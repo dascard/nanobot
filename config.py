@@ -6,6 +6,7 @@ import os
 
 # ── Dify 连接 ──
 DIFY_BASE_URL = os.environ.get("DIFY_BASE_URL", "http://localhost:5001/v1")
+API_KEY_01_CHAT = os.environ.get("API_KEY_01_CHAT", "")
 API_KEY_02 = os.environ.get("API_KEY_02_LOG", "")
 API_KEY_03 = os.environ.get("API_KEY_03_PERSONA", "")
 API_KEY_04 = os.environ.get("API_KEY_04_AUDIT", "")

@@ -45,3 +45,26 @@ def test_submit_log(client, db_session):
     assert len(logs) == 2
     assert logs[0].content == "hello API"
     assert logs[1].content == "hi"
+
+def test_proxy_chat(client, db_session):
+    from unittest.mock import patch
+    
+    with patch("routes.API_KEY_01_CHAT", "dummy_01"), \
+         patch("routes.call_dify_chat") as mock_dify:
+        mock_dify.return_value = "Mocked Dify Reply"
+        
+        response = client.post(
+            "/api/v1/chat", 
+            json={"user_id": "proxy_user", "query": "hello proxy"}
+        )
+        assert response.status_code == 200
+        assert response.json()["answer"] == "Mocked Dify Reply"
+        
+        # 验证是否写入了两条日志（一问一答）
+        from database import ChatLog
+        logs = db_session.query(ChatLog).filter_by(user_id="proxy_user").all()
+        assert len(logs) == 2
+        assert logs[0].content == "hello proxy"
+        assert logs[0].role == "user"
+        assert logs[1].content == "Mocked Dify Reply"
+        assert logs[1].role == "model"
