@@ -2,9 +2,12 @@
 FastAPI 路由模块。
 定义所有 HTTP 端点，含 Bearer Token 认证中间件。
 """
+import os
+import re
 import logging
-
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header
+import imgkit
+import markdown2
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -50,6 +53,17 @@ class AmbientLogRequest(BaseModel):
     group_id: str = "unknown"
     sender_name: str = "unknown"
     content: str = ""
+
+def is_complex_markdown(text: str) -> bool:
+    """检测是否包含需要渲染的复杂 Markdown 特性 (表格, 代码块, 多级标题)"""
+    patterns = [
+        r'\|.*\|',           # 表格
+        r'```',              # 代码块
+        r'^#+ ',             # 标题
+        r'-\s+\[[ x]\]',     # 任务列表
+    ]
+    return any(re.search(p, text, re.MULTILINE) for p in patterns)
+
 
 
 # ── 端点 ──
@@ -183,6 +197,44 @@ def search_history_logs(
         "logs": "\n".join(filtered_output) if filtered_output else "未检索到匹配结果。"
     }
 
+@router.get("/render")
+async def render_markdown(text: str):
+    """将 Markdown 渲染为优雅的图片返回"""
+    html_template = f"""
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {{ 
+                font-family: 'WenQuanYi Zen Hei', sans-serif; 
+                padding: 40px; 
+                background: #ffffff;
+                color: #333333;
+                line-height: 1.6;
+            }}
+            pre {{ background: #f6f8fa; padding: 16px; border-radius: 8px; overflow: auto; }}
+            table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+            th, td {{ border: 1px solid #dfe2e5; padding: 8px 12px; }}
+            blockquote {{ border-left: 4px solid #dfe2e5; color: #6a737d; padding-left: 16px; margin: 0; }}
+            img {{ max-width: 100%; }}
+        </style>
+    </head>
+    <body class="markdown-body">
+        {markdown2.markdown(text, extras=["tables", "fenced-code-blocks", "task_list"])}
+    </body>
+    </html>
+    """
+    options = {
+        'format': 'png',
+        'encoding': "UTF-8",
+        'quiet': '',
+        'enable-local-file-access': ''
+    }
+    # 在 Docker 中需要增加 --no-sandbox 等参数
+    img_bytes = imgkit.from_string(html_template, False, options=options)
+    return Response(content=img_bytes, media_type="image/png")
+
+
 
 @router.post("/chat")
 def proxy_chat(
@@ -259,10 +311,17 @@ def proxy_chat(
         # 触发进化时，针对具体的物理人触发（提取该人跨 Session 的足迹）
         background_tasks.add_task(evolution_task, req.user_id)
 
+    # 6. 检测是否需要 Markdown 渲染增强
+    render_url = None
+    if is_complex_markdown(answer):
+        # 构造给前端的渲染链接 (使用服务器自身地址)
+        render_url = f"/api/v1/render?text={answer[:2000]}" # 限制 URL 长度
+
     return {
         "status": "ok",
         "user_id": req.user_id,
         "answer": answer,
+        "render_url": render_url,
         "unprocessed_logs": pending
     }
 
