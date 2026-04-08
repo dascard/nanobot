@@ -3,15 +3,11 @@ FastAPI 路由模块。
 定义所有 HTTP 端点，含 Bearer Token 认证中间件。
 """
 import os
-import re
 import logging
-import imgkit
-import markdown2
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
-import base64
 
 from config import NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT
 from database import get_db, User, Persona, SystemPrompt, ChatLog
@@ -55,16 +51,6 @@ class AmbientLogRequest(BaseModel):
     group_id: str = "unknown"
     sender_name: str = "unknown"
     content: str = ""
-
-def is_complex_markdown(text: str) -> bool:
-    """检测是否包含需要渲染的复杂 Markdown 特性 (表格, 代码块, 多级标题)"""
-    patterns = [
-        r'\|.*\|',           # 表格
-        r'```',              # 代码块
-        r'^#+ ',             # 标题
-        r'-\s+\[[ x]\]',     # 任务列表
-    ]
-    return any(re.search(p, text, re.MULTILINE) for p in patterns)
 
 
 
@@ -281,44 +267,10 @@ def proxy_chat(
         # 触发进化时，针对具体的物理人触发（提取该人跨 Session 的足迹）
         background_tasks.add_task(evolution_task, req.user_id)
 
-    # 6. 检测是否需要 Markdown 渲染增强
-    render_base64 = None
-    if is_complex_markdown(answer):
-        try:
-            html_template = f"""
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <style>
-                    body {{ font-family: 'WenQuanYi Zen Hei', sans-serif; padding: 40px; background: #ffffff; color: #333333; line-height: 1.6; }}
-                    pre {{ background: #f6f8fa; padding: 16px; border-radius: 8px; overflow: auto; max-width: 100%; white-space: pre-wrap; }}
-                    table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
-                    th, td {{ border: 1px solid #dfe2e5; padding: 8px 12px; }}
-                    blockquote {{ border-left: 4px solid #dfe2e5; color: #6a737d; padding-left: 16px; margin: 0; }}
-                    img {{ max-width: 100%; }}
-                </style>
-            </head>
-            <body class="markdown-body">
-                {markdown2.markdown(answer, extras=["tables", "fenced-code-blocks", "task_list"])}
-            </body>
-            </html>
-            """
-            options = {
-                'format': 'png',
-                'encoding': "UTF-8",
-                'quiet': '',
-                'enable-local-file-access': ''
-            }
-            img_bytes = imgkit.from_string(html_template, False, options=options)
-            render_base64 = "base64://" + base64.b64encode(img_bytes).decode('utf-8')
-        except Exception as e:
-            logger.error(f"Markdown render failed: {e}")
-
     return {
         "status": "ok",
         "user_id": req.user_id,
         "answer": answer,
-        "render_base64": render_base64,
         "unprocessed_logs": pending
     }
 
