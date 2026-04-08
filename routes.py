@@ -43,6 +43,7 @@ class LogRequest(BaseModel):
 class ChatProxyRequest(BaseModel):
     user_id: str = "default_user"
     query: str
+    files: list[str] = None  # 支持可选的多模态图片 URL 列表
 
 class AmbientLogRequest(BaseModel):
     group_id: str
@@ -155,7 +156,11 @@ def search_history_logs(
     提供给 Dify Agent 作为 Custom Tool 调用的数据库本地精确检索 API。
     实现无需全量 RAG 的按需、极速精准回忆。
     """
-    query = db.query(ChatLog).filter(ChatLog.user_id == user_id)
+    if user_id == "all":
+        # 特权：全量全局搜索，允许机器人跨群回忆
+        query = db.query(ChatLog)
+    else:
+        query = db.query(ChatLog).filter(ChatLog.user_id == user_id)
     
     if keyword:
         # 简单粗暴且准确的 LIKE 查询，解决向量检索的时间线模糊问题
@@ -167,7 +172,9 @@ def search_history_logs(
     filtered_output = []
     for row in results:
         t = row.created_at.strftime("%Y-%m-%d %H:%M:%S")
-        filtered_output.append(f"[{t}] {row.role.upper()}: {row.content}")
+        # 增加返回来源 ID，让大模型知道这段历史来自哪个群/私聊
+        source = f"[{row.user_id}]" if user_id == "all" else ""
+        filtered_output.append(f"[{t}]{source} {row.role.upper()}: {row.content}")
         
     return {
         "status": "ok",
@@ -227,14 +234,20 @@ def proxy_chat(
             req.query, 
             p_json, 
             s_prompt,
-            recent_context_summary
+            recent_context_summary,
+            files=req.files
         )
     except Exception as e:
         logger.error(f"Chat Proxy failed: {e}")
         raise HTTPException(status_code=502, detail=f"Upstream Error: {str(e)}")
 
     # 5. 双向写库
-    db.add(ChatLog(user_id=req.user_id, role="user", content=req.query, processed=0))
+    # 如果包含图片，在文本记录中追加占位符以便上下文回溯
+    display_query = req.query
+    if req.files:
+        display_query += f" [包含 {len(req.files)} 张图片]"
+        
+    db.add(ChatLog(user_id=req.user_id, role="user", content=display_query, processed=0))
     db.add(ChatLog(user_id=req.user_id, role="model", content=answer, processed=0))
     db.commit()
 

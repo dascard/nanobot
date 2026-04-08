@@ -75,25 +75,42 @@ def call_dify_workflow(api_key: str, inputs: dict) -> dict:
         f"Dify workflow call failed after {DIFY_MAX_RETRIES} retries: {last_exc}"
     )
 
-def call_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, active_system_prompt: str, recent_context_summary: str = "") -> str:
+def call_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, active_system_prompt: str, recent_context_summary: str = "", files: list = None) -> str:
     """
     代理调用 Dify 01 对话模型引擎（/chat-messages 接口），并注入上下文。
+    支持可选的 files 参数用于多模态图片输入。
     """
     url = f"{DIFY_BASE_URL}/chat-messages"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    
+    # 构造 inputs 字典
+    inputs = {
+        "active_persona": active_persona,
+        "active_system_prompt": active_system_prompt,
+        "recent_context_summary": recent_context_summary
+    }
+    
     payload = {
-        "inputs": {
-            "active_persona": active_persona,
-            "active_system_prompt": active_system_prompt,
-            "recent_context_summary": recent_context_summary
-        },
+        "inputs": inputs,
         "query": query,
         "response_mode": "blocking",
         "user": user_id,
     }
+    
+    # 处理多模态图片文件
+    if files:
+        dify_files = []
+        for file_url in files:
+            dify_files.append({
+                "type": "image",
+                "transfer_method": "remote_url",
+                "url": file_url
+            })
+        payload["files"] = dify_files
+
     safe_key = f"***{api_key[-4:]}" if len(api_key) >= 4 else "***"
 
     last_exc: Exception | None = None
