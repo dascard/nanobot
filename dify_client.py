@@ -55,6 +55,10 @@ def call_dify_workflow(api_key: str, inputs: dict) -> dict:
                 )
             return outputs
 
+        except requests.exceptions.HTTPError as he:
+            err_text = resp.text if resp else str(he)
+            last_exc = RuntimeError(f"HTTPError: {he}. Response body: {err_text}")
+            logger.error(f"  ⚠ Dify workflow HTTP error: {last_exc}")
         except (requests.RequestException, RuntimeError) as exc:
             last_exc = exc
             if attempt < DIFY_MAX_RETRIES:
@@ -109,6 +113,13 @@ def call_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, 
                 logger.warning(f"Empty answer from Dify: {body}")
             return answer
 
+        except requests.exceptions.HTTPError as he:
+            err_text = resp.text if resp else str(he)
+            last_exc = RuntimeError(f"HTTPError: {he}. Response body: {err_text}")
+            logger.error(f"  ⚠ Dify chat HTTP error: {last_exc}")
+            if attempt < DIFY_MAX_RETRIES:
+                delay = DIFY_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                time.sleep(delay)
         except (requests.RequestException, RuntimeError) as exc:
             last_exc = exc
             if attempt < DIFY_MAX_RETRIES:
