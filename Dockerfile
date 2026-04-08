@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.10-slim-bullseye
 WORKDIR /app
 # 安装 sqlite3、wkhtmltopdf (用于 MD 渲染) 以及中文支持字体
 RUN apt-get update && apt-get install -y \

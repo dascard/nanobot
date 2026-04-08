@@ -10,6 +10,8 @@ import markdown2
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from typing import Optional, List
+import base64
 
 from config import NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT
 from database import get_db, User, Persona, SystemPrompt, ChatLog
@@ -47,7 +49,7 @@ class ChatProxyRequest(BaseModel):
     user_id: str = "default_user"
     session_id: str = "default_session"
     query: str = ""
-    files: list[str] | None = None  # 使用更现代的 Union 类型表示可选性
+    files: Optional[List[str]] = None
 
 class AmbientLogRequest(BaseModel):
     group_id: str = "unknown"
@@ -199,40 +201,8 @@ def search_history_logs(
 
 @router.get("/render")
 async def render_markdown(text: str):
-    """将 Markdown 渲染为优雅的图片返回"""
-    html_template = f"""
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <style>
-            body {{ 
-                font-family: 'WenQuanYi Zen Hei', sans-serif; 
-                padding: 40px; 
-                background: #ffffff;
-                color: #333333;
-                line-height: 1.6;
-            }}
-            pre {{ background: #f6f8fa; padding: 16px; border-radius: 8px; overflow: auto; }}
-            table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
-            th, td {{ border: 1px solid #dfe2e5; padding: 8px 12px; }}
-            blockquote {{ border-left: 4px solid #dfe2e5; color: #6a737d; padding-left: 16px; margin: 0; }}
-            img {{ max-width: 100%; }}
-        </style>
-    </head>
-    <body class="markdown-body">
-        {markdown2.markdown(text, extras=["tables", "fenced-code-blocks", "task_list"])}
-    </body>
-    </html>
-    """
-    options = {
-        'format': 'png',
-        'encoding': "UTF-8",
-        'quiet': '',
-        'enable-local-file-access': ''
-    }
-    # 在 Docker 中需要增加 --no-sandbox 等参数
-    img_bytes = imgkit.from_string(html_template, False, options=options)
-    return Response(content=img_bytes, media_type="image/png")
+    """遗留端点，已弃用。目前直接内嵌 base64 返回"""
+    return {"status": "deprecated"}
 
 
 
@@ -312,16 +282,43 @@ def proxy_chat(
         background_tasks.add_task(evolution_task, req.user_id)
 
     # 6. 检测是否需要 Markdown 渲染增强
-    render_url = None
+    render_base64 = None
     if is_complex_markdown(answer):
-        # 构造给前端的渲染链接 (使用服务器自身地址)
-        render_url = f"/api/v1/render?text={answer[:2000]}" # 限制 URL 长度
+        try:
+            html_template = f"""
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <style>
+                    body {{ font-family: 'WenQuanYi Zen Hei', sans-serif; padding: 40px; background: #ffffff; color: #333333; line-height: 1.6; }}
+                    pre {{ background: #f6f8fa; padding: 16px; border-radius: 8px; overflow: auto; max-width: 100%; white-space: pre-wrap; }}
+                    table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+                    th, td {{ border: 1px solid #dfe2e5; padding: 8px 12px; }}
+                    blockquote {{ border-left: 4px solid #dfe2e5; color: #6a737d; padding-left: 16px; margin: 0; }}
+                    img {{ max-width: 100%; }}
+                </style>
+            </head>
+            <body class="markdown-body">
+                {markdown2.markdown(answer, extras=["tables", "fenced-code-blocks", "task_list"])}
+            </body>
+            </html>
+            """
+            options = {
+                'format': 'png',
+                'encoding': "UTF-8",
+                'quiet': '',
+                'enable-local-file-access': ''
+            }
+            img_bytes = imgkit.from_string(html_template, False, options=options)
+            render_base64 = "base64://" + base64.b64encode(img_bytes).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Markdown render failed: {e}")
 
     return {
         "status": "ok",
         "user_id": req.user_id,
         "answer": answer,
-        "render_url": render_url,
+        "render_base64": render_base64,
         "unprocessed_logs": pending
     }
 
