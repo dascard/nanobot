@@ -11,6 +11,11 @@ API_KEY_02 = os.environ.get("API_KEY_02_LOG", "")
 API_KEY_03 = os.environ.get("API_KEY_03_PERSONA", "")
 API_KEY_04 = os.environ.get("API_KEY_04_AUDIT", "")
 
+# ── Dify 知识库 ──
+DATASET_API_KEY = os.environ.get("DATASET_API_KEY", "")
+DATASET_ID_LOGS = os.environ.get("DATASET_ID_LOGS", "")
+DATASET_ID_PERSONAS = os.environ.get("DATASET_ID_PERSONAS", "")
+
 # ── 进化参数 ──
 EVOLUTION_THRESHOLD = int(os.environ.get("EVOLUTION_THRESHOLD", "20"))
 

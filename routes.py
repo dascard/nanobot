@@ -12,6 +12,7 @@ from config import NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT
 from database import get_db, User, Persona, SystemPrompt, ChatLog
 from evolution import evolution_task
 from dify_client import call_dify_chat
+from compaction import run_autocompact_circuit_breaker
 
 logger = logging.getLogger("nanobot.routes")
 router = APIRouter(prefix="/api/v1")
@@ -52,17 +53,31 @@ def get_context(
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),
 ):
-    """返回拼合后的系统设定 + 用户画像，供前端注入脚本使用。"""
+    """返回拼合后的系统设定 + 用户画像 + 近期上下文，供前端注入脚本使用。"""
     persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
     sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == user_id).first()
+    
+    # 提取最近上下文 (Stateless Sliding Window)
+    recent_logs = (
+        db.query(ChatLog)
+        .filter(ChatLog.user_id == user_id)
+        .order_by(ChatLog.id.desc())
+        .limit(20)
+        .all()
+    )
+    recent_logs.reverse()
+    context_lines = []
+    for lg in recent_logs:
+        speaker = "User" if lg.role == "user" else "Assistant"
+        context_lines.append(f"{speaker}: {lg.content}")
+        
+    recent_context_summary = run_autocompact_circuit_breaker(context_lines, max_length=4000)
 
     return {
         "user_id": user_id,
         "persona_json": persona_obj.persona_json if persona_obj else "{}",
-        "system_prompt": (
-            sys_obj.prompt_text if sys_obj
-            else "你是一个具备自进化能力的智能助手。"
-        ),
+        "system_prompt": sys_obj.prompt_text if sys_obj else "你是一个具备自进化能力的智能助手。",
+        "recent_context_summary": recent_context_summary
     }
 
 
@@ -125,19 +140,44 @@ def proxy_chat(
     p_json = persona_obj.persona_json if persona_obj else "{}"
     s_prompt = sys_obj.prompt_text if sys_obj else "你是一个具备自进化能力的智能助手。"
 
-    # 3. 阻塞调用 Dify 01
+    # 3. 本地上下文滑窗提取 (Stateless Context)
+    recent_logs = (
+        db.query(ChatLog)
+        .filter(ChatLog.user_id == req.user_id)
+        .order_by(ChatLog.id.desc())
+        .limit(20)  # 最近 10 轮
+        .all()
+    )
+    recent_logs.reverse()  # 恢复为时间正序
+    
+    context_lines = []
+    for lg in recent_logs:
+        speaker = "User" if lg.role == "user" else "Assistant"
+        context_lines.append(f"{speaker}: {lg.content}")
+        
+    # 强制截断防爆处理与 Autocompact (Circuit Breaker / Strip Media / LLM prompt)
+    recent_context_summary = run_autocompact_circuit_breaker(context_lines, max_length=4000)
+
+    # 4. 阻塞调用 Dify 01 (Stateless)
     try:
-        answer = call_dify_chat(API_KEY_01_CHAT, req.user_id, req.query, p_json, s_prompt)
+        answer = call_dify_chat(
+            API_KEY_01_CHAT, 
+            req.user_id, 
+            req.query, 
+            p_json, 
+            s_prompt,
+            recent_context_summary
+        )
     except Exception as e:
         logger.error(f"Chat Proxy failed: {e}")
         raise HTTPException(status_code=502, detail=f"Upstream Error: {str(e)}")
 
-    # 4. 双向写库
+    # 5. 双向写库
     db.add(ChatLog(user_id=req.user_id, role="user", content=req.query, processed=0))
     db.add(ChatLog(user_id=req.user_id, role="model", content=answer, processed=0))
     db.commit()
 
-    # 5. 检查进化触发阈值
+    # 6. 检查进化触发阈值
     pending = db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
     if pending >= EVOLUTION_THRESHOLD:
         background_tasks.add_task(evolution_task, req.user_id)

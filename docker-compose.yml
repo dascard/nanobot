@@ -6,14 +6,8 @@ services:
     container_name: nanobot-server
     ports:
       - "8000:8000"
-    volumes:
-      - nanobot-data:/app/data      # 持久化 SQLite 数据
-    environment:
-      - DIFY_BASE_URL=http://dify-api:5001/v1   # 需要与 Dify docker-compose 的服务名一致
-      - API_KEY_02_LOG=your_key_here
-      - API_KEY_03_PERSONA=your_key_here
-      - API_KEY_04_AUDIT=your_key_here
-      - EVOLUTION_THRESHOLD=20
+    env_file:
+      - .env
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]

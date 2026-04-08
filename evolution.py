@@ -8,9 +8,9 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from config import API_KEY_02, API_KEY_03, API_KEY_04, EVOLUTION_THRESHOLD
+from config import API_KEY_02, API_KEY_03, API_KEY_04, EVOLUTION_THRESHOLD, DATASET_ID_LOGS, DATASET_ID_PERSONAS
 from database import SessionLocal, ChatLog, Persona, SystemPrompt
-from dify_client import call_dify_workflow
+from dify_client import call_dify_workflow, write_dify_dataset
 
 logger = logging.getLogger("nanobot.evolution")
 
@@ -78,6 +78,13 @@ def evolution_task(user_id: str) -> None:
         structured_json = out_02.get("structured_json", "")
         if not structured_json:
             raise RuntimeError("02 output 'structured_json' is empty")
+            
+        # --- [NEW] 将日志摘要自动写入「对话日志知识库」从而让温层 (RAG) 可以重新读取！
+        kb_document_02 = out_02.get("kb_document", "")
+        if kb_document_02 and DATASET_ID_LOGS:
+            logger.info("  [Dataset] Writing log summary to Knowledge Base...")
+            time_range = datetime.utcnow().strftime("%Y-%m-%d_%H%M")
+            write_dify_dataset(DATASET_ID_LOGS, f"日志_{user_id}_{time_range}", kb_document_02)
 
         # ── Step 4: Dify 03 (画像提炼器) ──
         logger.info("  [03] Persona Extractor...")
@@ -89,6 +96,12 @@ def evolution_task(user_id: str) -> None:
         final_persona = out_03.get("final_persona_json", "")
         if not final_persona:
             raise RuntimeError("03 output 'final_persona_json' is empty")
+
+        # --- [NEW] 按照原来的05，画像也可以写一份到知识库留档
+        kb_document_03 = out_03.get("kb_document", "")
+        if kb_document_03 and DATASET_ID_PERSONAS:
+            logger.info("  [Dataset] Writing persona to Knowledge Base...")
+            write_dify_dataset(DATASET_ID_PERSONAS, f"画像_{user_id}", kb_document_03)
 
         # ── Step 5: Dify 04 (Prompt 审计) ──
         logger.info("  [04] Prompt Audit Engine...")
