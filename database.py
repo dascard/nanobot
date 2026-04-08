@@ -3,8 +3,10 @@ from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 
-# Provide a fallback default sqlite database in the local data folder
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./data/nanobot.db")
+# 使用绝对路径确保在 Docker 挂载时路径不飘移
+DB_DIR = os.path.abspath("./data")
+DB_PATH = os.path.join(DB_DIR, "nanobot.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -38,7 +40,7 @@ class ChatLog(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 def init_db():
-    os.makedirs("./data", exist_ok=True)
+    os.makedirs(DB_DIR, exist_ok=True)
     Base.metadata.create_all(bind=engine)
 
 def get_db():

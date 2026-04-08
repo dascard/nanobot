@@ -41,15 +41,15 @@ class LogRequest(BaseModel):
 
 
 class ChatProxyRequest(BaseModel):
-    user_id: str = "default_user"   # 标识发件人（用于画像 Persona 索引，实现跨群认人）
-    session_id: str = "default_session" # 标识对话场（用于 Context 索引，实现群聊环境隔离）
-    query: str
-    files: list[str] = None  # 支持可选的多模态图片 URL 列表
+    user_id: str = "default_user"
+    session_id: str = "default_session"
+    query: str = ""
+    files: list[str] | None = None  # 使用更现代的 Union 类型表示可选性
 
 class AmbientLogRequest(BaseModel):
-    group_id: str
-    sender_name: str
-    content: str
+    group_id: str = "unknown"
+    sender_name: str = "unknown"
+    content: str = ""
 
 
 # ── 端点 ──
