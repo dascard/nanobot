@@ -44,6 +44,11 @@ class ChatProxyRequest(BaseModel):
     user_id: str = "default_user"
     query: str
 
+class AmbientLogRequest(BaseModel):
+    group_id: str
+    sender_name: str
+    content: str
+
 
 # ── 端点 ──
 
@@ -113,6 +118,62 @@ def submit_log(
         background_tasks.add_task(evolution_task, log_req.user_id)
 
     return {"status": "ok", "unprocessed_logs": pending}
+
+@router.post("/log_ambient")
+def submit_ambient_log(
+    req: AmbientLogRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
+):
+    """专门接收前台悄无声息收集的环境窥屏包，设为已处理，不消耗高级分析算力，只做持久化备份"""
+    actual_user_id = f"group_{req.group_id}"
+    
+    # 自动注册隐式群体用户
+    if not db.query(User).filter(User.id == actual_user_id).first():
+        db.add(User(id=actual_user_id))
+        
+    formatted_content = f"[{req.sender_name}]: {req.content}"
+    
+    db.add(ChatLog(
+        user_id=actual_user_id,
+        role="ambient",
+        content=formatted_content,
+        processed=1,  # 标注为已处理，不触发自进化总结，防止浪费算力
+    ))
+    db.commit()
+    return {"status": "ok", "message": "ambient log saved"}
+
+@router.get("/search_logs")
+def search_history_logs(
+    user_id: str,
+    keyword: str = "",
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
+):
+    """
+    提供给 Dify Agent 作为 Custom Tool 调用的数据库本地精确检索 API。
+    实现无需全量 RAG 的按需、极速精准回忆。
+    """
+    query = db.query(ChatLog).filter(ChatLog.user_id == user_id)
+    
+    if keyword:
+        # 简单粗暴且准确的 LIKE 查询，解决向量检索的时间线模糊问题
+        query = query.filter(ChatLog.content.like(f"%{keyword}%"))
+        
+    results = query.order_by(ChatLog.id.desc()).limit(limit).all()
+    results.reverse()
+    
+    filtered_output = []
+    for row in results:
+        t = row.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        filtered_output.append(f"[{t}] {row.role.upper()}: {row.content}")
+        
+    return {
+        "status": "ok",
+        "results_found": len(filtered_output),
+        "logs": "\n".join(filtered_output) if filtered_output else "未检索到匹配结果。"
+    }
 
 
 @router.post("/chat")
