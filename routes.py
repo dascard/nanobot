@@ -41,7 +41,8 @@ class LogRequest(BaseModel):
 
 
 class ChatProxyRequest(BaseModel):
-    user_id: str = "default_user"
+    user_id: str = "default_user"   # 标识发件人（用于画像 Persona 索引，实现跨群认人）
+    session_id: str = "default_session" # 标识对话场（用于 Context 索引，实现群聊环境隔离）
     query: str
     files: list[str] = None  # 支持可选的多模态图片 URL 列表
 
@@ -196,22 +197,23 @@ def proxy_chat(
     if not API_KEY_01_CHAT:
         raise HTTPException(status_code=500, detail="API_KEY_01_CHAT not configured")
 
-    # 1. 自动注册用户
-    if not db.query(User).filter(User.id == req.user_id).first():
-        db.add(User(id=req.user_id))
-        db.commit()
+    # 1. 自动注册用户 & 场
+    for target_id in [req.user_id, req.session_id]:
+        if not db.query(User).filter(User.id == target_id).first():
+            db.add(User(id=target_id))
+    db.commit()
 
-    # 2. 捞取用户画像上下文
+    # 2. 捞取用户画像上下文（基于 user_id: 认人）
     persona_obj = db.query(Persona).filter(Persona.user_id == req.user_id).first()
     sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == req.user_id).first()
     
     p_json = persona_obj.persona_json if persona_obj else "{}"
     s_prompt = sys_obj.prompt_text if sys_obj else "你是一个具备自进化能力的智能助手。"
 
-    # 3. 本地上下文滑窗提取 (Stateless Context)
+    # 3. 本地对话历史滑窗提取（基于 session_id: 认场）
     recent_logs = (
         db.query(ChatLog)
-        .filter(ChatLog.user_id == req.user_id)
+        .filter(ChatLog.user_id == req.session_id)
         .order_by(ChatLog.id.desc())
         .limit(20)  # 最近 10 轮
         .all()
@@ -241,19 +243,20 @@ def proxy_chat(
         logger.error(f"Chat Proxy failed: {e}")
         raise HTTPException(status_code=502, detail=f"Upstream Error: {str(e)}")
 
-    # 5. 双向写库
+    # 5. 双向写库 (记录在 Session 下，维持该场景的对话流)
     # 如果包含图片，在文本记录中追加占位符以便上下文回溯
     display_query = req.query
     if req.files:
         display_query += f" [包含 {len(req.files)} 张图片]"
         
-    db.add(ChatLog(user_id=req.user_id, role="user", content=display_query, processed=0))
-    db.add(ChatLog(user_id=req.user_id, role="model", content=answer, processed=0))
+    db.add(ChatLog(user_id=req.session_id, role="user", content=display_query, processed=0))
+    db.add(ChatLog(user_id=req.session_id, role="model", content=answer, processed=0))
     db.commit()
 
-    # 6. 检查进化触发阈值
-    pending = db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
+    # 6. 检查进化触发阈值 (基于 Session 触发：该场景产生了足够的对话流)
+    pending = db.query(ChatLog).filter(ChatLog.user_id == req.session_id, ChatLog.processed == 0).count()
     if pending >= EVOLUTION_THRESHOLD:
+        # 触发进化时，针对具体的物理人触发（提取该人跨 Session 的足迹）
         background_tasks.add_task(evolution_task, req.user_id)
 
     return {
