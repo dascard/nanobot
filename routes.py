@@ -5,6 +5,7 @@ FastAPI 路由模块。
 import os
 import logging
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Response
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -46,10 +47,16 @@ class ChatProxyRequest(BaseModel):
     session_id: str = "default_session"
     query: str = ""
     files: Optional[List[str]] = None
+    sender_name: Optional[str] = None
+    session_name: Optional[str] = None
+
+class EvolutionTriggerRequest(BaseModel):
+    user_id: str
 
 class AmbientLogRequest(BaseModel):
     group_id: str = "unknown"
-    sender_name: str = "unknown"
+    session_name: str | None = None  # 场景名 (如群名)
+    sender_name: str = "unknown"    # 发送者名
     content: str = ""
 
 
@@ -140,9 +147,12 @@ def submit_ambient_log(
     
     db.add(ChatLog(
         user_id=actual_user_id,
+        session_id=str(req.group_id),
+        sender_name=req.sender_name,
+        session_name=req.session_name,
         role="ambient",
         content=formatted_content,
-        processed=1,  # 标注为已处理，不触发自进化总结，防止浪费算力
+        processed=1,
     ))
     db.commit()
     return {"status": "ok", "message": "ambient log saved"}
@@ -152,31 +162,74 @@ def search_history_logs(
     user_id: str,
     keyword: str = "",
     limit: int = 50,
+    context_size: int = 0,
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),
 ):
     """
     提供给 Dify Agent 作为 Custom Tool 调用的数据库本地精确检索 API。
-    实现无需全量 RAG 的按需、极速精准回忆。
+    实现无需全量 RAG 的按需、极速精准回忆。带有上下文支持。
     """
     if user_id == "all":
-        # 特权：全量全局搜索，允许机器人跨群回忆
-        query = db.query(ChatLog)
+        base_query = db.query(ChatLog)
     else:
-        query = db.query(ChatLog).filter(ChatLog.user_id == user_id)
+        # 【弹性搜索核心】：允许 user_id 匹配 ID 或者 模糊匹配人名/场景名
+        # 【优先精确匹配】
+        exact_match = base_query.filter(
+            or_(
+                ChatLog.user_id == user_id,
+                ChatLog.session_id == user_id
+            )
+        )
+        if exact_match.count() > 0:
+            base_query = exact_match
+        else:
+            # 环境模糊匹配兜底
+            base_query = base_query.filter(
+                or_(
+                    ChatLog.sender_name.like(f"%{user_id}%"),
+                    ChatLog.session_name.like(f"%{user_id}%")
+                )
+            )
     
-    if keyword:
-        # 简单粗暴且准确的 LIKE 查询，解决向量检索的时间线模糊问题
-        query = query.filter(ChatLog.content.like(f"%{keyword}%"))
+    if not keyword:
+        # 无关键词：直接返回最新记录
+        results = base_query.order_by(ChatLog.id.desc()).limit(limit).all()
+        results.reverse()
+        final_logs = results
+    else:
+        # 有关键词：查找匹配及其上下文
+        matches = base_query.filter(ChatLog.content.like(f"%{keyword}%")).order_by(ChatLog.id.desc()).limit(limit).all()
         
-    results = query.order_by(ChatLog.id.desc()).limit(limit).all()
-    results.reverse()
-    
+        log_dict = {}
+        for match in matches:
+            log_dict[match.id] = match
+            
+            if context_size > 0:
+                # 查找上下文，必须限制在同一个 session_id（对话场）中，确保逻辑连贯
+                # 向上查找
+                before_logs = db.query(ChatLog).filter(
+                    ChatLog.session_id == match.session_id,
+                    ChatLog.id < match.id
+                ).order_by(ChatLog.id.desc()).limit(context_size).all()
+                
+                # 向下查找
+                after_logs = db.query(ChatLog).filter(
+                    ChatLog.session_id == match.session_id,
+                    ChatLog.id > match.id
+                ).order_by(ChatLog.id.asc()).limit(context_size).all()
+                
+                for log in before_logs + after_logs:
+                    log_dict[log.id] = log
+                
+        # 按照 ID 升序重排，确保呈现给 AI 的是正确的时间顺序
+        final_logs = [log_dict[log_id] for log_id in sorted(log_dict.keys())]
+        
     filtered_output = []
-    for row in results:
+    for row in final_logs:
         t = row.created_at.strftime("%Y-%m-%d %H:%M:%S")
-        # 增加返回来源 ID，让大模型知道这段历史来自哪个群/私聊
-        source = f"[{row.user_id}]" if user_id == "all" else ""
+        # 来源标识：跨群搜索时很有用
+        source = f"[{row.session_id}]"
         filtered_output.append(f"[{t}]{source} {row.role.upper()}: {row.content}")
         
     return {
@@ -221,19 +274,21 @@ def proxy_chat(
     # 3. 本地对话历史滑窗提取（基于 session_id: 认场）
     recent_logs = (
         db.query(ChatLog)
-        .filter(ChatLog.user_id == req.session_id)
+        .filter(ChatLog.session_id == req.session_id)
         .order_by(ChatLog.id.desc())
-        .limit(20)  # 最近 10 轮
+        .limit(20)
         .all()
     )
-    recent_logs.reverse()  # 恢复为时间正序
+    recent_logs.reverse()
     
     context_lines = []
     for lg in recent_logs:
         speaker = "User" if lg.role == "user" else "Assistant"
-        context_lines.append(f"{speaker}: {lg.content}")
+        # 加上人名，辅助 Dify 这里的 context 更有区分度
+        name_tag = f"({lg.sender_name})" if lg.sender_name else ""
+        context_lines.append(f"{speaker}{name_tag}: {lg.content}")
         
-    # 强制截断防爆处理与 Autocompact (Circuit Breaker / Strip Media / LLM prompt)
+    # 强制截断防爆处理
     recent_context_summary = run_autocompact_circuit_breaker(context_lines, max_length=4000)
 
     # 4. 阻塞调用 Dify 01 (Stateless)
@@ -251,18 +306,33 @@ def proxy_chat(
         logger.error(f"Chat Proxy failed: {e}")
         raise HTTPException(status_code=502, detail=f"Upstream Error: {str(e)}")
 
-    # 5. 双向写库 (记录在 Session 下，维持该场景的对话流)
-    # 如果包含图片，在文本记录中追加占位符以便上下文回溯
+    # 5. 双向写库
     display_query = req.query
     if req.files:
         display_query += f" [包含 {len(req.files)} 张图片]"
         
-    db.add(ChatLog(user_id=req.session_id, role="user", content=display_query, processed=0))
-    db.add(ChatLog(user_id=req.session_id, role="model", content=answer, processed=0))
+    db.add(ChatLog(
+        user_id=req.user_id,
+        session_id=req.session_id,
+        sender_name=req.sender_name,
+        session_name=req.session_name,
+        role="user",
+        content=display_query,
+        processed=0
+    ))
+    db.add(ChatLog(
+        user_id="nanobot",
+        session_id=req.session_id,
+        sender_name="Nanobot",
+        session_name=req.session_name,
+        role="model",
+        content=answer,
+        processed=0
+    ))
     db.commit()
 
     # 6. 检查进化触发阈值 (基于 Session 触发：该场景产生了足够的对话流)
-    pending = db.query(ChatLog).filter(ChatLog.user_id == req.session_id, ChatLog.processed == 0).count()
+    pending = db.query(ChatLog).filter(ChatLog.session_id == req.session_id, ChatLog.processed == 0).count()
     if pending >= EVOLUTION_THRESHOLD:
         # 触发进化时，针对具体的物理人触发（提取该人跨 Session 的足迹）
         background_tasks.add_task(evolution_task, req.user_id)
@@ -273,6 +343,19 @@ def proxy_chat(
         "answer": answer,
         "unprocessed_logs": pending
     }
+
+@router.post("/evolution/trigger")
+def trigger_evolution(
+    req: EvolutionTriggerRequest,
+    background_tasks: BackgroundTasks,
+    _auth=Depends(verify_token),
+):
+    """
+    手动触发自进化：通过 API 强制开启画像提炼与同步，不再依赖日志计数阈值。
+    """
+    logger.info(f"Manual evolution triggered for user [{req.user_id}]")
+    background_tasks.add_task(evolution_task, req.user_id)
+    return {"status": "ok", "message": f"Evolution task queued for {req.user_id}"}
 
 
 @router.get("/health")

@@ -21,6 +21,7 @@ EVOLUTION_THRESHOLD = int(os.environ.get("EVOLUTION_THRESHOLD", "20"))
 
 # ── API 认证 ──
 NANOBOT_API_TOKEN = os.environ.get("NANOBOT_API_TOKEN", "")
+ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "0000000000")
 
 # ── 数据库 ──
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./data/nanobot.db")

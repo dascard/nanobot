@@ -16,28 +16,31 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
     id = Column(String, primary_key=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now)
 
 class Persona(Base):
     __tablename__ = "personas"
     user_id = Column(String, primary_key=True, index=True)
     persona_json = Column(Text, default="{}")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 class SystemPrompt(Base):
     __tablename__ = "system_prompts"
     user_id = Column(String, primary_key=True, index=True)
     prompt_text = Column(Text, default="")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 class ChatLog(Base):
     __tablename__ = "chat_logs"
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    user_id = Column(String, index=True)
-    role = Column(String)  # 'user' or 'model'
+    user_id = Column(String, index=True)      # 物理发件人 ID (QQ号)
+    session_id = Column(String, index=True)   # 场景 ID (群号/私聊号)
+    sender_name = Column(String, nullable=True) # 发件人昵称/名片
+    session_name = Column(String, nullable=True) # 场景名 (群名/私聊对象名)
+    role = Column(String)  # 'user', 'model', or 'ambient'
     content = Column(Text)
     processed = Column(Integer, default=0)  # 0: unprocessed, 1: processed by evolution task
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now)
 
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)

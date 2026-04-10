@@ -8,7 +8,11 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
-from config import API_KEY_02, API_KEY_03, API_KEY_04, EVOLUTION_THRESHOLD, DATASET_ID_LOGS, DATASET_ID_PERSONAS
+from config import (
+    API_KEY_02, API_KEY_03, API_KEY_04, 
+    EVOLUTION_THRESHOLD, DATASET_ID_LOGS, DATASET_ID_PERSONAS,
+    ADMIN_USER_ID
+)
 from database import SessionLocal, ChatLog, Persona, SystemPrompt
 from dify_client import call_dify_workflow, write_dify_dataset
 
@@ -83,7 +87,7 @@ def evolution_task(user_id: str) -> None:
         kb_document_02 = out_02.get("kb_document", "")
         if kb_document_02 and DATASET_ID_LOGS:
             logger.info("  [Dataset] Writing log summary to Knowledge Base...")
-            time_range = datetime.utcnow().strftime("%Y-%m-%d_%H%M")
+            time_range = datetime.now().strftime("%Y-%m-%d_%H%M")
             write_dify_dataset(DATASET_ID_LOGS, f"日志_{user_id}_{time_range}", kb_document_02)
 
         # ── Step 4: Dify 03 (画像提炼器) ──
@@ -92,6 +96,7 @@ def evolution_task(user_id: str) -> None:
             "new_log_summary": structured_json,
             "user_id": user_id,
             "existing_persona": existing_persona,
+            "is_admin_user": user_id == ADMIN_USER_ID
         })
         final_persona = out_03.get("final_persona_json", "")
         if not final_persona:
@@ -117,15 +122,15 @@ def evolution_task(user_id: str) -> None:
         # ── Step 6: 回写 DB ──
         if persona_obj:
             persona_obj.persona_json = final_persona
-            persona_obj.updated_at = datetime.utcnow()
+            persona_obj.updated_at = datetime.now()
         else:
-            db.add(Persona(user_id=user_id, persona_json=final_persona))
+            db.add(Persona(user_id=user_id, persona_json=final_persona, updated_at=datetime.now()))
 
         if sys_obj:
             sys_obj.prompt_text = final_prompt
-            sys_obj.updated_at = datetime.utcnow()
+            sys_obj.updated_at = datetime.now()
         else:
-            db.add(SystemPrompt(user_id=user_id, prompt_text=final_prompt))
+            db.add(SystemPrompt(user_id=user_id, prompt_text=final_prompt, updated_at=datetime.now()))
 
         db.commit()
         logger.info(f"══════ Evolution SUCCESS [{user_id}] ══════")
