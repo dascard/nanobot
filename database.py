@@ -45,6 +45,30 @@ class ChatLog(Base):
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    
+    # ── 自动化热修复：处理现有表的列迁移 ──
+    # 由于 Base.metadata.create_all 不会修改现有表结构，我们需要手动检查并修补
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    existing_columns = [col["name"] for col in inspector.get_columns("chat_logs")]
+    
+    # 需要检查并补全的元数据列
+    required_upgrades = [
+        ("session_id", "TEXT"),
+        ("sender_name", "TEXT"),
+        ("session_name", "TEXT")
+    ]
+    
+    with engine.connect() as conn:
+        for col_name, col_type in required_upgrades:
+            if col_name not in existing_columns:
+                print(f"  → Migrating: Adding missing column [{col_name}] to chat_logs...")
+                try:
+                    # SQLite 的 ALTER TABLE 语法
+                    conn.execute(text(f"ALTER TABLE chat_logs ADD COLUMN {col_name} {col_type}"))
+                    conn.commit()
+                except Exception as e:
+                    print(f"  ⚠ Migration failed for {col_name}: {e}")
 
 def get_db():
     db = SessionLocal()
