@@ -66,7 +66,7 @@ def evolution_task(user_id: str) -> None:
             log.processed = 1
         db.commit()
 
-        # ── Step 2: 读现有画像和设定 ──
+        # ── Step 2: 读现有画像和设定 (必须使用带前缀的完整 user_id 以匹配数据库记录) ──
         persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
         sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == user_id).first()
 
@@ -77,13 +77,13 @@ def evolution_task(user_id: str) -> None:
         logger.info("  [02] Dialog Log Collector...")
         out_02 = call_dify_workflow(API_KEY_02, {
             "raw_dialog_logs": raw_dialog,
-            "user_id": user_id,
+            "user_id": user_id,  # 传给 Dify 记录
         })
         structured_json = out_02.get("structured_json", "")
         if not structured_json:
             raise RuntimeError("02 output 'structured_json' is empty")
             
-        # --- [NEW] 将日志摘要自动写入「对话日志知识库」从而让温层 (RAG) 可以重新读取！
+        # --- [NEW] 将日志摘要自动写入「对话日志知识库」
         kb_document_02 = out_02.get("kb_document", "")
         if kb_document_02 and DATASET_ID_LOGS:
             logger.info("  [Dataset] Writing log summary to Knowledge Base...")
@@ -92,11 +92,14 @@ def evolution_task(user_id: str) -> None:
 
         # ── Step 4: Dify 03 (画像提炼器) ──
         logger.info("  [03] Persona Extractor...")
+        # 仅在比对管理员身份时剥离前缀，不影响数据库查询
+        raw_user_id = user_id.split("_")[-1] if "_" in user_id else user_id
+        
         out_03 = call_dify_workflow(API_KEY_03, {
             "new_log_summary": structured_json,
             "user_id": user_id,
             "existing_persona": existing_persona,
-            "is_admin_user": user_id == ADMIN_USER_ID
+            "is_admin_user": raw_user_id == ADMIN_USER_ID
         })
         final_persona = out_03.get("final_persona_json", "")
         if not final_persona:
