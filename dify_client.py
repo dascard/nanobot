@@ -145,6 +145,50 @@ def call_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, 
 
     raise RuntimeError(f"Dify chat call failed: {last_exc}")
 
+def stream_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, active_system_prompt: str, recent_context_summary: str = "", files: list = None):
+    """
+    流式调用 Dify 01 对话模型引擎。
+    """
+    url = f"{DIFY_BASE_URL}/chat-messages"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    
+    # 注意：在 Dify 中，active_persona 等通常被定义为 Conversation Variables
+    # 这里通过 inputs 注入，DSL 端需要同步在 Start 节点定义这些变量
+    payload = {
+        "inputs": {
+            "active_persona": active_persona,
+            "active_system_prompt": active_system_prompt,
+            "recent_context_summary": recent_context_summary
+        },
+        "query": query,
+        "response_mode": "streaming",
+        "user": user_id,
+    }
+    
+    if files:
+        payload["files"] = [{"type": "image", "transfer_method": "remote_url", "url": u} for u in files]
+
+    resp = requests.post(url, headers=headers, json=payload, stream=True, timeout=DIFY_REQUEST_TIMEOUT)
+    resp.raise_for_status()
+
+    for line in resp.iter_lines():
+        if not line:
+            continue
+        line_str = line.decode("utf-8")
+        if line_str.startswith("data: "):
+            try:
+                data = json.loads(line_str[6:])
+                event = data.get("event")
+                if event == "message":
+                    yield data.get("answer", "")
+                elif event == "error":
+                    raise RuntimeError(f"Dify streaming error: {data}")
+            except json.JSONDecodeError:
+                continue
+
 def write_dify_dataset(dataset_id: str, document_name: str, document_text: str) -> None:
     """
     将文本写入指定的 Dify 知识库 (Dataset)。

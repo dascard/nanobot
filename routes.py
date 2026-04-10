@@ -13,7 +13,7 @@ from typing import Optional, List
 from config import NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT
 from database import get_db, User, Persona, SystemPrompt, ChatLog
 from evolution import evolution_task
-from dify_client import call_dify_chat
+from dify_client import call_dify_chat, stream_dify_chat
 from compaction import run_autocompact_circuit_breaker
 
 logger = logging.getLogger("nanobot.routes")
@@ -291,17 +291,22 @@ def proxy_chat(
     # 强制截断防爆处理
     recent_context_summary = run_autocompact_circuit_breaker(context_lines, max_length=4000)
 
-    # 4. 阻塞调用 Dify 01 (Stateless)
+    # 4. 流式调用 Dify 01 (Stateless)
+    # 为了解决首字响应慢的问题，我们在这里采用“伪流式”分段聚合
+    answer = ""
     try:
-        answer = call_dify_chat(
+        # stream_dify_chat 会实时产出文本块
+        for chunk in stream_dify_chat(
             API_KEY_01_CHAT, 
             req.user_id, 
             req.query, 
             p_json, 
-            s_prompt,
-            recent_context_summary,
+            s_prompt, 
+            recent_context_summary, 
             files=req.files
-        )
+        ):
+            answer += chunk
+            # TODO: 未来可以配合 WebSocket 实现真正的实时推流
     except Exception as e:
         logger.error(f"Chat Proxy failed: {e}")
         raise HTTPException(status_code=502, detail=f"Upstream Error: {str(e)}")
@@ -337,10 +342,21 @@ def proxy_chat(
         # 触发进化时，针对具体的物理人触发（提取该人跨 Session 的足迹）
         background_tasks.add_task(evolution_task, req.user_id)
 
+    # ── 模拟短对话：内容自动拆分逻辑 ──
+    # 将长回复按双换行或特定分段符拆分，让前端可以分条发送
+    if "\n\n" in answer:
+        answer_chunks = [c.strip() for c in answer.split("\n\n") if c.strip()]
+    elif len(answer) > 300:
+        # 兜底：如果太长且没换行，按句号尝试拆分（可选）
+        answer_chunks = [answer]
+    else:
+        answer_chunks = [answer]
+
     return {
         "status": "ok",
         "user_id": req.user_id,
-        "answer": answer,
+        "answer": answer,           # 保留全文兼容旧逻辑
+        "answer_chunks": answer_chunks, # 新增拆分后的列表
         "unprocessed_logs": pending
     }
 
