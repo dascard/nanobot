@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 
-from config import NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT
+from config import NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT, ADMIN_USER_ID
 from database import get_db, User, Persona, SystemPrompt, ChatLog
 from evolution import evolution_task
 from dify_client import call_dify_chat, stream_dify_chat
@@ -271,6 +271,10 @@ def proxy_chat(
     p_json = persona_obj.persona_json if persona_obj else "{}"
     s_prompt = sys_obj.prompt_text if sys_obj else "你是一个具备自进化能力的智能助手。"
 
+    # 识别管理员：剥离前缀比对
+    raw_uid = req.user_id.split("_")[-1] if "_" in req.user_id else req.user_id
+    is_admin = (raw_uid == ADMIN_USER_ID)
+
     # 3. 本地对话历史滑窗提取（基于 session_id: 认场）
     recent_logs = (
         db.query(ChatLog)
@@ -303,6 +307,7 @@ def proxy_chat(
             p_json, 
             s_prompt, 
             recent_context_summary, 
+            is_admin_user=is_admin,
             files=req.files
         ):
             answer += chunk

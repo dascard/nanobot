@@ -75,7 +75,7 @@ def call_dify_workflow(api_key: str, inputs: dict) -> dict:
         f"Dify workflow call failed after {DIFY_MAX_RETRIES} retries: {last_exc}"
     )
 
-def call_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, active_system_prompt: str, recent_context_summary: str = "", files: list = None) -> str:
+def call_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, active_system_prompt: str, recent_context_summary: str = "", is_admin_user: bool = False, files: list = None) -> str:
     """
     代理调用 Dify 01 对话模型引擎（/chat-messages 接口），并注入上下文。
     支持可选的 files 参数用于多模态图片输入。
@@ -90,7 +90,8 @@ def call_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, 
     inputs = {
         "active_persona": active_persona,
         "active_system_prompt": active_system_prompt,
-        "recent_context_summary": recent_context_summary
+        "recent_context_summary": recent_context_summary,
+        "is_admin_user": is_admin_user
     }
     
     payload = {
@@ -145,7 +146,7 @@ def call_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, 
 
     raise RuntimeError(f"Dify chat call failed: {last_exc}")
 
-def stream_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, active_system_prompt: str, recent_context_summary: str = "", files: list = None):
+def stream_dify_chat(api_key: str, user_id: str, query: str, active_persona: str, active_system_prompt: str, recent_context_summary: str = "", is_admin_user: bool = False, files: list = None):
     """
     流式调用 Dify 01 对话模型引擎。
     """
@@ -161,7 +162,8 @@ def stream_dify_chat(api_key: str, user_id: str, query: str, active_persona: str
         "inputs": {
             "active_persona": active_persona,
             "active_system_prompt": active_system_prompt,
-            "recent_context_summary": recent_context_summary
+            "recent_context_summary": recent_context_summary,
+            "is_admin_user": is_admin_user
         },
         "query": query,
         "response_mode": "streaming",
