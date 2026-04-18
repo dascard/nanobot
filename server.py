@@ -2,6 +2,7 @@
 FastAPI 应用入口点。
 只负责组装路由、日志配置和中间件。
 """
+
 import logging
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
@@ -15,12 +16,13 @@ from routes import router as api_router
 
 # ── 日志配置 (支持持久化分割) ──
 import os
+
 os.makedirs(LOG_DIR, exist_ok=True)
 handler = RotatingFileHandler(
     filename=f"{LOG_DIR}/nanobot.log",
     maxBytes=10 * 1024 * 1024,  # 10 MB
     backupCount=5,
-    encoding="utf-8"
+    encoding="utf-8",
 )
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 handler.setFormatter(formatter)

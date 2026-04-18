@@ -170,9 +170,8 @@ def search_history_logs(
     提供给 Dify Agent 作为 Custom Tool 调用的数据库本地精确检索 API。
     实现无需全量 RAG 的按需、极速精准回忆。带有上下文支持。
     """
-    if user_id == "all":
-        base_query = db.query(ChatLog)
-    else:
+    base_query = db.query(ChatLog)
+    if user_id != "all":
         # 【弹性搜索核心】：允许 user_id 匹配 ID 或者 模糊匹配人名/场景名
         # 【优先精确匹配】
         exact_match = base_query.filter(
