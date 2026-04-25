@@ -1,0 +1,3 @@
+[submodule "vendor/KohakuTerrarium"]
+	path = vendor/KohakuTerrarium
+	url = https://github.com/Kohaku-Lab/KohakuTerrarium
