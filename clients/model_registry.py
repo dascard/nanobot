@@ -19,19 +19,48 @@ class ModelRegistry:
                     content = f.read()
                     if content.strip():
                         self.data = json.loads(content)
-                        models_count = len(self.data.get("models", []))
-                        tiers = {}
-                        for m in self.data.get("models", []):
-                            t = m.get("tier", "unknown")
-                            tiers[t] = tiers.get(t, 0) + 1
-                        logger.info(
-                            f"Model registry loaded: {models_count} models from {MODEL_DATA_PATH}",
-                            extra={"model_count": models_count, "tiers": tiers},
-                        )
+                        self._log_all_models("loaded")
             else:
                 logger.warning(f"Model registry file not found at {MODEL_DATA_PATH}")
         except Exception as e:
             logger.error(f"Failed to load model registry: {e}")
+
+    def _log_all_models(self, event: str = "") -> None:
+        """Log all registry models grouped by tier with key attributes."""
+        models_list: List[Dict[str, Any]] = self.data.get("models", [])
+        if not models_list:
+            logger.info(f"Model registry is empty (event={event})")
+            return
+
+        tiers: Dict[str, List[Dict[str, Any]]] = {}
+        for m in models_list:
+            t = m.get("tier", "unknown")
+            tiers.setdefault(t, []).append(m)
+
+        lines = [f"=== Model Registry ({event}) total={len(models_list)} ==="]
+        for t in ["reasoning", "smart", "fast", "unknown"]:
+            tier_models = tiers.pop(t, [])
+            if not tier_models:
+                continue
+            lines.append(f"-- {t} ({len(tier_models)} models) --")
+            for m in tier_models:
+                tags = m.get("tags") or []
+                is_free = "FREE" if "free" in tags else "paid"
+                unstable = " [UNSTABLE]" if "unstable" in tags else ""
+                lines.append(
+                    f"  {m.get('id')} | intel={m.get('intelligence',0)} "
+                    f"| cost=${m.get('cost_input_1m',0):.2f}/1M "
+                    f"| {is_free}{unstable}"
+                )
+        for t, tier_models in sorted(tiers.items()):
+            if not tier_models:
+                continue
+            lines.append(f"-- {t} ({len(tier_models)} models) --")
+            for m in tier_models:
+                lines.append(f"  {m.get('id')}")
+
+        for line in lines:
+            logger.info(line)
 
     def get_models_by_provider(self, provider: str) -> List[Dict[str, Any]]:
         models_list: List[Dict[str, Any]] = self.data.get("models", [])
@@ -230,22 +259,10 @@ class ModelRegistry:
                 f"(new={new_count}, updated={updated_count}, unchanged={len(models) - total})"
             )
             if new_ids:
-                logger.debug(f"New models added: {new_ids}")
+                logger.info(f"New models added: {new_ids}")
             if updated_ids:
-                logger.debug(f"Models updated: {updated_ids}")
-
-            # Log tier distribution
-            tiers = {}
-            free_count = 0
-            for m in models_list:
-                t = m.get("tier", "unknown")
-                tiers[t] = tiers.get(t, 0) + 1
-                if "free" in (m.get("tags") or []):
-                    free_count += 1
-            logger.info(
-                f"Registry status: total_models={len(models_list)}, "
-                f"tiers={tiers}, free_models={free_count}"
-            )
+                logger.info(f"Models updated: {updated_ids}")
+            self._log_all_models("post-sync")
 
         self.save_registry()
         return total
