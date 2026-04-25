@@ -47,10 +47,12 @@ class ModelRegistry:
                 tags = m.get("tags") or []
                 is_free = "FREE" if "free" in tags else "paid"
                 unstable = " [UNSTABLE]" if "unstable" in tags else ""
+                desc = (m.get("description") or "").strip()
+                desc_suffix = f" — {desc[:80]}" if desc else ""
                 lines.append(
                     f"  {m.get('id')} | intel={m.get('intelligence',0)} "
                     f"| cost=${m.get('cost_input_1m',0):.2f}/1M "
-                    f"| {is_free}{unstable}"
+                    f"| {is_free}{unstable}{desc_suffix}"
                 )
         for t, tier_models in sorted(tiers.items()):
             if not tier_models:
