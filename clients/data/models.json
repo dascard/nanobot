@@ -1,0 +1,215 @@
+{
+  "models": [
+    {
+      "id": "new-reasoning-model-v1",
+      "intelligence": 9.8,
+      "cost_input": 0.5,
+      "cost_output": 1.5,
+      "tags": [
+        "reasoning",
+        "smart"
+      ]
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "provider": "new-api",
+      "intelligence": 8,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "fast",
+      "tags": [
+        "cheap",
+        "deepseek",
+        "fast",
+        "general",
+        "paid",
+        "stable"
+      ],
+      "description": "DeepSeek flash models are paid but preferred due to better price/performance.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "deepseek-v4-flash-high",
+      "provider": "new-api",
+      "intelligence": 9,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "reasoning",
+      "tags": [
+        "analysis",
+        "cheap",
+        "deepseek",
+        "fast",
+        "general",
+        "paid",
+        "reasoning",
+        "stable"
+      ],
+      "description": "DeepSeek high variants should be preferred over max for premium reasoning quality.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "deepseek-v4-flash-max",
+      "provider": "new-api",
+      "intelligence": 8,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "reasoning",
+      "tags": [
+        "cheap",
+        "deepseek",
+        "expensive",
+        "fast",
+        "general",
+        "paid",
+        "reasoning"
+      ],
+      "description": "DeepSeek max variants are expensive; use only when high/flash cannot satisfy the task.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "provider": "new-api",
+      "intelligence": 8,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "smart",
+      "tags": [
+        "analysis",
+        "deepseek",
+        "general",
+        "paid",
+        "reasoning"
+      ],
+      "description": "DeepSeek pro paid model; stronger than base flash but typically less cost-effective than flash-high for routine tasks.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "gemma-4",
+      "provider": "new-api",
+      "intelligence": 7,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "smart",
+      "tags": [
+        "general",
+        "multimodal",
+        "vision"
+      ],
+      "description": "Gemma4 is treated as multimodal in this pool.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "google/gemma-4-31b-it:free",
+      "provider": "new-api",
+      "intelligence": 6,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "smart",
+      "tags": [
+        "free",
+        "general",
+        "multimodal",
+        "rate_limited",
+        "vision"
+      ],
+      "description": "Gemma free alias may return 429 under peak load; usable when quota is available.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "gpt-oss-120b",
+      "provider": "new-api",
+      "intelligence": 7,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "smart",
+      "tags": [
+        "general",
+        "paid",
+        "reasoning"
+      ],
+      "description": "Paid/non-free alias of gpt-oss family; similar routing intent as free alias.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "nemotron-3",
+      "provider": "new-api",
+      "intelligence": 7,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "smart",
+      "tags": [
+        "general",
+        "paid"
+      ],
+      "description": "Paid/non-free Nemotron alias.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "provider": "new-api",
+      "intelligence": 6,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "fast",
+      "tags": [
+        "cheap",
+        "free",
+        "general"
+      ],
+      "description": "OpenRouter free alias for Nemotron family; usable as low-cost fallback.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "openai/gpt-oss-120b:free",
+      "provider": "new-api",
+      "intelligence": 6,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "fast",
+      "tags": [
+        "cheap",
+        "free",
+        "general",
+        "reasoning"
+      ],
+      "description": "OpenRouter free alias for gpt-oss-120b. Generally usable when free quota allows.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "qwen/qwen3-coder:free",
+      "provider": "new-api",
+      "intelligence": 4,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "fast",
+      "tags": [
+        "coding",
+        "free",
+        "general",
+        "limited",
+        "tool_use",
+        "unstable"
+      ],
+      "description": "Qwen coder free alias. Frequently limit-hit in this deployment; keep as low-priority fallback.",
+      "reasoning": "Auto-discovered from new-api /models"
+    },
+    {
+      "id": "qwen3-coder",
+      "provider": "new-api",
+      "intelligence": 7,
+      "cost_input_1m": 9.99,
+      "cost_output_1m": 9.99,
+      "tier": "smart",
+      "tags": [
+        "coding",
+        "general",
+        "paid",
+        "tool_use"
+      ],
+      "description": "Qwen coder paid/non-free alias; same family as free alias for routing continuity.",
+      "reasoning": "Auto-discovered from new-api /models"
+    }
+  ],
+  "last_updated": "2026-04-25T18:25:32.346019"
+}

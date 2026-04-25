@@ -1,0 +1,99 @@
+{
+  "models": [
+    {
+      "id": "gemini-3.1-pro-preview",
+      "provider": "gemini",
+      "intelligence": 9,
+      "cost_input_1m": 1.25,
+      "cost_output_1m": 3.75,
+      "tier": "smart",
+      "tags": [
+        "agentic",
+        "tool-call",
+        "1M-ctx"
+      ]
+    },
+    {
+      "id": "gemini-3.1-flash-lite-preview",
+      "provider": "gemini",
+      "intelligence": 4,
+      "cost_input_1m": 0.075,
+      "cost_output_1m": 0.3,
+      "tier": "fast",
+      "tags": [
+        "low-latency",
+        "high-volume"
+      ]
+    },
+    {
+      "id": "gemini-3.1-flash-preview",
+      "provider": "gemini",
+      "intelligence": 6,
+      "cost_input_1m": 0.35,
+      "cost_output_1m": 1.05,
+      "tier": "fast",
+      "tags": [
+        "balanced"
+      ]
+    },
+    {
+      "id": "deepseek-chat",
+      "provider": "deepseek",
+      "intelligence": 8,
+      "cost_input_1m": 0.14,
+      "cost_output_1m": 0.28,
+      "tier": "smart",
+      "tags": [
+        "cost-efficient",
+        "coding"
+      ]
+    },
+    {
+      "id": "deepseek-reasoner",
+      "provider": "deepseek",
+      "intelligence": 10,
+      "cost_input_1m": 0.55,
+      "cost_output_1m": 2.19,
+      "tier": "reasoning",
+      "tags": [
+        "chain-of-thought",
+        "complex-logic"
+      ]
+    },
+    {
+      "id": "glm-5.1",
+      "provider": "zhipu",
+      "intelligence": 9,
+      "cost_input_1m": 1.0,
+      "cost_output_1m": 3.0,
+      "tier": "smart",
+      "tags": [
+        "autonomous-agent",
+        "moe"
+      ]
+    },
+    {
+      "id": "qwen3.6-plus",
+      "provider": "qwen",
+      "intelligence": 8,
+      "cost_input_1m": 0.8,
+      "cost_output_1m": 2.4,
+      "tier": "smart",
+      "tags": [
+        "multimodal",
+        "1M-ctx"
+      ]
+    },
+    {
+      "id": "new-reasoning-model-v1",
+      "intelligence": 9.8,
+      "cost_input": 0.5,
+      "cost_output": 1.5,
+      "tags": [
+        "reasoning",
+        "smart"
+      ]
+    }
+  ],
+  "last_updated": "2026-04-25T02:16:54.553259"
+}

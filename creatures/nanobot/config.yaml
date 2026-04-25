@@ -1,0 +1,36 @@
+# Nanobot Agent Configuration — KohakuTerrarium Format
+name: nanobot
+version: "1.0"
+
+controller:
+  provider: openai
+  model: ${LLM_MODEL_SMART:-deepseek-chat}
+  base_url: ${NEW_API_BASE_URL:-https://api.new-api.com/v1}
+  api_key_env: NEW_API_KEY
+  temperature: 0.7
+  tool_format: native            # OpenAI function calling protocol
+  max_messages: 50               # auto-compaction threshold
+
+# ── Tools ──
+tools:
+  - name: sql_analysis
+    type: package
+    module: nanobot_kt.tools.sql_analysis
+    class: SQLAnalysisTool
+  - name: python_sandbox
+    type: package
+    module: nanobot_kt.tools.python_sandbox
+    class: PythonSandboxTool
+  - name: news_search
+    type: package
+    module: nanobot_kt.tools.news_search
+    class: NewsSearchTool
+
+# ── Output ──
+output:
+  type: custom
+  module: nanobot_kt.output
+  class: BufferedOutput
+
+# ── System Prompt ──
+system_prompt_file: prompt.md

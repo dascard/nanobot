@@ -1,5 +1,5 @@
 import pytest
-from database import ChatLog
+from core.database import ChatLog
 
 def test_health_check(client):
     response = client.get("/api/v1/health")
@@ -48,23 +48,19 @@ def test_submit_log(client, db_session):
 
 def test_proxy_chat(client, db_session):
     from unittest.mock import patch
+    from unittest.mock import AsyncMock
     
-    with patch("routes.API_KEY_01_CHAT", "dummy_01"), \
-         patch("routes.call_dify_chat") as mock_dify:
-        mock_dify.return_value = "Mocked Dify Reply"
-        
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(return_value="Mocked KT Reply")
+    
+    with patch("api.routes.get_bridge", return_value=mock_bridge):
         response = client.post(
             "/api/v1/chat", 
             json={"user_id": "proxy_user", "query": "hello proxy"}
         )
         assert response.status_code == 200
-        assert response.json()["answer"] == "Mocked Dify Reply"
+        assert response.json()["answer"] == "Mocked KT Reply"
         
-        # 验证是否写入了两条日志（一问一答）
-        from database import ChatLog
-        logs = db_session.query(ChatLog).filter_by(user_id="proxy_user").all()
-        assert len(logs) == 2
-        assert logs[0].content == "hello proxy"
-        assert logs[0].role == "user"
-        assert logs[1].content == "Mocked Dify Reply"
-        assert logs[1].role == "model"
+        # 验证 bridge.handle_message 被调用
+        mock_bridge.handle_message.assert_awaited_once()
+

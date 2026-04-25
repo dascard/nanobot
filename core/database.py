@@ -2,11 +2,12 @@ import os
 from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
+from config import DATABASE_URL
 
 # 使用绝对路径确保在 Docker 挂载时路径不飘移
 DB_DIR = os.path.abspath("./data")
 DB_PATH = os.path.join(DB_DIR, "nanobot.db")
-DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DB_PATH}")
+# BUG-20 FIX: DATABASE_URL now imported from config.py (single source of truth)
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -40,6 +41,21 @@ class ChatLog(Base):
     role = Column(String)  # 'user', 'model', or 'ambient'
     content = Column(Text)
     processed = Column(Integer, default=0)  # 0: unprocessed, 1: processed by evolution task
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class MemoryDigest(Base):
+    __tablename__ = "memory_digests"
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(String, index=True)
+    session_id = Column(String, index=True)
+    digest_date = Column(String, index=True)  # YYYY-MM-DD
+    level = Column(Integer, default=0, index=True)  # 0=rich, 1=summary, 2=compact
+    parent_id = Column(Integer, nullable=True)
+    content = Column(Text)
+    meta_json = Column(Text, default="{}")
+    source_start_log_id = Column(Integer, nullable=True)
+    source_end_log_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
 def init_db():

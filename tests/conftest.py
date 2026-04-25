@@ -2,14 +2,22 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
+import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, patch, MagicMock
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 # 劫持 DATABASE_URL 到内存数据库进行测试
 import os
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["NANOBOT_API_TOKEN"] = "" # 测试环境禁用 API Token
+os.environ["NEW_API_KEY"] = "test-key-for-ci"  # Prevent KT init crash
 
-from database import Base, get_db
-import database
+from core.database import Base, get_db
+from core import database
 from server import app
 from sqlalchemy.pool import StaticPool
 

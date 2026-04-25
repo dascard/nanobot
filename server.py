@@ -6,13 +6,14 @@ FastAPI 应用入口点。
 import logging
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import LOG_DIR, LOG_LEVEL
-from database import init_db
-from routes import router as api_router
+from core.database import init_db
+from api.routes import router as api_router
 
 # ── 日志配置 (支持持久化分割) ──
 import os
@@ -43,8 +44,36 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Nanobot Server Gateway...")
     init_db()
     logger.info("Database initialized.")
+    digest_thread = None
+    digest_stop_event = None
+
+    from config import DAILY_DIGEST_ENABLED
+    if DAILY_DIGEST_ENABLED:
+        from core.daily_digest import daily_digest_scheduler
+        digest_stop_event = threading.Event()
+        digest_thread = threading.Thread(
+            target=daily_digest_scheduler,
+            args=(digest_stop_event,),
+            daemon=True,
+            name="daily-digest-scheduler",
+        )
+        digest_thread.start()
+        logger.info("Daily digest scheduler initialized.")
+
+    # Initialize KT Framework bridge (replaces old manual controller)
+    from nanobot_kt.bridge import init_bridge, shutdown_bridge
+    bridge = await init_bridge()
+    logger.info(f"KT Agent initialized via bridge.")
+    # Also init legacy controller for endpoints that still use SQLiteMemory
+    from api.routes import init_legacy_memory
+    init_legacy_memory()
     yield
     logger.info("Shutting down Nanobot Server Gateway...")
+    if digest_stop_event is not None:
+        digest_stop_event.set()
+    if digest_thread is not None:
+        digest_thread.join(timeout=5)
+    await shutdown_bridge()
 
 
 # ── 应用初始化 ──

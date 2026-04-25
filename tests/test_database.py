@@ -1,5 +1,5 @@
 import pytest
-from database import User, Persona, SystemPrompt, ChatLog
+from core.database import User, Persona, SystemPrompt, ChatLog
 
 def test_create_user(db_session):
     user = User(id="test_user_1")

@@ -120,6 +120,8 @@ def run_autocompact_circuit_breaker(context_lines: List[str], max_length: int = 
                 logger.error("Tripped circuit breaker: MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES reached. Forcing PTL fallback.")
                 # Circuit breaker drop
                 current_lines = truncate_head_for_ptl_retry(current_lines)
+                # BUG-07 FIX: Reset failures to allow retry after truncation
+                failures = 0
                 if not current_lines:
                     return ""
                 continue
