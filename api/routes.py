@@ -38,8 +38,20 @@ def init_legacy_memory():
     logger.info("Legacy SQLiteMemory initialized for evolution endpoints")
 
 
-def _build_session_memory(db: Session, session_id: str, max_messages: int = 20) -> str:
-    """Build a conversation history context string for a given session."""
+def _cap_text(text: str, max_chars: int, label: str = "") -> str:
+    """Truncate text at last newline boundary, appending a truncation marker."""
+    if len(text) <= max_chars:
+        return text
+    cut_at = text.rfind("\n", 0, max_chars)
+    if cut_at <= 0:
+        cut_at = max_chars
+    logger.debug(f"[cap] {label}: {len(text)} -> {cut_at} chars (max={max_chars})")
+    return text[:cut_at] + f"\n...[截断: 原{len(text)}字符]"
+
+
+def _build_session_memory(db: Session, session_id: str, max_messages: int = 30,
+                          max_per_msg: int = 1000, max_total: int = 15000) -> str:
+    """Build a capped conversation history context string for a given session."""
     recent_logs = (
         db.query(ChatLog)
         .filter(ChatLog.session_id == session_id)
@@ -54,15 +66,22 @@ def _build_session_memory(db: Session, session_id: str, max_messages: int = 20) 
 
     lines = []
     for log in recent_logs:
+        content = _cap_text(log.content.strip(), max_per_msg, f"session_msg")
+        if not content:
+            continue
         if log.role == "user":
-            lines.append(f"用户: {log.content}")
+            lines.append(f"用户: {content}")
         elif log.role == "assistant":
-            lines.append(f"助手: {log.content}")
+            lines.append(f"助手: {content}")
 
     if not lines:
         return ""
 
-    return "[以下为近期对话历史，供你理解上下文]\n" + "\n".join(lines) + "\n[历史结束]"
+    header = "[以下为近期对话历史，供你理解上下文]"
+    body = "\n".join(lines)
+    footer = "[历史结束]"
+    full = f"{header}\n{body}\n{footer}"
+    return _cap_text(full, max_total, "session_memory")
 
 
 # ── 认证中间件 ──
@@ -354,7 +373,7 @@ async def proxy_chat(
             db.add(User(id=target_id))
     db.commit()
 
-    # 2. 加载用户画像 & 系统提示词
+    # 2. 加载用户画像 (PersonaArchitectAgent 实际输出的键: identity, communication_style, domain_profiles, persona_summary)
     persona_obj = db.query(Persona).filter(Persona.user_id == req.user_id).first()
     persona_json_str = persona_obj.persona_json if persona_obj else "{}"
     try:
@@ -364,14 +383,24 @@ async def proxy_chat(
     persona_text = ""
     if isinstance(persona_data, dict) and persona_data:
         parts = []
+        # persona_summary: overall self-description
         summary = str(persona_data.get("persona_summary", "")).strip()
         if summary:
             parts.append(summary)
-        traits = persona_data.get("traits") or persona_data.get("preferences") or {}
-        if isinstance(traits, dict) and traits:
-            trait_lines = ", ".join(f"{k}={v}" for k, v in traits.items() if v)
-            if trait_lines:
-                parts.append(f"特征偏好: {trait_lines}")
+        # identity: core user identity dict (role, name, etc.)
+        identity = persona_data.get("identity")
+        if isinstance(identity, dict) and identity:
+            ident_parts = []
+            for k, v in identity.items():
+                if v and str(v).strip():
+                    ident_parts.append(f"{k}: {v}")
+            if ident_parts:
+                parts.append("身份: " + "; ".join(ident_parts))
+        # communication_style: how user prefers to communicate
+        comm_style = str(persona_data.get("communication_style", "")).strip()
+        if comm_style:
+            parts.append(f"沟通风格: {comm_style}")
+        # domain_profiles: per-domain expertise/interests
         domains = persona_data.get("domain_profiles", {})
         if isinstance(domains, dict) and domains:
             domain_lines = []
@@ -382,40 +411,36 @@ async def proxy_chat(
                         domain_lines.append(f"{domain}: {desc}")
             if domain_lines:
                 parts.append("领域画像:\n" + "\n".join(f"  - {line}" for line in domain_lines))
-        # Fallback: if no recognized keys, include raw JSON (up to 500 chars)
+        # Fallback: unrecognized structure
         if not parts:
             raw = json.dumps(persona_data, ensure_ascii=False)
-            if len(raw) > 10:  # more than just "{}"
+            if len(raw) > 10:
                 parts.append(f"画像数据: {raw[:500]}")
-        persona_text = "\n".join(parts)
-
-    sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == req.user_id).first()
-    sys_prompt_text = sys_obj.prompt_text.strip() if sys_obj and sys_obj.prompt_text else ""
+        persona_text = _cap_text("\n".join(parts), 5000, "persona")
 
     logger.info(
         f"[/chat] Persona lookup: user_id={req.user_id}, "
-        f"found={persona_obj is not None}, persona_len={len(persona_text)}, "
-        f"sys_prompt_len={len(sys_prompt_text)}, "
-        f"persona_json_keys={list(persona_data.keys()) if isinstance(persona_data, dict) else 'N/A'}"
+        f"found={persona_obj is not None}, persona_raw_len={len(persona_json_str)}, "
+        f"persona_text_len={len(persona_text)}, "
+        f"keys={list(persona_data.keys()) if isinstance(persona_data, dict) else 'N/A'}"
     )
 
-    # 3. 构建会话记忆上下文 (从 DB 提取近期对话历史)
+    # 3. 构建会话记忆上下文
     memory_context = _build_session_memory(db, req.session_id, max_messages=20)
 
-    # 4. 组装 enriched query: persona → system prompt → memory → user message
+    # 4. 组装 enriched query — 只注入会话记忆（用户画像通过 metadata 传递，由 bridge 注入为 system 消息；
+    #    系统提示词已由 KT evolution 写入 SystemPrompt 表，再由 PromptAuditorAgent 合并到 KT system prompt）
     enriched_query = req.query
-    context_blocks = []
-    if persona_text:
-        context_blocks.append(f"[用户画像]\n{persona_text}")
-    if sys_prompt_text:
-        context_blocks.append(f"[系统提示]\n{sys_prompt_text}")
     if memory_context:
-        context_blocks.append(memory_context)
-    if context_blocks:
-        enriched_query = "\n\n".join(context_blocks) + f"\n\n[当前消息]\n用户: {req.query}"
-        logger.info(f"[/chat] Enriched query: {len(context_blocks)} context blocks, total={len(enriched_query)} chars")
+        enriched_query = _cap_text(
+            f"{memory_context}\n\n[当前消息]\n用户: {req.query}", 20000, "enriched_query"
+        )
+        logger.info(
+            f"[/chat] Enriched query: memory={len(memory_context)}chars, "
+            f"total={len(enriched_query)}chars, est_tokens={len(enriched_query)//2}"
+        )
 
-    # 3. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
+    # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
     bridge = get_bridge()
     try:
         answer = await bridge.handle_message(
@@ -425,7 +450,8 @@ async def proxy_chat(
             sender_name=req.sender_name or "",
             metadata={
                 "session_name": req.session_name,
-                "files": req.files
+                "files": req.files,
+                "persona_text": persona_text,
             }
         )
     except Exception as e:
@@ -459,9 +485,10 @@ async def proxy_chat(
     ))
     db.commit()
 
-    # 4. 检查进化触发阈值
-    pending = db.query(ChatLog).filter(ChatLog.session_id == req.session_id, ChatLog.processed == 0).count()
+    # 4. 检查进化触发阈值 (按 user_id 计数，而非 session_id，确保个人消息足够才触发进化)
+    pending = db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
     if pending >= EVOLUTION_THRESHOLD:
+        logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
         background_tasks.add_task(evolution_task, req.user_id)
 
     # 5. 模拟短对话：内容自动拆分逻辑

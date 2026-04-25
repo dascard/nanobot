@@ -70,6 +70,8 @@ class NanobotBridge:
             await self._agent.stop()
         logger.info("KT Agent stopped")
 
+    PERSONA_MARKER = "[PersonaContext]"
+
     async def handle_message(
         self,
         query: str,
@@ -90,7 +92,7 @@ class NanobotBridge:
             user_id: User identifier
             session_id: Session/group identifier
             sender_name: Display name of the sender
-            metadata: Additional metadata
+            metadata: Additional metadata (persona_text, files, session_name)
 
         Returns:
             Agent's response text
@@ -101,6 +103,21 @@ class NanobotBridge:
         async with self._lock:
             self._output.clear()
             logger.info(f"[NanobotBridge] Starting handle_message: query_len={len(query)}, user={user_id}, session={session_id}")
+
+            # --- Inject persona as system message (authoritative weight, persists across clears) ---
+            meta = metadata or {}
+            persona_text = str(meta.get("persona_text", "")).strip()
+            if persona_text and hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                conv = self._agent.controller.conversation
+                # Remove any existing persona system message
+                conv._messages = [
+                    m for m in conv._messages
+                    if not (m.role == "system" and getattr(m, 'content', '').startswith(self.PERSONA_MARKER))
+                ]
+                conv.append("system", f"{self.PERSONA_MARKER}\n{persona_text}")
+                logger.info(f"[NanobotBridge] Persona injected as system message: len={len(persona_text)}")
+            # -------------------------------------------------------------------------------------
+
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")
             logger.debug(f"[NanobotBridge] Output module: {self._output}")
             logger.debug(f"[NanobotBridge] Agent output_module attr: {getattr(self._agent, '_output_module', 'NOT SET')}")
@@ -130,6 +147,22 @@ class NanobotBridge:
                 target_model = "gpt-4o"
                 routed_tier = "smart"
             # -----------------------------
+
+            # --- Context budget awareness ---
+            est_tokens = len(query) // 2  # rough estimate for Chinese-heavy text
+            ctx_window = 128000  # default fallback
+            if route_client:
+                model_info = registry.get_model_info(target_model)
+                if model_info and model_info.get("context_window"):
+                    ctx_window = int(model_info["context_window"])
+            pct = est_tokens / ctx_window * 100
+            log_fn = logger.warning if pct > 80 else logger.info
+            log_fn(
+                f"[Context Budget] estimated_tokens={est_tokens}, "
+                f"context_window={ctx_window}, usage={pct:.1f}%, "
+                f"model={target_model}"
+            )
+            # ----------------------------------
 
             max_attempts = 3
             failed_models = []

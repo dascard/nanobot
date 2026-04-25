@@ -5,19 +5,22 @@
     "intelligence": 4,
     "tier": "fast",
     "cost_input_1m": 0.0,
-    "cost_output_1m": 0.0
+    "cost_output_1m": 0.0,
+    "context_window": 131072
   },
   "qwen3-coder": {
     "description": "Phantom entry: gateway has no real paid qwen3-coder, only the free alias (which is always 429). Marked unstable.",
     "tags": ["coding", "paid", "unstable"],
     "intelligence": 4,
-    "tier": "fast"
+    "tier": "fast",
+    "context_window": 131072
   },
   "gemma-4": {
     "description": "Gemma4 is treated as multimodal in this pool.",
     "tags": ["multimodal", "vision", "general"],
     "intelligence": 7,
-    "tier": "smart"
+    "tier": "smart",
+    "context_window": 128000
   },
   "google/gemma-4-31b-it:free": {
     "description": "Gemma free alias may return 429 under peak load; usable when quota is available.",
@@ -25,7 +28,8 @@
     "intelligence": 6,
     "tier": "smart",
     "cost_input_1m": 0.0,
-    "cost_output_1m": 0.0
+    "cost_output_1m": 0.0,
+    "context_window": 128000
   },
   "openai/gpt-oss-120b:free": {
     "description": "OpenRouter free alias for gpt-oss-120b. Generally usable when free quota allows.",
@@ -33,7 +37,8 @@
     "intelligence": 6,
     "tier": "fast",
     "cost_input_1m": 0.0,
-    "cost_output_1m": 0.0
+    "cost_output_1m": 0.0,
+    "context_window": 128000
   },
   "nvidia/nemotron-3-super-120b-a12b:free": {
     "description": "OpenRouter free alias for Nemotron family; usable as low-cost fallback.",
@@ -41,48 +46,56 @@
     "intelligence": 6,
     "tier": "fast",
     "cost_input_1m": 0.0,
-    "cost_output_1m": 0.0
+    "cost_output_1m": 0.0,
+    "context_window": 128000
   },
   "gpt-oss-120b": {
     "description": "Paid/non-free alias of gpt-oss family; similar routing intent as free alias.",
     "tags": ["paid", "general", "reasoning"],
     "intelligence": 7,
-    "tier": "smart"
+    "tier": "smart",
+    "context_window": 128000
   },
   "nemotron-3": {
     "description": "Paid/non-free Nemotron alias.",
     "tags": ["paid", "general"],
     "intelligence": 7,
-    "tier": "smart"
+    "tier": "smart",
+    "context_window": 128000
   },
   "deepseek-v4-flash": {
     "description": "DeepSeek flash models are paid but preferred due to better price/performance.",
     "tags": ["deepseek", "paid", "cheap", "fast", "stable"],
     "intelligence": 8,
-    "tier": "fast"
+    "tier": "fast",
+    "context_window": 131072
   },
   "deepseek-v4-flash-high": {
     "description": "DeepSeek high variants should be preferred over max for premium reasoning quality.",
     "tags": ["deepseek", "paid", "reasoning", "analysis", "stable"],
     "intelligence": 9,
-    "tier": "reasoning"
+    "tier": "reasoning",
+    "context_window": 131072
   },
   "deepseek-v4-flash-max": {
     "description": "DeepSeek max variants are expensive; use only when high/flash cannot satisfy the task.",
     "tags": ["deepseek", "paid", "expensive", "reasoning"],
     "intelligence": 8,
-    "tier": "reasoning"
+    "tier": "reasoning",
+    "context_window": 131072
   },
   "deepseek-v4-pro": {
     "description": "DeepSeek pro paid model; stronger than base flash but typically less cost-effective than flash-high for routine tasks.",
     "tags": ["deepseek", "paid", "reasoning", "analysis"],
     "intelligence": 8,
-    "tier": "smart"
+    "tier": "smart",
+    "context_window": 131072
   },
   "new-reasoning-model-v1": {
     "description": "Legacy local reasoning alias kept for compatibility.",
     "tags": ["reasoning", "analysis"],
     "intelligence": 8,
-    "tier": "reasoning"
+    "tier": "reasoning",
+    "context_window": 131072
   }
 }

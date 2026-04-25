@@ -20,7 +20,7 @@ DATASET_ID_LOGS = os.environ.get("DATASET_ID_LOGS", "")
 DATASET_ID_PERSONAS = os.environ.get("DATASET_ID_PERSONAS", "")
 
 # ── 进化参数 ──
-EVOLUTION_THRESHOLD = int(os.environ.get("EVOLUTION_THRESHOLD", "20"))
+EVOLUTION_THRESHOLD = int(os.environ.get("EVOLUTION_THRESHOLD", "10"))
 
 # ── API 认证 ──
 NANOBOT_API_TOKEN = os.environ.get("NANOBOT_API_TOKEN", "")

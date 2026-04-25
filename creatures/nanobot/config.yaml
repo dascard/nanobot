@@ -13,6 +13,10 @@ controller:
   max_messages: 50               # auto-compaction threshold
   ephemeral: true               # clear conversation after each interaction (per-session memory injected via DB)
 
+# ── Memory ──
+memory:
+  path: ./memory
+
 # ── Tools ──
 tools:
   - name: sql_analysis
@@ -27,6 +31,13 @@ tools:
     type: package
     module: nanobot_kt.tools.news_search
     class: NewsSearchTool
+
+# ── Sub-Agents ──
+subagents:
+  - name: memory_read
+    type: builtin
+  - name: memory_write
+    type: builtin
 
 # ── Output ──
 output:

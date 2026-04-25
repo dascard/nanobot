@@ -808,12 +808,38 @@ class PersonaArchitectAgent:
         merge_input = f"## 现有画像\n{existing_persona}\n\n## 新日志摘要\n{json.dumps(log_summary, ensure_ascii=False)}"
         draft_res = await provider.invoke_raw(query=merge_input, system_prompt=PERSONA_MERGE_PROMPT, user_id="p_architect_merge", model_tier="smart")
         draft_json = EvolutionUtils.json_repair(draft_res)
-        
+
+        # Validate merge output; retry once with explicit repair hint on parse failure
+        if isinstance(draft_json, dict) and draft_json.get("parse_error"):
+            logger.warning(f"PersonaArchitectAgent merge parse error, retrying: {draft_json.get('raw', '')[:200]}")
+            repair_input = f"## 修复要求\n之前的输出无法解析为 JSON。请直接输出有效的 JSON 对象，键为 identity/communication_style/domain_profiles/persona_summary/version。\n\n## 原始合并输入\n{merge_input}"
+            draft_res = await provider.invoke_raw(query=repair_input, system_prompt=PERSONA_MERGE_PROMPT, user_id="p_architect_merge_retry", model_tier="smart")
+            draft_json = EvolutionUtils.json_repair(draft_res)
+
         # 2. Stage: Six-Dimension Critique (T3 - Use Reasoning model if available)
         critique_res = await provider.invoke_raw(query=json.dumps(draft_json, ensure_ascii=False), system_prompt=PERSONA_CRITIQUE_PROMPT, user_id="p_architect_critique", model_tier="reasoning")
-        
+
         # 3. Stage: Final Repair & Truncation (Python)
         final_persona = EvolutionUtils.json_repair(critique_res)
+
+        # Validate critique output; retry once on parse failure
+        if isinstance(final_persona, dict) and final_persona.get("parse_error"):
+            logger.warning(f"PersonaArchitectAgent critique parse error, retrying: {final_persona.get('raw', '')[:200]}")
+            repair_input = f"## 修复要求\n之前的输出无法解析为 JSON。请直接输出有效的 JSON 对象。\n\n## 草稿画像\n{json.dumps(draft_json, ensure_ascii=False)}"
+            critique_res = await provider.invoke_raw(query=repair_input, system_prompt=PERSONA_CRITIQUE_PROMPT, user_id="p_architect_critique_retry", model_tier="reasoning")
+            final_persona = EvolutionUtils.json_repair(critique_res)
+
+        # Validate expected keys; log warnings for missing fields
+        if isinstance(final_persona, dict):
+            expected_keys = {"identity", "communication_style", "domain_profiles", "persona_summary", "version"}
+            present_keys = set(final_persona.keys())
+            missing = expected_keys - present_keys
+            unexpected = present_keys - expected_keys - set(["parse_error", "raw"])
+            if missing:
+                logger.warning(f"PersonaArchitectAgent output missing expected keys: {missing}")
+            if unexpected:
+                logger.debug(f"PersonaArchitectAgent output has unexpected keys: {unexpected}")
+
         normalized_persona = self._enforce_persona_size(final_persona, max_chars=3000)
         if self._to_json_len(normalized_persona) > 3000:
             logger.warning("Persona remains larger than 3000 chars after compression.")
