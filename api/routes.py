@@ -38,6 +38,33 @@ def init_legacy_memory():
     logger.info("Legacy SQLiteMemory initialized for evolution endpoints")
 
 
+def _build_session_memory(db: Session, session_id: str, max_messages: int = 20) -> str:
+    """Build a conversation history context string for a given session."""
+    recent_logs = (
+        db.query(ChatLog)
+        .filter(ChatLog.session_id == session_id)
+        .order_by(ChatLog.id.desc())
+        .limit(max_messages)
+        .all()
+    )
+    recent_logs.reverse()
+
+    if not recent_logs:
+        return ""
+
+    lines = []
+    for log in recent_logs:
+        if log.role == "user":
+            lines.append(f"用户: {log.content}")
+        elif log.role == "assistant":
+            lines.append(f"助手: {log.content}")
+
+    if not lines:
+        return ""
+
+    return "[以下为近期对话历史，供你理解上下文]\n" + "\n".join(lines) + "\n[历史结束]"
+
+
 # ── 认证中间件 ──
 
 def verify_token(authorization: str = Header(default="")):
@@ -320,18 +347,25 @@ async def proxy_chat(
     统一网关：接收客户端的发问，通过 KT Agent 处理，返回结果并双向落库。
     """
     logger.info(f"[/chat] Request START: user={req.user_id}, session={req.session_id}, query={req.query[:100]}, sender={req.sender_name}, files={req.files}, session_name={req.session_name}")
-    
+
     # 1. 自动注册用户 & 场 (前置校验)
     for target_id in [req.user_id, req.session_id]:
         if not db.query(User).filter(User.id == target_id).first():
             db.add(User(id=target_id))
     db.commit()
 
-    # 2. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
+    # 2. 构建会话记忆上下文 (从 DB 提取近期对话历史)
+    memory_context = _build_session_memory(db, req.session_id, max_messages=20)
+    enriched_query = req.query
+    if memory_context:
+        enriched_query = f"{memory_context}\n\n[当前消息]\n用户: {req.query}"
+        logger.debug(f"[/chat] Injected session memory: {len(memory_context)} chars for session={req.session_id}")
+
+    # 3. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
     bridge = get_bridge()
     try:
         answer = await bridge.handle_message(
-            req.query,
+            enriched_query,
             user_id=req.user_id,
             session_id=req.session_id,
             sender_name=req.sender_name or "",

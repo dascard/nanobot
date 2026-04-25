@@ -1,9 +1,11 @@
 {
   "qwen/qwen3-coder:free": {
-    "description": "Qwen coder free alias. Frequently limit-hit in this deployment; keep as low-priority fallback.",
-    "tags": ["coding", "free", "unstable", "limited"],
+    "description": "Qwen coder free alias. Almost always inaccessible (429/503); marked unstable so router avoids it.",
+    "tags": ["coding", "free", "unstable"],
     "intelligence": 4,
-    "tier": "fast"
+    "tier": "fast",
+    "cost_input_1m": 0.0,
+    "cost_output_1m": 0.0
   },
   "qwen3-coder": {
     "description": "Qwen coder paid/non-free alias; same family as free alias for routing continuity.",
@@ -19,21 +21,27 @@
   },
   "google/gemma-4-31b-it:free": {
     "description": "Gemma free alias may return 429 under peak load; usable when quota is available.",
-    "tags": ["free", "multimodal", "vision", "general", "rate_limited"],
+    "tags": ["free", "multimodal", "vision", "general"],
     "intelligence": 6,
-    "tier": "smart"
+    "tier": "smart",
+    "cost_input_1m": 0.0,
+    "cost_output_1m": 0.0
   },
   "openai/gpt-oss-120b:free": {
     "description": "OpenRouter free alias for gpt-oss-120b. Generally usable when free quota allows.",
     "tags": ["free", "cheap", "general", "reasoning"],
     "intelligence": 6,
-    "tier": "fast"
+    "tier": "fast",
+    "cost_input_1m": 0.0,
+    "cost_output_1m": 0.0
   },
   "nvidia/nemotron-3-super-120b-a12b:free": {
     "description": "OpenRouter free alias for Nemotron family; usable as low-cost fallback.",
     "tags": ["free", "cheap", "general"],
     "intelligence": 6,
-    "tier": "fast"
+    "tier": "fast",
+    "cost_input_1m": 0.0,
+    "cost_output_1m": 0.0
   },
   "gpt-oss-120b": {
     "description": "Paid/non-free alias of gpt-oss family; similar routing intent as free alias.",

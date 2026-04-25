@@ -11,6 +11,7 @@ controller:
   max_retries: 0                 # Fail fast on proxy timeout/502 to trigger custom model routing fallback
   tool_format: native            # Re-enabling native function calling per user request
   max_messages: 50               # auto-compaction threshold
+  ephemeral: true               # clear conversation after each interaction (per-session memory injected via DB)
 
 # ── Tools ──
 tools:

@@ -47,7 +47,7 @@ class NewAPIClient:
         self.timeout = timeout or NEW_API_TIMEOUT
         self.max_retries = max_retries
 
-        avoid_tags = ["unstable", "rate_limited", "limited"]
+        avoid_tags = ["unstable"]
         self.model_map = {
             "smart": registry.select_model("new-api", "smart", max_cost=LLM_BUDGET_CAP, avoid_tags=avoid_tags) or "gpt-4o",
             "fast": registry.select_model("new-api", "fast", max_cost=LLM_BUDGET_CAP, avoid_tags=avoid_tags) or "gpt-4o-mini",
@@ -82,6 +82,7 @@ class NewAPIClient:
     def _infer_model_profile(self, model_id: str) -> Dict[str, Any]:
         mid = (model_id or "").lower()
         tags: List[str] = []
+        is_free = mid.endswith(":free")
 
         if any(k in mid for k in ["reason", "o1", "r1", "think"]):
             tags.extend(["reasoning", "analysis"])
@@ -93,6 +94,9 @@ class NewAPIClient:
             tags.extend(["vision", "multimodal"])
         if any(k in mid for k in ["qwen", "glm", "yi", "deepseek", "kimi", "claude", "gpt", "gemini"]):
             tags.append("general")
+
+        if is_free:
+            tags.append("free")
 
         tier = "smart"
         if "reasoning" in tags:
@@ -172,24 +176,39 @@ class NewAPIClient:
                         return []
                     payload = await resp.json()
                     items = payload.get("data", []) if isinstance(payload, dict) else []
+                    logger.info(f"new-api /models returned {len(items)} model entries")
                     models: List[Dict[str, Any]] = []
+                    free_count = 0
                     for item in items:
                         model_id = item.get("id")
                         if not model_id:
                             continue
                         profile = self._infer_model_profile(str(model_id))
+                        is_free = "free" in profile["tags"]
+                        if is_free:
+                            free_count += 1
                         base_model = {
                             "id": model_id,
                             "provider": "new-api",
                             "intelligence": profile["intelligence"],
-                            "cost_input_1m": 9.99,
-                            "cost_output_1m": 9.99,
+                            "cost_input_1m": 0.0 if is_free else 9.99,
+                            "cost_output_1m": 0.0 if is_free else 9.99,
                             "tier": profile["tier"],
                             "tags": profile["tags"],
                             "description": profile["description"],
                             "reasoning": "Auto-discovered from new-api /models",
                         }
                         models.append(self._apply_model_override(str(model_id), base_model))
+
+                    tiers = {}
+                    for m in models:
+                        t = m.get("tier", "unknown")
+                        tiers[t] = tiers.get(t, 0) + 1
+                    logger.info(
+                        f"fetch_models: {len(models)} models parsed "
+                        f"(free={free_count}, paid={len(models) - free_count}), "
+                        f"tiers={tiers}"
+                    )
                     return models
             except aiohttp.ClientError as e:
                 logger.warning(f"new-api model list network error: {e}")
@@ -210,15 +229,38 @@ class NewAPIClient:
             if not force and now - self.__class__._last_model_sync_ts < interval_sec:
                 return 0
 
+            logger.info(f"Starting model sync from {self.base_url}/models (force={force})")
             models = await self.fetch_models()
             if not models:
+                logger.warning("Model sync: no models fetched from API")
                 self.__class__._last_model_sync_ts = now
                 return 0
 
             updated = registry.add_or_update_many(models)
             self.__class__._last_model_sync_ts = now
-            if updated:
-                logger.info(f"new-api model sync updated {updated} models")
+
+            # Post-sync summary: list all models by tier with free/paid breakdown
+            all_models = registry.get_models_by_provider("new-api")
+            tiers = {}
+            free_ids = []
+            for m in all_models:
+                t = m.get("tier", "unknown")
+                if t not in tiers:
+                    tiers[t] = {"free": 0, "paid": 0}
+                if "free" in (m.get("tags") or []):
+                    tiers[t]["free"] += 1
+                    free_ids.append(m.get("id"))
+                else:
+                    tiers[t]["paid"] += 1
+
+            tier_summary = ", ".join(
+                f"{t}={c['free']}F/{c['paid']}P" for t, c in sorted(tiers.items())
+            )
+            logger.info(
+                f"Model sync complete: {updated} models processed, "
+                f"total={len(all_models)}, tiers=[{tier_summary}], "
+                f"free_models={free_ids}"
+            )
             return updated
 
     def _resolve_model(self, model_tier: str, manual_model: str = "") -> str:
@@ -297,8 +339,13 @@ class NewAPIClient:
         if manual_model:
             return manual_model
 
-        avoid_tags = ["unstable", "rate_limited", "limited"]
+        avoid_tags = ["unstable"]
         task_tags = task_tags or []
+
+        logger.debug(
+            f"_resolve_model_for_task: tier={model_tier}, task_tags={task_tags}, "
+            f"exclude={exclude_models}, budget={LLM_BUDGET_CAP}"
+        )
 
         selected = registry.select_model(
             provider="new-api",
@@ -309,6 +356,7 @@ class NewAPIClient:
             exclude_models=exclude_models,
         )
         if selected:
+            logger.info(f"Model resolved: {selected} (tier={model_tier})")
             return selected
 
         # Fallback without required tags but still avoid unstable models.
@@ -320,8 +368,11 @@ class NewAPIClient:
             exclude_models=exclude_models,
         )
         if selected:
+            logger.info(f"Model resolved (fallback, no required tags): {selected} (tier={model_tier})")
             return selected
-        return self._resolve_model(model_tier, manual_model="")
+        fallback = self._resolve_model(model_tier, manual_model="")
+        logger.warning(f"Model resolution fell back to hardcoded default: {fallback}")
+        return fallback
 
     async def chat_completion(
         self,
@@ -341,6 +392,11 @@ class NewAPIClient:
         routed_tier = self._route_model_tier(messages, tools, model_tier)
         task_tags = self._infer_task_tags(messages, tools)
         target_model = self._resolve_model_for_task(routed_tier, task_tags=task_tags, manual_model=manual_model)
+        logger.info(
+            f"chat_completion routing: requested_tier={model_tier}, "
+            f"routed_tier={routed_tier}, task_tags={task_tags}, "
+            f"target_model={target_model}"
+        )
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
         payload = self._build_payload(messages, tools, temperature, False, target_model)

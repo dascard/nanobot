@@ -19,6 +19,15 @@ class ModelRegistry:
                     content = f.read()
                     if content.strip():
                         self.data = json.loads(content)
+                        models_count = len(self.data.get("models", []))
+                        tiers = {}
+                        for m in self.data.get("models", []):
+                            t = m.get("tier", "unknown")
+                            tiers[t] = tiers.get(t, 0) + 1
+                        logger.info(
+                            f"Model registry loaded: {models_count} models from {MODEL_DATA_PATH}",
+                            extra={"model_count": models_count, "tiers": tiers},
+                        )
             else:
                 logger.warning(f"Model registry file not found at {MODEL_DATA_PATH}")
         except Exception as e:
@@ -28,9 +37,9 @@ class ModelRegistry:
         models_list: List[Dict[str, Any]] = self.data.get("models", [])
         return [m for m in models_list if m.get("provider") == provider]
 
-    def select_model(self, 
-                     provider: str, 
-                     tier: str = "smart", 
+    def select_model(self,
+                     provider: str,
+                     tier: str = "smart",
                      max_cost: Optional[float] = None,
                      min_intelligence: int = 0,
                      required_tags: Optional[List[str]] = None,
@@ -43,15 +52,22 @@ class ModelRegistry:
         """
         all_candidates = self.get_models_by_provider(provider)
         if not all_candidates:
+            logger.warning(f"No models found for provider={provider}")
             return None
 
         # Tier progression: smart -> fast -> any
         tiers_to_try = [tier] if tier else ["smart", "fast"]
         if tier == "smart":
             tiers_to_try.append("fast")
-        
+
         required_tags = [x.lower() for x in (required_tags or []) if x]
         avoid_tags = [x.lower() for x in (avoid_tags or []) if x]
+
+        logger.debug(
+            f"select_model: provider={provider}, tier={tier}, "
+            f"required_tags={required_tags}, avoid_tags={avoid_tags}, "
+            f"exclude={exclude_models}, max_cost={max_cost}, prefer_free={prefer_free}"
+        )
 
         def _tags_of(m: Dict[str, Any]) -> List[str]:
             tags = m.get("tags") or []
@@ -71,43 +87,66 @@ class ModelRegistry:
 
         for t in tiers_to_try:
             candidates = [m for m in all_candidates if m.get("tier") == t]
-            
+            logger.debug(f"select_model: tier={t}, candidates_before_filter={len(candidates)}")
+
             if exclude_models:
                 exclude_lower = [em.lower() for em in exclude_models]
                 candidates = [m for m in candidates if m.get("id", "").lower() not in exclude_lower]
-            
+                logger.debug(f"select_model: tier={t}, after_exclude={len(candidates)}")
+
             # Apply cost filter
             if max_cost is not None:
                 candidates = [m for m in candidates if m.get("cost_input_1m", 999) <= max_cost]
-            
+                logger.debug(f"select_model: tier={t}, after_cost_filter={len(candidates)}")
+
             # Apply intelligence filter
             if min_intelligence > 0:
                 candidates = [m for m in candidates if m.get("intelligence", 0) >= min_intelligence]
+                logger.debug(f"select_model: tier={t}, after_intel_filter={len(candidates)}")
 
             # Apply tag constraints (soft requirement if possible)
             if required_tags:
                 tagged = [m for m in candidates if any(rt in _tags_of(m) for rt in required_tags)]
                 if tagged:
                     candidates = tagged
+                    logger.debug(f"select_model: tier={t}, required_tags matched={len(candidates)}")
 
             if avoid_tags:
                 non_avoid = [m for m in candidates if not any(at in _tags_of(m) for at in avoid_tags)]
                 if non_avoid:
                     candidates = non_avoid
-            
+                    logger.debug(
+                        f"select_model: tier={t}, after_avoid_filter={len(candidates)}, "
+                        f"excluded_models_with_avoid_tags={len([m for m in all_candidates if m.get('tier') == t]) - len(candidates)}"
+                    )
+
             if candidates:
                 # Found suitable candidates in this tier
                 candidates.sort(key=_score, reverse=True)
-                return candidates[0].get("id")
+                selected = candidates[0]
+                selected_tags = _tags_of(selected)
+                logger.info(
+                    f"Model selected: id={selected.get('id')}, tier={t}, "
+                    f"intelligence={selected.get('intelligence')}, "
+                    f"cost_input_1m={selected.get('cost_input_1m')}, "
+                    f"tags={selected_tags}, is_free={'free' in selected_tags}, "
+                    f"candidates_considered={len(candidates)}"
+                )
+                return selected.get("id")
 
         # Ultimate Fallback: return the cheapest model if still no candidates
         all_candidates.sort(key=lambda x: x.get("cost_input_1m", 999))
         cheap_model = all_candidates[0]
-        
+
         target_id = cheap_model.get("id")
         if max_cost is not None and cheap_model.get("cost_input_1m", 999) > max_cost:
             logger.warning(f"No model found for {provider} under budget {max_cost}. Using cheapest: {target_id}")
-            
+
+        logger.info(
+            f"Fallback model selected: id={target_id}, "
+            f"cost_input_1m={cheap_model.get('cost_input_1m')}, "
+            f"tier={cheap_model.get('tier')}"
+        )
         return target_id
 
     def get_model_info(self, model_id: str) -> Optional[Dict[str, Any]]:
@@ -153,22 +192,63 @@ class ModelRegistry:
         models_list = self.data.get("models", [])
         index = {m.get("id"): i for i, m in enumerate(models_list) if m.get("id")}
 
-        updated = 0
+        new_count = 0
+        updated_count = 0
+        updated_ids = []
+        new_ids = []
+
         for m in models:
             model_id = m.get("id")
             if not model_id:
                 continue
             if model_id in index:
+                old = models_list[index[model_id]]
+                # Check if anything changed
+                changed = (
+                    old.get("tier") != m.get("tier") or
+                    old.get("intelligence") != m.get("intelligence") or
+                    old.get("cost_input_1m") != m.get("cost_input_1m") or
+                    sorted(old.get("tags") or []) != sorted(m.get("tags") or [])
+                )
                 models_list[index[model_id]] = m
+                if changed:
+                    updated_count += 1
+                    updated_ids.append(model_id)
             else:
                 index[model_id] = len(models_list)
                 models_list.append(m)
-            updated += 1
+                new_count += 1
+                new_ids.append(model_id)
 
+        total = new_count + updated_count
         self.data["models"] = models_list
         self.data["last_updated"] = __import__("datetime").datetime.now().isoformat()
+
+        if total > 0:
+            logger.info(
+                f"Registry batch update: {total} models processed "
+                f"(new={new_count}, updated={updated_count}, unchanged={len(models) - total})"
+            )
+            if new_ids:
+                logger.debug(f"New models added: {new_ids}")
+            if updated_ids:
+                logger.debug(f"Models updated: {updated_ids}")
+
+            # Log tier distribution
+            tiers = {}
+            free_count = 0
+            for m in models_list:
+                t = m.get("tier", "unknown")
+                tiers[t] = tiers.get(t, 0) + 1
+                if "free" in (m.get("tags") or []):
+                    free_count += 1
+            logger.info(
+                f"Registry status: total_models={len(models_list)}, "
+                f"tiers={tiers}, free_models={free_count}"
+            )
+
         self.save_registry()
-        return updated
+        return total
 
     def remove_model(self, model_id: str):
         models_list = self.data.get("models", [])
