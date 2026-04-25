@@ -27,6 +27,14 @@ class BufferedOutput(BaseOutputModule):
         self._buffer: list[str] = []
         self._complete_event = asyncio.Event()
 
+    async def start(self) -> None:
+        """Initialize the output module."""
+        logger.info("[BufferedOutput.start] Initializing")
+
+    async def stop(self) -> None:
+        """Shutdown the output module."""
+        logger.info("[BufferedOutput.stop] Shutting down")
+
     async def write(self, content: str) -> None:
         """Buffer complete content."""
         logger.info(f"[BufferedOutput.write] called with {len(content)} chars: {content[:100] if content else '(empty)'}")

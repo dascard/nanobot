@@ -49,6 +49,16 @@ class NanobotBridge:
         tools_list = self._agent.registry.list_tools()
         logger.info(f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}")
 
+        # 检查 controller 配置
+        if hasattr(self._agent, '_controller'):
+            ctrl = self._agent._controller
+            logger.info(f"[KT Agent] Controller type: {type(ctrl)}")
+            logger.info(f"[KT Agent] Controller provider: {getattr(ctrl, 'provider', 'N/A')}")
+            logger.info(f"[KT Agent] Controller model: {getattr(ctrl, 'model', 'N/A')}")
+            logger.info(f"[KT Agent] Controller base_url: {getattr(ctrl, 'base_url', 'N/A')}")
+        else:
+            logger.warning("[KT Agent] No _controller attribute found!")
+
     async def stop(self) -> None:
         """Shutdown the agent."""
         if self._output:
@@ -86,35 +96,39 @@ class NanobotBridge:
         async with self._lock:
             self._output.clear()
             logger.info(f"[NanobotBridge] Starting handle_message: query_len={len(query)}, user={user_id}, session={session_id}")
-            logger.debug(f"[NanobotBridge] Agent controller: {self._agent._controller if hasattr(self._agent, '_controller') else 'N/A'}")
-            logger.debug(f"[NanobotBridge] Agent output_module: {self._agent._output_module if hasattr(self._agent, '_output_module') else 'N/A'}")
+            logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")
+            logger.debug(f"[NanobotBridge] Output module: {self._output}")
+            logger.debug(f"[NanobotBridge] Agent output_module attr: {getattr(self._agent, '_output_module', 'NOT SET')}")
 
             # Create a user input event for the KT controller
             event = create_user_input_event(query)
-            logger.debug(f"[NanobotBridge] Created event: type={type(event).__name__}, content_len={len(str(event))}")
+            logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 
             try:
                 # Process the event through KT's controller pipeline
-                # This runs: LLM call → tool dispatch → multi-turn loop → final response
-                logger.debug(f"[NanobotBridge] Before _process_event: output._buffer={len(self._output._buffer) if hasattr(self._output, '_buffer') else 'N/A'}")
-                await self._agent._process_event(event)
-                logger.debug(f"[NanobotBridge] After _process_event: output._buffer={len(self._output._buffer) if hasattr(self._output, '_buffer') else 'N/A'}")
+                logger.info(f"[NanobotBridge] Calling _process_event...")
+                result = await self._agent._process_event(event)
+                logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
             except Exception as e:
                 logger.error(f"[NanobotBridge] Agent processing error: {e}", exc_info=True)
                 return f"处理消息时出错: {str(e)}"
 
+            logger.info(f"[NanobotBridge] Checking output buffer...")
             response = self._output.get_response()
             buffer_list = self._output._buffer if hasattr(self._output, '_buffer') else []
             buffer_len = len(buffer_list)
+
+            # 如果 output buffer 为空，尝试从返回值获取
+            if not response and result:
+                logger.info(f"[NanobotBridge] Buffer empty, using _process_event return value")
+                response = str(result) if result else ""
             
-            logger.info(f"[NanobotBridge] After processing: response_len={len(response)}, buffer_chunks={buffer_len}, chunks_content={buffer_list}")
+            logger.info(f"[NanobotBridge] After processing: response_len={len(response)}, buffer_chunks={buffer_len}")
             if response:
                 logger.debug(f"[NanobotBridge] Response preview: {response[:200]}")
             else:
                 logger.warning(f"[NanobotBridge] EMPTY RESPONSE!")
-                logger.warning(f"[NanobotBridge] buffer_list={buffer_list}, buffer_len={buffer_len}")
-                if hasattr(self._agent, '_controller') and self._agent._controller:
-                    logger.warning(f"[NanobotBridge] Controller state: {self._agent._controller}")
+                logger.warning(f"[NanobotBridge] buffer={buffer_list}, result={result}")
 
             if not response.strip():
                 logger.warning(f"[NanobotBridge] KT agent returned empty response after strip")
