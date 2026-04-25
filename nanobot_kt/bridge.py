@@ -98,7 +98,8 @@ class NanobotBridge:
 
             response = self._output.get_response()
             if not response.strip():
-                response = "（无回复内容）"
+                logger.warning("KT agent returned empty response")
+                return ""
 
             return response
 

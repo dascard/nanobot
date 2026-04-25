@@ -5,7 +5,8 @@ requests>=2.31.0
 pydantic>=2.0.0
 aiohttp>=3.8.0
 # KohakuTerrarium AI Framework
-git+https://github.com/Kohaku-Lab/KohakuTerrarium.git
+,vendor/KohakuTerrarium
+duckduckgo-search
 pandas
 tabulate
 
@@ -13,3 +14,4 @@ tabulate
 pytest>=7.0.0
 pytest-mock>=3.10.0
 httpx>=0.24.1
+lxml_html_clean
