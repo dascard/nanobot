@@ -144,6 +144,7 @@ class TestNanobotBridge:
         mock_load.return_value = mock_config
 
         mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = ["sql_analysis", "python_sandbox"]
         MockAgent.return_value = mock_agent
 
@@ -165,6 +166,7 @@ class TestNanobotBridge:
         mock_load.return_value = mock_config
 
         mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
 
         async def fake_process(event):

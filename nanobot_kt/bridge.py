@@ -16,6 +16,8 @@ from kohakuterrarium.core.config import load_agent_config
 from kohakuterrarium.core.events import create_user_input_event
 
 from nanobot_kt.output import BufferedOutput
+from clients.new_api_client import NewAPIClient
+from config import NEW_API_KEY, NEW_API_BASE_URL
 
 logger = logging.getLogger("nanobot.kt.bridge")
 
@@ -105,6 +107,24 @@ class NanobotBridge:
             # Create a user input event for the KT controller
             event = create_user_input_event(query)
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
+
+            # --- Dynamic Model Routing ---
+            try:
+                route_client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+                messages = [{"role": "user", "content": query}]
+                # Simulate presence of tools for tag inference so tasks map correctly
+                routed_tier = route_client._route_model_tier(messages, tools=[{}], requested_tier="smart")
+                task_tags = route_client._infer_task_tags(messages, tools=[{}])
+                target_model = route_client._resolve_model_for_task(routed_tier, task_tags=task_tags, manual_model="")
+                
+                # Dynamically update the KT Agent's underlying LLM Provider model for this request
+                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
+                    old_model = self._agent.controller.llm.config.model
+                    self._agent.controller.llm.config.model = target_model
+                    logger.info(f"[Model Router] Query routed to tier '{routed_tier}'. Changed KT model: {old_model} -> {target_model}")
+            except Exception as e:
+                logger.error(f"[Model Router] Failed to route model, using default: {e}", exc_info=True)
+            # -----------------------------
 
             try:
                 # Process the event through KT's controller pipeline
