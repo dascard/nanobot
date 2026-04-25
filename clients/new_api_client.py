@@ -47,10 +47,11 @@ class NewAPIClient:
         self.timeout = timeout or NEW_API_TIMEOUT
         self.max_retries = max_retries
 
+        avoid_tags = ["unstable", "rate_limited", "limited"]
         self.model_map = {
-            "smart": registry.select_model("new-api", "smart", max_cost=LLM_BUDGET_CAP) or "gpt-4o",
-            "fast": registry.select_model("new-api", "fast", max_cost=LLM_BUDGET_CAP) or "gpt-4o-mini",
-            "reasoning": registry.select_model("new-api", "reasoning", max_cost=LLM_BUDGET_CAP) or "o1-mini",
+            "smart": registry.select_model("new-api", "smart", max_cost=LLM_BUDGET_CAP, avoid_tags=avoid_tags) or "gpt-4o",
+            "fast": registry.select_model("new-api", "fast", max_cost=LLM_BUDGET_CAP, avoid_tags=avoid_tags) or "gpt-4o-mini",
+            "reasoning": registry.select_model("new-api", "reasoning", max_cost=LLM_BUDGET_CAP, avoid_tags=avoid_tags) or "o1-mini",
         }
         if model_map:
             for key, value in model_map.items():
@@ -292,11 +293,12 @@ class NewAPIClient:
 
         return sorted(set(tags))
 
-    def _resolve_model_for_task(self, model_tier: str, task_tags: List[str], manual_model: str = "") -> str:
+    def _resolve_model_for_task(self, model_tier: str, task_tags: Optional[List[str]] = None, manual_model: str = "", exclude_models: Optional[List[str]] = None) -> str:
         if manual_model:
             return manual_model
 
         avoid_tags = ["unstable", "rate_limited", "limited"]
+        task_tags = task_tags or []
 
         selected = registry.select_model(
             provider="new-api",
@@ -304,6 +306,7 @@ class NewAPIClient:
             max_cost=LLM_BUDGET_CAP,
             required_tags=task_tags,
             avoid_tags=avoid_tags,
+            exclude_models=exclude_models,
         )
         if selected:
             return selected
@@ -314,6 +317,7 @@ class NewAPIClient:
             tier=model_tier,
             max_cost=LLM_BUDGET_CAP,
             avoid_tags=avoid_tags,
+            exclude_models=exclude_models,
         )
         if selected:
             return selected

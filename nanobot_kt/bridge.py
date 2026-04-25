@@ -109,6 +109,7 @@ class NanobotBridge:
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 
             # --- Dynamic Model Routing ---
+            route_client = None
             try:
                 route_client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
                 messages = [{"role": "user", "content": query}]
@@ -116,24 +117,62 @@ class NanobotBridge:
                 routed_tier = route_client._route_model_tier(messages, tools=[{}], requested_tier="smart")
                 task_tags = route_client._infer_task_tags(messages, tools=[{}])
                 target_model = route_client._resolve_model_for_task(routed_tier, task_tags=task_tags, manual_model="")
+            except Exception as e:
+                logger.error(f"[Model Router] Failed to route model, using default: {e}", exc_info=True)
+                target_model = "gpt-4o"
+                routed_tier = "smart"
+            # -----------------------------
+
+            max_attempts = 3
+            failed_models = []
+            for attempt in range(max_attempts):
+                self._output.clear()
+                event = create_user_input_event(query)
                 
                 # Dynamically update the KT Agent's underlying LLM Provider model for this request
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
+                    if attempt > 0 and route_client:
+                        failed_models.append(old_model)
+                        # Try to find another model in the SAME tier first
+                        target_model = route_client._resolve_model_for_task(routed_tier, task_tags=[], manual_model="", exclude_models=failed_models)
+                        
+                        # If no new model was found in this tier, downgrade tier
+                        if target_model == old_model or target_model in failed_models:
+                            logger.warning(f"[Model Router] Tier '{routed_tier}' exhausted (failed: {failed_models}). Downgrading tier...")
+                            if routed_tier == "reasoning": routed_tier = "smart"
+                            elif routed_tier == "smart": routed_tier = "fast"
+                            # Re-resolve with downgraded tier
+                            target_model = route_client._resolve_model_for_task(routed_tier, task_tags=[], manual_model="", exclude_models=failed_models)
+                        
                     old_model = self._agent.controller.llm.config.model
                     self._agent.controller.llm.config.model = target_model
-                    logger.info(f"[Model Router] Query routed to tier '{routed_tier}'. Changed KT model: {old_model} -> {target_model}")
-            except Exception as e:
-                logger.error(f"[Model Router] Failed to route model, using default: {e}", exc_info=True)
-            # -----------------------------
+                    logger.info(f"[Model Router] Attempt {attempt+1}: Query routed to tier '{routed_tier}'. Changed KT model: {old_model} -> {target_model}")
+                
+                try:
+                    # Process the event through KT's controller pipeline
+                    logger.info(f"[NanobotBridge] Calling _process_event (Attempt {attempt+1})...")
+                    result = await self._agent._process_event(event)
+                    logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
+                except Exception as e:
+                    logger.error(f"[NanobotBridge] Agent processing error: {e}", exc_info=True)
+                    self._output._buffer.append(f"\n[系统内部错误] {str(e)}")
 
-            try:
-                # Process the event through KT's controller pipeline
-                logger.info(f"[NanobotBridge] Calling _process_event...")
-                result = await self._agent._process_event(event)
-                logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
-            except Exception as e:
-                logger.error(f"[NanobotBridge] Agent processing error: {e}", exc_info=True)
-                return f"处理消息时出错: {str(e)}"
+                response = self._output.get_response()
+                if "[系统内部错误]" in response and attempt < max_attempts - 1:
+                    logger.warning(f"[NanobotBridge] Framework error detected. Attempting fallback.")
+                    # Rollback the appended user event from KT history
+                    if hasattr(self._agent.controller, 'conversation'):
+                        idx = self._agent.controller.conversation.find_last_user_index()
+                        if idx >= 0:
+                            msgs = self._agent.controller.conversation.get_messages()
+                            # Check if the text matches (sometimes it's a TextPart)
+                            content = msgs[idx].content
+                            if isinstance(content, str) and content == query:
+                                self._agent.controller.conversation.truncate_from(idx)
+                                logger.info(f"[NanobotBridge] Rolled back failed user message at index {idx}")
+                    continue  # Retry with downgraded model
+                else:
+                    break  # Success or max attempts reached
 
             logger.info(f"[NanobotBridge] Checking output buffer...")
             response = self._output.get_response()

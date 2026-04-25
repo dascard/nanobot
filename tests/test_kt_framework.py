@@ -211,5 +211,5 @@ class TestCreatureConfig:
         from kohakuterrarium.core.config import load_agent_config
         config = load_agent_config(config_dir)
         assert config.name == "nanobot"
-        assert "native" in (config.tool_format or "")
+        assert "bracket" in (config.tool_format or "")
         assert len(config.tools) == 3

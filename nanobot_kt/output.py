@@ -70,6 +70,11 @@ class BufferedOutput(BaseOutputModule):
         self._buffer.clear()
         self._complete_event.clear()
 
-    def on_activity(self, activity_type: str, detail: str) -> None:
-        """Log tool/subagent activity."""
-        logger.debug(f"[Activity] {activity_type}: {detail}")
+    def on_activity(self, activity_type: str, detail: str, **kwargs: Any) -> None:
+        """Log tool/subagent activity and capture processing errors."""
+        if activity_type == "processing_error":
+            logger.error(f"[Activity] {activity_type}: {detail}")
+            # Ensure the user sees the error instead of an empty response
+            self._buffer.append(f"\n[系统内部错误] {detail}")
+        else:
+            logger.info(f"[Activity] {activity_type}: {detail}")

@@ -34,7 +34,9 @@ class ModelRegistry:
                      max_cost: Optional[float] = None,
                      min_intelligence: int = 0,
                      required_tags: Optional[List[str]] = None,
-                     avoid_tags: Optional[List[str]] = None) -> Optional[str]:
+                     avoid_tags: Optional[List[str]] = None,
+                     exclude_models: Optional[List[str]] = None,
+                     prefer_free: bool = True) -> Optional[str]:
         """
         根据厂商、层级、成本上限和最小智能得分选择模型。
         支持根据成本自动降级 (Smart -> Fast)
@@ -63,11 +65,16 @@ class ModelRegistry:
             avoid_hit = sum(1 for t in avoid_tags if t in tags)
             intel = m.get("intelligence", 0)
             cost = m.get("cost_input_1m", 999)
-            # sort desc by tag/intelligence, asc by cost
-            return (tag_hit, -avoid_hit, intel, -cost)
+            is_free = 1 if (prefer_free and cost == 0) else 0
+            # sort desc by tag/avoid/is_free/intelligence, asc by cost
+            return (tag_hit, -avoid_hit, is_free, intel, -cost)
 
         for t in tiers_to_try:
             candidates = [m for m in all_candidates if m.get("tier") == t]
+            
+            if exclude_models:
+                exclude_lower = [em.lower() for em in exclude_models]
+                candidates = [m for m in candidates if m.get("id", "").lower() not in exclude_lower]
             
             # Apply cost filter
             if max_cost is not None:
