@@ -374,7 +374,28 @@ async def proxy_chat(
     db.commit()
 
     # 2. 加载用户画像 (PersonaArchitectAgent 实际输出的键: identity, communication_style, domain_profiles, persona_summary)
-    persona_obj = db.query(Persona).filter(Persona.user_id == req.user_id).first()
+    # 兼容性：bot 端 user_id 格式可能变化（"12345" vs "private_12345" vs "group_xxx"）
+    # 逐一尝试所有可能的 ID 变体
+    def _find_persona(db: Session, uid: str) -> Persona | None:
+        candidates: list[str] = [uid]
+        # 添加前缀变体
+        for prefix in ("private_", "group_"):
+            if not uid.startswith(prefix):
+                candidates.append(f"{prefix}{uid}")
+        # 剥离前缀变体
+        for prefix in ("private_", "group_"):
+            if uid.startswith(prefix):
+                candidates.append(uid[len(prefix):])
+        # 去重后依次尝试
+        for c in dict.fromkeys(candidates):
+            p = db.query(Persona).filter(Persona.user_id == c).first()
+            if p:
+                if c != candidates[0]:
+                    logger.info(f"[/chat] Persona found via fallback: tried={candidates[0]}, matched={c}")
+                return p
+        logger.debug(f"[/chat] No persona for user_id={uid} (tried {len(candidates)} variants)")
+        return None
+    persona_obj = _find_persona(db, req.user_id)
     persona_json_str = persona_obj.persona_json if persona_obj else "{}"
     try:
         persona_data = json.loads(persona_json_str)
