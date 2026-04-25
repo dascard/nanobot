@@ -8,10 +8,10 @@
     "cost_output_1m": 0.0
   },
   "qwen3-coder": {
-    "description": "Qwen coder paid/non-free alias; same family as free alias for routing continuity.",
-    "tags": ["coding", "paid", "general"],
-    "intelligence": 7,
-    "tier": "smart"
+    "description": "Phantom entry: gateway has no real paid qwen3-coder, only the free alias (which is always 429). Marked unstable.",
+    "tags": ["coding", "paid", "unstable"],
+    "intelligence": 4,
+    "tier": "fast"
   },
   "gemma-4": {
     "description": "Gemma4 is treated as multimodal in this pool.",
