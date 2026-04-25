@@ -319,7 +319,7 @@ async def proxy_chat(
     """
     统一网关：接收客户端的发问，通过 KT Agent 处理，返回结果并双向落库。
     """
-    logger.info(f"[/chat] Request: user={req.user_id}, session={req.session_id}, query_len={len(req.query)}")
+    logger.info(f"[/chat] Request START: user={req.user_id}, session={req.session_id}, query={req.query[:100]}, sender={req.sender_name}, files={req.files}, session_name={req.session_name}")
     
     # 1. 自动注册用户 & 场 (前置校验)
     for target_id in [req.user_id, req.session_id]:
@@ -344,9 +344,9 @@ async def proxy_chat(
         logger.error(f"[/chat] KT Agent failed: {e}")
         raise HTTPException(status_code=502, detail=f"KT Error: {str(e)}")
 
-    logger.info(f"[/chat] Bridge returned: answer_len={len(answer)}, answer_empty={not answer.strip()}")
+    logger.info(f"[/chat] Bridge returned: answer_len={len(answer)}, answer_stripped_empty={not answer.strip()}")
     if answer:
-        logger.debug(f"[/chat] Answer preview (first 300 chars): {answer[:300]}")
+        logger.debug(f"[/chat] Answer preview: {answer[:300]}")
     else:
         logger.warning(f"[/chat] EMPTY ANSWER returned from bridge!")
 

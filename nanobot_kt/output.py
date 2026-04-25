@@ -29,23 +29,28 @@ class BufferedOutput(BaseOutputModule):
 
     async def write(self, content: str) -> None:
         """Buffer complete content."""
+        logger.info(f"[BufferedOutput.write] called with {len(content)} chars: {content[:100] if content else '(empty)'}")
         self._buffer.append(content)
 
     async def write_stream(self, chunk: str) -> None:
         """Buffer streaming chunks."""
+        logger.info(f"[BufferedOutput.write_stream] called with {len(chunk)} chars: {chunk[:100] if chunk else '(empty)'}")
         self._buffer.append(chunk)
 
     async def flush(self) -> None:
         """No-op for buffer."""
-        pass
+        logger.debug(f"[BufferedOutput.flush] called, current buffer_len={len(''.join(self._buffer))}")
 
     async def on_processing_start(self) -> None:
         """Reset buffer at the start of each processing cycle."""
+        logger.debug(f"[BufferedOutput.on_processing_start] resetting buffer")
         self._buffer.clear()
         self._complete_event.clear()
 
     async def on_processing_end(self) -> None:
         """Signal that processing is done."""
+        final_len = len("".join(self._buffer))
+        logger.info(f"[BufferedOutput.on_processing_end] processing complete, final_buffer_len={final_len}")
         self._complete_event.set()
 
     def get_response(self) -> str:
