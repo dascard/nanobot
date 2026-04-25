@@ -6,8 +6,6 @@ services:
     container_name: nanobot-server
     ports:
       - "8000:8000"
-    volumes:
-      - nanobot-data:/app/data # 持久化 SQLite 数据
     env_file:
       - .env
     volumes:
