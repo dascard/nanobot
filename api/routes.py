@@ -354,12 +354,66 @@ async def proxy_chat(
             db.add(User(id=target_id))
     db.commit()
 
-    # 2. 构建会话记忆上下文 (从 DB 提取近期对话历史)
+    # 2. 加载用户画像 & 系统提示词
+    persona_obj = db.query(Persona).filter(Persona.user_id == req.user_id).first()
+    persona_json_str = persona_obj.persona_json if persona_obj else "{}"
+    try:
+        persona_data = json.loads(persona_json_str)
+    except (json.JSONDecodeError, TypeError):
+        persona_data = {}
+    persona_text = ""
+    if isinstance(persona_data, dict) and persona_data:
+        parts = []
+        summary = str(persona_data.get("persona_summary", "")).strip()
+        if summary:
+            parts.append(summary)
+        traits = persona_data.get("traits") or persona_data.get("preferences") or {}
+        if isinstance(traits, dict) and traits:
+            trait_lines = ", ".join(f"{k}={v}" for k, v in traits.items() if v)
+            if trait_lines:
+                parts.append(f"特征偏好: {trait_lines}")
+        domains = persona_data.get("domain_profiles", {})
+        if isinstance(domains, dict) and domains:
+            domain_lines = []
+            for domain, info in domains.items():
+                if isinstance(info, dict):
+                    desc = str(info.get("summary", info.get("description", ""))).strip()
+                    if desc:
+                        domain_lines.append(f"{domain}: {desc}")
+            if domain_lines:
+                parts.append("领域画像:\n" + "\n".join(f"  - {line}" for line in domain_lines))
+        # Fallback: if no recognized keys, include raw JSON (up to 500 chars)
+        if not parts:
+            raw = json.dumps(persona_data, ensure_ascii=False)
+            if len(raw) > 10:  # more than just "{}"
+                parts.append(f"画像数据: {raw[:500]}")
+        persona_text = "\n".join(parts)
+
+    sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == req.user_id).first()
+    sys_prompt_text = sys_obj.prompt_text.strip() if sys_obj and sys_obj.prompt_text else ""
+
+    logger.info(
+        f"[/chat] Persona lookup: user_id={req.user_id}, "
+        f"found={persona_obj is not None}, persona_len={len(persona_text)}, "
+        f"sys_prompt_len={len(sys_prompt_text)}, "
+        f"persona_json_keys={list(persona_data.keys()) if isinstance(persona_data, dict) else 'N/A'}"
+    )
+
+    # 3. 构建会话记忆上下文 (从 DB 提取近期对话历史)
     memory_context = _build_session_memory(db, req.session_id, max_messages=20)
+
+    # 4. 组装 enriched query: persona → system prompt → memory → user message
     enriched_query = req.query
+    context_blocks = []
+    if persona_text:
+        context_blocks.append(f"[用户画像]\n{persona_text}")
+    if sys_prompt_text:
+        context_blocks.append(f"[系统提示]\n{sys_prompt_text}")
     if memory_context:
-        enriched_query = f"{memory_context}\n\n[当前消息]\n用户: {req.query}"
-        logger.debug(f"[/chat] Injected session memory: {len(memory_context)} chars for session={req.session_id}")
+        context_blocks.append(memory_context)
+    if context_blocks:
+        enriched_query = "\n\n".join(context_blocks) + f"\n\n[当前消息]\n用户: {req.query}"
+        logger.info(f"[/chat] Enriched query: {len(context_blocks)} context blocks, total={len(enriched_query)} chars")
 
     # 3. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
     bridge = get_bridge()
