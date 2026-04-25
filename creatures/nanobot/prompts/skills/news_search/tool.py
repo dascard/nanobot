@@ -679,6 +679,23 @@ class NewsSearchTool(BaseTool):
     def execution_mode(self) -> ExecutionMode:
         return ExecutionMode.DIRECT
 
+    def get_parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索关键词或自然语言查询",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "返回的最大结果数量（默认 3）",
+                    "default": 3,
+                },
+            },
+            "required": ["query"],
+        }
+
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         query = args.get("query", "")
         if not query.strip():

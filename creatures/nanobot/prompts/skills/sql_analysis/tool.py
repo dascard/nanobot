@@ -29,6 +29,18 @@ class SQLAnalysisTool(BaseTool):
     def execution_mode(self) -> ExecutionMode:
         return ExecutionMode.DIRECT
 
+    def get_parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "sql": {
+                    "type": "string",
+                    "description": "要执行的只读 SQL 查询语句",
+                }
+            },
+            "required": ["sql"],
+        }
+
     def _get_sandbox(self) -> AnalysisSandbox:
         if self._sandbox is None:
             self._sandbox = AnalysisSandbox()

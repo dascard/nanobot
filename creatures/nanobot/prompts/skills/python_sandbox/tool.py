@@ -32,6 +32,18 @@ class PythonSandboxTool(BaseTool):
     def execution_mode(self) -> ExecutionMode:
         return ExecutionMode.DIRECT
 
+    def get_parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "要执行的 Python 数据分析脚本代码",
+                }
+            },
+            "required": ["code"],
+        }
+
     def _get_sandbox(self) -> AnalysisSandbox:
         if self._sandbox is None:
             self._sandbox = AnalysisSandbox()
