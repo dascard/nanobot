@@ -80,10 +80,10 @@ class NewAPIClient:
         cls._model_overrides_cache = {}
         return cls._model_overrides_cache
 
-    def _infer_model_profile(self, model_id: str) -> Dict[str, Any]:
+    def _infer_model_profile(self, model_id: str, supported_endpoints: list = None) -> Dict[str, Any]:
         mid = (model_id or "").lower()
         tags: List[str] = []
-        is_free = mid.endswith(":free")
+        is_free = mid.endswith(":free") or mid.endswith("-free")
 
         if any(k in mid for k in ["reason", "o1", "r1", "think"]):
             tags.extend(["reasoning", "analysis"])
@@ -99,20 +99,39 @@ class NewAPIClient:
         if is_free:
             tags.append("free")
 
+        # Models with empty supported_endpoint_types likely don't support chat
+        endpoints = supported_endpoints or []
+        if isinstance(endpoints, list) and len(endpoints) == 0:
+            tags.append("unstable")
+
         tier = "smart"
         if "reasoning" in tags:
             tier = "reasoning"
         elif "fast" in tags:
             tier = "fast"
 
+        # Generate per-model description from ID parts
+        parts = mid.replace(":free", "").replace("-free", "").replace("/", " ").replace("-", " ").split()
+        family = next((p.capitalize() for p in parts if p in ["deepseek", "qwen", "gemma", "nemotron", "gpt", "claude", "kimi", "glm", "yi"]), "")
+        variant = next((p.upper() for p in parts if p in ["flash", "pro", "max", "mini", "lite", "turbo", "high"]), "")
+        size = next((p.upper() for p in parts if p.endswith("b") and p[:-1].isdigit()), "")
+        model_type = next((p.capitalize() for p in parts if p in ["coder", "oss", "reasoning"]), "")
+
+        desc_parts = [family] if family else [model_id]
+        if size:
+            desc_parts.append(size)
+        if variant:
+            desc_parts.append(variant)
+        if model_type:
+            desc_parts.append(model_type)
+        desc_parts.append("(free)" if is_free else "(paid)")
+        desc = " ".join(desc_parts)
+
         if "reasoning" in tags:
-            desc = "Strong at long-chain reasoning and complex planning tasks"
             intelligence = 9
         elif "fast" in tags:
-            desc = "Optimized for speed/cost and short straightforward tasks"
             intelligence = 6
         else:
-            desc = "Balanced general-purpose model for everyday assistant tasks"
             intelligence = 7
 
         return {
@@ -188,7 +207,10 @@ class NewAPIClient:
                         model_id = item.get("id")
                         if not model_id:
                             continue
-                        profile = self._infer_model_profile(str(model_id))
+                        profile = self._infer_model_profile(
+                            str(model_id),
+                            supported_endpoints=item.get("supported_endpoint_types", []),
+                        )
                         is_free = "free" in profile["tags"]
 
                         # Use API-provided metadata when available, fall back to inferred values
