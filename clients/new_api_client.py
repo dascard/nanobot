@@ -6,6 +6,7 @@ import asyncio
 import aiohttp
 import json
 import logging
+import re
 import time
 import os
 import fnmatch
@@ -306,15 +307,19 @@ class NewAPIClient:
             for m in messages
             if m.get("role") == "user"
         ).lower()
-        msg_len = len(user_text)
         has_tools = bool(tools)
 
         hard_markers = ["设计", "证明", "推导", "架构", "审计", "优化", "debug", "reason", "analyze", "复杂"]
         easy_markers = ["翻译", "润色", "摘要", "改写", "hello", "解释一下"]
 
-        if any(k in user_text for k in hard_markers) or msg_len > 1800 or (has_tools and msg_len > 800):
+        if any(k in user_text for k in hard_markers) or (has_tools and len(user_text) > 800):
             return "reasoning"
-        if any(k in user_text for k in easy_markers) and msg_len < 400 and not has_tools:
+        # Strip URLs before measuring text length so link-heavy messages
+        # don't falsely trigger the reasoning threshold.
+        text_without_urls = re.sub(r'https?://\S+', '', user_text)
+        if len(text_without_urls) > 1800:
+            return "reasoning"
+        if any(k in user_text for k in easy_markers) and len(text_without_urls) < 400 and not has_tools:
             return "fast"
         return "smart"
 
