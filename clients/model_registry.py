@@ -65,7 +65,7 @@ class ModelRegistry:
             avoid_hit = sum(1 for t in avoid_tags if t in tags)
             intel = m.get("intelligence", 0)
             cost = m.get("cost_input_1m", 999)
-            is_free = 1 if (prefer_free and cost == 0) else 0
+            is_free = 1 if (prefer_free and "free" in tags) else 0
             # sort desc by tag/avoid/is_free/intelligence, asc by cost
             return (tag_hit, -avoid_hit, is_free, intel, -cost)
 

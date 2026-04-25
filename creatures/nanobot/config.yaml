@@ -8,7 +8,8 @@ controller:
   base_url: ${NEW_API_BASE_URL:-https://api.new-api.com/v1}
   api_key_env: NEW_API_KEY
   temperature: 0.7
-  tool_format: bracket            # Use KT's robust text-based tool protocol
+  max_retries: 0                 # Fail fast on proxy timeout/502 to trigger custom model routing fallback
+  tool_format: native            # Re-enabling native function calling per user request
   max_messages: 50               # auto-compaction threshold
 
 # ── Tools ──

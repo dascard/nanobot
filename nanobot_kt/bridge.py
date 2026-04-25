@@ -160,16 +160,46 @@ class NanobotBridge:
                 response = self._output.get_response()
                 if "[系统内部错误]" in response and attempt < max_attempts - 1:
                     logger.warning(f"[NanobotBridge] Framework error detected. Attempting fallback.")
-                    # Rollback the appended user event from KT history
+                    tool_results_preserved = False
                     if hasattr(self._agent.controller, 'conversation'):
-                        idx = self._agent.controller.conversation.find_last_user_index()
-                        if idx >= 0:
-                            msgs = self._agent.controller.conversation.get_messages()
-                            # Check if the text matches (sometimes it's a TextPart)
-                            content = msgs[idx].content
+                        msgs = self._agent.controller.conversation.get_messages()
+                        user_idx = self._agent.controller.conversation.find_last_user_index()
+
+                        # Find any 'tool' messages that landed AFTER the last user message.
+                        # These represent tool calls that COMPLETED successfully before the crash.
+                        # We must NOT re-execute them; only strip the dangling assistant response.
+                        last_tool_idx = -1
+                        if user_idx >= 0:
+                            for i in range(len(msgs) - 1, user_idx, -1):
+                                if msgs[i].role == "tool":
+                                    last_tool_idx = i
+                                    break
+
+                        if last_tool_idx >= 0:
+                            # Tools ran successfully. Strip only the broken assistant response
+                            # AFTER the last tool result. Keep all tool messages intact.
+                            strip_from = last_tool_idx + 1
+                            if strip_from < len(msgs):
+                                self._agent.controller.conversation.truncate_from(strip_from)
+                                logger.info(
+                                    f"[NanobotBridge] Preserved tool results (idx≤{last_tool_idx}). "
+                                    f"Stripped only broken post-tool assistant turn from idx={strip_from}."
+                                )
+                            # Send an empty continuation event, NOT the original user query again,
+                            # so the model picks up from the existing tool results.
+                            from kohakuterrarium.core.events import TriggerEvent
+                            event = TriggerEvent(type="user_input", content="")
+                            tool_results_preserved = True
+                        elif user_idx >= 0:
+                            # No tools ran. Full rollback is safe — retry with the original query.
+                            content = msgs[user_idx].content
                             if isinstance(content, str) and content == query:
-                                self._agent.controller.conversation.truncate_from(idx)
-                                logger.info(f"[NanobotBridge] Rolled back failed user message at index {idx}")
+                                self._agent.controller.conversation.truncate_from(user_idx)
+                                logger.info(f"[NanobotBridge] Full rollback: removed failed user message at idx={user_idx}")
+                            event = create_user_input_event(query)
+
+                    if not tool_results_preserved:
+                        event = create_user_input_event(query)
                     continue  # Retry with downgraded model
                 else:
                     break  # Success or max attempts reached
