@@ -46,9 +46,8 @@ class NanobotBridge:
             output_module=self._output,
         )
         await self._output.start()
-        tool_count = len(self._agent.registry.list_tools())
-        tools_list = [t.name for t in self._agent.registry.list_tools()]
-        logger.info(f"KT Agent '{config.name}' initialized with {tool_count} tools: {tools_list}")
+        tools_list = self._agent.registry.list_tools()
+        logger.info(f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}")
 
     async def stop(self) -> None:
         """Shutdown the agent."""
