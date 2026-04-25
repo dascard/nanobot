@@ -93,7 +93,7 @@ class NewAPIClient:
             tags.extend(["fast", "cheap"])
         if any(k in mid for k in ["vision", "vl", "omni"]):
             tags.extend(["vision", "multimodal"])
-        if any(k in mid for k in ["qwen", "glm", "yi", "deepseek", "kimi", "claude", "gpt", "gemini"]):
+        if any(k in mid for k in ["qwen", "glm", "yi", "deepseek", "kimi", "claude", "gpt", "gemini", "gemma"]):
             tags.append("general")
 
         if is_free:
@@ -105,22 +105,8 @@ class NewAPIClient:
         elif "fast" in tags:
             tier = "fast"
 
-        # Generate per-model description from ID parts
-        parts = mid.replace(":free", "").replace("-free", "").replace("/", " ").replace("-", " ").split()
-        family = next((p.capitalize() for p in parts if p in ["deepseek", "qwen", "gemma", "nemotron", "gpt", "claude", "kimi", "glm", "yi"]), "")
-        variant = next((p.upper() for p in parts if p in ["flash", "pro", "max", "mini", "lite", "turbo", "high"]), "")
-        size = next((p.upper() for p in parts if p.endswith("b") and p[:-1].isdigit()), "")
-        model_type = next((p.capitalize() for p in parts if p in ["coder", "oss", "reasoning"]), "")
-
-        desc_parts = [family] if family else [model_id]
-        if size:
-            desc_parts.append(size)
-        if variant:
-            desc_parts.append(variant)
-        if model_type:
-            desc_parts.append(model_type)
-        desc_parts.append("(free)" if is_free else "(paid)")
-        desc = " ".join(desc_parts)
+        tags_list = sorted(set(tags)) or ["general"]
+        desc = self._build_description(model_id, tags_list)
 
         if "reasoning" in tags:
             intelligence = 9
@@ -131,7 +117,7 @@ class NewAPIClient:
 
         return {
             "tier": tier,
-            "tags": sorted(set(tags)) or ["general"],
+            "tags": tags_list,
             "description": desc,
             "intelligence": intelligence,
         }
@@ -144,11 +130,24 @@ class NewAPIClient:
         candidates: List[str] = []
         candidates.append(model_id)
 
-        # Treat `xxx` and `xxx:free` as alias forms.
-        if model_id.endswith(":free"):
-            candidates.append(model_id[:-5])
+        # Strip provider prefix (e.g. "deepseek/deepseek-v4-pro-free" → "deepseek-v4-pro-free")
+        if "/" in model_id:
+            bare = model_id.split("/")[-1]
         else:
-            candidates.append(f"{model_id}:free")
+            bare = model_id
+
+        # Build candidate forms: with/without :free and -free
+        for mid in {model_id, bare}:
+            candidates.append(mid)
+            if mid.endswith(":free"):
+                candidates.append(mid[:-5])
+                candidates.append(f"{mid[:-5]}-free")
+            elif mid.endswith("-free"):
+                candidates.append(mid[:-5])
+                candidates.append(f"{mid[:-5]}:free")
+            else:
+                candidates.append(f"{mid}:free")
+                candidates.append(f"{mid}-free")
 
         lower_model_id = model_id.lower()
         wildcard_keys = [k for k in overrides.keys() if "*" in k]
@@ -170,7 +169,35 @@ class NewAPIClient:
         merged.update(override)
         if "tags" in base and "tags" in override and isinstance(base["tags"], list) and isinstance(override["tags"], list):
             merged["tags"] = sorted(set([*base["tags"], *override["tags"]]))
+        # Clean up contradictory free/paid tags and regenerate description
+        final_tags = merged.get("tags", [])
+        if isinstance(final_tags, list):
+            if "free" in final_tags and "paid" in final_tags:
+                final_tags.remove("paid")
+                merged["tags"] = final_tags
+            # Regenerate description to match final tag state
+            merged["description"] = self._build_description(model_id, final_tags)
         return merged
+
+    def _build_description(self, model_id: str, tags: List[str]) -> str:
+        """Build a human-readable description from model ID and tags."""
+        mid = (model_id or "").lower()
+        parts = mid.replace(":free", "").replace("-free", "").replace("/", " ").replace("-", " ").split()
+        family = next((p.capitalize() for p in parts if p in ["deepseek", "qwen", "gemma", "nemotron", "gpt", "claude", "kimi", "glm", "yi"]), "")
+        variant = next((p.upper() for p in parts if p in ["flash", "pro", "max", "mini", "lite", "turbo", "high"]), "")
+        size = next((p.upper() for p in parts if p.endswith("b") and p[:-1].isdigit()), "")
+        model_type = next((p.capitalize() for p in parts if p in ["coder", "oss", "reasoning"]), "")
+
+        desc_parts = [family] if family else [model_id]
+        if size:
+            desc_parts.append(size)
+        if variant:
+            desc_parts.append(variant)
+        if model_type:
+            desc_parts.append(model_type)
+        is_free = "free" in tags
+        desc_parts.append("(free)" if is_free else "(paid)")
+        return " ".join(desc_parts)
 
     async def fetch_models(self) -> List[Dict[str, Any]]:
         """从 new-api `/models` 拉取模型列表。"""
