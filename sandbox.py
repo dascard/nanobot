@@ -41,8 +41,9 @@ _BLOCKED_MODULES = frozenset([
 
 
 class AnalysisSandbox:
-    def __init__(self, db_path: str = "./data/nanobot.db"):
-        self.db_path = db_path.replace("sqlite:///", "")
+    def __init__(self, db_path: str = ""):
+        raw = db_path or DATABASE_URL
+        self.db_path = os.path.abspath(raw.replace("sqlite:///", ""))
 
     def run_query(self, sql: str) -> str:
         """运行 SQL 查询并返回 Markdown 表格格式的结果 (只读)"""
@@ -118,9 +119,10 @@ class AnalysisSandbox:
         """构建沙箱脚本：注入安全 import hook + 用户代码"""
         db_path_escaped = self.db_path.replace("\\", "\\\\")
         blocked_json = json.dumps(list(_BLOCKED_MODULES))
-        
+
         return textwrap.dedent(f'''\
 import sys
+import os as _os
 
 # ── Phase 1: Install import blocker ──
 _BLOCKED = set({blocked_json})
@@ -132,7 +134,7 @@ class _ImportBlocker:
         if top_level in _BLOCKED:
             return self
         return None
-    
+
     def load_module(self, fullname):
         raise ImportError(f"Module '{{fullname}}' is blocked in the analysis sandbox.")
 
@@ -146,13 +148,21 @@ for _name in _dangerous_builtins:
         delattr(_builtins, _name)
 
 # ── Phase 3: Provide safe data access ──
-import sqlite3 as _sqlite3
-_conn = _sqlite3.connect("{db_path_escaped}")
-_conn.execute("PRAGMA query_only = ON")
+_conn = None
+try:
+    import sqlite3 as _sqlite3
+    _db_path = "{db_path_escaped}"
+    if _os.path.exists(_db_path):
+        _conn = _sqlite3.connect(_db_path)
+        _conn.execute("PRAGMA query_only = ON")
+    else:
+        print(f"[sandbox] DB not found at {{_db_path}} — sqlite3 available but no connection opened.")
+except Exception as _e:
+    print(f"[sandbox] DB connection skipped: {{type(_e).__name__}}: {{_e}}")
 
 try:
     import pandas as pd
-except:
+except Exception:
     pd = None
 
 # ── Phase 4: Execute user code ──
@@ -161,7 +171,8 @@ try:
 except Exception as _e:
     print(f"Execution Error: {{type(_e).__name__}}: {{_e}}")
 finally:
-    _conn.close()
+    if _conn is not None:
+        _conn.close()
 ''')
 
     @staticmethod
