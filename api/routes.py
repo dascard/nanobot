@@ -319,6 +319,8 @@ async def proxy_chat(
     """
     统一网关：接收客户端的发问，通过 KT Agent 处理，返回结果并双向落库。
     """
+    logger.info(f"[/chat] Request: user={req.user_id}, session={req.session_id}, query_len={len(req.query)}")
+    
     # 1. 自动注册用户 & 场 (前置校验)
     for target_id in [req.user_id, req.session_id]:
         if not db.query(User).filter(User.id == target_id).first():
@@ -339,8 +341,14 @@ async def proxy_chat(
             }
         )
     except Exception as e:
-        logger.error(f"KT Agent failed: {e}")
+        logger.error(f"[/chat] KT Agent failed: {e}")
         raise HTTPException(status_code=502, detail=f"KT Error: {str(e)}")
+
+    logger.info(f"[/chat] Bridge returned: answer_len={len(answer)}, answer_empty={not answer.strip()}")
+    if answer:
+        logger.debug(f"[/chat] Answer preview (first 300 chars): {answer[:300]}")
+    else:
+        logger.warning(f"[/chat] EMPTY ANSWER returned from bridge!")
 
     # 3. 落库 (KT 的 session 管理是独立的, nanobot 原有日志需手动写入)
     db.add(ChatLog(
@@ -376,6 +384,7 @@ async def proxy_chat(
     else:
         answer_chunks = [answer]
 
+    logger.info(f"[/chat] Response: answer_chunks_count={len(answer_chunks)}, status=ok")
     return {
         "status": "ok",
         "user_id": req.user_id,

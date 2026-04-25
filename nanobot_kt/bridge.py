@@ -84,6 +84,7 @@ class NanobotBridge:
 
         async with self._lock:
             self._output.clear()
+            logger.info(f"[NanobotBridge] Starting handle_message: query_len={len(query)}, user={user_id}, session={session_id}")
 
             # Create a user input event for the KT controller
             event = create_user_input_event(query)
@@ -91,14 +92,26 @@ class NanobotBridge:
             try:
                 # Process the event through KT's controller pipeline
                 # This runs: LLM call → tool dispatch → multi-turn loop → final response
+                logger.debug(f"[NanobotBridge] Agent._process_event starting...")
                 await self._agent._process_event(event)
+                logger.debug(f"[NanobotBridge] Agent._process_event completed")
             except Exception as e:
-                logger.error(f"Agent processing error: {e}", exc_info=True)
+                logger.error(f"[NanobotBridge] Agent processing error: {e}", exc_info=True)
                 return f"处理消息时出错: {str(e)}"
 
             response = self._output.get_response()
+            buffer_content = "".join(self._output._buffer) if hasattr(self._output, '_buffer') else "(no buffer)"
+            buffer_len = len(self._output._buffer) if hasattr(self._output, '_buffer') else 0
+            
+            logger.info(f"[NanobotBridge] After processing: response_len={len(response)}, buffer_chunks={buffer_len}")
+            if response:
+                logger.debug(f"[NanobotBridge] Response preview (first 200 chars): {response[:200]}")
+            else:
+                logger.warning(f"[NanobotBridge] EMPTY RESPONSE! buffer_content={buffer_content}, buffer_len={buffer_len}")
+                logger.warning(f"[NanobotBridge] Output buffer chunks: {self._output._buffer if hasattr(self._output, '_buffer') else 'N/A'}")
+
             if not response.strip():
-                logger.warning("KT agent returned empty response")
+                logger.warning(f"[NanobotBridge] KT agent returned empty response after strip")
                 return ""
 
             return response
