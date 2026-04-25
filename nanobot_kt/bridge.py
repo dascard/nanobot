@@ -55,14 +55,15 @@ class NanobotBridge:
         logger.info(f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}")
 
         # 检查 controller 配置
-        if hasattr(self._agent, '_controller'):
-            ctrl = self._agent._controller
+        ctrl = getattr(self._agent, 'controller', None)
+        if ctrl:
             logger.info(f"[KT Agent] Controller type: {type(ctrl)}")
             logger.info(f"[KT Agent] Controller provider: {getattr(ctrl, 'provider', 'N/A')}")
             logger.info(f"[KT Agent] Controller model: {getattr(ctrl, 'model', 'N/A')}")
             logger.info(f"[KT Agent] Controller base_url: {getattr(ctrl, 'base_url', 'N/A')}")
         else:
-            logger.warning("[KT Agent] No _controller attribute found!")
+            logger.warning("[KT Agent] No controller attribute found! Agent attributes: %s",
+                           [a for a in dir(self._agent) if not a.startswith('__')])
 
     async def stop(self) -> None:
         """Shutdown the agent."""
@@ -107,15 +108,20 @@ class NanobotBridge:
             # --- Inject persona as system message (authoritative weight, persists across clears) ---
             meta = metadata or {}
             persona_text = str(meta.get("persona_text", "")).strip()
-            if persona_text and hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                conv = self._agent.controller.conversation
-                # Remove any existing persona system message
-                conv._messages = [
-                    m for m in conv._messages
-                    if not (m.role == "system" and getattr(m, 'content', '').startswith(self.PERSONA_MARKER))
-                ]
-                conv.append("system", f"{self.PERSONA_MARKER}\n{persona_text}")
-                logger.info(f"[NanobotBridge] Persona injected as system message: len={len(persona_text)}")
+            if persona_text:
+                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                    conv = self._agent.controller.conversation
+                    # Remove any existing persona system message
+                    conv._messages = [
+                        m for m in conv._messages
+                        if not (m.role == "system" and getattr(m, 'content', '').startswith(self.PERSONA_MARKER))
+                    ]
+                    conv.append("system", f"{self.PERSONA_MARKER}\n{persona_text}")
+                    logger.info(f"[NanobotBridge] Persona injected as system message: len={len(persona_text)}")
+                else:
+                    logger.warning("[NanobotBridge] Cannot inject persona: agent has no controller/conversation")
+            else:
+                logger.info(f"[NanobotBridge] No persona_text in metadata (keys={list(meta.keys())})")
             # -------------------------------------------------------------------------------------
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")
@@ -127,7 +133,11 @@ class NanobotBridge:
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 
             # --- Dynamic Model Routing ---
+            # Use raw query for routing so enriched context (session memory, persona)
+            # doesn't inflate the complexity estimate and force "reasoning" tier.
             route_client = None
+            meta = metadata or {}
+            raw_query = str(meta.get("raw_query", query)).strip() or query
             try:
                 route_client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
                 # Ensure registry is populated before routing (cold start after deploy)
@@ -137,7 +147,7 @@ class NanobotBridge:
                     await route_client.sync_models_to_registry(force=True)
                 else:
                     await route_client.sync_models_to_registry(force=False)
-                messages = [{"role": "user", "content": query}]
+                messages = [{"role": "user", "content": raw_query}]
                 # Simulate presence of tools for tag inference so tasks map correctly
                 routed_tier = route_client._route_model_tier(messages, tools=[{}], requested_tier="smart")
                 task_tags = route_client._infer_task_tags(messages, tools=[{}])

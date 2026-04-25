@@ -452,6 +452,7 @@ async def proxy_chat(
                 "session_name": req.session_name,
                 "files": req.files,
                 "persona_text": persona_text,
+                "raw_query": req.query,  # original user message for routing (not enriched)
             }
         )
     except Exception as e:

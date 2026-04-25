@@ -29,6 +29,7 @@ class PythonSandboxTool(BaseTool):
             "沙箱内预置了数据库连接变量：_conn（只读 sqlite3.Connection，已连接到 nanobot.db）和 _db_path（数据库文件路径）。"
             "可直接使用 _conn.execute('SELECT ...').fetchall() 查询数据，也可通过 pd.read_sql_query(sql, _conn) 获取 DataFrame。"
             "沙箱禁止了 open/os/sys 等模块，不要尝试文件操作。"
+        )
 
     @property
     def execution_mode(self) -> ExecutionMode:
