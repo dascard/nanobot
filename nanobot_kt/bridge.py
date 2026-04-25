@@ -17,6 +17,7 @@ from kohakuterrarium.core.events import create_user_input_event
 
 from nanobot_kt.output import BufferedOutput
 from clients.new_api_client import NewAPIClient
+from clients.model_registry import registry
 from config import NEW_API_KEY, NEW_API_BASE_URL
 
 logger = logging.getLogger("nanobot.kt.bridge")
@@ -112,6 +113,13 @@ class NanobotBridge:
             route_client = None
             try:
                 route_client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+                # Ensure registry is populated before routing (cold start after deploy)
+                existing = registry.get_models_by_provider("new-api")
+                if not existing:
+                    logger.info("[Model Router] Registry empty, forcing model sync...")
+                    await route_client.sync_models_to_registry(force=True)
+                else:
+                    await route_client.sync_models_to_registry(force=False)
                 messages = [{"role": "user", "content": query}]
                 # Simulate presence of tools for tag inference so tasks map correctly
                 routed_tier = route_client._route_model_tier(messages, tools=[{}], requested_tier="smart")
