@@ -124,6 +124,16 @@ class NanobotBridge:
             if not response and result:
                 logger.info(f"[NanobotBridge] Buffer empty, using _process_event return value")
                 response = str(result) if result else ""
+
+            # Native mode under some gateways may emit no text chunks but still
+            # keep useful content in conversation / extra_fields.
+            if not response:
+                fallback = self._extract_fallback_response()
+                if fallback:
+                    logger.info(
+                        f"[NanobotBridge] Buffer empty, using fallback response len={len(fallback)}"
+                    )
+                    response = fallback
             
             logger.info(f"[NanobotBridge] After processing: response_len={len(response)}, buffer_chunks={buffer_len}")
             if response:
@@ -137,6 +147,57 @@ class NanobotBridge:
                 return ""
 
             return response
+
+    def _extract_fallback_response(self) -> str:
+        """Best-effort fallback when output buffer has no text chunks."""
+        if not self._agent:
+            return ""
+
+        # 1) Last assistant message from conversation
+        try:
+            messages = self._agent.controller.conversation.to_messages()
+            for msg in reversed(messages):
+                if msg.get("role") != "assistant":
+                    continue
+                content = msg.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
+                if isinstance(content, list):
+                    parts = []
+                    for p in content:
+                        if isinstance(p, dict) and p.get("type") == "text":
+                            txt = (p.get("text") or "").strip()
+                            if txt:
+                                parts.append(txt)
+                    if parts:
+                        return "\n".join(parts)
+                break
+        except Exception as e:
+            logger.debug(f"[NanobotBridge] fallback conversation read failed: {e}")
+
+        # 2) Provider extra fields (e.g. reasoning_content)
+        try:
+            extras = getattr(self._agent.llm, "last_assistant_extra_fields", {}) or {}
+            for key in ("reasoning_content", "reasoning"):
+                val = extras.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+            details = extras.get("reasoning_details")
+            if isinstance(details, list):
+                lines = []
+                for item in details:
+                    if isinstance(item, str) and item.strip():
+                        lines.append(item.strip())
+                    elif isinstance(item, dict):
+                        text = str(item.get("text") or item.get("content") or "").strip()
+                        if text:
+                            lines.append(text)
+                if lines:
+                    return "\n".join(lines)
+        except Exception as e:
+            logger.debug(f"[NanobotBridge] fallback extras read failed: {e}")
+
+        return ""
 
     @property
     def agent(self) -> Optional[Agent]:

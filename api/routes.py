@@ -377,7 +377,9 @@ async def proxy_chat(
         background_tasks.add_task(evolution_task, req.user_id)
 
     # 5. 模拟短对话：内容自动拆分逻辑
-    if "\n\n" in answer:
+    if not answer.strip():
+        answer_chunks = []
+    elif "\n\n" in answer:
         answer_chunks = [c.strip() for c in answer.split("\n\n") if c.strip()]
     elif len(answer) > 300:
         answer_chunks = [answer]
