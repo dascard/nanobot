@@ -178,6 +178,10 @@ class NewAPIClient:
                     payload = await resp.json()
                     items = payload.get("data", []) if isinstance(payload, dict) else []
                     logger.info(f"new-api /models returned {len(items)} model entries")
+                    # Log first item keys for debugging what fields the gateway provides
+                    if items:
+                        first = items[0]
+                        logger.debug(f"new-api /models first item keys: {list(first.keys())}, sample={ {k: first[k] for k in list(first.keys())[:5]} }")
                     models: List[Dict[str, Any]] = []
                     free_count = 0
                     for item in items:
@@ -186,18 +190,25 @@ class NewAPIClient:
                             continue
                         profile = self._infer_model_profile(str(model_id))
                         is_free = "free" in profile["tags"]
-                        if is_free:
-                            free_count += 1
+
+                        # Use API-provided metadata when available, fall back to inferred values
+                        api_desc = (item.get("description") or "").strip()
+                        api_owned_by = (item.get("owned_by") or "").strip()
+                        # Only trust API pricing if explicitly present (0.0 is falsy, so use `in` check)
+                        api_cost_input = item.get("cost_input_1m") if "cost_input_1m" in item else None
+                        if api_cost_input is None and isinstance(item.get("pricing"), dict):
+                            api_cost_input = item["pricing"].get("input")
+
                         base_model = {
                             "id": model_id,
                             "provider": "new-api",
                             "intelligence": profile["intelligence"],
-                            "cost_input_1m": 0.0 if is_free else 9.99,
-                            "cost_output_1m": 0.0 if is_free else 9.99,
+                            "cost_input_1m": api_cost_input if api_cost_input is not None else (0.0 if is_free else 9.99),
+                            "cost_output_1m": (0.0 if is_free else 9.99),
                             "tier": profile["tier"],
                             "tags": profile["tags"],
-                            "description": profile["description"],
-                            "reasoning": "Auto-discovered from new-api /models",
+                            "description": api_desc or profile["description"],
+                            "reasoning": api_owned_by or "Auto-discovered from new-api /models",
                         }
                         models.append(self._apply_model_override(str(model_id), base_model))
 
