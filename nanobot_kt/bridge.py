@@ -45,7 +45,9 @@ class NanobotBridge:
             config,
             output_module=self._output,
         )
-        await self._output.start()
+        # Critical: Agent must be started so _running=True; otherwise
+        # _process_event() drops all events and returns empty output.
+        await self._agent.start()
         tools_list = self._agent.registry.list_tools()
         logger.info(f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}")
 
@@ -61,8 +63,8 @@ class NanobotBridge:
 
     async def stop(self) -> None:
         """Shutdown the agent."""
-        if self._output:
-            await self._output.stop()
+        if self._agent:
+            await self._agent.stop()
         logger.info("KT Agent stopped")
 
     async def handle_message(
