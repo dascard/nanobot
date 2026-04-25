@@ -80,7 +80,7 @@ class NewAPIClient:
         cls._model_overrides_cache = {}
         return cls._model_overrides_cache
 
-    def _infer_model_profile(self, model_id: str, supported_endpoints: list = None) -> Dict[str, Any]:
+    def _infer_model_profile(self, model_id: str) -> Dict[str, Any]:
         mid = (model_id or "").lower()
         tags: List[str] = []
         is_free = mid.endswith(":free") or mid.endswith("-free")
@@ -98,11 +98,6 @@ class NewAPIClient:
 
         if is_free:
             tags.append("free")
-
-        # Models with empty supported_endpoint_types likely don't support chat
-        endpoints = supported_endpoints or []
-        if isinstance(endpoints, list) and len(endpoints) == 0:
-            tags.append("unstable")
 
         tier = "smart"
         if "reasoning" in tags:
@@ -207,10 +202,7 @@ class NewAPIClient:
                         model_id = item.get("id")
                         if not model_id:
                             continue
-                        profile = self._infer_model_profile(
-                            str(model_id),
-                            supported_endpoints=item.get("supported_endpoint_types", []),
-                        )
+                        profile = self._infer_model_profile(str(model_id))
                         is_free = "free" in profile["tags"]
 
                         # Use API-provided metadata when available, fall back to inferred values
