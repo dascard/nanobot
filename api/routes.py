@@ -404,11 +404,23 @@ async def proxy_chat(
     persona_text = ""
     if isinstance(persona_data, dict) and persona_data:
         parts = []
-        # persona_summary: overall self-description
-        summary = str(persona_data.get("persona_summary", "")).strip()
+        # persona_summary / summary: overall self-description (both old and new key names)
+        summary = str(persona_data.get("persona_summary") or persona_data.get("summary") or "").strip()
         if summary:
             parts.append(summary)
-        # identity: core user identity dict (role, name, etc.)
+        # traits: list of user traits
+        traits = persona_data.get("traits")
+        if isinstance(traits, list) and traits:
+            parts.append("特质: " + "; ".join(str(t) for t in traits if t))
+        # preferences: list of user preferences
+        prefs = persona_data.get("preferences")
+        if isinstance(prefs, list) and prefs:
+            parts.append("偏好: " + "; ".join(str(p) for p in prefs if p))
+        # pain_points
+        pain = str(persona_data.get("pain_points", "")).strip()
+        if pain:
+            parts.append(f"痛点: {pain}")
+        # identity: core user identity dict (new format)
         identity = persona_data.get("identity")
         if isinstance(identity, dict) and identity:
             ident_parts = []
@@ -417,11 +429,11 @@ async def proxy_chat(
                     ident_parts.append(f"{k}: {v}")
             if ident_parts:
                 parts.append("身份: " + "; ".join(ident_parts))
-        # communication_style: how user prefers to communicate
+        # communication_style
         comm_style = str(persona_data.get("communication_style", "")).strip()
         if comm_style:
             parts.append(f"沟通风格: {comm_style}")
-        # domain_profiles: per-domain expertise/interests
+        # domain_profiles
         domains = persona_data.get("domain_profiles", {})
         if isinstance(domains, dict) and domains:
             domain_lines = []
