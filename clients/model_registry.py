@@ -10,7 +10,30 @@ logger = logging.getLogger("nanobot.registry")
 MODEL_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "models.json")
 
 
-_FAILURE_STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "model_failures.json")
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+_FAILURE_STATE_PATH = os.path.join(_DATA_DIR, "model_failures.json")
+_RUNTIME_STATE_PATH = os.path.join(_DATA_DIR, "runtime_state.json")
+
+
+def _atomic_write(path: str, data: Any) -> None:
+    """Write JSON to tmp file then atomic rename — safe against SIGKILL."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _atomic_read(path: str) -> dict | None:
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.loads(f.read())
+    except Exception:
+        pass
+    return None
 
 
 class ModelFailureTracker:
@@ -28,38 +51,27 @@ class ModelFailureTracker:
         self._load()
 
     def _load(self) -> None:
-        try:
-            if os.path.exists(_FAILURE_STATE_PATH):
-                with open(_FAILURE_STATE_PATH, "r", encoding="utf-8") as f:
-                    data = json.loads(f.read())
-                self._failures = data.get("failures", {})
-                self._disabled_until = data.get("disabled_until", {})
-                # Expire stale cooldowns on load (server may have been down)
-                now = time.time()
-                expired = [mid for mid, until in self._disabled_until.items() if now >= until]
-                for mid in expired:
-                    del self._disabled_until[mid]
-                    self._failures.pop(mid, None)
-                if expired:
-                    logger.info(f"Expired {len(expired)} stale cooldowns on load")
-                total = len(self._failures)
-                if total:
-                    logger.info(f"Loaded failure state: {total} models tracked, "
-                                f"{len(self._disabled_until)} disabled")
-        except Exception as e:
-            logger.warning(f"Failed to load failure state: {e}")
+        data = _atomic_read(_FAILURE_STATE_PATH)
+        if data:
+            self._failures = data.get("failures", {})
+            self._disabled_until = data.get("disabled_until", {})
+            # Expire stale cooldowns (server may have been down)
+            now = time.time()
+            expired = [mid for mid, until in self._disabled_until.items() if now >= until]
+            for mid in expired:
+                del self._disabled_until[mid]
+                self._failures.pop(mid, None)
+            if expired:
+                logger.info(f"Expired {len(expired)} stale cooldowns on load")
+            if self._failures:
+                logger.info(f"Loaded failure state: {len(self._failures)} models, "
+                            f"{len(self._disabled_until)} disabled")
 
     def _save(self) -> None:
-        try:
-            data = {
-                "failures": dict(self._failures),
-                "disabled_until": dict(self._disabled_until),
-            }
-            os.makedirs(os.path.dirname(_FAILURE_STATE_PATH), exist_ok=True)
-            with open(_FAILURE_STATE_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"Failed to save failure state: {e}")
+        _atomic_write(_FAILURE_STATE_PATH, {
+            "failures": dict(self._failures),
+            "disabled_until": dict(self._disabled_until),
+        })
 
     async def record_failure(self, model_id: str) -> None:
         async with self._lock:
@@ -97,6 +109,50 @@ class ModelFailureTracker:
                 logger.info(f"Model [{model_id}] re-enabled after cooldown")
                 return False
             return True
+
+
+class RuntimeState:
+    """General runtime state persisted across restarts.
+
+    Stores lightweight key-value pairs that should survive
+    container restarts (model sync timestamps, usage counters, etc).
+    Uses atomic writes — safe against SIGKILL during save.
+    """
+
+    def __init__(self):
+        self._data: dict[str, Any] = {}
+        self._lock = asyncio.Lock()
+        self._load()
+
+    def _load(self) -> None:
+        data = _atomic_read(_RUNTIME_STATE_PATH)
+        if data:
+            self._data = data
+            logger.debug(f"Loaded runtime state: {list(data.keys())}")
+
+    async def set(self, key: str, value: Any) -> None:
+        async with self._lock:
+            self._data[key] = value
+            _atomic_write(_RUNTIME_STATE_PATH, self._data)
+
+    async def get(self, key: str, default: Any = None) -> Any:
+        async with self._lock:
+            return self._data.get(key, default)
+
+    async def incr(self, key: str) -> int:
+        async with self._lock:
+            v = int(self._data.get(key, 0)) + 1
+            self._data[key] = v
+            _atomic_write(_RUNTIME_STATE_PATH, self._data)
+            return v
+
+    async def keys(self) -> list[str]:
+        async with self._lock:
+            return list(self._data.keys())
+
+
+# Global runtime state singleton
+runtime_state = RuntimeState()
 
 
 class ModelRegistry:

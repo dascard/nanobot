@@ -31,7 +31,7 @@ _RETRYABLE_STATUS = {429, 502, 503, 504}
 
 
 class NewAPIClient:
-    _last_model_sync_ts: float = 0.0
+    _last_model_sync_ts: float | None = None  # lazy-init from runtime_state
     _model_sync_lock = asyncio.Lock()
     _model_overrides_cache: Dict[str, Any] | None = None
     _failure_tracker: "ModelFailureTracker | None" = None
@@ -275,8 +275,18 @@ class NewAPIClient:
         if not NEW_API_AUTO_MODEL_SYNC and not force:
             return 0
 
+        from clients.model_registry import runtime_state as _rs
+
         interval_sec = max(60, NEW_API_MODEL_SYNC_INTERVAL_MINUTES * 60)
         now = time.time()
+
+        # Load last sync time from persisted state (survives restarts)
+        if self.__class__._last_model_sync_ts is None:
+            async with self.__class__._model_sync_lock:
+                if self.__class__._last_model_sync_ts is None:
+                    saved = await _rs.get("last_model_sync_ts", 0)
+                    self.__class__._last_model_sync_ts = saved
+
         if not force and now - self.__class__._last_model_sync_ts < interval_sec:
             return 0
 
@@ -294,6 +304,8 @@ class NewAPIClient:
 
             updated = registry.add_or_update_many(models)
             self.__class__._last_model_sync_ts = now
+            # Persist sync timestamp so restart doesn't re-sync
+            asyncio.ensure_future(_rs.set("last_model_sync_ts", now))
 
             # Post-sync summary: list all models by tier with free/paid breakdown
             all_models = registry.get_models_by_provider("new-api")
