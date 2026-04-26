@@ -155,6 +155,29 @@ class ModelRegistry:
                 # Found suitable candidates in this tier
                 candidates.sort(key=_score, reverse=True)
                 selected = candidates[0]
+
+                # 跨层免费优先：当前层最优是付费的，检查其他层有无智力接近的免费模型
+                if prefer_free and "free" not in _tags_of(selected):
+                    sel_intel = selected.get("intelligence", 0)
+                    for c in all_candidates:
+                        tags_c = _tags_of(c)
+                        if "free" not in tags_c:
+                            continue
+                        if c.get("intelligence", 0) < sel_intel - 1:
+                            continue
+                        if max_cost is not None and c.get("cost_input_1m", 999) > max_cost:
+                            continue
+                        if exclude_models and c.get("id", "").lower() in (em.lower() for em in exclude_models):
+                            continue
+                        if avoid_tags and any(at in tags_c for at in avoid_tags):
+                            continue
+                        logger.info(
+                            f"Model selected (cross-tier free): prefer {c.get('id')} "
+                            f"over {selected.get('id')} (tier={t})"
+                        )
+                        selected = c
+                        break
+
                 selected_tags = _tags_of(selected)
                 logger.info(
                     f"Model selected: id={selected.get('id')}, tier={t}, "

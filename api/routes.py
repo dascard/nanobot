@@ -5,7 +5,9 @@ FastAPI 路由模块。
 import os
 import logging
 import json
+import asyncio
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -113,6 +115,7 @@ class ChatProxyRequest(BaseModel):
     files: Optional[List[str]] = None
     sender_name: Optional[str] = None
     session_name: Optional[str] = None
+    stream: bool = False  # SSE streaming with heartbeats
 
 class EvolutionTriggerRequest(BaseModel):
     user_id: str
@@ -496,19 +499,61 @@ async def proxy_chat(
 
     # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
     bridge = get_bridge()
-    try:
-        answer = await bridge.handle_message(
+    bridge_meta = {
+        "session_name": req.session_name,
+        "files": req.files,
+        "persona_text": persona_text,
+        "raw_query": req.query,
+    }
+
+    async def _do_chat():
+        return await bridge.handle_message(
             enriched_query,
             user_id=req.user_id,
             session_id=req.session_id,
             sender_name=req.sender_name or "",
-            metadata={
-                "session_name": req.session_name,
-                "files": req.files,
-                "persona_text": persona_text,
-                "raw_query": req.query,  # original user message for routing (not enriched)
-            }
+            metadata=bridge_meta,
         )
+
+    async def _stream_chat():
+        """SSE streaming with periodic heartbeats to prevent client timeout."""
+        result_holder: dict = {}
+        done = asyncio.Event()
+
+        async def runner():
+            try:
+                result_holder["answer"] = await _do_chat()
+            except Exception as e:
+                result_holder["error"] = str(e)
+            finally:
+                done.set()
+
+        runner_task = asyncio.create_task(runner())
+        heartbeat_interval = 5  # seconds
+
+        try:
+            while not done.is_set():
+                try:
+                    await asyncio.wait_for(asyncio.shield(done.wait()), timeout=heartbeat_interval)
+                    break
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'status': 'processing'}, ensure_ascii=False)}\n\n"
+
+            if "error" in result_holder:
+                yield f"data: {json.dumps({'status': 'error', 'message': result_holder['error']}, ensure_ascii=False)}\n\n"
+            else:
+                answer = result_holder.get("answer", "")
+                yield f"data: {json.dumps({'status': 'done', 'answer': answer}, ensure_ascii=False)}\n\n"
+        finally:
+            if not runner_task.done():
+                runner_task.cancel()
+            done.set()
+
+    if req.stream:
+        return StreamingResponse(_stream_chat(), media_type="text/event-stream")
+
+    try:
+        answer = await _do_chat()
     except Exception as e:
         logger.error(f"[/chat] KT Agent failed: {e}")
         raise HTTPException(status_code=502, detail=f"KT Error: {str(e)}")
