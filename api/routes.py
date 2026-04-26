@@ -66,16 +66,17 @@ def _build_session_memory(db: Session, session_id: str, max_messages: int = 30,
     if not recent_logs:
         return ""
 
-    # Skip progress status messages and tool confirmation garbage
-    SKIP_PATTERNS = ["处理中...", "正在更新画像", "正在搜索", "正在查询", "正在执行",
-                     "正在读取", "正在写入", "更新画像", "创建定时任务",
-                     "任务已创建", "定时任务已创建", "已创建 (id="]
+    # Only filter assistant progress/tool noise. Never filter user messages.
+    ASSISTANT_SKIP = ["处理中...", "正在更新画像", "正在搜索", "正在查询",
+                      "正在执行", "正在读取", "正在写入"]
 
     lines = []
     for log in recent_logs:
         content = log.content.strip()
-        # Skip meta/noise
-        if any(p in content for p in SKIP_PATTERNS):
+        if not content:
+            continue
+        # Only skip assistant progress noise
+        if log.role == "assistant" and any(p in content for p in ASSISTANT_SKIP):
             continue
         content = _cap_text(content, max_per_msg, f"session_msg")
         if not content:
@@ -494,17 +495,17 @@ async def proxy_chat(
     )
 
     # 3. 构建会话记忆上下文
-    memory_context = _build_session_memory(db, req.session_id, max_messages=20)
+    memory_context = _build_session_memory(db, req.session_id, max_messages=10)
 
-    # 4. 组装 enriched query — 只注入会话记忆（用户画像通过 metadata 传递，由 bridge 注入为 system 消息；
-    #    系统提示词已由 KT evolution 写入 SystemPrompt 表，再由 PromptAuditorAgent 合并到 KT system prompt）
-    enriched_query = req.query
+    # 4. 组装 enriched query — 当前消息在前，历史在后（仅供语境参考）
+    chat_type = "私聊" if str(req.session_id).startswith("private_") else "群聊"
+    enriched_query = f"[{chat_type}] 用户: {req.query}"
     if memory_context:
         enriched_query = _cap_text(
-            f"{memory_context}\n\n[当前消息]\n用户: {req.query}", 20000, "enriched_query"
+            f"{enriched_query}\n\n---\n{memory_context}", 20000, "enriched_query"
         )
         logger.info(
-            f"[/chat] Enriched query: memory={len(memory_context)}chars, "
+            f"[/chat] Enriched query: type={chat_type}, memory={len(memory_context)}chars, "
             f"total={len(enriched_query)}chars, est_tokens={len(enriched_query)//2}"
         )
 
@@ -612,13 +613,14 @@ async def proxy_chat(
         logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
         background_tasks.add_task(evolution_task, req.user_id)
 
-    # 5. 模拟短对话：内容自动拆分逻辑
+    # 5. 模拟短对话：内容自动拆分逻辑（按双换行优先，单换行兜底）
     if not answer.strip():
         answer_chunks = []
     elif "\n\n" in answer:
         answer_chunks = [c.strip() for c in answer.split("\n\n") if c.strip()]
-    elif len(answer) > 300:
-        answer_chunks = [answer]
+    elif "\n" in answer and len(answer) > 100:
+        # 有单换行且较长 → 按单换行拆成短气泡
+        answer_chunks = [c.strip() for c in answer.split("\n") if c.strip()]
     else:
         answer_chunks = [answer]
 

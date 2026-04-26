@@ -434,8 +434,8 @@ class NewAPIClient:
                 continue
             if m.get("cost_input_1m", 999) > max_cost_val:
                 continue
-            # Check failure tracker synchronously (uses asyncio.Lock internally)
-            # but we're in a sync method. Use a simple status check.
+            if tracker.sync_is_disabled(mid):
+                continue
             candidates.append(m)
 
         if not candidates:
@@ -549,8 +549,9 @@ class NewAPIClient:
                                 f"attempt={attempt+1}, retry in {delay}s"
                             )
                             last_error = f"API Error {resp.status}: {detail[:200]}"
-                            # Switch model on rate limit (429)
+                            # Record failure + switch model on rate limit (429)
                             if resp.status == 429:
+                                asyncio.create_task(tracker.record_failure(target_model))
                                 candidate_idx += 1
                                 logger.info(f"Switching to next candidate: {candidates[candidate_idx % len(candidates)]['id']}")
                             await asyncio.sleep(delay)
@@ -559,13 +560,15 @@ class NewAPIClient:
                         if resp.status != 200:
                             detail = await resp.text()
                             logger.error(f"new-api error: status={resp.status}, detail={detail}")
-                            candidate_idx += 1  # switch model on non-retryable error too
+                            asyncio.create_task(tracker.record_failure(target_model))
+                            candidate_idx += 1
                             last_error = f"API Error {resp.status}: {detail[:200]}"
                             if candidate_idx < len(candidates):
                                 continue
                             return {"error": last_error}
 
                         result = await resp.json()
+                        asyncio.create_task(tracker.record_success(target_model))
                         self.last_usage = result.get("usage", {})
                         result["_nanobot_model_id"] = target_model
                         result["_nanobot_complexity"] = complexity

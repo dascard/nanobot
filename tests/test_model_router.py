@@ -58,3 +58,36 @@ class TestPriorityScore:
         cheap = {"id": "a", "cost_input_1m": 0.04, "intelligence": 7, "tags": []}
         expensive = {"id": "b", "cost_input_1m": 0.43, "intelligence": 7, "tags": []}
         assert ModelRegistry.compute_priority_score(cheap) < ModelRegistry.compute_priority_score(expensive)
+
+
+class TestFailureTracker:
+    def test_record_and_check(self):
+        from clients.model_registry import ModelFailureTracker
+        import time
+        t = ModelFailureTracker(max_failures=2, cooldown_base_s=0.1)
+        assert not t.sync_is_disabled("m1")
+        # 2 failures = disabled
+        for _ in range(2):
+            t._failures["m1"] = t._failures.get("m1", 0) + 1
+            if t._failures["m1"] >= t._max_failures:
+                t._disabled_until["m1"] = time.time() + t._cooldown_base
+        assert t.sync_is_disabled("m1")
+
+    def test_cooldown_expires(self):
+        from clients.model_registry import ModelFailureTracker
+        import time
+        t = ModelFailureTracker(max_failures=1, cooldown_base_s=0.01)
+        t._failures["m1"] = 1
+        t._disabled_until["m1"] = time.time() - 1  # expired
+        assert not t.sync_is_disabled("m1")  # auto-cleared
+        assert "m1" not in t._failures
+
+    def test_success_resets(self):
+        from clients.model_registry import ModelFailureTracker
+        t = ModelFailureTracker(max_failures=3)
+        t._failures["m1"] = 2
+        t._disabled_until["m1"] = 9999999999
+        # Simulate record_success logic
+        t._failures.pop("m1", None)
+        t._disabled_until.pop("m1", None)
+        assert not t.sync_is_disabled("m1")

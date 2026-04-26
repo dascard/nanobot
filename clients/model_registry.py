@@ -50,12 +50,13 @@ class ModelFailureTracker:
         self._lock = asyncio.Lock()
         self._load()
 
+    # ── persistence ──
+
     def _load(self) -> None:
         data = _atomic_read(_FAILURE_STATE_PATH)
         if data:
             self._failures = data.get("failures", {})
             self._disabled_until = data.get("disabled_until", {})
-            # Expire stale cooldowns (server may have been down)
             now = time.time()
             expired = [mid for mid, until in self._disabled_until.items() if now >= until]
             for mid in expired:
@@ -73,21 +74,17 @@ class ModelFailureTracker:
             "disabled_until": dict(self._disabled_until),
         })
 
+    # ── public API ──
+
     async def record_failure(self, model_id: str) -> None:
         async with self._lock:
             count = self._failures.get(model_id, 0) + 1
             self._failures[model_id] = count
             if count >= self._max_failures:
                 extra = count - self._max_failures
-                cooldown = min(
-                    self._cooldown_base * (2 ** extra),
-                    self._cooldown_max,
-                )
+                cooldown = min(self._cooldown_base * (2 ** extra), self._cooldown_max)
                 self._disabled_until[model_id] = time.time() + cooldown
-                logger.warning(
-                    f"Model [{model_id}] disabled for {cooldown:.0f}s "
-                    f"(failure #{count})"
-                )
+                logger.warning(f"Model [{model_id}] disabled for {cooldown:.0f}s (failure #{count})")
             self._save()
 
     async def record_success(self, model_id: str) -> None:
@@ -97,18 +94,23 @@ class ModelFailureTracker:
             if changed:
                 self._save()
 
+    def sync_is_disabled(self, model_id: str) -> bool:
+        """Sync check (no lock). Expired cooldowns auto-clear."""
+        until = self._disabled_until.get(model_id)
+        if until is None:
+            return False
+        if time.time() >= until:
+            del self._disabled_until[model_id]
+            self._failures.pop(model_id, None)
+            self._save()
+            logger.info(f"Model [{model_id}] re-enabled after cooldown")
+            return False
+        return True
+
     async def is_disabled(self, model_id: str) -> bool:
+        """Async check with lock."""
         async with self._lock:
-            until = self._disabled_until.get(model_id)
-            if until is None:
-                return False
-            if time.time() >= until:
-                del self._disabled_until[model_id]
-                self._failures.pop(model_id, None)
-                self._save()
-                logger.info(f"Model [{model_id}] re-enabled after cooldown")
-                return False
-            return True
+            return self.sync_is_disabled(model_id)
 
 
 class RuntimeState:
