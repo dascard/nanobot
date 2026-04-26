@@ -1,30 +1,28 @@
 """
-Daily digest pipeline for progressive-disclosure memory management.
-
-Design:
-- Level 0: rich daily digest (high-detail)
-- Level 1: compressed digest (mid-detail)
-- Level 2: compact digest (low-detail)
-
-This keeps conversation memory queryable in SQL while allowing incremental reveal.
+Daily digest + scheduled task pipeline.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timedelta
 from typing import List
 
+import aiohttp
 from sqlalchemy import and_
 
 from config import DAILY_DIGEST_HOUR
 from core.compaction import run_autocompact_circuit_breaker
-from core.database import SessionLocal, ChatLog, MemoryDigest
+from core.database import SessionLocal, ChatLog, MemoryDigest, ScheduledTask
 
 logger = logging.getLogger("nanobot.daily_digest")
+
+QQBOT_PUSH_URL = os.environ.get("QQBOT_PUSH_URL", "http://127.0.0.1:8080/nanobot/push")
 
 TOPIC_KEYWORDS = {
     "model_release": ["发布", "release", "new model", "版本", "更新"],
@@ -244,3 +242,130 @@ def daily_digest_scheduler(stop_event: threading.Event) -> None:
         run_daily_digest_once()
 
     logger.info("Daily digest scheduler stopped")
+
+
+# ── QQ 推送 ──
+
+async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
+    """推送消息到 QQ（通过 qqbot 的 /nanobot/push 端点）。"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                QQBOT_PUSH_URL,
+                json={"target_type": target_type, "target_id": target_id, "message": message},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    logger.info(f"Push OK: {target_type}/{target_id} len={len(message)}")
+                    return True
+                logger.warning(f"Push failed: status={resp.status}, body={await resp.text()}")
+                return False
+    except Exception as e:
+        logger.error(f"Push error: {e}")
+        return False
+
+
+# ── 定时任务调度 ──
+
+async def _generate_task_message(task: ScheduledTask) -> str | None:
+    """用 LLM 根据模板生成推送内容。"""
+    from clients.new_api_client import NewAPIClient
+    from config import NEW_API_KEY, NEW_API_BASE_URL
+
+    try:
+        client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+        messages = [{"role": "user", "content": task.prompt_template}]
+        resp = await client.chat_completion(messages=messages, model_tier="fast")
+        if isinstance(resp, dict) and "choices" in resp:
+            return resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        logger.error(f"Task [{task.name}] LLM call failed: {e}")
+    return None
+
+
+async def run_scheduled_tasks() -> int:
+    """检查并执行到期的定时任务。返回执行数。"""
+    db = SessionLocal()
+    executed = 0
+    try:
+        now = datetime.now()
+        tasks = db.query(ScheduledTask).filter(ScheduledTask.enabled == 1).all()
+
+        for task in tasks:
+            if not _should_run(task, now):
+                continue
+
+            logger.info(f"Running scheduled task: {task.name}")
+            content = await _generate_task_message(task)
+            if not content:
+                continue
+
+            ok = await push_to_qq(task.target_type, task.target_id, content)
+            if ok:
+                task.last_run_at = now
+                db.commit()
+                executed += 1
+    except Exception as e:
+        logger.exception(f"Scheduled tasks runner failed: {e}")
+    finally:
+        db.close()
+    return executed
+
+
+def _should_run(task: ScheduledTask, now: datetime) -> bool:
+    """简单 cron 匹配（只支持分 时 日 月 周）。"""
+    try:
+        parts = (task.cron_expr or "").strip().split()
+        if len(parts) != 5:
+            return False
+        minute, hour, day, month, dow = parts
+        if not _match(now.minute, minute):
+            return False
+        if not _match(now.hour, hour):
+            return False
+        if not _match(now.day, day):
+            return False
+        if not _match(now.month, month):
+            return False
+        if not _match(now.isoweekday(), dow):
+            return False
+        # 避免同一分钟内重复执行
+        if task.last_run_at and (now - task.last_run_at).total_seconds() < 60:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _match(value: int, expr: str) -> bool:
+    if expr == "*":
+        return True
+    for part in expr.split(","):
+        part = part.strip()
+        if "-" in part:
+            lo, hi = part.split("-")
+            if int(lo) <= value <= int(hi):
+                return True
+        elif "/" in part and part.startswith("*/"):
+            step = int(part[2:])
+            if value % step == 0:
+                return True
+        elif part.isdigit() and int(part) == value:
+            return True
+    return False
+
+
+def scheduled_task_runner(stop_event: threading.Event) -> None:
+    """后台线程：每分钟检查一次定时任务。"""
+    logger.info("Scheduled task runner started")
+    while not stop_event.is_set():
+        try:
+            asyncio.run(run_scheduled_tasks())
+        except Exception as e:
+            logger.error(f"Scheduled task tick failed: {e}")
+        # Sleep 60 seconds (check once a minute)
+        for _ in range(60):
+            if stop_event.is_set():
+                break
+            time.sleep(1)
+    logger.info("Scheduled task runner stopped")

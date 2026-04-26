@@ -58,6 +58,19 @@ class MemoryDigest(Base):
     source_end_log_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
+class ScheduledTask(Base):
+    __tablename__ = "scheduled_tasks"
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    name = Column(String, index=True)            # 任务名
+    cron_expr = Column(String)                   # cron: "0 9 * * *" (分 时 日 月 周)
+    target_type = Column(String, default="private")  # private | group
+    target_id = Column(String)                   # QQ号 或 群号
+    prompt_template = Column(Text)               # 传给 LLM 的提示模板
+    enabled = Column(Integer, default=1)
+    last_run_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.now)
+
+
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
     Base.metadata.create_all(bind=engine)

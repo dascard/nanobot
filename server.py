@@ -60,6 +60,18 @@ async def lifespan(app: FastAPI):
         digest_thread.start()
         logger.info("Daily digest scheduler initialized.")
 
+    # Scheduled task runner (push notifications to QQ)
+    from core.daily_digest import scheduled_task_runner
+    task_stop_event = threading.Event()
+    task_thread = threading.Thread(
+        target=scheduled_task_runner,
+        args=(task_stop_event,),
+        daemon=True,
+        name="scheduled-task-runner",
+    )
+    task_thread.start()
+    logger.info("Scheduled task runner initialized.")
+
     # Initialize KT Framework bridge (replaces old manual controller)
     from nanobot_kt.bridge import init_bridge, shutdown_bridge
     bridge = await init_bridge()

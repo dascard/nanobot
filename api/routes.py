@@ -862,6 +862,53 @@ def recall_memory(
     }
 
 
+class ScheduledTaskCreate(BaseModel):
+    name: str
+    cron_expr: str = "0 9 * * *"  # 分 时 日 月 周
+    target_type: str = "private"
+    target_id: str
+    prompt_template: str
+
+@router.post("/tasks")
+def create_scheduled_task(
+    req: ScheduledTaskCreate,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
+):
+    """创建定时任务。例如每天9点推送AI新闻到私聊。"""
+    from core.database import ScheduledTask as ST
+    task = ST(
+        name=req.name,
+        cron_expr=req.cron_expr,
+        target_type=req.target_type,
+        target_id=req.target_id,
+        prompt_template=req.prompt_template,
+    )
+    db.add(task)
+    db.commit()
+    logger.info(f"Scheduled task created: {req.name} cron={req.cron_expr}")
+    return {"status": "ok", "id": task.id}
+
+@router.get("/tasks")
+def list_scheduled_tasks(db: Session = Depends(get_db), _auth=Depends(verify_token)):
+    """列出所有定时任务。"""
+    from core.database import ScheduledTask as ST
+    tasks = db.query(ST).all()
+    return [{"id": t.id, "name": t.name, "cron": t.cron_expr,
+             "target": f"{t.target_type}/{t.target_id}", "enabled": t.enabled,
+             "last_run": t.last_run_at.isoformat() if t.last_run_at else None} for t in tasks]
+
+@router.delete("/tasks/{task_id}")
+def delete_scheduled_task(task_id: int, db: Session = Depends(get_db), _auth=Depends(verify_token)):
+    """删除定时任务。"""
+    from core.database import ScheduledTask as ST
+    t = db.query(ST).filter(ST.id == task_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+    db.delete(t)
+    db.commit()
+    return {"status": "ok"}
+
 @router.get("/health")
 def health_check():
     """健康检查端点。"""
