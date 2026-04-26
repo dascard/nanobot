@@ -1,101 +1,119 @@
 {
   "qwen/qwen3-coder:free": {
-    "description": "Qwen coder free alias. Almost always inaccessible (429/503); marked unstable so router avoids it.",
+    "description": "Qwen3-Coder free. Low benchmark (~AA <25), unstable (429/503).",
     "tags": ["coding", "free", "unstable"],
-    "intelligence": 4,
+    "intelligence": 5,
     "tier": "fast",
     "cost_input_1m": 0.0,
     "cost_output_1m": 0.0,
-    "context_window": 131072
+    "context_window": 160000
   },
   "qwen3-coder": {
-    "description": "Phantom entry: gateway has no real paid qwen3-coder, only the free alias (which is always 429). Marked unstable.",
+    "description": "Qwen3-Coder 30B paid. ~AA <25.",
     "tags": ["coding", "paid", "unstable"],
-    "intelligence": 4,
+    "intelligence": 5,
     "tier": "fast",
-    "context_window": 131072
-  },
-  "gemma-4": {
-    "description": "Gemma4 is treated as multimodal in this pool.",
-    "tags": ["multimodal", "vision", "general"],
-    "intelligence": 7,
-    "tier": "smart",
-    "context_window": 128000
+    "cost_input_1m": 0.07,
+    "cost_output_1m": 0.27,
+    "context_window": 160000
   },
   "google/gemma-4-31b-it:free": {
-    "description": "Gemma free alias may return 429 under peak load; usable when quota is available.",
+    "description": "Gemma4 31B free. ~AA 30 (est), multimodal.",
     "tags": ["free", "multimodal", "vision", "general"],
-    "intelligence": 6,
+    "intelligence": 8,
     "tier": "smart",
     "cost_input_1m": 0.0,
     "cost_output_1m": 0.0,
-    "context_window": 128000
+    "context_window": 262144
+  },
+  "gemma-4": {
+    "description": "Gemma4 31B paid. ~AA 30 (est).",
+    "tags": ["multimodal", "vision", "general"],
+    "intelligence": 8,
+    "tier": "smart",
+    "cost_input_1m": 0.13,
+    "cost_output_1m": 0.38,
+    "context_window": 262144
   },
   "openai/gpt-oss-120b:free": {
-    "description": "OpenRouter free alias for gpt-oss-120b. Generally usable when free quota allows.",
-    "tags": ["free", "cheap", "general", "reasoning"],
-    "intelligence": 6,
-    "tier": "fast",
-    "cost_input_1m": 0.0,
-    "cost_output_1m": 0.0,
-    "context_window": 128000
-  },
-  "nvidia/nemotron-3-super-120b-a12b:free": {
-    "description": "OpenRouter free alias for Nemotron family; usable as low-cost fallback.",
+    "description": "GPT-OSS 120B free. ~AA 25 (est).",
     "tags": ["free", "cheap", "general"],
-    "intelligence": 6,
+    "intelligence": 7,
     "tier": "fast",
     "cost_input_1m": 0.0,
     "cost_output_1m": 0.0,
-    "context_window": 128000
+    "context_window": 131072
   },
   "gpt-oss-120b": {
-    "description": "Paid/non-free alias of gpt-oss family; similar routing intent as free alias.",
-    "tags": ["paid", "general", "reasoning"],
+    "description": "GPT-OSS 120B paid. ~AA 25 (est), cheapest paid at $0.04/M.",
+    "tags": ["paid", "general", "cheap"],
     "intelligence": 7,
     "tier": "smart",
-    "context_window": 128000
+    "cost_input_1m": 0.04,
+    "cost_output_1m": 0.19,
+    "context_window": 131072
+  },
+  "nvidia/nemotron-3-super-120b-a12b:free": {
+    "description": "Nemotron 120B free. AA Intel 36.0, GPQA 80%, IFBench 71.5%. Best free non-deepseek.",
+    "tags": ["free", "cheap", "general"],
+    "intelligence": 9,
+    "tier": "fast",
+    "cost_input_1m": 0.0,
+    "cost_output_1m": 0.0,
+    "context_window": 262144
   },
   "nemotron-3": {
-    "description": "Paid/non-free Nemotron alias.",
+    "description": "Nemotron 120B paid. AA Intel 36.0, GPQA 80%, IFBench 71.5%.",
     "tags": ["paid", "general"],
-    "intelligence": 7,
+    "intelligence": 9,
     "tier": "smart",
-    "context_window": 128000
+    "cost_input_1m": 0.09,
+    "cost_output_1m": 0.45,
+    "context_window": 262144
   },
   "deepseek-v4-flash": {
-    "description": "DeepSeek flash models are paid but preferred due to better price/performance.",
+    "description": "DeepSeek V4 Flash. AA Agentic 61.3, Chatbot Arena 1284 (55% WR).",
     "tags": ["deepseek", "paid", "cheap", "fast", "stable"],
-    "intelligence": 8,
+    "intelligence": 11,
     "tier": "fast",
-    "context_window": 131072
+    "cost_input_1m": 0.14,
+    "cost_output_1m": 0.28,
+    "context_window": 1048576
   },
   "deepseek-v4-flash-high": {
-    "description": "DeepSeek high variants should be preferred over max for premium reasoning quality.",
+    "description": "DeepSeek V4 Flash-High. Reasoning-enhanced variant, ~AA 55 (est).",
     "tags": ["deepseek", "paid", "reasoning", "analysis", "stable"],
-    "intelligence": 9,
+    "intelligence": 14,
     "tier": "reasoning",
-    "context_window": 131072
+    "cost_input_1m": 0.14,
+    "cost_output_1m": 0.28,
+    "context_window": 1048576
   },
   "deepseek-v4-flash-max": {
-    "description": "DeepSeek max variants are expensive; use only when high/flash cannot satisfy the task.",
+    "description": "DeepSeek V4 Flash-Max. Most expensive reasoning variant.",
     "tags": ["deepseek", "paid", "expensive", "reasoning"],
-    "intelligence": 8,
+    "intelligence": 13,
     "tier": "reasoning",
-    "context_window": 131072
+    "cost_input_1m": 0.14,
+    "cost_output_1m": 0.28,
+    "context_window": 1048576
   },
   "deepseek-v4-pro": {
-    "description": "DeepSeek pro paid model; stronger than base flash but typically less cost-effective than flash-high for routine tasks.",
+    "description": "DeepSeek V4 Pro. AA Intel 51.5, AA Agentic 67.2, Chatbot Arena 1321 (59%).",
     "tags": ["deepseek", "paid", "reasoning", "analysis"],
-    "intelligence": 8,
+    "intelligence": 13,
     "tier": "smart",
-    "context_window": 131072
+    "cost_input_1m": 0.43,
+    "cost_output_1m": 0.87,
+    "context_window": 1048576
   },
   "new-reasoning-model-v1": {
-    "description": "Legacy local reasoning alias kept for compatibility.",
+    "description": "Legacy local reasoning alias.",
     "tags": ["reasoning", "analysis"],
-    "intelligence": 8,
+    "intelligence": 10,
     "tier": "reasoning",
+    "cost_input_1m": 0.50,
+    "cost_output_1m": 1.50,
     "context_window": 131072
   }
 }

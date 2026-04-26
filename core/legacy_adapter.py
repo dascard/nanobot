@@ -289,7 +289,7 @@ class UnifiedProvider:
             self.client = None
         else:
             # OpenAI-compatible mode (new-api, openai, deepseek, etc.)
-            self.client = NewAPIClient(api_key=api_key, base_url=base_url, model_map=model_map, timeout=timeout)
+            self.client = NewAPIClient(api_key=api_key, base_url=base_url, timeout=timeout)
 
     async def invoke(self, 
                       query: str, 

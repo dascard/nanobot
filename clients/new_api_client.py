@@ -34,12 +34,28 @@ class NewAPIClient:
     _last_model_sync_ts: float = 0.0
     _model_sync_lock = asyncio.Lock()
     _model_overrides_cache: Dict[str, Any] | None = None
+    _failure_tracker: "ModelFailureTracker | None" = None
+
+    @classmethod
+    def get_failure_tracker(cls) -> "ModelFailureTracker":
+        if cls._failure_tracker is None:
+            from config import (
+                MODEL_MAX_CONSECUTIVE_FAILURES,
+                MODEL_COOLDOWN_BASE_SECONDS,
+                MODEL_COOLDOWN_MAX_SECONDS,
+            )
+            from clients.model_registry import ModelFailureTracker
+            cls._failure_tracker = ModelFailureTracker(
+                max_failures=MODEL_MAX_CONSECUTIVE_FAILURES,
+                cooldown_base_s=MODEL_COOLDOWN_BASE_SECONDS,
+                cooldown_max_s=MODEL_COOLDOWN_MAX_SECONDS,
+            )
+        return cls._failure_tracker
 
     def __init__(
         self,
         api_key: str,
         base_url: str = "",
-        model_map: Optional[Dict[str, str]] = None,
         timeout: Optional[int] = None,
         max_retries: int = 3,
     ):
@@ -47,19 +63,6 @@ class NewAPIClient:
         self.base_url = (base_url or NEW_API_BASE_URL).rstrip("/")
         self.timeout = timeout or NEW_API_TIMEOUT
         self.max_retries = max_retries
-
-        avoid_tags = ["unstable"]
-        self.model_map = {
-            "smart": registry.select_model("new-api", "smart", max_cost=LLM_BUDGET_CAP, avoid_tags=avoid_tags) or "gpt-4o",
-            "fast": registry.select_model("new-api", "fast", max_cost=LLM_BUDGET_CAP, avoid_tags=avoid_tags) or "gpt-4o-mini",
-            "reasoning": registry.select_model("new-api", "reasoning", max_cost=LLM_BUDGET_CAP, avoid_tags=avoid_tags) or "o1-mini",
-        }
-        if model_map:
-            for key, value in model_map.items():
-                if value:
-                    self.model_map[key] = value
-
-        # Token usage tracking (updated after each call)
         self.last_usage: Dict[str, int] = {}
 
     @classmethod
@@ -316,8 +319,15 @@ class NewAPIClient:
             )
             return updated
 
-    def _resolve_model(self, model_tier: str, manual_model: str = "") -> str:
-        return manual_model or self.model_map.get(model_tier, self.model_map["smart"])
+    def _resolve_model(self, _model_tier: str = "", manual_model: str = "") -> str:
+        """Simple fallback: cheapest available model."""
+        if manual_model:
+            return manual_model
+        models = registry.get_models_by_provider("new-api")
+        if models:
+            models.sort(key=lambda m: m.get("cost_input_1m", 999))
+            return models[0]["id"]
+        return "gpt-4o"
 
     def _build_headers(self) -> Dict[str, str]:
         return {
@@ -344,94 +354,135 @@ class NewAPIClient:
             payload["tool_choice"] = "auto"
         return payload
 
-    def _route_model_tier(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]], requested_tier: str) -> str:
-        """根据任务复杂度自动路由 tier。"""
-        mode = (AUTO_MODEL_ROUTING_MODE or "off").lower().strip()
-        if mode == "off":
-            return requested_tier
+    # ── New Model Router ──
 
-        # 当前版本：code heuristic；model planner 后续扩展。
-        if mode not in {"code", "model"}:
-            return requested_tier
-
+    def estimate_complexity(self, messages: List[Dict[str, Any]],
+                            tools: Optional[List[Dict[str, Any]]] = None) -> int:
+        """Return complexity 1-10. Used to derive the intel_floor."""
         user_text = "\n".join(
             str(m.get("content", ""))
             for m in messages
             if m.get("role") == "user"
         ).lower()
+        text = re.sub(r'https?://\S+', '', user_text)
+        length = len(text)
         has_tools = bool(tools)
 
-        hard_markers = ["设计", "证明", "推导", "架构", "审计", "优化", "debug", "reason", "analyze", "复杂"]
-        easy_markers = ["翻译", "润色", "摘要", "改写", "hello", "解释一下"]
+        score = 2  # baseline
+        if length > 400:   score += 1
+        if length > 800:   score += 1
+        if length > 1800:  score += 1
+        if has_tools:      score += 1
 
-        if any(k in user_text for k in hard_markers) or (has_tools and len(user_text) > 800):
-            return "reasoning"
-        # Strip URLs before measuring text length so link-heavy messages
-        # don't falsely trigger the reasoning threshold.
-        text_without_urls = re.sub(r'https?://\S+', '', user_text)
-        if len(text_without_urls) > 1800:
-            return "reasoning"
-        if any(k in user_text for k in easy_markers) and len(text_without_urls) < 400 and not has_tools:
-            return "fast"
-        return "smart"
+        hard_markers = ["设计", "证明", "推导", "架构", "审计", "优化",
+                        "debug", "reason", "analyze", "复杂", "proof"]
+        if any(k in text for k in hard_markers):
+            score += 2
 
-    def _infer_task_tags(self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]]) -> List[str]:
-        text = "\n".join(str(m.get("content", "")) for m in messages if m.get("role") == "user").lower()
-        tags: List[str] = ["general"]
+        coding_markers = ["代码", "code", "python", "sql", "bug",
+                          "javascript", "typescript", "前端", "后端"]
+        if any(k in text for k in coding_markers):
+            score += 1
 
-        if tools:
-            tags.append("tool_use")
-        if any(k in text for k in ["代码", "code", "debug", "bug", "sql", "python"]):
-            tags.append("coding")
-        if any(k in text for k in ["分析", "proof", "推导", "reason", "架构", "审计", "优化"]):
-            tags.append("reasoning")
-        if any(k in text for k in ["总结", "summary", "摘要", "提炼"]):
-            tags.append("summarization")
-        if any(k in text for k in ["翻译", "translate"]):
-            tags.append("translation")
+        easy_markers = ["翻译", "润色", "摘要", "改写", "hello",
+                        "hi", "你好", "解释一下"]
+        if any(k in text for k in easy_markers) and length < 300:
+            score -= 1
 
-        return sorted(set(tags))
+        return max(1, min(10, score))
 
-    def _resolve_model_for_task(self, model_tier: str, task_tags: Optional[List[str]] = None, manual_model: str = "", exclude_models: Optional[List[str]] = None, avoid_tags: Optional[List[str]] = None) -> str:
+    def get_ordered_candidates(self, provider: str, intel_floor: int,
+                               exclude_models: Optional[List[str]] = None,
+                               max_cost: Optional[float] = None,
+                               avoid_tags: Optional[List[str]] = None,
+                               ) -> List[Dict[str, Any]]:
+        """Return models ordered by priority: downward from intel_floor, then upward.
+
+        Phase 1 (downward): models with intel >= intel_floor, cheapest-first.
+        Phase 2 (upward): models with intel > split_idx, cheapest-first.
+        """
+        all_models = registry.get_models_by_provider(provider)
+        if not all_models:
+            return []
+
+        exclude_lower = [em.lower() for em in (exclude_models or [])]
+        avoid_tags_set = set(t.lower() for t in (avoid_tags or []))
+        tracker = self.get_failure_tracker()
+        max_cost_val = max_cost if max_cost is not None else LLM_BUDGET_CAP
+
+        candidates = []
+        for m in all_models:
+            mid = m.get("id", "")
+            tags = [t.lower() for t in (m.get("tags") or [])]
+            if mid.lower() in exclude_lower:
+                continue
+            if "unstable" in tags:
+                continue
+            if avoid_tags_set and any(at in tags for at in avoid_tags_set):
+                continue
+            if m.get("cost_input_1m", 999) > max_cost_val:
+                continue
+            # Check failure tracker synchronously (uses asyncio.Lock internally)
+            # but we're in a sync method. Use a simple status check.
+            candidates.append(m)
+
+        if not candidates:
+            return []
+
+        # Sort by priority score (lower = better)
+        candidates.sort(key=lambda m: registry.compute_priority_score(m))
+
+        # Find split_idx: first model with intel >= intel_floor
+        split_idx = None
+        for i, m in enumerate(candidates):
+            if m.get("intelligence", 0) >= intel_floor:
+                split_idx = i
+                break
+
+        if split_idx is None:
+            return candidates  # No model meets the floor, return all
+
+        # Phase 1: downward (split_idx → 0), Phase 2: upward (split_idx+1 → end)
+        downward = list(reversed(candidates[:split_idx + 1]))
+        upward = candidates[split_idx + 1:]
+        return downward + upward
+
+    def resolve_model(self, messages: List[Dict[str, Any]],
+                      tools: Optional[List[Dict[str, Any]]] = None,
+                      manual_model: str = "",
+                      exclude_models: Optional[List[str]] = None,
+                      ) -> str:
+        """Single entry point: complexity → intel_floor → ordered candidates → first healthy."""
         if manual_model:
             return manual_model
 
-        _avoid = ["unstable"]
-        if avoid_tags:
-            _avoid.extend(avoid_tags)
-        task_tags = task_tags or []
+        complexity = self.estimate_complexity(messages, tools)
+        intel_floor = max(1, complexity - 1)
 
-        logger.debug(
-            f"_resolve_model_for_task: tier={model_tier}, task_tags={task_tags}, "
-            f"exclude={exclude_models}, budget={LLM_BUDGET_CAP}"
-        )
-
-        selected = registry.select_model(
+        candidates = self.get_ordered_candidates(
             provider="new-api",
-            tier=model_tier,
-            max_cost=LLM_BUDGET_CAP,
-            required_tags=task_tags,
-            avoid_tags=_avoid,
+            intel_floor=intel_floor,
             exclude_models=exclude_models,
+            avoid_tags=None,
         )
-        if selected:
-            logger.info(f"Model resolved: {selected} (tier={model_tier})")
-            return selected
 
-        # Fallback without required tags but still avoid unstable models.
-        selected = registry.select_model(
-            provider="new-api",
-            tier=model_tier,
-            max_cost=LLM_BUDGET_CAP,
-            avoid_tags=_avoid,
-            exclude_models=exclude_models,
+        if not candidates:
+            all_models = registry.get_models_by_provider("new-api")
+            all_models.sort(key=lambda m: m.get("cost_input_1m", 999))
+            if all_models:
+                fallback = all_models[0]["id"]
+                logger.warning(f"No healthy candidates, using cheapest: {fallback}")
+                return fallback
+            return "gpt-4o"
+
+        selected = candidates[0]
+        logger.info(
+            f"Model resolved: {selected['id']} "
+            f"(complexity={complexity}, intel_floor={intel_floor}, "
+            f"intel={selected.get('intelligence')}, "
+            f"cost={selected.get('cost_input_1m')})"
         )
-        if selected:
-            logger.info(f"Model resolved (fallback, no required tags): {selected} (tier={model_tier})")
-            return selected
-        fallback = self._resolve_model(model_tier, manual_model="")
-        logger.warning(f"Model resolution fell back to hardcoded default: {fallback}")
-        return fallback
+        return selected["id"]
 
     async def chat_completion(
         self,
@@ -448,14 +499,8 @@ class NewAPIClient:
 
         await self.sync_models_to_registry(force=False)
 
-        routed_tier = self._route_model_tier(messages, tools, model_tier)
-        task_tags = self._infer_task_tags(messages, tools)
-        target_model = self._resolve_model_for_task(routed_tier, task_tags=task_tags, manual_model=manual_model)
-        logger.info(
-            f"chat_completion routing: requested_tier={model_tier}, "
-            f"routed_tier={routed_tier}, task_tags={task_tags}, "
-            f"target_model={target_model}"
-        )
+        target_model = self.resolve_model(messages, tools, manual_model=manual_model)
+        logger.info(f"chat_completion routing: target_model={target_model}")
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
         payload = self._build_payload(messages, tools, temperature, False, target_model)

@@ -135,79 +135,72 @@ class NanobotBridge:
             event = create_user_input_event(query)
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 
-            # --- Dynamic Model Routing ---
-            # Use raw query for routing so enriched context (session memory, persona)
-            # doesn't inflate the complexity estimate and force "reasoning" tier.
+            # --- Dynamic Model Routing (new priority-ordered system) ---
             route_client = None
             meta = metadata or {}
             raw_query = str(meta.get("raw_query", query)).strip() or query
             try:
                 route_client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
-                # Ensure registry is populated before routing (cold start after deploy)
                 existing = registry.get_models_by_provider("new-api")
                 if not existing:
                     logger.info("[Model Router] Registry empty, forcing model sync...")
                     await route_client.sync_models_to_registry(force=True)
                 else:
                     await route_client.sync_models_to_registry(force=False)
-                messages = [{"role": "user", "content": raw_query}]
-                # Simulate presence of tools for tag inference so tasks map correctly
-                routed_tier = route_client._route_model_tier(messages, tools=[{}], requested_tier="smart")
-                task_tags = route_client._infer_task_tags(messages, tools=[{}])
-                target_model = route_client._resolve_model_for_task(routed_tier, task_tags=task_tags, manual_model="")
+
+                messages_for_routing = [{"role": "user", "content": raw_query}]
+                complexity = route_client.estimate_complexity(messages_for_routing, tools=[{}])
+                intel_floor = max(1, complexity - 1)
+                candidates = route_client.get_ordered_candidates(
+                    provider="new-api", intel_floor=intel_floor,
+                )
+                logger.info(
+                    f"[Model Router] complexity={complexity}, intel_floor={intel_floor}, "
+                    f"candidates={[(c['id'][:30], c.get('intelligence')) for c in candidates[:8]]}"
+                )
             except Exception as e:
-                logger.error(f"[Model Router] Failed to route model, using default: {e}", exc_info=True)
-                target_model = "gpt-4o"
-                routed_tier = "smart"
-            # -----------------------------
+                logger.error(f"[Model Router] Failed to route: {e}", exc_info=True)
+                candidates = []
+            # --------------------------------------------------------
 
             # --- Context budget awareness ---
-            est_tokens = len(query) // 2  # rough estimate for Chinese-heavy text
-            ctx_window = 128000  # default fallback
-            if route_client:
-                model_info = registry.get_model_info(target_model)
-                if model_info and model_info.get("context_window"):
-                    ctx_window = int(model_info["context_window"])
-            pct = est_tokens / ctx_window * 100
-            log_fn = logger.warning if pct > 80 else logger.info
-            log_fn(
-                f"[Context Budget] estimated_tokens={est_tokens}, "
-                f"context_window={ctx_window}, usage={pct:.1f}%, "
-                f"model={target_model}"
-            )
+            est_tokens = len(query) // 2
+            if candidates:
+                ctx_window = candidates[0].get("context_window", 128000)
+                logger.info(
+                    f"[Context Budget] estimated_tokens={est_tokens}, "
+                    f"context_window={ctx_window}, "
+                    f"usage={est_tokens / ctx_window * 100:.1f}%"
+                )
             # ----------------------------------
 
-            max_attempts = 5
-            failed_models = []
-            deepseek_unstable = False  # set when deepseek thinking mode breaks
+            model_iterator = iter(candidates)
+            tracker = NewAPIClient.get_failure_tracker()
+            max_attempts = min(len(candidates), 8) if candidates else 5
+
             for attempt in range(max_attempts):
                 self._output.clear()
                 event = create_user_input_event(query)
-                
-                # Dynamically update the KT Agent's underlying LLM Provider model for this request
-                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
-                    if attempt > 0 and route_client:
-                        failed_models.append(old_model)
-                        if deepseek_unstable:
-                            # Skip all deepseek models — thinking mode breaks tool loops
-                            failed_models.extend([m.get("id", "") for m in registry.get_models_by_provider("new-api")
-                                                   if "deepseek" in m.get("id", "").lower()])
-                        # Try to find another model in the SAME tier first
-                        target_model = route_client._resolve_model_for_task(routed_tier, task_tags=[], manual_model="", exclude_models=failed_models)
 
-                        # If no new model was found in this tier, downgrade tier
-                        if target_model == old_model or target_model in failed_models:
-                            logger.warning(f"[Model Router] Tier '{routed_tier}' exhausted (failed: {failed_models}). Downgrading tier...")
-                            if routed_tier == "reasoning": routed_tier = "smart"
-                            elif routed_tier == "smart": routed_tier = "fast"
-                            target_model = route_client._resolve_model_for_task(routed_tier, task_tags=[], manual_model="", exclude_models=failed_models)
-                        
+                # Get next model from ordered list
+                try:
+                    candidate = next(model_iterator)
+                    target_model = candidate["id"]
+                except StopIteration:
+                    logger.warning(f"[Model Router] No more candidates after {attempt} attempts")
+                    break
+
+                # Update KT agent's LLM model
+                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
                     old_model = self._agent.controller.llm.config.model
                     self._agent.controller.llm.config.model = target_model
-                    logger.info(f"[Model Router] Attempt {attempt+1}: Query routed to tier '{routed_tier}'. Changed KT model: {old_model} -> {target_model}")
-                
+                    logger.info(
+                        f"[Model Router] Attempt {attempt+1}: {target_model} "
+                        f"(intel={candidate.get('intelligence')}, "
+                        f"cost={candidate.get('cost_input_1m')})"
+                    )
+
                 try:
-                    # Process the event through KT's controller pipeline
                     logger.info(f"[NanobotBridge] Calling _process_event (Attempt {attempt+1})...")
                     result = await self._agent._process_event(event)
                     logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
@@ -217,78 +210,46 @@ class NanobotBridge:
 
                 response = self._output.get_response()
                 if "[系统内部错误]" in response and attempt < max_attempts - 1:
-                    logger.warning(f"[NanobotBridge] Framework error detected. Attempting fallback. Error: {response[-300:]}")
-                    tool_results_preserved = False
+                    logger.warning(f"[NanobotBridge] Framework error. Recording failure for {target_model}")
+                    await tracker.record_failure(target_model)
 
-                    # --- reasoning_content error: DeepSeek thinking models fail in
-                    #     tool-call loops. Switch to a non-reasoning model. ---
+                    # reasoning_content: deepseek thinking mode → ban all deepseek
                     if "reasoning_content" in response and route_client:
-                        logger.warning("[NanobotBridge] reasoning_content error — deepseek thinking mode broken, excluding all deepseek")
-                        failed_models.append(target_model)
-                        deepseek_unstable = True
-                        # Downgrade tier and switch to non-deepseek free model
-                        if routed_tier == "reasoning":
-                            routed_tier = "smart"
-                        elif routed_tier == "smart":
-                            routed_tier = "fast"
-                        target_model = route_client._resolve_model_for_task(
-                            routed_tier, task_tags=[], manual_model="",
-                            exclude_models=failed_models,
-                        )
-                        # Fallback: manually pick a free non-deepseek model
-                        if not target_model or "deepseek" in target_model.lower():
-                            for fid in ["google/gemma-4-31b-it:free", "openai/gpt-oss-120b:free",
-                                        "nvidia/nemotron-3-super-120b-a12b:free"]:
-                                if fid.lower() not in (m.lower() for m in failed_models):
-                                    target_model = fid
-                                    break
-                        logger.info(f"[NanobotBridge] Switched to non-deepseek: {target_model}")
-                        old_model = self._agent.controller.llm.config.model
-                        self._agent.controller.llm.config.model = target_model
-                    # ----------------------------------------------------------------
+                        logger.warning("[NanobotBridge] reasoning_content — banning deepseek family")
+                        for m in registry.get_models_by_provider("new-api"):
+                            if "deepseek" in m.get("id", "").lower():
+                                await tracker.record_failure(m["id"])
 
+                    # Conversation rollback logic
+                    tool_results_preserved = False
                     if hasattr(self._agent.controller, 'conversation'):
                         msgs = self._agent.controller.conversation.get_messages()
                         user_idx = self._agent.controller.conversation.find_last_user_index()
-
-                        # Find any 'tool' messages that landed AFTER the last user message.
-                        # These represent tool calls that COMPLETED successfully before the crash.
-                        # We must NOT re-execute them; only strip the dangling assistant response.
                         last_tool_idx = -1
                         if user_idx >= 0:
                             for i in range(len(msgs) - 1, user_idx, -1):
                                 if msgs[i].role == "tool":
                                     last_tool_idx = i
                                     break
-
                         if last_tool_idx >= 0:
-                            # Tools ran successfully. Strip only the broken assistant response
-                            # AFTER the last tool result. Keep all tool messages intact.
                             strip_from = last_tool_idx + 1
                             if strip_from < len(msgs):
                                 self._agent.controller.conversation.truncate_from(strip_from)
-                                logger.info(
-                                    f"[NanobotBridge] Preserved tool results (idx≤{last_tool_idx}). "
-                                    f"Stripped only broken post-tool assistant turn from idx={strip_from}."
-                                )
-                            # Send an empty continuation event, NOT the original user query again,
-                            # so the model picks up from the existing tool results.
+                                logger.info(f"[NanobotBridge] Preserved tool results (idx≤{last_tool_idx})")
                             from kohakuterrarium.core.events import TriggerEvent
                             event = TriggerEvent(type="user_input", content="")
                             tool_results_preserved = True
                         elif user_idx >= 0:
-                            # No tools ran. Full rollback is safe — retry with the original query.
                             content = msgs[user_idx].content
                             if isinstance(content, str) and content == query:
                                 self._agent.controller.conversation.truncate_from(user_idx)
-                                logger.info(f"[NanobotBridge] Full rollback: removed failed user message at idx={user_idx}")
                             event = create_user_input_event(query)
-
                     if not tool_results_preserved:
                         event = create_user_input_event(query)
-                    continue  # Retry with downgraded model
+                    continue
                 else:
-                    break  # Success or max attempts reached
+                    await tracker.record_success(target_model)
+                    break
 
             logger.info(f"[NanobotBridge] Checking output buffer...")
             response = self._output.get_response()

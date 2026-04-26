@@ -1,5 +1,7 @@
 import json
 import os
+import time
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 
@@ -7,7 +9,87 @@ logger = logging.getLogger("nanobot.registry")
 
 MODEL_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "models.json")
 
+
+class ModelFailureTracker:
+    """Per-model circuit breaker with exponential-backoff cooldown.
+
+    Singleton: one instance lives at the NewAPIClient class level.
+    Async-safe via asyncio.Lock.
+    """
+
+    def __init__(self, max_failures: int = 3,
+                 cooldown_base_s: float = 300.0,
+                 cooldown_max_s: float = 1800.0):
+        self._failures: dict[str, int] = {}
+        self._disabled_until: dict[str, float] = {}
+        self._max_failures = max_failures
+        self._cooldown_base = cooldown_base_s
+        self._cooldown_max = cooldown_max_s
+        self._lock = asyncio.Lock()
+
+    async def record_failure(self, model_id: str) -> None:
+        """Increment consecutive failure count. Disable if count >= max."""
+        async with self._lock:
+            count = self._failures.get(model_id, 0) + 1
+            self._failures[model_id] = count
+            if count >= self._max_failures:
+                extra = count - self._max_failures
+                cooldown = min(
+                    self._cooldown_base * (2 ** extra),
+                    self._cooldown_max,
+                )
+                self._disabled_until[model_id] = time.time() + cooldown
+                logger.warning(
+                    f"Model [{model_id}] disabled for {cooldown:.0f}s "
+                    f"(failure #{count})"
+                )
+
+    async def record_success(self, model_id: str) -> None:
+        """Reset failure count on success."""
+        async with self._lock:
+            self._failures.pop(model_id, None)
+            self._disabled_until.pop(model_id, None)
+
+    async def is_disabled(self, model_id: str) -> bool:
+        """Check if model is currently disabled. Auto-re-enable on cooldown expiry."""
+        async with self._lock:
+            until = self._disabled_until.get(model_id)
+            if until is None:
+                return False
+            if time.time() >= until:
+                del self._disabled_until[model_id]
+                self._failures.pop(model_id, None)
+                logger.info(f"Model [{model_id}] re-enabled after cooldown")
+                return False
+            return True
+
+
 class ModelRegistry:
+    @staticmethod
+    def compute_priority_score(model: dict, max_cost: float = 10.0,
+                               max_intel: float = 15.0) -> float:
+        """Lower score = higher priority (cheaper + more capable first).
+
+        Formula: cost_weight * (cost/max_cost) - intel_weight * (intel/max_intel)
+                 + free_bonus + unstable_penalty
+        """
+        from config import (
+            ROUTER_COST_WEIGHT, ROUTER_INTEL_WEIGHT,
+            ROUTER_FREE_BONUS, ROUTER_UNSTABLE_PENALTY,
+        )
+        cost = model.get("cost_input_1m", 999)
+        intel = model.get("intelligence", 0)
+        tags = [t.lower() for t in (model.get("tags") or [])]
+
+        cost_norm = cost / max_cost
+        intel_norm = intel / max_intel
+        free_bonus = ROUTER_FREE_BONUS if "free" in tags else 0.0
+        unstable_pen = ROUTER_UNSTABLE_PENALTY if "unstable" in tags else 0.0
+
+        return (ROUTER_COST_WEIGHT * cost_norm
+                - ROUTER_INTEL_WEIGHT * intel_norm
+                + free_bonus + unstable_pen)
+
     def __init__(self):
         self.data: Dict[str, Any] = {"models": [], "last_updated": "never"}
         self._load_registry()

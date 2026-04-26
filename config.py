@@ -63,6 +63,17 @@ LLM_BUDGET_CAP = float(os.environ.get("LLM_BUDGET_CAP", "10.0")) # 每百万 Tok
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "5"))  # 单次对话最大工具轮数
 NEW_API_MAX_RETRIES = int(os.environ.get("NEW_API_MAX_RETRIES", "3"))
 
+# ── 模型路由参数 ──
+# 优先级评分权重 (参考 RouteLLM: cost ×10 + intel ×3)
+ROUTER_COST_WEIGHT = float(os.environ.get("ROUTER_COST_WEIGHT", "10.0"))
+ROUTER_INTEL_WEIGHT = float(os.environ.get("ROUTER_INTEL_WEIGHT", "3.0"))
+ROUTER_FREE_BONUS = float(os.environ.get("ROUTER_FREE_BONUS", "-2.0"))
+ROUTER_UNSTABLE_PENALTY = float(os.environ.get("ROUTER_UNSTABLE_PENALTY", "5.0"))
+# 熔断器参数: 连续失败 N 次后临时禁用，指数退避恢复
+MODEL_MAX_CONSECUTIVE_FAILURES = int(os.environ.get("MODEL_MAX_CONSECUTIVE_FAILURES", "3"))
+MODEL_COOLDOWN_BASE_SECONDS = int(os.environ.get("MODEL_COOLDOWN_BASE_SECONDS", "300"))
+MODEL_COOLDOWN_MAX_SECONDS = int(os.environ.get("MODEL_COOLDOWN_MAX_SECONDS", "1800"))
+
 # ── 每日记忆折叠 ──
 DAILY_DIGEST_ENABLED = os.environ.get("DAILY_DIGEST_ENABLED", "1") == "1"
 DAILY_DIGEST_HOUR = int(os.environ.get("DAILY_DIGEST_HOUR", "4"))
