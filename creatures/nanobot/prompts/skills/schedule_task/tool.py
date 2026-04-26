@@ -1,5 +1,5 @@
 """
-Schedule Task tool — create cron-based push tasks from within KT conversation.
+Schedule Task tool — manage cron-based push tasks from within KT conversation.
 """
 
 import logging
@@ -11,7 +11,7 @@ logger = logging.getLogger("nanobot.tool.schedule_task")
 
 
 class ScheduleTaskTool(BaseTool):
-    """Create a timed push notification task that sends LLM-generated content to QQ."""
+    """Manage timed push notification tasks for QQ."""
 
     @property
     def tool_name(self) -> str:
@@ -20,8 +20,8 @@ class ScheduleTaskTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "创建定时推送任务。用户说'每天X点推送Y'时使用。"
-            "支持 cron 表达式控制推送时间，LLM 根据提示模板生成内容后推送到 QQ。"
+            "管理定时推送任务。支持创建、查看、修改、启停和删除。"
+            "用户说'每天X点推送Y'时创建，'看看定时任务'时列出，'停掉XX任务'时禁用。"
         )
 
     @property
@@ -32,68 +32,93 @@ class ScheduleTaskTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "name": {
+                "action": {
                     "type": "string",
-                    "description": "任务名称，如 daily-ai-news",
+                    "description": "create(创建) | list(列出全部) | update(修改) | toggle(启停) | delete(删除)",
+                    "enum": ["create", "list", "update", "toggle", "delete"],
                 },
-                "cron_expr": {
-                    "type": "string",
-                    "description": "cron 表达式：分 时 日 月 周。例：每天9点=0 9 * * *，每早8点=0 8 * * *，每周一18点=0 18 * * 1",
-                },
-                "target_type": {
-                    "type": "string",
-                    "description": "推送到 private（私聊）或 group（群聊）",
-                    "enum": ["private", "group"],
-                },
-                "target_id": {
-                    "type": "string",
-                    "description": "QQ号（私聊）或群号（群聊）。当前用户QQ号见系统提示中的 user= 标记",
-                },
-                "prompt_template": {
-                    "type": "string",
-                    "description": "给 LLM 的提示词，用于生成推送内容。如'搜索今天AI新闻，3-5条中文总结'",
-                },
+                "task_id": {"type": "integer", "description": "任务ID（update/toggle/delete 必填）"},
+                "name": {"type": "string", "description": "任务名（create/update）"},
+                "cron_expr": {"type": "string", "description": "cron 表达式（create/update）"},
+                "target_type": {"type": "string", "description": "推送类型: private 或 group"},
+                "target_id": {"type": "string", "description": "QQ号 或 群号"},
+                "prompt_template": {"type": "string", "description": "LLM 生成内容的提示模板"},
             },
-            "required": ["name", "cron_expr", "target_type", "target_id", "prompt_template"],
+            "required": ["action"],
         }
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
+        from core.database import SessionLocal, ScheduledTask
+
+        action = str(args.get("action", "create")).strip()
+        task_id = args.get("task_id")
+
         try:
-            from core.database import SessionLocal, ScheduledTask
-
-            name = str(args.get("name", "")).strip()
-            cron_expr = str(args.get("cron_expr", "")).strip()
-            target_type = str(args.get("target_type", "private")).strip()
-            target_id = str(args.get("target_id", "")).strip()
-            prompt_template = str(args.get("prompt_template", "")).strip()
-
-            if not all([name, cron_expr, target_id, prompt_template]):
-                return ToolResult(error="缺少必填参数: name, cron_expr, target_id, prompt_template")
-            if target_type not in ("private", "group"):
-                return ToolResult(error="target_type 必须是 private 或 group")
-
             db = SessionLocal()
             try:
-                task = ScheduledTask(
-                    name=name,
-                    cron_expr=cron_expr,
-                    target_type=target_type,
-                    target_id=target_id,
-                    prompt_template=prompt_template,
-                )
-                db.add(task)
+                if action == "list":
+                    tasks = db.query(ScheduledTask).all()
+                    if not tasks:
+                        return ToolResult(output="暂无定时任务", exit_code=0)
+                    lines = []
+                    for t in tasks:
+                        s = "启用" if t.enabled else "禁用"
+                        last = t.last_run_at.strftime("%m-%d %H:%M") if t.last_run_at else "从未"
+                        lines.append(
+                            f"[{t.id}] {s} {t.name} | cron={t.cron_expr} "
+                            f"| ->{t.target_type}/{t.target_id} | 上次={last}"
+                        )
+                    return ToolResult(output="\n".join(lines), exit_code=0)
+
+                if action == "delete":
+                    if not task_id:
+                        return ToolResult(error="delete 需要 task_id")
+                    t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+                    if not t:
+                        return ToolResult(error=f"任务 {task_id} 不存在")
+                    db.delete(t)
+                    db.commit()
+                    return ToolResult(output=f"任务 {task_id} ({t.name}) 已删除", exit_code=0)
+
+                if action == "toggle":
+                    if not task_id:
+                        return ToolResult(error="toggle 需要 task_id")
+                    t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+                    if not t:
+                        return ToolResult(error=f"任务 {task_id} 不存在")
+                    t.enabled = 0 if t.enabled else 1
+                    db.commit()
+                    s = "启用" if t.enabled else "禁用"
+                    return ToolResult(output=f"任务 {task_id} ({t.name}) 已{s}", exit_code=0)
+
+                if action == "update":
+                    if not task_id:
+                        return ToolResult(error="update 需要 task_id")
+                    t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+                    if not t:
+                        return ToolResult(error=f"任务 {task_id} 不存在")
+                    for f in ("name", "cron_expr", "target_type", "target_id", "prompt_template"):
+                        v = args.get(f)
+                        if v is not None and str(v).strip():
+                            setattr(t, f, str(v).strip())
+                    db.commit()
+                    return ToolResult(output=f"任务 {task_id} ({t.name}) 已更新", exit_code=0)
+
+                # create
+                name = str(args.get("name", "")).strip()
+                cron = str(args.get("cron_expr", "")).strip()
+                ttype = str(args.get("target_type", "private")).strip()
+                tid = str(args.get("target_id", "")).strip()
+                prompt = str(args.get("prompt_template", "")).strip()
+                if not all([name, cron, tid, prompt]):
+                    return ToolResult(error="create 需要 name, cron_expr, target_id, prompt_template")
+                t = ScheduledTask(name=name, cron_expr=cron, target_type=ttype, target_id=tid, prompt_template=prompt)
+                db.add(t)
                 db.commit()
-                task_id = task.id
+                logger.info(f"[schedule_task] Created: {name} cron={cron} -> {ttype}/{tid}")
+                return ToolResult(output=f"已创建 (id={t.id}): {name} | cron={cron}", exit_code=0)
             finally:
                 db.close()
-
-            logger.info(f"[schedule_task] Created: {name} cron={cron_expr} -> {target_type}/{target_id}")
-            return ToolResult(
-                output=f"定时任务已创建 (id={task_id}): {name}\n"
-                       f"时间: {cron_expr} | 推送: {target_type}/{target_id}\n"
-                       f"提示: {prompt_template}",
-                exit_code=0,
-            )
         except Exception as e:
             logger.error(f"[schedule_task] Failed: {e}", exc_info=True)
-            return ToolResult(error=f"创建任务失败: {str(e)}")
+            return ToolResult(error=str(e))

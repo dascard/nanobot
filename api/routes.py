@@ -898,6 +898,32 @@ def list_scheduled_tasks(db: Session = Depends(get_db), _auth=Depends(verify_tok
              "target": f"{t.target_type}/{t.target_id}", "enabled": t.enabled,
              "last_run": t.last_run_at.isoformat() if t.last_run_at else None} for t in tasks]
 
+@router.put("/tasks/{task_id}")
+def update_scheduled_task(task_id: int, req: ScheduledTaskCreate, db: Session = Depends(get_db), _auth=Depends(verify_token)):
+    """修改定时任务。"""
+    from core.database import ScheduledTask as ST
+    t = db.query(ST).filter(ST.id == task_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+    t.name = req.name
+    t.cron_expr = req.cron_expr
+    t.target_type = req.target_type
+    t.target_id = req.target_id
+    t.prompt_template = req.prompt_template
+    db.commit()
+    return {"status": "ok"}
+
+@router.post("/tasks/{task_id}/toggle")
+def toggle_scheduled_task(task_id: int, db: Session = Depends(get_db), _auth=Depends(verify_token)):
+    """启用/禁用定时任务。"""
+    from core.database import ScheduledTask as ST
+    t = db.query(ST).filter(ST.id == task_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+    t.enabled = 0 if t.enabled else 1
+    db.commit()
+    return {"status": "ok", "enabled": bool(t.enabled)}
+
 @router.delete("/tasks/{task_id}")
 def delete_scheduled_task(task_id: int, db: Session = Depends(get_db), _auth=Depends(verify_token)):
     """删除定时任务。"""
