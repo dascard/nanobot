@@ -185,6 +185,30 @@ def _build_expand_chain(db: Session, base: MemoryDigest, reveal_to_level: int) -
     return chain
 
 
+def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str) -> int:
+    """Persist a chat turn and return current unprocessed log count for the user."""
+    db.add(ChatLog(
+        user_id=req.user_id,
+        session_id=req.session_id,
+        role="user",
+        content=req.query,
+        sender_name=req.sender_name or "",
+        session_name=req.session_name or "",
+        processed=0,
+    ))
+    db.add(ChatLog(
+        user_id=req.user_id,
+        session_id=req.session_id,
+        role="assistant",
+        content=answer,
+        sender_name="nanobot",
+        session_name=req.session_name or "",
+        processed=0,
+    ))
+    db.commit()
+    return db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
+
+
 
 # ── 端点 ──
 
@@ -529,7 +553,6 @@ async def proxy_chat(
 
     async def _stream_chat():
         """SSE streaming with progress events and heartbeats."""
-        stream_queue: asyncio.Queue[dict] = asyncio.Queue()
         result_holder: dict = {}
         done = asyncio.Event()
 
@@ -538,7 +561,6 @@ async def proxy_chat(
                 result_holder["answer"] = await bridge.handle_message(
                     enriched_query, user_id=req.user_id, session_id=req.session_id,
                     sender_name=req.sender_name or "", metadata=bridge_meta,
-                    stream_queue=stream_queue,
                 )
             except Exception as e:
                 result_holder["error"] = str(e)
@@ -551,20 +573,18 @@ async def proxy_chat(
         try:
             while not done.is_set():
                 try:
-                    msg = await asyncio.wait_for(stream_queue.get(), timeout=heartbeat_interval)
-                    yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                    await asyncio.wait_for(done.wait(), timeout=heartbeat_interval)
                 except asyncio.TimeoutError:
                     yield f"data: {json.dumps({'status': 'heartbeat'}, ensure_ascii=False)}\n\n"
-
-            # Drain remaining
-            while not stream_queue.empty():
-                msg = stream_queue.get_nowait()
-                yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
 
             if "error" in result_holder:
                 yield f"data: {json.dumps({'status': 'error', 'message': result_holder['error']}, ensure_ascii=False)}\n\n"
             else:
                 answer = result_holder.get("answer", "")
+                pending = _persist_chat_turn(db, req, answer)
+                if pending >= EVOLUTION_THRESHOLD:
+                    logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
+                    background_tasks.add_task(evolution_task, req.user_id)
                 yield f"data: {json.dumps({'status': 'done', 'answer': answer}, ensure_ascii=False)}\n\n"
         finally:
             if not runner_task.done():
@@ -587,28 +607,9 @@ async def proxy_chat(
         logger.warning(f"[/chat] EMPTY ANSWER returned from bridge!")
 
     # 3. 落库 (KT 的 session 管理是独立的, nanobot 原有日志需手动写入)
-    db.add(ChatLog(
-        user_id=req.user_id,
-        session_id=req.session_id,
-        role="user",
-        content=req.query,
-        sender_name=req.sender_name or "",
-        session_name=req.session_name or "",
-        processed=0,
-    ))
-    db.add(ChatLog(
-        user_id=req.user_id,
-        session_id=req.session_id,
-        role="assistant",
-        content=answer,
-        sender_name="nanobot",
-        session_name=req.session_name or "",
-        processed=0,
-    ))
-    db.commit()
+    pending = _persist_chat_turn(db, req, answer)
 
     # 4. 检查进化触发阈值 (按 user_id 计数，而非 session_id，确保个人消息足够才触发进化)
-    pending = db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
     if pending >= EVOLUTION_THRESHOLD:
         logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
         background_tasks.add_task(evolution_task, req.user_id)

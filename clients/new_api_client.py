@@ -523,6 +523,7 @@ class NewAPIClient:
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
         last_error: Optional[str] = None
+        tracker = self.get_failure_tracker()
 
         # Try candidates in order. Each model gets 1 quick retry; 429 skips immediately.
         candidate_idx = 0

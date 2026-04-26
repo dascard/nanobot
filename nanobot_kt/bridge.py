@@ -177,6 +177,7 @@ class NanobotBridge:
             model_iterator = iter(candidates)
             tracker = NewAPIClient.get_failure_tracker()
             max_attempts = min(len(candidates), 8) if candidates else 5
+            result = None
 
             for attempt in range(max_attempts):
                 self._output.clear()

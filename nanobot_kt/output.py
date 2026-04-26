@@ -22,21 +22,21 @@ def _safety_check(tool_name: str, args: dict[str, Any] | None) -> str | None:
     code = str(args.get("code") or args.get("sql") or "")
     if tool_name in ("python_sandbox", "bash") and code:
         dangerous = [
-            (r"\bos\.remove\b", "删除文件"),
-            (r"\bos\.rmdir\b", "删除目录"),
-            (r"\bshutil\.rmtree\b", "递归删除"),
-            (r"\bopen\s*\([^)]*['\"]w", "写入文件"),
-            (r"\brequests\.post\b", "发送 POST 请求"),
-            (r"\bsubprocess\b", "执行子进程"),
+            (r"\bos\.remove\b", "delete file"),
+            (r"\bos\.rmdir\b", "delete directory"),
+            (r"\bshutil\.rmtree\b", "recursive delete"),
+            (r"\bopen\s*\([^)]*['\"]w", "write file"),
+            (r"\brequests\.post\b", "HTTP POST"),
+            (r"\bsubprocess\b", "spawn process"),
         ]
         for pattern, desc in dangerous:
             if re.search(pattern, code):
-                return f"[安全警告] {tool_name}: {desc}"
+                return f"[SECURITY_WARNING] {tool_name}: {desc}"
     if tool_name == "sql_analysis" and code:
         lowered = code.lower()
         for kw in ("insert", "update", "delete", "drop", "alter", "create"):
             if re.search(rf"\b{kw}\b", lowered):
-                return f"[安全警告] sql_analysis: 包含 {kw.upper()} 语句"
+                return f"[SECURITY_WARNING] sql_analysis: contains {kw.upper()}"
     return None
 
 
@@ -82,7 +82,7 @@ class BufferedOutput(BaseOutputModule):
         logger.debug(f"[BufferedOutput.flush] called, current buffer_len={len(''.join(self._buffer))}")
 
     async def on_processing_start(self) -> None:
-        logger.debug(f"[BufferedOutput.on_processing_start] resetting buffer")
+        logger.debug("[BufferedOutput.on_processing_start] resetting buffer")
         self._buffer.clear()
         self._complete_event.clear()
 
@@ -102,11 +102,16 @@ class BufferedOutput(BaseOutputModule):
         """Log activity. Emit progress for tool starts + errors to stream."""
         if activity_type == "processing_error":
             logger.error(f"[Activity] {activity_type}: {detail}")
-            self._buffer.append(f"\n[系统内部错误] {detail}")
+            self._buffer.append(f"\n[PROCESSING_ERROR] {detail}")
             if self._stream_queue is not None:
-                asyncio.ensure_future(
-                    self._stream_queue.put({"status": "error", "message": detail})
-                )
+                asyncio.ensure_future(self._stream_queue.put({"status": "error", "message": detail}))
+            return
+
+        if activity_type == "tool_error":
+            logger.error(f"[Activity] {activity_type}: {detail}")
+            self._buffer.append(f"\n[TOOL_ERROR] {detail}")
+            if self._stream_queue is not None:
+                asyncio.ensure_future(self._stream_queue.put({"status": "error", "message": detail}))
             return
 
         if activity_type == "tool_start":
@@ -116,7 +121,6 @@ class BufferedOutput(BaseOutputModule):
             except IndexError:
                 tool_name = "unknown"
 
-            # Safety check (log-only)
             args_str = detail.split("]", 1)[1].strip() if "]" in detail else ""
             if args_str:
                 args = {"code": args_str} if "=" not in args_str else {}
@@ -128,12 +132,9 @@ class BufferedOutput(BaseOutputModule):
                 if warning:
                     logger.warning(f"[Safety] {warning}")
 
-            # Progress event — qqbot 端用撤回机制管理显示，这里放心发
             if self._stream_queue is not None:
                 hint = self._TOOL_HINTS.get(tool_name, f"正在执行 {tool_name}")
-                asyncio.ensure_future(
-                    self._stream_queue.put({"status": "progress", "text": hint})
-                )
+                asyncio.ensure_future(self._stream_queue.put({"status": "progress", "text": hint}))
             return
 
         if activity_type == "tool_done":
