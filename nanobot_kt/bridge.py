@@ -177,8 +177,9 @@ class NanobotBridge:
             )
             # ----------------------------------
 
-            max_attempts = 3
+            max_attempts = 5
             failed_models = []
+            deepseek_unstable = False  # set when deepseek thinking mode breaks
             for attempt in range(max_attempts):
                 self._output.clear()
                 event = create_user_input_event(query)
@@ -187,15 +188,18 @@ class NanobotBridge:
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
                     if attempt > 0 and route_client:
                         failed_models.append(old_model)
+                        if deepseek_unstable:
+                            # Skip all deepseek models — thinking mode breaks tool loops
+                            failed_models.extend([m.get("id", "") for m in registry.get_models_by_provider("new-api")
+                                                   if "deepseek" in m.get("id", "").lower()])
                         # Try to find another model in the SAME tier first
                         target_model = route_client._resolve_model_for_task(routed_tier, task_tags=[], manual_model="", exclude_models=failed_models)
-                        
+
                         # If no new model was found in this tier, downgrade tier
                         if target_model == old_model or target_model in failed_models:
                             logger.warning(f"[Model Router] Tier '{routed_tier}' exhausted (failed: {failed_models}). Downgrading tier...")
                             if routed_tier == "reasoning": routed_tier = "smart"
                             elif routed_tier == "smart": routed_tier = "fast"
-                            # Re-resolve with downgraded tier
                             target_model = route_client._resolve_model_for_task(routed_tier, task_tags=[], manual_model="", exclude_models=failed_models)
                         
                     old_model = self._agent.controller.llm.config.model
@@ -219,23 +223,26 @@ class NanobotBridge:
                     # --- reasoning_content error: DeepSeek thinking models fail in
                     #     tool-call loops. Switch to a non-reasoning model. ---
                     if "reasoning_content" in response and route_client:
-                        logger.warning("[NanobotBridge] reasoning_content error — excluding reasoning-tagged models")
+                        logger.warning("[NanobotBridge] reasoning_content error — deepseek thinking mode broken, excluding all deepseek")
                         failed_models.append(target_model)
-                        # Pick a model without "reasoning" tag
+                        deepseek_unstable = True
+                        # Downgrade tier and switch to non-deepseek free model
+                        if routed_tier == "reasoning":
+                            routed_tier = "smart"
+                        elif routed_tier == "smart":
+                            routed_tier = "fast"
                         target_model = route_client._resolve_model_for_task(
                             routed_tier, task_tags=[], manual_model="",
                             exclude_models=failed_models,
-                            avoid_tags=["reasoning"],
                         )
-                        if target_model == old_model or target_model in failed_models:
-                            # Downgrade tier
-                            routed_tier = "fast"
-                            target_model = route_client._resolve_model_for_task(
-                                routed_tier, task_tags=[], manual_model="",
-                                exclude_models=failed_models,
-                                avoid_tags=["reasoning"],
-                            )
-                        logger.info(f"[NanobotBridge] Switched to non-reasoning model: {target_model}")
+                        # Fallback: manually pick a free non-deepseek model
+                        if not target_model or "deepseek" in target_model.lower():
+                            for fid in ["google/gemma-4-31b-it:free", "openai/gpt-oss-120b:free",
+                                        "nvidia/nemotron-3-super-120b-a12b:free"]:
+                                if fid.lower() not in (m.lower() for m in failed_models):
+                                    target_model = fid
+                                    break
+                        logger.info(f"[NanobotBridge] Switched to non-deepseek: {target_model}")
                         old_model = self._agent.controller.llm.config.model
                         self._agent.controller.llm.config.model = target_model
                     # ----------------------------------------------------------------
