@@ -613,13 +613,12 @@ async def proxy_chat(
         logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
         background_tasks.add_task(evolution_task, req.user_id)
 
-    # 5. 模拟短对话：内容自动拆分逻辑（按双换行优先，单换行兜底）
+    # 5. 模拟短对话：内容自动拆分逻辑（按换行拆成短气泡）
     if not answer.strip():
         answer_chunks = []
     elif "\n\n" in answer:
         answer_chunks = [c.strip() for c in answer.split("\n\n") if c.strip()]
-    elif "\n" in answer and len(answer) > 100:
-        # 有单换行且较长 → 按单换行拆成短气泡
+    elif "\n" in answer:
         answer_chunks = [c.strip() for c in answer.split("\n") if c.strip()]
     else:
         answer_chunks = [answer]
