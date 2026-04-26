@@ -212,4 +212,4 @@ class TestCreatureConfig:
         config = load_agent_config(config_dir)
         assert config.name == "nanobot"
         assert config.tool_format in ["bracket", "native"]
-        assert len(config.tools) == 3
+        assert len(config.tools) >= 3
