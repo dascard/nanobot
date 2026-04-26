@@ -3,3 +3,6 @@
 .env
 __pycache__/*
 clients/data/models.json
+.claude/skills/
+clients/data/*.json
+!clients/data/model_overrides.json

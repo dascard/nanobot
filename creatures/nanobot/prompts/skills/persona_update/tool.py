@@ -92,11 +92,11 @@ class PersonaUpdateTool(BaseTool):
                     for log in logs
                 ]
 
-                # 3. Create provider
+                # 3. Create provider with retry
                 client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
 
                 class _ToolProvider:
-                    """Minimal provider wrapping NewAPIClient for the evolution agents."""
+                    """Provider wrapping NewAPIClient with retry for evolution agents."""
                     def __init__(self, c):
                         self.client = c
 
@@ -105,12 +105,19 @@ class PersonaUpdateTool(BaseTool):
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": query},
                         ]
-                        resp = await self.client.chat_completion(
-                            messages=messages, model_tier=model_tier
-                        )
-                        if isinstance(resp, dict) and "choices" in resp:
-                            return resp["choices"][0]["message"]["content"]
-                        return str(resp.get("error", resp))
+                        last_error = ""
+                        for attempt in range(3):
+                            resp = await self.client.chat_completion(
+                                messages=messages, model_tier=model_tier
+                            )
+                            if isinstance(resp, dict) and "choices" in resp:
+                                return resp["choices"][0]["message"]["content"]
+                            last_error = str(resp.get("error", resp))[:200]
+                            logger.warning(f"[persona_update] LLM attempt {attempt+1}/3 failed: {last_error}")
+                            if attempt < 2:
+                                import asyncio as _asyncio
+                                await _asyncio.sleep(2.0 * (attempt + 1))
+                        return f"API Error after 3 retries: {last_error}"
 
                 provider = _ToolProvider(client)
 
