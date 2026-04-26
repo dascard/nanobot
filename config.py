@@ -65,8 +65,8 @@ NEW_API_MAX_RETRIES = int(os.environ.get("NEW_API_MAX_RETRIES", "3"))
 
 # ── 模型路由参数 ──
 # 优先级评分权重 (参考 RouteLLM: cost ×10 + intel ×3)
-ROUTER_COST_WEIGHT = float(os.environ.get("ROUTER_COST_WEIGHT", "10.0"))
-ROUTER_INTEL_WEIGHT = float(os.environ.get("ROUTER_INTEL_WEIGHT", "3.0"))
+ROUTER_COST_WEIGHT = float(os.environ.get("ROUTER_COST_WEIGHT", "6.0"))
+ROUTER_INTEL_WEIGHT = float(os.environ.get("ROUTER_INTEL_WEIGHT", "5.0"))
 ROUTER_FREE_BONUS = float(os.environ.get("ROUTER_FREE_BONUS", "-2.0"))
 ROUTER_UNSTABLE_PENALTY = float(os.environ.get("ROUTER_UNSTABLE_PENALTY", "5.0"))
 # 熔断器参数: 连续失败 N 次后临时禁用，指数退避恢复

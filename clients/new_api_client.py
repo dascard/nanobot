@@ -524,14 +524,14 @@ class NewAPIClient:
         headers = self._build_headers()
         last_error: Optional[str] = None
 
-        # Try candidates in order, 2 attempts per model before switching
+        # Try candidates in order. Each model gets 1 quick retry; 429 skips immediately.
         candidate_idx = 0
-        for attempt in range(self.max_retries * len(candidates)):
+        retries_left = 1  # per-model retry budget
+        for _ in range(len(candidates) * 2):  # max 2N total attempts
             model = candidates[candidate_idx % len(candidates)]
             target_model = str(model.get("id", ""))
             payload = self._build_payload(messages, tools, temperature, False, target_model)
-
-            if attempt == 0:
+            if candidate_idx == 0 and retries_left == 1:
                 logger.info(f"chat_completion: {target_model} "
                             f"(complexity={complexity}, intel={model.get('intelligence')})")
 
@@ -541,49 +541,40 @@ class NewAPIClient:
                         url, headers=headers, json=payload,
                         timeout=aiohttp.ClientTimeout(total=self.timeout),
                     ) as resp:
-                        if resp.status in _RETRYABLE_STATUS and attempt < self.max_retries * len(candidates) - 1:
-                            detail = await resp.text()
-                            delay = min(2 ** (attempt % self.max_retries), 16)
-                            logger.warning(
-                                f"new-api error: status={resp.status}, model={target_model}, "
-                                f"attempt={attempt+1}, retry in {delay}s"
-                            )
-                            last_error = f"API Error {resp.status}: {detail[:200]}"
-                            # Record failure + switch model on rate limit (429)
-                            if resp.status == 429:
-                                asyncio.create_task(tracker.record_failure(target_model))
-                                candidate_idx += 1
-                                logger.info(f"Switching to next candidate: {candidates[candidate_idx % len(candidates)]['id']}")
-                            await asyncio.sleep(delay)
-                            continue
+                        if resp.status == 200:
+                            result = await resp.json()
+                            asyncio.create_task(tracker.record_success(target_model))
+                            self.last_usage = result.get("usage", {})
+                            result["_nanobot_model_id"] = target_model
+                            result["_nanobot_complexity"] = complexity
+                            return result
 
-                        if resp.status != 200:
-                            detail = await resp.text()
-                            logger.error(f"new-api error: status={resp.status}, detail={detail}")
-                            asyncio.create_task(tracker.record_failure(target_model))
+                        detail = await resp.text()
+                        last_error = f"API Error {resp.status}: {detail[:200]}"
+                        asyncio.create_task(tracker.record_failure(target_model))
+
+                        if resp.status == 429 or retries_left <= 0:
+                            # 429 or exhausted retries → switch model immediately
                             candidate_idx += 1
-                            last_error = f"API Error {resp.status}: {detail[:200]}"
-                            if candidate_idx < len(candidates):
-                                continue
-                            return {"error": last_error}
-
-                        result = await resp.json()
-                        asyncio.create_task(tracker.record_success(target_model))
-                        self.last_usage = result.get("usage", {})
-                        result["_nanobot_model_id"] = target_model
-                        result["_nanobot_complexity"] = complexity
-                        return result
+                            retries_left = 1
+                            logger.warning(f"new-api: {target_model} failed ({last_error}), switching")
+                        else:
+                            # 502/503/504 → retry same model once
+                            retries_left -= 1
+                            logger.warning(f"new-api: {target_model} retrying ({last_error})")
+                        await asyncio.sleep(1)
+                        continue
 
                 except aiohttp.ClientError as e:
                     last_error = str(e)
-                    logger.warning(f"new-api network error: model={target_model}, {e}")
+                    asyncio.create_task(tracker.record_failure(target_model))
                     candidate_idx += 1
-                    if candidate_idx < len(candidates):
-                        await asyncio.sleep(1)
-                        continue
-                    return {"error": "NetworkError", "detail": str(e)}
+                    retries_left = 1
+                    logger.warning(f"new-api network error: {target_model}, {e}, switching")
+                    await asyncio.sleep(1)
+                    continue
 
-        return {"error": "MaxRetriesExceeded", "detail": last_error or "Unknown"}
+        return {"error": "AllModelsFailed", "detail": last_error or "Unknown"}
 
     async def chat_completion_stream(
         self,
