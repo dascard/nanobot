@@ -3,6 +3,7 @@ WORKDIR /app
 # 安装 sqlite3、wkhtmltopdf (用于 MD 渲染) 以及中文支持字体
 RUN apt-get update && apt-get install -y \
 	git \
+	tzdata \
 	sqlite3 \
 	wkhtmltopdf \
 	xvfb \
