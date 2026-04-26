@@ -210,8 +210,26 @@ class NanobotBridge:
 
                 response = self._output.get_response()
                 if "[系统内部错误]" in response and attempt < max_attempts - 1:
-                    logger.warning(f"[NanobotBridge] Framework error detected. Attempting fallback.")
+                    logger.warning(f"[NanobotBridge] Framework error detected. Attempting fallback. Error: {response[-300:]}")
                     tool_results_preserved = False
+
+                    # --- reasoning_content fix: DeepSeek thinking models require it to be
+                    #     round-tripped, but it often breaks tool-call loops. Strip it so the
+                    #     retry uses a clean context. ---
+                    reasoning_error = "reasoning_content" in response
+                    if reasoning_error and hasattr(self._agent.controller, 'conversation'):
+                        conv = self._agent.controller.conversation
+                        stripped = 0
+                        for msg in conv._messages:
+                            if msg.role == "assistant" and hasattr(msg, 'extra_fields') and msg.extra_fields:
+                                if msg.extra_fields.pop("reasoning_content", None):
+                                    stripped += 1
+                                msg.extra_fields.pop("reasoning_details", None)
+                                msg.extra_fields.pop("reasoning", None)
+                        if stripped:
+                            logger.info(f"[NanobotBridge] Stripped reasoning_content from {stripped} assistant messages")
+                    # ----------------------------------------------------------------
+
                     if hasattr(self._agent.controller, 'conversation'):
                         msgs = self._agent.controller.conversation.get_messages()
                         user_idx = self._agent.controller.conversation.find_last_user_index()
