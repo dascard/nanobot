@@ -392,11 +392,13 @@ class NewAPIClient:
 
         return sorted(set(tags))
 
-    def _resolve_model_for_task(self, model_tier: str, task_tags: Optional[List[str]] = None, manual_model: str = "", exclude_models: Optional[List[str]] = None) -> str:
+    def _resolve_model_for_task(self, model_tier: str, task_tags: Optional[List[str]] = None, manual_model: str = "", exclude_models: Optional[List[str]] = None, avoid_tags: Optional[List[str]] = None) -> str:
         if manual_model:
             return manual_model
 
-        avoid_tags = ["unstable"]
+        _avoid = ["unstable"]
+        if avoid_tags:
+            _avoid.extend(avoid_tags)
         task_tags = task_tags or []
 
         logger.debug(
@@ -409,7 +411,7 @@ class NewAPIClient:
             tier=model_tier,
             max_cost=LLM_BUDGET_CAP,
             required_tags=task_tags,
-            avoid_tags=avoid_tags,
+            avoid_tags=_avoid,
             exclude_models=exclude_models,
         )
         if selected:
@@ -421,7 +423,7 @@ class NewAPIClient:
             provider="new-api",
             tier=model_tier,
             max_cost=LLM_BUDGET_CAP,
-            avoid_tags=avoid_tags,
+            avoid_tags=_avoid,
             exclude_models=exclude_models,
         )
         if selected:

@@ -111,17 +111,27 @@ class NanobotBridge:
             if persona_text:
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                     conv = self._agent.controller.conversation
-                    # Remove any existing persona system message
                     conv._messages = [
                         m for m in conv._messages
                         if not (m.role == "system" and getattr(m, 'content', '').startswith(self.PERSONA_MARKER))
                     ]
-                    conv.append("system", f"{self.PERSONA_MARKER}\n{persona_text}")
+                    conv.append("system", f"{self.PERSONA_MARKER} user={user_id}\n{persona_text}")
                     logger.info(f"[NanobotBridge] Persona injected as system message: len={len(persona_text)}")
                 else:
                     logger.warning("[NanobotBridge] Cannot inject persona: agent has no controller/conversation")
+            elif user_id:
+                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                    conv = self._agent.controller.conversation
+                    conv._messages = [
+                        m for m in conv._messages
+                        if not (m.role == "system" and getattr(m, 'content', '').startswith(self.PERSONA_MARKER))
+                    ]
+                    conv.append("system", f"{self.PERSONA_MARKER} user={user_id}\n无已存储画像")
+                    logger.info(f"[NanobotBridge] User ID tag injected (no persona yet): user={user_id}")
+                else:
+                    logger.warning("[NanobotBridge] Cannot inject user_id tag: no controller/conversation")
             else:
-                logger.info(f"[NanobotBridge] No persona_text in metadata (keys={list(meta.keys())})")
+                logger.info(f"[NanobotBridge] No persona_text or user_id in metadata (keys={list(meta.keys())})")
             # -------------------------------------------------------------------------------------
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")
@@ -213,21 +223,28 @@ class NanobotBridge:
                     logger.warning(f"[NanobotBridge] Framework error detected. Attempting fallback. Error: {response[-300:]}")
                     tool_results_preserved = False
 
-                    # --- reasoning_content fix: DeepSeek thinking models require it to be
-                    #     round-tripped, but it often breaks tool-call loops. Strip it so the
-                    #     retry uses a clean context. ---
-                    reasoning_error = "reasoning_content" in response
-                    if reasoning_error and hasattr(self._agent.controller, 'conversation'):
-                        conv = self._agent.controller.conversation
-                        stripped = 0
-                        for msg in conv._messages:
-                            if msg.role == "assistant" and hasattr(msg, 'extra_fields') and msg.extra_fields:
-                                if msg.extra_fields.pop("reasoning_content", None):
-                                    stripped += 1
-                                msg.extra_fields.pop("reasoning_details", None)
-                                msg.extra_fields.pop("reasoning", None)
-                        if stripped:
-                            logger.info(f"[NanobotBridge] Stripped reasoning_content from {stripped} assistant messages")
+                    # --- reasoning_content error: DeepSeek thinking models fail in
+                    #     tool-call loops. Switch to a non-reasoning model. ---
+                    if "reasoning_content" in response and route_client:
+                        logger.warning("[NanobotBridge] reasoning_content error — excluding reasoning-tagged models")
+                        failed_models.append(target_model)
+                        # Pick a model without "reasoning" tag
+                        target_model = route_client._resolve_model_for_task(
+                            routed_tier, task_tags=[], manual_model="",
+                            exclude_models=failed_models,
+                            avoid_tags=["reasoning"],
+                        )
+                        if target_model == old_model or target_model in failed_models:
+                            # Downgrade tier
+                            routed_tier = "fast"
+                            target_model = route_client._resolve_model_for_task(
+                                routed_tier, task_tags=[], manual_model="",
+                                exclude_models=failed_models,
+                                avoid_tags=["reasoning"],
+                            )
+                        logger.info(f"[NanobotBridge] Switched to non-reasoning model: {target_model}")
+                        old_model = self._agent.controller.llm.config.model
+                        self._agent.controller.llm.config.model = target_model
                     # ----------------------------------------------------------------
 
                     if hasattr(self._agent.controller, 'conversation'):

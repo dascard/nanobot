@@ -38,11 +38,11 @@ class PersonaUpdateTool(BaseTool):
             "properties": {
                 "user_id": {
                     "type": "string",
-                    "description": "要更新画像的用户 ID",
+                    "description": "要更新画像的用户 ID（见系统提示中的 user= 标记）",
                 },
                 "instructions": {
                     "type": "string",
-                    "description": "可选的更新指引，如 '关注技术偏好' '侧重沟通风格'。留空则全面更新",
+                    "description": "可选的更新指引。留空则全面更新",
                 },
             },
             "required": ["user_id"],
@@ -69,10 +69,12 @@ class PersonaUpdateTool(BaseTool):
             db = SessionLocal()
             try:
                 # 1. Read existing persona
+
+                # 1. Read existing persona
                 persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
                 existing_persona = persona_obj.persona_json if persona_obj else "{}"
 
-                # 2. Read recent chat logs (last 50 unprocessed)
+                # 2. Read recent chat logs (last 50)
                 logs = (
                     db.query(ChatLog)
                     .filter(ChatLog.user_id == user_id)
