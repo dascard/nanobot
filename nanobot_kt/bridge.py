@@ -81,28 +81,21 @@ class NanobotBridge:
         session_id: str = "",
         sender_name: str = "",
         metadata: dict[str, Any] | None = None,
+        stream_queue: asyncio.Queue[dict[str, Any]] | None = None,
     ) -> str:
         """
         Send a user message to the KT agent and return the response.
 
-        This bridges between the HTTP request/response model (what routes.py needs)
-        and KT's event-driven agent model.
-
-        Args:
-            query: User message text
-            user_id: User identifier
-            session_id: Session/group identifier
-            sender_name: Display name of the sender
-            metadata: Additional metadata (persona_text, files, session_name)
-
-        Returns:
-            Agent's response text
+        If stream_queue is provided, concise progress events are pushed
+        during processing (one per distinct tool call, plus errors).
         """
         if not self._agent:
             return "Error: Agent not initialized"
 
         async with self._lock:
             self._output.clear()
+            if stream_queue is not None:
+                self._output.enable_stream(stream_queue)
             logger.info(f"[NanobotBridge] Starting handle_message: query_len={len(query)}, user={user_id}, session={session_id}")
 
             # --- Inject persona as system message (authoritative weight, persists across clears) ---

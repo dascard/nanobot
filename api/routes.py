@@ -516,28 +516,38 @@ async def proxy_chat(
         )
 
     async def _stream_chat():
-        """SSE streaming with periodic heartbeats to prevent client timeout."""
+        """SSE streaming with progress events and heartbeats."""
+        stream_queue: asyncio.Queue[dict] = asyncio.Queue()
         result_holder: dict = {}
         done = asyncio.Event()
 
         async def runner():
             try:
-                result_holder["answer"] = await _do_chat()
+                result_holder["answer"] = await bridge.handle_message(
+                    enriched_query, user_id=req.user_id, session_id=req.session_id,
+                    sender_name=req.sender_name or "", metadata=bridge_meta,
+                    stream_queue=stream_queue,
+                )
             except Exception as e:
                 result_holder["error"] = str(e)
             finally:
                 done.set()
 
         runner_task = asyncio.create_task(runner())
-        heartbeat_interval = 5  # seconds
+        heartbeat_interval = 5
 
         try:
             while not done.is_set():
                 try:
-                    await asyncio.wait_for(asyncio.shield(done.wait()), timeout=heartbeat_interval)
-                    break
+                    msg = await asyncio.wait_for(stream_queue.get(), timeout=heartbeat_interval)
+                    yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
                 except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'status': 'processing'}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'status': 'heartbeat'}, ensure_ascii=False)}\n\n"
+
+            # Drain remaining
+            while not stream_queue.empty():
+                msg = stream_queue.get_nowait()
+                yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
 
             if "error" in result_holder:
                 yield f"data: {json.dumps({'status': 'error', 'message': result_holder['error']}, ensure_ascii=False)}\n\n"
