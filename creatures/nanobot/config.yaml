@@ -31,6 +31,10 @@ tools:
     type: package
     module: nanobot_kt.tools.news_search
     class: NewsSearchTool
+  - name: persona_update
+    type: package
+    module: nanobot_kt.tools.persona_update
+    class: PersonaUpdateTool
 
 # ── Sub-Agents ──
 subagents:

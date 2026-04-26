@@ -403,53 +403,74 @@ async def proxy_chat(
         persona_data = {}
     persona_text = ""
     if isinstance(persona_data, dict) and persona_data:
-        parts = []
-        # persona_summary / summary: overall self-description (both old and new key names)
+        parts: list[str] = []
+
+        # ── 顶层摘要（最高优先级） ──
         summary = str(persona_data.get("persona_summary") or persona_data.get("summary") or "").strip()
         if summary:
-            parts.append(summary)
-        # traits: list of user traits
+            parts.append(f"【用户画像】{summary}")
+
+        # ── 回复风格（最重要的字段：告诉 AI 怎么回应这个用户） ──
+        # 兼容旧字段名 communication_style
+        resp_style = str(persona_data.get("response_style") or persona_data.get("communication_style") or "").strip()
+        if resp_style:
+            parts.append(f"【回复要求】{resp_style}")
+
+        # ── 核心特质（前5个） ──
         traits = persona_data.get("traits")
         if isinstance(traits, list) and traits:
-            parts.append("特质: " + "; ".join(str(t) for t in traits if t))
-        # preferences: list of user preferences
+            parts.append(f"【特质】{', '.join(str(t) for t in traits[:5] if t)}")
+
+        # ── 偏好 ──
         prefs = persona_data.get("preferences")
         if isinstance(prefs, list) and prefs:
-            parts.append("偏好: " + "; ".join(str(p) for p in prefs if p))
-        # pain_points
-        pain = str(persona_data.get("pain_points", "")).strip()
+            parts.append(f"【偏好】{' | '.join(str(p) for p in prefs[:4] if p)}")
+
+        # ── 痛点/注意事项 ──
+        pain = str(persona_data.get("pain_points") or "").strip()
         if pain:
-            parts.append(f"痛点: {pain}")
-        # identity: core user identity dict (new format)
+            parts.append(f"【雷区】{pain[:300]}")
+
+        # ── 身份（新版格式） ──
         identity = persona_data.get("identity")
         if isinstance(identity, dict) and identity:
-            ident_parts = []
-            for k, v in identity.items():
-                if v and str(v).strip():
-                    ident_parts.append(f"{k}: {v}")
+            ident_parts = [f"{k}: {v}" for k, v in identity.items() if v and str(v).strip()]
             if ident_parts:
-                parts.append("身份: " + "; ".join(ident_parts))
-        # communication_style
-        comm_style = str(persona_data.get("communication_style", "")).strip()
-        if comm_style:
-            parts.append(f"沟通风格: {comm_style}")
-        # domain_profiles
+                parts.append(f"【身份】{' | '.join(ident_parts)}")
+
+        # ── 领域画像（按置信度排序，只取 Top 3，压缩信号细节） ──
         domains = persona_data.get("domain_profiles", {})
         if isinstance(domains, dict) and domains:
+            def _domain_rank(item: tuple) -> tuple[int, int]:
+                info = item[1]
+                if not isinstance(info, dict):
+                    return (0, 0)
+                conf_score = {"high": 3, "medium": 2, "low": 1}.get(
+                    str(info.get("confidence", "low")).lower(), 0
+                )
+                count = int(info.get("interaction_count", 0) or 0)
+                return (conf_score, count)
+
+            ranked = sorted(domains.items(), key=_domain_rank, reverse=True)
             domain_lines = []
-            for domain, info in domains.items():
-                if isinstance(info, dict):
-                    desc = str(info.get("summary", info.get("description", ""))).strip()
-                    if desc:
-                        domain_lines.append(f"{domain}: {desc}")
+            for domain, info in ranked[:3]:
+                if not isinstance(info, dict):
+                    continue
+                conf = str(info.get("confidence", "?"))[:5]
+                desc = str(info.get("summary") or info.get("description") or "").strip()
+                # 只取摘要，丢弃冗余的信号列表
+                if desc:
+                    domain_lines.append(f"  [{conf}] {domain}: {desc[:240]}")
             if domain_lines:
-                parts.append("领域画像:\n" + "\n".join(f"  - {line}" for line in domain_lines))
-        # Fallback: unrecognized structure
+                parts.append(f"【关注领域】\n" + "\n".join(domain_lines))
+
+        # ── Fallback ──
         if not parts:
             raw = json.dumps(persona_data, ensure_ascii=False)
             if len(raw) > 10:
-                parts.append(f"画像数据: {raw[:500]}")
-        persona_text = _cap_text("\n".join(parts), 5000, "persona")
+                parts.append(f"画像: {raw[:500]}")
+
+        persona_text = _cap_text("\n\n".join(parts), 5000, "persona")
 
     logger.info(
         f"[/chat] Persona lookup: user_id={req.user_id}, "
