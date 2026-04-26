@@ -10,12 +10,11 @@ logger = logging.getLogger("nanobot.registry")
 MODEL_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "models.json")
 
 
-class ModelFailureTracker:
-    """Per-model circuit breaker with exponential-backoff cooldown.
+_FAILURE_STATE_PATH = os.path.join(os.path.dirname(__file__), "data", "model_failures.json")
 
-    Singleton: one instance lives at the NewAPIClient class level.
-    Async-safe via asyncio.Lock.
-    """
+
+class ModelFailureTracker:
+    """Per-model circuit breaker with exponential-backoff cooldown + disk persistence."""
 
     def __init__(self, max_failures: int = 3,
                  cooldown_base_s: float = 300.0,
@@ -26,9 +25,43 @@ class ModelFailureTracker:
         self._cooldown_base = cooldown_base_s
         self._cooldown_max = cooldown_max_s
         self._lock = asyncio.Lock()
+        self._load()
+
+    def _load(self) -> None:
+        try:
+            if os.path.exists(_FAILURE_STATE_PATH):
+                with open(_FAILURE_STATE_PATH, "r", encoding="utf-8") as f:
+                    data = json.loads(f.read())
+                self._failures = data.get("failures", {})
+                self._disabled_until = data.get("disabled_until", {})
+                # Expire stale cooldowns on load (server may have been down)
+                now = time.time()
+                expired = [mid for mid, until in self._disabled_until.items() if now >= until]
+                for mid in expired:
+                    del self._disabled_until[mid]
+                    self._failures.pop(mid, None)
+                if expired:
+                    logger.info(f"Expired {len(expired)} stale cooldowns on load")
+                total = len(self._failures)
+                if total:
+                    logger.info(f"Loaded failure state: {total} models tracked, "
+                                f"{len(self._disabled_until)} disabled")
+        except Exception as e:
+            logger.warning(f"Failed to load failure state: {e}")
+
+    def _save(self) -> None:
+        try:
+            data = {
+                "failures": dict(self._failures),
+                "disabled_until": dict(self._disabled_until),
+            }
+            os.makedirs(os.path.dirname(_FAILURE_STATE_PATH), exist_ok=True)
+            with open(_FAILURE_STATE_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Failed to save failure state: {e}")
 
     async def record_failure(self, model_id: str) -> None:
-        """Increment consecutive failure count. Disable if count >= max."""
         async with self._lock:
             count = self._failures.get(model_id, 0) + 1
             self._failures[model_id] = count
@@ -43,15 +76,16 @@ class ModelFailureTracker:
                     f"Model [{model_id}] disabled for {cooldown:.0f}s "
                     f"(failure #{count})"
                 )
+            self._save()
 
     async def record_success(self, model_id: str) -> None:
-        """Reset failure count on success."""
         async with self._lock:
-            self._failures.pop(model_id, None)
+            changed = self._failures.pop(model_id, None) is not None
             self._disabled_until.pop(model_id, None)
+            if changed:
+                self._save()
 
     async def is_disabled(self, model_id: str) -> bool:
-        """Check if model is currently disabled. Auto-re-enable on cooldown expiry."""
         async with self._lock:
             until = self._disabled_until.get(model_id)
             if until is None:
@@ -59,6 +93,7 @@ class ModelFailureTracker:
             if time.time() >= until:
                 del self._disabled_until[model_id]
                 self._failures.pop(model_id, None)
+                self._save()
                 logger.info(f"Model [{model_id}] re-enabled after cooldown")
                 return False
             return True
