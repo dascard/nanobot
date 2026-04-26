@@ -19,7 +19,8 @@
 - **sql_analysis**: 查聊天记录数据库（只读 SELECT）
 - **python_sandbox**: 跑 Python 数据分析脚本
 - **news_search**: 搜索 AI/科技资讯
-- **persona_update**: 更新你的用户画像（用户说"记住了""记到画像里"时用）
+- **persona_update**: 更新用户画像（用户说"记住了""记到画像里"时用）
+- **schedule_task**: 创建定时推送任务（用户说"每天X点推送Y"时用）。QQ号见系统提示中的 user= 标记
 
 ## 记忆操作
 memory_read / memory_write 是内部工具——调完别跟用户汇报结果，默默执行就行。

@@ -35,6 +35,10 @@ tools:
     type: package
     module: nanobot_kt.tools.persona_update
     class: PersonaUpdateTool
+  - name: schedule_task
+    type: package
+    module: nanobot_kt.tools.schedule_task
+    class: ScheduleTaskTool
 
 # ── Sub-Agents ──
 subagents:
