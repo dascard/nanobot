@@ -511,54 +511,73 @@ class NewAPIClient:
 
         await self.sync_models_to_registry(force=False)
 
-        target_model = self.resolve_model(messages, tools, manual_model=manual_model)
-        logger.info(f"chat_completion routing: target_model={target_model}")
+        complexity = self.estimate_complexity(messages, tools)
+        intel_floor = max(1, complexity - 1)
+        candidates = self.get_ordered_candidates(
+            provider="new-api",
+            intel_floor=intel_floor,
+        )
+        if not candidates:
+            return {"error": "No candidates available"}
+
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
-        payload = self._build_payload(messages, tools, temperature, False, target_model)
-
         last_error: Optional[str] = None
-        for attempt in range(1, self.max_retries + 1):
+
+        # Try candidates in order, 2 attempts per model before switching
+        candidate_idx = 0
+        for attempt in range(self.max_retries * len(candidates)):
+            model = candidates[candidate_idx % len(candidates)]
+            target_model = str(model.get("id", ""))
+            payload = self._build_payload(messages, tools, temperature, False, target_model)
+
+            if attempt == 0:
+                logger.info(f"chat_completion: {target_model} "
+                            f"(complexity={complexity}, intel={model.get('intelligence')})")
+
             async with aiohttp.ClientSession() as session:
                 try:
                     async with session.post(
-                        url,
-                        headers=headers,
-                        json=payload,
+                        url, headers=headers, json=payload,
                         timeout=aiohttp.ClientTimeout(total=self.timeout),
                     ) as resp:
-                        if resp.status in _RETRYABLE_STATUS and attempt < self.max_retries:
+                        if resp.status in _RETRYABLE_STATUS and attempt < self.max_retries * len(candidates) - 1:
                             detail = await resp.text()
-                            delay = min(2 ** attempt, 16)
+                            delay = min(2 ** (attempt % self.max_retries), 16)
                             logger.warning(
-                                f"new-api retryable error: status={resp.status}, "
-                                f"attempt={attempt}/{self.max_retries}, retry in {delay}s"
+                                f"new-api error: status={resp.status}, model={target_model}, "
+                                f"attempt={attempt+1}, retry in {delay}s"
                             )
                             last_error = f"API Error {resp.status}: {detail[:200]}"
+                            # Switch model on rate limit (429)
+                            if resp.status == 429:
+                                candidate_idx += 1
+                                logger.info(f"Switching to next candidate: {candidates[candidate_idx % len(candidates)]['id']}")
                             await asyncio.sleep(delay)
                             continue
 
                         if resp.status != 200:
                             detail = await resp.text()
                             logger.error(f"new-api error: status={resp.status}, detail={detail}")
-                            return {"error": f"API Error {resp.status}", "detail": detail}
+                            candidate_idx += 1  # switch model on non-retryable error too
+                            last_error = f"API Error {resp.status}: {detail[:200]}"
+                            if candidate_idx < len(candidates):
+                                continue
+                            return {"error": last_error}
 
                         result = await resp.json()
-                        # Track token usage
                         self.last_usage = result.get("usage", {})
-                        result["_nanobot_model_tier"] = routed_tier
                         result["_nanobot_model_id"] = target_model
-                        result["_nanobot_task_tags"] = task_tags
+                        result["_nanobot_complexity"] = complexity
                         return result
 
                 except aiohttp.ClientError as e:
                     last_error = str(e)
-                    if attempt < self.max_retries:
-                        delay = min(2 ** attempt, 16)
-                        logger.warning(f"new-api network error (attempt {attempt}): {e}, retry in {delay}s")
-                        await asyncio.sleep(delay)
+                    logger.warning(f"new-api network error: model={target_model}, {e}")
+                    candidate_idx += 1
+                    if candidate_idx < len(candidates):
+                        await asyncio.sleep(1)
                         continue
-                    logger.error(f"new-api network error (final): {e}")
                     return {"error": "NetworkError", "detail": str(e)}
 
         return {"error": "MaxRetriesExceeded", "detail": last_error or "Unknown"}

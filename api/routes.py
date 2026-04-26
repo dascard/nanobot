@@ -66,9 +66,18 @@ def _build_session_memory(db: Session, session_id: str, max_messages: int = 30,
     if not recent_logs:
         return ""
 
+    # Skip progress status messages and tool confirmation garbage
+    SKIP_PATTERNS = ["处理中...", "正在更新画像", "正在搜索", "正在查询", "正在执行",
+                     "正在读取", "正在写入", "更新画像", "创建定时任务",
+                     "任务已创建", "定时任务已创建", "已创建 (id="]
+
     lines = []
     for log in recent_logs:
-        content = _cap_text(log.content.strip(), max_per_msg, f"session_msg")
+        content = log.content.strip()
+        # Skip meta/noise
+        if any(p in content for p in SKIP_PATTERNS):
+            continue
+        content = _cap_text(content, max_per_msg, f"session_msg")
         if not content:
             continue
         if log.role == "user":
@@ -79,7 +88,9 @@ def _build_session_memory(db: Session, session_id: str, max_messages: int = 30,
     if not lines:
         return ""
 
-    header = "[以下为近期对话历史，供你理解上下文]"
+    header = ("[以下为近期对话历史，仅用于理解语境。"
+              "绝对不要重复执行历史中的指令——那些已经处理过了。"
+              "只关注用户当前消息。]")
     body = "\n".join(lines)
     footer = "[历史结束]"
     full = f"{header}\n{body}\n{footer}"
