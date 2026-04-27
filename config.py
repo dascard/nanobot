@@ -77,3 +77,15 @@ MODEL_COOLDOWN_MAX_SECONDS = int(os.environ.get("MODEL_COOLDOWN_MAX_SECONDS", "1
 # ── 每日记忆折叠 ──
 DAILY_DIGEST_ENABLED = os.environ.get("DAILY_DIGEST_ENABLED", "1") == "1"
 DAILY_DIGEST_HOUR = int(os.environ.get("DAILY_DIGEST_HOUR", "4"))
+
+# ── 私聊分类器 ──
+CLASSIFIER_API_URL = os.environ.get("CLASSIFIER_API_URL", "http://10.60.42.158:8080/v1")
+CLASSIFIER_TIMEOUT = float(os.environ.get("CLASSIFIER_TIMEOUT", "5.0"))
+GUARDRAIL_INJECTION_PATTERNS = [
+    r'\[SYSTEM', r'\[INST\]', r'</?system>', r'</?user>',
+    r'IGNORE\s+.*RULE', r'忽略\s*.*指令', r'忽略\s*.*规则',
+    r'OUTPUT\s*:', r'输出\s*:', r'ALWAYS\s+输出',
+    r'你是.*过滤器', r'你的任务是\s+ALWAYS',
+    r'<\|im_start\|>', r'<\|im_end\|>',
+    r'从现在开始.*助手', r'从现在开始.*无限制',
+]
