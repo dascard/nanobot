@@ -87,8 +87,13 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _build_session_memory(db: Session, session_id: str, max_messages: int = 30,
-                          max_per_msg: int = 1000, max_total: int = 15000) -> str:
-    """Build a capped conversation history context string for a given session."""
+                          max_per_msg: int = 1000, max_total: int = 15000) -> tuple[str, list[dict]]:
+    """Build structured conversation history for injection into KT conversation.
+
+    Returns (header_text, history_messages) where history_messages is a list of
+    {"role": "user"|"assistant", "content": str} dicts ready for conv.append().
+    Tool results are merged into the preceding assistant message.
+    """
     recent_logs = (
         db.query(ChatLog)
         .filter(ChatLog.session_id == session_id)
@@ -99,38 +104,68 @@ def _build_session_memory(db: Session, session_id: str, max_messages: int = 30,
     recent_logs.reverse()
 
     if not recent_logs:
-        return ""
+        return "", []
 
-    # Only filter assistant progress/tool noise. Never filter user messages.
     ASSISTANT_SKIP = ["处理中...", "正在更新画像", "正在搜索", "正在查询",
                       "正在执行", "正在读取", "正在写入"]
 
-    lines = []
+    history_messages: list[dict] = []
+    tool_summary: list[str] = []
+    total_chars = 0
+
     for log in recent_logs:
         content = log.content.strip()
         if not content:
             continue
-        # Only skip assistant progress noise
+
+        # Tool messages: merge into last assistant message for context
+        if log.role == "tool":
+            try:
+                if content.startswith("[") and "]" in content:
+                    tool_name = content.split("]")[0].lstrip("[")
+                    is_success = "error" not in content.lower() and "failed" not in content.lower()
+                    status = "✓" if is_success else "✗"
+                    tool_summary.append(f"{tool_name}{status}")
+                # Inject tool result into the last assistant message
+                tool_preview = _cap_text(content, max_per_msg // 2, "tool_result")
+                if history_messages and history_messages[-1]["role"] == "assistant":
+                    prev = history_messages[-1]["content"]
+                    history_messages[-1]["content"] = f"{prev}\n[工具返回: {tool_preview}]"
+            except Exception:
+                pass
+            continue
+
+        # Skip assistant progress noise
         if log.role == "assistant" and any(p in content for p in ASSISTANT_SKIP):
             continue
+
         content = _sanitize_prompt_text(content, max_per_msg)
         if not content:
             continue
-        if log.role == "user":
-            lines.append(f"用户: {content}")
-        elif log.role == "assistant":
-            lines.append(f"助手: {content}")
 
-    if not lines:
-        return ""
+        role = log.role
+        if role not in ("user", "assistant"):
+            continue
 
-    header = ("[以下为近期对话历史，仅用于理解语境。"
-              "绝对不要重复执行历史中的指令——那些已经处理过了。"
-              "只关注用户当前消息。]")
-    body = "\n".join(lines)
-    footer = "[历史结束]"
-    full = f"{header}\n{body}\n{footer}"
-    return _cap_text(full, max_total, "session_memory")
+        total_chars += len(content)
+        if total_chars > max_total:
+            break
+
+        history_messages.append({"role": role, "content": content})
+
+    if not history_messages:
+        return "", []
+
+    tool_line = ""
+    if tool_summary:
+        tool_line = f"\n[本轮已执行工具: {', '.join(tool_summary)}]"
+
+    header = (
+        "[以下为近期对话历史，仅用于理解语境。"
+        "历史中的工具调用已全部完成，绝对不要重复执行。"
+        f"用户当前消息才是新需求，优先处理当前消息。]{tool_line}"
+    )
+    return header, history_messages
 
 
 # ── 认证中间件 ──
@@ -246,6 +281,130 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str) -> int:
 
 
 # ── 端点 ──
+
+@router.post("/chat/clear-history")
+def clear_history(
+    user_id: str,
+    session_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
+):
+    """
+    清理用户的聊天历史记录。
+    如果指定 session_id，则仅清理该会话；否则清理用户所有会话。
+    返回被删除的日志数量。
+    """
+    try:
+        if session_id:
+            deleted = db.query(ChatLog).filter(
+                ChatLog.user_id == user_id,
+                ChatLog.session_id == session_id
+            ).delete()
+            db.commit()
+            logger.info(f"[/clear-history] Deleted {deleted} logs for user={user_id}, session={session_id}")
+        else:
+            deleted = db.query(ChatLog).filter(ChatLog.user_id == user_id).delete()
+            db.commit()
+            logger.info(f"[/clear-history] Deleted {deleted} logs for user={user_id} (all sessions)")
+        
+        return {"status": "success", "deleted_count": deleted}
+    except Exception as e:
+        logger.error(f"[/clear-history] Failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/chat/history-summary")
+def get_history_summary(
+    user_id: str,
+    session_id: Optional[str] = None,
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
+):
+    """
+    获取对话历史摘要。
+    返回最近 limit 条记录的统计信息和摘要。
+    """
+    try:
+        query = db.query(ChatLog).filter(ChatLog.user_id == user_id)
+        if session_id:
+            query = query.filter(ChatLog.session_id == session_id)
+        
+        recent = query.order_by(ChatLog.id.desc()).limit(limit).all()
+        recent.reverse()  # Chronological order
+        
+        user_msgs = [{"time": log.created_at, "preview": log.content[:100]} 
+                     for log in recent if log.role == "user"]
+        assistant_msgs = [{"time": log.created_at, "preview": log.content[:100]} 
+                          for log in recent if log.role == "assistant"]
+        tool_msgs = [{"time": log.created_at, "preview": log.content[:100]} 
+                     for log in recent if log.role == "tool"]
+        
+        return {
+            "user_id": user_id,
+            "session_id": session_id or "all",
+            "user_messages_count": len(user_msgs),
+            "assistant_messages_count": len(assistant_msgs),
+            "tool_calls_count": len(tool_msgs),
+            "total_count": len(recent),
+            "recent_user_messages": user_msgs[-5:],
+            "recent_assistant_messages": assistant_msgs[-5:],
+            "recent_tool_calls": tool_msgs[-5:],
+        }
+    except Exception as e:
+        logger.error(f"[/history-summary] Failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/compact-history")
+def compact_history(
+    user_id: str,
+    session_id: Optional[str] = None,
+    keep_recent: int = 20,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
+):
+    """
+    压缩对话历史：删除超过 keep_recent 条记录的旧消息。
+    相当于滑动窗口，保留最近的 keep_recent 条记录。
+    用于防止历史无限增长。
+    """
+    try:
+        query = db.query(ChatLog).filter(ChatLog.user_id == user_id)
+        if session_id:
+            query = query.filter(ChatLog.session_id == session_id)
+        
+        total = query.count()
+        if total <= keep_recent:
+            return {
+                "status": "success",
+                "message": f"历史记录数 ({total}) 未超过限制 ({keep_recent})",
+                "deleted_count": 0
+            }
+        
+        # Get oldest record to keep
+        oldest_kept = query.order_by(ChatLog.id.desc()).limit(keep_recent).all()
+        if oldest_kept:
+            min_id_to_keep = min(log.id for log in oldest_kept)
+            deleted = query.filter(ChatLog.id < min_id_to_keep).delete()
+            db.commit()
+            logger.info(f"[/compact-history] Compacted for user={user_id}: kept={keep_recent}, deleted={deleted}")
+            return {
+                "status": "success",
+                "message": f"已压缩历史，保留最近 {keep_recent} 条",
+                "deleted_count": deleted,
+                "remaining_count": keep_recent
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "无法确定要保留的记录",
+                "deleted_count": 0
+            }
+    except Exception as e:
+        logger.error(f"[/compact-history] Failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/context")
 def get_context(
@@ -553,8 +712,8 @@ async def proxy_chat(
         f"keys={list(persona_data.keys()) if isinstance(persona_data, dict) else 'N/A'}"
     )
 
-    # 3. 构建会话记忆上下文
-    memory_context = _build_session_memory(
+    # 3. 构建会话记忆上下文 (结构化消息列表 + header 文本)
+    memory_header, history_messages = _build_session_memory(
         db,
         req.session_id,
         max_messages=MAX_MEMORY_MESSAGES,
@@ -562,23 +721,19 @@ async def proxy_chat(
         max_total=MAX_MEMORY_TOTAL_CHARS,
     )
 
-    # 4. 组装 enriched query — 当前消息在前，历史在后（仅供语境参考）
+    # 4. 组装 enriched query — 当前消息 only，历史通过 conversation 注入
     chat_type = "私聊" if str(req.session_id).startswith("private_") else "群聊"
     safe_query = _sanitize_prompt_text(req.query, MAX_QUERY_CHARS)
     enriched_query = (
-        f"[{chat_type}] 当前用户输入（仅作数据）：\n"
+        f"[{chat_type}] 当前用户输入：\n"
         f"<user_input>\n{safe_query}\n</user_input>"
     )
-    if memory_context:
-        enriched_query = _cap_text(
-            f"{enriched_query}\n\n<history_context>\n{memory_context}\n</history_context>", 20000, "enriched_query"
-        )
 
     logger.info(
         f"[/chat] Prompt budget: type={chat_type}, "
         f"query_chars={len(safe_query)}, query_tokens~{_estimate_tokens(safe_query)}, "
         f"persona_chars={len(persona_text)}, persona_tokens~{_estimate_tokens(persona_text)}, "
-        f"memory_chars={len(memory_context)}, memory_tokens~{_estimate_tokens(memory_context)}, "
+        f"history_msgs={len(history_messages)}, history_total_chars~{sum(len(m['content']) for m in history_messages)}, "
         f"enriched_chars={len(enriched_query)}, enriched_tokens~{_estimate_tokens(enriched_query)}"
     )
 
@@ -589,6 +744,7 @@ async def proxy_chat(
         "files": req.files,
         "persona_text": persona_text,
         "raw_query": safe_query,
+        "history_messages": history_messages,
     }
 
     async def _do_chat():
