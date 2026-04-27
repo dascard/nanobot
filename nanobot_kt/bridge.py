@@ -47,7 +47,13 @@ class NanobotBridge:
         self._agent = Agent(
             config,
             output_module=self._output,
+            pwd="./workspace",  # 文件操作沙箱：read/write/edit 等工具只能在此目录内操作
         )
+        # 强制 block 模式——即使模型重试也不允许访问 workspace 外的路径
+        if hasattr(self._agent, 'executor') and hasattr(self._agent.executor, '_path_guard'):
+            self._agent.executor._path_guard.mode = "block"
+            logger.info("[NanobotBridge] File tool sandbox enforced (mode=block, cwd=./workspace)")
+
         # Critical: Agent must be started so _running=True; otherwise
         # _process_event() drops all events and returns empty output.
         await self._agent.start()

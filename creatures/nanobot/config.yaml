@@ -39,6 +39,19 @@ tools:
     type: package
     module: nanobot_kt.tools.schedule_task
     class: ScheduleTaskTool
+  # KT built-in file tools — sandboxed to ./workspace (PathBoundaryGuard mode=block)
+  - name: read
+    type: builtin
+  - name: write
+    type: builtin
+  - name: edit
+    type: builtin
+  - name: grep
+    type: builtin
+  - name: glob
+    type: builtin
+  - name: bash
+    type: builtin
 
 # ── Sub-Agents ──
 subagents:

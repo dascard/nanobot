@@ -5,4 +5,7 @@ __pycache__/*
 clients/data/models.json
 .claude/skills/
 clients/data/*.json
-!clients/data/model_overrides.jsonnode_modules/
+!clients/data/model_overrides.json
+node_modules/
+workspace/*
+!workspace/README.md
