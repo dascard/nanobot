@@ -366,6 +366,13 @@ class NewAPIClient:
             payload["tool_choice"] = "auto"
         return payload
 
+    def _safe_get_failure_tracker(self):
+        try:
+            return self.get_failure_tracker()
+        except Exception as e:
+            logger.warning(f"failure tracker unavailable: {e}")
+            return None
+
     # ── New Model Router ──
 
     def estimate_complexity(self, messages: List[Dict[str, Any]],
@@ -419,7 +426,7 @@ class NewAPIClient:
 
         exclude_lower = [em.lower() for em in (exclude_models or [])]
         avoid_tags_set = set(t.lower() for t in (avoid_tags or []))
-        tracker = self.get_failure_tracker()
+        tracker = self._safe_get_failure_tracker()
         max_cost_val = max_cost if max_cost is not None else LLM_BUDGET_CAP
 
         candidates = []
@@ -434,7 +441,7 @@ class NewAPIClient:
                 continue
             if m.get("cost_input_1m", 999) > max_cost_val:
                 continue
-            if tracker.sync_is_disabled(mid):
+            if tracker is not None and tracker.sync_is_disabled(mid):
                 continue
             candidates.append(m)
 
@@ -523,7 +530,7 @@ class NewAPIClient:
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
         last_error: Optional[str] = None
-        tracker = self.get_failure_tracker()
+        tracker = self._safe_get_failure_tracker()
 
         # Try candidates in order. Each model gets 1 quick retry; 429 skips immediately.
         candidate_idx = 0
@@ -544,7 +551,8 @@ class NewAPIClient:
                     ) as resp:
                         if resp.status == 200:
                             result = await resp.json()
-                            asyncio.create_task(tracker.record_success(target_model))
+                            if tracker is not None:
+                                asyncio.create_task(tracker.record_success(target_model))
                             self.last_usage = result.get("usage", {})
                             result["_nanobot_model_id"] = target_model
                             result["_nanobot_complexity"] = complexity
@@ -552,7 +560,8 @@ class NewAPIClient:
 
                         detail = await resp.text()
                         last_error = f"API Error {resp.status}: {detail[:200]}"
-                        asyncio.create_task(tracker.record_failure(target_model))
+                        if tracker is not None:
+                            asyncio.create_task(tracker.record_failure(target_model))
 
                         if resp.status == 429 or retries_left <= 0:
                             # 429 or exhausted retries → switch model immediately
@@ -568,7 +577,8 @@ class NewAPIClient:
 
                 except aiohttp.ClientError as e:
                     last_error = str(e)
-                    asyncio.create_task(tracker.record_failure(target_model))
+                    if tracker is not None:
+                        asyncio.create_task(tracker.record_failure(target_model))
                     candidate_idx += 1
                     retries_left = 1
                     logger.warning(f"new-api network error: {target_model}, {e}, switching")
@@ -590,10 +600,25 @@ class NewAPIClient:
             yield {"error": "NEW_API_KEY is missing"}
             return
 
-        target_model = self._resolve_model(model_tier, manual_model)
+        await self.sync_models_to_registry(force=False)
+
+        complexity = self.estimate_complexity(messages, tools)
+        intel_floor = max(1, complexity - 1)
+        candidates = self.get_ordered_candidates(
+            provider="new-api",
+            intel_floor=intel_floor,
+        )
+        if manual_model:
+            target_model = manual_model
+        elif candidates:
+            target_model = str(candidates[0].get("id", ""))
+        else:
+            target_model = self._resolve_model(model_tier, manual_model)
+
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
         payload = self._build_payload(messages, tools, temperature, True, target_model)
+        tracker = self._safe_get_failure_tracker()
 
         async with aiohttp.ClientSession() as session:
             try:
@@ -605,6 +630,8 @@ class NewAPIClient:
                 ) as resp:
                     if resp.status != 200:
                         detail = await resp.text()
+                        if tracker is not None:
+                            asyncio.create_task(tracker.record_failure(target_model))
                         yield {"error": f"API Error {resp.status}", "detail": detail}
                         return
 
@@ -620,12 +647,16 @@ class NewAPIClient:
                             # Track usage from final chunk if present
                             if chunk.get("usage"):
                                 self.last_usage = chunk["usage"]
+                                if tracker is not None:
+                                    asyncio.create_task(tracker.record_success(target_model))
                             yield chunk
                         except json.JSONDecodeError:
                             continue
 
             except aiohttp.ClientError as e:
                 logger.error(f"new-api stream error: {e}")
+                if tracker is not None:
+                    asyncio.create_task(tracker.record_failure(target_model))
                 yield {"error": "NetworkError", "detail": str(e)}
 
 
