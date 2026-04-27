@@ -31,12 +31,12 @@ def _safety_check(tool_name: str, args: dict[str, Any] | None) -> str | None:
         ]
         for pattern, desc in dangerous:
             if re.search(pattern, code):
-                return f"[SECURITY_WARNING] {tool_name}: {desc}"
+                return f"[安全警告] {tool_name}: {desc}"
     if tool_name == "sql_analysis" and code:
         lowered = code.lower()
         for kw in ("insert", "update", "delete", "drop", "alter", "create"):
             if re.search(rf"\b{kw}\b", lowered):
-                return f"[SECURITY_WARNING] sql_analysis: contains {kw.upper()}"
+                return f"[安全警告] sql_analysis: 包含 {kw.upper()} 语句"
     return None
 
 
@@ -102,14 +102,14 @@ class BufferedOutput(BaseOutputModule):
         """Log activity. Emit progress for tool starts + errors to stream."""
         if activity_type == "processing_error":
             logger.error(f"[Activity] {activity_type}: {detail}")
-            self._buffer.append(f"\n[PROCESSING_ERROR] {detail}")
+            self._buffer.append(f"\n[系统内部错误] {detail}")
             if self._stream_queue is not None:
                 asyncio.ensure_future(self._stream_queue.put({"status": "error", "message": detail}))
             return
 
         if activity_type == "tool_error":
             logger.error(f"[Activity] {activity_type}: {detail}")
-            self._buffer.append(f"\n[TOOL_ERROR] {detail}")
+            self._buffer.append(f"\n[工具错误] {detail}")
             if self._stream_queue is not None:
                 asyncio.ensure_future(self._stream_queue.put({"status": "error", "message": detail}))
             return

@@ -267,7 +267,8 @@ class NanobotBridge:
 
                 response = self._output.get_response()
                 is_empty = not response.strip()
-                is_error = "[系统内部错误]" in response or "processing_error" in response
+                is_error = ("[系统内部错误]" in response or "[工具错误]" in response
+                         or "processing_error" in response)
                 if (is_empty or is_error) and attempt < max_attempts - 1:
                     logger.warning(f"[NanobotBridge] Framework error. Recording failure for {target_model}")
                     if tracker is not None:
