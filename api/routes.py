@@ -6,6 +6,7 @@ import os
 import logging
 import json
 import asyncio
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
@@ -34,7 +35,7 @@ EMPTY_ASSISTANT_PLACEHOLDER = "（无回复内容）"
 # Prompt budget caps to avoid hidden context blow-up.
 MAX_QUERY_CHARS = 2000
 MAX_PERSONA_CHARS = 1600
-MAX_MEMORY_MESSAGES = 6
+MAX_MEMORY_WINDOW_MINUTES = 30
 MAX_MEMORY_PER_MSG_CHARS = 300
 MAX_MEMORY_TOTAL_CHARS = 4000
 
@@ -86,22 +87,32 @@ def _estimate_tokens(text: str) -> int:
     return int(cjk_count * 1.0 + ascii_count * 0.35)
 
 
-def _build_session_memory(db: Session, session_id: str, max_messages: int = 30,
-                          max_per_msg: int = 1000, max_total: int = 15000) -> tuple[str, list[dict]]:
+def _build_session_memory(db: Session, session_id: str, user_id: str = "",
+                          window_minutes: int = 30,
+                          max_per_msg: int = 300, max_total: int = 4000) -> tuple[str, list[dict]]:
     """Build structured conversation history for injection into KT conversation.
 
     Returns (header_text, history_messages) where history_messages is a list of
     {"role": "user"|"assistant", "content": str} dicts ready for conv.append().
-    Tool results are merged into the preceding assistant message.
+    Uses a time-based window (not fixed count) so conversation pace adapts naturally.
+    Respects user.history_clear_at so users can start fresh without data loss.
     """
-    recent_logs = (
+    cutoff = datetime.now() - timedelta(minutes=window_minutes)
+
+    # Respect history_clear_at marker (non-destructive clear)
+    if user_id:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user and user.history_clear_at:
+            if user.history_clear_at > cutoff:
+                cutoff = user.history_clear_at
+
+    query = (
         db.query(ChatLog)
         .filter(ChatLog.session_id == session_id)
-        .order_by(ChatLog.id.desc())
-        .limit(max_messages)
-        .all()
+        .filter(ChatLog.created_at > cutoff)
+        .order_by(ChatLog.created_at.asc())
     )
-    recent_logs.reverse()
+    recent_logs = query.all()
 
     if not recent_logs:
         return "", []
@@ -126,7 +137,6 @@ def _build_session_memory(db: Session, session_id: str, max_messages: int = 30,
                     is_success = "error" not in content.lower() and "failed" not in content.lower()
                     status = "✓" if is_success else "✗"
                     tool_summary.append(f"{tool_name}{status}")
-                # Inject tool result into the last assistant message
                 tool_preview = _cap_text(content, max_per_msg // 2, "tool_result")
                 if history_messages and history_messages[-1]["role"] == "assistant":
                     prev = history_messages[-1]["content"]
@@ -161,9 +171,9 @@ def _build_session_memory(db: Session, session_id: str, max_messages: int = 30,
         tool_line = f"\n[本轮已执行工具: {', '.join(tool_summary)}]"
 
     header = (
-        "[以下为近期对话历史，仅用于理解语境。"
+        f"[近{window_minutes}分钟内对话历史，仅用于理解语境。"
         "历史中的工具调用已全部完成，绝对不要重复执行。"
-        f"用户当前消息才是新需求，优先处理当前消息。]{tool_line}"
+        f"如需更早的上下文，使用 sql_analysis 查询 chat_logs 表。]{tool_line}"
     )
     return header, history_messages
 
@@ -282,34 +292,28 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str) -> int:
 
 # ── 端点 ──
 
-@router.post("/chat/clear-history")
-def clear_history(
+@router.post("/chat/mark-clear")
+def mark_clear(
     user_id: str,
-    session_id: Optional[str] = None,
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),
 ):
     """
-    清理用户的聊天历史记录。
-    如果指定 session_id，则仅清理该会话；否则清理用户所有会话。
-    返回被删除的日志数量。
+    标记用户历史记录的清除点（非删除）。
+    之后的历史查询（_build_session_memory）只拉取此时间点之后的消息。
+    旧数据保留在 DB 中，可通过 sql_analysis 工具查询。
     """
     try:
-        if session_id:
-            deleted = db.query(ChatLog).filter(
-                ChatLog.user_id == user_id,
-                ChatLog.session_id == session_id
-            ).delete()
-            db.commit()
-            logger.info(f"[/clear-history] Deleted {deleted} logs for user={user_id}, session={session_id}")
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            db.add(User(id=user_id, history_clear_at=datetime.now()))
         else:
-            deleted = db.query(ChatLog).filter(ChatLog.user_id == user_id).delete()
-            db.commit()
-            logger.info(f"[/clear-history] Deleted {deleted} logs for user={user_id} (all sessions)")
-        
-        return {"status": "success", "deleted_count": deleted}
+            user.history_clear_at = datetime.now()
+        db.commit()
+        logger.info(f"[/mark-clear] Clear marker set for user={user_id}")
+        return {"status": "success", "message": "已标记清除点，此后只拉取新消息"}
     except Exception as e:
-        logger.error(f"[/clear-history] Failed: {e}")
+        logger.error(f"[/mark-clear] Failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -712,11 +716,12 @@ async def proxy_chat(
         f"keys={list(persona_data.keys()) if isinstance(persona_data, dict) else 'N/A'}"
     )
 
-    # 3. 构建会话记忆上下文 (结构化消息列表 + header 文本)
+    # 3. 构建会话记忆上下文 (时间窗口 + clear 标记感知)
     memory_header, history_messages = _build_session_memory(
         db,
         req.session_id,
-        max_messages=MAX_MEMORY_MESSAGES,
+        user_id=req.user_id,
+        window_minutes=MAX_MEMORY_WINDOW_MINUTES,
         max_per_msg=MAX_MEMORY_PER_MSG_CHARS,
         max_total=MAX_MEMORY_TOTAL_CHARS,
     )

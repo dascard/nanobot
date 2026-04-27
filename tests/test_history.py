@@ -3,6 +3,7 @@ Tests for history memory system: _build_session_memory, _sanitize_prompt_text,
 _enrich_query, and history injection into conversation.
 """
 import pytest
+from datetime import datetime, timedelta
 from core.database import ChatLog, User
 
 
@@ -71,7 +72,7 @@ def test_build_memory_single_turn(db_session):
     _seed_chat_logs(db_session, "s1", [
         ("user", "你好"),
     ])
-    header, messages = _build_session_memory(db_session, "s1", max_messages=10)
+    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
     assert "你好" in messages[0]["content"]
@@ -86,7 +87,7 @@ def test_build_memory_role_alternation(db_session):
         ("user", "今天天气如何"),
         ("assistant", "晴天，25度"),
     ])
-    header, messages = _build_session_memory(db_session, "s1", max_messages=10)
+    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
     assert len(messages) == 4
     assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant"]
 
@@ -99,7 +100,7 @@ def test_build_memory_filters_assistant_noise(db_session):
         ("assistant", "正在搜索 AI 新闻..."),
         ("assistant", "找到了：DeepSeek 发布新模型"),
     ])
-    header, messages = _build_session_memory(db_session, "s1", max_messages=10)
+    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
     # "正在搜索" should be filtered; only the real response stays
     contents = [m["content"] for m in messages]
     assert not any("正在搜索" in c for c in contents)
@@ -115,7 +116,7 @@ def test_build_memory_merges_tool_results(db_session):
         ("tool", "[persona_update] 画像已更新: summary=技术型用户..."),
         ("assistant", "画像已更新完成！"),
     ])
-    header, messages = _build_session_memory(db_session, "s1", max_messages=10)
+    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
     # Tool message merged into first assistant msg
     assert len(messages) == 3  # user, assistant_with_tool, assistant2
     assert messages[0]["role"] == "user"
@@ -133,7 +134,7 @@ def test_build_memory_header_includes_tool_summary(db_session):
         ("tool", "[sql_analysis] SELECT * FROM users; 3 rows returned"),
         ("assistant", "查到3条数据"),
     ])
-    header, messages = _build_session_memory(db_session, "s1", max_messages=10)
+    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
     assert "本轮已执行工具" in header
     assert "sql_analysis" in header
 
@@ -147,7 +148,7 @@ def test_build_memory_tool_failure_marked(db_session):
         ("tool", "[sql_analysis] Error: connection failed"),
         ("assistant", "查询失败"),
     ])
-    header, messages = _build_session_memory(db_session, "s1", max_messages=10)
+    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
     assert "sql_analysis✗" in header
     assert "✓" not in header
 
@@ -162,22 +163,37 @@ def test_build_memory_caps_total_chars(db_session):
         ("assistant", "D" * 500),
     ])
     header, messages = _build_session_memory(db_session, "s1",
-                                              max_messages=10,
+                                              window_minutes=1440,
                                               max_total=800)
     total = sum(len(m["content"]) for m in messages)
     assert total <= 800 + 100  # tolerance for truncation overhead
 
 
-def test_build_memory_respects_message_limit(db_session):
-    """max_messages limits how many DB rows are fetched."""
+def test_build_memory_respects_time_window(db_session):
+    """Messages outside the time window should not be fetched."""
     from api.routes import _build_session_memory
-    for i in range(20):
-        _seed_chat_logs(db_session, "s1", [
-            ("user", f"msg{i}"),
-            ("assistant", f"reply{i}"),
-        ])
-    header, messages = _build_session_memory(db_session, "s1", max_messages=4)
-    assert len(messages) <= 4
+    from datetime import timedelta
+
+    # Seed current messages
+    _seed_chat_logs(db_session, "s1", [
+        ("user", "recent"),
+        ("assistant", "reply"),
+    ])
+
+    # Manually insert an old message outside the window
+    old_time = datetime.now() - timedelta(hours=2)
+    db_session.add(ChatLog(
+        user_id="test_user", session_id="s1", role="user",
+        content="old message", sender_name="test", session_name="test",
+        created_at=old_time, processed=0,
+    ))
+    db_session.commit()
+
+    # With 60-minute window, the old message should be excluded
+    header, messages = _build_session_memory(db_session, "s1", window_minutes=60)
+    contents = [m["content"] for m in messages]
+    assert "recent" in " ".join(contents)
+    assert "old message" not in " ".join(contents)
 
 
 def test_build_memory_returns_struct_dicts(db_session):
@@ -193,6 +209,41 @@ def test_build_memory_returns_struct_dicts(db_session):
         assert "role" in m
         assert "content" in m
         assert m["role"] in ("user", "assistant")
+
+
+# ── mark-clear ──
+
+def test_mark_clear_respected(db_session):
+    """After mark-clear, messages before the clear point should not appear."""
+    from api.routes import _build_session_memory
+
+    # Set a clear marker 15 minutes ago
+    clear_time = datetime.now() - timedelta(minutes=15)
+    db_session.add(User(id="test_user", history_clear_at=clear_time))
+    db_session.commit()
+
+    # Insert messages: one old (20 min ago), one recent (5 min ago)
+    old_time = datetime.now() - timedelta(minutes=20)
+    recent_time = datetime.now() - timedelta(minutes=5)
+    db_session.add(ChatLog(user_id="test_user", session_id="s1", role="user",
+        content="before clear", created_at=old_time, sender_name="test",
+        session_name="test", processed=0))
+    db_session.add(ChatLog(user_id="test_user", session_id="s1", role="assistant",
+        content="before clear reply", created_at=old_time, sender_name="nanobot",
+        session_name="test", processed=0))
+    db_session.add(ChatLog(user_id="test_user", session_id="s1", role="user",
+        content="after clear", created_at=recent_time, sender_name="test",
+        session_name="test", processed=0))
+    db_session.add(ChatLog(user_id="test_user", session_id="s1", role="assistant",
+        content="after clear reply", created_at=recent_time, sender_name="nanobot",
+        session_name="test", processed=0))
+    db_session.commit()
+
+    header, messages = _build_session_memory(db_session, "s1", user_id="test_user",
+                                              window_minutes=1440)
+    contents = [m["content"] for m in messages]
+    assert any("after clear" in c for c in contents)
+    assert not any("before clear" in c for c in contents)
 
 
 # ── history injection via bridge ──

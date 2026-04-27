@@ -17,6 +17,7 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
     id = Column(String, primary_key=True, index=True)
+    history_clear_at = Column(DateTime, nullable=True)  # 清除标记：查询只取此时间之后的消息
     created_at = Column(DateTime, default=datetime.now)
 
 class Persona(Base):
