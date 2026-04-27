@@ -4,7 +4,7 @@ _enrich_query, and history injection into conversation.
 """
 import pytest
 from datetime import datetime, timedelta
-from core.database import ChatLog, User
+from core.database import ChatLog, ConversationTurn, User
 
 
 # ── _sanitize_prompt_text ──
@@ -92,67 +92,6 @@ def test_build_memory_role_alternation(db_session):
     assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant"]
 
 
-def test_build_memory_filters_assistant_noise(db_session):
-    """Assistant progress messages like '正在搜索...' should be filtered."""
-    from api.routes import _build_session_memory
-    _seed_chat_logs(db_session, "s1", [
-        ("user", "查一下新闻"),
-        ("assistant", "正在搜索 AI 新闻..."),
-        ("assistant", "找到了：DeepSeek 发布新模型"),
-    ])
-    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
-    # "正在搜索" should be filtered; only the real response stays
-    contents = [m["content"] for m in messages]
-    assert not any("正在搜索" in c for c in contents)
-    assert any("DeepSeek" in c for c in contents)
-
-
-def test_build_memory_merges_tool_results(db_session):
-    """Tool result should be appended to the preceding assistant message."""
-    from api.routes import _build_session_memory
-    _seed_chat_logs(db_session, "s1", [
-        ("user", "更新我的画像"),
-        ("assistant", "好的，我来更新"),
-        ("tool", "[persona_update] 画像已更新: summary=技术型用户..."),
-        ("assistant", "画像已更新完成！"),
-    ])
-    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
-    # Tool message merged into first assistant msg
-    assert len(messages) == 3  # user, assistant_with_tool, assistant2
-    assert messages[0]["role"] == "user"
-    assert messages[1]["role"] == "assistant"
-    assert "[工具返回:" in messages[1]["content"]
-    assert "persona_update" in messages[1]["content"]
-
-
-def test_build_memory_header_includes_tool_summary(db_session):
-    """Header should include [本轮已执行工具: ...] when tools were called."""
-    from api.routes import _build_session_memory
-    _seed_chat_logs(db_session, "s1", [
-        ("user", "查数据"),
-        ("assistant", "查询中"),
-        ("tool", "[sql_analysis] SELECT * FROM users; 3 rows returned"),
-        ("assistant", "查到3条数据"),
-    ])
-    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
-    assert "本轮已执行工具" in header
-    assert "sql_analysis" in header
-
-
-def test_build_memory_tool_failure_marked(db_session):
-    """Failed tool calls should be marked with ✗ not ✓."""
-    from api.routes import _build_session_memory
-    _seed_chat_logs(db_session, "s1", [
-        ("user", "查一下"),
-        ("assistant", "查询中"),
-        ("tool", "[sql_analysis] Error: connection failed"),
-        ("assistant", "查询失败"),
-    ])
-    header, messages = _build_session_memory(db_session, "s1", window_minutes=1440)
-    assert "sql_analysis✗" in header
-    assert "✓" not in header
-
-
 def test_build_memory_caps_total_chars(db_session):
     """Content beyond max_total should be truncated."""
     from api.routes import _build_session_memory
@@ -180,12 +119,11 @@ def test_build_memory_respects_time_window(db_session):
         ("assistant", "reply"),
     ])
 
-    # Manually insert an old message outside the window
+    # Manually insert an old ConversationTurn outside the window
     old_time = datetime.now() - timedelta(hours=2)
-    db_session.add(ChatLog(
+    db_session.add(ConversationTurn(
         user_id="test_user", session_id="s1", role="user",
-        content="old message", sender_name="test", session_name="test",
-        created_at=old_time, processed=0,
+        content="old message", created_at=old_time,
     ))
     db_session.commit()
 
@@ -225,18 +163,17 @@ def test_mark_clear_respected(db_session):
     # Insert messages: one old (20 min ago), one recent (5 min ago)
     old_time = datetime.now() - timedelta(minutes=20)
     recent_time = datetime.now() - timedelta(minutes=5)
-    db_session.add(ChatLog(user_id="test_user", session_id="s1", role="user",
-        content="before clear", created_at=old_time, sender_name="test",
-        session_name="test", processed=0))
-    db_session.add(ChatLog(user_id="test_user", session_id="s1", role="assistant",
-        content="before clear reply", created_at=old_time, sender_name="nanobot",
-        session_name="test", processed=0))
-    db_session.add(ChatLog(user_id="test_user", session_id="s1", role="user",
-        content="after clear", created_at=recent_time, sender_name="test",
-        session_name="test", processed=0))
-    db_session.add(ChatLog(user_id="test_user", session_id="s1", role="assistant",
-        content="after clear reply", created_at=recent_time, sender_name="nanobot",
-        session_name="test", processed=0))
+    for role, content, ct in [
+        ("user", "before clear", old_time),
+        ("assistant", "before clear reply", old_time),
+        ("user", "after clear", recent_time),
+        ("assistant", "after clear reply", recent_time),
+    ]:
+        db_session.add(ChatLog(user_id="test_user", session_id="s1", role=role,
+            content=content, created_at=ct, sender_name="test",
+            session_name="test", processed=0))
+        db_session.add(ConversationTurn(user_id="test_user", session_id="s1",
+            role=role, content=content, created_at=ct))
     db_session.commit()
 
     header, messages = _build_session_memory(db_session, "s1", user_id="test_user",
@@ -330,15 +267,17 @@ def test_bridge_no_crash_on_empty_history():
 # ── helpers ──
 
 def _seed_chat_logs(db_session, session_id, messages):
-    """Insert ChatLog rows for testing."""
+    """Insert ChatLog + ConversationTurn rows for testing."""
     for role, content in messages:
         db_session.add(ChatLog(
-            user_id="test_user",
-            session_id=session_id,
-            role=role,
-            content=content,
-            sender_name="test",
-            session_name="test",
-            processed=0,
+            user_id="test_user", session_id=session_id,
+            role=role, content=content,
+            sender_name="test", session_name="test", processed=0,
         ))
+        # ConversationTurn only gets user/assistant (no tool)
+        if role in ("user", "assistant"):
+            db_session.add(ConversationTurn(
+                user_id="test_user", session_id=session_id,
+                role=role, content=content,
+            ))
     db_session.commit()

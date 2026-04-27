@@ -45,6 +45,19 @@ class ChatLog(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class ConversationTurn(Base):
+    """对话上下文专用表——仅存 user/assistant 消息，不含工具噪声和 ambient 消息。
+    与 ChatLog 分离：ChatLog 是原始存档（进化素材），本表是精简上下文（历史注入）。
+    """
+    __tablename__ = "conversation_turns"
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(String, index=True)
+    session_id = Column(String, index=True)
+    role = Column(String)  # 'user' | 'assistant'（tool 结果已合并到 assistant）
+    content = Column(Text)
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class MemoryDigest(Base):
     __tablename__ = "memory_digests"
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
@@ -80,25 +93,34 @@ def init_db():
     # 由于 Base.metadata.create_all 不会修改现有表结构，我们需要手动检查并修补
     from sqlalchemy import inspect, text
     inspector = inspect(engine)
+
+    # chat_logs 元数据列
     existing_columns = [col["name"] for col in inspector.get_columns("chat_logs")]
-    
-    # 需要检查并补全的元数据列
     required_upgrades = [
         ("session_id", "TEXT"),
         ("sender_name", "TEXT"),
         ("session_name", "TEXT")
     ]
-    
     with engine.connect() as conn:
         for col_name, col_type in required_upgrades:
             if col_name not in existing_columns:
                 print(f"  → Migrating: Adding missing column [{col_name}] to chat_logs...")
                 try:
-                    # SQLite 的 ALTER TABLE 语法
                     conn.execute(text(f"ALTER TABLE chat_logs ADD COLUMN {col_name} {col_type}"))
                     conn.commit()
                 except Exception as e:
                     print(f"  ⚠ Migration failed for {col_name}: {e}")
+
+    # users.history_clear_at (打标记清历史)
+    user_columns = [col["name"] for col in inspector.get_columns("users")]
+    if "history_clear_at" not in user_columns:
+        print("  → Migrating: Adding missing column [history_clear_at] to users...")
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN history_clear_at TIMESTAMP"))
+                conn.commit()
+        except Exception as e:
+            print(f"  ⚠ Migration failed for history_clear_at: {e}")
 
 def get_db():
     db = SessionLocal()

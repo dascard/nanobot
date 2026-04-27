@@ -46,9 +46,22 @@ chinese-commit-conventions  → 规范化提交
 | `tests/` | 测试 |
 | `docs/superpowers/specs/` | 设计文档 |
 
+## 数据模型
+
+| 表 | 用途 | 写入方 |
+|---|------|--------|
+| `users` | 用户 ID + `history_clear_at` 清除标记 | `proxy_chat`、`mark-clear` |
+| `chat_logs` | **原始消息存档**——进化/画像分析素材，含 tool、ambient | `_persist_chat_turn`、`log_ambient` |
+| `conversation_turns` | **精简对话上下文**——仅 user/assistant，专用于历史注入 | `_persist_chat_turn` |
+| `personas` | 用户画像 JSON | `evolution_task` |
+| `scheduled_tasks` | 定时推送任务 | `/chat/tasks` |
+
+**分离原则**：`ChatLog` 是档案馆（保留全部，永不删除），`ConversationTurn` 是工作内存（可清理，时间窗口查询）。
+
 ## 关键约束
 
-- **HTTP 请求无状态**：KT conversation 每次清空，历史通过 `_build_session_memory()` 从 DB 注入
+- **HTTP 请求无状态**：KT conversation 每次清空，历史通过 `_build_session_memory()` 从 `ConversationTurn` 注入
+- **历史清除**：`mark-clear` 打 `history_clear_at` 标记 + 删 `ConversationTurn`；`ChatLog` 保留不删
 - **模型路由**：`get_ordered_candidates()` 按 priority score 排序，向下遍历（便宜优先）
 - **熔断器**：`ModelFailureTracker` 连续 3 次失败后自动禁用 5min
 - **Token 估算**：CJK 字符按 1.0，ASCII 按 0.35（不求精确，量级判断）

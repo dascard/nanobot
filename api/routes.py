@@ -19,7 +19,7 @@ from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER, NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT,
     LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING
 )
-from core.database import get_db, User, Persona, SystemPrompt, ChatLog, MemoryDigest
+from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest
 from core.evolution import evolution_task
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from nanobot_kt.bridge import get_bridge
@@ -90,90 +90,55 @@ def _estimate_tokens(text: str) -> int:
 def _build_session_memory(db: Session, session_id: str, user_id: str = "",
                           window_minutes: int = 30,
                           max_per_msg: int = 300, max_total: int = 4000) -> tuple[str, list[dict]]:
-    """Build structured conversation history for injection into KT conversation.
+    """Build structured conversation history from ConversationTurn (clean, ready-to-inject).
 
-    Returns (header_text, history_messages) where history_messages is a list of
-    {"role": "user"|"assistant", "content": str} dicts ready for conv.append().
-    Uses a time-based window (not fixed count) so conversation pace adapts naturally.
-    Respects user.history_clear_at so users can start fresh without data loss.
+    ConversationTurn only contains user/assistant messages — no tool noise, no ambient.
+    Returns (header_text, history_messages) for conv.append() injection.
     """
     cutoff = datetime.now() - timedelta(minutes=window_minutes)
 
-    # Respect history_clear_at marker (non-destructive clear)
+    # Respect history_clear_at marker
     if user_id:
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.history_clear_at:
             if user.history_clear_at > cutoff:
                 cutoff = user.history_clear_at
 
-    query = (
-        db.query(ChatLog)
-        .filter(ChatLog.session_id == session_id)
-        .filter(ChatLog.created_at > cutoff)
-        .order_by(ChatLog.created_at.asc())
+    turns = (
+        db.query(ConversationTurn)
+        .filter(ConversationTurn.session_id == session_id)
+        .filter(ConversationTurn.created_at > cutoff)
+        .order_by(ConversationTurn.created_at.asc())
+        .all()
     )
-    recent_logs = query.all()
 
-    if not recent_logs:
+    if not turns:
         return "", []
 
-    ASSISTANT_SKIP = ["处理中...", "正在更新画像", "正在搜索", "正在查询",
-                      "正在执行", "正在读取", "正在写入"]
-
     history_messages: list[dict] = []
-    tool_summary: list[str] = []
     total_chars = 0
 
-    for log in recent_logs:
-        content = log.content.strip()
+    for t in turns:
+        content = t.content.strip()
         if not content:
             continue
-
-        # Tool messages: merge into last assistant message for context
-        if log.role == "tool":
-            try:
-                if content.startswith("[") and "]" in content:
-                    tool_name = content.split("]")[0].lstrip("[")
-                    is_success = "error" not in content.lower() and "failed" not in content.lower()
-                    status = "✓" if is_success else "✗"
-                    tool_summary.append(f"{tool_name}{status}")
-                tool_preview = _cap_text(content, max_per_msg // 2, "tool_result")
-                if history_messages and history_messages[-1]["role"] == "assistant":
-                    prev = history_messages[-1]["content"]
-                    history_messages[-1]["content"] = f"{prev}\n[工具返回: {tool_preview}]"
-            except Exception:
-                pass
-            continue
-
-        # Skip assistant progress noise
-        if log.role == "assistant" and any(p in content for p in ASSISTANT_SKIP):
-            continue
-
         content = _sanitize_prompt_text(content, max_per_msg)
         if not content:
-            continue
-
-        role = log.role
-        if role not in ("user", "assistant"):
             continue
 
         total_chars += len(content)
         if total_chars > max_total:
             break
 
-        history_messages.append({"role": role, "content": content})
+        history_messages.append({"role": t.role, "content": content})
 
     if not history_messages:
         return "", []
 
-    tool_line = ""
-    if tool_summary:
-        tool_line = f"\n[本轮已执行工具: {', '.join(tool_summary)}]"
-
     header = (
         f"[近{window_minutes}分钟内对话历史，仅用于理解语境。"
         "历史中的工具调用已全部完成，绝对不要重复执行。"
-        f"如需更早的上下文，使用 sql_analysis 查询 chat_logs 表。]{tool_line}"
+        f"如需更早的上下文，使用 sql_analysis 查询 chat_logs 表。]"
     )
     return header, history_messages
 
@@ -266,7 +231,8 @@ def _build_expand_chain(db: Session, base: MemoryDigest, reveal_to_level: int) -
 
 
 def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str) -> int:
-    """Persist a chat turn and return current unprocessed log count for the user."""
+    """Persist a chat turn to both ChatLog (evolution) and ConversationTurn (context)."""
+    # ChatLog — 原始存档，进化/画像分析
     db.add(ChatLog(
         user_id=req.user_id,
         session_id=req.session_id,
@@ -285,6 +251,9 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str) -> int:
         session_name=req.session_name or "",
         processed=0,
     ))
+    # ConversationTurn — 精简上下文，专用于历史注入
+    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id, role="user", content=req.query))
+    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id, role="assistant", content=answer))
     db.commit()
     return db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
 
@@ -300,18 +269,25 @@ def mark_clear(
 ):
     """
     标记用户历史记录的清除点（非删除）。
-    之后的历史查询（_build_session_memory）只拉取此时间点之后的消息。
-    旧数据保留在 DB 中，可通过 sql_analysis 工具查询。
+    ConversationTurn 旧记录立即删除，ChatLog 保留（进化素材）。
+    之后的历史查询只拉取此时间点之后的 ConversationTurn。
     """
     try:
+        now = datetime.now()
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
-            db.add(User(id=user_id, history_clear_at=datetime.now()))
+            db.add(User(id=user_id, history_clear_at=now))
         else:
-            user.history_clear_at = datetime.now()
+            user.history_clear_at = now
+
+        # 删除旧 ConversationTurn，保留 ChatLog 做进化素材
+        deleted = db.query(ConversationTurn).filter(
+            ConversationTurn.user_id == user_id,
+            ConversationTurn.created_at <= now,
+        ).delete()
         db.commit()
-        logger.info(f"[/mark-clear] Clear marker set for user={user_id}")
-        return {"status": "success", "message": "已标记清除点，此后只拉取新消息"}
+        logger.info(f"[/mark-clear] Clear marker set for user={user_id}, deleted {deleted} ConversationTurn rows")
+        return {"status": "success", "message": "已标记清除点", "deleted_context_rows": deleted}
     except Exception as e:
         logger.error(f"[/mark-clear] Failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -369,42 +345,36 @@ def compact_history(
     _auth=Depends(verify_token),
 ):
     """
-    压缩对话历史：删除超过 keep_recent 条记录的旧消息。
-    相当于滑动窗口，保留最近的 keep_recent 条记录。
-    用于防止历史无限增长。
+    压缩对话上下文：清理超过 keep_recent 条的 ConversationTurn 旧记录。
+    ChatLog 不受影响（保留做进化素材）。
     """
     try:
-        query = db.query(ChatLog).filter(ChatLog.user_id == user_id)
+        query = db.query(ConversationTurn).filter(ConversationTurn.user_id == user_id)
         if session_id:
-            query = query.filter(ChatLog.session_id == session_id)
-        
+            query = query.filter(ConversationTurn.session_id == session_id)
+
         total = query.count()
         if total <= keep_recent:
             return {
                 "status": "success",
-                "message": f"历史记录数 ({total}) 未超过限制 ({keep_recent})",
+                "message": f"上下文记录数 ({total}) 未超过限制 ({keep_recent})",
                 "deleted_count": 0
             }
-        
-        # Get oldest record to keep
-        oldest_kept = query.order_by(ChatLog.id.desc()).limit(keep_recent).all()
+
+        oldest_kept = query.order_by(ConversationTurn.id.desc()).limit(keep_recent).all()
         if oldest_kept:
-            min_id_to_keep = min(log.id for log in oldest_kept)
-            deleted = query.filter(ChatLog.id < min_id_to_keep).delete()
+            min_id_to_keep = min(t.id for t in oldest_kept)
+            deleted = query.filter(ConversationTurn.id < min_id_to_keep).delete()
             db.commit()
-            logger.info(f"[/compact-history] Compacted for user={user_id}: kept={keep_recent}, deleted={deleted}")
+            logger.info(f"[/compact-history] Compacted context for user={user_id}: kept={keep_recent}, deleted={deleted}")
             return {
                 "status": "success",
-                "message": f"已压缩历史，保留最近 {keep_recent} 条",
+                "message": f"已压缩上下文，保留最近 {keep_recent} 条",
                 "deleted_count": deleted,
                 "remaining_count": keep_recent
             }
         else:
-            return {
-                "status": "error",
-                "message": "无法确定要保留的记录",
-                "deleted_count": 0
-            }
+            return {"status": "error", "message": "无法确定要保留的记录", "deleted_count": 0}
     except Exception as e:
         logger.error(f"[/compact-history] Failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
