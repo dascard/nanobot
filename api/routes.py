@@ -707,7 +707,7 @@ async def proxy_chat(
     is_group = not str(req.session_id).startswith("private_")
     guardrail_status: str | None = None
 
-    if req.classification_request:
+    if not is_group or req.classification_request:
         guardrail = get_guardrail()
         messages = req.merged_messages or [req.query]
         merged = "\n---\n".join(messages)
