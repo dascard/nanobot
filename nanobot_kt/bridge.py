@@ -171,6 +171,18 @@ class NanobotBridge:
                     logger.warning("[NanobotBridge] Cannot inject history: no controller/conversation")
             # ------------------------------------------------------------------------------------
 
+            # --- Group chat file tool restriction ---
+            is_group = meta.get("is_group", False)
+            if is_group:
+                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                    conv = self._agent.controller.conversation
+                    conv.append("system",
+                        "[群聊限制] 本群聊中文件操作工具(read/write/edit/grep/glob/bash)不可用。"
+                        "只能使用 sql_analysis/python_sandbox/news_search/schedule_task/persona_update。"
+                    )
+                    logger.info("[NanobotBridge] Group chat file tool restriction applied")
+            # ---------------------------------------------
+
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")
             logger.debug(f"[NanobotBridge] Output module: {self._output}")
             logger.debug(f"[NanobotBridge] Agent output_module attr: {getattr(self._agent, '_output_module', 'NOT SET')}")
