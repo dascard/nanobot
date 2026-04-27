@@ -706,13 +706,17 @@ async def proxy_chat(
     # 4a. 私聊分类器（Guardrail）
     is_group = not str(req.session_id).startswith("private_")
     guardrail_status: str | None = None
+    _classifier_ran = False
 
     if not is_group or req.classification_request:
+        _classifier_ran = True
         guardrail = get_guardrail()
         messages = req.merged_messages or [req.query]
         merged = "\n---\n".join(messages)
         result = guardrail.classify(merged)
         guardrail_status = result["status"]
+        logger.info("[/chat] Guardrail result: status=%s, complexity=%s, user=%s",
+                     guardrail_status, result.get("complexity", 0), req.user_id)
 
         if guardrail_status == "silent":
             _persist_chat_turn(db, req, "（数据中转，自动静默）", guardrail_status)
@@ -729,7 +733,7 @@ async def proxy_chat(
     # safe_query 始终从原始 query 构造（bridge_meta 需要原始内容）
     safe_query = _sanitize_prompt_text(req.query, MAX_QUERY_CHARS)
     # 当 injection 时 enriched_query 已在分类器中设置，跳过常规组装
-    if not (req.classification_request and guardrail_status == "injection"):
+    if not (_classifier_ran and guardrail_status == "injection"):
         chat_type = "私聊" if str(req.session_id).startswith("private_") else "群聊"
         enriched_query = (
             f"[{chat_type}] 当前用户输入：\n"

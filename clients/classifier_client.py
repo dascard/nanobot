@@ -83,6 +83,9 @@ class Guardrail:
         data = json.dumps(payload).encode("utf-8")
         url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
 
+        logger.info("  [classifier] >> Qwen: %s | message: %.80s",
+                     url, message)
+
         req = urllib.request.Request(
             url,
             data=data,
@@ -95,8 +98,12 @@ class Guardrail:
 
         content = body["choices"][0]["message"]["content"]
 
+        logger.info("  [classifier] << Qwen raw: %.120s", content)
+
         # Strip think/thought blocks that Qwen may produce
         content = THINK_PATTERN.sub("", content).strip()
+
+        logger.info("  [classifier] << Qwen cleaned: %.120s", content)
         return content
 
     # ── L3: Output Validation ──
