@@ -9,3 +9,4 @@ clients/data/*.json
 node_modules/
 workspace/*
 !workspace/README.md
+sentinel/
