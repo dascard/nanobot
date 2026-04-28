@@ -68,18 +68,27 @@ class Guardrail:
         if cls._sentinel is not None:
             return cls._sentinel
         try:
-            from transformers import pipeline
+            from transformers import (
+                AutoModelForSequenceClassification,
+                AutoTokenizer,
+                pipeline,
+            )
 
             model_path = os.environ.get("SENTINEL_MODEL_PATH", "./sentinel")
             logger.info("Loading sentinel from: %s", model_path)
+            tokenizer = AutoTokenizer.from_pretrained(model_path)
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_path, torch_dtype="float16",
+            )
             cls._sentinel = pipeline(
                 "text-classification",
-                model=model_path,
+                model=model,
+                tokenizer=tokenizer,
                 device=-1,
                 max_length=512,
                 truncation=True,
             )
-            logger.info("Sentinel loaded")
+            logger.info("Sentinel loaded, labels=%s", model.config.id2label)
         except ImportError:
             logger.warning("transformers not installed, injection detection disabled")
             cls._sentinel = False
@@ -107,7 +116,7 @@ class Guardrail:
             label = result[0]["label"].upper() if result else ""
             score = result[0]["score"] if result else 0.0
 
-            is_injection = "INJECTION" in label and score >= 0.5
+            is_injection = "JAILBREAK" in label and score >= 0.5
             if is_injection:
                 logger.warning("Sentinel detected injection: label=%s score=%.3f", label, score)
             return is_injection
