@@ -10,6 +10,10 @@ duckduckgo-search
 pandas
 tabulate
 
+# ── Prompt Injection Sentinel (L1 guardrail) ──
+transformers>=4.40.0
+torch>=2.0.0
+
 # ── Tests ──
 pytest>=7.0.0
 pytest-mock>=3.10.0
