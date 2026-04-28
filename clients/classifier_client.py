@@ -192,8 +192,8 @@ class Guardrail:
         try:
             response_text = self._call_qwen(message)
         except Exception as exc:
-            logger.warning("Qwen call failed: %s", exc)
-            return {"status": "injection", "complexity": 0}
+            logger.warning("Qwen call failed, fallback to reply: %s", exc)
+            return {"status": "reply", "complexity": 5}
 
         # L3: Output validation
         is_valid, type_str, complexity = self._validate_output(response_text)
