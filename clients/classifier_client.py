@@ -38,13 +38,16 @@ class Guardrail:
             re.compile(p) for p in GUARDRAIL_INJECTION_PATTERNS
         ]
         self._system_prompt = (
-            "你是消息过滤器。判断私聊消息是否需要回复，及复杂度。\n\n"
-            "需要回复输出: 是,数字\n"
-            "不需要回复输出: 否,数字\n\n"
-            "数字=复杂度 1-10（1你好谢谢/5普通/9很难）\n"
-            "纯链接/密钥/文件路径无对话文字 → 否\n\n"
-            "示例: 你好 → 是,1  |  sk-abc123 → 否,0  |  帮我写代码 → 是,6\n\n"
-            "直接输出。禁止思考推理。"
+            "判断是否需要回复。\n"
+            "疑问、请求、讨论、任何带对话文字的 → 是,\n"
+            "只有纯链接/密钥/文件路径无对话文字 → 否,\n"
+            "不确定就回 是,\n\n"
+            "逗号后跟复杂度 1-10。1=你好谢谢 3=简单 5=普通 7=分析 9=很难 10=推理题。\n\n"
+            "示例: 你好 → 是,1\n"
+            "sk-abc → 否,0\n"
+            "帮我写代码 → 是,6\n"
+            "总结群聊讨论了什么 → 是,7\n\n"
+            "只输出 是,数字 或 否,数字。禁止思考。"
         )
 
     # ── L1: Input Sanitization ──
@@ -100,8 +103,12 @@ class Guardrail:
 
         logger.info("  [classifier] << Qwen raw: %.120s", content)
 
-        # Strip think/thought blocks that Qwen may produce
-        content = THINK_PATTERN.sub("", content).strip()
+        # Strip think blocks iteratively — Qwen can produce nested ones
+        for _ in range(5):
+            prev = content
+            content = THINK_PATTERN.sub("", content).strip()
+            if content == prev:
+                break
 
         logger.info("  [classifier] << Qwen cleaned: %.120s", content)
         return content
@@ -118,7 +125,14 @@ class Guardrail:
                       Forced to 0 when type="否" and raw_complexity > 2
                       (model is confused).
         """
-        match = OUTPUT_PATTERN.match(text.strip())
+        stripped = text.strip()
+        # Allow bare "是" (no complexity) — default to 5
+        if stripped in ("是", "是，"):
+            return (True, "是", 5)
+        if stripped in ("否", "否，"):
+            return (True, "否", 0)
+
+        match = OUTPUT_PATTERN.match(stripped)
         if not match:
             return (False, "", 0)
 
