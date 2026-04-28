@@ -40,15 +40,27 @@ class Guardrail:
         self._system_prompt = (
             "判断是否需要回复。\n"
             "疑问、请求、讨论、任何带对话文字的 → 是,\n"
-            "只有纯链接/密钥/文件路径无对话文字 → 否,\n"
+            "即使消息中含链接/密钥/路径，只要有人类对话文字就判是,\n"
+            "只有纯链接/密钥/文件路径/空白 → 否,\n"
             "不确定就回 是,\n\n"
             "逗号后跟复杂度 1-10。1=你好谢谢 3=简单 5=普通 7=分析 9=很难 10=推理题。\n\n"
             "示例: 你好 → 是,1\n"
+            "... → 是,1\n"
+            "[图片] → 是,3\n"
             "sk-abc → 否,0\n"
+            "   → 否,0\n"
             "帮我写代码 → 是,6\n"
+            "sk-abc过期了怎么办 → 是,5\n"
             "总结群聊讨论了什么 → 是,7\n\n"
             "只输出 是,数字 或 否,数字。禁止思考。"
         )
+
+    # ── L0: Message Preprocessing ──
+
+    # Prefixes that confuse the model into thinking it's a system instruction
+    _CONFUSING_PREFIXES = re.compile(
+        r"^\s*[\[<]\s*(?:SYSTEM|system|INST|PROMPT|INSTRUCTION|CMD)[\s\]>]+",
+    )
 
     # ── L1: Input Sanitization ──
 
@@ -80,8 +92,8 @@ class Guardrail:
                 {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": message},
             ],
-            "max_tokens": 30,
-            "temperature": 0,
+            "max_tokens": 100,
+            "temperature": 0.3,
         }
         data = json.dumps(payload).encode("utf-8")
         url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
@@ -96,7 +108,10 @@ class Guardrail:
             method="POST",
         )
 
-        response = urllib.request.urlopen(req, timeout=CLASSIFIER_TIMEOUT)
+        # 绕过本地 HTTP 代理（Clash 等），直连内网 llama-server
+        proxy_handler = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(proxy_handler)
+        response = opener.open(req, timeout=CLASSIFIER_TIMEOUT)
         body = json.loads(response.read().decode("utf-8"))
 
         content = body["choices"][0]["message"]["content"]
@@ -160,9 +175,18 @@ class Guardrail:
           status: "reply" | "silent" | "injection"
           complexity: int (0 for silent/injection, 1-10 for reply)
         """
-        # L1: Input sanitization
+        # L0: 空消息或纯空白直接静默，无需走模型
+        if not message or not message.strip():
+            return {"status": "silent", "complexity": 0}
+
+        # L1: Input sanitization (检查原始消息)
         if self._sanitize_input(message):
             return {"status": "injection", "complexity": 0}
+
+        # L1.5: 去掉误导性前缀标记（[SYSTEM] 等）后再发给模型
+        message = self._CONFUSING_PREFIXES.sub("", message).strip()
+        if not message:
+            return {"status": "silent", "complexity": 0}
 
         # L2 + L4: Call Qwen (L4 = timeout handled by urlopen)
         try:
