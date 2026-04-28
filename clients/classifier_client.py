@@ -12,6 +12,8 @@ import logging
 import re
 import urllib.request
 
+import os
+
 from config import (
     CLASSIFIER_API_URL,
     CLASSIFIER_TIMEOUT,
@@ -73,15 +75,22 @@ class Guardrail:
         try:
             from transformers import pipeline
 
-            logger.info("Loading prompt-injection-sentinel model...")
+            model_path = os.environ.get("SENTINEL_MODEL_PATH", "/app/models/sentinel")
+            if os.path.isdir(model_path):
+                logger.info("Loading sentinel from local path: %s", model_path)
+                model_id = model_path
+            else:
+                logger.info("Local path %s not found, falling back to HuggingFace", model_path)
+                model_id = "qualifire/prompt-injection-sentinel"
+
             cls._sentinel = pipeline(
                 "text-classification",
-                model="qualifire/prompt-injection-sentinel",
+                model=model_id,
                 device=-1,
                 max_length=512,
                 truncation=True,
             )
-            logger.info("Sentinel model loaded")
+            logger.info("Sentinel model loaded from: %s", model_id)
         except ImportError:
             logger.warning(
                 "transformers not installed — injection detection disabled. "
