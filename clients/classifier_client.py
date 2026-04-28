@@ -1,7 +1,7 @@
 """
 Private chat classifier guardrail — 4-layer defense.
 
-L1: Input sanitization (regex injection detection)
+L1: 模型注入检测 (prompt-injection-sentinel)
 L2: Qwen model call (llama.cpp server)
 L3: Output validation (strict format)
 L4: Timeout (5s → treated as injection)
@@ -15,7 +15,6 @@ import urllib.request
 from config import (
     CLASSIFIER_API_URL,
     CLASSIFIER_TIMEOUT,
-    GUARDRAIL_INJECTION_PATTERNS,
 )
 
 logger = logging.getLogger("nanobot.classifier")
@@ -29,14 +28,16 @@ THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 # Control characters to strip (exclude \n, \t, \r)
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
+# L1 注入检测阈值
+INJECTION_THRESHOLD = 0.5
+
 
 class Guardrail:
     """4-layer guardrail for private message classification."""
 
+    _sentinel: object | None = None  # 类级别缓存，所有实例共享
+
     def __init__(self):
-        self._injection_regexes = [
-            re.compile(p) for p in GUARDRAIL_INJECTION_PATTERNS
-        ]
         self._system_prompt = (
             "判断是否需要回复。\n"
             "疑问、请求、讨论、任何带对话文字的 → 是,\n"
@@ -62,23 +63,62 @@ class Guardrail:
         r"^\s*[\[<]\s*(?:SYSTEM|system|INST|PROMPT|INSTRUCTION|CMD)[\s\]>]+",
     )
 
-    # ── L1: Input Sanitization ──
+    # ── L1: Model-based Injection Detection ──
 
-    def _sanitize_input(self, message: str) -> bool:
-        """Normalize input and detect prompt injection patterns.
+    @classmethod
+    def _load_sentinel(cls):
+        """Lazy-load prompt-injection-sentinel model (class-level cache)."""
+        if cls._sentinel is not None:
+            return cls._sentinel
+        try:
+            from transformers import pipeline
 
-        Returns True if an injection pattern is found (message must be rejected).
-        """
-        # Normalize newlines
-        sanitized = message.replace("\r\n", "\n").replace("\r", "\n")
-        # Strip control characters
-        sanitized = CONTROL_CHAR_PATTERN.sub("", sanitized)
+            logger.info("Loading prompt-injection-sentinel model...")
+            cls._sentinel = pipeline(
+                "text-classification",
+                model="qualifire/prompt-injection-sentinel",
+                device=-1,
+                max_length=512,
+                truncation=True,
+            )
+            logger.info("Sentinel model loaded")
+        except ImportError:
+            logger.warning(
+                "transformers not installed — injection detection disabled. "
+                "Install: pip install transformers torch"
+            )
+            cls._sentinel = False
+        except Exception as e:
+            logger.error("Failed to load sentinel model: %s", e)
+            cls._sentinel = False
+        return cls._sentinel
 
-        for regex in self._injection_regexes:
-            if regex.search(sanitized):
-                logger.warning("Injection pattern matched: %s", regex.pattern)
-                return True
-        return False
+    @classmethod
+    def _detect_injection(cls, message: str) -> bool:
+        """Run sentinel model on message. Returns True if injection detected."""
+        sentinel = cls._load_sentinel()
+        if sentinel is False or sentinel is None:
+            return False  # model unavailable → fail open
+
+        try:
+            # Normalize
+            text = message.replace("\r\n", "\n").replace("\r", "\n")
+            text = CONTROL_CHAR_PATTERN.sub("", text)
+            if not text.strip():
+                return False
+
+            result = sentinel(text[:1024])  # truncate to avoid excess tokens
+            # result is list of dicts: [{"label": "INJECTION", "score": 0.97}]
+            label = result[0]["label"].upper() if result else ""
+            score = result[0]["score"] if result else 0.0
+
+            is_injection = "INJECTION" in label and score >= INJECTION_THRESHOLD
+            if is_injection:
+                logger.warning("Sentinel detected injection: label=%s score=%.3f", label, score)
+            return is_injection
+        except Exception as e:
+            logger.error("Sentinel inference failed: %s", e)
+            return False  # fail open
 
     # ── L2: Qwen Call ──
 
@@ -179,8 +219,8 @@ class Guardrail:
         if not message or not message.strip():
             return {"status": "silent", "complexity": 0}
 
-        # L1: Input sanitization (检查原始消息)
-        if self._sanitize_input(message):
+        # L1: 模型注入检测（检查原始消息）
+        if self._detect_injection(message):
             return {"status": "injection", "complexity": 0}
 
         # L1.5: 去掉误导性前缀标记（[SYSTEM] 等）后再发给模型
