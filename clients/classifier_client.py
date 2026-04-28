@@ -1,18 +1,17 @@
 """
 Private chat classifier guardrail — 4-layer defense.
 
-L1: 模型注入检测 (prompt-injection-sentinel)
+L1: 模型注入检测 (prompt-injection-sentinel, transformers pipeline)
 L2: Qwen model call (llama.cpp server)
 L3: Output validation (strict format)
-L4: Timeout (5s → treated as injection)
+L4: Timeout fallback
 """
 
 import json
 import logging
+import os
 import re
 import urllib.request
-
-import os
 
 from config import (
     CLASSIFIER_API_URL,
@@ -29,10 +28,6 @@ THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 # Control characters to strip (exclude \n, \t, \r)
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
-
-# L1 注入检测阈值
-INJECTION_THRESHOLD = 0.5
-
 
 class Guardrail:
     """4-layer guardrail for private message classification."""
@@ -69,36 +64,27 @@ class Guardrail:
 
     @classmethod
     def _load_sentinel(cls):
-        """Lazy-load prompt-injection-sentinel model (class-level cache)."""
+        """Lazy-load sentinel model from local ./sentinel (class-level cache)."""
         if cls._sentinel is not None:
             return cls._sentinel
         try:
             from transformers import pipeline
 
-            model_path = os.environ.get("SENTINEL_MODEL_PATH", "/app/models/sentinel")
-            if os.path.isdir(model_path):
-                logger.info("Loading sentinel from local path: %s", model_path)
-                model_id = model_path
-            else:
-                logger.info("Local path %s not found, falling back to HuggingFace", model_path)
-                model_id = "qualifire/prompt-injection-sentinel"
-
+            model_path = os.environ.get("SENTINEL_MODEL_PATH", "./sentinel")
+            logger.info("Loading sentinel from: %s", model_path)
             cls._sentinel = pipeline(
                 "text-classification",
-                model=model_id,
+                model=model_path,
                 device=-1,
                 max_length=512,
                 truncation=True,
             )
-            logger.info("Sentinel model loaded from: %s", model_id)
+            logger.info("Sentinel loaded")
         except ImportError:
-            logger.warning(
-                "transformers not installed — injection detection disabled. "
-                "Install: pip install transformers torch"
-            )
+            logger.warning("transformers not installed, injection detection disabled")
             cls._sentinel = False
         except Exception as e:
-            logger.error("Failed to load sentinel model: %s", e)
+            logger.error("Failed to load sentinel: %s", e)
             cls._sentinel = False
         return cls._sentinel
 
@@ -121,7 +107,7 @@ class Guardrail:
             label = result[0]["label"].upper() if result else ""
             score = result[0]["score"] if result else 0.0
 
-            is_injection = "INJECTION" in label and score >= INJECTION_THRESHOLD
+            is_injection = "INJECTION" in label and score >= 0.5
             if is_injection:
                 logger.warning("Sentinel detected injection: label=%s score=%.3f", label, score)
             return is_injection
@@ -141,8 +127,8 @@ class Guardrail:
                 {"role": "system", "content": self._system_prompt},
                 {"role": "user", "content": message},
             ],
-            "max_tokens": 100,
-            "temperature": 0.3,
+            "max_tokens": 30,
+            "temperature": 0,
         }
         data = json.dumps(payload).encode("utf-8")
         url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
