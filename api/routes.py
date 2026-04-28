@@ -262,6 +262,9 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id, role="user", content=user_content))
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id, role="assistant", content=answer))
     db.commit()
+    from core.evolution import _evolution_running
+    if req.user_id in _evolution_running:
+        return 0  # 进化正在跑，本轮不计入阈值
     return db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
 
 

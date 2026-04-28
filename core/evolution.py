@@ -18,6 +18,7 @@ logger = logging.getLogger("nanobot.evolution")
 # 进化锁：同一用户不可并发触发
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
+_evolution_running: set[str] = set()  # 当前正在跑进化的 user_id
 
 def _get_lock(user_id: str) -> threading.Lock:
     with _locks_guard:
@@ -66,9 +67,10 @@ def evolution_task(user_id: str) -> None:
     """
     lock = _get_lock(user_id)
     if not lock.acquire(blocking=False):
-        logger.warning(f"Evolution already running for [{user_id}], skipping.")
+        logger.debug(f"Evolution already running for [{user_id}], skipping.")
         return
 
+    _evolution_running.add(user_id)
     memory = None
     try:
         logger.info(f"══════ KT Evolution START [{user_id}] ══════")
@@ -97,6 +99,7 @@ def evolution_task(user_id: str) -> None:
     finally:
         if memory is not None:
             memory.close()
+        _evolution_running.discard(user_id)
         lock.release()
 
 def model_scout_task() -> None:

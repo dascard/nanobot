@@ -66,12 +66,18 @@ class SQLAnalysisTool(BaseTool):
         forbidden = [
             "insert", "update", "delete", "drop", "alter", "create", "attach",
             "detach", "replace", "truncate", "grant", "revoke", "vacuum", "reindex",
-            "pragma", "begin", "commit", "rollback",
+            "begin", "commit", "rollback",
         ]
-        if any(re.search(rf"\b{kw}\b", lowered) for kw in forbidden):
+        # Read-only PRAGMA (table_info, index_list etc.) — allowed
+        is_readonly_pragma = bool(re.match(
+            r"^pragma\s+(table_|index_|foreign_key_list|compile_options"
+            r"|database_list|collation_list|function_list)\b", lowered))
+        if not is_readonly_pragma and any(re.search(rf"\b{kw}\b", lowered) for kw in forbidden):
             return False, "Only read-only SELECT/CTE queries are permitted"
 
-        # Allow SELECT and WITH ... SELECT
+        # Allow SELECT, WITH ... SELECT, and read-only PRAGMA
+        if is_readonly_pragma:
+            return True, ""
         if re.match(r"^(select|with)\b", lowered) is None:
             return False, "Query must start with SELECT or WITH"
 
