@@ -79,7 +79,7 @@ DAILY_DIGEST_ENABLED = os.environ.get("DAILY_DIGEST_ENABLED", "1") == "1"
 DAILY_DIGEST_HOUR = int(os.environ.get("DAILY_DIGEST_HOUR", "4"))
 
 # ── 私聊分类器 ──
-CLASSIFIER_API_URL = os.environ.get("CLASSIFIER_API_URL", "http://10.60.42.158:8080/v1")
+CLASSIFIER_API_URL = os.environ.get("CLASSIFIER_API_URL", "http://10.60.42.158:9999/v1")
 CLASSIFIER_TIMEOUT = float(os.environ.get("CLASSIFIER_TIMEOUT", "5.0"))
 GUARDRAIL_INJECTION_PATTERNS = [
     r'\[SYSTEM', r'\[INST\]', r'</?system>', r'</?user>',

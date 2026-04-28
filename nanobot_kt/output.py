@@ -55,6 +55,7 @@ class BufferedOutput(BaseOutputModule):
     def __init__(self, **kwargs: Any):
         super().__init__()
         self._buffer: list[str] = []
+        self._saved: str = ""  # clear_all 后仍可恢复
         self._complete_event = asyncio.Event()
         self._stream_queue: asyncio.Queue[dict[str, Any]] | None = None
 
@@ -87,15 +88,17 @@ class BufferedOutput(BaseOutputModule):
         self._complete_event.clear()
 
     async def on_processing_end(self) -> None:
-        final_len = len("".join(self._buffer))
-        logger.info(f"[BufferedOutput.on_processing_end] processing complete, final_buffer_len={final_len}")
+        self._saved = "".join(self._buffer)  # 快照：防止 KT 框架 clear_all 清空
+        logger.info(f"[BufferedOutput.on_processing_end] processing complete, final_buffer_len={len(self._saved)}")
         self._complete_event.set()
 
     def get_response(self) -> str:
-        return "".join(self._buffer)
+        buf = "".join(self._buffer)
+        return buf if buf else self._saved
 
     def clear(self) -> None:
         self._buffer.clear()
+        self._saved = ""
         self._complete_event.clear()
 
     def on_activity(self, activity_type: str, detail: str, **kwargs: Any) -> None:

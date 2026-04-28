@@ -822,14 +822,38 @@ async def proxy_chat(
                     background_tasks.add_task(evolution_task, req.user_id)
                 yield f"data: {json.dumps({'status': 'done', 'answer': answer}, ensure_ascii=False)}\n\n"
         finally:
-            if not runner_task.done():
-                runner_task.cancel()
             if not persisted:
-                try:
-                    _persist_chat_turn(db, req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
-                    logger.warning(f"[/chat] Stream aborted before completion, fallback persisted: user={req.user_id}, session={req.session_id}")
-                except Exception as pe:
-                    logger.error(f"[/chat] Stream fallback persist failed: {pe}")
+                if runner_task.done():
+                    try:
+                        _persist_chat_turn(db, req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
+                    except Exception as pe:
+                        logger.error(f"[/chat] Stream fallback persist failed: {pe}")
+                else:
+                    # 客户端断连但 runner 还在跑 → 后台继续，完成后 push 结果
+                    async def _finish_and_push():
+                        try:
+                            answer = await runner_task
+                            if answer and answer.strip():
+                                _persist_chat_turn(db, req, answer, guardrail_status)
+                                from core.daily_digest import push_to_qq
+                                await push_to_qq(
+                                    "private" if not bridge_meta.get("is_group") else "group",
+                                    req.user_id,
+                                    answer,
+                                )
+                                logger.info(
+                                    f"[/chat] Stream-aborted result pushed: "
+                                    f"user={req.user_id}, len={len(answer)}"
+                                )
+                            else:
+                                _persist_chat_turn(db, req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
+                        except Exception as e:
+                            logger.error(f"[/chat] Background finish failed: {e}")
+                    background_tasks.add_task(_finish_and_push)
+                    logger.warning(
+                        f"[/chat] Stream aborted, running in background: "
+                        f"user={req.user_id}, session={req.session_id}"
+                    )
             done.set()
 
     if req.stream:

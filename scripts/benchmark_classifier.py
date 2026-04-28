@@ -9,7 +9,7 @@ import re
 import time
 import urllib.request
 
-QWEN_URL = "http://10.60.42.158:8080/v1/chat/completions"
+QWEN_URL = "http://10.60.42.158:9999/v1/chat/completions"
 TIMEOUT = 10.0
 DELAY_BETWEEN = 0.3  # 请求间隔（秒），避免打爆 llama.cpp
 
