@@ -20,8 +20,9 @@ class ScheduleTaskTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "管理定时推送任务。支持创建、查看、修改、启停和删除。"
-            "用户说'每天X点推送Y'时创建，'看看定时任务'时列出，'停掉XX任务'时禁用。"
+            "管理定时推送任务。支持创建、查看、修改、启停、立即执行和删除。"
+            "用户说'每天X点推送Y'时创建，'看看定时任务'时列出，"
+            "'停掉XX任务'时禁用，'现在执行XX任务'时立即运行。"
         )
 
     @property
@@ -34,8 +35,8 @@ class ScheduleTaskTool(BaseTool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "create(创建) | list(列出全部) | update(修改) | toggle(启停) | delete(删除)",
-                    "enum": ["create", "list", "update", "toggle", "delete"],
+                    "description": "create(创建) | list(列出) | update(修改) | toggle(启停) | run(立即执行) | delete(删除)",
+                    "enum": ["create", "list", "update", "toggle", "run", "delete"],
                 },
                 "task_id": {"type": "integer", "description": "任务ID（update/toggle/delete 必填）"},
                 "name": {"type": "string", "description": "任务名（create/update）"},
@@ -69,6 +70,30 @@ class ScheduleTaskTool(BaseTool):
                             f"| ->{t.target_type}/{t.target_id} | 上次={last}"
                         )
                     return ToolResult(output="\n".join(lines), exit_code=0)
+
+                if action == "run":
+                    if not task_id:
+                        return ToolResult(error="run 需要 task_id")
+                    t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
+                    if not t:
+                        return ToolResult(error=f"任务 {task_id} 不存在")
+                    from core.daily_digest import _generate_task_message, push_to_qq
+
+                    logger.info(f"[schedule_task] Manual run: {t.name}")
+                    content = await _generate_task_message(t)
+                    if not content:
+                        return ToolResult(error=f"任务 {t.name} 生成内容失败")
+                    ok = await push_to_qq(t.target_type, t.target_id, content)
+                    if ok:
+                        from datetime import datetime
+                        t.last_run_at = datetime.now()
+                        db.commit()
+                        preview = content[:200] + ("..." if len(content) > 200 else "")
+                        return ToolResult(
+                            output=f"任务 {t.name} 已执行并推送 → {t.target_type}/{t.target_id}\n预览: {preview}",
+                            exit_code=0,
+                        )
+                    return ToolResult(error=f"任务 {t.name} 推送失败")
 
                 if action == "delete":
                     if not task_id:

@@ -268,18 +268,29 @@ async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
 # ── 定时任务调度 ──
 
 async def _generate_task_message(task: ScheduledTask) -> str | None:
-    """用 LLM 根据模板生成推送内容。"""
+    """用 LLM 根据模板生成推送内容（带 10 分钟超时保护）。"""
     from clients.new_api_client import NewAPIClient
     from config import NEW_API_KEY, NEW_API_BASE_URL
 
     try:
-        client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+        client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=60)
         messages = [{"role": "user", "content": task.prompt_template}]
-        resp = await client.chat_completion(messages=messages, model_tier="fast")
+        resp = await asyncio.wait_for(
+            client.chat_completion(messages=messages, model_tier="fast"),
+            timeout=600,
+        )
         if isinstance(resp, dict) and "choices" in resp:
             return resp["choices"][0]["message"]["content"]
+        # 返回体无 choices——可能是 API 错误或 free 模型被限流
+        error_detail = resp.get("error", {}) if isinstance(resp, dict) else "null"
+        logger.error(f"Task [{task.name}] LLM returned no choices: "
+                      f"resp_type={type(resp).__name__}, "
+                      f"error={str(error_detail)[:200]}, "
+                      f"keys={list(resp.keys()) if isinstance(resp, dict) else 'N/A'}")
+    except asyncio.TimeoutError:
+        logger.error(f"Task [{task.name}] LLM call timed out (10min)")
     except Exception as e:
-        logger.error(f"Task [{task.name}] LLM call failed: {e}")
+        logger.exception(f"Task [{task.name}] LLM call failed: {e}")
     return None
 
 
@@ -298,6 +309,7 @@ async def run_scheduled_tasks() -> int:
             logger.info(f"Running scheduled task: {task.name}")
             content = await _generate_task_message(task)
             if not content:
+                logger.warning(f"Task [{task.name}] skipped: LLM returned empty/no content")
                 continue
 
             ok = await push_to_qq(task.target_type, task.target_id, content)
@@ -305,6 +317,9 @@ async def run_scheduled_tasks() -> int:
                 task.last_run_at = now
                 db.commit()
                 executed += 1
+                logger.info(f"Task [{task.name}] completed and pushed")
+            else:
+                logger.error(f"Task [{task.name}] push_to_qq failed")
     except Exception as e:
         logger.exception(f"Scheduled tasks runner failed: {e}")
     finally:

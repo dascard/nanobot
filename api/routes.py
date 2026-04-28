@@ -1182,6 +1182,29 @@ def toggle_scheduled_task(task_id: int, db: Session = Depends(get_db), _auth=Dep
     db.commit()
     return {"status": "ok", "enabled": bool(t.enabled)}
 
+@router.post("/tasks/{task_id}/run")
+async def run_scheduled_task_now(task_id: int, db: Session = Depends(get_db), _auth=Depends(verify_token)):
+    """立即执行指定定时任务（生成内容并推送）。"""
+    from core.database import ScheduledTask as ST
+    from core.daily_digest import _generate_task_message, push_to_qq
+
+    t = db.query(ST).filter(ST.id == task_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    logger.info(f"Manual run: {t.name}")
+    content = await _generate_task_message(t)
+    if not content:
+        raise HTTPException(status_code=500, detail="LLM returned no content")
+
+    ok = await push_to_qq(t.target_type, t.target_id, content)
+    if ok:
+        t.last_run_at = datetime.now()
+        db.commit()
+        return {"status": "ok", "content": content[:200], "target": f"{t.target_type}/{t.target_id}"}
+    raise HTTPException(status_code=502, detail="Push to QQ failed")
+
+
 @router.delete("/tasks/{task_id}")
 def delete_scheduled_task(task_id: int, db: Session = Depends(get_db), _auth=Depends(verify_token)):
     """删除定时任务。"""

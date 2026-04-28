@@ -266,6 +266,9 @@ class NewAPIClient:
                         f"tiers={tiers}"
                     )
                     return models
+            except asyncio.TimeoutError:
+                logger.warning("new-api model list timed out")
+                return []
             except aiohttp.ClientError as e:
                 logger.warning(f"new-api model list network error: {e}")
                 return []
@@ -573,6 +576,12 @@ class NewAPIClient:
                                 logger.warning(f"new-api: {target_model} failed ({last_error}), switching")
                                 break  # exhausted retries, move to next model
 
+                    except asyncio.TimeoutError as e:
+                        last_error = f"timeout: {e}"
+                        if tracker is not None:
+                            asyncio.create_task(tracker.record_failure(target_model))
+                        logger.warning(f"new-api timeout: {target_model}, switching")
+                        break
                     except aiohttp.ClientError as e:
                         last_error = str(e)
                         if tracker is not None:
@@ -648,6 +657,11 @@ class NewAPIClient:
                         except json.JSONDecodeError:
                             continue
 
+            except asyncio.TimeoutError:
+                logger.error("new-api stream timed out")
+                if tracker is not None:
+                    asyncio.create_task(tracker.record_failure(target_model))
+                yield {"error": "Timeout", "detail": "stream timed out"}
             except aiohttp.ClientError as e:
                 logger.error(f"new-api stream error: {e}")
                 if tracker is not None:
