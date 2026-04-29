@@ -72,13 +72,6 @@ async def lifespan(app: FastAPI):
     task_thread.start()
     logger.info("Scheduled task runner initialized.")
 
-    # Pre-load sentinel model at startup (not lazily on first message)
-    try:
-        from clients.classifier_client import Guardrail
-        Guardrail._load_sentinel()
-    except Exception as e:
-        logger.warning(f"Sentinel pre-load failed (will retry on first classify): {e}")
-
     # Initialize KT Framework bridge (replaces old manual controller)
     from nanobot_kt.bridge import init_bridge, shutdown_bridge
     bridge = await init_bridge()
