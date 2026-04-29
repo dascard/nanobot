@@ -753,9 +753,6 @@ async def proxy_chat(
                 is_first = True
                 buf = _private_buffers[req.user_id] = {
                     "queries": [merged],
-                    "qwen_task": asyncio.create_task(
-                        asyncio.to_thread(guardrail.classify, merged)
-                    ),
                     "done": asyncio.Event(),
                     "result": None,
                     "answer": None,
@@ -775,9 +772,6 @@ async def proxy_chat(
                 is_first = True
                 buf = _private_buffers[req.user_id] = {
                     "queries": [merged],
-                    "qwen_task": asyncio.create_task(
-                        asyncio.to_thread(guardrail.classify, merged)
-                    ),
                     "done": asyncio.Event(),
                     "result": None,
                     "answer": None,
@@ -800,25 +794,15 @@ async def proxy_chat(
             buf = _private_buffers.get(req.user_id)
             if buf is None:
                 return {"status": "silent", "user_id": req.user_id}
-            if len(buf["queries"]) > 1:
-                buffered_query = "\n---\n".join(buf["queries"])
-                try:
-                    result = await asyncio.wait_for(
-                        asyncio.to_thread(guardrail.classify, buffered_query),
-                        timeout=CLASSIFIER_TIMEOUT + 2,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning("[/chat] Buffered classify timed out, fallback to reply")
-                    result = {"status": "reply", "complexity": 5}
-            else:
-                buffered_query = merged
-                try:
-                    result = await asyncio.wait_for(
-                        buf["qwen_task"], timeout=CLASSIFIER_TIMEOUT + 2
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning("[/chat] Qwen task timed out, fallback to reply")
-                    result = {"status": "reply", "complexity": 5}
+            buffered_query = "\n---\n".join(buf["queries"]) if len(buf["queries"]) > 1 else merged
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(guardrail.classify, buffered_query),
+                    timeout=CLASSIFIER_TIMEOUT + 2,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[/chat] Classify timed out, fallback to reply")
+                result = {"status": "reply", "complexity": 5}
             buf["result"] = result
 
         guardrail_status = result["status"]
