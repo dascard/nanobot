@@ -25,8 +25,7 @@ class PersonaUpdateTool(BaseTool):
     def description(self) -> str:
         return (
             "更新用户画像。根据最近的对话记录重新分析用户行为偏好并更新画像 JSON。"
-            "仅在用户明确要求（如'更新我的画像''重新建立我的画像'）时调用。"
-            "不要在普通对话中自动调用——画像更新由后台定时任务负责。"
+            "当用户说 '更新我的画像' 'update my persona' 或对话中出现值得记录的新信息时使用。"
         )
 
     @property
