@@ -784,27 +784,14 @@ async def proxy_chat(
                 }
 
         if done_event is not None:
-            # 缓冲期内后续消息：等待第一条完成
+            # 缓冲期内后续消息：等待第一条完成，但不返回 answer
+            # 第一条消息已通过 HTTP 响应返回了 answer，后续消息只静默消费
             await done_event.wait()
-            result = buf["result"]
-            guardrail_status = result["status"]
-            answer = buf["answer"]
-            if guardrail_status == "silent":
-                return {"status": "silent", "user_id": req.user_id}
-            if answer:
-                return {"status": "reply", "answer": answer, "user_id": req.user_id}
-            return {"status": "reply", "user_id": req.user_id}
+            return {"status": "silent", "user_id": req.user_id}
 
         if not is_first:
-            # 缓冲结束 <2s——共享缓存
-            result = buf["result"]
-            guardrail_status = result["status"]
-            answer = buf["answer"]
-            if guardrail_status == "silent":
-                return {"status": "silent", "user_id": req.user_id}
-            if answer:
-                return {"status": "reply", "answer": answer, "user_id": req.user_id}
-            return {"status": "reply", "user_id": req.user_id}
+            # 缓冲结束 <2s——静默消费（第一条已返回 answer）
+            return {"status": "silent", "user_id": req.user_id}
 
         # 第一条消息：等 5s + 合并 + Qwen
         await asyncio.sleep(5.0)
