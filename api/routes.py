@@ -7,6 +7,7 @@ import logging
 import json
 import asyncio
 import time as _time
+from hmac import compare_digest
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Response
 from fastapi.responses import StreamingResponse
@@ -161,7 +162,7 @@ def verify_token(authorization: str = Header(default="")):
     if not NANOBOT_API_TOKEN:
         return  # 未配置 Token 则跳过认证
     token = authorization.replace("Bearer ", "").strip()
-    if token != NANOBOT_API_TOKEN:
+    if not compare_digest(token, NANOBOT_API_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing API token")
 
 

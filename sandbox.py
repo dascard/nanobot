@@ -141,7 +141,7 @@ sys.meta_path.insert(0, _ImportBlocker())
 
 # ── Phase 2: Remove dangerous builtins ──
 import builtins as _builtins
-_dangerous_builtins = ["open", "input", "breakpoint"]
+_dangerous_builtins = ["open", "input", "breakpoint", "eval", "exec", "compile", "__import__"]
 for _name in _dangerous_builtins:
     if hasattr(_builtins, _name):
         delattr(_builtins, _name)
