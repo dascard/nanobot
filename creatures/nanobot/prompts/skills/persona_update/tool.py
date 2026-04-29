@@ -137,13 +137,9 @@ class PersonaUpdateTool(BaseTool):
                 if isinstance(new_persona, dict) and new_persona.get("parse_error"):
                     return ToolResult(error=f"Persona generation failed: {new_persona.get('raw', '')[:300]}")
 
-                # 6. Mark logs as processed BEFORE saving (防止进化死循环)
-                log_ids = [log.id for log in logs]
-                memory = SQLiteMemory()
-                memory.mark_logs_processed(log_ids)
-
-                # 7. Save persona to DB
+                # 6. Save to DB
                 new_json = json.dumps(new_persona, ensure_ascii=False)
+                memory = SQLiteMemory()
                 memory.update_persona_and_prompt(user_id, new_json, "")
 
                 # 7. Build readable summary of what changed

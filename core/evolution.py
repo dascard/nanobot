@@ -15,10 +15,14 @@ from config import (
 
 logger = logging.getLogger("nanobot.evolution")
 
+import time as _time
+
 # 进化锁：同一用户不可并发触发
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 _evolution_running: set[str] = set()  # 当前正在跑进化的 user_id
+_last_attempt: dict[str, float] = {}  # 用户上次进化尝试的时间戳
+EVOLUTION_COOLDOWN_SECONDS = 300  # 同一用户两次进化之间最少间隔 5 分钟
 
 def _get_lock(user_id: str) -> threading.Lock:
     with _locks_guard:
@@ -65,6 +69,13 @@ def evolution_task(user_id: str) -> None:
     """
     进化任务入口：委托给 KT 控制器执行。
     """
+    # 冷却检查：防止每轮聊天反复触发（如 API 失败导致 logs 未标记为已处理）
+    now = _time.time()
+    last = _last_attempt.get(user_id, 0)
+    if now - last < EVOLUTION_COOLDOWN_SECONDS:
+        logger.debug(f"Evolution cooldown for [{user_id}], {now - last:.0f}s since last attempt")
+        return
+
     lock = _get_lock(user_id)
     if not lock.acquire(blocking=False):
         logger.debug(f"Evolution already running for [{user_id}], skipping.")
@@ -97,6 +108,7 @@ def evolution_task(user_id: str) -> None:
     except Exception as e:
         logger.error(f"KT Evolution FAILED [{user_id}]: {e}", exc_info=True)
     finally:
+        _last_attempt[user_id] = _time.time()
         if memory is not None:
             memory.close()
         _evolution_running.discard(user_id)
