@@ -595,7 +595,7 @@ class NanobotKTController:
                 except (json.JSONDecodeError, KeyError):
                     args = {}
                 
-                logger.info(f"  [Tool Call] {func_name}({args})")
+                logger.info(f"  [Tool Call] {func_name}(keys={list(args.keys())})")
                 
                 # Run sync tool in thread to avoid blocking
                 result = await asyncio.to_thread(self._execute_native_tool, func_name, args)

@@ -6,6 +6,7 @@ Persona 预处理层——LLM 候选提取 + Python 状态机去重/聚类/计�
 - Python: 状态机全权决定 NEW/UPDATE/ARCHIVE、去重、计数、置信度、冲突
 """
 
+import hashlib
 import json
 import logging
 import math
@@ -182,7 +183,7 @@ class PersonaStateMachine:
             try:
                 vec = embed_text(text)
             except Exception as e:
-                logger.warning(f"Embedding failed for '{text[:50]}': {e}")
+                logger.warning(f"Embedding failed for text hash={hashlib.sha256(text.encode()).hexdigest()[:12]}: {e}")
                 continue
 
             domain = c.get("domain", "general")

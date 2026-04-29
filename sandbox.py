@@ -115,13 +115,17 @@ class AnalysisSandbox:
             return f"Sandbox Error: {str(e)}"
 
     def _build_sandbox_script(self, user_code: str) -> str:
-        """构建沙箱脚本：注入安全 import hook + 用户代码"""
+        """构建沙箱脚本：注入安全 import hook + 隔离命名空间执行用户代码。
+
+        关键安全设计：用户代码通过 exec() 在受限 globals 命名空间中执行，
+        无法访问 _setup_os、_setup_builtins 等内部变量。
+        """
         db_path_escaped = self.db_path.replace("\\", "\\\\")
         blocked_json = json.dumps(list(_BLOCKED_MODULES))
+        dangerous_json = json.dumps(["open", "input", "breakpoint", "eval", "exec", "compile", "__import__"])
 
         return textwrap.dedent(f'''\
 import sys
-import os as _os
 
 # ── Phase 1: Install import blocker ──
 _BLOCKED = set({blocked_json})
@@ -139,34 +143,59 @@ class _ImportBlocker:
 
 sys.meta_path.insert(0, _ImportBlocker())
 
-# ── Phase 2: Remove dangerous builtins ──
-import builtins as _builtins
-_dangerous_builtins = ["open", "input", "breakpoint", "eval", "exec", "compile", "__import__"]
-for _name in _dangerous_builtins:
-    if hasattr(_builtins, _name):
-        delattr(_builtins, _name)
-
-# ── Phase 3: Provide safe data access ──
-_conn = None
-try:
-    import sqlite3 as _sqlite3
-    _db_path = "{db_path_escaped}"
-    if _os.path.exists(_db_path):
-        _conn = _sqlite3.connect(_db_path)
-        _conn.execute("PRAGMA query_only = ON")
-    else:
-        print(f"[sandbox] DB not found at {{_db_path}} — sqlite3 available but no connection opened.")
-except Exception as _e:
-    print(f"[sandbox] DB connection skipped: {{type(_e).__name__}}: {{_e}}")
+# ── Phase 2: Build safe import list (whitelist) ──
+_safe_modules = {{}}
+for _mod_name in ["sqlite3", "json", "math", "statistics", "collections", "re", "datetime"]:
+    try:
+        _safe_modules[_mod_name] = __import__(_mod_name)
+    except Exception:
+        pass
 
 try:
-    import pandas as pd
+    import pandas
+    _safe_modules["pd"] = pandas
 except Exception:
-    pd = None
+    _safe_modules["pd"] = None
 
-# ── Phase 4: Execute user code ──
+# ── Phase 3: Open DB connection ──
+_conn = None
+_db_path = "{db_path_escaped}"
+db_exists = False
 try:
-{textwrap.indent(user_code, "    ")}
+    # 仅做文件检查：用 open() 测试路径是否存在，用完即关
+    with open(_db_path, "rb") as _f:
+        db_exists = True
+except Exception:
+    db_exists = False
+
+if db_exists:
+    _conn = _safe_modules["sqlite3"].connect(_db_path)
+    _conn.execute("PRAGMA query_only = ON")
+else:
+    print(f"[sandbox] DB not found at {{_db_path}} — sqlite3 available but no connection opened.")
+
+# ── Phase 4: Build restricted execution namespace ──
+_safe_ns = dict(_safe_modules)
+_safe_ns["conn"] = _conn
+# 移除危险 builtins，只保留安全子集
+import builtins as _b
+_safe_builtins = {{
+    k: getattr(_b, k) for k in dir(_b)
+    if not k.startswith("_") and k not in {dangerous_json}
+}}
+# 补充必要的 builtins
+for _k in ["True", "False", "None", "int", "float", "str", "list", "dict",
+           "tuple", "set", "bool", "bytes", "len", "range", "enumerate",
+           "zip", "map", "filter", "sorted", "reversed", "sum", "min", "max",
+           "abs", "round", "type", "isinstance", "hasattr", "getattr",
+           "print", "format", "iter", "next", "slice", "Exception",
+           "ValueError", "TypeError", "KeyError", "IndexError", "ZeroDivisionError"]:
+    _safe_builtins[_k] = getattr(_b, _k)
+_safe_ns["__builtins__"] = _safe_builtins
+
+# ── Phase 5: Execute user code in isolated namespace ──
+try:
+    exec({json.dumps(user_code)}, _safe_ns)
 except Exception as _e:
     print(f"Execution Error: {{type(_e).__name__}}: {{_e}}")
 finally:
