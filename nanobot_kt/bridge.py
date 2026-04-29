@@ -63,10 +63,7 @@ class NanobotBridge:
         # 检查 controller 配置
         ctrl = getattr(self._agent, 'controller', None)
         if ctrl:
-            logger.info(f"[KT Agent] Controller type: {type(ctrl)}")
-            logger.info(f"[KT Agent] Controller provider: {getattr(ctrl, 'provider', 'N/A')}")
-            logger.info(f"[KT Agent] Controller model: {getattr(ctrl, 'model', 'N/A')}")
-            logger.info(f"[KT Agent] Controller base_url: {getattr(ctrl, 'base_url', 'N/A')}")
+            logger.info(f"[KT Agent] Controller type: {type(ctrl).__name__}")
         else:
             logger.warning("[KT Agent] No controller attribute found! Agent attributes: %s",
                            [a for a in dir(self._agent) if not a.startswith('__')])
