@@ -100,7 +100,16 @@ class PersonaUpdateTool(BaseTool):
                     def __init__(self, c):
                         self.client = c
 
-                    async def invoke_raw(self, query, system_prompt, user_id, model_tier="smart"):
+                    # 画像分析是高复杂度任务，跳过 cost 优先的路由器
+                    _PERSONA_MODEL_MAP = {
+                        "smart": "deepseek-v4-pro",
+                        "reasoning": "deepseek-v4-flash-high",
+                        "fast": "deepseek-v4-flash",
+                    }
+
+                    async def invoke_raw(self, query, system_prompt, user_id, model_tier="smart", manual_model=""):
+                        # manual_model 由调用方指定则用调用方的，否则按 tier 映射
+                        target = manual_model or self._PERSONA_MODEL_MAP.get(model_tier, "")
                         messages = [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": query},
@@ -108,7 +117,8 @@ class PersonaUpdateTool(BaseTool):
                         last_error = ""
                         for attempt in range(3):
                             resp = await self.client.chat_completion(
-                                messages=messages, model_tier=model_tier
+                                messages=messages, model_tier=model_tier,
+                                manual_model=target,
                             )
                             if isinstance(resp, dict) and "choices" in resp:
                                 return resp["choices"][0]["message"]["content"]
