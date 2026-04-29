@@ -10,10 +10,16 @@ import hashlib
 import json
 import logging
 import math
+import os
+import warnings
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
 import numpy as np
+
+# 无 GPU 环境：抑制 CUDA 初始化 warning（PyTorch 会自动降级到 CPU）
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+warnings.filterwarnings("ignore", message=".*CUDA initialization.*")
 from sqlalchemy.orm import Session
 
 from core.database import SessionLocal, PersonaFact, PersonaBehavior
@@ -70,6 +76,8 @@ def _get_embedder():
     if _embedder is None:
         with _embedder_lock:
             if _embedder is None:
+                # 在 torch 首次导入前再次确保 CUDA warning 被抑制
+                warnings.filterwarnings("ignore", message=".*CUDA initialization.*")
                 from sentence_transformers import SentenceTransformer
                 logger.info(f"Loading embedding model: {_EMBEDDER_MODEL}")
                 _embedder = SentenceTransformer(_EMBEDDER_MODEL)
