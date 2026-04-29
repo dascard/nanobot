@@ -1,5 +1,9 @@
 import pytest
 from sqlalchemy import create_engine
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
 import sys

@@ -25,6 +25,12 @@ CONTRADICTION_THRESHOLD = 0.25  # 低于此值视为潜在矛盾（语义反向�
 MAX_FACTS_PER_USER = 100        # 每人最多保留画像条数
 CANONICAL_MIN_LENGTH_RATIO = 0.7  # canonical 保留信息密度比
 
+# 衰减参数
+PREFERENCE_ARCHIVE_DAYS = 90    # 偏好 90 天无更新→归档
+BEHAVIOR_ARCHIVE_DAYS = 45      # 行为 45 天无更新→归档
+PREFERENCE_ARCHIVE_SCORE = 0.1  # 偏好置信度低于此值→归档
+BEHAVIOR_ARCHIVE_SCORE = 0.15   # 行为置信度低于此值→归档
+
 # ── LLM System Prompts ──
 
 CANDIDATE_EXTRACTION_SYSTEM_PROMPT = """你是用户行为观察员。从用户发言中提取所有可能的偏好和特征。
@@ -48,7 +54,10 @@ CANDIDATE_EXTRACTION_SYSTEM_PROMPT = """你是用户行为观察员。从用户�
 }"""
 
 # ── 懒加载 ──
+import threading as _threading
+
 _embedder = None
+_embedder_lock = _threading.Lock()
 _nli_pipeline = None
 
 _EMBEDDER_MODEL = "BAAI/bge-base-zh-v1.5"
@@ -58,9 +67,11 @@ _NLI_MODEL = "roberta-large-mnli"
 def _get_embedder():
     global _embedder
     if _embedder is None:
-        from sentence_transformers import SentenceTransformer
-        logger.info(f"Loading embedding model: {_EMBEDDER_MODEL}")
-        _embedder = SentenceTransformer(_EMBEDDER_MODEL)
+        with _embedder_lock:
+            if _embedder is None:
+                from sentence_transformers import SentenceTransformer
+                logger.info(f"Loading embedding model: {_EMBEDDER_MODEL}")
+                _embedder = SentenceTransformer(_EMBEDDER_MODEL)
     return _embedder
 
 
@@ -154,6 +165,15 @@ class PersonaStateMachine:
         stats = {"created": 0, "merged": 0, "conflicts": 0}
         now = datetime.now()
 
+        # 一次性预取所有现有 facts（避免 N+1：每个候选都单独查询）
+        existing_facts = (
+            self.db.query(PersonaFact)
+            .filter(PersonaFact.user_id == self.user_id)
+            .order_by(PersonaFact.last_seen.desc())
+            .limit(MAX_FACTS_PER_USER)
+            .all()
+        )
+
         for c in candidates:
             text = (c.get("text") or "").strip()
             if not text:
@@ -168,7 +188,7 @@ class PersonaStateMachine:
             domain = c.get("domain", "general")
             evidence = c.get("evidence", "")
 
-            matches = self._find_matches(vec)
+            matches = self._find_matches(vec, existing_facts)
             if not matches:
                 self._create_fact(text, evidence, domain, vec, now)
                 stats["created"] += 1
@@ -219,16 +239,12 @@ class PersonaStateMachine:
 
     # ── 匹配 ──
 
-    def _find_matches(self, vec: np.ndarray, threshold: float = MATCH_THRESHOLD) -> List[Tuple[PersonaFact, float]]:
-        """与每个 cluster 的 centroid 比较，返回 > threshold 的匹配（按相似度降序）。"""
-        existing = (
-            self.db.query(PersonaFact)
-            .filter(PersonaFact.user_id == self.user_id)
-            .order_by(PersonaFact.last_seen.desc())
-            .limit(MAX_FACTS_PER_USER)
-            .all()
-        )
+    def _find_matches(self, vec: np.ndarray, existing: List[PersonaFact],
+                      threshold: float = MATCH_THRESHOLD) -> List[Tuple[PersonaFact, float]]:
+        """与每个 cluster 的 centroid 比较，返回 > threshold 的匹配（按相似度降序）。
 
+        existing 由调用方预取（避免 N+1 查询），应为同一用户的现有 facts 列表。
+        """
         # 按 cluster_id 分组，每组取 centroid 比较
         clusters: Dict[int, np.ndarray] = {}
         for f in existing:
@@ -370,12 +386,12 @@ class PersonaStateMachine:
             score = compute_confidence(f.evidence_count, days)
 
             if f.fact_type == "preference":
-                if days > 90 or score < 0.1:
+                if days > PREFERENCE_ARCHIVE_DAYS or score < PREFERENCE_ARCHIVE_SCORE:
                     f.confidence = "归档"
                 else:
                     f.confidence = confidence_label(score)
             else:
-                if days > 45 or score < 0.15:
+                if days > BEHAVIOR_ARCHIVE_DAYS or score < BEHAVIOR_ARCHIVE_SCORE:
                     f.confidence = "归档"
                 else:
                     f.confidence = confidence_label(score)
