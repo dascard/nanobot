@@ -68,10 +68,15 @@ class SQLAnalysisTool(BaseTool):
             "detach", "replace", "truncate", "grant", "revoke", "vacuum", "reindex",
             "begin", "commit", "rollback",
         ]
-        # Read-only PRAGMA (table_info, index_list etc.) — allowed
-        is_readonly_pragma = bool(re.match(
-            r"^pragma\s+(table_|index_|foreign_key_list|compile_options"
-            r"|database_list|collation_list|function_list)\b", lowered))
+        # Read-only PRAGMA — exact keyword match (not prefix match)
+        _readonly_pragmas = {
+            "table_info", "table_xinfo", "index_list", "index_info",
+            "foreign_key_list", "foreign_keys", "compile_options",
+            "database_list", "collation_list", "function_list",
+            "schema_version", "application_id", "user_version",
+        }
+        m = re.match(r"^pragma\s+(\w+)", lowered)
+        is_readonly_pragma = m is not None and m.group(1) in _readonly_pragmas
         if not is_readonly_pragma and any(re.search(rf"\b{kw}\b", lowered) for kw in forbidden):
             return False, "Only read-only SELECT/CTE queries are permitted"
 
