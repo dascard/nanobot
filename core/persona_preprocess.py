@@ -21,7 +21,7 @@ from core.database import SessionLocal, PersonaFact, PersonaBehavior
 logger = logging.getLogger("nanobot.persona")
 
 # ── 常量 ──
-MATCH_THRESHOLD = 0.78          # cosine 相似度匹配阈值（BGE 中文基线 ~0.5，相近语义 ~0.83）
+MATCH_THRESHOLD = 0.65          # cosine 相似度匹配阈值（BGE 相近语义 0.60-0.70，不同语义 0.34-0.59）
 CONTRADICTION_THRESHOLD = 0.25  # 低于此值视为潜在矛盾（语义反向）
 MAX_FACTS_PER_USER = 100        # 每人最多保留画像条数
 CANONICAL_MIN_LENGTH_RATIO = 0.7  # canonical 保留信息密度比
