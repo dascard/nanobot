@@ -7,12 +7,14 @@ import pytest
 
 
 def _mock_qwen_response(content: str) -> MagicMock:
-    """Helper: create a mock urllib.response object that returns given Qwen content."""
+    """Helper: create a mock urllib.response that works as context manager."""
     mock = MagicMock()
     mock.read.return_value = json.dumps({
         "choices": [{"message": {"content": content}}],
         "timings": {},
     }).encode("utf-8")
+    mock.__enter__ = MagicMock(return_value=mock)
+    mock.__exit__ = MagicMock(return_value=False)
     return mock
 
 

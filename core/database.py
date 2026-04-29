@@ -94,19 +94,21 @@ def init_db():
     from sqlalchemy import inspect, text
     inspector = inspect(engine)
 
-    # chat_logs 元数据列
+    # chat_logs 元数据列（白名单：仅允许已知安全列名和类型）
+    allowed_migrations = {
+        "session_id": "TEXT",
+        "sender_name": "TEXT",
+        "session_name": "TEXT",
+    }
     existing_columns = [col["name"] for col in inspector.get_columns("chat_logs")]
-    required_upgrades = [
-        ("session_id", "TEXT"),
-        ("sender_name", "TEXT"),
-        ("session_name", "TEXT")
-    ]
     with engine.connect() as conn:
-        for col_name, col_type in required_upgrades:
+        for col_name, col_type in allowed_migrations.items():
             if col_name not in existing_columns:
                 print(f"  → Migrating: Adding missing column [{col_name}] to chat_logs...")
                 try:
-                    conn.execute(text(f"ALTER TABLE chat_logs ADD COLUMN {col_name} {col_type}"))
+                    conn.execute(text(
+                        f"ALTER TABLE chat_logs ADD COLUMN {col_name} {col_type}"
+                    ))
                     conn.commit()
                 except Exception as e:
                     print(f"  ⚠ Migration failed for {col_name}: {e}")

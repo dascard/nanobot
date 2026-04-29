@@ -18,11 +18,11 @@ from sqlalchemy import and_
 
 from config import DAILY_DIGEST_HOUR
 from core.compaction import run_autocompact_circuit_breaker
-from core.database import SessionLocal, ChatLog, MemoryDigest, ScheduledTask
+from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
 
 logger = logging.getLogger("nanobot.daily_digest")
 
-QQBOT_PUSH_URL = os.environ.get("QQBOT_PUSH_URL", "http://127.0.0.1:8080/nanobot/push")
+QQBOT_PUSH_URL = os.environ.get("QQBOT_PUSH_URL", "http://172.17.0.1:8080/nanobot/push")
 
 TOPIC_KEYWORDS = {
     "model_release": ["发布", "release", "new model", "版本", "更新"],
@@ -32,8 +32,22 @@ TOPIC_KEYWORDS = {
 }
 
 MODEL_HINTS = [
-    "qwen", "deepseek", "kimi", "gpt", "claude", "gemini", "llama", "mistral", "hunyuan", "glm",
-    "通义", "豆包", "混元", "智谱", "阶跃", "minimax",
+    "qwen",
+    "deepseek",
+    "kimi",
+    "gpt",
+    "claude",
+    "gemini",
+    "llama",
+    "mistral",
+    "hunyuan",
+    "glm",
+    "通义",
+    "豆包",
+    "混元",
+    "智谱",
+    "阶跃",
+    "minimax",
 ]
 
 
@@ -202,7 +216,9 @@ def generate_daily_digest_for_date(target_date: str, user_id: str | None = None)
 
         db.commit()
         if created > 0:
-            logger.info(f"Daily digest generated for {created} session(s), date={target_date}")
+            logger.info(
+                f"Daily digest generated for {created} session(s), date={target_date}"
+            )
         return created
     except Exception:
         db.rollback()
@@ -246,19 +262,28 @@ def daily_digest_scheduler(stop_event: threading.Event) -> None:
 
 # ── QQ 推送 ──
 
+
 async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
     """推送消息到 QQ（通过 qqbot 的 /nanobot/push 端点）。"""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 QQBOT_PUSH_URL,
-                json={"target_type": target_type, "target_id": target_id, "message": message},
+                json={
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "message": message,
+                },
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as resp:
                 if resp.status == 200:
-                    logger.info(f"Push OK: {target_type}/{target_id} len={len(message)}")
+                    logger.info(
+                        f"Push OK: {target_type}/{target_id} len={len(message)}"
+                    )
                     return True
-                logger.warning(f"Push failed: status={resp.status}, body={await resp.text()}")
+                logger.warning(
+                    f"Push failed: status={resp.status}, body={await resp.text()}"
+                )
                 return False
     except Exception as e:
         logger.error(f"Push error: {e}")
@@ -267,13 +292,16 @@ async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
 
 # ── 定时任务调度 ──
 
+
 async def _generate_task_message(task: ScheduledTask) -> str | None:
     """用 LLM 根据模板生成推送内容（带 10 分钟超时保护）。"""
     from clients.new_api_client import NewAPIClient
-    from config import NEW_API_KEY, NEW_API_BASE_URL
+    from config import NEW_API_BASE_URL, NEW_API_KEY
 
     try:
-        client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=60)
+        client = NewAPIClient(
+            api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=60
+        )
         messages = [{"role": "user", "content": task.prompt_template}]
         resp = await asyncio.wait_for(
             client.chat_completion(messages=messages, model_tier="fast"),
@@ -283,10 +311,12 @@ async def _generate_task_message(task: ScheduledTask) -> str | None:
             return resp["choices"][0]["message"]["content"]
         # 返回体无 choices——可能是 API 错误或 free 模型被限流
         error_detail = resp.get("error", {}) if isinstance(resp, dict) else "null"
-        logger.error(f"Task [{task.name}] LLM returned no choices: "
-                      f"resp_type={type(resp).__name__}, "
-                      f"error={str(error_detail)[:200]}, "
-                      f"keys={list(resp.keys()) if isinstance(resp, dict) else 'N/A'}")
+        logger.error(
+            f"Task [{task.name}] LLM returned no choices: "
+            f"resp_type={type(resp).__name__}, "
+            f"error={str(error_detail)[:200]}, "
+            f"keys={list(resp.keys()) if isinstance(resp, dict) else 'N/A'}"
+        )
     except asyncio.TimeoutError:
         logger.error(f"Task [{task.name}] LLM call timed out (10min)")
     except Exception as e:
@@ -309,7 +339,9 @@ async def run_scheduled_tasks() -> int:
             logger.info(f"Running scheduled task: {task.name}")
             content = await _generate_task_message(task)
             if not content:
-                logger.warning(f"Task [{task.name}] skipped: LLM returned empty/no content")
+                logger.warning(
+                    f"Task [{task.name}] skipped: LLM returned empty/no content"
+                )
                 continue
 
             ok = await push_to_qq(task.target_type, task.target_id, content)

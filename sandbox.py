@@ -53,24 +53,23 @@ class AnalysisSandbox:
             return "SQL Error: Only SELECT queries are permitted in the sandbox."
         
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("PRAGMA query_only = ON")  # SQLite read-only mode
-            if pd is not None:
-                df = pd.read_sql_query(sql, conn)
-                result = df.to_markdown()
-            else:
-                cursor = conn.execute(sql)
-                cols = [desc[0] for desc in cursor.description] if cursor.description else []
-                rows = cursor.fetchall()
-                if not cols:
-                    result = "(no results)"
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("PRAGMA query_only = ON")
+                if pd is not None:
+                    df = pd.read_sql_query(sql, conn)
+                    result = df.to_markdown()
                 else:
-                    header = " | ".join(cols)
-                    separator = " | ".join(["---"] * len(cols))
-                    body = "\n".join(" | ".join(str(v) for v in row) for row in rows)
-                    result = f"{header}\n{separator}\n{body}"
-            conn.close()
-            return result
+                    cursor = conn.execute(sql)
+                    cols = [desc[0] for desc in cursor.description] if cursor.description else []
+                    rows = cursor.fetchall()
+                    if not cols:
+                        result = "(no results)"
+                    else:
+                        header = " | ".join(cols)
+                        separator = " | ".join(["---"] * len(cols))
+                        body = "\n".join(" | ".join(str(v) for v in row) for row in rows)
+                        result = f"{header}\n{separator}\n{body}"
+                return result
         except Exception as e:
             return f"SQL Error: {str(e)}"
 

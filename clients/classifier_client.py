@@ -155,8 +155,8 @@ class Guardrail:
         # 绕过本地 HTTP 代理（Clash 等），直连内网 llama-server
         proxy_handler = urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
-        response = opener.open(req, timeout=CLASSIFIER_TIMEOUT)
-        body = json.loads(response.read().decode("utf-8"))
+        with opener.open(req, timeout=CLASSIFIER_TIMEOUT) as response:
+            body = json.loads(response.read().decode("utf-8"))
 
         content = body["choices"][0]["message"]["content"]
 

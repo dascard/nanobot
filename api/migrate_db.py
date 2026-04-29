@@ -15,13 +15,13 @@ def migrate():
     cursor.execute("PRAGMA table_info(chat_logs)")
     columns = [col[1] for col in cursor.fetchall()]
 
-    new_columns = [
-        ("session_id", "TEXT"),
-        ("sender_name", "TEXT"),
-        ("session_name", "TEXT")
-    ]
+    allowed_migrations = {
+        "session_id": "TEXT",
+        "sender_name": "TEXT",
+        "session_name": "TEXT",
+    }
 
-    for col_name, col_type in new_columns:
+    for col_name, col_type in allowed_migrations.items():
         if col_name not in columns:
             print(f"Adding column {col_name} to chat_logs...")
             try:
