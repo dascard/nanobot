@@ -12,14 +12,6 @@ services:
       - ./data:/app/data
       - ./sentinel:/app/sentinel
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
-volumes:
-  nanobot-data:
 
 # ── 如需与 Dify 同网段通信，取消下方注释 ──
 # networks:
