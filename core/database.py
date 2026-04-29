@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer
+from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer, LargeBinary, Float
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from config import DATABASE_URL
@@ -95,6 +95,44 @@ class SensitiveData(Base):
     guardrail_status = Column(String, default="silent")
     sender_name = Column(String, default="")
     session_name = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class PersonaFact(Base):
+    """用户画像事实——LLM 提取候选后，Python 状态机去重/聚类/计数/衰减。
+    一个 cluster = 一个语义等价簇，cluster 内共享 cluster_id。
+    """
+    __tablename__ = "persona_facts"
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(String, index=True, nullable=False)
+    domain_primary = Column(String, default="general")
+    content = Column(Text, nullable=False)             # canonical form（簇内标准表达）
+    embedding = Column(LargeBinary, nullable=True)      # 本条自身的 embedding 向量
+    cluster_centroid = Column(LargeBinary, nullable=True)  # 簇内均值向量（稳定锚点）
+    cluster_id = Column(Integer, index=True, nullable=True)
+    evidence_count = Column(Integer, default=1)
+    source_log_ids = Column(Text, default="[]")         # JSON array of log IDs
+    first_seen = Column(DateTime, nullable=True)
+    last_seen = Column(DateTime, nullable=True)
+    confidence = Column(String, default="可能")          # 确认/可能/待确认/归档
+    fact_type = Column(String, default="preference")     # preference | behavior | trait
+    derived_from = Column(Text, default="[]")            # JSON array of behavior IDs
+    contradicted_by = Column(Text, default="[]")         # JSON array of conflicting fact IDs
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class PersonaBehavior(Base):
+    """用户行为模式——可观察的重复行为，不一定是偏好。"""
+    __tablename__ = "persona_behaviors"
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(String, index=True, nullable=False)
+    domain_primary = Column(String, default="general")
+    pattern = Column(Text, nullable=False)
+    embedding = Column(LargeBinary, nullable=True)
+    frequency = Column(Integer, default=1)
+    source_log_ids = Column(Text, default="[]")
+    last_observed = Column(DateTime, nullable=True)
+    confidence = Column(String, default="可能")
     created_at = Column(DateTime, default=datetime.now)
 
 

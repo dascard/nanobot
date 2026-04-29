@@ -18,6 +18,12 @@ from core.state_manager import StateManager
 from sandbox import AnalysisSandbox
 from creatures.nanobot.prompts.skills.news_search.tool import search_and_extract_news
 from clients.new_api_client import NewAPIClient, format_openai_messages
+from core.persona_preprocess import (
+    CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
+    PersonaStateMachine,
+    build_candidate_extraction_prompt,
+    filter_user_messages,
+)
 
 
 # --- Local Evolution Prompts (High Fidelity) ---
@@ -37,57 +43,66 @@ LOG_ANALYST_LLM_PROMPT = """你是一个专业的对话日志分析师。你的�
 6. 领域信号（domain_signals）：snake_case 领域 ID + 水平信号 + 偏好 + 痛点
 """
 
-PERSONA_MERGE_PROMPT = """你是用户行为分析师。从对话日志中提取可操作画像，这份画像会被注入到 AI 的系统提示词中，直接影响 AI 的回复方式。
+PERSONA_MERGE_PROMPT = """你是用户行为分析师。从对话日志中提取可操作画像。
+
+## ⚠️ 数据格式
+日志格式: [时间] role(谁): 内容
+- role="user" → 用户说的话 ← **只分析这部分**
+- role="assistant" → 你的前任(nanobot)的回复 ← **忽略！不要分析 bot 的行为**
+- role="tool" → 工具调用记录 ← 忽略
 
 ## 核心原则
-你写入的每一条信息必须能回答这个问题：**AI 知道了这个，回复会发生什么具体改变？**
-答不上来的、描述系统的、泛化标签——全部丢弃。
+每一条必须回答：**AI 知道了这个，回复会发生什么具体改变？**
+描述系统的、描述 bot 的、描述工具错误的、泛化标签——全部丢弃。
 
 ## 输出 JSON
 {
-  "summary": "一句话概括用户特征和行为模式（20-30字）",
-  "traits": ["在日志中反复出现 ≥2 次的具体行为。不是'技术型用户'这类标签，是'直接查数据库表结构而非等文档'这类可见行为"],
-  "preferences": ["用户明确表达或反复体现的偏好"],
-  "pain_points": "观察到用户表现出不耐烦/受挫的具体行为。只描述用户做了什么说了什么——不要填系统 Bug、工具错误、网络超时等非用户行为。无则空字符串",
-  "response_style": "AI 应采用什么回复风格。写清楚：语气是随意还是正式？回复长度偏好？要不要客套铺垫？接受技术细节还是需要通俗化？——这是最重要的字段，直接改变 AI 行为",
-  "domain_profiles": {"领域名": {"confidence": "high|medium|low", "summary": "简述", "interaction_count": 0}}
+  "summary": "用户是谁、主要聊什么（15-25字，中文）",
+  "traits": ["用户反复表现的具体行为。不是标签，是「每次提问都先发一段代码再问」这类可见模式。至少2次"],
+  "preferences": ["用户明确说的喜欢/不喜欢，如'别发太长''直接给答案别铺垫'"],
+  "pain_points": "用户表现不耐烦/受挫的行为。只看用户说了什么——不要填 SQL 报错、超时、API 失败、工具错误、PRAGMA 被拒绝等系统问题。无则\"\"",
+  "response_style": "具体回复指令：语气(随意/正式/幽默)？长度(简短/详细/看情况)？要不要客套？技术细节接受度？——这是最重要的字段",
+  "domain_profiles": {}
 }
 
 ## 规则
-- ≥2 次同类信号才写入
-- 旧信号不再出现则降低 confidence 或删除
-- 忽略"好的""谢谢""嗯"
+- ≥2 次同类信号才写
+- 旧信号不再出现则降 confidence 或删
+- 忽略"好的""谢谢""嗯""OK"
 
-## 反例（绝对不要输出这类内容）
-✗ pain_points: "工具参数声明与实际实现不一致导致反复失败" ← 描述的是系统，不是用户
-✗ traits: "技术型用户" ← 泛化标签，AI 知道了也不知道怎么改回复
-✗ summary: "用户主要用来测试和调试系统" ← 对 AI 回复策略无影响
+## quality check (输出前自检)
+□ traits 里有没有"SQL 报错后重试查询"这类 bot 行为？→ 删掉
+□ pain_points 里有没有"PRAGMA 被拦截""超时""401 错误"？→ 删掉，不是用户行为
+□ 每条的"AI 知道了会怎么改回复"能答上来吗？
 """
 
-PERSONA_CRITIQUE_PROMPT = """你是画像质量审计员。审查候选画像 JSON 并输出修正版。
+PERSONA_CRITIQUE_PROMPT = """你是画像质量审计员。审查候选画像并输出修正版。
 
-## 审计方法
-逐条检查，每个问题附带修正。只输出有问题的条目——通过的不用提。
+## 审计方法（逐条检查，通过的不用提）
 
-### 第一遍：污染扫描（优先）
-排查 pain_points 和 traits 中是否混入了系统/工具/代码的描述。
-- 如果混入了 → 删除，并在修改要点中注明"系统污染"
-- 如果某条读不出"用户的什么行为/反应"，就是污染
+### 第一遍：bot/系统污染扫描（最重要）
+traits / pain_points / preferences 中，逐条问：**这是描述用户的行为，还是描述 bot/系统/工具？**
+- "SQL 报错后会反复调整查询" → bot 行为，删除
+- "PRAGMA 被拦截后换写法重试" → bot 行为，删除
+- "直接查数据库表结构" → 这才是用户行为
+- "模型超时导致回复延迟" → 系统问题，删除
+- "API 返回 401 后切换模型" → bot/系统行为，删除
 
 ### 第二遍：五问
-1. AI 不被告知也会这样做吗？ → 删除。理由："默认行为"
-2. 与画像其他条目矛盾吗？ → 保留一方。理由："与 X 冲突"
-3. 换个说法重复了同一条信息吗？ → 合并。理由："与 X 冗余"
-4. 是仅针对某一次翻车的临时修正吗？ → 删除。理由："创可贴"
-5. 每次读到它理解会不一样吗？ → 改写。理由："模糊"
+1. AI 不被告知也会这样做吗？→ 删。"默认行为"
+2. 与画像其他条目矛盾吗？→ 保留一方。"冲突"
+3. 换个说法重复了同一信息吗？→ 合并。"冗余"
+4. 仅针对一次翻车的临时修正吗？→ 删。"创可贴"
+5. 每次读到理解会不一样吗？→ 改写。"模糊"
 
-### 第三遍：response_style 专项
-response_style 必须足够具体以至于 AI 能直接据此改变回复。如果某句是泛词——"友好一些""更专业"——直接改写为具体指令。
+### 第三遍：response_style
+必须具体到 AI 能据此改变回复。泛词全部改写为具体指令。
+✗ "友好一些" → ✓ "用口语化语气，不叫用户尊称"
+✗ "更专业" → ✓ "给代码示例而非文字解释"
 
 ## 输出
-```
 修改要点：
-- [类型] 条目 → 操作：理由
+- [污染/bot行为] 条目 → 删除
 ...
 
 修正 JSON：
@@ -274,18 +289,35 @@ class SQLiteMemory:
             db.close()
 
     def update_persona_and_prompt(self, user_id: str, persona_json: str, system_prompt: str):
-        """同步回写画像与提示词"""
+        """同步回写画像与提示词（带有效性校验）"""
+        import json as _json
         from datetime import datetime
+
+        try:
+            data = _json.loads(persona_json) if isinstance(persona_json, str) else persona_json
+        except (_json.JSONDecodeError, TypeError):
+            logger.error(f"Persona update rejected: invalid JSON for user {user_id}")
+            return
+        if not isinstance(data, dict):
+            logger.error(f"Persona update rejected: not dict, user={user_id}")
+            return
+        if "error" in data or "code" in data:
+            logger.error(f"Persona update rejected: error response, user={user_id}, "
+                          f"preview={str(data)[:200]}")
+            return
+
         db = self._get_session()
         try:
             persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
             sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == user_id).first()
             now = datetime.now()
             if persona_obj:
-                persona_obj.persona_json = persona_json
+                persona_obj.persona_json = _json.dumps(data, ensure_ascii=False)
                 persona_obj.updated_at = now
             else:
-                db.add(Persona(user_id=user_id, persona_json=persona_json, updated_at=now))
+                db.add(Persona(user_id=user_id,
+                               persona_json=_json.dumps(data, ensure_ascii=False),
+                               updated_at=now))
             if sys_obj:
                 sys_obj.prompt_text = system_prompt
                 sys_obj.updated_at = now
@@ -603,33 +635,76 @@ class NanobotKTController:
         if results_02.get("kb_document") and DATASET_ID_LOGS:
              write_dify_dataset(DATASET_ID_LOGS, f"Summary_{user_id}_{datetime.datetime.now().strftime('%Y%H%M%S')}", results_02["kb_document"])
 
-        # 3. Design Stage: PersonaArchitect sub-agent
-        logger.info(f"  [KT Local Architect] Updating persona for {user_id}...")
+        # 3. Design Stage: LLM 候选提取 + Python 状态机（替代旧的 PersonaArchitectAgent）
+        logger.info(f"  [KT Local StateMachine] Extracting persona candidates for {user_id}...")
         existing_persona = self.memory.get_user_persona(user_id)
-        results_03 = await self.persona_architect.run(existing_persona, results_02, self.provider)
+
+        # 3a. 过滤用户消息 + 构建 prompt
+        user_msgs = filter_user_messages(logs)
+        logs_text = "\n".join(
+            f"[{log.get('created_at', '')}] user: {log.get('content', '')}"
+            for log in user_msgs
+        )
+        if not logs_text.strip():
+            logger.info(f"  [KT Local StateMachine] No user messages, skipping persona update")
+            self.memory.mark_logs_processed([log["id"] for log in logs])
+            return
+
+        extraction_prompt = build_candidate_extraction_prompt(existing_persona, logs_text)
+
+        # 3b. LLM 调用（只用 fast tier，因为只做提取不推理）
+        candidate_res = await self.provider.invoke_raw(
+            query=extraction_prompt,
+            system_prompt=CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
+            user_id=user_id,
+            model_tier="fast",
+        )
+
+        # 3c. JSON 解析
+        parsed = EvolutionUtils.json_repair(candidate_res)
+        candidates = parsed.get("candidates", []) if isinstance(parsed, dict) else []
+
+        if not candidates:
+            logger.warning(f"  [KT Local StateMachine] No candidates extracted, skipping")
+            self.memory.mark_logs_processed([log["id"] for log in logs])
+            return
+
+        # 3d. Python 状态机——去重/聚类/计数/衰减/冲突检测
+        db = SessionLocal()
+        try:
+            sm = PersonaStateMachine(db, user_id)
+            stats = sm.process_candidates(candidates)
+            persona_summary = sm.build_summary()
+        finally:
+            db.close()
+
+        logger.info(f"  [KT Local StateMachine] {stats}")
 
         # Optional: Sync persona snapshot to Dify KB (if configured)
         if DATASET_ID_PERSONAS:
-            persona_doc = self.persona_architect.to_kb_document(results_03, user_id)
-            if persona_doc:
-                write_dify_dataset(
-                    DATASET_ID_PERSONAS,
-                    f"Persona_{user_id}_{datetime.datetime.now().strftime('%Y%H%M%S')}",
-                    persona_doc,
-                )
+            persona_doc = (
+                f"# Persona Snapshot\n"
+                f"User: {user_id}\n\n"
+                f"## Summary\n{persona_summary}\n\n"
+                f"## Stats\n{json.dumps(stats, ensure_ascii=False)}"
+            )
+            write_dify_dataset(
+                DATASET_ID_PERSONAS,
+                f"Persona_{user_id}_{datetime.datetime.now().strftime('%Y%H%M%S')}",
+                persona_doc,
+            )
 
         # 4. Quality Stage: PromptAuditor sub-agent
         logger.info(f"  [KT Local Auditor] Auditing system prompt for {user_id}...")
         current_prompt = self.memory.get_system_prompt(user_id)
-        results_04 = await self.prompt_auditor.run(current_prompt, json.dumps(results_03, ensure_ascii=False), self.provider)
+        results_04 = await self.prompt_auditor.run(current_prompt, persona_summary, self.provider)
 
         # 5. Commit Stage: Save to DB
         self.memory.update_persona_and_prompt(
-            user_id, 
-            json.dumps(results_03, ensure_ascii=False), 
+            user_id,
+            persona_summary,
             results_04["final_system_prompt"]
         )
-        # Logs are now dicts: access via ["id"] instead of .id
         self.memory.mark_logs_processed([log["id"] for log in logs])
         logger.info(f"  [KT Local Success] User {user_id} evolved successfully.")
 

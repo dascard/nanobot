@@ -78,3 +78,39 @@ chinese-commit-conventions  → 规范化提交
 - **Token 估算**：CJK 字符按 1.0，ASCII 按 0.35（不求精确，量级判断）
 - **中文优先**：bot 使用者是中文用户，所有 prompt 和回复用中文
 - **提示词同步**：修改 `enriched_query` 组装逻辑、历史注入方式、conversation 结构时，**必须检查 `creatures/nanobot/prompt.md` 是否仍然准确**。如果 prompt 引用的标记（如 `<user_input>`、`<history_context>`）或行为描述（如"历史通过 conversation 注入"）已过时，必须在同一 PR 中更新
+
+## 禁止行为（反复犯错的教训）
+
+### 1. 未验证就声称完成
+- ✗ 没测 Qwen 连通性就说端口改了 OK
+- ✗ 没测 news_search 就说"网络问题非代码"
+- ✗ 没跑 benchmark 就说 prompt 优化好了
+- ✓ **任何修改后，必须实际运行验证命令并确认输出**
+
+### 2. 急于提交
+- ✗ 多次在测试没跑完、用户没确认时就要 commit
+- ✓ **用户明确说"提交"之前不 git commit**
+
+### 3. 照搬外部回答，不做独立搜索
+- ✗ 用户贴了一段 AI 分析，直接当正确答案
+- ✗ 用户说"用 qualifire 模型"，没验证就加进代码
+- ✓ **用户提出的方案也是假设，必须自己查证**
+- ✓ **用 GitHub MCP / Context7 / WebSearch 独立调研**
+
+### 4. 提 naive 技术方案
+- ✗ "用关键词匹配做领域分类"——不可靠
+- ✗ "asyncio.Lock 嵌套 + Event.wait"——必然死锁
+- ✗ "_preprocess 重排消息"——hacky
+- ✓ **复杂问题先用 brainstorming 探索方案，别急着写代码**
+
+### 5. 代码改了但没读现有实现
+- ✗ PRAGMA regex `\b` 不知道实际 SQL 格式
+- ✗ 声称改了 QQBOT_PUSH_URL 但实际没改
+- ✓ **改之前 grep 相关代码，读明白现有逻辑**
+
+### 6. 不用好用的工具
+- ✗ 用 WebSearch/WebFetch 搜网页——结果不可控、解析易出错、吃上下文
+- ✗ 明明有 Tavily（tavily-search/tavily-crawl/tavily-cli）却不用
+- ✓ **网页搜索优先用 Tavily**——LLM 优化结果，干净结构化输出
+- ✓ **代码搜索用 GitHub MCP**——search_code/search_repositories
+- ✓ **API/库文档用 Context7**——query-docs
