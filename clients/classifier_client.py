@@ -76,9 +76,11 @@ class Guardrail:
 
             model_path = os.environ.get("SENTINEL_MODEL_PATH", "./sentinel")
             logger.info("Loading sentinel from: %s", model_path)
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_path, trust_remote_code=True,
+            )
             model = AutoModelForSequenceClassification.from_pretrained(
-                model_path, torch_dtype="float16",
+                model_path, torch_dtype="float16", trust_remote_code=True,
             )
             cls._sentinel = pipeline(
                 "text-classification",
