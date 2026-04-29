@@ -101,6 +101,9 @@ class SensitiveData(Base):
 class PersonaFact(Base):
     """用户画像事实——LLM 提取候选后，Python 状态机去重/聚类/计数/衰减。
     一个 cluster = 一个语义等价簇，cluster 内共享 cluster_id。
+
+    注意: source_log_ids 字段名沿袭旧命名，实际存储 evidence 文本（非 log ID 整数），
+    用前需 json.loads() 解析。
     """
     __tablename__ = "persona_facts"
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
@@ -122,7 +125,11 @@ class PersonaFact(Base):
 
 
 class PersonaBehavior(Base):
-    """用户行为模式——可观察的重复行为，不一定是偏好。"""
+    """用户行为模式——可观察的重复行为，不一定是偏好。
+
+    注意: 当前階段預留（v1 仅用了 PersonaFact），该表由 create_all 自动创建但无数据写入。
+    未来将在状态机中区分 preference/behavior 写入不同表。
+    """
     __tablename__ = "persona_behaviors"
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     user_id = Column(String, index=True, nullable=False)

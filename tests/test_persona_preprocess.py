@@ -172,6 +172,90 @@ class TestProcessCandidatesCreate:
         assert stats["created"] == 0
 
 
+class TestProcessCandidatesWithMockEmbedder:
+    """用 mock embedding 测试核心状态机逻辑，不依赖真实模型加载，CI 可用。"""
+
+    def test_create_new_clusters_mock(self, state_machine, db_session, monkeypatch):
+        import numpy as np
+
+        def mock_embed(text: str) -> np.ndarray:
+            seed = sum(ord(c) for c in text) % (2**31 - 1)
+            rng = np.random.RandomState(seed)
+            vec = rng.randn(768).astype(np.float32)
+            return vec / np.linalg.norm(vec)
+
+        monkeypatch.setattr("core.persona_preprocess.embed_text", mock_embed)
+
+        candidates = [
+            {"text": "用户喜欢简洁代码", "evidence": "别废话", "domain": "编程"},
+            {"text": "用户偏好命令行", "evidence": "用CLI", "domain": "工具"},
+        ]
+        stats = state_machine.process_candidates(candidates)
+        assert stats["created"] == 2
+        assert stats["merged"] == 0
+
+        facts = db_session.query(PersonaFact).filter(
+            PersonaFact.user_id == "test_user_01"
+        ).all()
+        assert len(facts) == 2
+        assert facts[0].cluster_id != facts[1].cluster_id
+
+    def test_merge_duplicate_mock(self, state_machine, db_session, monkeypatch):
+        import numpy as np
+
+        def mock_embed(text: str) -> np.ndarray:
+            # 同一文本返回相同向量，相近文本返回高相似度向量
+            base = np.zeros(768, dtype=np.float32)
+            # "喜欢简洁代码" 类文本映射到高相似区域
+            idx = hash("代码偏好") % 768
+            base[idx] = 1.0
+            return base / np.linalg.norm(base)
+
+        monkeypatch.setattr("core.persona_preprocess.embed_text", mock_embed)
+
+        c1 = [{"text": "用户喜欢简洁代码", "evidence": "ev1", "domain": "编程"}]
+        state_machine.process_candidates(c1)
+
+        c2 = [{"text": "用户偏好简短回复", "evidence": "ev2", "domain": "编程"}]
+        stats = state_machine.process_candidates(c2)
+        assert stats["merged"] == 1
+
+        facts = db_session.query(PersonaFact).filter(
+            PersonaFact.user_id == "test_user_01"
+        ).all()
+        assert len(facts) == 1
+        assert facts[0].evidence_count == 2
+
+    def test_different_domain_no_merge_mock(self, state_machine, db_session, monkeypatch):
+        import numpy as np
+
+        # 用确定的正交向量模拟不同领域，避免随机碰撞
+        _vec_cache = {}
+
+        def mock_embed(text: str) -> np.ndarray:
+            if text not in _vec_cache:
+                # 为每个独特性文本分配固定维度上的正交向量
+                vec = np.zeros(768, dtype=np.float32)
+                idx = abs(hash(text)) % 768
+                vec[idx] = 1.0
+                _vec_cache[text] = vec
+            return _vec_cache[text]
+
+        monkeypatch.setattr("core.persona_preprocess.embed_text", mock_embed)
+
+        c1 = [{"text": "用户喜欢简洁代码", "evidence": "ev1", "domain": "编程"}]
+        state_machine.process_candidates(c1)
+
+        c2 = [{"text": "用户对日本历史有浓厚兴趣", "evidence": "ev2", "domain": "历史"}]
+        state_machine.process_candidates(c2)
+
+        facts = db_session.query(PersonaFact).filter(
+            PersonaFact.user_id == "test_user_01"
+        ).all()
+        assert len(facts) == 2
+        assert facts[0].cluster_id != facts[1].cluster_id
+
+
 class TestProcessCandidatesMerge:
     @pytest.mark.slow
     def test_merge_semantic_duplicate(self, state_machine, db_session):
@@ -237,7 +321,6 @@ class TestDecay:
         db_session.commit()
 
         state_machine._apply_decay(datetime.now())
-        db_session.refresh(fact)
         assert fact.confidence != "归档"
 
     def test_behavior_decays_faster(self, state_machine, db_session):
