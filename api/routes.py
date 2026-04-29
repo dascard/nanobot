@@ -19,7 +19,8 @@ from typing import Optional, List
 from config import (
     NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT, ADMIN_USER_ID,
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER, NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT,
-    LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING
+    LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING,
+    CLASSIFIER_TIMEOUT,
 )
 from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest
 from core.evolution import evolution_task
@@ -801,10 +802,23 @@ async def proxy_chat(
                 return {"status": "silent", "user_id": req.user_id}
             if len(buf["queries"]) > 1:
                 buffered_query = "\n---\n".join(buf["queries"])
-                result = guardrail.classify(buffered_query)
+                try:
+                    result = await asyncio.wait_for(
+                        asyncio.to_thread(guardrail.classify, buffered_query),
+                        timeout=CLASSIFIER_TIMEOUT + 2,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("[/chat] Buffered classify timed out, fallback to reply")
+                    result = {"status": "reply", "complexity": 5}
             else:
                 buffered_query = merged
-                result = await buf["qwen_task"]
+                try:
+                    result = await asyncio.wait_for(
+                        buf["qwen_task"], timeout=CLASSIFIER_TIMEOUT + 2
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("[/chat] Qwen task timed out, fallback to reply")
+                    result = {"status": "reply", "complexity": 5}
             buf["result"] = result
 
         guardrail_status = result["status"]
