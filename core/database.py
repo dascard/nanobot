@@ -85,6 +85,19 @@ class ScheduledTask(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class SensitiveData(Base):
+    """Qwen 判定为「否」的原始消息，单独存档，不混入 chat_logs。"""
+    __tablename__ = "sensitive_data"
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(String, index=True)
+    session_id = Column(String)
+    content = Column(Text)        # 原始敏感内容
+    guardrail_status = Column(String, default="silent")
+    sender_name = Column(String, default="")
+    session_name = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.now)
+
+
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
     Base.metadata.create_all(bind=engine)

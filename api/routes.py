@@ -244,14 +244,30 @@ def _build_expand_chain(db: Session, base: MemoryDigest, reveal_to_level: int) -
 def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrail_status: str | None = None) -> int:
     """Persist a chat turn to both ChatLog (evolution) and ConversationTurn (context)."""
     is_injection = guardrail_status == "injection"
+    is_silent = guardrail_status == "silent"
     processed_val = -1 if is_injection else 0
+
+    # 敏感数据（Qwen 判定为否）：原始内容入 sensitive_data，chat_logs 用占位符
+    if is_silent:
+        from core.database import SensitiveData
+        db.add(SensitiveData(
+            user_id=req.user_id,
+            session_id=req.session_id,
+            content=req.query,
+            guardrail_status="silent",
+            sender_name=req.sender_name or "",
+            session_name=req.session_name or "",
+        ))
+        display_content = "[敏感数据]"
+    else:
+        display_content = "[安全提示: 检测到注入已被拦截]" if is_injection else req.query
 
     # ChatLog — 原始存档，进化/画像分析
     db.add(ChatLog(
         user_id=req.user_id,
         session_id=req.session_id,
         role="user",
-        content=req.query,
+        content=display_content,
         sender_name=req.sender_name or "",
         session_name=req.session_name or "",
         processed=processed_val,
@@ -266,8 +282,7 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
         processed=processed_val,
     ))
     # ConversationTurn — 精简上下文，专用于历史注入
-    user_content = "[安全提示: 检测到注入已被拦截]" if is_injection else req.query
-    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id, role="user", content=user_content))
+    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id, role="user", content=display_content))
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id, role="assistant", content=answer))
     db.commit()
     from core.evolution import _evolution_running
