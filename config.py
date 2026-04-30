@@ -110,14 +110,3 @@ GUARDRAIL_INJECTION_PATTERNS = [
     r'<\|im_start\|>', r'<\|im_end\|>',
     r'从现在开始.*助手', r'从现在开始.*无限制',
 ]
-
-# ── 群名映射 ──
-# JSON 格式环境变量: GROUP_NAMES='{"1027790249":"凡赛尔图书馆","1097666427":"火魄生态瓶"}'
-import json as _json
-GROUP_NAMES: dict[str, str] = {}
-_raw = os.environ.get("GROUP_NAMES", "")
-if _raw:
-    try:
-        GROUP_NAMES = _json.loads(_raw)
-    except _json.JSONDecodeError:
-        pass

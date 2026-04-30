@@ -193,14 +193,10 @@ class GroupAnalysisTool(BaseTool):
 
     @property
     def description(self) -> str:
-        from config import GROUP_NAMES
-        name_hint = ""
-        if GROUP_NAMES:
-            items = "、".join(f"{v}({k})" for k, v in list(GROUP_NAMES.items())[:5])
-            name_hint = f" 已知群: {items}"
         return (
             "分析群聊消息生成日报。提取话题总结、活跃用户称号、金句和氛围。"
-            f"当用户要求总结群聊、分析群消息、看群日报时使用。{name_hint}"
+            "当用户要求总结群聊、分析群消息、看群日报时使用。"
+            "group_id 可以是群号或群名（如'凡赛尔图书馆'）。"
         )
 
     @property
@@ -269,9 +265,9 @@ class GroupAnalysisTool(BaseTool):
                 if len(messages) < 3:
                     return ToolResult(output=f"群 {group_id} 可分析的消息不足（需≥3条）", exit_code=0)
 
-                # 3. 群名解析
-                from config import GROUP_NAMES
-                group_name = GROUP_NAMES.get(group_id, group_id)
+                # 3. 群名——从数据库 session_name 或第一条消息中获取
+                db_names = set(l.session_name for l in logs if l.session_name and l.session_name != f"群聊:{group_id}")
+                group_name = next(iter(db_names), group_id)
                 logger.info(f"[group_analysis] {len(logs)} raw → {len(messages)} cleaned for {group_name}")
 
                 # 4. 格式化消息文本
