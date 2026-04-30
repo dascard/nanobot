@@ -31,6 +31,10 @@ tools:
     type: package
     module: nanobot_kt.tools.news_search
     class: NewsSearchTool
+  - name: image_summary
+    type: package
+    module: nanobot_kt.tools.image_summary
+    class: ImageSummaryTool
   - name: persona_update
     type: package
     module: nanobot_kt.tools.persona_update
@@ -39,6 +43,10 @@ tools:
     type: package
     module: nanobot_kt.tools.schedule_task
     class: ScheduleTaskTool
+  - name: group_analysis
+    type: package
+    module: nanobot_kt.tools.group_analysis
+    class: GroupAnalysisTool
   # KT built-in file tools — sandboxed to ./workspace (PathBoundaryGuard mode=block)
   - name: read
     type: builtin
