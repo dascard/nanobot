@@ -43,6 +43,11 @@ BEHAVIOR_ARCHIVE_SCORE = 0.15   # 行为置信度低于此值→归档
 CANDIDATE_EXTRACTION_SYSTEM_PROMPT = """你是用户行为观察员。从用户发言中提取所有可能的偏好和特征。
 宁可多提取（高 recall），不要漏。去重/计数/冲突由程序处理。
 
+## type 字段说明
+- "preference": 用户**明确表达**的主观偏好（喜欢/不喜欢/希望/要求），属于"看法"
+- "behavior": 用户**可观察的重复行为模式**（反复测试、频繁查询、习惯性操作），属于"做法"
+- 区分：user说"我喜欢简洁代码"→preference；user多次发送IP地址测试注入→behavior
+
 ## 规则
 - 只看 role=user。忽略 assistant/tool/ambient/系统设定/bot 行为。
 - 只提取用户**明确说过**的偏好和**可见行为模式**。
@@ -55,7 +60,14 @@ CANDIDATE_EXTRACTION_SYSTEM_PROMPT = """你是用户行为观察员。从用户�
     {
       "text": "用户偏好直接给可运行的代码而非文字解释",
       "evidence": "用户说'给我完整代码，别解释'",
-      "domain": "编程"
+      "domain": "编程",
+      "type": "preference"
+    },
+    {
+      "text": "用户反复用IP地址和角色设定测试bot安全边界",
+      "evidence": "用户多次发送IP(100.65.228.8)和越狱prompt",
+      "domain": "安全测试",
+      "type": "behavior"
     }
   ]
 }"""
@@ -164,7 +176,10 @@ class PersonaStateMachine:
     # ── 公共入口 ──
 
     def process_candidates(self, candidates: List[Dict[str, str]]) -> Dict[str, Any]:
-        """处理 LLM 提取的候选列表，写入 persona_facts 表。
+        """处理 LLM 提取的候选列表。
+
+        preference → persona_facts 表（cluster + centroid 去重）
+        behavior  → persona_behaviors 表（embedding 去重 + frequency）
 
         返回: {"created": int, "merged": int, "conflicts": int}
         """
@@ -174,11 +189,18 @@ class PersonaStateMachine:
         stats = {"created": 0, "merged": 0, "conflicts": 0}
         now = datetime.now()
 
-        # 一次性预取所有现有 facts（避免 N+1：每个候选都单独查询）
+        # 一次性预取所有现有 facts（避免 N+1）
         existing_facts = (
             self.db.query(PersonaFact)
             .filter(PersonaFact.user_id == self.user_id)
             .order_by(PersonaFact.last_seen.desc())
+            .limit(MAX_FACTS_PER_USER)
+            .all()
+        )
+        existing_behaviors = (
+            self.db.query(PersonaBehavior)
+            .filter(PersonaBehavior.user_id == self.user_id)
+            .order_by(PersonaBehavior.last_observed.desc())
             .limit(MAX_FACTS_PER_USER)
             .all()
         )
@@ -196,17 +218,22 @@ class PersonaStateMachine:
 
             domain = c.get("domain", "general")
             evidence = c.get("evidence", "")
+            ctype = c.get("type", "preference")
 
-            matches = self._find_matches(vec, existing_facts)
-            if not matches:
-                self._create_fact(text, evidence, domain, vec, now)
+            if ctype == "behavior":
+                self._upsert_behavior(text, evidence, domain, vec, existing_behaviors, now)
                 stats["created"] += 1
-            elif len(matches) == 1:
-                self._merge_fact(matches[0][0], text, evidence, vec, now)
-                stats["merged"] += 1
             else:
-                self._resolve_conflicts(matches, text, evidence, domain, vec, now)
-                stats["conflicts"] += 1
+                matches = self._find_matches(vec, existing_facts)
+                if not matches:
+                    self._create_fact(text, evidence, domain, vec, now)
+                    stats["created"] += 1
+                elif len(matches) == 1:
+                    self._merge_fact(matches[0][0], text, evidence, vec, now)
+                    stats["merged"] += 1
+                else:
+                    self._resolve_conflicts(matches, text, evidence, domain, vec, now)
+                    stats["conflicts"] += 1
 
         self._apply_decay(now)
         self._prune_excess()
@@ -305,6 +332,40 @@ class PersonaStateMachine:
         self.db.add(fact)
         self.db.flush()
         fact.cluster_id = fact.id
+
+    # ── Behavior 写入（简化去重，不做 centroid 聚类）──
+
+    def _upsert_behavior(self, text: str, evidence: str, domain: str,
+                         vec: np.ndarray, existing: List[PersonaBehavior], now: datetime):
+        """Behavior 去重：embedding 相似 > MATCH_THRESHOLD 则合并，否则新建。"""
+        blob = _to_blob(vec)
+        for b in existing:
+            if b.embedding is None:
+                continue
+            bv = _from_blob(b.embedding)
+            if cosine_similarity(vec, bv) > MATCH_THRESHOLD:
+                b.frequency += 1
+                b.last_observed = now
+                if evidence:
+                    sources = json.loads(b.source_log_ids or "[]")
+                    if evidence not in sources:
+                        sources.append(evidence)
+                        if len(sources) > 20:
+                            sources = sources[-20:]
+                        b.source_log_ids = json.dumps(sources, ensure_ascii=False)
+                logger.debug(f"Behavior merged: '{text[:40]}' -> freq={b.frequency}")
+                return
+        # 新 behavior
+        bh = PersonaBehavior(
+            user_id=self.user_id,
+            domain_primary=domain,
+            pattern=text,
+            embedding=blob,
+            frequency=1,
+            source_log_ids=json.dumps([evidence] if evidence else [], ensure_ascii=False),
+            last_observed=now,
+        )
+        self.db.add(bh)
 
     # ── 合并 ──
 
