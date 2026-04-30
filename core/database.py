@@ -27,12 +27,21 @@ Base = declarative_base()
 
 
 class User(Base):
+    """用户/群聊统一实体。
+
+    id 支持三种格式:
+      - "0000000000"     QQ 用户（提交日志或私聊时自动注册）
+      - "group_1027790249" 群聊（ambient log 首次收到时自动注册）
+      - 不再创建 "private_xxx" 格式（proxy_chat 只注册 user_id）
+
+    name 由消息入口自动刷新:
+      - 群名: submit_ambient_log 从 session_name 更新
+      - 用户名: proxy_chat 从 sender_name 更新
+    """
     __tablename__ = "users"
     id = Column(String, primary_key=True, index=True)
-    name = Column(String, default="")           # 群名/用户名
-    history_clear_at = Column(
-        DateTime, nullable=True
-    )  # 清除标记：查询只取此时间之后的消息
+    name = Column(String, default="")           # 群名或用户名（由消息入口自动刷新）
+    history_clear_at = Column(DateTime, nullable=True)  # 清除标记
     created_at = Column(DateTime, default=datetime.now)
 
 
