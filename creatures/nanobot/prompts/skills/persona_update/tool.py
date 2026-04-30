@@ -88,7 +88,8 @@ class PersonaUpdateTool(BaseTool):
                     return ToolResult(output="没有找到该用户的对话日志", exit_code=0)
 
                 log_dicts = [
-                    {"role": log.role, "content": log.content, "session_id": log.session_id or ""}
+                    {"role": log.role, "content": log.content, "session_id": log.session_id or "",
+                     "created_at": str(log.created_at) if log.created_at else ""}
                     for log in logs
                 ]
 
@@ -147,7 +148,43 @@ class PersonaUpdateTool(BaseTool):
                 if isinstance(new_persona, dict) and new_persona.get("parse_error"):
                     return ToolResult(error=f"Persona generation failed: {new_persona.get('raw', '')[:300]}")
 
-                # 6. Save to DB
+                # 6. 新版状态机：从同批日志提取结构化 facts（与旧画像并存）
+                try:
+                    from core.persona_preprocess import (
+                        PersonaStateMachine, build_candidate_extraction_prompt,
+                        CANDIDATE_EXTRACTION_SYSTEM_PROMPT, filter_user_messages,
+                    )
+                    user_log_dicts = filter_user_messages(log_dicts)
+                    if user_log_dicts:
+                        logs_text = "\n".join(
+                            f"[{m.get('created_at', '')}] user: {m.get('content', '')}"
+                            for m in user_log_dicts[-30:]
+                        )
+                        extraction_prompt = build_candidate_extraction_prompt(
+                            existing_persona, logs_text
+                        )
+                        candidate_raw = await provider.invoke_raw(
+                            query=extraction_prompt,
+                            system_prompt=CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
+                            user_id=user_id,
+                            model_tier="fast",
+                        )
+                        parsed = EvolutionUtils.json_repair(candidate_raw)
+                        candidates = (
+                            parsed.get("candidates", [])
+                            if isinstance(parsed, dict) else []
+                        )
+                        if candidates:
+                            sm = PersonaStateMachine(db, user_id)
+                            stats = sm.process_candidates(candidates)
+                            logger.info(
+                                "[persona_update] StateMachine: user=%s, %s",
+                                user_id, stats,
+                            )
+                except Exception as e:
+                    logger.warning("[persona_update] StateMachine skipped: %s", e)
+
+                # 7. Save to DB (old personas table)
                 new_json = json.dumps(new_persona, ensure_ascii=False)
                 memory = SQLiteMemory()
                 memory.update_persona_and_prompt(user_id, new_json, "")
