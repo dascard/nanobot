@@ -328,12 +328,28 @@ class GroupAnalysisTool(BaseTool):
                 quotes = EvolutionUtils.json_repair(quote_raw)
 
                 # 8. 格式化输出
-                return ToolResult(output=_format_combined(
+                text_report = _format_combined(
                     topics if isinstance(topics, dict) else {},
                     titles if isinstance(titles, dict) else {},
                     quotes if isinstance(quotes, dict) else {},
                     len(messages),
-                ), exit_code=0)
+                )
+
+                # 9. 生成 HTML 报告图片（如可用）
+                merged = {}
+                if isinstance(topics, dict):
+                    merged.update(topics)
+                if isinstance(titles, dict):
+                    merged["users"] = titles.get("users", [])
+                if isinstance(quotes, dict):
+                    merged["quotes"] = quotes.get("quotes", [])
+
+                html = _render_html(merged, len(messages))
+                image_path = _render_to_image(html, group_id)
+                if image_path:
+                    text_report += f"\n\n📸 报告图片: {image_path}"
+
+                return ToolResult(output=text_report, exit_code=0)
 
             finally:
                 db.close()
@@ -377,3 +393,111 @@ def _format_combined(topics: dict, titles: dict, quotes: dict, msg_count: int) -
         lines.append("")
 
     return "\n".join(lines) if len(lines) > 1 else "分析完成，但未提取到足够信息。"
+
+
+# ── HTML 报告渲染 ──
+
+HTML_REPORT_TEMPLATE = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  body {{ font-family: 'WenQuanYi Zen Hei', 'Microsoft YaHei', sans-serif;
+         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+         padding: 30px; max-width: 800px; margin: 0 auto; }}
+  .card {{ background: #fff; border-radius: 16px; padding: 24px; margin: 16px 0;
+           box-shadow: 0 4px 20px rgba(0,0,0,.1); }}
+  h1 {{ color: #fff; text-align: center; font-size: 28px; text-shadow: 0 2px 4px rgba(0,0,0,.2); }}
+  h2 {{ color: #667eea; font-size: 20px; border-bottom: 2px solid #667eea; padding-bottom: 8px; }}
+  .topic {{ margin: 12px 0; }}
+  .topic-name {{ font-size: 16px; font-weight: bold; color: #333; }}
+  .topic-detail {{ color: #666; font-size: 14px; margin: 4px 0 0 16px; }}
+  .contributors {{ color: #999; font-size: 12px; }}
+  .user {{ display: flex; align-items: baseline; margin: 8px 0; }}
+  .user-id {{ font-weight: bold; color: #333; min-width: 80px; }}
+  .user-title {{ background: linear-gradient(135deg, #667eea, #764ba2);
+                 color: #fff; padding: 2px 10px; border-radius: 10px; font-size: 13px; }}
+  .user-reason {{ color: #888; font-size: 13px; margin-left: 8px; }}
+  .quote {{ background: #f8f8f8; border-left: 4px solid #667eea;
+            padding: 12px 16px; margin: 8px 0; border-radius: 0 8px 8px 0; }}
+  .quote-content {{ font-size: 15px; color: #444; font-style: italic; }}
+  .quote-author {{ font-size: 12px; color: #999; text-align: right; margin-top: 4px; }}
+  .meta {{ text-align: center; color: rgba(255,255,255,.7); font-size: 13px; margin-top: 20px; }}
+</style>
+</head>
+<body>
+<h1>📊 群聊日报</h1>
+<div class="meta">分析 {msg_count} 条消息 · {date_str}</div>
+{body_html}
+</body>
+</html>"""
+
+
+def _render_html(data: dict, msg_count: int) -> str:
+    """生成 HTML 报告字符串。"""
+    from datetime import datetime
+    parts = []
+
+    topics = data.get("topics", data.get("topic_list", []))
+    if topics:
+        parts.append('<div class="card"><h2>话题总结</h2>')
+        for t in topics:
+            contributors = "、".join(t.get("contributors", [])[:5])
+            parts.append(f'<div class="topic">')
+            parts.append(f'<div class="topic-name">{t.get("topic", "?")}</div>')
+            parts.append(f'<div class="contributors">{contributors}</div>')
+            if t.get("detail"):
+                parts.append(f'<div class="topic-detail">{t["detail"]}</div>')
+            parts.append('</div>')
+        parts.append('</div>')
+
+    users = data.get("users", data.get("active_users", []))
+    if users:
+        parts.append('<div class="card"><h2>活跃用户</h2>')
+        for u in users:
+            parts.append(f'<div class="user">'
+                         f'<span class="user-id">{u.get("user_id", "?")}</span>'
+                         f'<span class="user-title">{u.get("title", "")}</span>'
+                         f'<span class="user-reason">{u.get("reason", "")}</span>'
+                         f'</div>')
+        parts.append('</div>')
+
+    quotes = data.get("quotes", data.get("golden_quotes", []))
+    if quotes:
+        parts.append('<div class="card"><h2>💬 金句</h2>')
+        for q in quotes:
+            parts.append(f'<div class="quote">'
+                         f'<div class="quote-content">「{q.get("content", "")}」</div>'
+                         f'<div class="quote-author">—— {q.get("user_id", "?")}</div>'
+                         f'</div>')
+        parts.append('</div>')
+
+    body_html = "\n".join(parts)
+    return HTML_REPORT_TEMPLATE.format(
+        msg_count=msg_count,
+        date_str=datetime.now().strftime("%Y-%m-%d %H:%M"),
+        body_html=body_html,
+    )
+
+
+def _render_to_image(html: str, group_id: str) -> str | None:
+    """将 HTML 渲染为 PNG 图片，返回文件路径。"""
+    try:
+        import imgkit
+        import os
+        import tempfile
+        output_dir = os.path.join(tempfile.gettempdir(), "nanobot_reports")
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, f"report_{group_id}.png")
+        options = {
+            "format": "png", "width": 800, "quality": "95",
+            "encoding": "UTF-8",
+        }
+        imgkit.from_string(html, output_path, options=options)
+        return output_path
+    except ImportError:
+        logger.warning("imgkit not installed, skipping image render")
+        return None
+    except Exception as e:
+        logger.warning(f"Image render failed: {e}")
+        return None
