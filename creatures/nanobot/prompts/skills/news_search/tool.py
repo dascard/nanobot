@@ -154,6 +154,104 @@ def _build_value_alert(item: Dict[str, Any], content: str) -> Dict[str, Any]:
     }
 
 
+def _truncate_text(text: str, max_chars: int) -> str:
+    value = (text or "").strip()
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."
+
+
+def _normalize_summary_text(text: str, max_chars: int) -> str:
+    value = re.sub(r"\s+", " ", (text or "").strip())
+    return _truncate_text(value, max_chars)
+
+
+def _escape_md_table_cell(text: str) -> str:
+    value = (text or "").replace("\n", " ").replace("|", "\\|").strip()
+    return value or "-"
+
+
+def _format_news_markdown_report(
+    query: str,
+    search_results: List[Dict[str, Any]],
+    extracted_contents: List[str],
+    *,
+    deepen: bool,
+    decision_reason: str,
+    value_alerts: List[Dict[str, Any]],
+) -> str:
+    lines: List[str] = [
+        "# AI 资讯速报",
+        "",
+        f"> 查询：`{query}`",
+        f"> 深搜：{'已启用' if deepen else '未启用'}",
+        f"> 决策原因：{decision_reason}",
+        f"> 命中结果：{len(search_results)}",
+        "",
+    ]
+
+    lines.append("## 高价值提醒")
+    lines.append("")
+    if value_alerts:
+        value_alerts = sorted(value_alerts, key=lambda x: int(x.get("signal", 0)), reverse=True)
+        for alert in value_alerts:
+            models = "、".join(alert.get("models", [])) or "未识别"
+            lines.append(
+                f"- **{alert.get('title') or '未命名条目'}**"
+                f"（信号分 `{alert.get('signal', 0)}`，模型线索：{models}）"
+            )
+            if alert.get("url"):
+                lines.append(f"  - 链接：{alert['url']}")
+    else:
+        lines.append("- 暂无明显的免费、低价或高性价比模型信号。")
+    lines.append("")
+
+    lines.append("## 结果概览")
+    lines.append("")
+    lines.append("| 序号 | 标题 | 来源 | 质量分 | 检索策略 | 摘要线索 |")
+    lines.append("| --- | --- | --- | ---: | --- | --- |")
+    for idx, (item, content) in enumerate(zip(search_results, extracted_contents), start=1):
+        url = item.get("href", "") or ""
+        domain = _domain(url) or "unknown"
+        score = _source_score(item)
+        title = _escape_md_table_cell(item.get("title") or "未命名条目")
+        snippet = _escape_md_table_cell(
+            _normalize_summary_text(
+                item.get("body") or content or "无摘要",
+                42,
+            )
+        )
+        lines.append(
+            f"| {idx} | [{title}]({url}) | {domain} | {score} | "
+            f"{_escape_md_table_cell(item.get('search_strategy', 'web_ddg'))} | {snippet} |"
+        )
+    lines.append("")
+
+    lines.append("## 详细条目")
+    lines.append("")
+    for idx, (item, content) in enumerate(zip(search_results, extracted_contents), start=1):
+        url = item.get("href", "") or ""
+        domain = _domain(url) or "unknown"
+        score = _source_score(item)
+        lines.append(f"### {idx}. {item.get('title') or '未命名条目'}")
+        lines.append(f"- 链接：{url}")
+        lines.append(f"- 来源：`{domain}`")
+        lines.append(f"- 质量分：`{score}`")
+        lines.append(f"- 检索策略：`{item.get('search_strategy', 'web_ddg')}`")
+        if item.get("body"):
+            lines.append(f"- 摘要片段：{_normalize_summary_text(item.get('body', ''), 180)}")
+        lines.append("")
+        lines.append("**正文摘要**")
+        lines.append("")
+        if content.startswith("Error extracting") or content.startswith("Failed"):
+            lines.append(f"> {content}")
+        else:
+            lines.append(_truncate_text(content, 1800))
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
 def _heuristic_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_results: int) -> bool:
     q = (query or "").lower()
     deepen_markers = ["深入", "全面", "对比", "价格", "白嫖", "便宜", "free", "cheap", "pricing"]
@@ -614,45 +712,27 @@ def search_and_extract_news(
     if not search_results:
         return "No results found."
     
-    final_text = []
-    final_text.append("News intelligence report (ranked by source quality):")
-    final_text.append(f"DeepSearchDecision: {'enabled' if deepen else 'skipped'} | Reason: {decision_reason}")
     value_alerts: List[Dict[str, Any]] = []
-    for idx, r in enumerate(search_results):
+    extracted_contents: List[str] = []
+    for r in search_results:
         url = r.get('href', '')
-        domain = _domain(url)
-        score = _source_score(r)
-        final_text.append(f"\n--- Result {idx+1} ---")
-        final_text.append(f"Title: {r.get('title')}")
-        final_text.append(f"URL: {url}")
-        final_text.append(f"Source: {domain or 'unknown'} | QualityScore: {score}")
-        final_text.append(f"SearchStrategy: {r.get('search_strategy', 'web_ddg')}")
-        final_text.append(f"Snippet: {r.get('body')}")
-        
+
         # 抽取前 3 个结果正文，保障可追溯信息密度
         content = WebTools.extract_web_content(url)
-        if content.startswith("Error extracting") or content.startswith("Failed"):
-            final_text.append(f"Content Summary: {content}\n")
-        else:
-            final_text.append(f"Content Summary:\n{content[:1800]}...\n")
+        extracted_contents.append(content)
 
         alert = _build_value_alert(r, content)
         if alert.get("triggered"):
             value_alerts.append(alert)
 
-    if value_alerts:
-        final_text.append("\n=== High Value Model Alerts ===")
-        value_alerts.sort(key=lambda x: int(x.get("signal", 0)), reverse=True)
-        for i, alert in enumerate(value_alerts, 1):
-            models = ", ".join(alert.get("models", [])) or "unspecified"
-            final_text.append(f"[{i}] {alert.get('title')}")
-            final_text.append(f"URL: {alert.get('url')}")
-            final_text.append(f"SignalScore: {alert.get('signal')} | ModelHints: {models}")
-    else:
-        final_text.append("\n=== High Value Model Alerts ===")
-        final_text.append("No strong cost-performance/free-model signals found in current results.")
-
-    report = "\n".join(final_text)
+    report = _format_news_markdown_report(
+        query=query,
+        search_results=search_results,
+        extracted_contents=extracted_contents,
+        deepen=deepen,
+        decision_reason=decision_reason,
+        value_alerts=value_alerts,
+    )
     if persist:
         _persist_news_artifacts(
             query=query,
@@ -722,4 +802,3 @@ class NewsSearchTool(BaseTool):
             session_id=session_id,
         )
         return ToolResult(output=result, exit_code=0)
-
