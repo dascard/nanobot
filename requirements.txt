@@ -17,6 +17,9 @@ sentencepiece>=0.1.99
 # ── Persona Embedding (BGE model) ──
 sentence-transformers>=2.7.0
 
+# ── Image Pipeline ──
+Pillow>=10.0.0
+
 # ── Tests ──
 pytest>=7.0.0
 pytest-mock>=3.10.0
