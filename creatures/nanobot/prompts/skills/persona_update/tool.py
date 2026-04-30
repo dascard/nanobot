@@ -58,7 +58,6 @@ class PersonaUpdateTool(BaseTool):
         try:
             from core.database import SessionLocal, Persona, ChatLog
             from core.legacy_adapter import (
-                PersonaArchitectAgent,
                 LogAnalystAgent,
                 EvolutionUtils,
                 SQLiteMemory,
@@ -137,80 +136,63 @@ class PersonaUpdateTool(BaseTool):
                 log_analyst = LogAnalystAgent()
                 log_summary = await log_analyst.run(log_dicts, provider)
 
-                # 5. Merge + critique
-                logger.info(f"[persona_update] Updating persona for user={user_id}")
-                if instructions:
-                    log_summary["instructions"] = instructions
-
-                persona_architect = PersonaArchitectAgent()
-                new_persona = await persona_architect.run(existing_persona, log_summary, provider)
-
-                if isinstance(new_persona, dict) and new_persona.get("parse_error"):
-                    return ToolResult(error=f"Persona generation failed: {new_persona.get('raw', '')[:300]}")
-
-                # 6. 新版状态机：从同批日志提取结构化 facts（与旧画像并存）
+                # 5. 新版状态机：LLM 候选提取 + Python 去重聚类（替代旧 PersonaArchitectAgent）
+                logger.info(f"[persona_update] Extracting candidates for user={user_id}")
                 try:
                     from core.persona_preprocess import (
                         PersonaStateMachine, build_candidate_extraction_prompt,
                         CANDIDATE_EXTRACTION_SYSTEM_PROMPT, filter_user_messages,
                     )
                     user_log_dicts = filter_user_messages(log_dicts)
-                    if user_log_dicts:
-                        logs_text = "\n".join(
-                            f"[{m.get('created_at', '')}] user: {m.get('content', '')}"
-                            for m in user_log_dicts[-30:]
-                        )
-                        extraction_prompt = build_candidate_extraction_prompt(
-                            existing_persona, logs_text
-                        )
-                        candidate_raw = await provider.invoke_raw(
-                            query=extraction_prompt,
-                            system_prompt=CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
-                            user_id=user_id,
-                            model_tier="fast",
-                        )
-                        parsed = EvolutionUtils.json_repair(candidate_raw)
-                        candidates = (
-                            parsed.get("candidates", [])
-                            if isinstance(parsed, dict) else []
-                        )
-                        if candidates:
-                            sm = PersonaStateMachine(db, user_id)
-                            stats = sm.process_candidates(candidates)
-                            logger.info(
-                                "[persona_update] StateMachine: user=%s, %s",
-                                user_id, stats,
-                            )
+                    if not user_log_dicts:
+                        return ToolResult(output="没有找到该用户的对话消息", exit_code=0)
+
+                    logs_text = "\n".join(
+                        f"[{m.get('created_at', '')}] user: {m.get('content', '')}"
+                        for m in user_log_dicts[-30:]
+                    )
+                    extraction_prompt = build_candidate_extraction_prompt(
+                        existing_persona, logs_text
+                    )
+                    candidate_raw = await provider.invoke_raw(
+                        query=extraction_prompt,
+                        system_prompt=CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
+                        user_id=user_id,
+                        model_tier="fast",
+                    )
+                    parsed = EvolutionUtils.json_repair(candidate_raw)
+                    candidates = (
+                        parsed.get("candidates", [])
+                        if isinstance(parsed, dict) else []
+                    )
+                    if not candidates:
+                        return ToolResult(output="未提取到新的画像信息", exit_code=0)
+
+                    sm = PersonaStateMachine(db, user_id)
+                    stats = sm.process_candidates(candidates)
+                    persona_summary = sm.build_summary()
+                    logger.info("[persona_update] StateMachine: user=%s, %s", user_id, stats)
                 except Exception as e:
-                    logger.warning("[persona_update] StateMachine skipped: %s", e)
+                    logger.error("[persona_update] StateMachine failed: %s", e)
+                    return ToolResult(error=f"画像生成失败: {str(e)}")
 
-                # 7. Save to DB (old personas table)
-                new_json = json.dumps(new_persona, ensure_ascii=False)
+                # 6. Save to DB: personas(压缩摘要) + persona_facts/behaviors 已由状态机写入
                 memory = SQLiteMemory()
-                memory.update_persona_and_prompt(user_id, new_json, "")
+                memory.update_persona_and_prompt(user_id, persona_summary, "")
 
-                # 7. Build readable summary of what changed
-                old_data = json.loads(existing_persona) if existing_persona and existing_persona != "{}" else {}
-                changes = []
-                if isinstance(new_persona, dict):
-                    if new_persona.get("summary") != old_data.get("summary"):
-                        changes.append(f"画像摘要: {new_persona.get('summary', 'N/A')}")
-                    new_traits = set(new_persona.get("traits") or [])
-                    old_traits = set(old_data.get("traits") or [])
-                    added = new_traits - old_traits
-                    removed = old_traits - new_traits
-                    if added:
-                        changes.append(f"新增特质: {', '.join(added)}")
-                    if removed:
-                        changes.append(f"移除特质: {', '.join(removed)}")
-                    new_style = new_persona.get("response_style") or new_persona.get("communication_style") or ""
-                    old_style = old_data.get("response_style") or old_data.get("communication_style") or ""
-                    if new_style != old_style:
-                        changes.append(f"回复风格: {new_style[:120]}")
-
-                summary = "\n".join(changes) if changes else "画像已更新（无显著变化）"
+                # 7. Build summary from state machine stats
+                parts = []
+                if stats.get("created"):
+                    parts.append(f"新建 {stats['created']} 条")
+                if stats.get("merged"):
+                    parts.append(f"合并 {stats['merged']} 条")
+                if stats.get("conflicts"):
+                    parts.append(f"冲突 {stats['conflicts']} 条")
+                change_summary = "、".join(parts) if parts else "无变化"
                 return ToolResult(
-                    output=f"画像更新完成 (user={user_id})\n\n{summary}",
+                    output=f"画像更新完成 (user={user_id})\n"
+                           f"{change_summary}\n"
+                           f"总事实数: {json.loads(persona_summary).get('count', 0)}",
                     exit_code=0,
                 )
             finally:
