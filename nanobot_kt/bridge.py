@@ -14,6 +14,7 @@ from typing import Any, Optional
 from kohakuterrarium.core.agent import Agent
 from kohakuterrarium.core.config import load_agent_config
 from kohakuterrarium.core.events import create_user_input_event
+from kohakuterrarium.llm.message import ImagePart, make_multimodal_content
 
 from nanobot_kt.output import BufferedOutput
 from clients.new_api_client import NewAPIClient
@@ -75,6 +76,15 @@ class NanobotBridge:
         logger.info("KT Agent stopped")
 
     PERSONA_MARKER = "[PersonaContext]"
+
+    @staticmethod
+    def _build_event_content(query: str, files: list[str] | None) -> str | list[Any]:
+        image_parts = [
+            ImagePart(url=file_url, detail="low", source_type="qq", source_name=f"attachment_{idx + 1}")
+            for idx, file_url in enumerate(files or [])
+            if isinstance(file_url, str) and file_url.strip()
+        ]
+        return make_multimodal_content(query, images=image_parts)
 
     def _build_persona_system_reference(self, user_id: str, persona_text: str) -> str:
         cleaned = str(persona_text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
@@ -155,9 +165,12 @@ class NanobotBridge:
 
             # --- Inject history messages as structured conversation (proper role boundaries) ---
             history_messages = meta.get("history_messages", [])
+            history_header = str(meta.get("history_header", "")).strip()
             if history_messages:
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                     conv = self._agent.controller.conversation
+                    if history_header:
+                        conv.append("system", history_header)
                     for msg in history_messages:
                         role = msg.get("role", "user")
                         content = msg.get("content", "")
@@ -185,7 +198,8 @@ class NanobotBridge:
             logger.debug(f"[NanobotBridge] Agent output_module attr: {getattr(self._agent, '_output_module', 'NOT SET')}")
 
             # Create a user input event for the KT controller
-            event = create_user_input_event(query)
+            event_content = self._build_event_content(query, meta.get("files"))
+            event = create_user_input_event(event_content)
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 
             # --- Dynamic Model Routing (new priority-ordered system) ---
@@ -247,12 +261,12 @@ class NanobotBridge:
                 logger.warning(f"[Model Router] Failure tracker unavailable: {e}")
             max_attempts = min(len(candidates), 8) if candidates else 5
             result = None
-            next_event = create_user_input_event(query)
+            next_event = create_user_input_event(event_content)
 
             for attempt in range(max_attempts):
                 self._output.clear()
                 event = next_event
-                next_event = create_user_input_event(query)
+                next_event = create_user_input_event(event_content)
 
                 # Get next model from ordered list
                 try:
@@ -326,9 +340,9 @@ class NanobotBridge:
                             content = msgs[user_idx].content
                             if isinstance(content, str) and content == query:
                                 self._agent.controller.conversation.truncate_from(user_idx)
-                            next_event = create_user_input_event(query)
+                            next_event = create_user_input_event(event_content)
                     if not tool_results_preserved:
-                        next_event = create_user_input_event(query)
+                        next_event = create_user_input_event(event_content)
                     continue
                 else:
                     if tracker is not None:

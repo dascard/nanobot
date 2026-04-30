@@ -192,6 +192,87 @@ class TestNanobotBridge:
         result = asyncio.run(bridge.handle_message("test"))
         assert "not initialized" in result.lower() or "Error" in result
 
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_uses_multimodal_event_for_files(self, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
+
+        captured = {}
+
+        async def fake_process(event):
+            captured["event"] = event
+            bridge._output._buffer.append("ok")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "看看这张图",
+                user_id="u1",
+                metadata={"files": ["https://example.com/a.png", "https://example.com/b.png"]},
+            )
+
+        result = asyncio.run(_run())
+        assert result == "ok"
+        assert isinstance(captured["event"].content, list)
+        assert captured["event"].content[0].type == "text"
+        image_parts = [part for part in captured["event"].content if getattr(part, "type", "") == "image_url"]
+        assert len(image_parts) == 2
+        assert image_parts[0].url == "https://example.com/a.png"
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_injects_history_header(self, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("ok")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "test query",
+                user_id="u1",
+                metadata={
+                    "history_header": "[近30分钟内对话历史，仅用于理解语境。]",
+                    "history_messages": [{"role": "user", "content": "旧消息"}],
+                },
+            )
+
+        asyncio.run(_run())
+        mock_conv.append.assert_any_call("system", "[近30分钟内对话历史，仅用于理解语境。]")
+
 
 # ── Creature Config Loading Test ──
 
