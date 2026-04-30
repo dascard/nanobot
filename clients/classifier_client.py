@@ -214,7 +214,7 @@ class Guardrail:
 
     # ── Public API ──
 
-    def classify(self, message: str) -> dict:
+    def classify(self, message: str, *, allow_injection_passthrough: bool = False) -> dict:
         """Classify a private chat message.
 
         Returns dict with:
@@ -227,7 +227,9 @@ class Guardrail:
 
         # L1: 模型注入检测（检查原始消息）
         if self._detect_injection(message):
-            return {"status": "injection", "complexity": 0}
+            if not allow_injection_passthrough:
+                return {"status": "injection", "complexity": 0}
+            logger.info("Injection detected but bypassing short-circuit for passthrough")
 
         # L1.5: 去掉误导性前缀标记（[SYSTEM] 等）后再发给模型
         message = self._CONFUSING_PREFIXES.sub("", message).strip()

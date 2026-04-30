@@ -878,7 +878,11 @@ async def proxy_chat(
                         "queries": [merged],
                         "files": _normalize_files(req.files),
                         "qwen_task": asyncio.create_task(
-                            asyncio.to_thread(guardrail.classify, guardrail_input)
+                            asyncio.to_thread(
+                                guardrail.classify,
+                                guardrail_input,
+                                allow_injection_passthrough=_is_guardrail_superuser(req.user_id),
+                            )
                         ),
                         "done": asyncio.Event(),
                         "result": None,
@@ -907,7 +911,11 @@ async def proxy_chat(
                         "queries": [merged],
                         "files": _normalize_files(req.files),
                         "qwen_task": asyncio.create_task(
-                            asyncio.to_thread(guardrail.classify, guardrail_input)
+                            asyncio.to_thread(
+                                guardrail.classify,
+                                guardrail_input,
+                                allow_injection_passthrough=_is_guardrail_superuser(req.user_id),
+                            )
                         ),
                         "done": asyncio.Event(),
                         "result": None,
@@ -947,7 +955,11 @@ async def proxy_chat(
             buffered_query = _join_buffered_messages(buffered_messages)
             buffered_guardrail_input = _build_guardrail_input(buffered_query, buffered_files)
             if len(buffered_messages) > 1:
-                result = await asyncio.to_thread(guardrail.classify, buffered_guardrail_input)
+                result = await asyncio.to_thread(
+                    guardrail.classify,
+                    buffered_guardrail_input,
+                    allow_injection_passthrough=_is_guardrail_superuser(req.user_id),
+                )
             else:
                 result = await qwen_task
 
@@ -958,13 +970,6 @@ async def proxy_chat(
 
             raw_guardrail_status = result["status"]
             guardrail_status = raw_guardrail_status
-            if raw_guardrail_status == "injection" and _is_guardrail_superuser(req.user_id):
-                guardrail_status = "reply"
-                logger.warning(
-                    "[/chat] Guardrail injection bypassed for superuser: user=%s admin=%s",
-                    req.user_id,
-                    ADMIN_USER_ID,
-                )
             logger.info(
                 "[/chat] Guardrail result: raw_status=%s, effective_status=%s, complexity=%s, user=%s",
                 raw_guardrail_status,

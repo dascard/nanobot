@@ -10,3 +10,4 @@ node_modules/
 workspace/*
 !workspace/README.md
 sentinel/model.safetensors
+cc2codex/
