@@ -21,7 +21,7 @@ from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER, NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT,
     LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING
 )
-from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest
+from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest, GroupName
 from core.evolution import evolution_task
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from nanobot_kt.bridge import get_bridge
@@ -649,17 +649,16 @@ def update_group_name(
     req: UpdateGroupNameRequest,
     db: Session = Depends(get_db),
 ):
-    """更新 session_name != 当前群名的记录（初始修正 + 群改名后重新同步）。"""
-    updated = (
-        db.query(ChatLog)
-        .filter(
-            ChatLog.session_id == req.group_id,
-            ChatLog.session_name != req.group_name,
-        )
-        .update({"session_name": req.group_name}, synchronize_session="fetch")
+    """写入 group_names 表（O(1) upsert，不回写 chat_logs）。"""
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    stmt = sqlite_insert(GroupName).values(
+        group_id=req.group_id, name=req.group_name,
+    ).on_conflict_do_update(
+        index_elements=["group_id"], set_={"name": req.group_name},
     )
+    db.execute(stmt)
     db.commit()
-    return {"status": "ok", "updated": updated}
+    return {"status": "ok"}
 
 
 @router.get("/search_logs")

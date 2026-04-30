@@ -227,12 +227,26 @@ class GroupAnalysisTool(BaseTool):
             return ToolResult(error="Missing 'group_id' argument")
 
         try:
-            from core.database import SessionLocal, ChatLog, Persona
+            from core.database import SessionLocal, ChatLog, GroupName
             from clients.new_api_client import NewAPIClient
             from config import NEW_API_KEY, NEW_API_BASE_URL
 
             db = SessionLocal()
             try:
+                # 0. 群名——从 group_names 表查，无则用 session_name fallback
+                gn = db.query(GroupName).filter(GroupName.group_id == group_id).first()
+                if gn and gn.name:
+                    group_name = gn.name
+                else:
+                    # fallback: 从 chat_logs 最新记录的 session_name 取
+                    last = (
+                        db.query(ChatLog.session_name)
+                        .filter(ChatLog.session_id == group_id)
+                        .order_by(ChatLog.id.desc())
+                        .first()
+                    )
+                    group_name = last[0] if last and last[0] and last[0] != f"群聊:{group_id}" else group_id
+
                 # 1. 读取群消息
                 logs = (
                     db.query(ChatLog)
@@ -265,9 +279,6 @@ class GroupAnalysisTool(BaseTool):
                 if len(messages) < 3:
                     return ToolResult(output=f"群 {group_id} 可分析的消息不足（需≥3条）", exit_code=0)
 
-                # 3. 群名——从数据库 session_name 或第一条消息中获取
-                db_names = set(l.session_name for l in logs if l.session_name and l.session_name != f"群聊:{group_id}")
-                group_name = next(iter(db_names), group_id)
                 logger.info(f"[group_analysis] {len(logs)} raw → {len(messages)} cleaned for {group_name}")
 
                 # 4. 格式化消息文本

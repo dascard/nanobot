@@ -167,6 +167,14 @@ class PersonaBehavior(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class GroupName(Base):
+    """群名映射——单独存储，改名时只写一行而非全部 chat_logs 回写。"""
+    __tablename__ = "group_names"
+    group_id = Column(String, primary_key=True, index=True)
+    name = Column(String, default="")
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
     Base.metadata.create_all(bind=engine)
