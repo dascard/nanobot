@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from sqlalchemy import or_
 
 logger = logging.getLogger("nanobot.tool.group_analysis")
 
@@ -234,14 +235,20 @@ class GroupAnalysisTool(BaseTool):
             db = SessionLocal()
             try:
                 # 0. 群名——从 users 表查（群也是 user，id=group_xxx）
-                uid = f"group_{group_id}" if not group_id.startswith("group_") else group_id
-                u = db.query(User).filter(User.id == uid).first()
-                group_name = (u.name or group_id) if u else group_id
+                normalized_group_id = f"group_{group_id}" if not group_id.startswith("group_") else group_id
+                legacy_group_id = normalized_group_id.removeprefix("group_")
+                u = db.query(User).filter(User.id == normalized_group_id).first()
+                group_name = (u.name or normalized_group_id) if u else normalized_group_id
 
                 # 1. 读取群消息
                 logs = (
                     db.query(ChatLog)
-                    .filter(ChatLog.session_id == group_id)
+                    .filter(
+                        or_(
+                            ChatLog.session_id == normalized_group_id,
+                            ChatLog.session_id == legacy_group_id,
+                        )
+                    )
                     .order_by(ChatLog.id.desc())
                     .limit(300)
                     .all()
@@ -290,7 +297,7 @@ class GroupAnalysisTool(BaseTool):
                 # 5. 注入画像（如有）
                 from core.database import Persona as PersonaModel
                 persona = db.query(PersonaModel).filter(
-                    PersonaModel.user_id == group_id
+                    PersonaModel.user_id == normalized_group_id
                 ).first()
                 persona_text = ""
                 if persona and persona.persona_json and persona.persona_json != "{}":

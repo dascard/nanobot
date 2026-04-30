@@ -48,6 +48,25 @@ def test_submit_log(client, db_session):
     assert logs[0].content == "hello API"
     assert logs[1].content == "hi"
 
+
+def test_submit_ambient_log_uses_normalized_group_session_id(client, db_session):
+    response = client.post(
+        "/api/v1/log_ambient",
+        json={
+            "group_id": "987654",
+            "sender_name": "测试成员",
+            "session_name": "测试群",
+            "content": "大家好",
+        },
+    )
+
+    assert response.status_code == 200
+
+    log = db_session.query(ChatLog).filter_by(role="ambient").one()
+    assert log.user_id == "group_987654"
+    assert log.session_id == "group_987654"
+    assert log.content == "[测试成员]: 大家好"
+
 def test_proxy_chat(client, db_session):
     from unittest.mock import patch
     from unittest.mock import AsyncMock
@@ -438,6 +457,8 @@ async def test_private_buffer_merges_files_for_final_bridge_request(db_session, 
     fake_now["value"] = 3.0
     task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
     await real_sleep(0)
+    assert _private_buffers["u-files"]["window_seconds"] == 10.0
+    assert _private_buffers["u-files"]["deadline"] == 13.0
     release_first_sleep.set()
 
     await second_sleep_started.wait()
@@ -466,4 +487,78 @@ async def test_private_buffer_merges_files_for_final_bridge_request(db_session, 
     assert "[图片附件 2 张]" in user_turn.content
     assert "https://example.com/a.png" not in user_turn.content
     assert "u-files" not in _private_buffers
+
+
+@pytest.mark.asyncio
+async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db_session, monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from api.routes import ChatProxyRequest, proxy_chat, _private_buffers
+
+    _private_buffers.clear()
+
+    class DummyGuardrail:
+        def classify(self, message, allow_injection_passthrough=False):
+            return {"status": "reply", "complexity": 5}
+
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(return_value="图后文本回复")
+
+    fake_now = {"value": 0.0}
+    first_sleep_started = asyncio.Event()
+    second_sleep_started = asyncio.Event()
+    release_first_sleep = asyncio.Event()
+    release_second_sleep = asyncio.Event()
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(_delay):
+        start = fake_now["value"]
+        if not first_sleep_started.is_set():
+            first_sleep_started.set()
+            await real_sleep(0)
+            await release_first_sleep.wait()
+        else:
+            second_sleep_started.set()
+            await real_sleep(0)
+            await release_second_sleep.wait()
+        fake_now["value"] = max(fake_now["value"], start + _delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr("api.routes.get_guardrail", lambda: DummyGuardrail())
+    monkeypatch.setattr("api.routes.get_bridge", lambda: mock_bridge)
+    monkeypatch.setattr("api.routes.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("api.routes._time.time", lambda: fake_now["value"])
+
+    req1 = ChatProxyRequest(
+        user_id="u-shrink",
+        session_id="private_u-shrink",
+        query="先看图片",
+        files=["https://example.com/a.png"],
+    )
+    req2 = ChatProxyRequest(
+        user_id="u-shrink",
+        session_id="private_u-shrink",
+        query="然后看文本",
+        files=None,
+    )
+
+    task1 = asyncio.create_task(proxy_chat(req1, BackgroundTasks(), db_session, None))
+    await first_sleep_started.wait()
+    fake_now["value"] = 3.0
+    task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
+    await real_sleep(0)
+    assert _private_buffers["u-shrink"]["window_seconds"] == 5.0
+    assert _private_buffers["u-shrink"]["deadline"] == 8.0
+    release_first_sleep.set()
+
+    await second_sleep_started.wait()
+    release_second_sleep.set()
+
+    result1 = await asyncio.wait_for(task1, timeout=1)
+    result2 = await asyncio.wait_for(task2, timeout=1)
+
+    assert result1["status"] == "ok"
+    assert result1["answer"] == "图后文本回复"
+    assert result2 == {"status": "silent", "user_id": "u-shrink"}
+    assert "u-shrink" not in _private_buffers
 

@@ -22,7 +22,8 @@ from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
 
 logger = logging.getLogger("nanobot.daily_digest")
 
-QQBOT_PUSH_URL = os.environ.get("QQBOT_PUSH_URL", "http://172.17.0.1:8080/nanobot/push")
+# QQbot / NoneBot 侧默认监听 8082；若部署环境不同，可通过环境变量覆盖。
+QQBOT_PUSH_URL = os.environ.get("QQBOT_PUSH_URL", "http://172.17.0.1:8082/nanobot/push")
 
 TOPIC_KEYWORDS = {
     "model_release": ["发布", "release", "new model", "版本", "更新"],
@@ -61,6 +62,26 @@ def _next_run_delay_seconds(now: datetime, run_hour: int) -> int:
     if now >= target:
         target = target + timedelta(days=1)
     return max(60, int((target - now).total_seconds()))
+
+
+def _normalize_group_session_id(group_id: str) -> str:
+    group_id = str(group_id or "").strip()
+    if not group_id:
+        return ""
+    return group_id if group_id.startswith("group_") else f"group_{group_id}"
+
+
+def _normalize_chatlog_session_id(session_id: str, user_id: str = "") -> str:
+    sid = (session_id or "").strip()
+    uid = (user_id or "").strip()
+    if uid.startswith("group_"):
+        return sid if sid.startswith("group_") else uid
+    return sid
+
+
+def _group_push_target_id(session_id: str) -> str:
+    session_id = _normalize_group_session_id(session_id)
+    return session_id.removeprefix("group_")
 
 
 def _format_log_line(log: ChatLog) -> str:
@@ -147,7 +168,7 @@ def generate_daily_digest_for_date(target_date: str, user_id: str | None = None)
         for log in all_logs:
             if _to_day(log.created_at) != target_date:
                 continue
-            sid = (log.session_id or "").strip()
+            sid = _normalize_chatlog_session_id(log.session_id, log.user_id)
             if not sid:
                 continue
             by_session.setdefault(sid, []).append(log)
@@ -427,15 +448,15 @@ async def run_group_analysis_scheduled() -> int:
     db = SessionLocal()
     executed = 0
     try:
-        groups = (
-            db.query(ChatLog.session_id)
-            .filter(ChatLog.session_id.isnot(None))
-            .filter(ChatLog.session_id != "")
-            .filter(ChatLog.session_id.like("group_%") | ~ChatLog.session_id.like("private_%"))
-            .distinct()
-            .all()
+        groups = db.query(ChatLog.session_id, ChatLog.user_id).distinct().all()
+        group_ids = sorted(
+            {
+                normalized_sid
+                for session_id, user_id in groups
+                for normalized_sid in [_normalize_chatlog_session_id(session_id, user_id)]
+                if normalized_sid.startswith("group_")
+            }
         )
-        group_ids = [g[0] for g in groups if not g[0].startswith("private_") and g[0] != "news_search"]
         if not group_ids:
             return 0
 
@@ -444,7 +465,7 @@ async def run_group_analysis_scheduled() -> int:
         for gid in group_ids:
             output = await _run_single_group_analysis(gid)
             if output:
-                await push_to_qq("group", gid, output)
+                await push_to_qq("group", _group_push_target_id(gid), output)
                 executed += 1
                 await asyncio.sleep(3)
 

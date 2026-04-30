@@ -259,6 +259,13 @@ def _normalize_files(files: Optional[List[str]]) -> list[str]:
     return [file for file in (files or []) if isinstance(file, str) and file.strip()]
 
 
+def _normalize_group_session_id(group_id: str) -> str:
+    group_id = str(group_id or "").strip()
+    if not group_id:
+        return ""
+    return group_id if group_id.startswith("group_") else f"group_{group_id}"
+
+
 def _merge_buffered_files(existing: list[str], incoming: Optional[List[str]]) -> list[str]:
     merged = list(existing)
     for file in _normalize_files(incoming):
@@ -617,7 +624,7 @@ def submit_ambient_log(
     _auth=Depends(verify_token),
 ):
     """专门接收前台悄无声息收集的环境窥屏包，设为已处理，不消耗高级分析算力，只做持久化备份"""
-    actual_user_id = f"group_{req.group_id}"
+    actual_user_id = _normalize_group_session_id(req.group_id)
     
     # ensure User exists, and stamp group name if provided (not fallback)
     user = db.query(User).filter(User.id == actual_user_id).first()
@@ -632,7 +639,7 @@ def submit_ambient_log(
     
     db.add(ChatLog(
         user_id=actual_user_id,
-        session_id=str(req.group_id),
+        session_id=actual_user_id,
         sender_name=req.sender_name,
         session_name=req.session_name,
         role="ambient",
@@ -1164,15 +1171,21 @@ async def proxy_chat(
                                 await _finalize_private_buffer(req.user_id, answer)
                                 _persist_chat_turn(db, persist_req, answer, guardrail_status)
                                 from core.daily_digest import push_to_qq
-                                await push_to_qq(
+                                ok = await push_to_qq(
                                     "private" if not bridge_meta.get("is_group") else "group",
                                     _resolve_push_target_id(req, bool(bridge_meta.get("is_group"))),
                                     answer,
                                 )
-                                logger.info(
-                                    f"[/chat] Stream-aborted result pushed: "
-                                    f"user={req.user_id}, len={len(answer)}"
-                                )
+                                if ok:
+                                    logger.info(
+                                        f"[/chat] Stream-aborted result pushed: "
+                                        f"user={req.user_id}, len={len(answer)}"
+                                    )
+                                else:
+                                    logger.error(
+                                        f"[/chat] Stream-aborted result push failed: "
+                                        f"user={req.user_id}, session={req.session_id}, len={len(answer)}"
+                                    )
                             else:
                                 await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
                                 _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
