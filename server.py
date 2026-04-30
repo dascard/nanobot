@@ -61,7 +61,7 @@ async def lifespan(app: FastAPI):
         logger.info("Daily digest scheduler initialized.")
 
     # Scheduled task runner (push notifications to QQ)
-    from core.daily_digest import scheduled_task_runner
+    from core.daily_digest import scheduled_task_runner, group_analysis_scheduler
     task_stop_event = threading.Event()
     task_thread = threading.Thread(
         target=scheduled_task_runner,
@@ -71,6 +71,17 @@ async def lifespan(app: FastAPI):
     )
     task_thread.start()
     logger.info("Scheduled task runner initialized.")
+
+    # Group daily analysis scheduler (每天晚上自动分析群聊)
+    ga_stop_event = threading.Event()
+    ga_thread = threading.Thread(
+        target=group_analysis_scheduler,
+        args=(ga_stop_event,),
+        daemon=True,
+        name="group-analysis-scheduler",
+    )
+    ga_thread.start()
+    logger.info("Group analysis scheduler initialized.")
 
     # Pre-load sentinel model at startup (not lazily on first classify)
     try:
@@ -92,6 +103,8 @@ async def lifespan(app: FastAPI):
         digest_stop_event.set()
     if digest_thread is not None:
         digest_thread.join(timeout=5)
+    ga_stop_event.set()
+    ga_thread.join(timeout=5)
     await shutdown_bridge()
 
 
