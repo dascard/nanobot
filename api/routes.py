@@ -649,10 +649,13 @@ def update_group_name(
     req: UpdateGroupNameRequest,
     db: Session = Depends(get_db),
 ):
-    """QQbot 首次获取到群名后，批量回写所有历史 chat_logs 的 session_name。"""
+    """仅更新 session_name 仍为旧格式（"群聊:xxx"）的记录，已修正的不重复写。"""
     updated = (
         db.query(ChatLog)
-        .filter(ChatLog.session_id == req.group_id)
+        .filter(
+            ChatLog.session_id == req.group_id,
+            ChatLog.session_name.like("群聊:%"),
+        )
         .update({"session_name": req.group_name}, synchronize_session="fetch")
     )
     db.commit()
