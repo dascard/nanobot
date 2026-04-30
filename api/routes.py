@@ -35,11 +35,12 @@ logger = logging.getLogger("nanobot.routes")
 router = APIRouter(prefix="/api/v1")
 EMPTY_ASSISTANT_PLACEHOLDER = "（无回复内容）"
 
-# 私聊缓冲：5 秒窗口收集碎片消息，期间 Qwen 并行计算
+# 私聊缓冲：基础 5 秒窗口；只要有文件附件就延长到 10 秒
 _private_buffers: dict[str, dict] = {}
 _private_lock = asyncio.Lock()
 MAX_BUFFERED_MESSAGES = 10  # 单用户 5s 窗口内最多收集条数
 PRIVATE_BUFFER_WINDOW_SECONDS = 5.0
+PRIVATE_BUFFER_WINDOW_WITH_FILES_SECONDS = 10.0
 
 # Prompt budget caps to avoid hidden context blow-up.
 MAX_QUERY_CHARS = 2000
@@ -264,6 +265,14 @@ def _merge_buffered_files(existing: list[str], incoming: Optional[List[str]]) ->
         if file not in merged:
             merged.append(file)
     return merged
+
+
+def _private_buffer_window_seconds(files: Optional[List[str]]) -> float:
+    return (
+        PRIVATE_BUFFER_WINDOW_WITH_FILES_SECONDS
+        if _normalize_files(files)
+        else PRIVATE_BUFFER_WINDOW_SECONDS
+    )
 
 
 def _build_guardrail_input(query: str, files: Optional[List[str]]) -> str:
@@ -629,6 +638,27 @@ def submit_ambient_log(
     db.commit()
     return {"status": "ok", "message": "ambient log saved"}
 
+
+class UpdateGroupNameRequest(BaseModel):
+    group_id: str
+    group_name: str
+
+
+@router.post("/update_group_name")
+def update_group_name(
+    req: UpdateGroupNameRequest,
+    db: Session = Depends(get_db),
+):
+    """QQbot 首次获取到群名后，批量回写所有历史 chat_logs 的 session_name。"""
+    updated = (
+        db.query(ChatLog)
+        .filter(ChatLog.session_id == req.group_id)
+        .update({"session_name": req.group_name}, synchronize_session="fetch")
+    )
+    db.commit()
+    return {"status": "ok", "updated": updated}
+
+
 @router.get("/search_logs")
 def search_history_logs(
     user_id: str,
@@ -874,6 +904,7 @@ async def proxy_chat(
                 if buf is None:
                     # 新缓冲窗口
                     is_first = True
+                    window_seconds = _private_buffer_window_seconds(req.files)
                     buf = _private_buffers[req.user_id] = {
                         "queries": [merged],
                         "files": _normalize_files(req.files),
@@ -887,7 +918,8 @@ async def proxy_chat(
                         "done": asyncio.Event(),
                         "result": None,
                         "answer": None,
-                        "deadline": now + PRIVATE_BUFFER_WINDOW_SECONDS,
+                        "deadline": now + window_seconds,
+                        "window_seconds": window_seconds,
                     }
                 elif not buf["done"].is_set():
                     # 缓冲窗口内——追加消息（超上限时并入最后一条，避免静默丢弃）
@@ -901,12 +933,15 @@ async def proxy_chat(
                         )
                         buf["queries"][-1] = _join_buffered_messages([buf["queries"][-1], merged])
                     buf["files"] = _merge_buffered_files(buf.get("files", []), req.files)
-                    buf["deadline"] = now + PRIVATE_BUFFER_WINDOW_SECONDS
+                    window_seconds = _private_buffer_window_seconds(req.files)
+                    buf["window_seconds"] = window_seconds
+                    buf["deadline"] = now + window_seconds
                     done_event = buf["done"]
                 else:
                     # 旧缓冲已结束——开新窗口
                     _private_buffers.pop(req.user_id, None)
                     is_first = True
+                    window_seconds = _private_buffer_window_seconds(req.files)
                     buf = _private_buffers[req.user_id] = {
                         "queries": [merged],
                         "files": _normalize_files(req.files),
@@ -920,7 +955,8 @@ async def proxy_chat(
                         "done": asyncio.Event(),
                         "result": None,
                         "answer": None,
-                        "deadline": now + PRIVATE_BUFFER_WINDOW_SECONDS,
+                        "deadline": now + window_seconds,
+                        "window_seconds": window_seconds,
                     }
 
             if done_event is not None:
