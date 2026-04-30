@@ -193,9 +193,14 @@ class GroupAnalysisTool(BaseTool):
 
     @property
     def description(self) -> str:
+        from config import GROUP_NAMES
+        name_hint = ""
+        if GROUP_NAMES:
+            items = "、".join(f"{v}({k})" for k, v in list(GROUP_NAMES.items())[:5])
+            name_hint = f" 已知群: {items}"
         return (
             "分析群聊消息生成日报。提取话题总结、活跃用户称号、金句和氛围。"
-            "当用户要求总结群聊、分析群消息、看群日报时使用。"
+            f"当用户要求总结群聊、分析群消息、看群日报时使用。{name_hint}"
         )
 
     @property
@@ -264,9 +269,12 @@ class GroupAnalysisTool(BaseTool):
                 if len(messages) < 3:
                     return ToolResult(output=f"群 {group_id} 可分析的消息不足（需≥3条）", exit_code=0)
 
-                logger.info(f"[group_analysis] {len(logs)} raw → {len(messages)} cleaned for group {group_id}")
+                # 3. 群名解析
+                from config import GROUP_NAMES
+                group_name = GROUP_NAMES.get(group_id, group_id)
+                logger.info(f"[group_analysis] {len(logs)} raw → {len(messages)} cleaned for {group_name}")
 
-                # 3. 格式化消息文本
+                # 4. 格式化消息文本
                 messages_text = "\n".join(
                     f"[{m['time']}] [{m['user_id']}]: {m['content']}"
                     for m in messages
@@ -329,6 +337,7 @@ class GroupAnalysisTool(BaseTool):
 
                 # 8. Markdown 输出（QQbot 端 md_to_pic 自动渲染为图片）
                 report = _format_markdown(
+                    group_name,
                     topics if isinstance(topics, dict) else {},
                     titles if isinstance(titles, dict) else {},
                     quotes if isinstance(quotes, dict) else {},
@@ -343,9 +352,9 @@ class GroupAnalysisTool(BaseTool):
             return ToolResult(error=f"群聊分析失败: {str(e)}")
 
 
-def _format_markdown(topics: dict, titles: dict, quotes: dict, msg_count: int) -> str:
+def _format_markdown(group_name: str, topics: dict, titles: dict, quotes: dict, msg_count: int) -> str:
     """合并三路分析结果为 Markdown（QQbot 端 md_to_pic 自动渲染为图片）。"""
-    lines = [f"# 📊 群聊日报", f"", f"> 分析 {msg_count} 条消息", f""]
+    lines = [f"# 📊 {group_name} 群聊日报", f"", f"> 分析 {msg_count} 条消息", f""]
 
     topic_list = topics.get("topics", [])
     if topic_list:

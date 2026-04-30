@@ -82,6 +82,26 @@ DAILY_DIGEST_HOUR = int(os.environ.get("DAILY_DIGEST_HOUR", "4"))
 CLASSIFIER_API_URL = os.environ.get("CLASSIFIER_API_URL", "http://172.17.0.1:9999/v1")
 SENTINEL_MODEL_PATH = os.environ.get("SENTINEL_MODEL_PATH", "./models/sentinel")
 CLASSIFIER_TIMEOUT = float(os.environ.get("CLASSIFIER_TIMEOUT", "5.0"))
+
+# ── 图片摘要（复用本地 Qwen 视觉模型） ──
+IMAGE_SUMMARY_API_URL = os.environ.get("IMAGE_SUMMARY_API_URL", CLASSIFIER_API_URL)
+IMAGE_SUMMARY_TIMEOUT = float(os.environ.get("IMAGE_SUMMARY_TIMEOUT", "120.0"))
+IMAGE_SUMMARY_MAX_TOKENS = int(os.environ.get("IMAGE_SUMMARY_MAX_TOKENS", "512"))
+IMAGE_SUMMARY_TEMPERATURE = float(os.environ.get("IMAGE_SUMMARY_TEMPERATURE", "0.1"))
+IMAGE_SUMMARY_TOP_P = float(os.environ.get("IMAGE_SUMMARY_TOP_P", "0.9"))
+
+# ── 图片预处理（下载/缓存/压缩后再上传） ──
+IMAGE_PREPROCESS_CACHE_DIR = os.environ.get(
+    "IMAGE_PREPROCESS_CACHE_DIR",
+    os.path.join(LOG_DIR, "image_cache"),
+)
+# 原始图片字节上限；默认 768KiB，压缩后再转 base64 约等于 1MiB
+IMAGE_PREPROCESS_MAX_BYTES = int(os.environ.get("IMAGE_PREPROCESS_MAX_BYTES", str(768 * 1024)))
+IMAGE_PREPROCESS_MAX_SIDE = int(os.environ.get("IMAGE_PREPROCESS_MAX_SIDE", "1024"))
+IMAGE_PREPROCESS_START_QUALITY = int(os.environ.get("IMAGE_PREPROCESS_START_QUALITY", "92"))
+IMAGE_PREPROCESS_MIN_QUALITY = int(os.environ.get("IMAGE_PREPROCESS_MIN_QUALITY", "45"))
+IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT = float(os.environ.get("IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT", "20.0"))
+
 GUARDRAIL_INJECTION_PATTERNS = [
     r'\[SYSTEM', r'\[INST\]', r'</?system>', r'</?user>',
     r'IGNORE\s+.*RULE', r'忽略\s*.*指令', r'忽略\s*.*规则',
@@ -90,3 +110,14 @@ GUARDRAIL_INJECTION_PATTERNS = [
     r'<\|im_start\|>', r'<\|im_end\|>',
     r'从现在开始.*助手', r'从现在开始.*无限制',
 ]
+
+# ── 群名映射 ──
+# JSON 格式环境变量: GROUP_NAMES='{"1027790249":"凡赛尔图书馆","1097666427":"火魄生态瓶"}'
+import json as _json
+GROUP_NAMES: dict[str, str] = {}
+_raw = os.environ.get("GROUP_NAMES", "")
+if _raw:
+    try:
+        GROUP_NAMES = _json.loads(_raw)
+    except _json.JSONDecodeError:
+        pass
