@@ -14,9 +14,10 @@ from typing import Any, Optional
 from kohakuterrarium.core.agent import Agent
 from kohakuterrarium.core.config import load_agent_config
 from kohakuterrarium.core.events import create_user_input_event
-from kohakuterrarium.llm.message import ImagePart, make_multimodal_content
+from kohakuterrarium.llm.message import make_multimodal_content
 
 from nanobot_kt.output import BufferedOutput
+from nanobot_kt.image_pipeline import prepare_image_parts
 from clients.new_api_client import NewAPIClient
 from clients.model_registry import registry
 from config import NEW_API_KEY, NEW_API_BASE_URL
@@ -76,15 +77,6 @@ class NanobotBridge:
         logger.info("KT Agent stopped")
 
     PERSONA_MARKER = "[PersonaContext]"
-
-    @staticmethod
-    def _build_event_content(query: str, files: list[str] | None) -> str | list[Any]:
-        image_parts = [
-            ImagePart(url=file_url, detail="low", source_type="qq", source_name=f"attachment_{idx + 1}")
-            for idx, file_url in enumerate(files or [])
-            if isinstance(file_url, str) and file_url.strip()
-        ]
-        return make_multimodal_content(query, images=image_parts)
 
     def _build_persona_system_reference(self, user_id: str, persona_text: str) -> str:
         cleaned = str(persona_text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
@@ -198,7 +190,18 @@ class NanobotBridge:
             logger.debug(f"[NanobotBridge] Agent output_module attr: {getattr(self._agent, '_output_module', 'NOT SET')}")
 
             # Create a user input event for the KT controller
-            event_content = self._build_event_content(query, meta.get("files"))
+            files = meta.get("files")
+            if files:
+                image_parts = await asyncio.to_thread(
+                    prepare_image_parts,
+                    files,
+                    source_type="qq",
+                    source_name_prefix="attachment",
+                    detail="low",
+                )
+                event_content = make_multimodal_content(query, images=image_parts)
+            else:
+                event_content = query
             event = create_user_input_event(event_content)
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 

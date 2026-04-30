@@ -49,6 +49,22 @@ class TestBufferedOutput:
         output = BufferedOutput()
         output.on_activity("tool_start", "sql_analysis")  # Should not raise
 
+    def test_tool_error_streams_progress_without_polluting_final_response(self):
+        from nanobot_kt.output import BufferedOutput
+
+        async def _run():
+            output = BufferedOutput()
+            queue = asyncio.Queue()
+            output.enable_stream(queue)
+            output.on_activity("tool_error", "[schedule_task] ERROR: 推送失败")
+            event = await queue.get()
+            return output.get_response(), event
+
+        response, event = asyncio.run(_run())
+        assert response == ""
+        assert event["status"] == "progress"
+        assert "工具失败" in event["text"]
+
 
 # ── BaseTool Adapter Tests ──
 
@@ -196,6 +212,7 @@ class TestNanobotBridge:
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_uses_multimodal_event_for_files(self, MockAgent, mock_load):
         from nanobot_kt.bridge import NanobotBridge
+        from kohakuterrarium.llm.message import ImagePart
 
         mock_config = MagicMock()
         mock_config.name = "test"
@@ -216,24 +233,36 @@ class TestNanobotBridge:
 
         mock_agent._process_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
+        with patch(
+            "nanobot_kt.bridge.prepare_image_parts",
+            return_value=[
+                ImagePart(
+                    url="data:image/jpeg;base64,ZmFrZQ==",
+                    detail="low",
+                    source_type="qq",
+                    source_name="attachment_1",
+                )
+            ],
+        ) as mock_prepare:
+            bridge = NanobotBridge()
 
-        bridge = NanobotBridge()
+            async def _run():
+                await bridge.start()
+                return await bridge.handle_message(
+                    "看看这张图",
+                    user_id="u1",
+                    metadata={"files": ["https://example.com/a.png", "https://example.com/b.png"]},
+                )
 
-        async def _run():
-            await bridge.start()
-            return await bridge.handle_message(
-                "看看这张图",
-                user_id="u1",
-                metadata={"files": ["https://example.com/a.png", "https://example.com/b.png"]},
-            )
+            result = asyncio.run(_run())
 
-        result = asyncio.run(_run())
         assert result == "ok"
+        mock_prepare.assert_called_once()
         assert isinstance(captured["event"].content, list)
         assert captured["event"].content[0].type == "text"
         image_parts = [part for part in captured["event"].content if getattr(part, "type", "") == "image_url"]
-        assert len(image_parts) == 2
-        assert image_parts[0].url == "https://example.com/a.png"
+        assert len(image_parts) == 1
+        assert image_parts[0].url.startswith("data:image/jpeg;base64,")
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
@@ -294,3 +323,5 @@ class TestCreatureConfig:
         assert config.name == "nanobot"
         assert config.tool_format in ["bracket", "native"]
         assert len(config.tools) >= 3
+        tool_names = {tool.name for tool in config.tools}
+        assert "image_summary" in tool_names

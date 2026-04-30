@@ -47,6 +47,7 @@ class BufferedOutput(BaseOutputModule):
         "sql_analysis": "正在查询数据库...",
         "python_sandbox": "正在执行数据分析...",
         "news_search": "正在搜索资讯...",
+        "image_summary": "正在生成图片摘要...",
         "persona_update": "正在更新画像...",
         "memory_read": "正在读取记忆...",
         "memory_write": "正在写入记忆...",
@@ -112,9 +113,12 @@ class BufferedOutput(BaseOutputModule):
 
         if activity_type == "tool_error":
             logger.error(f"[Activity] {activity_type}: {detail}")
-            self._buffer.append(f"\n[工具错误] {detail}")
             if self._stream_queue is not None:
-                asyncio.ensure_future(self._stream_queue.put({"status": "error", "message": detail}))
+                asyncio.ensure_future(
+                    self._stream_queue.put(
+                        {"status": "progress", "text": f"工具失败：{detail}"}
+                    )
+                )
             return
 
         if activity_type == "tool_start":

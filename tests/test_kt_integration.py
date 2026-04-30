@@ -79,6 +79,54 @@ class TestNewAPIClientRetry:
         assert "error" in result
         assert "missing" in result["error"].lower()
 
+    @pytest.mark.asyncio
+    async def test_manual_model_skips_routing(self):
+        """manual_model 应该直接命中指定模型，不再走候选路由。"""
+        from clients.new_api_client import NewAPIClient
+
+        client = NewAPIClient(api_key="test-key", base_url="http://fake")
+        client.sync_models_to_registry = AsyncMock(return_value=0)
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(return_value={
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        })
+
+        class _RespCM:
+            def __init__(self, resp):
+                self.resp = resp
+
+            async def __aenter__(self):
+                return self.resp
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class _SessionCM:
+            def __init__(self, session):
+                self.session = session
+
+            async def __aenter__(self):
+                return self.session
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(return_value=_RespCM(mock_resp))
+
+        with patch.object(client, "get_ordered_candidates", side_effect=AssertionError("manual_model 不应走候选路由")):
+            with patch("aiohttp.ClientSession", return_value=_SessionCM(mock_session)):
+                result = await client.chat_completion(
+                    messages=[{"role": "user", "content": "描述这张图"}],
+                    manual_model="gemma-4",
+                )
+
+        assert result["choices"][0]["message"]["content"] == "OK"
+        assert result["_nanobot_model_id"] == "gemma-4"
+
 
 # ── UnifiedProvider Tests ──
 

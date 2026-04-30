@@ -522,13 +522,20 @@ class NewAPIClient:
         await self.sync_models_to_registry(force=False)
 
         complexity = self.estimate_complexity(messages, tools)
-        intel_floor = max(1, complexity - 1)
-        candidates = self.get_ordered_candidates(
-            provider="new-api",
-            intel_floor=intel_floor,
-        )
-        if not candidates:
-            return {"error": "No candidates available"}
+        if manual_model:
+            candidates = [{
+                "id": manual_model,
+                "intelligence": 0,
+                "cost_input_1m": 0.0,
+            }]
+        else:
+            intel_floor = max(1, complexity - 1)
+            candidates = self.get_ordered_candidates(
+                provider="new-api",
+                intel_floor=intel_floor,
+            )
+            if not candidates:
+                return {"error": "No candidates available"}
 
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
@@ -607,17 +614,18 @@ class NewAPIClient:
         await self.sync_models_to_registry(force=False)
 
         complexity = self.estimate_complexity(messages, tools)
-        intel_floor = max(1, complexity - 1)
-        candidates = self.get_ordered_candidates(
-            provider="new-api",
-            intel_floor=intel_floor,
-        )
         if manual_model:
             target_model = manual_model
-        elif candidates:
-            target_model = str(candidates[0].get("id", ""))
         else:
-            target_model = self._resolve_model(model_tier, manual_model)
+            intel_floor = max(1, complexity - 1)
+            candidates = self.get_ordered_candidates(
+                provider="new-api",
+                intel_floor=intel_floor,
+            )
+            if candidates:
+                target_model = str(candidates[0].get("id", ""))
+            else:
+                target_model = self._resolve_model(model_tier, manual_model)
 
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()

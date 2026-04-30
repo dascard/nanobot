@@ -1,20 +1,19 @@
 """
-Group Analysis tool — 群聊消息分析，生成话题总结/活跃用户称号/金句提取。
+Group Analysis tool — 群聊消息分析，生成话题总结/活跃用户称号/金句/质量锐评。
 
 基于 astrbot_plugin_qq_group_daily_analysis 架构复刻：
 - 消息过滤（去 game bot 命令/纯符号/超短消息）
 - 用户统计（发言数/平均字数/夜间比例）→ LLM 称号分析
-- 三路并发 LLM（话题/称号/金句），各自 JSON→正则→降温重试
+- 四路并发 LLM（话题/称号/金句/质量），各自 JSON→正则→降温重试
 - 画像注入到分析 prompt 中保持风格一致
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
@@ -51,11 +50,11 @@ USER_TITLE_PROMPT = """根据群聊发言统计和消息内容，给活跃用户
 ## 输出 JSON
 {{
   "users": [
-    {{"user_id": "user_id", "title": "称号(≤8字)", "reason": "一句话理由"}}
+    {{"user_id": "user_id", "title": "称号(≤8字)", "mbti": "可选，4位MBTI或空字符串", "reason": "一句话理由"}}
   ]
 }}
 
-要求: 3-8个用户。称号要贴合发言风格，有趣但不冒犯。只输出JSON。"""
+要求: 3-8个用户。称号要贴合发言风格，有趣但不冒犯。MBTI 仅在把握较高时给出，否则留空。只输出JSON。"""
 
 GOLDEN_QUOTE_PROMPT = """从群聊记录中提取最有趣的发言。
 
@@ -69,6 +68,28 @@ GOLDEN_QUOTE_PROMPT = """从群聊记录中提取最有趣的发言。
 }}
 
 要求: 0-3条。优先提取幽默/有深度/有梗的发言。只输出JSON。
+
+## 群聊消息
+{messages_text}"""
+
+CHAT_QUALITY_PROMPT = """请根据以下群聊记录，给出结构化的聊天质量锐评。
+
+## 消息格式: [HH:MM] [user_id]: 内容
+
+## 输出 JSON
+{{
+  "title": "一句话总评(≤12字)",
+  "subtitle": "简短副标题(≤20字)",
+  "dimensions": [
+    {{"name": "维度名", "percentage": 0-100, "comment": "一句话点评"}}
+  ],
+  "summary": "2-3句话的整体总结"
+}}
+
+要求:
+- 维度控制在 2-4 个
+- 百分比反映相对表现，不要全部给满分
+- 只输出 JSON
 
 ## 群聊消息
 {messages_text}"""
@@ -97,6 +118,12 @@ def _clean_message(content: str) -> str | None:
     text = content.strip()
     if not text or len(text) <= 2:
         return None
+    # slash 指令 / bot mention 指令
+    if re.match(r"^\s*(?:<@!?\d+>|@\S+)?\s*/\S+", text):
+        return None
+    # 纯 mention
+    if re.match(r"^(?:<@!?\d+>|@\S+)\s*$", text):
+        return None
     # 纯数字/符号
     if re.match(r"^[\d\s\-+*/=.~`!@#$%^&*()\[\]{{}}|\\:;,.<>?/]+$", text):
         return None
@@ -110,6 +137,36 @@ def _clean_message(content: str) -> str | None:
     text = text.replace("\n", " ").replace("\r", " ")
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
     return text
+
+
+def _parse_instruction_window_hours(instructions: str) -> int | None:
+    text = str(instructions or "").strip()
+    if not text:
+        return None
+
+    hour_match = re.search(r"最近\s*(\d+)\s*小时", text)
+    if hour_match:
+        return max(1, int(hour_match.group(1)))
+
+    day_match = re.search(r"最近\s*(\d+)\s*天", text)
+    if day_match:
+        return max(1, int(day_match.group(1))) * 24
+
+    return None
+
+
+def _filter_messages_by_hours(logs: list, hours: int | None, *, now: datetime | None = None) -> list:
+    if not hours or hours <= 0:
+        return list(logs)
+
+    now = now or datetime.now()
+    cutoff = now - timedelta(hours=hours)
+    filtered = []
+    for log in logs:
+        created_at = log.get("created_at") if isinstance(log, dict) else getattr(log, "created_at", None)
+        if created_at and created_at >= cutoff:
+            filtered.append(log)
+    return filtered
 
 
 # ── 用户统计 ──
@@ -142,6 +199,55 @@ def _compute_user_stats(messages: list[dict]) -> dict:
             "night_ratio": night_ratio, "reply_ratio": reply_ratio,
         }
     return result
+
+
+def _compute_group_statistics(messages: list[dict]) -> dict[str, Any]:
+    hour_counts: dict[int, int] = defaultdict(int)
+    participants: set[str] = set()
+    total_characters = 0
+    emoji_count = 0
+
+    for message in messages:
+        participants.add(str(message.get("user_id") or "?"))
+        content = str(message.get("content") or "")
+        total_characters += len(content)
+        emoji_count += _count_emojis(content)
+        hour_counts[int(message.get("hour", 0))] += 1
+
+    message_count = len(messages)
+    participant_count = len(participants)
+    average_message_length = round(total_characters / message_count, 1) if message_count else 0.0
+    most_active_hour = max(hour_counts.items(), key=lambda item: item[1])[0] if hour_counts else 0
+
+    return {
+        "message_count": message_count,
+        "participant_count": participant_count,
+        "total_characters": total_characters,
+        "average_message_length": average_message_length,
+        "most_active_period": f"{most_active_hour:02d}:00-{(most_active_hour + 1) % 24:02d}:00",
+        "hourly_counts": dict(hour_counts),
+        "emoji_count": emoji_count,
+    }
+
+
+def _count_emojis(text: str) -> int:
+    return len(re.findall(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]", text))
+
+
+def _format_hourly_activity(hourly_counts: dict[int, int]) -> list[str]:
+    if not hourly_counts:
+        return ["_暂无活跃度分布数据_"]
+
+    peak = max(hourly_counts.values()) or 1
+    lines = [
+        "| 时段 | 消息数 | 活跃条 |",
+        "| --- | ---: | --- |",
+    ]
+    for hour in sorted(hourly_counts):
+        count = hourly_counts[hour]
+        bar_len = max(1, round(count / peak * 8))
+        lines.append(f"| {hour:02d}:00 | {count} | {'█' * bar_len} |")
+    return lines
 
 
 # ── LLM 调用 + 重试 ──
@@ -195,7 +301,7 @@ class GroupAnalysisTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "分析群聊消息生成日报。提取话题总结、活跃用户称号、金句和氛围。"
+            "分析群聊消息生成日报。提取话题总结、活跃用户称号、金句和聊天质量锐评。"
             "当用户要求总结群聊、分析群消息、看群日报时使用。"
             "group_id 可以是群号或群名（如'凡赛尔图书馆'）。"
         )
@@ -254,6 +360,7 @@ class GroupAnalysisTool(BaseTool):
                     .all()
                 )
                 logs.reverse()
+                logs = _filter_messages_by_hours(logs, _parse_instruction_window_hours(instructions))
 
                 if not logs:
                     return ToolResult(output=f"未找到群 {group_id} 的消息记录", exit_code=0)
@@ -278,6 +385,8 @@ class GroupAnalysisTool(BaseTool):
                     return ToolResult(output=f"群 {group_id} 可分析的消息不足（需≥3条）", exit_code=0)
 
                 logger.info(f"[group_analysis] {len(logs)} raw → {len(messages)} cleaned for {group_name}")
+
+                group_stats = _compute_group_statistics(messages)
 
                 # 4. 格式化消息文本
                 messages_text = "\n".join(
@@ -312,7 +421,7 @@ class GroupAnalysisTool(BaseTool):
 
                 persona_hint = f"\n\n## 分析风格指引\n{persona_text}" if persona_text else ""
 
-                # 6. 三路并发 LLM
+                # 6. 四路并发 LLM
                 client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=180)
                 system_base = "你是群聊分析助手。只输出JSON，不要markdown标记或额外说明。" + persona_hint
 
@@ -330,23 +439,30 @@ class GroupAnalysisTool(BaseTool):
                     prompt = GOLDEN_QUOTE_PROMPT.format(messages_text=messages_text)
                     return await _call_llm_with_retry(client, system_base, prompt)
 
-                topic_raw, title_raw, quote_raw = await asyncio.gather(
-                    analyze_topics(), analyze_titles(), analyze_quotes(),
+                async def analyze_quality():
+                    prompt = CHAT_QUALITY_PROMPT.format(messages_text=messages_text[-4000:])
+                    return await _call_llm_with_retry(client, system_base, prompt)
+
+                topic_raw, title_raw, quote_raw, quality_raw = await asyncio.gather(
+                    analyze_topics(), analyze_titles(), analyze_quotes(), analyze_quality(),
                 )
 
-                # 7. 解析三路结果
+                # 7. 解析四路结果
                 from core.legacy_adapter import EvolutionUtils
                 topics = EvolutionUtils.json_repair(topic_raw)
                 titles = EvolutionUtils.json_repair(title_raw)
                 quotes = EvolutionUtils.json_repair(quote_raw)
+                quality = EvolutionUtils.json_repair(quality_raw)
 
                 # 8. Markdown 输出（QQbot 端 md_to_pic 自动渲染为图片）
                 report = _format_markdown(
                     group_name,
+                    group_stats,
+                    user_stats,
                     topics if isinstance(topics, dict) else {},
                     titles if isinstance(titles, dict) else {},
+                    quality if isinstance(quality, dict) else {},
                     quotes if isinstance(quotes, dict) else {},
-                    len(messages),
                 )
                 return ToolResult(output=report, exit_code=0)
 
@@ -357,9 +473,48 @@ class GroupAnalysisTool(BaseTool):
             return ToolResult(error=f"群聊分析失败: {str(e)}")
 
 
-def _format_markdown(group_name: str, topics: dict, titles: dict, quotes: dict, msg_count: int) -> str:
-    """合并三路分析结果为 Markdown（QQbot 端 md_to_pic 自动渲染为图片）。"""
-    lines = [f"# 📊 {group_name} 群聊日报", f"", f"> 分析 {msg_count} 条消息", f""]
+def _format_markdown(
+    group_name: str,
+    group_stats: dict[str, Any],
+    user_stats: dict[str, dict],
+    topics: dict,
+    titles: dict,
+    quality: dict,
+    quotes: dict,
+) -> str:
+    """合并分析结果为 Markdown（QQbot 端 md_to_pic 自动渲染为图片）。"""
+    lines = [
+        f"# 📊 {group_name} 群聊日报",
+        "",
+        f"> 分析 {group_stats.get('message_count', 0)} 条消息",
+        "",
+        "## 统计概览",
+        "",
+        f"- 消息总数：{group_stats.get('message_count', 0)}",
+        f"- 参与人数：{group_stats.get('participant_count', 0)}",
+        f"- 总字数：{group_stats.get('total_characters', 0)}",
+        f"- 平均消息长度：{group_stats.get('average_message_length', 0)} 字",
+        f"- 最活跃时段：{group_stats.get('most_active_period', '00:00-01:00')}",
+        f"- 表情使用次数：{group_stats.get('emoji_count', 0)}",
+        "",
+        "## 活跃度分布",
+        "",
+    ]
+
+    lines.extend(_format_hourly_activity(group_stats.get("hourly_counts", {})))
+    lines.append("")
+
+    if user_stats:
+        lines.append("## 活跃用户速览")
+        lines.append("")
+        lines.append("| 用户 | 发言数 | 平均字数 | 夜间比例 | 回复比例 |")
+        lines.append("| --- | ---: | ---: | ---: | ---: |")
+        for uid, stats in sorted(user_stats.items(), key=lambda item: item[1]["count"], reverse=True)[:10]:
+            lines.append(
+                f"| {uid} | {stats.get('count', 0)} | {stats.get('avg_chars', 0)} | "
+                f"{stats.get('night_ratio', 0):.0%} | {stats.get('reply_ratio', 0):.0%} |"
+            )
+        lines.append("")
 
     topic_list = topics.get("topics", [])
     if topic_list:
@@ -378,10 +533,30 @@ def _format_markdown(group_name: str, topics: dict, titles: dict, quotes: dict, 
     if user_list:
         lines.append("## 活跃用户")
         lines.append("")
-        lines.append("| 用户 | 称号 | 理由 |")
-        lines.append("|------|------|------|")
+        lines.append("| 用户 | 称号 | MBTI | 理由 |")
+        lines.append("| --- | --- | --- | --- |")
         for u in user_list:
-            lines.append(f"| {u.get('user_id', '?')} | {u.get('title', '')} | {u.get('reason', '')} |")
+            lines.append(
+                f"| {u.get('user_id', '?')} | {u.get('title', '')} | "
+                f"{u.get('mbti', '') or '-'} | {u.get('reason', '')} |"
+            )
+        lines.append("")
+
+    if quality:
+        lines.append("## 聊天质量锐评")
+        lines.append("")
+        if quality.get("title"):
+            lines.append(f"### {quality.get('title')}")
+        if quality.get("subtitle"):
+            lines.append(f"> {quality.get('subtitle')}")
+            lines.append("")
+        for dimension in quality.get("dimensions", [])[:4]:
+            lines.append(
+                f"- {dimension.get('name', '维度')}：{dimension.get('percentage', 0)}% - {dimension.get('comment', '')}"
+            )
+        if quality.get("summary"):
+            lines.append("")
+            lines.append(str(quality.get("summary")))
         lines.append("")
 
     quote_list = quotes.get("quotes", [])
@@ -393,5 +568,12 @@ def _format_markdown(group_name: str, topics: dict, titles: dict, quotes: dict, 
             lines.append(f"")
             lines.append(f"—— {q.get('user_id', '?')}")
             lines.append("")
+
+    lines.extend(
+        [
+            "---",
+            f"生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        ]
+    )
 
     return "\n".join(lines) if len(lines) > 2 else "分析完成，但未提取到足够信息。"

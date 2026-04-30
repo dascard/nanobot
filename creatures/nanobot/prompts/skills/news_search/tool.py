@@ -7,6 +7,7 @@ Uses DuckDuckGo for web search and trafilatura for high-quality article extracti
 import logging
 import re
 import json
+import html
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Dict
 from urllib.parse import urlparse
@@ -171,6 +172,57 @@ def _escape_md_table_cell(text: str) -> str:
     return value or "-"
 
 
+def _escape_html(text: str) -> str:
+    return html.escape(str(text or ""), quote=True)
+
+
+def _build_news_conclusion(
+    query: str,
+    search_results: List[Dict[str, Any]],
+    value_alerts: List[Dict[str, Any]],
+) -> str:
+    if value_alerts:
+        top_alert = max(value_alerts, key=lambda x: int(x.get("signal", 0)))
+        models = "、".join(top_alert.get("models", [])[:3]) or "相关模型"
+        return (
+            f"这轮检索里最值得优先关注的是 **{top_alert.get('title') or '高价值条目'}**，"
+            f"它同时带出了 `{models}` 的免费、低价或性价比信号。"
+        )
+
+    if search_results:
+        lead = search_results[0]
+        domain = _domain(lead.get("href", "")) or "未知来源"
+        return (
+            f"本轮更像是一次常规资讯更新，优先值得看的主线是 "
+            f"**{lead.get('title') or '首条资讯'}**，来源于 `{domain}`。"
+        )
+
+    return f"这次没有拿到足够的相关新闻结果，建议改写查询词后重试：`{query}`。"
+
+
+def _build_news_brief_items(
+    search_results: List[Dict[str, Any]],
+    extracted_contents: List[str],
+    *,
+    limit: int = 5,
+) -> List[Dict[str, str]]:
+    items: List[Dict[str, str]] = []
+    for idx, (item, content) in enumerate(zip(search_results, extracted_contents), start=1):
+        if idx > limit:
+            break
+        summary = _normalize_summary_text(content or item.get("body") or "暂无摘要", 88)
+        domain = _domain(item.get("href", "")) or "unknown"
+        items.append(
+            {
+                "index": str(idx),
+                "title": item.get("title") or "未命名条目",
+                "summary": summary,
+                "domain": domain,
+            }
+        )
+    return items
+
+
 def _format_news_markdown_report(
     query: str,
     search_results: List[Dict[str, Any]],
@@ -180,76 +232,272 @@ def _format_news_markdown_report(
     decision_reason: str,
     value_alerts: List[Dict[str, Any]],
 ) -> str:
-    lines: List[str] = [
-        "# AI 资讯速报",
-        "",
-        f"> 查询：`{query}`",
-        f"> 深搜：{'已启用' if deepen else '未启用'}",
-        f"> 决策原因：{decision_reason}",
-        f"> 命中结果：{len(search_results)}",
-        "",
-    ]
-
-    lines.append("## 高价值提醒")
-    lines.append("")
+    conclusion = _build_news_conclusion(query, search_results, value_alerts)
+    brief_items = _build_news_brief_items(search_results, extracted_contents)
+    alert_cards = []
     if value_alerts:
         value_alerts = sorted(value_alerts, key=lambda x: int(x.get("signal", 0)), reverse=True)
-        for alert in value_alerts:
+        for alert in value_alerts[:5]:
             models = "、".join(alert.get("models", [])) or "未识别"
-            lines.append(
-                f"- **{alert.get('title') or '未命名条目'}**"
-                f"（信号分 `{alert.get('signal', 0)}`，模型线索：{models}）"
-            )
+            link_html = ""
             if alert.get("url"):
-                lines.append(f"  - 链接：{alert['url']}")
-    else:
-        lines.append("- 暂无明显的免费、低价或高性价比模型信号。")
-    lines.append("")
-
-    lines.append("## 结果概览")
-    lines.append("")
-    lines.append("| 序号 | 标题 | 来源 | 质量分 | 检索策略 | 摘要线索 |")
-    lines.append("| --- | --- | --- | ---: | --- | --- |")
-    for idx, (item, content) in enumerate(zip(search_results, extracted_contents), start=1):
-        url = item.get("href", "") or ""
-        domain = _domain(url) or "unknown"
-        score = _source_score(item)
-        title = _escape_md_table_cell(item.get("title") or "未命名条目")
-        snippet = _escape_md_table_cell(
-            _normalize_summary_text(
-                item.get("body") or content or "无摘要",
-                42,
+                safe_url = _escape_html(alert["url"])
+                link_html = f'<div class="alert-link"><a href="{safe_url}">{safe_url}</a></div>'
+            alert_cards.append(
+                f"""
+                <div class="alert-card">
+                  <div class="alert-title">{_escape_html(alert.get('title') or '未命名条目')}</div>
+                  <div class="alert-meta">信号分 {int(alert.get('signal', 0))} · 模型线索：{_escape_html(models)}</div>
+                  {link_html}
+                </div>
+                """.strip()
             )
-        )
-        lines.append(
-            f"| {idx} | [{title}]({url}) | {domain} | {score} | "
-            f"{_escape_md_table_cell(item.get('search_strategy', 'web_ddg'))} | {snippet} |"
-        )
-    lines.append("")
+    else:
+        alert_cards.append('<div class="alert-empty">暂无明显的免费、低价或高性价比模型信号。</div>')
 
-    lines.append("## 详细条目")
-    lines.append("")
+    overview_rows = []
+    detail_sections = []
     for idx, (item, content) in enumerate(zip(search_results, extracted_contents), start=1):
         url = item.get("href", "") or ""
+        safe_url = _escape_html(url)
         domain = _domain(url) or "unknown"
         score = _source_score(item)
-        lines.append(f"### {idx}. {item.get('title') or '未命名条目'}")
-        lines.append(f"- 链接：{url}")
-        lines.append(f"- 来源：`{domain}`")
-        lines.append(f"- 质量分：`{score}`")
-        lines.append(f"- 检索策略：`{item.get('search_strategy', 'web_ddg')}`")
-        if item.get("body"):
-            lines.append(f"- 摘要片段：{_normalize_summary_text(item.get('body', ''), 180)}")
-        lines.append("")
-        lines.append("**正文摘要**")
-        lines.append("")
-        if content.startswith("Error extracting") or content.startswith("Failed"):
-            lines.append(f"> {content}")
-        else:
-            lines.append(_truncate_text(content, 1800))
-        lines.append("")
+        title = item.get("title") or "未命名条目"
+        strategy = item.get("search_strategy", "web_ddg")
+        snippet = _normalize_summary_text(item.get("body") or content or "无摘要", 42)
+        overview_rows.append(
+            f"""
+            <tr>
+              <td>{idx}</td>
+              <td><a href="{safe_url}">{_escape_html(title)}</a></td>
+              <td>{_escape_html(domain)}</td>
+              <td>{score}</td>
+              <td>{_escape_html(strategy)}</td>
+              <td>{_escape_html(snippet)}</td>
+            </tr>
+            """.strip()
+        )
+        detail_body = content if content.startswith("Error extracting") or content.startswith("Failed") else _truncate_text(content, 900)
+        detail_sections.append(
+            f"""
+            <section class="detail-item">
+              <h3>{idx}. {_escape_html(title)}</h3>
+              <div class="detail-meta">
+                <span>来源：{_escape_html(domain)}</span>
+                <span>质量分：{score}</span>
+                <span>检索策略：{_escape_html(strategy)}</span>
+              </div>
+              <div class="detail-link"><a href="{safe_url}">{safe_url}</a></div>
+              <p class="detail-snippet">{_escape_html(_normalize_summary_text(item.get('body', ''), 180))}</p>
+              <div class="detail-content">{_escape_html(detail_body)}</div>
+            </section>
+            """.strip()
+        )
 
-    return "\n".join(lines).strip()
+    brief_html = "".join(
+        f"""
+        <div class="brief-card">
+          <div class="brief-index">{_escape_html(item['index'])}</div>
+          <div class="brief-body">
+            <div class="brief-title">{_escape_html(item['title'])}</div>
+            <div class="brief-summary">{_escape_html(item['summary'])}</div>
+            <div class="brief-domain">{_escape_html(item['domain'])}</div>
+          </div>
+        </div>
+        """.strip()
+        for item in brief_items
+    ) or '<div class="brief-empty">暂无足够结果可生成简报。</div>'
+
+    return f"""
+<article class="news-brief">
+  <style>
+    .news-brief {{
+      font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: #18212f;
+      background: linear-gradient(180deg, #f6f1e8 0%, #eef3f8 100%);
+      padding: 28px;
+      width: 960px;
+      box-sizing: border-box;
+    }}
+    .news-brief * {{ box-sizing: border-box; }}
+    .hero {{
+      background: linear-gradient(135deg, #13233d 0%, #2b5a88 52%, #d8b36b 100%);
+      color: #fffaf0;
+      border-radius: 24px;
+      padding: 28px 30px;
+      box-shadow: 0 18px 40px rgba(19, 35, 61, 0.18);
+    }}
+    .hero h1 {{
+      margin: 0 0 8px;
+      font-size: 34px;
+      line-height: 1.15;
+    }}
+    .hero p {{
+      margin: 0;
+      font-size: 15px;
+      opacity: 0.92;
+    }}
+    .meta-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }}
+    .meta-card, .section {{
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid rgba(19, 35, 61, 0.08);
+      border-radius: 20px;
+      padding: 20px 22px;
+      margin-top: 18px;
+      box-shadow: 0 10px 24px rgba(35, 49, 66, 0.08);
+    }}
+    .meta-label {{
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #6d7a8a;
+      margin-bottom: 6px;
+    }}
+    .meta-value {{
+      font-size: 18px;
+      font-weight: 700;
+      color: #152235;
+    }}
+    .section h2 {{
+      margin: 0 0 14px;
+      font-size: 22px;
+      color: #13233d;
+    }}
+    .conclusion {{
+      font-size: 18px;
+      line-height: 1.8;
+    }}
+    .brief-grid {{
+      display: grid;
+      gap: 12px;
+    }}
+    .brief-card, .alert-card {{
+      display: flex;
+      gap: 14px;
+      background: #fffdfa;
+      border: 1px solid rgba(216, 179, 107, 0.28);
+      border-radius: 18px;
+      padding: 16px 18px;
+    }}
+    .brief-index {{
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      background: #13233d;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      flex: 0 0 auto;
+    }}
+    .brief-title, .alert-title {{
+      font-size: 18px;
+      font-weight: 700;
+      color: #1c2b3f;
+      margin-bottom: 4px;
+    }}
+    .brief-summary, .alert-meta, .detail-content, .detail-snippet {{
+      white-space: pre-wrap;
+      line-height: 1.7;
+      color: #3a4657;
+    }}
+    .brief-domain {{
+      margin-top: 8px;
+      font-size: 13px;
+      color: #76603c;
+    }}
+    .alert-link, .detail-link {{
+      margin-top: 8px;
+      font-size: 13px;
+      word-break: break-all;
+    }}
+    a {{
+      color: #1d5b93;
+      text-decoration: none;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      overflow: hidden;
+      border-radius: 16px;
+      background: #fff;
+    }}
+    th, td {{
+      padding: 12px 10px;
+      border-bottom: 1px solid #e7edf3;
+      text-align: left;
+      vertical-align: top;
+    }}
+    th {{
+      background: #15283f;
+      color: white;
+      font-weight: 700;
+    }}
+    .detail-item + .detail-item {{
+      margin-top: 18px;
+      padding-top: 18px;
+      border-top: 1px solid #dde6ef;
+    }}
+    .detail-item h3 {{
+      margin: 0 0 10px;
+      color: #13233d;
+      font-size: 19px;
+    }}
+    .detail-meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      font-size: 13px;
+      color: #6a7787;
+      margin-bottom: 8px;
+    }}
+  </style>
+  <section class="hero">
+    <p>AI 资讯简报</p>
+    <h1>{_escape_html(query)}</h1>
+    <div class="meta-grid">
+      <div class="meta-card"><div class="meta-label">深搜</div><div class="meta-value">{'已启用' if deepen else '未启用'}</div></div>
+      <div class="meta-card"><div class="meta-label">命中结果</div><div class="meta-value">{len(search_results)}</div></div>
+      <div class="meta-card"><div class="meta-label">决策原因</div><div class="meta-value">{_escape_html(decision_reason or '-')}</div></div>
+      <div class="meta-card"><div class="meta-label">时间</div><div class="meta-value">{_escape_html(datetime.now().strftime('%m-%d %H:%M'))}</div></div>
+    </div>
+  </section>
+  <section class="section">
+    <h2>今日结论</h2>
+    <div class="conclusion">{_escape_html(conclusion)}</div>
+  </section>
+  <section class="section">
+    <h2>重点速览</h2>
+    <div class="brief-grid">{brief_html}</div>
+  </section>
+  <section class="section">
+    <h2>机会关注</h2>
+    <div class="brief-grid">{''.join(alert_cards)}</div>
+  </section>
+  <section class="section">
+    <h2>来源索引</h2>
+    <table>
+      <thead>
+        <tr><th>序号</th><th>标题</th><th>来源</th><th>质量分</th><th>检索策略</th><th>摘要线索</th></tr>
+      </thead>
+      <tbody>
+        {''.join(overview_rows)}
+      </tbody>
+    </table>
+  </section>
+  <section class="section">
+    <h2>延伸阅读</h2>
+    {''.join(detail_sections)}
+  </section>
+</article>
+""".strip()
 
 
 def _heuristic_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_results: int) -> bool:

@@ -51,12 +51,14 @@ def test_combined_news_tool():
         mock_deepen.return_value = (False, "test")
         
         final_report = search_and_extract_news("query")
-        
-        assert "# AI 资讯速报" in final_report
-        assert "## 结果概览" in final_report
-        assert "| 序号 | 标题 | 来源 | 质量分 |" in final_report
-        assert "## 详细条目" in final_report
-        assert "### 1. Title A" in final_report
+
+        assert "<article" in final_report
+        assert "class=\"news-brief\"" in final_report
+        assert "今日结论" in final_report
+        assert "重点速览" in final_report
+        assert "来源索引" in final_report
+        assert "<table" in final_report
+        assert "Title A" in final_report
         assert "Title A" in final_report
         assert "Long content from A" in final_report
         assert "https://example.com/a" in final_report
@@ -82,7 +84,8 @@ def test_combined_news_tool_output_matches_qqbot_markdown_render_patterns():
 
         final_report = search_and_extract_news("deepseek 最新资讯")
 
-        assert "# AI 资讯速报" in final_report
-        assert "## 高价值提醒" in final_report
-        assert "| 序号 | 标题 | 来源 | 质量分 |" in final_report
-        assert "### 1. DeepSeek 新发布" in final_report
+        assert "<article" in final_report
+        assert "今日结论" in final_report
+        assert "机会关注" in final_report
+        assert "<table" in final_report
+        assert "DeepSeek 新发布" in final_report
