@@ -763,10 +763,13 @@ async def proxy_chat(
     """
     logger.info(f"[/chat] Request START: user={req.user_id}, session={req.session_id}, query={req.query[:100]}, sender={req.sender_name}, files={req.files}, session_name={req.session_name}")
 
-    # 1. 自动注册用户 & 场 (前置校验)
-    # 只注册实际用户（user_id），不注册会话（session_id）
-    if not db.query(User).filter(User.id == req.user_id).first():
-        db.add(User(id=req.user_id))
+    # 1. 自动注册用户 & 更新用户名
+    user = db.query(User).filter(User.id == req.user_id).first()
+    if not user:
+        db.add(User(id=req.user_id, name=(req.sender_name or "")))
+        db.commit()
+    elif req.sender_name and user.name != req.sender_name:
+        user.name = req.sender_name
         db.commit()
 
     # 2. 加载用户画像 (PersonaArchitectAgent 实际输出的键: identity, communication_style, domain_profiles, persona_summary)
