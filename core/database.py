@@ -29,6 +29,7 @@ Base = declarative_base()
 class User(Base):
     __tablename__ = "users"
     id = Column(String, primary_key=True, index=True)
+    name = Column(String, default="")           # 群名/用户名
     history_clear_at = Column(
         DateTime, nullable=True
     )  # 清除标记：查询只取此时间之后的消息
@@ -167,14 +168,6 @@ class PersonaBehavior(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
-class GroupName(Base):
-    """群名映射——单独存储，改名时只写一行而非全部 chat_logs 回写。"""
-    __tablename__ = "group_names"
-    group_id = Column(String, primary_key=True, index=True)
-    name = Column(String, default="")
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
     Base.metadata.create_all(bind=engine)
@@ -207,16 +200,18 @@ def init_db():
                     print(f"  ⚠ Migration failed for {col_name}: {e}")
 
     user_columns = [col["name"] for col in inspector.get_columns("users")]
-    if "history_clear_at" not in user_columns:
-        print("  → Migrating: Adding missing column [history_clear_at] to users...")
-        try:
-            with engine.connect() as conn:
-                conn.execute(
-                    text("ALTER TABLE users ADD COLUMN history_clear_at TIMESTAMP")
-                )
-                conn.commit()
-        except Exception as e:
-            print(f"  ⚠ Migration failed for history_clear_at: {e}")
+    for col_name in ["history_clear_at", "name"]:
+        if col_name not in user_columns:
+            col_type_map = {"history_clear_at": "TIMESTAMP", "name": "TEXT"}
+            print(f"  → Migrating: Adding missing column [{col_name}] to users...")
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(
+                        f"ALTER TABLE users ADD COLUMN {col_name} {col_type_map[col_name]}"
+                    ))
+                    conn.commit()
+            except Exception as e:
+                print(f"  ⚠ Migration failed for {col_name}: {e}")
 
 
 def get_db():

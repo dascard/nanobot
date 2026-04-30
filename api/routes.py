@@ -21,7 +21,7 @@ from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER, NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT,
     LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING
 )
-from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest, GroupName
+from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest
 from core.evolution import evolution_task
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from nanobot_kt.bridge import get_bridge
@@ -619,9 +619,13 @@ def submit_ambient_log(
     """专门接收前台悄无声息收集的环境窥屏包，设为已处理，不消耗高级分析算力，只做持久化备份"""
     actual_user_id = f"group_{req.group_id}"
     
-    # BUG-15 FIX: ensure User is committed before ChatLog
-    if not db.query(User).filter(User.id == actual_user_id).first():
+    # ensure User exists, and stamp group name if provided (not fallback)
+    user = db.query(User).filter(User.id == actual_user_id).first()
+    if not user:
         db.add(User(id=actual_user_id))
+        db.commit()
+    elif req.session_name and req.session_name != f"群聊:{req.group_id}" and user.name != req.session_name:
+        user.name = req.session_name
         db.commit()
         
     formatted_content = f"[{req.sender_name}]: {req.content}"
@@ -649,14 +653,13 @@ def update_group_name(
     req: UpdateGroupNameRequest,
     db: Session = Depends(get_db),
 ):
-    """写入 group_names 表（O(1) upsert，不回写 chat_logs）。"""
-    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-    stmt = sqlite_insert(GroupName).values(
-        group_id=req.group_id, name=req.group_name,
-    ).on_conflict_do_update(
-        index_elements=["group_id"], set_={"name": req.group_name},
-    )
-    db.execute(stmt)
+    """更新 users 表的 name 字段（群聊也用 users 表，id=group_xxx）。"""
+    user_id = f"group_{req.group_id}" if not req.group_id.startswith("group_") else req.group_id
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.name = req.group_name
+    else:
+        db.add(User(id=user_id, name=req.group_name))
     db.commit()
     return {"status": "ok"}
 

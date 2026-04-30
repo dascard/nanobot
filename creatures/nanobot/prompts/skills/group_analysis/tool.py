@@ -227,25 +227,16 @@ class GroupAnalysisTool(BaseTool):
             return ToolResult(error="Missing 'group_id' argument")
 
         try:
-            from core.database import SessionLocal, ChatLog, GroupName
+            from core.database import SessionLocal, ChatLog, User
             from clients.new_api_client import NewAPIClient
             from config import NEW_API_KEY, NEW_API_BASE_URL
 
             db = SessionLocal()
             try:
-                # 0. 群名——从 group_names 表查，无则用 session_name fallback
-                gn = db.query(GroupName).filter(GroupName.group_id == group_id).first()
-                if gn and gn.name:
-                    group_name = gn.name
-                else:
-                    # fallback: 从 chat_logs 最新记录的 session_name 取
-                    last = (
-                        db.query(ChatLog.session_name)
-                        .filter(ChatLog.session_id == group_id)
-                        .order_by(ChatLog.id.desc())
-                        .first()
-                    )
-                    group_name = last[0] if last and last[0] and last[0] != f"群聊:{group_id}" else group_id
+                # 0. 群名——从 users 表查（群也是 user，id=group_xxx）
+                uid = f"group_{group_id}" if not group_id.startswith("group_") else group_id
+                u = db.query(User).filter(User.id == uid).first()
+                group_name = (u.name or group_id) if u else group_id
 
                 # 1. 读取群消息
                 logs = (
