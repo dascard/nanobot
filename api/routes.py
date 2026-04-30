@@ -649,12 +649,12 @@ def update_group_name(
     req: UpdateGroupNameRequest,
     db: Session = Depends(get_db),
 ):
-    """仅更新 session_name 仍为旧格式（"群聊:xxx"）的记录，已修正的不重复写。"""
+    """更新 session_name != 当前群名的记录（初始修正 + 群改名后重新同步）。"""
     updated = (
         db.query(ChatLog)
         .filter(
             ChatLog.session_id == req.group_id,
-            ChatLog.session_name.like("群聊:%"),
+            ChatLog.session_name != req.group_name,
         )
         .update({"session_name": req.group_name}, synchronize_session="fetch")
     )
