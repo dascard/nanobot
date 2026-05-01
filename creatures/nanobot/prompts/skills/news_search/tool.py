@@ -4,10 +4,12 @@ News Search tool — KohakuTerrarium BaseTool adapter.
 Uses DuckDuckGo for web search and trafilatura for high-quality article extraction.
 """
 
+import asyncio
 import logging
 import re
 import json
 import html
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Dict
 from urllib.parse import urlparse
@@ -223,7 +225,140 @@ def _build_news_brief_items(
     return items
 
 
-def _format_news_markdown_report(
+def _coerce_layout_text(value: Any, max_chars: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return _normalize_summary_text(value, max_chars)
+
+
+def _coerce_layout_list(value: Any, *, max_items: int, max_chars: int) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    cleaned: List[str] = []
+    for item in value:
+        text = _coerce_layout_text(item, max_chars)
+        if text:
+            cleaned.append(text)
+        if len(cleaned) >= max_items:
+            break
+    return cleaned
+
+
+def _parse_news_layout_payload(raw: str) -> Dict[str, Any]:
+    from core.legacy_adapter import EvolutionUtils
+
+    parsed = EvolutionUtils.json_repair(raw or "")
+    if not isinstance(parsed, dict) or parsed.get("parse_error"):
+        return {}
+
+    return {
+        "title": _coerce_layout_text(parsed.get("title"), 28),
+        "subtitle": _coerce_layout_text(parsed.get("subtitle"), 40),
+        "summary": _coerce_layout_text(parsed.get("summary"), 160),
+        "highlights": _coerce_layout_list(parsed.get("highlights"), max_items=4, max_chars=72),
+        "alerts": _coerce_layout_list(parsed.get("alerts"), max_items=3, max_chars=72),
+        "closing": _coerce_layout_text(parsed.get("closing"), 88),
+    }
+
+
+def _specificity_score(text: str) -> int:
+    value = (text or "").strip().lower()
+    if not value:
+        return 0
+
+    score = 0
+    if re.search(r"\d", value):
+        score += 1
+    if any(name in value for name in MODEL_NAME_HINTS):
+        score += 2
+    if any(token in value for token in ["api", "token", "免费", "低价", "价格", "额度", "开源", "benchmark", "成本", "%", "$"]):
+        score += 1
+    if len(value) >= 18:
+        score += 1
+    return score
+
+
+def _merge_specific_items(
+    preferred: List[str],
+    fallback: List[str],
+    *,
+    min_items: int,
+    max_items: int,
+    specificity_floor: int,
+) -> List[str]:
+    merged: List[str] = []
+    seen: set[str] = set()
+
+    for item in preferred:
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        if _specificity_score(normalized) >= specificity_floor:
+            merged.append(normalized)
+            seen.add(normalized)
+        if len(merged) >= max_items:
+            return merged
+
+    for item in fallback:
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        merged.append(normalized)
+        seen.add(normalized)
+        if len(merged) >= max_items:
+            return merged
+
+    for item in preferred:
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        merged.append(normalized)
+        seen.add(normalized)
+        if len(merged) >= max_items:
+            return merged
+
+    return merged[:max(min_items, len(merged))]
+
+
+def _merge_layout_with_fallback(parsed: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(fallback)
+
+    title = _coerce_layout_text(parsed.get("title"), 28)
+    subtitle = _coerce_layout_text(parsed.get("subtitle"), 40)
+    summary = _coerce_layout_text(parsed.get("summary"), 160)
+    closing = _coerce_layout_text(parsed.get("closing"), 88)
+
+    if title:
+        merged["title"] = title
+    if subtitle:
+        merged["subtitle"] = subtitle
+    if closing:
+        merged["closing"] = closing
+
+    if summary and _specificity_score(summary) >= 2:
+        merged["summary"] = summary
+
+    merged["highlights"] = _merge_specific_items(
+        list(parsed.get("highlights") or []),
+        list(fallback.get("highlights") or []),
+        min_items=3,
+        max_items=4,
+        specificity_floor=2,
+    ) or list(fallback.get("highlights") or [])
+
+    fallback_alerts = list(fallback.get("alerts") or [])
+    merged["alerts"] = _merge_specific_items(
+        list(parsed.get("alerts") or []),
+        fallback_alerts,
+        min_items=1 if not fallback_alerts else min(2, len(fallback_alerts)),
+        max_items=3,
+        specificity_floor=1,
+    ) or fallback_alerts
+
+    return merged
+
+
+def _build_news_layout_fallback(
     query: str,
     search_results: List[Dict[str, Any]],
     extracted_contents: List[str],
@@ -231,29 +366,202 @@ def _format_news_markdown_report(
     deepen: bool,
     decision_reason: str,
     value_alerts: List[Dict[str, Any]],
-) -> str:
+) -> Dict[str, Any]:
     conclusion = _build_news_conclusion(query, search_results, value_alerts)
-    brief_items = _build_news_brief_items(search_results, extracted_contents)
-    alert_cards = []
+    brief_items = _build_news_brief_items(search_results, extracted_contents, limit=4)
+    highlights = [
+        _normalize_summary_text(f"{item['title']}：{item['summary']}", 72)
+        for item in brief_items
+    ]
+    alerts = []
     if value_alerts:
-        value_alerts = sorted(value_alerts, key=lambda x: int(x.get("signal", 0)), reverse=True)
-        for alert in value_alerts[:5]:
-            models = "、".join(alert.get("models", [])) or "未识别"
-            link_html = ""
-            if alert.get("url"):
-                safe_url = _escape_html(alert["url"])
-                link_html = f'<div class="alert-link"><a href="{safe_url}">{safe_url}</a></div>'
-            alert_cards.append(
-                f"""
-                <div class="alert-card">
-                  <div class="alert-title">{_escape_html(alert.get('title') or '未命名条目')}</div>
-                  <div class="alert-meta">信号分 {int(alert.get('signal', 0))} · 模型线索：{_escape_html(models)}</div>
-                  {link_html}
-                </div>
-                """.strip()
+        for alert in sorted(value_alerts, key=lambda x: int(x.get("signal", 0)), reverse=True)[:3]:
+            models = "、".join(alert.get("models", [])[:3]) or "相关模型"
+            alerts.append(
+                _normalize_summary_text(
+                    f"{alert.get('title') or '高价值条目'}：出现与 {models} 相关的免费、低价或性价比信号。",
+                    72,
+                )
             )
-    else:
-        alert_cards.append('<div class="alert-empty">暂无明显的免费、低价或高性价比模型信号。</div>')
+    if not alerts:
+        alerts.append("暂无明显的免费、低价或高性价比信号，可先关注来源索引里的首条资讯。")
+
+    subtitle_parts = []
+    if query:
+        subtitle_parts.append(_truncate_text(query, 24))
+    subtitle_parts.append("深搜已启用" if deepen else "常规速报")
+
+    closing = "更细节的链接、来源与正文摘录见下方来源索引和延伸阅读。"
+    if decision_reason:
+        closing = _normalize_summary_text(
+            f"{closing} 本次检索决策：{decision_reason}.",
+            88,
+        )
+
+    return {
+        "title": "AI 今日速报",
+        "subtitle": "｜".join(subtitle_parts) if subtitle_parts else "AI 最新资讯整理",
+        "summary": conclusion,
+        "highlights": highlights or ["暂无足够结果生成重点速览。"],
+        "alerts": alerts,
+        "closing": closing,
+    }
+
+
+def _run_async_blocking(coro: Any) -> Any:
+    result: Dict[str, Any] = {}
+    error: Dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - 仅用于线程桥接
+            error["value"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if "value" in error:
+        raise error["value"]
+    return result.get("value")
+
+
+def _summarize_news_layout(
+    query: str,
+    search_results: List[Dict[str, Any]],
+    extracted_contents: List[str],
+    *,
+    deepen: bool,
+    decision_reason: str,
+    value_alerts: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    fallback = _build_news_layout_fallback(
+        query,
+        search_results,
+        extracted_contents,
+        deepen=deepen,
+        decision_reason=decision_reason,
+        value_alerts=value_alerts,
+    )
+
+    from config import NEW_API_KEY, NEW_API_BASE_URL
+
+    if not NEW_API_KEY or not search_results:
+        return fallback
+
+    try:
+        from clients.new_api_client import NewAPIClient
+
+        source_lines = []
+        for idx, (item, content) in enumerate(zip(search_results[:4], extracted_contents[:4]), start=1):
+            source_lines.append(
+                f"{idx}. 标题={item.get('title', '')}\n"
+                f"来源={_domain(item.get('href', '')) or 'unknown'}\n"
+                f"线索={_normalize_summary_text(item.get('body') or content or '', 120)}\n"
+                f"正文摘录={_normalize_summary_text(content, 180)}"
+            )
+        alert_lines = [
+            _normalize_summary_text(
+                f"{alert.get('title') or '高价值条目'} | 信号分={int(alert.get('signal', 0))} | 模型={','.join(alert.get('models', [])) or '未识别'}",
+                100,
+            )
+            for alert in value_alerts[:3]
+        ]
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是资讯版式整理器。请先在内部完成判断，但不要展示推理过程。"
+                    "你必须优先保留具体模型名、价格/API/token/免费额度/发布时间等可核对信息。"
+                    "不要输出空泛判断，不要只写一句行业趋势，不要省略具体对象。"
+                    "请基于检索结果输出严格 JSON，不要输出 Markdown、HTML、解释或代码块。"
+                    "JSON 只允许这 6 个键：title, subtitle, summary, highlights, alerts, closing。"
+                    "title/subtitle/summary/closing 必须是字符串；highlights/alerts 必须是字符串数组。"
+                    "summary 必须点名至少 1 个具体模型或公司。"
+                    "highlights 必须 3 到 4 条，每条都尽量包含具体模型、价格、API、免费额度、发布时间或能力变化中的至少一项。"
+                    "alerts 为 1 到 3 条，优先写成本、免费额度、可用性、上线节奏等提醒。"
+                    "全部使用中文，单条简洁但信息密度高。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"查询词：{query}\n"
+                    f"是否深搜：{'是' if deepen else '否'}\n"
+                    f"检索决策：{decision_reason or '-'}\n"
+                    f"候选资讯：\n{chr(10).join(source_lines)}\n"
+                    f"价值信号：\n{chr(10).join(alert_lines) or '无明显价值信号'}\n"
+                    "请输出适合日报卡片顶部区域的结构化摘要。"
+                ),
+            },
+        ]
+
+        async def _ask() -> Dict[str, Any]:
+            client = NewAPIClient(
+                api_key=NEW_API_KEY,
+                base_url=NEW_API_BASE_URL,
+                max_retries=1,
+            )
+            return await client.chat_completion(
+                messages=messages,
+                temperature=0.1,
+                model_tier="fast",
+            )
+
+        resp = _run_async_blocking(_ask())
+        raw = (
+            resp.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        parsed = _parse_news_layout_payload(raw)
+        if not parsed.get("title") or not parsed.get("summary") or not parsed.get("highlights"):
+            return fallback
+        return _merge_layout_with_fallback(parsed, fallback)
+    except Exception as e:
+        logger.warning(f"News layout summarization failed, fallback to deterministic template: {e}")
+        return fallback
+
+
+def _format_news_html_report(
+    query: str,
+    search_results: List[Dict[str, Any]],
+    extracted_contents: List[str],
+    *,
+    layout: Dict[str, Any],
+    deepen: bool,
+    decision_reason: str,
+    value_alerts: List[Dict[str, Any]],
+) -> str:
+    title = layout.get("title") or "AI 今日速报"
+    subtitle = layout.get("subtitle") or _truncate_text(query, 36)
+    summary = layout.get("summary") or _build_news_conclusion(query, search_results, value_alerts)
+    highlights = list(layout.get("highlights") or [])
+    alerts = list(layout.get("alerts") or [])
+    closing = layout.get("closing") or "更细节的信息见下方来源索引和延伸阅读。"
+
+    brief_html = "".join(
+        f"""
+        <div class="brief-card">
+          <div class="brief-index">{idx}</div>
+          <div class="brief-body">
+            <div class="brief-title">{_escape_html(item)}</div>
+          </div>
+        </div>
+        """.strip()
+        for idx, item in enumerate(highlights[:4], start=1)
+    ) or '<div class="brief-empty">暂无足够结果可生成简报。</div>'
+
+    alert_cards = "".join(
+        f"""
+        <div class="alert-card">
+          <div class="alert-title">关注点 {idx}</div>
+          <div class="alert-meta">{_escape_html(item)}</div>
+        </div>
+        """.strip()
+        for idx, item in enumerate(alerts[:3], start=1)
+    ) or '<div class="alert-empty">暂无明显的免费、低价或高性价比模型信号。</div>'
 
     overview_rows = []
     detail_sections = []
@@ -262,14 +570,14 @@ def _format_news_markdown_report(
         safe_url = _escape_html(url)
         domain = _domain(url) or "unknown"
         score = _source_score(item)
-        title = item.get("title") or "未命名条目"
+        item_title = item.get("title") or "未命名条目"
         strategy = item.get("search_strategy", "web_ddg")
         snippet = _normalize_summary_text(item.get("body") or content or "无摘要", 42)
         overview_rows.append(
             f"""
             <tr>
               <td>{idx}</td>
-              <td><a href="{safe_url}">{_escape_html(title)}</a></td>
+              <td><a href="{safe_url}">{_escape_html(item_title)}</a></td>
               <td>{_escape_html(domain)}</td>
               <td>{score}</td>
               <td>{_escape_html(strategy)}</td>
@@ -281,7 +589,7 @@ def _format_news_markdown_report(
         detail_sections.append(
             f"""
             <section class="detail-item">
-              <h3>{idx}. {_escape_html(title)}</h3>
+              <h3>{idx}. {_escape_html(item_title)}</h3>
               <div class="detail-meta">
                 <span>来源：{_escape_html(domain)}</span>
                 <span>质量分：{score}</span>
@@ -293,20 +601,6 @@ def _format_news_markdown_report(
             </section>
             """.strip()
         )
-
-    brief_html = "".join(
-        f"""
-        <div class="brief-card">
-          <div class="brief-index">{_escape_html(item['index'])}</div>
-          <div class="brief-body">
-            <div class="brief-title">{_escape_html(item['title'])}</div>
-            <div class="brief-summary">{_escape_html(item['summary'])}</div>
-            <div class="brief-domain">{_escape_html(item['domain'])}</div>
-          </div>
-        </div>
-        """.strip()
-        for item in brief_items
-    ) or '<div class="brief-empty">暂无足够结果可生成简报。</div>'
 
     return f"""
 <article class="news-brief">
@@ -336,6 +630,17 @@ def _format_news_markdown_report(
       margin: 0;
       font-size: 15px;
       opacity: 0.92;
+    }}
+    .hero-subtitle {{
+      margin-top: 10px !important;
+      font-size: 18px !important;
+      line-height: 1.6 !important;
+      opacity: 0.96 !important;
+    }}
+    .hero-query {{
+      margin-top: 8px !important;
+      font-size: 13px !important;
+      opacity: 0.82 !important;
     }}
     .meta-grid {{
       display: grid;
@@ -461,7 +766,9 @@ def _format_news_markdown_report(
   </style>
   <section class="hero">
     <p>AI 资讯简报</p>
-    <h1>{_escape_html(query)}</h1>
+    <h1>{_escape_html(title)}</h1>
+    <p class="hero-subtitle">{_escape_html(subtitle)}</p>
+    <p class="hero-query">查询词：{_escape_html(query)}</p>
     <div class="meta-grid">
       <div class="meta-card"><div class="meta-label">深搜</div><div class="meta-value">{'已启用' if deepen else '未启用'}</div></div>
       <div class="meta-card"><div class="meta-label">命中结果</div><div class="meta-value">{len(search_results)}</div></div>
@@ -471,7 +778,7 @@ def _format_news_markdown_report(
   </section>
   <section class="section">
     <h2>今日结论</h2>
-    <div class="conclusion">{_escape_html(conclusion)}</div>
+    <div class="conclusion">{_escape_html(summary)}</div>
   </section>
   <section class="section">
     <h2>重点速览</h2>
@@ -479,7 +786,7 @@ def _format_news_markdown_report(
   </section>
   <section class="section">
     <h2>机会关注</h2>
-    <div class="brief-grid">{''.join(alert_cards)}</div>
+    <div class="brief-grid">{alert_cards}</div>
   </section>
   <section class="section">
     <h2>来源索引</h2>
@@ -495,6 +802,10 @@ def _format_news_markdown_report(
   <section class="section">
     <h2>延伸阅读</h2>
     {''.join(detail_sections)}
+  </section>
+  <section class="section">
+    <h2>一句收尾</h2>
+    <div class="conclusion">{_escape_html(closing)}</div>
   </section>
 </article>
 """.strip()
@@ -675,6 +986,12 @@ def _infer_timelimit(query: str) -> str | None:
     return None
 
 
+def _is_urgent_news_query(query: str) -> bool:
+    q = (query or "").lower()
+    markers = ["today", "今日", "今天", "latest", "最新", "刚刚", "breaking", "24h", "24小时"]
+    return any(k in q for k in markers)
+
+
 def _tokenize_query(query: str) -> List[str]:
     q = (query or "").lower().strip()
     if not q:
@@ -712,6 +1029,28 @@ def _is_recent_enough(raw_date: str, hours: int = 72) -> bool:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - dt) <= timedelta(hours=hours)
+
+
+def _normalize_search_result(item: Dict[str, Any], *, strategy: str) -> Dict[str, Any]:
+    normalized = dict(item)
+    href = normalized.get("href") or normalized.get("url") or ""
+    normalized["href"] = href
+    normalized.setdefault("search_strategy", strategy)
+    return normalized
+
+
+def _filter_stale_news_results(results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+    if not _is_news_query(query):
+        return results
+
+    hours = 36 if _is_urgent_news_query(query) else 72
+    filtered: List[Dict[str, Any]] = []
+    for item in results:
+        raw_date = (item.get("date") or "").strip()
+        if raw_date and not _is_recent_enough(raw_date, hours=hours):
+            continue
+        filtered.append(item)
+    return filtered
 
 
 def _match_query(item: Dict[str, Any], query: str) -> bool:
@@ -838,6 +1177,11 @@ def _build_query_variants(query: str) -> List[str]:
     variants.append(f"{q} model pricing OR free tier OR api")
     variants.append(f"{q} 开源 OR 免费 OR 低价 模型")
     variants.append(f"{q} site:reuters.com OR site:techcrunch.com OR site:theverge.com")
+    if _is_news_query(q):
+        today = datetime.now().strftime("%Y-%m-%d")
+        variants.append(f"{today} {q}")
+        variants.append(f"{q} today breaking")
+        variants.append(f"{q} site:openai.com OR site:anthropic.com OR site:huggingface.co")
     return variants
 
 
@@ -874,24 +1218,21 @@ class WebTools:
     @staticmethod
     def search(query: str, max_results: int = 5, deep: bool = False) -> List[Dict]:
         try:
-            # Strategy 1: structured RSS sources first.
+            # Strategy 1: structured RSS sources.
             rss_limit = max_results * (2 if deep else 1)
             rss_agg = _fetch_multi_rss(query=query, max_results=rss_limit)
-            if rss_agg:
-                return rss_agg[:max_results]
 
             # Strategy 1b: Juya direct date match for briefing style queries.
             target_date = _extract_date(query)
+            rss_results = list(rss_agg)
             if _is_rss_first_query(query):
-                rss_results = _fetch_juya_rss(max_results=max_results, target_date=target_date)
-                if rss_results:
-                    return rss_results
+                rss_results.extend(_fetch_juya_rss(max_results=max_results, target_date=target_date))
 
             # Strategy 2: multi-query web retrieval with dedup/ranking fallback.
             results = []
             timelimit = _infer_timelimit(query)
             if timelimit is None and _is_news_query(query):
-                timelimit = "w"
+                timelimit = "d"
             per_variant = max_results * (4 if deep else 2)
             variants = _build_query_variants(query)
             if deep:
@@ -903,6 +1244,15 @@ class WebTools:
                     ]
                 )
             with DDGS() as ddgs:
+                if _is_news_query(query):
+                    for r in ddgs.news(
+                        keywords=query,
+                        region='wt-wt',
+                        safesearch='moderate',
+                        timelimit=timelimit,
+                        max_results=per_variant,
+                    ):
+                        results.append(_normalize_search_result(dict(r), strategy="web_ddg_news"))
                 for variant in variants:
                     for r in ddgs.text(
                         variant,
@@ -911,12 +1261,16 @@ class WebTools:
                         timelimit=timelimit,
                         max_results=per_variant,
                     ):
-                        r = dict(r)
-                        r.setdefault("search_strategy", "web_ddg_deep" if deep else "web_ddg_multi_variant")
-                        results.append(r)
-            results = _dedup_results(results)
-            results = _rerank_with_domain_diversity(results, max_results=max_results)
-            return results
+                        results.append(
+                            _normalize_search_result(
+                                dict(r),
+                                strategy="web_ddg_deep" if deep else "web_ddg_multi_variant",
+                            )
+                        )
+            merged = _filter_stale_news_results(rss_results + results, query)
+            merged = _dedup_results(merged)
+            merged = _rerank_with_domain_diversity(merged, max_results=max_results)
+            return merged
         except Exception as e:
             logger.error(f"Search failed: {e}")
             return []
@@ -973,10 +1327,19 @@ def search_and_extract_news(
         if alert.get("triggered"):
             value_alerts.append(alert)
 
-    report = _format_news_markdown_report(
+    layout = _summarize_news_layout(
         query=query,
         search_results=search_results,
         extracted_contents=extracted_contents,
+        deepen=deepen,
+        decision_reason=decision_reason,
+        value_alerts=value_alerts,
+    )
+    report = _format_news_html_report(
+        query=query,
+        search_results=search_results,
+        extracted_contents=extracted_contents,
+        layout=layout,
         deepen=deepen,
         decision_reason=decision_reason,
         value_alerts=value_alerts,

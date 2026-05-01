@@ -1,6 +1,11 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from creatures.nanobot.prompts.skills.news_search.tool import WebTools, search_and_extract_news
+from creatures.nanobot.prompts.skills.news_search.tool import (
+    WebTools,
+    search_and_extract_news,
+    _parse_news_layout_payload,
+    _merge_layout_with_fallback,
+)
 
 def test_web_search_mock():
     """测试 WebSearchTool 是否能正确处理搜刮结果"""
@@ -89,3 +94,195 @@ def test_combined_news_tool_output_matches_qqbot_markdown_render_patterns():
         assert "机会关注" in final_report
         assert "<table" in final_report
         assert "DeepSeek 新发布" in final_report
+
+
+def test_web_search_news_query_uses_daily_timelimit_and_merges_rss_with_web():
+    rss_results = [
+        {
+            "title": "RSS AI Daily",
+            "href": "https://rss.example.com/a",
+            "body": "rss body",
+            "date": "2026-05-01T10:00:00+0000",
+            "source_weight": 3,
+            "search_strategy": "rss:test",
+        }
+    ]
+    web_results = [
+        {
+            "title": "Web Breaking News",
+            "href": "https://web.example.com/b",
+            "body": "web body",
+        }
+    ]
+
+    with patch("creatures.nanobot.prompts.skills.news_search.tool._fetch_multi_rss", return_value=rss_results), \
+         patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+        mock_instance = mock_ddgs.return_value.__enter__.return_value
+        mock_instance.text.return_value = web_results
+
+        results = WebTools.search("AI 最新资讯", max_results=3, deep=False)
+
+        assert len(results) == 2
+        assert any(item["href"] == "https://rss.example.com/a" for item in results)
+        assert any(item["href"] == "https://web.example.com/b" for item in results)
+        _, kwargs = mock_instance.text.call_args
+        assert kwargs["timelimit"] == "d"
+
+
+def test_parse_news_layout_payload_accepts_small_json_schema():
+    raw = """
+```json
+{
+  "title": "AI 今日速报",
+  "subtitle": "价格、发布与开源动态",
+  "summary": "今天最值得关注的是价格窗口和新模型发布。",
+  "highlights": ["Qwen 新模型发布", "DeepSeek 价格继续下探"],
+  "alerts": ["注意比较 API 定价变化"],
+  "closing": "适合继续跟踪今天和近 24 小时内的发布。"
+}
+```
+""".strip()
+
+    parsed = _parse_news_layout_payload(raw)
+
+    assert parsed["title"] == "AI 今日速报"
+    assert parsed["subtitle"] == "价格、发布与开源动态"
+    assert parsed["summary"].startswith("今天最值得关注")
+    assert parsed["highlights"] == ["Qwen 新模型发布", "DeepSeek 价格继续下探"]
+    assert parsed["alerts"] == ["注意比较 API 定价变化"]
+    assert parsed["closing"].startswith("适合继续跟踪")
+
+
+def test_combined_news_tool_renders_fixed_html_template_from_structured_layout():
+    with patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.search") as mock_search, \
+         patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.extract_web_content") as mock_extract, \
+         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen") as mock_deepen, \
+         patch("creatures.nanobot.prompts.skills.news_search.tool._summarize_news_layout") as mock_layout:
+
+        mock_search.return_value = [
+            {
+                "title": "Qwen 新模型发布",
+                "href": "https://example.com/qwen",
+                "body": "更强推理和更低价格",
+                "search_strategy": "web_ddg",
+            }
+        ]
+        mock_extract.return_value = "Qwen 发布了新模型，并给出了更低的 token 价格。"
+        mock_deepen.return_value = (False, "test")
+        mock_layout.return_value = {
+            "title": "AI 今日速报",
+            "subtitle": "发布、价格与模型能力更新",
+            "summary": "今天的核心是模型发布和价格信号同时出现。",
+            "highlights": ["Qwen 新模型发布", "价格出现下探信号"],
+            "alerts": ["适合继续比较 API 成本"],
+            "closing": "更细节可看下方来源索引。",
+        }
+
+        final_report = search_and_extract_news("qwen 最新资讯")
+
+        assert "<article" in final_report
+        assert "class=\"news-brief\"" in final_report
+        assert "AI 今日速报" in final_report
+        assert "发布、价格与模型能力更新" in final_report
+        assert "今天的核心是模型发布和价格信号同时出现。" in final_report
+        assert "Qwen 新模型发布" in final_report
+        assert "适合继续比较 API 成本" in final_report
+        assert "更细节可看下方来源索引。" in final_report
+        assert "<table" in final_report
+
+
+def test_web_search_news_query_prefers_ddgs_news_results():
+    news_results = [
+        {
+            "title": "Fresh AI Launch",
+            "url": "https://news.example.com/fresh",
+            "body": "fresh body",
+            "date": "2026-05-01T09:30:00+0000",
+        }
+    ]
+    text_results = [
+        {
+            "title": "Generic Web Result",
+            "href": "https://web.example.com/generic",
+            "body": "generic body",
+        }
+    ]
+
+    with patch("creatures.nanobot.prompts.skills.news_search.tool._fetch_multi_rss", return_value=[]), \
+         patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+        mock_instance = mock_ddgs.return_value.__enter__.return_value
+        mock_instance.news.return_value = news_results
+        mock_instance.text.return_value = text_results
+
+        results = WebTools.search("AI 最新资讯", max_results=3, deep=False)
+
+        assert any(item["href"] == "https://news.example.com/fresh" for item in results)
+        assert any(item["href"] == "https://web.example.com/generic" for item in results)
+        assert mock_instance.news.called
+
+
+def test_web_search_latest_query_filters_out_obviously_stale_dated_results():
+    rss_results = [
+        {
+            "title": "Old RSS News",
+            "href": "https://rss.example.com/old",
+            "body": "old rss body",
+            "date": "2026-04-27T09:00:00+0000",
+            "source_weight": 3,
+            "search_strategy": "rss:test",
+        },
+        {
+            "title": "Fresh RSS News",
+            "href": "https://rss.example.com/fresh",
+            "body": "fresh rss body",
+            "date": "2026-05-01T08:00:00+0000",
+            "source_weight": 3,
+            "search_strategy": "rss:test",
+        },
+    ]
+
+    with patch("creatures.nanobot.prompts.skills.news_search.tool._fetch_multi_rss", return_value=rss_results), \
+         patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+        mock_instance = mock_ddgs.return_value.__enter__.return_value
+        mock_instance.news.return_value = []
+        mock_instance.text.return_value = []
+
+        results = WebTools.search("今天 AI 最新资讯", max_results=5, deep=False)
+
+        assert any(item["href"] == "https://rss.example.com/fresh" for item in results)
+        assert all(item["href"] != "https://rss.example.com/old" for item in results)
+
+
+def test_merge_layout_with_fallback_backfills_specific_models_and_more_items():
+    fallback = {
+        "title": "AI 今日速报",
+        "subtitle": "Qwen、DeepSeek 与价格动态",
+        "summary": "Qwen 新模型发布，DeepSeek 同时调整 API 定价与免费额度。",
+        "highlights": [
+            "Qwen 新模型发布：推理能力提升，并给出更低价格策略",
+            "DeepSeek API 定价调整：token 计费与免费额度同步更新",
+            "两条动态都直接影响模型选型与调用成本",
+        ],
+        "alerts": [
+            "DeepSeek 免费额度变化需要核对实际使用量",
+            "价格调整可能影响现有项目预算",
+        ],
+        "closing": "详细数据可继续查看来源索引。",
+    }
+    parsed = {
+        "title": "AI 动态",
+        "subtitle": "行业持续变化",
+        "summary": "今天行业继续发展，值得关注。",
+        "highlights": ["行业持续升温"],
+        "alerts": ["继续关注"],
+        "closing": "后续继续观察。",
+    }
+
+    merged = _merge_layout_with_fallback(parsed, fallback)
+
+    assert merged["title"] == "AI 动态"
+    assert "Qwen" in "".join(merged["highlights"])
+    assert "DeepSeek" in "".join(merged["highlights"])
+    assert len(merged["highlights"]) >= 3
+    assert any("价格" in item or "API" in item or "免费额度" in item for item in merged["alerts"])
+    assert "Qwen" in merged["summary"] or "DeepSeek" in merged["summary"]

@@ -8,6 +8,7 @@ and provides a simple async handle_message() interface for use in routes.py.
 
 import asyncio
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -23,6 +24,16 @@ from clients.model_registry import registry
 from config import NEW_API_KEY, NEW_API_BASE_URL
 
 logger = logging.getLogger("nanobot.kt.bridge")
+
+
+def _current_time_label() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S CST")
+
+
+def _is_news_request(query: str) -> bool:
+    q = (query or "").lower()
+    markers = ("news", "latest", "today", "资讯", "新闻", "快讯", "日报", "早报", "发布")
+    return any(marker in q for marker in markers)
 
 
 class NanobotBridge:
@@ -91,6 +102,30 @@ class NanobotBridge:
             "</persona_reference>"
         )
 
+    def _build_time_system_reference(self) -> str:
+        return (
+            "[CurrentTimeContext]\n"
+            f"当前时间（北京时间）：{_current_time_label()}\n"
+            "涉及今天、最近、刚刚、日报、新闻时，默认以这个时间为准理解。"
+        )
+
+    def _extract_last_news_tool_output(self) -> str:
+        if not self._agent:
+            return ""
+        try:
+            messages = self._agent.controller.conversation.to_messages()
+            for msg in reversed(messages):
+                if msg.get("role") != "tool":
+                    continue
+                content = msg.get("content")
+                if isinstance(content, str) and "news-brief" in content:
+                    article_idx = content.find("<article")
+                    if article_idx >= 0:
+                        return content[article_idx:].strip()
+        except Exception as e:
+            logger.debug(f"[NanobotBridge] news tool output fallback failed: {e}")
+        return ""
+
     async def handle_message(
         self,
         query: str,
@@ -153,6 +188,14 @@ class NanobotBridge:
                     logger.warning("[NanobotBridge] Cannot inject user_id tag: no controller/conversation")
             else:
                 logger.info(f"[NanobotBridge] No persona_text or user_id in metadata (keys={list(meta.keys())})")
+            # -------------------------------------------------------------------------------------
+            if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                conv = self._agent.controller.conversation
+                conv._messages = [
+                    m for m in conv._messages
+                    if not (m.role == "system" and getattr(m, 'content', '').startswith("[CurrentTimeContext]"))
+                ]
+                conv.append("system", self._build_time_system_reference())
             # -------------------------------------------------------------------------------------
 
             # --- Inject history messages as structured conversation (proper role boundaries) ---
@@ -371,6 +414,12 @@ class NanobotBridge:
                         f"[NanobotBridge] Buffer empty, using fallback response len={len(fallback)}"
                     )
                     response = fallback
+
+            if _is_news_request(raw_query):
+                news_html = self._extract_last_news_tool_output()
+                if news_html and not response.lstrip().startswith("<article"):
+                    logger.info("[NanobotBridge] Replacing rewritten news response with preserved HTML tool output")
+                    response = news_html
             
             logger.info(f"[NanobotBridge] After processing: response_len={len(response)}, buffer_chunks={buffer_len}")
             if response:

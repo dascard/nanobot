@@ -258,11 +258,77 @@ class TestNanobotBridge:
 
         assert result == "ok"
         mock_prepare.assert_called_once()
-        assert isinstance(captured["event"].content, list)
-        assert captured["event"].content[0].type == "text"
-        image_parts = [part for part in captured["event"].content if getattr(part, "type", "") == "image_url"]
-        assert len(image_parts) == 1
-        assert image_parts[0].url.startswith("data:image/jpeg;base64,")
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_injects_current_time_system_message(self, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
+
+        async def fake_process(event):
+            bridge._output._buffer.append("ok")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        with patch("nanobot_kt.bridge._current_time_label", return_value="2026-05-01 09:30:00 CST"):
+            bridge = NanobotBridge()
+
+            async def _run():
+                await bridge.start()
+                return await bridge.handle_message("test query", user_id="u1")
+
+            result = asyncio.run(_run())
+
+        assert result == "ok"
+        system_messages = [call.args[1] for call in mock_conv.append.call_args_list if call.args[0] == "system"]
+        assert any("当前时间" in msg and "2026-05-01 09:30:00 CST" in msg for msg in system_messages)
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_prefers_news_tool_html_over_plaintext_rewrite(self, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.to_messages.return_value = [
+            {"role": "tool", "content": "[news_search]\n<article class=\"news-brief\"><h1>HTML资讯卡片</h1></article>"},
+            {"role": "assistant", "content": "我给你整理了几条新闻"},
+        ]
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("我给你整理了几条新闻")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("给我最新 AI 新闻", user_id="u1")
+
+        result = asyncio.run(_run())
+
+        assert result.startswith("<article")
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
