@@ -48,6 +48,15 @@ def _is_group_analysis_request(query: str) -> bool:
     )
 
 
+def _extract_html_document(content: str) -> str:
+    lowered = content.lower()
+    for marker in ("<!doctype html", "<html", "<article"):
+        idx = lowered.find(marker)
+        if idx >= 0:
+            return content[idx:].strip()
+    return ""
+
+
 class NanobotBridge:
     """
     Wraps a KT Agent for use as a request/response handler.
@@ -131,9 +140,9 @@ class NanobotBridge:
                     continue
                 content = msg.get("content")
                 if isinstance(content, str) and any(marker in content for marker in marker_classes):
-                    article_idx = content.find("<article")
-                    if article_idx >= 0:
-                        return content[article_idx:].strip()
+                    html_doc = _extract_html_document(content)
+                    if html_doc:
+                        return html_doc
         except Exception as e:
             logger.debug(f"[NanobotBridge] rich tool output fallback failed: {e}")
         return ""
@@ -235,7 +244,7 @@ class NanobotBridge:
                     conv = self._agent.controller.conversation
                     conv.append("system",
                         "[群聊限制] 本群聊中文件操作工具(read/write/edit/grep/glob/bash)不可用。"
-                        "只能使用 sql_analysis/python_sandbox/news_search/schedule_task/persona_update。"
+                        "只能使用 sql_analysis/python_sandbox/news_search/group_analysis/schedule_task/persona_update。"
                     )
                     logger.info("[NanobotBridge] Group chat file tool restriction applied")
             # ---------------------------------------------

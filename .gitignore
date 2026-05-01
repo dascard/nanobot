@@ -1,7 +1,13 @@
 ./data/*
+/data/nanobot.db
+/data/nanobot.db-*
+/data/*.log
+/data/*.log.*
 .venv/*
 .env
 __pycache__/*
+**/__pycache__/
+*.py[cod]
 clients/data/models.json
 .claude/skills/
 clients/data/*.json

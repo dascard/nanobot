@@ -11,6 +11,7 @@ Group Analysis tool — 群聊消息分析，生成手账风格 HTML 日报。
 import asyncio
 import json
 import logging
+import os
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -20,6 +21,10 @@ from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResul
 from sqlalchemy import or_
 
 logger = logging.getLogger("nanobot.tool.group_analysis")
+
+GROUP_ANALYSIS_MAX_LOGS = int(os.environ.get("GROUP_ANALYSIS_MAX_LOGS", "5000"))
+GROUP_ANALYSIS_PROMPT_CHAR_BUDGET = int(os.environ.get("GROUP_ANALYSIS_PROMPT_CHAR_BUDGET", "60000"))
+GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET = int(os.environ.get("GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET", "24000"))
 
 # ── Prompt 模板 ──
 
@@ -125,6 +130,61 @@ def _clean_message(content: str) -> str | None:
 
 def _escape_html(text: Any) -> str:
     return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+def _safe_percentage(value: Any, default: int = 50) -> int:
+    try:
+        pct = int(float(str(value).strip().rstrip("%")))
+    except (TypeError, ValueError):
+        pct = default
+    return max(0, min(100, pct))
+
+def _format_message_line(message: dict[str, Any]) -> str:
+    content = re.sub(r"\s+", " ", str(message.get("content") or "")).strip()
+    if len(content) > 500:
+        content = content[:500] + "..."
+    return f"[{message.get('time', '??:??')}] [{message.get('user_id', '?')}]: {content}"
+
+def _pack_lines_forward(lines: list[str], max_chars: int) -> str:
+    picked: list[str] = []
+    used = 0
+    for line in lines:
+        extra = len(line) + (1 if picked else 0)
+        if used + extra > max_chars:
+            break
+        picked.append(line)
+        used += extra
+    return "\n".join(picked)
+
+def _pack_lines_backward(lines: list[str], max_chars: int) -> str:
+    picked: list[str] = []
+    used = 0
+    for line in reversed(lines):
+        extra = len(line) + (1 if picked else 0)
+        if used + extra > max_chars:
+            break
+        picked.append(line)
+        used += extra
+    picked.reverse()
+    return "\n".join(picked)
+
+def _build_message_prompt_text(messages: list[dict[str, Any]], max_chars: int) -> str:
+    header = f"原始可分析消息总数: {len(messages)}\n"
+    lines = [_format_message_line(m) for m in messages]
+    full = header + "\n".join(lines)
+    if len(full) <= max_chars:
+        return full
+
+    marker = "\n...（中间消息已按预算压缩，保留开头与最新消息；统计信息仍基于全部消息）...\n"
+    remaining = max(0, max_chars - len(header) - len(marker))
+    if remaining <= 0:
+        return (header + marker).strip()[:max_chars]
+
+    head_budget = remaining // 4
+    tail_budget = remaining - head_budget
+    head = _pack_lines_forward(lines, head_budget)
+    tail = _pack_lines_backward(lines, tail_budget)
+    compact = header + head + marker + tail
+    return compact[:max_chars]
 
 def _parse_instruction_window_hours(instructions: str) -> int | None:
     text = str(instructions or "").strip()
@@ -252,7 +312,7 @@ class GroupAnalysisTool(BaseTool):
 
                 logs = (db.query(ChatLog).filter(
                     or_(ChatLog.session_id == ngid, ChatLog.session_id == lgid))
-                    .order_by(ChatLog.id.desc()).limit(300).all())
+                    .order_by(ChatLog.id.desc()).limit(GROUP_ANALYSIS_MAX_LOGS).all())
                 logs.reverse()
                 logs = _filter_messages_by_hours(logs, _parse_instruction_window_hours(instructions))
                 if not logs: return ToolResult(output=f"未找到群 {group_id} 的消息记录", exit_code=0)
@@ -271,7 +331,8 @@ class GroupAnalysisTool(BaseTool):
                 logger.info(f"[group_analysis] {len(logs)} raw → {len(messages)} cleaned for {group_name}")
 
                 group_stats = _compute_group_statistics(messages)
-                msg_text = "\n".join(f"[{m['time']}] [{m['user_id']}]: {m['content']}" for m in messages)
+                msg_text = _build_message_prompt_text(messages, GROUP_ANALYSIS_PROMPT_CHAR_BUDGET)
+                style_msg_text = _build_message_prompt_text(messages, GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET)
                 user_stats = _compute_user_stats(messages)
                 top = sorted(user_stats.items(), key=lambda x: x[1]["count"], reverse=True)[:10]
                 users_text = "\n".join(f"- {uid} | {s['count']}条 | 均{s['avg_chars']}字 | 夜间{s['night_ratio']:.0%} | 回复{s['reply_ratio']:.0%}" for uid, s in top)
@@ -281,7 +342,7 @@ class GroupAnalysisTool(BaseTool):
 
                 topic_raw, title_raw, quote_raw, quality_raw = await asyncio.gather(
                     _call_llm_with_retry(client, SYS, TOPIC_PROMPT.format(messages_text=msg_text)),
-                    _call_llm_with_retry(client, SYS, USER_TITLE_PROMPT.format(users_text=users_text, messages_text=msg_text[:3000])),
+                    _call_llm_with_retry(client, SYS, USER_TITLE_PROMPT.format(users_text=users_text, messages_text=style_msg_text)),
                     _call_llm_with_retry(client, SYS, GOLDEN_QUOTE_PROMPT.format(messages_text=msg_text)),
                     _call_llm_with_retry(client, SYS, CHAT_QUALITY_PROMPT.format(messages_text=msg_text)))
 
@@ -402,7 +463,7 @@ def _format_scrapbook_html(
     topic_html = '<ul class="topic-list">' + "".join(
         f'<li class="topic-item"><span class="topic-num">{i}</span><div>'
         f'<div class="topic-title">{_escape_html(t.get("topic","?"))}</div>'
-        f'<div class="topic-contributors">{"、".join(t.get("contributors",[])[:5])}</div>'
+        f'<div class="topic-contributors">{"、".join(_escape_html(x) for x in t.get("contributors",[])[:5])}</div>'
         f'<div class="topic-detail">{_escape_html(t.get("detail",""))}</div></div></li>'
         for i, t in enumerate(tlist, 1)) + '</ul>' if tlist else '<p style="color:#999">暂无显著话题。</p>'
 
@@ -433,16 +494,21 @@ def _format_scrapbook_html(
     # 质量
     dims = quality.get("dimensions", [])
     if dims:
-        dim_html = '<div class="quality-dims">' + "".join(
-            f'<div class="quality-dim"><div class="dim-name">{_escape_html(d.get("name","?"))}</div>'
-            f'<div class="dim-pct">{d.get("percentage",0)}%</div>'
-            f'<div class="dim-bar"><div class="dim-fill" style="width:{d.get("percentage",50)}%"></div></div>'
-            f'<div class="dim-comment">{_escape_html(d.get("comment",""))}</div></div>'
-            for d in dims[:4]) + '</div>'
+        dim_cards = []
+        for d in dims[:4]:
+            pct = _safe_percentage(d.get("percentage", 50))
+            dim_cards.append(
+                f'<div class="quality-dim"><div class="dim-name">{_escape_html(d.get("name","?"))}</div>'
+                f'<div class="dim-pct">{pct}%</div>'
+                f'<div class="dim-bar"><div class="dim-fill" style="width:{pct}%"></div></div>'
+                f'<div class="dim-comment">{_escape_html(d.get("comment",""))}</div></div>'
+            )
+        dim_html = '<div class="quality-dims">' + "".join(dim_cards) + '</div>'
         quality_html = (
-            f'<div class="quality-card"><div class="quality-title">📊 {_escape_html(quality.get("title","群聊质量锐评"))}</div>'
+            f'<div class="section"><div class="section-title">📊 聊天质量锐评</div>'
+            f'<div class="quality-card"><div class="quality-title">{_escape_html(quality.get("title","群聊质量锐评"))}</div>'
             f'<p style="color:#888;margin:4px 0">{_escape_html(quality.get("subtitle",""))}</p>'
-            f'{dim_html}<p style="color:#777;font-size:.85rem;margin-top:8px">{_escape_html(quality.get("summary",""))}</p></div>')
+            f'{dim_html}<p style="color:#777;font-size:.85rem;margin-top:8px">{_escape_html(quality.get("summary",""))}</p></div></div>')
     else:
         quality_html = ""
 
@@ -463,8 +529,8 @@ def _format_scrapbook_html(
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><style>{SCRAPBOOK_CSS}</style></head>
-<body>
-<div class="container">
+<body class="group-analysis-report">
+<div class="container group-analysis-report">
   <div class="header">
     <div class="title-sticker">
       <div class="tape"></div>

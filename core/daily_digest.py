@@ -24,6 +24,7 @@ logger = logging.getLogger("nanobot.daily_digest")
 
 # QQbot / NoneBot 侧默认监听 8082；若部署环境不同，可通过环境变量覆盖。
 QQBOT_PUSH_URL = os.environ.get("QQBOT_PUSH_URL", "http://172.17.0.1:8082/nanobot/push")
+QQBOT_PUSH_TIMEOUT = float(os.environ.get("QQBOT_PUSH_TIMEOUT", "180"))
 
 TOPIC_KEYWORDS = {
     "model_release": ["发布", "release", "new model", "版本", "更新"],
@@ -295,7 +296,7 @@ async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
                     "target_id": target_id,
                     "message": message,
                 },
-                timeout=aiohttp.ClientTimeout(total=10),
+                timeout=aiohttp.ClientTimeout(total=QQBOT_PUSH_TIMEOUT),
             ) as resp:
                 if resp.status == 200:
                     logger.info(

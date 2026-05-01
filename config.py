@@ -95,8 +95,11 @@ IMAGE_PREPROCESS_CACHE_DIR = os.environ.get(
     "IMAGE_PREPROCESS_CACHE_DIR",
     os.path.join(LOG_DIR, "image_cache"),
 )
-# 原始图片字节上限；默认 768KiB，压缩后再转 base64 约等于 1MiB
+# 压缩后图片字节上限；默认 768KiB，转 base64 后约等于 1MiB
 IMAGE_PREPROCESS_MAX_BYTES = int(os.environ.get("IMAGE_PREPROCESS_MAX_BYTES", str(768 * 1024)))
+# 下载/解码后的原始图片字节上限，防止超大图片进入解码流程
+IMAGE_PREPROCESS_RAW_MAX_BYTES = int(os.environ.get("IMAGE_PREPROCESS_RAW_MAX_BYTES", str(12 * 1024 * 1024)))
+IMAGE_PREPROCESS_ALLOW_LOCAL_FILES = os.environ.get("IMAGE_PREPROCESS_ALLOW_LOCAL_FILES", "0") == "1"
 IMAGE_PREPROCESS_MAX_SIDE = int(os.environ.get("IMAGE_PREPROCESS_MAX_SIDE", "1024"))
 IMAGE_PREPROCESS_START_QUALITY = int(os.environ.get("IMAGE_PREPROCESS_START_QUALITY", "92"))
 IMAGE_PREPROCESS_MIN_QUALITY = int(os.environ.get("IMAGE_PREPROCESS_MIN_QUALITY", "45"))
