@@ -386,12 +386,8 @@ class NanobotBridge:
 
                 try:
                     logger.info(f"[NanobotBridge] Calling _process_event (Attempt {attempt+1})...")
-                    result = await asyncio.wait_for(
-                        self._agent._process_event(event), timeout=120.0,
-                    )
+                    result = await self._agent._process_event(event)
                     logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
-                except asyncio.TimeoutError:
-                    logger.warning("[NanobotBridge] _process_event timed out, using buffer content")
                 except Exception as e:
                     logger.error(f"[NanobotBridge] Agent processing error: {e}", exc_info=True)
                     self._output._buffer.append(f"\n[系统内部错误] {str(e)}")
@@ -404,22 +400,22 @@ class NanobotBridge:
                     f"has_tool_err={'[工具错误]' in response}, "
                     f"preview={response[:100] if response else '(EMPTY)'}"
                 )
+                # 优先提取 tool 产出的 HTML——无论 buffer 空不空
+                # LLM 可能吞掉报告只输出文本，或 buffer 为空（tool 跑完但 LLM 卡住）
+                preserved_html = ""
+                if _is_news_request(raw_query):
+                    preserved_html = self._extract_last_rich_tool_output(("news-brief",))
+                if not preserved_html and _is_group_analysis_request(raw_query):
+                    preserved_html = self._extract_last_rich_tool_output(("group-analysis-report",))
+                if preserved_html:
+                    logger.info("[NanobotBridge] Using preserved tool HTML output")
+                    self._output._buffer.append(preserved_html)
+                    if tracker is not None:
+                        await tracker.record_success(target_model)
+                    break
+
                 is_empty = not response.strip()
                 is_error = "[系统内部错误]" in response
-                if is_empty:
-                    preserved_rich_output = ""
-                    if _is_news_request(raw_query):
-                        preserved_rich_output = self._extract_last_rich_tool_output(("news-brief",))
-                    if not preserved_rich_output and _is_group_analysis_request(raw_query):
-                        preserved_rich_output = self._extract_last_rich_tool_output(("group-analysis-report",))
-                    if preserved_rich_output:
-                        logger.info(
-                            "[NanobotBridge] Returning preserved rich tool output after empty/timeout attempt"
-                        )
-                        self._output._buffer.append(preserved_rich_output)
-                        if tracker is not None:
-                            await tracker.record_success(target_model)
-                        break
                 if (is_empty or is_error) and attempt < max_attempts - 1:
                     logger.warning(f"[NanobotBridge] Framework error. Recording failure for {target_model}")
                     if tracker is not None:
