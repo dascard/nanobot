@@ -232,10 +232,23 @@ class GroupAnalysisTool(BaseTool):
 
             db = SessionLocal()
             try:
-                ngid = f"group_{group_id}" if not group_id.startswith("group_") else group_id
+                # 支持群名模糊匹配（非纯数字且非 group_ 前缀 → 按 name 搜索）
+                if group_id.isdigit():
+                    ngid = f"group_{group_id}"
+                elif group_id.startswith("group_"):
+                    ngid = group_id
+                else:
+                    ngid = None
+                    matched = db.query(User).filter(
+                        User.id.like("group_%"), User.name.like(f"%{group_id}%")
+                    ).first()
+                    if matched:
+                        ngid = matched.id
+                if not ngid:
+                    return ToolResult(output=f"未找到群 \"{group_id}\"——群号或群名不匹配", exit_code=0)
                 lgid = ngid.removeprefix("group_")
                 u = db.query(User).filter(User.id == ngid).first()
-                group_name = (u.name or ngid) if u else ngid
+                group_name = (u.name or lgid) if u else lgid
 
                 logs = (db.query(ChatLog).filter(
                     or_(ChatLog.session_id == ngid, ChatLog.session_id == lgid))
