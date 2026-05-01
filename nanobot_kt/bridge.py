@@ -86,7 +86,7 @@ class NanobotBridge:
         self.creature_path = creature_path
         self._output = BufferedOutput()
         self._agent: Optional[Agent] = None
-        self._lock = asyncio.Lock()
+        self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session_id 分锁，不同会话可并发
 
     async def start(self) -> None:
         """Initialize the KT agent from creature config."""
@@ -197,7 +197,8 @@ class NanobotBridge:
         if not self._agent:
             return "Error: Agent not initialized"
 
-        async with self._lock:
+        session_lock = self._session_locks.setdefault(session_id, asyncio.Lock())
+        async with session_lock:
             self._output.clear()
             if stream_queue is not None:
                 self._output.enable_stream(stream_queue)
