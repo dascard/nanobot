@@ -114,3 +114,14 @@ chinese-commit-conventions  → 规范化提交
 - ✓ **网页搜索优先用 Tavily**——LLM 优化结果，干净结构化输出
 - ✓ **代码搜索用 GitHub MCP**——search_code/search_repositories
 - ✓ **API/库文档用 Context7**——query-docs
+
+## 服务器地址
+
+| 服务 | 地址 | 用途 |
+|------|------|------|
+| new-api (LLM) | `10.60.42.158:9000` | LLM API 网关 |
+| nanobot server | `10.60.42.158:8000` | 主服务 |
+| QQbot push | `10.60.42.158:8082/nanobot/push` | 向 QQ 推送消息 |
+| Qwen classifier | `172.17.0.1:9999` | 容器内访问宿主机的 llama-server |
+
+本地测试时需 `unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY` 清除代理。
