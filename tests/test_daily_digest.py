@@ -35,3 +35,7 @@ def test_generate_daily_digest_merges_legacy_group_session_ids(db_session, monke
     assert created == 1
     assert db_session.query(MemoryDigest).filter_by(session_id="group_123456").count() == 3
     assert db_session.query(MemoryDigest).filter_by(session_id="123456").count() == 0
+
+
+def test_qq_push_timeout_covers_html_rendering_window():
+    assert daily_digest.QQBOT_PUSH_TIMEOUT >= 120

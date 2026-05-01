@@ -332,6 +332,50 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_prefers_group_analysis_html_over_plaintext_rewrite(self, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.to_messages.return_value = [
+            {
+                "role": "tool",
+                "content": (
+                    "[group_analysis]\n"
+                    "<!DOCTYPE html><html><body class=\"group-analysis-report\">"
+                    "<h1>群聊分析卡片</h1></body></html>"
+                ),
+            },
+            {"role": "assistant", "content": "我给你总结一下这个群"},
+        ]
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("我给你总结一下这个群")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("分析第二团体这个群的消息", user_id="u1")
+
+        result = asyncio.run(_run())
+
+        assert result.startswith("<!DOCTYPE html>")
+        assert "group-analysis-report" in result
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_injects_history_header(self, MockAgent, mock_load):
         from nanobot_kt.bridge import NanobotBridge
 

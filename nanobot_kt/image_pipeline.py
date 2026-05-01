@@ -20,11 +20,13 @@ from PIL import Image, ImageOps
 from kohakuterrarium.llm.message import ImagePart
 
 from config import (
+    IMAGE_PREPROCESS_ALLOW_LOCAL_FILES,
     IMAGE_PREPROCESS_CACHE_DIR,
     IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT,
     IMAGE_PREPROCESS_MAX_BYTES,
     IMAGE_PREPROCESS_MAX_SIDE,
     IMAGE_PREPROCESS_MIN_QUALITY,
+    IMAGE_PREPROCESS_RAW_MAX_BYTES,
     IMAGE_PREPROCESS_START_QUALITY,
 )
 
@@ -86,15 +88,32 @@ def _download_source_bytes(source: str) -> tuple[bytes, str]:
     if source.startswith("data:"):
         header, b64 = source.split(",", 1)
         mime = header[5:].split(";", 1)[0] if header.startswith("data:") else "image/jpeg"
-        return base64.b64decode(b64), mime or "image/jpeg"
+        raw = base64.b64decode(b64)
+        if len(raw) > IMAGE_PREPROCESS_RAW_MAX_BYTES:
+            raise ValueError(f"图片过大: {len(raw)} bytes > {IMAGE_PREPROCESS_RAW_MAX_BYTES} bytes")
+        return raw, mime or "image/jpeg"
 
-    if source.startswith("file://"):
+    parsed = urllib.parse.urlparse(source)
+    if parsed.scheme == "file":
+        if not IMAGE_PREPROCESS_ALLOW_LOCAL_FILES:
+            raise ValueError("默认禁止读取本地文件图片")
         path = Path(urllib.parse.urlparse(source).path)
-        return path.read_bytes(), _guess_mime(source)
+        data = path.read_bytes()
+        if len(data) > IMAGE_PREPROCESS_RAW_MAX_BYTES:
+            raise ValueError(f"图片过大: {len(data)} bytes > {IMAGE_PREPROCESS_RAW_MAX_BYTES} bytes")
+        return data, _guess_mime(source)
 
-    if Path(source).exists():
+    if parsed.scheme == "" and Path(source).exists():
+        if not IMAGE_PREPROCESS_ALLOW_LOCAL_FILES:
+            raise ValueError("默认禁止读取本地文件图片")
         path = Path(source)
-        return path.read_bytes(), _guess_mime(str(path))
+        data = path.read_bytes()
+        if len(data) > IMAGE_PREPROCESS_RAW_MAX_BYTES:
+            raise ValueError(f"图片过大: {len(data)} bytes > {IMAGE_PREPROCESS_RAW_MAX_BYTES} bytes")
+        return data, _guess_mime(str(path))
+
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("仅支持 http(s)、data 图片地址")
 
     req = urllib.request.Request(
         source,
@@ -103,7 +122,20 @@ def _download_source_bytes(source: str) -> tuple[bytes, str]:
     )
     with urllib.request.urlopen(req, timeout=IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT) as resp:
         mime = (resp.headers.get_content_type() if hasattr(resp.headers, "get_content_type") else "") or _guess_mime(source)
-        return resp.read(), mime
+        content_length = resp.headers.get("Content-Length") if hasattr(resp.headers, "get") else None
+        if content_length:
+            try:
+                if int(content_length) > IMAGE_PREPROCESS_RAW_MAX_BYTES:
+                    raise ValueError(
+                        f"图片过大: {content_length} bytes > {IMAGE_PREPROCESS_RAW_MAX_BYTES} bytes"
+                    )
+            except ValueError as e:
+                if "图片过大" in str(e):
+                    raise
+        raw = resp.read(IMAGE_PREPROCESS_RAW_MAX_BYTES + 1)
+        if len(raw) > IMAGE_PREPROCESS_RAW_MAX_BYTES:
+            raise ValueError(f"图片过大: {len(raw)} bytes > {IMAGE_PREPROCESS_RAW_MAX_BYTES} bytes")
+        return raw, mime
 
 
 def _flatten_to_rgb(image: Image.Image) -> Image.Image:

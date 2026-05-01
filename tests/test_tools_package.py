@@ -1,5 +1,10 @@
+import asyncio
+
 import pytest
 from unittest.mock import MagicMock, patch
+from datetime import datetime
+
+from creatures.nanobot.prompts.skills.news_search import tool as news_tool
 from creatures.nanobot.prompts.skills.news_search.tool import (
     WebTools,
     search_and_extract_news,
@@ -221,6 +226,60 @@ def test_web_search_news_query_prefers_ddgs_news_results():
         assert mock_instance.news.called
 
 
+def test_extract_date_accepts_chinese_date_and_today(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = cls(2026, 5, 1)
+            return base.replace(tzinfo=tz) if tz else base
+
+    monkeypatch.setattr(news_tool, "datetime", FixedDateTime)
+
+    assert news_tool._extract_date("2026年5月1日 人工智能 新闻") == "2026-05-01"
+    assert news_tool._extract_date("今天 AI 日报") == "2026-05-01"
+
+
+def test_juya_rss_preserves_pubdate_for_freshness_filter():
+    xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss><channel><item>
+  <title>AI Daily 2026-05-01</title>
+  <link>https://example.com/issue-1</link>
+  <description>fresh issue</description>
+  <pubDate>Fri, 01 May 2026 00:00:00 GMT</pubDate>
+</item></channel></rss>"""
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = xml
+    mock_resp.__enter__.return_value = mock_resp
+    mock_resp.__exit__.return_value = False
+
+    with patch("creatures.nanobot.prompts.skills.news_search.tool.urlopen", return_value=mock_resp):
+        results = news_tool._fetch_juya_rss(max_results=3, target_date="2026-05-01")
+
+    assert len(results) == 1
+    assert results[0]["date"].startswith("2026-05-01T")
+
+
+def test_news_search_tool_reuses_equivalent_daily_query_cache(monkeypatch):
+    calls = {"count": 0}
+
+    def fake_search(query, max_results=3, **kwargs):
+        calls["count"] += 1
+        return f"<article>{query}:{max_results}</article>"
+
+    monkeypatch.setattr(news_tool, "search_and_extract_news", fake_search)
+    news_tool._NEWS_SEARCH_CACHE.clear()
+
+    tool = news_tool.NewsSearchTool()
+    first = asyncio.run(tool.execute({"query": "2026年5月1日 人工智能 新闻", "max_results": 5}))
+    second = asyncio.run(tool.execute({"query": "AI 最新资讯 2026-05-01", "max_results": 5}))
+
+    assert first.success
+    assert second.success
+    assert calls["count"] == 1
+    assert second.output == first.output
+
+
 def test_web_search_latest_query_filters_out_obviously_stale_dated_results():
     rss_results = [
         {
@@ -286,3 +345,47 @@ def test_merge_layout_with_fallback_backfills_specific_models_and_more_items():
     assert len(merged["highlights"]) >= 3
     assert any("价格" in item or "API" in item or "免费额度" in item for item in merged["alerts"])
     assert "Qwen" in merged["summary"] or "DeepSeek" in merged["summary"]
+
+
+def test_combined_news_tool_returns_unavailable_html_when_search_backends_fail():
+    with patch("creatures.nanobot.prompts.skills.news_search.tool.WebTools.search", return_value=[]), \
+         patch("creatures.nanobot.prompts.skills.news_search.tool._model_should_deepen", return_value=(False, "backend-unavailable")):
+
+        final_report = search_and_extract_news("今天 AI 新闻")
+
+        assert "<article" in final_report
+        assert "class=\"news-brief" in final_report
+        assert "暂时不可用" in final_report or "稍后再试" in final_report
+        assert "不要继续重试" in final_report or "搜索源" in final_report
+
+
+def test_web_search_preserves_partial_results_when_later_variant_fails():
+    rss_results = [
+        {
+            "title": "RSS Fresh News",
+            "href": "https://rss.example.com/fresh",
+            "body": "rss body",
+            "date": "2026-05-01T08:00:00+0000",
+            "source_weight": 3,
+            "search_strategy": "rss:test",
+        }
+    ]
+
+    with patch("creatures.nanobot.prompts.skills.news_search.tool._fetch_multi_rss", return_value=rss_results), \
+         patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+        mock_instance = mock_ddgs.return_value.__enter__.return_value
+        mock_instance.news.side_effect = RuntimeError("403 Ratelimit")
+
+        def fake_text(*args, **kwargs):
+            query = args[0] if args else ""
+            if "model pricing" in query:
+                raise RuntimeError("202 Ratelimit")
+            return [{"title": "Web Fresh News", "href": "https://web.example.com/fresh", "body": "web body"}]
+
+        mock_instance.text.side_effect = fake_text
+
+        results = WebTools.search("今天 AI 最新资讯", max_results=5, deep=False)
+
+        assert any(item["href"] == "https://rss.example.com/fresh" for item in results)
+        assert any(item["href"] == "https://web.example.com/fresh" for item in results)
+        assert WebTools.last_error == ""

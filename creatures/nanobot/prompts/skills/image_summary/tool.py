@@ -1,0 +1,215 @@
+"""Image summary tool — 直接调用本地 Qwen 视觉模型生成结构化摘要。"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import urllib.error
+import urllib.request
+from typing import Any
+
+from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from kohakuterrarium.llm.message import content_parts_to_dicts, make_multimodal_content
+
+from config import (
+    IMAGE_SUMMARY_API_URL,
+    IMAGE_SUMMARY_MAX_TOKENS,
+    IMAGE_SUMMARY_TEMPERATURE,
+    IMAGE_SUMMARY_TIMEOUT,
+    IMAGE_SUMMARY_TOP_P,
+)
+from nanobot_kt.image_pipeline import prepare_image_parts
+
+logger = logging.getLogger("nanobot.tool.image_summary")
+
+OUTPUT_JSON_KEYS = {
+    "image_count": 0,
+    "overall_summary": "",
+    "per_image": [],
+    "keywords": [],
+    "risk_flags": [],
+    "confidence": "medium",
+}
+
+
+def _normalize_files(files: Any) -> list[str]:
+    if not isinstance(files, list):
+        return []
+    normalized: list[str] = []
+    for file in files:
+        if not isinstance(file, str):
+            continue
+        item = file.strip()
+        if item and item not in normalized:
+            normalized.append(item)
+    return normalized
+
+
+def _strip_code_fences(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+    return cleaned.strip()
+
+
+def _parse_json_payload(text: str) -> dict[str, Any]:
+    cleaned = _strip_code_fences(text)
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        parsed = json.loads(cleaned[start : end + 1])
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise ValueError("模型未返回可解析的 JSON")
+
+
+def _build_multimodal_content(files: list[str], focus: str) -> list[Any] | str:
+    prompt_lines = [
+        f"请为以下 {len(files)} 张图片生成结构化摘要。",
+        "要求：",
+        "- 输出严格 JSON，不要 Markdown，不要代码块，不要解释文字",
+        "- 保留图片中的文字、物体、场景、布局和可疑信息",
+        "- 看不清就写入 uncertainties，不要猜测",
+        "- 如果图片里有文字，请尽量做 OCR",
+    ]
+    if focus:
+        prompt_lines.append(f"- 额外关注点：{focus}")
+
+    image_parts = prepare_image_parts(
+        files,
+        source_type="image_summary",
+        source_name_prefix="image_summary",
+        detail="low",
+    )
+    content = make_multimodal_content("\n".join(prompt_lines), images=image_parts)
+    if isinstance(content, list):
+        return content_parts_to_dicts(content)
+    return content
+
+
+class ImageSummaryTool(BaseTool):
+    """使用本地 Qwen 视觉模型对图片做结构化摘要。"""
+
+    @property
+    def tool_name(self) -> str:
+        return "image_summary"
+
+    @property
+    def description(self) -> str:
+        return (
+            "生成图片摘要并输出结构化 JSON。"
+            "当你需要 OCR、细节归档、版面分析或多图整理时使用。"
+            "这个工具直接调用本地 Qwen 视觉模型，也可以把同样的结构化摘要写进回复里。"
+        )
+
+    @property
+    def execution_mode(self) -> ExecutionMode:
+        return ExecutionMode.DIRECT
+
+    def get_parameters_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "图片 URL 或可访问的文件引用列表",
+                    "minItems": 1,
+                },
+                "focus": {
+                    "type": "string",
+                    "description": "可选，摘要重点，如 OCR、人物、场景、风险、表格",
+                },
+            },
+            "required": ["files"],
+        }
+
+    @staticmethod
+    def _system_prompt() -> str:
+        return (
+            "你是本地 Qwen 视觉摘要模型。"
+            "请根据输入图片输出严格 JSON，禁止 Markdown、禁止代码块、禁止额外解释。"
+            "如果图片不清晰，请在 uncertainties 中说明，不要猜测。"
+            "输出结构必须包含："
+            "{"
+            "\"image_count\": int, "
+            "\"overall_summary\": str, "
+            "\"per_image\": [{\"index\": int, \"summary\": str, \"text\": [str], \"objects\": [str], \"scene\": str, \"uncertainties\": [str]}], "
+            "\"keywords\": [str], "
+            "\"risk_flags\": [str], "
+            "\"confidence\": \"high|medium|low\""
+            "}"
+        )
+
+    def _build_payload(self, files: list[str], focus: str) -> dict[str, Any]:
+        return {
+            "messages": [
+                {"role": "system", "content": self._system_prompt()},
+                {"role": "user", "content": _build_multimodal_content(files, focus)},
+            ],
+            "max_tokens": IMAGE_SUMMARY_MAX_TOKENS,
+            "temperature": IMAGE_SUMMARY_TEMPERATURE,
+            "top_p": IMAGE_SUMMARY_TOP_P,
+        }
+
+    def _call_qwen(self, files: list[str], focus: str) -> str:
+        payload = self._build_payload(files, focus)
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        url = f"{IMAGE_SUMMARY_API_URL.rstrip('/')}/chat/completions"
+
+        logger.info("  [image_summary] >> Qwen: %s | files=%d", url, len(files))
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        proxy_handler = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(proxy_handler)
+        with opener.open(req, timeout=IMAGE_SUMMARY_TIMEOUT) as response:
+            body = json.loads(response.read().decode("utf-8"))
+
+        content = body["choices"][0]["message"]["content"]
+        logger.info("  [image_summary] << raw: %.120s", content)
+        return str(content)
+
+    async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
+        files = _normalize_files(args.get("files"))
+        focus = str(args.get("focus", "")).strip()
+        if not files:
+            return ToolResult(error="Missing 'files' argument")
+
+        try:
+            raw_content = await asyncio.to_thread(self._call_qwen, files, focus)
+            parsed = _parse_json_payload(raw_content)
+            for key, default in OUTPUT_JSON_KEYS.items():
+                parsed.setdefault(key, default)
+            parsed["image_count"] = int(parsed.get("image_count") or len(files))
+            if not isinstance(parsed.get("per_image"), list):
+                parsed["per_image"] = []
+            if not isinstance(parsed.get("keywords"), list):
+                parsed["keywords"] = []
+            if not isinstance(parsed.get("risk_flags"), list):
+                parsed["risk_flags"] = []
+            if not isinstance(parsed.get("confidence"), str):
+                parsed["confidence"] = "medium"
+            return ToolResult(output=json.dumps(parsed, ensure_ascii=False), exit_code=0)
+        except urllib.error.URLError as e:
+            logger.error(f"[image_summary] Qwen request failed: {e}", exc_info=True)
+            return ToolResult(error=f"Image summary failed: {str(e)}")
+        except Exception as e:
+            logger.error(f"[image_summary] Failed: {e}", exc_info=True)
+            return ToolResult(error=f"Image summary failed: {str(e)}")
