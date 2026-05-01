@@ -820,6 +820,8 @@ class LogAnalystAgent:
         
         # 3. JSON 修补并返回
         structured = EvolutionUtils.json_repair(response)
+        if not isinstance(structured, dict):
+            structured = {"parse_error": True, "raw": str(structured)[:500]}
         structured.update({
             "quality_tier": clean_res["quality_tier"],
             "kb_document": self._format_kb(structured, clean_res)
