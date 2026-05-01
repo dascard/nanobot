@@ -36,6 +36,18 @@ def _is_news_request(query: str) -> bool:
     return any(marker in q for marker in markers)
 
 
+def _is_group_analysis_request(query: str) -> bool:
+    q = (query or "").lower()
+    direct_markers = ("群聊总结", "群总结", "群日报", "分析群", "总结群", "分析这个群", "总结这个群")
+    if any(marker in q for marker in direct_markers):
+        return True
+    group_markers = ("群", "群聊", "这个群")
+    analysis_markers = ("分析", "总结", "日报", "概览", "回顾")
+    return any(group_marker in q for group_marker in group_markers) and any(
+        analysis_marker in q for analysis_marker in analysis_markers
+    )
+
+
 class NanobotBridge:
     """
     Wraps a KT Agent for use as a request/response handler.
@@ -109,7 +121,7 @@ class NanobotBridge:
             "涉及今天、最近、刚刚、日报、新闻时，默认以这个时间为准理解。"
         )
 
-    def _extract_last_news_tool_output(self) -> str:
+    def _extract_last_rich_tool_output(self, marker_classes: tuple[str, ...]) -> str:
         if not self._agent:
             return ""
         try:
@@ -118,12 +130,12 @@ class NanobotBridge:
                 if msg.get("role") != "tool":
                     continue
                 content = msg.get("content")
-                if isinstance(content, str) and "news-brief" in content:
+                if isinstance(content, str) and any(marker in content for marker in marker_classes):
                     article_idx = content.find("<article")
                     if article_idx >= 0:
                         return content[article_idx:].strip()
         except Exception as e:
-            logger.debug(f"[NanobotBridge] news tool output fallback failed: {e}")
+            logger.debug(f"[NanobotBridge] rich tool output fallback failed: {e}")
         return ""
 
     async def handle_message(
@@ -334,8 +346,12 @@ class NanobotBridge:
 
                 try:
                     logger.info(f"[NanobotBridge] Calling _process_event (Attempt {attempt+1})...")
-                    result = await self._agent._process_event(event)
+                    result = await asyncio.wait_for(
+                        self._agent._process_event(event), timeout=120.0,
+                    )
                     logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
+                except asyncio.TimeoutError:
+                    logger.warning("[NanobotBridge] _process_event timed out, using buffer content")
                 except Exception as e:
                     logger.error(f"[NanobotBridge] Agent processing error: {e}", exc_info=True)
                     self._output._buffer.append(f"\n[系统内部错误] {str(e)}")
@@ -416,10 +432,16 @@ class NanobotBridge:
                     response = fallback
 
             if _is_news_request(raw_query):
-                news_html = self._extract_last_news_tool_output()
+                news_html = self._extract_last_rich_tool_output(("news-brief",))
                 if news_html and not response.lstrip().startswith("<article"):
                     logger.info("[NanobotBridge] Replacing rewritten news response with preserved HTML tool output")
                     response = news_html
+
+            if _is_group_analysis_request(raw_query):
+                group_html = self._extract_last_rich_tool_output(("group-analysis-report",))
+                if group_html and not response.lstrip().startswith("<article"):
+                    logger.info("[NanobotBridge] Replacing rewritten group analysis response with preserved HTML tool output")
+                    response = group_html
             
             logger.info(f"[NanobotBridge] After processing: response_len={len(response)}, buffer_chunks={buffer_len}")
             if response:
