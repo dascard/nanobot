@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any
@@ -25,6 +26,7 @@ logger = logging.getLogger("nanobot.tool.group_analysis")
 GROUP_ANALYSIS_MAX_LOGS = int(os.environ.get("GROUP_ANALYSIS_MAX_LOGS", "5000"))
 GROUP_ANALYSIS_PROMPT_CHAR_BUDGET = int(os.environ.get("GROUP_ANALYSIS_PROMPT_CHAR_BUDGET", "60000"))
 GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET = int(os.environ.get("GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET", "24000"))
+_LAST_GROUP_ANALYSIS_REPORT: tuple[float, str] = (0.0, "")
 
 # ── Prompt 模板 ──
 
@@ -185,6 +187,19 @@ def _build_message_prompt_text(messages: list[dict[str, Any]], max_chars: int) -
     tail = _pack_lines_backward(lines, tail_budget)
     compact = header + head + marker + tail
     return compact[:max_chars]
+
+def _remember_group_analysis_report(report: str) -> None:
+    global _LAST_GROUP_ANALYSIS_REPORT
+    if report and "group-analysis-report" in report:
+        _LAST_GROUP_ANALYSIS_REPORT = (time.monotonic(), report)
+
+def get_recent_group_analysis_report(max_age_seconds: float = 300.0) -> str:
+    created_at, report = _LAST_GROUP_ANALYSIS_REPORT
+    if not report:
+        return ""
+    if time.monotonic() - created_at > max_age_seconds:
+        return ""
+    return report
 
 def _parse_instruction_window_hours(instructions: str) -> int | None:
     text = str(instructions or "").strip()
@@ -351,6 +366,7 @@ class GroupAnalysisTool(BaseTool):
                 report = _format_scrapbook_html(
                     group_name, group_stats,
                     _p(topic_raw), _p(title_raw), _p(quote_raw), _p(quality_raw))
+                _remember_group_analysis_report(report)
                 return ToolResult(output=report, exit_code=0)
             finally:
                 db.close()

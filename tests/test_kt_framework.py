@@ -374,6 +374,60 @@ class TestNanobotBridge:
         assert result.startswith("<!DOCTYPE html>")
         assert "group-analysis-report" in result
 
+    @patch("nanobot_kt.bridge.registry")
+    @patch("nanobot_kt.bridge.NewAPIClient")
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_returns_group_html_when_processing_times_out_after_tool(
+        self, MockAgent, mock_load, MockClient, mock_registry
+    ):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 5
+        route_client.get_ordered_candidates.return_value = [
+            {"id": "model-a", "intelligence": 9, "cost_input_1m": 0.0, "context_window": 128000}
+        ]
+        MockClient.return_value = route_client
+        MockClient.get_failure_tracker.return_value = MagicMock(
+            record_success=AsyncMock(),
+            record_failure=AsyncMock(),
+        )
+        mock_registry.get_models_by_provider.return_value = [{"id": "model-a"}]
+
+        group_html = "<!DOCTYPE html><html><body class=\"group-analysis-report\"><h1>群聊分析卡片</h1></body></html>"
+
+        tool_msg = MagicMock()
+        tool_msg.role = "tool"
+        tool_msg.content = group_html
+        mock_conv = MagicMock()
+        mock_conv._messages = [tool_msg]
+        mock_conv.get_messages.return_value = [tool_msg]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
+        mock_agent._process_event = AsyncMock(side_effect=asyncio.TimeoutError())
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("分析这个群的消息", user_id="u1")
+
+        result = asyncio.run(_run())
+
+        assert result == group_html
+
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_injects_history_header(self, MockAgent, mock_load):

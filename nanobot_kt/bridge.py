@@ -57,6 +57,20 @@ def _extract_html_document(content: str) -> str:
     return ""
 
 
+def _message_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(_message_content_to_text(item) for item in content)
+    if isinstance(content, dict):
+        parts: list[str] = []
+        for key in ("text", "content", "output"):
+            if key in content:
+                parts.append(_message_content_to_text(content.get(key)))
+        return "\n".join(part for part in parts if part)
+    return ""
+
+
 class NanobotBridge:
     """
     Wraps a KT Agent for use as a request/response handler.
@@ -133,14 +147,31 @@ class NanobotBridge:
     def _extract_last_rich_tool_output(self, marker_classes: tuple[str, ...]) -> str:
         if not self._agent:
             return ""
+
+        if "group-analysis-report" in marker_classes:
+            try:
+                from creatures.nanobot.prompts.skills.group_analysis.tool import (
+                    get_recent_group_analysis_report,
+                )
+
+                cached = get_recent_group_analysis_report()
+                if cached:
+                    return cached
+            except Exception as e:
+                logger.debug(f"[NanobotBridge] group analysis cache fallback failed: {e}")
+
         try:
-            messages = self._agent.controller.conversation.to_messages()
-            for msg in reversed(messages):
-                if msg.get("role") != "tool":
-                    continue
-                content = msg.get("content")
-                if isinstance(content, str) and any(marker in content for marker in marker_classes):
-                    html_doc = _extract_html_document(content)
+            conv = self._agent.controller.conversation
+            payloads: list[Any] = []
+            if hasattr(conv, "get_messages"):
+                payloads.extend(conv.get_messages())
+            if hasattr(conv, "to_messages"):
+                payloads.extend(conv.to_messages())
+            for msg in reversed(payloads):
+                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+                text = _message_content_to_text(content)
+                if text and any(marker in text for marker in marker_classes):
+                    html_doc = _extract_html_document(text)
                     if html_doc:
                         return html_doc
         except Exception as e:
@@ -375,6 +406,20 @@ class NanobotBridge:
                 )
                 is_empty = not response.strip()
                 is_error = "[系统内部错误]" in response
+                if is_empty:
+                    preserved_rich_output = ""
+                    if _is_news_request(raw_query):
+                        preserved_rich_output = self._extract_last_rich_tool_output(("news-brief",))
+                    if not preserved_rich_output and _is_group_analysis_request(raw_query):
+                        preserved_rich_output = self._extract_last_rich_tool_output(("group-analysis-report",))
+                    if preserved_rich_output:
+                        logger.info(
+                            "[NanobotBridge] Returning preserved rich tool output after empty/timeout attempt"
+                        )
+                        self._output._buffer.append(preserved_rich_output)
+                        if tracker is not None:
+                            await tracker.record_success(target_model)
+                        break
                 if (is_empty or is_error) and attempt < max_attempts - 1:
                     logger.warning(f"[NanobotBridge] Framework error. Recording failure for {target_model}")
                     if tracker is not None:
