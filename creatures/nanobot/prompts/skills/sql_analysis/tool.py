@@ -23,7 +23,7 @@ class SQLAnalysisTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "在对话日志 SQLite 库中执行只读 SQL 查询进行数据分析"
+        return "在对话日志 SQLite 库中执行只读 SQL 查询。仅当历史信息明显影响当前回复时使用——不用于寒暄、即时情绪、轻松接话。无命中不编造。"
 
     @property
     def execution_mode(self) -> ExecutionMode:
