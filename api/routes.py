@@ -714,6 +714,7 @@ class UpdateGroupNameRequest(BaseModel):
 def update_group_name(
     req: UpdateGroupNameRequest,
     db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
 ):
     """更新 users 表的 name 字段（群聊也用 users 表，id=group_xxx）。"""
     user_id = f"group_{req.group_id}" if not req.group_id.startswith("group_") else req.group_id
@@ -762,7 +763,8 @@ def group_timing(req: GroupTimingRequest, _auth=Depends(verify_token)):
     try:
         result = gate.judge(context)
     except Exception as e:
-        result = {"action": "no_reply", "delay_seconds": None, "reason": f"内部错误: {e}"}
+        logger.warning("[TimingGate] endpoint error: %s", e)
+        result = {"action": "no_reply", "delay_seconds": None, "reason": "内部错误"}
 
     return result
 
