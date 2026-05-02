@@ -576,8 +576,13 @@ class NanobotBridge:
                 logger.warning(f"[NanobotBridge] EMPTY RESPONSE!")
                 logger.warning(f"[NanobotBridge] buffer={buffer_list}, result={result}")
 
-            # Replyer pass: 非 HTML 回复用 replyer prompt 清理 planner 痕迹
-            if response.strip() and not response.lstrip().startswith("<article") and not response.lstrip().startswith("<!doctype"):
+            # Replyer pass: 仅群聊长回复启用（短回复/私聊/HTML 全部跳过）
+            is_group = bool(meta.get("is_group", False)) if meta else False
+            if (response.strip()
+                    and not response.lstrip().startswith("<article")
+                    and not response.lstrip().startswith("<!doctype")
+                    and is_group
+                    and len(response) >= 50):
                 try:
                     reply_client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=30)
                     replyer_prompt = (
