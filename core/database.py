@@ -185,23 +185,6 @@ class PersonaBehavior(Base):
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
 
-    # 自动备份（迁移前）
-    if os.path.exists(DB_PATH):
-        import shutil as _shutil
-        from datetime import datetime as _dt
-        backup_path = f"{DB_PATH}.bak.{_dt.now().strftime('%Y%m%d_%H%M%S')}"
-        try:
-            _shutil.copy2(DB_PATH, backup_path)
-            # 只保留最近 5 个备份
-            backups = sorted(
-                [f for f in os.listdir(DB_DIR) if f.startswith("nanobot.db.bak.")],
-                reverse=True,
-            )
-            for old in backups[5:]:
-                os.remove(os.path.join(DB_DIR, old))
-        except Exception:
-            pass
-
     Base.metadata.create_all(bind=engine)
 
     # ── 自动化热修复：处理现有表的列迁移 ──
@@ -222,51 +205,69 @@ def init_db():
         "source_message_ids_json": "TEXT",
         "meta_json": "TEXT",
     }
-    for c, t in _chat_v2_migrations.items():
-        if c not in existing_columns:
-            print(f"  → Migrating: Adding missing column [{c}] to chat_logs...")
-            try:
-                with engine.connect() as conn:
-                    conn.execute(text(f"ALTER TABLE chat_logs ADD COLUMN {c} {t}"))
-                    conn.commit()
-            except Exception as e:
-                print(f"  ⚠ Migration failed for {c}: {e}")
     # conversation_turns v2
+    existing_columns = [col["name"] for col in inspector.get_columns("chat_logs")]
     conv_cols = [col["name"] for col in inspector.get_columns("conversation_turns")]
-    for c in ("source_message_ids_json", "meta_json"):
-        if c not in conv_cols:
-            print(f"  → Migrating: Adding missing column [{c}] to conversation_turns...")
-            try:
-                with engine.connect() as conn:
-                    conn.execute(text(f"ALTER TABLE conversation_turns ADD COLUMN {c} TEXT"))
-                    conn.commit()
-            except Exception as e:
-                print(f"  ⚠ Migration failed for {c}: {e}")
-    # index: (session_id, message_id) for chat_logs
-    if "message_id" in existing_columns:
+
+    chat_missing = [
+        (col_name, col_type)
+        for col_name, col_type in {**allowed_migrations, **_chat_v2_migrations}.items()
+        if col_name not in existing_columns
+    ]
+    conv_missing = [
+        (col_name, "TEXT")
+        for col_name in ("source_message_ids_json", "meta_json")
+        if col_name not in conv_cols
+    ]
+
+    # 自动备份（仅在确实需要迁移时）
+    if (chat_missing or conv_missing) and os.path.exists(DB_PATH):
+        import shutil as _shutil
+        from datetime import datetime as _dt
+        backup_path = f"{DB_PATH}.bak.{_dt.now().strftime('%Y%m%d_%H%M%S')}"
         try:
-            with engine.connect() as conn:
-                conn.execute(text(
-                    "CREATE INDEX IF NOT EXISTS idx_cl_session_msg "
-                    "ON chat_logs(session_id, message_id)"
-                ))
+            _shutil.copy2(DB_PATH, backup_path)
+            # 只保留最近 5 个备份
+            backups = sorted(
+                [f for f in os.listdir(DB_DIR) if f.startswith("nanobot.db.bak.")],
+                reverse=True,
+            )
+            for old in backups[5:]:
+                os.remove(os.path.join(DB_DIR, old))
+        except Exception as _e:
+            import logging as _logging
+            _logging.getLogger("nanobot").warning("DB backup/cleanup failed (migration continues): %s", _e)
+
+    with engine.connect() as conn:
+        for col_name, col_type in chat_missing:
+            print(f"  → Migrating: Adding missing column [{col_name}] to chat_logs...")
+            try:
+                conn.execute(
+                    text(f"ALTER TABLE chat_logs ADD COLUMN {col_name} {col_type}")
+                )
                 conn.commit()
+            except Exception as e:
+                print(f"  ⚠ Migration failed for {col_name}: {e}")
+
+        for col_name, col_type in conv_missing:
+            print(f"  → Migrating: Adding missing column [{col_name}] to conversation_turns...")
+            try:
+                conn.execute(
+                    text(f"ALTER TABLE conversation_turns ADD COLUMN {col_name} {col_type}")
+                )
+                conn.commit()
+            except Exception as e:
+                print(f"  ⚠ Migration failed for {col_name}: {e}")
+
+        # index: (session_id, message_id) for chat_logs
+        try:
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_cl_session_msg "
+                "ON chat_logs(session_id, message_id)"
+            ))
+            conn.commit()
         except Exception as e:
             print(f"  ⚠ Index creation failed: {e}")
-    existing_columns = [col["name"] for col in inspector.get_columns("chat_logs")]
-    with engine.connect() as conn:
-        for col_name, col_type in allowed_migrations.items():
-            if col_name not in existing_columns:
-                print(
-                    f"  → Migrating: Adding missing column [{col_name}] to chat_logs..."
-                )
-                try:
-                    conn.execute(
-                        text(f"ALTER TABLE chat_logs ADD COLUMN {col_name} {col_type}")
-                    )
-                    conn.commit()
-                except Exception as e:
-                    print(f"  ⚠ Migration failed for {col_name}: {e}")
 
     user_columns = [col["name"] for col in inspector.get_columns("users")]
     for col_name in ["history_clear_at", "name"]:

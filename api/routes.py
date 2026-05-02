@@ -129,7 +129,7 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
         db.query(ConversationTurn)
         .filter(ConversationTurn.session_id == session_id)
         .filter(ConversationTurn.created_at > cutoff)
-        .order_by(ConversationTurn.created_at.desc())
+        .order_by(ConversationTurn.created_at.desc(), ConversationTurn.id.desc())
         .limit(max_rows)
         .all()
     )
@@ -137,12 +137,9 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
     if not turns:
         return "", []
 
-    # Reverse to chronological for processing
-    turns.reverse()
-
-    # 3. 正序累计 token → 超限停止
-    history_messages: list[dict] = []
-    total_chars = 0
+    # 3. 倒序从新到旧累计 token，确保预算不足时保留最新上下文
+    selected_desc: list[dict] = []
+    total_tokens = 0
     for t in turns:
         content = t.content.strip()
         if not content:
@@ -150,10 +147,14 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
         content = _sanitize_prompt_text(content, max_per_msg)
         if not content:
             continue
-        total_chars += len(content)
-        if total_chars > max_total:
+        token_cost = max(len(content), _estimate_tokens(content))
+        if selected_desc and total_tokens + token_cost > max_total:
             break
-        history_messages.append({"role": t.role, "content": content})
+        total_tokens += token_cost
+        selected_desc.append({"role": t.role, "content": content})
+
+    # 4. 选中行 reverse 成正序
+    history_messages = list(reversed(selected_desc))
 
     if not history_messages:
         logger.debug("[Context] empty after token cap session=%s", session_id)
@@ -167,9 +168,9 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
         logger.debug("[Context] all assistant rows trimmed session=%s", session_id)
         return "", []
 
-    logger.info("[Context] session=%s type=%s rows=%d→%d total_chars=%d max=%d",
+    logger.info("[Context] session=%s type=%s rows=%d→%d total_tokens~%d max=%d",
                 session_id, "group" if is_group else "private",
-                len(turns), len(history_messages), total_chars, max_rows)
+                len(turns), len(history_messages), total_tokens, max_rows)
 
     header = (
         f"[近{window_minutes}分钟内对话历史，仅用于理解语境。"
@@ -459,14 +460,14 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
         processed=processed_val,
     ))
     # ConversationTurn — 精简上下文，专用于历史注入
-    # HTML 报告只存摘要，避免污染下轮上下文
+    # HTML 报告只存摘要，避免污染下轮上下文；ChatLog 保留完整原文。
     turn_answer = answer
-    if answer and len(answer) > 2000:
-        answer_lower = answer[:200].lower()
+    if answer:
+        answer_lower = answer.lstrip()[:500].lower()
         html_markers = ("<!doctype", "<html", "<head", "<body", "<article", "<style")
         if any(answer_lower.startswith(m) for m in html_markers):
-            turn_answer = f"[报告: 已渲染为图片/HTML，{len(answer)}字符]"
-        else:
+            turn_answer = f"[HTML报告: 已渲染为图片/HTML，{len(answer)}字符]"
+        elif len(answer) > 2000:
             turn_answer = answer[:2000] + "\n...[截断]"
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
                             role="user", content=context_display_content,
@@ -739,7 +740,7 @@ class GroupTimingRequest(BaseModel):
 
 
 @router.post("/group_timing")
-def group_timing(req: GroupTimingRequest):
+def group_timing(req: GroupTimingRequest, _auth=Depends(verify_token)):
     """Timing Gate——Qwen 判断群聊 continue/wait/no_reply。"""
     import asyncio as _asyncio
     gate = get_timing_gate()
@@ -759,7 +760,7 @@ def group_timing(req: GroupTimingRequest):
     context = "\n".join(lines)
 
     try:
-        result = _asyncio.run(_asyncio.to_thread(gate.judge, context))
+        result = gate.judge(context)
     except Exception as e:
         result = {"action": "no_reply", "delay_seconds": None, "reason": f"内部错误: {e}"}
 
@@ -980,6 +981,8 @@ async def proxy_chat(
         f"keys={list(persona_data.keys()) if isinstance(persona_data, dict) else 'N/A'}"
     )
 
+    is_group = not str(req.session_id).startswith("private_")
+
     # 3. 构建会话记忆上下文 (时间窗口 + clear 标记感知)
     memory_header, history_messages = _build_session_memory(
         db,
@@ -992,7 +995,6 @@ async def proxy_chat(
     )
 
     # 4a. 私聊分类器（Guardrail） + 消息缓冲（5s 窗口，Qwen 并行）
-    is_group = not str(req.session_id).startswith("private_")
     guardrail_status: str | None = None
     _classifier_ran = False
     buffered_query: str | None = None  # 缓冲合并后的查询，供 LLM 使用

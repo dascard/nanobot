@@ -7,6 +7,7 @@ and provides a simple async handle_message() interface for use in routes.py.
 """
 
 import asyncio
+import inspect
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -78,6 +79,17 @@ def _message_content_to_text(content: Any) -> str:
                 parts.append(_message_content_to_text(content.get(key)))
         return "\n".join(part for part in parts if part)
     return ""
+
+
+async def _call_tracker_method(tracker: Any, method_name: str, model_id: str) -> None:
+    if tracker is None:
+        return
+    method = getattr(tracker, method_name, None)
+    if not method:
+        return
+    result = method(model_id)
+    if inspect.isawaitable(result):
+        await result
 
 
 class NanobotBridge:
@@ -215,7 +227,23 @@ class NanobotBridge:
 
         # HeartFlow: 按 session 分锁，同 session 串行，不同 session 并发
         import time as _time
+        if not hasattr(self, "_session_locks"):
+            self._session_locks = {}
+        if not hasattr(self, "_session_last_active"):
+            self._session_last_active = {}
+        if not hasattr(self, "SESSION_TTL_SECONDS"):
+            self.SESSION_TTL_SECONDS = 300
         sess_lock = self._session_locks.setdefault(session_id, asyncio.Lock())
+
+        # 定期清理过期 session 锁
+        if len(self._session_locks) > 100 and len(self._session_locks) % 100 == 0:
+            stale = [sid for sid, ts in list(self._session_last_active.items())
+                     if now_ts - ts > self.SESSION_TTL_SECONDS * 2]
+            for sid in stale:
+                self._session_locks.pop(sid, None)
+                self._session_last_active.pop(sid, None)
+            if stale:
+                logger.info("[HeartFlow] Cleaned %d stale sessions", len(stale))
 
         # Interrupt: 如果该 session 正在处理，发 interrupt 信号
         if sess_lock.locked() and hasattr(self._agent, '_interrupt_requested'):
@@ -459,24 +487,21 @@ class NanobotBridge:
                     logger.info("[NanobotBridge] Using preserved tool HTML output")
                     if preserved_html not in response:
                         self._output._buffer.append(preserved_html)
-                    if tracker is not None:
-                        await tracker.record_success(target_model)
+                    await _call_tracker_method(tracker, "record_success", target_model)
                     break
 
                 is_empty = not response.strip()
                 is_error = "[系统内部错误]" in response
                 if (is_empty or is_error) and attempt < max_attempts - 1:
                     logger.warning(f"[NanobotBridge] Framework error. Recording failure for {target_model}")
-                    if tracker is not None:
-                        await tracker.record_failure(target_model)
+                    await _call_tracker_method(tracker, "record_failure", target_model)
 
                     # reasoning_content: deepseek thinking mode → ban all deepseek
                     if "reasoning_content" in response and route_client:
                         logger.warning("[NanobotBridge] reasoning_content — banning deepseek family")
                         for m in registry.get_models_by_provider("new-api"):
                             if "deepseek" in m.get("id", "").lower():
-                                if tracker is not None:
-                                    await tracker.record_failure(m["id"])
+                                await _call_tracker_method(tracker, "record_failure", m["id"])
 
                     # Conversation rollback logic
                     tool_results_preserved = False
@@ -506,8 +531,7 @@ class NanobotBridge:
                         next_event = create_user_input_event(event_content)
                     continue
                 else:
-                    if tracker is not None:
-                        await tracker.record_success(target_model)
+                    await _call_tracker_method(tracker, "record_success", target_model)
                     break
 
             logger.info(f"[NanobotBridge] Checking output buffer...")
@@ -578,7 +602,7 @@ class NanobotBridge:
                         else:
                             logger.debug("[Replyer] skipped: output too short")
                 except Exception as e:
-                    logger.debug(f"[NanobotBridge] Replyer pass skipped: {e}")
+                    logger.warning("[Replyer] pass skipped: %s", e)
 
             if not response.strip():
                 logger.warning(f"[NanobotBridge] KT agent returned empty response after strip")
