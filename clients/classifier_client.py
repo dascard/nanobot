@@ -265,3 +265,111 @@ def get_guardrail() -> Guardrail:
     if _guardrail_instance is None:
         _guardrail_instance = Guardrail()
     return _guardrail_instance
+
+
+# ── Timing Gate（群聊回复节奏判断，独立于 Guardrail）──
+
+TIMING_GATE_PROMPT = """你是群聊节奏控制器。你的唯一任务是判断 bot 现在是否应该进入正式回复流程。
+
+## 上下文
+bot 在 QQ 群聊中水群。它不是你——你只是一个节奏判断器。bot 之后会由另一个系统做实际回复。
+
+## 判断规则
+1. 用户在跟 bot 说话（@/叫名字/回复 bot）→ continue
+2. 用户在跟别人聊天 → no_reply
+3. 用户可能还在打字（消息不完整）→ wait
+4. 纯游戏命令、签到、钓鱼 → no_reply
+5. 不确定是否对 bot 说的 → no_reply
+
+## 输出 JSON
+{"action": "继续则填 continue / 等待则填 wait / 不回复则填 no_reply", "delay_seconds": 仅在 wait 时填等待秒数(3-15), "reason": "一句话原因"}
+
+只输出 JSON，不要其他内容。"""
+
+TIMING_GATE_MAX_TOKENS = 80
+
+
+class TimingGate:
+    """群聊节奏判断器——Qwen 三态输出，与 Guardrail 完全独立。"""
+
+    def _call_qwen(self, message: str) -> str:
+        payload = {
+            "messages": [
+                {"role": "system", "content": TIMING_GATE_PROMPT},
+                {"role": "user", "content": message},
+            ],
+            "max_tokens": TIMING_GATE_MAX_TOKENS,
+            "temperature": 0,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
+        req = urllib.request.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        proxy_handler = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(proxy_handler)
+        with opener.open(req, timeout=CLASSIFIER_TIMEOUT) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        return body["choices"][0]["message"]["content"]
+
+    def _parse_output(self, raw: str) -> dict:
+        result = {"raw": raw[:200], "error_type": None}
+        # 去 think
+        cleaned = raw
+        for _ in range(5):
+            prev = cleaned
+            cleaned = THINK_PATTERN.sub("", cleaned).strip()
+            if cleaned == prev: break
+
+        # 提取 JSON
+        try:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(cleaned[start:end])
+                action = str(data.get("action", "")).strip().lower()
+                if action in ("continue", "wait", "no_reply"):
+                    delay = int(data.get("delay_seconds", 5))
+                    delay = max(3, min(30, delay))
+                    return {"action": action,
+                            "delay_seconds": delay if action == "wait" else None,
+                            "reason": str(data.get("reason", ""))[:200],
+                            "raw": raw[:200], "error_type": None}
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+
+        # 旧格式兼容
+        match = re.match(r"^\s*(是|否)\s*[,，]\s*(\d+)\s*$", cleaned)
+        if match:
+            action = "continue" if match.group(1) == "是" else "no_reply"
+            return {"action": action, "delay_seconds": None,
+                    "reason": "旧格式兼容", "raw": raw[:200], "error_type": None}
+
+        # 非法 → no_reply
+        logger.warning(f"[TimingGate] Invalid: {raw[:100]}")
+        return {"action": "no_reply", "delay_seconds": None,
+                "reason": "非法输出", "raw": raw[:200], "error_type": "parse_error"}
+
+    def judge(self, context: str) -> dict:
+        try:
+            raw = self._call_qwen(context)
+            result = self._parse_output(raw)
+            logger.info("[TimingGate] action=%s delay=%s reason=%s error=%s",
+                        result["action"], result.get("delay_seconds"),
+                        str(result.get("reason", ""))[:60], result.get("error_type"))
+            return result
+        except Exception as e:
+            logger.warning(f"[TimingGate] failed: {e}")
+            return {"action": "no_reply", "delay_seconds": None,
+                    "reason": f"Qwen不可用: {e}", "raw": "", "error_type": "network_error"}
+
+
+_timing_gate_instance: "TimingGate | None" = None
+
+
+def get_timing_gate() -> TimingGate:
+    global _timing_gate_instance
+    if _timing_gate_instance is None:
+        _timing_gate_instance = TimingGate()
+    return _timing_gate_instance

@@ -29,7 +29,7 @@ from core.compaction import run_autocompact_circuit_breaker
 from core.daily_digest import generate_daily_digest_for_date
 from clients.model_registry import registry
 from clients.new_api_client import NewAPIClient
-from clients.classifier_client import get_guardrail
+from clients.classifier_client import get_guardrail, get_timing_gate
 
 logger = logging.getLogger("nanobot.routes")
 router = APIRouter(prefix="/api/v1")
@@ -669,6 +669,47 @@ def update_group_name(
         db.add(User(id=user_id, name=req.group_name))
     db.commit()
     return {"status": "ok"}
+
+
+class GroupTimingRequest(BaseModel):
+    group_id: str
+    sender_id: str = ""
+    sender_name: str = ""
+    message: str
+    pending_messages: list[dict] = []
+    message_id: str | None = None
+    session_name: str | None = None
+    is_reply_to_bot: bool = False
+    trigger_reason: str = ""
+    bot_aliases: list[str] = []
+
+
+@router.post("/group_timing")
+def group_timing(req: GroupTimingRequest):
+    """Timing Gate——Qwen 判断群聊 continue/wait/no_reply。"""
+    import asyncio as _asyncio
+    gate = get_timing_gate()
+
+    # 构建上下文
+    lines = []
+    if req.session_name:
+        lines.append(f"群: {req.session_name}")
+    if req.bot_aliases:
+        lines.append(f"bot别名: {', '.join(req.bot_aliases)}")
+    for pm in req.pending_messages:
+        sid = pm.get("sender_name", pm.get("sender_id", "?"))
+        msg = str(pm.get("message", ""))[:200]
+        lines.append(f"[{sid}]: {msg}")
+    if not req.pending_messages:
+        lines.append(f"[{req.sender_name or req.sender_id}]: {req.message[:200]}")
+    context = "\n".join(lines)
+
+    try:
+        result = _asyncio.run(_asyncio.to_thread(gate.judge, context))
+    except Exception as e:
+        result = {"action": "no_reply", "delay_seconds": None, "reason": f"内部错误: {e}"}
+
+    return result
 
 
 @router.get("/search_logs")
