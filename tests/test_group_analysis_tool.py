@@ -156,39 +156,62 @@ def test_filter_messages_by_hours_keeps_recent_messages():
     assert filtered[0]["content"] == "recent"
 
 
-def test_group_analysis_dedupes_ambient_when_user_has_same_source():
+def test_group_analysis_dedupes_all_ambient_covered_by_user_source_ids():
+    """TimingGate 合并转发：user 的 source_message_ids 覆盖全部 ambient → 全去重。"""
     from core.database import ChatLog
     from creatures.nanobot.prompts.skills.group_analysis.tool import _dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
-        ChatLog(role="user", message_id="m1", source_message_ids_json='["m1", "m2"]', content="hello", sender_name="A"),
         ChatLog(role="ambient", message_id="m2", content="[A]: world", sender_name="A"),
+        ChatLog(role="user", message_id="m1", source_message_ids_json='["m1", "m2"]',
+                content="合并: hello\nworld", sender_name="A"),
         ChatLog(role="assistant", content="bot reply", sender_name="nanobot"),
     ]
 
     deduped = _dedupe_group_logs(logs)
 
-    assert [log.role for log in deduped] == ["user", "ambient", "assistant"]
-    assert deduped[0].content == "hello"
-    assert deduped[1].content == "[A]: world"
+    assert [log.role for log in deduped] == ["user", "assistant"]
 
 
-def test_group_analysis_keeps_ambient_for_batched_source_ids_not_in_user_content():
+def test_group_analysis_keeps_ambient_not_in_user_source_ids():
+    """ambient 的 message_id 不在任何 user 的 source_message_ids 中 → 保留。"""
+    from core.database import ChatLog
+    from creatures.nanobot.prompts.skills.group_analysis.tool import _dedupe_group_logs
+
+    logs = [
+        ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
+        ChatLog(role="ambient", message_id="m3", content="[C]: unrelated", sender_name="C"),
+        ChatLog(role="user", message_id="m1", source_message_ids_json='["m1", "m2"]',
+                content="merged hello", sender_name="A"),
+    ]
+
+    deduped = _dedupe_group_logs(logs)
+
+    # m1 被 user 覆盖 → 去重；m3 不在 user 的 source 中 → 保留
+    assert [(log.role, log.message_id) for log in deduped] == [
+        ("ambient", "m3"),
+        ("user", "m1"),
+    ]
+
+
+def test_group_analysis_keeps_source_ambient_when_user_content_does_not_cover_it():
+    """防御非 Plan8 客户端：source_ids 批量传入但 user 内容未合并对应原文时，不能误删 ambient。"""
     from core.database import ChatLog
     from creatures.nanobot.prompts.skills.group_analysis.tool import _dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
         ChatLog(role="ambient", message_id="m2", content="[B]: world", sender_name="B"),
-        ChatLog(role="user", message_id="m1", source_message_ids_json='["m1", "m2"]', content="hello", sender_name="A"),
+        ChatLog(role="user", message_id="m1", source_message_ids_json='["m1", "m2"]',
+                content="hello", sender_name="A"),
     ]
 
     deduped = _dedupe_group_logs(logs)
 
-    assert [(log.role, log.message_id, log.content) for log in deduped] == [
-        ("ambient", "m2", "[B]: world"),
-        ("user", "m1", "hello"),
+    assert [(log.role, log.message_id) for log in deduped] == [
+        ("ambient", "m2"),
+        ("user", "m1"),
     ]
 
 

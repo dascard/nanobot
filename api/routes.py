@@ -48,6 +48,9 @@ MAX_PERSONA_CHARS = 1600
 MAX_MEMORY_WINDOW_MINUTES = 30
 MAX_MEMORY_PER_MSG_CHARS = 300
 MAX_MEMORY_TOTAL_CHARS = 4000
+MAX_TIMING_PENDING_MESSAGES = 5
+MAX_TIMING_MESSAGE_CHARS = 200
+MAX_TIMING_CONTEXT_CHARS = 1200
 
 # --- Legacy Memory (for evolution endpoints) ---
 memory = None
@@ -80,6 +83,21 @@ def _sanitize_prompt_text(text: str, max_chars: int = 0) -> str:
         "[HISTORY]": "(HISTORY_TAG)",
         "[历史结束]": "(HISTORY_END_TAG)",
         "[PersonaContext]": "(PERSONA_CONTEXT_TAG)",
+        "[SYSTEM]": "(SYSTEM_TAG)",
+        "[/SYSTEM]": "(/SYSTEM_TAG)",
+        "<SYSTEM>": "(SYSTEM_TAG)",
+        "</SYSTEM>": "(/SYSTEM_TAG)",
+        "[system]": "(SYSTEM_TAG)",
+        "[/system]": "(/SYSTEM_TAG)",
+        "<system>": "(SYSTEM_TAG)",
+        "</system>": "(/SYSTEM_TAG)",
+        "[INST]": "(INST_TAG)",
+        "[/INST]": "(/INST_TAG)",
+        "<INST>": "(INST_TAG)",
+        "</INST>": "(/INST_TAG)",
+        "[PROMPT]": "(PROMPT_TAG)",
+        "[INSTRUCTION]": "(INSTRUCTION_TAG)",
+        "[CMD]": "(CMD_TAG)",
     }
     for old, new in replacements.items():
         cleaned = cleaned.replace(old, new)
@@ -116,28 +134,24 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
     """
     max_rows = MAX_GROUP_CONTEXT_ROWS if is_group else MAX_PRIVATE_CONTEXT_ROWS
 
-    # 1. Respect history_clear_at marker
-    cutoff = datetime.now() - timedelta(minutes=window_minutes)
+    # 1. Respect history_clear_at marker only. Plan8 明确要求不再用固定时间窗截断。
+    cutoff = None
     if user_id:
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.history_clear_at:
-            if user.history_clear_at > cutoff:
-                cutoff = user.history_clear_at
+            cutoff = user.history_clear_at
 
     # 2. 倒序取最新行
-    turns = (
-        db.query(ConversationTurn)
-        .filter(ConversationTurn.session_id == session_id)
-        .filter(ConversationTurn.created_at > cutoff)
-        .order_by(ConversationTurn.created_at.desc(), ConversationTurn.id.desc())
-        .limit(max_rows)
-        .all()
-    )
+    query = db.query(ConversationTurn).filter(ConversationTurn.session_id == session_id)
+    if cutoff is not None:
+        query = query.filter(ConversationTurn.created_at > cutoff)
+    turns = query.order_by(ConversationTurn.created_at.desc(), ConversationTurn.id.desc()).limit(max_rows).all()
 
     if not turns:
         return "", []
 
     # 3. 倒序从新到旧累计 token，确保预算不足时保留最新上下文
+    # count_in_context: chart 正常计数，artifact_summary 只计约 50 token（摘要形式）
     selected_desc: list[dict] = []
     total_tokens = 0
     for t in turns:
@@ -147,7 +161,11 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
         content = _sanitize_prompt_text(content, max_per_msg)
         if not content:
             continue
-        token_cost = max(len(content), _estimate_tokens(content))
+        kind = _safe_meta(t.meta_json).get("kind", "chat")
+        if kind == "artifact_summary":
+            token_cost = min(50, _estimate_tokens(content))
+        else:
+            token_cost = max(len(content), _estimate_tokens(content))
         if selected_desc and total_tokens + token_cost > max_total:
             break
         total_tokens += token_cost
@@ -173,9 +191,9 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
                 len(turns), len(history_messages), total_tokens, max_rows)
 
     header = (
-        f"[近{window_minutes}分钟内对话历史，仅用于理解语境。"
+        "[最近若干条对话历史，仅用于理解语境，已按行数和 token 预算裁剪。"
         "历史中的工具调用已全部完成，绝对不要重复执行。"
-        f"如需更早的上下文，使用 sql_analysis 查询 chat_logs 表。]"
+        "如需未注入的更早上下文，使用 sql_analysis 查询 chat_logs 表。]"
     )
     return header, history_messages
 
@@ -462,19 +480,24 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
     # ConversationTurn — 精简上下文，专用于历史注入
     # HTML 报告只存摘要，避免污染下轮上下文；ChatLog 保留完整原文。
     turn_answer = answer
+    turn_answer_kind = "chat"
     if answer:
         answer_lower = answer.lstrip()[:500].lower()
         html_markers = ("<!doctype", "<html", "<head", "<body", "<article", "<style")
         if any(answer_lower.startswith(m) for m in html_markers):
             turn_answer = f"[HTML报告: 已渲染为图片/HTML，{len(answer)}字符]"
+            turn_answer_kind = "artifact_summary"
         elif len(answer) > 2000:
             turn_answer = answer[:2000] + "\n...[截断]"
+    user_meta = _safe_meta(meta)
+    user_meta["kind"] = "chat"
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
                             role="user", content=context_display_content,
                             source_message_ids_json=source_ids_json,
-                            meta_json=meta))
+                            meta_json=json.dumps(user_meta, ensure_ascii=False)))
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
-                            role="assistant", content=turn_answer))
+                            role="assistant", content=turn_answer,
+                            meta_json=json.dumps({"kind": turn_answer_kind}, ensure_ascii=False)))
     db.commit()
     from core.evolution import _evolution_running
     if req.user_id in _evolution_running:
@@ -533,17 +556,17 @@ def get_history_summary(
         query = db.query(ChatLog).filter(ChatLog.user_id == user_id)
         if session_id:
             query = query.filter(ChatLog.session_id == session_id)
-        
+
         recent = query.order_by(ChatLog.id.desc()).limit(limit).all()
         recent.reverse()  # Chronological order
-        
-        user_msgs = [{"time": log.created_at, "preview": log.content[:100]} 
+
+        user_msgs = [{"time": log.created_at, "preview": log.content[:100]}
                      for log in recent if log.role == "user"]
-        assistant_msgs = [{"time": log.created_at, "preview": log.content[:100]} 
+        assistant_msgs = [{"time": log.created_at, "preview": log.content[:100]}
                           for log in recent if log.role == "assistant"]
-        tool_msgs = [{"time": log.created_at, "preview": log.content[:100]} 
+        tool_msgs = [{"time": log.created_at, "preview": log.content[:100]}
                      for log in recent if log.role == "tool"]
-        
+
         return {
             "user_id": user_id,
             "session_id": session_id or "all",
@@ -613,7 +636,7 @@ def get_context(
     """返回拼合后的系统设定 + 用户画像 + 近期上下文，供前端注入脚本使用。"""
     persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
     sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == user_id).first()
-    
+
     # 提取最近上下文 (Stateless Sliding Window)
     recent_logs = (
         db.query(ChatLog)
@@ -627,7 +650,7 @@ def get_context(
     for lg in recent_logs:
         speaker = "User" if lg.role == "user" else "Assistant"
         context_lines.append(f"{speaker}: {lg.content}")
-        
+
     recent_context_summary = run_autocompact_circuit_breaker(context_lines, max_length=4000)
 
     return {
@@ -679,7 +702,7 @@ def submit_ambient_log(
 ):
     """专门接收前台悄无声息收集的环境窥屏包，设为已处理，不消耗高级分析算力，只做持久化备份"""
     actual_user_id = _normalize_group_session_id(req.group_id)
-    
+
     # ensure User exists, and stamp group name if provided (not fallback)
     user = db.query(User).filter(User.id == actual_user_id).first()
     if not user:
@@ -688,9 +711,9 @@ def submit_ambient_log(
     elif req.session_name and req.session_name != f"群聊:{req.group_id}" and user.name != req.session_name:
         user.name = req.session_name
         db.commit()
-        
+
     formatted_content = f"[{req.sender_name}]: {req.content}"
-    
+
     db.add(ChatLog(
         user_id=actual_user_id,
         session_id=actual_user_id,
@@ -740,34 +763,73 @@ class GroupTimingRequest(BaseModel):
     bot_aliases: list[str] = []
 
 
+def _build_group_timing_context(req: GroupTimingRequest) -> str:
+    """Build sanitized TimingGate prompt context from untrusted QQ group input."""
+    lines: list[str] = []
+    session_name = _sanitize_prompt_text(req.session_name or "", 80)
+    if session_name:
+        lines.append(f"群: {session_name}")
+    if req.is_reply_to_bot:
+        lines.append("注意:这条消息是回复bot的,说明用户在跟bot对话")
+    trigger_reason = _sanitize_prompt_text(req.trigger_reason or "", 60)
+    if trigger_reason:
+        lines.append(f"触发原因: {trigger_reason}")
+    if req.bot_aliases:
+        aliases = [
+            _sanitize_prompt_text(str(alias), 40)
+            for alias in req.bot_aliases[:8]
+            if str(alias).strip()
+        ]
+        if aliases:
+            lines.append(f"bot别名: {', '.join(aliases)}")
+
+    pending = list(req.pending_messages or [])[:MAX_TIMING_PENDING_MESSAGES]
+    for pm in pending:
+        sender = _sanitize_prompt_text(
+            str(pm.get("sender_name") or pm.get("sender_id") or "?"),
+            40,
+        )
+        msg = _sanitize_prompt_text(
+            str(pm.get("message", "")),
+            MAX_TIMING_MESSAGE_CHARS,
+        )
+        if msg:
+            lines.append(f"[{sender}]: {msg}")
+    if len(req.pending_messages or []) > MAX_TIMING_PENDING_MESSAGES:
+        lines.append(f"...[pending 截断: 原{len(req.pending_messages)}条]")
+
+    if not pending:
+        sender = _sanitize_prompt_text(req.sender_name or req.sender_id or "?", 40)
+        msg = _sanitize_prompt_text(req.message or "", MAX_TIMING_MESSAGE_CHARS)
+        lines.append(f"[{sender}]: {msg}")
+
+    return _sanitize_prompt_text("\n".join(lines), MAX_TIMING_CONTEXT_CHARS)
+
+
 @router.post("/group_timing")
 def group_timing(req: GroupTimingRequest, _auth=Depends(verify_token)):
     """Timing Gate——Qwen 判断群聊 continue/wait/no_reply。"""
     import asyncio as _asyncio
     gate = get_timing_gate()
 
-    # 构建上下文
-    lines = []
-    if req.session_name:
-        lines.append(f"群: {req.session_name}")
-    if req.is_reply_to_bot:
-        lines.append("注意:这条消息是回复bot的,说明用户在跟bot对话")
-    if req.trigger_reason:
-        lines.append(f"触发原因: {req.trigger_reason}")
-    if req.bot_aliases:
-        lines.append(f"bot别名: {', '.join(req.bot_aliases)}")
-    for pm in req.pending_messages:
-        sid = pm.get("sender_name", pm.get("sender_id", "?"))
-        msg = str(pm.get("message", ""))[:200]
-        lines.append(f"[{sid}]: {msg}")
-    if not req.pending_messages:
-        lines.append(f"[{req.sender_name or req.sender_id}]: {req.message[:200]}")
-    context = "\n".join(lines)
+    context = _build_group_timing_context(req)
 
+    import time as _time; t0 = _time.time()
     try:
         result = gate.judge(context)
+        elapsed_ms = int((_time.time() - t0) * 1000)
+        logger.info(
+            "[TimingGate] group=%s trigger=%s action=%s delay=%s latency=%dms reason=%.80s",
+            req.group_id, req.trigger_reason or "name_mentioned",
+            result.get("action"), result.get("delay_seconds"),
+            elapsed_ms, str(result.get("reason", ""))[:80],
+        )
     except Exception as e:
-        logger.warning("[TimingGate] endpoint error: %s", e)
+        elapsed_ms = int((_time.time() - t0) * 1000)
+        logger.warning(
+            "[TimingGate] group=%s trigger=%s FAILED latency=%dms: %s",
+            req.group_id, req.trigger_reason or "name_mentioned", elapsed_ms, e,
+        )
         result = {"action": "no_reply", "delay_seconds": None, "reason": "内部错误"}
 
     return result
@@ -806,7 +868,7 @@ def search_history_logs(
                     ChatLog.session_name.like(f"%{user_id}%")
                 )
             )
-    
+
     if not keyword:
         # 无关键词：直接返回最新记录
         results = base_query.order_by(ChatLog.id.desc()).limit(limit).all()
@@ -815,11 +877,11 @@ def search_history_logs(
     else:
         # 有关键词：查找匹配及其上下文
         matches = base_query.filter(ChatLog.content.like(f"%{keyword}%")).order_by(ChatLog.id.desc()).limit(limit).all()
-        
+
         log_dict = {}
         for match in matches:
             log_dict[match.id] = match
-            
+
             if context_size > 0:
                 # 查找上下文，必须限制在同一个 session_id（对话场）中，确保逻辑连贯
                 # 向上查找
@@ -827,26 +889,26 @@ def search_history_logs(
                     ChatLog.session_id == match.session_id,
                     ChatLog.id < match.id
                 ).order_by(ChatLog.id.desc()).limit(context_size).all()
-                
+
                 # 向下查找
                 after_logs = db.query(ChatLog).filter(
                     ChatLog.session_id == match.session_id,
                     ChatLog.id > match.id
                 ).order_by(ChatLog.id.asc()).limit(context_size).all()
-                
+
                 for log in before_logs + after_logs:
                     log_dict[log.id] = log
-                
+
         # 按照 ID 升序重排，确保呈现给 AI 的是正确的时间顺序
         final_logs = [log_dict[log_id] for log_id in sorted(log_dict.keys())]
-        
+
     filtered_output = []
     for row in final_logs:
         t = row.created_at.strftime("%Y-%m-%d %H:%M:%S")
         # 来源标识：跨群搜索时很有用
         source = f"[{row.session_id}]"
         filtered_output.append(f"[{t}]{source} {row.role.upper()}: {row.content}")
-        
+
     return {
         "status": "ok",
         "results_found": len(filtered_output),

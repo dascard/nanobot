@@ -8,6 +8,7 @@ and provides a simple async handle_message() interface for use in routes.py.
 
 import asyncio
 import inspect
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -95,7 +96,7 @@ async def _call_tracker_method(tracker: Any, method_name: str, model_id: str) ->
 class NanobotBridge:
     """
     Wraps a KT Agent for use as a request/response handler.
-    
+
     Lifecycle:
         bridge = NanobotBridge("creatures/nanobot")
         await bridge.start()
@@ -103,13 +104,14 @@ class NanobotBridge:
         await bridge.stop()
     """
 
+    # 每轮重建 conversation，不跨请求复用（DB 是唯一事实源）
+    CONVERSATION_TTL_SECONDS = 0
+
     def __init__(self, creature_path: str = "creatures/nanobot"):
         self.creature_path = creature_path
         self._output = BufferedOutput()
         self._agent: Optional[Agent] = None
         self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session 分锁
-        self._session_last_active: dict[str, float] = {}   # 会话最后活跃时间
-        self.SESSION_TTL_SECONDS = 300  # 5 分钟无活动则清空会话
 
     async def start(self) -> None:
         """Initialize the KT agent from creature config."""
@@ -168,15 +170,27 @@ class NanobotBridge:
         )
 
     def _extract_reply_from_tool_output(self) -> str:
-        """从 conversation 中提取 reply() 工具的输出。"""
+        """从 conversation 中提取 reply() 工具的结构化输出。"""
         if not self._agent:
             return ""
         try:
+            from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+
             messages = self._agent.controller.conversation.to_messages()
             for msg in reversed(messages):
                 if msg.get("role") != "tool":
                     continue
                 content = _message_content_to_text(msg.get("content"))
+                # 新格式：JSON 结构化
+                try:
+                    data = json.loads(content)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    data = {}
+                if isinstance(data, dict) and REPLY_MARKER in data:
+                    reply_content = str(data[REPLY_MARKER].get("content", "")).strip()
+                    if reply_content:
+                        return reply_content
+                # 旧格式兼容：[REPLY]...[/REPLY]
                 if "[REPLY]" in content and "[/REPLY]" in content:
                     start = content.find("[REPLY]") + len("[REPLY]")
                     end = content.find("[/REPLY]")
@@ -244,66 +258,35 @@ class NanobotBridge:
         if not self._agent:
             return "Error: Agent not initialized"
 
-        # HeartFlow: 按 session 分锁，同 session 串行，不同 session 并发
+        # SessionRuntime: 按 session 分锁，同 session 串行，不同 session 并发
         import time as _time
         if not hasattr(self, "_session_locks"):
             self._session_locks = {}
-        if not hasattr(self, "_session_last_active"):
-            self._session_last_active = {}
-        if not hasattr(self, "SESSION_TTL_SECONDS"):
-            self.SESSION_TTL_SECONDS = 300
         sess_lock = self._session_locks.setdefault(session_id, asyncio.Lock())
-
-        # 定期清理过期 session 锁
-        if len(self._session_locks) > 100 and len(self._session_locks) % 100 == 0:
-            stale = [sid for sid, ts in list(self._session_last_active.items())
-                     if _time.time() - ts > self.SESSION_TTL_SECONDS * 2]
-            for sid in stale:
-                self._session_locks.pop(sid, None)
-                self._session_last_active.pop(sid, None)
-            if stale:
-                logger.info("[HeartFlow] Cleaned %d stale sessions", len(stale))
 
         # Interrupt: 如果该 session 正在处理，发 interrupt 信号
         if sess_lock.locked() and hasattr(self._agent, '_interrupt_requested'):
-            logger.info("[HeartFlow] Interrupt flag for session=%s", session_id)
+            logger.info("[SessionRuntime] Interrupt flag set for session=%s", session_id)
             self._agent._interrupt_requested = True
 
         async with sess_lock:
-            now_ts = _time.time()
+            t_start = _time.time()
             self._output.clear()
-
-            # Session continuity: 同 session 短时间内复用 conversation
-            keep_conversation = False
-            last_active = self._session_last_active.get(session_id, 0)
-            if now_ts - last_active < self.SESSION_TTL_SECONDS:
-                keep_conversation = True
-                logger.info("[HeartFlow] Reusing session=%s age=%ds",
-                            session_id, int(now_ts - last_active))
-            else:
-                logger.info("[HeartFlow] Cold session=%s, clearing", session_id)
-            self._session_last_active[session_id] = now_ts
             if stream_queue is not None:
                 self._output.enable_stream(stream_queue)
-            logger.info(f"[NanobotBridge] Starting handle_message: query_len={len(query)}, user={user_id}, session={session_id}")
+            logger.info("[SessionRuntime] START session=%s user=%s query_len=%d",
+                        session_id, user_id, len(query))
 
-            # Session continuity: 如果保持会话则只清理非系统消息到合理长度
+            # 每轮重建 conversation——DB 是唯一事实源，不在内存中跨请求复用
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                 conv = self._agent.controller.conversation
                 all_msgs = getattr(conv, '_messages', [])
                 before_len = len(all_msgs)
-                if keep_conversation and before_len > 0:
-                    # 保留系统消息 + 最近 20 条上下文
-                    sys_msgs = [m for m in all_msgs if getattr(m, 'role', '') == 'system']
-                    ctx_msgs = [m for m in all_msgs if getattr(m, 'role', '') != 'system']
-                    conv._messages = sys_msgs + ctx_msgs[-20:]
-                    after_len = len(conv._messages)
-                    logger.info("[HeartFlow] Trimmed conversation: %d→%d (%d sys + %d ctx)",
-                                before_len, after_len, len(sys_msgs), min(len(ctx_msgs), 20))
-                else:
-                    conv._messages = [m for m in all_msgs if getattr(m, 'role', '') == 'system']
-                    after_len = len(conv._messages)
-                    logger.info("[HeartFlow] Reset conversation: %d→%d", before_len, after_len)
+                # 只保留 system 消息（persona / 时间 / 工具限制），其余由 history_messages 重建
+                conv._messages = [m for m in all_msgs if getattr(m, 'role', '') == 'system']
+                after_len = len(conv._messages)
+                logger.info("[SessionRuntime] Reset conversation: %d→%d (system=%d)",
+                            before_len, after_len, after_len)
 
             # --- Inject persona as system message (authoritative weight, persists across clears) ---
             meta = metadata or {}
@@ -602,8 +585,21 @@ class NanobotBridge:
                     response = reply_text
 
             if not response.strip():
-                logger.warning(f"[NanobotBridge] KT agent returned empty response after strip")
+                logger.warning("[NanobotBridge] KT agent returned empty response after strip")
                 return ""
+
+            elapsed_ms = int((_time.time() - t_start) * 1000)
+            logger.info("[SessionRuntime] DONE session=%s latency=%dms resp_len=%d",
+                        session_id, elapsed_ms, len(response))
+
+            # 惰性清理：session_locks 过大时扫一遍过期锁（无等待者 = unlocked）
+            if len(self._session_locks) > 200:
+                stale_sids = [sid for sid, lock in list(self._session_locks.items())
+                              if not lock.locked()]
+                for sid in stale_sids:
+                    self._session_locks.pop(sid, None)
+                if stale_sids:
+                    logger.info("[SessionRuntime] Cleaned %d idle session locks", len(stale_sids))
 
             return response
 

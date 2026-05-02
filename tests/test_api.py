@@ -112,7 +112,8 @@ def test_proxy_chat_passes_history_header_to_bridge(client, db_session):
 
     assert response.status_code == 200
     _, kwargs = mock_bridge.handle_message.await_args
-    assert "近30分钟内对话历史" in kwargs["metadata"]["history_header"]
+    assert "最近若干条对话历史" in kwargs["metadata"]["history_header"]
+    assert "token 预算裁剪" in kwargs["metadata"]["history_header"]
     assert len(kwargs["metadata"]["history_messages"]) == 2
 
 

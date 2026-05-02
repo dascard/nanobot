@@ -232,15 +232,35 @@ def _source_ids_for_log(log: Any) -> set[str]:
             logger.debug("[group_analysis] invalid source_message_ids_json: %.80s", raw)
     return ids
 
+def _strip_sender_prefix(content: str) -> str:
+    text = re.sub(r"\s+", " ", str(content or "")).strip()
+    m = re.match(r"^\[[^\]]{1,80}\]\s*[:：]\s*(.*)$", text)
+    return m.group(1).strip() if m else text
+
+def _content_contains_source(user_content: str, ambient_content: str) -> bool:
+    """判断合并后的 user 行是否确实包含某条 ambient 原文。"""
+    source = _strip_sender_prefix(ambient_content)
+    if not source:
+        return False
+    target = str(user_content or "")
+    if source in target:
+        return True
+    compact_source = re.sub(r"\s+", "", source)
+    compact_target = re.sub(r"\s+", "", target)
+    return bool(compact_source) and compact_source in compact_target
+
 def _dedupe_group_logs(logs: list[Any]) -> list[Any]:
-    """按原始入站消息去重：user 优先于 ambient，assistant 单独保留。"""
-    user_message_ids: set[str] = set()
+    """按原始入站消息去重。user 仅在确实覆盖原文时替换 ambient。"""
+    direct_user_ids: set[str] = set()
+    source_to_user_logs: dict[str, list[Any]] = defaultdict(list)
     for log in logs:
         if getattr(log, "role", "") != "user":
             continue
         message_id = str(getattr(log, "message_id", "") or "").strip()
         if message_id:
-            user_message_ids.add(message_id)
+            direct_user_ids.add(message_id)
+        for source_id in _source_ids_for_log(log):
+            source_to_user_logs[source_id].append(log)
 
     seen_ambient_ids: set[str] = set()
     seen_user_ids: set[str] = set()
@@ -261,10 +281,21 @@ def _dedupe_group_logs(logs: list[Any]) -> list[Any]:
             deduped.append(log)
             continue
 
-        # 只用 user.message_id 替换同一条 ambient。不要用批量 source_message_ids
-        # 删除其它 ambient，否则合并窗口中的未合并原文会从群分析里消失。
-        if role == "ambient" and ids and ids & user_message_ids:
+        # 同一个 message_id 的 user 行是 ambient 的正式处理副本，直接去重。
+        if ids and ids & direct_user_ids:
             continue
+        # 批量 source ids 只有在 user 内容确实包含该 ambient 原文时才去重。
+        if ids:
+            covered = False
+            for source_id in ids:
+                for user_log in source_to_user_logs.get(source_id, []):
+                    if _content_contains_source(getattr(user_log, "content", ""), getattr(log, "content", "")):
+                        covered = True
+                        break
+                if covered:
+                    break
+            if covered:
+                continue
         if ids and ids & seen_ambient_ids:
             continue
         seen_ambient_ids.update(ids)

@@ -1,6 +1,7 @@
-./data/*
+data/*
 /data/nanobot.db
 /data/nanobot.db-*
+/data/nanobot.db.bak.*
 /data/*.log
 /data/*.log.*
 .venv/*

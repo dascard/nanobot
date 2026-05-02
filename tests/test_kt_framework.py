@@ -501,13 +501,16 @@ class TestNanobotBridge:
                 "test query",
                 user_id="u1",
                 metadata={
-                    "history_header": "[近30分钟内对话历史，仅用于理解语境。]",
+                    "history_header": "[最近若干条对话历史，仅用于理解语境，已按行数和 token 预算裁剪。]",
                     "history_messages": [{"role": "user", "content": "旧消息"}],
                 },
             )
 
         asyncio.run(_run())
-        mock_conv.append.assert_any_call("system", "[近30分钟内对话历史，仅用于理解语境。]")
+        mock_conv.append.assert_any_call(
+            "system",
+            "[最近若干条对话历史，仅用于理解语境，已按行数和 token 预算裁剪。]",
+        )
 
 
 # ── Creature Config Loading Test ──
