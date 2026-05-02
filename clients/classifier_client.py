@@ -352,15 +352,20 @@ class TimingGate:
                 "reason": "非法输出", "raw": raw[:200], "error_type": "parse_error"}
 
     def judge(self, context: str) -> dict:
+        import time as _t
+        t0 = _t.time()
         try:
             raw = self._call_qwen(context)
             result = self._parse_output(raw)
-            logger.info("[TimingGate] action=%s delay=%s reason=%s error=%s",
+            elapsed_ms = int((_t.time() - t0) * 1000)
+            logger.info("[TimingGate] action=%s delay=%s latency=%dms reason=%.60s error=%s",
                         result["action"], result.get("delay_seconds"),
-                        str(result.get("reason", ""))[:60], result.get("error_type"))
+                        elapsed_ms, str(result.get("reason", ""))[:60],
+                        result.get("error_type"))
             return result
         except Exception as e:
-            logger.warning(f"[TimingGate] failed: {e}")
+            elapsed_ms = int((_t.time() - t0) * 1000)
+            logger.warning("[TimingGate] failed latency=%dms: %s", elapsed_ms, e)
             return {"action": "no_reply", "delay_seconds": None,
                     "reason": f"Qwen不可用: {e}", "raw": "", "error_type": "network_error"}
 

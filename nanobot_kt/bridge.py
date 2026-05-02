@@ -95,7 +95,9 @@ class NanobotBridge:
         self.creature_path = creature_path
         self._output = BufferedOutput()
         self._agent: Optional[Agent] = None
-        self._lock = asyncio.Lock()  # KT Agent 非线程安全——单实例必须串行
+        self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session 分锁
+        self._session_last_active: dict[str, float] = {}   # 会话最后活跃时间
+        self.SESSION_TTL_SECONDS = 300  # 5 分钟无活动则清空会话
 
     async def start(self) -> None:
         """Initialize the KT agent from creature config."""
@@ -211,21 +213,50 @@ class NanobotBridge:
         if not self._agent:
             return "Error: Agent not initialized"
 
-        async with self._lock:
+        # HeartFlow: 按 session 分锁，同 session 串行，不同 session 并发
+        import time as _time
+        sess_lock = self._session_locks.setdefault(session_id, asyncio.Lock())
+
+        # Interrupt: 如果该 session 正在处理，发 interrupt 信号
+        if sess_lock.locked() and hasattr(self._agent, '_interrupt_requested'):
+            logger.info("[HeartFlow] Interrupt flag for session=%s", session_id)
+            self._agent._interrupt_requested = True
+
+        async with sess_lock:
+            now_ts = _time.time()
             self._output.clear()
+
+            # Session continuity: 同 session 短时间内复用 conversation
+            keep_conversation = False
+            last_active = self._session_last_active.get(session_id, 0)
+            if now_ts - last_active < self.SESSION_TTL_SECONDS:
+                keep_conversation = True
+                logger.info("[HeartFlow] Reusing session=%s age=%ds",
+                            session_id, int(now_ts - last_active))
+            else:
+                logger.info("[HeartFlow] Cold session=%s, clearing", session_id)
+            self._session_last_active[session_id] = now_ts
             if stream_queue is not None:
                 self._output.enable_stream(stream_queue)
             logger.info(f"[NanobotBridge] Starting handle_message: query_len={len(query)}, user={user_id}, session={session_id}")
 
-            # Keep session stateless across HTTP requests: preserve only system messages.
-            # Otherwise KT conversation accumulates every turn and token usage keeps growing.
+            # Session continuity: 如果保持会话则只清理非系统消息到合理长度
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                 conv = self._agent.controller.conversation
-                before_len = len(getattr(conv, '_messages', []))
-                conv._messages = [m for m in conv._messages if getattr(m, 'role', '') == 'system']
-                after_len = len(conv._messages)
-                if after_len != before_len:
-                    logger.info(f"[NanobotBridge] Conversation reset for request scope: {before_len} -> {after_len}")
+                all_msgs = getattr(conv, '_messages', [])
+                before_len = len(all_msgs)
+                if keep_conversation and before_len > 0:
+                    # 保留系统消息 + 最近 20 条上下文
+                    sys_msgs = [m for m in all_msgs if getattr(m, 'role', '') == 'system']
+                    ctx_msgs = [m for m in all_msgs if getattr(m, 'role', '') != 'system']
+                    conv._messages = sys_msgs + ctx_msgs[-20:]
+                    after_len = len(conv._messages)
+                    logger.info("[HeartFlow] Trimmed conversation: %d→%d (%d sys + %d ctx)",
+                                before_len, after_len, len(sys_msgs), min(len(ctx_msgs), 20))
+                else:
+                    conv._messages = [m for m in all_msgs if getattr(m, 'role', '') == 'system']
+                    after_len = len(conv._messages)
+                    logger.info("[HeartFlow] Reset conversation: %d→%d", before_len, after_len)
 
             # --- Inject persona as system message (authoritative weight, persists across clears) ---
             meta = metadata or {}
@@ -542,8 +573,10 @@ class NanobotBridge:
                     if isinstance(r_resp, dict) and "choices" in r_resp:
                         cleaned = r_resp["choices"][0]["message"]["content"].strip()
                         if cleaned and len(cleaned) > 5:
+                            logger.info("[Replyer] applied len=%d→%d", len(response), len(cleaned))
                             response = cleaned
-                            logger.info("[NanobotBridge] Replyer pass applied")
+                        else:
+                            logger.debug("[Replyer] skipped: output too short")
                 except Exception as e:
                     logger.debug(f"[NanobotBridge] Replyer pass skipped: {e}")
 

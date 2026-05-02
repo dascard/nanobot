@@ -156,13 +156,20 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
         history_messages.append({"role": t.role, "content": content})
 
     if not history_messages:
+        logger.debug("[Context] empty after token cap session=%s", session_id)
         return "", []
 
+    before_normalize = len(history_messages)
     # 4. normalize: 丢弃开头连续 assistant（不能从半句话开始）
     while history_messages and history_messages[0]["role"] == "assistant":
         history_messages.pop(0)
     if not history_messages:
+        logger.debug("[Context] all assistant rows trimmed session=%s", session_id)
         return "", []
+
+    logger.info("[Context] session=%s type=%s rows=%d→%d total_chars=%d max=%d",
+                session_id, "group" if is_group else "private",
+                len(turns), len(history_messages), total_chars, max_rows)
 
     header = (
         f"[近{window_minutes}分钟内对话历史，仅用于理解语境。"
