@@ -238,7 +238,7 @@ class NanobotBridge:
         # 定期清理过期 session 锁
         if len(self._session_locks) > 100 and len(self._session_locks) % 100 == 0:
             stale = [sid for sid, ts in list(self._session_last_active.items())
-                     if now_ts - ts > self.SESSION_TTL_SECONDS * 2]
+                     if _time.time() - ts > self.SESSION_TTL_SECONDS * 2]
             for sid in stale:
                 self._session_locks.pop(sid, None)
                 self._session_last_active.pop(sid, None)
