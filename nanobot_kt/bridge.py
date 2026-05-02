@@ -53,7 +53,16 @@ def _extract_html_document(content: str) -> str:
     for marker in ("<!doctype html", "<html", "<article"):
         idx = lowered.find(marker)
         if idx >= 0:
-            return content[idx:].strip()
+            doc = content[idx:].strip()
+            doc_lower = doc.lower()
+            if doc_lower.startswith("<article"):
+                end = doc_lower.find("</article>")
+                if end >= 0:
+                    return doc[: end + len("</article>")].strip()
+            end = doc_lower.find("</html>")
+            if end >= 0:
+                return doc[: end + len("</html>")].strip()
+            return doc
     return ""
 
 
@@ -492,7 +501,7 @@ class NanobotBridge:
 
             if _is_news_request(raw_query):
                 news_html = self._extract_last_rich_tool_output(("news-brief",))
-                if news_html and not response.lstrip().startswith("<article"):
+                if news_html and response.strip() != news_html.strip():
                     logger.info("[NanobotBridge] Replacing rewritten news response with preserved HTML tool output")
                     response = news_html
 
@@ -501,7 +510,7 @@ class NanobotBridge:
                     ("group-analysis-report",),
                     allow_recent_cache=True,
                 )
-                if group_html and not response.lstrip().startswith("<article"):
+                if group_html and response.strip() != group_html.strip():
                     logger.info("[NanobotBridge] Replacing rewritten group analysis response with preserved HTML tool output")
                     response = group_html
             
@@ -511,6 +520,32 @@ class NanobotBridge:
             else:
                 logger.warning(f"[NanobotBridge] EMPTY RESPONSE!")
                 logger.warning(f"[NanobotBridge] buffer={buffer_list}, result={result}")
+
+            # Replyer pass: 非 HTML 回复用 replyer prompt 清理 planner 痕迹
+            if response.strip() and not response.lstrip().startswith("<article") and not response.lstrip().startswith("<!doctype"):
+                try:
+                    reply_client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=30)
+                    replyer_prompt = (
+                        "将以下 AI 助手的内部回复改写为日常口语化的群聊发言。"
+                        "去掉所有 AI 痕迹（如'根据分析''我决定''建议回复'），"
+                        "保持原意和语气，不要添加新信息。只输出改写后的内容。"
+                    )
+                    r_resp = await reply_client.chat_completion(
+                        messages=[
+                            {"role": "system", "content": replyer_prompt},
+                            {"role": "user", "content": response[:3000]},
+                        ],
+                        model_tier="fast",
+                        manual_model="deepseek-v4-flash",
+                        temperature=0.3,
+                    )
+                    if isinstance(r_resp, dict) and "choices" in r_resp:
+                        cleaned = r_resp["choices"][0]["message"]["content"].strip()
+                        if cleaned and len(cleaned) > 5:
+                            response = cleaned
+                            logger.info("[NanobotBridge] Replyer pass applied")
+                except Exception as e:
+                    logger.debug(f"[NanobotBridge] Replyer pass skipped: {e}")
 
             if not response.strip():
                 logger.warning(f"[NanobotBridge] KT agent returned empty response after strip")
