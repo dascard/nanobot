@@ -97,37 +97,52 @@ def _estimate_tokens(text: str) -> int:
     return int(cjk_count * 1.0 + ascii_count * 0.35)
 
 
+MAX_GROUP_CONTEXT_ROWS = 10
+MAX_PRIVATE_CONTEXT_ROWS = 32
+
+
 def _build_session_memory(db: Session, session_id: str, user_id: str = "",
                           window_minutes: int = 30,
-                          max_per_msg: int = 300, max_total: int = 4000) -> tuple[str, list[dict]]:
-    """Build structured conversation history from ConversationTurn (clean, ready-to-inject).
+                          max_per_msg: int = 300, max_total: int = 4000,
+                          is_group: bool = False) -> tuple[str, list[dict]]:
+    """Build structured conversation history from ConversationTurn。
 
-    ConversationTurn only contains user/assistant messages — no tool noise, no ambient.
-    Returns (header_text, history_messages) for conv.append() injection.
+    新算法（MaiBot-inspired）:
+      1. history_clear_at 过滤
+      2. 倒序取最新 MAX_ROWS 行
+      3. 倒序从新到旧累计 token → 超限停止
+      4. 选中行 reverse 正序
+      5. normalize: 丢弃开头连续 assistant
     """
-    cutoff = datetime.now() - timedelta(minutes=window_minutes)
+    max_rows = MAX_GROUP_CONTEXT_ROWS if is_group else MAX_PRIVATE_CONTEXT_ROWS
 
-    # Respect history_clear_at marker
+    # 1. Respect history_clear_at marker
+    cutoff = datetime.now() - timedelta(minutes=window_minutes)
     if user_id:
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.history_clear_at:
             if user.history_clear_at > cutoff:
                 cutoff = user.history_clear_at
 
+    # 2. 倒序取最新行
     turns = (
         db.query(ConversationTurn)
         .filter(ConversationTurn.session_id == session_id)
         .filter(ConversationTurn.created_at > cutoff)
-        .order_by(ConversationTurn.created_at.asc())
+        .order_by(ConversationTurn.created_at.desc())
+        .limit(max_rows)
         .all()
     )
 
     if not turns:
         return "", []
 
+    # Reverse to chronological for processing
+    turns.reverse()
+
+    # 3. 正序累计 token → 超限停止
     history_messages: list[dict] = []
     total_chars = 0
-
     for t in turns:
         content = t.content.strip()
         if not content:
@@ -135,13 +150,17 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
         content = _sanitize_prompt_text(content, max_per_msg)
         if not content:
             continue
-
         total_chars += len(content)
         if total_chars > max_total:
             break
-
         history_messages.append({"role": t.role, "content": content})
 
+    if not history_messages:
+        return "", []
+
+    # 4. normalize: 丢弃开头连续 assistant（不能从半句话开始）
+    while history_messages and history_messages[0]["role"] == "assistant":
+        history_messages.pop(0)
     if not history_messages:
         return "", []
 
@@ -419,8 +438,19 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
         processed=processed_val,
     ))
     # ConversationTurn — 精简上下文，专用于历史注入
-    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id, role="user", content=context_display_content))
-    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id, role="assistant", content=answer))
+    # HTML 报告只存摘要，避免污染下轮上下文
+    turn_answer = answer
+    if answer and len(answer) > 2000:
+        answer_lower = answer[:200].lower()
+        html_markers = ("<!doctype", "<html", "<head", "<body", "<article", "<style")
+        if any(answer_lower.startswith(m) for m in html_markers):
+            turn_answer = f"[报告: 已渲染为图片/HTML，{len(answer)}字符]"
+        else:
+            turn_answer = answer[:2000] + "\n...[截断]"
+    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
+                            role="user", content=context_display_content))
+    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
+                            role="assistant", content=turn_answer))
     db.commit()
     from core.evolution import _evolution_running
     if req.user_id in _evolution_running:
@@ -933,6 +963,7 @@ async def proxy_chat(
         user_id=req.user_id,
         window_minutes=MAX_MEMORY_WINDOW_MINUTES,
         max_per_msg=MAX_MEMORY_PER_MSG_CHARS,
+        is_group=is_group,
         max_total=MAX_MEMORY_TOTAL_CHARS,
     )
 
