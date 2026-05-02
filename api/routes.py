@@ -750,6 +750,10 @@ def group_timing(req: GroupTimingRequest, _auth=Depends(verify_token)):
     lines = []
     if req.session_name:
         lines.append(f"群: {req.session_name}")
+    if req.is_reply_to_bot:
+        lines.append("注意:这条消息是回复bot的,说明用户在跟bot对话")
+    if req.trigger_reason:
+        lines.append(f"触发原因: {req.trigger_reason}")
     if req.bot_aliases:
         lines.append(f"bot别名: {', '.join(req.bot_aliases)}")
     for pm in req.pending_messages:
