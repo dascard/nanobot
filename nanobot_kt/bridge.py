@@ -496,12 +496,9 @@ class NanobotBridge:
                     logger.warning(f"[NanobotBridge] Framework error. Recording failure for {target_model}")
                     await _call_tracker_method(tracker, "record_failure", target_model)
 
-                    # reasoning_content: deepseek thinking mode → ban all deepseek
-                    if "reasoning_content" in response and route_client:
-                        logger.warning("[NanobotBridge] reasoning_content — banning deepseek family")
-                        for m in registry.get_models_by_provider("new-api"):
-                            if "deepseek" in m.get("id", "").lower():
-                                await _call_tracker_method(tracker, "record_failure", m["id"])
+                    # reasoning_content: 只 ban 出错的特定模型，不波及同厂商其他模型
+                    if "reasoning_content" in response:
+                        logger.warning("[NanobotBridge] reasoning_content — banning %s only", target_model)
 
                     # Conversation rollback logic
                     tool_results_preserved = False
@@ -679,8 +676,10 @@ class NanobotBridgePool:
     def __init__(self, creature_path: str = "creatures/nanobot"):
         self.creature_path = creature_path
         self._bridges: dict[str, NanobotBridge] = {}
+        self._bridge_last_used: dict[str, float] = {}
         self._create_lock = asyncio.Lock()
         self._started = False
+        self.BRIDGE_TTL_SECONDS = 600  # 10 分钟无使用则回收
 
     async def start(self) -> None:
         self._started = True
@@ -703,13 +702,27 @@ class NanobotBridgePool:
         return f"user:{uid}" if uid else "_default"
 
     async def _get_bridge(self, key: str) -> NanobotBridge:
+        import time as _t
         async with self._create_lock:
+            # TTL 清理
+            now = _t.time()
+            stale = [k for k, ts in list(self._bridge_last_used.items())
+                     if now - ts > self.BRIDGE_TTL_SECONDS]
+            for k in stale:
+                b = self._bridges.pop(k, None)
+                self._bridge_last_used.pop(k, None)
+                if b:
+                    asyncio.create_task(b.stop())
+            if stale:
+                logger.info("[BridgePool] Cleaned %d stale bridges", len(stale))
+
             bridge = self._bridges.get(key)
             if bridge is None:
                 bridge = NanobotBridge(self.creature_path)
                 await bridge.start()
                 self._bridges[key] = bridge
                 logger.info("[NanobotBridgePool] created child bridge for session=%s", key)
+            self._bridge_last_used[key] = _t.time()
             return bridge
 
     async def handle_message(
