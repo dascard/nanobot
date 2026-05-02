@@ -156,6 +156,42 @@ def test_filter_messages_by_hours_keeps_recent_messages():
     assert filtered[0]["content"] == "recent"
 
 
+def test_group_analysis_dedupes_ambient_when_user_has_same_source():
+    from core.database import ChatLog
+    from creatures.nanobot.prompts.skills.group_analysis.tool import _dedupe_group_logs
+
+    logs = [
+        ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
+        ChatLog(role="user", message_id="m1", source_message_ids_json='["m1", "m2"]', content="hello", sender_name="A"),
+        ChatLog(role="ambient", message_id="m2", content="[A]: world", sender_name="A"),
+        ChatLog(role="assistant", content="bot reply", sender_name="nanobot"),
+    ]
+
+    deduped = _dedupe_group_logs(logs)
+
+    assert [log.role for log in deduped] == ["user", "ambient", "assistant"]
+    assert deduped[0].content == "hello"
+    assert deduped[1].content == "[A]: world"
+
+
+def test_group_analysis_keeps_ambient_for_batched_source_ids_not_in_user_content():
+    from core.database import ChatLog
+    from creatures.nanobot.prompts.skills.group_analysis.tool import _dedupe_group_logs
+
+    logs = [
+        ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
+        ChatLog(role="ambient", message_id="m2", content="[B]: world", sender_name="B"),
+        ChatLog(role="user", message_id="m1", source_message_ids_json='["m1", "m2"]', content="hello", sender_name="A"),
+    ]
+
+    deduped = _dedupe_group_logs(logs)
+
+    assert [(log.role, log.message_id, log.content) for log in deduped] == [
+        ("ambient", "m2", "[B]: world"),
+        ("user", "m1", "hello"),
+    ]
+
+
 def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
     import core.database as database
     import clients.new_api_client as new_api_client

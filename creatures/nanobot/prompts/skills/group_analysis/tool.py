@@ -217,6 +217,60 @@ def _filter_messages_by_hours(logs: list, hours: int | None, *, now: datetime | 
     return [l for l in logs if (l.get("created_at") if isinstance(l, dict) else getattr(l, "created_at", None)) and
             (l.get("created_at") if isinstance(l, dict) else getattr(l, "created_at", None)) >= cutoff]
 
+def _source_ids_for_log(log: Any) -> set[str]:
+    ids: set[str] = set()
+    message_id = str(getattr(log, "message_id", "") or "").strip()
+    if message_id:
+        ids.add(message_id)
+    raw = str(getattr(log, "source_message_ids_json", "") or "").strip()
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                ids.update(str(x).strip() for x in data if str(x).strip())
+        except json.JSONDecodeError:
+            logger.debug("[group_analysis] invalid source_message_ids_json: %.80s", raw)
+    return ids
+
+def _dedupe_group_logs(logs: list[Any]) -> list[Any]:
+    """按原始入站消息去重：user 优先于 ambient，assistant 单独保留。"""
+    user_message_ids: set[str] = set()
+    for log in logs:
+        if getattr(log, "role", "") != "user":
+            continue
+        message_id = str(getattr(log, "message_id", "") or "").strip()
+        if message_id:
+            user_message_ids.add(message_id)
+
+    seen_ambient_ids: set[str] = set()
+    seen_user_ids: set[str] = set()
+    deduped: list[Any] = []
+    for log in logs:
+        role = getattr(log, "role", "")
+        if role not in ("user", "ambient"):
+            deduped.append(log)
+            continue
+
+        ids = _source_ids_for_log(log)
+        message_id = str(getattr(log, "message_id", "") or "").strip()
+        if role == "user":
+            if message_id and message_id in seen_user_ids:
+                continue
+            if message_id:
+                seen_user_ids.add(message_id)
+            deduped.append(log)
+            continue
+
+        # 只用 user.message_id 替换同一条 ambient。不要用批量 source_message_ids
+        # 删除其它 ambient，否则合并窗口中的未合并原文会从群分析里消失。
+        if role == "ambient" and ids and ids & user_message_ids:
+            continue
+        if ids and ids & seen_ambient_ids:
+            continue
+        seen_ambient_ids.update(ids)
+        deduped.append(log)
+    return deduped
+
 # ── 统计 ──
 
 def _compute_user_stats(messages: list[dict]) -> dict:
@@ -330,6 +384,7 @@ class GroupAnalysisTool(BaseTool):
                     .order_by(ChatLog.id.desc()).limit(GROUP_ANALYSIS_MAX_LOGS).all())
                 logs.reverse()
                 logs = _filter_messages_by_hours(logs, _parse_instruction_window_hours(instructions))
+                logs = _dedupe_group_logs(logs)
                 if not logs: return ToolResult(output=f"未找到群 {group_id} 的消息记录", exit_code=0)
 
                 messages = []

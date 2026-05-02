@@ -108,6 +108,24 @@ def test_build_memory_caps_total_chars(db_session):
     assert total <= 800 + 100  # tolerance for truncation overhead
 
 
+def test_build_memory_token_cap_keeps_latest_rows(db_session):
+    """预算不足时保留最新消息，而不是保留旧消息后截断。"""
+    from api.routes import _build_session_memory
+    _seed_chat_logs(db_session, "s1", [
+        ("user", "旧消息" * 80),
+        ("assistant", "旧回复" * 80),
+        ("user", "最新问题" * 40),
+    ])
+
+    header, messages = _build_session_memory(
+        db_session, "s1", window_minutes=1440, max_total=180, max_per_msg=400,
+    )
+
+    contents = [m["content"] for m in messages]
+    assert any("最新问题" in c for c in contents)
+    assert not any("旧消息" in c for c in contents)
+
+
 def test_build_memory_respects_time_window(db_session):
     """Messages outside the time window should not be fetched."""
     from api.routes import _build_session_memory
