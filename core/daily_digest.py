@@ -65,6 +65,42 @@ def _next_run_delay_seconds(now: datetime, run_hour: int) -> int:
     return max(60, int((target - now).total_seconds()))
 
 
+def _build_scheduled_task_query(task: ScheduledTask, now: datetime | None = None) -> str:
+    now = now or datetime.now()
+    time_label = now.strftime("%Y-%m-%d %H:%M:%S")
+    prompt = (task.prompt_template or "").strip()
+    return (
+        "[定时任务执行]\n"
+        f"当前时间（北京时间）：{time_label}\n"
+        f"任务名称：{task.name or '未命名任务'}\n"
+        f"推送目标：{task.target_type}/{task.target_id}\n\n"
+        "执行规则：\n"
+        "- 必须完成下面的任务模板，不要改写为闲聊。\n"
+        "- 如果任务涉及今天、最新、新闻、资讯、日报、早报，必须先调用 news_search 获取实时来源；禁止只凭模型内置知识生成。\n"
+        "- 如果任务涉及群聊总结、群日报、分析某个群，必须调用 group_analysis 获取真实聊天记录。\n"
+        "- 如果任务涉及数据库、历史记录或统计查询，优先调用 sql_analysis。\n"
+        "- 工具返回 HTML 报告时，直接保留 HTML，不要改写成 Markdown。\n\n"
+        "<task_template>\n"
+        f"{prompt}\n"
+        "</task_template>"
+    )
+
+
+def _scheduled_task_session_id(task: ScheduledTask) -> str:
+    if (task.target_type or "").strip() == "group":
+        return _normalize_group_session_id(task.target_id or "")
+    return f"scheduled_task_{task.id or 'unknown'}"
+
+
+def _scheduled_task_metadata(task: ScheduledTask) -> dict:
+    is_group = (task.target_type or "").strip() == "group"
+    return {
+        "raw_query": task.prompt_template or "",
+        "session_name": f"定时任务:{task.name or task.id}",
+        "is_group": is_group,
+    }
+
+
 def _normalize_group_session_id(group_id: str) -> str:
     group_id = str(group_id or "").strip()
     if not group_id:
@@ -316,33 +352,32 @@ async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
 
 
 async def _generate_task_message(task: ScheduledTask) -> str | None:
-    """用 LLM 根据模板生成推送内容（带 10 分钟超时保护）。"""
-    from clients.new_api_client import NewAPIClient
-    from config import NEW_API_BASE_URL, NEW_API_KEY
+    """通过 KT Agent 执行定时任务，让模型拥有真实工具调用能力。"""
+    from nanobot_kt.bridge import NanobotBridge
 
+    bridge = NanobotBridge()
     try:
-        client = NewAPIClient(
-            api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=60
-        )
-        messages = [{"role": "user", "content": task.prompt_template}]
-        resp = await asyncio.wait_for(
-            client.chat_completion(messages=messages, model_tier="fast"),
+        await bridge.start()
+        response = await asyncio.wait_for(
+            bridge.handle_message(
+                _build_scheduled_task_query(task),
+                user_id=f"scheduled_task:{task.id or 'unknown'}",
+                session_id=_scheduled_task_session_id(task),
+                sender_name="定时任务",
+                metadata=_scheduled_task_metadata(task),
+            ),
             timeout=600,
         )
-        if isinstance(resp, dict) and "choices" in resp:
-            return resp["choices"][0]["message"]["content"]
-        # 返回体无 choices——可能是 API 错误或 free 模型被限流
-        error_detail = resp.get("error", {}) if isinstance(resp, dict) else "null"
-        logger.error(
-            f"Task [{task.name}] LLM returned no choices: "
-            f"resp_type={type(resp).__name__}, "
-            f"error={str(error_detail)[:200]}, "
-            f"keys={list(resp.keys()) if isinstance(resp, dict) else 'N/A'}"
-        )
+        return response or None
     except asyncio.TimeoutError:
-        logger.error(f"Task [{task.name}] LLM call timed out (10min)")
+        logger.error(f"Task [{task.name}] KT Agent call timed out (10min)")
     except Exception as e:
-        logger.exception(f"Task [{task.name}] LLM call failed: {e}")
+        logger.exception(f"Task [{task.name}] KT Agent call failed: {e}")
+    finally:
+        try:
+            await bridge.stop()
+        except Exception as e:
+            logger.warning(f"Task [{task.name}] KT Agent stop failed: {e}")
     return None
 
 

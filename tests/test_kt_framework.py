@@ -65,7 +65,6 @@ class TestBufferedOutput:
         assert event["status"] == "progress"
         assert "工具失败" in event["text"]
 
-
 # ── BaseTool Adapter Tests ──
 
 class TestSQLAnalysisTool:
@@ -148,6 +147,50 @@ class TestNanobotBridge:
         b2 = bridge_mod.get_bridge()
         assert b1 is b2
         bridge_mod._bridge = None  # cleanup
+
+    def test_bridge_pool_allows_different_sessions_to_run_concurrently(self, monkeypatch):
+        import nanobot_kt.bridge as bridge_mod
+
+        active = 0
+        max_active = 0
+        gate = asyncio.Event()
+
+        class FakeBridge:
+            def __init__(self, _creature_path="creatures/nanobot"):
+                pass
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+            async def handle_message(self, query, *, session_id="", **_kwargs):
+                nonlocal active, max_active
+                active += 1
+                max_active = max(max_active, active)
+                if active == 2:
+                    gate.set()
+                await gate.wait()
+                await asyncio.sleep(0.01)
+                active -= 1
+                return session_id
+
+        monkeypatch.setattr(bridge_mod, "NanobotBridge", FakeBridge)
+
+        async def _run():
+            pool = bridge_mod.NanobotBridgePool()
+            await pool.start()
+            results = await asyncio.gather(
+                pool.handle_message("a", session_id="session-a"),
+                pool.handle_message("b", session_id="session-b"),
+            )
+            await pool.stop()
+            return results
+
+        results = asyncio.run(_run())
+        assert sorted(results) == ["session-a", "session-b"]
+        assert max_active == 2
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")

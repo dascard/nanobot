@@ -144,21 +144,14 @@ class NanobotBridge:
             "涉及今天、最近、刚刚、日报、新闻时，默认以这个时间为准理解。"
         )
 
-    def _extract_last_rich_tool_output(self, marker_classes: tuple[str, ...]) -> str:
+    def _extract_last_rich_tool_output(
+        self,
+        marker_classes: tuple[str, ...],
+        *,
+        allow_recent_cache: bool = False,
+    ) -> str:
         if not self._agent:
             return ""
-
-        if "group-analysis-report" in marker_classes:
-            try:
-                from creatures.nanobot.prompts.skills.group_analysis.tool import (
-                    get_recent_group_analysis_report,
-                )
-
-                cached = get_recent_group_analysis_report()
-                if cached:
-                    return cached
-            except Exception as e:
-                logger.debug(f"[NanobotBridge] group analysis cache fallback failed: {e}")
 
         try:
             conv = self._agent.controller.conversation
@@ -176,6 +169,18 @@ class NanobotBridge:
                         return html_doc
         except Exception as e:
             logger.debug(f"[NanobotBridge] rich tool output fallback failed: {e}")
+
+        if allow_recent_cache and "group-analysis-report" in marker_classes:
+            try:
+                from creatures.nanobot.prompts.skills.group_analysis.tool import (
+                    get_recent_group_analysis_report,
+                )
+
+                cached = get_recent_group_analysis_report()
+                if cached:
+                    return cached
+            except Exception as e:
+                logger.debug(f"[NanobotBridge] group analysis cache fallback failed: {e}")
         return ""
 
     async def handle_message(
@@ -406,10 +411,14 @@ class NanobotBridge:
                 if _is_news_request(raw_query):
                     preserved_html = self._extract_last_rich_tool_output(("news-brief",))
                 if not preserved_html and _is_group_analysis_request(raw_query):
-                    preserved_html = self._extract_last_rich_tool_output(("group-analysis-report",))
+                    preserved_html = self._extract_last_rich_tool_output(
+                        ("group-analysis-report",),
+                        allow_recent_cache=True,
+                    )
                 if preserved_html:
                     logger.info("[NanobotBridge] Using preserved tool HTML output")
-                    self._output._buffer.append(preserved_html)
+                    if preserved_html not in response:
+                        self._output._buffer.append(preserved_html)
                     if tracker is not None:
                         await tracker.record_success(target_model)
                     break
@@ -488,7 +497,10 @@ class NanobotBridge:
                     response = news_html
 
             if _is_group_analysis_request(raw_query):
-                group_html = self._extract_last_rich_tool_output(("group-analysis-report",))
+                group_html = self._extract_last_rich_tool_output(
+                    ("group-analysis-report",),
+                    allow_recent_cache=True,
+                )
                 if group_html and not response.lstrip().startswith("<article"):
                     logger.info("[NanobotBridge] Replacing rewritten group analysis response with preserved HTML tool output")
                     response = group_html
@@ -563,22 +575,91 @@ class NanobotBridge:
         return self._agent
 
 
+class NanobotBridgePool:
+    """按会话隔离 KT Agent，避免全局单例锁阻塞不同用户。"""
+
+    def __init__(self, creature_path: str = "creatures/nanobot"):
+        self.creature_path = creature_path
+        self._bridges: dict[str, NanobotBridge] = {}
+        self._create_lock = asyncio.Lock()
+        self._started = False
+
+    async def start(self) -> None:
+        self._started = True
+        logger.info("[NanobotBridgePool] started")
+
+    async def stop(self) -> None:
+        async with self._create_lock:
+            bridges = list(self._bridges.values())
+            self._bridges.clear()
+            self._started = False
+        if bridges:
+            await asyncio.gather(*(bridge.stop() for bridge in bridges), return_exceptions=True)
+        logger.info("[NanobotBridgePool] stopped")
+
+    def _session_key(self, user_id: str = "", session_id: str = "") -> str:
+        sid = str(session_id or "").strip()
+        if sid:
+            return sid
+        uid = str(user_id or "").strip()
+        return f"user:{uid}" if uid else "_default"
+
+    async def _get_bridge(self, key: str) -> NanobotBridge:
+        async with self._create_lock:
+            bridge = self._bridges.get(key)
+            if bridge is None:
+                bridge = NanobotBridge(self.creature_path)
+                await bridge.start()
+                self._bridges[key] = bridge
+                logger.info("[NanobotBridgePool] created child bridge for session=%s", key)
+            return bridge
+
+    async def handle_message(
+        self,
+        query: str,
+        *,
+        user_id: str = "",
+        session_id: str = "",
+        sender_name: str = "",
+        metadata: dict[str, Any] | None = None,
+        stream_queue: asyncio.Queue[dict[str, Any]] | None = None,
+    ) -> str:
+        if not self._started:
+            await self.start()
+        key = self._session_key(user_id=user_id, session_id=session_id)
+        bridge = await self._get_bridge(key)
+        return await bridge.handle_message(
+            query,
+            user_id=user_id,
+            session_id=session_id,
+            sender_name=sender_name,
+            metadata=metadata,
+            stream_queue=stream_queue,
+        )
+
+    @property
+    def agent(self) -> Optional[Agent]:
+        for bridge in self._bridges.values():
+            return bridge.agent
+        return None
+
+
 # Module-level singleton (initialized by server.py lifespan)
-_bridge: Optional[NanobotBridge] = None
+_bridge: Optional["NanobotBridgePool"] = None
 
 
-def get_bridge() -> NanobotBridge:
+def get_bridge() -> NanobotBridgePool:
     """Get the global bridge instance."""
     global _bridge
     if _bridge is None:
-        _bridge = NanobotBridge()
+        _bridge = NanobotBridgePool()
     return _bridge
 
 
-async def init_bridge() -> NanobotBridge:
+async def init_bridge() -> NanobotBridgePool:
     """Initialize and start the global bridge. Called from server.py lifespan."""
     global _bridge
-    _bridge = NanobotBridge()
+    _bridge = NanobotBridgePool()
     await _bridge.start()
     return _bridge
 
