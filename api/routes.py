@@ -204,6 +204,9 @@ class ChatProxyRequest(BaseModel):
     stream: bool = False  # SSE streaming with heartbeats
     classification_request: bool = False
     merged_messages: list[str] | None = None
+    message_id: str | None = None               # QQ 原始消息 ID
+    source_message_ids: list[str] | None = None  # 合并消息的源 ID 列表
+    client_meta: dict | None = None              # QQbot 侧元信息
 
 class EvolutionTriggerRequest(BaseModel):
     user_id: str
@@ -213,6 +216,7 @@ class AmbientLogRequest(BaseModel):
     session_name: str | None = None  # 场景名 (如群名)
     sender_name: str = "unknown"    # 发送者名
     content: str = ""
+    message_id: str | None = None   # QQ 原始消息 ID
 
 
 class MemoryDigestRunRequest(BaseModel):
@@ -418,6 +422,13 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
         archive_display_content = "[安全提示: 检测到注入已被拦截]" if is_injection else archive_user_content
         context_display_content = "[安全提示: 检测到注入已被拦截]" if is_injection else context_user_content
 
+    # normalize source_message_ids: 确保包含 message_id
+    source_ids = list(req.source_message_ids or [])
+    if req.message_id and req.message_id not in source_ids:
+        source_ids.insert(0, req.message_id)
+    source_ids_json = json.dumps(source_ids, ensure_ascii=False) if source_ids else "[]"
+    meta = json.dumps(req.client_meta or {}, ensure_ascii=False)
+
     # ChatLog — 原始存档，进化/画像分析
     db.add(ChatLog(
         user_id=req.user_id,
@@ -427,6 +438,9 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
         sender_name=req.sender_name or "",
         session_name=req.session_name or "",
         processed=processed_val,
+        message_id=req.message_id,
+        source_message_ids_json=source_ids_json,
+        meta_json=meta,
     ))
     db.add(ChatLog(
         user_id=req.user_id,
@@ -448,7 +462,9 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
         else:
             turn_answer = answer[:2000] + "\n...[截断]"
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
-                            role="user", content=context_display_content))
+                            role="user", content=context_display_content,
+                            source_message_ids_json=source_ids_json,
+                            meta_json=meta))
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
                             role="assistant", content=turn_answer))
     db.commit()
@@ -675,6 +691,7 @@ def submit_ambient_log(
         role="ambient",
         content=formatted_content,
         processed=1,
+        message_id=req.message_id,
     ))
     db.commit()
     return {"status": "ok", "message": "ambient log saved"}
