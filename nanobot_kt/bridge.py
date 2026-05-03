@@ -636,28 +636,8 @@ class NanobotBridge:
         except Exception as e:
             logger.debug(f"[NanobotBridge] fallback conversation read failed: {e}")
 
-        # 2) Provider extra fields (e.g. reasoning_content)
-        try:
-            extras = getattr(self._agent.llm, "last_assistant_extra_fields", {}) or {}
-            for key in ("reasoning_content", "reasoning"):
-                val = extras.get(key)
-                if isinstance(val, str) and val.strip():
-                    return val.strip()
-            details = extras.get("reasoning_details")
-            if isinstance(details, list):
-                lines = []
-                for item in details:
-                    if isinstance(item, str) and item.strip():
-                        lines.append(item.strip())
-                    elif isinstance(item, dict):
-                        text = str(item.get("text") or item.get("content") or "").strip()
-                        if text:
-                            lines.append(text)
-                if lines:
-                    return "\n".join(lines)
-        except Exception as e:
-            logger.debug(f"[NanobotBridge] fallback extras read failed: {e}")
-
+        # 2) reasoning_content 绝不作为 fallback——它是推理过程，不是用户可见回复
+        logger.warning("[NanobotBridge] fallback: no text found, returning empty")
         return ""
 
     @property
