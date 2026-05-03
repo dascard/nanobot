@@ -28,6 +28,69 @@ handler = RotatingFileHandler(
 formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 handler.setFormatter(formatter)
 
+
+def _startup_network_check(logger):
+    """启动时探测关键后端连通性，结果记入日志。"""
+    import urllib.request, json, time, os
+    targets = {}
+
+    # 构建显式代理 opener——urlopen(url_str) 不自动走环境代理
+    proxy_url = os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY") or ""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler(
+        {"http": proxy_url, "https": proxy_url})) if proxy_url else urllib.request.build_opener()
+
+    def _fetch(url, timeout):
+        req = urllib.request.Request(url, headers={"User-Agent": "Nanobot/1.0"})
+        return opener.open(req, timeout=timeout)
+
+    # 1. LLM API (new-api) — 内网，不走代理
+    base = os.environ.get("NEW_API_BASE_URL", "http://10.60.42.158:9000/v1")
+    key = os.environ.get("NEW_API_KEY", "")
+    t0 = time.time()
+    try:
+        req = urllib.request.Request(f"{base}/models",
+            headers={"Authorization": f"Bearer {key}"} if key else {})
+        with urllib.request.build_opener().open(req, timeout=5) as r:
+            n = len(json.loads(r.read()).get("data", []))
+        targets["llm_api"] = f"OK ({n} models, {time.time()-t0:.1f}s)"
+    except Exception as e:
+        targets["llm_api"] = f"FAIL: {type(e).__name__}: {e}"
+
+    # 2. Qwen classifier — 内网，不走代理
+    qwen = os.environ.get("CLASSIFIER_API_URL", "http://10.60.42.158:9999/v1")
+    t0 = time.time()
+    try:
+        with urllib.request.build_opener().open(f"{qwen}/models", timeout=3) as r:
+            targets["qwen"] = f"OK ({time.time()-t0:.1f}s)"
+    except Exception as e:
+        targets["qwen"] = f"FAIL: {type(e).__name__}: {e}"
+
+    # 3. DuckDuckGo — 走代理
+    t0 = time.time()
+    try:
+        with _fetch("https://duckduckgo.com", 5) as r:
+            targets["ddg"] = f"OK ({r.status}, {time.time()-t0:.1f}s)"
+    except Exception as e:
+        targets["ddg"] = f"FAIL ({time.time()-t0:.1f}s): {type(e).__name__}: {e}"
+
+    # 4. RSS — 走代理
+    t0 = time.time()
+    try:
+        with _fetch("https://www.reddit.com/r/LocalLLaMA/.rss", 5) as r:
+            targets["rss"] = f"OK ({r.status}, {time.time()-t0:.1f}s)"
+    except Exception as e:
+        targets["rss"] = f"FAIL ({time.time()-t0:.1f}s): {type(e).__name__}: {e}"
+
+    # 汇总
+    ok = sum(1 for v in targets.values() if v.startswith("OK"))
+    fail = len(targets) - ok
+    logger.info(f"[NetworkCheck] {ok}/{len(targets)} reachable:")
+    for name, status in targets.items():
+        logger.info(f"  {name}: {status}")
+    if fail:
+        logger.warning(f"[NetworkCheck] {fail} backends unreachable — news_search may be slow")
+
+
 logger = logging.getLogger("nanobot")
 logger.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
 if not logger.handlers:
@@ -78,6 +141,9 @@ async def lifespan(app: FastAPI):
         Guardrail._load_sentinel()
     except Exception as e:
         logger.warning(f"Sentinel pre-load failed (will retry on first classify): {e}")
+
+    # ── 启动网络连通性检测 ──
+    _startup_network_check(logger)
 
     # Initialize KT Framework bridge (replaces old manual controller)
     from nanobot_kt.bridge import init_bridge, shutdown_bridge

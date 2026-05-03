@@ -11,7 +11,7 @@ controller:
   max_retries: 0                 # Fail fast on proxy timeout/502 to trigger custom model routing fallback
   tool_format: native            # Re-enabling native function calling per user request
   max_messages: 50               # auto-compaction threshold
-  ephemeral: true               # clear conversation after each interaction (per-session memory injected via DB)
+  ephemeral: false              # 桥接层已手动清理 conversation，KT 不需再清（会删掉 reply 工具输出）
   max_iterations: 12             # 硬兜底——正常靠 prompt 自控，此值仅防死循环
 
 # ── Memory ──

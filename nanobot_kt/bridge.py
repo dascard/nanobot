@@ -130,6 +130,14 @@ class NanobotBridge:
         # Critical: Agent must be started so _running=True; otherwise
         # _process_event() drops all events and returns empty output.
         await self._agent.start()
+
+        # DeepSeek thinking 禁用——阻止模型复述系统提示词
+        if hasattr(self._agent.controller, "llm") and hasattr(self._agent.controller.llm, "extra_body"):
+            model = getattr(self._agent.controller.llm.config, "model", "") if hasattr(self._agent.controller.llm, "config") else ""
+            if "deepseek" in str(model).lower():
+                self._agent.controller.llm.extra_body["thinking"] = {"type": "disabled"}
+                logger.info("[NanobotBridge] DeepSeek thinking disabled via extra_body")
+
         tools_list = self._agent.registry.list_tools()
         logger.info(f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}")
 
@@ -178,9 +186,11 @@ class NanobotBridge:
 
             messages = self._agent.controller.conversation.get_messages()
             for msg in reversed(messages):
-                if msg.get("role") != "tool":
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+                if role != "tool":
                     continue
-                content = _message_content_to_text(msg.get("content"))
+                raw_content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
+                content = _message_content_to_text(raw_content)
                 # 新格式：JSON 结构化
                 try:
                     data = json.loads(content)
@@ -618,9 +628,10 @@ class NanobotBridge:
         try:
             messages = self._agent.controller.conversation.get_messages()
             for msg in reversed(messages):
-                if msg.get("role") != "assistant":
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+                if role != "assistant":
                     continue
-                content = msg.get("content")
+                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
                 if isinstance(content, str) and content.strip():
                     return content.strip()
                 if isinstance(content, list):
