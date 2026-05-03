@@ -27,7 +27,7 @@ def _route_mode(query: str, mode: str = "auto") -> str:
     research_markers = ["深入", "详细", "核验", "官方来源", "证据", "对比", "benchmark", "开源协议"]
     if any(k in q for k in research_markers):
         return "research"
-    return "quality"  # 默认 quality
+    return "quality"  # quality is default
 
 
 def _get_providers(mode: str) -> list:
