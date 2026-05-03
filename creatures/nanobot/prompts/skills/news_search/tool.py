@@ -1517,6 +1517,12 @@ def _extract_json_object(raw: str) -> str:
     m = re.search(r"\{[\s\S]*\}", raw)
     return m.group(0) if m else raw
 
+
+def _run_news_daily_pipeline(query: str, mode: str = "fast", limit: int = 8) -> str:
+    """新 NewsDaily pipeline——RSS/官方源聚合，默认不调 LLM。"""
+    from .news_daily.tool import run_pipeline
+    return run_pipeline(query, mode, limit)
+
 def search_and_extract_news_v2(
     query: str,
     max_results: int = 5,
@@ -1771,16 +1777,22 @@ class NewsSearchTool(BaseTool):
         import asyncio
         try:
             result = await asyncio.to_thread(
-                search_and_extract_news_v2,
-                query, max_results, mode,
+                _run_news_daily_pipeline, query, mode, max_results,
             )
         except Exception:
-            logger.warning("[news_search] v2 failed, fallback to v1")
-            result = await asyncio.to_thread(
-                search_and_extract_news,
-                query, max_results, persist=True,
-                user_id=user_id, session_id=session_id,
-            )
+            logger.warning("[news_search] daily pipeline failed, fallback to v2")
+            try:
+                result = await asyncio.to_thread(
+                    search_and_extract_news_v2,
+                    query, max_results, mode,
+                )
+            except Exception:
+                logger.warning("[news_search] v2 failed, fallback to v1")
+                result = await asyncio.to_thread(
+                    search_and_extract_news,
+                    query, max_results, persist=True,
+                    user_id=user_id, session_id=session_id,
+                )
         # 强制HTML输出——永不为空/不裸文本
         if not result or not str(result).strip():
             logger.error("[news_search] empty output query=%r", query)
