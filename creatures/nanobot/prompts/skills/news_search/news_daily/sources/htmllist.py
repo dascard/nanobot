@@ -50,7 +50,7 @@ class HtmlListProvider:
     def _extract(self, html: str, limit: int) -> list[NewsItem]:
         """从 HTML 中提取文章标题和链接。"""
         items = []
-        dom = self._domain(self.url)
+        dom = _domain(self.url)
 
         # 找所有 <a> 标签，提取看起来像文章链接的
         links = re.findall(

@@ -2,6 +2,7 @@
 
 import logging
 from .rss import RSSProvider
+from .htmllist import HtmlListProvider
 from ..schema import NewsItem, SourceConfig
 
 logger = logging.getLogger("nanobot.news_daily.official")
@@ -64,11 +65,11 @@ DEFAULT_SOURCES: list[SourceConfig] = [
     # === core_provider: html_list (无RSS的官方博客, 暂标记enabled=False) ===
     SourceConfig(name="anthropic_news", type="html_list",
                  url="https://www.anthropic.com/news",
-                 trust=0.96, weight=1.0, group="core_provider", enabled=False,
+                 trust=0.96, weight=1.0, group="core_provider", enabled=True,
                  category_hint=["Claude", "模型", "API"]),
     SourceConfig(name="mistral_news", type="html_list",
                  url="https://mistral.ai/news",
-                 trust=0.94, weight=1.0, group="core_provider", enabled=False,
+                 trust=0.94, weight=1.0, group="core_provider", enabled=True,
                  category_hint=["Mistral", "模型"]),
     SourceConfig(name="deepseek_news", type="html_list",
                  url="https://api-docs.deepseek.com/news/",
@@ -125,7 +126,10 @@ class SourceRegistry:
         self.sources: list[tuple[SourceConfig, RSSProvider]] = []
         for cfg in DEFAULT_SOURCES:
             if cfg.enabled:
-                prov = RSSProvider(url=cfg.url, source_name=cfg.name, trust=cfg.trust)
+                if cfg.type == "html_list":
+                    prov = HtmlListProvider(url=cfg.url, source_name=cfg.name, trust=cfg.trust)
+                else:
+                    prov = RSSProvider(url=cfg.url, source_name=cfg.name, trust=cfg.trust)
                 self.sources.append((cfg, prov))
         logger.info("[registry] %d sources loaded", len(self.sources))
 
