@@ -1072,8 +1072,15 @@ def _is_rss_first_query(query: str) -> bool:
     return any(k in q for k in RSS_KEYWORDS)
 
 def _should_use_juya_direct(query: str) -> bool:
-    """Juya RSS 只用于日报/早报/简报类请求，普通搜索不触发。"""
-    return _is_daily_digest_query(query)
+    """Juya RSS 用于日报类 + 模型改写后的日报变体（如"今日 AI 新闻"）。"""
+    if _is_daily_digest_query(query):
+        return True
+    # 模型可能把"日报"改写为"今日 AI 新闻"等——检测日期+AI组合
+    q = (query or "").lower()
+    has_date = bool(re.search(r"(2026|2025|\d{4}-\d{2}-\d{2}|\d{1,2}月\d{1,2}日)", q))
+    has_ai = bool(re.search(r"(ai|人工智能|大模型|llm|模型|新闻|资讯)", q))
+    has_today = any(k in q for k in ("今日", "今天", "today"))
+    return (has_today or has_date) and has_ai
 
 
 def _is_news_query(query: str) -> bool:
