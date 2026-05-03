@@ -117,7 +117,7 @@ def render_html(digest: dict) -> str:
     <div class="why">{_e(ts.get('why_it_matters', ''))}</div>
     {confidence_badge(ts.get('confidence', ''))}
     <div style="margin-top:8px;font-size:.72rem;color:#999">
-      {_format_source_ids(ts.get('source_ids', []))}
+{_src_name(ts.get("source_ids",[]), digest.get("sources",[]))}
     </div>
   </div>"""
 
@@ -133,7 +133,7 @@ def render_html(digest: dict) -> str:
     <div class="highlight-card">
       <div class="label">{_e(label)}{importance_dots(imp)}</div>
       <div class="txt">{_e(text)}</div>
-      <div class="src">{_format_source_ids(h.get('source_ids', []))}</div>
+      <div class="src">{_src_name(h.get("source_ids",[]), digest.get("sources",[]))}</div>
     </div>"""
         html += '\n  </div>'
 
@@ -167,12 +167,26 @@ def render_html(digest: dict) -> str:
     return html
 
 
+def _src_name(ids: list[int], sources: list[dict]) -> str:
+    if not ids or not sources:
+        return ""
+    names = []
+    for sid in ids:
+        for s in sources:
+            if s.get("source_id") == sid:
+                names.append(s.get("source_name", f"#{sid}"))
+                break
+        else:
+            names.append(f"#{sid}")
+    return ", ".join(names[:3])
+
 def _e(text: str) -> str:
     """HTML 转义。"""
     return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def _format_source_ids(ids: list[int]) -> str:
+    """fallback when just IDs available"""
     if not ids:
         return ""
-    return "来源: #" + ", #".join(str(i) for i in ids)
+    return "#" + ", #".join(str(i) for i in ids)

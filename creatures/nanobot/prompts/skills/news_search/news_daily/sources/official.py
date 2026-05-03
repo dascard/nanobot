@@ -3,6 +3,7 @@
 import logging
 from .rss import RSSProvider
 from .htmllist import HtmlListProvider
+from .htmllist import HtmlListProvider
 from ..schema import NewsItem, SourceConfig
 
 logger = logging.getLogger("nanobot.news_daily.official")
@@ -41,15 +42,15 @@ DEFAULT_SOURCES: list[SourceConfig] = [
                  trust=0.78, weight=1.0, group="ai_media",
                  category_hint=["分析", "AI"]),
     # === research: RSS ===
-    SourceConfig(name="mit_ai", type="rss",
+    SourceConfig(name="mit_ai", enabled=False, type="rss",
                  url="https://news.mit.edu/rss/topic/artificial-intelligence2",
                  trust=0.82, weight=0.6, group="research",
                  category_hint=["研究", "AI"]),
-    SourceConfig(name="arxiv_ai", type="rss",
+    SourceConfig(name="arxiv_ai", enabled=False, type="rss",
                  url="https://rss.arxiv.org/rss/cs.AI",
                  trust=0.84, weight=0.6, group="research",
                  category_hint=["论文", "AI"]),
-    SourceConfig(name="arxiv_cl", type="rss",
+    SourceConfig(name="arxiv_cl", enabled=False, type="rss",
                  url="https://rss.arxiv.org/rss/cs.CL",
                  trust=0.84, weight=0.6, group="research",
                  category_hint=["论文", "NLP"]),
