@@ -492,9 +492,8 @@ class NanobotBridge:
                 # 从 conversation 提 tool HTML——不用缓存(避免跨 query 串结果)
                 preserved_html = self._extract_last_rich_tool_output(("news-brief", "group-analysis-report"))
                 if preserved_html:
-                    logger.info("[NanobotBridge] Using preserved tool HTML output")
-                    if preserved_html not in response:
-                        self._output._buffer.append(preserved_html)
+                    logger.info("[NanobotBridge] Using preserved tool HTML output (replacing buffer)")
+                    self._output._buffer = [preserved_html]
                     await _call_tracker_method(tracker, "record_success", target_model)
                     break
 
