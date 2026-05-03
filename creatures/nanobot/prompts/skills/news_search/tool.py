@@ -43,7 +43,8 @@ _NEWS_SEARCH_CACHE_LOCK = threading.Lock()
 
 JUYA_RSS_URL = "https://imjuya.github.io/juya-ai-daily/rss.xml"
 RSS_KEYWORDS = {
-    "juya", "ai daily", "morning briefing", "日报", "早报", "每日", "快讯", "newsletter"
+    "juya", "ai daily", "morning briefing", "日报", "早报", "每日", "快讯", "newsletter",
+    "资讯", "最新", "新闻", "ai news", "today", "简报", "digest",
 }
 
 RSS_SOURCES = [
