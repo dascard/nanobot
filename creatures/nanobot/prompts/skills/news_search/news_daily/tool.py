@@ -55,27 +55,51 @@ def _apply_quotas(items, mode: str) -> list:
         result.extend(buckets.get(group, []))
     return result
 
-def run_pipeline(query: str, mode: str = "fast", limit: int = 8) -> str:
-    """主 Pipeline——抓取→处理→digest→渲染。"""
+def run_pipeline(query: str, mode: str = "fast", limit: int = 10) -> str:
+    """主 Pipeline——fast: deterministic, quality: LLM摘要。"""
     from ..render import render_html as _render
     t0 = _time.time()
 
     providers = _get_providers(mode)
-    items = collect_sources(providers, limit_per_source=limit, timeout=8)
+    items = collect_sources(providers, limit_per_source=8, timeout=8)
     logger.info("[daily] collect: %d items in %.1fs", len(items), _time.time() - t0)
 
     items = normalize_items(items)
     items = filter_recent(items, hours=72)
     items = dedup_items(items)
     items = rank_items(items)
-    items = _apply_quotas(items, mode)
-    items = items[:limit]
-    logger.info("[daily] pipeline: %d items after filter/rank", len(items))
 
-    digest = build_digest_deterministic(items, query, mode)
+    if mode == "fast":
+        items = _apply_quotas(items, mode)
+        items = items[:limit]
+        digest = build_digest_deterministic(items, query, mode)
+    else:
+        from .pipeline.select_ import select_items_by_quota
+        from .pipeline.evidence_light import build_light_evidence_cards
+        from .pipeline.summarize_quality import summarize_quality
+        from .pipeline.validate import safe_quality_digest, validate_quality_digest
+
+        candidates = select_items_by_quota(items, max_items=limit)
+        logger.info("[daily] quality candidates: %d from %d items", len(candidates), len(items))
+
+        fallback_d = build_digest_deterministic(candidates, query, "quality")
+        cards = build_light_evidence_cards(candidates)
+
+        if cards:
+            llm_d = summarize_quality(cards, dict(fallback_d))
+            digest = safe_quality_digest(llm_d, dict(fallback_d), cards)
+            ok, issues = validate_quality_digest(digest, cards)
+            if not ok:
+                logger.warning("[daily] quality validator fatal: %s", issues)
+                digest = dict(fallback_d)
+            elif issues:
+                digest.setdefault("missing_info", []).extend(issues[:3])
+        else:
+            digest = dict(fallback_d)
+
     html = _render(digest)
-    logger.info("[daily] done %d items → %d chars HTML in %.1fs",
-                len(items), len(html), _time.time() - t0)
+    logger.info("[daily] done %s mode %d items → %d chars HTML in %.1fs",
+                mode, len(items), len(html), _time.time() - t0)
     return html
 
 
