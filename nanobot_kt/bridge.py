@@ -489,14 +489,8 @@ class NanobotBridge:
                     f"has_tool_err={'[工具错误]' in response}, "
                     f"preview={response[:100] if response else '(EMPTY)'}"
                 )
-                # 优先提取 tool 产出的 HTML——无论 buffer 空不空、query 是否匹配关键词
-                # LLM 可能吞掉报告只输出文本，或 buffer 为空（tool 跑完但 LLM 卡住 / interrupt）
-                preserved_html = self._extract_last_rich_tool_output(("news-brief",))
-                if not preserved_html:
-                    preserved_html = self._extract_last_rich_tool_output(
-                        ("group-analysis-report",),
-                        allow_recent_cache=True,
-                    )
+                # 从 conversation 提 tool HTML——不用缓存(避免跨 query 串结果)
+                preserved_html = self._extract_last_rich_tool_output(("news-brief", "group-analysis-report"))
                 if preserved_html:
                     logger.info("[NanobotBridge] Using preserved tool HTML output")
                     if preserved_html not in response:
