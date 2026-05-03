@@ -367,6 +367,9 @@ class NewAPIClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        # 禁用 DeepSeek 推理思考——reasoning_content 会泄漏系统提示词到用户可见输出
+        if "deepseek" in str(model).lower():
+            payload["thinking"] = {"type": "disabled"}
         return payload
 
     def _safe_get_failure_tracker(self):
