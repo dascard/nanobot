@@ -37,6 +37,7 @@ def _ddgs_kwargs():
     return {"proxy": _proxy_url} if _proxy_url else {}
 
 NEWS_SEARCH_CACHE_TTL_SECONDS = int(os.environ.get("NEWS_SEARCH_CACHE_TTL_SECONDS", "300"))
+NEWS_SEARCH_DDG_ENABLED = os.environ.get("NEWS_SEARCH_DDG_ENABLED", "0") == "1"
 _NEWS_SEARCH_CACHE: dict[tuple[Any, ...], tuple[float, str]] = {}
 _NEWS_SEARCH_CACHE_LOCK = threading.Lock()
 
@@ -1280,12 +1281,17 @@ def _build_query_variants(query: str) -> List[str]:
     return variants
 
 
+def _is_daily_digest_query(query: str) -> bool:
+    q = (query or "").lower()
+    return any(k in q for k in [
+        "日报", "早报", "每日", "今日ai", "今天ai", "ai daily",
+        "morning briefing", "简报", "digest",
+    ])
+
 def _news_search_cache_key(query: str, max_results: int) -> tuple[Any, ...]:
     q = re.sub(r"\s+", " ", (query or "").lower()).strip()
     target_date = _extract_date(query)
-    ai_like = any(k in q for k in ["ai", "人工智能", "大模型", "llm", "模型"])
-    news_like = _is_news_query(q) or bool(target_date)
-    if ai_like and news_like:
+    if _is_daily_digest_query(q) and _is_rss_first_query(q):
         return ("daily_ai", target_date or datetime.now().strftime("%Y-%m-%d"), int(max_results))
     return ("query", q, int(max_results))
 
@@ -1382,6 +1388,9 @@ class WebTools:
                 ]
             )
 
+        if not NEWS_SEARCH_DDG_ENABLED:
+            logger.info("[search] ddg disabled by NEWS_SEARCH_DDG_ENABLED=0")
+            return _filter_stale_news_results(rss_results, query)
         try:
             with DDGS(**_ddgs_kwargs()) as ddgs:
                 if _is_news_query(query):
@@ -1444,6 +1453,165 @@ class WebTools:
             return "Failed to download url"
         except Exception as e:
             return f"Error extracting {url}: {e}"
+
+# ═══════════════════════════════════════
+#  V2 Pipeline: Evidence Cards + 结构化 JSON + Validator + 模板渲染
+# ═══════════════════════════════════════
+
+
+
+def _normalize_for_evidence(results: list[dict], query: str = "") -> list[dict]:
+    """适配 WebTools.search() 的 href/body/date → url/snippet/published_at。"""
+    out = []
+    for r in results:
+        url = r.get("url") or r.get("href") or ""
+        if not url:
+            continue
+        body = r.get("body") or r.get("snippet") or r.get("description") or ""
+        out.append({
+            "title": r.get("title", ""),
+            "url": url,
+            "domain": _domain(url),
+            "published_at": r.get("published_at") or r.get("date") or "",
+            "snippet": body,
+            "content_excerpt": body,
+            "source_weight": r.get("source_weight", 0),
+            "search_strategy": r.get("search_strategy", ""),
+            "_query": query,
+        })
+    return out
+
+
+def _extract_json_object(raw: str) -> str:
+    """从 LLM 输出中提取 JSON object——去掉 markdown 代码块和前后缀。"""
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw).strip()
+        raw = re.sub(r"```\s*$", "", raw).strip()
+    m = re.search(r"\{[\s\S]*\}", raw)
+    return m.group(0) if m else raw
+
+def search_and_extract_news_v2(
+    query: str,
+    max_results: int = 5,
+    mode: str = "fast",
+) -> str:
+    """新 Pipeline: 搜索→去重评分→Evidence Cards→结构化JSON→validate→模板HTML。"""
+    import time as _t; t0 = _t.time()
+    from .evidence import (
+        build_evidence_pipeline, validate_digest, safe_digest, FALLBACK_DIGEST,
+    )
+    from .prompts import SYSTEM_PROMPT, build_evidence_prompt
+    from .render import render_html
+    from core.legacy_adapter import EvolutionUtils
+
+    # 1. 搜索
+    search_results = []
+    juya_attempted = False
+    juya_hit = False
+    juya_used = False
+
+    rss_first = _is_rss_first_query(query)
+    target_date = _extract_date(query)
+    logger.info("[news_v2] route query=%r rss_first=%s target=%s mode=%s",
+                query[:60], rss_first, target_date or "latest", mode)
+
+    if rss_first:
+        juya_attempted = True
+        juya_raw = _fetch_juya_rss(max_results=max_results, target_date=target_date)
+        juya_hit = bool(juya_raw)
+        logger.info("[news_v2] juya attempted rss_count=%d titles=%s",
+                    len(juya_raw or []),
+                    [x.get("title","")[:40] for x in (juya_raw or [])[:3]])
+        if juya_raw:
+            juya_used = True
+            search_results = juya_raw
+
+    if not search_results:
+        search_results = WebTools.search(query, max_results=max_results, deep=(mode == "deep"))
+    if not search_results:
+        logger.info("[news_v2] no search results, fallback juya=%s/%s/%s",
+                    juya_attempted, juya_hit, juya_used)
+        return render_html(FALLBACK_DIGEST)
+
+    # 2. Evidence Pipeline
+    evidence_sources = _normalize_for_evidence(search_results, query)
+    cards, _ = build_evidence_pipeline(evidence_sources, query, max_sources=max_results)
+    if not cards:
+        logger.info("[news_v2] no cards juya=%s/%s/%s raw=%d norm=%d",
+                    juya_attempted, juya_hit, juya_used,
+                    len(search_results), len(evidence_sources))
+        return render_html(FALLBACK_DIGEST)
+
+    # 3. LLM 结构化生成
+    cards_json = []
+    for c in cards:
+        d = {"source_id": c.source_id, "title": c.title, "domain": c.domain,
+             "published_at": c.published_at, "entities": c.entities,
+             "claims": c.claims, "numbers": c.numbers,
+             "related_sentences": c.related_sentences,
+             "why_it_matters": c.why_it_matters, "confidence": c.confidence}
+        cards_json.append(d)
+
+    prompt = build_evidence_prompt(cards_json, mode)
+    raw = _call_llm_simple(SYSTEM_PROMPT, prompt, temperature=0.1)
+
+    # 4. JSON 解析
+    digest = EvolutionUtils.json_repair(raw)
+    if not isinstance(digest, dict) or digest.get("parse_error"):
+        logger.warning("[news_v2] LLM output parse failed, using fallback")
+        return render_html({**FALLBACK_DIGEST, "missing_info": ["LLM生成结果无法解析"]})
+
+    # 5. Validate
+    digest = safe_digest(digest, cards)
+    digest["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    digest["mode"] = mode
+
+    # 6. 渲染 HTML
+    html = render_html(digest)
+
+    ok, v_issues = validate_digest(digest, cards)
+    logger.info(
+        "[news_v2] done %.1fs mode=%s juya_att=%s/hit=%s/used=%s "
+        "raw=%d norm=%d cards=%d html=%d validator=%s",
+        _t.time()-t0, mode, juya_attempted, juya_hit, juya_used,
+        len(search_results), len(evidence_sources), len(cards), len(html),
+        "PASS" if ok else f"WARN:{v_issues}",
+    )
+    return html
+
+
+def _call_llm_simple(system: str, prompt: str, temperature: float = 0.1, max_tokens: int = 2000) -> str:
+    """简化 LLM 调用——用于结构化 JSON 生成。"""
+    try:
+        from clients.new_api_client import NewAPIClient
+        from config import NEW_API_KEY, NEW_API_BASE_URL
+        import asyncio as _asyncio
+
+        async def _call():
+            client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+            resp = await client.chat_completion(
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": prompt}],
+                model_tier="fast", temperature=temperature,
+            )
+            if isinstance(resp, dict) and "choices" in resp:
+                return resp["choices"][0]["message"]["content"]
+            return ""
+
+        try:
+            loop = _asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(_asyncio.run, _call()).result()
+        return _asyncio.run(_call())
+    except Exception as e:
+        logger.warning("[news_v2] LLM call failed: %s", e)
+        return ""
+
 
 def search_and_extract_news(
     query: str,
@@ -1567,13 +1735,29 @@ class NewsSearchTool(BaseTool):
         
         # KT runs tools concurrently; run blocking code in thread
         import asyncio
-        result = await asyncio.to_thread(
-            search_and_extract_news,
-            query,
-            max_results,
-            persist=True,
-            user_id=user_id,
-            session_id=session_id,
-        )
+        mode = str(args.get("mode") or "fast")
+        try:
+            result = await asyncio.to_thread(
+                search_and_extract_news_v2,
+                query, max_results, mode,
+            )
+        except Exception:
+            logger.warning("[news_search] v2 failed, fallback to v1")
+            result = await asyncio.to_thread(
+                search_and_extract_news,
+                query, max_results, persist=True,
+                user_id=user_id, session_id=session_id,
+            )
+        # 强制HTML输出——永不为空/不裸文本
+        if not result or not str(result).strip():
+            logger.error("[news_search] empty output query=%r", query)
+            result = render_html({**FALLBACK_DIGEST, "title": "暂无可用资讯",
+                "verdict": "本轮没有生成有效输出，已触发兜底。",
+                "missing_info": ["工具返回为空"]})
+        elif "<html" not in str(result).lower() and "<article" not in str(result).lower():
+            logger.warning("[news_search] non-html output query=%r len=%d", query, len(str(result)))
+            result = render_html({**FALLBACK_DIGEST, "title": "资讯结果不完整",
+                "verdict": "本轮生成结果非标准HTML，已转换兜底。",
+                "missing_info": [str(result)[:200]]})
         _store_cached_news_result(cache_key, result)
         return ToolResult(output=result, exit_code=0)

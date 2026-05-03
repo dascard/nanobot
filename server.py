@@ -31,7 +31,19 @@ handler.setFormatter(formatter)
 
 def _startup_network_check(logger):
     """启动时探测关键后端连通性，结果记入日志。"""
-    import urllib.request, json, time, os
+    import urllib.request, json, time, os, subprocess
+    # 打印 git commit 版本
+    try:
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"],
+                                      cwd=project_root,
+                                      text=True, stderr=subprocess.DEVNULL).strip()
+        dt = subprocess.check_output(["git", "log", "-1", "--format=%ci", "--date=short"],
+                                     cwd=project_root,
+                                     text=True, stderr=subprocess.DEVNULL).strip()[:10]
+        logger.info("[startup] server version=%s date=%s", sha, dt)
+    except Exception:
+        logger.info("[startup] server version=unknown")
     targets = {}
 
     # 构建显式代理 opener——urlopen(url_str) 不自动走环境代理

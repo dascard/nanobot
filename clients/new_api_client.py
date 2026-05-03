@@ -357,6 +357,7 @@ class NewAPIClient:
         temperature: float,
         stream: bool,
         model: str,
+        max_tokens: int | None = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": model,
@@ -364,6 +365,8 @@ class NewAPIClient:
             "temperature": temperature,
             "stream": stream,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
@@ -517,6 +520,7 @@ class NewAPIClient:
         stream: bool = False,
         model_tier: str = "smart",
         manual_model: str = "",
+        max_tokens: int | None = None,
     ) -> Dict[str, Any]:
         """Non-streaming chat completion with retry."""
         if not self.api_key:
@@ -554,7 +558,7 @@ class NewAPIClient:
                             f"(complexity={complexity}, intel={model.get('intelligence')})")
 
             for attempt in range(2):  # max 2 per model
-                payload = self._build_payload(messages, tools, temperature, False, target_model)
+                payload = self._build_payload(messages, tools, temperature, False, target_model, max_tokens=max_tokens)
                 async with aiohttp.ClientSession() as session:
                     try:
                         async with session.post(

@@ -1,0 +1,178 @@
+"""新闻日报 HTML 模板渲染——LLM 只填 JSON，模板负责视觉。"""
+
+import json
+from datetime import datetime
+
+
+NEWS_TEMPLATE_CSS = """
+:root{--bg:#faf9f7;--card:#fff;--ink:#1a1a2e;--sub:#666;--accent:#e65100;
+  --tag-bg:#fff3e0;--tag-ink:#bf360c;--green:#2e7d32;--border:#e8e5df;
+  --shadow:0 2px 8px rgba(0,0,0,.06)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--ink);line-height:1.7;padding:24px 16px 40px}
+.container{max-width:720px;margin:0 auto}
+.header{margin-bottom:28px;padding-bottom:20px;border-bottom:2px solid var(--border)}
+.header h1{font-size:1.6rem;font-weight:700;color:var(--ink)}
+.header .sub{font-size:.9rem;color:var(--sub);margin-top:4px}
+.header .meta{font-size:.75rem;color:#999;margin-top:6px}
+.verdict{background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:18px 20px;margin-bottom:24px;font-size:.95rem;box-shadow:var(--shadow)}
+.verdict .label{font-size:.75rem;color:var(--accent);font-weight:600;
+  text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.top-story{background:linear-gradient(135deg,#fff8e1,#fff3e0);
+  border:2px solid var(--accent);border-radius:14px;padding:22px;margin-bottom:24px;
+  box-shadow:var(--shadow)}
+.top-story .flag{font-size:.7rem;color:var(--accent);font-weight:700;
+  text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+.top-story h2{font-size:1.15rem;margin-bottom:8px}
+.top-story .what{font-size:.9rem;color:var(--ink);margin-bottom:8px}
+.top-story .why{font-size:.82rem;color:var(--sub);font-style:italic}
+.top-story .confidence{display:inline-block;margin-top:10px;padding:2px 10px;
+  border-radius:10px;font-size:.72rem;background:var(--tag-bg);color:var(--tag-ink)}
+.highlights{margin-bottom:24px}
+.highlights .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.highlight-card{background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:14px 18px;margin-bottom:10px;box-shadow:var(--shadow)}
+.highlight-card .label{font-size:.72rem;font-weight:600;color:var(--accent);
+  margin-bottom:4px}
+.highlight-card .txt{font-size:.9rem}
+.highlight-card .src{font-size:.72rem;color:#999;margin-top:6px}
+.importance{display:inline-block;margin-left:6px}
+.importance .dot{display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--accent);margin-right:2px;opacity:.3}
+.importance .dot.active{opacity:1}
+.watchlist{background:var(--card);border:1px solid var(--border);
+  border-radius:12px;padding:18px 20px;margin-bottom:24px;box-shadow:var(--shadow)}
+.watchlist .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.watch-item{font-size:.88rem;padding:6px 0;border-bottom:1px solid #f5f3ef}
+.watch-item:last-child{border-bottom:none}
+.watch-item .reason{font-size:.78rem;color:var(--sub);margin-left:4px}
+.missing{font-size:.8rem;color:#999;padding:12px 16px;margin-bottom:24px;
+  border-left:3px solid #ddd;background:#f8f8f6;border-radius:0 8px 8px 0}
+.closing{font-size:.88rem;color:var(--sub);text-align:center;
+  padding:16px 0;border-top:1px solid var(--border);margin-top:8px}
+.footer{text-align:center;font-size:.7rem;color:#ccc;margin-top:20px}
+"""
+
+
+def importance_dots(score: int) -> str:
+    max_dots = 5
+    active = min(max(score, 0), max_dots)
+    dots = ""
+    for i in range(max_dots):
+        dots += '<span class="dot' + (' active' if i < active else '') + '"></span>'
+    return f'<span class="importance">{dots}</span>'
+
+
+def confidence_badge(conf: str) -> str:
+    if not conf:
+        return ""
+    return f'<span class="confidence">{conf}</span>'
+
+
+def source_link(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.lower().lstrip("www.")
+        short = domain[:40]
+    except Exception:
+        short = url[:40]
+    return f'<a href="{url}" target="_blank" style="color:#999;text-decoration:none">{short}</a>'
+
+
+def render_html(digest: dict) -> str:
+    """将 NewsDigest JSON 渲染为 HTML 新闻日报。"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # 顶部
+    html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><style>{NEWS_TEMPLATE_CSS}</style></head>
+<body class="news-brief">
+<div class="container">
+  <div class="header">
+    <h1>{_e(digest.get('title', 'AI 日报'))}</h1>
+    <div class="sub">{_e(digest.get('subtitle', ''))}</div>
+    <div class="meta">{_e(digest.get('generated_at', now))} · {_e(digest.get('mode', 'fast'))} mode</div>
+  </div>"""
+
+    # 总评
+    verdict = digest.get("verdict", "")
+    if verdict:
+        html += f'\n  <div class="verdict"><div class="label">今日总评</div>{_e(verdict)}</div>'
+
+    # 头条
+    ts = digest.get("top_story")
+    if ts:
+        html += f"""
+  <div class="top-story">
+    <div class="flag">⚡ Top Story</div>
+    <h2>{_e(ts.get('title', ''))}</h2>
+    <div class="what">{_e(ts.get('what_happened', ''))}</div>
+    <div class="why">{_e(ts.get('why_it_matters', ''))}</div>
+    {confidence_badge(ts.get('confidence', ''))}
+    <div style="margin-top:8px;font-size:.72rem;color:#999">
+      {_format_source_ids(ts.get('source_ids', []))}
+    </div>
+  </div>"""
+
+    # 亮点
+    highlights = digest.get("highlights", [])
+    if highlights:
+        html += '\n  <div class="highlights"><div class="section-title">📌 要点速览</div>'
+        for h in highlights:
+            label = h.get("label", "")
+            text = h.get("text", "")
+            imp = h.get("importance", 3)
+            html += f"""
+    <div class="highlight-card">
+      <div class="label">{_e(label)}{importance_dots(imp)}</div>
+      <div class="txt">{_e(text)}</div>
+      <div class="src">{_format_source_ids(h.get('source_ids', []))}</div>
+    </div>"""
+        html += '\n  </div>'
+
+    # 关注
+    watchlist = digest.get("watchlist", [])
+    if watchlist:
+        html += '\n  <div class="watchlist"><div class="section-title">🔍 持续关注</div>'
+        for w in watchlist:
+            html += f"""
+    <div class="watch-item">
+      {_e(w.get('text', ''))}
+      <span class="reason">{_e(w.get('reason', ''))}</span>
+      <span style="font-size:.7rem;color:#ccc;margin-left:8px">{_format_source_ids(w.get('source_ids', []))}</span>
+    </div>"""
+        html += '\n  </div>'
+
+    # 缺失
+    missing = digest.get("missing_info", [])
+    if missing:
+        html += '\n  <div class="missing">'
+        for m in missing:
+            html += f'<div>⚠ {_e(m)}</div>'
+        html += '\n  </div>'
+
+    # 结尾
+    closing = digest.get("closing", "")
+    if closing:
+        html += f'\n  <div class="closing">{_e(closing)}</div>'
+
+    html += f'\n  <div class="footer">Nanobot AI 日报 · {now}</div>\n</div>\n</body>\n</html>'
+    return html
+
+
+def _e(text: str) -> str:
+    """HTML 转义。"""
+    return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _format_source_ids(ids: list[int]) -> str:
+    if not ids:
+        return ""
+    return "来源: #" + ", #".join(str(i) for i in ids)
