@@ -31,10 +31,29 @@ def _route_mode(query: str, mode: str = "auto") -> str:
 
 
 def _get_providers(mode: str) -> list:
-    providers = [JuyaProvider()]
-    # fast/quality use curated only; research adds web_search
-    return providers
+    """从 SourceRegistry 获取 provider 列表。"""
+    from .sources.official import get_registry
+    reg = get_registry()
+    pairs = reg.select(mode)
+    return [p for _, p in pairs]
 
+
+
+def _apply_quotas(items, mode: str) -> list:
+    """按来源类别配额限制，防止单一类别刷屏。"""
+    from .sources.official import DAILY_QUOTA
+    quotas = dict(DAILY_QUOTA)
+    buckets: dict[str, list] = {}
+    result = []
+    for item in items:
+        group = "official" if item.trust > 0.85 else ("media" if item.trust > 0.7 else "curated")
+        bucket = buckets.setdefault(group, [])
+        limit = quotas.get(group, 5)
+        if len(bucket) < limit:
+            bucket.append(item)
+    for group in ["official", "research", "media", "curated"]:
+        result.extend(buckets.get(group, []))
+    return result
 
 def run_pipeline(query: str, mode: str = "fast", limit: int = 8) -> str:
     """主 Pipeline——抓取→处理→digest→渲染。"""
@@ -49,6 +68,7 @@ def run_pipeline(query: str, mode: str = "fast", limit: int = 8) -> str:
     items = filter_recent(items, hours=72)
     items = dedup_items(items)
     items = rank_items(items)
+    items = _apply_quotas(items, mode)
     items = items[:limit]
     logger.info("[daily] pipeline: %d items after filter/rank", len(items))
 

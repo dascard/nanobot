@@ -17,11 +17,11 @@ DEFAULT_SOURCES: list[SourceConfig] = [
                  url="https://huggingface.co/blog/feed.xml",
                  trust=0.92, weight=1.0, group="official",
                  category_hint=["开源", "模型", "工具"]),
-    SourceConfig(name="google_blog_ai", type="rss",
+    SourceConfig(name="google_blog_ai", enabled=False, type="rss",  # TODO: fix XML/format
                  url="https://blog.google/feed/",
                  trust=0.93, weight=1.0, group="official",
                  category_hint=["Gemini", "产品", "研究"]),
-    SourceConfig(name="google_deepmind", type="rss",
+    SourceConfig(name="google_deepmind", enabled=False, type="rss",  # TODO: fix XML/format
                  url="https://blog.google/feed/",
                  trust=0.94, weight=1.0, group="official",
                  category_hint=["DeepMind", "Gemma", "研究"]),
@@ -29,11 +29,11 @@ DEFAULT_SOURCES: list[SourceConfig] = [
                  url="https://news.mit.edu/rss/topic/artificial-intelligence2",
                  trust=0.90, weight=1.0, group="official",
                  category_hint=["研究", "AI"]),
-    SourceConfig(name="arxiv_ai", type="rss",
+    SourceConfig(name="arxiv_ai", enabled=False, type="rss",  # TODO: fix XML/format
                  url="https://rss.arxiv.org/rss/cs.AI",
                  trust=0.88, weight=1.0, group="research",
                  category_hint=["论文", "AI"]),
-    SourceConfig(name="arxiv_cl", type="rss",
+    SourceConfig(name="arxiv_cl", enabled=False, type="rss",  # TODO: fix XML/format
                  url="https://rss.arxiv.org/rss/cs.CL",
                  trust=0.88, weight=1.0, group="research",
                  category_hint=["论文", "NLP", "LLM"]),
@@ -42,7 +42,7 @@ DEFAULT_SOURCES: list[SourceConfig] = [
                  url="https://techcrunch.com/category/artificial-intelligence/feed/",
                  trust=0.78, weight=1.0, group="media",
                  category_hint=["行业", "创业", "AI"]),
-    SourceConfig(name="theverge_ai", type="rss",
+    SourceConfig(name="theverge_ai", enabled=False, type="rss",  # TODO: fix XML/format
                  url="https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
                  trust=0.76, weight=1.0, group="media",
                  category_hint=["消费AI", "行业"]),
