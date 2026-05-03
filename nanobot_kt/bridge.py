@@ -564,16 +564,12 @@ class NanobotBridge:
                     )
                     response = fallback
 
-            news_html = self._extract_last_rich_tool_output(("news-brief",))
-            if news_html and response.strip() != news_html.strip():
-                logger.info("[NanobotBridge] Replacing rewritten news response with preserved HTML tool output")
-                response = news_html
-
-            group_html = self._extract_last_rich_tool_output(
-                ("group-analysis-report",), allow_recent_cache=True)
-            if group_html and response.strip() != group_html.strip():
-                logger.info("[NanobotBridge] Replacing rewritten group analysis response with preserved HTML tool output")
-                response = group_html
+            # 事后兜底——retry loop 已做 preserved HTML 提取，这里只补漏
+            final_html = self._extract_last_rich_tool_output(
+                ("news-brief", "group-analysis-report"))
+            if final_html and final_html.strip() != response.strip():
+                logger.info("[NanobotBridge] post-loop HTML replacement")
+                response = final_html
             
             logger.info(f"[NanobotBridge] After processing: response_len={len(response)}, buffer_chunks={buffer_len}")
             if response:
