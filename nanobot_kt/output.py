@@ -53,10 +53,13 @@ class BufferedOutput(BaseOutputModule):
         "memory_write": "正在写入记忆...",
     }
 
+    HTML_TOOLS = {"news_search", "group_analysis"}
+
     def __init__(self, **kwargs: Any):
         super().__init__()
         self._buffer: list[str] = []
         self._saved: str = ""  # clear_all 后仍可恢复
+        self._agent_ref: Any = None  # bridge 注入，tool_done 时设 interrupt
         self._complete_event = asyncio.Event()
         self._stream_queue: asyncio.Queue[dict[str, Any]] | None = None
 
@@ -146,6 +149,15 @@ class BufferedOutput(BaseOutputModule):
 
         if activity_type == "tool_done":
             logger.info(f"[Activity] {activity_type}: {detail}")
+            # HTML 工具完成后立即 interrupt——避免模型磨蹭 45s 再调 reply
+            try:
+                tool_name = detail.split("[", 2)[1].split("]", 1)[0] if "[" in detail else ""
+            except (IndexError, ValueError):
+                tool_name = ""
+            if tool_name and tool_name in self.HTML_TOOLS and self._agent_ref is not None:
+                if hasattr(self._agent_ref, '_interrupt_requested'):
+                    self._agent_ref._interrupt_requested = True
+                    logger.info("[BufferedOutput] interrupt after %s tool_done", tool_name)
             return
 
         logger.info(f"[Activity] {activity_type}: {detail}")

@@ -131,6 +131,10 @@ class NanobotBridge:
         # _process_event() drops all events and returns empty output.
         await self._agent.start()
 
+        # 注入 agent 引用到 output，tool_done 时触发 interrupt
+        if hasattr(self._output, '_agent_ref'):
+            self._output._agent_ref = self._agent
+
         # DeepSeek thinking 禁用——阻止模型复述系统提示词
         if hasattr(self._agent.controller, "llm") and hasattr(self._agent.controller.llm, "extra_body"):
             model = getattr(self._agent.controller.llm.config, "model", "") if hasattr(self._agent.controller.llm, "config") else ""
