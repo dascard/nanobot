@@ -176,7 +176,7 @@ class NanobotBridge:
         try:
             from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
 
-            messages = self._agent.controller.conversation.to_messages()
+            messages = self._agent.controller.conversation.get_messages()
             for msg in reversed(messages):
                 if msg.get("role") != "tool":
                     continue
@@ -215,7 +215,7 @@ class NanobotBridge:
             if hasattr(conv, "get_messages"):
                 payloads.extend(conv.get_messages())
             if hasattr(conv, "to_messages"):
-                payloads.extend(conv.to_messages())
+                payloads.extend(conv.get_messages())
             for msg in reversed(payloads):
                 content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
                 text = _message_content_to_text(content)
@@ -616,7 +616,7 @@ class NanobotBridge:
 
         # 1) Last assistant message from conversation
         try:
-            messages = self._agent.controller.conversation.to_messages()
+            messages = self._agent.controller.conversation.get_messages()
             for msg in reversed(messages):
                 if msg.get("role") != "assistant":
                     continue
