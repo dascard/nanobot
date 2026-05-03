@@ -14,8 +14,9 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Dict
+import os as _os
 from urllib.parse import urlparse
-from urllib.request import urlopen
+from urllib.request import urlopen, build_opener, ProxyHandler, Request
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from duckduckgo_search import DDGS
@@ -23,6 +24,17 @@ import trafilatura
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
 logger = logging.getLogger("nanobot.news_search")
+
+# ── 代理感知 ──
+_proxy_url = _os.environ.get("http_proxy") or _os.environ.get("HTTP_PROXY") or ""
+_proxy_opener = build_opener(ProxyHandler({"http": _proxy_url, "https": _proxy_url})) if _proxy_url else build_opener()
+
+def _urlopen(url, timeout=10):
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    return _proxy_opener.open(req, timeout=timeout) if _proxy_url else urlopen(url, timeout=timeout)
+
+def _ddgs_kwargs():
+    return {"proxy": _proxy_url} if _proxy_url else {}
 
 NEWS_SEARCH_CACHE_TTL_SECONDS = int(os.environ.get("NEWS_SEARCH_CACHE_TTL_SECONDS", "300"))
 _NEWS_SEARCH_CACHE: dict[tuple[Any, ...], tuple[float, str]] = {}
@@ -1143,7 +1155,7 @@ def _match_query(item: Dict[str, Any], query: str) -> bool:
 
 def _fetch_rss_source(source: Dict[str, Any], max_results: int) -> List[Dict[str, Any]]:
     try:
-        with urlopen(source["url"], timeout=6) as resp:
+        with _urlopen(source["url"], timeout=6) as resp:
             xml_data = resp.read()
 
         root = ET.fromstring(xml_data)
@@ -1207,7 +1219,7 @@ def _fetch_multi_rss(query: str, max_results: int) -> List[Dict[str, Any]]:
 
 def _fetch_juya_rss(max_results: int, target_date: str | None = None) -> List[Dict[str, Any]]:
     try:
-        with urlopen(JUYA_RSS_URL, timeout=6) as resp:
+        with _urlopen(JUYA_RSS_URL, timeout=6) as resp:
             xml_data = resp.read()
 
         root = ET.fromstring(xml_data)
@@ -1371,7 +1383,7 @@ class WebTools:
             )
 
         try:
-            with DDGS() as ddgs:
+            with DDGS(**_ddgs_kwargs()) as ddgs:
                 if _is_news_query(query):
                     try:
                         for r in ddgs.news(
