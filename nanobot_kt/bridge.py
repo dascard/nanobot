@@ -489,12 +489,10 @@ class NanobotBridge:
                     f"has_tool_err={'[工具错误]' in response}, "
                     f"preview={response[:100] if response else '(EMPTY)'}"
                 )
-                # 优先提取 tool 产出的 HTML——无论 buffer 空不空
-                # LLM 可能吞掉报告只输出文本，或 buffer 为空（tool 跑完但 LLM 卡住）
-                preserved_html = ""
-                if _is_news_request(raw_query):
-                    preserved_html = self._extract_last_rich_tool_output(("news-brief",))
-                if not preserved_html and _is_group_analysis_request(raw_query):
+                # 优先提取 tool 产出的 HTML——无论 buffer 空不空、query 是否匹配关键词
+                # LLM 可能吞掉报告只输出文本，或 buffer 为空（tool 跑完但 LLM 卡住 / interrupt）
+                preserved_html = self._extract_last_rich_tool_output(("news-brief",))
+                if not preserved_html:
                     preserved_html = self._extract_last_rich_tool_output(
                         ("group-analysis-report",),
                         allow_recent_cache=True,
@@ -573,20 +571,16 @@ class NanobotBridge:
                     )
                     response = fallback
 
-            if _is_news_request(raw_query):
-                news_html = self._extract_last_rich_tool_output(("news-brief",))
-                if news_html and response.strip() != news_html.strip():
-                    logger.info("[NanobotBridge] Replacing rewritten news response with preserved HTML tool output")
-                    response = news_html
+            news_html = self._extract_last_rich_tool_output(("news-brief",))
+            if news_html and response.strip() != news_html.strip():
+                logger.info("[NanobotBridge] Replacing rewritten news response with preserved HTML tool output")
+                response = news_html
 
-            if _is_group_analysis_request(raw_query):
-                group_html = self._extract_last_rich_tool_output(
-                    ("group-analysis-report",),
-                    allow_recent_cache=True,
-                )
-                if group_html and response.strip() != group_html.strip():
-                    logger.info("[NanobotBridge] Replacing rewritten group analysis response with preserved HTML tool output")
-                    response = group_html
+            group_html = self._extract_last_rich_tool_output(
+                ("group-analysis-report",), allow_recent_cache=True)
+            if group_html and response.strip() != group_html.strip():
+                logger.info("[NanobotBridge] Replacing rewritten group analysis response with preserved HTML tool output")
+                response = group_html
             
             logger.info(f"[NanobotBridge] After processing: response_len={len(response)}, buffer_chunks={buffer_len}")
             if response:
