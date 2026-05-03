@@ -42,7 +42,7 @@ DEFAULT_SOURCES: list[SourceConfig] = [
                  url="https://techcrunch.com/category/artificial-intelligence/feed/",
                  trust=0.78, weight=1.0, group="media",
                  category_hint=["行业", "创业", "AI"]),
-    SourceConfig(name="theverge_ai", enabled=False, type="rss",  # TODO: fix XML/format
+    SourceConfig(name="theverge_ai", type="rss"
                  url="https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
                  trust=0.76, weight=1.0, group="media",
                  category_hint=["消费AI", "行业"]),

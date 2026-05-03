@@ -38,21 +38,16 @@ class RSSProvider:
             return []
 
     def _parse(self, xml: str, limit: int) -> list[NewsItem]:
-        import xml.etree.ElementTree as ET
+        """使用 feedparser 解析 RSS/Atom——原生支持两种格式。"""
+        import feedparser
         items = []
         try:
-            root = ET.fromstring(xml)
-            ns = self._ns(root)
-            entries = root.findall(".//item") or root.findall(f".//{{{ns.get('', '')}}}entry")
-            if not entries:
-                channel = root.find("channel")
-                if channel is not None:
-                    entries = channel.findall("item")
-            for entry in entries[:limit]:
-                title = self._text(entry, "title", ns).strip()
-                link = self._text(entry, "link", ns).strip()
-                desc = self._text(entry, "description", ns).strip()
-                pub = self._text(entry, "pubDate", ns).strip() or self._text(entry, "published", ns).strip()
+            feed = feedparser.parse(xml)
+            for entry in feed.entries[:limit]:
+                title = (entry.get("title") or "").strip()
+                link = (entry.get("link") or entry.get("links", [{}])[0].get("href") or "").strip()
+                desc = (entry.get("description") or entry.get("summary") or "").strip()
+                pub = (entry.get("published") or entry.get("pubDate") or entry.get("updated") or "")
 
                 if not title or not link:
                     continue
@@ -60,9 +55,10 @@ class RSSProvider:
                 pub_date = ""
                 if pub:
                     try:
-                        pub_date = parsedate_to_datetime(pub).strftime("%Y-%m-%d")
+                        from datetime import datetime
+                        pub_date = datetime(*entry.published_parsed[:6]).strftime("%Y-%m-%d") if hasattr(entry, "published_parsed") and entry.published_parsed else pub[:10]
                     except Exception:
-                        pub_date = pub[:10]
+                        pub_date = str(pub)[:10]
 
                 domain = self._domain(link)
 
@@ -72,22 +68,11 @@ class RSSProvider:
                     domain=domain, published_at=pub_date, trust=self.trust,
                     freshness=1.0 if self._is_recent(pub_date) else 0.5,
                 ))
-        except ET.ParseError as e:
-            logger.warning("[rss] xml parse error for %s: %s", self.source_name, e)
+        except Exception as e:
+            logger.warning("[rss] parse error for %s: %s", self.source_name, e)
         return items[:limit]
 
-    @staticmethod
-    def _ns(root) -> dict:
-        m = re.match(r"\{(.*)\}", root.tag)
-        return {"": m.group(1)} if m else {}
 
-    @staticmethod
-    def _text(el, tag, ns) -> str:
-        for t in (tag, f"{{{ns.get('', '')}}}{tag}"):
-            e = el.find(t)
-            if e is not None and e.text:
-                return e.text
-        return ""
 
     @staticmethod
     def _domain(url: str) -> str:
