@@ -12,7 +12,7 @@ controller:
   tool_format: native            # Re-enabling native function calling per user request
   max_messages: 50               # auto-compaction threshold
   ephemeral: true               # clear conversation after each interaction (per-session memory injected via DB)
-  max_iterations: 30             # 硬兜底——正常靠 prompt 自控，此值仅防死循环
+  max_iterations: 12             # 硬兜底——正常靠 prompt 自控，此值仅防死循环
 
 # ── Memory ──
 memory:

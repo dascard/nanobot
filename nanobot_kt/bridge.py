@@ -492,6 +492,12 @@ class NanobotBridge:
                     await _call_tracker_method(tracker, "record_success", target_model)
                     break
 
+                reply_text = self._extract_reply_from_tool_output()
+                if reply_text:
+                    logger.info("[NanobotBridge] reply() called len=%d, stopping model loop", len(reply_text))
+                    await _call_tracker_method(tracker, "record_success", target_model)
+                    break
+
                 is_empty = not response.strip()
                 is_error = "[系统内部错误]" in response
                 if (is_empty or is_error) and attempt < max_attempts - 1:
