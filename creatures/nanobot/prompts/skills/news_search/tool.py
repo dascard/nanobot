@@ -44,7 +44,12 @@ _NEWS_SEARCH_CACHE_LOCK = threading.Lock()
 JUYA_RSS_URL = "https://imjuya.github.io/juya-ai-daily/rss.xml"
 RSS_KEYWORDS = {
     "juya", "ai daily", "morning briefing", "日报", "早报", "每日", "快讯", "newsletter",
-    "资讯", "最新", "新闻", "ai news", "today", "简报", "digest",
+    "简报", "digest",
+}
+# 只有日报/早报/简报才用 Juya RSS 快路径（"最新/新闻/资讯"太宽泛）
+DAILY_DIGEST_KEYWORDS = {
+    "日报", "早报", "每日", "今日ai", "今天ai", "ai daily",
+    "morning briefing", "简报", "digest",
 }
 
 RSS_SOURCES = [
@@ -1058,9 +1063,17 @@ def _extract_date(query: str) -> str | None:
     return None
 
 
+def _is_daily_digest_query(query: str) -> bool:
+    q = (query or "").lower()
+    return any(k in q for k in DAILY_DIGEST_KEYWORDS)
+
 def _is_rss_first_query(query: str) -> bool:
     q = (query or "").lower()
     return any(k in q for k in RSS_KEYWORDS)
+
+def _should_use_juya_direct(query: str) -> bool:
+    """Juya RSS 只用于日报/早报/简报类请求，普通搜索不触发。"""
+    return _is_daily_digest_query(query)
 
 
 def _is_news_query(query: str) -> bool:
@@ -1289,12 +1302,17 @@ def _is_daily_digest_query(query: str) -> bool:
         "morning briefing", "简报", "digest",
     ])
 
-def _news_search_cache_key(query: str, max_results: int) -> tuple[Any, ...]:
+def _news_search_cache_key(
+    query: str, max_results: int,
+    mode: str = "fast", user_id: str = "", session_id: str = "",
+) -> tuple[Any, ...]:
     q = re.sub(r"\s+", " ", (query or "").lower()).strip()
     target_date = _extract_date(query)
-    if _is_daily_digest_query(q) and _is_rss_first_query(q):
-        return ("daily_ai", target_date or datetime.now().strftime("%Y-%m-%d"), int(max_results))
-    return ("query", q, int(max_results))
+    today = datetime.now().strftime("%Y-%m-%d")
+    ver = "v2_20260503"
+    if _is_daily_digest_query(q):
+        return (ver, "daily_ai", target_date or today, int(max_results), mode)
+    return (ver, "query", q, int(max_results), mode)
 
 
 def _get_cached_news_result(key: tuple[Any, ...]) -> str | None:
@@ -1512,7 +1530,7 @@ def search_and_extract_news_v2(
     juya_hit = False
     juya_used = False
 
-    rss_first = _is_rss_first_query(query)
+    rss_first = _should_use_juya_direct(query)
     target_date = _extract_date(query)
     logger.info("[news_v2] route query=%r rss_first=%s target=%s mode=%s",
                 query[:60], rss_first, target_date or "latest", mode)
@@ -1709,6 +1727,8 @@ class NewsSearchTool(BaseTool):
                     "description": "返回的最大结果数量（默认 3）",
                     "default": 3,
                 },
+                "no_cache": {"type": "boolean", "description": "跳过缓存强制重新检索", "default": False},
+                "refresh": {"type": "boolean", "description": "强制刷新", "default": False},
             },
             "required": ["query"],
         }
@@ -1718,8 +1738,9 @@ class NewsSearchTool(BaseTool):
         if not query.strip():
             return ToolResult(error="Missing 'query' argument")
         max_results = int(args.get("max_results", 3) or 3)
+        mode = str(args.get("mode") or "fast")
+        no_cache = bool(args.get("no_cache") or args.get("refresh"))
 
-        # Best-effort context extraction for persistence tags.
         user_id = str(args.get("user_id") or kwargs.get("user_id") or "")
         session_id = str(args.get("session_id") or kwargs.get("session_id") or "")
         metadata = kwargs.get("metadata") or {}
@@ -1728,15 +1749,19 @@ class NewsSearchTool(BaseTool):
         if not session_id and isinstance(metadata, dict):
             session_id = str(metadata.get("session_id") or "")
 
-        cache_key = _news_search_cache_key(query, max_results)
-        cached = _get_cached_news_result(cache_key)
-        if cached is not None:
-            logger.info("[news_search] reuse cached result for key=%s", cache_key)
-            return ToolResult(output=cached, exit_code=0)
-        
+        logger.info("[news_search] query=%r mode=%s max=%d no_cache=%s",
+                    query[:80], mode, max_results, no_cache)
+
+        cache_key = _news_search_cache_key(query, max_results, mode=mode,
+                                           user_id=user_id, session_id=session_id)
+        if not no_cache:
+            cached = _get_cached_news_result(cache_key)
+            if cached is not None:
+                logger.info("[news_search] cache HIT key=%s", cache_key[:2])
+                return ToolResult(output=cached, exit_code=0)
+
         # KT runs tools concurrently; run blocking code in thread
         import asyncio
-        mode = str(args.get("mode") or "fast")
         try:
             result = await asyncio.to_thread(
                 search_and_extract_news_v2,
