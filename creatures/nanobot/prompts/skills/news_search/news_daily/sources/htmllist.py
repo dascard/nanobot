@@ -48,40 +48,62 @@ class HtmlListProvider:
             return []
 
     def _extract(self, html: str, limit: int) -> list[NewsItem]:
-        """从 HTML 中提取文章标题和链接。"""
+        """从 HTML 提取标题/链接/日期/摘要。"""
+        import re as _re
         items = []
         dom = _domain(self.url)
 
-        # 找所有 <a> 标签，提取看起来像文章链接的
-        links = re.findall(
-            r'<a[^>]*href="([^"]*/(?:blog|news|engineering|articles?)/[^"]*)"[^>]*>(.*?)</a>',
-            html, re.IGNORECASE | re.DOTALL,
-        )
-        if not links:
-            # 退一步：找所有含标题样式的链接
-            links = re.findall(
-                r'<a[^>]*href="([^"]+/(?:blog|news|engineering)[^"]*)"[^>]*>([\s\S]{10,200}?)</a>',
-                html, re.IGNORECASE,
-            )
+        # 日期: <time> 标签或常见格式
+        def _find_date(text):
+            for ptn in [
+                r'<time[^>]*datetime=["\'](\d{4}-\d{2}-\d{2})',
+                r'(\d{4}[/-]\d{2}[/-]\d{2})',
+                r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}',
+            ]:
+                m = _re.search(ptn, text, _re.IGNORECASE)
+                if m:
+                    return m.group(0)[:10]
+            return ""
+
+        # 摘要: meta description 或标签周围文本
+        def _find_summary(text):
+            m = _re.search(r'<meta[^>]*name="description"[^>]*content="([^"]{20,250})"', text, _re.IGNORECASE)
+            if m:
+                return m.group(1)
+            clean = _re.sub(r'<[^>]+>', ' ', text)
+            clean = _re.sub(r'\s+', ' ', clean).strip()
+            return clean[:200] if len(clean) > 40 else ""
 
         seen = set()
-        for href, raw_title in links:
-            raw_title = re.sub(r'<[^>]+>', '', raw_title).strip()
-            raw_title = re.sub(r'\s+', ' ', raw_title)
-            if len(raw_title) < 15 or len(raw_title) > 200:
+        for m in _re.finditer(
+            r'<a[^>]*href="([^"]*/(?:blog|news|engineering|articles?|product|research)/[^"]*)"[^>]*>(.*?)</a>',
+            html, _re.IGNORECASE | _re.DOTALL,
+        ):
+            href, raw_title = m.group(1), m.group(2)
+            raw_title = _re.sub(r'<[^>]+>', '', raw_title).strip()
+            raw_title = _re.sub(r'\s+', ' ', raw_title)
+            if len(raw_title) < 12 or len(raw_title) > 250:
                 continue
             url = href if href.startswith("http") else f"https://{dom}{href}"
-            key = raw_title[:60]
-            if key in seen:
+            if raw_title[:60] in seen:
                 continue
-            seen.add(key)
+            seen.add(raw_title[:60])
+
+            # 取链接周围 1000 字符上下文用于日期和摘要
+            ctx_start = max(0, m.start() - 500)
+            ctx_end = min(len(html), m.end() + 500)
+            ctx = html[ctx_start:ctx_end]
+
             items.append(NewsItem(
                 id=url, title=raw_title[:120], url=url,
+                summary=_find_summary(ctx)[:200],
                 source_name=self.source_name, source_type="html_list",
                 domain=_domain(url), trust=self.trust,
+                published_at=_find_date(ctx),
+                freshness=0.5,
             ))
             if len(items) >= limit:
                 break
 
-        logger.info("[htmllist] %s extracted %d items from HTML", self.source_name, len(items))
+        logger.info("[htmllist] %s: %d items", self.source_name, len(items))
         return items
