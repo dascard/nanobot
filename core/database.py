@@ -182,6 +182,28 @@ class PersonaBehavior(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class GroupMemory(Base):
+    """群体记忆——群聊中长期稳定的群体认知。
+    memory_type: topic/slang/relationship/style/event/preference
+    不复用 PersonaFact——群记忆和用户画像是不同维度。
+    """
+
+    __tablename__ = "group_memories"
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    group_id = Column(String, index=True, nullable=False)
+    memory_type = Column(String, index=True, nullable=False)
+    content = Column(Text, nullable=False)
+    evidence_log_ids_json = Column(Text, default="[]")
+    confidence = Column(Float, default=0.5)
+    evidence_count = Column(Integer, default=1)
+    first_seen = Column(DateTime, default=datetime.now)
+    last_seen = Column(DateTime, default=datetime.now)
+    decay_score = Column(Float, default=1.0)
+    status = Column(String, default="active")
+    meta_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.now)
+
+
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
 
