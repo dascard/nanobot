@@ -23,7 +23,11 @@ class SQLAnalysisTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "在对话日志 SQLite 库中执行只读 SQL 查询。仅当历史信息明显影响当前回复时使用——不用于寒暄、即时情绪、轻松接话。无命中不编造。"
+        return ("只读 SQL 分析工具，用于用户明确要求查询数据库、审计数据、检查表结构或调试 SQL 时使用。"
+                "不要将本工具作为业务工具的前置步骤。"
+                "如果用户要分析群聊、生成群日报、总结某个群的消息，应直接调用 group_analysis，"
+                "不要先用 SQL 查询群号、User 表或 ChatLog。"
+                "SELECT/WITH 必须包含 LIMIT（普通≤1000/聚合≤5000/原文内容≤500）；禁止 SELECT *。")
 
     @property
     def execution_mode(self) -> ExecutionMode:
@@ -35,7 +39,13 @@ class SQLAnalysisTool(BaseTool):
             "properties": {
                 "sql": {
                     "type": "string",
-                    "description": "要执行的只读 SQL 查询语句",
+                    "description": (
+                        "要执行的只读 SQL 查询语句。"
+                        "必须是单条 SELECT/CTE 或只读 PRAGMA；"
+                        "SELECT/WITH 必须包含 LIMIT；禁止 SELECT *；"
+                        "普通查询≤1000，聚合查询(COUNT/GROUP BY)≤5000，"
+                        "原文内容字段(content/message/text/html)≤500。"
+                    ),
                 }
             },
             "required": ["sql"],
@@ -52,13 +62,42 @@ class SQLAnalysisTool(BaseTool):
         without_line = re.sub(r"--.*?$", "", sql, flags=re.MULTILINE)
         return re.sub(r"/\*.*?\*/", "", without_line, flags=re.DOTALL)
 
+    # ── 分级 LIMIT ──
+    DEFAULT_MAX_SQL_LIMIT = 1000
+    AGGREGATE_MAX_SQL_LIMIT = 5000
+    RAW_CONTENT_MAX_SQL_LIMIT = 500
+
+    _RAW_CONTENT_COLS = {"content", "message", "text", "body", "prompt", "response", "html"}
+
+    @classmethod
+    def _is_aggregate_query(cls, sql: str) -> bool:
+        lowered = sql.lower()
+        return (
+            " group by " in lowered
+            or any(re.search(rf"\b{fn}\s*\(", lowered)
+                   for fn in ["count", "sum", "avg", "min", "max"])
+        )
+
+    @classmethod
+    def _selects_raw_content(cls, sql: str) -> bool:
+        lowered = sql.lower()
+        return any(re.search(rf"\b{name}\b", lowered) for name in cls._RAW_CONTENT_COLS)
+
+    @classmethod
+    def _limit_cap_for_query(cls, sql: str) -> int:
+        # 聚合查询优先——COUNT(content) 之类不会被误伤为原文查询
+        if cls._is_aggregate_query(sql):
+            return cls.AGGREGATE_MAX_SQL_LIMIT
+        if cls._selects_raw_content(sql):
+            return cls.RAW_CONTENT_MAX_SQL_LIMIT
+        return cls.DEFAULT_MAX_SQL_LIMIT
+
     @classmethod
     def _validate_read_only_sql(cls, sql: str) -> tuple[bool, str]:
         normalized = cls._strip_sql_comments(sql).strip()
         if not normalized:
             return False, "SQL is empty"
 
-        # Block stacked statements and obvious mutation keywords.
         if ";" in normalized.rstrip(";"):
             return False, "Only a single SQL statement is allowed"
 
@@ -68,7 +107,6 @@ class SQLAnalysisTool(BaseTool):
             "detach", "replace", "truncate", "grant", "revoke", "vacuum", "reindex",
             "begin", "commit", "rollback",
         ]
-        # Read-only PRAGMA — exact keyword match (not prefix match)
         _readonly_pragmas = {
             "table_info", "table_xinfo", "index_list", "index_info",
             "foreign_key_list", "foreign_keys", "compile_options",
@@ -77,14 +115,31 @@ class SQLAnalysisTool(BaseTool):
         }
         m = re.match(r"^pragma\s+(\w+)", lowered)
         is_readonly_pragma = m is not None and m.group(1) in _readonly_pragmas
+
+        if is_readonly_pragma and "=" in lowered:
+            return False, "PRAGMA assignment is not allowed"
+
         if not is_readonly_pragma and any(re.search(rf"\b{kw}\b", lowered) for kw in forbidden):
             return False, "Only read-only SELECT/CTE queries are permitted"
 
-        # Allow SELECT, WITH ... SELECT, and read-only PRAGMA
         if is_readonly_pragma:
             return True, ""
+
         if re.match(r"^(select|with)\b", lowered) is None:
-            return False, "Query must start with SELECT or WITH"
+            return False, "Only SELECT or CTE (WITH) queries are allowed"
+
+        # 禁止 SELECT *
+        if re.search(r"\bselect\s+\*", lowered):
+            return False, "SELECT * is not allowed; select specific columns"
+
+        # 分级 LIMIT
+        m_limit = re.search(r"\blimit\s+(\d+)\b", lowered)
+        if not m_limit:
+            return False, "SELECT/CTE queries must include LIMIT"
+
+        cap = cls._limit_cap_for_query(lowered)
+        if int(m_limit.group(1)) > cap:
+            return False, f"LIMIT must be <= {cap} for this query type"
 
         return True, ""
 

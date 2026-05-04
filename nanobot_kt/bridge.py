@@ -242,7 +242,7 @@ class NanobotBridge:
 
         if allow_recent_cache and "group-analysis-report" in marker_classes:
             try:
-                from creatures.nanobot.prompts.skills.group_analysis.tool import (
+                from creatures.nanobot.prompts.skills.group_analysis.cache import (
                     get_recent_group_analysis_report,
                 )
 

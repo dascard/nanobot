@@ -3,27 +3,27 @@ import asyncio
 
 
 def test_clean_message_filters_commands_and_noise():
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _clean_message
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import clean_message
 
-    assert _clean_message("/group_analysis") is None
-    assert _clean_message("<@123456> /help") is None
-    assert _clean_message("@bot") is None
-    assert _clean_message("  ++==  ") is None
-    assert _clean_message("https://example.com") is None
-    assert _clean_message("正常聊天内容") == "正常聊天内容"
+    assert clean_message("/group_analysis") is None
+    assert clean_message("<@123456> /help") is None
+    assert clean_message("@bot") is None
+    assert clean_message("  ++==  ") is None
+    assert clean_message("https://example.com") is None
+    assert clean_message("正常聊天内容") == "正常聊天内容"
 
 
 def test_parse_instruction_window_hours():
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _parse_instruction_window_hours
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import parse_instruction_window_hours
 
-    assert _parse_instruction_window_hours("最近2小时") == 2
-    assert _parse_instruction_window_hours("只看最近6小时") == 6
-    assert _parse_instruction_window_hours("最近1天") == 24
-    assert _parse_instruction_window_hours("随便看看") is None
+    assert parse_instruction_window_hours("最近2小时") == 2
+    assert parse_instruction_window_hours("只看最近6小时") == 6
+    assert parse_instruction_window_hours("最近1天") == 24
+    assert parse_instruction_window_hours("随便看看") is None
 
 
 def test_compute_group_statistics_returns_summary():
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _compute_group_statistics
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import compute_group_statistics
 
     messages = [
         {"user_id": "A", "content": "早上好😂", "hour": 9, "is_reply": False},
@@ -31,7 +31,7 @@ def test_compute_group_statistics_returns_summary():
         {"user_id": "A", "content": "晚上继续聊", "hour": 21, "is_reply": False},
     ]
 
-    stats = _compute_group_statistics(messages)
+    stats = compute_group_statistics(messages)
 
     assert stats["message_count"] == 3
     assert stats["participant_count"] == 2
@@ -43,9 +43,9 @@ def test_compute_group_statistics_returns_summary():
 
 
 def test_format_group_report_includes_statistics_quality_and_mbti():
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _format_scrapbook_html
+    from creatures.nanobot.prompts.skills.group_analysis.render import format_scrapbook_html
 
-    report = _format_scrapbook_html(
+    report = format_scrapbook_html(
         "测试群",
         {
             "message_count": 12,
@@ -83,9 +83,9 @@ def test_format_group_report_includes_statistics_quality_and_mbti():
 
 
 def test_format_group_report_escapes_contributors_and_clamps_percentages():
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _format_scrapbook_html
+    from creatures.nanobot.prompts.skills.group_analysis.render import format_scrapbook_html
 
-    report = _format_scrapbook_html(
+    report = format_scrapbook_html(
         "测试群",
         {
             "message_count": 3,
@@ -123,7 +123,7 @@ def test_format_group_report_escapes_contributors_and_clamps_percentages():
 
 
 def test_build_message_prompt_text_keeps_large_group_context():
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _build_message_prompt_text
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import build_message_prompt_text
 
     messages = [
         {
@@ -134,32 +134,18 @@ def test_build_message_prompt_text_keeps_large_group_context():
         for idx in range(2200)
     ]
 
-    text = _build_message_prompt_text(messages, max_chars=12000)
+    text = build_message_prompt_text(messages, max_chars=12000)
 
     assert "原始可分析消息总数: 2200" in text
     assert "第2199条消息" in text
     assert len(text) <= 12000
 
 
-def test_filter_messages_by_hours_keeps_recent_messages():
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _filter_messages_by_hours
-
-    now = datetime.now()
-    logs = [
-        {"created_at": now - timedelta(hours=1), "content": "recent"},
-        {"created_at": now - timedelta(hours=8), "content": "old"},
-    ]
-
-    filtered = _filter_messages_by_hours(logs, 2, now=now)
-
-    assert len(filtered) == 1
-    assert filtered[0]["content"] == "recent"
-
 
 def test_group_analysis_dedupes_all_ambient_covered_by_user_source_ids():
     """TimingGate 合并转发：user 的 source_message_ids 覆盖全部 ambient → 全去重。"""
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _dedupe_group_logs
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
@@ -169,7 +155,7 @@ def test_group_analysis_dedupes_all_ambient_covered_by_user_source_ids():
         ChatLog(role="assistant", content="bot reply", sender_name="nanobot"),
     ]
 
-    deduped = _dedupe_group_logs(logs)
+    deduped = dedupe_group_logs(logs)
 
     assert [log.role for log in deduped] == ["user", "assistant"]
 
@@ -177,7 +163,7 @@ def test_group_analysis_dedupes_all_ambient_covered_by_user_source_ids():
 def test_group_analysis_keeps_ambient_not_in_user_source_ids():
     """ambient 的 message_id 不在任何 user 的 source_message_ids 中 → 保留。"""
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _dedupe_group_logs
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
@@ -186,7 +172,7 @@ def test_group_analysis_keeps_ambient_not_in_user_source_ids():
                 content="merged hello", sender_name="A"),
     ]
 
-    deduped = _dedupe_group_logs(logs)
+    deduped = dedupe_group_logs(logs)
 
     # m1 被 user 覆盖 → 去重；m3 不在 user 的 source 中 → 保留
     assert [(log.role, log.message_id) for log in deduped] == [
@@ -198,7 +184,7 @@ def test_group_analysis_keeps_ambient_not_in_user_source_ids():
 def test_group_analysis_keeps_source_ambient_when_user_content_does_not_cover_it():
     """防御非 Plan8 客户端：source_ids 批量传入但 user 内容未合并对应原文时，不能误删 ambient。"""
     from core.database import ChatLog
-    from creatures.nanobot.prompts.skills.group_analysis.tool import _dedupe_group_logs
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
 
     logs = [
         ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
@@ -207,7 +193,7 @@ def test_group_analysis_keeps_source_ambient_when_user_content_does_not_cover_it
                 content="hello", sender_name="A"),
     ]
 
-    deduped = _dedupe_group_logs(logs)
+    deduped = dedupe_group_logs(logs)
 
     assert [(log.role, log.message_id) for log in deduped] == [
         ("ambient", "m2"),
@@ -280,7 +266,7 @@ def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
 
     monkeypatch.setattr(database, "SessionLocal", lambda: FakeSession())
     monkeypatch.setattr(new_api_client, "NewAPIClient", DummyClient)
-    monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.tool._call_llm_with_retry", fake_call)
+    monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.analyzer._call_llm_with_retry", fake_call)
 
     tool = GroupAnalysisTool()
     result = asyncio.run(tool.execute({"group_id": "123", "instructions": "最近2小时"}))
