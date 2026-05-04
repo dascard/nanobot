@@ -152,6 +152,9 @@ class GroupRuntime:
             state.add_message(pm)
             state.session_name = session_name
             state.bot_aliases = list(bot_aliases or [])
+            # cooldown: 距上次bot回复的秒数
+            if state.last_bot_reply_ts > 0:
+                ctx["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
 
             if not state.can_trigger_gate():
                 return {
@@ -209,6 +212,8 @@ class GroupRuntime:
             "session_name": state.session_name,
             "bot_aliases": list(state.bot_aliases),
         }
+        if state.last_bot_reply_ts > 0:
+            ctx_saved["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
         result = await self._call_gate(group_id, snapshot, ctx_saved, trigger_reason)
 
         async with self._lock:
@@ -274,6 +279,7 @@ class GroupRuntime:
     def _build_timing_context(
         *, pending: list[PendingMessage], trigger_reason: str = "",
         session_name: str = "", bot_aliases: list[str] | None = None,
+        last_bot_reply_ago: float | None = None,
     ) -> str:
         """构造 TimingGate prompt context——不依赖 api.routes。"""
         from core.context_builder import sanitize_prompt_text
@@ -284,6 +290,9 @@ class GroupRuntime:
             lines.append(f"群: {sn}")
         if any(p.is_reply_to_bot for p in pending):
             lines.append("注意:这条消息是回复bot的,说明用户在跟bot对话")
+        if last_bot_reply_ago is not None and last_bot_reply_ago > 0:
+            secs = int(last_bot_reply_ago)
+            lines.append(f"bot上次发言: {secs}秒前")
         tr = sanitize_prompt_text(trigger_reason, 60)
         if tr:
             lines.append(f"触发原因: {tr}")
