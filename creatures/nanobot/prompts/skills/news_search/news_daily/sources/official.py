@@ -112,10 +112,11 @@ SOURCE_TIER_WEIGHT = {
 }
 
 DAILY_QUOTA = {
-    "official": 3,
+    "core_provider": 6,
+    "core_platform": 3,
+    "ai_media": 4,
     "research": 2,
-    "media": 3,
-    "curated": 2,
+    "curated": 3,
     "community": 1,
 }
 
