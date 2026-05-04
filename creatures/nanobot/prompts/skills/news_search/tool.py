@@ -1779,8 +1779,8 @@ class NewsSearchTool(BaseTool):
             result = await asyncio.to_thread(
                 _run_news_daily_pipeline, query, "quality", max_results  # quality is default,
             )
-        except Exception:
-            logger.warning("[news_search] daily pipeline failed, fallback to v2")
+        except Exception as e:
+            logger.warning("[news_search] daily pipeline failed: %s", e)
             try:
                 result = await asyncio.to_thread(
                     search_and_extract_news_v2,

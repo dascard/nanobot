@@ -23,14 +23,20 @@ def collect_sources(
 
     with ThreadPoolExecutor(max_workers=min(4, len(providers))) as ex:
         futures = {ex.submit(p.fetch, limit_per_source): p for p in providers}
-        for future in as_completed(futures, timeout=timeout + 2):
-            provider = futures[future]
-            try:
-                result = future.result(timeout=timeout)
-                items.extend(result)
-                logger.debug("[collect] %s: %d items", provider.name, len(result))
-            except Exception as e:
-                logger.warning("[collect] %s failed: %s", provider.name, e)
+        try:
+            for future in as_completed(futures, timeout=timeout + 2):
+                provider = futures[future]
+                try:
+                    result = future.result(timeout=2)
+                    items.extend(result)
+                    logger.debug("[collect] %s: %d items", provider.name, len(result))
+                except Exception as e:
+                    logger.warning("[collect] %s failed: %s", provider.name, e)
+        except TimeoutError:
+            n_done = sum(1 for f in futures if f.done())
+            logger.warning("[collect] timeout: %d/%d done, using partial results", n_done, len(futures))
+        except Exception as e:
+            logger.warning("[collect] futures error: %s (%d items)", e, len(items))
 
     logger.info("[collect] %d providers → %d items in %.1fs",
                 len(providers), len(items), time.time() - t0)
