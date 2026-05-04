@@ -298,7 +298,7 @@ class TestGroupRuntime:
 
         await runtime.process_message("g1", {
             "sender_id": "u1", "sender_name": "A", "message": "hi",
-        })
+        }, trigger_reason="bot_name_mentioned")  # bypass cooldown
         assert "last_bot_reply_ago" in captured
         assert captured["last_bot_reply_ago"] > 0
 
@@ -322,6 +322,66 @@ class TestGroupRuntime:
         })
         assert r["action"] == "wait"
         assert r["cooldown_ago"] >= 0  # round 可能导致 0.001→0.0
+
+    @pytest.mark.asyncio
+    async def test_cooldown_blocks_ambient_after_bot_reply(self):
+        """bot 刚回复后，非 reply_to_bot 非 mention → 硬 wait。"""
+        runtime = GroupRuntime()
+        rt_calls = []
+
+        async def fake_gate(*_a, **_kw):
+            rt_calls.append(1)
+            return {"action": "continue"}
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        # bot 刚回复
+        runtime._states["g1"] = GateState()
+        runtime.note_bot_replied("g1")
+
+        r = await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        })
+        assert r["action"] == "wait"
+        assert r["delay_seconds"] > 0
+        assert "冷却" in r["reason"]
+        assert len(rt_calls) == 0  # 没调 gate——直接 cooldown 拦截
+
+    @pytest.mark.asyncio
+    async def test_cooldown_allows_reply_to_bot(self, monkeypatch):
+        """bot 刚回复后，但用户回复 bot → 正常 gate。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            return {"action": "continue", "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+        runtime._states["g1"] = GateState()
+        runtime.note_bot_replied("g1")
+
+        r = await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+            "is_reply_to_bot": True,
+        })
+        assert r["action"] == "continue"  # cooldown 不拦回复 bot
+
+    @pytest.mark.asyncio
+    async def test_cooldown_allows_mention(self, monkeypatch):
+        """bot 刚回复后，但 trigger_reason 非空 → 正常 gate。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            return {"action": "continue", "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+        runtime._states["g1"] = GateState()
+        runtime.note_bot_replied("g1")
+
+        r = await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        }, trigger_reason="bot_name_mentioned")
+        assert r["action"] == "continue"  # cooldown 不拦 mention
 
     def test_build_timing_context_sanitizes_system_tags(self):
         """_build_timing_context 净化伪系统标签。"""

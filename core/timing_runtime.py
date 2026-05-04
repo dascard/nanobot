@@ -17,6 +17,7 @@ MAX_WAIT_SEC = 60          # 累计等待上限秒
 MAX_RETRIES = 3            # wait 重试上限
 MAX_AGE_SEC = 120          # 消息最大年龄秒
 IDLE_CLEANUP_SEC = 600     # 10 分钟无活动清理 state
+BOT_REPLY_COOLDOWN_SEC = 30  # bot 刚回复后降低插话概率
 
 
 class PendingMessage:
@@ -118,7 +119,7 @@ class GateState:
         return _time.time() - self.last_active_ts > IDLE_CLEANUP_SEC
 
     def bot_reply_ago(self) -> float:
-        return round(_time.time() - self.last_bot_reply_ts, 1) if self.last_bot_reply_ts > 0 else 0
+        return (_time.time() - self.last_bot_reply_ts) if self.last_bot_reply_ts > 0 else 0
 
     def note_bot_replied(self):
         self.last_bot_reply_ts = _time.time()
@@ -155,9 +156,20 @@ class GroupRuntime:
             state.add_message(pm)
             state.session_name = session_name
             state.bot_aliases = list(bot_aliases or [])
-            # cooldown: 距上次bot回复的秒数
             if state.last_bot_reply_ts > 0:
                 ctx["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
+
+            # 硬 cooldown：bot 刚回复过且非直接互动 → 不调 gate，直接 wait
+            ago = state.bot_reply_ago()
+            if 0 < ago < BOT_REPLY_COOLDOWN_SEC:
+                has_direct = any(p.is_reply_to_bot for p in state.pending) or bool(trigger_reason)
+                if not has_direct:
+                    return {
+                        "action": "wait", "delay_seconds": max(1, int(BOT_REPLY_COOLDOWN_SEC - ago)),
+                        "generation": state.generation,
+                        "cooldown_ago": ago,
+                        "reason": "bot 刚回复过，冷却中",
+                    }
 
             if not state.can_trigger_gate():
                 return {
@@ -254,7 +266,7 @@ class GroupRuntime:
             state.handle_no_reply()
             action = "no_reply"
 
-        cooldown = state.bot_reply_ago()
+        cooldown = round(state.bot_reply_ago(), 1)
         state.mark_gate_done()
         return {"action": action, "delay_seconds": delay,
                 "generation": state.generation,
