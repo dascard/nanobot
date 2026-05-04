@@ -7,6 +7,7 @@
 
 import asyncio
 import logging
+import math
 import time as _time
 
 logger = logging.getLogger("nanobot.timing_runtime")
@@ -18,6 +19,7 @@ MAX_RETRIES = 3            # wait 重试上限
 MAX_AGE_SEC = 120          # 消息最大年龄秒
 IDLE_CLEANUP_SEC = 600     # 10 分钟无活动清理 state
 BOT_REPLY_COOLDOWN_SEC = 30  # bot 刚回复后降低插话概率
+_DIRECT_TRIGGERS = {"bot_name_mentioned", "mentioned", "reply_to_bot", "direct_call", "at_bot"}
 
 
 class PendingMessage:
@@ -133,6 +135,17 @@ class GroupRuntime:
         self._states: dict[str, GateState] = {}
         self._lock = asyncio.Lock()
 
+    @staticmethod
+    def _should_cooldown(state: GateState, trigger_reason: str) -> bool:
+        ago = state.bot_reply_ago()
+        if not (0 < ago < BOT_REPLY_COOLDOWN_SEC):
+            return False
+        is_direct = (
+            any(p.is_reply_to_bot for p in state.pending)
+            or str(trigger_reason or "").strip() in _DIRECT_TRIGGERS
+        )
+        return not is_direct
+
     async def process_message(
         self, group_id: str, msg: dict, *,
         trigger_reason: str = "", session_name: str = "",
@@ -160,16 +173,14 @@ class GroupRuntime:
                 ctx["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
 
             # 硬 cooldown：bot 刚回复过且非直接互动 → 不调 gate，直接 wait
-            ago = state.bot_reply_ago()
-            if 0 < ago < BOT_REPLY_COOLDOWN_SEC:
-                has_direct = any(p.is_reply_to_bot for p in state.pending) or bool(trigger_reason)
-                if not has_direct:
-                    return {
-                        "action": "wait", "delay_seconds": max(1, int(BOT_REPLY_COOLDOWN_SEC - ago)),
-                        "generation": state.generation,
-                        "cooldown_ago": ago,
-                        "reason": "bot 刚回复过，冷却中",
-                    }
+            if self._should_cooldown(state, trigger_reason):
+                ago = state.bot_reply_ago()
+                return {
+                    "action": "wait", "delay_seconds": max(1, math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),
+                    "generation": state.generation,
+                    "cooldown_ago": round(ago, 1),
+                    "reason": "bot 刚回复过，冷却中",
+                }
 
             if not state.can_trigger_gate():
                 return {
@@ -217,10 +228,18 @@ class GroupRuntime:
                         "generation": state.generation,
                         "reason": "generation mismatch, timer expired"}
 
+            # 硬 cooldown 同样适用于 timer 回调
+            if self._should_cooldown(state, trigger_reason):
+                ago = state.bot_reply_ago()
+                return {"action": "wait", "delay_seconds": max(1, math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),
+                        "generation": state.generation,
+                        "cooldown_ago": round(ago, 1),
+                        "reason": "bot 刚回复过，冷却中"}
+
             if not state.can_trigger_gate():
                 return {"action": "wait", "delay_seconds": state.next_gate_delay(),
                         "generation": state.generation,
-                        "cooldown_ago": state.bot_reply_ago(),
+                        "cooldown_ago": round(state.bot_reply_ago(), 1),
                         "reason": "rate limited"}
 
             state.mark_gate_start()

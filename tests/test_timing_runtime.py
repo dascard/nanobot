@@ -383,6 +383,51 @@ class TestGroupRuntime:
         }, trigger_reason="bot_name_mentioned")
         assert r["action"] == "continue"  # cooldown 不拦 mention
 
+    @pytest.mark.asyncio
+    async def test_ambient_trigger_does_not_bypass_cooldown(self):
+        """trigger_reason="ambient" 不应绕过 cooldown。"""
+        runtime = GroupRuntime()
+        rt_calls = []
+
+        async def fake_gate(*_a, **_kw):
+            rt_calls.append(1)
+            return {"action": "continue"}
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        runtime._states["g1"] = GateState()
+        runtime.note_bot_replied("g1")
+
+        r = await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        }, trigger_reason="ambient")
+        assert r["action"] == "wait"
+        assert "冷却" in r["reason"]
+        assert len(rt_calls) == 0  # gate 未被调用
+
+    @pytest.mark.asyncio
+    async def test_timer_respects_cooldown(self):
+        """timer 在 cooldown 未结束时继续 wait，不调用 gate。"""
+        runtime = GroupRuntime()
+        rt_calls = []
+
+        async def fake_gate(*_a, **_kw):
+            rt_calls.append(1)
+            return {"action": "continue"}
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        runtime._states["g1"] = GateState()
+        runtime._states["g1"].last_gate_completed_ts = 0  # bypass rate limit
+        runtime.note_bot_replied("g1")
+
+        r = await runtime.handle_timer_fired("g1", generation=0)
+        assert r["action"] == "wait"
+        assert "冷却" in r["reason"]
+        assert len(rt_calls) == 0  # gate 未被调用
+
     def test_build_timing_context_sanitizes_system_tags(self):
         """_build_timing_context 净化伪系统标签。"""
         pending = [
