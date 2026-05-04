@@ -362,6 +362,19 @@ class NanobotBridge:
                         "只能使用 sql_analysis/python_sandbox/news_search/group_analysis/schedule_task/persona_update。"
                     )
                     logger.info("[NanobotBridge] Group chat file tool restriction applied")
+
+                    # 注入群画像（从 GroupMemory 动态生成）
+                    session_id = meta.get("session_id", "")
+                    if session_id:
+                        try:
+                            from core.context_builder import build_group_profile_context
+                            profile_ctx = build_group_profile_context(session_id)
+                            if profile_ctx:
+                                conv.append("system", profile_ctx)
+                                logger.info("[NanobotBridge] GroupProfile injected for %s (%d chars)",
+                                            session_id, len(profile_ctx))
+                        except Exception:
+                            pass
             # ---------------------------------------------
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")
