@@ -117,6 +117,9 @@ class GateState:
     def is_idle(self) -> bool:
         return _time.time() - self.last_active_ts > IDLE_CLEANUP_SEC
 
+    def bot_reply_ago(self) -> float:
+        return round(_time.time() - self.last_bot_reply_ts, 1) if self.last_bot_reply_ts > 0 else 0
+
     def note_bot_replied(self):
         self.last_bot_reply_ts = _time.time()
         self._touch()
@@ -159,7 +162,8 @@ class GroupRuntime:
             if not state.can_trigger_gate():
                 return {
                     "action": "wait", "delay_seconds": state.next_gate_delay(),
-                    "generation": state.generation, "cooldown_ago": 0,
+                    "generation": state.generation,
+                    "cooldown_ago": state.bot_reply_ago(),
                     "reason": "rate limited / gate in progress",
                 }
 
@@ -180,7 +184,8 @@ class GroupRuntime:
                 logger.info("[timing_runtime] gen mismatch %d!=%d for %s",
                             gen, state.generation, group_id)
                 return {"action": "no_reply", "delay_seconds": None,
-                        "generation": state.generation, "cooldown_ago": 0,
+                        "generation": state.generation,
+                        "cooldown_ago": state.bot_reply_ago(),
                         "reason": "generation mismatch, new messages arrived during gate"}
 
             return self._apply_gate_result(state, result)
@@ -202,18 +207,20 @@ class GroupRuntime:
 
             if not state.can_trigger_gate():
                 return {"action": "wait", "delay_seconds": state.next_gate_delay(),
-                        "generation": state.generation, "reason": "rate limited"}
+                        "generation": state.generation,
+                        "cooldown_ago": state.bot_reply_ago(),
+                        "reason": "rate limited"}
 
             state.mark_gate_start()
             snapshot = state.take_snapshot()
             gen = state.generation
+            ctx_saved = {
+                "session_name": state.session_name,
+                "bot_aliases": list(state.bot_aliases),
+            }
+            if state.last_bot_reply_ts > 0:
+                ctx_saved["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
 
-        ctx_saved = {
-            "session_name": state.session_name,
-            "bot_aliases": list(state.bot_aliases),
-        }
-        if state.last_bot_reply_ts > 0:
-            ctx_saved["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
         result = await self._call_gate(group_id, snapshot, ctx_saved, trigger_reason)
 
         async with self._lock:
@@ -247,11 +254,11 @@ class GroupRuntime:
             state.handle_no_reply()
             action = "no_reply"
 
-        cooldown = (_time.time() - state.last_bot_reply_ts) if state.last_bot_reply_ts > 0 else 0
+        cooldown = state.bot_reply_ago()
         state.mark_gate_done()
         return {"action": action, "delay_seconds": delay,
                 "generation": state.generation,
-                "cooldown_ago": round(cooldown, 1),
+                "cooldown_ago": cooldown,
                 "reason": result.get("reason", "")}
 
     def note_bot_replied(self, group_id: str):

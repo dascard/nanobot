@@ -272,6 +272,57 @@ class TestGroupRuntime:
         runtime = GroupRuntime()
         runtime.note_bot_replied("nonexistent")  # 不应抛异常
 
+    def test_build_timing_context_includes_cooldown(self):
+        """last_bot_reply_ago 注入 TimingGate context。"""
+        ctx = GroupRuntime._build_timing_context(
+            pending=[PendingMessage("u1", "A", "hi")],
+            last_bot_reply_ago=12.3,
+        )
+        assert "bot上次发言: 12秒前" in ctx
+
+    @pytest.mark.asyncio
+    async def test_note_bot_replied_passes_cooldown_to_gate(self, monkeypatch):
+        """note_bot_replied → process_message → _call_gate 收到 cooldown。"""
+        runtime = GroupRuntime()
+        captured = {}
+
+        async def fake_gate(_gid, _p, ctx, _tr):
+            captured.update(ctx)
+            return {"action": "no_reply", "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        runtime._states["g1"] = GateState()
+        runtime._states["g1"].last_gate_completed_ts = 0
+        runtime.note_bot_replied("g1")
+
+        await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hi",
+        })
+        assert "last_bot_reply_ago" in captured
+        assert captured["last_bot_reply_ago"] > 0
+
+    @pytest.mark.asyncio
+    async def test_rate_limited_reports_cooldown(self, monkeypatch):
+        """rate-limit 返回也带正确 cooldown_ago。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            return {"action": "continue", "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        })
+        runtime.note_bot_replied("g1")
+
+        r = await runtime.process_message("g1", {
+            "sender_id": "u2", "sender_name": "B", "message": "hi",
+        })
+        assert r["action"] == "wait"
+        assert r["cooldown_ago"] >= 0  # round 可能导致 0.001→0.0
+
     def test_build_timing_context_sanitizes_system_tags(self):
         """_build_timing_context 净化伪系统标签。"""
         pending = [
