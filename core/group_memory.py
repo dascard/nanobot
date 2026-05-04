@@ -60,7 +60,8 @@ def upsert(
             evidence_log_ids_json=json.dumps(evidence_log_ids or []),
             confidence=confidence_hint, evidence_count=1,
             first_seen=datetime.now(), last_seen=datetime.now(),
-            decay_score=1.0, status="active",
+            decay_score=1.0,
+            status="active" if confidence_hint >= CONFIDENCE_FLOOR else "review",
             meta_json=json.dumps(meta or {}, ensure_ascii=False),
         )
         db.add(entry)

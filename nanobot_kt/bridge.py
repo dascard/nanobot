@@ -616,6 +616,14 @@ class NanobotBridge:
                 if stale_sids:
                     logger.info("[SessionRuntime] Cleaned %d idle session locks", len(stale_sids))
 
+            # bot 回复后通知 GroupRuntime——触发 cooldown
+            if response and meta.get("is_group"):
+                try:
+                    from core.timing_runtime import get_group_runtime
+                    get_group_runtime().note_bot_replied(session_id)
+                except Exception:
+                    pass
+
             return response
 
     @property
