@@ -75,10 +75,13 @@ def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
         digest = build_digest_deterministic(candidates, query, mode)
     else:
         from .pipeline.select_ import select_items_by_quota
+        from .pipeline.enrich import enrich_items
         from .pipeline.evidence_light import build_light_evidence_cards
         from .pipeline.summarize_quality import summarize_quality
         from .pipeline.validate import safe_quality_digest, validate_quality_digest
 
+        # 先 enrich 再 select——薄 RSS（如 qbitai/huggingface）靠详情补全才能入选
+        items = enrich_items(items)
         candidates = select_items_by_quota(items, max_items=limit)
         logger.info("[daily] quality candidates: %d from %d items", len(candidates), len(items))
 

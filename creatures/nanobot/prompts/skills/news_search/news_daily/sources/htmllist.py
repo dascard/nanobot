@@ -55,14 +55,15 @@ class HtmlListProvider:
 
         # 日期: <time> 标签或常见格式
         def _find_date(text):
-            for ptn in [
-                r'<time[^>]*datetime=["\'](\d{4}-\d{2}-\d{2})',
-                r'(\d{4}[/-]\d{2}[/-]\d{2})',
-                r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}',
-            ]:
-                m = _re.search(ptn, text, _re.IGNORECASE)
-                if m:
-                    return m.group(0)[:10]
+            m = _re.search(r'<time[^>]*datetime=["\'](\d{4}-\d{2}-\d{2})', text, _re.IGNORECASE)
+            if m:
+                return m.group(1)
+            m = _re.search(r'(\d{4}[/-]\d{2}[/-]\d{2})', text, _re.IGNORECASE)
+            if m:
+                return m.group(1).replace("/", "-")
+            m = _re.search(r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},?\s+\d{4}', text, _re.IGNORECASE)
+            if m:
+                return m.group(0)
             return ""
 
         # 摘要: meta description 或标签周围文本
@@ -74,29 +75,60 @@ class HtmlListProvider:
             clean = _re.sub(r'\s+', ' ', clean).strip()
             return clean[:200] if len(clean) > 40 else ""
 
+        # 页面级 meta description（fallback 用）
+        page_meta = ""
+        m_meta = _re.search(r'<meta[^>]*name="description"[^>]*content="([^"]{20,300})"', html, _re.IGNORECASE)
+        if m_meta:
+            page_meta = m_meta.group(1)
+        if not page_meta:
+            m_og = _re.search(r'<meta[^>]*property="og:description"[^>]*content="([^"]{20,300})"', html, _re.IGNORECASE)
+            if m_og:
+                page_meta = m_og.group(1)
+
         seen = set()
         for m in _re.finditer(
             r'<a[^>]*href="([^"]*/(?:blog|news|engineering|articles?|product|research)/[^"]*)"[^>]*>(.*?)</a>',
             html, _re.IGNORECASE | _re.DOTALL,
         ):
-            href, raw_title = m.group(1), m.group(2)
-            raw_title = _re.sub(r'<[^>]+>', '', raw_title).strip()
+            href, raw_html = m.group(1), m.group(2)
+
+            # 标签替换为空格，防止 "TitleProductDate" 粘连
+            raw_title = _re.sub(r'<[^>]+>', ' ', raw_html).strip()
             raw_title = _re.sub(r'\s+', ' ', raw_title)
-            if len(raw_title) < 12 or len(raw_title) > 250:
+
+            # 在第一个日期/元数据关键词前截断标题
+            title = raw_title
+            for sep in [r'\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}',
+                        r'\b\d{4}[-/]\d{2}[-/]\d{2}\b',
+                        r'\bProduct\b', r'\bResearch\b', r'\bAnnouncements?\b',
+                        r'\bBlog\b', r'\bNews\b']:
+                m_sep = _re.search(sep, title)
+                if m_sep and m_sep.start() > 12:
+                    title = title[:m_sep.start()].strip()
+                    break
+
+            if len(title) < 12 or len(title) > 120:
                 continue
             url = href if href.startswith("http") else f"https://{dom}{href}"
-            if raw_title[:60] in seen:
+            if title[:60] in seen:
                 continue
-            seen.add(raw_title[:60])
+            seen.add(title[:60])
 
-            # 取链接周围 1000 字符上下文用于日期和摘要
+            # 取链接周围上下文用于日期
             ctx_start = max(0, m.start() - 500)
             ctx_end = min(len(html), m.end() + 500)
             ctx = html[ctx_start:ctx_end]
 
+            # 摘要：优先取页面 meta description，清理 URL/CDN 垃圾
+            raw_summary = page_meta or _re.sub(r'<[^>]+>', ' ', ctx)
+            raw_summary = _re.sub(r'\s+', ' ', raw_summary).strip()
+            raw_summary = _re.sub(r'https?://\S+|_nc_cat=\d+|cdn\S+\.(?:png|jpg|webp)', '', raw_summary)
+            raw_summary = _re.sub(r'\s+', ' ', raw_summary).strip()
+            summary = raw_summary[:220] if len(raw_summary) > 30 else ""
+
             items.append(NewsItem(
-                id=url, title=raw_title[:120], url=url,
-                summary=_find_summary(ctx)[:200],
+                id=url, title=title[:120], url=url,
+                summary=summary,
                 source_name=self.source_name, source_type="html_list",
                 domain=_domain(url), trust=self.trust,
                 published_at=_find_date(ctx),

@@ -33,19 +33,37 @@ def normalize_items(items: list[NewsItem]) -> list[NewsItem]:
     return result
 
 
+_DATE_FORMATS = [
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%b %d, %Y",
+    "%B %d, %Y",
+    "%b %d %Y",
+    "%d %b %Y",
+]
+
+
+def _parse_date(raw: str):
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(raw.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def filter_recent(items: list[NewsItem], hours: int = 72) -> list[NewsItem]:
-    """过滤过旧条目。"""
+    """过滤过旧条目——无日期或无法解析的默认保留。"""
     cutoff = datetime.now() - timedelta(hours=hours)
     result = []
     for item in items:
         if not item.published_at:
-            result.append(item)  # 无日期保留
+            result.append(item)
             continue
-        try:
-            dt = datetime.strptime(item.published_at, "%Y-%m-%d")
-            if dt >= cutoff:
-                result.append(item)
-        except Exception:
+        dt = _parse_date(item.published_at)
+        if dt is None:
+            result.append(item)
+        elif dt >= cutoff:
             result.append(item)
     logger.debug("[normalize] %d → %d after %dh filter", len(items), len(result), hours)
     return result

@@ -1,5 +1,6 @@
 """程序生成 NewsDigest——fast 模式不调 LLM。"""
 
+from dataclasses import asdict as _to_dict
 from datetime import datetime
 from ..schema import NewsItem, NewsDigest, fallback_digest
 
@@ -41,7 +42,7 @@ def build_digest_deterministic(items, query="", mode="fast"):
             "source_ids": [1], "confidence": "high" if items[0].trust > 0.7 else "medium",
         },
         "highlights": [
-            {"label": _item_label(item), "text": item.title[:100], "source_ids": [idx+1], "importance": 3}
+            {"label": _item_label(item), "text": (item.summary or item.title)[:200], "source_ids": [idx+1], "importance": 3}
             for idx, item in enumerate(items[:8])
         ],
         "watchlist": [],
@@ -50,7 +51,7 @@ def build_digest_deterministic(items, query="", mode="fast"):
         ),
         "closing": "需要正常日报请使用 quality 模式。" if is_fast else "本日报基于 RSS 自动聚合。",
         "sources": [
-            {"source_id": idx+1, "title": item.title, "url": item.url, "domain": item.domain, "source_name": item.source_name}
+            {"source_id": idx+1, "title": item.title, "url": item.url, "domain": item.domain, "source_name": item.source_name, "published_at": item.published_at or ""}
             for idx, item in enumerate(items[:12])
         ],
     }

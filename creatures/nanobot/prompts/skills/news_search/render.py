@@ -50,6 +50,17 @@ body{font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
 .watch-item{font-size:.88rem;padding:6px 0;border-bottom:1px solid #f5f3ef}
 .watch-item:last-child{border-bottom:none}
 .watch-item .reason{font-size:.78rem;color:var(--sub);margin-left:4px}
+.details{margin-bottom:24px}
+.details .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.detail-card{background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:14px 18px;margin-bottom:10px;box-shadow:var(--shadow)}
+.detail-title{font-weight:700;font-size:.95rem;margin-bottom:8px;color:var(--ink)}
+.detail-block{font-size:.88rem;color:var(--ink);margin-top:6px}
+.detail-block ul{margin:4px 0 0 16px;padding:0}
+.detail-block li{margin-bottom:2px}
+.detail-impact{font-size:.86rem;color:var(--sub);margin-top:8px;font-style:italic}
+.detail-src{font-size:.72rem;color:#999;margin-top:6px}
 .missing{font-size:.8rem;color:#999;padding:12px 16px;margin-bottom:24px;
   border-left:3px solid #ddd;background:#f8f8f6;border-radius:0 8px 8px 0}
 .closing{font-size:.88rem;color:var(--sub);text-align:center;
@@ -117,7 +128,7 @@ def render_html(digest: dict) -> str:
     <div class="why">{_e(ts.get('why_it_matters', ''))}</div>
     {confidence_badge(ts.get('confidence', ''))}
     <div style="margin-top:8px;font-size:.72rem;color:#999">
-{_src_name(ts.get("source_ids",[]), digest.get("sources",[]))}
+{_src_name(ts.get("source_ids",[]), digest.get("sources",[]))} · {_src_date(ts.get("source_ids",[]), digest.get("sources",[]))}
     </div>
   </div>"""
 
@@ -133,8 +144,37 @@ def render_html(digest: dict) -> str:
     <div class="highlight-card">
       <div class="label">{_e(label)}{importance_dots(imp)}</div>
       <div class="txt">{_e(text)}</div>
-      <div class="src">{_src_name(h.get("source_ids",[]), digest.get("sources",[]))}</div>
+      <div class="src">{_src_name(h.get("source_ids",[]), digest.get("sources",[]))}  {_src_date(h.get("source_ids",[]), digest.get("sources",[]))}</div>
     </div>"""
+        html += '\n  </div>'
+
+    # 重点详情
+    details = digest.get("details", [])
+    if details:
+        html += '\n  <div class="details"><div class="section-title">🧩 重点详情</div>'
+        for d in details[:3]:
+            title = d.get("title", "")
+            known = d.get("known", [])
+            unknown = d.get("unknown", [])
+            impact = d.get("impact", "")
+            src_labels = d.get("source_labels", [])
+            html += f'\n    <div class="detail-card">'
+            html += f'\n      <div class="detail-title">{_e(title)}</div>'
+            if known:
+                html += '\n      <div class="detail-block"><b>已知：</b><ul>'
+                for k in known:
+                    html += f'<li>{_e(k)}</li>'
+                html += '</ul></div>'
+            if unknown:
+                html += '\n      <div class="detail-block"><b>缺失：</b><ul>'
+                for u in unknown:
+                    html += f'<li>{_e(u)}</li>'
+                html += '</ul></div>'
+            if impact:
+                html += f'\n      <div class="detail-impact"><b>影响：</b>{_e(impact)}</div>'
+            if src_labels:
+                html += f'\n      <div class="detail-src">来源：{_e(", ".join(src_labels))}</div>'
+            html += '\n    </div>'
         html += '\n  </div>'
 
     # 关注
@@ -179,6 +219,19 @@ def _src_name(ids: list[int], sources: list[dict]) -> str:
         else:
             names.append(f"#{sid}")
     return ", ".join(names[:3])
+
+def _src_date(ids, sources):
+    if not ids or not sources:
+        return ""
+    dates = []
+    for sid in ids[:2]:
+        for s in sources:
+            if s.get("source_id") == sid:
+                d = s.get("published_at", "")
+                if d:
+                    dates.append(d)
+                break
+    return ", ".join(dates) if dates else ""
 
 def _e(text: str) -> str:
     """HTML 转义。"""

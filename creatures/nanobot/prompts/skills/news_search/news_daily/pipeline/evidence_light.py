@@ -71,24 +71,55 @@ def confidence_from_item(item: NewsItem) -> str:
     return "low"
 
 
+def _extract_known_facts(item) -> list[str]:
+    """从 detail_text 提取已知事实句。"""
+    detail = item.detail_text or ""
+    if not detail:
+        return []
+    sents = re.split(r'(?<=[。！？.!?])\s*', detail)
+    facts = []
+    for s in sents:
+        s = s.strip()
+        if len(s) > 15 and len(facts) < 4:
+            facts.append(s[:200])
+    return facts
+
+
+_WHY_MATTERS_BY_GROUP = {
+    "core_provider": "厂商动态，直接影响开发者选型和 API 使用",
+    "core_platform": "平台生态变化，影响开源模型和工具链",
+    "ai_media": "行业趋势信号，反映市场方向和竞争格局",
+    "curated": "信息密度高，综合多方报道提炼关键变化",
+}
+
+
+def _infer_why_matters(item) -> str:
+    group = getattr(item, 'source_group', '')
+    return _WHY_MATTERS_BY_GROUP.get(group, "AI 行业动态")
+
+
 def build_light_evidence_cards(items: list[NewsItem]) -> list[dict]:
     cards = []
     for idx, item in enumerate(items, start=1):
-        text = f"{item.title} {item.summary or item.content_excerpt}"
+        text = f"{item.title} {item.summary or item.content_excerpt} {item.detail_text}"
         cards.append({
             "source_id": idx,
             "title": item.title,
             "url": item.url,
             "domain": item.domain,
             "source_name": item.source_name,
+            "source_group": getattr(item, 'source_group', 'curated'),
             "published_at": item.published_at or "unknown",
             "category": item.category,
             "trust": round(item.trust, 2),
             "confidence": confidence_from_item(item),
-            "summary": trim_text(item.summary, 220),
+            "summary": trim_text(item.summary, 400),
             "claims": extract_claims(text),
             "numbers": extract_numbers(text),
             "entities": extract_entities(text),
-            "related_text": trim_text(item.summary or item.title, 260),
+            "related_text": trim_text(item.summary or item.title, 400),
+            "detail_text": trim_text(item.detail_text, 1200),
+            "known_facts": _extract_known_facts(item),
+            "why_it_matters_hint": _infer_why_matters(item),
         })
     return cards

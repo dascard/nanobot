@@ -121,15 +121,51 @@ def _group_push_target_id(session_id: str) -> str:
     return session_id.removeprefix("group_")
 
 
-def _format_log_line(log: ChatLog) -> str:
+_HTML_SIGNATURES = ("<!doctype", "<html", "<article", "<div class=", "```html")
+
+
+def _is_html_blob(content: str) -> bool:
+    c = (content or "").strip().lower()
+    return any(c.startswith(sig) for sig in _HTML_SIGNATURES)
+
+
+def _format_log_line(log: ChatLog) -> str | None:
+    role = (log.role or "unknown").strip()
+
+    # 工具调用/思考过程不进入记忆摘要
+    if role in ("tool", "model", "system", "function"):
+        return None
+
     ts = log.created_at.strftime("%H:%M") if log.created_at else "--:--"
     sender = (log.sender_name or "").strip()
-    role = (log.role or "unknown").strip()
-    content = (log.content or "").replace("\n", " ").strip()
+    content = (log.content or "").strip()
+    who = sender or role
+
+    # HTML 日报/报告 → 存指针，不存全文
+    if role == "assistant" and _is_html_blob(content):
+        label = _html_label(content)
+        return f"[{ts}] {role}({who}): {label}"
+
+    # 普通文本消息
+    content = content.replace("\n", " ")
     if len(content) > 280:
         content = content[:280] + "..."
-    who = sender or role
+    if not content:
+        return None
     return f"[{ts}] {role}({who}): {content}"
+
+
+def _html_label(content: str) -> str:
+    import re
+    c = content.lower()
+    if "news-brief" in c or "日报" in c or "daily" in c:
+        return f"[AI日报 {len(content)} chars]"
+    if "group_analysis" in c or "群聊分析" in c:
+        return f"[群聊分析报告 {len(content)} chars]"
+    m = re.search(r"<title>(.*?)</title>", c, re.IGNORECASE)
+    if m:
+        return f"[HTML报告: {m.group(1)[:40]} {len(content)} chars]"
+    return f"[HTML内容 {len(content)} chars]"
 
 
 def _build_progressive_layers(lines: List[str]) -> tuple[str, str, str]:
@@ -216,7 +252,7 @@ def generate_daily_digest_for_date(target_date: str, user_id: str | None = None)
             if _already_digested(db, session_id, target_date):
                 continue
 
-            lines = [_format_log_line(x) for x in logs]
+            lines = [l for x in logs if (l := _format_log_line(x)) is not None]
             level0, level1, level2 = _build_progressive_layers(lines)
 
             start_id = logs[0].id

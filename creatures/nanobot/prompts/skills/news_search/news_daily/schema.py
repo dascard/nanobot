@@ -11,6 +11,7 @@ class NewsItem:
     url: str = ""
     summary: str = ""
     content_excerpt: str = ""
+    detail_text: str = ""          # 从详情页提取的正文（quality 模式用）
 
     source_name: str = ""
     source_type: str = ""          # rss / html_list / github / social_x ...
@@ -57,6 +58,7 @@ class NewsDigest:
     top_story: dict | None = None
     highlights: list[dict] = field(default_factory=list)
     watchlist: list[dict] = field(default_factory=list)
+    details: list[dict] = field(default_factory=list)
     missing_info: list[str] = field(default_factory=list)
     closing: str = ""
     sources: list[dict] = field(default_factory=list)

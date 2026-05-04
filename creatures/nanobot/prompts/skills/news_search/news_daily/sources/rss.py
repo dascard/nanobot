@@ -62,8 +62,19 @@ class RSSProvider:
 
                 domain = self._domain(link)
 
+                # HTML content → 纯文本
+                content_text = ""
+                content_list = entry.get("content", [])
+                if content_list:
+                    raw_html = content_list[0].get("value", "")
+                    if raw_html:
+                        content_text = re.sub(r'<[^>]+>', ' ', raw_html)
+                        content_text = re.sub(r'\s+', ' ', content_text).strip()
+
                 items.append(NewsItem(
-                    id=link, title=title, url=link, summary=desc[:200],
+                    id=link, title=title, url=link,
+                    summary=(content_text or desc)[:600],
+                    content_excerpt=content_text[:3000],
                     source_name=self.source_name, source_type="rss",
                     domain=domain, published_at=pub_date, trust=self.trust,
                     freshness=1.0 if self._is_recent(pub_date) else 0.5,
