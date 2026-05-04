@@ -959,7 +959,6 @@ async def proxy_chat(
         db,
         req.session_id,
         user_id=req.user_id,
-        window_minutes=MAX_MEMORY_WINDOW_MINUTES,
         max_per_msg=MAX_MEMORY_PER_MSG_CHARS,
         is_group=is_group,
         max_total=MAX_MEMORY_TOTAL_CHARS,
