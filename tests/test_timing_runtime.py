@@ -88,11 +88,59 @@ class TestGroupRuntime:
             "sender_id": "u1", "sender_name": "A", "message": "hello",
         })
         assert r1["action"] == "continue"
+        assert r1["delay_seconds"] is None  # continue 无 delay
 
         r2 = await runtime.process_message("g1", {
             "sender_id": "u2", "sender_name": "B", "message": "hi",
         })
         assert r2["action"] == "wait"
+        assert isinstance(r2["delay_seconds"], int)
+        assert r2["delay_seconds"] > 0
+
+    @pytest.mark.asyncio
+    async def test_generation_mismatch_clears_running(self, monkeypatch):
+        """gen mismatch 后 running 必须被清掉——否则群永久卡死。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            # 模拟新消息到来
+            runtime._states["g1"].add_message(
+                PendingMessage("u2", "B", "interrupt"))
+            return {"action": "continue", "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        r = await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        })
+        assert r["action"] == "no_reply"
+        assert "mismatch" in r["reason"]
+        # running 必须已清除
+        assert not runtime._states["g1"].running
+
+    @pytest.mark.asyncio
+    async def test_session_name_saved_for_timer_reuse(self, monkeypatch):
+        """timer 回调时从 state 取回 session_name/bot_aliases。"""
+        runtime = GroupRuntime()
+        captured_ctx = {}
+
+        async def fake_gate(_gid, _p, ctx, _tr):
+            captured_ctx.update(ctx)
+            return {"action": "wait", "delay_seconds": 5, "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        }, session_name="测试群", bot_aliases=["testbot"])
+        assert captured_ctx.get("session_name") == "测试群"
+        assert "testbot" in captured_ctx.get("bot_aliases", [])
+
+        # bypass rate limit for timer test
+        runtime._states["g1"].last_gate_completed_ts = 0
+        captured_ctx.clear()
+        await runtime.handle_timer_fired("g1", generation=1)
+        assert captured_ctx.get("session_name") == "测试群"
 
     @pytest.mark.asyncio
     async def test_timer_fired_gen_mismatch_rejected(self, monkeypatch):

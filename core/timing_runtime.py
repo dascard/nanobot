@@ -53,6 +53,8 @@ class GateState:
         self.last_bot_reply_ts: float = 0.0
         self.last_active_ts: float = _time.time()
         self.created_at: float = _time.time()
+        self.session_name: str = ""
+        self.bot_aliases: list[str] = []
 
     def _touch(self):
         self.last_active_ts = _time.time()
@@ -148,6 +150,8 @@ class GroupRuntime:
         async with self._lock:
             state = self._states.setdefault(group_id, GateState())
             state.add_message(pm)
+            state.session_name = session_name
+            state.bot_aliases = list(bot_aliases or [])
 
             if not state.can_trigger_gate():
                 return {
@@ -201,7 +205,11 @@ class GroupRuntime:
             snapshot = state.take_snapshot()
             gen = state.generation
 
-        result = await self._call_gate(group_id, snapshot, {}, trigger_reason)
+        ctx_saved = {
+            "session_name": state.session_name,
+            "bot_aliases": list(state.bot_aliases),
+        }
+        result = await self._call_gate(group_id, snapshot, ctx_saved, trigger_reason)
 
         async with self._lock:
             state = self._states.get(group_id)

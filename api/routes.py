@@ -651,9 +651,8 @@ def _build_group_timing_context(
     trigger_reason: str = "",
     bot_aliases: list[str] | None = None,
 ) -> str:
-    """Build sanitized TimingGate prompt context。支持两种调用方式：
-    - 旧: _build_group_timing_context(req=GroupTimingRequest(...))
-    - 新: _build_group_timing_context(group_id=..., pending_messages=..., ...)
+    """[DEPRECATED] 仅保留用于旧测试兼容。
+    实际 TimingGate context 构造已移至 core.timing_runtime.GroupRuntime._build_timing_context()。
     """
     lines: list[str] = []
     if req is not None:
