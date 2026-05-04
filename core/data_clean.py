@@ -48,7 +48,7 @@ def clean_memory_digests(dry_run: bool = True) -> dict:
             db.query(MemoryDigest.session_id, MemoryDigest.digest_date)
             .distinct().all()
         )
-        logger.info("找到 %d 个 digest 分组", len(groups))
+        print(f"[data_clean] {'[DRY-RUN] ' if dry_run else ''}{len(groups)} 个 digest 分组待检查")
 
         for session_id, digest_date in groups:
             try:
@@ -82,12 +82,8 @@ def clean_memory_digests(dry_run: bool = True) -> dict:
                     old_total = sum(len(d.content or "") for d in existing)
                     l0, l1, l2 = _regenerate_digest(day_logs)
                     new_total = len(l0) + len(l1) + len(l2)
-                    logger.info(
-                        "[dry-run] %s/%s: %d rows, %d→%d chars (%.0f%% reduction)",
-                        session_id, digest_date, len(existing),
-                        old_total, new_total,
-                        (1 - new_total / max(old_total, 1)) * 100,
-                    )
+                    pct = (1 - new_total / max(old_total, 1)) * 100
+                    print(f"  {session_id}/{digest_date}: {old_total}→{new_total} chars ({pct:.0f}%)")
                     stats["updated"] += 1
                     continue
 
@@ -110,5 +106,6 @@ def clean_memory_digests(dry_run: bool = True) -> dict:
     finally:
         db.close()
 
+    print(f"[data_clean] 完成: updated={stats['updated']} skipped={stats['skipped']} errors={len(stats['errors'])}")
     logger.info("清洗完成: %s", stats)
     return stats
