@@ -535,3 +535,172 @@ class TestCreatureConfig:
         assert len(config.tools) >= 3
         tool_names = {tool.name for tool in config.tools}
         assert "image_summary" in tool_names
+
+
+# ── Reply contract 锁死测试 ──
+
+
+class TestReplyContract:
+    """锁死 reply() 行为——确保不因重构引入泄漏口。"""
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_reply_tool_json_content_is_sent(self, MockAgent, mock_load):
+        """reply() JSON 结构化输出 → 正确提取返回。"""
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv.get_messages.return_value = [
+            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "这是给用户的回复"}}'},
+        ]
+        mock_agent.controller = MagicMock(
+            conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")),
+        )
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("ok")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("你好", user_id="u1")
+
+        result = asyncio.run(_run())
+        assert result == "这是给用户的回复"
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_html_tool_output_bypasses_reply(self, MockAgent, mock_load):
+        """HTML 工具输出 → 直出，不经 reply()。"""
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv.get_messages.return_value = [
+            {
+                "role": "tool",
+                "content": (
+                    "[group_analysis]\n"
+                    "<!DOCTYPE html><html><body class=\"group-analysis-report\">"
+                    "<h1>群聊日报</h1></body></html>"
+                ),
+            },
+        ]
+        mock_agent.controller = MagicMock(
+            conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")),
+        )
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("some irrelevant text")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("群日报", user_id="u1")
+
+        result = asyncio.run(_run())
+        assert result.startswith("<!DOCTYPE html>")
+        assert "group-analysis-report" in result
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_direct_assistant_text_is_not_sent(self, MockAgent, mock_load):
+        """无 reply() → conversation 中的 assistant 纯文本不应泄漏为用户回复。"""
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        # conversation 里有 assistant 文本但没有 reply() tool 消息
+        mock_conv.get_messages.return_value = [
+            {"role": "assistant", "content": "我来分析一下这个群的消息..."},
+        ]
+        mock_controller = MagicMock()
+        mock_controller.conversation = mock_conv
+        mock_controller.llm = MagicMock(config=MagicMock(model="test-model"))
+        mock_controller.max_attempts = 1
+        mock_conv.find_last_user_index.return_value = -1  # 跳过回滚逻辑
+        mock_agent.controller = mock_controller
+
+        # output buffer 保持空——模型没有通过 reply() 产出回复
+        async def fake_process(_event):
+            pass
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("你好", user_id="u1")
+
+        result = asyncio.run(_run())
+        assert not result or result == ""
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_reasoning_content_never_sent(self, MockAgent, mock_load):
+        """reasoning_content 绝不能泄漏为用户可见回复。"""
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        # conversation 有 reasoning_content 但没有 reply() tool 消息
+        mock_conv.get_messages.return_value = [
+            {"role": "assistant", "content": "", "reasoning_content": "用户问的是群聊情况..."},
+        ]
+        mock_controller = MagicMock()
+        mock_controller.conversation = mock_conv
+        mock_controller.llm = MagicMock(config=MagicMock(model="test-model"))
+        mock_controller.max_attempts = 1
+        mock_conv.find_last_user_index.return_value = -1
+        mock_agent.controller = mock_controller
+
+        async def fake_process(_event):
+            pass
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("你好", user_id="u1")
+
+        result = asyncio.run(_run())
+        assert not result or result == ""
+        assert "调 group_analysis" not in (result or "")

@@ -26,7 +26,15 @@ def test_prompt_is_not_empty(prompt_text):
 
 
 def test_prompt_has_required_fragments(fragments):
-    required = {"00_identity.md", "50_reply_contract.md", "30_tool_discipline.md"}
+    required = {
+        "00_identity.md",
+        "10_chat_style.md",
+        "20_group_rules.md",
+        "30_tool_discipline.md",
+        "40_memory_policy.md",
+        "50_reply_contract.md",
+        "60_artifact_passthrough.md",
+    }
     missing = required - set(fragments.keys())
     assert not missing, f"Missing fragments: {missing}"
 

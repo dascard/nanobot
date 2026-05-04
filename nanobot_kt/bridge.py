@@ -204,12 +204,6 @@ class NanobotBridge:
                     reply_content = str(data[REPLY_MARKER].get("content", "")).strip()
                     if reply_content:
                         return reply_content
-                # 旧格式兼容：[REPLY]...[/REPLY]
-                if "[REPLY]" in content and "[/REPLY]" in content:
-                    start = content.find("[REPLY]") + len("[REPLY]")
-                    end = content.find("[/REPLY]")
-                    if start < end:
-                        return content[start:end].strip()
         except Exception as e:
             logger.debug("[Reply] extraction failed: %s", e)
         return ""
@@ -352,7 +346,8 @@ class NanobotBridge:
                         content = msg.get("content", "")
                         if role in ("user", "assistant") and content:
                             conv.append(role, content)
-                    logger.info(f"[NanobotBridge] Injected {len(history_messages)} history messages into conversation")
+                    logger.info("[NanobotBridge] Injected %d history messages (header=%d chars)",
+                                len(history_messages), len(history_header))
                 else:
                     logger.warning("[NanobotBridge] Cannot inject history: no controller/conversation")
             # ------------------------------------------------------------------------------------
@@ -554,16 +549,6 @@ class NanobotBridge:
                 logger.info(f"[NanobotBridge] Buffer empty, using _process_event return value")
                 response = str(result) if result else ""
 
-            # Native mode under some gateways may emit no text chunks but still
-            # keep useful content in conversation / extra_fields.
-            if not response:
-                fallback = self._extract_fallback_response()
-                if fallback:
-                    logger.info(
-                        f"[NanobotBridge] Buffer empty, using fallback response len={len(fallback)}"
-                    )
-                    response = fallback
-
             # 事后兜底——retry loop 已做 preserved HTML 提取，这里只补漏
             final_html = self._extract_last_rich_tool_output(
                 ("news-brief", "group-analysis-report"))
@@ -592,8 +577,15 @@ class NanobotBridge:
                 return ""
 
             elapsed_ms = int((_time.time() - t_start) * 1000)
-            logger.info("[SessionRuntime] DONE session=%s latency=%dms resp_len=%d",
-                        session_id, elapsed_ms, len(response))
+            response_source = (
+                "reply_tool" if reply_text else
+                "html_tool" if preserved_html else
+                "fallback" if fallback else
+                "buffer" if response else
+                "empty"
+            )
+            logger.info("[SessionRuntime] DONE session=%s latency=%dms resp_len=%d source=%s",
+                        session_id, elapsed_ms, len(response), response_source)
 
             # 惰性清理：session_locks 过大时扫一遍过期锁（无等待者 = unlocked）
             if len(self._session_locks) > 200:
@@ -605,38 +597,6 @@ class NanobotBridge:
                     logger.info("[SessionRuntime] Cleaned %d idle session locks", len(stale_sids))
 
             return response
-
-    def _extract_fallback_response(self) -> str:
-        """Best-effort fallback when output buffer has no text chunks."""
-        if not self._agent:
-            return ""
-
-        # 1) Last assistant message from conversation
-        try:
-            messages = self._agent.controller.conversation.get_messages()
-            for msg in reversed(messages):
-                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
-                if role != "assistant":
-                    continue
-                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
-                if isinstance(content, str) and content.strip():
-                    return content.strip()
-                if isinstance(content, list):
-                    parts = []
-                    for p in content:
-                        if isinstance(p, dict) and p.get("type") == "text":
-                            txt = (p.get("text") or "").strip()
-                            if txt:
-                                parts.append(txt)
-                    if parts:
-                        return "\n".join(parts)
-                break
-        except Exception as e:
-            logger.debug(f"[NanobotBridge] fallback conversation read failed: {e}")
-
-        # 2) reasoning_content 绝不作为 fallback——它是推理过程，不是用户可见回复
-        logger.warning("[NanobotBridge] fallback: no text found, returning empty")
-        return ""
 
     @property
     def agent(self) -> Optional[Agent]:
