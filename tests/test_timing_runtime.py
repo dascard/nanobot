@@ -79,7 +79,7 @@ class TestGroupRuntime:
     async def test_process_message_rate_limited_returns_wait(self, monkeypatch):
         runtime = GroupRuntime()
 
-        async def fake_gate(_gid, _p, _tr):
+        async def fake_gate(_gid, _p, _ctx, _tr):
             return {"action": "continue", "reason": "test"}
 
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
@@ -98,7 +98,7 @@ class TestGroupRuntime:
     async def test_timer_fired_gen_mismatch_rejected(self, monkeypatch):
         runtime = GroupRuntime()
 
-        async def fake_gate(_gid, _p, _tr):
+        async def fake_gate(_gid, _p, _ctx, _tr):
             return {"action": "wait", "delay_seconds": 5, "reason": "test"}
 
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
@@ -120,7 +120,7 @@ class TestGroupRuntime:
     async def test_idle_cleanup_removes_old_states(self):
         runtime = GroupRuntime()
         runtime._states["g_old"] = GateState()
-        runtime._states["g_old"].created_at = _time.time() - 9999
+        runtime._states["g_old"].last_active_ts = _time.time() - 9999
         runtime._states["g_new"] = GateState()
 
         runtime.cleanup_idle()

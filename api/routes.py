@@ -870,6 +870,8 @@ async def group_timing(req: GroupTimingRequest, _auth=Depends(verify_token)):
                 "message_id": req.message_id or "",
                 "is_reply_to_bot": req.is_reply_to_bot,
             },
+            session_name=req.session_name or "",
+            bot_aliases=list(req.bot_aliases or []),
             trigger_reason=req.trigger_reason,
         )
         elapsed_ms = int((_time.time() - t0) * 1000)
