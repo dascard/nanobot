@@ -6,7 +6,9 @@ from core.group_memory import upsert, query_active, build_profile, apply_decay
 
 @pytest.fixture(autouse=True)
 def _init_db():
-    init_db()
+    from core.database import Base, engine
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
 
 class TestUpsert:

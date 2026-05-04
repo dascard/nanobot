@@ -8,7 +8,9 @@ from creatures.nanobot.prompts.skills.group_analysis.memory_candidates import (
 
 @pytest.fixture(autouse=True)
 def _init_db():
-    init_db()
+    from core.database import Base, engine
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
 
 class TestExtractAndPersist:

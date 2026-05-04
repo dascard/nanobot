@@ -697,10 +697,12 @@ async def group_timing(req: GroupTimingRequest, _auth=Depends(verify_token)):
         )
         elapsed_ms = int((_time.time() - t0) * 1000)
         logger.info(
-            "[TimingGate] group=%s trigger=%s action=%s delay=%s gen=%d latency=%dms reason=%.80s",
+            "[TimingGate] group=%s trigger=%s action=%s delay=%s gen=%d latency=%dms "
+            "cooldown=%.0fs reason=%.80s",
             req.group_id, req.trigger_reason or "mentioned",
             result.get("action"), result.get("delay_seconds"),
             result.get("generation", 0), elapsed_ms,
+            result.get("cooldown_ago", 0) or 0,
             str(result.get("reason", ""))[:80],
         )
     except Exception as e:

@@ -159,7 +159,7 @@ class GroupRuntime:
             if not state.can_trigger_gate():
                 return {
                     "action": "wait", "delay_seconds": state.next_gate_delay(),
-                    "generation": state.generation,
+                    "generation": state.generation, "cooldown_ago": 0,
                     "reason": "rate limited / gate in progress",
                 }
 
@@ -180,7 +180,7 @@ class GroupRuntime:
                 logger.info("[timing_runtime] gen mismatch %d!=%d for %s",
                             gen, state.generation, group_id)
                 return {"action": "no_reply", "delay_seconds": None,
-                        "generation": state.generation,
+                        "generation": state.generation, "cooldown_ago": 0,
                         "reason": "generation mismatch, new messages arrived during gate"}
 
             return self._apply_gate_result(state, result)
@@ -247,9 +247,11 @@ class GroupRuntime:
             state.handle_no_reply()
             action = "no_reply"
 
+        cooldown = (_time.time() - state.last_bot_reply_ts) if state.last_bot_reply_ts > 0 else 0
         state.mark_gate_done()
         return {"action": action, "delay_seconds": delay,
                 "generation": state.generation,
+                "cooldown_ago": round(cooldown, 1),
                 "reason": result.get("reason", "")}
 
     def note_bot_replied(self, group_id: str):

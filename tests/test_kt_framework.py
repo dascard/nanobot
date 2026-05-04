@@ -721,3 +721,177 @@ class TestNoteBotReplied:
         from core.timing_runtime import get_group_runtime
         rt = get_group_runtime()
         rt.note_bot_replied("nonexistent")  # 不抛异常
+
+
+class TestNoteBotRepliedBridge:
+    """bridge 层验证 note_bot_replied 调用链。"""
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
+    def test_group_response_calls_note(self, mock_note, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv.get_messages.return_value = [
+            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "群聊回复"}}'},
+        ]
+        mock_conv.find_last_user_index.return_value = -1
+        mock_controller = MagicMock()
+        mock_controller.conversation = mock_conv
+        mock_controller.llm = MagicMock(config=MagicMock(model="test-model"))
+        mock_controller.max_attempts = 1
+        mock_agent.controller = mock_controller
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("群聊回复")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "你好", user_id="u1", session_id="group_123",
+                metadata={"is_group": True},
+            )
+
+        result = asyncio.run(_run())
+        assert result == "群聊回复"
+        mock_note.assert_called_once()  # 核心：确认 bridge 调用了 note_bot_replied
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
+    def test_private_chat_skips_note(self, mock_note, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv.get_messages.return_value = [
+            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "私聊回复"}}'},
+        ]
+        mock_conv.find_last_user_index.return_value = -1
+        mock_controller = MagicMock()
+        mock_controller.conversation = mock_conv
+        mock_controller.llm = MagicMock(config=MagicMock(model="test-model"))
+        mock_controller.max_attempts = 1
+        mock_agent.controller = mock_controller
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("私聊回复")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "你好", user_id="u1", session_id="private_u1",
+                metadata={"is_group": False},
+            )
+
+        result = asyncio.run(_run())
+        assert result == "私聊回复"
+        mock_note.assert_not_called()
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
+    def test_empty_response_skips_note(self, mock_note, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv.get_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+        mock_controller = MagicMock()
+        mock_controller.conversation = mock_conv
+        mock_controller.llm = MagicMock(config=MagicMock(model="test-model"))
+        mock_controller.max_attempts = 1
+        mock_agent.controller = mock_controller
+
+        async def fake_process(_event):
+            pass
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "你好", user_id="u1", session_id="group_123",
+                metadata={"is_group": True},
+            )
+
+        asyncio.run(_run())
+        mock_note.assert_not_called()
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
+    def test_note_exception_preserves_response(self, mock_note, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_note.side_effect = RuntimeError("boom")
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv.get_messages.return_value = [
+            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "回复"}}'},
+        ]
+        mock_conv.find_last_user_index.return_value = -1
+        mock_controller = MagicMock()
+        mock_controller.conversation = mock_conv
+        mock_controller.llm = MagicMock(config=MagicMock(model="test-model"))
+        mock_controller.max_attempts = 1
+        mock_agent.controller = mock_controller
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("回复")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "你好", user_id="u1", session_id="group_123",
+                metadata={"is_group": True},
+            )
+
+        result = asyncio.run(_run())
+        assert result == "回复"
