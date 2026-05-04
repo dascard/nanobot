@@ -780,75 +780,124 @@ class GroupTimingRequest(BaseModel):
     bot_aliases: list[str] = []
 
 
-def _build_group_timing_context(req: GroupTimingRequest) -> str:
-    """Build sanitized TimingGate prompt context from untrusted QQ group input."""
+def _build_group_timing_context(
+    req: GroupTimingRequest | None = None,
+    *,
+    group_id: str = "",
+    pending_messages: list[dict] | None = None,
+    session_name: str = "",
+    is_reply_to_bot: bool = False,
+    trigger_reason: str = "",
+    bot_aliases: list[str] | None = None,
+) -> str:
+    """Build sanitized TimingGate prompt context。支持两种调用方式：
+    - 旧: _build_group_timing_context(req=GroupTimingRequest(...))
+    - 新: _build_group_timing_context(group_id=..., pending_messages=..., ...)
+    """
     lines: list[str] = []
-    session_name = _sanitize_prompt_text(req.session_name or "", 80)
-    if session_name:
-        lines.append(f"群: {session_name}")
-    if req.is_reply_to_bot:
+    if req is not None:
+        group_id = req.group_id
+        pending_messages = list(req.pending_messages or [])
+        session_name = req.session_name or ""
+        is_reply_to_bot = req.is_reply_to_bot
+        trigger_reason = req.trigger_reason or ""
+        bot_aliases = list(req.bot_aliases or [])
+
+    pending_messages = pending_messages or []
+
+    sn = _sanitize_prompt_text(session_name, 80)
+    if sn:
+        lines.append(f"群: {sn}")
+    if is_reply_to_bot:
         lines.append("注意:这条消息是回复bot的,说明用户在跟bot对话")
-    trigger_reason = _sanitize_prompt_text(req.trigger_reason or "", 60)
-    if trigger_reason:
-        lines.append(f"触发原因: {trigger_reason}")
-    if req.bot_aliases:
-        aliases = [
-            _sanitize_prompt_text(str(alias), 40)
-            for alias in req.bot_aliases[:8]
-            if str(alias).strip()
-        ]
+    tr = _sanitize_prompt_text(trigger_reason, 60)
+    if tr:
+        lines.append(f"触发原因: {tr}")
+    if bot_aliases:
+        aliases = [_sanitize_prompt_text(str(a), 40) for a in bot_aliases[:8] if str(a).strip()]
         if aliases:
             lines.append(f"bot别名: {', '.join(aliases)}")
 
-    pending = list(req.pending_messages or [])[:MAX_TIMING_PENDING_MESSAGES]
+    pending = pending_messages[:MAX_TIMING_PENDING_MESSAGES]
     for pm in pending:
         sender = _sanitize_prompt_text(
-            str(pm.get("sender_name") or pm.get("sender_id") or "?"),
-            40,
-        )
-        msg = _sanitize_prompt_text(
-            str(pm.get("message", "")),
-            MAX_TIMING_MESSAGE_CHARS,
-        )
+            str(pm.get("sender_name") or pm.get("sender_id") or "?"), 40)
+        msg = _sanitize_prompt_text(str(pm.get("message", "")), MAX_TIMING_MESSAGE_CHARS)
         if msg:
             lines.append(f"[{sender}]: {msg}")
-    if len(req.pending_messages or []) > MAX_TIMING_PENDING_MESSAGES:
-        lines.append(f"...[pending 截断: 原{len(req.pending_messages)}条]")
-
-    if not pending:
-        sender = _sanitize_prompt_text(req.sender_name or req.sender_id or "?", 40)
-        msg = _sanitize_prompt_text(req.message or "", MAX_TIMING_MESSAGE_CHARS)
-        lines.append(f"[{sender}]: {msg}")
+    if len(pending_messages) > MAX_TIMING_PENDING_MESSAGES:
+        lines.append(f"...[pending 截断: 原{len(pending_messages)}条]")
 
     return _sanitize_prompt_text("\n".join(lines), MAX_TIMING_CONTEXT_CHARS)
 
 
+class GroupTimingTimerRequest(BaseModel):
+    """timer_fired 模式——wait 到期后 QQbot 回调。"""
+    group_id: str
+    generation: int
+    timer_fired: bool = True
+    trigger_reason: str = ""
+
+
 @router.post("/group_timing")
-def group_timing(req: GroupTimingRequest, _auth=Depends(verify_token)):
-    """Timing Gate——Qwen 判断群聊 continue/wait/no_reply。"""
-    import asyncio as _asyncio
-    gate = get_timing_gate()
+async def group_timing(req: GroupTimingRequest, _auth=Depends(verify_token)):
+    """Timing Gate——GroupRuntime 管理状态，TimingGate 做判断。"""
+    import time as _time
+    from core.timing_runtime import get_group_runtime
 
-    context = _build_group_timing_context(req)
+    runtime = get_group_runtime()
 
-    import time as _time; t0 = _time.time()
+    t0 = _time.time()
     try:
-        result = gate.judge(context)
+        result = await runtime.process_message(
+            req.group_id,
+            {
+                "sender_id": req.sender_id,
+                "sender_name": req.sender_name,
+                "message": req.message,
+                "message_id": req.message_id or "",
+                "is_reply_to_bot": req.is_reply_to_bot,
+            },
+            trigger_reason=req.trigger_reason,
+        )
         elapsed_ms = int((_time.time() - t0) * 1000)
         logger.info(
-            "[TimingGate] group=%s trigger=%s action=%s delay=%s latency=%dms reason=%.80s",
-            req.group_id, req.trigger_reason or "name_mentioned",
+            "[TimingGate] group=%s trigger=%s action=%s delay=%s gen=%d latency=%dms reason=%.80s",
+            req.group_id, req.trigger_reason or "mentioned",
             result.get("action"), result.get("delay_seconds"),
-            elapsed_ms, str(result.get("reason", ""))[:80],
+            result.get("generation", 0), elapsed_ms,
+            str(result.get("reason", ""))[:80],
         )
     except Exception as e:
         elapsed_ms = int((_time.time() - t0) * 1000)
         logger.warning(
             "[TimingGate] group=%s trigger=%s FAILED latency=%dms: %s",
-            req.group_id, req.trigger_reason or "name_mentioned", elapsed_ms, e,
+            req.group_id, req.trigger_reason or "mentioned", elapsed_ms, e,
         )
         result = {"action": "no_reply", "delay_seconds": None, "reason": "内部错误"}
 
+    return result
+
+
+@router.post("/group_timing/timer")
+async def group_timing_timer(req: GroupTimingTimerRequest, _auth=Depends(verify_token)):
+    """Timing Gate timer 回调——wait 到期后 QQbot 调用此端点。"""
+    import time as _time
+    from core.timing_runtime import get_group_runtime
+
+    runtime = get_group_runtime()
+    t0 = _time.time()
+    try:
+        result = await runtime.handle_timer_fired(
+            req.group_id, req.generation, trigger_reason=req.trigger_reason,
+        )
+        elapsed_ms = int((_time.time() - t0) * 1000)
+        logger.info(
+            "[TimingGate.timer] group=%s gen=%d action=%s latency=%dms",
+            req.group_id, req.generation, result.get("action"), elapsed_ms,
+        )
+    except Exception as e:
+        result = {"action": "no_reply", "reason": "内部错误"}
     return result
 
 
