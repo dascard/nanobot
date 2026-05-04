@@ -40,18 +40,30 @@ class TestExtractAndPersist:
         mems = query_active("g_test2")
         assert len(mems) == 0  # review 不进入 active
 
-    def test_source_meta_passed(self):
+    def test_source_meta_written_to_db(self):
+        import json
+        from core.database import SessionLocal, GroupMemory
         analysis = {
             "topics": {"topics": [{"topic": "测试", "detail": ""}]},
             "quality": {"dimensions": [], "summary": ""},
             "quotes": {"quotes": []},
             "titles": {"users": []},
         }
-        stats = extract_and_persist("g_test", analysis, source_meta={
+        stats = extract_and_persist("g_meta", analysis, source_meta={
             "source": "group_analysis", "latest_log_id": 42,
             "raw_count": 100, "window_hours": 24,
         })
         assert stats["new"] >= 1
+        db = SessionLocal()
+        row = db.query(GroupMemory).filter(
+            GroupMemory.group_id == "g_meta",
+            GroupMemory.memory_type == "topic",
+        ).first()
+        assert row is not None
+        meta = json.loads(row.meta_json)
+        assert meta["source"] == "group_analysis"
+        assert meta["latest_log_id"] == 42
+        db.close()
 
     def test_empty_analysis_returns_zero(self):
         analysis = {

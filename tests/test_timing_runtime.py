@@ -232,6 +232,7 @@ class TestGroupRuntime:
         runtime._states["g1"].last_gate_completed_ts = 0
         await runtime.handle_timer_fired("g1", generation=1)
         assert captured.get("session_name") == "测试群"
+        assert captured.get("bot_aliases") == ["testbot"]
 
     @pytest.mark.asyncio
     async def test_idle_cleanup_removes_old_states(self):

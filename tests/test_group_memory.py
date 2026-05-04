@@ -18,10 +18,18 @@ class TestUpsert:
         assert mems[0]["status"] == "active"
 
     def test_low_confidence_writes_review(self):
+        from core.database import SessionLocal, GroupMemory
         r = upsert("g_review", "event", "某人说了一句梗", confidence_hint=0.40)
         assert r == "new"
         mems = query_active("g_review")
         assert len(mems) == 0  # review 不被 query_active 取出
+        # 直接查 DB 确认 status=review
+        db = SessionLocal()
+        row = db.query(GroupMemory).filter(
+            GroupMemory.group_id == "g_review").first()
+        assert row is not None
+        assert row.status == "review"
+        db.close()
 
     def test_duplicate_updates_evidence(self):
         upsert("g_dup", "topic", "测试话题", confidence_hint=0.60)
