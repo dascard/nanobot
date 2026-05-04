@@ -225,6 +225,9 @@ class NanobotBridge:
             elif hasattr(conv, "to_messages"):
                 payloads.extend(conv.to_messages())
             for msg in reversed(payloads):
+                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "")
+                if role != "tool":
+                    continue  # 只看 tool 消息——assistant 可能引用 marker 但非 HTML 输出
                 content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
                 text = _message_content_to_text(content)
                 if text and any(marker in text for marker in marker_classes):
