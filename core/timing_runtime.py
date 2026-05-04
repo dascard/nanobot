@@ -74,6 +74,12 @@ class GateState:
             return False
         return _time.time() - self.last_gate_completed_ts >= MIN_INTERVAL
 
+    def next_gate_delay(self) -> int:
+        if self.running:
+            return 3
+        remaining = MIN_INTERVAL - (_time.time() - self.last_gate_completed_ts)
+        return max(1, min(MIN_INTERVAL, int(remaining) + 1))
+
     def mark_gate_start(self):
         self.running = True
         self._touch()
@@ -145,7 +151,7 @@ class GroupRuntime:
 
             if not state.can_trigger_gate():
                 return {
-                    "action": "wait", "delay_seconds": None,
+                    "action": "wait", "delay_seconds": state.next_gate_delay(),
                     "generation": state.generation,
                     "reason": "rate limited / gate in progress",
                 }
@@ -188,7 +194,7 @@ class GroupRuntime:
                         "reason": "generation mismatch, timer expired"}
 
             if not state.can_trigger_gate():
-                return {"action": "wait", "delay_seconds": None,
+                return {"action": "wait", "delay_seconds": state.next_gate_delay(),
                         "generation": state.generation, "reason": "rate limited"}
 
             state.mark_gate_start()
@@ -247,14 +253,14 @@ class GroupRuntime:
 
     async def _call_gate(self, group_id: str, pending: list[PendingMessage],
                          ctx: dict, trigger_reason: str) -> dict:
-        """调用 TimingGate 模型判断——不 import api.routes，自行构造 context。"""
+        """调用 TimingGate 模型判断——to_thread 避免阻塞 event loop。"""
         from clients.classifier_client import get_timing_gate
 
         gate = get_timing_gate()
         context = self._build_timing_context(
             pending=pending, trigger_reason=trigger_reason, **ctx,
         )
-        return gate.judge(context)
+        return await asyncio.to_thread(gate.judge, context)
 
     @staticmethod
     def _build_timing_context(
