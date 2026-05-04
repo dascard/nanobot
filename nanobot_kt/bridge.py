@@ -223,7 +223,7 @@ class NanobotBridge:
             if hasattr(conv, "get_messages"):
                 payloads.extend(conv.get_messages())
             if hasattr(conv, "to_messages"):
-                payloads.extend(conv.get_messages())
+                payloads.extend(conv.to_messages())
             for msg in reversed(payloads):
                 content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
                 text = _message_content_to_text(content)
@@ -580,7 +580,6 @@ class NanobotBridge:
             response_source = (
                 "reply_tool" if reply_text else
                 "html_tool" if preserved_html else
-                "fallback" if fallback else
                 "buffer" if response else
                 "empty"
             )
