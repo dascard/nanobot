@@ -259,6 +259,19 @@ class TestGroupRuntime:
         assert "回复bot" in ctx
         assert "mentioned" in ctx
 
+    def test_note_bot_replied_updates_timestamp(self):
+        """note_bot_replied 更新 last_bot_reply_ts。"""
+        runtime = GroupRuntime()
+        runtime._states["g1"] = GateState()
+        assert runtime._states["g1"].last_bot_reply_ts == 0.0
+        runtime.note_bot_replied("g1")
+        assert runtime._states["g1"].last_bot_reply_ts > 0
+
+    def test_note_bot_replied_nonexistent_no_error(self):
+        """不存在的 group 调用 note_bot_replied 不抛异常。"""
+        runtime = GroupRuntime()
+        runtime.note_bot_replied("nonexistent")  # 不应抛异常
+
     def test_build_timing_context_sanitizes_system_tags(self):
         """_build_timing_context 净化伪系统标签。"""
         pending = [
