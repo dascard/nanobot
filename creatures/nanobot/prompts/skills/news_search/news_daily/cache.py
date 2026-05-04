@@ -7,39 +7,48 @@ from datetime import datetime
 
 logger = __import__("logging").getLogger("nanobot.news_daily.cache")
 
-_cache: dict[str, tuple[float, str]] = {}
+_cache: dict[str, tuple[float, str, str]] = {}
 _lock = threading.Lock()
 
 TTL = {
-    "fast": 1800,     # 30min
-    "quality": 1800,
-    "research": 600,  # 10min
-    "error": 120,     # 2min
+    "fast": 1800,      # 30min
+    "quality": 3600,  # 60min
+    "error": 120,
 }
 
+SOURCE_SET_VERSION = "ai_sources_v2_patched"
 
-def make_key(query: str, mode: str, limit: int) -> str:
+
+def _daily_query_key(query: str) -> str:
+    q = (query or "").strip().lower()
+    if any(k in q for k in ["日报", "早报", "快讯", "今日", "今天", "daily", "brief"]):
+        return "daily_ai"
+    return hashlib.md5(q.encode()).hexdigest()[:10]
+
+
+def make_key(query: str, mode: str, limit: int, output_format: str = "html") -> str:
     date = datetime.now().strftime("%Y-%m-%d")
-    q = hashlib.md5(query.strip().lower().encode()).hexdigest()[:8]
-    return f"news:{date}:{mode}:{limit}:{q}"
+    q = _daily_query_key(query)
+    return f"news:{date}:{mode}:{SOURCE_SET_VERSION}:{output_format}:{limit}:{q}"
 
 
 def get(key: str) -> str | None:
     with _lock:
         entry = _cache.get(key)
-        if entry and time.monotonic() - entry[0] < TTL.get("fast", 1800):
-            return entry[1]
-        if entry:
-            del _cache[key]
+        if not entry:
+            return None
+        ts, value, mode = entry
+        if time.monotonic() - ts < TTL.get(mode, 1800):
+            return value
+        del _cache[key]
     return None
 
 
-def set(key: str, value: str, mode: str = "fast") -> None:
+def set(key: str, value: str, mode: str = "quality") -> None:
     with _lock:
-        _cache[key] = (time.monotonic(), value)
-        # 惰性清理
+        _cache[key] = (time.monotonic(), value, mode)
         if len(_cache) > 100:
             now = time.monotonic()
-            stale = [k for k, v in _cache.items() if now - v[0] > 3600]
+            stale = [k for k, v in _cache.items() if now - v[0] > 7200]
             for k in stale:
                 del _cache[k]

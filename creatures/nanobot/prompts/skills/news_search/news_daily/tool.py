@@ -1,4 +1,4 @@
-"""News Daily Tool —— Bot 入口，只负责参数解析、路由、缓存。"""
+"""AI Daily News Tool —— 只负责日报，不再混入 web research。"""
 
 import logging
 import time as _time
@@ -7,7 +7,6 @@ from typing import Any
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
 from .schema import fallback_digest
-from .sources.curated import JuyaProvider, CURATED_SOURCES
 from .pipeline.collect import collect_sources
 from .pipeline.normalize import normalize_items, filter_recent
 from .pipeline.dedup import dedup_items
@@ -19,49 +18,51 @@ logger = logging.getLogger("nanobot.news_daily")
 
 
 def _route_mode(query: str, mode: str = "auto") -> str:
-    if mode not in ("auto", "fast", "quality", "research"):
+    if mode not in ("auto", "fast", "quality"):
         mode = "auto"
     if mode != "auto":
         return mode
-    q = query.lower()
-    research_markers = ["深入", "详细", "核验", "官方来源", "证据", "对比", "benchmark", "开源协议"]
-    if any(k in q for k in research_markers):
-        return "research"
-    return "quality"  # quality is default
+    return "quality"
 
 
 def _get_providers(mode: str) -> list:
-    """从 SourceRegistry 获取 provider 列表。"""
     from .sources.official import get_registry
     reg = get_registry()
     pairs = reg.select(mode)
-    return [p for _, p in pairs]
+    providers = []
+    for cfg, prov in pairs:
+        # Inject source_group from config
+        prov._group = cfg.group
+        prov._top_story_eligible = cfg.top_story_eligible
+        prov._category_hint = cfg.category_hint
+        providers.append(prov)
+    return providers
 
 
-
-def _apply_quotas(items, mode: str) -> list:
-    """按来源类别配额限制，防止单一类别刷屏。"""
+def _apply_quotas(items, limit: int) -> list:
     from .sources.official import DAILY_QUOTA
-    quotas = dict(DAILY_QUOTA)
     buckets: dict[str, list] = {}
-    result = []
     for item in items:
-        group = "official" if item.trust > 0.85 else ("media" if item.trust > 0.7 else "curated")
-        bucket = buckets.setdefault(group, [])
-        limit = quotas.get(group, 5)
-        if len(bucket) < limit:
-            bucket.append(item)
-    for group in ["official", "research", "media", "curated"]:
-        result.extend(buckets.get(group, []))
-    return result
+        buckets.setdefault(item.source_group or "curated", []).append(item)
+    result = []
+    for group in ["core_provider", "core_platform", "ai_media", "research", "curated", "community"]:
+        result.extend(buckets.get(group, [])[:DAILY_QUOTA.get(group, 0)])
+    if len(result) < limit:
+        for item in items:
+            if item not in result and item.source_group != "community":
+                result.append(item)
+            if len(result) >= limit:
+                break
+    return result[:limit]
 
-def run_pipeline(query: str, mode: str = "fast", limit: int = 10) -> str:
-    """主 Pipeline——fast: deterministic, quality: LLM摘要。"""
+
+def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
+    """主 Pipeline——fast: 标题索引，quality: LLM 摘要。"""
     from ..render import render_html as _render
     t0 = _time.time()
 
     providers = _get_providers(mode)
-    items = collect_sources(providers, limit_per_source=8, timeout=8)
+    items = collect_sources(providers, limit_per_source=8, timeout=10)
     logger.info("[daily] collect: %d items in %.1fs", len(items), _time.time() - t0)
 
     items = normalize_items(items)
@@ -70,9 +71,8 @@ def run_pipeline(query: str, mode: str = "fast", limit: int = 10) -> str:
     items = rank_items(items)
 
     if mode == "fast":
-        items = _apply_quotas(items, mode)
-        items = items[:limit]
-        digest = build_digest_deterministic(items, query, mode)
+        candidates = _apply_quotas(items, limit)
+        digest = build_digest_deterministic(candidates, query, mode)
     else:
         from .pipeline.select_ import select_items_by_quota
         from .pipeline.evidence_light import build_light_evidence_cards
@@ -98,8 +98,7 @@ def run_pipeline(query: str, mode: str = "fast", limit: int = 10) -> str:
             digest = dict(fallback_d)
 
     html = _render(digest)
-    logger.info("[daily] done %s mode %d items → %d chars HTML in %.1fs",
-                mode, len(items), len(html), _time.time() - t0)
+    logger.info("[daily] done %s mode %d ranked items → %d chars HTML in %.1fs", mode, len(items), len(html), _time.time() - t0)
     return html
 
 
@@ -122,11 +121,8 @@ class NewsDailyTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "搜索关键词或自然语言查询"},
-                "mode": {
-                    "type": "string", "enum": ["auto", "fast", "quality", "research"],
-                    "default": "auto",
-                },
+                "query": {"type": "string", "description": "日报请求，例如：今日 AI 日报"},
+                "mode": {"type": "string", "enum": ["auto", "fast", "quality", "research"], "default": "auto"},
                 "max_results": {"type": "integer", "default": 8},
                 "refresh": {"type": "boolean", "default": False},
             },
@@ -139,11 +135,11 @@ class NewsDailyTool(BaseTool):
             return ToolResult(error="Missing 'query' argument")
 
         mode = str(args.get("mode") or "auto")
-        limit = int(args.get("max_results", 8) or 8)
+        limit = int(args.get("max_results", 10) or 10)
         refresh = bool(args.get("refresh", False))
         resolved_mode = _route_mode(query, mode)
 
-        ck = cache.make_key(query, resolved_mode, limit)
+        ck = cache.make_key(query, resolved_mode, limit, "html")
         if not refresh:
             cached = cache.get(ck)
             if cached:

@@ -19,6 +19,16 @@ def normalize_items(items: list[NewsItem]) -> list[NewsItem]:
             item.id = hashlib.md5(item.url.encode()).hexdigest()[:12]
         if not item.fetched_at:
             item.fetched_at = now
+        # Infer source_group from trust if not set
+        if not item.source_group:
+            if item.trust >= 0.88:
+                item.source_group = "core_provider"
+            elif item.trust >= 0.78:
+                item.source_group = "core_platform"
+            elif item.trust >= 0.70:
+                item.source_group = "ai_media"
+            else:
+                item.source_group = "curated"
         result.append(item)
     return result
 
