@@ -137,6 +137,13 @@ class GroupAnalysisTool(BaseTool):
                 analysis = await analyze_group(payload, instructions)
                 llm_ms = round((time.monotonic() - llm_t0) * 1000)
 
+                # 提取群体记忆候选（非阻塞，失败不影响日报）
+                try:
+                    from .memory_candidates import extract_and_persist
+                    extract_and_persist(group.group_id, analysis)
+                except Exception:
+                    pass
+
                 render_t0 = time.monotonic()
                 report = format_scrapbook_html(
                     group.name, payload["group_stats"],
