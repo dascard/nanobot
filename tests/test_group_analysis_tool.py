@@ -201,6 +201,42 @@ def test_group_analysis_keeps_source_ambient_when_user_content_does_not_cover_it
     ]
 
 
+def test_group_analysis_dedupes_duplicate_ambient_same_message_id():
+    """同 message_id 的 ambient 只保留一条。"""
+    from core.database import ChatLog
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
+
+    logs = [
+        ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
+        ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
+        ChatLog(role="user", message_id="m2", content="world", sender_name="B"),
+    ]
+    deduped = dedupe_group_logs(logs)
+    assert [(log.role, log.message_id) for log in deduped] == [
+        ("ambient", "m1"),
+        ("user", "m2"),
+    ]
+
+
+def test_group_analysis_assistant_not_participate_in_dedupe():
+    """assistant 消息不参与 ambient/user 去重，也不被去重逻辑删除。"""
+    from core.database import ChatLog
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import dedupe_group_logs
+
+    logs = [
+        ChatLog(role="ambient", message_id="m1", content="[A]: hello", sender_name="A"),
+        ChatLog(role="assistant", content="bot reply", sender_name="nanobot"),
+        ChatLog(role="user", message_id="m1", source_message_ids_json='["m1"]',
+                content="merged: hello", sender_name="A"),
+        ChatLog(role="assistant", content="another bot reply", sender_name="nanobot"),
+    ]
+    deduped = dedupe_group_logs(logs)
+    roles = [log.role for log in deduped]
+    assert roles.count("assistant") == 2
+    assert roles.count("ambient") == 0
+    assert roles.count("user") == 1
+
+
 def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
     import core.database as database
     import clients.new_api_client as new_api_client

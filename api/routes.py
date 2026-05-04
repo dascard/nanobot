@@ -119,6 +119,19 @@ MAX_GROUP_CONTEXT_ROWS = 10
 MAX_PRIVATE_CONTEXT_ROWS = 32
 
 
+def _relative_time_label(dt: datetime) -> str:
+    """返回相对时间标签：<1小时→[N分钟前]，<24小时→[N小时前]，否则→[MM-DD HH:MM]"""
+    delta = datetime.now() - dt
+    minutes = int(delta.total_seconds() / 60)
+    if minutes < 1:
+        return "[刚刚]"
+    if minutes < 60:
+        return f"[{minutes}分钟前]"
+    if minutes < 1440:
+        return f"[{minutes // 60}小时前]"
+    return f"[{dt.strftime('%m-%d %H:%M')}]"
+
+
 def _build_session_memory(db: Session, session_id: str, user_id: str = "",
                           window_minutes: int = 30,
                           max_per_msg: int = 300, max_total: int = 4000,
@@ -169,7 +182,11 @@ def _build_session_memory(db: Session, session_id: str, user_id: str = "",
         if selected_desc and total_tokens + token_cost > max_total:
             break
         total_tokens += token_cost
-        selected_desc.append({"role": t.role, "content": content})
+
+        # 附加时间标签——冷清群历史可能跨越多天，不加时间模型会误判语境
+        time_label = _relative_time_label(t.created_at) if t.created_at else ""
+        display = f"{time_label} {content}".strip() if time_label else content
+        selected_desc.append({"role": t.role, "content": display})
 
     # 4. 选中行 reverse 成正序
     history_messages = list(reversed(selected_desc))
