@@ -15,9 +15,11 @@ def extract_and_persist(group_id: str, analysis: dict, *,
 
     stats = {"new": 0, "updated": 0, "skipped": 0}
     meta = source_meta or {}
+    evidence_ids = meta.pop("source_log_ids", []) if meta else []
 
     def _u(mtype, content, hint):
-        return upsert(group_id, mtype, content, confidence_hint=hint, meta=meta)
+        return upsert(group_id, mtype, content, confidence_hint=hint,
+                      meta=meta, evidence_log_ids=evidence_ids)
 
     # topics → memory_type=topic
     for t in analysis.get("topics", {}).get("topics", [])[:5]:

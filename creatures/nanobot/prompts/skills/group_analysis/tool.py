@@ -145,6 +145,7 @@ class GroupAnalysisTool(BaseTool):
                         "latest_log_id": batch.latest_log_id,
                         "raw_count": batch.raw_count,
                         "window_hours": window_hours or 0,
+                        "source_log_ids": payload.get("source_log_ids", []),
                     }
                     extract_and_persist(group.group_id, analysis, source_meta=source_meta)
                 except Exception as e:

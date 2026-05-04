@@ -319,6 +319,8 @@ def build_analysis_payload(
         for uid, s in top
     )
 
+    source_log_ids = [getattr(log, "id", 0) or 0 for log in logs if getattr(log, "id", 0)]
+
     return {
         "messages": messages,
         "group_stats": group_stats,
@@ -326,4 +328,5 @@ def build_analysis_payload(
         "msg_text": msg_text,
         "style_msg_text": style_msg_text,
         "users_text": users_text,
+        "source_log_ids": source_log_ids,
     }
