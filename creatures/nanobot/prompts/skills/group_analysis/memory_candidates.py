@@ -8,11 +8,16 @@ import logging
 logger = logging.getLogger("nanobot.tool.group_analysis.memory")
 
 
-def extract_and_persist(group_id: str, analysis: dict) -> dict:
-    """映射分析结果 → GroupMemory 候选并写入。返回 {"new": N, "updated": N}。"""
+def extract_and_persist(group_id: str, analysis: dict, *,
+                         source_meta: dict | None = None) -> dict:
+    """映射分析结果 → GroupMemory 候选并写入。"""
     from core.group_memory import upsert
 
-    stats = {"new": 0, "updated": 0}
+    stats = {"new": 0, "updated": 0, "skipped": 0}
+    meta = source_meta or {}
+
+    def _u(mtype, content, hint):
+        return upsert(group_id, mtype, content, confidence_hint=hint, meta=meta)
 
     # topics → memory_type=topic
     for t in analysis.get("topics", {}).get("topics", [])[:5]:
@@ -21,8 +26,7 @@ def extract_and_persist(group_id: str, analysis: dict) -> dict:
         if not topic:
             continue
         content = f"{topic}: {detail}" if detail else topic
-        r = upsert(group_id, "topic", content, confidence_hint=0.65)
-        stats[r] = stats.get(r, 0) + 1
+        stats[_u("topic", content, 0.65)] += 1
 
     # quality dimensions → style
     for d in analysis.get("quality", {}).get("dimensions", [])[:3]:
@@ -30,14 +34,11 @@ def extract_and_persist(group_id: str, analysis: dict) -> dict:
         comment = (d.get("comment") or "").strip()
         if not name:
             continue
-        content = f"「{name}」: {comment}" if comment else name
-        r = upsert(group_id, "style", content, confidence_hint=0.60)
-        stats[r] = stats.get(r, 0) + 1
+        stats[_u("style", f"「{name}」: {comment}", 0.60)] += 1
 
     summary = (analysis.get("quality", {}).get("summary") or "").strip()
     if summary and len(summary) > 10:
-        r = upsert(group_id, "style", f"整体风格: {summary}", confidence_hint=0.55)
-        stats[r] = stats.get(r, 0) + 1
+        stats[_u("style", f"整体风格: {summary}", 0.55)] += 1
 
     # quotes → event
     for q in analysis.get("quotes", {}).get("quotes", [])[:3]:
@@ -46,8 +47,7 @@ def extract_and_persist(group_id: str, analysis: dict) -> dict:
         if not content:
             continue
         label = f"金句({user}): {content}" if user else f"金句: {content}"
-        r = upsert(group_id, "event", label, confidence_hint=0.50)
-        stats[r] = stats.get(r, 0) + 1
+        stats[_u("event", label, 0.50)] += 1
 
     # user titles → relationship
     for u in analysis.get("titles", {}).get("users", [])[:5]:
@@ -59,9 +59,8 @@ def extract_and_persist(group_id: str, analysis: dict) -> dict:
         content = f"{uid}: {title}" if title else uid
         if reason:
             content += f"（{reason}）"
-        r = upsert(group_id, "relationship", content, confidence_hint=0.55)
-        stats[r] = stats.get(r, 0) + 1
+        stats[_u("relationship", content, 0.55)] += 1
 
-    logger.info("[memory] group=%s new=%d updated=%d",
-                group_id, stats.get("new", 0), stats.get("updated", 0))
+    logger.info("[memory] group=%s new=%d updated=%d skipped=%d",
+                group_id, stats["new"], stats["updated"], stats["skipped"])
     return stats

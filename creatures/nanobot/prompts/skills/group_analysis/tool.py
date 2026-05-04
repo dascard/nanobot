@@ -140,9 +140,15 @@ class GroupAnalysisTool(BaseTool):
                 # 提取群体记忆候选（非阻塞，失败不影响日报）
                 try:
                     from .memory_candidates import extract_and_persist
-                    extract_and_persist(group.group_id, analysis)
-                except Exception:
-                    pass
+                    source_meta = {
+                        "source": "group_analysis",
+                        "latest_log_id": batch.latest_log_id,
+                        "raw_count": batch.raw_count,
+                        "window_hours": window_hours or 0,
+                    }
+                    extract_and_persist(group.group_id, analysis, source_meta=source_meta)
+                except Exception as e:
+                    logger.warning("[group_analysis] memory persist failed: %s", e)
 
                 render_t0 = time.monotonic()
                 report = format_scrapbook_html(
