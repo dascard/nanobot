@@ -621,8 +621,8 @@ class NanobotBridge:
                 try:
                     from core.timing_runtime import get_group_runtime
                     get_group_runtime().note_bot_replied(session_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("[GroupRuntime] note_bot_replied failed: %s", e)
 
             return response
 
