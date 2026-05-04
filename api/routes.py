@@ -62,6 +62,18 @@ def init_legacy_memory():
     logger.info("Legacy SQLiteMemory initialized for evolution endpoints")
 
 
+from core.context_builder import (
+    sanitize_prompt_text as _sanitize_prompt_text,
+    estimate_tokens as _estimate_tokens,
+    relative_time_label as _relative_time_label,
+    build_session_memory as _build_session_memory,
+    MAX_GROUP_CONTEXT_ROWS,
+    MAX_PRIVATE_CONTEXT_ROWS,
+)
+
+# 旧函数已移至 core/context_builder.py，此处仅保留向后兼容 re-export
+
+
 def _cap_text(text: str, max_chars: int, label: str = "") -> str:
     """Truncate text at last newline boundary, appending a truncation marker."""
     if len(text) <= max_chars:
