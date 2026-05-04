@@ -37,6 +37,9 @@ def clean_memory_digests(dry_run: bool = True) -> dict:
 
     返回: {"deleted": N, "updated": N, "skipped": N, "errors": [...]}
     """
+    # 抑制 compaction 的 COMPACT_API_KEY 警告
+    logging.getLogger("nanobot.compact").setLevel(logging.ERROR)
+
     db = SessionLocal()
     stats = {"deleted": 0, "updated": 0, "skipped": 0, "errors": []}
 
