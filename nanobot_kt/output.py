@@ -53,7 +53,7 @@ class BufferedOutput(BaseOutputModule):
         "memory_write": "正在写入记忆...",
     }
 
-    HTML_TOOLS = {"news_search", "group_analysis"}
+    _INTERRUPT_TOOLS = {"news_search", "group_analysis", "reply"}
 
     def __init__(self, **kwargs: Any):
         super().__init__()
@@ -154,7 +154,7 @@ class BufferedOutput(BaseOutputModule):
                 tool_name = detail.split("[", 2)[1].split("]", 1)[0] if "[" in detail else ""
             except (IndexError, ValueError):
                 tool_name = ""
-            if tool_name and tool_name in self.HTML_TOOLS and self._agent_ref is not None:
+            if tool_name and tool_name in self._INTERRUPT_TOOLS and self._agent_ref is not None:
                 if hasattr(self._agent_ref, '_interrupt_requested'):
                     self._agent_ref._interrupt_requested = True
                     logger.info("[BufferedOutput] interrupt after %s tool_done", tool_name)
