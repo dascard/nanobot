@@ -704,3 +704,20 @@ class TestReplyContract:
         result = asyncio.run(_run())
         assert not result or result == ""
         assert "调 group_analysis" not in (result or "")
+
+
+class TestNoteBotReplied:
+    """验证 note_bot_replied() 自身行为——bridge 层集成测试另测。"""
+
+    def test_updates_timestamp(self):
+        from core.timing_runtime import get_group_runtime, GateState
+        rt = get_group_runtime()
+        rt._states["g_test"] = GateState()
+        assert rt._states["g_test"].last_bot_reply_ts == 0.0
+        rt.note_bot_replied("g_test")
+        assert rt._states["g_test"].last_bot_reply_ts > 0
+
+    def test_nonexistent_no_error(self):
+        from core.timing_runtime import get_group_runtime
+        rt = get_group_runtime()
+        rt.note_bot_replied("nonexistent")  # 不抛异常
