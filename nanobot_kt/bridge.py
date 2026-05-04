@@ -340,7 +340,7 @@ class NanobotBridge:
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                     conv = self._agent.controller.conversation
                     if history_header:
-                        conv.append("system", f"[HistoryContextHeader]\n{history_header}")
+                        conv.append("system", history_header)
                     for msg in history_messages:
                         role = msg.get("role", "user")
                         content = msg.get("content", "")
@@ -357,14 +357,6 @@ class NanobotBridge:
             if is_group:
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                     conv = self._agent.controller.conversation
-                    # 清理旧的动态 system 消息（防止跨轮堆积）
-                    _DYNAMIC_MARKERS = (
-                        "[GroupRestriction]", "[群聊限制]", "[GroupProfileContext]",
-                        "[HistoryContextHeader]",
-                    )
-                    for m in _DYNAMIC_MARKERS:
-                        conv.remove("system", lambda content, marker=m: marker in str(content))
-
                     conv.append("system",
                         "[GroupRestriction] 本群聊中文件操作工具(read/write/edit/grep/glob/bash)不可用。"
                         "只能使用 sql_analysis/python_sandbox/news_search/group_analysis/schedule_task/persona_update。"
