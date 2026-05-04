@@ -165,6 +165,75 @@ class TestGroupRuntime:
         assert "mismatch" in r2["reason"]
 
     @pytest.mark.asyncio
+    async def test_rate_limited_wait_has_positive_delay(self, monkeypatch):
+        """rate limited 返回的 wait 必须有正整数 delay_seconds。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            return {"action": "continue", "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        })
+        r2 = await runtime.process_message("g1", {
+            "sender_id": "u2", "sender_name": "B", "message": "hi",
+        })
+        assert r2["action"] == "wait"
+        assert isinstance(r2["delay_seconds"], int)
+        assert r2["delay_seconds"] > 0
+
+    @pytest.mark.asyncio
+    async def test_continue_no_reply_delay_is_none(self, monkeypatch):
+        """continue/no_reply 的 delay_seconds 应为 None。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            return {"action": "continue", "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+        r = await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        })
+        assert r["action"] == "continue"
+        assert r["delay_seconds"] is None
+
+        async def fake_no_reply(_gid, _p, _ctx, _tr):
+            return {"action": "no_reply", "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_no_reply)
+        # reset state to allow gate
+        runtime._states["g1"].last_gate_completed_ts = 0
+        r2 = await runtime.process_message("g1", {
+            "sender_id": "u2", "sender_name": "B", "message": "hi",
+        })
+        assert r2["action"] == "no_reply"
+        assert r2["delay_seconds"] is None
+
+    @pytest.mark.asyncio
+    async def test_timer_retains_session_context(self, monkeypatch):
+        """timer 回调时 session_name/bot_aliases 从 state 恢复。"""
+        runtime = GroupRuntime()
+        captured = {}
+
+        async def fake_gate(_gid, _p, ctx, _tr):
+            captured.update(ctx)
+            return {"action": "wait", "delay_seconds": 5, "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        }, session_name="测试群", bot_aliases=["testbot"])
+        assert captured.get("session_name") == "测试群"
+
+        captured.clear()
+        runtime._states["g1"].last_gate_completed_ts = 0
+        await runtime.handle_timer_fired("g1", generation=1)
+        assert captured.get("session_name") == "测试群"
+
+    @pytest.mark.asyncio
     async def test_idle_cleanup_removes_old_states(self):
         runtime = GroupRuntime()
         runtime._states["g_old"] = GateState()

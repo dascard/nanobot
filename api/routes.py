@@ -643,52 +643,25 @@ class GroupTimingRequest(BaseModel):
 
 def _build_group_timing_context(
     req: GroupTimingRequest | None = None,
-    *,
-    group_id: str = "",
-    pending_messages: list[dict] | None = None,
-    session_name: str = "",
-    is_reply_to_bot: bool = False,
-    trigger_reason: str = "",
-    bot_aliases: list[str] | None = None,
+    **kwargs,
 ) -> str:
-    """[DEPRECATED] 仅保留用于旧测试兼容。
-    实际 TimingGate context 构造已移至 core.timing_runtime.GroupRuntime._build_timing_context()。
-    """
-    lines: list[str] = []
+    """[DEPRECATED] wrapper——实际逻辑在 core.timing_runtime.GroupRuntime._build_timing_context()。"""
+    from core.timing_runtime import PendingMessage as RPM, GroupRuntime
+
     if req is not None:
-        group_id = req.group_id
-        pending_messages = list(req.pending_messages or [])
-        session_name = req.session_name or ""
-        is_reply_to_bot = req.is_reply_to_bot
-        trigger_reason = req.trigger_reason or ""
-        bot_aliases = list(req.bot_aliases or [])
-
-    pending_messages = pending_messages or []
-
-    sn = _sanitize_prompt_text(session_name, 80)
-    if sn:
-        lines.append(f"群: {sn}")
-    if is_reply_to_bot:
-        lines.append("注意:这条消息是回复bot的,说明用户在跟bot对话")
-    tr = _sanitize_prompt_text(trigger_reason, 60)
-    if tr:
-        lines.append(f"触发原因: {tr}")
-    if bot_aliases:
-        aliases = [_sanitize_prompt_text(str(a), 40) for a in bot_aliases[:8] if str(a).strip()]
-        if aliases:
-            lines.append(f"bot别名: {', '.join(aliases)}")
-
-    pending = pending_messages[:MAX_TIMING_PENDING_MESSAGES]
-    for pm in pending:
-        sender = _sanitize_prompt_text(
-            str(pm.get("sender_name") or pm.get("sender_id") or "?"), 40)
-        msg = _sanitize_prompt_text(str(pm.get("message", "")), MAX_TIMING_MESSAGE_CHARS)
-        if msg:
-            lines.append(f"[{sender}]: {msg}")
-    if len(pending_messages) > MAX_TIMING_PENDING_MESSAGES:
-        lines.append(f"...[pending 截断: 原{len(pending_messages)}条]")
-
-    return _sanitize_prompt_text("\n".join(lines), MAX_TIMING_CONTEXT_CHARS)
+        pending = [
+            RPM(sender_id=p.get("sender_id", ""), sender_name=p.get("sender_name", ""),
+                message=p.get("message", ""),
+                is_reply_to_bot=req.is_reply_to_bot or p.get("is_reply_to_bot", False))
+            for p in (req.pending_messages or [])
+        ]
+        return GroupRuntime._build_timing_context(
+            pending=pending,
+            session_name=req.session_name or "",
+            trigger_reason=req.trigger_reason or "",
+            bot_aliases=list(req.bot_aliases or []),
+        )
+    return GroupRuntime._build_timing_context(**kwargs)
 
 
 class GroupTimingTimerRequest(BaseModel):
