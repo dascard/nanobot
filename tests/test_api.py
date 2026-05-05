@@ -304,11 +304,12 @@ async def test_private_buffer_silent_releases_waiters(db_session, monkeypatch):
             first_sleep_started.set()
             await real_sleep(0)
             await release_first_sleep.wait()
+            # 第一轮被外部提前释放——不推进时间，让 while 循环以当前 fake_now 重新计算 remaining
         else:
             second_sleep_started.set()
             await real_sleep(0)
             await release_second_sleep.wait()
-        fake_now["value"] = max(fake_now["value"], start + _delay)
+            fake_now["value"] = max(fake_now["value"], start + _delay)
         await real_sleep(0)
 
     monkeypatch.setattr("api.routes.get_guardrail", lambda: DummyGuardrail())
@@ -363,11 +364,12 @@ async def test_private_buffer_refreshes_window_and_persists_merged_messages(db_s
             first_sleep_started.set()
             await real_sleep(0)
             await release_first_sleep.wait()
+            # 第一轮被外部提前释放——不推进时间，让 while 循环以当前 fake_now 重新计算 remaining
         else:
             second_sleep_started.set()
             await real_sleep(0)
             await release_second_sleep.wait()
-        fake_now["value"] = max(fake_now["value"], start + _delay)
+            fake_now["value"] = max(fake_now["value"], start + _delay)
         await real_sleep(0)
 
     monkeypatch.setattr("api.routes.get_guardrail", lambda: DummyGuardrail())
@@ -433,11 +435,12 @@ async def test_private_buffer_merges_files_for_final_bridge_request(db_session, 
             first_sleep_started.set()
             await real_sleep(0)
             await release_first_sleep.wait()
+            # 第一轮被外部提前释放——不推进时间，让 while 循环以当前 fake_now 重新计算 remaining
         else:
             second_sleep_started.set()
             await real_sleep(0)
             await release_second_sleep.wait()
-        fake_now["value"] = max(fake_now["value"], start + _delay)
+            fake_now["value"] = max(fake_now["value"], start + _delay)
         await real_sleep(0)
 
     monkeypatch.setattr("api.routes.get_guardrail", lambda: DummyGuardrail())
@@ -518,11 +521,12 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
             first_sleep_started.set()
             await real_sleep(0)
             await release_first_sleep.wait()
+            # 第一轮被外部提前释放——不推进时间，让 while 循环以当前 fake_now 重新计算 remaining
         else:
             second_sleep_started.set()
             await real_sleep(0)
             await release_second_sleep.wait()
-        fake_now["value"] = max(fake_now["value"], start + _delay)
+            fake_now["value"] = max(fake_now["value"], start + _delay)
         await real_sleep(0)
 
     monkeypatch.setattr("api.routes.get_guardrail", lambda: DummyGuardrail())
