@@ -1775,12 +1775,9 @@ class NewsSearchTool(BaseTool):
 
         # KT runs tools concurrently; run blocking code in thread
         import asyncio
-        if mode not in ("auto", "fast", "quality", "daily"):
-            mode = "auto"
-        resolved_mode = mode if mode != "auto" else "daily"
         try:
             result = await asyncio.to_thread(
-                _run_news_daily_pipeline, query, resolved_mode, max_results,
+                _run_news_daily_pipeline, query, "quality", max_results,
             )
         except Exception as e:
             logger.warning("[news_search] daily pipeline failed: %s", e)
