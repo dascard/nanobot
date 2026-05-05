@@ -1751,8 +1751,15 @@ class NewsSearchTool(BaseTool):
         if not query.strip():
             return ToolResult(error="Missing 'query' argument")
         max_results = int(args.get("max_results", 3) or 3)
-        mode = str(args.get("mode") or "fast")
+        requested_mode = str(args.get("mode") or "auto")
         no_cache = bool(args.get("no_cache") or args.get("refresh"))
+
+        # 模式路由: auto→quality(LLM), fast/quality/daily 直通, research→quality
+        if requested_mode not in ("auto", "fast", "quality", "daily", "research"):
+            requested_mode = "auto"
+        resolved_mode = requested_mode
+        if resolved_mode in ("auto", "research"):
+            resolved_mode = "quality"
 
         user_id = str(args.get("user_id") or kwargs.get("user_id") or "")
         session_id = str(args.get("session_id") or kwargs.get("session_id") or "")
@@ -1762,10 +1769,10 @@ class NewsSearchTool(BaseTool):
         if not session_id and isinstance(metadata, dict):
             session_id = str(metadata.get("session_id") or "")
 
-        logger.info("[news_search] query=%r mode=%s max=%d no_cache=%s",
-                    query[:80], mode, max_results, no_cache)
+        logger.info("[news_search] query=%r mode=%s resolved=%s max=%d no_cache=%s",
+                    query[:80], requested_mode, resolved_mode, max_results, no_cache)
 
-        cache_key = _news_search_cache_key(query, max_results, mode=mode,
+        cache_key = _news_search_cache_key(query, max_results, mode=resolved_mode,
                                            user_id=user_id, session_id=session_id)
         if not no_cache:
             cached = _get_cached_news_result(cache_key)
@@ -1777,14 +1784,15 @@ class NewsSearchTool(BaseTool):
         import asyncio
         try:
             result = await asyncio.to_thread(
-                _run_news_daily_pipeline, query, "quality", max_results,
+                _run_news_daily_pipeline, query, resolved_mode, max_results,
             )
+
         except Exception as e:
             logger.warning("[news_search] daily pipeline failed: %s", e)
             try:
                 result = await asyncio.to_thread(
                     search_and_extract_news_v2,
-                    query, max_results, mode,
+                    query, max_results, resolved_mode,
                 )
             except Exception:
                 logger.warning("[news_search] v2 failed, fallback to v1")

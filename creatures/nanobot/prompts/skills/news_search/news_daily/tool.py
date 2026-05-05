@@ -265,7 +265,7 @@ class NewsDailyTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "搜索 AI/科技领域最新资讯并生成日报。fast=快速聚合 quality=LLM摘要 research=深度搜索"
+        return "搜索 AI/科技领域最新资讯并生成日报。fast=快速聚合 quality=LLM摘要 daily=事件聚类"
 
     @property
     def execution_mode(self) -> ExecutionMode:
@@ -276,7 +276,7 @@ class NewsDailyTool(BaseTool):
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "日报请求，例如：今日 AI 日报"},
-                "mode": {"type": "string", "enum": ["auto", "fast", "quality", "research"], "default": "auto"},
+                "mode": {"type": "string", "enum": ["auto", "fast", "quality", "daily"], "default": "auto"},
                 "max_results": {"type": "integer", "default": 8},
                 "refresh": {"type": "boolean", "default": False},
             },

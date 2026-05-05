@@ -29,6 +29,9 @@ def filter_fresh_articles(articles: list[Article], now: datetime) -> list[Articl
         a.freshness_score = compute_freshness(a, now)
         if a.published_at is None:
             a.is_low_freshness = True
+            if a.is_official:
+                a.freshness_score = 0.25
+                kept.append(a)
             continue
         age_hours = (now - a.published_at).total_seconds() / 3600
         if age_hours > DAILY_FRESHNESS_HOURS:

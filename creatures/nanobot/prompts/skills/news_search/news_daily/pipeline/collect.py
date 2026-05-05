@@ -21,7 +21,8 @@ def collect_sources(
     items: list[NewsItem] = []
     t0 = time.time()
 
-    with ThreadPoolExecutor(max_workers=min(4, len(providers))) as ex:
+    ex = ThreadPoolExecutor(max_workers=min(8, len(providers)))
+    try:
         futures = {ex.submit(p.fetch, limit_per_source): p for p in providers}
         try:
             for future in as_completed(futures, timeout=timeout + 2):
@@ -37,6 +38,8 @@ def collect_sources(
             logger.warning("[collect] timeout: %d/%d done, using partial results", n_done, len(futures))
         except Exception as e:
             logger.warning("[collect] futures error: %s (%d items)", e, len(items))
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
     logger.info("[collect] %d providers → %d items in %.1fs",
                 len(providers), len(items), time.time() - t0)

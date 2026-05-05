@@ -374,13 +374,16 @@ def test_combined_news_tool_returns_unavailable_html_when_search_backends_fail()
         assert "不要继续重试" in final_report or "搜索源" in final_report
 
 
-def test_web_search_preserves_partial_results_when_later_variant_fails():
+def test_web_search_preserves_partial_results_when_later_variant_fails(monkeypatch):
+    monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
+    monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])
+    fresh_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+0000")
     rss_results = [
         {
             "title": "RSS Fresh News",
             "href": "https://rss.example.com/fresh",
             "body": "rss body",
-            "date": "2026-05-01T08:00:00+0000",
+            "date": fresh_date,
             "source_weight": 3,
             "search_strategy": "rss:test",
         }

@@ -1,18 +1,26 @@
-"""候选选择 + 配额策略。"""
+"""候选选择 + 配额策略——基于 source_group 而非 trust。"""
 
 from ..schema import NewsItem
 
-QUALITY_QUOTAS = {"official": 4, "research": 2, "media": 3, "curated": 2, "community": 0}
+GROUP_PRIORITY = ["core_provider", "core_platform", "ai_media", "research", "curated", "community"]
+QUALITY_QUOTAS = {
+    "core_provider": 4, "core_platform": 2, "ai_media": 3,
+    "research": 1, "curated": 2, "community": 0,
+}
 
 
 def _item_group(item: NewsItem) -> str:
+    sg = getattr(item, "source_group", "") or ""
+    if sg in GROUP_PRIORITY:
+        return sg
+    # fallback: trust-based inference for items without source_group
     if item.trust >= 0.88:
-        return "official"
+        return "core_provider"
     if item.trust >= 0.78:
-        return "media"
+        return "core_platform"
     if item.trust >= 0.60:
-        return "curated"
-    return "community"
+        return "ai_media"
+    return "curated"
 
 
 def select_items_by_quota(items: list[NewsItem], max_items: int = 10) -> list[NewsItem]:
@@ -24,7 +32,7 @@ def select_items_by_quota(items: list[NewsItem], max_items: int = 10) -> list[Ne
         buckets.setdefault(group, []).append(item)
 
     result = []
-    for group in ["official", "media", "curated", "research", "community"]:
+    for group in GROUP_PRIORITY:
         limit = quotas.get(group, 2)
         result.extend(buckets.get(group, [])[:limit])
 

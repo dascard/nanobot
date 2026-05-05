@@ -76,6 +76,10 @@ class RSSProvider:
                     summary=(content_text or desc)[:600],
                     content_excerpt=content_text[:3000],
                     source_name=self.source_name, source_type="rss",
+                    source_group=getattr(self, "_group", "curated"),
+                    source_weight=getattr(self, "_weight", 1.0),
+                    top_story_eligible=getattr(self, "_top_story_eligible", True),
+                    category_hint=getattr(self, "_category_hint", []),
                     domain=domain, published_at=pub_date, trust=self.trust,
                     freshness=1.0 if self._is_recent(pub_date) else 0.5,
                 ))

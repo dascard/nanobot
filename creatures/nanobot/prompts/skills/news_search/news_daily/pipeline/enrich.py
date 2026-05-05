@@ -65,11 +65,11 @@ def _fetch_detail(url: str, timeout: int = 8) -> str:
 
 def enrich_items(items: list[NewsItem], max_fetch: int = 12) -> list[NewsItem]:
     """对高优先级候选并发抓详情页。"""
-    # Juya 是策展聚合源，没有独立文章页，跳过
+    # 策展/聚合源无独立文章页，跳过详情抓取
     eligible = [
         item for item in items
         if getattr(item, 'source_group', '') in DETAIL_FETCH_GROUPS
-        and item.source_name != "Juya AI Daily"
+        and "juya" not in (item.source_name or "").lower()
         and not item.url.endswith('.xml')
     ][:max_fetch]
 
@@ -77,7 +77,8 @@ def enrich_items(items: list[NewsItem], max_fetch: int = 12) -> list[NewsItem]:
         return items
 
     logger.info("[enrich] fetching details for %d items", len(eligible))
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    pool = ThreadPoolExecutor(max_workers=4)
+    try:
         futures = {pool.submit(_fetch_detail, item.url): item for item in eligible}
         try:
             for f in as_completed(futures, timeout=20):
@@ -92,6 +93,8 @@ def enrich_items(items: list[NewsItem], max_fetch: int = 12) -> list[NewsItem]:
                     pass
         except TimeoutError:
             logger.debug("[enrich] partial——timeout, using completed results")
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
     enriched = sum(1 for item in items if item.detail_text)
     logger.info("[enrich] %d/%d items enriched", enriched, len(eligible))
