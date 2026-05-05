@@ -43,55 +43,24 @@ class PrivateTimingGate:
             self.stats["wait"] += 1
             return _log("wait", "looks incomplete", 0.8, "rule_wait", user_id)
 
-        # Qwen 三态分类
-        if self.classifier:
-            try:
-                import asyncio
-                prompt = _build_prompt(text, has_files)
-                result = await asyncio.to_thread(self.classifier.classify, prompt)
-                decision = _map_result(result)
-                self.stats[decision.action] += 1
-                logger.info(
-                    "[PrivateClassify] qwen_result user=%s action=%s conf=%.2f reason=%s raw=%s",
-                    user_id, decision.action, decision.confidence, decision.reason[:120], decision.raw_label,
-                )
-                return decision
-            except Exception as e:
-                logger.warning("[PrivateGate] classifier failed user=%s: %s", user_id, e)
+        # Qwen 独立三态分类——不复用 Guardrail.classify()
+        try:
+            from clients.classifier_client import call_qwen_private_timing
+            import asyncio
+            result = await asyncio.to_thread(call_qwen_private_timing, text, has_files)
+            label = result.get("label", "REPLY_NOW")
+            action = "no_reply" if label == "NO_REPLY" else ("wait" if label == "WAIT" else "reply_now")
+            self.stats[action] += 1
+            decision = PrivateDecision(action, label, result.get("confidence", 1.0), label)
+            logger.info("[PrivateClassify] qwen_result user=%s action=%s raw=%s",
+                        user_id, action, label)
+            return decision
+        except Exception as e:
+            logger.warning("[PrivateGate] classifier failed user=%s: %s", user_id, e)
 
         # fallback
         self.stats["reply_now"] += 1
         return _log("reply_now", "fallback default", 0.5, "fallback", user_id)
-
-
-def _build_prompt(text: str, has_files: bool) -> str:
-    ctx = f"{text}\n[附带图片]" if has_files else text
-    return (
-        "判断这条私聊消息需要怎样处理。\n\n"
-        "选项：\n"
-        "NO_REPLY — 不需要回复（纯感叹词、简短应答、表情类）\n"
-        "WAIT — 用户还没说完，需要等后续消息（半句话、碎片输入）\n"
-        "REPLY_NOW — 明确问题/命令/请求，应该立即回复\n\n"
-        f"消息：{ctx[:500]}\n\n"
-        "只输出 NO_REPLY、WAIT 或 REPLY_NOW，不要解释。"
-    )
-
-
-def _map_result(result) -> "PrivateDecision":
-    if isinstance(result, dict):
-        label = str(result.get("label") or result.get("action") or result.get("status") or "").strip().upper()
-        reason = str(result.get("reason") or "")
-        confidence = float(result.get("confidence") or 0.0)
-    else:
-        label = str(result).strip().upper()
-        reason = ""
-        confidence = 0.0
-
-    if label in ("NO_REPLY", "IGNORE", "SILENT", "否"):
-        return PrivateDecision("no_reply", reason, confidence, label)
-    if label in ("WAIT", "BUFFER", "NEED_MORE", "HOLD"):
-        return PrivateDecision("wait", reason, confidence, label)
-    return PrivateDecision("reply_now", reason, confidence, label)
 
 
 def _log(action: str, reason: str, confidence: float, raw: str, user_id: str) -> PrivateDecision:
@@ -108,7 +77,6 @@ _gate: PrivateTimingGate | None = None
 def get_private_gate() -> PrivateTimingGate:
     global _gate
     if _gate is None:
-        from clients.classifier_client import get_guardrail
-        _gate = PrivateTimingGate(classifier=get_guardrail())
-        logger.info("[PrivateGate] initialized with classifier")
+        _gate = PrivateTimingGate()
+        logger.info("[PrivateGate] initialized")
     return _gate

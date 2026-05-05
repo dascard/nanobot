@@ -142,7 +142,8 @@ class BufferedOutput(BaseOutputModule):
                 if warning:
                     logger.warning(f"[Safety] {warning}")
 
-            if self._stream_queue is not None:
+            # reply 是内部工具——不推送到 QQbot 作为进度提示
+            if tool_name != "reply" and self._stream_queue is not None:
                 hint = self._TOOL_HINTS.get(tool_name, f"正在执行 {tool_name}")
                 asyncio.ensure_future(self._stream_queue.put({"status": "progress", "text": hint}))
             return

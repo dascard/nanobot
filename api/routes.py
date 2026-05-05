@@ -983,6 +983,10 @@ async def proxy_chat(
             if decision.action == "no_reply":
                 _persist_chat_turn(db, req, "", guardrail_status=None)
                 return {"status": "no_reply", "user_id": req.user_id}
+            if decision.action == "reply_now":
+                messages = req.merged_messages or [req.query]
+                buffered_query = _join_buffered_messages(messages)
+                buffered_files = _normalize_files(req.files)
         except Exception as e:
             logger.warning("[/chat] PrivateGate classify failed user=%s: %s", req.user_id, e)
 

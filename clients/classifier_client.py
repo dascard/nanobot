@@ -381,3 +381,70 @@ def get_timing_gate() -> TimingGate:
     if _timing_gate_instance is None:
         _timing_gate_instance = TimingGate()
     return _timing_gate_instance
+
+
+# ── Private reply timing classifier（独立 prompt，不混用 Guardrail.classify）──
+
+_PRIVATE_TIMING_PROMPT = """你是私聊消息回复时机分类器。
+
+判断用户这条私聊消息应如何处理，只输出以下三个标签之一：
+
+NO_REPLY — 不需要回复。纯语气词、简短应答、表情、"嗯/哦/ok/收到/好/哈哈/草" 等。
+WAIT — 用户还没说完，需要等后续消息。半句话、碎片输入、"等下/还有/我发图" 等。
+REPLY_NOW — 明确问题、请求、命令，应该立即回复。
+
+只输出一个标签：NO_REPLY、WAIT 或 REPLY_NOW。
+不要解释，不要输出中文"是/否"，不要输出数字。"""
+
+
+def _parse_private_label(raw: str) -> str:
+    text = (raw or "").strip().upper()
+    if "NO_REPLY" in text:
+        return "NO_REPLY"
+    if "WAIT" in text:
+        return "WAIT"
+    if "REPLY_NOW" in text:
+        return "REPLY_NOW"
+    if text.startswith("否"):
+        return "NO_REPLY"
+    return "REPLY_NOW"
+
+
+def call_qwen_private_timing(message: str, has_files: bool = False) -> dict:
+    """调用 Qwen 做私聊三态分类。独立 prompt，不混用旧 classify()。"""
+    ctx = f"{message}\n[附带图片]" if has_files else message
+    payload = {
+        "messages": [
+            {"role": "system", "content": _PRIVATE_TIMING_PROMPT},
+            {"role": "user", "content": ctx},
+        ],
+        "max_tokens": 30, "temperature": 0,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
+
+    logger.info("[private_classifier] >> Qwen | message=%.80s has_files=%s", message, has_files)
+
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    proxy_handler = urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(proxy_handler)
+    try:
+        with opener.open(req, timeout=CLASSIFIER_TIMEOUT) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        raw = body["choices"][0]["message"]["content"]
+    except Exception as e:
+        logger.warning("[private_classifier] Qwen failed: %s", e)
+        return {"label": "REPLY_NOW", "raw": "", "confidence": 0.0}
+
+    for _ in range(5):
+        prev = raw
+        raw = THINK_PATTERN.sub("", raw).strip()
+        if raw == prev:
+            break
+
+    label = _parse_private_label(raw)
+    logger.info("[private_classifier] << raw=%.80s parsed=%s", raw, label)
+    return {"label": label, "raw": raw, "confidence": 1.0}
