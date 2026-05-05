@@ -83,7 +83,7 @@ class TestSQLAnalysisTool:
         mock_instance.run_query.return_value = "id|count\n1|42"
 
         tool = SQLAnalysisTool()
-        result = asyncio.run(tool.execute({"sql": "SELECT count(*) FROM chat_logs"}))
+        result = asyncio.run(tool.execute({"sql": "SELECT count(id) AS count FROM chat_logs LIMIT 1"}))
         assert result.success
         assert "42" in result.output
 

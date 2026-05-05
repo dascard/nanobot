@@ -70,13 +70,14 @@ class TestReplyExtraction:
         assert result == "你好"
 
     @pytest.mark.asyncio
-    async def test_legacy_reply_extracted(self):
+    async def test_legacy_reply_not_extracted(self):
+        """旧 [REPLY] 标签格式不再支持——只解析 JSON reply marker。"""
         b = await _start_bridge()
         _set_conversation(b, [
             _fake_tool_msg("reply", "[REPLY]你好[/REPLY]"),
         ])
         result = b._extract_reply_from_tool_output()
-        assert result == "你好"
+        assert result == ""
 
     @pytest.mark.asyncio
     async def test_no_reply_returns_empty(self):
@@ -145,16 +146,16 @@ class TestNoLeak:
         assert result == "今天的日报如下"
 
     @pytest.mark.asyncio
-    async def test_fallback_does_not_return_reasoning(self):
+    async def test_html_extraction_ignores_non_tool_roles(self):
+        """_extract_last_rich_tool_output 只看 role=tool 消息——assistant 的 marker 不触发 HTML 提取。"""
         b = await _start_bridge()
-        b._agent.llm = MagicMock()
-        b._agent.llm.last_assistant_extra_fields = {
-            "reasoning_content": "你是 Nanobot... ## 工具调用纪律...",
-        }
-        _set_conversation(b, [])
-        result = b._extract_fallback_response()
-        assert "工具调用纪律" not in result
-        assert "你是 Nanobot" not in result
+        _set_conversation(b, [
+            _fake_assistant_msg("这里是 news-brief 的纯文本讨论"),
+            _fake_tool_msg("news_search", '<article class="news-brief"><h1>日报</h1></article>'),
+        ])
+        result = b._extract_last_rich_tool_output(("news-brief",))
+        assert "news-brief" in result
+        assert "纯文本讨论" not in result
 
     @pytest.mark.asyncio
     async def test_reply_marker_not_in_final_output(self):

@@ -262,7 +262,7 @@ def test_juya_rss_preserves_pubdate_for_freshness_filter():
     mock_resp.__enter__.return_value = mock_resp
     mock_resp.__exit__.return_value = False
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool.urlopen", return_value=mock_resp):
+    with patch("creatures.nanobot.prompts.skills.news_search.tool._urlopen", return_value=mock_resp):
         results = news_tool._fetch_juya_rss(max_results=3, target_date="2026-05-01")
 
     assert len(results) == 1

@@ -61,3 +61,19 @@ def client(db_session):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-slow", action="store_true", default=False,
+        help="run tests that require external models or slow resources",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--run-slow"):
+        return
+    skip_slow = pytest.mark.skip(reason="need --run-slow to run external model tests")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip_slow)
