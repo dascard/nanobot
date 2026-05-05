@@ -1,9 +1,55 @@
 """Article 标准化——title/source/time/entity/topic 归一化。"""
 
 import re, hashlib
-from datetime import datetime
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+
 from .config import OFFICIAL_SOURCES, SOURCE_QUALITY, STOP_WORDS, TOPIC_KEYWORDS, KNOWN_ENTITIES
 from .models import Article
+
+_OFFICIAL_DOMAINS = {
+    "openai.com", "anthropic.com", "deepmind.google",
+    "mistral.ai", "deepseek.com", "qwen.ai", "kimi.com",
+    "moonshot.cn", "x.ai", "nvidia.com", "cohere.com",
+    "meta.com", "ai.meta.com",
+}
+
+_DATE_FORMATS = [
+    "%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S",
+    "%b %d, %Y", "%B %d, %Y", "%b %d, %y",
+]
+
+
+def parse_date(raw: str) -> datetime | None:
+    """多格式日期解析——ISO 8601 / RFC 2822 / 常见变体。"""
+    value = (raw or "").strip()
+    if not value:
+        return None
+    # ISO
+    try:
+        v = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(v).replace(tzinfo=None)
+    except Exception:
+        pass
+    # RFC 2822
+    try:
+        dt = parsedate_to_datetime(value)
+        if dt and dt.tzinfo:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
+    except Exception:
+        pass
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _is_official(source_name: str, domain: str) -> bool:
+    sn = source_name.strip().lower().replace(" ", "_")
+    return sn in OFFICIAL_SOURCES or domain.lower() in _OFFICIAL_DOMAINS
 
 
 def _norm_key(text: str) -> str:
@@ -56,29 +102,21 @@ def compute_source_quality(source_group: str) -> float:
 
 def normalize_articles(raw_items: list) -> list[Article]:
     articles = []
-    for item in raw_items:
-        pub = None
-        raw_date = getattr(item, "published_at", "") or ""
-        if raw_date:
-            for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%b %d, %Y", "%B %d, %Y"):
-                try:
-                    pub = datetime.strptime(raw_date.strip(), fmt)
-                    break
-                except ValueError:
-                    continue
+    return articles
 
+def normalize_articles(raw_items: list) -> list[Article]:
+    articles = []
+    for item in raw_items:
+        pub = parse_date(getattr(item, "published_at", "") or "")
         source_name = getattr(item, "source_name", "") or ""
         source_group = getattr(item, "source_group", "") or "unknown"
         title = getattr(item, "title", "") or ""
+        domain = getattr(item, "domain", "") or ""
         text = f"{title} {getattr(item, 'summary', '') or ''} {getattr(item, 'detail_text', '') or ''}"
-
         articles.append(Article(
             id=getattr(item, "id", "") or _norm_key(title),
-            title=title,
-            url=getattr(item, "url", "") or "",
-            source=source_name,
-            source_group=source_group,
-            domain=getattr(item, "domain", "") or "",
+            title=title, url=getattr(item, "url", "") or "",
+            source=source_name, source_group=source_group, domain=domain,
             published_at=pub,
             summary=(getattr(item, "summary", "") or "")[:400],
             content=(getattr(item, "detail_text", "") or getattr(item, "content_excerpt", "") or "")[:1200],
@@ -86,7 +124,7 @@ def normalize_articles(raw_items: list) -> list[Article]:
             entity_keys=extract_entities(text),
             topic_keys=extract_topic_keys(text),
             source_quality_score=compute_source_quality(source_group),
-            is_official=source_name in OFFICIAL_SOURCES,
+            is_official=_is_official(source_name, domain),
             is_time_unknown=pub is None,
         ))
     return articles

@@ -64,27 +64,51 @@ def _report_to_digest(report, articles):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     top = report.top_story
     highlights = report.highlights
-    details = report.details
 
-    # render guard: 最后防线去重
+    # 构建 article_id → source_id 映射
+    art_to_src = {}
+    sources = []
+    for a in articles[:12]:
+        sid = len(sources) + 1
+        art_to_src[a.id] = sid
+        sources.append({
+            "source_id": sid, "title": a.title, "url": a.url, "domain": a.domain,
+            "source_name": a.source,
+            "published_at": a.published_at.strftime("%Y-%m-%d") if a.published_at else "",
+        })
+
+    def _cluster_src_ids(c):
+        ids = []
+        for a in c.articles:
+            sid = art_to_src.get(a.id)
+            if sid and sid not in ids:
+                ids.append(sid)
+        return ids[:3]
+
+    # render guard
     seen_ids, seen_entities, seen_domains = set(), {}, {}
     safe_hl = []
     for c in highlights:
-        if c.id in seen_ids: continue
-        if any(seen_entities.get(e, 0) >= MAX_SAME_ENTITY_CLUSTERS_DAILY for e in c.entities): continue
+        if c.id in seen_ids:
+            continue
+        if any(seen_entities.get(e, 0) >= MAX_SAME_ENTITY_CLUSTERS_DAILY for e in c.entities):
+            continue
         rep = c.representative
-        if rep and seen_domains.get(rep.domain, 0) >= MAX_CLUSTERS_PER_DOMAIN_FINAL: continue
+        if rep and seen_domains.get(rep.domain, 0) >= MAX_CLUSTERS_PER_DOMAIN_FINAL:
+            continue
         safe_hl.append(c)
         seen_ids.add(c.id)
-        for e in c.entities: seen_entities[e] = seen_entities.get(e, 0) + 1
-        if rep: seen_domains[rep.domain] = seen_domains.get(rep.domain, 0) + 1
+        for e in c.entities:
+            seen_entities[e] = seen_entities.get(e, 0) + 1
+        if rep:
+            seen_domains[rep.domain] = seen_domains.get(rep.domain, 0) + 1
 
-    def _cluster_to_card(c, idx):
+    def _cluster_to_card(c):
         rep = c.representative
         return {
             "label": (rep.source if rep else ""),
             "text": c.title[:120],
-            "source_ids": [idx + 1],
+            "source_ids": _cluster_src_ids(c),
             "importance": min(5, max(1, int(c.final_score * 5))),
         }
 
@@ -94,8 +118,15 @@ def _report_to_digest(report, articles):
             "known": c.known[:3] or [a.summary[:200] for a in c.articles[:2] if a.summary],
             "unknown": c.missing[:2] or [],
             "impact": c.impact or "",
-            "source_labels": list(c.source_domains)[:3],
+            "source_labels": [a.source for a in c.articles[:3]],
         }
+
+    # details 也走 render guard
+    safe_ids = {c.id for c in safe_hl}
+    safe_details = []
+    for c in ([top] if top else []) + safe_hl[:2]:
+        if c and c.id not in {d.id for d in safe_details}:
+            safe_details.append(c)
 
     return {
         "title": report.title,
@@ -103,17 +134,13 @@ def _report_to_digest(report, articles):
         "verdict": f"共 {len(articles)} 篇文章，{len(highlights)} 个事件聚类" if highlights else "今日有效事件较少",
         "generated_at": now_str,
         "mode": "daily",
-        "top_story": _cluster_to_card(top, 0) if top else None,
-        "highlights": [_cluster_to_card(c, i) for i, c in enumerate(safe_hl[:6])],
-        "details": [_cluster_to_detail(c) for c in (details or [])[:3]],
+        "top_story": _cluster_to_card(top) if top else None,
+        "highlights": [_cluster_to_card(c) for c in safe_hl[:6]],
+        "details": [_cluster_to_detail(c) for c in safe_details[:3]],
         "watchlist": [],
         "missing_info": [],
         "closing": "基于事件聚类生成，同源/同实体已自动合并。",
-        "sources": [
-            {"source_id": i + 1, "title": a.title, "url": a.url, "domain": a.domain,
-             "source_name": a.source, "published_at": a.published_at.strftime("%Y-%m-%d") if a.published_at else ""}
-            for i, a in enumerate(articles[:12])
-        ],
+        "sources": sources,
     }
 
 
