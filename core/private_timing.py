@@ -46,15 +46,24 @@ class PrivateTimingGate:
         # Qwen 独立三态分类——不复用 Guardrail.classify()
         try:
             from clients.classifier_client import call_qwen_private_timing
+            from config import CLASSIFIER_TIMEOUT
             import asyncio
-            result = await asyncio.to_thread(call_qwen_private_timing, text, has_files)
+            result = await asyncio.wait_for(
+                asyncio.to_thread(call_qwen_private_timing, text, has_files),
+                timeout=CLASSIFIER_TIMEOUT + 1,
+            )
             label = result.get("label", "REPLY_NOW")
+            raw = result.get("raw", "")
             action = "no_reply" if label == "NO_REPLY" else ("wait" if label == "WAIT" else "reply_now")
             self.stats[action] += 1
-            decision = PrivateDecision(action, label, result.get("confidence", 1.0), label)
-            logger.info("[PrivateClassify] qwen_result user=%s action=%s raw=%s",
-                        user_id, action, label)
+            decision = PrivateDecision(action=action, reason=label,
+                                       confidence=result.get("confidence", 1.0),
+                                       raw_label=raw or label)
+            logger.info("[PrivateClassify] qwen_result user=%s action=%s label=%s raw=%s",
+                        user_id, action, label, (raw or "")[:80])
             return decision
+        except asyncio.TimeoutError:
+            logger.warning("[PrivateGate] classifier timeout user=%s", user_id)
         except Exception as e:
             logger.warning("[PrivateGate] classifier failed user=%s: %s", user_id, e)
 
