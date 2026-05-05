@@ -606,6 +606,153 @@ def submit_ambient_log(
     return {"status": "ok", "message": "ambient log saved"}
 
 
+# ── 统一群聊入口 /group/message ──
+
+class GroupMessageRequest(BaseModel):
+    group_id: str
+    sender_id: str = ""
+    sender_name: str = ""
+    message: str = ""
+    message_id: str | None = None
+    session_name: str | None = None
+    is_at_bot: bool = False
+    is_reply_to_bot: bool = False
+    bot_aliases: list[str] = []
+
+
+def _derive_group_trigger_reason(req: GroupMessageRequest) -> tuple[bool, str]:
+    """L0 规则预筛——不调 Qwen，判断群消息是否值得进入 TimingGate。"""
+    text = (req.message or "").strip()
+
+    if req.is_at_bot:
+        return True, "at_bot"
+    if req.is_reply_to_bot:
+        return True, "reply_to_bot"
+    if text.startswith(("/", "！", "!")):
+        return True, "direct_call"
+    if any(alias in text for alias in (req.bot_aliases or [])):
+        return True, "bot_name_mentioned"
+    if "?" in text or "？" in text:
+        if len(text) > 5:
+            return True, "possible_question"
+    if any(k in text for k in ("怎么", "为什么", "有没有", "求推荐", "报错", "有人知道", "如何", "能不能")):
+        return True, "possible_question"
+    if len(text) <= 2:
+        return False, "too_short"
+    return False, "ambient_only"
+
+
+@router.post("/group/message")
+async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
+                        _auth=Depends(verify_token)):
+    """统一群聊入口：归档 → trigger 推断 → TimingGate → chat/bridge。"""
+    import time as _t
+    from core.timing_runtime import get_group_runtime
+
+    group_user_id = _normalize_group_session_id(req.group_id)
+
+    # 1. 归档 ambient log
+    user = db.query(User).filter(User.id == group_user_id).first()
+    if not user:
+        db.add(User(id=group_user_id))
+        db.commit()
+    elif req.session_name and user.name != req.session_name:
+        user.name = req.session_name
+        db.commit()
+
+    formatted = f"[{req.sender_name}]: {req.message}" if req.message else ""
+    db.add(ChatLog(
+        user_id=group_user_id, session_id=group_user_id,
+        sender_name=req.sender_name, session_name=req.session_name,
+        role="ambient", content=formatted, processed=1,
+        message_id=req.message_id,
+    ))
+    db.commit()
+
+    # 2. 判断是否需要进入 TimingGate
+    should_trigger, reason = _derive_group_trigger_reason(req)
+    if not should_trigger:
+        return {"action": "no_reply", "reason": reason}
+
+    # 3. 走 GroupRuntime → TimingGate
+    runtime = get_group_runtime()
+    t0 = _t.time()
+    try:
+        result = await runtime.process_message(
+            req.group_id,
+            {
+                "sender_id": req.sender_id,
+                "sender_name": req.sender_name,
+                "message": req.message,
+                "message_id": req.message_id or "",
+                "is_reply_to_bot": req.is_reply_to_bot,
+            },
+            session_name=req.session_name or "",
+            bot_aliases=list(req.bot_aliases or []),
+            trigger_reason=reason,
+        )
+        elapsed_ms = int((_t.time() - t0) * 1000)
+        action = result.get("action", "no_reply")
+
+        logger.info(
+            "[GroupMsg] group=%s trigger=%s ➜ %s delay=%s gen=%d latency=%dms cooldown=%.0fs reason=%.80s",
+            req.group_id, reason, action,
+            result.get("delay_seconds"), result.get("generation", 0),
+            elapsed_ms, result.get("cooldown_ago", 0) or 0,
+            str(result.get("reason", ""))[:80],
+        )
+
+        if action == "continue":
+            # 4. 内部调用 chat pipeline 生成回复
+            try:
+                from nanobot_kt.bridge import get_bridge
+                from core.context_builder import build_session_memory
+
+                bridge = get_bridge()
+                memory_header, history_messages = build_session_memory(
+                    db, group_user_id, user_id=group_user_id,
+                    is_group=True,
+                )
+                bridge_meta = {
+                    "user_id": group_user_id,
+                    "session_id": group_user_id,
+                    "sender_name": req.sender_name,
+                    "is_group": True,
+                    "history_header": memory_header,
+                    "history_messages": history_messages,
+                    "group_id": req.group_id,
+                }
+                chat_query = _build_multimodal_user_input_text(req.message, None,
+                                                                max_chars=MAX_QUERY_CHARS)
+                enriched = f"[群聊] 当前用户输入：\n<user_input>\n{chat_query}\n</user_input>"
+
+                reply = await bridge.handle_message(
+                    enriched, session_id=group_user_id, user_id=group_user_id,
+                    metadata=bridge_meta,
+                )
+                answer = reply if isinstance(reply, str) else str(reply or "")
+                return {
+                    "action": "continue",
+                    "reply": _sanitize_prompt_text(answer, max_chars=4000),
+                    "generation": result.get("generation", 0),
+                    "reason": str(result.get("reason", ""))[:120],
+                }
+            except Exception as e:
+                logger.error("[GroupMsg] bridge failed group=%s: %s", req.group_id, e)
+                return {"action": "no_reply", "reason": f"bridge_error: {e}"}
+
+        return {
+            "action": action,
+            "delay_seconds": result.get("delay_seconds"),
+            "generation": result.get("generation", 0),
+            "reason": str(result.get("reason", ""))[:120],
+        }
+
+    except Exception as e:
+        logger.warning("[GroupMsg] group=%s FAILED: %s", req.group_id, e)
+        return {"action": "no_reply", "reason": f"error: {e}"}
+
+
 class UpdateGroupNameRequest(BaseModel):
     group_id: str
     group_name: str
