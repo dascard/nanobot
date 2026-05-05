@@ -1,4 +1,4 @@
-"""AI Daily News Tool —— 只负责日报，不再混入 web research。"""
+"""AI Daily News Tool —— quality 为主，daily 为 fallback。"""
 
 import logging
 import time as _time
@@ -17,12 +17,17 @@ from . import cache
 logger = logging.getLogger("nanobot.news_daily")
 
 
+class FallbackNeeded(Exception):
+    """quality 管线失败或质量不足时触发 daily fallback。"""
+    pass
+
+
 def _route_mode(query: str, mode: str = "auto") -> str:
     if mode not in ("auto", "fast", "quality", "daily"):
         mode = "auto"
     if mode != "auto":
         return mode
-    return "daily"  # 默认走新 EventCluster 管线
+    return "quality"  # 默认走 quality LLM 管线
 
 
 def _get_providers(mode: str) -> list:
@@ -31,8 +36,8 @@ def _get_providers(mode: str) -> list:
     pairs = reg.select(mode)
     providers = []
     for cfg, prov in pairs:
-        # Inject source_group from config
         prov._group = cfg.group
+        prov._weight = cfg.weight
         prov._top_story_eligible = cfg.top_story_eligible
         prov._category_hint = cfg.category_hint
         providers.append(prov)
@@ -189,8 +194,40 @@ def _report_to_digest(report, articles):
     }
 
 
+def _html_looks_usable(html: str) -> bool:
+    if not html or len(html) < 800:
+        return False
+    bad = ["AI 日报暂无内容", "未获取到 RSS 资讯", "今日有效事件较少", "新闻源为空"]
+    return not any(m in html for m in bad)
+
+
+def run_news_search_auto(query: str, limit: int = 8) -> str:
+    """对外唯一入口：quality → daily fallback → fallback_digest。"""
+    # 1. quality (LLM)
+    try:
+        html = run_pipeline(query, mode="quality", limit=limit)
+        if _html_looks_usable(html):
+            return html
+        raise FallbackNeeded("quality html not usable")
+    except Exception as e:
+        logger.warning("[news] quality failed, fallback to daily: %s", e)
+
+    # 2. daily (EventCluster)
+    try:
+        html = run_pipeline(query, mode="daily", limit=limit)
+        if _html_looks_usable(html):
+            return html
+        raise FallbackNeeded("daily html not usable")
+    except Exception as e:
+        logger.warning("[news] daily fallback failed: %s", e)
+
+    # 3. ultimate fallback
+    from ..render import render_html
+    return render_html(fallback_digest(query, "管线无法生成有效日报", "quality"))
+
+
 def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
-    """主 Pipeline——fast: 标题索引，quality: LLM 摘要。"""
+    """主 Pipeline——quality: LLM 摘要，daily: EventCluster 聚类。"""
     from ..render import render_html as _render
     t0 = _time.time()
 
@@ -236,20 +273,22 @@ def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
         candidates = select_items_by_quota(items, max_items=limit)
         logger.info("[daily] quality candidates: %d from %d items", len(candidates), len(items))
 
+        if not candidates:
+            raise FallbackNeeded("quality has no candidates after enrich+quota")
+
         fallback_d = build_digest_deterministic(candidates, query, "quality")
         cards = build_light_evidence_cards(candidates)
 
-        if cards:
-            llm_d = summarize_quality(cards, dict(fallback_d))
-            digest = safe_quality_digest(llm_d, dict(fallback_d), cards)
-            ok, issues = validate_quality_digest(digest, cards)
-            if not ok:
-                logger.warning("[daily] quality validator fatal: %s", issues)
-                digest = dict(fallback_d)
-            elif issues:
-                digest.setdefault("missing_info", []).extend(issues[:3])
-        else:
-            digest = dict(fallback_d)
+        if not cards:
+            raise FallbackNeeded("quality has no evidence cards")
+
+        llm_d = summarize_quality(cards, dict(fallback_d))
+        digest = safe_quality_digest(llm_d, dict(fallback_d), cards)
+        ok, issues = validate_quality_digest(digest, cards)
+        if not ok:
+            raise FallbackNeeded(f"quality validator fatal: {issues}")
+        if issues:
+            digest.setdefault("missing_info", []).extend(issues[:3])
 
     html = _render(digest)
     logger.info("[daily] done %s mode %d ranked items → %d chars HTML in %.1fs", mode, len(items), len(html), _time.time() - t0)
@@ -257,7 +296,7 @@ def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
 
 
 class NewsDailyTool(BaseTool):
-    """AI 日报生成——RSS/官方源聚合，默认不调 LLM。"""
+    """AI 日报生成——默认 quality LLM 摘要，失败时自动降级 daily 事件聚类。"""
 
     @property
     def tool_name(self) -> str:
@@ -265,7 +304,7 @@ class NewsDailyTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return "搜索 AI/科技领域最新资讯并生成日报。fast=快速聚合 quality=LLM摘要 daily=事件聚类"
+        return "搜索 AI/科技领域最新资讯并生成日报。"
 
     @property
     def execution_mode(self) -> ExecutionMode:
@@ -276,7 +315,6 @@ class NewsDailyTool(BaseTool):
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "日报请求，例如：今日 AI 日报"},
-                "mode": {"type": "string", "enum": ["auto", "fast", "quality", "daily"], "default": "auto"},
                 "max_results": {"type": "integer", "default": 8},
                 "refresh": {"type": "boolean", "default": False},
             },
@@ -288,25 +326,23 @@ class NewsDailyTool(BaseTool):
         if not query:
             return ToolResult(error="Missing 'query' argument")
 
-        mode = str(args.get("mode") or "auto")
-        limit = int(args.get("max_results", 10) or 10)
+        limit = int(args.get("max_results", 8) or 8)
         refresh = bool(args.get("refresh", False))
-        resolved_mode = _route_mode(query, mode)
 
-        ck = cache.make_key(query, resolved_mode, limit, "html")
+        ck = cache.make_key(query, "quality", limit, "html")
         if not refresh:
             cached = cache.get(ck)
             if cached:
-                logger.info("[daily] cache HIT mode=%s", resolved_mode)
+                logger.info("[daily] cache HIT")
                 return ToolResult(output=cached, exit_code=0)
 
         try:
             import asyncio
-            result = await asyncio.to_thread(run_pipeline, query, resolved_mode, limit)
+            result = await asyncio.to_thread(run_news_search_auto, query, limit)
         except Exception as e:
-            logger.exception("[daily] pipeline failed")
+            logger.exception("[daily] auto pipeline failed")
             from ..render import render_html
-            result = render_html(fallback_digest(query, str(e)[:160], resolved_mode))
+            result = render_html(fallback_digest(query, str(e)[:160], "quality"))
 
-        cache.set(ck, result, resolved_mode)
+        cache.set(ck, result, "quality")
         return ToolResult(output=result, exit_code=0)

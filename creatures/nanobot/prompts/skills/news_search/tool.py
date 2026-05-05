@@ -1518,10 +1518,10 @@ def _extract_json_object(raw: str) -> str:
     return m.group(0) if m else raw
 
 
-def _run_news_daily_pipeline(query: str, mode: str = "fast", limit: int = 8) -> str:
-    """新 NewsDaily pipeline——RSS/官方源聚合，默认不调 LLM。"""
-    from .news_daily.tool import run_pipeline
-    return run_pipeline(query, mode, limit)
+def _run_news_daily_pipeline(query: str, mode: str = "quality", limit: int = 8) -> str:
+    """统一入口——quality → daily fallback。"""
+    from .news_daily.tool import run_news_search_auto
+    return run_news_search_auto(query, limit)
 
 def search_and_extract_news_v2(
     query: str,
@@ -1751,15 +1751,7 @@ class NewsSearchTool(BaseTool):
         if not query.strip():
             return ToolResult(error="Missing 'query' argument")
         max_results = int(args.get("max_results", 3) or 3)
-        requested_mode = str(args.get("mode") or "auto")
         no_cache = bool(args.get("no_cache") or args.get("refresh"))
-
-        # 模式路由: auto→quality(LLM), fast/quality/daily 直通, research→quality
-        if requested_mode not in ("auto", "fast", "quality", "daily", "research"):
-            requested_mode = "auto"
-        resolved_mode = requested_mode
-        if resolved_mode in ("auto", "research"):
-            resolved_mode = "quality"
 
         user_id = str(args.get("user_id") or kwargs.get("user_id") or "")
         session_id = str(args.get("session_id") or kwargs.get("session_id") or "")
@@ -1769,38 +1761,22 @@ class NewsSearchTool(BaseTool):
         if not session_id and isinstance(metadata, dict):
             session_id = str(metadata.get("session_id") or "")
 
-        logger.info("[news_search] query=%r mode=%s resolved=%s max=%d no_cache=%s",
-                    query[:80], requested_mode, resolved_mode, max_results, no_cache)
+        logger.info("[news_search] query=%r max=%d no_cache=%s",
+                    query[:80], max_results, no_cache)
 
-        cache_key = _news_search_cache_key(query, max_results, mode=resolved_mode,
+        cache_key = _news_search_cache_key(query, max_results, mode="quality",
                                            user_id=user_id, session_id=session_id)
         if not no_cache:
             cached = _get_cached_news_result(cache_key)
             if cached is not None:
-                logger.info("[news_search] cache HIT key=%s", cache_key[:2])
+                logger.info("[news_search] cache HIT")
                 return ToolResult(output=cached, exit_code=0)
 
         # KT runs tools concurrently; run blocking code in thread
         import asyncio
-        try:
-            result = await asyncio.to_thread(
-                _run_news_daily_pipeline, query, resolved_mode, max_results,
-            )
-
-        except Exception as e:
-            logger.warning("[news_search] daily pipeline failed: %s", e)
-            try:
-                result = await asyncio.to_thread(
-                    search_and_extract_news_v2,
-                    query, max_results, resolved_mode,
-                )
-            except Exception:
-                logger.warning("[news_search] v2 failed, fallback to v1")
-                result = await asyncio.to_thread(
-                    search_and_extract_news,
-                    query, max_results, persist=True,
-                    user_id=user_id, session_id=session_id,
-                )
+        result = await asyncio.to_thread(
+            _run_news_daily_pipeline, query, "quality", max_results,
+        )
         # 强制HTML输出——永不为空/不裸文本
         if not result or not str(result).strip():
             logger.error("[news_search] empty output query=%r", query)

@@ -728,11 +728,11 @@ class TestBuildDailyReport:
 # ============================================================
 
 class TestRouteMode:
-    def test_default_is_daily(self):
-        assert _route_mode("今日 AI 日报") == "daily"
+    def test_default_is_quality(self):
+        assert _route_mode("今日 AI 日报") == "quality"
 
-    def test_auto_resolves_to_daily(self):
-        assert _route_mode("test", "auto") == "daily"
+    def test_auto_resolves_to_quality(self):
+        assert _route_mode("test", "auto") == "quality"
 
     def test_explicit_fast(self):
         assert _route_mode("test", "fast") == "fast"
@@ -741,7 +741,7 @@ class TestRouteMode:
         assert _route_mode("test", "quality") == "quality"
 
     def test_invalid_mode_defaults(self):
-        assert _route_mode("test", "invalid") == "daily"
+        assert _route_mode("test", "invalid") == "quality"
 
 
 class TestApplyQuotas:
