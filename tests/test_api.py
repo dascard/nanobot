@@ -312,6 +312,12 @@ async def test_private_buffer_silent_releases_waiters(db_session, monkeypatch):
             fake_now["value"] = max(fake_now["value"], start + _delay)
         await real_sleep(0)
 
+    from core.private_timing import PrivateTimingGate, PrivateDecision
+    monkeypatch.setattr("core.private_timing.get_private_gate",
+                        lambda: PrivateTimingGate(classifier=None))
+    from core.private_timing import PrivateTimingGate
+    import core.private_timing as _pt
+    _pt._gate = PrivateTimingGate(classifier=None)
     monkeypatch.setattr("api.routes.get_guardrail", lambda: DummyGuardrail())
     monkeypatch.setattr("api.routes.asyncio.sleep", fake_sleep)
     monkeypatch.setattr("api.routes._time.time", lambda: fake_now["value"])

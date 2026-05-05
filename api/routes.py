@@ -967,11 +967,24 @@ async def proxy_chat(
         max_total=MAX_MEMORY_TOTAL_CHARS,
     )
 
-    # 4a. 私聊分类器（Guardrail） + 消息缓冲（5s 窗口，Qwen 并行）
+    # 4a. 私聊三态分类：先分类再路由
     guardrail_status: str | None = None
     _classifier_ran = False
-    buffered_query: str | None = None  # 缓冲合并后的查询，供 LLM 使用
+    buffered_query: str | None = None
     buffered_files: list[str] | None = None
+
+    if not is_group and not req.classification_request:
+        from core.private_timing import get_private_gate
+        try:
+            private_gate = get_private_gate()
+            decision = await private_gate.classify(
+                req.query, user_id=req.user_id, has_files=bool(req.files),
+            )
+            if decision.action == "no_reply":
+                _persist_chat_turn(db, req, "", guardrail_status=None)
+                return {"status": "no_reply", "user_id": req.user_id}
+        except Exception as e:
+            logger.warning("[/chat] PrivateGate classify failed user=%s: %s", req.user_id, e)
 
     if not is_group or req.classification_request:
         try:
