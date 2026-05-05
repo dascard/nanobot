@@ -566,6 +566,41 @@ def submit_log(
 
     return {"status": "ok", "unprocessed_logs": pending}
 
+
+# ── [DEPRECATED] 旧群聊端点 —— 逐步迁移到 /group/message ──
+
+class AmbientLogRequest(BaseModel):
+    group_id: str = "unknown"
+    session_name: str | None = None
+    sender_name: str = "unknown"
+    content: str = ""
+    message_id: str | None = None
+
+
+@router.post("/log_ambient")
+def submit_ambient_log(req: AmbientLogRequest, db: Session = Depends(get_db),
+                       _auth=Depends(verify_token)):
+    """[DEPRECATED] 使用 /group/message 替代。"""
+    logger.warning("[DEPRECATED] /log_ambient called by group=%s — migrate to /group/message", req.group_id)
+    actual_user_id = _normalize_group_session_id(req.group_id)
+    user = db.query(User).filter(User.id == actual_user_id).first()
+    if not user:
+        db.add(User(id=actual_user_id))
+        db.commit()
+    elif req.session_name and user.name != req.session_name:
+        user.name = req.session_name
+        db.commit()
+    formatted = f"[{req.sender_name}]: {req.content}"
+    db.add(ChatLog(user_id=actual_user_id, session_id=actual_user_id,
+                   sender_name=req.sender_name, session_name=req.session_name,
+                   role="ambient", content=formatted, processed=1,
+                   message_id=req.message_id))
+    db.commit()
+    return {"status": "ok", "message": "ambient log saved [deprecated]"}
+
+
+
+
 # ── 统一群聊入口 /group/message ──
 
 class GroupMessageRequest(BaseModel):
@@ -611,6 +646,10 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
 
     group_user_id = _normalize_group_session_id(req.group_id)
 
+    logger.info("[GroupMsg] recv group=%s sender=%s len=%d at=%s reply=%s",
+                req.group_id, req.sender_name, len(req.message or ""),
+                req.is_at_bot, req.is_reply_to_bot)
+
     # 1. 归档 ambient log
     user = db.query(User).filter(User.id == group_user_id).first()
     if not user:
@@ -628,9 +667,11 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
         message_id=req.message_id,
     ))
     db.commit()
+    logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
 
     # 2. 判断是否需要进入 TimingGate
     should_trigger, reason = _derive_group_trigger_reason(req)
+    logger.info("[GroupMsg] trigger=%s enter_timing=%s", reason, should_trigger)
     if not should_trigger:
         return {"action": "no_reply", "reason": reason}
 
@@ -779,9 +820,26 @@ class GroupTimingTimerRequest(BaseModel):
     trigger_reason: str = ""
 
 
+@router.post("/group_timing")
+async def group_timing_deprecated(req: GroupTimingRequest, _auth=Depends(verify_token)):
+    """[DEPRECATED] 使用 /group/message 替代。"""
+    logger.warning("[DEPRECATED] /group_timing called by group=%s — migrate to /group/message", req.group_id)
+    from core.timing_runtime import get_group_runtime
+    runtime = get_group_runtime()
+    result = await runtime.process_message(
+        req.group_id,
+        {"sender_id": req.sender_id, "sender_name": req.sender_name,
+         "message": req.message, "message_id": req.message_id or "",
+         "is_reply_to_bot": req.is_reply_to_bot},
+        session_name=req.session_name or "",
+        bot_aliases=list(req.bot_aliases or []),
+        trigger_reason=req.trigger_reason or "mentioned",
+    )
+    return result
 @router.post("/group_timing/timer")
-async def group_timing_timer(req: GroupTimingTimerRequest, _auth=Depends(verify_token)):
-    """Timing Gate timer 回调——wait 到期后 QQbot 调用此端点。"""
+async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends(get_db),
+                             _auth=Depends(verify_token)):
+    """Timing Gate timer 回调——wait 到期，若 continue 则内部生成回复。"""
     import time as _time
     from core.timing_runtime import get_group_runtime
 
@@ -792,12 +850,46 @@ async def group_timing_timer(req: GroupTimingTimerRequest, _auth=Depends(verify_
             req.group_id, req.generation, trigger_reason=req.trigger_reason,
         )
         elapsed_ms = int((_time.time() - t0) * 1000)
+        action = result.get("action", "no_reply")
         logger.info(
-            "[TimingGate.timer] group=%s gen=%d action=%s latency=%dms",
-            req.group_id, req.generation, result.get("action"), elapsed_ms,
+            "[TimingGate.timer] group=%s gen=%d ➜ %s latency=%dms",
+            req.group_id, req.generation, action, elapsed_ms,
         )
+
+        if action == "continue":
+            group_user_id = _normalize_group_session_id(req.group_id)
+            try:
+                from nanobot_kt.bridge import get_bridge
+                from core.context_builder import build_session_memory
+
+                bridge = get_bridge()
+                memory_header, history_messages = build_session_memory(
+                    db, group_user_id, user_id=group_user_id, is_group=True,
+                )
+                bridge_meta = {
+                    "user_id": group_user_id, "session_id": group_user_id,
+                    "is_group": True, "history_header": memory_header,
+                    "history_messages": history_messages, "group_id": req.group_id,
+                }
+                chat_query = _build_multimodal_user_input_text(
+                    result.get("pending_text", ""), None, max_chars=MAX_QUERY_CHARS,
+                )
+                if not chat_query.strip():
+                    chat_query = "[群聊] timer 触发回复"
+                enriched = f"[群聊] timer 到期回复：\n<user_input>\n{chat_query}\n</user_input>"
+                reply = await bridge.handle_message(
+                    enriched, session_id=group_user_id, user_id=group_user_id,
+                    metadata=bridge_meta,
+                )
+                answer = reply if isinstance(reply, str) else str(reply or "")
+                result["reply"] = _sanitize_prompt_text(answer, max_chars=4000)
+                result["group_id"] = req.group_id
+                logger.info("[TimingGate.timer] reply group=%s len=%d", req.group_id, len(answer))
+            except Exception as e:
+                logger.error("[TimingGate.timer] bridge failed group=%s: %s", req.group_id, e)
+                result["action"] = "no_reply"
     except Exception as e:
-        result = {"action": "no_reply", "reason": "内部错误"}
+        result = {"action": "no_reply", "reason": f"error: {e}"}
     return result
 
 
