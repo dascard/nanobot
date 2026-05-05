@@ -115,12 +115,6 @@ class ChatProxyRequest(BaseModel):
 class EvolutionTriggerRequest(BaseModel):
     user_id: str
 
-class AmbientLogRequest(BaseModel):
-    group_id: str = "unknown"
-    session_name: str | None = None  # 场景名 (如群名)
-    sender_name: str = "unknown"    # 发送者名
-    content: str = ""
-    message_id: str | None = None   # QQ 原始消息 ID
 
 
 class MemoryDigestRunRequest(BaseModel):
@@ -572,40 +566,6 @@ def submit_log(
 
     return {"status": "ok", "unprocessed_logs": pending}
 
-@router.post("/log_ambient")
-def submit_ambient_log(
-    req: AmbientLogRequest,
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_token),
-):
-    """专门接收前台悄无声息收集的环境窥屏包，设为已处理，不消耗高级分析算力，只做持久化备份"""
-    actual_user_id = _normalize_group_session_id(req.group_id)
-
-    # ensure User exists, and stamp group name if provided (not fallback)
-    user = db.query(User).filter(User.id == actual_user_id).first()
-    if not user:
-        db.add(User(id=actual_user_id))
-        db.commit()
-    elif req.session_name and req.session_name != f"群聊:{req.group_id}" and user.name != req.session_name:
-        user.name = req.session_name
-        db.commit()
-
-    formatted_content = f"[{req.sender_name}]: {req.content}"
-
-    db.add(ChatLog(
-        user_id=actual_user_id,
-        session_id=actual_user_id,
-        sender_name=req.sender_name,
-        session_name=req.session_name,
-        role="ambient",
-        content=formatted_content,
-        processed=1,
-        message_id=req.message_id,
-    ))
-    db.commit()
-    return {"status": "ok", "message": "ambient log saved"}
-
-
 # ── 统一群聊入口 /group/message ──
 
 class GroupMessageRequest(BaseModel):
@@ -817,53 +777,6 @@ class GroupTimingTimerRequest(BaseModel):
     generation: int
     timer_fired: bool = True
     trigger_reason: str = ""
-
-
-@router.post("/group_timing")
-async def group_timing(req: GroupTimingRequest, _auth=Depends(verify_token)):
-    """Timing Gate——GroupRuntime 管理状态，TimingGate 做判断。"""
-    import time as _time
-    from core.timing_runtime import get_group_runtime
-
-    runtime = get_group_runtime()
-
-    t0 = _time.time()
-    try:
-        result = await runtime.process_message(
-            req.group_id,
-            {
-                "sender_id": req.sender_id,
-                "sender_name": req.sender_name,
-                "message": req.message,
-                "message_id": req.message_id or "",
-                "is_reply_to_bot": req.is_reply_to_bot,
-            },
-            session_name=req.session_name or "",
-            bot_aliases=list(req.bot_aliases or []),
-            trigger_reason=req.trigger_reason,
-        )
-        elapsed_ms = int((_time.time() - t0) * 1000)
-        action = result.get("action", "no_reply")
-        logger.info(
-            "[TimingGate] group=%s trigger=%s ➜ %s delay=%s gen=%d latency=%dms "
-            "cooldown=%.0fs reason=%.80s",
-            req.group_id, req.trigger_reason or "mentioned",
-            action, result.get("delay_seconds"),
-            result.get("generation", 0), elapsed_ms,
-            result.get("cooldown_ago", 0) or 0,
-            str(result.get("reason", ""))[:80],
-        )
-        if result.get("pending_count"):
-            logger.info("[TimingGate] group=%s pending=%d msgs", req.group_id, result["pending_count"])
-    except Exception as e:
-        elapsed_ms = int((_time.time() - t0) * 1000)
-        logger.warning(
-            "[TimingGate] group=%s trigger=%s FAILED latency=%dms: %s",
-            req.group_id, req.trigger_reason or "mentioned", elapsed_ms, e,
-        )
-        result = {"action": "no_reply", "delay_seconds": None, "reason": "内部错误"}
-
-    return result
 
 
 @router.post("/group_timing/timer")

@@ -48,25 +48,6 @@ def test_submit_log(client, db_session):
     assert logs[0].content == "hello API"
     assert logs[1].content == "hi"
 
-
-def test_submit_ambient_log_uses_normalized_group_session_id(client, db_session):
-    response = client.post(
-        "/api/v1/log_ambient",
-        json={
-            "group_id": "987654",
-            "sender_name": "测试成员",
-            "session_name": "测试群",
-            "content": "大家好",
-        },
-    )
-
-    assert response.status_code == 200
-
-    log = db_session.query(ChatLog).filter_by(role="ambient").one()
-    assert log.user_id == "group_987654"
-    assert log.session_id == "group_987654"
-    assert log.content == "[测试成员]: 大家好"
-
 def test_proxy_chat(client, db_session):
     from unittest.mock import patch
     from unittest.mock import AsyncMock
