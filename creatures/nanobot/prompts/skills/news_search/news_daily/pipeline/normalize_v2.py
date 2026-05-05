@@ -102,10 +102,6 @@ def compute_source_quality(source_group: str) -> float:
 
 def normalize_articles(raw_items: list) -> list[Article]:
     articles = []
-    return articles
-
-def normalize_articles(raw_items: list) -> list[Article]:
-    articles = []
     for item in raw_items:
         pub = parse_date(getattr(item, "published_at", "") or "")
         source_name = getattr(item, "source_name", "") or ""

@@ -118,7 +118,7 @@ def _report_to_digest(report, articles):
             "known": c.known[:3] or [a.summary[:200] for a in c.articles[:2] if a.summary],
             "unknown": c.missing[:2] or [],
             "impact": c.impact or "",
-            "source_labels": [a.source for a in c.articles[:3]],
+            "source_ids": _cluster_src_ids(c), "source_labels": [a.source for a in c.articles[:3]],
         }
 
     # details 也走 render guard
