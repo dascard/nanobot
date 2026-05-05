@@ -123,10 +123,10 @@ class TestNewsSearchTool:
         tool = NewsSearchTool()
         assert tool.tool_name == "news_search"
 
-    @patch("creatures.nanobot.prompts.skills.news_search.tool.search_and_extract_news")
-    def test_execute_success(self, mock_search):
+    @patch("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline")
+    def test_execute_success(self, mock_daily):
         from creatures.nanobot.prompts.skills.news_search.tool import NewsSearchTool
-        mock_search.return_value = "AI news: GPT-5 released"
+        mock_daily.return_value = "<article>AI news: GPT-5 released</article>"
 
         tool = NewsSearchTool()
         result = asyncio.run(tool.execute({"query": "AI news"}))
@@ -351,10 +351,12 @@ class TestNanobotBridge:
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.to_messages.return_value = [
+        tool_messages = [
             {"role": "tool", "content": "[news_search]\n<article class=\"news-brief\"><h1>HTML资讯卡片</h1></article>"},
             {"role": "assistant", "content": "我给你整理了几条新闻"},
         ]
+        mock_conv.to_messages.return_value = tool_messages
+        mock_conv.get_messages.return_value = tool_messages
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
 
         async def fake_process(_event):
@@ -387,7 +389,7 @@ class TestNanobotBridge:
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.to_messages.return_value = [
+        ga_messages = [
             {
                 "role": "tool",
                 "content": (
@@ -398,6 +400,8 @@ class TestNanobotBridge:
             },
             {"role": "assistant", "content": "我给你总结一下这个群"},
         ]
+        mock_conv.to_messages.return_value = ga_messages
+        mock_conv.get_messages.return_value = ga_messages
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
 
         async def fake_process(_event):

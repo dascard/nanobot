@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 from unittest.mock import MagicMock, patch
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from creatures.nanobot.prompts.skills.news_search import tool as news_tool
 from creatures.nanobot.prompts.skills.news_search.tool import (
@@ -12,13 +12,16 @@ from creatures.nanobot.prompts.skills.news_search.tool import (
     _merge_layout_with_fallback,
 )
 
-def test_web_search_mock():
+def test_web_search_mock(monkeypatch):
     """测试 WebSearchTool 是否能正确处理搜刮结果"""
+    monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
+    monkeypatch.setattr(news_tool, "_fetch_multi_rss", lambda query=None, max_results=3: [])
+    monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])
     mock_results = [
         {"title": "AI News 1", "href": "http://test1.com", "body": "Snippet 1"},
         {"title": "AI News 2", "href": "http://test2.com", "body": "Snippet 2"},
     ]
-    
+
     with patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
         # Mock DDGS context manager and text method
         mock_instance = mock_ddgs.return_value.__enter__.return_value
@@ -101,13 +104,16 @@ def test_combined_news_tool_output_matches_qqbot_markdown_render_patterns():
         assert "DeepSeek 新发布" in final_report
 
 
-def test_web_search_news_query_uses_daily_timelimit_and_merges_rss_with_web():
+def test_web_search_news_query_uses_daily_timelimit_and_merges_rss_with_web(monkeypatch):
+    monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
+    monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])
+    fresh_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+0000")
     rss_results = [
         {
             "title": "RSS AI Daily",
             "href": "https://rss.example.com/a",
             "body": "rss body",
-            "date": "2026-05-01T10:00:00+0000",
+            "date": fresh_date,
             "source_weight": 3,
             "search_strategy": "rss:test",
         }
@@ -119,15 +125,15 @@ def test_web_search_news_query_uses_daily_timelimit_and_merges_rss_with_web():
             "body": "web body",
         }
     ]
+    monkeypatch.setattr(news_tool, "_fetch_multi_rss", lambda query=None, max_results=3: rss_results)
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool._fetch_multi_rss", return_value=rss_results), \
-         patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+    with patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
         mock_instance = mock_ddgs.return_value.__enter__.return_value
         mock_instance.text.return_value = web_results
 
         results = WebTools.search("AI 最新资讯", max_results=3, deep=False)
 
-        assert len(results) == 2
+        assert len(results) == 2, f"Expected 2 results, got {len(results)}: {results}"
         assert any(item["href"] == "https://rss.example.com/a" for item in results)
         assert any(item["href"] == "https://web.example.com/b" for item in results)
         _, kwargs = mock_instance.text.call_args
@@ -196,13 +202,17 @@ def test_combined_news_tool_renders_fixed_html_template_from_structured_layout()
         assert "<table" in final_report
 
 
-def test_web_search_news_query_prefers_ddgs_news_results():
+def test_web_search_news_query_prefers_ddgs_news_results(monkeypatch):
+    monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
+    monkeypatch.setattr(news_tool, "_fetch_multi_rss", lambda query=None, max_results=3: [])
+    monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])
+    fresh_date = datetime.now().strftime("%Y-%m-%dT%H:%M:%S+0000")
     news_results = [
         {
             "title": "Fresh AI Launch",
             "url": "https://news.example.com/fresh",
             "body": "fresh body",
-            "date": "2026-05-01T09:30:00+0000",
+            "date": fresh_date,
         }
     ]
     text_results = [
@@ -213,8 +223,7 @@ def test_web_search_news_query_prefers_ddgs_news_results():
         }
     ]
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool._fetch_multi_rss", return_value=[]), \
-         patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+    with patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
         mock_instance = mock_ddgs.return_value.__enter__.return_value
         mock_instance.news.return_value = news_results
         mock_instance.text.return_value = text_results
@@ -263,16 +272,17 @@ def test_juya_rss_preserves_pubdate_for_freshness_filter():
 def test_news_search_tool_reuses_equivalent_daily_query_cache(monkeypatch):
     calls = {"count": 0}
 
-    def fake_search(query, max_results=3, **kwargs):
+    def fake_daily(query, mode="quality", limit=8):
         calls["count"] += 1
-        return f"<article>{query}:{max_results}</article>"
+        return f"<article>{query}:{limit}</article>"
 
-    monkeypatch.setattr(news_tool, "search_and_extract_news", fake_search)
+    monkeypatch.setattr(news_tool, "_run_news_daily_pipeline", fake_daily)
     news_tool._NEWS_SEARCH_CACHE.clear()
 
     tool = news_tool.NewsSearchTool()
-    first = asyncio.run(tool.execute({"query": "2026年5月1日 人工智能 新闻", "max_results": 5}))
-    second = asyncio.run(tool.execute({"query": "AI 最新资讯 2026-05-01", "max_results": 5}))
+    q = "2026年5月1日 人工智能 新闻"
+    first = asyncio.run(tool.execute({"query": q, "max_results": 5}))
+    second = asyncio.run(tool.execute({"query": q, "max_results": 5}))
 
     assert first.success
     assert second.success
@@ -280,13 +290,18 @@ def test_news_search_tool_reuses_equivalent_daily_query_cache(monkeypatch):
     assert second.output == first.output
 
 
-def test_web_search_latest_query_filters_out_obviously_stale_dated_results():
+def test_web_search_latest_query_filters_out_obviously_stale_dated_results(monkeypatch):
+    monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
+    monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])
+    now = datetime.now()
+    fresh_date = now.strftime("%Y-%m-%dT%H:%M:%S+0000")
+    old_date = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%S+0000")
     rss_results = [
         {
             "title": "Old RSS News",
             "href": "https://rss.example.com/old",
             "body": "old rss body",
-            "date": "2026-04-27T09:00:00+0000",
+            "date": old_date,
             "source_weight": 3,
             "search_strategy": "rss:test",
         },
@@ -294,14 +309,14 @@ def test_web_search_latest_query_filters_out_obviously_stale_dated_results():
             "title": "Fresh RSS News",
             "href": "https://rss.example.com/fresh",
             "body": "fresh rss body",
-            "date": "2026-05-01T08:00:00+0000",
+            "date": fresh_date,
             "source_weight": 3,
             "search_strategy": "rss:test",
         },
     ]
+    monkeypatch.setattr(news_tool, "_fetch_multi_rss", lambda query=None, max_results=3: rss_results)
 
-    with patch("creatures.nanobot.prompts.skills.news_search.tool._fetch_multi_rss", return_value=rss_results), \
-         patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
+    with patch("creatures.nanobot.prompts.skills.news_search.tool.DDGS") as mock_ddgs:
         mock_instance = mock_ddgs.return_value.__enter__.return_value
         mock_instance.news.return_value = []
         mock_instance.text.return_value = []
