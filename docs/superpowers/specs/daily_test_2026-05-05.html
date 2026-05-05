@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><style>
+:root{--bg:#faf9f7;--card:#fff;--ink:#1a1a2e;--sub:#666;--accent:#e65100;
+  --tag-bg:#fff3e0;--tag-ink:#bf360c;--green:#2e7d32;--border:#e8e5df;
+  --shadow:0 2px 8px rgba(0,0,0,.06)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--ink);line-height:1.7;padding:24px 16px 40px}
+.container{max-width:720px;margin:0 auto}
+.header{margin-bottom:28px;padding-bottom:20px;border-bottom:2px solid var(--border)}
+.header h1{font-size:1.6rem;font-weight:700;color:var(--ink)}
+.header .sub{font-size:.9rem;color:var(--sub);margin-top:4px}
+.header .meta{font-size:.75rem;color:#999;margin-top:6px}
+.verdict{background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:18px 20px;margin-bottom:24px;font-size:.95rem;box-shadow:var(--shadow)}
+.verdict .label{font-size:.75rem;color:var(--accent);font-weight:600;
+  text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.top-story{background:linear-gradient(135deg,#fff8e1,#fff3e0);
+  border:2px solid var(--accent);border-radius:14px;padding:22px;margin-bottom:24px;
+  box-shadow:var(--shadow)}
+.top-story .flag{font-size:.7rem;color:var(--accent);font-weight:700;
+  text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+.top-story h2{font-size:1.15rem;margin-bottom:8px}
+.top-story .what{font-size:.9rem;color:var(--ink);margin-bottom:8px}
+.top-story .why{font-size:.82rem;color:var(--sub);font-style:italic}
+.top-story .confidence{display:inline-block;margin-top:10px;padding:2px 10px;
+  border-radius:10px;font-size:.72rem;background:var(--tag-bg);color:var(--tag-ink)}
+.highlights{margin-bottom:24px}
+.highlights .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.highlight-card{background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:14px 18px;margin-bottom:10px;box-shadow:var(--shadow)}
+.highlight-card .label{font-size:.72rem;font-weight:600;color:var(--accent);
+  margin-bottom:4px}
+.highlight-card .txt{font-size:.9rem}
+.highlight-card .src{font-size:.72rem;color:#999;margin-top:6px}
+.importance{display:inline-block;margin-left:6px}
+.importance .dot{display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--accent);margin-right:2px;opacity:.3}
+.importance .dot.active{opacity:1}
+.watchlist{background:var(--card);border:1px solid var(--border);
+  border-radius:12px;padding:18px 20px;margin-bottom:24px;box-shadow:var(--shadow)}
+.watchlist .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.watch-item{font-size:.88rem;padding:6px 0;border-bottom:1px solid #f5f3ef}
+.watch-item:last-child{border-bottom:none}
+.watch-item .reason{font-size:.78rem;color:var(--sub);margin-left:4px}
+.details{margin-bottom:24px}
+.details .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.detail-card{background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:14px 18px;margin-bottom:10px;box-shadow:var(--shadow)}
+.detail-title{font-weight:700;font-size:.95rem;margin-bottom:8px;color:var(--ink)}
+.detail-block{font-size:.88rem;color:var(--ink);margin-top:6px}
+.detail-block ul{margin:4px 0 0 16px;padding:0}
+.detail-block li{margin-bottom:2px}
+.detail-impact{font-size:.86rem;color:var(--sub);margin-top:8px;font-style:italic}
+.detail-src{font-size:.72rem;color:#999;margin-top:6px}
+.missing{font-size:.8rem;color:#999;padding:12px 16px;margin-bottom:24px;
+  border-left:3px solid #ddd;background:#f8f8f6;border-radius:0 8px 8px 0}
+.closing{font-size:.88rem;color:var(--sub);text-align:center;
+  padding:16px 0;border-top:1px solid var(--border);margin-top:8px}
+.footer{text-align:center;font-size:.7rem;color:#ccc;margin-top:20px}
+</style></head>
+<body class="news-brief">
+<div class="container">
+  <div class="header">
+    <h1>AI 日报</h1>
+    <div class="sub">6 个事件</div>
+    <div class="meta">2026-05-05 16:06 · daily mode</div>
+  </div>
+  <div class="verdict"><div class="label">今日总评</div>共 19 篇文章，6 个事件聚类</div>
+  <div class="top-story">
+    <div class="flag">⚡ Top Story</div>
+    <h2>OpenAI · 产品更新 · 发布新模型 — Etsy's new native app within ChatGPT aims to be a conversational  shopping e</h2>
+    <div class="what">Etsy's new native app within ChatGPT aims to be a conversational  shopping experience for users.</div>
+    <div class="why">4 个来源</div>
+    
+    <div style="margin-top:8px;font-size:.72rem;color:#999">
+techcrunch_ai, openai_news, openai_news · 2026-05-05, 2026-05-04
+    </div>
+  </div>
+  <div class="highlights"><div class="section-title">📌 要点速览</div>
+    <div class="highlight-card">
+      <div class="label">anthropic_news<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot"></span></span></div>
+      <div class="txt">Anthropic · 研究成果 · 安全事件 — Anthropic has spent years building itself up as the safe AI company. But new sec</div>
+      <div class="src">theverge_ai  2026-05-05</div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">nvidia_blog<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot"></span><span class="dot"></span></span></div>
+      <div class="txt">NVIDIA · 产品更新 · 研究成果 — The automotive cockpit is undergoing a fundamental shift from rule-based interfa</div>
+      <div class="src">nvidia_blog, nvidia_blog  2026-05-05, 2026-05-04</div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">nvidia_blog<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot"></span><span class="dot"></span></span></div>
+      <div class="txt">产品更新 — Generative AI’s explosive first chapter was defined by humans sending requests a</div>
+      <div class="src">nvidia_blog  2026-05-05</div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">techcrunch_ai<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+      <div class="txt">产品更新 — The Seattle-based startup's Series A round was led by Glilot Capital, NFX, and S</div>
+      <div class="src">  </div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">theverge_ai<span class="importance"><span class="dot active"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+      <div class="txt">Google/DeepMind — Staffers at Google DeepMind's headquarters have voted to unionize in an effort t</div>
+      <div class="src">  </div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">theverge_ai<span class="importance"><span class="dot active"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+      <div class="txt">What an AI-designed car looks like — The cars rolling off production lines right now are filled with old ideas. From </div>
+      <div class="src">theverge_ai  2026-05-05</div>
+    </div>
+  </div>
+  <div class="details"><div class="section-title">🧩 重点详情</div>
+    <div class="detail-card">
+      <div class="detail-title">OpenAI · 产品更新 · 发布新模型 — Etsy's new native app within ChatGPT aims to be a conversational  shopping e</div>
+      <div class="detail-block"><b>已知：</b><ul><li>Etsy's new native app within ChatGPT aims to be a conversational  shopping experience for users.</li><li>OpenAI and PwC are partnering to help enterprises use AI agents to automate finance workflows, improve forecasting, strengthen controls, and modernize the CFO function.</li></ul></div>
+      <div class="detail-src">来源：techcrunch_ai, openai_news, openai_news</div>
+    </div>
+    <div class="detail-card">
+      <div class="detail-title">Anthropic · 研究成果 · 安全事件 — Anthropic has spent years building itself up as the safe AI company. But n</div>
+      <div class="detail-block"><b>已知：</b><ul><li>Anthropic has spent years building itself up as the safe AI company. But new security research shared with The Verge suggests Claude's carefully crafted helpful personality may itself be a vulnerabili</li><li>Anthropic is an AI safety and research company that&amp;#x27;s working to build reliable, interpretable, and steerable AI systems.</li></ul></div>
+      <div class="detail-src">来源：theverge_ai, anthropic_news, anthropic_news</div>
+    </div>
+    <div class="detail-card">
+      <div class="detail-title">NVIDIA · 产品更新 · 研究成果 — The automotive cockpit is undergoing a fundamental shift from rule-based inte</div>
+      <div class="detail-block"><b>已知：</b><ul><li>The automotive cockpit is undergoing a fundamental shift from rule-based interfaces to agentic, multimodal AI systems capable of reasoning, planning, and... The automotive cockpit is undergoing a fund</li><li>The Nvidia CEO seems to feel that claims of AI's job-killing potential have been greatly exaggerated.</li></ul></div>
+      <div class="detail-src">来源：nvidia_blog, techcrunch_ai, nvidia_blog</div>
+    </div>
+  </div>
+  <div class="closing">基于事件聚类生成，同源/同实体已自动合并。</div>
+  <div class="footer">Nanobot AI 日报 · 2026-05-05 16:06</div>
+</div>
+</body>
+</html>

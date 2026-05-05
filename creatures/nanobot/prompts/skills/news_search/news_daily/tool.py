@@ -103,22 +103,67 @@ def _report_to_digest(report, articles):
         if rep:
             seen_domains[rep.domain] = seen_domains.get(rep.domain, 0) + 1
 
+    _ENTITY_CN = {
+        "openai": "OpenAI", "anthropic": "Anthropic", "google": "Google/DeepMind",
+        "deepseek": "DeepSeek/深度求索", "qwen": "Qwen/通义千问", "kimi": "Kimi/月之暗面",
+        "mistral": "Mistral", "meta": "Meta", "nvidia": "NVIDIA", "xai": "xAI/Grok",
+    }
+    _TOPIC_CN = {
+        "model_release": "发布新模型", "benchmark": "评测/基准", "funding": "融资动态",
+        "product": "产品更新", "policy": "政策/监管", "research": "研究成果", "incident": "安全事件",
+    }
+
+    def _build_event_summary(c):
+        """从 cluster 的 entity/topic/article 生成中文事件摘要。"""
+        parts = []
+        entity_cn = [_ENTITY_CN.get(e, e) for e in (c.entities or [])]
+        topic_cn = [_TOPIC_CN.get(t, t) for t in (c.keywords or [])]
+        if entity_cn:
+            parts.append("、".join(entity_cn))
+        if topic_cn:
+            parts.append(" · ".join(topic_cn[:2]))
+        n_src = len(c.source_domains) if c.source_domains else 1
+        src_note = f"{n_src} 个来源" if n_src >= 2 else ""
+        base = " · ".join(parts) if parts else c.title[:60]
+        # 拼接一篇文章的摘要作为补充
+        snippets = [a.summary[:80] for a in c.articles[:2] if a.summary and len(a.summary) > 10]
+        snippet = (" — " + snippets[0]) if snippets else ""
+        return f"{base}{snippet}", src_note
+
     def _cluster_to_card(c):
         rep = c.representative
+        summary, src_note = _build_event_summary(c)
+        text = summary[:140]
         return {
             "label": (rep.source if rep else ""),
-            "text": c.title[:120],
+            "text": text,
+            "source_ids": _cluster_src_ids(c),
+            "importance": min(5, max(1, int(c.final_score * 5))),
+        }
+
+    def _cluster_to_top_story(c):
+        summary, src_note = _build_event_summary(c)
+        known_texts = c.known[:2] or [a.summary[:150] for a in c.articles[:2] if a.summary]
+        snippets = [a.summary[:120] for a in c.articles[:3] if a.summary and len(a.summary) > 20]
+        return {
+            "title": summary[:100],
+            "text": summary[:140],
+            "what_happened": known_texts[0] if known_texts else (snippets[0] if snippets else ""),
+            "why_it_matters": (c.impact or "")[:120] or (src_note or ""),
+            "label": (c.representative.source if c.representative else ""),
             "source_ids": _cluster_src_ids(c),
             "importance": min(5, max(1, int(c.final_score * 5))),
         }
 
     def _cluster_to_detail(c):
+        summary, _ = _build_event_summary(c)
         return {
-            "title": c.title,
+            "title": summary[:100],
             "known": c.known[:3] or [a.summary[:200] for a in c.articles[:2] if a.summary],
             "unknown": c.missing[:2] or [],
             "impact": c.impact or "",
-            "source_ids": _cluster_src_ids(c), "source_labels": [a.source for a in c.articles[:3]],
+            "source_ids": _cluster_src_ids(c),
+            "source_labels": [a.source for a in c.articles[:3]],
         }
 
     # details 也走 render guard
@@ -134,7 +179,7 @@ def _report_to_digest(report, articles):
         "verdict": f"共 {len(articles)} 篇文章，{len(highlights)} 个事件聚类" if highlights else "今日有效事件较少",
         "generated_at": now_str,
         "mode": "daily",
-        "top_story": _cluster_to_card(top) if top else None,
+        "top_story": _cluster_to_top_story(top) if top else None,
         "highlights": [_cluster_to_card(c) for c in safe_hl[:6]],
         "details": [_cluster_to_detail(c) for c in safe_details[:3]],
         "watchlist": [],
