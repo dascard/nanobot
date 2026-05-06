@@ -9,6 +9,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     Text,
+    UniqueConstraint,
     create_engine,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -223,6 +224,7 @@ class ExpressionMemory(Base):
     last_seen = Column(DateTime, default=datetime.now)
     created_at = Column(DateTime, default=datetime.now)
 
+    __table_args__ = (UniqueConstraint("chat_stream_id", "expression", name="uq_expr_stream_expr"),)
 
 class JargonMemory(Base):
     """群聊黑话/术语学习——词义解释和使用条件。"""
@@ -240,6 +242,7 @@ class JargonMemory(Base):
     last_seen = Column(DateTime, default=datetime.now)
     created_at = Column(DateTime, default=datetime.now)
 
+    __table_args__ = (UniqueConstraint("chat_stream_id", "term", name="uq_jargon_stream_term"),)
 
 class ChatStreamConfig(Base):
     """群聊/私聊流配置——talk_value、表达开关等。"""
