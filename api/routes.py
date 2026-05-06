@@ -1145,7 +1145,7 @@ async def proxy_chat(
                     _persist_chat_turn(db, req, reply, guardrail_status="casual_template")
                     return {"status": "ok", "answer": reply}
                 # 无模板匹配——casual 不进 bridge，走默认短句
-                fallback = "你先说事。" if req.query else ""
+                fallback = "你先说事" if req.query else ""
                 _persist_chat_turn(db, req, fallback, guardrail_status="casual_template")
                 return {"status": "ok", "answer": fallback}
             if _private_decision.action == "reply_now":

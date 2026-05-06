@@ -549,6 +549,8 @@ class NanobotBridge:
 
                 reply_text = self._extract_reply_from_tool_output()
                 if reply_text:
+                    from core.reply_postprocess import strip_chat_end_punct
+                    reply_text = strip_chat_end_punct(reply_text)
                     logger.info("[NanobotBridge] reply() called len=%d, stopping model loop", len(reply_text))
                     await _call_tracker_method(tracker, "record_success", target_model)
                     break
@@ -621,6 +623,8 @@ class NanobotBridge:
             # Reply extraction: 优先从 reply() 工具输出提取用户可见文本
             reply_text = self._extract_reply_from_tool_output()
             if reply_text:
+                from core.reply_postprocess import strip_chat_end_punct
+                reply_text = strip_chat_end_punct(reply_text)
                 logger.info("[Reply] extracted from tool output len=%d", len(reply_text))
                 response = reply_text
                 # 如果 response 之前是空或者被污染了，用 reply 替换
