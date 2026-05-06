@@ -387,17 +387,19 @@ class NanobotBridge:
                                 expr_ctx = build_expression_context(chat_stream_id)
                                 if expr_ctx:
                                     conv.append("system", expr_ctx)
-                                    logger.info("[NanobotBridge] ExpressionContext injected for %s (%d chars)",
-                                                session_id, len(expr_ctx))
+                                    logger.info("[NanobotBridge] ExpressionContext injected stream=%s chars=%d",
+                                                chat_stream_id, len(expr_ctx))
                                 jargon_ctx = build_jargon_context(chat_stream_id)
                                 if jargon_ctx:
                                     conv.append("system", jargon_ctx)
-                                    logger.info("[NanobotBridge] JargonContext injected for %s (%d chars)",
-                                                session_id, len(jargon_ctx))
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
+                                    logger.info("[NanobotBridge] JargonContext injected stream=%s chars=%d",
+                                                chat_stream_id, len(jargon_ctx))
+                            except Exception as e:
+                                logger.warning("[NanobotBridge] Expression/Jargon inject failed stream=%s: %s",
+                                               session_id, e)
+                        except Exception as e:
+                            logger.warning("[NanobotBridge] GroupProfile inject failed session=%s: %s",
+                                           session_id, e)
             # --- Effort constraint + tool_policy hard enforcement ---
             effort_constraint = str(meta.get("effort_constraint", "")).strip()
             tool_policy = str(meta.get("tool_policy", "full")).strip()
