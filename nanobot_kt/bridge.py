@@ -395,7 +395,7 @@ class NanobotBridge:
                                     logger.info("[NanobotBridge] JargonContext injected stream=%s chars=%d",
                                                 chat_stream_id, len(jargon_ctx))
                             except Exception as e:
-                                logger.warning("[NanobotBridge] Expression/Jargon inject failed stream=%s: %s",
+                                logger.warning("[NanobotBridge] Expression/Jargon inject failed session=%s: %s",
                                                session_id, e)
                         except Exception as e:
                             logger.warning("[NanobotBridge] GroupProfile inject failed session=%s: %s",
