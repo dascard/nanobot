@@ -414,7 +414,12 @@ class NanobotBridge:
                     await route_client.sync_models_to_registry(force=False)
 
                 messages_for_routing = [{"role": "user", "content": raw_query}]
-                complexity = route_client.estimate_complexity(messages_for_routing, tools=[{}])
+                meta_complexity = meta.get("complexity")
+                if isinstance(meta_complexity, int) and 1 <= meta_complexity <= 10:
+                    complexity = meta_complexity
+                    logger.info("[Model Router] using metadata complexity=%s", complexity)
+                else:
+                    complexity = route_client.estimate_complexity(messages_for_routing, tools=[{}])
                 intel_floor = max(1, complexity - 1)
                 candidates = route_client.get_ordered_candidates(
                     provider="new-api", intel_floor=intel_floor,
