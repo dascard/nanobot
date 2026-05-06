@@ -361,6 +361,29 @@ def init_db():
                 print(f"  ⚠ Migration failed for {col_name}: {e}")
 
 
+
+    # expression/jargon unique index migration
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+        if "expression_memories" in inspector.get_table_names():
+            conn = engine.connect()
+            try:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_expr_stream_expr "
+                    "ON expression_memories(chat_stream_id, expression)"
+                ))
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_jargon_stream_term "
+                    "ON jargon_memories(chat_stream_id, term)"
+                ))
+                conn.commit()
+            except Exception as e:
+                print(f"  Warning: unique index migration skipped: {e}")
+            finally:
+                conn.close()
+    except Exception:
+        pass
 def get_db():
     db = SessionLocal()
     try:
