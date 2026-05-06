@@ -1127,15 +1127,23 @@ async def proxy_chat(
     _private_decision: PrivateDecision | None = None
 
     if not is_group and not req.classification_request:
-        from core.private_timing import get_private_gate, PrivateDecision
+        from core.private_timing import get_private_gate, PrivateDecision, get_effort_constraint
         try:
+            _is_superuser = _is_guardrail_superuser(req.user_id)
             private_gate = get_private_gate()
             _private_decision = await private_gate.classify(
                 req.query, user_id=req.user_id, has_files=bool(req.files),
+                is_superuser=_is_superuser,
             )
             if _private_decision.action == "no_reply":
                 _persist_chat_turn(db, req, "", guardrail_status=None)
                 return {"status": "no_reply", "user_id": req.user_id}
+            if _private_decision.effort == "casual":
+                from core.reply_templates import get_casual_reply
+                reply = get_casual_reply(req.query, is_superuser=_is_superuser)
+                if reply:
+                    _persist_chat_turn(db, req, reply, guardrail_status=None)
+                    return {"status": "ok", "answer": reply}
             if _private_decision.action == "reply_now":
                 messages = req.merged_messages or [req.query]
                 buffered_query = _join_buffered_messages(messages)
@@ -1313,6 +1321,7 @@ async def proxy_chat(
     # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
     bridge = get_bridge()
     _complexity = (_private_decision.complexity if _private_decision and _private_decision.complexity else 3)
+    _constraint = (get_effort_constraint(_private_decision.effort) if _private_decision else "")
     bridge_meta = {
         "session_name": req.session_name,
         "files": final_files,
@@ -1325,8 +1334,12 @@ async def proxy_chat(
         "private_decision": {
             "action": _private_decision.action,
             "complexity": _private_decision.complexity,
+            "effort": _private_decision.effort,
+            "tool_policy": _private_decision.tool_policy,
             "reason": _private_decision.reason,
         } if _private_decision else None,
+        "effort_constraint": _constraint or "",
+        "tool_policy": _private_decision.tool_policy if _private_decision else "full",
     }
 
     async def _do_chat():
