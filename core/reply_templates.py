@@ -10,6 +10,9 @@ CASUAL_TEMPLATES = {
     "missing_material": ["发。", "日志呢。", "先贴出来。"],
     "too_broad": ["太大了，挑一块。", "你先说目标。"],
     "uncertain_debug": ["不一定，先看日志。", "先别急着怪模型。"],
+    "daily_request_casual": ["这个有点麻烦。", "晚点看。", "你真要看？"],
+    "unclear_request": ["啥意思。", "你先说清楚。", "没看懂。"],
+    "image_no_context": ["这图要看啥。", "你想问哪块？"],
 }
 
 

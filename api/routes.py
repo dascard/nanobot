@@ -352,7 +352,7 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
     # ConversationTurn — 精简上下文，专用于历史注入
     # HTML 报告只存摘要，避免污染下轮上下文；ChatLog 保留完整原文。
     turn_answer = answer
-    turn_answer_kind = "chat"
+    turn_answer_kind = "casual_template" if guardrail_status == "casual_template" else "chat"
     if answer:
         answer_lower = answer.lstrip()[:500].lower()
         html_markers = ("<!doctype", "<html", "<head", "<body", "<article", "<style")

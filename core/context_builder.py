@@ -125,6 +125,12 @@ def build_session_memory(
         if not content:
             continue
         kind = _safe_meta(t.meta_json).get("kind", "chat")
+        # casual_template 最多保留 1 条，避免短句污染历史
+        if kind == "casual_template" and t.role == "assistant":
+            casual_count = sum(1 for d in selected_desc if d.get("role") == "assistant"
+                               and _safe_meta(d.get("meta_json", "{}")).get("kind") == "casual_template")
+            if casual_count >= 1:
+                continue
         if kind == "artifact_summary":
             token_cost = min(50, estimate_tokens(content))
         else:
@@ -135,7 +141,7 @@ def build_session_memory(
 
         time_label = relative_time_label(t.created_at) if t.created_at else ""
         display = f"{time_label} {content}".strip() if time_label else content
-        selected_desc.append({"role": t.role, "content": display})
+        selected_desc.append({"role": t.role, "content": display, "meta_json": t.meta_json})
 
     history_messages = list(reversed(selected_desc))
     if not history_messages:

@@ -63,13 +63,15 @@ def _looks_task_request(text: str) -> bool:
 
 def _has_inline_material(text: str) -> bool:
     """判断消息里是否已包含具体材料（报错、日志、代码等）。"""
-    strong_markers = ("KeyError", "TypeError", "SyntaxError", "No module named", "Traceback")
-    if any(m in text for m in strong_markers):
+    strong = ("Traceback", "Error", "Exception", "No module named",
+              "KeyError", "TypeError", "SyntaxError", "HTTPError",
+              "ImportError", "ModuleNotFoundError")
+    if any(m in text for m in strong):
         return True
     if len(text) < 40:
         return False
-    markers = ("\n", "Error", "Exception", "HTTP", "报错如下", "```", "错误信息", "status code")
-    return any(m in text for m in markers)
+    weak = ("\n", "```", "报错如下", "错误信息", "status code")
+    return any(m in text for m in weak)
 
 
 def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]:
@@ -96,7 +98,7 @@ def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]
         if ("日报" in t or "新闻" in t):
             if is_superuser:
                 return "serious", "full", "daily_request"
-            return "short", "limited", "daily_request"
+            return "casual", "none", "daily_request_casual"
         return "short", "limited", "specific_task"
     return "short", "limited", "general_query"
 
