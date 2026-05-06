@@ -214,44 +214,49 @@ class Guardrail:
 
     # ── Public API ──
 
-    def classify(self, message: str, *, allow_injection_passthrough: bool = False) -> dict:
-        """Classify a private chat message.
-
-        Returns dict with:
-          status: "reply" | "silent" | "injection"
-          complexity: int (0 for silent/injection, 1-10 for reply)
-        """
-        # L0: 空消息或纯空白直接静默，无需走模型
+    def detect_injection(self, message: str, *, allow_passthrough: bool = False) -> dict:
+        """Sentinel 注入检测——不做 Qwen 调用。"""
         if not message or not message.strip():
-            return {"status": "silent", "complexity": 0}
-
-        # L1: 模型注入检测（检查原始消息）
+            return {"status": "safe", "injection": False}
         if self._detect_injection(message):
-            if not allow_injection_passthrough:
-                return {"status": "injection", "complexity": 0}
-            logger.info("Injection detected but bypassing short-circuit for passthrough")
+            if allow_passthrough:
+                logger.info("[Guardrail] injection detected but passthrough enabled")
+                return {"status": "safe", "injection": True, "passthrough": True}
+            return {"status": "injection", "injection": True}
+        return {"status": "safe", "injection": False}
 
-        # L1.5: 去掉误导性前缀标记（[SYSTEM] 等）后再发给模型
+    def classify_reply_legacy(self, message: str) -> dict:
+        """旧 Qwen 二分类——输出 status=reply/silent + complexity。"""
         message = self._CONFUSING_PREFIXES.sub("", message).strip()
         if not message:
             return {"status": "silent", "complexity": 0}
-
-        # L2 + L4: Call Qwen (L4 = timeout handled by urlopen)
         try:
             response_text = self._call_qwen(message)
         except Exception as exc:
             logger.warning("Qwen call failed, fallback to reply: %s", exc)
             return {"status": "reply", "complexity": 5}
-
-        # L3: Output validation
         is_valid, type_str, complexity = self._validate_output(response_text)
         if not is_valid:
             return {"status": "injection", "complexity": 0}
-
         if type_str == "否":
             return {"status": "silent", "complexity": 0}
-
         return {"status": "reply", "complexity": complexity}
+
+    def classify(self, message: str, *, allow_injection_passthrough: bool = False) -> dict:
+        """Classify a private chat message (保持兼容)。
+
+        Returns dict with:
+          status: "reply" | "silent" | "injection"
+          complexity: int (0 for silent/injection, 1-10 for reply)
+        """
+        if not message or not message.strip():
+            return {"status": "silent", "complexity": 0}
+
+        injection = self.detect_injection(message, allow_passthrough=allow_injection_passthrough)
+        if injection["status"] == "injection":
+            return {"status": "injection", "complexity": 0}
+
+        return self.classify_reply_legacy(message)
 
 
 # ── Module-level singleton ──
@@ -265,6 +270,132 @@ def get_guardrail() -> Guardrail:
     if _guardrail_instance is None:
         _guardrail_instance = Guardrail()
     return _guardrail_instance
+
+
+# ── PrivateDecisionClassifier（私聊三态决策，一次 Qwen 调用输出 action + complexity）──
+
+PRIVATE_DECISION_PROMPT = """你是私聊消息路由分类器。你的任务是判断用户这条私聊消息如何处理。
+
+只输出 JSON，不要解释，不要 Markdown。
+
+字段 action：
+- no_reply：不需要回复。用于纯语气词、表情、结束语、极短确认，如"嗯/哦/ok/收到/好/哈哈/草"。
+- wait：用户明显没说完，需要等待后续消息。用于半句话、碎片输入、"等下/还有/我发图/我发代码/这个报错是"等。
+- reply_now：明确问题、请求、命令，应立即回复。
+
+字段 complexity，整数 1-10：
+1：问候、简单算术、极简单常识
+2-3：普通问答
+4-5：需要上下文、总结、轻量分析、新闻日报
+6-7：需要工具、搜索、代码分析、多步任务
+8-10：复杂推理、长文、复杂代码/论文/建模
+
+规则：
+1. 私聊默认认为用户在和 bot 说话。
+2. 不确定 action 时选 reply_now。
+3. 不要输出"是/否"。
+4. complexity 必须是 1-10 的整数。
+
+输出示例：
+{"action":"reply_now","complexity":5,"reason":"用户要求总结今日 AI 日报"}"""
+
+
+class PrivateDecisionClassifier:
+    """私聊决策分类器——一次 Qwen 调用输出 action + complexity。"""
+
+    def _call_qwen(self, message: str, has_files: bool = False) -> str:
+        ctx = f"{message}\n[附带图片]" if has_files else message
+        payload = {
+            "messages": [
+                {"role": "system", "content": PRIVATE_DECISION_PROMPT},
+                {"role": "user", "content": ctx},
+            ],
+            "max_tokens": 120,
+            "temperature": 0,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
+        logger.info("[private_decision] >> Qwen | message=%.80s has_files=%s", message, has_files)
+
+        req = urllib.request.Request(
+            url, data=data,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        proxy_handler = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(proxy_handler)
+        with opener.open(req, timeout=CLASSIFIER_TIMEOUT) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        return body["choices"][0]["message"]["content"]
+
+    def _parse(self, raw: str) -> dict:
+        cleaned = raw or ""
+        for _ in range(5):
+            prev = cleaned
+            cleaned = THINK_PATTERN.sub("", cleaned).strip()
+            if cleaned == prev:
+                break
+        try:
+            start = cleaned.find("{")
+            end = cleaned.rfind("}") + 1
+            data = json.loads(cleaned[start:end])
+        except Exception:
+            return self._parse_fallback(cleaned)
+
+        action = str(data.get("action", "")).strip().lower()
+        if action not in {"no_reply", "wait", "reply_now"}:
+            action = "reply_now"
+        try:
+            complexity = int(data.get("complexity", 5))
+        except Exception:
+            complexity = 5
+        complexity = max(1, min(10, complexity))
+        if action in {"no_reply", "wait"}:
+            complexity = 0
+
+        return {
+            "action": action,
+            "complexity": complexity,
+            "reason": str(data.get("reason", ""))[:160],
+            "raw": raw[:300],
+        }
+
+    def _parse_fallback(self, text: str) -> dict:
+        """兼容旧格式输出（NO_REPLY/WAIT/是,5 等）。"""
+        upper = text.upper()
+        if "NO_REPLY" in upper or text.startswith(("否", "不用", "不需要")):
+            return {"action": "no_reply", "complexity": 0, "reason": "fallback parse", "raw": text[:300]}
+        if "WAIT" in upper or "等待" in text or text.startswith(("等", "稍等")):
+            return {"action": "wait", "complexity": 0, "reason": "fallback parse", "raw": text[:300]}
+        m = re.match(r"^\s*是\s*[,，]\s*(\d+)\s*$", text)
+        if m:
+            c = max(1, min(10, int(m.group(1))))
+            return {"action": "reply_now", "complexity": c, "reason": "legacy reply parse", "raw": text[:300]}
+        return {"action": "reply_now", "complexity": 5, "reason": "invalid output fallback", "raw": text[:300]}
+
+    def classify(self, message: str, has_files: bool = False) -> dict:
+        if not message.strip() and not has_files:
+            return {"action": "no_reply", "complexity": 0, "reason": "empty message", "raw": ""}
+        try:
+            raw = self._call_qwen(message, has_files)
+            parsed = self._parse(raw)
+            logger.info(
+                "[private_decision] << action=%s complexity=%s raw=%.100s",
+                parsed["action"], parsed["complexity"], raw[:100],
+            )
+            return parsed
+        except Exception as e:
+            logger.warning("[private_decision] Qwen failed: %s", e)
+            return {"action": "reply_now", "complexity": 5, "reason": "classifier fallback", "raw": ""}
+
+
+_private_decision_instance: PrivateDecisionClassifier | None = None
+
+
+def get_private_decision_classifier() -> PrivateDecisionClassifier:
+    global _private_decision_instance
+    if _private_decision_instance is None:
+        _private_decision_instance = PrivateDecisionClassifier()
+    return _private_decision_instance
 
 
 # ── Timing Gate（群聊回复节奏判断，独立于 Guardrail）──
@@ -411,40 +542,11 @@ def _parse_private_label(raw: str) -> str:
 
 
 def call_qwen_private_timing(message: str, has_files: bool = False) -> dict:
-    """调用 Qwen 做私聊三态分类。独立 prompt，不混用旧 classify()。"""
-    ctx = f"{message}\n[附带图片]" if has_files else message
-    payload = {
-        "messages": [
-            {"role": "system", "content": _PRIVATE_TIMING_PROMPT},
-            {"role": "user", "content": ctx},
-        ],
-        "max_tokens": 30, "temperature": 0,
+    """[DEPRECATED] 使用 get_private_decision_classifier().classify() 替代。"""
+    result = get_private_decision_classifier().classify(message, has_files)
+    label_map = {"no_reply": "NO_REPLY", "wait": "WAIT", "reply_now": "REPLY_NOW"}
+    return {
+        "label": label_map.get(result["action"], "REPLY_NOW"),
+        "raw": result.get("raw", ""),
+        "confidence": 1.0,
     }
-    data = json.dumps(payload).encode("utf-8")
-    url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
-
-    logger.info("[private_classifier] >> Qwen | message=%.80s has_files=%s", message, has_files)
-
-    req = urllib.request.Request(
-        url, data=data,
-        headers={"Content-Type": "application/json"}, method="POST",
-    )
-    proxy_handler = urllib.request.ProxyHandler({})
-    opener = urllib.request.build_opener(proxy_handler)
-    try:
-        with opener.open(req, timeout=CLASSIFIER_TIMEOUT) as response:
-            body = json.loads(response.read().decode("utf-8"))
-        raw = body["choices"][0]["message"]["content"]
-    except Exception as e:
-        logger.warning("[private_classifier] Qwen failed: %s", e)
-        return {"label": "REPLY_NOW", "raw": "", "confidence": 0.0}
-
-    for _ in range(5):
-        prev = raw
-        raw = THINK_PATTERN.sub("", raw).strip()
-        if raw == prev:
-            break
-
-    label = _parse_private_label(raw)
-    logger.info("[private_classifier] << raw=%.80s parsed=%s", raw, label)
-    return {"label": label, "raw": raw, "confidence": 1.0}

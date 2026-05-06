@@ -15,6 +15,7 @@ class PrivateDecision:
     reason: str = ""
     confidence: float = 0.0
     raw_label: str = ""
+    complexity: int = 0
 
 
 @dataclass
@@ -28,7 +29,7 @@ class PrivateTimingGate:
         text = (text or "").strip()
         self.stats["total"] += 1
 
-        logger.info("[PrivateGate] classify_start user=%s len=%d has_files=%s", user_id, len(text), has_files)
+        logger.info("[PrivateDecision] start user=%s len=%d has_files=%s", user_id, len(text), has_files)
 
         # 规则兜底：空消息/极短应答 → NO_REPLY
         if not text and not has_files:
@@ -43,29 +44,37 @@ class PrivateTimingGate:
             self.stats["wait"] += 1
             return _log("wait", "looks incomplete", 0.8, "rule_wait", user_id)
 
-        # Qwen 独立三态分类——不复用 Guardrail.classify()
+        # Qwen 一次调用输出 action + complexity
         try:
-            from clients.classifier_client import call_qwen_private_timing
+            from clients.classifier_client import get_private_decision_classifier
             from config import CLASSIFIER_TIMEOUT
             import asyncio
+
             result = await asyncio.wait_for(
-                asyncio.to_thread(call_qwen_private_timing, text, has_files),
+                asyncio.to_thread(
+                    get_private_decision_classifier().classify, text, has_files,
+                ),
                 timeout=CLASSIFIER_TIMEOUT + 1,
             )
-            label = result.get("label", "REPLY_NOW")
-            raw = result.get("raw", "")
-            action = "no_reply" if label == "NO_REPLY" else ("wait" if label == "WAIT" else "reply_now")
+            action = result.get("action", "reply_now")
+            complexity = int(result.get("complexity", 0) or 0)
             self.stats[action] += 1
-            decision = PrivateDecision(action=action, reason=label,
-                                       confidence=result.get("confidence", 1.0),
-                                       raw_label=raw or label)
-            logger.info("[PrivateClassify] qwen_result user=%s action=%s label=%s raw=%s",
-                        user_id, action, label, (raw or "")[:80])
+            decision = PrivateDecision(
+                action=action,
+                reason=result.get("reason", ""),
+                confidence=1.0,
+                raw_label=result.get("raw", ""),
+                complexity=complexity,
+            )
+            logger.info(
+                "[PrivateDecision] result user=%s action=%s complexity=%s reason=%s raw=%s",
+                user_id, action, complexity, decision.reason[:120], decision.raw_label[:120],
+            )
             return decision
         except asyncio.TimeoutError:
-            logger.warning("[PrivateGate] classifier timeout user=%s", user_id)
+            logger.warning("[PrivateDecision] timeout user=%s", user_id)
         except Exception as e:
-            logger.warning("[PrivateGate] classifier failed user=%s: %s", user_id, e)
+            logger.warning("[PrivateDecision] failed user=%s: %s", user_id, e)
 
         # fallback
         self.stats["reply_now"] += 1
@@ -74,7 +83,7 @@ class PrivateTimingGate:
 
 def _log(action: str, reason: str, confidence: float, raw: str, user_id: str) -> PrivateDecision:
     d = PrivateDecision(action, reason, confidence, raw)
-    logger.info("[PrivateGate] route user=%s action=%s conf=%.2f reason=%s raw=%s",
+    logger.info("[PrivateDecision] rule user=%s action=%s conf=%.2f reason=%s raw=%s",
                 user_id, action, confidence, reason[:80], raw)
     return d
 
