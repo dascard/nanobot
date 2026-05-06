@@ -61,6 +61,16 @@ def _looks_task_request(text: str) -> bool:
     return any(p.search(text) for p in _TASK_PATTERNS)
 
 
+def _has_inline_material(text: str) -> bool:
+    """判断消息里是否已包含具体材料（报错、日志、代码等）。"""
+    return (
+        "\n" in text
+        or "Traceback" in text or "Error" in text or "Exception" in text
+        or ("报错" in text and len(text) > 30)
+        or "No module named" in text
+    )
+
+
 def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]:
     t = text.strip()
     if is_superuser:
@@ -76,12 +86,16 @@ def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]
     if any(w in t for w in _PERSONAL_PROBE_WORDS):
         return "casual", "none", "personal_probe"
     if any(w in t for w in _MISSING_MATERIAL_WORDS) and not _looks_task_request(t):
+        if _has_inline_material(t):
+            return "short", "limited", "specific_task"
         return "casual", "none", "missing_material"
     if any(w in t for w in _TOO_BROAD_WORDS):
         return "casual", "none", "too_broad"
     if _looks_task_request(t):
-        if "日报" in t or "新闻" in t:
-            return "serious", "full", "daily_request"
+        if ("日报" in t or "新闻" in t):
+            if is_superuser:
+                return "serious", "full", "daily_request"
+            return "short", "limited", "daily_request"
         return "short", "limited", "specific_task"
     return "short", "limited", "general_query"
 
@@ -166,8 +180,10 @@ class PrivateTimingGate:
 
 
 def _log_d(action: str, reason: str, confidence: float, raw: str,
-           effort: str, tool_policy: str, user_id: str) -> PrivateDecision:
-    d = PrivateDecision(action, reason, confidence, raw, effort=effort, tool_policy=tool_policy)
+           effort: str, tool_policy: str, user_id: str,
+           complexity: int = 0) -> PrivateDecision:
+    d = PrivateDecision(action, reason, confidence, raw,
+                        complexity=complexity, effort=effort, tool_policy=tool_policy)
     logger.info("[PrivateDecision] rule user=%s action=%s effort=%s tool=%s conf=%.2f reason=%s",
                 user_id, action, effort, tool_policy, confidence, reason[:80])
     return d

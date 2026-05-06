@@ -378,6 +378,13 @@ class NanobotBridge:
                                             session_id, len(profile_ctx))
                         except Exception:
                             pass
+            # --- Effort constraint + tool_policy injection ---
+            effort_constraint = str(meta.get("effort_constraint", "")).strip()
+            tool_policy = str(meta.get("tool_policy", "full")).strip()
+            if effort_constraint:
+                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                    self._agent.controller.conversation.append("system", effort_constraint)
+                    logger.info("[Bridge] effort_constraint injected len=%d policy=%s", len(effort_constraint), tool_policy)
             # ---------------------------------------------
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")

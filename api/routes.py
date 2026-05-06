@@ -1142,7 +1142,7 @@ async def proxy_chat(
                 from core.reply_templates import get_casual_reply
                 reply = get_casual_reply(req.query, is_superuser=_is_superuser)
                 if reply:
-                    _persist_chat_turn(db, req, reply, guardrail_status=None)
+                    _persist_chat_turn(db, req, reply, guardrail_status="casual_template")
                     return {"status": "ok", "answer": reply}
             if _private_decision.action == "reply_now":
                 messages = req.merged_messages or [req.query]
