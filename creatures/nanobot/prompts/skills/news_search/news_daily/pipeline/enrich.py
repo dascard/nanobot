@@ -54,12 +54,12 @@ def extract_detail_text(html: str, max_chars: int = 1200) -> str:
 
 def _fetch_detail(url: str, timeout: int = 8) -> str:
     try:
-        req = Request(url, headers={"User-Agent": "Nanobot/2.0"})
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; Nanobot/2.0)", "Accept": "text/html,application/xhtml+xml"})
         with _opener.open(req, timeout=timeout) as r:
             raw = r.read().decode("utf-8", errors="replace")
             return extract_detail_text(raw)
     except Exception as e:
-        logger.debug("[enrich] %s: %s", url, str(e)[:80])
+        logger.warning("[enrich] failed %s: %s", url, str(e)[:160])
         return ""
 
 

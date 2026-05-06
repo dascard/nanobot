@@ -290,8 +290,10 @@ def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
         if issues:
             digest.setdefault("missing_info", []).extend(issues[:3])
 
+    summary_source = digest.get("_quality_source", "fallback") if mode != "daily" else "deterministic"
     html = _render(digest)
-    logger.info("[daily] done %s mode %d ranked items → %d chars HTML in %.1fs", mode, len(items), len(html), _time.time() - t0)
+    logger.info("[daily] done %s mode %d items \u2192 %d chars HTML source=%s in %.1fs",
+                 mode, len(items), len(html), summary_source, _time.time() - t0)
     return html
 
 
