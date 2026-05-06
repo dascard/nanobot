@@ -1751,6 +1751,9 @@ class NewsSearchTool(BaseTool):
         if not query.strip():
             return ToolResult(error="Missing 'query' argument")
         max_results = int(args.get("max_results", 3) or 3)
+        # 日报/新闻类请求强制至少8条候选
+        if any(k in query for k in ("日报", "今日", "AI 新闻", "AI新闻", "最新资讯")):
+            max_results = max(max_results, 8)
         no_cache = bool(args.get("no_cache") or args.get("refresh"))
 
         user_id = str(args.get("user_id") or kwargs.get("user_id") or "")

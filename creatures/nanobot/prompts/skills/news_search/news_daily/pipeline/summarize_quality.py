@@ -72,7 +72,7 @@ def build_quality_prompt(cards: list[dict]) -> str:
 {chr(10).join(card_texts)}
 
 ## 要求
-生成 6-8 条 highlights、2-3 条 details、1-2 条 watchlist。
+生成 3-6 条 highlights、2-3 条 details、1-2 条 watchlist。
 每条 highlight 100-150字，必须写清楚：什么事、为什么重要、对谁有影响。要像新闻导语一样有信息量，不能只写标题。
 每条 detail 必须有 known（已知信息2-3点）、unknown（缺失信息0-2点）、impact（一句话影响）。
 details 的 source_labels 使用卡片中的 "来源名（组）" 格式。

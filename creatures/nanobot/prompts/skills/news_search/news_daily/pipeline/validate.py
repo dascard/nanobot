@@ -37,7 +37,7 @@ def safe_quality_digest(llm_digest: dict, fallback: dict, cards: list[dict]) -> 
     digest = dict(fallback)
 
     for k in ["title", "subtitle", "verdict", "top_story", "highlights",
-              "details", "watchlist", "missing_info", "closing"]:
+              "details", "watchlist", "missing_info", "closing", "_quality_source"]:
         if k in llm_digest and llm_digest[k]:
             digest[k] = llm_digest[k]
 

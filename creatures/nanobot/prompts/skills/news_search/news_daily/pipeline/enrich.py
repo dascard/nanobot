@@ -55,6 +55,10 @@ def extract_detail_text(html: str, max_chars: int = 1200) -> str:
 def _fetch_detail(url: str, timeout: int = 8) -> str:
     try:
         req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; Nanobot/2.0)", "Accept": "text/html,application/xhtml+xml"})
+        # OpenAI 308 permanent redirect workaround
+        url = url.rstrip("/") + "/" if "openai.com/index/" in url and not url.endswith("/") else url
+        # OpenAI 308 redirect workaround
+        url = url.rstrip("/") + "/" if "openai.com/index/" in url and not url.endswith("/") else url
         with _opener.open(req, timeout=timeout) as r:
             raw = r.read().decode("utf-8", errors="replace")
             return extract_detail_text(raw)
