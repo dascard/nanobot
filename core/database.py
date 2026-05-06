@@ -204,6 +204,58 @@ class GroupMemory(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class ExpressionMemory(Base):
+    """群聊表达学习——短句、语气词、句式等说话方式。"""
+    __tablename__ = "expression_memories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_stream_id = Column(String, index=True, nullable=False)
+    expression = Column(Text, nullable=False)
+    expression_type = Column(String, default="phrase")
+    scene = Column(String, default="")
+    example_json = Column(Text, default="[]")
+    source_count = Column(Integer, default=1)
+    confidence = Column(Float, default=0.5)
+    checked = Column(Integer, default=0)
+    status = Column(String, default="candidate")
+    weight = Column(Float, default=0.5)
+    first_seen = Column(DateTime, default=datetime.now)
+    last_seen = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class JargonMemory(Base):
+    """群聊黑话/术语学习——词义解释和使用条件。"""
+    __tablename__ = "jargon_memories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_stream_id = Column(String, index=True, nullable=False)
+    term = Column(String, index=True, nullable=False)
+    meaning = Column(Text, default="")
+    examples_json = Column(Text, default="[]")
+    confidence = Column(Float, default=0.5)
+    checked = Column(Integer, default=0)
+    status = Column(String, default="candidate")
+    first_seen = Column(DateTime, default=datetime.now)
+    last_seen = Column(DateTime, default=datetime.now)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class ChatStreamConfig(Base):
+    """群聊/私聊流配置——talk_value、表达开关等。"""
+    __tablename__ = "chat_stream_configs"
+
+    chat_stream_id = Column(String, primary_key=True)
+    talk_value = Column(Float, default=0.5)
+    mentioned_bot_reply = Column(Integer, default=1)
+    use_expression = Column(Integer, default=1)
+    enable_expression_learning = Column(Integer, default=1)
+    enable_jargon_learning = Column(Integer, default=1)
+    planner_smooth = Column(Integer, default=3)
+    meta_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.now)
+
+
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
 
