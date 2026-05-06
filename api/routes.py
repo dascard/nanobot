@@ -1143,11 +1143,11 @@ async def proxy_chat(
                 reply = get_casual_reply(req.query, is_superuser=_is_superuser)
                 if reply:
                     _persist_chat_turn(db, req, reply, guardrail_status="casual_template")
-                    return {"status": "ok", "answer": reply}
+                    return {"status": "ok", "answer": reply, "source": "casual_template", "intent": _private_decision.reason}
                 # 无模板匹配——casual 不进 bridge，走默认短句
                 fallback = "你先说事" if req.query else ""
                 _persist_chat_turn(db, req, fallback, guardrail_status="casual_template")
-                return {"status": "ok", "answer": fallback}
+                return {"status": "ok", "answer": fallback, "source": "casual_template", "intent": _private_decision.reason}
             if _private_decision.action == "reply_now":
                 messages = req.merged_messages or [req.query]
                 buffered_query = _join_buffered_messages(messages)
