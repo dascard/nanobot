@@ -381,10 +381,17 @@ class NanobotBridge:
             # --- Effort constraint + tool_policy injection ---
             effort_constraint = str(meta.get("effort_constraint", "")).strip()
             tool_policy = str(meta.get("tool_policy", "full")).strip()
-            if effort_constraint:
-                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                    self._agent.controller.conversation.append("system", effort_constraint)
-                    logger.info("[Bridge] effort_constraint injected len=%d policy=%s", len(effort_constraint), tool_policy)
+            if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                conv = self._agent.controller.conversation
+                if effort_constraint:
+                    conv.append("system", effort_constraint)
+                if tool_policy == "none":
+                    conv.append("system", "[ToolPolicy] 本轮禁止调用任何工具。必须只用 reply 工具输出一句短回复。不要分析、不要列步骤。")
+                elif tool_policy == "limited":
+                    conv.append("system", "[ToolPolicy] 本轮默认不要调用重工具。只有明显必要时才允许轻工具。不要写报告。")
+                else:
+                    conv.append("system", "[ToolPolicy] 本轮允许使用必要工具。")
+                logger.info("[Bridge] effort_constraint len=%d tool_policy=%s", len(effort_constraint), tool_policy)
             # ---------------------------------------------
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")

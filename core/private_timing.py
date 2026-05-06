@@ -34,9 +34,9 @@ _TOO_BROAD_WORDS = ("整个项目", "全部代码", "完整方案", "全部改",
 
 
 _EFFORT_CONSTRAINTS = {
-    "casual": "本轮只随口接一句。不要分析、不要列步骤、不要调用工具。回复尽量短。",
-    "short": "本轮简短处理。先给判断，最多补1-3个要点。不要写报告。",
-    "serious": "本轮认真处理。可以使用工具，可以分步骤分析。先给结论再给依据。",
+    "casual": "本轮只随口接一句。不要分析、不要列步骤、不要调用工具、不要解释能力。回复控制在1句话，最好2-12个字。如果缺材料，只让对方发材料。",
+    "short": "本轮简短处理。先给判断，最多补1-3个要点，最多3句话。不要用Markdown标题，不要列表超过3条。不要写报告。",
+    "serious": "本轮认真处理。可以使用工具，可以分步骤分析。先给结论，再给依据、修改点和验收方式。",
 }
 
 
@@ -63,12 +63,14 @@ def _looks_task_request(text: str) -> bool:
 
 def _has_inline_material(text: str) -> bool:
     """判断消息里是否已包含具体材料（报错、日志、代码等）。"""
-    return (
-        "\n" in text
-        or "Traceback" in text or "Error" in text or "Exception" in text
-        or ("报错" in text and len(text) > 30)
-        or "No module named" in text
+    if len(text) < 40:
+        return False
+    markers = (
+        "\n", "Traceback", "Error", "Exception", "No module named",
+        "KeyError", "TypeError", "SyntaxError", "HTTP", "报错如下",
+        "```", "错误信息", "status code",
     )
+    return any(m in text for m in markers)
 
 
 def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]:
