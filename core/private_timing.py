@@ -7,6 +7,7 @@ logger = logging.getLogger("nanobot.private_timing")
 
 _NO_REPLY_SET = {"嗯", "哦", "ok", "OK", "Ok", "收到", "好", "好的", "哈哈", "草", "。。", "…", "..."}
 _WAIT_MARKERS = ("等下", "等等", "我发你", "我发图", "还有", "就是然后", "这个是", "你看这个")
+_TASK_KEYWORDS = ("日报", "总结", "新闻", "搜索", "分析", "帮我", "解释", "代码", "报错", "翻译", "写")
 
 
 @dataclass
@@ -43,6 +44,15 @@ class PrivateTimingGate:
         if any(m in text for m in _WAIT_MARKERS) and len(text) < 30:
             self.stats["wait"] += 1
             return _log("wait", "looks incomplete", 0.8, "rule_wait", user_id)
+
+        # 规则 fast path：明确任务请求直接 reply_now，不等 Qwen 超时
+        if any(k in text for k in _TASK_KEYWORDS):
+            c = 5 if ("日报" in text or "新闻" in text) else 4
+            self.stats["reply_now"] += 1
+            d = PrivateDecision(action="reply_now", reason="rule_task_request",
+                                confidence=1.0, raw_label="rule_task_request", complexity=c)
+            logger.info("[PrivateDecision] fast_path user=%s action=reply_now complexity=%s", user_id, c)
+            return d
 
         # Qwen 一次调用输出 action + complexity
         try:

@@ -1124,18 +1124,19 @@ async def proxy_chat(
     _classifier_ran = False
     buffered_query: str | None = None
     buffered_files: list[str] | None = None
+    _private_decision: PrivateDecision | None = None
 
     if not is_group and not req.classification_request:
-        from core.private_timing import get_private_gate
+        from core.private_timing import get_private_gate, PrivateDecision
         try:
             private_gate = get_private_gate()
-            decision = await private_gate.classify(
+            _private_decision = await private_gate.classify(
                 req.query, user_id=req.user_id, has_files=bool(req.files),
             )
-            if decision.action == "no_reply":
+            if _private_decision.action == "no_reply":
                 _persist_chat_turn(db, req, "", guardrail_status=None)
                 return {"status": "no_reply", "user_id": req.user_id}
-            if decision.action == "reply_now":
+            if _private_decision.action == "reply_now":
                 messages = req.merged_messages or [req.query]
                 buffered_query = _join_buffered_messages(messages)
                 buffered_files = _normalize_files(req.files)
@@ -1165,9 +1166,9 @@ async def proxy_chat(
                         "files": _normalize_files(req.files),
                         "qwen_task": asyncio.create_task(
                             asyncio.to_thread(
-                                guardrail.classify,
+                                guardrail.detect_injection,
                                 guardrail_input,
-                                allow_injection_passthrough=_is_guardrail_superuser(req.user_id),
+                                allow_passthrough=_is_guardrail_superuser(req.user_id),
                             )
                         ),
                         "done": asyncio.Event(),
@@ -1202,9 +1203,9 @@ async def proxy_chat(
                         "files": _normalize_files(req.files),
                         "qwen_task": asyncio.create_task(
                             asyncio.to_thread(
-                                guardrail.classify,
+                                guardrail.detect_injection,
                                 guardrail_input,
-                                allow_injection_passthrough=_is_guardrail_superuser(req.user_id),
+                                allow_passthrough=_is_guardrail_superuser(req.user_id),
                             )
                         ),
                         "done": asyncio.Event(),
@@ -1247,9 +1248,9 @@ async def proxy_chat(
             buffered_guardrail_input = _build_guardrail_input(buffered_query, buffered_files)
             if len(buffered_messages) > 1:
                 result = await asyncio.to_thread(
-                    guardrail.classify,
+                    guardrail.detect_injection,
                     buffered_guardrail_input,
-                    allow_injection_passthrough=_is_guardrail_superuser(req.user_id),
+                    allow_passthrough=_is_guardrail_superuser(req.user_id),
                 )
             else:
                 result = await qwen_task
@@ -1259,13 +1260,11 @@ async def proxy_chat(
                 if buf is not None:
                     buf["result"] = result
 
-            raw_guardrail_status = result["status"]
-            guardrail_status = raw_guardrail_status
+            guardrail_status = "injection" if result.get("status") == "injection" else "safe"
             logger.info(
-                "[/chat] Guardrail result: raw_status=%s, effective_status=%s, complexity=%s, user=%s",
-                raw_guardrail_status,
-                guardrail_status,
-                result.get("complexity", 0),
+                "[/chat] Guardrail result: injection=%s, passthrough=%s, user=%s",
+                result.get("injection", False),
+                result.get("passthrough", False),
                 req.user_id,
             )
         except Exception:
@@ -1313,6 +1312,7 @@ async def proxy_chat(
 
     # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
     bridge = get_bridge()
+    _complexity = (_private_decision.complexity if _private_decision and _private_decision.complexity else 3)
     bridge_meta = {
         "session_name": req.session_name,
         "files": final_files,
@@ -1321,6 +1321,12 @@ async def proxy_chat(
         "history_header": memory_header,
         "history_messages": history_messages,
         "is_group": is_group,
+        "complexity": _complexity,
+        "private_decision": {
+            "action": _private_decision.action,
+            "complexity": _private_decision.complexity,
+            "reason": _private_decision.reason,
+        } if _private_decision else None,
     }
 
     async def _do_chat():
