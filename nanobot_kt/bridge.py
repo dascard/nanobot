@@ -376,6 +376,26 @@ class NanobotBridge:
                                 conv.append("system", profile_ctx)
                                 logger.info("[NanobotBridge] GroupProfile injected for %s (%d chars)",
                                             session_id, len(profile_ctx))
+
+                            try:
+                                from core.expression_memory import (
+                                    normalize_chat_stream_id,
+                                    build_expression_context,
+                                    build_jargon_context,
+                                )
+                                chat_stream_id = normalize_chat_stream_id(session_id, chat_type="group")
+                                expr_ctx = build_expression_context(chat_stream_id)
+                                if expr_ctx:
+                                    conv.append("system", expr_ctx)
+                                    logger.info("[NanobotBridge] ExpressionContext injected for %s (%d chars)",
+                                                session_id, len(expr_ctx))
+                                jargon_ctx = build_jargon_context(chat_stream_id)
+                                if jargon_ctx:
+                                    conv.append("system", jargon_ctx)
+                                    logger.info("[NanobotBridge] JargonContext injected for %s (%d chars)",
+                                                session_id, len(jargon_ctx))
+                            except Exception:
+                                pass
                         except Exception:
                             pass
             # --- Effort constraint + tool_policy hard enforcement ---

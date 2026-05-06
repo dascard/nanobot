@@ -287,3 +287,39 @@ def mark_expression_checked(chat_stream_id: str, expression: str, accepted: bool
 
 def mark_jargon_checked(chat_stream_id: str, term: str, accepted: bool = True) -> bool:
     return _mark_checked(JargonMemory, chat_stream_id, "term", term, accepted)
+
+
+# ── Context builders ──
+
+def build_expression_context(chat_stream_id: str, *, limit: int = 8) -> str:
+    cfg = get_stream_config(chat_stream_id)
+    if not cfg.get("use_expression", True):
+        return ""
+    expressions = query_active_expressions(chat_stream_id, limit=limit)
+    if not expressions:
+        return ""
+    lines = ["[ExpressionContext]"]
+    lines.append("以下是本群常见表达，只作为语气参考，不要强行模仿，不要每句都使用：")
+    for e in expressions[:limit]:
+        expr = str(e.get("expression", "")).strip()
+        scene = str(e.get("scene", "")).strip()
+        if not expr:
+            continue
+        lines.append(f"- {expr}" + (f"（场景：{scene}）" if scene else ""))
+    return "\n".join(lines)
+
+
+def build_jargon_context(chat_stream_id: str, *, limit: int = 8) -> str:
+    jargon = query_active_jargon(chat_stream_id, limit=limit)
+    if not jargon:
+        return ""
+    lines = ["[JargonContext]"]
+    lines.append("以下是本群黑话/术语解释，仅用于理解语境：")
+    for j in jargon[:limit]:
+        term = str(j.get("term", "")).strip()
+        meaning = str(j.get("meaning", "")).strip()
+        if term and meaning:
+            lines.append(f"- {term}: {meaning}")
+        elif term:
+            lines.append(f"- {term}")
+    return "\n".join(lines)
