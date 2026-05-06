@@ -274,14 +274,14 @@ def get_guardrail() -> Guardrail:
 
 # ── PrivateDecisionClassifier（私聊三态决策，一次 Qwen 调用输出 action + complexity）──
 
-PRIVATE_DECISION_PROMPT = """你是私聊消息路由分类器。你的任务是判断用户这条私聊消息如何处理。
+PRIVATE_DECISION_PROMPT = """你是私聊消息路由分类器。你的任务是判断用户这条私聊消息是否有对话意图。
 
 只输出 JSON，不要解释，不要 Markdown。
 
 字段 action：
-- no_reply：不需要回复。用于纯语气词、表情、结束语、极短确认，如"嗯/哦/ok/收到/好/哈哈/草"。
-- wait：用户明显没说完，需要等待后续消息。用于半句话、碎片输入、"等下/还有/我发图/我发代码/这个报错是"等。
-- reply_now：明确问题、请求、命令，应立即回复。
+- no_reply：不需要回复。用于纯语气词、表情、结束语、极短确认；也用于纯传输内容——单独文件、图片、网址、密钥、token、文件路径、代码块、日志、配置、长文本粘贴，用户没有提出问题或请求。
+- wait：用户明显没说完，需要等待后续消息。如"等下/还有/我发图/我发代码/这个报错是"。
+- reply_now：用户明确有对话意图——包括问题、请求、命令、让你解释/总结/分析/翻译/检查/生成内容。
 
 字段 complexity，整数 1-10：
 1：问候、简单算术、极简单常识
@@ -291,13 +291,19 @@ PRIVATE_DECISION_PROMPT = """你是私聊消息路由分类器。你的任务是
 8-10：复杂推理、长文、复杂代码/论文/建模
 
 规则：
-1. 私聊默认认为用户在和 bot 说话。
-2. 不确定 action 时选 reply_now。
-3. 不要输出"是/否"。
-4. complexity 必须是 1-10 的整数。
+1. 私聊不等于一定要回复；先判断是否有对话意图。
+2. 纯传输内容默认 no_reply。
+3. 像文件/密钥/网址/日志/代码/长文本，且没有请求词或问句时选 no_reply。
+4. 用户明确要求"看看/解释/总结/分析/翻译/帮我/哪里错/怎么做"时选 reply_now。
+5. 不确定但像自然语言交流时选 reply_now。不确定但像数据传输时选 no_reply。
+6. complexity 必须是 1-10 的整数。
 
 输出示例：
-{"action":"reply_now","complexity":5,"reason":"用户要求总结今日 AI 日报"}"""
+{"action":"no_reply","complexity":0,"reason":"用户仅发送网址，像传输内容"}
+{"action":"no_reply","complexity":0,"reason":"用户仅发送密钥，无对话请求"}
+{"action":"reply_now","complexity":5,"reason":"用户要求总结今日 AI 日报"}
+{"action":"reply_now","complexity":6,"reason":"用户要求分析报错日志"}
+{"action":"wait","complexity":0,"reason":"用户表示稍后继续发送内容"}"""
 
 
 class PrivateDecisionClassifier:
@@ -385,7 +391,17 @@ class PrivateDecisionClassifier:
             return parsed
         except Exception as e:
             logger.warning("[private_decision] Qwen failed: %s", e)
-            return {"action": "reply_now", "complexity": 5, "reason": "classifier fallback", "raw": ""}
+            # fallback: 纯传输内容 no_reply，其余 reply_now
+            import re as _re
+            t = (message or "").strip()
+            is_transport = (
+                (has_files and not t)
+                or bool(_re.match(r"^(https?://\S+|sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9_\-+/=]{32,})$", t))
+                or (len(t) > 500 and "?" not in t and "？" not in t)
+            )
+            if is_transport:
+                return {"action": "no_reply", "complexity": 0, "reason": "fallback transport_only", "raw": ""}
+            return {"action": "reply_now", "complexity": 3, "reason": "classifier fallback", "raw": ""}
 
 
 _private_decision_instance: PrivateDecisionClassifier | None = None
