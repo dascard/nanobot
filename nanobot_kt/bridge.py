@@ -378,20 +378,40 @@ class NanobotBridge:
                                             session_id, len(profile_ctx))
                         except Exception:
                             pass
-            # --- Effort constraint + tool_policy injection ---
+            # --- Effort constraint + tool_policy hard enforcement ---
             effort_constraint = str(meta.get("effort_constraint", "")).strip()
             tool_policy = str(meta.get("tool_policy", "full")).strip()
+            _saved_tools: dict[str, bool] = {}
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                 conv = self._agent.controller.conversation
                 if effort_constraint:
                     conv.append("system", effort_constraint)
                 if tool_policy == "none":
-                    conv.append("system", "[ToolPolicy] 本轮禁止调用任何工具。必须只用 reply 工具输出一句短回复。不要分析、不要列步骤。")
+                    conv.append("system", "[ToolPolicy] 本轮禁止调用任何工具。必须只用 reply 工具。")
                 elif tool_policy == "limited":
-                    conv.append("system", "[ToolPolicy] 本轮默认不要调用重工具。只有明显必要时才允许轻工具。不要写报告。")
+                    conv.append("system", "[ToolPolicy] 本轮只允许 reply/image_summary/python_sandbox。禁止 sql_analysis/news_search/group_analysis/文件操作。")
                 else:
                     conv.append("system", "[ToolPolicy] 本轮允许使用必要工具。")
-                logger.info("[Bridge] effort_constraint len=%d tool_policy=%s", len(effort_constraint), tool_policy)
+
+            # hard enforcement: 动态移除不在允许列表的工具
+            _LIMITED_ALLOWED = {"reply", "image_summary", "python_sandbox"}
+            if hasattr(self._agent, 'registry') and hasattr(self._agent.registry, '_tools'):
+                reg = self._agent.registry
+                if tool_policy == "none":
+                    for name in list(reg._tools.keys()):
+                        if name != "reply":
+                            _saved_tools[name] = reg._tools[name]
+                            reg._tools.pop(name, None)
+                elif tool_policy == "limited":
+                    for name in list(reg._tools.keys()):
+                        if name not in _LIMITED_ALLOWED:
+                            _saved_tools[name] = reg._tools[name]
+                            reg._tools.pop(name, None)
+
+            self._saved_tools = _saved_tools
+            effective_tools = list(self._agent.registry._tools.keys()) if hasattr(self._agent, 'registry') else []
+            logger.info("[Bridge] tool_policy=%s effective_tools=%s saved=%d",
+                        tool_policy, effective_tools, len(_saved_tools))
             # ---------------------------------------------
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")
@@ -629,6 +649,15 @@ class NanobotBridge:
                     self._session_locks.pop(sid, None)
                 if stale_sids:
                     logger.info("[SessionRuntime] Cleaned %d idle session locks", len(stale_sids))
+
+            # restore tools removed by tool_policy enforcement
+            saved = getattr(self, '_saved_tools', {})
+            if saved and hasattr(self._agent, 'registry') and hasattr(self._agent.registry, '_tools'):
+                reg = self._agent.registry
+                for name, tool in saved.items():
+                    reg._tools[name] = tool
+                logger.info("[Bridge] restored %d tools after tool_policy", len(saved))
+                self._saved_tools = {}
 
             # bot 回复后通知 GroupRuntime——触发 cooldown
             if response and meta.get("is_group"):
