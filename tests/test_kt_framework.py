@@ -786,10 +786,10 @@ class TestNoteBotReplied:
     def test_updates_timestamp(self):
         from core.timing_runtime import get_group_runtime, GateState
         rt = get_group_runtime()
-        rt._states["g_test"] = GateState()
-        assert rt._states["g_test"].last_bot_reply_ts == 0.0
+        rt._states["group_g_test"] = GateState()
+        assert rt._states["group_g_test"].last_bot_reply_ts == 0.0
         rt.note_bot_replied("g_test")
-        assert rt._states["g_test"].last_bot_reply_ts > 0
+        assert rt._states["group_g_test"].last_bot_reply_ts > 0
 
     def test_nonexistent_no_error(self):
         from core.timing_runtime import get_group_runtime

@@ -48,6 +48,10 @@ tools:
     type: package
     module: nanobot_kt.tools.group_analysis
     class: GroupAnalysisTool
+  - name: sticker_search
+    type: package
+    module: nanobot_kt.tools.sticker_search
+    class: StickerSearchTool
   - name: reply
     type: package
     module: nanobot_kt.tools.reply

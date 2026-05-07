@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, 
 from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 
 from config import (
@@ -690,11 +690,114 @@ class GroupMessageRequest(BaseModel):
     sender_id: str = ""
     sender_name: str = ""
     message: str = ""
+    files: Optional[List[str]] = None
+    client_meta: dict | None = None
     message_id: str | None = None
     session_name: str | None = None
     is_at_bot: bool = False
     is_reply_to_bot: bool = False
     bot_aliases: list[str] = []
+
+
+def _safe_group_client_meta(req: GroupMessageRequest) -> dict:
+    return req.client_meta if isinstance(req.client_meta, dict) else {}
+
+
+def _group_sticker_payloads(req: GroupMessageRequest) -> list[dict]:
+    meta = _safe_group_client_meta(req)
+    files = _normalize_files(req.files)
+    raw_stickers = meta.get("stickers")
+    payloads: list[dict] = []
+    if isinstance(raw_stickers, list):
+        for item in raw_stickers:
+            if not isinstance(item, dict):
+                continue
+            file_ref = (
+                item.get("file_ref")
+                or item.get("file")
+                or item.get("url")
+                or item.get("path")
+                or ""
+            )
+            if not isinstance(file_ref, str) or not file_ref.strip():
+                continue
+            payloads.append({**item, "file_ref": file_ref.strip()})
+    message_type = str(meta.get("message_type") or "").lower()
+    if not payloads and message_type in {"sticker", "emoji", "mface"}:
+        for file_ref in files:
+            payloads.append({"file_ref": file_ref, "source": "files"})
+    return payloads
+
+
+def _build_group_message_text(req: GroupMessageRequest) -> str:
+    text = str(req.message or "").strip()
+    if text:
+        return text
+    stickers = _group_sticker_payloads(req)
+    if stickers:
+        hints = []
+        for item in stickers[:3]:
+            hint = str(item.get("name") or item.get("description") or "").strip()
+            if hint:
+                hints.append(hint)
+        suffix = f" {' / '.join(hints)}" if hints else ""
+        return f"[表情包]{suffix}"
+    files = _normalize_files(req.files)
+    if files:
+        return f"[图片] {len(files)} 张"
+    return ""
+
+
+def _register_group_stickers_from_message(
+    db: Session,
+    req: GroupMessageRequest,
+    *,
+    background_tasks: BackgroundTasks | None = None,
+) -> list[dict]:
+    payloads = _group_sticker_payloads(req)
+    if not payloads:
+        return []
+    from core.sticker_memory import auto_describe_sticker, register_sticker
+    from core.group_runtime.ids import normalize_group_stream_id
+
+    chat_stream_id = normalize_group_stream_id(req.group_id)
+    registered: list[dict] = []
+    for item in payloads:
+        file_ref = str(item.get("file_ref") or "").strip()
+        if not file_ref:
+            continue
+        tags = item.get("tags") if isinstance(item.get("tags"), list) else []
+        emotions = item.get("emotions") if isinstance(item.get("emotions"), list) else []
+        sticker = register_sticker(
+            db,
+            chat_stream_id=chat_stream_id,
+            file_ref=file_ref,
+            sticker_hash=str(
+                item.get("hash")
+                or item.get("file_unique")
+                or item.get("file_id")
+                or item.get("emoji_id")
+                or item.get("id")
+                or ""
+            ),
+            send_code=str(item.get("send_code") or ""),
+            name=str(item.get("name") or item.get("summary") or ""),
+            description=str(item.get("description") or ""),
+            tags=tags,
+            emotions=emotions,
+            source_type="auto",
+            status=str(item.get("status") or "active"),
+            meta={
+                "group_id": req.group_id,
+                "message_id": req.message_id or "",
+                "sender_id": req.sender_id or "",
+                "client_meta": item,
+            },
+        )
+        registered.append(sticker)
+        if background_tasks is not None and not sticker.get("description"):
+            background_tasks.add_task(auto_describe_sticker, sticker["id"])
+    return registered
 
 
 def _derive_group_trigger_reason(req: GroupMessageRequest) -> str:
@@ -714,15 +817,17 @@ def _derive_group_trigger_reason(req: GroupMessageRequest) -> str:
 
 @router.post("/group/message")
 async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
+                        background_tasks: BackgroundTasks = None,
                         _auth=Depends(verify_token)):
     """统一群聊入口：归档 → trigger 推断 → TimingGate → chat/bridge。"""
     import time as _t
     from core.timing_runtime import get_group_runtime
 
     group_user_id = _normalize_group_session_id(req.group_id)
+    message_text = _build_group_message_text(req)
 
     logger.info("[GroupMsg] recv group=%s sender=%s len=%d at=%s reply=%s",
-                req.group_id, req.sender_name, len(req.message or ""),
+                req.group_id, req.sender_name, len(message_text or ""),
                 req.is_at_bot, req.is_reply_to_bot)
 
     if req.message_id:
@@ -736,6 +841,11 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
             return {"action": "no_reply", "reason": "duplicate_message"}
 
     # 1. 归档 ambient log
+    registered_stickers = _register_group_stickers_from_message(
+        db,
+        req,
+        background_tasks=background_tasks,
+    )
     user = db.query(User).filter(User.id == group_user_id).first()
     if not user:
         db.add(User(id=group_user_id))
@@ -751,12 +861,16 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     )
 
     # 2. 当前消息入库
-    formatted = f"[{req.sender_name}]: {req.message}" if req.message else ""
+    formatted = f"[{req.sender_name}]: {message_text}" if message_text else ""
+    meta = _safe_group_client_meta(req)
+    if registered_stickers:
+        meta = {**meta, "registered_sticker_ids": [item["id"] for item in registered_stickers]}
     db.add(ChatLog(
         user_id=group_user_id, session_id=group_user_id,
         sender_name=req.sender_name, session_name=req.session_name,
         role="ambient", content=formatted, processed=1,
         message_id=req.message_id,
+        meta_json=json.dumps(meta, ensure_ascii=False),
     ))
     db.commit()
     logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
@@ -774,7 +888,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
             {
                 "sender_id": req.sender_id,
                 "sender_name": req.sender_name,
-                "message": req.message,
+                "message": message_text,
                 "message_id": req.message_id or "",
                 "is_reply_to_bot": req.is_reply_to_bot,
                 "is_at_bot": req.is_at_bot,
@@ -808,7 +922,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                 if not chat_query:
                     chat_query = _format_group_planner_message(
                         sender_name=req.sender_name,
-                        content=req.message,
+                        content=message_text,
                         message_id=req.message_id or "",
                     )
                     source_message_ids = [req.message_id] if req.message_id else []
@@ -873,6 +987,96 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     except Exception as e:
         logger.warning("[GroupMsg] group=%s FAILED: %s", req.group_id, e)
         return {"action": "no_reply", "reason": f"error: {e}"}
+
+
+class StickerRegisterRequest(BaseModel):
+    group_id: str = ""
+    chat_stream_id: str = ""
+    file_ref: str
+    sticker_hash: str = ""
+    send_code: str = ""
+    name: str = ""
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    emotions: list[str] = Field(default_factory=list)
+    source_type: str = "manual"
+    status: str = "active"
+    auto_describe: bool = False
+    client_meta: dict | None = None
+
+
+@router.post("/stickers/register")
+def register_sticker_endpoint(
+    req: StickerRegisterRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
+):
+    """注册或更新表情包；可选后台 Qwen 描述补全。"""
+    from core.sticker_memory import auto_describe_sticker, register_sticker
+
+    try:
+        sticker = register_sticker(
+            db,
+            chat_stream_id=req.chat_stream_id,
+            group_id=req.group_id,
+            file_ref=req.file_ref,
+            sticker_hash=req.sticker_hash,
+            send_code=req.send_code,
+            name=req.name,
+            description=req.description,
+            tags=req.tags,
+            emotions=req.emotions,
+            source_type=req.source_type,
+            status=req.status,
+            meta=req.client_meta or {},
+        )
+        if req.auto_describe and not sticker.get("description"):
+            background_tasks.add_task(auto_describe_sticker, sticker["id"])
+        return {"status": "ok", "sticker": sticker}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/stickers/search")
+def search_sticker_endpoint(
+    query: str = "",
+    group_id: str = "",
+    chat_stream_id: str = "",
+    limit: int = 5,
+    include_global: bool = True,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
+):
+    """搜索当前群或全局表情包。"""
+    from core.sticker_memory import search_stickers
+
+    return {
+        "status": "ok",
+        "results": search_stickers(
+            db,
+            query,
+            group_id=group_id,
+            chat_stream_id=chat_stream_id,
+            limit=max(1, min(limit, 20)),
+            include_global=include_global,
+        ),
+    }
+
+
+@router.post("/stickers/{sticker_id}/disable")
+def disable_sticker_endpoint(
+    sticker_id: int,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_token),
+):
+    """禁用表情包，搜索工具默认不再返回。"""
+    from core.sticker_memory import disable_sticker
+
+    try:
+        return {"status": "ok", "sticker": disable_sticker(db, sticker_id)}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 class UpdateGroupNameRequest(BaseModel):

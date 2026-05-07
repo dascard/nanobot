@@ -45,6 +45,8 @@ def sanitize_prompt_text(text: str, max_chars: int = 0) -> str:
         "</group_memory_context>": "(/GROUP_MEMORY_CONTEXT_TAG)",
         "<group_recent_context>": "(GROUP_RECENT_CONTEXT_TAG)",
         "</group_recent_context>": "(/GROUP_RECENT_CONTEXT_TAG)",
+        "<timing_recent_context>": "(TIMING_RECENT_CONTEXT_TAG)",
+        "</timing_recent_context>": "(/TIMING_RECENT_CONTEXT_TAG)",
         "<message_meta>": "(MESSAGE_META_TAG)",
         "</message_meta>": "(/MESSAGE_META_TAG)",
         "<user_input>": "(USER_INPUT_TAG)",

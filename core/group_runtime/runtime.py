@@ -20,7 +20,7 @@ MAX_RETRIES = 3
 MAX_AGE_SEC = 120
 IDLE_CLEANUP_SEC = 600
 BOT_REPLY_COOLDOWN_SEC = 30
-_DIRECT_TRIGGERS = {"at_bot", "reply_to_bot", "bot_name_mentioned", "direct_call"}
+_DIRECT_TRIGGERS = {"at_bot", "reply_to_bot", "bot_name_mentioned", "direct_call", "mentioned"}
 
 
 @dataclass
@@ -82,6 +82,8 @@ class GroupChatState:
     total_wait_s: float = 0.0
     force_next_continue: bool = False
     force_reason: str = ""
+    talk_value: float = 0.5
+    last_trigger_reason: str = "ambient"
     last_active_ts: float = 0.0
     created_at: float = 0.0
 
@@ -180,6 +182,12 @@ class GroupRuntime:
         self._lock = asyncio.Lock()
 
     @staticmethod
+    def _norm_group_id(group_id: str) -> str:
+        """所有入口强制 normalize——防止不同格式的 group_id 创建多个 state。"""
+        from core.group_runtime.ids import normalize_group_session_id
+        return normalize_group_session_id(group_id)
+
+    @staticmethod
     def _should_cooldown(state: GroupChatState, trigger_reason: str) -> bool:
         ago = state.bot_reply_ago()
         if not (0 < ago < BOT_REPLY_COOLDOWN_SEC):
@@ -205,6 +213,9 @@ class GroupRuntime:
         """处理新消息——添加、判断是否触发 gate、返回结果。"""
         from core.group_runtime.ids import normalize_group_stream_id
 
+        group_id = self._norm_group_id(group_id)
+        stream_id = normalize_group_stream_id(group_id)
+
         pm = GroupPendingMessage(
             sender_id=str(msg.get("sender_id", "")),
             sender_name=str(msg.get("sender_name", "")),
@@ -219,8 +230,10 @@ class GroupRuntime:
         async with self._lock:
             state = self._states.setdefault(group_id, GroupChatState(
                 group_id=group_id,
-                stream_id=normalize_group_stream_id(group_id),
+                stream_id=stream_id,
             ))
+            state.talk_value = talk_value
+            state.last_trigger_reason = str(trigger_reason or "").strip()
             state.session_name = session_name
             state.bot_aliases = list(bot_aliases or [])
             state.add_message(pm)
@@ -314,10 +327,23 @@ class GroupRuntime:
                                  trigger_reason: str = "",
                                  recent_context: str = "") -> dict:
         """wait timer 到期——校验 generation 后重新 gate 判断。"""
+        group_id = self._norm_group_id(group_id)
         async with self._lock:
             state = self._states.get(group_id)
             if not state:
                 return {"action": "no_reply", "delay_seconds": None, "reason": "state cleaned up"}
+
+            # 检查 talk_value gate——timer 也不能绕过
+            if (state.last_trigger_reason == "ambient"
+                    and not self._should_gate_by_frequency(state, state.talk_value)):
+                threshold = max(1, round(1.0 / max(state.talk_value, 0.05)))
+                return {
+                    "action": "wait",
+                    "delay_seconds": state.next_gate_delay(),
+                    "generation": state.generation,
+                    "cooldown_ago": state.bot_reply_ago(),
+                    "reason": f"talk_value gate: {len(state.pending)}/{threshold} pending",
+                }
 
             if generation != state.generation:
                 logger.info("[GroupRuntime] timer gen mismatch %d!=%d for %s",
@@ -402,7 +428,7 @@ class GroupRuntime:
         return response
 
     def note_bot_replied(self, group_id: str):
-        state = self._states.get(group_id)
+        state = self._states.get(self._norm_group_id(group_id))
         if state:
             state.note_bot_replied()
 

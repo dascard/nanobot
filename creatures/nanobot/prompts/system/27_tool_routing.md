@@ -5,6 +5,7 @@
 - `group_analysis`：总结群聊/分析群消息/生成群日报。不要先调 sql_analysis 查 group_id
 - `sql_analysis`：仅当用户明确要求数据库查询/统计记录/审计数据/检查表结构时使用。不要把 sql_analysis 当成其他业务工具的前置步骤
 - `image_summary`：图片理解/OCR/版面分析/多图整理
+- `sticker_search`：斗图、玩梗、用户明确要表情包，或群聊正在发纯表情时使用。不要频繁发表情包
 - `python_sandbox`：数据处理/计算/临时代码验证
 - `persona_update`：用户说"记住了"时更新画像
 - `schedule_task`：创建定时推送任务

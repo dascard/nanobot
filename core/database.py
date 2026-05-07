@@ -244,6 +244,35 @@ class JargonMemory(Base):
 
     __table_args__ = (UniqueConstraint("chat_stream_id", "term", name="uq_jargon_stream_term"),)
 
+
+class StickerMemory(Base):
+    """群聊表情包记忆——按群/全局作用域存储可发送图片引用。"""
+    __tablename__ = "sticker_memories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_stream_id = Column(String, index=True, nullable=False)
+    sticker_hash = Column(String, index=True, nullable=False)
+    file_ref = Column(Text, nullable=False)
+    send_code = Column(Text, default="")
+    name = Column(String, default="")
+    description = Column(Text, default="")
+    tags_json = Column(Text, default="[]")
+    emotions_json = Column(Text, default="[]")
+    source_type = Column(String, default="manual")
+    source_count = Column(Integer, default=1)
+    status = Column(String, default="active")
+    usage_count = Column(Integer, default=0)
+    first_seen = Column(DateTime, default=datetime.now)
+    last_seen = Column(DateTime, default=datetime.now)
+    last_used = Column(DateTime, nullable=True)
+    meta_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("chat_stream_id", "sticker_hash", name="uq_sticker_stream_hash"),
+    )
+
+
 class ChatStreamConfig(Base):
     """群聊/私聊流配置——talk_value、表达开关等。"""
     __tablename__ = "chat_stream_configs"

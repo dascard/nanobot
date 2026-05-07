@@ -148,12 +148,15 @@ def run_learning_cycle():
         if not rows:
             return {"scanned": 0, "expression_new": 0, "jargon_new": 0}
 
-        # 按 stream_id 分组
+        # 按 stream_id 分组，content 剥离 sender 前缀
+        from core.context_builder import _strip_speaker_prefix
+
         group_msgs: dict[str, list[dict]] = {}
         for row in rows:
             stream_id = normalize_group_stream_id(row.session_id)
+            clean_content = _strip_speaker_prefix(row.content or "", row.sender_name or "")
             group_msgs.setdefault(stream_id, []).append({
-                "content": row.content or "",
+                "content": clean_content,
                 "sender_name": row.sender_name or "",
             })
 

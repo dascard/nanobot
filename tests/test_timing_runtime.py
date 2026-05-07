@@ -104,7 +104,7 @@ class TestGroupRuntime:
 
         async def fake_gate(_gid, _p, _ctx, _tr):
             # 模拟新消息到来
-            runtime._states["g1"].add_message(
+            runtime._states["group_g1"].add_message(
                 PendingMessage("u2", "B", "interrupt"))
             return {"action": "continue", "reason": "test"}
 
@@ -116,7 +116,7 @@ class TestGroupRuntime:
         assert r["action"] == "no_reply"
         assert "mismatch" in r["reason"]
         # running 必须已清除
-        assert not runtime._states["g1"].running
+        assert not runtime._states["group_g1"].running
 
     @pytest.mark.asyncio
     async def test_session_name_saved_for_timer_reuse(self, monkeypatch):
@@ -137,7 +137,7 @@ class TestGroupRuntime:
         assert "testbot" in captured_ctx.get("bot_aliases", [])
 
         # bypass rate limit for timer test
-        runtime._states["g1"].last_gate_completed_ts = 0
+        runtime._states["group_g1"].last_gate_completed_ts = 0
         captured_ctx.clear()
         await runtime.handle_timer_fired("g1", generation=1)
         assert captured_ctx.get("session_name") == "测试群"
@@ -158,7 +158,7 @@ class TestGroupRuntime:
         gen = r1["generation"]
 
         # 新消息到来 → generation 变化
-        runtime._states["g1"].add_message(PendingMessage("u2", "B", "new"))
+        runtime._states["group_g1"].add_message(PendingMessage("u2", "B", "new"))
 
         r2 = await runtime.handle_timer_fired("g1", gen)
         assert r2["action"] == "no_reply"
@@ -204,7 +204,7 @@ class TestGroupRuntime:
 
         monkeypatch.setattr(runtime, "_call_gate", fake_no_reply)
         # reset state to allow gate
-        runtime._states["g1"].last_gate_completed_ts = 0
+        runtime._states["group_g1"].last_gate_completed_ts = 0
         r2 = await runtime.process_message("g1", {
             "sender_id": "u2", "sender_name": "B", "message": "hi",
         })
@@ -250,7 +250,7 @@ class TestGroupRuntime:
         assert captured.get("session_name") == "测试群"
 
         captured.clear()
-        runtime._states["g1"].last_gate_completed_ts = 0
+        runtime._states["group_g1"].last_gate_completed_ts = 0
         await runtime.handle_timer_fired("g1", generation=1)
         assert captured.get("session_name") == "测试群"
         assert captured.get("bot_aliases") == ["testbot"]
@@ -258,13 +258,13 @@ class TestGroupRuntime:
     @pytest.mark.asyncio
     async def test_idle_cleanup_removes_old_states(self):
         runtime = GroupRuntime()
-        runtime._states["g_old"] = GateState()
-        runtime._states["g_old"].last_active_ts = _time.time() - 9999
-        runtime._states["g_new"] = GateState()
+        runtime._states["group_g_old"] = GateState()
+        runtime._states["group_g_old"].last_active_ts = _time.time() - 9999
+        runtime._states["group_g_new"] = GateState()
 
         runtime.cleanup_idle()
-        assert "g_old" not in runtime._states
-        assert "g_new" in runtime._states
+        assert "group_g_old" not in runtime._states
+        assert "group_g_new" in runtime._states
 
     def test_build_timing_context_includes_all_fields(self):
         """_build_timing_context 覆盖 session_name/bot_aliases/reply_to_bot。"""
@@ -283,10 +283,10 @@ class TestGroupRuntime:
     def test_note_bot_replied_updates_timestamp(self):
         """note_bot_replied 更新 last_bot_reply_ts。"""
         runtime = GroupRuntime()
-        runtime._states["g1"] = GateState()
-        assert runtime._states["g1"].last_bot_reply_ts == 0.0
+        runtime._states["group_g1"] = GateState()
+        assert runtime._states["group_g1"].last_bot_reply_ts == 0.0
         runtime.note_bot_replied("g1")
-        assert runtime._states["g1"].last_bot_reply_ts > 0
+        assert runtime._states["group_g1"].last_bot_reply_ts > 0
 
     def test_note_bot_replied_nonexistent_no_error(self):
         """不存在的 group 调用 note_bot_replied 不抛异常。"""
@@ -313,8 +313,8 @@ class TestGroupRuntime:
 
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
 
-        runtime._states["g1"] = GateState()
-        runtime._states["g1"].last_gate_completed_ts = 0
+        runtime._states["group_g1"] = GateState()
+        runtime._states["group_g1"].last_gate_completed_ts = 0
         runtime.note_bot_replied("g1")
 
         r = await runtime.process_message("g1", {
@@ -359,7 +359,7 @@ class TestGroupRuntime:
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
 
         # bot 刚回复
-        runtime._states["g1"] = GateState()
+        runtime._states["group_g1"] = GateState()
         runtime.note_bot_replied("g1")
 
         r = await runtime.process_message("g1", {
@@ -379,7 +379,7 @@ class TestGroupRuntime:
             return {"action": "continue", "reason": "test"}
 
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
-        runtime._states["g1"] = GateState()
+        runtime._states["group_g1"] = GateState()
         runtime.note_bot_replied("g1")
 
         r = await runtime.process_message("g1", {
@@ -397,7 +397,7 @@ class TestGroupRuntime:
             return {"action": "continue", "reason": "test"}
 
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
-        runtime._states["g1"] = GateState()
+        runtime._states["group_g1"] = GateState()
         runtime.note_bot_replied("g1")
 
         r = await runtime.process_message("g1", {
@@ -418,7 +418,7 @@ class TestGroupRuntime:
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
 
-        runtime._states["g1"] = GateState()
+        runtime._states["group_g1"] = GateState()
         runtime.note_bot_replied("g1")
 
         r = await runtime.process_message("g1", {
@@ -441,11 +441,14 @@ class TestGroupRuntime:
         monkeypatch = pytest.MonkeyPatch()
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
 
-        runtime._states["g1"] = GateState()
-        runtime._states["g1"].last_gate_completed_ts = 0  # bypass rate limit
+        runtime._states["group_g1"] = GateState()
+        runtime._states["group_g1"].last_gate_completed_ts = 0  # bypass rate limit
+        # 确保有 pending 且非 ambient，跳过 talk_value gate
+        runtime._states["group_g1"].add_message(PendingMessage("u1", "A", "hi"))
+        runtime._states["group_g1"].last_trigger_reason = "timer"
         runtime.note_bot_replied("g1")
 
-        r = await runtime.handle_timer_fired("g1", generation=0)
+        r = await runtime.handle_timer_fired("g1", generation=1)
         assert r["action"] == "wait"
         assert "冷却" in r["reason"]
         assert len(rt_calls) == 0  # gate 未被调用
@@ -460,3 +463,50 @@ class TestGroupRuntime:
         assert "<INST>" not in ctx
         assert "SYSTEM_TAG" in ctx
         assert "INST_TAG" in ctx
+
+    # ── talk_value gate + timer ──
+
+    @pytest.mark.asyncio
+    async def test_first_ambient_with_talk_value_half_waits(self, monkeypatch):
+        """普通群消息 talk_value=0.5 → 1条不满足阈值 → wait。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(*_a, **_kw):
+            return {"action": "continue", "reason": "test"}
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        r = await runtime.process_message("group_1", {
+            "sender_id": "u1", "sender_name": "A", "message": "hello",
+        }, trigger_reason="ambient", talk_value=0.5)
+        assert r["action"] == "wait"
+        assert "1/2" in r.get("reason", "")
+
+    @pytest.mark.asyncio
+    async def test_timer_does_not_bypass_talk_value_gate(self):
+        """timer 回调也检查 talk_value——ambient 一条不能绕过。"""
+        runtime = GroupRuntime()
+        rt = GroupRuntime()
+
+        rt._states["group_1"] = GateState()
+        rt._states["group_1"].talk_value = 0.5
+        rt._states["group_1"].last_trigger_reason = "ambient"
+        rt._states["group_1"].add_message(PendingMessage("u1", "A", "msg1"))
+
+        r = await rt.handle_timer_fired("group_1", 1)
+        assert r["action"] == "wait"
+        assert "1/2" in r.get("reason", "")
+
+    @pytest.mark.asyncio
+    async def test_group_id_normalized_in_state_key(self):
+        """不同格式的 group_id 映射到同一个 runtime state。"""
+        runtime = GroupRuntime()
+        await runtime.process_message("123456", {
+            "sender_id": "u1", "sender_name": "A", "message": "hi",
+        })
+        await runtime.process_message("group_123456", {
+            "sender_id": "u2", "sender_name": "B", "message": "hello",
+        }, trigger_reason="ambient")
+        # 两个请求应对同一 state
+        assert "group_123456" in runtime._states
+        assert "123456" not in runtime._states
+        assert len(runtime._states) == 1

@@ -2,7 +2,9 @@
 Nanobot 集中配置模块。
 所有环境变量和常量在此统一管理。
 """
+
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -39,7 +41,9 @@ DIFY_RETRY_BASE_DELAY = float(os.environ.get("DIFY_RETRY_BASE_DELAY", "2.0"))
 DIFY_REQUEST_TIMEOUT = int(os.environ.get("DIFY_REQUEST_TIMEOUT", "180"))
 
 # ── 厂商 API (OpenAI 兼容) ──
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "new-api")  # new-api | deepseek | zhipu | qwen | openrouter | gemini | siliconflow | dify
+LLM_PROVIDER = os.environ.get(
+    "LLM_PROVIDER", "new-api"
+)  # new-api | deepseek | zhipu | qwen | openrouter | gemini | siliconflow | dify
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "")
 
@@ -48,7 +52,9 @@ NEW_API_KEY = os.environ.get("NEW_API_KEY", "")
 NEW_API_BASE_URL = os.environ.get("NEW_API_BASE_URL", "https://api.new-api.com/v1")
 NEW_API_TIMEOUT = int(os.environ.get("NEW_API_TIMEOUT", "180"))
 NEW_API_AUTO_MODEL_SYNC = os.environ.get("NEW_API_AUTO_MODEL_SYNC", "1") == "1"
-NEW_API_MODEL_SYNC_INTERVAL_MINUTES = int(os.environ.get("NEW_API_MODEL_SYNC_INTERVAL_MINUTES", "60"))
+NEW_API_MODEL_SYNC_INTERVAL_MINUTES = int(
+    os.environ.get("NEW_API_MODEL_SYNC_INTERVAL_MINUTES", "60")
+)
 
 # 自动路由：off | code | model
 AUTO_MODEL_ROUTING_MODE = os.environ.get("AUTO_MODEL_ROUTING_MODE", "code")
@@ -57,13 +63,17 @@ AUTO_MODEL_ROUTING_MODE = os.environ.get("AUTO_MODEL_ROUTING_MODE", "code")
 LLM_MODEL_SMART = os.environ.get("LLM_MODEL_SMART", "")
 LLM_MODEL_FAST = os.environ.get("LLM_MODEL_FAST", "")
 LLM_MODEL_REASONING = os.environ.get("LLM_MODEL_REASONING", "")
-LLM_BUDGET_CAP = float(os.environ.get("LLM_BUDGET_CAP", "10.0")) # 每百万 Token 输入的最大允许成本
+LLM_BUDGET_CAP = float(
+    os.environ.get("LLM_BUDGET_CAP", "10.0")
+)  # 每百万 Token 输入的最大允许成本
 
 # 回复主链路模型策略：当前 KT 仍是 planner/reply 同轮调用，这组配置用于提升最终生成链路智能度。
-LLM_MODEL_REPLY = os.environ.get("LLM_MODEL_REPLY", "")
+LLM_MODEL_REPLY = os.environ.get("LLM_MODEL_REPLY", "deepseek-v4-flash-max")
 REPLY_MODEL_INTEL_FLOOR = int(os.environ.get("REPLY_MODEL_INTEL_FLOOR", "12"))
 REPLY_MODEL_INTEL_BOOST = int(os.environ.get("REPLY_MODEL_INTEL_BOOST", "2"))
-REPLY_MODEL_MAX_COST = float(os.environ.get("REPLY_MODEL_MAX_COST", str(LLM_BUDGET_CAP)))
+REPLY_MODEL_MAX_COST = float(
+    os.environ.get("REPLY_MODEL_MAX_COST", str(LLM_BUDGET_CAP))
+)
 
 # ── Agent 行为 ──
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "5"))  # 单次对话最大工具轮数
@@ -76,7 +86,9 @@ ROUTER_INTEL_WEIGHT = float(os.environ.get("ROUTER_INTEL_WEIGHT", "5.0"))
 ROUTER_FREE_BONUS = float(os.environ.get("ROUTER_FREE_BONUS", "-2.0"))
 ROUTER_UNSTABLE_PENALTY = float(os.environ.get("ROUTER_UNSTABLE_PENALTY", "5.0"))
 # 熔断器参数: 连续失败 N 次后临时禁用，指数退避恢复
-MODEL_MAX_CONSECUTIVE_FAILURES = int(os.environ.get("MODEL_MAX_CONSECUTIVE_FAILURES", "3"))
+MODEL_MAX_CONSECUTIVE_FAILURES = int(
+    os.environ.get("MODEL_MAX_CONSECUTIVE_FAILURES", "3")
+)
 MODEL_COOLDOWN_BASE_SECONDS = int(os.environ.get("MODEL_COOLDOWN_BASE_SECONDS", "300"))
 MODEL_COOLDOWN_MAX_SECONDS = int(os.environ.get("MODEL_COOLDOWN_MAX_SECONDS", "1800"))
 
@@ -102,20 +114,40 @@ IMAGE_PREPROCESS_CACHE_DIR = os.environ.get(
     os.path.join(LOG_DIR, "image_cache"),
 )
 # 压缩后图片字节上限；默认 768KiB，转 base64 后约等于 1MiB
-IMAGE_PREPROCESS_MAX_BYTES = int(os.environ.get("IMAGE_PREPROCESS_MAX_BYTES", str(768 * 1024)))
+IMAGE_PREPROCESS_MAX_BYTES = int(
+    os.environ.get("IMAGE_PREPROCESS_MAX_BYTES", str(768 * 1024))
+)
 # 下载/解码后的原始图片字节上限，防止超大图片进入解码流程
-IMAGE_PREPROCESS_RAW_MAX_BYTES = int(os.environ.get("IMAGE_PREPROCESS_RAW_MAX_BYTES", str(12 * 1024 * 1024)))
-IMAGE_PREPROCESS_ALLOW_LOCAL_FILES = os.environ.get("IMAGE_PREPROCESS_ALLOW_LOCAL_FILES", "0") == "1"
+IMAGE_PREPROCESS_RAW_MAX_BYTES = int(
+    os.environ.get("IMAGE_PREPROCESS_RAW_MAX_BYTES", str(12 * 1024 * 1024))
+)
+IMAGE_PREPROCESS_ALLOW_LOCAL_FILES = (
+    os.environ.get("IMAGE_PREPROCESS_ALLOW_LOCAL_FILES", "0") == "1"
+)
 IMAGE_PREPROCESS_MAX_SIDE = int(os.environ.get("IMAGE_PREPROCESS_MAX_SIDE", "1024"))
-IMAGE_PREPROCESS_START_QUALITY = int(os.environ.get("IMAGE_PREPROCESS_START_QUALITY", "92"))
+IMAGE_PREPROCESS_START_QUALITY = int(
+    os.environ.get("IMAGE_PREPROCESS_START_QUALITY", "92")
+)
 IMAGE_PREPROCESS_MIN_QUALITY = int(os.environ.get("IMAGE_PREPROCESS_MIN_QUALITY", "45"))
-IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT = float(os.environ.get("IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT", "20.0"))
+IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT = float(
+    os.environ.get("IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT", "20.0")
+)
 
 GUARDRAIL_INJECTION_PATTERNS = [
-    r'\[SYSTEM', r'\[INST\]', r'</?system>', r'</?user>',
-    r'IGNORE\s+.*RULE', r'忽略\s*.*指令', r'忽略\s*.*规则',
-    r'OUTPUT\s*:', r'输出\s*:', r'ALWAYS\s+输出',
-    r'你是.*过滤器', r'你的任务是\s+ALWAYS',
-    r'<\|im_start\|>', r'<\|im_end\|>',
-    r'从现在开始.*助手', r'从现在开始.*无限制',
+    r"\[SYSTEM",
+    r"\[INST\]",
+    r"</?system>",
+    r"</?user>",
+    r"IGNORE\s+.*RULE",
+    r"忽略\s*.*指令",
+    r"忽略\s*.*规则",
+    r"OUTPUT\s*:",
+    r"输出\s*:",
+    r"ALWAYS\s+输出",
+    r"你是.*过滤器",
+    r"你的任务是\s+ALWAYS",
+    r"<\|im_start\|>",
+    r"<\|im_end\|>",
+    r"从现在开始.*助手",
+    r"从现在开始.*无限制",
 ]

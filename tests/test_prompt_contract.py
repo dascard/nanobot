@@ -71,6 +71,12 @@ def test_contains_tool_discipline(prompt_text):
     assert "禁止用不同参数反复调同一个工具" in prompt_text
 
 
+def test_contains_sticker_tool_policy(prompt_text):
+    assert "sticker_search" in prompt_text
+    assert "表情包" in prompt_text
+    assert "不要频繁发表情包" in prompt_text
+
+
 def test_contains_chat_style(prompt_text):
     assert 'meta 话术' in prompt_text
     assert "换行即分段" in prompt_text

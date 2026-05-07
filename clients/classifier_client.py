@@ -13,10 +13,7 @@ import os
 import re
 import urllib.request
 
-from config import (
-    CLASSIFIER_API_URL,
-    CLASSIFIER_TIMEOUT,
-)
+from config import CLASSIFIER_API_URL, CLASSIFIER_TIMEOUT
 
 logger = logging.getLogger("nanobot.classifier")
 
@@ -28,6 +25,7 @@ THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 # Control characters to strip (exclude \n, \t, \r)
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
 
 class Guardrail:
     """4-layer guardrail for private message classification."""
@@ -77,10 +75,13 @@ class Guardrail:
             model_path = os.environ.get("SENTINEL_MODEL_PATH", "./sentinel")
             logger.info("Loading sentinel from: %s", model_path)
             tokenizer = AutoTokenizer.from_pretrained(
-                model_path, trust_remote_code=True,
+                model_path,
+                trust_remote_code=True,
             )
             model = AutoModelForSequenceClassification.from_pretrained(
-                model_path, torch_dtype="float16", trust_remote_code=True,
+                model_path,
+                torch_dtype="float16",
+                trust_remote_code=True,
             )
             cls._sentinel = pipeline(
                 "text-classification",
@@ -120,7 +121,9 @@ class Guardrail:
 
             is_injection = "JAILBREAK" in label and score >= 0.5
             if is_injection:
-                logger.warning("Sentinel detected injection: label=%s score=%.3f", label, score)
+                logger.warning(
+                    "Sentinel detected injection: label=%s score=%.3f", label, score
+                )
             return is_injection
         except Exception as e:
             logger.error("Sentinel inference failed: %s", e)
@@ -144,8 +147,7 @@ class Guardrail:
         data = json.dumps(payload).encode("utf-8")
         url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
 
-        logger.info("  [classifier] >> Qwen: %s | message: %.80s",
-                     url, message)
+        logger.info("  [classifier] >> Qwen: %s | message: %.80s", url, message)
 
         req = urllib.request.Request(
             url,
@@ -214,7 +216,9 @@ class Guardrail:
 
     # ── Public API ──
 
-    def detect_injection(self, message: str, *, allow_passthrough: bool = False) -> dict:
+    def detect_injection(
+        self, message: str, *, allow_passthrough: bool = False
+    ) -> dict:
         """Sentinel 注入检测——不做 Qwen 调用。"""
         if not message or not message.strip():
             return {"status": "safe", "injection": False}
@@ -242,7 +246,9 @@ class Guardrail:
             return {"status": "silent", "complexity": 0}
         return {"status": "reply", "complexity": complexity}
 
-    def classify(self, message: str, *, allow_injection_passthrough: bool = False) -> dict:
+    def classify(
+        self, message: str, *, allow_injection_passthrough: bool = False
+    ) -> dict:
         """Classify a private chat message (保持兼容)。
 
         Returns dict with:
@@ -252,7 +258,9 @@ class Guardrail:
         if not message or not message.strip():
             return {"status": "silent", "complexity": 0}
 
-        injection = self.detect_injection(message, allow_passthrough=allow_injection_passthrough)
+        injection = self.detect_injection(
+            message, allow_passthrough=allow_injection_passthrough
+        )
         if injection["status"] == "injection":
             return {"status": "injection", "complexity": 0}
 
@@ -321,11 +329,17 @@ class PrivateDecisionClassifier:
         }
         data = json.dumps(payload).encode("utf-8")
         url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
-        logger.info("[private_decision] >> Qwen | message=%.80s has_files=%s", message, has_files)
+        logger.info(
+            "[private_decision] >> Qwen | message=%.80s has_files=%s",
+            message,
+            has_files,
+        )
 
         req = urllib.request.Request(
-            url, data=data,
-            headers={"Content-Type": "application/json"}, method="POST",
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
         proxy_handler = urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
@@ -369,39 +383,82 @@ class PrivateDecisionClassifier:
         """兼容旧格式输出（NO_REPLY/WAIT/是,5 等）。"""
         upper = text.upper()
         if "NO_REPLY" in upper or text.startswith(("否", "不用", "不需要")):
-            return {"action": "no_reply", "complexity": 0, "reason": "fallback parse", "raw": text[:300]}
+            return {
+                "action": "no_reply",
+                "complexity": 0,
+                "reason": "fallback parse",
+                "raw": text[:300],
+            }
         if "WAIT" in upper or "等待" in text or text.startswith(("等", "稍等")):
-            return {"action": "wait", "complexity": 0, "reason": "fallback parse", "raw": text[:300]}
+            return {
+                "action": "wait",
+                "complexity": 0,
+                "reason": "fallback parse",
+                "raw": text[:300],
+            }
         m = re.match(r"^\s*是\s*[,，]\s*(\d+)\s*$", text)
         if m:
             c = max(1, min(10, int(m.group(1))))
-            return {"action": "reply_now", "complexity": c, "reason": "legacy reply parse", "raw": text[:300]}
-        return {"action": "reply_now", "complexity": 5, "reason": "invalid output fallback", "raw": text[:300]}
+            return {
+                "action": "reply_now",
+                "complexity": c,
+                "reason": "legacy reply parse",
+                "raw": text[:300],
+            }
+        return {
+            "action": "reply_now",
+            "complexity": 5,
+            "reason": "invalid output fallback",
+            "raw": text[:300],
+        }
 
     def classify(self, message: str, has_files: bool = False) -> dict:
         if not message.strip() and not has_files:
-            return {"action": "no_reply", "complexity": 0, "reason": "empty message", "raw": ""}
+            return {
+                "action": "no_reply",
+                "complexity": 0,
+                "reason": "empty message",
+                "raw": "",
+            }
         try:
             raw = self._call_qwen(message, has_files)
             parsed = self._parse(raw)
             logger.info(
                 "[private_decision] << action=%s complexity=%s raw=%.100s",
-                parsed["action"], parsed["complexity"], raw[:100],
+                parsed["action"],
+                parsed["complexity"],
+                raw[:100],
             )
             return parsed
         except Exception as e:
             logger.warning("[private_decision] Qwen failed: %s", e)
             # fallback: 纯传输内容 no_reply，其余 reply_now
             import re as _re
+
             t = (message or "").strip()
             is_transport = (
                 (has_files and not t)
-                or bool(_re.match(r"^(https?://\S+|sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9_\-+/=]{32,})$", t))
+                or bool(
+                    _re.match(
+                        r"^(https?://\S+|sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9_\-+/=]{32,})$",
+                        t,
+                    )
+                )
                 or (len(t) > 500 and "?" not in t and "？" not in t)
             )
             if is_transport:
-                return {"action": "no_reply", "complexity": 0, "reason": "fallback transport_only", "raw": ""}
-            return {"action": "reply_now", "complexity": 3, "reason": "classifier fallback", "raw": ""}
+                return {
+                    "action": "no_reply",
+                    "complexity": 0,
+                    "reason": "fallback transport_only",
+                    "raw": "",
+                }
+            return {
+                "action": "reply_now",
+                "complexity": 3,
+                "reason": "classifier fallback",
+                "raw": "",
+            }
 
 
 _private_decision_instance: PrivateDecisionClassifier | None = None
@@ -433,7 +490,7 @@ bot 是 QQ 群聊中的普通参与者，不是主持人。你不是负责生成
 6. 不要根据单个关键词机械判断；结合触发原因、发言对象、上下文和群聊节奏。
 
 ## 输入格式
-系统会给你 `<timing_context>`，其中可能包含群名、触发原因、bot 别名、冷却信息，以及 Maibot planner 风格的消息块：
+系统会给你 `<timing_context>`，其中可能包含群名、触发原因、bot 别名、冷却信息，以及消息块：
 [msg_id]...
 [时间]...
 [用户名]...
@@ -463,8 +520,10 @@ class TimingGate:
         data = json.dumps(payload).encode("utf-8")
         url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
         req = urllib.request.Request(
-            url, data=data,
-            headers={"Content-Type": "application/json"}, method="POST",
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
         )
         proxy_handler = urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
@@ -479,7 +538,8 @@ class TimingGate:
         for _ in range(5):
             prev = cleaned
             cleaned = THINK_PATTERN.sub("", cleaned).strip()
-            if cleaned == prev: break
+            if cleaned == prev:
+                break
 
         # 提取 JSON
         try:
@@ -491,10 +551,13 @@ class TimingGate:
                 if action in ("continue", "wait", "no_reply"):
                     delay = int(data.get("delay_seconds", 5))
                     delay = max(3, min(30, delay))
-                    return {"action": action,
-                            "delay_seconds": delay if action == "wait" else None,
-                            "reason": str(data.get("reason", ""))[:200],
-                            "raw": raw[:200], "error_type": None}
+                    return {
+                        "action": action,
+                        "delay_seconds": delay if action == "wait" else None,
+                        "reason": str(data.get("reason", ""))[:200],
+                        "raw": raw[:200],
+                        "error_type": None,
+                    }
         except (json.JSONDecodeError, ValueError, KeyError, TypeError):
             pass
 
@@ -502,31 +565,51 @@ class TimingGate:
         match = re.match(r"^\s*(是|否)\s*[,，]\s*(\d+)\s*$", cleaned)
         if match:
             action = "continue" if match.group(1) == "是" else "no_reply"
-            return {"action": action, "delay_seconds": None,
-                    "reason": "旧格式兼容", "raw": raw[:200], "error_type": None}
+            return {
+                "action": action,
+                "delay_seconds": None,
+                "reason": "旧格式兼容",
+                "raw": raw[:200],
+                "error_type": None,
+            }
 
         # 非法 → no_reply
         logger.warning(f"[TimingGate] Invalid: {raw[:100]}")
-        return {"action": "no_reply", "delay_seconds": None,
-                "reason": "非法输出", "raw": raw[:200], "error_type": "parse_error"}
+        return {
+            "action": "no_reply",
+            "delay_seconds": None,
+            "reason": "非法输出",
+            "raw": raw[:200],
+            "error_type": "parse_error",
+        }
 
     def judge(self, context: str) -> dict:
         import time as _t
+
         t0 = _t.time()
         try:
             raw = self._call_qwen(context)
             result = self._parse_output(raw)
             elapsed_ms = int((_t.time() - t0) * 1000)
-            logger.info("[TimingGate] action=%s delay=%s latency=%dms reason=%.60s error=%s",
-                        result["action"], result.get("delay_seconds"),
-                        elapsed_ms, str(result.get("reason", ""))[:60],
-                        result.get("error_type"))
+            logger.info(
+                "[TimingGate] action=%s delay=%s latency=%dms reason=%.60s error=%s",
+                result["action"],
+                result.get("delay_seconds"),
+                elapsed_ms,
+                str(result.get("reason", ""))[:60],
+                result.get("error_type"),
+            )
             return result
         except Exception as e:
             elapsed_ms = int((_t.time() - t0) * 1000)
             logger.warning("[TimingGate] failed latency=%dms: %s", elapsed_ms, e)
-            return {"action": "no_reply", "delay_seconds": None,
-                    "reason": f"Qwen不可用: {e}", "raw": "", "error_type": "network_error"}
+            return {
+                "action": "no_reply",
+                "delay_seconds": None,
+                "reason": f"Qwen不可用: {e}",
+                "raw": "",
+                "error_type": "network_error",
+            }
 
 
 _timing_gate_instance: "TimingGate | None" = None

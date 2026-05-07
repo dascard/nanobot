@@ -662,6 +662,57 @@ async def test_group_message_wait_returns_generation(db_session, monkeypatch):
     assert data["generation"] == 5
 
 
+@pytest.mark.asyncio
+async def test_group_message_image_auto_registers_sticker(db_session, monkeypatch):
+    """纯图片/表情消息也应进入统一群聊入口，并自动注册可搜索表情。"""
+    from api.routes import GroupMessageRequest, group_message
+    from core.database import StickerMemory
+
+    calls = []
+
+    async def fake_process(_self, group_id, msg, **kwargs):
+        calls.append((group_id, msg, kwargs))
+        return {"action": "no_reply", "generation": 1, "reason": "image ambient"}
+
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="123",
+            sender_id="u-img",
+            sender_name="发图人",
+            message="",
+            message_id="m-img-1",
+            session_name="测试群",
+            files=["https://example.com/sticker.png"],
+            client_meta={
+                "message_type": "sticker",
+                "stickers": [
+                    {
+                        "file": "https://example.com/sticker.png",
+                        "hash": "sticker-hash-1",
+                        "name": "拍桌",
+                        "description": "拍桌生气表情",
+                        "tags": ["拍桌", "生气"],
+                        "emotions": ["angry"],
+                    }
+                ],
+            },
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "no_reply"
+    row = db_session.query(StickerMemory).filter_by(sticker_hash="sticker-hash-1").one()
+    assert row.chat_stream_id == "qq:123:group"
+    assert row.description == "拍桌生气表情"
+    assert calls
+    assert calls[0][1]["message"].startswith("[表情包]")
+    logs = db_session.query(ChatLog).filter_by(role="ambient").all()
+    assert any("[表情包]" in log.content for log in logs)
+
+
 def test_deprecated_log_ambient_still_works(client, db_session):
     """旧 /log_ambient 仍可用，但已标记 deprecated。"""
     response = client.post("/api/v1/log_ambient", json={

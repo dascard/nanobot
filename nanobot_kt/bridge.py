@@ -195,6 +195,27 @@ class NanobotBridge:
     PERSONA_MARKER = "<persona_reference"
     RUNTIME_MARKER = "<runtime_context>"
 
+    # 所有运行时注入的 system 消息前缀——每轮 reset 时统一清理
+    DYNAMIC_SYSTEM_PREFIXES = (
+        "<runtime_context>",
+        "<persona_reference",
+        "[PersonaContext]",
+        "[CurrentTimeContext]",
+        "[GroupRestriction]",
+        "[ToolPolicy]",
+        "<group_recent_context>",
+        "<group_memory_context",
+        "[ExpressionContext]",
+        "[JargonContext]",
+        "<history_context>",
+        "## 群聊行为",
+        "## 群聊上下文使用规则",
+        "## 当前回复目标",
+        "## 群聊发言时机",
+        "## 内部控制消息",
+        "## 私聊行为",
+    )
+
     def _build_persona_system_reference(self, user_id: str, persona_text: str) -> str:
         cleaned = str(persona_text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\x00", "")
         cleaned = cleaned.replace("[PersonaContext]", "(PERSONA_CONTEXT_TAG)")
@@ -386,15 +407,7 @@ class NanobotBridge:
             meta = metadata or {}
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                 conv = self._agent.controller.conversation
-                self._remove_system_contexts(
-                    conv,
-                    (
-                        self.RUNTIME_MARKER,
-                        "<persona_reference",
-                        "[PersonaContext]",
-                        "[CurrentTimeContext]",
-                    ),
-                )
+                self._remove_system_contexts(conv, self.DYNAMIC_SYSTEM_PREFIXES)
                 conv.append(
                     "system",
                     self._build_runtime_context(
@@ -467,9 +480,12 @@ class NanobotBridge:
                                     len(group_recent_context))
 
                     # 注入群画像（从 GroupMemory 动态生成）
-                    group_session_id = str(meta.get("session_id") or session_id or "").strip()
-                    profile_group_id = str(meta.get("group_id") or group_session_id).strip()
-                    if group_session_id:
+                    from core.group_runtime.ids import normalize_group_session_id, normalize_group_stream_id
+                    profile_group_id = normalize_group_session_id(
+                        str(meta.get("group_id") or meta.get("session_id") or session_id or "").strip()
+                    )
+                    chat_stream_id = normalize_group_stream_id(profile_group_id)
+                    if profile_group_id:
                         try:
                             from core.context_builder import build_group_profile_context
                             profile_ctx = build_group_profile_context(profile_group_id)
@@ -480,11 +496,9 @@ class NanobotBridge:
 
                             try:
                                 from core.expression_memory import (
-                                    normalize_chat_stream_id,
                                     build_expression_context,
                                     build_jargon_context,
                                 )
-                                chat_stream_id = normalize_chat_stream_id(group_session_id, chat_type="group")
                                 expr_ctx = build_expression_context(chat_stream_id)
                                 if expr_ctx:
                                     conv.append("system", expr_ctx)
