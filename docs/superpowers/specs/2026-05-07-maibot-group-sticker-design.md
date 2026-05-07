@@ -8,7 +8,7 @@
 - 将 Maibot 的 talk_value、轻量 recent context、表达/黑话持续学习适配到现有 FastAPI + KT bridge 架构。
 - 增加表情包系统，提供存储、检索、发送引用和工具接入。
 
-Maibot 的表情包系统核心能力是：表情哈希/文件保存、描述与标签、禁用/注册状态、按情绪或语义选择、发送后更新使用记录。Nanobot 当前没有原生消息组件，QQbot 推送只接受文本，因此本次采用 QQ/OneBot 兼容的 CQ 图片码作为发送载体。
+Maibot 的表情包系统核心能力是：表情哈希/文件保存、描述与标签、禁用/注册状态、按情绪或语义选择、发送后更新使用记录。Nanobot 当前没有原生消息组件，QQbot 推送只接受文本，因此服务端最终仍输出 QQ/OneBot 兼容的 CQ 图片码；模型侧优先使用短 `reply_token`，由 `reply` 工具展开，避免手抄长 URL。
 
 ## 目标
 
@@ -18,9 +18,9 @@ Maibot 的表情包系统核心能力是：表情哈希/文件保存、描述与
 4. 群聊发言频率引入 `talk_value`，普通 ambient 消息按群活跃度动态决定是否触发 gate。
 5. 表达/黑话学习后台任务持续扫描 ambient 消息，不再只依赖 group_analysis 后沉淀。
 6. 增加 `StickerMemory` 表，支持表情包哈希、群/全局作用域、URL 或 CQ file、描述、标签、情绪、启用状态和使用统计。
-7. 群聊图片/表情包自动注册：QQbot 侧把图片段、表情段和文件引用传入 `/group/message`，服务端按 hash 去重入库。
+7. 群聊表情包/贴纸自动注册：QQbot 侧把图片段、表情段和文件引用传入 `/group/message`，服务端按 hash 去重入库；普通图片先只进入群聊现场。
 8. 复用现有 Qwen 视觉能力为未描述的表情包后台生成描述、标签和情绪，不新增多模态模型。
-9. 增加 `sticker_search` 工具：模型按关键词/情绪搜索表情包，拿到可直接放进 `reply(content)` 的 CQ 图片码。
+9. 增加 `sticker_search` 工具：模型按关键词/情绪搜索表情包，拿到可直接放进 `reply(content)` 的短 `reply_token`。
 10. 增加管理 API：注册、搜索、禁用表情包，供 QQbot 或后台管理面板接入。
 11. 允许同步修改 QQbot 仓库：入站兼容群图片/表情，出站解析服务端返回的 CQ 图片码。
 
@@ -69,21 +69,22 @@ Maibot 的表情包系统核心能力是：表情哈希/文件保存、描述与
 
 - `/api/v1/group/message` 接收 `files` 和 `client_meta.stickers`。
 - 图片/表情包消息即使没有文本，也进入统一群聊入口，用 `[图片]` 或 `[表情包]` 占位写入 ambient log，并进入 TimingGate。
+- 保守策略：仅 `sticker/emoji/mface` 或 `client_meta.stickers` 自动注册；普通 `image` 只写入群聊现场，不进入表情库。
 - 服务端按 `chat_stream_id + sticker_hash` upsert；已有记录只刷新 `last_seen` 和补充缺失字段。
 - 未带描述的表情包加入后台描述任务，调用现有 Qwen 视觉接口生成 description/tags/emotions。
-- Qwen 失败不阻塞群消息处理，记录为 candidate，等待后续显式注册或下一次补全。
+- Qwen 失败不阻塞群消息处理；未描述表情保留当前状态，等待后续显式注册或下一次补全。
 
 工具 `sticker_search`：
 
 - 入参：`query`、`group_id`、`limit`、`prefer_global`。
 - 先查当前群，再查 global。
-- 输出候选及 `send_code`，明确“把 send_code 放入 reply(content) 即可发送表情包”。
+- 输出候选、`reply_token` 和兼容用 `send_code`，明确优先把 `reply_token` 放入 `reply(content)`，由 reply 工具展开为 CQ 图片码。
 
 QQbot 适配：
 
 - 群聊 lurker 不再丢弃纯图片/表情消息。
 - 提取 `image`、`mface`、`face` 等可用消息段，传 `files` 和 `client_meta` 到 Nanobot。
-- 出站 `_send_answer()` 检测纯 CQ 图片码并转成 OneBot `MessageSegment.image()` 发送。
+- 出站 `_send_answer()` 检测纯 CQ 图片码或“文字 + CQ 图片码”，并转成 OneBot `MessageSegment.image()` 发送。
 
 管理 API：
 
@@ -95,16 +96,16 @@ QQbot 适配：
 
 - QQbot 不解析 CQ 图片码：本阶段同步修改 QQbot `_send_answer()`，并把输出格式集中在 `core.sticker_memory.build_sticker_send_code()`，后续可切换。
 - 模型滥发表情包：prompt 中要求只在斗图、玩梗、用户要求或语气明显适合时使用。
-- 群里普通图片被误收为表情包：优先依赖 QQbot 传入的 segment 类型；无法区分时先以 `candidate` 入库，搜索工具默认只返回 `active`。
+- 群里普通图片被误收为表情包：优先依赖 QQbot 传入的 segment 类型；普通 `image` 不自动注册，只进入群聊现场。
 
 ## 验收
 
 - `StickerMemory` 表可创建，注册同 hash 表情包会更新而非重复插入。
 - 搜索命中 description/tags/emotions，并按群内表情优先于 global。
-- 群里纯图片/表情消息不会被 QQbot 丢弃，会进入 `/group/message` 并自动注册。
+- 群里纯图片/表情消息不会被 QQbot 丢弃，会进入 `/group/message`；其中表情包/贴纸会自动注册，普通图片只作为现场上下文。
 - 未带描述的表情包会触发 Qwen 后台描述补全，失败不影响消息链路。
-- `sticker_search` 工具返回 CQ 图片码和候选元信息。
+- `sticker_search` 工具返回 `reply_token`、CQ 图片码和候选元信息。
 - prompt 包含 `sticker_search` 路由和克制使用规则。
-- QQbot 能把纯 CQ 图片码回复转成图片发送。
+- QQbot 能把纯 CQ 图片码或混合文本中的 CQ 图片码转成图片发送。
 - TimingGate recent context、talk_value gate、持续学习测试通过。
 - 全量 pytest 通过，提交使用中文 Conventional Commit。

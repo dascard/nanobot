@@ -20,7 +20,9 @@ MAX_RETRIES = 3
 MAX_AGE_SEC = 120
 IDLE_CLEANUP_SEC = 600
 BOT_REPLY_COOLDOWN_SEC = 30
+BOT_FOLLOWUP_WINDOW_SEC = 120
 _DIRECT_TRIGGERS = {"at_bot", "reply_to_bot", "bot_name_mentioned", "direct_call", "mentioned"}
+_COOLDOWN_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
 
 
 @dataclass
@@ -194,7 +196,7 @@ class GroupRuntime:
             return False
         if state.force_next_continue:
             return False
-        is_direct = str(trigger_reason or "").strip() in _DIRECT_TRIGGERS
+        is_direct = str(trigger_reason or "").strip() in _COOLDOWN_BYPASS_TRIGGERS
         return not is_direct
 
     @staticmethod
@@ -202,6 +204,21 @@ class GroupRuntime:
         """talk_value 越高，越容易触发 gate。直接触发类的 force 不经过此判断。"""
         threshold = max(1, round(1.0 / max(talk_value, 0.05)))
         return len(state.pending) >= threshold
+
+    @staticmethod
+    def _looks_like_recent_bot_followup(state: GroupChatState, msg: GroupPendingMessage) -> bool:
+        ago = state.bot_reply_ago()
+        if not (0 < ago <= BOT_FOLLOWUP_WINDOW_SEC):
+            return False
+        text = (msg.message or "").strip()
+        if not text or len(text) > 60 or text.startswith(("/", "!", "！")):
+            return False
+        followup_terms = (
+            "再", "继续", "换", "还有", "看看", "来个", "发个", "发张", "发一下",
+            "整", "上一个", "刚才", "刚刚", "这个", "那个", "呢", "吗", "怎么",
+            "为什么", "啥", "如何", "行不行", "可以吗", "有没有", "表情", "图",
+        )
+        return text.endswith(("?", "？")) or any(term in text for term in followup_terms)
 
     async def process_message(
         self, group_id: str, msg: dict, *,
@@ -233,7 +250,11 @@ class GroupRuntime:
                 stream_id=stream_id,
             ))
             state.talk_value = talk_value
-            state.last_trigger_reason = str(trigger_reason or "").strip()
+            tr = str(trigger_reason or "").strip()
+            if tr == "ambient" and self._looks_like_recent_bot_followup(state, pm):
+                tr = "recent_bot_followup"
+                pm.trigger_reason = tr
+            state.last_trigger_reason = tr
             state.session_name = session_name
             state.bot_aliases = list(bot_aliases or [])
             state.add_message(pm)
@@ -247,12 +268,11 @@ class GroupRuntime:
                 ctx["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
 
             # 直接触发 → arm force_next_continue
-            tr = str(trigger_reason or "").strip()
             if tr in _DIRECT_TRIGGERS or pm.is_at_bot or pm.is_reply_to_bot:
                 state.arm_force_continue(tr or ("reply_to_bot" if pm.is_reply_to_bot else "at_bot"))
 
             # 硬 cooldown：bot 刚回复过且非直接互动 → wait
-            if self._should_cooldown(state, trigger_reason):
+            if self._should_cooldown(state, tr):
                 ago = state.bot_reply_ago()
                 return {
                     "action": "wait",
@@ -305,7 +325,7 @@ class GroupRuntime:
             gen = state.generation
             ctx_snapshot = dict(ctx)
 
-        result = await self._call_gate(group_id, snapshot, ctx_snapshot, trigger_reason)
+        result = await self._call_gate(group_id, snapshot, ctx_snapshot, tr)
 
         async with self._lock:
             state = self._states.get(group_id)

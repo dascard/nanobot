@@ -31,6 +31,12 @@ class ReplyTool(BaseTool):
         content = str(args.get("content", "")).strip()
         if not content:
             return ToolResult(error="Missing 'content' argument")
+        try:
+            from core.sticker_memory import expand_sticker_refs_in_content, record_sticker_uses_in_content
+            content = expand_sticker_refs_in_content(content)
+            record_sticker_uses_in_content(content)
+        except Exception:
+            pass
         # 结构化输出——bridge 解析此 JSON，不依赖文本标签
         return ToolResult(
             output=json.dumps({REPLY_MARKER: {"content": content}}, ensure_ascii=False),

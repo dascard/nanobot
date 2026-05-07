@@ -77,7 +77,7 @@ class StickerSearchTool(BaseTool):
                 "query": query,
                 "count": len(results),
                 "results": results,
-                "usage_hint": "选择一个 result.send_code，原样放进 reply(content) 即可发送表情包；如果没有很贴切的候选，改用文字回复。",
+                "usage_hint": "优先选择一个 result.reply_token 放进 reply(content)，reply 工具会自动展开并发送表情包；不要手抄长 URL。如果没有很贴切的候选，改用文字回复。",
             }
             return ToolResult(output=json.dumps(payload, ensure_ascii=False), exit_code=0)
         finally:

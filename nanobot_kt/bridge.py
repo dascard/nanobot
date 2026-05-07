@@ -464,7 +464,8 @@ class NanobotBridge:
                     conv = self._agent.controller.conversation
                     conv.append("system",
                         "[GroupRestriction] 本群聊中文件操作工具(read/write/edit/grep/glob/bash)不可用。"
-                        "只能使用 sql_analysis/python_sandbox/news_search/group_analysis/schedule_task/persona_update。"
+                        "允许使用 reply/sticker_search/sql_analysis/python_sandbox/news_search/"
+                        "group_analysis/schedule_task/persona_update。"
                     )
                     # 注入群聊专属行为规则
                     for frag in ("20_group_rules.md", "25_context_control.md"):
@@ -533,12 +534,16 @@ class NanobotBridge:
                 if tool_policy == "none":
                     conv.append("system", "[ToolPolicy] 本轮禁止调用任何工具。必须只用 reply 工具。")
                 elif tool_policy == "limited":
-                    conv.append("system", "[ToolPolicy] 本轮只允许 reply/image_summary/python_sandbox。禁止 sql_analysis/news_search/group_analysis/文件操作。")
+                    conv.append(
+                        "system",
+                        "[ToolPolicy] 本轮只允许 reply/image_summary/python_sandbox/sticker_search。"
+                        "禁止 sql_analysis/news_search/group_analysis/文件操作。",
+                    )
                 else:
                     conv.append("system", "[ToolPolicy] 本轮允许使用必要工具。")
 
             # hard enforcement: 动态移除不在允许列表的工具
-            _LIMITED_ALLOWED = {"reply", "image_summary", "python_sandbox"}
+            _LIMITED_ALLOWED = {"reply", "image_summary", "python_sandbox", "sticker_search"}
             if hasattr(self._agent, 'registry') and hasattr(self._agent.registry, '_tools'):
                 reg = self._agent.registry
                 if tool_policy == "none":

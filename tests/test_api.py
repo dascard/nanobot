@@ -713,6 +713,58 @@ async def test_group_message_image_auto_registers_sticker(db_session, monkeypatc
     assert any("[表情包]" in log.content for log in logs)
 
 
+def test_sticker_register_search_and_disable_api(client):
+    response = client.post(
+        "/api/v1/stickers/register",
+        json={
+            "chat_stream_id": "123",
+            "file_ref": "https://example.com/api.png",
+            "sticker_hash": "api-hash",
+            "description": "API 注册震惊图",
+            "tags": ["震惊"],
+        },
+    )
+    assert response.status_code == 200
+    sticker_id = response.json()["sticker"]["id"]
+
+    search = client.get("/api/v1/stickers/search", params={"query": "震惊", "group_id": "123"})
+    assert search.status_code == 200
+    results = search.json()["results"]
+    assert len(results) == 1
+    assert results[0]["chat_stream_id"] == "qq:123:group"
+
+    disable = client.post(f"/api/v1/stickers/{sticker_id}/disable")
+    assert disable.status_code == 200
+
+    search_after_disable = client.get(
+        "/api/v1/stickers/search",
+        params={"query": "震惊", "group_id": "123"},
+    )
+    assert search_after_disable.status_code == 200
+    assert search_after_disable.json()["results"] == []
+
+
+def test_sticker_register_auto_describe_adds_background_task(db_session):
+    from fastapi import BackgroundTasks
+    from api.routes import StickerRegisterRequest, register_sticker_endpoint
+
+    tasks = BackgroundTasks()
+    result = register_sticker_endpoint(
+        StickerRegisterRequest(
+            group_id="123",
+            file_ref="https://example.com/auto.png",
+            sticker_hash="auto-desc-hash",
+            auto_describe=True,
+        ),
+        tasks,
+        db_session,
+        None,
+    )
+
+    assert result["status"] == "ok"
+    assert len(tasks.tasks) == 1
+
+
 def test_deprecated_log_ambient_still_works(client, db_session):
     """旧 /log_ambient 仍可用，但已标记 deprecated。"""
     response = client.post("/api/v1/log_ambient", json={

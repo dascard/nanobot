@@ -365,6 +365,47 @@ def init_db():
             except Exception as e:
                 print(f"  ⚠ Migration failed for {col_name}: {e}")
 
+        if "sticker_memories" in inspector.get_table_names():
+            sticker_columns = [col["name"] for col in inspector.get_columns("sticker_memories")]
+            sticker_required_columns = {
+                "chat_stream_id": "TEXT",
+                "sticker_hash": "TEXT",
+                "file_ref": "TEXT",
+                "send_code": "TEXT",
+                "name": "TEXT",
+                "description": "TEXT",
+                "tags_json": "TEXT",
+                "emotions_json": "TEXT",
+                "source_type": "TEXT",
+                "source_count": "INTEGER DEFAULT 1",
+                "status": "TEXT DEFAULT 'active'",
+                "usage_count": "INTEGER DEFAULT 0",
+                "first_seen": "TIMESTAMP",
+                "last_seen": "TIMESTAMP",
+                "last_used": "TIMESTAMP",
+                "meta_json": "TEXT",
+                "created_at": "TIMESTAMP",
+            }
+            for col_name, col_type in sticker_required_columns.items():
+                if col_name in sticker_columns:
+                    continue
+                print(f"  → Migrating: Adding missing column [{col_name}] to sticker_memories...")
+                try:
+                    conn.execute(
+                        text(f"ALTER TABLE sticker_memories ADD COLUMN {col_name} {col_type}")
+                    )
+                    conn.commit()
+                except Exception as e:
+                    print(f"  ⚠ Migration failed for sticker_memories.{col_name}: {e}")
+            try:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sticker_stream_hash "
+                    "ON sticker_memories(chat_stream_id, sticker_hash)"
+                ))
+                conn.commit()
+            except Exception as e:
+                print(f"  ⚠ Sticker index creation failed: {e}")
+
         # index: (session_id, message_id) for chat_logs
         try:
             conn.execute(text(

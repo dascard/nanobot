@@ -497,6 +497,34 @@ class TestGroupRuntime:
         assert "1/2" in r.get("reason", "")
 
     @pytest.mark.asyncio
+    async def test_recent_bot_followup_bypasses_talk_value_gate(self, monkeypatch):
+        """bot 刚参与过对话后，短追问不应被 ambient talk_value 门挡住。"""
+        runtime = GroupRuntime()
+        captured = {}
+
+        state = runtime._states.setdefault("group_1", GateState(group_id="group_1"))
+        state.note_bot_replied()
+
+        async def fake_gate(group_id, pending, ctx, trigger_reason):
+            captured["group_id"] = group_id
+            captured["trigger_reason"] = trigger_reason
+            captured["pending_trigger"] = pending[0].trigger_reason
+            return {"action": "continue", "reason": "followup"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        r = await runtime.process_message("group_1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "再看看呢",
+            "message_id": "m1",
+        }, trigger_reason="ambient", talk_value=0.5)
+
+        assert r["action"] == "continue"
+        assert captured["trigger_reason"] == "recent_bot_followup"
+        assert captured["pending_trigger"] == "recent_bot_followup"
+
+    @pytest.mark.asyncio
     async def test_group_id_normalized_in_state_key(self):
         """不同格式的 group_id 映射到同一个 runtime state。"""
         runtime = GroupRuntime()

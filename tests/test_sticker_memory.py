@@ -3,7 +3,9 @@ import json
 from core.database import StickerMemory
 from core.sticker_memory import (
     build_sticker_send_code,
+    expand_sticker_refs_in_content,
     record_sticker_use,
+    record_sticker_uses_in_content,
     register_sticker,
     search_stickers,
 )
@@ -86,7 +88,73 @@ def test_record_sticker_use_updates_counter_and_last_used(db_session):
     assert updated["last_used"] is not None
 
 
+def test_record_sticker_uses_in_content_updates_matching_send_code(db_session):
+    item = register_sticker(
+        db_session,
+        chat_stream_id="qq:123:group",
+        file_ref="https://example.com/sent.png",
+        sticker_hash="sent-hash",
+        description="发送用表情",
+    )
+
+    count = record_sticker_uses_in_content(
+        "[CQ:image,file=https://example.com/sent.png]",
+        db=db_session,
+    )
+
+    assert count == 1
+    row = db_session.query(StickerMemory).filter_by(id=item["id"]).one()
+    assert row.usage_count == 1
+    assert row.last_used is not None
+
+
+def test_bare_chat_stream_id_normalizes_to_group_stream(db_session):
+    register_sticker(
+        db_session,
+        chat_stream_id="123",
+        file_ref="https://example.com/bare.png",
+        sticker_hash="bare-hash",
+        description="裸群号注册",
+        tags=["裸群号"],
+    )
+
+    results = search_stickers(db_session, "裸群号", group_id="123", limit=5)
+
+    assert len(results) == 1
+    assert results[0]["chat_stream_id"] == "qq:123:group"
+
+
 def test_build_sticker_send_code_escapes_cq_sensitive_chars():
     assert build_sticker_send_code("https://example.com/a[1].png") == (
         "[CQ:image,file=https://example.com/a&#91;1&#93;.png]"
     )
+
+
+def test_build_sticker_send_code_does_not_double_escape_html_entities(db_session):
+    item = register_sticker(
+        db_session,
+        chat_stream_id="qq:123:group",
+        file_ref="https://example.com/sticker.png?appid=1407&amp;fileid=abc&amp;rkey=def",
+        sticker_hash="html-entity-hash",
+        description="HTML 实体链接",
+    )
+
+    assert item["file_ref"] == "https://example.com/sticker.png?appid=1407&fileid=abc&rkey=def"
+    assert item["send_code"] == (
+        "[CQ:image,file=https://example.com/sticker.png?appid=1407&amp;fileid=abc&amp;rkey=def]"
+    )
+    assert "&amp;amp;" not in item["send_code"]
+
+
+def test_expand_sticker_refs_in_content_replaces_short_token(db_session):
+    item = register_sticker(
+        db_session,
+        chat_stream_id="qq:123:group",
+        file_ref="https://example.com/short-token.png",
+        sticker_hash="short-token-hash",
+        description="短 token 表情",
+    )
+
+    expanded = expand_sticker_refs_in_content(f"[sticker:{item['id']}]", db_session)
+
+    assert expanded == "[CQ:image,file=https://example.com/short-token.png]"

@@ -108,6 +108,14 @@ IMAGE_SUMMARY_MAX_TOKENS = int(os.environ.get("IMAGE_SUMMARY_MAX_TOKENS", "512")
 IMAGE_SUMMARY_TEMPERATURE = float(os.environ.get("IMAGE_SUMMARY_TEMPERATURE", "0.1"))
 IMAGE_SUMMARY_TOP_P = float(os.environ.get("IMAGE_SUMMARY_TOP_P", "0.9"))
 
+# ── 表情包自动描述 ──
+STICKER_AUTO_DESCRIBE_ENABLED = (
+    os.environ.get("STICKER_AUTO_DESCRIBE_ENABLED", "1") == "1"
+)
+STICKER_AUTO_DESCRIBE_MAX_PER_CYCLE = int(
+    os.environ.get("STICKER_AUTO_DESCRIBE_MAX_PER_CYCLE", "3")
+)
+
 # ── 图片预处理（下载/缓存/压缩后再上传） ──
 IMAGE_PREPROCESS_CACHE_DIR = os.environ.get(
     "IMAGE_PREPROCESS_CACHE_DIR",

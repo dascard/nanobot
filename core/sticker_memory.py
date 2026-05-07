@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from config import STICKER_AUTO_DESCRIBE_ENABLED
 from core.database import SessionLocal, StickerMemory
 from core.group_runtime.ids import normalize_group_stream_id
 
@@ -18,6 +21,8 @@ logger = logging.getLogger("nanobot.sticker_memory")
 GLOBAL_STICKER_STREAM_ID = "global"
 ACTIVE_STATUS = "active"
 DEFAULT_AUTO_STATUS = "active"
+CQ_IMAGE_PATTERN = re.compile(r"\[CQ:image,[^\]]*file=([^,\]]+)[^\]]*\]")
+STICKER_REF_PATTERN = re.compile(r"\[sticker:(\d+)\]")
 
 
 def _json_list(values: Any) -> list[str]:
@@ -50,11 +55,9 @@ def _dumps_list(values: Any) -> str:
 def normalize_sticker_stream_id(group_id: str = "", chat_stream_id: str = "") -> str:
     if chat_stream_id:
         value = str(chat_stream_id).strip()
-        if value == GLOBAL_STICKER_STREAM_ID or value.startswith("qq:"):
+        if value == GLOBAL_STICKER_STREAM_ID:
             return value
-        if value.startswith("group_"):
-            return normalize_group_stream_id(value)
-        return value
+        return normalize_group_stream_id(value)
     if group_id:
         return normalize_group_stream_id(group_id)
     return GLOBAL_STICKER_STREAM_ID
@@ -82,14 +85,46 @@ def _cq_escape(value: str) -> str:
     )
 
 
+def normalize_sticker_file_ref(file_ref: str) -> str:
+    return html.unescape(str(file_ref or "").strip())
+
+
 def build_sticker_send_code(file_ref: str, send_code: str = "") -> str:
     explicit = str(send_code or "").strip()
     if explicit:
-        return explicit
-    ref = str(file_ref or "").strip()
+        match = CQ_IMAGE_PATTERN.fullmatch(explicit)
+        if not match:
+            return explicit
+        ref = normalize_sticker_file_ref(_cq_unescape(match.group(1).strip()))
+        return f"[CQ:image,file={_cq_escape(ref)}]"
+    ref = normalize_sticker_file_ref(file_ref)
     if ref.startswith("[CQ:image,"):
-        return ref
+        match = CQ_IMAGE_PATTERN.fullmatch(ref)
+        if not match:
+            return ref
+        inner_ref = normalize_sticker_file_ref(_cq_unescape(match.group(1).strip()))
+        return f"[CQ:image,file={_cq_escape(inner_ref)}]"
     return f"[CQ:image,file={_cq_escape(ref)}]"
+
+
+def _cq_unescape(value: str) -> str:
+    return html.unescape(str(value or ""))
+
+
+def extract_sticker_send_codes(content: str) -> list[str]:
+    codes: list[str] = []
+    for match in CQ_IMAGE_PATTERN.finditer(str(content or "")):
+        file_ref = normalize_sticker_file_ref(_cq_unescape(match.group(1).strip()))
+        if not file_ref:
+            continue
+        code = build_sticker_send_code(file_ref)
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _canonical_row_send_code(row: StickerMemory) -> str:
+    return build_sticker_send_code(row.file_ref or "", row.send_code or "")
 
 
 def sticker_to_dict(row: StickerMemory) -> dict[str, Any]:
@@ -98,7 +133,8 @@ def sticker_to_dict(row: StickerMemory) -> dict[str, Any]:
         "chat_stream_id": row.chat_stream_id,
         "sticker_hash": row.sticker_hash,
         "file_ref": row.file_ref,
-        "send_code": row.send_code or build_sticker_send_code(row.file_ref),
+        "send_code": _canonical_row_send_code(row),
+        "reply_token": f"[sticker:{row.id}]",
         "name": row.name or "",
         "description": row.description or "",
         "tags": _loads_list(row.tags_json),
@@ -128,7 +164,7 @@ def register_sticker(
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stream_id = normalize_sticker_stream_id(group_id=group_id, chat_stream_id=chat_stream_id)
-    ref = str(file_ref or "").strip()
+    ref = normalize_sticker_file_ref(file_ref)
     if not ref:
         raise ValueError("file_ref 不能为空")
     stable_hash = build_sticker_hash(ref, sticker_hash=sticker_hash, description=description)
@@ -270,6 +306,83 @@ def record_sticker_use(db: Session, sticker_id: int) -> dict[str, Any]:
     return sticker_to_dict(row)
 
 
+def record_sticker_uses_in_content(content: str, db: Session | None = None) -> int:
+    send_codes = extract_sticker_send_codes(content)
+    if not send_codes:
+        return 0
+
+    own_session = db is None
+    session = db or SessionLocal()
+    try:
+        rows = (
+            session.query(StickerMemory)
+            .filter(StickerMemory.status == ACTIVE_STATUS, StickerMemory.send_code.in_(send_codes))
+            .all()
+        )
+        if len(rows) < len(send_codes):
+            known_ids = {row.id for row in rows}
+            candidates = (
+                session.query(StickerMemory)
+                .filter(StickerMemory.status == ACTIVE_STATUS)
+                .all()
+            )
+            for row in candidates:
+                if row.id in known_ids:
+                    continue
+                if _canonical_row_send_code(row) in send_codes:
+                    rows.append(row)
+                    known_ids.add(row.id)
+        now = datetime.now()
+        for row in rows:
+            row.usage_count = int(row.usage_count or 0) + 1
+            row.last_used = now
+        if rows:
+            session.commit()
+        return len(rows)
+    except Exception as e:
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        logger.warning("[StickerMemory] record sent sticker failed: %s", e)
+        return 0
+    finally:
+        if own_session:
+            session.close()
+
+
+def expand_sticker_refs_in_content(content: str, db: Session | None = None) -> str:
+    text = str(content or "")
+    sticker_ids = {int(match.group(1)) for match in STICKER_REF_PATTERN.finditer(text)}
+    if not sticker_ids:
+        return text
+
+    own_session = db is None
+    session = db or SessionLocal()
+    try:
+        rows = (
+            session.query(StickerMemory)
+            .filter(StickerMemory.status == ACTIVE_STATUS, StickerMemory.id.in_(sticker_ids))
+            .all()
+        )
+        code_by_id = {
+            int(row.id): _canonical_row_send_code(row)
+            for row in rows
+        }
+
+        def replace_token(match: re.Match) -> str:
+            sticker_id = int(match.group(1))
+            return code_by_id.get(sticker_id, match.group(0))
+
+        return STICKER_REF_PATTERN.sub(replace_token, text)
+    except Exception as e:
+        logger.warning("[StickerMemory] expand sticker refs failed: %s", e)
+        return text
+    finally:
+        if own_session:
+            session.close()
+
+
 def disable_sticker(db: Session, sticker_id: int) -> dict[str, Any]:
     row = db.query(StickerMemory).filter(StickerMemory.id == int(sticker_id)).first()
     if row is None:
@@ -326,6 +439,8 @@ def describe_sticker_with_qwen(file_ref: str) -> dict[str, Any]:
 
 
 def auto_describe_sticker(sticker_id: int) -> None:
+    if not STICKER_AUTO_DESCRIBE_ENABLED:
+        return
     db = SessionLocal()
     try:
         row = db.query(StickerMemory).filter(StickerMemory.id == int(sticker_id)).first()

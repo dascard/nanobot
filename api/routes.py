@@ -19,7 +19,8 @@ from typing import Optional, List
 from config import (
     NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT, ADMIN_USER_ID,
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER, NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT,
-    LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING
+    LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING,
+    STICKER_AUTO_DESCRIBE_ENABLED, STICKER_AUTO_DESCRIBE_MAX_PER_CYCLE,
 )
 from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest
 from core.evolution import evolution_task
@@ -762,6 +763,7 @@ def _register_group_stickers_from_message(
 
     chat_stream_id = normalize_group_stream_id(req.group_id)
     registered: list[dict] = []
+    describe_tasks = 0
     for item in payloads:
         file_ref = str(item.get("file_ref") or "").strip()
         if not file_ref:
@@ -795,8 +797,14 @@ def _register_group_stickers_from_message(
             },
         )
         registered.append(sticker)
-        if background_tasks is not None and not sticker.get("description"):
+        if (
+            background_tasks is not None
+            and STICKER_AUTO_DESCRIBE_ENABLED
+            and not sticker.get("description")
+            and describe_tasks < max(0, STICKER_AUTO_DESCRIBE_MAX_PER_CYCLE)
+        ):
             background_tasks.add_task(auto_describe_sticker, sticker["id"])
+            describe_tasks += 1
     return registered
 
 

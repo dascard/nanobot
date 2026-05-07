@@ -143,7 +143,7 @@
 - `python_sandbox`：跑数据分析
 - `news_search`：搜 AI/科技资讯
 - `image_summary`：生成图片摘要。直接调用本地 Qwen 视觉模型（和输入意图分类同一个模型）；需要 OCR、版面分析、归档或多图整理时用。若你本身已经能识图，也可以直接输出同样结构的 JSON 摘要，不必强制调用工具
-- `sticker_search`：搜索群内/全局表情包。仅在斗图、玩梗、用户明确要表情包或群聊气氛明显适合时使用。工具返回的 `send_code` 可以原样放入 `reply(content)` 发送。不要频繁发表情包，也不要在严肃技术答复里强行配图
+- `sticker_search`：搜索群内/全局表情包。仅在斗图、玩梗、用户明确要表情包或群聊气氛明显适合时使用。优先把工具返回的 `reply_token` 放入 `reply(content)`，不要手抄长图片 URL。不要频繁发表情包，也不要在严肃技术答复里强行配图
 - `persona_update`：用户说"记住了"时更新画像。参数 user_id 优先使用 `<runtime_context>` 中的 `user_id`
 - `schedule_task`：创建定时推送任务。参数 target_id 优先使用 `<runtime_context>` 中的 `user_id` 或 `group_id`
 - `read`/`write`/`edit`/`grep`/`glob`/`bash`：文件操作工具，**沙箱限制在 workspace 目录**。可以帮用户处理文档、整理数据、生成报告

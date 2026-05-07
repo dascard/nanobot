@@ -586,6 +586,58 @@ class TestNanobotBridge:
             "[最近若干条对话历史，仅用于理解语境，已按行数和 token 预算裁剪。]",
         )
 
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_group_restriction_allows_sticker_search(self, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.registry._tools = {"reply": object(), "sticker_search": object()}
+        mock_conv = MagicMock()
+        messages = []
+        mock_conv.append.side_effect = lambda role, content: messages.append(
+            {"role": role, "content": content}
+        )
+        mock_conv.get_messages.return_value = [
+            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "ok"}}'},
+        ]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+        mock_controller = MagicMock()
+        mock_controller.conversation = mock_conv
+        mock_controller.llm = MagicMock(config=MagicMock(model="test-model"))
+        mock_controller.max_attempts = 1
+        mock_agent.controller = mock_controller
+
+        async def fake_process(_event):
+            pass
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "发个表情",
+                user_id="group_123",
+                session_id="group_123",
+                metadata={"is_group": True, "group_id": "123", "tool_policy": "limited"},
+            )
+
+        assert asyncio.run(_run()) == "ok"
+        assert "sticker_search" in mock_agent.registry._tools
+        restriction_text = "\n".join(msg["content"] for msg in messages)
+        assert "sticker_search" in restriction_text
+        assert "本轮只允许 reply/image_summary/python_sandbox/sticker_search" in restriction_text
+
 
 # ── Creature Config Loading Test ──
 
