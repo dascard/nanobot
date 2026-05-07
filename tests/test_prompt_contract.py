@@ -28,11 +28,13 @@ def test_prompt_is_not_empty(prompt_text):
 def test_prompt_has_required_fragments(fragments):
     required = {
         "00_identity.md",
+        "05_core.md",
         "10_chat_style.md",
         "20_group_rules.md",
+        "25_context_control.md",
+        "27_tool_routing.md",
         "30_tool_discipline.md",
         "40_memory_policy.md",
-        "50_reply_contract.md",
         "60_artifact_passthrough.md",
     }
     missing = required - set(fragments.keys())
@@ -54,7 +56,7 @@ def test_generated_matches_committed():
 
 def test_contains_reply_contract(prompt_text):
     assert "reply(content)" in prompt_text
-    assert "不要在 reply() 之外输出任何文本" in prompt_text
+    assert '禁止用 assistant 普通文本作为最终回复' in prompt_text
 
 
 def test_contains_html_passthrough(prompt_text):
@@ -69,8 +71,8 @@ def test_contains_tool_discipline(prompt_text):
 
 
 def test_contains_chat_style(prompt_text):
-    assert "绝对禁止输出内部思考" in prompt_text
-    assert "换行就是分段" in prompt_text
+    assert 'meta 话术' in prompt_text
+    assert "换行即分段" in prompt_text
 
 
 def test_contains_memory_policy(prompt_text):
