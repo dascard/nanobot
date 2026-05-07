@@ -123,24 +123,12 @@ def _extract_jargon_candidates(messages: list[dict]) -> list[dict]:
     return candidates
 
 
-def _to_stream_id(session_id: str) -> str:
-    """兼容 group_<id> 和 qq:<id>:group 两种 session_id 格式。"""
-    from core.expression_memory import normalize_chat_stream_id
-    sid = str(session_id or "").strip()
-    if sid.startswith("qq:") and sid.endswith(":group"):
-        raw = sid.removeprefix("qq:").removesuffix(":group")
-    elif sid.startswith("group_"):
-        raw = sid.removeprefix("group_")
-    else:
-        raw = sid
-    return normalize_chat_stream_id(raw, chat_type="group", platform="qq")
-
-
 def run_learning_cycle():
     """执行一轮学习扫描——从 ChatLog 查最近 ambient 消息，提取候选并 upsert。"""
     from sqlalchemy import or_
     from core.database import SessionLocal, ChatLog
     from core.expression_memory import upsert_expression, upsert_jargon
+    from core.group_runtime.ids import normalize_group_stream_id
 
     db = SessionLocal()
     try:
@@ -160,10 +148,10 @@ def run_learning_cycle():
         if not rows:
             return {"scanned": 0, "expression_new": 0, "jargon_new": 0}
 
-        # 按群分组
+        # 按 stream_id 分组
         group_msgs: dict[str, list[dict]] = {}
         for row in rows:
-            stream_id = _to_stream_id(row.session_id)
+            stream_id = normalize_group_stream_id(row.session_id)
             group_msgs.setdefault(stream_id, []).append({
                 "content": row.content or "",
                 "sender_name": row.sender_name or "",

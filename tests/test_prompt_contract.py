@@ -162,22 +162,25 @@ def test_group_prompt_has_group_behavior():
 
 # ── Expression learner unit tests ──
 
-def test_to_stream_id_handles_group_prefix():
-    from core.expression_learner import _to_stream_id
-    assert _to_stream_id("group_123456") == "qq:123456:group"
+def test_normalize_group_session_id():
+    from core.group_runtime.ids import normalize_group_session_id
+    assert normalize_group_session_id("123456") == "group_123456"
+    assert normalize_group_session_id("group_123456") == "group_123456"
+    assert normalize_group_session_id("qq:123456:group") == "group_123456"
 
 
-def test_to_stream_id_handles_qq_colon_format():
-    from core.expression_learner import _to_stream_id
-    assert _to_stream_id("qq:123456:group") == "qq:123456:group"
+def test_normalize_group_stream_id():
+    from core.group_runtime.ids import normalize_group_stream_id
+    assert normalize_group_stream_id("group_123456") == "qq:123456:group"
+    assert normalize_group_stream_id("qq:123456:group") == "qq:123456:group"
+    assert normalize_group_stream_id("123456") == "qq:123456:group"
 
 
-def test_to_stream_id_strips_group_prefix():
-    from core.expression_learner import _to_stream_id
-    sid = _to_stream_id("group_789")
-    # 不应出现 double-prefix: qq:group_789:group
-    assert "group_" not in sid.split(":")[1]
-    assert sid == "qq:789:group"
+def test_raw_group_id():
+    from core.group_runtime.ids import raw_group_id
+    assert raw_group_id("group_789") == "789"
+    assert raw_group_id("qq:789:group") == "789"
+    assert raw_group_id("789") == "789"
 
 
 def test_short_cjk_phrases_extracts_whole_phrases():

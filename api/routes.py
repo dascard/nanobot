@@ -182,11 +182,18 @@ def _normalize_files(files: Optional[List[str]]) -> list[str]:
     return [file for file in (files or []) if isinstance(file, str) and file.strip()]
 
 
-def _normalize_group_session_id(group_id: str) -> str:
-    group_id = str(group_id or "").strip()
-    if not group_id:
-        return ""
-    return group_id if group_id.startswith("group_") else f"group_{group_id}"
+from core.group_runtime.ids import normalize_group_session_id as _normalize_group_session_id
+
+
+def _get_group_talk_value(session_id: str) -> float:
+    """获取群聊 talk_value，用于控制发言频率。"""
+    try:
+        from core.expression_memory import get_stream_config, normalize_chat_stream_id
+        raw = session_id.removeprefix("group_")
+        cfg = get_stream_config(normalize_chat_stream_id(raw, chat_type="group", platform="qq"))
+        return float(cfg.get("talk_value", 0.5))
+    except Exception:
+        return 0.5
 
 
 def _merge_buffered_files(existing: list[str], incoming: Optional[List[str]]) -> list[str]:
@@ -770,11 +777,13 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                 "message": req.message,
                 "message_id": req.message_id or "",
                 "is_reply_to_bot": req.is_reply_to_bot,
+                "is_at_bot": req.is_at_bot,
             },
             session_name=req.session_name or "",
             bot_aliases=list(req.bot_aliases or []),
             trigger_reason=reason,
             recent_context=recent_ctx,
+            talk_value=_get_group_talk_value(group_user_id),
         )
         elapsed_ms = int((_t.time() - t0) * 1000)
         action = result.get("action", "no_reply")

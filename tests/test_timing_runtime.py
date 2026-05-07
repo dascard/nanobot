@@ -303,12 +303,12 @@ class TestGroupRuntime:
 
     @pytest.mark.asyncio
     async def test_note_bot_replied_passes_cooldown_to_gate(self, monkeypatch):
-        """note_bot_replied → process_message → _call_gate 收到 cooldown。"""
+        """直接触发通过 force_next_continue 返回，跳过 cooldown。"""
         runtime = GroupRuntime()
-        captured = {}
 
-        async def fake_gate(_gid, _p, ctx, _tr):
-            captured.update(ctx)
+        gate_calls = []
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            gate_calls.append(1)
             return {"action": "no_reply", "reason": "test"}
 
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
@@ -317,11 +317,12 @@ class TestGroupRuntime:
         runtime._states["g1"].last_gate_completed_ts = 0
         runtime.note_bot_replied("g1")
 
-        await runtime.process_message("g1", {
+        r = await runtime.process_message("g1", {
             "sender_id": "u1", "sender_name": "A", "message": "hi",
-        }, trigger_reason="bot_name_mentioned")  # bypass cooldown
-        assert "last_bot_reply_ago" in captured
-        assert captured["last_bot_reply_ago"] > 0
+        }, trigger_reason="bot_name_mentioned")
+        assert r["action"] == "continue"
+        assert "direct trigger" in r.get("reason", "")
+        assert len(gate_calls) == 0
 
     @pytest.mark.asyncio
     async def test_rate_limited_reports_cooldown(self, monkeypatch):

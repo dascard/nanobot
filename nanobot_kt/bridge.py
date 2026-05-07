@@ -23,6 +23,20 @@ from nanobot_kt.output import BufferedOutput
 from nanobot_kt.image_pipeline import prepare_image_parts
 from clients.new_api_client import NewAPIClient
 from clients.model_registry import registry
+
+_PROMPT_FRAGMENTS_DIR: Path | None = None
+
+
+def _load_prompt_fragment(name: str) -> str:
+    """加载单段 prompt fragment，用于运行时按 chat_type 注入。"""
+    global _PROMPT_FRAGMENTS_DIR
+    if _PROMPT_FRAGMENTS_DIR is None:
+        _PROMPT_FRAGMENTS_DIR = Path(__file__).resolve().parent.parent / "creatures" / "nanobot" / "prompts" / "system"
+    fpath = _PROMPT_FRAGMENTS_DIR / name
+    if not fpath.exists():
+        return ""
+    return fpath.read_text(encoding="utf-8").strip()
+
 from config import (
     NEW_API_KEY,
     NEW_API_BASE_URL,
@@ -430,7 +444,7 @@ class NanobotBridge:
                     logger.warning("[NanobotBridge] Cannot inject history: no controller/conversation")
             # ------------------------------------------------------------------------------------
 
-            # --- Group chat file tool restriction ---
+            # --- Group chat file tool restriction + prompt fragments ---
             is_group = meta.get("is_group", False)
             if is_group:
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
@@ -439,6 +453,11 @@ class NanobotBridge:
                         "[GroupRestriction] 本群聊中文件操作工具(read/write/edit/grep/glob/bash)不可用。"
                         "只能使用 sql_analysis/python_sandbox/news_search/group_analysis/schedule_task/persona_update。"
                     )
+                    # 注入群聊专属行为规则
+                    for frag in ("20_group_rules.md", "25_context_control.md"):
+                        text = _load_prompt_fragment(frag)
+                        if text:
+                            conv.append("system", text)
                     logger.info("[NanobotBridge] Group chat file tool restriction applied")
 
                     group_recent_context = str(meta.get("group_recent_context") or "").strip()
@@ -482,6 +501,13 @@ class NanobotBridge:
                         except Exception as e:
                             logger.warning("[NanobotBridge] GroupProfile inject failed session=%s: %s",
                                            profile_group_id, e)
+            else:
+                # 私聊注入专属行为规则
+                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                    text = _load_prompt_fragment("26_private_behavior.md")
+                    if text:
+                        self._agent.controller.conversation.append("system", text)
+                        logger.info("[NanobotBridge] PrivateBehavior injected chars=%d", len(text))
             # --- Effort constraint + tool_policy hard enforcement ---
             effort_constraint = str(meta.get("effort_constraint", "")).strip()
             tool_policy = str(meta.get("tool_policy", "full")).strip()
