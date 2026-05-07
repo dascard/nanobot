@@ -45,7 +45,8 @@ def test_generated_matches_committed():
     """CI guard: committed prompt.md must equal build output."""
     import scripts.build_nanobot_prompt as bp
     generated = bp.build_prompt()
-    with open(bp.OUTPUT_FILE, "r", encoding="utf-8") as fh:
+    output_file = bp.OUTPUT_DIR + "/" + bp.OUTPUT_FILES["group"]
+    with open(output_file, "r", encoding="utf-8") as fh:
         committed = fh.read()
     assert generated == committed, (
         "prompt.md is stale. Run: python scripts/build_nanobot_prompt.py"

@@ -143,6 +143,63 @@ def build_profile(group_id: str) -> dict:
     }
 
 
+def build_profile_with_evidence(group_id: str, db) -> tuple[dict, dict[str, list[str]]]:
+    """与 build_profile 相同，但额外返回 evidence_map: content → evidence 原文摘要列表。
+
+    调用方负责管理 db session 生命周期。
+    """
+    from core.database import ChatLog
+
+    all_mem = query_active(group_id, min_confidence=0.7)
+    by_type: dict[str, list[dict]] = {}
+    for m in all_mem:
+        by_type.setdefault(m["memory_type"], []).append(m)
+
+    def _top(kind: str, n: int) -> list[str]:
+        return [m["content"] for m in by_type.get(kind, [])[:n]]
+
+    # 收集所有 memory 的 evidence_log_ids
+    evidence_ids: set[int] = set()
+    content_to_ids: dict[str, list[int]] = {}
+    for m in all_mem:
+        ids = _safe_evidence_ids(m.get("evidence_log_ids_json", ""))
+        content_to_ids[m["content"]] = ids
+        evidence_ids.update(ids)
+
+    # 批量查 ChatLog 获取证据原文摘要
+    evidence_map: dict[str, list[str]] = {}
+    if evidence_ids and db is not None:
+        rows = db.query(ChatLog).filter(ChatLog.id.in_(list(evidence_ids))).all()
+        id_to_text: dict[int, str] = {}
+        for row in rows:
+            text = (row.content or "").strip()
+            if text:
+                id_to_text[row.id] = text[:120]
+        for content, ids in content_to_ids.items():
+            snippets = [id_to_text[i] for i in ids if i in id_to_text]
+            if snippets:
+                evidence_map[content] = snippets[:3]
+
+    profile = {
+        "common_topics": _top("topic", 5),
+        "slang": {m["content"]: _safe_meta(m.get("meta_json", "{}")).get("meaning", "")
+                  for m in by_type.get("slang", [])[:8]},
+        "style": _top("style", 5),
+        "events": _top("event", 3),
+        "relationships": _top("relationship", 5),
+        "bot_preferences": _top("preference", 3),
+    }
+    return profile, evidence_map
+
+
+def _safe_evidence_ids(raw: str) -> list[int]:
+    try:
+        ids = json.loads(raw or "[]")
+        return [int(x) for x in ids if str(x).isdigit()][:10]
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 def _merge_evidence(memory, new_ids: list[int]):
     try:
         existing = json.loads(memory.evidence_log_ids_json or "[]")
@@ -168,5 +225,7 @@ def _row_to_dict(r: GroupMemory) -> dict:
         "decay_score": r.decay_score,
         "first_seen": r.first_seen.strftime("%Y-%m-%d") if r.first_seen else "",
         "last_seen": r.last_seen.strftime("%Y-%m-%d") if r.last_seen else "",
-        "status": r.status, "meta_json": r.meta_json,
+        "status": r.status,
+        "meta_json": r.meta_json,
+        "evidence_log_ids_json": r.evidence_log_ids_json,
     }

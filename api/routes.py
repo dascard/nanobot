@@ -751,6 +751,13 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     reason = _derive_group_trigger_reason(req)
     logger.info("[GroupMsg] trigger=%s enter_timing=true", reason)
 
+    # 2.5 构建 TimingGate 轻量 recent context（最近 3-5 条群消息，不含当前）
+    from core.context_builder import build_timing_recent_context
+    recent_ctx = build_timing_recent_context(
+        db, group_user_id, limit=5,
+        exclude_message_ids=[req.message_id] if req.message_id else [],
+    )
+
     # 3. 走 GroupRuntime → TimingGate
     runtime = get_group_runtime()
     t0 = _t.time()
@@ -767,6 +774,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
             session_name=req.session_name or "",
             bot_aliases=list(req.bot_aliases or []),
             trigger_reason=reason,
+            recent_context=recent_ctx,
         )
         elapsed_ms = int((_t.time() - t0) * 1000)
         action = result.get("action", "no_reply")
@@ -947,11 +955,17 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
     import time as _time
     from core.timing_runtime import get_group_runtime
 
+    from core.context_builder import build_timing_recent_context
+    group_user_id = _normalize_group_session_id(req.group_id)
+    recent_ctx = build_timing_recent_context(db, group_user_id, limit=5)
+
     runtime = get_group_runtime()
     t0 = _time.time()
     try:
         result = await runtime.handle_timer_fired(
-            req.group_id, req.generation, trigger_reason=req.trigger_reason,
+            req.group_id, req.generation,
+            trigger_reason=req.trigger_reason,
+            recent_context=recent_ctx,
         )
         elapsed_ms = int((_time.time() - t0) * 1000)
         action = result.get("action", "no_reply")

@@ -174,6 +174,7 @@ class GroupRuntime:
         self, group_id: str, msg: dict, *,
         trigger_reason: str = "", session_name: str = "",
         bot_aliases: list[str] | None = None,
+        recent_context: str = "",
     ) -> dict:
         """处理新消息——添加、判断是否触发 gate、返回结果。"""
         pm = PendingMessage(
@@ -186,6 +187,7 @@ class GroupRuntime:
         ctx = {
             "session_name": session_name,
             "bot_aliases": bot_aliases or [],
+            "recent_context": recent_context,
         }
 
         async with self._lock:
@@ -238,7 +240,8 @@ class GroupRuntime:
             return self._apply_gate_result(state, result)
 
     async def handle_timer_fired(self, group_id: str, generation: int,
-                                 trigger_reason: str = "") -> dict:
+                                 trigger_reason: str = "",
+                                 recent_context: str = "") -> dict:
         """wait timer 到期——校验 generation 后重新 gate 判断。"""
         async with self._lock:
             state = self._states.get(group_id)
@@ -272,6 +275,7 @@ class GroupRuntime:
             ctx_saved = {
                 "session_name": state.session_name,
                 "bot_aliases": list(state.bot_aliases),
+                "recent_context": recent_context,
             }
             if state.last_bot_reply_ts > 0:
                 ctx_saved["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
@@ -338,8 +342,10 @@ class GroupRuntime:
         from clients.classifier_client import get_timing_gate
 
         gate = get_timing_gate()
+        recent_context = ctx.pop("recent_context", "")
         context = self._build_timing_context(
-            pending=pending, trigger_reason=trigger_reason, **ctx,
+            pending=pending, trigger_reason=trigger_reason,
+            recent_context=recent_context, **ctx,
         )
         return await asyncio.to_thread(gate.judge, context)
 
@@ -348,6 +354,7 @@ class GroupRuntime:
         *, pending: list[PendingMessage], trigger_reason: str = "",
         session_name: str = "", bot_aliases: list[str] | None = None,
         last_bot_reply_ago: float | None = None,
+        recent_context: str = "",
     ) -> str:
         """构造 TimingGate prompt context——不依赖 api.routes。"""
         from core.context_builder import sanitize_prompt_text
@@ -368,6 +375,11 @@ class GroupRuntime:
         if aliases:
             lines.append(f"bot别名: {', '.join(aliases)}")
 
+        # 注入轻量 recent context——比 pending 更早的最近几条群消息
+        rc = str(recent_context or "").strip()
+        if rc:
+            lines.append(rc)
+
         msgs = pending[:MAX_PENDING]
         for p in msgs:
             lines.append(
@@ -377,7 +389,7 @@ class GroupRuntime:
             lines.append(f"...[pending 截断: 原{len(pending)}条]")
         lines.append("</timing_context>")
 
-        return sanitize_prompt_text("\n".join(lines), 1200)
+        return sanitize_prompt_text("\n".join(lines), 1600)
 
 
 _runtime: GroupRuntime | None = None

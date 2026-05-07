@@ -121,6 +121,8 @@ async def lifespan(app: FastAPI):
     logger.info("Database initialized.")
     digest_thread = None
     digest_stop_event = None
+    learner_thread = None
+    learner_stop_event = None
 
     from config import DAILY_DIGEST_ENABLED
     if DAILY_DIGEST_ENABLED:
@@ -154,6 +156,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Sentinel pre-load failed (will retry on first classify): {e}")
 
+    # ── 群聊表达/黑话自动学习 ──
+    from core.expression_learner import expression_learner_scheduler
+    learner_stop_event = threading.Event()
+    learner_thread = threading.Thread(
+        target=expression_learner_scheduler,
+        args=(learner_stop_event,),
+        daemon=True,
+        name="expression-learner",
+    )
+    learner_thread.start()
+
     # ── 启动网络连通性检测 ──
     _startup_network_check(logger)
 
@@ -170,6 +183,10 @@ async def lifespan(app: FastAPI):
         digest_stop_event.set()
     if digest_thread is not None:
         digest_thread.join(timeout=5)
+    if learner_stop_event is not None:
+        learner_stop_event.set()
+    if learner_thread is not None:
+        learner_thread.join(timeout=5)
     await shutdown_bridge()
 
 

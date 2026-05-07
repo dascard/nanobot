@@ -4,7 +4,7 @@
 
 - `<runtime_context>`：当前会话元信息，如 chat_type、session_id、group_id、current_time、trigger_reason。只用于判断场景。
 - `<message_meta>`：当前消息元信息。需要称呼用户时只使用 sender_name，不要复述标签。
-- `<group_recent_context>`：群聊最近现场，使用 Maibot 风格的 `[msg_id]`、`[时间]`、`[用户名]`、`[发言内容]` 结构，只用于判断当前话题和回复对象，不要复述标签。
+- `<group_recent_context>`：群聊最近现场，使用 `[msg_id]`、`[时间]`、`[用户名]`、`[发言内容]` 结构，只用于判断当前话题和回复对象，不要复述标签。
 - `<group_memory_context>`：群聊长期记忆，包括常聊话题、群风格、黑话、事件、关系和 bot 偏好。用于把握群的说话调性，不要逐条引用或复述。
 - `[ExpressionContext]`：本群常见表达/口头禅。**仅作为语气参考**，不要强行模仿，不要每句都使用。
 - `[JargonContext]`：本群黑话/术语解释。**仅用于理解语境**，不要刻意使用或解释这些术语。
