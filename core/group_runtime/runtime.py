@@ -1,4 +1,4 @@
-"""GroupRuntime — per-group stateful runtime（MaiBot HeartFlow 迁移）。
+"""GroupRuntime — per-group stateful runtime。
 
 保留 GroupRuntime.process_message() / handle_timer_fired() API，
 内部升级为 GroupChatState：force_next_continue + talk_value + message_cache。
@@ -69,7 +69,7 @@ def _pending_payload(pending: list[GroupPendingMessage]) -> dict:
 
 @dataclass
 class GroupChatState:
-    """单个群的运行时状态——对应 MaiBot MaisakaHeartFlowChatting。"""
+    """单个群的运行时状态——per-group stateful runtime。"""
     group_id: str = ""
     stream_id: str = ""
     session_name: str = ""
@@ -175,6 +175,18 @@ class GroupChatState:
         self.force_next_continue = True
         self.force_reason = reason
 
+    def recent_message_count(self, window_sec: int = 60) -> int:
+        now = _time.time()
+        return sum(1 for m in self.message_cache if now - m.ts <= window_sec)
+
+    def recent_sender_count(self, window_sec: int = 60) -> int:
+        now = _time.time()
+        return len({
+            m.sender_id
+            for m in self.message_cache
+            if now - m.ts <= window_sec and m.sender_id
+        })
+
 
 class GroupRuntime:
     """管理所有群的运行时状态——兼容旧 timing_runtime API。"""
@@ -200,9 +212,35 @@ class GroupRuntime:
         return not is_direct
 
     @staticmethod
-    def _should_gate_by_frequency(state: GroupChatState, talk_value: float = 0.5) -> bool:
-        """talk_value 越高，越容易触发 gate。直接触发类的 force 不经过此判断。"""
-        threshold = max(1, round(1.0 / max(talk_value, 0.05)))
+    def _activity_factor(state: GroupChatState) -> float:
+        """根据最近群消息密度动态调整插话门槛——群越活跃，bot 越克制。"""
+        msg_1m = state.recent_message_count(60)
+        msg_5m = state.recent_message_count(300)
+        sender_1m = state.recent_sender_count(60)
+
+        per_min = max(msg_1m, msg_5m / 5.0)
+
+        if msg_1m > 40 or msg_5m > 150:
+            return 4.0
+        if msg_1m > 20 or msg_5m > 80:
+            return 2.5
+        if msg_1m > 10 or msg_5m > 40:
+            return 1.5
+        if msg_1m <= 2 and msg_5m <= 6:
+            return 0.8
+        if sender_1m >= 4 and per_min >= 8:
+            return 1.3
+        return 1.0
+
+    @classmethod
+    def _talk_threshold(cls, state: GroupChatState, talk_value: float = 0.5) -> int:
+        base = max(1, round(1.0 / max(talk_value, 0.05)))
+        factor = cls._activity_factor(state)
+        return max(1, round(base * factor))
+
+    @classmethod
+    def _should_gate_by_frequency(cls, state: GroupChatState, talk_value: float = 0.5) -> bool:
+        threshold = cls._talk_threshold(state, talk_value)
         return len(state.pending) >= threshold
 
     @staticmethod
@@ -308,7 +346,11 @@ class GroupRuntime:
                     "delay_seconds": state.next_gate_delay(),
                     "generation": state.generation,
                     "cooldown_ago": state.bot_reply_ago(),
-                    "reason": f"talk_value gate: {len(state.pending)}/{threshold} pending",
+                    "reason": (
+                        f"talk_value gate: {len(state.pending)}/{threshold} pending "
+                        f"(talk={talk_value:.2f}, msg_1m={state.recent_message_count(60)}, "
+                        f"msg_5m={state.recent_message_count(300)})"
+                    ),
                 }
 
             if not state.can_trigger_gate():
@@ -362,7 +404,11 @@ class GroupRuntime:
                     "delay_seconds": state.next_gate_delay(),
                     "generation": state.generation,
                     "cooldown_ago": state.bot_reply_ago(),
-                    "reason": f"talk_value gate: {len(state.pending)}/{threshold} pending",
+                    "reason": (
+                        f"talk_value gate: {len(state.pending)}/{threshold} pending "
+                        f"(talk={state.talk_value:.2f}, msg_1m={state.recent_message_count(60)}, "
+                        f"msg_5m={state.recent_message_count(300)})"
+                    ),
                 }
 
             if generation != state.generation:

@@ -99,7 +99,7 @@ DAILY_DIGEST_HOUR = int(os.environ.get("DAILY_DIGEST_HOUR", "4"))
 # ── 私聊分类器 ──
 CLASSIFIER_API_URL = os.environ.get("CLASSIFIER_API_URL", "http://172.17.0.1:9999/v1")
 SENTINEL_MODEL_PATH = os.environ.get("SENTINEL_MODEL_PATH", "./models/sentinel")
-CLASSIFIER_TIMEOUT = float(os.environ.get("CLASSIFIER_TIMEOUT", "8.0"))
+CLASSIFIER_TIMEOUT = float(os.environ.get("CLASSIFIER_TIMEOUT", "15.0"))
 
 # ── 图片摘要（复用本地 Qwen 视觉模型） ──
 IMAGE_SUMMARY_API_URL = os.environ.get("IMAGE_SUMMARY_API_URL", CLASSIFIER_API_URL)
