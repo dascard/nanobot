@@ -138,6 +138,7 @@ def build_profile(group_id: str) -> dict:
                   for m in by_type.get("slang", [])[:8]},
         "style": _top("style", 5),
         "events": _top("event", 3),
+        "relationships": _top("relationship", 5),
         "bot_preferences": _top("preference", 3),
     }
 

@@ -46,7 +46,7 @@ def get_effort_constraint(effort: str) -> str:
 
 def _looks_transport_only(text: str, has_files: bool) -> bool:
     if has_files and not text.strip():
-        return True
+        return False
     t = text.strip()
     if not t:
         return False
@@ -140,6 +140,9 @@ class PrivateTimingGate:
         if _looks_transport_only(text, has_files):
             self.stats["no_reply"] += 1
             return _log_d("no_reply", "transport_only", 0.95, "rule_transport", "ignore", "none", user_id)
+        if has_files and not text:
+            self.stats["reply_now"] += 1
+            return _log_d("reply_now", "image_only", 0.95, "rule_image_only", "short", "limited", user_id, complexity=3)
 
         effort, tool_policy, intent = _infer_effort(text, is_superuser)
 

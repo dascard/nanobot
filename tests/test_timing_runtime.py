@@ -212,6 +212,27 @@ class TestGroupRuntime:
         assert r2["delay_seconds"] is None
 
     @pytest.mark.asyncio
+    async def test_continue_returns_pending_payload_for_chat_pipeline(self, monkeypatch):
+        """continue 结果携带 pending 文本和 message_id，供 bridge 构造当前输入并落库。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            return {"action": "continue", "reason": "test"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+        r = await runtime.process_message("g1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "你怎么看这个方案",
+            "message_id": "m100",
+        })
+
+        assert r["action"] == "continue"
+        assert "[用户名]A" in r["pending_text"]
+        assert "[发言内容]你怎么看这个方案" in r["pending_text"]
+        assert r["source_message_ids"] == ["m100"]
+
+    @pytest.mark.asyncio
     async def test_timer_retains_session_context(self, monkeypatch):
         """timer 回调时 session_name/bot_aliases 从 state 恢复。"""
         runtime = GroupRuntime()

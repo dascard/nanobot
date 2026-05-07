@@ -65,8 +65,11 @@ def test_proxy_chat(client, db_session):
         
         # 验证 bridge.handle_message 被调用
         mock_bridge.handle_message.assert_awaited_once()
+        called_query = mock_bridge.handle_message.await_args.args[0]
+        assert called_query == "<user_input>\nhello proxy\n</user_input>"
         _, kwargs = mock_bridge.handle_message.await_args
         assert kwargs["metadata"]["history_header"] == ""
+        assert kwargs["metadata"]["chat_type"] == "group"
 
 
 def test_proxy_chat_passes_history_header_to_bridge(client, db_session):
@@ -558,31 +561,49 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
 
 # ── /group/message 测试 ──
 
-def test_group_message_ambient_only(client, db_session, monkeypatch):
-    """普通群消息只归档 ambient，不调用 timing/chat。"""
-    from unittest.mock import AsyncMock, patch
-    mock_bridge = AsyncMock()
-    monkeypatch.setattr("api.routes.get_bridge", lambda: mock_bridge)
+@pytest.mark.asyncio
+async def test_group_message_ambient_enters_timing_gate(db_session, monkeypatch):
+    """普通群消息不再走 L0 关键词预筛，统一交给 TimingGate 判断。"""
+    from unittest.mock import AsyncMock
+    from api.routes import GroupMessageRequest, group_message
 
-    response = client.post("/api/v1/group/message", json={
-        "group_id": "123", "sender_id": "u1", "sender_name": "A",
-        "message": "哈哈", "session_name": "测试群",
-        "is_at_bot": False, "is_reply_to_bot": False,
-    })
-    assert response.status_code == 200
-    data = response.json()
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock()
+    monkeypatch.setattr("api.routes.get_bridge", lambda: mock_bridge)
+    calls = []
+
+    async def fake_process(_self, group_id, msg, **kwargs):
+        calls.append((group_id, msg, kwargs))
+        return {"action": "no_reply", "generation": 1, "reason": "timing says no"}
+
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="123", sender_id="u1", sender_name="A",
+            message="哈哈", session_name="测试群",
+            is_at_bot=False, is_reply_to_bot=False,
+        ),
+        db_session,
+        None,
+    )
     assert data["action"] in ("no_reply",)
     # ambient log written
     logs = db_session.query(ChatLog).filter_by(role="ambient").all()
     assert len(logs) >= 1
     assert any("[A]: 哈哈" in l.content for l in logs)
+    assert calls
+    assert calls[0][0] == "123"
+    assert calls[0][2]["trigger_reason"] == "ambient"
     # bridge not called
     mock_bridge.handle_message.assert_not_called()
 
 
-def test_group_message_at_bot_enters_timing(client, db_session, monkeypatch):
+@pytest.mark.asyncio
+async def test_group_message_at_bot_enters_timing(db_session, monkeypatch):
     """@bot 消息进入 timing gate。"""
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock
+    from api.routes import GroupMessageRequest, group_message
 
     mock_bridge = AsyncMock()
     mock_bridge.handle_message = AsyncMock(return_value="我是 bot 回复")
@@ -593,30 +614,49 @@ def test_group_message_at_bot_enters_timing(client, db_session, monkeypatch):
         return {"action": "continue", "generation": 1, "reason": "user@bot question"}
     monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
 
-    response = client.post("/api/v1/group/message", json={
-        "group_id": "456", "sender_id": "u2", "sender_name": "B",
-        "message": "你是？", "session_name": "测试群",
-        "is_at_bot": True, "is_reply_to_bot": False,
-    })
-    assert response.status_code == 200
-    data = response.json()
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="456", sender_id="u2", sender_name="B",
+            message="你是？", session_name="测试群",
+            is_at_bot=True, is_reply_to_bot=False,
+            message_id="m-at-1",
+        ),
+        db_session,
+        None,
+    )
     assert data["action"] == "continue"
     assert "reply" in data
 
+    called_query = mock_bridge.handle_message.await_args.args[0]
+    assert "<user_input>" in called_query
+    assert "[用户名]B" in called_query
+    assert "[发言内容]你是？" in called_query
+    _, kwargs = mock_bridge.handle_message.await_args
+    assert "group_recent_context" in kwargs["metadata"]
 
-def test_group_message_wait_returns_generation(client, db_session, monkeypatch):
+    assistant_logs = db_session.query(ChatLog).filter_by(user_id="group_456", role="assistant").all()
+    assert len(assistant_logs) == 1
+    assert assistant_logs[0].content == "我是 bot 回复"
+
+
+@pytest.mark.asyncio
+async def test_group_message_wait_returns_generation(db_session, monkeypatch):
     """timing 返回 wait 时返回 delay + generation。"""
+    from api.routes import GroupMessageRequest, group_message
+
     async def fake_process(*args, **kwargs):
         return {"action": "wait", "generation": 5, "delay_seconds": 8, "reason": "user may type more"}
     monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
 
-    response = client.post("/api/v1/group/message", json={
-        "group_id": "789", "sender_id": "u3", "sender_name": "C",
-        "message": "我想问一下", "session_name": "测试群",
-        "is_at_bot": True, "is_reply_to_bot": False,
-    })
-    assert response.status_code == 200
-    data = response.json()
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="789", sender_id="u3", sender_name="C",
+            message="我想问一下", session_name="测试群",
+            is_at_bot=True, is_reply_to_bot=False,
+        ),
+        db_session,
+        None,
+    )
     assert data["action"] == "wait"
     assert data["delay_seconds"] == 8
     assert data["generation"] == 5
@@ -631,4 +671,3 @@ def test_deprecated_log_ambient_still_works(client, db_session):
     assert response.status_code == 200
     logs = db_session.query(ChatLog).filter_by(role="ambient").all()
     assert any("[D]: 还在用旧接口" in l.content for l in logs)
-

@@ -2,6 +2,7 @@
 import pytest
 from core.database import init_db
 from core.group_memory import upsert, query_active, build_profile, apply_decay
+from core.context_builder import build_group_profile_context, build_group_recent_context
 
 
 @pytest.fixture(autouse=True)
@@ -59,6 +60,16 @@ class TestBuildProfile:
         profile = build_profile("g_nonexistent")
         assert profile["common_topics"] == []
 
+    def test_profile_includes_relationships_in_context(self):
+        upsert("g_relationship", "relationship", "A 经常和 B 一起讨论模型部署", confidence_hint=0.85)
+        profile = build_profile("g_relationship")
+        assert "A 经常和 B 一起讨论模型部署" in profile["relationships"]
+
+        context = build_group_profile_context("g_relationship")
+        assert context.startswith('<group_memory_context group_id="g_relationship">')
+        assert "群内关系" in context
+        assert "A 经常和 B 一起讨论模型部署" in context
+
 
 class TestDecay:
     def test_decay_archives_old(self):
@@ -67,3 +78,29 @@ class TestDecay:
             apply_decay("g_decay")
         mems = query_active("g_decay")
         assert len(mems) == 0
+
+
+class TestGroupRecentContext:
+    def test_recent_context_uses_maibot_message_prefix(self):
+        from core.database import SessionLocal, ChatLog
+
+        db = SessionLocal()
+        db.add(ChatLog(
+            user_id="group_recent",
+            session_id="group_recent",
+            role="ambient",
+            sender_name="A",
+            content="[A]: 这个方案有点绕",
+            message_id="m1",
+            processed=1,
+        ))
+        db.commit()
+
+        context = build_group_recent_context(db, "group_recent")
+        db.close()
+
+        assert context.startswith("<group_recent_context>")
+        assert "[msg_id]m1" in context
+        assert "[用户名]A" in context
+        assert "[发言内容]这个方案有点绕" in context
+        assert context.endswith("</group_recent_context>")

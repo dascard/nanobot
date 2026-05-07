@@ -43,6 +43,30 @@ class PendingMessage:
         }
 
 
+def _pending_payload(pending: list[PendingMessage]) -> dict:
+    """把待处理群消息转换成 Maibot planner 风格文本，供主回复链路使用。"""
+    from datetime import datetime
+    from core.context_builder import format_group_planner_message
+
+    blocks: list[str] = []
+    source_ids: list[str] = []
+    for msg in pending:
+        if msg.message_id:
+            source_ids.append(msg.message_id)
+        block = format_group_planner_message(
+            sender_name=msg.sender_name or msg.sender_id or "未知用户",
+            content=msg.message,
+            timestamp=datetime.fromtimestamp(msg.ts),
+            message_id=msg.message_id,
+        )
+        if block.strip():
+            blocks.append(block)
+    return {
+        "pending_text": "\n\n".join(blocks),
+        "source_message_ids": source_ids,
+    }
+
+
 class GateState:
     """一个群的 TimingGate 状态。"""
 
@@ -270,6 +294,7 @@ class GroupRuntime:
         """统一的 gate 结果处理——process_message 和 handle_timer_fired 共用。"""
         action = result.get("action", "no_reply")
         delay = None
+        payload = _pending_payload(state.pending)
 
         if action == "continue":
             state.handle_continue()
@@ -287,10 +312,13 @@ class GroupRuntime:
 
         cooldown = round(state.bot_reply_ago(), 1)
         state.mark_gate_done()
-        return {"action": action, "delay_seconds": delay,
-                "generation": state.generation,
-                "cooldown_ago": cooldown,
-                "reason": result.get("reason", "")}
+        response = {"action": action, "delay_seconds": delay,
+                    "generation": state.generation,
+                    "cooldown_ago": cooldown,
+                    "reason": result.get("reason", "")}
+        if action == "continue":
+            response.update(payload)
+        return response
 
     def note_bot_replied(self, group_id: str):
         state = self._states.get(group_id)
@@ -324,7 +352,7 @@ class GroupRuntime:
         """构造 TimingGate prompt context——不依赖 api.routes。"""
         from core.context_builder import sanitize_prompt_text
 
-        lines: list[str] = []
+        lines: list[str] = ["<timing_context>"]
         sn = sanitize_prompt_text(session_name, 80)
         if sn:
             lines.append(f"群: {sn}")
@@ -342,12 +370,12 @@ class GroupRuntime:
 
         msgs = pending[:MAX_PENDING]
         for p in msgs:
-            sender = sanitize_prompt_text(p.sender_name or p.sender_id or "?", 40)
-            msg = sanitize_prompt_text(p.message, 200)
-            if msg:
-                lines.append(f"[{sender}]: {msg}")
+            lines.append(
+                _pending_payload([p])["pending_text"]
+            )
         if len(pending) > MAX_PENDING:
             lines.append(f"...[pending 截断: 原{len(pending)}条]")
+        lines.append("</timing_context>")
 
         return sanitize_prompt_text("\n".join(lines), 1200)
 

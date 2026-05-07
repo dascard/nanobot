@@ -20,6 +20,6 @@
 - `python_sandbox`：跑数据分析
 - `news_search`：搜 AI/科技资讯
 - `image_summary`：生成图片摘要。直接调用本地 Qwen 视觉模型（和输入意图分类同一个模型）；需要 OCR、版面分析、归档或多图整理时用。若你本身已经能识图，也可以直接输出同样结构的 JSON 摘要，不必强制调用工具
-- `persona_update`：用户说"记住了"时更新画像。参数 user_id 见系统提示中的 `user=` 标记
-- `schedule_task`：创建定时推送任务。参数 target_id 见系统提示中的 `user=` 标记
+- `persona_update`：用户说"记住了"时更新画像。参数 user_id 优先使用 `<runtime_context>` 中的 `user_id`
+- `schedule_task`：创建定时推送任务。参数 target_id 优先使用 `<runtime_context>` 中的 `user_id` 或 `group_id`
 - `read`/`write`/`edit`/`grep`/`glob`/`bash`：文件操作工具，**沙箱限制在 workspace 目录**。可以帮用户处理文档、整理数据、生成报告

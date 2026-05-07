@@ -304,7 +304,7 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_injects_current_time_system_message(self, MockAgent, mock_load):
+    def test_handle_message_injects_runtime_context_system_message(self, MockAgent, mock_load):
         from nanobot_kt.bridge import NanobotBridge
 
         mock_config = MagicMock()
@@ -335,7 +335,77 @@ class TestNanobotBridge:
 
         assert result == "ok"
         system_messages = [call.args[1] for call in mock_conv.append.call_args_list if call.args[0] == "system"]
-        assert any("当前时间" in msg and "2026-05-01 09:30:00 CST" in msg for msg in system_messages)
+        assert any(
+            "<runtime_context>" in msg
+            and "current_time: 2026-05-01 09:30:00 CST" in msg
+            and "chat_type: private" in msg
+            for msg in system_messages
+        )
+
+    @patch("nanobot_kt.bridge.registry")
+    @patch("nanobot_kt.bridge.NewAPIClient")
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_uses_reply_model_intel_floor(
+        self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
+    ):
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.bridge import NanobotBridge
+        import json
+
+        monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "", raising=False)
+        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_FLOOR", 12, raising=False)
+        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_BOOST", 2, raising=False)
+        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_MAX_COST", 10.0, raising=False)
+
+        captured = {}
+
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+
+        def fake_candidates(**kwargs):
+            captured.update(kwargs)
+            return [{"id": "smart-reply", "intelligence": 12, "cost_input_1m": 0.4, "context_window": 128000}]
+
+        route_client.get_ordered_candidates.side_effect = fake_candidates
+        MockClient.return_value = route_client
+        MockClient.get_failure_tracker.return_value = MagicMock(
+            record_success=AsyncMock(),
+            record_failure=AsyncMock(),
+        )
+        mock_registry.get_models_by_provider.return_value = [{"id": "smart-reply"}]
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        reply_output = json.dumps({REPLY_MARKER: {"content": "高智回复"}}, ensure_ascii=False)
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [
+            {"role": "tool", "content": reply_output},
+        ]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="old-model")))
+        mock_agent._process_event = AsyncMock(return_value=None)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("你好", user_id="u1", session_id="private_u1", metadata={"complexity": 3})
+
+        result = asyncio.run(_run())
+        assert result == "高智回复"
+        assert captured["intel_floor"] == 12
+        assert captured["max_cost"] == 10.0
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")

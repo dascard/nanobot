@@ -38,7 +38,7 @@ class PersonaUpdateTool(BaseTool):
             "properties": {
                 "user_id": {
                     "type": "string",
-                    "description": "要更新画像的用户 ID（见系统提示中的 user= 标记）",
+                    "description": "要更新画像的用户 ID，优先使用 <runtime_context> 中的 user_id",
                 },
                 "instructions": {
                     "type": "string",

@@ -80,6 +80,19 @@ def test_contains_memory_policy(prompt_text):
     assert "sql_analysis" in prompt_text  # tool is mentioned
 
 
+def test_contains_structured_runtime_context(prompt_text):
+    assert "<runtime_context>" in prompt_text
+    assert "<group_memory_context" in prompt_text
+    assert "[GroupProfileContext]" not in prompt_text
+
+
+def test_group_prompt_aligns_maibot_planner_and_replyer(prompt_text):
+    assert "planner 职责" in prompt_text
+    assert "先判断当前聊天节奏" in prompt_text
+    assert "把真正要发出去的普通文本放进 `reply(content)`" in prompt_text
+    assert "recent context" not in prompt_text.lower()
+
+
 # ── Sanity: no duplicates ──
 
 def test_no_duplicate_tool_descriptions(prompt_text):

@@ -59,6 +59,12 @@ LLM_MODEL_FAST = os.environ.get("LLM_MODEL_FAST", "")
 LLM_MODEL_REASONING = os.environ.get("LLM_MODEL_REASONING", "")
 LLM_BUDGET_CAP = float(os.environ.get("LLM_BUDGET_CAP", "10.0")) # 每百万 Token 输入的最大允许成本
 
+# 回复主链路模型策略：当前 KT 仍是 planner/reply 同轮调用，这组配置用于提升最终生成链路智能度。
+LLM_MODEL_REPLY = os.environ.get("LLM_MODEL_REPLY", "")
+REPLY_MODEL_INTEL_FLOOR = int(os.environ.get("REPLY_MODEL_INTEL_FLOOR", "12"))
+REPLY_MODEL_INTEL_BOOST = int(os.environ.get("REPLY_MODEL_INTEL_BOOST", "2"))
+REPLY_MODEL_MAX_COST = float(os.environ.get("REPLY_MODEL_MAX_COST", str(LLM_BUDGET_CAP)))
+
 # ── Agent 行为 ──
 MAX_TOOL_ROUNDS = int(os.environ.get("MAX_TOOL_ROUNDS", "5"))  # 单次对话最大工具轮数
 NEW_API_MAX_RETRIES = int(os.environ.get("NEW_API_MAX_RETRIES", "3"))
