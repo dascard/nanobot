@@ -650,6 +650,16 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                 req.group_id, req.sender_name, len(req.message or ""),
                 req.is_at_bot, req.is_reply_to_bot)
 
+    if req.message_id:
+        dup = db.query(ChatLog).filter(
+            ChatLog.session_id == group_user_id,
+            ChatLog.message_id == req.message_id,
+            ChatLog.role == "ambient",
+        ).first()
+        if dup:
+            logger.info("[GroupMsg] duplicate ignored group=%s message_id=%s", group_user_id, req.message_id)
+            return {"action": "no_reply", "reason": "duplicate_message"}
+
     # 1. 归档 ambient log
     user = db.query(User).filter(User.id == group_user_id).first()
     if not user:
