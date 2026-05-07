@@ -39,36 +39,56 @@ def _is_noise_phrase(phrase: str) -> bool:
         "什么", "怎么", "为什么", "不知道", "我觉得", "我也是",
         "哈哈哈", "就是", "那个", "这个", "可以", "没有", "不是",
         "好的", "确实", "真的", "还行", "还行吧", "没问题",
+        "今天", "一下", "感觉", "问题", "但是", "然后", "现在",
+        "还是", "应该", "可能", "已经", "有点", "不过", "所以",
+        "如果", "因为", "的话", "比较", "特别", "一起", "好像",
+        "其实", "最近", "之前", "以后", "直接", "真的假", "怎么办",
+        "不知道怎", "这个问题",
     }
     return phrase in noise or len(phrase) < MIN_PHRASE_LEN
 
 
+def _short_cjk_phrases(text: str) -> list[str]:
+    """从单条消息提取完整短句（≤8 CJK 字符），不滑窗切 n-gram。"""
+    cjk = _cjk_chars(text)
+    if not cjk:
+        return []
+    # 按标点/空格/拉丁字符天然分段，避免跨句拼接
+    parts = re.split(r"[，。！？、；：\s\.,!?;:\"'()（）\[\]{}「」『』\n]+", text)
+    phrases: list[str] = []
+    for part in parts:
+        c = _cjk_chars(part)
+        if MIN_PHRASE_LEN <= len(c) <= MAX_PHRASE_LEN and not _is_noise_phrase(c):
+            phrases.append(c)
+    return phrases
+
+
 def _extract_expression_candidates(messages: list[dict]) -> list[dict]:
-    """从最近消息中检测重复短词——候选表达。"""
+    """从最近消息中检测重复短句——候选表达。
+
+    要求至少来自 2 个不同 sender，避免单人刷屏污染。
+    """
     phrase_counts: Counter = Counter()
+    phrase_senders: dict[str, set[str]] = {}
     phrase_examples: dict[str, list[str]] = {}
 
     for msg in messages:
         text = msg.get("content", "")
-        cjk = _cjk_chars(text)
-        if not cjk:
-            continue
-        seen: set[str] = set()
-        for length in range(MIN_PHRASE_LEN, min(MAX_PHRASE_LEN + 1, len(cjk) + 1)):
-            for start in range(len(cjk) - length + 1):
-                phrase = cjk[start:start + length]
-                if phrase in seen or _is_noise_phrase(phrase):
-                    continue
-                seen.add(phrase)
-                phrase_counts[phrase] += 1
-                if phrase not in phrase_examples:
-                    phrase_examples[phrase] = []
-                if text not in phrase_examples[phrase]:
-                    phrase_examples[phrase].append(text[:120])
+        sender = msg.get("sender_name", "")
+        for phrase in _short_cjk_phrases(text):
+            if _is_noise_phrase(phrase):
+                continue
+            phrase_counts[phrase] += 1
+            if sender:
+                phrase_senders.setdefault(phrase, set()).add(sender)
+            if phrase not in phrase_examples:
+                phrase_examples[phrase] = []
+            if text not in phrase_examples[phrase]:
+                phrase_examples[phrase].append(text[:120])
 
     candidates = []
     for phrase, count in phrase_counts.items():
-        if count >= MIN_REPEAT_COUNT:
+        if count >= MIN_REPEAT_COUNT and len(phrase_senders.get(phrase, set())) >= 2:
             candidates.append({
                 "expression": phrase,
                 "expr_type": "phrase",
@@ -103,10 +123,24 @@ def _extract_jargon_candidates(messages: list[dict]) -> list[dict]:
     return candidates
 
 
+def _to_stream_id(session_id: str) -> str:
+    """兼容 group_<id> 和 qq:<id>:group 两种 session_id 格式。"""
+    from core.expression_memory import normalize_chat_stream_id
+    sid = str(session_id or "").strip()
+    if sid.startswith("qq:") and sid.endswith(":group"):
+        raw = sid.removeprefix("qq:").removesuffix(":group")
+    elif sid.startswith("group_"):
+        raw = sid.removeprefix("group_")
+    else:
+        raw = sid
+    return normalize_chat_stream_id(raw, chat_type="group", platform="qq")
+
+
 def run_learning_cycle():
     """执行一轮学习扫描——从 ChatLog 查最近 ambient 消息，提取候选并 upsert。"""
+    from sqlalchemy import or_
     from core.database import SessionLocal, ChatLog
-    from core.expression_memory import upsert_expression, upsert_jargon, normalize_chat_stream_id
+    from core.expression_memory import upsert_expression, upsert_jargon
 
     db = SessionLocal()
     try:
@@ -116,7 +150,10 @@ def run_learning_cycle():
             .filter(
                 ChatLog.role == "ambient",
                 ChatLog.created_at >= cutoff,
-                ChatLog.session_id.like("qq:%:group"),
+                or_(
+                    ChatLog.session_id.like("group_%"),
+                    ChatLog.session_id.like("qq:%:group"),
+                ),
             )
             .all()
         )
@@ -126,19 +163,15 @@ def run_learning_cycle():
         # 按群分组
         group_msgs: dict[str, list[dict]] = {}
         for row in rows:
-            gid = row.session_id
-            group_msgs.setdefault(gid, []).append({
+            stream_id = _to_stream_id(row.session_id)
+            group_msgs.setdefault(stream_id, []).append({
                 "content": row.content or "",
                 "sender_name": row.sender_name or "",
             })
 
         expr_new, expr_upd, jargon_new, jargon_upd = 0, 0, 0, 0
 
-        for group_id, msgs in group_msgs.items():
-            stream_id = normalize_chat_stream_id(
-                group_id.removeprefix("qq:").removesuffix(":group"),
-                chat_type="group", platform="qq")
-
+        for stream_id, msgs in group_msgs.items():
             for c in _extract_expression_candidates(msgs):
                 r = upsert_expression(stream_id, c["expression"],
                                        expr_type=c["expr_type"],

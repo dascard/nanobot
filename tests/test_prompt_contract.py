@@ -137,3 +137,69 @@ def test_tool_descriptions_only_in_tool_fragment(fragments):
         assert "直接调用本地 Qwen 视觉模型" not in content, (
             f"{fname} contains image_summary description"
         )
+
+
+# ── Chat-type specific builds ──
+
+def test_private_prompt_has_private_behavior():
+    """私聊 prompt 应包含私聊行为规则，不含群聊专有规则。"""
+    from scripts.build_nanobot_prompt import build_prompt
+    text = build_prompt(chat_type="private")
+    assert "## 私聊行为" in text
+    assert "## 群聊行为" not in text
+    assert "## 群聊发言时机" not in text
+    assert "## 群聊上下文使用规则" not in text
+
+
+def test_group_prompt_has_group_behavior():
+    """群聊 prompt 应包含群聊行为规则，不含私聊专有规则。"""
+    from scripts.build_nanobot_prompt import build_prompt
+    text = build_prompt(chat_type="group")
+    assert "## 群聊行为" in text
+    assert "## 群聊发言时机" in text
+    assert "## 私聊行为" not in text
+
+
+# ── Expression learner unit tests ──
+
+def test_to_stream_id_handles_group_prefix():
+    from core.expression_learner import _to_stream_id
+    assert _to_stream_id("group_123456") == "qq:123456:group"
+
+
+def test_to_stream_id_handles_qq_colon_format():
+    from core.expression_learner import _to_stream_id
+    assert _to_stream_id("qq:123456:group") == "qq:123456:group"
+
+
+def test_to_stream_id_strips_group_prefix():
+    from core.expression_learner import _to_stream_id
+    sid = _to_stream_id("group_789")
+    # 不应出现 double-prefix: qq:group_789:group
+    assert "group_" not in sid.split(":")[1]
+    assert sid == "qq:789:group"
+
+
+def test_short_cjk_phrases_extracts_whole_phrases():
+    from core.expression_learner import _short_cjk_phrases
+    phrases = _short_cjk_phrases("端口冲突了，先看服务端日志")
+    assert "端口冲突" in phrases or len(phrases) > 0
+
+
+def test_short_cjk_phrases_filters_noise():
+    from core.expression_learner import _short_cjk_phrases
+    phrases = _short_cjk_phrases("今天感觉不知道")
+    assert phrases == [] or all(p not in ("今天", "感觉", "不知道") for p in phrases)
+
+
+# ── Timing recent context ──
+
+def test_build_timing_recent_context_strips_speaker_prefix():
+    from core.context_builder import build_timing_recent_context, _strip_speaker_prefix
+
+    # 验证 _strip_speaker_prefix 能剥离 [sender]: 前缀
+    result = _strip_speaker_prefix("[张三]: 端口冲突了", "张三")
+    assert "张三" not in result or result == "端口冲突了"
+
+    result2 = _strip_speaker_prefix("[张三]：端口冲突了", "张三")
+    assert "张三" not in result2 or result2 == "端口冲突了"

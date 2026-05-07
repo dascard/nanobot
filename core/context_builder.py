@@ -253,7 +253,8 @@ def build_timing_recent_context(
     for row in selected:
         ts = row.created_at.strftime("%H:%M:%S") if row.created_at else ""
         sender = sanitize_prompt_text(row.sender_name or "未知", 40)
-        content = sanitize_prompt_text(row.content or "", max_per_msg)
+        raw_content = _strip_speaker_prefix(row.content or "", row.sender_name)
+        content = sanitize_prompt_text(raw_content, max_per_msg)
         if not content.strip():
             continue
         line = f"[时间]{ts} [用户名]{sender} [发言]{content}"
@@ -406,4 +407,6 @@ def _evidence_for(evidence_map: dict[str, list[str]], content: str, max_chars: i
     if not evs:
         return ""
     combined = " | ".join(evs)
-    return sanitize_prompt_text(combined, max_chars) if combined else ""
+    # 双保险：先 escape HTML 标签，再 sanitize 系统标签
+    safe = sanitize_prompt_text(escape(combined, quote=False), max_chars)
+    return safe if safe else ""

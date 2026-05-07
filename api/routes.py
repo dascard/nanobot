@@ -737,6 +737,13 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
         user.name = req.session_name
         db.commit()
 
+    # 1.5 先构建 TimingGate recent context（当前消息尚未入库，不会重复）
+    from core.context_builder import build_timing_recent_context
+    recent_ctx = build_timing_recent_context(
+        db, group_user_id, limit=5,
+    )
+
+    # 2. 当前消息入库
     formatted = f"[{req.sender_name}]: {req.message}" if req.message else ""
     db.add(ChatLog(
         user_id=group_user_id, session_id=group_user_id,
@@ -747,18 +754,11 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     db.commit()
     logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
 
-    # 2. 所有非重复群消息进入 TimingGate；不再用 L0 关键词预筛。
+    # 3. 所有非重复群消息进入 TimingGate；不再用 L0 关键词预筛。
     reason = _derive_group_trigger_reason(req)
     logger.info("[GroupMsg] trigger=%s enter_timing=true", reason)
 
-    # 2.5 构建 TimingGate 轻量 recent context（最近 3-5 条群消息，不含当前）
-    from core.context_builder import build_timing_recent_context
-    recent_ctx = build_timing_recent_context(
-        db, group_user_id, limit=5,
-        exclude_message_ids=[req.message_id] if req.message_id else [],
-    )
-
-    # 3. 走 GroupRuntime → TimingGate
+    # 4. 走 GroupRuntime → TimingGate
     runtime = get_group_runtime()
     t0 = _t.time()
     try:
