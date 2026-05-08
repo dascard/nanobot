@@ -288,6 +288,45 @@ class ChatStreamConfig(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class AdminAuditLog(Base):
+    """WebUI 管理操作审计日志。"""
+    __tablename__ = "admin_audit_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    admin_user = Column(String, default="admin")
+    action = Column(String, nullable=False)
+    target_type = Column(String, default="")
+    target_id = Column(String, default="")
+    detail_json = Column(Text, default="{}")
+    ip_address = Column(String, default="")
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class UserBlockRule(Base):
+    """用户屏蔽规则——命中后消息只写 ChatLog，不触发回复。"""
+    __tablename__ = "user_block_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, index=True, nullable=False)
+    target_type = Column(String, default="private")  # private / group
+    group_id = Column(String, default="")             # 仅 group 类型时生效
+    rule_mode = Column(String, default="log_only")    # log_only / silent
+    reason = Column(Text, default="")
+    enabled = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class SystemSetting(Base):
+    """WebUI 系统设置——KV 存储。"""
+    __tablename__ = "system_settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(Text, default="")
+    description = Column(Text, default="")
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
 

@@ -197,6 +197,24 @@ def _get_group_talk_value(session_id: str) -> float:
         return 0.5
 
 
+def _check_user_blocked(db, user_id: str, target_type: str = "private", group_id: str = "") -> bool:
+    """检查用户是否被屏蔽——命中规则时返回 True。"""
+    try:
+        from core.database import UserBlockRule
+        rules = db.query(UserBlockRule).filter(
+            UserBlockRule.user_id == user_id,
+            UserBlockRule.enabled == 1,
+        ).all()
+        for r in rules:
+            if r.target_type in (target_type, "all"):
+                if r.target_type == "group" and r.group_id and r.group_id != group_id:
+                    continue
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def _merge_buffered_files(existing: list[str], incoming: Optional[List[str]]) -> list[str]:
     merged = list(existing)
     for file in _normalize_files(incoming):
@@ -882,6 +900,11 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     ))
     db.commit()
     logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
+
+    # 2.5 检查用户屏蔽规则——命中后只写 ChatLog，不进入 TimingGate
+    if _check_user_blocked(db, req.sender_id, target_type="group", group_id=req.group_id):
+        logger.info("[GroupMsg] blocked group=%s sender=%s", req.group_id, req.sender_id)
+        return {"action": "no_reply", "reason": "user_blocked"}
 
     # 3. 所有非重复群消息进入 TimingGate；不再用 L0 关键词预筛。
     reason = _derive_group_trigger_reason(req)

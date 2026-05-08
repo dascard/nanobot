@@ -8,3 +8,7 @@ sentinel/model.safetensors
 *.egg-info/
 .vscode/
 .idea/
+webui/node_modules/
+.claude/
+webui/node_modules/
+.claude/
