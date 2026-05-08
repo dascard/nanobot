@@ -166,22 +166,19 @@ class ModelRegistry:
         Formula: cost_weight * (cost/max_cost) - intel_weight * (intel/max_intel)
                  + free_bonus + unstable_penalty
         """
-        from config import (
-            ROUTER_COST_WEIGHT, ROUTER_INTEL_WEIGHT,
-            ROUTER_FREE_BONUS, ROUTER_UNSTABLE_PENALTY,
-        )
+        from core.settings_service import settings
         cost = model.get("cost_input_1m", 999)
         intel = model.get("intelligence", 0)
         tags = [t.lower() for t in (model.get("tags") or [])]
 
         cost_norm = cost / max_cost
         intel_norm = intel / max_intel
-        free_bonus = ROUTER_FREE_BONUS if "free" in tags else 0.0
-        unstable_pen = ROUTER_UNSTABLE_PENALTY if "unstable" in tags else 0.0
+        free_b = settings.get_float("router.free_bonus", -2.0) if "free" in tags else 0.0
+        unstable_p = settings.get_float("router.unstable_penalty", 5.0) if "unstable" in tags else 0.0
 
-        return (ROUTER_COST_WEIGHT * cost_norm
-                - ROUTER_INTEL_WEIGHT * intel_norm
-                + free_bonus + unstable_pen)
+        return (settings.get_float("router.cost_weight", 6.0) * cost_norm
+                - settings.get_float("router.intel_weight", 5.0) * intel_norm
+                + free_b + unstable_p)
 
     def __init__(self):
         self.data: Dict[str, Any] = {"models": [], "last_updated": "never"}

@@ -429,16 +429,16 @@ function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   {s.value_type === 'bool' ? (
-                    <button onClick={() => update(s.key, !s.value)}
-                      className={`px-3 py-1 rounded text-xs ${s.value ? 'bg-green-700' : 'bg-gray-600'}`}>
+                    <button onClick={() => !s.readonly && update(s.key, !s.value)} disabled={s.readonly}
+                      className={`px-3 py-1 rounded text-xs ${s.readonly ? 'bg-gray-700 opacity-50 cursor-not-allowed' : s.value ? 'bg-green-700' : 'bg-gray-600'}`}>
                       {s.value ? 'ON' : 'OFF'}
                     </button>
                   ) : (
                     <input type={s.value_type === 'int' || s.value_type === 'float' ? 'number' : 'text'}
                       defaultValue={s.value} step={s.value_type === 'float' ? '0.1' : '1'}
-                      min={s.min_value} max={s.max_value}
+                      min={s.min_value} max={s.max_value} disabled={s.readonly}
                       onBlur={e => { const v = e.target.value.trim(); if (!v || v === String(s.value)) return; const parsed = s.value_type === 'float' ? parseFloat(v) : parseInt(v); if (Number.isNaN(parsed)) { e.target.value = s.value; return } update(s.key, parsed) }}
-                      className="w-24 p-1 rounded bg-gray-700 text-sm text-center" />
+                      className={`w-24 p-1 rounded bg-gray-700 text-sm text-center ${s.readonly ? 'opacity-50 cursor-not-allowed' : ''}`} />
                   )}
                   {s.restart_required && <span className="text-red-400 text-xs">需重启</span>}
                 </div>

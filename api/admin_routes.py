@@ -489,7 +489,6 @@ def list_settings(_auth=Depends(verify_admin)):
     result = []
     for key, defn in sorted(SETTING_DEFS.items(), key=lambda x: x[1].category + x[0]):
         val = values.get(key, defn.default)
-        display_val = val
         result.append({
             "key": key, "value": None if defn.sensitive else val,
             "display_value": "****" if defn.sensitive else str(val),
@@ -510,6 +509,8 @@ def update_setting(key: str, body: dict, db: Session = Depends(get_db),
     defn = SETTING_DEFS.get(key)
     if not defn:
         raise HTTPException(400, f"Unknown setting: {key}")
+    if defn.restart_required and defn.key == "database.url":
+        raise HTTPException(400, "database.url is read-only, change via env var")
     raw_value = body.get("value")
     if raw_value is None:
         raise HTTPException(400, "Missing 'value'")

@@ -125,19 +125,19 @@ SETTING_DEFS: dict[str, SettingDef] = {
         key="model.max_consecutive_failures",
         env_name="MODEL_MAX_CONSECUTIVE_FAILURES",
         default=3, value_type="int",
-        category="router", description="熔断连续失败次数", min_value=1, max_value=20,
+        category="router", description="熔断连续失败次数(需重建tracker)", min_value=1, max_value=20,
     ),
     "model.cooldown_base_seconds": SettingDef(
         key="model.cooldown_base_seconds",
         env_name="MODEL_COOLDOWN_BASE_SECONDS",
         default=300, value_type="int",
-        category="router", description="熔断基础冷却(秒)", min_value=30, max_value=3600,
+        category="router", description="熔断基础冷却(秒,需重建tracker)", min_value=30, max_value=3600,
     ),
     "model.cooldown_max_seconds": SettingDef(
         key="model.cooldown_max_seconds",
         env_name="MODEL_COOLDOWN_MAX_SECONDS",
         default=1800, value_type="int",
-        category="router", description="熔断最大冷却(秒)", min_value=60, max_value=36000,
+        category="router", description="熔断最大冷却(秒,需重建tracker)", min_value=60, max_value=36000,
     ),
     "daily_digest.enabled": SettingDef(
         key="daily_digest.enabled", env_name="DAILY_DIGEST_ENABLED",
