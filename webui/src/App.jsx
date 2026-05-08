@@ -107,15 +107,22 @@ function Card({ title, value, to }) {
 function StickersPage() {
   const [data, setData] = useState({ items: [], total: 0 })
   const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
   const [page, setPage] = useState(1)
   const [edit, setEdit] = useState(null)
   const [showCreate, setShowCreate] = useState(false)
 
   const load = useCallback(() => {
-    api.get('/stickers', { params: { search, page, limit: 20 } }).then(r => setData(r.data))
-  }, [search, page])
+    api.get('/stickers', { params: { search, page, limit: 20, status: statusFilter } }).then(r => setData(r.data))
+  }, [search, page, statusFilter])
 
   useEffect(() => { load() }, [load])
+
+  const restoreSticker = (s, toStatus) => {
+    api.put(`/stickers/${s.id}`, { status: toStatus }).then(load)
+  }
+
+  const statusColor = (s) => s === 'active' ? 'text-green-400' : s === 'disabled' ? 'text-yellow-400' : 'text-red-400'
 
   return (
     <div>
@@ -123,6 +130,11 @@ function StickersPage() {
       <div className="flex gap-2 mb-4">
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索..."
           className="p-2 rounded bg-gray-700 border border-gray-600 flex-1" />
+        <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1) }}
+          className="p-2 rounded bg-gray-700 border border-gray-600">
+          <option value="">全部</option><option value="active">Active</option>
+          <option value="disabled">Disabled</option><option value="deleted">Deleted</option>
+        </select>
         <button onClick={() => { setPage(1); load() }} className="px-4 py-2 bg-blue-600 rounded">搜索</button>
         <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-green-600 rounded">新建</button>
       </div>
@@ -134,15 +146,22 @@ function StickersPage() {
               <td className="py-1">{s.id}</td>
               <td>{s.name || '-'}</td>
               <td className="max-w-xs truncate">{s.description || '-'}</td>
-              <td><span className={s.status === 'active' ? 'text-green-400' : 'text-red-400'}>{s.status}</span></td>
+              <td><span className={statusColor(s.status)}>{s.status}</span></td>
               <td>{s.usage_count}</td>
-              <td className="flex gap-1">
+              <td className="flex gap-1 flex-wrap">
                 <button onClick={() => setEdit(s)} className="px-2 py-0.5 bg-gray-600 rounded text-xs">编辑</button>
-                <button onClick={() => api.post(`/stickers/${s.id}/${s.status === 'active' ? 'disable' : 'enable'}`).then(load)}
-                  className={`px-2 py-0.5 rounded text-xs ${s.status === 'active' ? 'bg-yellow-700' : 'bg-green-700'}`}>
-                  {s.status === 'active' ? '禁用' : '启用'}</button>
-                <button onClick={() => { if (confirm('确认删除?')) api.delete(`/stickers/${s.id}`).then(load) }}
-                  className="px-2 py-0.5 bg-red-700 rounded text-xs">删除</button>
+                {s.status !== 'deleted' && (
+                  <button onClick={() => api.post(`/stickers/${s.id}/${s.status === 'active' ? 'disable' : 'enable'}`).then(load)}
+                    className={`px-2 py-0.5 rounded text-xs ${s.status === 'active' ? 'bg-yellow-700' : 'bg-green-700'}`}>
+                    {s.status === 'active' ? '禁用' : '启用'}</button>
+                )}
+                {s.status !== 'deleted' ? (
+                  <button onClick={() => { if (confirm('确认删除?')) api.delete(`/stickers/${s.id}`).then(load) }}
+                    className="px-2 py-0.5 bg-red-700 rounded text-xs">删除</button>
+                ) : (
+                  <button onClick={() => restoreSticker(s, 'disabled')}
+                    className="px-2 py-0.5 bg-green-700 rounded text-xs">恢复</button>
+                )}
               </td>
             </tr>
           ))}
@@ -172,6 +191,7 @@ function StickerCreateModal({ onClose, onCreated }) {
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-4 py-2 bg-gray-600 rounded">取消</button>
         <button onClick={() => {
+          if (!f.file_ref.trim()) { alert('file_ref 不能为空'); return }
           api.post('/stickers', {
             file_ref: f.file_ref, name: f.name, description: f.description,
             group_id: f.group_id, status: f.status,
@@ -188,19 +208,23 @@ function StickerEditModal({ sticker, onClose, onSaved }) {
   const [f, setF] = useState({
     name: sticker.name || '', description: sticker.description || '',
     tags: (sticker.tags || []).join(','), emotions: (sticker.emotions || []).join(','),
+    status: sticker.status || 'active',
   })
   return (
     <Modal onClose={onClose}>
       <h2 className="text-lg font-bold mb-4">编辑 Sticker #{sticker.id}</h2>
       <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Name" className="w-full p-2 rounded bg-gray-700 mb-2" />
       <textarea value={f.description} onChange={e => setF({ ...f, description: e.target.value })} placeholder="Description" className="w-full p-2 rounded bg-gray-700 mb-2" rows={3} />
+      <select value={f.status} onChange={e => setF({ ...f, status: e.target.value })} className="w-full p-2 rounded bg-gray-700 mb-2">
+        <option value="active">Active</option><option value="disabled">Disabled</option><option value="deleted">Deleted</option>
+      </select>
       <input value={f.tags} onChange={e => setF({ ...f, tags: e.target.value })} placeholder="Tags (逗号分隔)" className="w-full p-2 rounded bg-gray-700 mb-2" />
       <input value={f.emotions} onChange={e => setF({ ...f, emotions: e.target.value })} placeholder="Emotions (逗号分隔)" className="w-full p-2 rounded bg-gray-700 mb-4" />
       <div className="flex gap-2 justify-end">
         <button onClick={onClose} className="px-4 py-2 bg-gray-600 rounded">取消</button>
         <button onClick={() => {
           api.put(`/stickers/${sticker.id}`, {
-            name: f.name, description: f.description,
+            name: f.name, description: f.description, status: f.status,
             tags: f.tags.split(',').map(s => s.trim()).filter(Boolean),
             emotions: f.emotions.split(',').map(s => s.trim()).filter(Boolean),
           }).then(() => { onSaved(); onClose() })

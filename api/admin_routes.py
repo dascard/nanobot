@@ -174,7 +174,7 @@ def create_sticker(body: StickerCreate, db: Session = Depends(get_db), _auth=Dep
         raise HTTPException(400, str(e))
     _audit(db, "create_sticker", "sticker", sticker.get("id"), {
         "name": body.name, "status": body.status,
-        "stream_id": body.chat_stream_id or body.group_id,
+        "stream_id": sticker.get("chat_stream_id", ""),
         "description": body.description[:80] if body.description else "",
         "tags": body.tags[:5],
     })
