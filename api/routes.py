@@ -843,14 +843,18 @@ def _register_group_stickers_from_message(
 
 
 def _cache_sticker_preview_bg(sticker_id: int) -> None:
-    from core.database import SessionLocal
+    from core.database import SessionLocal, StickerMemory
     from core.sticker_preview import cache_sticker_preview
 
     db = SessionLocal()
     try:
-        result = cache_sticker_preview(db, sticker_id)
-        logger.info("[StickerPreview] bg cache id=%s ok=%s status=%s err=%s",
-                     sticker_id, result.ok, result.status, result.error[:120])
+        row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
+        force = row is not None and row.preview_status in {
+            "expired", "fetch_failed", "invalid_image", "invalid_ref",
+        }
+        result = cache_sticker_preview(db, sticker_id, force=force)
+        logger.info("[StickerPreview] bg cache id=%s ok=%s status=%s force=%s err=%s",
+                     sticker_id, result.ok, result.status, force, result.error[:120])
     except Exception as e:
         logger.warning("[StickerPreview] bg cache failed id=%s: %s", sticker_id, e)
     finally:

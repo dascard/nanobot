@@ -203,8 +203,18 @@ def register_sticker(
     else:
         row.last_seen = now
         row.source_count = int(row.source_count or 0) + 1
-        row.file_ref = ref or row.file_ref
-        row.send_code = build_sticker_send_code(ref, send_code) if ref else row.send_code
+
+        old_ref = row.file_ref or ""
+        if ref and ref != old_ref:
+            row.file_ref = ref
+            row.send_code = build_sticker_send_code(ref, send_code)
+            # 新 URL 到来：已有本地缓存不动，失败/过期则重置重试
+            if row.preview_status != "ok" or not row.local_path:
+                row.preview_status = "pending"
+                row.local_path = ""
+        else:
+            row.file_ref = ref or row.file_ref
+            row.send_code = build_sticker_send_code(ref, send_code) if ref else row.send_code
         if name:
             row.name = str(name).strip()
         if description:
