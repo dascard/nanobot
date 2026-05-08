@@ -229,7 +229,13 @@ function StickersPage() {
                 <td className="py-1.5 px-2 truncate max-w-[120px]">{s.name || '-'}</td>
                 <td className="py-1.5 px-2 truncate max-w-[200px] text-slate-400">{s.description || '-'}</td>
                 <td className="py-1.5 px-2">
-                  <span className={`px-2 py-0.5 rounded-full text-xs ${s.status === 'active' ? 'bg-emerald-500/15 text-emerald-400' : s.status === 'disabled' ? 'bg-amber-500/15 text-amber-400' : 'bg-red-500/15 text-red-400'}`}>{s.status}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`px-2 py-0.5 rounded-full text-xs ${s.status === 'active' ? 'bg-emerald-500/15 text-emerald-400' : s.status === 'disabled' ? 'bg-amber-500/15 text-amber-400' : 'bg-red-500/15 text-red-400'}`}>{s.status}</span>
+                    {s.preview_status === 'blocked' && (
+                      <button onClick={() => api.post(`/stickers/${s.id}/preview/retry`).then(load)}
+                        className="px-1.5 py-0.5 bg-amber-700/50 hover:bg-amber-700 text-amber-300 rounded text-xs" title="重试缓存">↻</button>
+                    )}
+                  </div>
                 </td>
                 <td className="py-1.5 px-2 text-slate-400">{s.usage_count}</td>
                 <td className="py-1.5 px-2">
@@ -276,7 +282,7 @@ function StickerCreateModal({ onClose, onCreated }) {
         <label className="text-xs text-slate-400 mb-1 block">文件引用 (URL/CQ码)</label>
         <input value={f.file_ref} onChange={e => setF({ ...f, file_ref: e.target.value })}
           placeholder="https://... 或 CQ 码" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm" />
-        {f.file_ref && <img src={f.file_ref} className="w-full h-32 object-cover rounded-lg mb-3 border border-slate-700" alt="preview" onError={e => e.target.style.display = 'none'} />}
+        {f.file_ref && <div className="text-xs text-slate-500 mb-3 p-2 bg-slate-900 rounded-lg">创建后将通过后端代理预览</div>}
         <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="名称" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm" />
         <textarea value={f.description} onChange={e => setF({ ...f, description: e.target.value })} placeholder="描述" rows={2} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm" />
         <input value={f.group_id} onChange={e => setF({ ...f, group_id: e.target.value })} placeholder="群号 (留空=全局)" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm" />
@@ -558,7 +564,9 @@ function PromptPage() {
   const [prompt, setPrompt] = useState('')
   const [frags, setFrags] = useState([])
   const [editing, setEditing] = useState(null)
+  const [editContent, setEditContent] = useState('')
   const [building, setBuilding] = useState(false)
+  const [tab, setTab] = useState('fragments') // 'fragments' | 'preview'
 
   const load = () => {
     api.get('/prompt').then(r => setPrompt(r.data.content))
@@ -566,12 +574,32 @@ function PromptPage() {
   }
   useEffect(() => { load() }, [])
 
-  const saveFragment = (name, content) => {
-    api.put(`/prompt/fragments/${encodeURIComponent(name)}`, { content }).then(() => {
-      setEditing(null)
+  const openEditor = (f) => {
+    setEditing(f.name)
+    setEditContent(f.content)
+  }
+  const closeEditor = () => {
+    setEditing(null)
+    setEditContent('')
+  }
+  const saveFragment = () => {
+    if (!editing) return
+    api.put(`/prompt/fragments/${encodeURIComponent(editing)}`, { content: editContent }).then(() => {
+      closeEditor()
       load()
     })
   }
+  // Ctrl+S / Cmd+S
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's' && editing) {
+        e.preventDefault()
+        saveFragment()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [editing, editContent])
 
   const rebuild = () => {
     setBuilding(true)
@@ -584,50 +612,66 @@ function PromptPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <div>
+        <div className="flex items-center gap-4">
           <h1 className="text-2xl font-bold">提示词</h1>
-          <p className="text-slate-500 text-sm">{frags.length} 个片段 · 可编辑</p>
+          <div className="flex gap-1 bg-slate-900 rounded-lg p-0.5">
+            <button onClick={() => setTab('fragments')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'fragments' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>编辑片段</button>
+            <button onClick={() => setTab('preview')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'preview' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>完整 prompt.md</button>
+          </div>
         </div>
         <button onClick={rebuild} disabled={building}
           className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium transition-colors">
           {building ? '构建中...' : '重新构建 prompt.md'}
         </button>
       </div>
-      <div className="flex gap-4">
-        <div className="flex-1">
-          <Card className="p-4">
-            <div className="text-xs text-slate-500 mb-2">完整 prompt.md（构建产物）</div>
-            <pre className="text-xs leading-relaxed whitespace-pre-wrap max-h-screen overflow-auto text-slate-300">{prompt}</pre>
-          </Card>
-        </div>
-        <div className="w-72 space-y-2">
-          <div className="text-xs text-slate-500 mb-1 px-1">可编辑片段（保存后需重建生效）</div>
-          {frags.map(f => (
-            <div key={f.name} className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
-              <div className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-800/50 transition-colors"
-                onClick={() => setEditing(editing === f.name ? null : f.name)}>
-                <span className="text-sm text-emerald-400 font-medium">{f.name}</span>
-                <span className="text-xs text-slate-600">{editing === f.name ? '收起' : '编辑'}</span>
-              </div>
-              {editing === f.name ? (
-                <div className="p-3 border-t border-slate-800">
-                  <textarea value={f.content}
-                    onChange={e => setFrags(frags.map(x => x.name === f.name ? { ...x, content: e.target.value } : x))}
-                    rows={8} className="w-full p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-300 font-mono resize-y" />
-                  <div className="flex gap-2 mt-2">
-                    <button onClick={() => saveFragment(f.name, f.content)}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium">保存</button>
-                    <button onClick={() => setEditing(null)}
-                      className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">取消</button>
+
+      {tab === 'preview' ? (
+        <Card className="p-4">
+          <pre className="text-xs leading-relaxed whitespace-pre-wrap max-h-[calc(100vh-200px)] overflow-auto text-slate-300">{prompt}</pre>
+        </Card>
+      ) : (
+        <div className="flex gap-4" style={{ height: 'calc(100vh - 160px)' }}>
+          {/* Fragment list */}
+          <div className="w-56 flex-shrink-0 space-y-1 overflow-auto">
+            <div className="text-xs text-slate-500 px-1 mb-2">{frags.length} 个片段</div>
+            {frags.map(f => (
+              <button key={f.name}
+                onClick={() => openEditor(f)}
+                className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors truncate block ${editing === f.name ? 'bg-emerald-500/15 text-emerald-400 font-medium' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}`}>
+                {f.name}
+              </button>
+            ))}
+          </div>
+          {/* Editor panel */}
+          <div className="flex-1 flex flex-col min-w-0">
+            {editing ? (
+              <>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-sm font-medium text-emerald-400">{editing}</h2>
+                  <div className="flex gap-2">
+                    <button onClick={closeEditor}
+                      className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">取消</button>
+                    <button onClick={saveFragment}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium transition-colors">保存</button>
                   </div>
                 </div>
-              ) : (
-                <pre className="p-3 text-xs whitespace-pre-wrap border-t border-slate-800 text-slate-400 max-h-32 overflow-hidden">{f.content}</pre>
-              )}
-            </div>
-          ))}
+                <textarea value={editContent}
+                  onChange={e => setEditContent(e.target.value)}
+                  className="flex-1 w-full p-4 rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-300 font-mono leading-relaxed resize-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
+                <div className="text-xs text-slate-600 mt-1">
+                  Ctrl+S 或 Cmd+S 保存 · 保存后需点"重新构建 prompt.md"生效 · {editContent.length} 字符
+                </div>
+              </>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-slate-600 text-sm">
+                点击左侧片段开始编辑
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
