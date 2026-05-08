@@ -44,6 +44,14 @@ def _startup_network_check(logger):
         logger.info("[startup] server version=%s date=%s", sha, dt)
     except Exception:
         logger.info("[startup] server version=unknown")
+
+    # 打印 Admin WebUI Token
+    from config import NANOBOT_API_TOKEN
+    logger.info("[startup] ========================================")
+    logger.info("[startup] Admin WebUI Token: %s", NANOBOT_API_TOKEN)
+    logger.info("[startup] 访问 http://host:8000 并输入此 Token 登录")
+    logger.info("[startup] ========================================")
+
     targets = {}
 
     # 构建显式代理 opener——urlopen(url_str) 不自动走环境代理

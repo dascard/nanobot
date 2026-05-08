@@ -26,6 +26,16 @@ EVOLUTION_THRESHOLD = int(os.environ.get("EVOLUTION_THRESHOLD", "10"))
 
 # ── API 认证 ──
 NANOBOT_API_TOKEN = os.environ.get("NANOBOT_API_TOKEN", "")
+
+if not NANOBOT_API_TOKEN:
+    import secrets
+    NANOBOT_API_TOKEN = secrets.token_hex(16)
+    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    try:
+        with open(_env_path, "a") as _fh:
+            _fh.write(f"\nNANOBOT_API_TOKEN={NANOBOT_API_TOKEN}\n")
+    except Exception:
+        pass
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "0000000000")
 
 # ── 数据库 ──
