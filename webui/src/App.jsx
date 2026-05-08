@@ -195,6 +195,7 @@ function StickersPage() {
     api.get('/stickers', { params: { search, page, limit: 20, status: sf } }).then(r => setData(r.data))
   }, [search, page, sf])
   useEffect(() => { load() }, [load])
+  useEffect(() => { setSelected(new Set()) }, [search, sf, page])
 
   return (
     <div>
@@ -227,8 +228,10 @@ function StickersPage() {
       <Card>
         <table className="w-full text-sm">
           <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-            <th className="py-2 px-2 font-medium"><input type="checkbox" checked={selected.size === data.items.length && data.items.length > 0}
-              onChange={e => setSelected(e.target.checked ? new Set(data.items.map(s => s.id)) : new Set())} className="accent-emerald-500" /></th>
+            <th className="py-2 px-2 font-medium"><input type="checkbox"
+              checked={data.items.length > 0 && data.items.every(s => selected.has(s.id))}
+              onChange={e => { const ids = data.items.map(s => s.id); setSelected(e.target.checked ? new Set(ids) : new Set()) }}
+              className="accent-emerald-500" /></th>
             <th className="py-2 px-2 font-medium">预览</th><th className="py-2 px-2 font-medium">名称</th><th className="py-2 px-2 font-medium">描述</th><th className="py-2 px-2 font-medium">状态</th><th className="py-2 px-2 font-medium">使用</th><th className="py-2 px-2 font-medium">操作</th></tr></thead>
           <tbody>
             {data.items.map(s => (
@@ -587,18 +590,23 @@ function LogsPage() {
   const [sel, setSel] = useState('')
   const [content, setContent] = useState('')
   const [lines, setLines] = useState(200)
-  useEffect(() => { api.get('/logs').then(r => setFiles(r.data.files)) }, [])
 
-  const loadLog = (name) => {
+  const refreshFiles = () => api.get('/logs').then(r => setFiles(r.data.files))
+  useEffect(() => { refreshFiles() }, [])
+
+  const loadLog = (name, n = lines) => {
     setSel(name)
-    api.get(`/logs/${encodeURIComponent(name)}?lines=${lines}`).then(r => setContent(r.data.content))
+    api.get(`/logs/${encodeURIComponent(name)}?lines=${n}`).then(r => setContent(r.data.content))
   }
 
   const formatSize = (s) => s < 1024 ? `${s}B` : s < 1048576 ? `${(s/1024).toFixed(1)}KB` : `${(s/1048576).toFixed(1)}MB`
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">日志</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">日志</h1>
+        <button onClick={refreshFiles} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">刷新列表</button>
+      </div>
       <div className="flex gap-4" style={{ height: 'calc(100vh - 140px)' }}>
         <div className="w-56 flex-shrink-0 space-y-1 overflow-auto">
           {files.map(f => (
@@ -612,7 +620,7 @@ function LogsPage() {
         <div className="flex-1 flex flex-col min-w-0">
           <div className="flex items-center gap-2 mb-2">
             <span className="text-sm text-slate-400">行数:</span>
-            <select value={lines} onChange={e => { setLines(Number(e.target.value)); if (sel) loadLog(sel) }}
+            <select value={lines} onChange={e => { const n = Number(e.target.value); setLines(n); if (sel) loadLog(sel, n) }}
               className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
               <option value="100">100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option>
             </select>

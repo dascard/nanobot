@@ -297,20 +297,29 @@ def retry_preview(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(
 
 @router.post("/stickers/batch-delete")
 def batch_delete_stickers(body: dict, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    ids = body.get("ids", [])
-    if not isinstance(ids, list) or not ids:
+    raw = body.get("ids", [])
+    if not isinstance(raw, list) or not raw:
         raise HTTPException(400, "ids required")
-    count = 0
-    for sid in ids:
+    ids: set[int] = set()
+    for x in raw:
         try:
-            row = db.query(StickerMemory).filter(StickerMemory.id == int(sid)).first()
-            if row:
-                row.status = "deleted"
-                count += 1
+            ids.add(int(x))
         except (ValueError, TypeError):
             continue
+    if not ids:
+        raise HTTPException(400, "no valid ids")
+    if len(ids) > 500:
+        raise HTTPException(400, f"too many ids, max 500")
+    rows = db.query(StickerMemory).filter(StickerMemory.id.in_(list(ids))).all()
+    count = 0
+    for row in rows:
+        if row.status != "deleted":
+            row.status = "deleted"
+            count += 1
     db.commit()
-    _audit(db, "batch_delete_stickers", "sticker", f"batch_{len(ids)}", {"count": count})
+    _audit(db, "batch_delete_stickers", "sticker", f"batch_{len(ids)}", {
+        "count": count, "ids_sample": sorted(ids)[:50],
+    })
     return {"ok": True, "deleted": count}
 
 
@@ -615,18 +624,28 @@ def list_log_files(_auth=Depends(verify_admin)):
     return {"files": files}
 
 
+def _is_allowed_log_name(name: str) -> bool:
+    n = os.path.basename(name)
+    return n == "nanobot.log" or n.startswith("nanobot.log.") or n.endswith(".log") or ".log." in n
+
+
 @router.get("/logs/{name}")
 def read_log(name: str, lines: int = 200, _auth=Depends(verify_admin)):
     import os as _os
+    from collections import deque
+
     base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     log_dir = _os.path.abspath(_os.path.join(base, "data"))
-    fpath = _os.path.join(log_dir, _os.path.basename(name))
-    if not fpath.startswith(log_dir + _os.sep) or not _os.path.exists(fpath):
+    fname = _os.path.basename(name)
+    if not _is_allowed_log_name(fname):
+        raise HTTPException(400, "Invalid log file name")
+    fpath = _os.path.abspath(_os.path.join(log_dir, fname))
+    if not fpath.startswith(log_dir + _os.sep) or not _os.path.isfile(fpath):
         raise HTTPException(404, "Log not found")
+    max_lines = max(1, min(int(lines), 2000))
     with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
-        all_lines = fh.readlines()
-    tail = all_lines[-max(1, min(lines, 2000)):]
-    return {"name": name, "lines": len(tail), "content": "".join(tail)}
+        tail = deque(fh, maxlen=max_lines)
+    return {"name": fname, "lines": len(tail), "content": "".join(tail)}
 
 
 # ═══════════════════════════════════════════
