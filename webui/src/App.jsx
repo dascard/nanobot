@@ -566,7 +566,8 @@ function PromptPage() {
   const [editing, setEditing] = useState(null)
   const [editContent, setEditContent] = useState('')
   const [building, setBuilding] = useState(false)
-  const [tab, setTab] = useState('fragments') // 'fragments' | 'preview'
+  const [tab, setTab] = useState('fragments')
+  const [toast, setToast] = useState('')
 
   const load = () => {
     api.get('/prompt').then(r => setPrompt(r.data.content))
@@ -574,22 +575,27 @@ function PromptPage() {
   }
   useEffect(() => { load() }, [])
 
+  const origContent = frags.find(f => f.name === editing)?.content || ''
+  const dirty = editing && editContent !== origContent
+
   const openEditor = (f) => {
+    if (dirty && editing !== f.name && !confirm('当前修改未保存，确认切换？')) return
     setEditing(f.name)
     setEditContent(f.content)
   }
   const closeEditor = () => {
+    if (dirty && !confirm('当前修改未保存，确认关闭？')) return
     setEditing(null)
     setEditContent('')
   }
   const saveFragment = () => {
-    if (!editing) return
+    if (!editing || !dirty) return
     api.put(`/prompt/fragments/${encodeURIComponent(editing)}`, { content: editContent }).then(() => {
+      setToast('已保存，记得重新构建 prompt.md 才能生效')
       closeEditor()
       load()
-    })
+    }).catch(e => alert(e.response?.data?.detail || '保存失败'))
   }
-  // Ctrl+S / Cmd+S
   useEffect(() => {
     const handler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's' && editing) {
@@ -604,13 +610,23 @@ function PromptPage() {
   const rebuild = () => {
     setBuilding(true)
     api.post('/prompt/build').then(r => {
-      alert(r.data.ok ? '构建成功: ' + r.data.output : '构建失败: ' + r.data.error)
-      if (r.data.ok) load()
+      if (r.data.ok) {
+        setToast('构建成功: ' + r.data.output)
+        load()
+      } else {
+        alert('构建失败\n' + (r.data.stderr || r.data.error || ''))
+      }
     }).finally(() => setBuilding(false))
   }
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(''), 3000)
+    return () => clearTimeout(t)
+  }, [toast])
 
   return (
     <div>
+      {toast && <div className="mb-3 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-sm text-emerald-400">{toast}</div>}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">
           <h1 className="text-2xl font-bold">提示词</h1>
@@ -649,7 +665,10 @@ function PromptPage() {
             {editing ? (
               <>
                 <div className="flex items-center justify-between mb-2">
-                  <h2 className="text-sm font-medium text-emerald-400">{editing}</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-sm font-medium text-emerald-400">{editing}</h2>
+                    {dirty && <span className="text-xs text-amber-400">● 未保存</span>}
+                  </div>
                   <div className="flex gap-2">
                     <button onClick={closeEditor}
                       className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">取消</button>

@@ -346,7 +346,8 @@ def _is_blocked_host(hostname: str) -> bool:
         ip = info[4][0]
         try:
             addr = ipaddress.ip_address(ip)
-            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            if (addr.is_private or addr.is_loopback or addr.is_link_local
+                    or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
                 return True
         except ValueError:
             continue
@@ -562,18 +563,28 @@ def list_prompt_fragments(_auth=Depends(verify_admin)):
 
 @router.put("/prompt/fragments/{name}")
 def update_prompt_fragment(name: str, body: dict, _auth=Depends(verify_admin)):
-    import os as _os
+    import os as _os, hashlib, re, shutil
     base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     frag_dir = _os.path.join(base, "creatures", "nanobot", "prompts", "system")
-    if ".." in name or "/" in name:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+\.md", name):
         raise HTTPException(400, "Invalid fragment name")
     fpath = _os.path.join(frag_dir, name)
     if not _os.path.exists(fpath):
         raise HTTPException(404, "Fragment not found")
     content = str(body.get("content", ""))
+    with open(fpath, "r", encoding="utf-8") as fh:
+        old = fh.read()
+    old_hash = hashlib.sha256(old.encode()).hexdigest()[:12]
+    # 备份
+    backup_dir = _os.path.join(base, "data", "prompt_backups")
+    _os.makedirs(backup_dir, exist_ok=True)
+    ts = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = _os.path.join(backup_dir, f"{name}.{ts}.{old_hash}.bak")
+    shutil.copy2(fpath, backup_path)
     with open(fpath, "w", encoding="utf-8") as fh:
         fh.write(content)
-    return {"name": name, "saved": True}
+    new_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+    return {"name": name, "saved": True, "before_hash": old_hash, "after_hash": new_hash}
 
 
 @router.post("/prompt/build")
@@ -583,6 +594,8 @@ def rebuild_prompt(_auth=Depends(verify_admin)):
     script = _os.path.join(base, "scripts", "build_nanobot_prompt.py")
     try:
         result = subprocess.run(["python", script], capture_output=True, text=True, cwd=base, timeout=10)
+        if result.returncode != 0:
+            return {"ok": False, "stdout": result.stdout.strip(), "stderr": result.stderr.strip(), "returncode": result.returncode}
         return {"ok": True, "output": result.stdout.strip()}
     except Exception as e:
         return {"ok": False, "error": str(e)}
