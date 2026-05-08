@@ -125,6 +125,7 @@ def _sticker_dict(r: StickerMemory) -> dict:
         "local_path": r.local_path or "",
         "preview_status": r.preview_status or "pending",
         "content_hash": r.content_hash or "",
+        "byte_size": r.byte_size or 0,
         "width": r.width or 0,
         "height": r.height or 0,
     }
@@ -276,13 +277,22 @@ def preview_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depend
 
 @router.post("/stickers/{sticker_id}/preview/retry")
 def retry_preview(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    from core.sticker_preview import cache_sticker_preview
+
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
     row.preview_status = "pending"
     row.local_path = ""
     db.commit()
-    return {"ok": True, "sticker_id": sticker_id}
+
+    result = cache_sticker_preview(db, sticker_id, force=True)
+    return {
+        "ok": result.ok,
+        "status": result.status,
+        "error": result.error,
+        "sticker_id": sticker_id,
+    }
 
 
 @router.delete("/stickers/{sticker_id}")

@@ -6,6 +6,7 @@ import hashlib
 import io
 import logging
 import os
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -113,7 +114,7 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
         existing = safe_existing_local_path(row.local_path or "")
         if existing:
             return StickerPreviewCacheResult(ok=True, status="ok", local_path=existing)
-        if row.preview_status in {"blocked", "expired", "invalid_image"}:
+        if row.preview_status in {"blocked", "expired", "invalid_image", "invalid_ref", "fetch_failed"}:
             return StickerPreviewCacheResult(ok=False, status=row.preview_status, error=row.preview_status)
 
     ref = extract_preview_ref(row)
@@ -134,13 +135,24 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
 
     try:
         req = urllib.request.Request(ref, headers={"User-Agent": "Nanobot/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            ct = resp.headers.get("Content-Type", "")
-            data = resp.read()
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                ct = resp.headers.get("Content-Type", "")
+                data = resp.read()
+        except urllib.error.HTTPError as e:
+            ct = (e.headers or {}).get("Content-Type", "")
+            data = e.read() or b""
+            body_preview = data[:500].decode("utf-8", errors="ignore")
+            if "download url has expired" in body_preview or "retmsg" in body_preview:
+                row.preview_status = "expired"; db.commit()
+                return StickerPreviewCacheResult(ok=False, status="expired", error=body_preview[:200])
+            row.preview_status = "fetch_failed"; db.commit()
+            return StickerPreviewCacheResult(ok=False, status="fetch_failed",
+                                              error=f"http {e.code}: {body_preview[:200]}")
 
         if not ct.lower().startswith("image/"):
             body_preview = data[:500].decode("utf-8", errors="ignore")
-            if "download url has expired" in body_preview or "expired" in body_preview:
+            if "download url has expired" in body_preview or "retmsg" in body_preview:
                 row.preview_status = "expired"; db.commit()
                 return StickerPreviewCacheResult(ok=False, status="expired", error=body_preview[:200])
             row.preview_status = "invalid_image"; db.commit()
@@ -168,6 +180,7 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
         row.local_path = local
         row.preview_status = "ok"
         if hasattr(row, "content_hash"): row.content_hash = ch
+        if hasattr(row, "byte_size"): row.byte_size = len(data)
         if hasattr(row, "width"): row.width = width
         if hasattr(row, "height"): row.height = height
         db.commit()
