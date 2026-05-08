@@ -211,6 +211,3 @@ from pathlib import Path as _Path
 _webui_dist = _Path(__file__).parent / "webui" / "dist"
 if _webui_dist.exists():
     app.mount("/", StaticFiles(directory=str(_webui_dist), html=True), name="webui")
-
-from api.admin_routes import router as admin_router
-app.include_router(admin_router)

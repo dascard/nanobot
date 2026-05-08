@@ -201,14 +201,17 @@ def _check_user_blocked(db, user_id: str, target_type: str = "private", group_id
     """检查用户是否被屏蔽——命中规则时返回 True。"""
     try:
         from core.database import UserBlockRule
+        from core.group_runtime.ids import normalize_group_session_id
         rules = db.query(UserBlockRule).filter(
             UserBlockRule.user_id == user_id,
             UserBlockRule.enabled == 1,
         ).all()
+        norm_group = normalize_group_session_id(group_id) if group_id else ""
         for r in rules:
             if r.target_type in (target_type, "all"):
-                if r.target_type == "group" and r.group_id and r.group_id != group_id:
-                    continue
+                if r.target_type == "group" and r.group_id:
+                    if norm_group and normalize_group_session_id(r.group_id) != norm_group:
+                        continue
                 return True
     except Exception:
         pass
@@ -1382,6 +1385,11 @@ async def proxy_chat(
     elif req.sender_name and user.name != req.sender_name:
         user.name = req.sender_name
         db.commit()
+
+    # 1.5 检查用户屏蔽规则
+    if _check_user_blocked(db, req.user_id, target_type="private"):
+        logger.info("[/chat] blocked user=%s", req.user_id)
+        return {"answer": "", "status": "silent", "reason": "user_blocked"}
 
     # 2. 加载用户画像 (PersonaArchitectAgent 实际输出的键: identity, communication_style, domain_profiles, persona_summary)
     # 兼容性：bot 端 user_id 格式可能变化（"12345" vs "private_12345" vs "group_xxx"）

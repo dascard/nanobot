@@ -10,5 +10,3 @@ sentinel/model.safetensors
 .idea/
 webui/node_modules/
 .claude/
-webui/node_modules/
-.claude/

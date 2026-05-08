@@ -18,13 +18,28 @@ function useAuth() {
 
 function Login({ onLogin }) {
   const [t, setT] = useState('')
+  const [err, setErr] = useState('')
+  const [loading, setLoading] = useState(false)
+  const submit = async (e) => {
+    e.preventDefault()
+    setErr(''); setLoading(true)
+    try {
+      await axios.get('/api/v1/admin/me', { headers: { Authorization: `Bearer ${t}` } })
+      onLogin(t)
+    } catch {
+      setErr('Token 验证失败')
+    } finally { setLoading(false) }
+  }
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-900">
-      <form onSubmit={e => { e.preventDefault(); onLogin(t) }} className="bg-gray-800 p-8 rounded-xl w-96">
+      <form onSubmit={submit} className="bg-gray-800 p-8 rounded-xl w-96">
         <h1 className="text-2xl text-white mb-6 text-center">Nanobot Admin</h1>
+        {err && <div className="text-red-400 text-sm mb-4 text-center">{err}</div>}
         <input type="password" value={t} onChange={e => setT(e.target.value)}
           placeholder="API Token" className="w-full p-3 rounded bg-gray-700 text-white mb-4 border border-gray-600" />
-        <button className="w-full p-3 bg-blue-600 text-white rounded hover:bg-blue-500">登录</button>
+        <button disabled={loading} className="w-full p-3 bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-50">
+          {loading ? '验证中...' : '登录'}
+        </button>
       </form>
     </div>
   )

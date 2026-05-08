@@ -23,8 +23,10 @@ router = APIRouter(prefix="/api/v1/admin")
 # ── Auth ──
 
 def verify_admin(authorization: str = Header(default="")) -> str:
+    if not NANOBOT_API_TOKEN:
+        raise HTTPException(status_code=503, detail="Admin token not configured")
     token = authorization.replace("Bearer ", "").strip()
-    if NANOBOT_API_TOKEN and not compare_digest(token, NANOBOT_API_TOKEN):
+    if not token or not compare_digest(token, NANOBOT_API_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid token")
     return "admin"
 
@@ -40,7 +42,26 @@ def _audit(db: Session, action: str, target_type: str = "", target_id: str = "",
         pass
 
 
+# ── Auth check endpoint ──
+
+@router.get("/me")
+def admin_me(_auth=Depends(verify_admin)):
+    return {"ok": True, "user": "admin"}
+
+
 # ── Models ──
+
+class StickerCreate(BaseModel):
+    group_id: str = ""
+    chat_stream_id: str = ""
+    file_ref: str
+    sticker_hash: str = ""
+    send_code: str = ""
+    name: str = ""
+    description: str = ""
+    tags: list[str] = []
+    emotions: list[str] = []
+
 
 class StickerUpdate(BaseModel):
     name: Optional[str] = None
@@ -127,6 +148,25 @@ def _config_dict(r: ChatStreamConfig) -> dict:
 # StickerMemory CRUD
 # ═══════════════════════════════════════════
 
+@router.post("/stickers")
+def create_sticker(body: StickerCreate, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    from datetime import datetime as _dt
+    import hashlib
+    sid = body.chat_stream_id or ("qq:" + body.group_id + ":group")
+    shash = body.sticker_hash or hashlib.md5(body.file_ref.encode()).hexdigest()[:12]
+    s = StickerMemory(
+        chat_stream_id=sid, sticker_hash=shash,
+        file_ref=body.file_ref, send_code=body.send_code,
+        name=body.name, description=body.description,
+        tags_json=json.dumps(body.tags, ensure_ascii=False),
+        emotions_json=json.dumps(body.emotions, ensure_ascii=False),
+        source_type="manual", status=body.status,
+    )
+    db.add(s); db.commit()
+    _audit(db, "create_sticker", "sticker", s.id, {"name": body.name})
+    return _sticker_dict(s)
+
+
 @router.get("/stickers")
 def list_stickers(
     search: str = "", status: str = "", page: int = 1, limit: int = 20,
@@ -197,8 +237,8 @@ def delete_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
-    db.delete(row); db.commit()
-    _audit(db, "delete_sticker", "sticker", sticker_id)
+    row.status = "deleted"; db.commit()
+    _audit(db, "soft_delete_sticker", "sticker", sticker_id)
     return {"ok": True}
 
 
@@ -304,7 +344,7 @@ READONLY_TABLES = [
     "chat_logs", "conversation_turns", "memory_digests",
     "group_memories", "expression_memories", "jargon_memories",
     "sticker_memories", "chat_stream_configs",
-    "system_prompts", "scheduled_tasks", "sensitive_data",
+    "system_prompts", "scheduled_tasks",
     "admin_audit_logs", "user_block_rules", "system_settings",
 ]
 
@@ -336,14 +376,20 @@ def query_table(table_name: str, page: int = 1, limit: int = 50,
 def execute_readonly_query(body: DbQuery, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     q = body.query.strip()
     q_upper = q.upper()
-    if not q_upper.startswith("SELECT"):
-        raise HTTPException(400, "Only SELECT queries allowed")
-    forbidden = ("INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE")
+    if ";" in q.rstrip(";"):
+        raise HTTPException(400, "Multi-statement forbidden")
+    if not q_upper.startswith("SELECT ") and q_upper != "SELECT":
+        raise HTTPException(400, "Only SELECT allowed")
+    forbidden = (
+        "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE",
+        "PRAGMA", "ATTACH", "DETACH", "VACUUM", "REINDEX", "LOAD_EXTENSION",
+    )
     for word in forbidden:
         if word in q_upper:
-            raise HTTPException(400, f"Forbidden keyword: {word}")
+            raise HTTPException(400, f"Forbidden: {word}")
     try:
-        result = db.execute(text(q))
+        limited = f"SELECT * FROM ({q}) LIMIT 500"
+        result = db.execute(text(limited))
         columns = list(result.keys()) if result.returns_rows else []
         rows = [dict(zip(columns, [str(v) if v is not None else None for v in row]))
                 for row in result.fetchall()] if result.returns_rows else []
@@ -405,8 +451,12 @@ def list_audit_logs(page: int = 1, limit: int = 50,
 def download_backup(_auth=Depends(verify_admin)):
     from fastapi.responses import FileResponse
     import os as _os
+    from config import DATABASE_URL as _db_url
+    if not (_db_url or "").startswith("sqlite:///"):
+        raise HTTPException(400, "Only SQLite backup supported")
+    db_rel = _db_url.removeprefix("sqlite:///")
     base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    db_path = _os.path.join(base, "data", "nanobot.db")
+    db_path = _os.path.join(base, db_rel) if not _os.path.isabs(db_rel) else db_rel
     if not _os.path.exists(db_path):
         raise HTTPException(404, "Database file not found")
     return FileResponse(db_path, media_type="application/octet-stream", filename="nanobot.db")
