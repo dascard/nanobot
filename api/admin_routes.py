@@ -491,12 +491,12 @@ def list_settings(_auth=Depends(verify_admin)):
         val = values.get(key, defn.default)
         display_val = val
         result.append({
-            "key": key, "value": val,
+            "key": key, "value": None if defn.sensitive else val,
             "display_value": "****" if defn.sensitive else str(val),
             "default": defn.default, "value_type": defn.value_type,
             "category": defn.category, "description": defn.description,
             "restart_required": defn.restart_required,
-            "min_value": defn.min_value, "max_value": defn.max_value,
+            "readonly": defn.key == "database.url","min_value": defn.min_value, "max_value": defn.max_value,
         })
     return {"settings": result, "version": settings.version}
 

@@ -10,7 +10,15 @@ from core.config_registry import SETTING_DEFS, SettingDef
 
 
 class SettingsService:
-    def __init__(self, ttl_seconds: float = 2.0):
+    def set_session_factory(self, factory):
+        self._session_factory = factory
+        self.invalidate()
+
+    def __init__(self, ttl_seconds: float = 2.0, session_factory=None):
+        if session_factory is not None:
+            self._session_factory = session_factory
+        else:
+            self._session_factory = SessionLocal
         self._cache: dict[str, object] = {}
         self._loaded_at = 0.0
         self._version = 0
@@ -34,7 +42,7 @@ class SettingsService:
                 return self._cache
             values: dict[str, object] = {}
             try:
-                db = SessionLocal()
+                db = self._session_factory()
                 try:
                     rows = db.query(SystemSetting).all()
                     row_map = {r.key: r for r in rows if r.value is not None}
@@ -43,7 +51,9 @@ class SettingsService:
                 for key, defn in SETTING_DEFS.items():
                     raw = row_map[key].value if key in row_map else os.environ.get(defn.env_name)
                     values[key] = self._cast(raw, defn)
-            except Exception:
+            except Exception as e:
+                import logging
+                logging.getLogger("nanobot.settings").warning("DB load failed, using env/default: %s", e)
                 for key, defn in SETTING_DEFS.items():
                     if key not in values:
                         values[key] = self._cast(os.environ.get(defn.env_name), defn)

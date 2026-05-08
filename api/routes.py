@@ -822,7 +822,7 @@ def _register_group_stickers_from_message(
             background_tasks is not None
             and settings.get_bool("sticker.auto_describe_enabled", True)
             and not sticker.get("description")
-            and describe_tasks < max(0, settings.get_int("sticker.auto_describe_max_per_cycle", 20))
+            and describe_tasks < max(0, settings.get_int("sticker.auto_describe_max_per_cycle", 3))
         ):
             background_tasks.add_task(auto_describe_sticker, sticker["id"])
             describe_tasks += 1

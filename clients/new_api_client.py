@@ -60,9 +60,13 @@ class NewAPIClient:
     ):
         self.api_key = api_key
         self.base_url = (base_url or NEW_API_BASE_URL).rstrip("/")
-        self.timeout = timeout or _new_api_timeout()
+        self._timeout_override = timeout
         self.max_retries = max_retries
         self.last_usage: Dict[str, int] = {}
+
+    @property
+    def _timeout(self) -> int:
+        return self._timeout_override or _new_api_timeout()
 
     @classmethod
     def _load_model_overrides(cls) -> Dict[str, Any]:
@@ -213,7 +217,7 @@ class NewAPIClient:
                 async with session.get(
                     url,
                     headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=min(self.timeout, 60)),
+                    timeout=aiohttp.ClientTimeout(total=min(self._timeout, 60)),
                 ) as resp:
                     if resp.status != 200:
                         logger.warning(f"new-api model list failed: status={resp.status}")
@@ -562,7 +566,7 @@ class NewAPIClient:
                     try:
                         async with session.post(
                             url, headers=headers, json=payload,
-                            timeout=aiohttp.ClientTimeout(total=self.timeout),
+                            timeout=aiohttp.ClientTimeout(total=self._timeout),
                         ) as resp:
                             if resp.status == 200:
                                 result = await resp.json()
@@ -644,7 +648,7 @@ class NewAPIClient:
                     url,
                     headers=headers,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=self.timeout),
+                    timeout=aiohttp.ClientTimeout(total=self._timeout),
                 ) as resp:
                     if resp.status != 200:
                         detail = await resp.text()

@@ -49,7 +49,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
     "image_summary.temperature": SettingDef(
         key="image_summary.temperature", env_name="IMAGE_SUMMARY_TEMPERATURE",
-        default=0.3, value_type="float",
+        default=0.1, value_type="float",
         category="image", description="图片摘要temperature", min_value=0, max_value=2.0,
     ),
     "image_summary.top_p": SettingDef(
@@ -66,7 +66,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
     "sticker.auto_describe_max_per_cycle": SettingDef(
         key="sticker.auto_describe_max_per_cycle",
         env_name="STICKER_AUTO_DESCRIBE_MAX_PER_CYCLE",
-        default=20, value_type="int",
+        default=3, value_type="int",
         category="sticker", description="每轮自动描述上限", min_value=1, max_value=100,
     ),
     "model.reply": SettingDef(

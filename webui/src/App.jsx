@@ -437,7 +437,7 @@ function SettingsPage() {
                     <input type={s.value_type === 'int' || s.value_type === 'float' ? 'number' : 'text'}
                       defaultValue={s.value} step={s.value_type === 'float' ? '0.1' : '1'}
                       min={s.min_value} max={s.max_value}
-                      onBlur={e => { const v = e.target.value; if (v !== String(s.value)) update(s.key, s.value_type === 'float' ? parseFloat(v) : s.value_type === 'int' ? parseInt(v) : v) }}
+                      onBlur={e => { const v = e.target.value.trim(); if (!v || v === String(s.value)) return; const parsed = s.value_type === 'float' ? parseFloat(v) : parseInt(v); if (Number.isNaN(parsed)) { e.target.value = s.value; return } update(s.key, parsed) }}
                       className="w-24 p-1 rounded bg-gray-700 text-sm text-center" />
                   )}
                   {s.restart_required && <span className="text-red-400 text-xs">需重启</span>}
