@@ -128,7 +128,7 @@ function StickersPage() {
     <div>
       <h1 className="text-2xl font-bold mb-4">Sticker 管理</h1>
       <div className="flex gap-2 mb-4">
-        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索..."
+        <input value={search} onChange={e => { setSearch(e.target.value); setPage(1) }} placeholder="搜索..."
           className="p-2 rounded bg-gray-700 border border-gray-600 flex-1" />
         <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1) }}
           className="p-2 rounded bg-gray-700 border border-gray-600">
