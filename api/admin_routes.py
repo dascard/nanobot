@@ -61,6 +61,7 @@ class StickerCreate(BaseModel):
     description: str = ""
     tags: list[str] = []
     emotions: list[str] = []
+    status: str = "active"
 
 
 class StickerUpdate(BaseModel):
@@ -150,21 +151,27 @@ def _config_dict(r: ChatStreamConfig) -> dict:
 
 @router.post("/stickers")
 def create_sticker(body: StickerCreate, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    from datetime import datetime as _dt
-    import hashlib
-    sid = body.chat_stream_id or ("qq:" + body.group_id + ":group")
-    shash = body.sticker_hash or hashlib.md5(body.file_ref.encode()).hexdigest()[:12]
-    s = StickerMemory(
-        chat_stream_id=sid, sticker_hash=shash,
-        file_ref=body.file_ref, send_code=body.send_code,
-        name=body.name, description=body.description,
-        tags_json=json.dumps(body.tags, ensure_ascii=False),
-        emotions_json=json.dumps(body.emotions, ensure_ascii=False),
-        source_type="manual", status=body.status,
-    )
-    db.add(s); db.commit()
-    _audit(db, "create_sticker", "sticker", s.id, {"name": body.name})
-    return _sticker_dict(s)
+    from core.sticker_memory import register_sticker
+    try:
+        sticker = register_sticker(
+            db,
+            group_id=body.group_id,
+            chat_stream_id=body.chat_stream_id,
+            file_ref=body.file_ref,
+            sticker_hash=body.sticker_hash,
+            send_code=body.send_code,
+            name=body.name,
+            description=body.description,
+            tags=body.tags,
+            emotions=body.emotions,
+            source_type="manual",
+            status=body.status,
+            meta={"source": "webui"},
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    _audit(db, "create_sticker", "sticker", sticker.get("id"), {"name": body.name})
+    return sticker
 
 
 @router.get("/stickers")
@@ -378,7 +385,7 @@ def execute_readonly_query(body: DbQuery, db: Session = Depends(get_db), _auth=D
     q_upper = q.upper()
     if ";" in q.rstrip(";"):
         raise HTTPException(400, "Multi-statement forbidden")
-    if not q_upper.startswith("SELECT ") and q_upper != "SELECT":
+    if not q_upper.startswith("SELECT "):
         raise HTTPException(400, "Only SELECT allowed")
     forbidden = (
         "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "TRUNCATE",

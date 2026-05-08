@@ -213,8 +213,8 @@ def _check_user_blocked(db, user_id: str, target_type: str = "private", group_id
                     if norm_group and normalize_group_session_id(r.group_id) != norm_group:
                         continue
                 return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("[BlockRule] check failed user=%s group=%s: %s", user_id, group_id, e)
     return False
 
 
@@ -1386,9 +1386,18 @@ async def proxy_chat(
         user.name = req.sender_name
         db.commit()
 
-    # 1.5 检查用户屏蔽规则
+    # 1.5 检查用户屏蔽规则——命中后只写 ChatLog，不回复
     if _check_user_blocked(db, req.user_id, target_type="private"):
         logger.info("[/chat] blocked user=%s", req.user_id)
+        db.add(ChatLog(
+            user_id=req.user_id, session_id=req.session_id,
+            role="user", content=req.query or "",
+            sender_name=req.sender_name or "",
+            session_name=req.session_name or "",
+            processed=1, message_id=req.message_id or "",
+            meta_json=json.dumps({"blocked": True, "reason": "user_blocked"}, ensure_ascii=False),
+        ))
+        db.commit()
         return {"answer": "", "status": "silent", "reason": "user_blocked"}
 
     # 2. 加载用户画像 (PersonaArchitectAgent 实际输出的键: identity, communication_style, domain_profiles, persona_summary)
