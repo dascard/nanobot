@@ -186,8 +186,46 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
         if hasattr(row, "width"): row.width = width
         if hasattr(row, "height"): row.height = height
         db.commit()
+
+        # 内容去重
+        dedupe_by_content_hash(db, row.id)
+
         return StickerPreviewCacheResult(ok=True, status="ok", local_path=local,
                                           content_hash=ch, width=width, height=height)
     except Exception as e:
         row.preview_status = "fetch_failed"; db.commit()
         return StickerPreviewCacheResult(ok=False, status="fetch_failed", error=str(e))
+
+
+def dedupe_by_content_hash(db: Session, sticker_id: int) -> int | None:
+    """content_hash 相同 → 标 duplicate，返回 canonical id。"""
+    row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
+    if not row or not row.content_hash or row.dedupe_status != "unique":
+        return None
+
+    existing = (
+        db.query(StickerMemory)
+        .filter(
+            StickerMemory.chat_stream_id == row.chat_stream_id,
+            StickerMemory.content_hash == row.content_hash,
+            StickerMemory.id != row.id,
+            StickerMemory.status.in_(["active", "disabled"]),
+            StickerMemory.dedupe_status == "unique",
+        )
+        .order_by(StickerMemory.id.asc())
+        .first()
+    )
+    if not existing:
+        return None
+
+    # 合并 usage/source_count/description
+    existing.source_count = (existing.source_count or 1) + (row.source_count or 1)
+    existing.usage_count = (existing.usage_count or 0) + (row.usage_count or 0)
+    if not existing.description and row.description:
+        existing.description = row.description
+
+    row.status = "duplicate"
+    row.duplicate_of_id = existing.id
+    row.dedupe_status = "duplicate"
+    db.commit()
+    return existing.id

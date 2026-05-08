@@ -72,8 +72,8 @@ def build_sticker_hash(
     explicit = str(sticker_hash or "").strip()
     if explicit:
         return explicit
-    seed = f"{file_ref.strip()}|{description.strip()}"
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
+    ref = normalize_sticker_file_ref(file_ref)
+    return hashlib.sha256(ref.encode("utf-8")).hexdigest()[:32]
 
 
 def _cq_escape(value: str) -> str:
@@ -438,17 +438,33 @@ def describe_sticker_with_qwen(file_ref: str) -> dict[str, Any]:
     }
 
 
-def auto_describe_sticker(sticker_id: int) -> None:
+def auto_describe_sticker(sticker_id: int, *, force: bool = False) -> None:
     if not STICKER_AUTO_DESCRIBE_ENABLED:
         return
     db = SessionLocal()
     try:
         row = db.query(StickerMemory).filter(StickerMemory.id == int(sticker_id)).first()
-        if row is None or row.description:
+        if row is None:
+            return
+        if not force:
+            if row.description:
+                return
+            if row.describe_status == "ok":
+                return
+            if row.describe_attempts >= 3:
+                return
+            if row.describe_status == "disabled":
+                return
+        ref = (row.local_path or row.file_ref or "").strip()
+        if not ref:
             return
         try:
-            payload = describe_sticker_with_qwen(row.file_ref)
+            payload = describe_sticker_with_qwen(ref)
         except Exception as e:
+            row.describe_status = "failed"
+            row.describe_attempts = (row.describe_attempts or 0) + 1
+            row.describe_last_error = str(e)[:1000]
+            db.commit()
             logger.warning("[StickerMemory] auto describe failed id=%s: %s", sticker_id, e)
             return
         row.description = str(payload.get("description") or "").strip()
@@ -462,6 +478,9 @@ def auto_describe_sticker(sticker_id: int) -> None:
             meta = {}
         meta["qwen_summary"] = payload.get("raw_summary")
         row.meta_json = json.dumps(meta, ensure_ascii=False)
+        row.describe_status = "ok"
+        row.describe_attempts = (row.describe_attempts or 0) + 1
+        row.described_at = datetime.now()
         db.commit()
     finally:
         db.close()

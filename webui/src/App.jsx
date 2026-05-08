@@ -248,7 +248,10 @@ function StickersPage() {
                 <td className="py-1.5 px-2 truncate max-w-[200px] text-slate-400">{s.description || '-'}</td>
                 <td className="py-1.5 px-2">
                   <div className="flex items-center gap-1.5">
-                    <span className={`px-2 py-0.5 rounded-full text-xs ${s.status === 'active' ? 'bg-emerald-500/15 text-emerald-400' : s.status === 'disabled' ? 'bg-amber-500/15 text-amber-400' : 'bg-red-500/15 text-red-400'}`}>{s.status}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs ${s.status === 'active' ? 'bg-emerald-500/15 text-emerald-400' : s.status === 'disabled' ? 'bg-amber-500/15 text-amber-400' : s.status === 'duplicate' ? 'bg-purple-500/15 text-purple-400' : 'bg-red-500/15 text-red-400'}`}>{s.status}</span>
+                    {s.dedupe_status === 'duplicate' && s.duplicate_of_id && (
+                      <span className="px-1.5 py-0.5 rounded text-xs bg-purple-500/15 text-purple-400" title={`重复于 #${s.duplicate_of_id}`}>dup</span>
+                    )}
                     {s.preview_status && s.preview_status !== 'ok' && s.preview_status !== 'pending' && (
                       <span className={`px-1.5 py-0.5 rounded text-xs ${
                         s.preview_status === 'expired' ? 'bg-red-500/15 text-red-400' :
@@ -266,6 +269,10 @@ function StickersPage() {
                 <td className="py-1.5 px-2">
                   <div className="flex gap-1">
                     <button onClick={() => setEdit(s)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">编辑</button>
+                    {s.describe_status !== 'ok' && s.status === 'active' && (
+                      <button onClick={() => api.post(`/stickers/${s.id}/redescribe`).then(r => { alert(r.data.ok ? '打标成功' : '打标失败: ' + r.data.error); load() })}
+                        className="px-2 py-1 bg-indigo-700/50 hover:bg-indigo-700 text-indigo-300 rounded-lg text-xs transition-colors" title="重新描述">AI</button>
+                    )}
                     {s.status !== 'deleted' ? (
                       <>
                         <button onClick={() => api.post(`/stickers/${s.id}/${s.status === 'active' ? 'disable' : 'enable'}`).then(load)}

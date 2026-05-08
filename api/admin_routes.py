@@ -129,6 +129,8 @@ def _sticker_dict(r: StickerMemory) -> dict:
         "byte_size": r.byte_size or 0,
         "width": r.width or 0,
         "height": r.height or 0,
+        "duplicate_of_id": r.duplicate_of_id,
+        "dedupe_status": r.dedupe_status or "unique",
     }
 
 
@@ -274,6 +276,22 @@ def preview_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depend
 
     status_code = 400 if result.status == "blocked" else 404
     raise HTTPException(status_code, f"preview {result.status}: {result.error}")
+
+
+@router.post("/stickers/{sticker_id}/redescribe")
+def redescribe_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    from core.sticker_memory import auto_describe_sticker
+
+    row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
+    if not row:
+        raise HTTPException(404, "Not found")
+    try:
+        auto_describe_sticker(sticker_id, force=True)
+        db.refresh(row)
+        _audit(db, "redescribe_sticker", "sticker", sticker_id)
+        return {"ok": True, "describe_status": row.describe_status, "description": row.description or ""}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @router.post("/stickers/{sticker_id}/preview/retry")

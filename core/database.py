@@ -272,6 +272,12 @@ class StickerMemory(Base):
     byte_size = Column(Integer, default=0)
     width = Column(Integer, default=0)
     height = Column(Integer, default=0)
+    duplicate_of_id = Column(Integer, nullable=True, index=True)
+    dedupe_status = Column(String, default="unique")
+    describe_status = Column(String, default="pending")
+    describe_attempts = Column(Integer, default=0)
+    describe_last_error = Column(Text, default="")
+    described_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
 
     __table_args__ = (
@@ -435,6 +441,11 @@ def init_db():
                 "byte_size": "INTEGER DEFAULT 0",
                 "width": "INTEGER DEFAULT 0",
                 "height": "INTEGER DEFAULT 0",
+                "duplicate_of_id": "INTEGER",
+                "dedupe_status": "TEXT DEFAULT 'unique'",
+                "describe_status": "TEXT DEFAULT 'pending'",
+                "describe_attempts": "INTEGER DEFAULT 0",
+                "describe_last_error": "TEXT",
                 "created_at": "TIMESTAMP",
             }
             for col_name, col_type in sticker_required_columns.items():
