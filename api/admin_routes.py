@@ -562,7 +562,8 @@ def list_prompt_fragments(_auth=Depends(verify_admin)):
 
 
 @router.put("/prompt/fragments/{name}")
-def update_prompt_fragment(name: str, body: dict, _auth=Depends(verify_admin)):
+def update_prompt_fragment(name: str, body: dict, db: Session = Depends(get_db),
+                           _auth=Depends(verify_admin)):
     import os as _os, hashlib, re, shutil
     base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     frag_dir = _os.path.join(base, "creatures", "nanobot", "prompts", "system")
@@ -572,29 +573,38 @@ def update_prompt_fragment(name: str, body: dict, _auth=Depends(verify_admin)):
     if not _os.path.exists(fpath):
         raise HTTPException(404, "Fragment not found")
     content = str(body.get("content", ""))
+    if not content.strip():
+        raise HTTPException(400, "Refuse to save empty prompt fragment")
     with open(fpath, "r", encoding="utf-8") as fh:
         old = fh.read()
     old_hash = hashlib.sha256(old.encode()).hexdigest()[:12]
-    # 备份
     backup_dir = _os.path.join(base, "data", "prompt_backups")
     _os.makedirs(backup_dir, exist_ok=True)
-    ts = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     backup_path = _os.path.join(backup_dir, f"{name}.{ts}.{old_hash}.bak")
     shutil.copy2(fpath, backup_path)
     with open(fpath, "w", encoding="utf-8") as fh:
         fh.write(content)
     new_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+    _audit(db, "update_prompt_fragment", "prompt_fragment", name, {
+        "before_hash": old_hash, "after_hash": new_hash,
+        "size_before": len(old), "size_after": len(content),
+    })
     return {"name": name, "saved": True, "before_hash": old_hash, "after_hash": new_hash}
 
 
 @router.post("/prompt/build")
-def rebuild_prompt(_auth=Depends(verify_admin)):
+def rebuild_prompt(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     import subprocess, os as _os
     base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     script = _os.path.join(base, "scripts", "build_nanobot_prompt.py")
     try:
         result = subprocess.run(["python", script], capture_output=True, text=True, cwd=base, timeout=10)
-        if result.returncode != 0:
+        ok = result.returncode == 0
+        _audit(db, "rebuild_prompt", "prompt", "nanobot", {
+            "ok": ok, "returncode": result.returncode,
+        })
+        if not ok:
             return {"ok": False, "stdout": result.stdout.strip(), "stderr": result.stderr.strip(), "returncode": result.returncode}
         return {"ok": True, "output": result.stdout.strip()}
     except Exception as e:

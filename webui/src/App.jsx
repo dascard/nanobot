@@ -570,8 +570,8 @@ function PromptPage() {
   const [toast, setToast] = useState('')
 
   const load = () => {
-    api.get('/prompt').then(r => setPrompt(r.data.content))
-    api.get('/prompt/fragments').then(r => setFrags(r.data.fragments))
+    api.get('/prompt').then(r => setPrompt(r.data.content)).catch(() => {})
+    api.get('/prompt/fragments').then(r => setFrags(r.data.fragments)).catch(() => {})
   }
   useEffect(() => { load() }, [])
 
@@ -583,8 +583,8 @@ function PromptPage() {
     setEditing(f.name)
     setEditContent(f.content)
   }
-  const closeEditor = () => {
-    if (dirty && !confirm('当前修改未保存，确认关闭？')) return
+  const closeEditor = (force = false) => {
+    if (!force && dirty && !confirm('当前修改未保存，确认关闭？')) return
     setEditing(null)
     setEditContent('')
   }
@@ -592,7 +592,8 @@ function PromptPage() {
     if (!editing || !dirty) return
     api.put(`/prompt/fragments/${encodeURIComponent(editing)}`, { content: editContent }).then(() => {
       setToast('已保存，记得重新构建 prompt.md 才能生效')
-      closeEditor()
+      setEditing(null)
+      setEditContent('')
       load()
     }).catch(e => alert(e.response?.data?.detail || '保存失败'))
   }
