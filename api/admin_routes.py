@@ -246,6 +246,49 @@ def disable_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depend
     return {"ok": True}
 
 
+@router.get("/stickers/{sticker_id}/preview")
+def preview_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    import os as _os, hashlib
+    from fastapi.responses import FileResponse
+
+    row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
+    if not row:
+        raise HTTPException(404, "Not found")
+
+    # 优先本地缓存
+    if row.local_path and _os.path.exists(row.local_path):
+        return FileResponse(row.local_path, media_type="image/webp")
+
+    # 尝试下载远程图片
+    ref = (row.file_ref or "").strip()
+    if not ref:
+        raise HTTPException(404, "No file reference")
+
+    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    cache_dir = _os.path.join(base, "data", "stickers")
+    _os.makedirs(cache_dir, exist_ok=True)
+    fname = hashlib.sha256(ref.encode()).hexdigest()[:16] + ".webp"
+    local = _os.path.join(cache_dir, fname)
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(ref, headers={"User-Agent": "Nanobot/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read()
+        with open(local, "wb") as f:
+            f.write(data)
+        row.local_path = local
+        row.preview_status = "ok"
+        db.commit()
+        return FileResponse(local, media_type="image/webp")
+    except Exception as e:
+        row.preview_status = "blocked"
+        db.commit()
+        # fallback: proxy remote URL
+        from starlette.responses import RedirectResponse
+        return RedirectResponse(url=ref)
+
+
 @router.delete("/stickers/{sticker_id}")
 def delete_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()

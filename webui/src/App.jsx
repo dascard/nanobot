@@ -202,8 +202,8 @@ function StickersPage() {
               <tr key={s.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
                 <td className="py-1.5 px-2">
                   <div className="w-10 h-10 rounded-lg bg-slate-800 overflow-hidden cursor-pointer hover:ring-2 ring-emerald-500/50 transition-all"
-                    onClick={() => setPreview(s.file_ref)}>
-                    <img src={s.file_ref} alt={s.name} className="w-full h-full object-cover" loading="lazy"
+                    onClick={() => setPreview(`/api/v1/admin/stickers/${s.id}/preview`)}>
+                    <img src={`/api/v1/admin/stickers/${s.id}/preview`} alt={s.name} className="w-full h-full object-cover" loading="lazy"
                       onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
                     <div className="hidden w-full h-full items-center justify-center text-slate-600 text-xs">img</div>
                   </div>

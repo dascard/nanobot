@@ -266,6 +266,8 @@ class StickerMemory(Base):
     last_seen = Column(DateTime, default=datetime.now)
     last_used = Column(DateTime, nullable=True)
     meta_json = Column(Text, default="{}")
+    local_path = Column(Text, default="")
+    preview_status = Column(String, default="pending")
     created_at = Column(DateTime, default=datetime.now)
 
     __table_args__ = (
