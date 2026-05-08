@@ -295,6 +295,25 @@ def retry_preview(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(
     }
 
 
+@router.post("/stickers/batch-delete")
+def batch_delete_stickers(body: dict, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    ids = body.get("ids", [])
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(400, "ids required")
+    count = 0
+    for sid in ids:
+        try:
+            row = db.query(StickerMemory).filter(StickerMemory.id == int(sid)).first()
+            if row:
+                row.status = "deleted"
+                count += 1
+        except (ValueError, TypeError):
+            continue
+    db.commit()
+    _audit(db, "batch_delete_stickers", "sticker", f"batch_{len(ids)}", {"count": count})
+    return {"ok": True, "deleted": count}
+
+
 @router.delete("/stickers/{sticker_id}")
 def delete_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
@@ -573,6 +592,41 @@ def download_backup(_auth=Depends(verify_admin)):
     if not _os.path.exists(db_path):
         raise HTTPException(404, "Database file not found")
     return FileResponse(db_path, media_type="application/octet-stream", filename="nanobot.db")
+
+
+# ═══════════════════════════════════════════
+# Log viewer
+# ═══════════════════════════════════════════
+
+@router.get("/logs")
+def list_log_files(_auth=Depends(verify_admin)):
+    import os as _os, glob
+    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    log_dir = _os.path.join(base, "data")
+    files = []
+    patterns = ["*.log", "*.log.*", "nanobot.log*"]
+    for pat in patterns:
+        for p in glob.glob(_os.path.join(log_dir, pat)):
+            fname = _os.path.basename(p)
+            if fname not in [f["name"] for f in files]:
+                size = _os.path.getsize(p)
+                files.append({"name": fname, "size": size, "mtime": _os.path.getmtime(p)})
+    files.sort(key=lambda x: -x["mtime"])
+    return {"files": files}
+
+
+@router.get("/logs/{name}")
+def read_log(name: str, lines: int = 200, _auth=Depends(verify_admin)):
+    import os as _os
+    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    log_dir = _os.path.abspath(_os.path.join(base, "data"))
+    fpath = _os.path.join(log_dir, _os.path.basename(name))
+    if not fpath.startswith(log_dir + _os.sep) or not _os.path.exists(fpath):
+        raise HTTPException(404, "Log not found")
+    with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+        all_lines = fh.readlines()
+    tail = all_lines[-max(1, min(lines, 2000)):]
+    return {"name": name, "lines": len(tail), "content": "".join(tail)}
 
 
 # ═══════════════════════════════════════════
