@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from datetime import datetime
 from hmac import compare_digest
 from typing import Optional
@@ -631,16 +632,15 @@ def _is_allowed_log_name(name: str) -> bool:
 
 @router.get("/logs/{name}")
 def read_log(name: str, lines: int = 200, _auth=Depends(verify_admin)):
-    import os as _os
     from collections import deque
 
-    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    log_dir = _os.path.abspath(_os.path.join(base, "data"))
-    fname = _os.path.basename(name)
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    log_dir = os.path.abspath(os.path.join(base, "data"))
+    fname = os.path.basename(name)
     if not _is_allowed_log_name(fname):
         raise HTTPException(400, "Invalid log file name")
-    fpath = _os.path.abspath(_os.path.join(log_dir, fname))
-    if not fpath.startswith(log_dir + _os.sep) or not _os.path.isfile(fpath):
+    fpath = os.path.abspath(os.path.join(log_dir, fname))
+    if not fpath.startswith(log_dir + os.sep) or not os.path.isfile(fpath):
         raise HTTPException(404, "Log not found")
     max_lines = max(1, min(int(lines), 2000))
     with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
