@@ -457,6 +457,10 @@ def auto_describe_sticker(sticker_id: int, *, force: bool = False) -> None:
                 return
         ref = (row.local_path or row.file_ref or "").strip()
         if not ref:
+            row.describe_status = "failed"
+            row.describe_attempts = (row.describe_attempts or 0) + 1
+            row.describe_last_error = "no image reference"
+            db.commit()
             return
         try:
             payload = describe_sticker_with_qwen(ref)
