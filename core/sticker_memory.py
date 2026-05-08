@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import json
 import logging
+import mimetypes
 import re
 from datetime import datetime
 from typing import Any
@@ -452,6 +454,34 @@ def describe_sticker_with_qwen(file_ref: str) -> dict[str, Any]:
     }
 
 
+def _sticker_image_ref_for_describe(row: StickerMemory) -> str:
+    """为表情包打标准备图片引用。
+
+    优先使用已缓存的本地文件，但不直接把路径传给 image_summary
+    ——image_pipeline 默认禁止读取本地文件，这里转为 data URL。
+    """
+    local = str(row.local_path or "").strip()
+    if local:
+        try:
+            from core.sticker_preview import safe_existing_local_path
+
+            safe = safe_existing_local_path(local)
+            if safe:
+                mime = mimetypes.guess_type(safe)[0] or "image/png"
+                with open(safe, "rb") as f:
+                    raw = f.read()
+                b64 = base64.b64encode(raw).decode("ascii")
+                return f"data:{mime};base64,{b64}"
+        except Exception as e:
+            logger.warning(
+                "[StickerMemory] build local data-url failed id=%s: %s",
+                getattr(row, "id", "?"),
+                e,
+            )
+
+    return str(row.file_ref or "").strip()
+
+
 def auto_describe_sticker(sticker_id: int, *, force: bool = False) -> None:
     if not force and not STICKER_AUTO_DESCRIBE_ENABLED:
         return
@@ -469,7 +499,7 @@ def auto_describe_sticker(sticker_id: int, *, force: bool = False) -> None:
                 return
             if row.describe_status == "disabled":
                 return
-        ref = (row.local_path or row.file_ref or "").strip()
+        ref = _sticker_image_ref_for_describe(row)
         if not ref:
             row.describe_status = "failed"
             row.describe_attempts = (row.describe_attempts or 0) + 1
