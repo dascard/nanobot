@@ -143,7 +143,8 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
             ct = (e.headers or {}).get("Content-Type", "")
             data = e.read() or b""
             body_preview = data[:500].decode("utf-8", errors="ignore")
-            if "download url has expired" in body_preview or "retmsg" in body_preview:
+            lower = body_preview.lower()
+            if "download url has expired" in lower or "-5503007" in body_preview:
                 row.preview_status = "expired"; db.commit()
                 return StickerPreviewCacheResult(ok=False, status="expired", error=body_preview[:200])
             row.preview_status = "fetch_failed"; db.commit()
@@ -152,7 +153,8 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
 
         if not ct.lower().startswith("image/"):
             body_preview = data[:500].decode("utf-8", errors="ignore")
-            if "download url has expired" in body_preview or "retmsg" in body_preview:
+            lower = body_preview.lower()
+            if "download url has expired" in lower or "-5503007" in body_preview:
                 row.preview_status = "expired"; db.commit()
                 return StickerPreviewCacheResult(ok=False, status="expired", error=body_preview[:200])
             row.preview_status = "invalid_image"; db.commit()
