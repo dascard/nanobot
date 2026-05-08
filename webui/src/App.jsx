@@ -541,23 +541,74 @@ function DbPage() {
 function PromptPage() {
   const [prompt, setPrompt] = useState('')
   const [frags, setFrags] = useState([])
-  useEffect(() => {
+  const [editing, setEditing] = useState(null)
+  const [building, setBuilding] = useState(false)
+
+  const load = () => {
     api.get('/prompt').then(r => setPrompt(r.data.content))
     api.get('/prompt/fragments').then(r => setFrags(r.data.fragments))
-  }, [])
+  }
+  useEffect(() => { load() }, [])
+
+  const saveFragment = (name, content) => {
+    api.put(`/prompt/fragments/${encodeURIComponent(name)}`, { content }).then(() => {
+      setEditing(null)
+      load()
+    })
+  }
+
+  const rebuild = () => {
+    setBuilding(true)
+    api.post('/prompt/build').then(r => {
+      alert(r.data.ok ? '构建成功: ' + r.data.output : '构建失败: ' + r.data.error)
+      if (r.data.ok) load()
+    }).finally(() => setBuilding(false))
+  }
+
   return (
     <div>
-      <div className="mb-4"><h1 className="text-2xl font-bold">提示词</h1><p className="text-slate-500 text-sm">只读查看</p></div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h1 className="text-2xl font-bold">提示词</h1>
+          <p className="text-slate-500 text-sm">{frags.length} 个片段 · 可编辑</p>
+        </div>
+        <button onClick={rebuild} disabled={building}
+          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium transition-colors">
+          {building ? '构建中...' : '重新构建 prompt.md'}
+        </button>
+      </div>
       <div className="flex gap-4">
         <div className="flex-1">
-          <Card className="p-4"><pre className="text-xs leading-relaxed whitespace-pre-wrap max-h-screen overflow-auto text-slate-300">{prompt}</pre></Card>
+          <Card className="p-4">
+            <div className="text-xs text-slate-500 mb-2">完整 prompt.md（构建产物）</div>
+            <pre className="text-xs leading-relaxed whitespace-pre-wrap max-h-screen overflow-auto text-slate-300">{prompt}</pre>
+          </Card>
         </div>
-        <div className="w-64 space-y-2">
+        <div className="w-72 space-y-2">
+          <div className="text-xs text-slate-500 mb-1 px-1">可编辑片段（保存后需重建生效）</div>
           {frags.map(f => (
-            <details key={f.name} className="bg-slate-900/60 border border-slate-800 rounded-xl">
-              <summary className="p-3 text-sm cursor-pointer text-emerald-400 font-medium hover:text-emerald-300 transition-colors">{f.name}</summary>
-              <pre className="p-3 text-xs whitespace-pre-wrap border-t border-slate-800 text-slate-400">{f.content}</pre>
-            </details>
+            <div key={f.name} className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
+              <div className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-800/50 transition-colors"
+                onClick={() => setEditing(editing === f.name ? null : f.name)}>
+                <span className="text-sm text-emerald-400 font-medium">{f.name}</span>
+                <span className="text-xs text-slate-600">{editing === f.name ? '收起' : '编辑'}</span>
+              </div>
+              {editing === f.name ? (
+                <div className="p-3 border-t border-slate-800">
+                  <textarea value={f.content}
+                    onChange={e => setFrags(frags.map(x => x.name === f.name ? { ...x, content: e.target.value } : x))}
+                    rows={8} className="w-full p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-300 font-mono resize-y" />
+                  <div className="flex gap-2 mt-2">
+                    <button onClick={() => saveFragment(f.name, f.content)}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium">保存</button>
+                    <button onClick={() => setEditing(null)}
+                      className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">取消</button>
+                  </div>
+                </div>
+              ) : (
+                <pre className="p-3 text-xs whitespace-pre-wrap border-t border-slate-800 text-slate-400 max-h-32 overflow-hidden">{f.content}</pre>
+              )}
+            </div>
           ))}
         </div>
       </div>

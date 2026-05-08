@@ -442,6 +442,34 @@ def list_prompt_fragments(_auth=Depends(verify_admin)):
     return {"fragments": items}
 
 
+@router.put("/prompt/fragments/{name}")
+def update_prompt_fragment(name: str, body: dict, _auth=Depends(verify_admin)):
+    import os as _os
+    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    frag_dir = _os.path.join(base, "creatures", "nanobot", "prompts", "system")
+    if ".." in name or "/" in name:
+        raise HTTPException(400, "Invalid fragment name")
+    fpath = _os.path.join(frag_dir, name)
+    if not _os.path.exists(fpath):
+        raise HTTPException(404, "Fragment not found")
+    content = str(body.get("content", ""))
+    with open(fpath, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    return {"name": name, "saved": True}
+
+
+@router.post("/prompt/build")
+def rebuild_prompt(_auth=Depends(verify_admin)):
+    import subprocess, os as _os
+    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    script = _os.path.join(base, "scripts", "build_nanobot_prompt.py")
+    try:
+        result = subprocess.run(["python", script], capture_output=True, text=True, cwd=base, timeout=10)
+        return {"ok": True, "output": result.stdout.strip()}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ═══════════════════════════════════════════
 # Audit logs + DB backup
 # ═══════════════════════════════════════════
