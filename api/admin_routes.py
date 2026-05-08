@@ -51,6 +51,8 @@ def admin_me(_auth=Depends(verify_admin)):
 
 # ── Models ──
 
+from typing import Literal
+
 class StickerCreate(BaseModel):
     group_id: str = ""
     chat_stream_id: str = ""
@@ -61,7 +63,7 @@ class StickerCreate(BaseModel):
     description: str = ""
     tags: list[str] = []
     emotions: list[str] = []
-    status: str = "active"
+    status: Literal["active", "disabled"] = "active"
 
 
 class StickerUpdate(BaseModel):
@@ -69,7 +71,7 @@ class StickerUpdate(BaseModel):
     description: Optional[str] = None
     tags: Optional[list[str]] = None
     emotions: Optional[list[str]] = None
-    status: Optional[str] = None
+    status: Optional[Literal["active", "disabled", "deleted"]] = None
 
 
 class BlockRuleCreate(BaseModel):
@@ -170,7 +172,12 @@ def create_sticker(body: StickerCreate, db: Session = Depends(get_db), _auth=Dep
         )
     except Exception as e:
         raise HTTPException(400, str(e))
-    _audit(db, "create_sticker", "sticker", sticker.get("id"), {"name": body.name})
+    _audit(db, "create_sticker", "sticker", sticker.get("id"), {
+        "name": body.name, "status": body.status,
+        "stream_id": body.chat_stream_id or body.group_id,
+        "description": body.description[:80] if body.description else "",
+        "tags": body.tags[:5],
+    })
     return sticker
 
 

@@ -1391,7 +1391,8 @@ async def proxy_chat(
         logger.info("[/chat] blocked user=%s", req.user_id)
         db.add(ChatLog(
             user_id=req.user_id, session_id=req.session_id,
-            role="user", content=req.query or "",
+            role="user",
+            content=_build_chatlog_user_content(req.query, req.files),
             sender_name=req.sender_name or "",
             session_name=req.session_name or "",
             processed=1, message_id=req.message_id or "",

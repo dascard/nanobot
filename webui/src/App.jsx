@@ -109,6 +109,7 @@ function StickersPage() {
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [edit, setEdit] = useState(null)
+  const [showCreate, setShowCreate] = useState(false)
 
   const load = useCallback(() => {
     api.get('/stickers', { params: { search, page, limit: 20 } }).then(r => setData(r.data))
@@ -123,6 +124,7 @@ function StickersPage() {
         <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索..."
           className="p-2 rounded bg-gray-700 border border-gray-600 flex-1" />
         <button onClick={() => { setPage(1); load() }} className="px-4 py-2 bg-blue-600 rounded">搜索</button>
+        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-green-600 rounded">新建</button>
       </div>
       <table className="w-full text-sm">
         <thead><tr className="text-left text-gray-400"><th>ID</th><th>Name</th><th>Desc</th><th>Status</th><th>Usage</th><th>Actions</th></tr></thead>
@@ -147,8 +149,38 @@ function StickersPage() {
         </tbody>
       </table>
       <Pagination page={page} total={data.total} limit={20} onChange={setPage} />
+      {showCreate && <StickerCreateModal onClose={() => setShowCreate(false)} onCreated={load} />}
       {edit && <StickerEditModal sticker={edit} onClose={() => setEdit(null)} onSaved={load} />}
     </div>
+  )
+}
+
+function StickerCreateModal({ onClose, onCreated }) {
+  const [f, setF] = useState({ file_ref: '', name: '', description: '', group_id: '', status: 'active', tags: '', emotions: '' })
+  return (
+    <Modal onClose={onClose}>
+      <h2 className="text-lg font-bold mb-4">新建 Sticker</h2>
+      <input value={f.file_ref} onChange={e => setF({ ...f, file_ref: e.target.value })} placeholder="file_ref (URL/CQ码)" className="w-full p-2 rounded bg-gray-700 mb-2" />
+      <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Name" className="w-full p-2 rounded bg-gray-700 mb-2" />
+      <textarea value={f.description} onChange={e => setF({ ...f, description: e.target.value })} placeholder="Description" className="w-full p-2 rounded bg-gray-700 mb-2" rows={2} />
+      <input value={f.group_id} onChange={e => setF({ ...f, group_id: e.target.value })} placeholder="Group ID (留空=全局)" className="w-full p-2 rounded bg-gray-700 mb-2" />
+      <select value={f.status} onChange={e => setF({ ...f, status: e.target.value })} className="w-full p-2 rounded bg-gray-700 mb-2">
+        <option value="active">Active</option><option value="disabled">Disabled</option>
+      </select>
+      <input value={f.tags} onChange={e => setF({ ...f, tags: e.target.value })} placeholder="Tags (逗号分隔)" className="w-full p-2 rounded bg-gray-700 mb-2" />
+      <input value={f.emotions} onChange={e => setF({ ...f, emotions: e.target.value })} placeholder="Emotions (逗号分隔)" className="w-full p-2 rounded bg-gray-700 mb-4" />
+      <div className="flex gap-2 justify-end">
+        <button onClick={onClose} className="px-4 py-2 bg-gray-600 rounded">取消</button>
+        <button onClick={() => {
+          api.post('/stickers', {
+            file_ref: f.file_ref, name: f.name, description: f.description,
+            group_id: f.group_id, status: f.status,
+            tags: f.tags.split(',').map(s => s.trim()).filter(Boolean),
+            emotions: f.emotions.split(',').map(s => s.trim()).filter(Boolean),
+          }).then(() => { onCreated(); onClose() }).catch(e => alert(e.response?.data?.detail || '创建失败'))
+        }} className="px-4 py-2 bg-blue-600 rounded">创建</button>
+      </div>
+    </Modal>
   )
 }
 
