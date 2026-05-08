@@ -260,7 +260,7 @@ function StickersPage() {
       {edit && <StickerEditModal sticker={edit} onClose={() => setEdit(null)} onSaved={load} />}
       {preview && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 cursor-pointer" onClick={() => setPreview(null)}>
-          <img src={preview} className="max-h-[80vh] max-w-[80vw] rounded-xl shadow-2xl" alt="preview" />
+          <AuthImage url={preview} alt="preview" className="max-h-[80vh] max-w-[80vw] object-contain rounded-xl shadow-2xl" />
         </div>
       )}
     </div>
@@ -312,10 +312,8 @@ function StickerEditModal({ sticker, onClose, onSaved }) {
       <div className="p-6">
         <h2 className="text-lg font-bold mb-1">编辑 #{sticker.id}</h2>
         <p className="text-xs text-slate-500 mb-4">{sticker.file_ref?.substring(0, 80)}</p>
-        {sticker.file_ref && (
-          <img src={sticker.file_ref} className="w-full h-32 object-contain rounded-lg mb-4 border border-slate-700 bg-slate-950" alt="preview"
-            onError={e => e.target.style.display = 'none'} />
-        )}
+        <AuthImage url={`/api/v1/admin/stickers/${sticker.id}/preview`} alt="preview"
+          className="w-full h-32 object-contain rounded-lg mb-4 border border-slate-700 bg-slate-950" />
         <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="名称" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm" />
         <textarea value={f.description} onChange={e => setF({ ...f, description: e.target.value })} placeholder="描述" rows={2} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm" />
         <select value={f.status} onChange={e => setF({ ...f, status: e.target.value })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm">

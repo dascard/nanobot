@@ -278,18 +278,19 @@ def preview_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depend
     if not ref:
         raise HTTPException(404, "No file reference")
 
-    # SSRF: 只允许 http/https
+    # SSRF: 只允许 http/https + 封禁私有/内网 IP
     u = urlparse(ref)
     if u.scheme not in {"http", "https"}:
         row.preview_status = "blocked"; db.commit()
         raise HTTPException(400, "unsupported URL scheme")
-    try:
-        addr = ipaddress.ip_address(u.hostname)
-        if addr.is_private or addr.is_loopback or addr.is_link_local:
-            row.preview_status = "blocked"; db.commit()
-            raise HTTPException(400, "private IP blocked")
-    except Exception:
-        pass
+    hostname = u.hostname
+    if not hostname:
+        row.preview_status = "blocked"; db.commit()
+        raise HTTPException(400, "missing hostname")
+    # 检查 hostname 字面量/IP + DNS 解析结果
+    if _is_blocked_host(hostname):
+        row.preview_status = "blocked"; db.commit()
+        raise HTTPException(400, "private/reserved IP blocked")
 
     _os.makedirs(cache_dir, exist_ok=True)
 
@@ -302,6 +303,13 @@ def preview_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depend
             data = resp.read()
             if len(data) < 512:
                 raise ValueError("image too small")
+            # Pillow 验证是否为合法图片
+            try:
+                from PIL import Image
+                import io as _io
+                Image.open(_io.BytesIO(data)).verify()
+            except Exception:
+                raise ValueError("invalid image bytes")
 
         ext_map = {"image/png":".png","image/jpeg":".jpg","image/gif":".gif","image/webp":".webp"}
         ext = ext_map.get(ct.split(";")[0].lower(), ".img")
@@ -318,6 +326,42 @@ def preview_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depend
         row.preview_status = "blocked"
         db.commit()
         raise HTTPException(404, f"preview unavailable: {e}")
+
+
+def _is_blocked_host(hostname: str) -> bool:
+    import ipaddress, socket
+    # 直接 IP 检查
+    try:
+        addr = ipaddress.ip_address(hostname)
+        return bool(addr.is_private or addr.is_loopback or addr.is_link_local
+                    or addr.is_reserved or addr.is_multicast or addr.is_unspecified)
+    except ValueError:
+        pass
+    # DNS 解析检查
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except socket.gaierror:
+        return True
+    for info in infos:
+        ip = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip)
+            if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+@router.post("/stickers/{sticker_id}/preview/retry")
+def retry_preview(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
+    if not row:
+        raise HTTPException(404, "Not found")
+    row.preview_status = "pending"
+    row.local_path = ""
+    db.commit()
+    return {"ok": True, "sticker_id": sticker_id}
 
 
 @router.delete("/stickers/{sticker_id}")
