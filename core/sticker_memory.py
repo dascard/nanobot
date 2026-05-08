@@ -439,7 +439,7 @@ def describe_sticker_with_qwen(file_ref: str) -> dict[str, Any]:
 
 
 def auto_describe_sticker(sticker_id: int, *, force: bool = False) -> None:
-    if not STICKER_AUTO_DESCRIBE_ENABLED:
+    if not force and not STICKER_AUTO_DESCRIBE_ENABLED:
         return
     db = SessionLocal()
     try:

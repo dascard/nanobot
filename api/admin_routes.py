@@ -131,6 +131,10 @@ def _sticker_dict(r: StickerMemory) -> dict:
         "height": r.height or 0,
         "duplicate_of_id": r.duplicate_of_id,
         "dedupe_status": r.dedupe_status or "unique",
+        "describe_status": r.describe_status or "pending",
+        "describe_attempts": r.describe_attempts or 0,
+        "describe_last_error": r.describe_last_error or "",
+        "described_at": str(r.described_at) if r.described_at else "",
     }
 
 
@@ -288,8 +292,10 @@ def redescribe_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Dep
     try:
         auto_describe_sticker(sticker_id, force=True)
         db.refresh(row)
+        ok = row.describe_status == "ok"
         _audit(db, "redescribe_sticker", "sticker", sticker_id)
-        return {"ok": True, "describe_status": row.describe_status, "description": row.description or ""}
+        return {"ok": ok, "describe_status": row.describe_status, "description": row.description or "",
+                "error": row.describe_last_error if not ok else ""}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 

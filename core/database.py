@@ -446,6 +446,7 @@ def init_db():
                 "describe_status": "TEXT DEFAULT 'pending'",
                 "describe_attempts": "INTEGER DEFAULT 0",
                 "describe_last_error": "TEXT",
+                "described_at": "TIMESTAMP",
                 "created_at": "TIMESTAMP",
             }
             for col_name, col_type in sticker_required_columns.items():
