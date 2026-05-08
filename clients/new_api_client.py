@@ -552,15 +552,17 @@ class NewAPIClient:
         last_error: Optional[str] = None
         tracker = self._safe_get_failure_tracker()
 
-        # Iterate candidates in priority order. Each model gets 1 retry (2 attempts max).
-        # 429 → switch immediately; 502/503/504 → retry once then switch.
+        # Iterate candidates in priority order, with configurable retry per model.
+        # 429 → switch immediately; 502/503/504 → retry then switch.
+        from core.settings_service import settings
+        _attempts = max(1, settings.get_int("new_api.max_retries", 3))
         for i, model in enumerate(candidates):
             target_model = str(model.get("id", ""))
             if i == 0:
                 logger.info(f"chat_completion: {target_model} "
                             f"(complexity={complexity}, intel={model.get('intelligence')})")
 
-            for attempt in range(2):  # max 2 per model
+            for attempt in range(_attempts):  # per-model retry from settings
                 payload = self._build_payload(messages, tools, temperature, False, target_model, max_tokens=max_tokens)
                 async with aiohttp.ClientSession() as session:
                     try:
