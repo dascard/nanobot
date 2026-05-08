@@ -122,6 +122,8 @@ def _sticker_dict(r: StickerMemory) -> dict:
         "first_seen": str(r.first_seen) if r.first_seen else "",
         "last_seen": str(r.last_seen) if r.last_seen else "",
         "last_used": str(r.last_used) if r.last_used else "",
+        "local_path": r.local_path or "",
+        "preview_status": r.preview_status or "pending",
     }
 
 
@@ -248,45 +250,74 @@ def disable_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depend
 
 @router.get("/stickers/{sticker_id}/preview")
 def preview_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    import os as _os, hashlib
+    import os as _os, hashlib, urllib.request, ipaddress
+    from urllib.parse import urlparse
     from fastapi.responses import FileResponse
 
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
 
-    # 优先本地缓存
-    if row.local_path and _os.path.exists(row.local_path):
-        return FileResponse(row.local_path, media_type="image/webp")
+    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    cache_dir = _os.path.abspath(_os.path.join(base, "data", "stickers"))
 
-    # 尝试下载远程图片
+    # 已有本地缓存 + 路径在 cache_dir 内
+    if row.local_path and _os.path.exists(row.local_path):
+        local_abs = _os.path.abspath(row.local_path)
+        if local_abs.startswith(cache_dir + _os.sep):
+            ext = _os.path.splitext(local_abs)[1].lower()
+            media = {".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",
+                     ".gif":"image/gif",".webp":"image/webp"}.get(ext, "image/webp")
+            return FileResponse(local_abs, media_type=media)
+
+    # 已确认被屏蔽，不再重试
+    if row.preview_status == "blocked":
+        raise HTTPException(404, "preview blocked")
+
     ref = (row.file_ref or "").strip()
     if not ref:
         raise HTTPException(404, "No file reference")
 
-    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    cache_dir = _os.path.join(base, "data", "stickers")
+    # SSRF: 只允许 http/https
+    u = urlparse(ref)
+    if u.scheme not in {"http", "https"}:
+        row.preview_status = "blocked"; db.commit()
+        raise HTTPException(400, "unsupported URL scheme")
+    try:
+        addr = ipaddress.ip_address(u.hostname)
+        if addr.is_private or addr.is_loopback or addr.is_link_local:
+            row.preview_status = "blocked"; db.commit()
+            raise HTTPException(400, "private IP blocked")
+    except Exception:
+        pass
+
     _os.makedirs(cache_dir, exist_ok=True)
-    fname = hashlib.sha256(ref.encode()).hexdigest()[:16] + ".webp"
-    local = _os.path.join(cache_dir, fname)
 
     try:
-        import urllib.request
         req = urllib.request.Request(ref, headers={"User-Agent": "Nanobot/1.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
+            ct = resp.headers.get("Content-Type", "")
+            if not ct.lower().startswith("image/"):
+                raise ValueError("not an image")
             data = resp.read()
+            if len(data) < 512:
+                raise ValueError("image too small")
+
+        ext_map = {"image/png":".png","image/jpeg":".jpg","image/gif":".gif","image/webp":".webp"}
+        ext = ext_map.get(ct.split(";")[0].lower(), ".img")
+        fname = hashlib.sha256(ref.encode()).hexdigest()[:16] + ext
+        local = _os.path.join(cache_dir, fname)
+
         with open(local, "wb") as f:
             f.write(data)
         row.local_path = local
         row.preview_status = "ok"
         db.commit()
-        return FileResponse(local, media_type="image/webp")
+        return FileResponse(local, media_type=ct.split(";")[0])
     except Exception as e:
         row.preview_status = "blocked"
         db.commit()
-        # fallback: proxy remote URL
-        from starlette.responses import RedirectResponse
-        return RedirectResponse(url=ref)
+        raise HTTPException(404, f"preview unavailable: {e}")
 
 
 @router.delete("/stickers/{sticker_id}")

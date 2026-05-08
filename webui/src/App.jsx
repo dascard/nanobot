@@ -118,6 +118,26 @@ function Spinner() {
   return <div className="flex items-center justify-center py-20"><div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" /></div>
 }
 
+function AuthImage({ url, alt, className, onClick }) {
+  const [src, setSrc] = useState('')
+  const [failed, setFailed] = useState(false)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let objUrl = ''
+    const path = url.replace('/api/v1/admin', '')
+    api.get(path, { responseType: 'blob' })
+      .then(r => { objUrl = URL.createObjectURL(r.data); setSrc(objUrl) })
+      .catch(() => setFailed(true))
+      .finally(() => setLoading(false))
+    return () => { if (objUrl) URL.revokeObjectURL(objUrl) }
+  }, [url])
+
+  if (loading) return <div className={`flex items-center justify-center bg-slate-800 ${className}`}>...</div>
+  if (failed) return <div className={`flex items-center justify-center bg-slate-800 text-slate-600 text-xs ${className}`}>img</div>
+  return <img src={src} alt={alt} className={className} loading="lazy" onClick={onClick} />
+}
+
 // ── Dashboard ──
 function Dashboard() {
   const [stats, setStats] = useState({})
@@ -203,9 +223,7 @@ function StickersPage() {
                 <td className="py-1.5 px-2">
                   <div className="w-10 h-10 rounded-lg bg-slate-800 overflow-hidden cursor-pointer hover:ring-2 ring-emerald-500/50 transition-all"
                     onClick={() => setPreview(`/api/v1/admin/stickers/${s.id}/preview`)}>
-                    <img src={`/api/v1/admin/stickers/${s.id}/preview`} alt={s.name} className="w-full h-full object-cover" loading="lazy"
-                      onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex' }} />
-                    <div className="hidden w-full h-full items-center justify-center text-slate-600 text-xs">img</div>
+                    <AuthImage url={`/api/v1/admin/stickers/${s.id}/preview`} alt={s.name} className="w-full h-full object-cover" />
                   </div>
                 </td>
                 <td className="py-1.5 px-2 truncate max-w-[120px]">{s.name || '-'}</td>

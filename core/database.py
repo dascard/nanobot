@@ -425,6 +425,8 @@ def init_db():
                 "last_seen": "TIMESTAMP",
                 "last_used": "TIMESTAMP",
                 "meta_json": "TEXT",
+                "local_path": "TEXT",
+                "preview_status": "TEXT DEFAULT 'pending'",
                 "created_at": "TIMESTAMP",
             }
             for col_name, col_type in sticker_required_columns.items():
