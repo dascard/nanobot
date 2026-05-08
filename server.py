@@ -46,8 +46,9 @@ def _startup_network_check(logger):
         logger.info("[startup] server version=unknown")
 
     # 打印 Admin WebUI Token
-    from config import NANOBOT_ADMIN_TOKEN
+    from config import NANOBOT_API_TOKEN, NANOBOT_ADMIN_TOKEN
     logger.info("[startup] ========================================")
+    logger.info("[startup] Push API auth: %s", "enabled" if NANOBOT_API_TOKEN else "disabled")
     logger.info("[startup] Admin WebUI Token: %s", NANOBOT_ADMIN_TOKEN)
     logger.info("[startup] 访问 http://host:8000 并输入此 Token 登录")
     logger.info("[startup] ========================================")
