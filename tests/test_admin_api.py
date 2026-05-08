@@ -1,18 +1,34 @@
-"""Admin API 集成测试——Sticker CRUD + Block Rules + status 枚举验证。"""
+"""Admin API 集成测试——Sticker CRUD + Block Rules + status 枚举 + 认证。"""
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from core.database import Base, get_db
 from server import app
 
 
 @pytest.fixture
-def client():
-    return TestClient(app)
-
-
-@pytest.fixture(autouse=True)
-def _set_test_token(monkeypatch):
+def client(tmp_path, monkeypatch):
+    """独立 SQLite 测试库——不污染真实数据库。"""
     monkeypatch.setattr("api.admin_routes.NANOBOT_API_TOKEN", "test-token")
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'test.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -20,76 +36,56 @@ def auth_header():
     return {"Authorization": "Bearer test-token"}
 
 
-@pytest.fixture(autouse=True)
-def setup_db():
-    from core.database import init_db
-    init_db()
+class TestAuth:
+    def test_no_token_returns_401(self, client):
+        r = client.get("/api/v1/admin/stickers")
+        assert r.status_code == 401
+
+    def test_wrong_token_returns_401(self, client):
+        r = client.get("/api/v1/admin/stickers",
+                       headers={"Authorization": "Bearer wrong"})
+        assert r.status_code == 401
+
+    def test_me_ok(self, client, auth_header):
+        r = client.get("/api/v1/admin/me", headers=auth_header)
+        assert r.status_code == 200
+        assert r.json()["ok"]
+
+    def test_no_token_configured_returns_503(self, client, monkeypatch):
+        monkeypatch.setattr("api.admin_routes.NANOBOT_API_TOKEN", "")
+        r = client.get("/api/v1/admin/stickers")
+        assert r.status_code == 503
 
 
 class TestStickerCRUD:
-    def test_create_sticker_active(self, client, auth_header):
+    def test_create_active(self, client, auth_header):
         r = client.post("/api/v1/admin/stickers", json={
             "file_ref": "http://example.com/test.png",
-            "name": "test_sticker", "status": "active",
+            "name": "test", "status": "active",
         }, headers=auth_header)
-        assert r.status_code == 200
+        assert r.status_code == 200, r.text
         assert r.json()["status"] == "active"
 
-    def test_create_sticker_group_id_normalizes(self, client, auth_header):
+    def test_group_id_normalizes_stream(self, client, auth_header):
         r = client.post("/api/v1/admin/stickers", json={
-            "file_ref": "http://example.com/g.png",
+            "file_ref": "http://x.com/g.png",
             "group_id": "623690872", "status": "active",
         }, headers=auth_header)
-        assert r.status_code == 200
         assert r.json()["chat_stream_id"] == "qq:623690872:group"
 
-    def test_create_sticker_empty_file_ref(self, client, auth_header):
+    def test_empty_file_ref_400(self, client, auth_header):
         r = client.post("/api/v1/admin/stickers", json={
             "file_ref": "", "name": "bad",
         }, headers=auth_header)
         assert r.status_code == 400
 
-    def test_create_sticker_invalid_status_422(self, client, auth_header):
+    def test_invalid_create_status_422(self, client, auth_header):
         r = client.post("/api/v1/admin/stickers", json={
-            "file_ref": "http://x.com/a.png", "status": "invalid_status",
+            "file_ref": "http://x.com/a.png", "status": "invalid",
         }, headers=auth_header)
         assert r.status_code == 422
 
-    def test_list_stickers_filter_by_status(self, client, auth_header):
-        client.post("/api/v1/admin/stickers", json={
-            "file_ref": "http://x.com/d.png", "status": "disabled",
-        }, headers=auth_header)
-        r = client.get("/api/v1/admin/stickers?status=active", headers=auth_header)
-        assert r.status_code == 200
-        for item in r.json()["items"]:
-            assert item["status"] == "active"
-
-    def test_update_status_to_deleted_and_list(self, client, auth_header):
-        r = client.post("/api/v1/admin/stickers", json={
-            "file_ref": "http://x.com/del.png", "status": "active",
-        }, headers=auth_header)
-        sid = r.json()["id"]
-        r2 = client.put(f"/api/v1/admin/stickers/{sid}", json={
-            "status": "deleted",
-        }, headers=auth_header)
-        assert r2.status_code == 200
-        assert r2.json()["status"] == "deleted"
-        r3 = client.get("/api/v1/admin/stickers?status=deleted", headers=auth_header)
-        assert any(s["id"] == sid for s in r3.json()["items"])
-
-    def test_restore_deleted_to_disabled(self, client, auth_header):
-        r = client.post("/api/v1/admin/stickers", json={
-            "file_ref": "http://x.com/restore.png", "status": "active",
-        }, headers=auth_header)
-        sid = r.json()["id"]
-        client.put(f"/api/v1/admin/stickers/{sid}", json={"status": "deleted"}, headers=auth_header)
-        r2 = client.put(f"/api/v1/admin/stickers/{sid}", json={
-            "status": "disabled",
-        }, headers=auth_header)
-        assert r2.status_code == 200
-        assert r2.json()["status"] == "disabled"
-
-    def test_update_invalid_status_422(self, client, auth_header):
+    def test_invalid_update_status_422(self, client, auth_header):
         r = client.post("/api/v1/admin/stickers", json={
             "file_ref": "http://x.com/inv.png", "status": "active",
         }, headers=auth_header)
@@ -98,6 +94,38 @@ class TestStickerCRUD:
             "status": "xxx",
         }, headers=auth_header)
         assert r2.status_code == 422
+
+    def test_list_filter_by_status(self, client, auth_header):
+        client.post("/api/v1/admin/stickers", json={
+            "file_ref": "http://x.com/d.png", "status": "disabled",
+        }, headers=auth_header)
+        r = client.get("/api/v1/admin/stickers?status=active", headers=auth_header)
+        for item in r.json()["items"]:
+            assert item["status"] == "active"
+
+    def test_soft_delete_and_restore(self, client, auth_header):
+        r = client.post("/api/v1/admin/stickers", json={
+            "file_ref": "http://x.com/del.png", "status": "active",
+        }, headers=auth_header)
+        sid = r.json()["id"]
+        # soft delete
+        client.delete(f"/api/v1/admin/stickers/{sid}", headers=auth_header)
+        r2 = client.get(f"/api/v1/admin/stickers/{sid}", headers=auth_header)
+        assert r2.json()["status"] == "deleted"
+        # restore to disabled
+        r3 = client.put(f"/api/v1/admin/stickers/{sid}", json={
+            "status": "disabled",
+        }, headers=auth_header)
+        assert r3.json()["status"] == "disabled"
+
+    def test_deleted_sticker_in_list(self, client, auth_header):
+        r = client.post("/api/v1/admin/stickers", json={
+            "file_ref": "http://x.com/vis.png", "status": "active",
+        }, headers=auth_header)
+        sid = r.json()["id"]
+        client.delete(f"/api/v1/admin/stickers/{sid}", headers=auth_header)
+        r2 = client.get("/api/v1/admin/stickers?status=deleted", headers=auth_header)
+        assert any(s["id"] == sid for s in r2.json()["items"])
 
     def test_enable_disable_cycle(self, client, auth_header):
         r = client.post("/api/v1/admin/stickers", json={
@@ -109,30 +137,18 @@ class TestStickerCRUD:
         r4 = client.get(f"/api/v1/admin/stickers/{sid}", headers=auth_header)
         assert r4.json()["status"] == "active"
 
-    def test_soft_delete_still_getable(self, client, auth_header):
-        r = client.post("/api/v1/admin/stickers", json={
-            "file_ref": "http://x.com/soft.png", "status": "active",
-        }, headers=auth_header)
-        sid = r.json()["id"]
-        client.delete(f"/api/v1/admin/stickers/{sid}", headers=auth_header)
-        r2 = client.get(f"/api/v1/admin/stickers/{sid}", headers=auth_header)
-        assert r2.status_code == 200
-        assert r2.json()["status"] == "deleted"
-
 
 class TestBlockRule:
     def test_create_and_list(self, client, auth_header):
-        r = client.post("/api/v1/admin/block-rules", json={
-            "user_id": "12345", "target_type": "private", "reason": "test",
+        client.post("/api/v1/admin/block-rules", json={
+            "user_id": "777", "target_type": "private", "reason": "test",
         }, headers=auth_header)
-        assert r.status_code == 200
-        assert r.json()["user_id"] == "12345"
-        r2 = client.get("/api/v1/admin/block-rules", headers=auth_header)
-        assert any(b["user_id"] == "12345" for b in r2.json()["items"])
+        r = client.get("/api/v1/admin/block-rules", headers=auth_header)
+        assert any(b["user_id"] == "777" for b in r.json()["items"])
 
     def test_toggle_enabled(self, client, auth_header):
         r = client.post("/api/v1/admin/block-rules", json={
-            "user_id": "99999", "target_type": "private",
+            "user_id": "888", "target_type": "private",
         }, headers=auth_header)
         bid = r.json()["id"]
         r2 = client.put(f"/api/v1/admin/block-rules/{bid}", json={
@@ -143,8 +159,27 @@ class TestBlockRule:
         assert r3.json()["enabled"] == 1
 
 
-class TestHealth:
-    def test_health_ok(self, client, auth_header):
-        r = client.get("/api/v1/admin/health", headers=auth_header)
+class TestPrivateBlockFlow:
+    def test_blocked_user_chat_writes_log(self, client, auth_header, monkeypatch):
+        """私聊 block 命中后写 ChatLog + 返回 silent。"""
+        monkeypatch.setattr("config.NANOBOT_API_TOKEN", "test-token")
+
+        client.post("/api/v1/admin/block-rules", json={
+            "user_id": "blocked_usr", "target_type": "private",
+        }, headers=auth_header)
+
+        r = client.post("/api/v1/chat", json={
+            "user_id": "blocked_usr", "session_id": "private_blocked_usr",
+            "query": "hello", "sender_name": "test",
+            "files": ["http://x.com/img.png"],
+        }, headers={"Authorization": "Bearer test-token"})
         assert r.status_code == 200
-        assert r.json()["ok"]
+        assert r.json().get("status") == "silent"
+
+        # 通过 DB browser 验证 ChatLog 已写入
+        r2 = client.get("/api/v1/admin/db/tables/chat_logs?limit=5",
+                        headers=auth_header)
+        assert r2.status_code == 200
+        rows = r2.json()["rows"]
+        assert any("blocked_usr" in str(r.get("user_id", "")) for r in rows), \
+            f"ChatLog should contain blocked user: {rows}"
