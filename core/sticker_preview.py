@@ -198,34 +198,55 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
 
 
 def dedupe_by_content_hash(db: Session, sticker_id: int) -> int | None:
-    """content_hash 相同 → 标 duplicate，返回 canonical id。"""
+    """content_hash 相同 → 选出最佳 canonical，其余标 duplicate。
+
+    canonical 优先级：active > disabled，有 description > 无，
+    usage_count 高 > 低，id 小 > 大。
+    """
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
-    if not row or not row.content_hash or row.dedupe_status != "unique":
+    if not row or not row.content_hash:
         return None
 
-    existing = (
+    all_rows = (
         db.query(StickerMemory)
         .filter(
             StickerMemory.chat_stream_id == row.chat_stream_id,
             StickerMemory.content_hash == row.content_hash,
-            StickerMemory.id != row.id,
             StickerMemory.status.in_(["active", "disabled"]),
             StickerMemory.dedupe_status == "unique",
         )
-        .order_by(StickerMemory.id.asc())
-        .first()
+        .all()
     )
-    if not existing:
+    if len(all_rows) <= 1:
         return None
 
-    # 合并 usage/source_count/description
-    existing.source_count = (existing.source_count or 1) + (row.source_count or 1)
-    existing.usage_count = (existing.usage_count or 0) + (row.usage_count or 0)
-    if not existing.description and row.description:
-        existing.description = row.description
+    def _priority(r: StickerMemory) -> tuple[int, int, int, int]:
+        return (
+            0 if r.status == "active" else 1,
+            0 if r.description else 1,
+            -(r.usage_count or 0),
+            r.id or 0,
+        )
 
-    row.status = "duplicate"
-    row.duplicate_of_id = existing.id
-    row.dedupe_status = "duplicate"
+    canonical = sorted(all_rows, key=_priority)[0]
+
+    merged_source = sum(r.source_count or 0 for r in all_rows)
+    merged_usage = sum(r.usage_count or 0 for r in all_rows)
+
+    for dup in all_rows:
+        if dup.id == canonical.id:
+            continue
+        dup.status = "duplicate"
+        dup.duplicate_of_id = canonical.id
+        dup.dedupe_status = "duplicate"
+
+    canonical.source_count = merged_source
+    canonical.usage_count = merged_usage
+    if not canonical.description:
+        for r in all_rows:
+            if r.description:
+                canonical.description = r.description
+                break
+
     db.commit()
-    return existing.id
+    return canonical.id

@@ -144,6 +144,10 @@ def sticker_to_dict(row: StickerMemory) -> dict[str, Any]:
         "status": row.status or "",
         "usage_count": int(row.usage_count or 0),
         "last_used": row.last_used.isoformat(timespec="seconds") if row.last_used else None,
+        "dedupe_status": row.dedupe_status or "unique",
+        "duplicate_of_id": row.duplicate_of_id,
+        "content_hash": row.content_hash or "",
+        "describe_status": row.describe_status or "pending",
     }
 
 
@@ -484,6 +488,7 @@ def auto_describe_sticker(sticker_id: int, *, force: bool = False) -> None:
         row.meta_json = json.dumps(meta, ensure_ascii=False)
         row.describe_status = "ok"
         row.describe_attempts = (row.describe_attempts or 0) + 1
+        row.describe_last_error = ""
         row.described_at = datetime.now()
         db.commit()
     finally:

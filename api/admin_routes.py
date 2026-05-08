@@ -244,6 +244,8 @@ def enable_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
+    if row.dedupe_status == "duplicate":
+        raise HTTPException(400, "duplicate sticker cannot be enabled directly")
     row.status = "active"; db.commit()
     _audit(db, "enable_sticker", "sticker", sticker_id)
     return {"ok": True}
