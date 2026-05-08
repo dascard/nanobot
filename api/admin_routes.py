@@ -1,4 +1,4 @@
-"""WebUI 管理 API——Sticker/Block/Config/DB 管理。prefix=/api/v1/admin，认证复用 NANOBOT_API_TOKEN。"""
+"""WebUI 管理 API——Sticker/Block/Config/DB 管理。prefix=/api/v1/admin，认证使用 NANOBOT_ADMIN_TOKEN。"""
 
 import json
 import logging
@@ -16,7 +16,7 @@ from core.database import (
     get_db,
     StickerMemory, ChatStreamConfig, UserBlockRule, SystemSetting, AdminAuditLog,
 )
-from config import NANOBOT_API_TOKEN
+from config import NANOBOT_ADMIN_TOKEN
 
 logger = logging.getLogger("nanobot.admin")
 router = APIRouter(prefix="/api/v1/admin")
@@ -24,10 +24,10 @@ router = APIRouter(prefix="/api/v1/admin")
 # ── Auth ──
 
 def verify_admin(authorization: str = Header(default="")) -> str:
-    if not NANOBOT_API_TOKEN:
+    if not NANOBOT_ADMIN_TOKEN:
         raise HTTPException(status_code=503, detail="Admin token not configured")
     token = authorization.replace("Bearer ", "").strip()
-    if not token or not compare_digest(token, NANOBOT_API_TOKEN):
+    if not token or not compare_digest(token, NANOBOT_ADMIN_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid token")
     return "admin"
 

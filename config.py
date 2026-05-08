@@ -25,15 +25,18 @@ DATASET_ID_PERSONAS = os.environ.get("DATASET_ID_PERSONAS", "")
 EVOLUTION_THRESHOLD = int(os.environ.get("EVOLUTION_THRESHOLD", "10"))
 
 # ── API 认证 ──
+# NANOBOT_API_TOKEN：bot 推送 / chat / group/message 接口认证（为空则不启用）
 NANOBOT_API_TOKEN = os.environ.get("NANOBOT_API_TOKEN", "")
 
-if not NANOBOT_API_TOKEN:
+# NANOBOT_ADMIN_TOKEN：WebUI /api/v1/admin/* 管理接口认证（自动生成，必填）
+NANOBOT_ADMIN_TOKEN = os.environ.get("NANOBOT_ADMIN_TOKEN", "")
+if not NANOBOT_ADMIN_TOKEN:
     import secrets
-    NANOBOT_API_TOKEN = secrets.token_hex(16)
+    NANOBOT_ADMIN_TOKEN = secrets.token_hex(16)
     _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     try:
         with open(_env_path, "a") as _fh:
-            _fh.write(f"\nNANOBOT_API_TOKEN={NANOBOT_API_TOKEN}\n")
+            _fh.write(f"\nNANOBOT_ADMIN_TOKEN={NANOBOT_ADMIN_TOKEN}\n")
     except Exception:
         pass
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "0000000000")

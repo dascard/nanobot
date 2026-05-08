@@ -11,7 +11,7 @@ from server import app
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     """独立 SQLite 测试库——不污染真实数据库。"""
-    monkeypatch.setattr("api.admin_routes.NANOBOT_API_TOKEN", "test-token")
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "test-token")
     engine = create_engine(
         f"sqlite:///{tmp_path / 'test.db'}",
@@ -59,7 +59,7 @@ class TestAuth:
         assert r.json()["ok"]
 
     def test_no_token_configured_returns_503(self, client, monkeypatch):
-        monkeypatch.setattr("api.admin_routes.NANOBOT_API_TOKEN", "")
+        monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "")
         assert client.get("/api/v1/admin/stickers").status_code == 503
 
 
