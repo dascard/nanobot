@@ -124,6 +124,9 @@ def _sticker_dict(r: StickerMemory) -> dict:
         "last_used": str(r.last_used) if r.last_used else "",
         "local_path": r.local_path or "",
         "preview_status": r.preview_status or "pending",
+        "content_hash": r.content_hash or "",
+        "width": r.width or 0,
+        "height": r.height or 0,
     }
 
 
@@ -250,108 +253,25 @@ def disable_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depend
 
 @router.get("/stickers/{sticker_id}/preview")
 def preview_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    import os as _os, hashlib, urllib.request, ipaddress
-    from urllib.parse import urlparse
     from fastapi.responses import FileResponse
+    from core.sticker_preview import (
+        cache_sticker_preview, media_type_for_path, safe_existing_local_path,
+    )
 
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
 
-    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    cache_dir = _os.path.abspath(_os.path.join(base, "data", "stickers"))
+    existing = safe_existing_local_path(row.local_path or "")
+    if existing:
+        return FileResponse(existing, media_type=media_type_for_path(existing))
 
-    # 已有本地缓存 + 路径在 cache_dir 内
-    if row.local_path and _os.path.exists(row.local_path):
-        local_abs = _os.path.abspath(row.local_path)
-        if local_abs.startswith(cache_dir + _os.sep):
-            ext = _os.path.splitext(local_abs)[1].lower()
-            media = {".png":"image/png",".jpg":"image/jpeg",".jpeg":"image/jpeg",
-                     ".gif":"image/gif",".webp":"image/webp"}.get(ext, "image/webp")
-            return FileResponse(local_abs, media_type=media)
+    result = cache_sticker_preview(db, sticker_id)
+    if result.ok and result.local_path:
+        return FileResponse(result.local_path, media_type=media_type_for_path(result.local_path))
 
-    # 已确认被屏蔽，不再重试
-    if row.preview_status == "blocked":
-        raise HTTPException(404, "preview blocked")
-
-    ref = (row.file_ref or "").strip()
-    if not ref:
-        raise HTTPException(404, "No file reference")
-
-    # SSRF: 只允许 http/https + 封禁私有/内网 IP
-    u = urlparse(ref)
-    if u.scheme not in {"http", "https"}:
-        row.preview_status = "blocked"; db.commit()
-        raise HTTPException(400, "unsupported URL scheme")
-    hostname = u.hostname
-    if not hostname:
-        row.preview_status = "blocked"; db.commit()
-        raise HTTPException(400, "missing hostname")
-    # 检查 hostname 字面量/IP + DNS 解析结果
-    if _is_blocked_host(hostname):
-        row.preview_status = "blocked"; db.commit()
-        raise HTTPException(400, "private/reserved IP blocked")
-
-    _os.makedirs(cache_dir, exist_ok=True)
-
-    try:
-        req = urllib.request.Request(ref, headers={"User-Agent": "Nanobot/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            ct = resp.headers.get("Content-Type", "")
-            if not ct.lower().startswith("image/"):
-                raise ValueError("not an image")
-            data = resp.read()
-            if len(data) < 512:
-                raise ValueError("image too small")
-            # Pillow 验证是否为合法图片
-            try:
-                from PIL import Image
-                import io as _io
-                Image.open(_io.BytesIO(data)).verify()
-            except Exception:
-                raise ValueError("invalid image bytes")
-
-        ext_map = {"image/png":".png","image/jpeg":".jpg","image/gif":".gif","image/webp":".webp"}
-        ext = ext_map.get(ct.split(";")[0].lower(), ".img")
-        fname = hashlib.sha256(ref.encode()).hexdigest()[:16] + ext
-        local = _os.path.join(cache_dir, fname)
-
-        with open(local, "wb") as f:
-            f.write(data)
-        row.local_path = local
-        row.preview_status = "ok"
-        db.commit()
-        return FileResponse(local, media_type=ct.split(";")[0])
-    except Exception as e:
-        row.preview_status = "blocked"
-        db.commit()
-        raise HTTPException(404, f"preview unavailable: {e}")
-
-
-def _is_blocked_host(hostname: str) -> bool:
-    import ipaddress, socket
-    # 直接 IP 检查
-    try:
-        addr = ipaddress.ip_address(hostname)
-        return bool(addr.is_private or addr.is_loopback or addr.is_link_local
-                    or addr.is_reserved or addr.is_multicast or addr.is_unspecified)
-    except ValueError:
-        pass
-    # DNS 解析检查
-    try:
-        infos = socket.getaddrinfo(hostname, None)
-    except socket.gaierror:
-        return True
-    for info in infos:
-        ip = info[4][0]
-        try:
-            addr = ipaddress.ip_address(ip)
-            if (addr.is_private or addr.is_loopback or addr.is_link_local
-                    or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
-                return True
-        except ValueError:
-            continue
-    return False
+    status_code = 400 if result.status == "blocked" else 404
+    raise HTTPException(status_code, f"preview {result.status}: {result.error}")
 
 
 @router.post("/stickers/{sticker_id}/preview/retry")

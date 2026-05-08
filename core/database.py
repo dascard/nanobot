@@ -268,6 +268,10 @@ class StickerMemory(Base):
     meta_json = Column(Text, default="{}")
     local_path = Column(Text, default="")
     preview_status = Column(String, default="pending")
+    content_hash = Column(String, index=True, default="")
+    byte_size = Column(Integer, default=0)
+    width = Column(Integer, default=0)
+    height = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.now)
 
     __table_args__ = (
@@ -427,6 +431,10 @@ def init_db():
                 "meta_json": "TEXT",
                 "local_path": "TEXT",
                 "preview_status": "TEXT DEFAULT 'pending'",
+                "content_hash": "TEXT",
+                "byte_size": "INTEGER DEFAULT 0",
+                "width": "INTEGER DEFAULT 0",
+                "height": "INTEGER DEFAULT 0",
                 "created_at": "TIMESTAMP",
             }
             for col_name, col_type in sticker_required_columns.items():

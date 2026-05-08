@@ -818,6 +818,19 @@ def _register_group_stickers_from_message(
             },
         )
         registered.append(sticker)
+
+        # 立即后台缓存原图——防止 QQ 临时 URL 过期
+        sticker_id = int(sticker.get("id") or 0)
+        if sticker_id:
+            if background_tasks is not None:
+                background_tasks.add_task(_cache_sticker_preview_bg, sticker_id)
+            else:
+                try:
+                    from core.sticker_preview import cache_sticker_preview
+                    cache_sticker_preview(db, sticker_id)
+                except Exception as e:
+                    logger.warning("[StickerPreview] register cache failed id=%s: %s", sticker_id, e)
+
         if (
             background_tasks is not None
             and settings.get_bool("sticker.auto_describe_enabled", True)
@@ -827,6 +840,21 @@ def _register_group_stickers_from_message(
             background_tasks.add_task(auto_describe_sticker, sticker["id"])
             describe_tasks += 1
     return registered
+
+
+def _cache_sticker_preview_bg(sticker_id: int) -> None:
+    from core.database import SessionLocal
+    from core.sticker_preview import cache_sticker_preview
+
+    db = SessionLocal()
+    try:
+        result = cache_sticker_preview(db, sticker_id)
+        logger.info("[StickerPreview] bg cache id=%s ok=%s status=%s err=%s",
+                     sticker_id, result.ok, result.status, result.error[:120])
+    except Exception as e:
+        logger.warning("[StickerPreview] bg cache failed id=%s: %s", sticker_id, e)
+    finally:
+        db.close()
 
 
 def _derive_group_trigger_reason(req: GroupMessageRequest) -> str:

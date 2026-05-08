@@ -231,7 +231,14 @@ function StickersPage() {
                 <td className="py-1.5 px-2">
                   <div className="flex items-center gap-1.5">
                     <span className={`px-2 py-0.5 rounded-full text-xs ${s.status === 'active' ? 'bg-emerald-500/15 text-emerald-400' : s.status === 'disabled' ? 'bg-amber-500/15 text-amber-400' : 'bg-red-500/15 text-red-400'}`}>{s.status}</span>
-                    {s.preview_status === 'blocked' && (
+                    {s.preview_status && s.preview_status !== 'ok' && s.preview_status !== 'pending' && (
+                      <span className={`px-1.5 py-0.5 rounded text-xs ${
+                        s.preview_status === 'expired' ? 'bg-red-500/15 text-red-400' :
+                        s.preview_status === 'fetch_failed' ? 'bg-amber-500/15 text-amber-400' :
+                        s.preview_status === 'invalid_image' ? 'bg-orange-500/15 text-orange-400' :
+                        'bg-slate-700 text-slate-300'}`}>{s.preview_status}</span>
+                    )}
+                    {s.preview_status && s.preview_status !== 'ok' && (
                       <button onClick={() => api.post(`/stickers/${s.id}/preview/retry`).then(load)}
                         className="px-1.5 py-0.5 bg-amber-700/50 hover:bg-amber-700 text-amber-300 rounded text-xs" title="重试缓存">↻</button>
                     )}
