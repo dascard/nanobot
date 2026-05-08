@@ -13,9 +13,14 @@ import os
 import re
 import urllib.request
 
-from config import CLASSIFIER_API_URL, CLASSIFIER_TIMEOUT
+from config import CLASSIFIER_API_URL
 
 logger = logging.getLogger("nanobot.classifier")
+
+
+def _classifier_timeout() -> float:
+    from core.settings_service import settings
+    return settings.get_float("classifier.timeout", 15.0)
 
 # Pattern for Qwen output validation: 是/否 + comma + number (optional negative)
 OUTPUT_PATTERN = re.compile(r"^(是|否)[,，](-?\d+)$")
@@ -159,7 +164,7 @@ class Guardrail:
         # 绕过本地 HTTP 代理（Clash 等），直连内网 llama-server
         proxy_handler = urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(req, timeout=CLASSIFIER_TIMEOUT) as response:
+        with opener.open(req, timeout=_classifier_timeout()) as response:
             body = json.loads(response.read().decode("utf-8"))
 
         content = body["choices"][0]["message"]["content"]
@@ -343,7 +348,7 @@ class PrivateDecisionClassifier:
         )
         proxy_handler = urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(req, timeout=CLASSIFIER_TIMEOUT) as response:
+        with opener.open(req, timeout=_classifier_timeout()) as response:
             body = json.loads(response.read().decode("utf-8"))
         return body["choices"][0]["message"]["content"]
 
@@ -527,7 +532,7 @@ class TimingGate:
         )
         proxy_handler = urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(req, timeout=CLASSIFIER_TIMEOUT) as response:
+        with opener.open(req, timeout=_classifier_timeout()) as response:
             body = json.loads(response.read().decode("utf-8"))
         return body["choices"][0]["message"]["content"]
 

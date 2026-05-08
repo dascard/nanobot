@@ -20,7 +20,6 @@ from config import (
     NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT, ADMIN_USER_ID,
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER, NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT,
     LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING,
-    STICKER_AUTO_DESCRIBE_ENABLED, STICKER_AUTO_DESCRIBE_MAX_PER_CYCLE,
 )
 from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest
 from core.evolution import evolution_task
@@ -184,6 +183,7 @@ def _normalize_files(files: Optional[List[str]]) -> list[str]:
 
 
 from core.group_runtime.ids import normalize_group_session_id as _normalize_group_session_id
+from core.settings_service import settings
 
 
 def _get_group_talk_value(session_id: str) -> float:
@@ -820,9 +820,9 @@ def _register_group_stickers_from_message(
         registered.append(sticker)
         if (
             background_tasks is not None
-            and STICKER_AUTO_DESCRIBE_ENABLED
+            and settings.get_bool("sticker.auto_describe_enabled", True)
             and not sticker.get("description")
-            and describe_tasks < max(0, STICKER_AUTO_DESCRIBE_MAX_PER_CYCLE)
+            and describe_tasks < max(0, settings.get_int("sticker.auto_describe_max_per_cycle", 20))
         ):
             background_tasks.add_task(auto_describe_sticker, sticker["id"])
             describe_tasks += 1

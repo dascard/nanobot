@@ -52,6 +52,7 @@ function Layout({ children, onLogout }) {
     { to: '/blocks', label: 'Block Rules' },
     { to: '/configs', label: 'Configs' },
     { to: '/db', label: 'DB Browser' },
+    { to: '/settings', label: 'Settings' },
     { to: '/prompt', label: 'Prompt' },
   ]
   return (
@@ -403,6 +404,53 @@ function DbPage() {
 }
 
 // ── Prompt ──
+function SettingsPage() {
+  const [data, setData] = useState(null)
+  const load = () => api.get('/settings').then(r => setData(r.data))
+  useEffect(() => { load() }, [])
+
+  const update = (key, value) => {
+    api.put(`/settings/${encodeURIComponent(key)}`, { value }).then(load)
+  }
+
+  const categories = [...new Set((data?.settings || []).map(s => s.category))]
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-4">Settings</h1>
+      {categories.map(cat => (
+        <div key={cat} className="mb-6">
+          <h2 className="text-lg font-bold text-blue-400 mb-2 capitalize">{cat}</h2>
+          <div className="space-y-2">
+            {(data?.settings || []).filter(s => s.category === cat).map(s => (
+              <div key={s.key} className="flex items-center gap-3 bg-gray-800 p-3 rounded">
+                <div className="flex-1">
+                  <div className="text-sm font-medium">{s.key}</div>
+                  <div className="text-xs text-gray-400">{s.description}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {s.value_type === 'bool' ? (
+                    <button onClick={() => update(s.key, !s.value)}
+                      className={`px-3 py-1 rounded text-xs ${s.value ? 'bg-green-700' : 'bg-gray-600'}`}>
+                      {s.value ? 'ON' : 'OFF'}
+                    </button>
+                  ) : (
+                    <input type={s.value_type === 'int' || s.value_type === 'float' ? 'number' : 'text'}
+                      defaultValue={s.value} step={s.value_type === 'float' ? '0.1' : '1'}
+                      min={s.min_value} max={s.max_value}
+                      onBlur={e => { const v = e.target.value; if (v !== String(s.value)) update(s.key, s.value_type === 'float' ? parseFloat(v) : s.value_type === 'int' ? parseInt(v) : v) }}
+                      className="w-24 p-1 rounded bg-gray-700 text-sm text-center" />
+                  )}
+                  {s.restart_required && <span className="text-red-400 text-xs">需重启</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function PromptPage() {
   const [prompt, setPrompt] = useState('')
   const [frags, setFrags] = useState([])
@@ -467,6 +515,7 @@ export default function App() {
           <Route path="/blocks" element={<BlocksPage />} />
           <Route path="/configs" element={<ConfigsPage />} />
           <Route path="/db" element={<DbPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="/prompt" element={<PromptPage />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

@@ -14,7 +14,6 @@ from typing import Dict, Any, List, Optional, AsyncIterator
 
 from config import (
     NEW_API_BASE_URL,
-    NEW_API_TIMEOUT,
     LLM_BUDGET_CAP,
     NEW_API_AUTO_MODEL_SYNC,
     NEW_API_MODEL_SYNC_INTERVAL_MINUTES,
@@ -23,6 +22,10 @@ from config import (
 from clients.model_registry import registry
 
 logger = logging.getLogger("nanobot.new_api")
+
+def _new_api_timeout():
+    from core.settings_service import settings
+    return settings.get_int("new_api.timeout", 180)
 
 MODEL_OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), "data", "model_overrides.json")
 
@@ -39,16 +42,12 @@ class NewAPIClient:
     @classmethod
     def get_failure_tracker(cls) -> "ModelFailureTracker":
         if cls._failure_tracker is None:
-            from config import (
-                MODEL_MAX_CONSECUTIVE_FAILURES,
-                MODEL_COOLDOWN_BASE_SECONDS,
-                MODEL_COOLDOWN_MAX_SECONDS,
-            )
+            from core.settings_service import settings
             from clients.model_registry import ModelFailureTracker
             cls._failure_tracker = ModelFailureTracker(
-                max_failures=MODEL_MAX_CONSECUTIVE_FAILURES,
-                cooldown_base_s=MODEL_COOLDOWN_BASE_SECONDS,
-                cooldown_max_s=MODEL_COOLDOWN_MAX_SECONDS,
+                max_failures=settings.get_int("model.max_consecutive_failures", 3),
+                cooldown_base_s=settings.get_int("model.cooldown_base_seconds", 300),
+                cooldown_max_s=settings.get_int("model.cooldown_max_seconds", 1800),
             )
         return cls._failure_tracker
 
@@ -61,7 +60,7 @@ class NewAPIClient:
     ):
         self.api_key = api_key
         self.base_url = (base_url or NEW_API_BASE_URL).rstrip("/")
-        self.timeout = timeout or NEW_API_TIMEOUT
+        self.timeout = timeout or _new_api_timeout()
         self.max_retries = max_retries
         self.last_usage: Dict[str, int] = {}
 

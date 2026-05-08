@@ -476,6 +476,102 @@ def download_backup(_auth=Depends(verify_admin)):
     return FileResponse(db_path, media_type="application/octet-stream", filename="nanobot.db")
 
 
+# ═══════════════════════════════════════════
+# Settings (热重载配置)
+# ═══════════════════════════════════════════
+
+@router.get("/settings")
+def list_settings(_auth=Depends(verify_admin)):
+    from core.config_registry import SETTING_DEFS
+    from core.settings_service import settings
+
+    values = settings.all_values()
+    result = []
+    for key, defn in sorted(SETTING_DEFS.items(), key=lambda x: x[1].category + x[0]):
+        val = values.get(key, defn.default)
+        display_val = val
+        result.append({
+            "key": key, "value": val,
+            "display_value": "****" if defn.sensitive else str(val),
+            "default": defn.default, "value_type": defn.value_type,
+            "category": defn.category, "description": defn.description,
+            "restart_required": defn.restart_required,
+            "min_value": defn.min_value, "max_value": defn.max_value,
+        })
+    return {"settings": result, "version": settings.version}
+
+
+@router.put("/settings/{key:path}")
+def update_setting(key: str, body: dict, db: Session = Depends(get_db),
+                   _auth=Depends(verify_admin)):
+    from core.config_registry import SETTING_DEFS
+    from core.settings_service import settings
+
+    defn = SETTING_DEFS.get(key)
+    if not defn:
+        raise HTTPException(400, f"Unknown setting: {key}")
+    raw_value = body.get("value")
+    if raw_value is None:
+        raise HTTPException(400, "Missing 'value'")
+    try:
+        if defn.value_type == "bool":
+            val = bool(raw_value) if isinstance(raw_value, bool) else str(raw_value).lower() in {"1", "true", "yes", "on"}
+        elif defn.value_type == "int":
+            val = int(raw_value)
+            if defn.min_value is not None and val < defn.min_value:
+                raise HTTPException(400, f"Min: {defn.min_value}")
+            if defn.max_value is not None and val > defn.max_value:
+                raise HTTPException(400, f"Max: {defn.max_value}")
+        elif defn.value_type == "float":
+            val = float(raw_value)
+            if defn.min_value is not None and val < defn.min_value:
+                raise HTTPException(400, f"Min: {defn.min_value}")
+            if defn.max_value is not None and val > defn.max_value:
+                raise HTTPException(400, f"Max: {defn.max_value}")
+        else:
+            val = str(raw_value)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
+
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if not row:
+        row = SystemSetting(key=key, value=str(val), description=defn.description)
+        db.add(row)
+    else:
+        row.value = str(val)
+    db.commit()
+    _audit(db, "update_setting", "setting", key, {"value": str(val)})
+    settings.invalidate()
+    return {"key": key, "value": val, "restart_required": defn.restart_required,
+            "version": settings.version}
+
+
+@router.post("/settings/{key:path}/reset")
+def reset_setting(key: str, db: Session = Depends(get_db),
+                  _auth=Depends(verify_admin)):
+    from core.config_registry import SETTING_DEFS
+    from core.settings_service import settings
+
+    defn = SETTING_DEFS.get(key)
+    if not defn:
+        raise HTTPException(400, f"Unknown setting: {key}")
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if row:
+        db.delete(row)
+        db.commit()
+        _audit(db, "reset_setting", "setting", key)
+    settings.invalidate()
+    return {"key": key, "value": defn.default, "reset_to": "default",
+            "version": settings.version}
+
+
+@router.post("/settings/reload")
+def reload_settings(_auth=Depends(verify_admin)):
+    from core.settings_service import settings
+    settings.invalidate()
+    return {"version": settings.version}
+
+
 @router.get("/health")
 def health():
     return {"ok": True, "time": datetime.now().isoformat()}

@@ -10,10 +10,14 @@ from core.legacy_adapter import SQLiteMemory, UnifiedProvider, NanobotKTControll
 from config import (
     API_KEY_01_CHAT, OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER,
     LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING,
-    NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT
+    NEW_API_KEY, NEW_API_BASE_URL
 )
 
 logger = logging.getLogger("nanobot.evolution")
+
+def _evo_timeout():
+    from core.settings_service import settings
+    return settings.get_int("new_api.timeout", 180)
 
 # 进化锁：同一用户不可并发触发
 _locks: dict[str, threading.Lock] = {}
@@ -38,7 +42,7 @@ def _build_provider() -> UnifiedProvider:
         api_key=NEW_API_KEY if LLM_PROVIDER == "new-api" else (OPENAI_API_KEY or (API_KEY_01_CHAT if LLM_PROVIDER == "dify" else "")),
         base_url=NEW_API_BASE_URL if LLM_PROVIDER == "new-api" else OPENAI_BASE_URL,
         model_map=model_map,
-        timeout=NEW_API_TIMEOUT if LLM_PROVIDER == "new-api" else None,
+        timeout=_evo_timeout() if LLM_PROVIDER == "new-api" else None,
     )
 
 def _run_async(coro):
