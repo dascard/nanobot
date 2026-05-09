@@ -1122,6 +1122,7 @@ def _annotate_group_timing_event(
             "latency_ms": int(result.get("latency_ms") or latency_ms or 0),
             "cooldown_ago": result.get("cooldown_ago"),
             "pending_count": result.get("pending_count"),
+            "pending_text": str(result.get("pending_text") or "")[:500],
             "context_chars": result.get("context_chars"),
             "raw": _short_text(str(result.get("raw") or ""), 1000),
             "error_type": error_type or None,
@@ -1130,6 +1131,8 @@ def _annotate_group_timing_event(
                 result.get("action") if error_type else None
             ),
             "context_summary": _short_text(str(result.get("context") or ""), 1200),
+            "hard_rule": result.get("hard_rule"),
+            "directed_to_other": result.get("directed_to_other"),
         }
         meta["timing_gate"] = {k: v for k, v in timing.items() if v not in ("", None)}
         ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)

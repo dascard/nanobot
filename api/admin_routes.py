@@ -335,6 +335,9 @@ def _timing_event_dict(row: ChatLog) -> dict:
         "parse_error": bool(timing.get("parse_error") or error_type == "parse_error"),
         "fallback_action": timing.get("fallback_action", ""),
         "cooldown_ago": timing.get("cooldown_ago"),
+        "hard_rule": timing.get("hard_rule"),
+        "directed_to_other": timing.get("directed_to_other"),
+        "pending_text": timing.get("pending_text", ""),
     }
 
 

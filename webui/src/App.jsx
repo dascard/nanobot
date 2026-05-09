@@ -498,7 +498,7 @@ function TimingEventsTable({ rows = [] }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
-        <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-2">时间</th><th className="py-2 px-2">群</th><th className="py-2 px-2">触发消息</th><th className="py-2 px-2">action</th><th className="py-2 px-2">mode</th><th className="py-2 px-2">pending</th><th className="py-2 px-2">ctx_ch</th><th className="py-2 px-2">talk</th><th className="py-2 px-2">msg1/5m</th><th className="py-2 px-2">delay</th><th className="py-2 px-2">gen</th><th className="py-2 px-2">latency</th><th className="py-2 px-2">parse</th><th className="py-2 px-2">trigger</th><th className="py-2 px-2">fallback</th><th className="py-2 px-2">reason</th></tr></thead>
+        <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-2">时间</th><th className="py-2 px-2">群</th><th className="py-2 px-2">触发消息</th><th className="py-2 px-2">action</th><th className="py-2 px-2">mode</th><th className="py-2 px-2">pending</th><th className="py-2 px-2">ctx_ch</th><th className="py-2 px-2">talk</th><th className="py-2 px-2">msg1/5m</th><th className="py-2 px-2">delay</th><th className="py-2 px-2">gen</th><th className="py-2 px-2">latency</th><th className="py-2 px-2">parse</th><th className="py-2 px-2">trigger</th><th className="py-2 px-2">hard</th><th className="py-2 px-2">dir</th><th className="py-2 px-2">fallback</th><th className="py-2 px-2">reason</th></tr></thead>
         <tbody>
           {rows.map(r => (
             <tr key={r.id} onClick={() => setExpanded(expanded === r.id ? null : r.id)}
@@ -517,6 +517,8 @@ function TimingEventsTable({ rows = [] }) {
               <td className="py-2 px-2">{r.latency_ms ? `${r.latency_ms}ms` : '-'}</td>
               <td className="py-2 px-2">{r.parse_error ? <Badge tone="red">parse_error</Badge> : <span className="text-slate-600">ok</span>}</td>
               <td className="py-2 px-2 max-w-[120px] truncate text-slate-500">{r.trigger_reason || '-'}</td>
+              <td className="py-2 px-2">{r.hard_rule ? <Badge tone="red">{r.hard_rule === 'directed_to_other_no_bot_target' ? 'dir_other' : r.hard_rule}</Badge> : '-'}</td>
+              <td className="py-2 px-2">{r.directed_to_other ? <Badge tone="amber">other</Badge> : '-'}</td>
               <td className="py-2 px-2 max-w-[100px] truncate">{r.fallback_action || '-'}</td>
               <td className="py-2 px-2 max-w-[200px] truncate text-slate-400">{r.reason}</td>
             </tr>
