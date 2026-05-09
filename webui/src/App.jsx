@@ -56,6 +56,7 @@ const NAV = [
   { to: '/groups', label: '群聊运行' },
   { to: '/timing-gate', label: 'TimingGate' },
   { to: '/stickers', label: '表情包' },
+  { to: '/stickers/duplicates', label: '去重工作台' },
   { to: '/prompt', label: 'Prompt' },
   { to: '/models', label: '模型' },
   { to: '/blocks', label: '屏蔽' },
@@ -228,6 +229,8 @@ function Dashboard() {
         <MiniStat label="TimingGate parse_error" value={c.timing_parse_errors} tone={c.timing_parse_errors ? 'red' : 'slate'} />
         <MiniStat label="Sticker 缓存失败" value={c.sticker_cache_failures} tone={c.sticker_cache_failures ? 'amber' : 'slate'} />
         <MiniStat label="打标失败" value={c.tagging_failures} tone={c.tagging_failures ? 'amber' : 'slate'} />
+        <MiniStat label="打标描述失败" value={c.sticker_describe_failures || 0} tone={c.sticker_describe_failures ? 'amber' : 'slate'} />
+        <MiniStat label="TimingGate 1h 总数" value={timing.total || 0} />
         <MiniStat label="TimingGate p95" value={`${timing.p95_latency_ms || 0}ms`} />
       </div>
 
@@ -306,7 +309,7 @@ function GroupsPage() {
       <Card className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-            <th className="py-2 px-3 font-medium">群</th><th className="py-2 px-3 font-medium">talk</th><th className="py-2 px-3 font-medium">消息</th><th className="py-2 px-3 font-medium">回复</th><th className="py-2 px-3 font-medium">gen</th><th className="py-2 px-3 font-medium">timer</th><th className="py-2 px-3 font-medium">最近 action</th><th className="py-2 px-3 font-medium">reason</th><th className="py-2 px-3 font-medium">latency</th></tr></thead>
+            <th className="py-2 px-3 font-medium">群</th><th className="py-2 px-3 font-medium">talk</th><th className="py-2 px-3 font-medium">消息</th><th className="py-2 px-3 font-medium">pending</th><th className="py-2 px-3 font-medium">回复</th><th className="py-2 px-3 font-medium">gen</th><th className="py-2 px-3 font-medium">timer</th><th className="py-2 px-3 font-medium">最近 action</th><th className="py-2 px-3 font-medium">reason</th><th className="py-2 px-3 font-medium">latency</th></tr></thead>
           <tbody>
             {data.items.map(g => (
               <tr key={g.session_id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
@@ -316,6 +319,7 @@ function GroupsPage() {
                 </td>
                 <td className="py-2 px-3">{g.talk_value}</td>
                 <td className="py-2 px-3 text-slate-400">{g.msg_1m}/{g.msg_5m}</td>
+                <td className="py-2 px-3">{g.pending_count ?? '-'}</td>
                 <td className="py-2 px-3 text-slate-400">{formatAgo(g.since_last_reply)}</td>
                 <td className="py-2 px-3">{g.generation || 0}</td>
                 <td className="py-2 px-3">{g.has_pending_timer ? <Badge tone="amber">pending</Badge> : <span className="text-slate-600">-</span>}</td>
@@ -348,10 +352,16 @@ function GroupDetailPage() {
       <div className="grid grid-cols-2 xl:grid-cols-6 gap-3 mb-4">
         <MiniStat label="generation" value={g.generation || 0} />
         <MiniStat label="pending timer" value={g.has_pending_timer ? 'YES' : 'NO'} tone={g.has_pending_timer ? 'amber' : 'slate'} />
+        <MiniStat label="running" value={data.runtime?.running ? 'YES' : 'NO'} tone={data.runtime?.running ? 'emerald' : 'slate'} />
         <MiniStat label="msg_1m" value={g.msg_1m || 0} />
         <MiniStat label="msg_5m" value={g.msg_5m || 0} />
         <MiniStat label="since reply" value={formatAgo(g.since_last_reply)} />
         <MiniStat label="pending" value={data.runtime?.pending_count || 0} />
+        <MiniStat label="wait_count" value={data.runtime?.wait_count ?? '-'} />
+        <MiniStat label="since bot reply" value={data.runtime?.last_bot_reply_ago != null ? formatAgo(data.runtime.last_bot_reply_ago) : '-'} />
+        <MiniStat label="last active" value={data.runtime?.last_active_ago != null ? formatAgo(data.runtime.last_active_ago) : '-'} />
+        <MiniStat label="last trigger" value={data.runtime?.last_trigger_reason || '-'} />
+        <MiniStat label="total_wait_s" value={data.runtime?.total_wait_s != null ? `${Number(data.runtime.total_wait_s).toFixed(1)}s` : '-'} />
       </div>
       <Card className="p-2 mb-4 flex gap-1 flex-wrap">
         {[
@@ -442,6 +452,11 @@ function TimingGatePage() {
         <MiniStat label="wait" value={stats.actions?.wait || 0} tone="amber" />
         <MiniStat label="no_reply" value={stats.actions?.no_reply || 0} />
         <MiniStat label="parse_error" value={stats.parse_error || 0} tone={stats.parse_error ? 'red' : 'slate'} />
+        <MiniStat label="parse_error% " value={`${(stats.parse_error_ratio != null ? (stats.parse_error_ratio * 100).toFixed(1) : '0')}%`} />
+        <MiniStat label="continue% " value={`${(stats.continue_ratio != null ? (stats.continue_ratio * 100).toFixed(1) : '0')}%`} tone="emerald" />
+        <MiniStat label="wait% " value={`${(stats.wait_ratio != null ? (stats.wait_ratio * 100).toFixed(1) : '0')}%`} tone="amber" />
+        <MiniStat label="no_reply% " value={`${(stats.no_reply_ratio != null ? (stats.no_reply_ratio * 100).toFixed(1) : '0')}%`} />
+        <MiniStat label="avg 延迟" value={`${stats.avg_latency_ms || 0}ms`} />
         <MiniStat label="p95 延迟" value={`${stats.p95_latency_ms || 0}ms`} />
       </div>
 
@@ -482,25 +497,82 @@ function TimingEventsTable({ rows = [] }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
-        <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-2">时间</th><th className="py-2 px-2">群</th><th className="py-2 px-2">触发消息</th><th className="py-2 px-2">action</th><th className="py-2 px-2">delay</th><th className="py-2 px-2">gen</th><th className="py-2 px-2">latency</th><th className="py-2 px-2">parse</th><th className="py-2 px-2">reason</th></tr></thead>
+        <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-2">时间</th><th className="py-2 px-2">群</th><th className="py-2 px-2">触发消息</th><th className="py-2 px-2">action</th><th className="py-2 px-2">mode</th><th className="py-2 px-2">pending</th><th className="py-2 px-2">ctx_ch</th><th className="py-2 px-2">talk</th><th className="py-2 px-2">msg1/5m</th><th className="py-2 px-2">delay</th><th className="py-2 px-2">gen</th><th className="py-2 px-2">latency</th><th className="py-2 px-2">parse</th><th className="py-2 px-2">trigger</th><th className="py-2 px-2">fallback</th><th className="py-2 px-2">reason</th></tr></thead>
         <tbody>
           {rows.map(r => (
             <tr key={r.id} onClick={() => setExpanded(expanded === r.id ? null : r.id)}
               className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer align-top">
               <td className="py-2 px-2 whitespace-nowrap text-slate-500">{r.time}</td>
               <td className="py-2 px-2">{r.group_id}</td>
-              <td className="py-2 px-2 max-w-[260px] truncate">{r.trigger_message}</td>
+              <td className="py-2 px-2 max-w-[160px] truncate">{r.trigger_message}</td>
               <td className="py-2 px-2"><Badge tone={actionTone(r.action)}>{r.action || '-'}</Badge></td>
+              <td className="py-2 px-2 text-slate-500">{r.mode || '-'}</td>
+              <td className="py-2 px-2">{r.pending_count ?? '-'}</td>
+              <td className="py-2 px-2 text-slate-500">{r.context_chars ?? '-'}</td>
+              <td className="py-2 px-2">{r.talk_value != null ? Number(r.talk_value).toFixed(2) : '-'}</td>
+              <td className="py-2 px-2 text-slate-500">{r.msg_1m ?? '-'}/{r.msg_5m ?? '-'}</td>
               <td className="py-2 px-2">{r.delay_seconds ?? '-'}</td>
               <td className="py-2 px-2">{r.generation ?? '-'}</td>
               <td className="py-2 px-2">{r.latency_ms ? `${r.latency_ms}ms` : '-'}</td>
               <td className="py-2 px-2">{r.parse_error ? <Badge tone="red">parse_error</Badge> : <span className="text-slate-600">ok</span>}</td>
-              <td className="py-2 px-2 max-w-[300px] truncate text-slate-400">{r.reason}</td>
+              <td className="py-2 px-2 max-w-[120px] truncate text-slate-500">{r.trigger_reason || '-'}</td>
+              <td className="py-2 px-2 max-w-[100px] truncate">{r.fallback_action || '-'}</td>
+              <td className="py-2 px-2 max-w-[200px] truncate text-slate-400">{r.reason}</td>
             </tr>
           ))}
         </tbody>
       </table>
       {expanded && <JsonBlock value={rows.find(r => r.id === expanded)} className="mt-3 max-h-96" />}
+    </div>
+  )
+}
+
+// ── Sticker Dedup ──
+function StickerDedupPage() {
+  const [data, setData] = useState({ groups: [] })
+  const load = () => api.get('/stickers/duplicate-groups?limit=100').then(r => setData(r.data))
+  useEffect(() => { load() }, [])
+
+  return (
+    <div>
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h1 className="text-2xl font-bold">去重工作台</h1>
+          <p className="text-slate-500 text-sm">按 content_hash 分组，展示重复表情包</p>
+        </div>
+        <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
+      </div>
+      {(data.groups || []).map(g => (
+        <Card key={g.content_hash} className="p-4 mb-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs text-slate-400">hash:</span>
+            <code className="text-xs bg-slate-950 px-2 py-0.5 rounded">{g.content_hash}</code>
+            <Badge tone="amber">{g.count} 个重复</Badge>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+                <th className="py-2 px-2">id</th><th className="py-2 px-2">预览</th><th className="py-2 px-2">名称</th><th className="py-2 px-2">描述</th><th className="py-2 px-2">状态</th><th className="py-2 px-2">dedupe</th><th className="py-2 px-2">使用次数</th><th className="py-2 px-2">preview</th><th className="py-2 px-2">describe</th>
+              </tr></thead>
+              <tbody>
+                {(g.items || []).map(s => (
+                  <tr key={s.id} className="border-b border-slate-800/50">
+                    <td className="py-2 px-2">{s.id}</td>
+                    <td className="py-2 px-2">{s.local_path ? <img src={`${API_BASE}/stickers/${s.id}/preview`} className="w-8 h-8 object-cover rounded" alt="" /> : '-'}</td>
+                    <td className="py-2 px-2 max-w-[120px] truncate">{s.name || '-'}</td>
+                    <td className="py-2 px-2 max-w-[200px] truncate">{s.description || '-'}</td>
+                    <td className="py-2 px-2"><Badge tone={s.status === 'active' ? 'emerald' : s.status === 'disabled' ? 'amber' : 'slate'}>{s.status}</Badge></td>
+                    <td className="py-2 px-2">{s.dedupe_status !== 'unique' ? <Badge tone="purple">{s.dedupe_status}</Badge> : <span className="text-slate-600">unique</span>}</td>
+                    <td className="py-2 px-2">{s.usage_count}</td>
+                    <td className="py-2 px-2"><Badge tone={s.preview_status === 'ok' ? 'emerald' : 'amber'}>{s.preview_status}</Badge></td>
+                    <td className="py-2 px-2"><Badge tone={s.describe_status === 'ok' ? 'emerald' : s.describe_status === 'failed' ? 'red' : 'slate'}>{s.describe_status}</Badge></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      ))}
     </div>
   )
 }
@@ -1286,6 +1358,7 @@ export default function App() {
           <Route path="/groups/:groupId" element={<GroupDetailPage />} />
           <Route path="/timing-gate" element={<TimingGatePage />} />
           <Route path="/stickers" element={<StickersPage />} />
+          <Route path="/stickers/duplicates" element={<StickerDedupPage />} />
           <Route path="/blocks" element={<BlocksPage />} />
           <Route path="/configs" element={<ConfigsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
