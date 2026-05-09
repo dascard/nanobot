@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from hmac import compare_digest
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -1053,7 +1053,7 @@ def _config_default(sid: str) -> dict:
 
 
 @router.put("/configs/{chat_stream_id:path}")
-def update_config(chat_stream_id: str, body: ConfigUpdate, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def update_config(chat_stream_id: str, body: ConfigUpdate, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(ChatStreamConfig).filter(ChatStreamConfig.chat_stream_id == chat_stream_id).first()
     if not row:
         row = ChatStreamConfig(chat_stream_id=chat_stream_id)
@@ -1076,7 +1076,7 @@ def update_config(chat_stream_id: str, body: ConfigUpdate, db: Session = Depends
         row.group_profile_mode = "on" if body.enable_group_profile else "off"
         updates["group_profile_mode"] = row.group_profile_mode
     db.commit()
-    _audit(db, "update_config", "config", chat_stream_id, updates)
+    _audit(db, "update_config", "config", chat_stream_id, updates, ip_address=_client_ip(request))
     return _config_dict(row)
 
 
@@ -1593,7 +1593,7 @@ def list_settings(_auth=Depends(verify_admin)):
 
 
 @router.put("/settings/{key:path}")
-def update_setting(key: str, body: dict, db: Session = Depends(get_db),
+def update_setting(key: str, body: dict, request: Request, db: Session = Depends(get_db),
                    _auth=Depends(verify_admin)):
     from core.config_registry import SETTING_DEFS
     from core.settings_service import settings
@@ -1633,14 +1633,14 @@ def update_setting(key: str, body: dict, db: Session = Depends(get_db),
     else:
         row.value = str(val)
     db.commit()
-    _audit(db, "update_setting", "setting", key, {"value": str(val)})
+    _audit(db, "update_setting", "setting", key, {"value": str(val)}, ip_address=_client_ip(request))
     settings.invalidate()
     return {"key": key, "value": val, "restart_required": defn.restart_required,
             "version": settings.version}
 
 
 @router.post("/settings/{key:path}/reset")
-def reset_setting(key: str, db: Session = Depends(get_db),
+def reset_setting(key: str, request: Request, db: Session = Depends(get_db),
                   _auth=Depends(verify_admin)):
     from core.config_registry import SETTING_DEFS
     from core.settings_service import settings
@@ -1652,7 +1652,7 @@ def reset_setting(key: str, db: Session = Depends(get_db),
     if row:
         db.delete(row)
         db.commit()
-        _audit(db, "reset_setting", "setting", key)
+        _audit(db, "reset_setting", "setting", key, ip_address=_client_ip(request))
     settings.invalidate()
     return {"key": key, "value": defn.default, "reset_to": "default",
             "version": settings.version}
