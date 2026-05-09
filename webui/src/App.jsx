@@ -933,14 +933,27 @@ function SettingsPage() {
   useEffect(() => { load() }, [])
   const update = (key, value) => { api.put(`/settings/${encodeURIComponent(key)}`, { value }).then(load) }
   const categories = [...new Set((data?.settings || []).map(s => s.category))]
+  const [search, setSearch] = useState('')
+  const reloadFromDB = () => api.post('/settings/reload').then(load)
+  const resetKey = (key) => api.post(`/settings/${encodeURIComponent(key)}/reset`).then(load)
   return (
     <div>
-      <div className="mb-4"><h1 className="text-2xl font-bold">系统设置</h1><p className="text-slate-500 text-sm">热重载配置，修改即时生效</p></div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h1 className="text-2xl font-bold">系统设置</h1>
+          <p className="text-slate-500 text-sm">热重载配置，修改即时生效</p>
+        </div>
+        <div className="flex gap-2">
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索配置..."
+            className="w-40 p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs" />
+          <button onClick={reloadFromDB} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">从 DB 重载</button>
+        </div>
+      </div>
       {categories.map(cat => (
         <div key={cat} className="mb-6">
           <h2 className="text-sm font-semibold text-emerald-400 mb-3 uppercase tracking-wider">{cat}</h2>
           <div className="space-y-2">
-            {(data?.settings || []).filter(s => s.category === cat).map(s => (
+            {(data?.settings || []).filter(s => !search || s.key.includes(search) || s.description.includes(search)).filter(s => s.category === cat).map(s => (
               <Card key={s.key} className="p-4 flex items-center gap-4">
                 <div className="flex-1 min-w-0">
                   <div className="text-sm">{s.key}</div>
@@ -958,6 +971,7 @@ function SettingsPage() {
                 )}
                 {s.restart_required && <span className="text-amber-500 text-xs">需重启</span>}
                 {s.readonly && <span className="text-slate-600 text-xs">只读</span>}
+                {!s.readonly && <button onClick={() => resetKey(s.key)} className="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs text-slate-500">默认</button>}
               </Card>
             ))}
           </div>
@@ -976,9 +990,13 @@ function DbPage() {
   const [sqlResult, setSqlResult] = useState(null)
   useEffect(() => { api.get('/db/tables').then(r => setTables(r.data.tables)) }, [])
   const queryTable = (t) => { setSel(t); api.get(`/db/tables/${t}`, { params: { limit: 50 } }).then(r => setRows(r.data)) }
+  const backupDb = () => window.open(`${API_BASE}/db/backup`, '_blank')
   return (
     <div>
-      <div className="mb-4"><h1 className="text-2xl font-bold">数据库浏览</h1><p className="text-slate-500 text-sm">只读数据浏览</p></div>
+      <div className="flex items-center justify-between mb-4">
+        <div><h1 className="text-2xl font-bold">数据库浏览</h1><p className="text-slate-500 text-sm">只读数据浏览</p></div>
+        <button onClick={backupDb} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">下载备份</button>
+      </div>
       <Card className="p-3 mb-4">
         <div className="flex gap-1.5 flex-wrap">
           {tables.map(t => <button key={t} onClick={() => queryTable(t)}
