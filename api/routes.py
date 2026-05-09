@@ -754,6 +754,13 @@ _MAX_REPLY_CONTENT = 300
 _MAX_SEGMENT_TEXT = 500
 _MAX_MENTION_NICK = 80
 
+_ALLOWED_SEGMENT_KEYS = {
+    "image": ("file", "url", "file_id", "summary", "sub_type"),
+    "mface": ("file", "url", "emoji_id", "summary", "key", "emoji_package_id"),
+    "file": ("file", "name", "file_name", "file_size", "url", "file_id"),
+    "forward": ("id", "summary"),
+}
+
 
 def _normalize_onebot_segments(req: GroupMessageRequest) -> list[dict]:
     """清理 OneBot segments：去空、限制数量、裁剪字段长度。"""
@@ -772,8 +779,10 @@ def _normalize_onebot_segments(req: GroupMessageRequest) -> list[dict]:
             result.append({"type": t, "data": {"qq": str(data.get("qq", ""))[:20]}})
         elif t == "reply":
             result.append({"type": t, "data": {"id": str(data.get("id", ""))[:50]}})
-        elif t in ("image", "mface", "file", "forward"):
-            result.append({"type": t, "data": data})
+        elif t in _ALLOWED_SEGMENT_KEYS:
+            keys = _ALLOWED_SEGMENT_KEYS[t]
+            filtered = {k: str(data.get(k, ""))[:500] for k in keys if data.get(k) is not None}
+            result.append({"type": t, "data": filtered})
     return result
 
 
@@ -852,28 +861,42 @@ def _derive_group_direction(
     mentions: list[dict],
     reply_to: dict | None,
 ) -> dict:
-    """推导消息指向性。"""
+    """推导消息指向性——尊重 req 显式字段 + segments 推导。"""
     bot_id = req.bot_id or req.self_id
     d = {
-        "at_bot": False, "reply_to_bot": False,
-        "at_others": False, "reply_to_others": False,
-        "directed_to_other": False, "mentions_bot": False,
+        "at_bot": bool(req.is_at_bot),
+        "reply_to_bot": bool(req.is_reply_to_bot),
+        "at_others": False,
+        "reply_to_others": False,
+        "directed_to_other": False,
+        "mentions_bot": bool(req.is_at_bot),
         "mentions_others": False,
     }
     for m in mentions:
-        if m.get("is_bot") or (bot_id and m["user_id"] == bot_id):
+        uid = str(m.get("user_id") or "")
+        is_bot = bool(m.get("is_bot")) or bool(bot_id and uid == bot_id)
+        if is_bot:
             d["mentions_bot"] = True
             d["at_bot"] = True
-        else:
+        elif uid:
             d["mentions_others"] = True
             d["at_others"] = True
     if reply_to:
-        if reply_to.get("is_bot") or (bot_id and reply_to.get("sender_id") == bot_id):
+        rid = reply_to.get("sender_id") or ""
+        is_reply_to_bot = (
+            bool(reply_to.get("is_bot"))
+            or bool(bot_id and rid == bot_id)
+            or bool(req.is_reply_to_bot)
+        )
+        if is_reply_to_bot:
             d["reply_to_bot"] = True
-        elif reply_to.get("sender_id"):
+        elif reply_to.get("sender_id") or reply_to.get("message_id"):
             d["reply_to_others"] = True
+
+    explicit_other = bool(req.is_directed_to_other)
+    inferred_other = d["at_others"] or d["reply_to_others"]
     d["directed_to_other"] = (
-        (d["at_others"] or d["reply_to_others"])
+        (explicit_other or inferred_other)
         and not d["at_bot"]
         and not d["reply_to_bot"]
         and not d["mentions_bot"]
@@ -948,10 +971,42 @@ def _group_sticker_payloads(req: GroupMessageRequest) -> list[dict]:
     return payloads
 
 
+def _render_segments_to_text(segments: list[dict], mentions: list[dict]) -> str:
+    """从 OneBot segments 渲染人类可读文本。"""
+    nick_by_id = {str(m.get("user_id", "")): str(m.get("nickname", "")) for m in mentions}
+    parts: list[str] = []
+    for seg in segments:
+        t = seg.get("type")
+        data = seg.get("data") or {}
+        if t == "text":
+            parts.append(str(data.get("text", "")))
+        elif t == "at":
+            qq = str(data.get("qq", ""))
+            label = nick_by_id.get(qq) or qq
+            parts.append(f"@{label}")
+        elif t == "image":
+            parts.append("[图片:1张]")
+        elif t == "mface":
+            parts.append("[表情包]")
+        elif t == "file":
+            name = str(data.get("name") or data.get("file_name", "文件"))
+            parts.append(f"[文件:{name[:80]}]")
+        elif t == "reply":
+            continue
+    return " ".join(p for p in parts if p and p.strip()).strip()
+
+
 def _build_group_message_text(req: GroupMessageRequest) -> str:
     text = str(req.message or "").strip()
     if text:
         return text
+    # 从 segments 渲染
+    segments = _normalize_onebot_segments(req)
+    if segments:
+        mentions = _normalize_group_mentions(req, segments)
+        rendered = _render_segments_to_text(segments, mentions)
+        if rendered:
+            return rendered
     stickers = _group_sticker_payloads(req)
     if stickers:
         hints = []

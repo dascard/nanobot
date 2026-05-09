@@ -810,26 +810,23 @@ class TestGroupMessageStructured:
         data = resp.json()
         assert data.get("action") in ("continue", "wait", "no_reply")
 
+    def _meta(self, db_session):
+        logs = db_session.query(ChatLog).filter_by(role="ambient").all()
+        return json.loads(logs[-1].meta_json or "{}")
+
     def test_chatlog_meta_json_writes_standard_structure(self, client, db_session):
-        """ChatLog.meta_json写入标准结构,不重复reply_to_*顶层字段"""
         client.post("/api/v1/group/message", json={
-            "group_id": "123456",
-            "sender_id": "111",
-            "sender_name": "小明",
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
             "message": "hello",
             "segments": [{"type": "at", "data": {"qq": "999888"}}],
-            "raw_message": "[CQ:at,qq=999888] hello",
-            "self_id": "999888",
-            "bot_id": "999888",
-            "bot_name": "Nanobot",
+            "self_id": "999888", "bot_id": "999888",
             "mentions": [{"user_id": "999888", "nickname": "Nanobot"}],
             "is_at_bot": True,
         })
-        logs = db_session.query(ChatLog).filter_by(role="ambient").all()
-        assert len(logs) >= 1
-        meta = json.loads(logs[-1].meta_json or "{}")
-        assert "segments" in meta or "mentions" in meta or "directed" in meta, \
-            "meta_json should have standard structure"
+        meta = self._meta(db_session)
+        assert meta.get("message_type") == "group_message"
+        assert meta["directed"]["at_bot"] is True
+        assert meta["directed"]["directed_to_other"] is False
 
     def test_old_payload_still_works(self, client, db_session):
         """旧payload只传message/files/client_meta仍可进入TimingGate"""
@@ -867,42 +864,86 @@ class TestGroupMessageStructured:
         assert cm.get("message_type") in ("sticker", "text", "image", None)
 
     def test_segments_capped_at_30(self, client, db_session):
-        """segments最多30个,超量不导致请求失败"""
         segments = [{"type": "text", "data": {"text": f"m{i}"}} for i in range(50)]
-        resp = client.post("/api/v1/group/message", json={
-            "group_id": "123456",
-            "sender_id": "111",
-            "sender_name": "小明",
-            "message": "many segments",
-            "segments": segments,
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
+            "message": "many segments", "segments": segments,
         })
-        assert resp.status_code == 200
+        assert len(self._meta(db_session)["segments"]) == 30
 
     def test_mentions_dedup_and_capped(self, client, db_session):
-        """mentions去重且最多20个"""
         mentions = [{"user_id": str(i), "nickname": f"user{i}"} for i in range(30)]
-        resp = client.post("/api/v1/group/message", json={
-            "group_id": "123456",
-            "sender_id": "111",
-            "sender_name": "小明",
-            "message": "many mentions",
-            "mentions": mentions,
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
+            "message": "many mentions", "mentions": mentions,
         })
-        assert resp.status_code == 200
+        assert len(self._meta(db_session)["mentions"]) == 20
 
     def test_at_bot_segment_detected(self, client, db_session):
-        """at segment指向bot_id时被正确识别为at_bot"""
-        resp = client.post("/api/v1/group/message", json={
-            "group_id": "123456",
-            "sender_id": "111",
-            "sender_name": "小明",
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
             "message": "@bot hello",
             "segments": [
                 {"type": "at", "data": {"qq": "999888"}},
                 {"type": "text", "data": {"text": " hello"}},
             ],
-            "self_id": "999888",
-            "bot_id": "999888",
-            "bot_name": "Nanobot",
+            "self_id": "999888", "bot_id": "999888",
         })
-        assert resp.status_code == 200
+        meta = self._meta(db_session)
+        assert meta["directed"]["at_bot"] is True
+        assert meta["directed"]["mentions_bot"] is True
+
+    def test_old_is_at_bot_without_segments(self, client, db_session):
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
+            "message": "@bot hello", "is_at_bot": True,
+        })
+        assert self._meta(db_session)["directed"]["at_bot"] is True
+
+    def test_old_is_reply_to_bot_works(self, client, db_session):
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
+            "message": "reply", "is_reply_to_bot": True,
+        })
+        assert self._meta(db_session)["directed"]["reply_to_bot"] is True
+
+    def test_directed_to_other_suppression(self, client, db_session):
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
+            "message": "reply to someone",
+            "segments": [{"type": "at", "data": {"qq": "222"}}],
+            "self_id": "999888", "is_directed_to_other": True,
+        })
+        assert self._meta(db_session)["directed"]["directed_to_other"] is True
+
+    def test_at_others_and_at_bot_not_suppressed(self, client, db_session):
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
+            "message": "@bot @other",
+            "segments": [
+                {"type": "at", "data": {"qq": "999888"}},
+                {"type": "at", "data": {"qq": "222"}},
+            ],
+            "self_id": "999888", "bot_id": "999888",
+        })
+        meta = self._meta(db_session)
+        assert meta["directed"]["at_bot"] is True
+        assert meta["directed"]["at_others"] is True
+        assert meta["directed"]["directed_to_other"] is False
+
+    def test_segments_rendered_to_plaintext(self, client, db_session):
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
+            "message": "",
+            "segments": [
+                {"type": "at", "data": {"qq": "222"}},
+                {"type": "text", "data": {"text": "你看这个"}},
+                {"type": "image", "data": {"file": "http://x.com/pic.png"}},
+            ],
+            "mentions": [{"user_id": "222", "nickname": "小红"}],
+        })
+        logs = db_session.query(ChatLog).filter_by(role="ambient").all()
+        content = logs[-1].content
+        assert "@小红" in content
+        assert "你看这个" in content
+        assert "[图片" in content
