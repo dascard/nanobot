@@ -497,15 +497,17 @@ def init_db():
                 except Exception as e:
                     print(f"  ⚠ Migration failed for group_memories.{col_name}: {e}")
 
-            # 回填 content_hash
+            # 回填 content_hash（必须和 core/group_memory.py _normalize_content 一致）
             import hashlib as _hashlib
+            import re as _re
             rows = conn.execute(text(
                 "SELECT id, content FROM group_memories WHERE content_hash IS NULL OR content_hash = ''"
             )).fetchall()
             if rows:
                 print(f"  → Backfilling content_hash for {len(rows)} group_memories rows...")
                 for row in rows:
-                    h = _hashlib.sha256((row.content or "").strip().encode()).hexdigest()[:32]
+                    norm = _re.sub(r"\s+", " ", (row.content or "").strip().lower()).rstrip("。.!！?？")
+                    h = _hashlib.sha256(norm.encode("utf-8")).hexdigest()[:32]
                     conn.execute(
                         text("UPDATE group_memories SET content_hash = :h WHERE id = :id"),
                         {"h": h, "id": row.id},
@@ -513,7 +515,7 @@ def init_db():
                 conn.commit()
                 print(f"  → content_hash backfill complete")
 
-            # 查旧数据重复 → 合并后建唯一索引
+            # 查旧数据重复 → archived 重复项改写 content_hash 保证唯一索引不冲突
             try:
                 dup_rows = conn.execute(text(
                     "SELECT group_id, memory_type, content_hash, COUNT(*) AS n "
@@ -533,6 +535,7 @@ def init_db():
                         for (dup_id,) in dup_ids[1:]:
                             conn.execute(text(
                                 "UPDATE group_memories SET status = 'archived', "
+                                "content_hash = content_hash || ':archived:' || CAST(id AS TEXT), "
                                 "cluster_key = (SELECT cluster_key FROM group_memories WHERE id = :c) "
                                 "WHERE id = :d"
                             ), {"c": canonical_id, "d": dup_id})

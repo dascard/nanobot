@@ -74,6 +74,8 @@ def upsert(
             existing.last_seen = datetime.now()
             existing.confidence = min(1.0, existing.confidence + confidence_hint * 0.1)
             existing.decay_score = min(1.0, existing.decay_score + 0.05)
+            if existing.status == "archived" and existing.confidence >= CONFIDENCE_FLOOR:
+                existing.status = "active"
             if evidence_log_ids:
                 _merge_evidence(existing, evidence_log_ids)
             if meta:
@@ -252,13 +254,22 @@ def _safe_meta(raw: str) -> dict:
 
 
 def should_inject(memory: dict) -> bool:
-    """判断一条记忆是否应注入 GroupProfile。"""
-    return (
+    """判断一条记忆是否应注入 GroupProfile。
+
+    基础 gate：active + high confidence + 有证据 + decay 未过期。
+    类型化门槛：event ≥1 evidence，其他 ≥2 evidence。
+    """
+    if not (
         memory.get("status") == "active"
         and memory.get("confidence", 0) >= 0.7
         and memory.get("decay_score", 0) >= 0.3
         and bool(_safe_evidence_ids(memory.get("evidence_log_ids_json", "")))
-    )
+    ):
+        return False
+
+    t = memory.get("memory_type", "")
+    min_evidence = 1 if t == "event" else 2
+    return memory.get("evidence_count", 0) >= min_evidence
 
 
 def _row_to_dict(r: GroupMemory) -> dict:

@@ -48,9 +48,12 @@ class TestUpsert:
 
 class TestBuildProfile:
     def test_only_active_high_confidence(self):
+        # topic needs ≥2 evidence, call twice
         upsert("g_profile", "topic", "高置信话题", confidence_hint=0.85, evidence_log_ids=[1])
-        upsert("g_profile", "topic", "低置信话题", confidence_hint=0.40, evidence_log_ids=[2])
-        upsert("g_profile", "style", "群风格", confidence_hint=0.80, evidence_log_ids=[3])
+        upsert("g_profile", "topic", "高置信话题", confidence_hint=0.85, evidence_log_ids=[2])
+        upsert("g_profile", "topic", "低置信话题", confidence_hint=0.40, evidence_log_ids=[3])
+        upsert("g_profile", "style", "群风格", confidence_hint=0.80, evidence_log_ids=[4])
+        upsert("g_profile", "style", "群风格", confidence_hint=0.80, evidence_log_ids=[5])
         profile = build_profile("g_profile")
         assert "高置信话题" in profile["common_topics"]
         assert "低置信话题" not in profile["common_topics"]
@@ -61,6 +64,7 @@ class TestBuildProfile:
 
     def test_profile_includes_relationships_in_context(self):
         upsert("g_relationship", "relationship", "A 经常和 B 一起讨论模型部署", confidence_hint=0.85, evidence_log_ids=[1])
+        upsert("g_relationship", "relationship", "A 经常和 B 一起讨论模型部署", confidence_hint=0.85, evidence_log_ids=[2])
         profile = build_profile("g_relationship")
         assert "A 经常和 B 一起讨论模型部署" in profile["relationships"]
 
