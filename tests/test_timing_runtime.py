@@ -538,3 +538,128 @@ class TestGroupRuntime:
         assert "group_123456" in runtime._states
         assert "123456" not in runtime._states
         assert len(runtime._states) == 1
+
+
+# ═══════════════════════════════════════════
+# Task 1C: directed features 测试
+# ═══════════════════════════════════════════
+
+class TestGroupPendingMessageDirected:
+    """GroupPendingMessage 包含 directed fields"""
+
+    def test_pending_message_has_directed_fields(self):
+        from core.group_runtime.runtime import GroupPendingMessage
+
+        msg = GroupPendingMessage(
+            sender_id="111", sender_name="小明", message="@bot hello",
+            is_at_bot=True, is_directed_to_other=False,
+            segments=[{"type": "at", "data": {"qq": "999"}}],
+            mentions=[{"user_id": "999", "is_bot": True}],
+            directed={"at_bot": True, "directed_to_other": False},
+            self_id="999", bot_id="999", bot_name="Nanobot",
+        )
+        d = msg.to_dict()
+        assert d["is_at_bot"] is True
+        assert d["directed"]["at_bot"] is True
+        assert len(d["mentions"]) == 1
+
+    def test_to_dict_compat_without_new_fields(self):
+        from core.group_runtime.runtime import GroupPendingMessage
+
+        msg = GroupPendingMessage(
+            sender_id="111", sender_name="小明", message="hello",
+        )
+        d = msg.to_dict()
+        assert d["segments"] == []
+        assert d["mentions"] == []
+        assert d.get("directed", {}).get("directed_to_other") != True
+
+
+class TestShouldSuppressDirected:
+    """should_suppress_directed_to_other hard rule"""
+
+    def test_all_directed_to_other_suppresses(self):
+        from core.group_runtime.runtime import (
+            GroupPendingMessage, should_suppress_directed_to_other,
+        )
+        msgs = [
+            GroupPendingMessage(
+                sender_id="111", sender_name="A", message="@B",
+                is_directed_to_other=True, is_at_bot=False, is_reply_to_bot=False,
+                mentions=[{"user_id": "222"}],
+                directed={"at_others": True, "directed_to_other": True},
+            ),
+            GroupPendingMessage(
+                sender_id="222", sender_name="B", message="reply to A",
+                is_directed_to_other=True, is_at_bot=False, is_reply_to_bot=False,
+                reply_to={"sender_id": "111"},
+                directed={"reply_to_others": True, "directed_to_other": True},
+            ),
+        ]
+        assert should_suppress_directed_to_other(msgs) is True
+
+    def test_one_at_bot_prevents_suppression(self):
+        from core.group_runtime.runtime import (
+            GroupPendingMessage, should_suppress_directed_to_other,
+        )
+        msgs = [
+            GroupPendingMessage(
+                sender_id="111", sender_name="A", message="@B",
+                is_directed_to_other=True, is_at_bot=False, is_reply_to_bot=False,
+                mentions=[{"user_id": "222"}],
+                directed={"at_others": True, "directed_to_other": True},
+            ),
+            GroupPendingMessage(
+                sender_id="333", sender_name="C", message="@bot help",
+                is_directed_to_other=False, is_at_bot=True, is_reply_to_bot=False,
+                trigger_reason="at_bot",
+                mentions=[{"user_id": "999", "is_bot": True}],
+                directed={"at_bot": True, "directed_to_other": False},
+            ),
+        ]
+        assert should_suppress_directed_to_other(msgs) is False
+
+    def test_empty_pending_no_suppress(self):
+        from core.group_runtime.runtime import should_suppress_directed_to_other
+        assert should_suppress_directed_to_other([]) is False
+
+    def test_trigger_reason_at_bot_blocks_suppression(self):
+        from core.group_runtime.runtime import (
+            GroupPendingMessage, should_suppress_directed_to_other,
+        )
+        msgs = [
+            GroupPendingMessage(
+                sender_id="111", sender_name="A", message="@B",
+                is_directed_to_other=True, is_at_bot=False, is_reply_to_bot=False,
+                mentions=[{"user_id": "222"}],
+                directed={"at_others": True, "directed_to_other": True},
+            ),
+            GroupPendingMessage(
+                sender_id="222", sender_name="B", message="@bot 看看",
+                is_directed_to_other=False, is_at_bot=True, is_reply_to_bot=False,
+                trigger_reason="at_bot",
+                mentions=[{"user_id": "999", "is_bot": True}],
+                directed={"at_bot": True, "directed_to_other": False},
+            ),
+        ]
+        assert should_suppress_directed_to_other(msgs) is False
+
+    def test_bot_name_mentioned_blocks_suppression(self):
+        from core.group_runtime.runtime import (
+            GroupPendingMessage, should_suppress_directed_to_other,
+        )
+        msgs = [
+            GroupPendingMessage(
+                sender_id="111", sender_name="A", message="@B",
+                is_directed_to_other=True, is_at_bot=False, is_reply_to_bot=False,
+                mentions=[{"user_id": "222"}],
+                directed={"at_others": True, "directed_to_other": True},
+            ),
+            GroupPendingMessage(
+                sender_id="222", sender_name="B", message="Nanobot 你来看看",
+                is_directed_to_other=False, is_at_bot=False, is_reply_to_bot=False,
+                trigger_reason="bot_name_mentioned",
+                directed={"at_bot": False, "directed_to_other": False},
+            ),
+        ]
+        assert should_suppress_directed_to_other(msgs) is False

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """GroupRuntime — per-group stateful runtime。
 
 保留 GroupRuntime.process_message() / handle_timer_fired() API，
@@ -25,6 +26,20 @@ _DIRECT_TRIGGERS = {"at_bot", "reply_to_bot", "bot_name_mentioned", "direct_call
 _COOLDOWN_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
 
 
+def should_suppress_directed_to_other(pending_msgs: list[GroupPendingMessage]) -> bool:
+    """全部 pending 都指向其他用户且没有指向 bot → 不应插嘴。"""
+    if not pending_msgs:
+        return False
+    if any(
+        m.is_at_bot
+        or m.is_reply_to_bot
+        or m.trigger_reason in _DIRECT_TRIGGERS
+        for m in pending_msgs
+    ):
+        return False
+    return all(m.is_directed_to_other for m in pending_msgs)
+
+
 @dataclass
 class GroupPendingMessage:
     sender_id: str
@@ -35,6 +50,24 @@ class GroupPendingMessage:
     is_at_bot: bool = False
     is_reply_to_bot: bool = False
     trigger_reason: str = "ambient"
+    # ── 结构化字段 (Batch 1) ──
+    segments: list[dict] | None = None
+    raw_message: str = ""
+    mentions: list[dict] | None = None
+    reply_to: dict | None = None
+    directed: dict | None = None
+    is_directed_to_other: bool = False
+    self_id: str = ""
+    bot_id: str = ""
+    bot_name: str = ""
+
+    def __post_init__(self):
+        if self.segments is None:
+            self.segments = []
+        if self.mentions is None:
+            self.mentions = []
+        if self.directed is None:
+            self.directed = {}
 
     def to_dict(self) -> dict:
         return {
@@ -42,6 +75,11 @@ class GroupPendingMessage:
             "message": self.message, "message_id": self.message_id, "ts": self.ts,
             "is_reply_to_bot": self.is_reply_to_bot,
             "is_at_bot": self.is_at_bot, "trigger_reason": self.trigger_reason,
+            "segments": self.segments or [], "mentions": self.mentions or [],
+            "reply_to": self.reply_to, "directed": self.directed or {},
+            "is_directed_to_other": self.is_directed_to_other,
+            "self_id": self.self_id, "bot_id": self.bot_id,
+            "bot_name": self.bot_name,
         }
 
 
@@ -280,6 +318,14 @@ class GroupRuntime:
             is_at_bot=bool(msg.get("is_at_bot", False)),
             is_reply_to_bot=bool(msg.get("is_reply_to_bot", False)),
             trigger_reason=str(trigger_reason or ""),
+            segments=msg.get("segments") if isinstance(msg.get("segments"), list) else [],
+            mentions=msg.get("mentions") if isinstance(msg.get("mentions"), list) else [],
+            reply_to=msg.get("reply_to") if isinstance(msg.get("reply_to"), dict) else None,
+            directed=msg.get("directed") if isinstance(msg.get("directed"), dict) else None,
+            is_directed_to_other=bool(msg.get("is_directed_to_other", False)),
+            self_id=str(msg.get("self_id", "")),
+            bot_id=str(msg.get("bot_id", "")),
+            bot_name=str(msg.get("bot_name", "")),
         )
 
         async with self._lock:
@@ -308,6 +354,14 @@ class GroupRuntime:
             # 直接触发 → arm force_next_continue
             if tr in _DIRECT_TRIGGERS or pm.is_at_bot or pm.is_reply_to_bot:
                 state.arm_force_continue(tr or ("reply_to_bot" if pm.is_reply_to_bot else "at_bot"))
+
+            # directed_to_other hard rule：全部指向别人 → no_reply
+            if should_suppress_directed_to_other(state.pending):
+                return {
+                    "action": "no_reply",
+                    "generation": state.generation,
+                    "reason": "directed_to_other_no_bot_target",
+                }
 
             # 硬 cooldown：bot 刚回复过且非直接互动 → wait
             if self._should_cooldown(state, tr):
