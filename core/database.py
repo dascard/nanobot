@@ -303,7 +303,7 @@ class ChatStreamConfig(Base):
     use_expression = Column(Integer, default=1)
     enable_expression_learning = Column(Integer, default=1)
     enable_jargon_learning = Column(Integer, default=1)
-    enable_group_profile = Column(Integer, default=0)  # 是否注入 GroupProfileContext
+    group_profile_mode = Column(String, default="off")  # off/preview/on
     planner_smooth = Column(Integer, default=3)
     meta_json = Column(Text, default="{}")
     created_at = Column(DateTime, default=datetime.now)
@@ -556,15 +556,27 @@ def init_db():
 
         if "chat_stream_configs" in inspector.get_table_names():
             cfg_columns = [col["name"] for col in inspector.get_columns("chat_stream_configs")]
-            if "enable_group_profile" not in cfg_columns:
-                print("  → Migrating: Adding missing column [enable_group_profile] to chat_stream_configs...")
+            if "group_profile_mode" not in cfg_columns:
+                # 兼容旧 enable_group_profile → group_profile_mode
+                has_old = "enable_group_profile" in cfg_columns
+                default_val = "on" if has_old else "off"
                 try:
                     conn.execute(text(
-                        "ALTER TABLE chat_stream_configs ADD COLUMN enable_group_profile INTEGER DEFAULT 0"
+                        f"ALTER TABLE chat_stream_configs ADD COLUMN group_profile_mode TEXT DEFAULT '{default_val}'"
                     ))
                     conn.commit()
                 except Exception as e:
-                    print(f"  ⚠ Migration failed for chat_stream_configs.enable_group_profile: {e}")
+                    print(f"  ⚠ Migration failed for chat_stream_configs.group_profile_mode: {e}")
+                if has_old:
+                    try:
+                        conn.execute(text(
+                            "UPDATE chat_stream_configs SET group_profile_mode = "
+                            "CASE WHEN enable_group_profile != 0 THEN 'on' ELSE 'off' END"
+                        ))
+                        conn.commit()
+                        print("  → Migrated enable_group_profile → group_profile_mode")
+                    except Exception as e:
+                        print(f"  ⚠ Value migration failed: {e}")
 
         # index: (session_id, message_id) for chat_logs
         try:

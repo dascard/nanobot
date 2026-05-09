@@ -859,7 +859,7 @@ function ConfigsPage() {
       <div className="mb-4"><h1 className="text-2xl font-bold">流配置</h1><p className="text-slate-500 text-sm">{data.total} 个配置</p></div>
       <Card>
         <table className="w-full text-sm">
-          <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-2 font-medium">流 ID</th><th className="py-2 px-2 font-medium">发言</th><th className="py-2 px-2 font-medium w-10">@</th><th className="py-2 px-2 font-medium w-10">E</th><th className="py-2 px-2 font-medium w-10">L</th><th className="py-2 px-2 font-medium w-10">J</th><th className="py-2 px-2 font-medium w-10">P</th><th className="py-2 px-2 font-medium">平滑</th><th className="py-2 px-2 font-medium"></th></tr></thead>
+          <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-2 font-medium">流 ID</th><th className="py-2 px-2 font-medium">发言</th><th className="py-2 px-2 font-medium w-10">@</th><th className="py-2 px-2 font-medium w-10">E</th><th className="py-2 px-2 font-medium w-10">L</th><th className="py-2 px-2 font-medium w-10">J</th><th className="py-2 px-2 font-medium w-10" title="GroupProfile 群画像注入">画像</th><th className="py-2 px-2 font-medium">平滑</th><th className="py-2 px-2 font-medium"></th></tr></thead>
           <tbody>
             {data.items.map(c => (
               <tr key={c.chat_stream_id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
@@ -869,7 +869,7 @@ function ConfigsPage() {
                 <td className="py-2 px-2">{c.use_expression ? '✓' : '—'}</td>
                 <td className="py-2 px-2">{c.enable_expression_learning ? '✓' : '—'}</td>
                 <td className="py-2 px-2">{c.enable_jargon_learning ? '✓' : '—'}</td>
-                <td className="py-2 px-2">{c.enable_group_profile ? <Badge tone="emerald">✓</Badge> : '—'}</td>
+                <td className="py-2 px-2"><Badge tone={c.group_profile_mode === 'on' ? 'emerald' : c.group_profile_mode === 'preview' ? 'amber' : 'slate'}>{c.group_profile_mode || 'off'}</Badge></td>
                 <td className="py-2 px-2">{c.planner_smooth}</td>
                 <td className="py-2 px-2"><button onClick={() => setEdit(c)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">编辑</button></td>
               </tr>
@@ -886,7 +886,7 @@ function ConfigEditModal({ config, onClose, onSaved }) {
     talk_value: config.talk_value, mentioned_bot_reply: config.mentioned_bot_reply,
     use_expression: config.use_expression, enable_expression_learning: config.enable_expression_learning,
     enable_jargon_learning: config.enable_jargon_learning,
-    enable_group_profile: config.enable_group_profile || false,
+    group_profile_mode: config.group_profile_mode || 'off',
     planner_smooth: config.planner_smooth,
   })
   return (
@@ -902,10 +902,13 @@ function ConfigEditModal({ config, onClose, onSaved }) {
             <input type="checkbox" checked={f[k]} onChange={e => setF({ ...f, [k]: e.target.checked })} className="accent-emerald-500" />{k}
           </label>
         ))}
-        <label className="flex items-center gap-2 mb-2 text-sm text-slate-400">
-          <input type="checkbox" checked={f.enable_group_profile}
-            onChange={e => setF({ ...f, enable_group_profile: e.target.checked })} className="accent-emerald-500" />enable_group_profile（群画像注入）
-        </label>
+        <label className="text-xs text-slate-400">群画像注入 mode（待 ContextBuilder 接入后生效）</label>
+        <select value={f.group_profile_mode} onChange={e => setF({ ...f, group_profile_mode: e.target.value })}
+          className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm">
+          <option value="off">off — 不生成不注入</option>
+          <option value="preview">preview — 生成并记录 debug，不注入 prompt</option>
+          <option value="on">on — 生成并注入 GroupProfileContext</option>
+        </select>
         <label className="text-xs text-slate-400">Planner 平滑</label>
         <input type="number" value={f.planner_smooth} onChange={e => setF({ ...f, planner_smooth: parseInt(e.target.value) })}
           className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-4 text-sm" />

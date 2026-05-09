@@ -172,7 +172,7 @@ class ConfigUpdate(BaseModel):
     use_expression: Optional[int] = None
     enable_expression_learning: Optional[int] = None
     enable_jargon_learning: Optional[int] = None
-    enable_group_profile: Optional[int] = None
+    group_profile_mode: Optional[str] = None
     planner_smooth: Optional[int] = None
 
 
@@ -234,7 +234,7 @@ def _config_dict(r: ChatStreamConfig) -> dict:
         "use_expression": bool(r.use_expression),
         "enable_expression_learning": bool(r.enable_expression_learning),
         "enable_jargon_learning": bool(r.enable_jargon_learning),
-        "enable_group_profile": bool(r.enable_group_profile),
+        "group_profile_mode": r.group_profile_mode or "off",
         "planner_smooth": r.planner_smooth,
     }
 
@@ -1035,7 +1035,7 @@ def get_config(chat_stream_id: str, db: Session = Depends(get_db), _auth=Depends
 def _config_default(sid: str) -> dict:
     return {"chat_stream_id": sid, "talk_value": 0.5, "mentioned_bot_reply": True,
             "use_expression": True, "enable_expression_learning": True,
-            "enable_jargon_learning": True, "enable_group_profile": False,
+            "enable_jargon_learning": True, "group_profile_mode": "off",
             "planner_smooth": 3}
 
 
@@ -1047,12 +1047,17 @@ def update_config(chat_stream_id: str, body: ConfigUpdate, db: Session = Depends
         db.add(row); db.flush()
     updates = {}
     int_fields = ("mentioned_bot_reply", "use_expression", "enable_expression_learning",
-                  "enable_jargon_learning", "enable_group_profile", "planner_smooth")
+                  "enable_jargon_learning", "planner_smooth")
     for field in ("talk_value",) + int_fields:
         val = getattr(body, field, None)
         if val is not None:
             setattr(row, field, int(val) if field in int_fields else val)
             updates[field] = val
+    if body.group_profile_mode is not None:
+        mode = str(body.group_profile_mode).strip()
+        if mode in ("off", "preview", "on"):
+            row.group_profile_mode = mode
+            updates["group_profile_mode"] = mode
     db.commit()
     _audit(db, "update_config", "config", chat_stream_id, updates)
     return _config_dict(row)
