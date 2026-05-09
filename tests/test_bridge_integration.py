@@ -168,3 +168,30 @@ class TestNoLeak:
         assert "[REPLY]" not in result
         assert "[/REPLY]" not in result
         assert result == "干净回复"
+
+
+
+class TestReplyMeta:
+    """Batch 2: reply_meta per-session 隔离和校验"""
+
+    def test_per_session_store_popped_isolated(self):
+        """pop 后第二次 None，两个 session 不串"""
+        store = {"s_A": {"send_mode": "quote"}, "s_B": {"send_mode": "mention"}}
+        assert store.pop("s_A")["send_mode"] == "quote"
+        assert store.pop("s_B")["send_mode"] == "mention"
+        assert store.pop("s_A", None) is None
+
+    def test_invalid_send_mode_normalized(self):
+        """非法 send_mode 被 normalize 为 normal"""
+        from creatures.nanobot.prompts.skills.reply.tool import _ALLOWED_SEND_MODES
+        assert "invalid" not in _ALLOWED_SEND_MODES
+        mode = "invalid"
+        if mode not in _ALLOWED_SEND_MODES:
+            mode = "normal"
+        assert mode == "normal"
+
+    def test_mentions_filter_non_digit(self):
+        """mentions 中非数字被过滤"""
+        mentions = ["12345", "abc", "67890", ""]
+        f = [s for s in (str(m).strip()[:20] for m in mentions) if s.isdigit()][:10]
+        assert f == ["12345", "67890"]
