@@ -811,8 +811,13 @@ class TestGroupMessageStructured:
         assert data.get("action") in ("continue", "wait", "no_reply")
 
     def _meta(self, db_session):
-        logs = db_session.query(ChatLog).filter_by(role="ambient").all()
-        return json.loads(logs[-1].meta_json or "{}")
+        log = (
+            db_session.query(ChatLog)
+            .filter_by(role="ambient")
+            .order_by(ChatLog.id.desc())
+            .first()
+        )
+        return json.loads(log.meta_json or "{}") if log else {}
 
     def test_chatlog_meta_json_writes_standard_structure(self, client, db_session):
         client.post("/api/v1/group/message", json={
@@ -930,6 +935,17 @@ class TestGroupMessageStructured:
         assert meta["directed"]["at_bot"] is True
         assert meta["directed"]["at_others"] is True
         assert meta["directed"]["directed_to_other"] is False
+
+    def test_reply_to_scattered_fields_preserve_is_bot(self, client, db_session):
+        """散字段路径也保留 is_reply_to_bot"""
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456", "sender_id": "111", "sender_name": "小明",
+            "message": "回复你",
+            "reply_to_message_id": "m1", "is_reply_to_bot": True,
+        })
+        meta = self._meta(db_session)
+        assert meta["reply_to"]["is_bot"] is True
+        assert meta["directed"]["reply_to_bot"] is True
 
     def test_segments_rendered_to_plaintext(self, client, db_session):
         client.post("/api/v1/group/message", json={

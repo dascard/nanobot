@@ -840,12 +840,14 @@ def _normalize_group_reply_to(req: GroupMessageRequest, segments: list[dict]) ->
             "is_bot": bool(r.get("is_bot")),
         }
     if req.reply_to_message_id:
+        bot_id = req.bot_id or req.self_id
+        sender_id = str(req.reply_to_sender_id or "")[:20]
         return {
             "message_id": str(req.reply_to_message_id)[:50],
-            "sender_id": str(req.reply_to_sender_id or "")[:20],
+            "sender_id": sender_id,
             "sender_name": str(req.reply_to_sender_name or "")[:80],
             "content": str(req.reply_to_content or "")[:_MAX_REPLY_CONTENT],
-            "is_bot": False,
+            "is_bot": bool(req.is_reply_to_bot or (bot_id and sender_id == bot_id)),
         }
     for seg in segments:
         if seg.get("type") == "reply":
@@ -997,16 +999,16 @@ def _render_segments_to_text(segments: list[dict], mentions: list[dict]) -> str:
 
 
 def _build_group_message_text(req: GroupMessageRequest) -> str:
-    text = str(req.message or "").strip()
-    if text:
-        return text
-    # 从 segments 渲染
+    # 优先从 segments 渲染——保留 @/图片/文件等语义
     segments = _normalize_onebot_segments(req)
     if segments:
         mentions = _normalize_group_mentions(req, segments)
         rendered = _render_segments_to_text(segments, mentions)
         if rendered:
             return rendered
+    text = str(req.message or "").strip()
+    if text:
+        return text
     stickers = _group_sticker_payloads(req)
     if stickers:
         hints = []
