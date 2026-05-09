@@ -1322,13 +1322,16 @@ async def chat_model_test(body: ChatModelTestRequest, _auth=Depends(verify_admin
 
 
 class TimingGateStabilityRequest(BaseModel):
-    cases: list[dict] = []
-    runs: int = Field(default=20, ge=1, le=50)
+    cases: list[dict] = Field(default_factory=list, max_length=10)
+    runs: int = Field(default=20, ge=1, le=20)
 
 
 @router.post("/models/timing-gate-stability-test")
 async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Depends(verify_admin)):
-    """TimingGate JSON 稳定性测试——连续跑 N 次，统计 parse_error 和延迟分布。"""
+    """TimingGate JSON 稳定性测试——连续跑 N 次，统计 parse_error 和延迟分布。
+
+    不会写入真实 TimingGate 记录。
+    """
     import time
     from clients.classifier_client import get_timing_gate
 
@@ -1344,7 +1347,7 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
 
     for case in cases:
         name = case.get("name", "unknown")
-        context = str(case.get("context", ""))
+        base_context = str(case.get("context", ""))
         pending = int(case.get("pending_count", 0))
         runs_list: list[dict] = []
         parse_errors = 0
@@ -1352,37 +1355,46 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
         actions: dict[str, int] = {}
         raw_samples: list[str] = []
 
+        # 构造接近真实 TimingGate 输入的 context
+        timing_context = (
+            f"<timing_context>\n"
+            f"pending_count: {pending}\n"
+            f"talk_value: {case.get('talk_value', 0.5)}\n"
+            f"msg_1m: {case.get('msg_1m', 0)}\n"
+            f"msg_5m: {case.get('msg_5m', 0)}\n"
+            f"{base_context}\n"
+            f"</timing_context>"
+        )
+
         for i in range(body.runs):
             t0 = time.time()
-            try:
-                raw = gate._call_model_raw(context)
-            except Exception as e:
-                raw = f"ERROR: {e}"
+            result = gate.judge(timing_context)
             lat = time.time() - t0
             latencies.append(lat)
 
-            try:
-                parsed = gate._parse_json_response(raw)
-                action = parsed.get("action", "no_reply")
-                reason = parsed.get("reason", "")
-                actions[action] = actions.get(action, 0) + 1
-                runs_list.append({
-                    "index": i, "action": action, "reason": reason,
-                    "delay": parsed.get("delay_seconds", 0), "latency_ms": int(lat * 1000),
-                })
-            except Exception:
+            action = result.get("action", "no_reply")
+            error_type = result.get("error_type")
+            if error_type == "parse_error":
                 parse_errors += 1
-                actions["parse_error"] = actions.get("parse_error", 0) + 1
-                runs_list.append({"index": i, "action": "parse_error", "latency_ms": int(lat * 1000)})
+            actions[action] = actions.get(action, 0) + 1
+            runs_list.append({
+                "index": i,
+                "action": action,
+                "reason": result.get("reason", ""),
+                "delay": result.get("delay_seconds"),
+                "error_type": error_type,
+                "latency_ms": int(lat * 1000),
+            })
 
             if i < 3:
-                raw_samples.append(raw[:300])
+                raw_samples.append((result.get("raw") or "")[:300])
 
+        n = body.runs
         all_results.append({
             "name": name,
-            "runs": body.runs,
+            "run_count": n,
             "parse_error_count": parse_errors,
-            "parse_error_ratio": round(parse_errors / body.runs, 3),
+            "parse_error_ratio": round(parse_errors / n, 3),
             "avg_latency_ms": int(sum(latencies) / len(latencies) * 1000),
             "action_dist": actions,
             "runs": runs_list,
@@ -1390,10 +1402,12 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
         })
 
     total_errors = sum(r["parse_error_count"] for r in all_results)
+    total_runs = len(cases) * body.runs
     return {
+        "dry_run": True,
         "cases": all_results,
         "overall_parse_error_count": total_errors,
-        "overall_parse_error_ratio": round(total_errors / (len(cases) * body.runs), 3) if cases else 0,
+        "overall_parse_error_ratio": round(total_errors / total_runs, 3) if total_runs else 0,
     }
 
 
