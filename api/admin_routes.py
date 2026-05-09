@@ -56,6 +56,13 @@ def _client_ip(request) -> str:
     return ""
 
 
+def _audit_request(db: Session, request: Request, action: str,
+                   target_type: str = "", target_id: str = "",
+                   detail: dict | None = None):
+    """写审计日志——自动从 request 提取客户端 IP。"""
+    return _audit(db, action, target_type, target_id, detail,
+                  ip_address=_client_ip(request))
+
 # ── Auth check endpoint ──
 
 @router.get("/me")
@@ -736,7 +743,7 @@ def timing_gate_test(body: TimingGateTestRequest, _auth=Depends(verify_admin)):
 # ═══════════════════════════════════════════
 
 @router.post("/stickers")
-def create_sticker(body: StickerCreate, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def create_sticker(body: StickerCreate, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     from core.sticker_memory import register_sticker
     try:
         sticker = register_sticker(
@@ -756,7 +763,7 @@ def create_sticker(body: StickerCreate, db: Session = Depends(get_db), _auth=Dep
         )
     except Exception as e:
         raise HTTPException(400, str(e))
-    _audit(db, "create_sticker", "sticker", sticker.get("id"), {
+    _audit_request(db, request, "create_sticker", "sticker", sticker.get("id"), {
         "name": body.name, "status": body.status,
         "stream_id": sticker.get("chat_stream_id", ""),
         "description": body.description[:80] if body.description else "",
@@ -838,7 +845,7 @@ def get_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(ve
 
 
 @router.put("/stickers/{sticker_id}")
-def update_sticker(sticker_id: int, body: StickerUpdate, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def update_sticker(sticker_id: int, body: StickerUpdate, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
@@ -852,29 +859,29 @@ def update_sticker(sticker_id: int, body: StickerUpdate, db: Session = Depends(g
     if body.emotions is not None:
         row.emotions_json = json.dumps(body.emotions, ensure_ascii=False); updates["emotions"] = body.emotions
     db.commit()
-    _audit(db, "update_sticker", "sticker", sticker_id, updates)
+    _audit_request(db, request, "update_sticker", "sticker", sticker_id, updates)
     return _sticker_dict(row)
 
 
 @router.post("/stickers/{sticker_id}/enable")
-def enable_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def enable_sticker(sticker_id: int, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
     if row.dedupe_status == "duplicate":
         raise HTTPException(400, "duplicate sticker cannot be enabled directly")
     row.status = "active"; db.commit()
-    _audit(db, "enable_sticker", "sticker", sticker_id)
+    _audit_request(db, request, "enable_sticker", "sticker", sticker_id)
     return {"ok": True}
 
 
 @router.post("/stickers/{sticker_id}/disable")
-def disable_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def disable_sticker(sticker_id: int, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
     row.status = "disabled"; db.commit()
-    _audit(db, "disable_sticker", "sticker", sticker_id)
+    _audit_request(db, request, "disable_sticker", "sticker", sticker_id)
     return {"ok": True}
 
 
@@ -902,7 +909,7 @@ def preview_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depend
 
 
 @router.post("/stickers/{sticker_id}/redescribe")
-def redescribe_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def redescribe_sticker(sticker_id: int, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     from core.sticker_memory import auto_describe_sticker
 
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
@@ -912,7 +919,7 @@ def redescribe_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Dep
         auto_describe_sticker(sticker_id, force=True)
         db.refresh(row)
         ok = row.describe_status == "ok"
-        _audit(db, "redescribe_sticker", "sticker", sticker_id)
+        _audit_request(db, request, "redescribe_sticker", "sticker", sticker_id)
         return {"ok": ok, "describe_status": row.describe_status, "description": row.description or "",
                 "error": row.describe_last_error if not ok else ""}
     except Exception as e:
@@ -940,7 +947,7 @@ def retry_preview(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(
 
 
 @router.post("/stickers/batch-delete")
-def batch_delete_stickers(body: dict, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def batch_delete_stickers(body: dict, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     raw = body.get("ids", [])
     if not isinstance(raw, list) or not raw:
         raise HTTPException(400, "ids required")
@@ -961,19 +968,19 @@ def batch_delete_stickers(body: dict, db: Session = Depends(get_db), _auth=Depen
             row.status = "deleted"
             count += 1
     db.commit()
-    _audit(db, "batch_delete_stickers", "sticker", f"batch_{len(ids)}", {
+    _audit_request(db, request, "batch_delete_stickers", "sticker", f"batch_{len(ids)}", {
         "count": count, "ids_sample": sorted(ids)[:50],
     })
     return {"ok": True, "deleted": count}
 
 
 @router.delete("/stickers/{sticker_id}")
-def delete_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def delete_sticker(sticker_id: int, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
     row.status = "deleted"; db.commit()
-    _audit(db, "soft_delete_sticker", "sticker", sticker_id)
+    _audit_request(db, request, "soft_delete_sticker", "sticker", sticker_id)
     return {"ok": True}
 
 
@@ -990,15 +997,15 @@ def list_block_rules(page: int = 1, limit: int = 20, db: Session = Depends(get_d
 
 
 @router.post("/block-rules")
-def create_block_rule(body: BlockRuleCreate, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def create_block_rule(body: BlockRuleCreate, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     rule = UserBlockRule(**body.model_dump())
     db.add(rule); db.commit()
-    _audit(db, "create_block_rule", "block_rule", rule.id, body.model_dump())
+    _audit_request(db, request, "create_block_rule", "block_rule", rule.id, body.model_dump())
     return _block_dict(rule)
 
 
 @router.put("/block-rules/{rule_id}")
-def update_block_rule(rule_id: int, body: BlockRuleUpdate, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def update_block_rule(rule_id: int, body: BlockRuleUpdate, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(UserBlockRule).filter(UserBlockRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "Not found")
@@ -1008,17 +1015,17 @@ def update_block_rule(rule_id: int, body: BlockRuleUpdate, db: Session = Depends
         if val is not None:
             setattr(row, field, val); updates[field] = val
     db.commit()
-    _audit(db, "update_block_rule", "block_rule", rule_id, updates)
+    _audit_request(db, request, "update_block_rule", "block_rule", rule_id, updates)
     return _block_dict(row)
 
 
 @router.delete("/block-rules/{rule_id}")
-def delete_block_rule(rule_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def delete_block_rule(rule_id: int, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(UserBlockRule).filter(UserBlockRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "Not found")
     db.delete(row); db.commit()
-    _audit(db, "delete_block_rule", "block_rule", rule_id)
+    _audit_request(db, request, "delete_block_rule", "block_rule", rule_id)
     return {"ok": True}
 
 
@@ -1199,7 +1206,7 @@ def update_prompt_fragment(name: str, body: dict, db: Session = Depends(get_db),
     with open(fpath, "w", encoding="utf-8") as fh:
         fh.write(content)
     new_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
-    _audit(db, "update_prompt_fragment", "prompt_fragment", name, {
+    _audit_request(db, request, "update_prompt_fragment", "prompt_fragment", name, {
         "before_hash": old_hash, "after_hash": new_hash,
         "size_before": len(old), "size_after": len(content),
     })
@@ -1214,7 +1221,7 @@ def rebuild_prompt(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     try:
         result = subprocess.run(["python", script], capture_output=True, text=True, cwd=base, timeout=10)
         ok = result.returncode == 0
-        _audit(db, "rebuild_prompt", "prompt", "nanobot", {
+        _audit_request(db, request, "rebuild_prompt", "prompt", "nanobot", {
             "ok": ok, "returncode": result.returncode,
         })
         if not ok:
@@ -1293,7 +1300,7 @@ def rollback_prompt_backup(backup_name: str, db: Session = Depends(get_db), _aut
     os.makedirs(backup_dir, exist_ok=True)
     shutil.copy2(target, rollback_guard)
     shutil.copy2(backup_path, target)
-    _audit(db, "rollback_prompt_fragment", "prompt_fragment", parsed["fragment"], {
+    _audit_request(db, request, "rollback_prompt_fragment", "prompt_fragment", parsed["fragment"], {
         "backup": backup_name,
         "before_hash": current_hash,
     })
