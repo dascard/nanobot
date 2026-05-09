@@ -1053,9 +1053,9 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                         message_id=req.message_id or "",
                     )
                     source_message_ids = [req.message_id] if req.message_id else []
-                memory_header, history_messages = _build_session_memory(
+                memory_header, history_messages, _ctx_debug = _build_session_memory(
                     db, group_user_id, user_id=group_user_id,
-                    is_group=True,
+                    is_group=True, group_id=req.group_id,
                 )
                 group_recent_context = _build_group_recent_context(
                     db, group_user_id, exclude_message_ids=source_message_ids,
@@ -1322,8 +1322,9 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     str(x) for x in (result.get("source_message_ids") or [])
                     if str(x).strip()
                 ]
-                memory_header, history_messages = _build_session_memory(
+                memory_header, history_messages, _ctx_debug = _build_session_memory(
                     db, group_user_id, user_id=group_user_id, is_group=True,
+                    group_id=req.group_id,
                 )
                 group_recent_context = _build_group_recent_context(
                     db, group_user_id, exclude_message_ids=source_message_ids,
@@ -1603,7 +1604,7 @@ async def proxy_chat(
     is_group = not str(req.session_id).startswith("private_")
 
     # 3. 构建会话记忆上下文 (时间窗口 + clear 标记感知)
-    memory_header, history_messages = _build_session_memory(
+    memory_header, history_messages, _ctx_debug = _build_session_memory(
         db,
         req.session_id,
         user_id=req.user_id,

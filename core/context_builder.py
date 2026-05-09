@@ -99,11 +99,13 @@ def _safe_meta(meta_json: str) -> dict:
 def build_session_memory(
     db, session_id: str, user_id: str = "",
     max_per_msg: int = 300, max_total: int = 4000,
-    is_group: bool = False,
-) -> tuple[str, list[dict]]:
+    is_group: bool = False, group_id: str = "",
+) -> tuple[str, list[dict], dict]:
     """从 ConversationTurn 构建结构化历史消息。
 
-    算法:
+    返回 (header_text, messages_list, debug_info)。
+
+    debug_info 包含 group_profile_mode/profile_injected/profile_items_count 等。
       1. history_clear_at 过滤
       2. 倒序取最新 MAX_ROWS 行
       3. 倒序从新到旧累计 token → 超限停止
@@ -130,8 +132,14 @@ def build_session_memory(
         .limit(max_rows).all()
     )
 
+    debug: dict = {
+        "history_turns": 0, "history_chars": 0,
+        "group_profile_mode": "off", "group_profile_injected": False,
+        "profile_items_count": 0, "profile_memory_ids": [],
+    }
+
     if not turns:
-        return "", []
+        return "", [], debug
 
     selected_desc: list[dict] = []
     total_tokens = 0
@@ -163,12 +171,15 @@ def build_session_memory(
 
     history_messages = list(reversed(selected_desc))
     if not history_messages:
-        return "", []
+        return "", [], debug
 
     while history_messages and history_messages[0]["role"] == "assistant":
         history_messages.pop(0)
     if not history_messages:
-        return "", []
+        return "", [], debug
+
+    debug["history_turns"] = len(history_messages)
+    debug["history_chars"] = sum(len(m.get("content", "")) for m in history_messages)
 
     logger.info("[Context] session=%s type=%s rows=%d→%d tokens~%d max=%d",
                 session_id, "group" if is_group else "private",
@@ -181,7 +192,61 @@ def build_session_memory(
         "只回复当前 <user_input>；如需未注入的更早上下文，再使用 sql_analysis 查询 chat_logs 表。\n"
         "</history_context>"
     )
-    return header, history_messages
+
+    # ── GroupProfile injection ──
+    if is_group and group_id:
+        try:
+            from core.database import ChatStreamConfig
+            from core.group_runtime.ids import normalize_group_session_id
+            norm = normalize_group_session_id(group_id)
+            cfg = db.query(ChatStreamConfig).filter(
+                ChatStreamConfig.chat_stream_id == norm
+            ).first()
+            mode = (cfg.group_profile_mode or "off") if cfg else "off"
+            debug["group_profile_mode"] = mode
+
+            if mode in ("preview", "on"):
+                from core.group_memory import build_profile
+                profile = build_profile(group_id)
+                if profile:
+                    items_count = sum(
+                        len(v) if isinstance(v, (list, dict)) else 1
+                        for v in profile.values() if v
+                    )
+                    debug["profile_items_count"] = items_count
+
+                    if mode == "on":
+                        profile_ctx = _render_profile_context(group_id, profile)
+                        if profile_ctx:
+                            header = profile_ctx + "\n" + header
+                            debug["group_profile_injected"] = True
+                            debug["profile_memory_ids"] = [
+                                m["id"] for k in profile
+                                for m in (profile.get(k, []) if isinstance(profile.get(k), list) else [])
+                                if isinstance(m, dict) and m.get("id")
+                            ][:20]
+        except Exception as e:
+            logger.warning("[Context] GroupProfile injection failed: %s", e)
+
+    return header, history_messages, debug
+
+
+def _render_profile_context(group_id: str, profile: dict) -> str:
+    """渲染 [GroupProfileContext] marker。"""
+    parts = [f"[GroupProfileContext]\ngroup_id: {group_id}"]
+    for category, values in profile.items():
+        if not values:
+            continue
+        if isinstance(values, dict):
+            parts.append(f"- {category}: " + ", ".join(
+                f"{k}={v}" for k, v in list(values.items())[:8]))
+        elif isinstance(values, list):
+            parts.append(f"- {category}: " + "; ".join(
+                str(v) for v in values[:8]))
+    if len(parts) <= 2:
+        return ""
+    parts.append("[/GroupProfileContext]")
+    return "\n".join(parts)
 
 
 def _strip_speaker_prefix(content: str, sender_name: str = "") -> str:
