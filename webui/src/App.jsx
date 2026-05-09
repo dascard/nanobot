@@ -934,8 +934,13 @@ function SettingsPage() {
   const update = (key, value) => { api.put(`/settings/${encodeURIComponent(key)}`, { value }).then(load) }
   const categories = [...new Set((data?.settings || []).map(s => s.category))]
   const [search, setSearch] = useState('')
-  const reloadFromDB = () => api.post('/settings/reload').then(load)
-  const resetKey = (key) => api.post(`/settings/${encodeURIComponent(key)}/reset`).then(load)
+  const reloadFromDB = () => api.post('/settings/reload').then(load).catch(e => alert(e.response?.data?.detail || e.message))
+  const resetKey = (key) => {
+    if (!confirm(`确认将 ${key} 重置为默认值？`)) return
+    api.post(`/settings/${encodeURIComponent(key)}/reset`).then(load).catch(e => alert(e.response?.data?.detail || e.message))
+  }
+  const searchLower = search.trim().toLowerCase()
+  const matchesSearch = (s) => !searchLower || String(s.key || '').toLowerCase().includes(searchLower) || String(s.description || '').toLowerCase().includes(searchLower)
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -953,7 +958,7 @@ function SettingsPage() {
         <div key={cat} className="mb-6">
           <h2 className="text-sm font-semibold text-emerald-400 mb-3 uppercase tracking-wider">{cat}</h2>
           <div className="space-y-2">
-            {(data?.settings || []).filter(s => !search || s.key.includes(search) || s.description.includes(search)).filter(s => s.category === cat).map(s => (
+            {(data?.settings || []).filter(matchesSearch).filter(s => s.category === cat).map(s => (
               <Card key={s.key} className="p-4 flex items-center gap-4">
                 <div className="flex-1 min-w-0">
                   <div className="text-sm">{s.key}</div>
@@ -990,7 +995,17 @@ function DbPage() {
   const [sqlResult, setSqlResult] = useState(null)
   useEffect(() => { api.get('/db/tables').then(r => setTables(r.data.tables)) }, [])
   const queryTable = (t) => { setSel(t); api.get(`/db/tables/${t}`, { params: { limit: 50 } }).then(r => setRows(r.data)) }
-  const backupDb = () => window.open(`${API_BASE}/db/backup`, '_blank')
+  const backupDb = async () => {
+    try {
+      const res = await api.get('/db/backup', { responseType: 'blob' })
+      const blob = new Blob([res.data], { type: 'application/octet-stream' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `nanobot-backup-${new Date().toISOString().slice(0, 19).replaceAll(':', '-')}.db`
+      document.body.appendChild(a); a.click(); a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) { alert(e.response?.data?.detail || e.message) }
+  }
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
