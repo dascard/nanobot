@@ -6,6 +6,7 @@ from typing import Any
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
 REPLY_MARKER = "NANOBOT_REPLY_OUTPUT"
+_ALLOWED_SEND_MODES = {"normal", "quote", "mention", "quote_and_mention"}
 
 
 class ReplyTool(BaseTool):
@@ -48,13 +49,17 @@ class ReplyTool(BaseTool):
             mentions = [str(m)[:20] for m in mentions if str(m).strip()][:10]
         else:
             mentions = []
+        send_mode = str(args.get("send_mode", "normal") or "normal")
+        if send_mode not in _ALLOWED_SEND_MODES:
+            send_mode = "normal"
+
         reply_meta = {
             "content": content,
             "reply_to_message_id": str(args.get("reply_to_message_id", ""))[:50] or None,
             "mentions": mentions,
             "quote": bool(args.get("quote")),
             "at_sender": bool(args.get("at_sender")),
-            "send_mode": str(args.get("send_mode", "normal") or "normal"),
+            "send_mode": send_mode,
         }
         return ToolResult(
             output=json.dumps({REPLY_MARKER: reply_meta}, ensure_ascii=False),

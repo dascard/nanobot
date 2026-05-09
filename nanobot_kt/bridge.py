@@ -303,7 +303,6 @@ class NanobotBridge:
         ]
 
     _ALLOWED_SEND_MODES = frozenset({"normal", "quote", "mention", "quote_and_mention"})
-    _reply_meta_by_session: dict[str, dict] = {}
 
     def _extract_reply_from_tool_output(self, session_id: str = "") -> str:
         """从 conversation 中提取 reply() 工具的结构化输出。
@@ -347,14 +346,19 @@ class NanobotBridge:
                             "send_mode": send_mode,
                         }
                         if session_id:
-                            self._reply_meta_by_session[session_id] = rm
+                            self._reply_meta_store()[session_id] = rm
                         return reply_text
         except Exception as e:
             logger.debug("[Reply] extraction failed: %s", e)
         return ""
 
+    def _reply_meta_store(self) -> dict:
+        if not hasattr(self, "__reply_meta_by_session"):
+            self.__reply_meta_by_session = {}
+        return self.__reply_meta_by_session
+
     def pop_last_reply_meta(self, session_id: str = "") -> dict | None:
-        return self._reply_meta_by_session.pop(session_id, None)
+        return self._reply_meta_store().pop(session_id, None)
 
     def _extract_last_rich_tool_output(
         self,

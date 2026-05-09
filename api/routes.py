@@ -1628,7 +1628,8 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                 )
                 answer = reply if isinstance(reply, str) else str(reply or "")
                 result["reply"] = _sanitize_prompt_text(answer, max_chars=4000)
-                result["reply_meta"] = bridge.get_last_reply_meta() if hasattr(bridge, "get_last_reply_meta") else None
+                reply_meta_timer = bridge.pop_last_reply_meta(group_user_id)
+                result["reply_meta"] = reply_meta_timer
                 result["group_id"] = req.group_id
                 if answer.strip():
                     _persist_group_bridge_reply(
@@ -1639,7 +1640,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                         query=chat_query,
                         answer=answer,
                         source_message_ids=source_message_ids,
-                        reply_meta=reply_meta,
+                        reply_meta=reply_meta_timer,
                     )
                     runtime.note_bot_replied(req.group_id)
                 logger.info("[TimingGate.timer] reply group=%s len=%d", req.group_id, len(answer))
