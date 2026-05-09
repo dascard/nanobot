@@ -303,6 +303,7 @@ class ChatStreamConfig(Base):
     use_expression = Column(Integer, default=1)
     enable_expression_learning = Column(Integer, default=1)
     enable_jargon_learning = Column(Integer, default=1)
+    enable_group_profile = Column(Integer, default=0)  # 是否注入 GroupProfileContext
     planner_smooth = Column(Integer, default=3)
     meta_json = Column(Text, default="{}")
     created_at = Column(DateTime, default=datetime.now)
@@ -552,6 +553,18 @@ def init_db():
                 conn.commit()
             except Exception as e:
                 print(f"  ⚠ GroupMemory index creation failed: {e}")
+
+        if "chat_stream_configs" in inspector.get_table_names():
+            cfg_columns = [col["name"] for col in inspector.get_columns("chat_stream_configs")]
+            if "enable_group_profile" not in cfg_columns:
+                print("  → Migrating: Adding missing column [enable_group_profile] to chat_stream_configs...")
+                try:
+                    conn.execute(text(
+                        "ALTER TABLE chat_stream_configs ADD COLUMN enable_group_profile INTEGER DEFAULT 0"
+                    ))
+                    conn.commit()
+                except Exception as e:
+                    print(f"  ⚠ Migration failed for chat_stream_configs.enable_group_profile: {e}")
 
         # index: (session_id, message_id) for chat_logs
         try:
