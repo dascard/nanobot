@@ -173,6 +173,7 @@ class ConfigUpdate(BaseModel):
     enable_expression_learning: Optional[int] = None
     enable_jargon_learning: Optional[int] = None
     group_profile_mode: Optional[str] = None
+    enable_group_profile: Optional[int] = None  # deprecated, 兼容旧调用方
     planner_smooth: Optional[int] = None
 
 
@@ -1055,9 +1056,13 @@ def update_config(chat_stream_id: str, body: ConfigUpdate, db: Session = Depends
             updates[field] = val
     if body.group_profile_mode is not None:
         mode = str(body.group_profile_mode).strip()
-        if mode in ("off", "preview", "on"):
-            row.group_profile_mode = mode
-            updates["group_profile_mode"] = mode
+        if mode not in ("off", "preview", "on"):
+            raise HTTPException(status_code=400, detail=f"invalid group_profile_mode: {mode}")
+        row.group_profile_mode = mode
+        updates["group_profile_mode"] = mode
+    elif body.enable_group_profile is not None:
+        row.group_profile_mode = "on" if body.enable_group_profile else "off"
+        updates["group_profile_mode"] = row.group_profile_mode
     db.commit()
     _audit(db, "update_config", "config", chat_stream_id, updates)
     return _config_dict(row)
