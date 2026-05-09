@@ -205,6 +205,7 @@ class NanobotBridge:
         "[ToolPolicy]",
         "<group_recent_context>",
         "<group_memory_context",
+        "[GroupProfileContext]",
         "[ExpressionContext]",
         "[JargonContext]",
         "<history_context>",
@@ -480,42 +481,29 @@ class NanobotBridge:
                         logger.info("[NanobotBridge] GroupRecentContext injected chars=%d",
                                     len(group_recent_context))
 
-                    # 注入群画像（从 GroupMemory 动态生成）
-                    from core.group_runtime.ids import normalize_group_session_id, normalize_group_stream_id
-                    profile_group_id = normalize_group_session_id(
-                        str(meta.get("group_id") or meta.get("session_id") or session_id or "").strip()
-                    )
-                    chat_stream_id = normalize_group_stream_id(profile_group_id)
-                    if profile_group_id:
-                        try:
-                            from core.context_builder import build_group_profile_context
-                            profile_ctx = build_group_profile_context(profile_group_id)
-                            if profile_ctx:
-                                conv.append("system", profile_ctx)
-                                logger.info("[NanobotBridge] GroupProfile injected for %s (%d chars)",
-                                            profile_group_id, len(profile_ctx))
-
-                            try:
-                                from core.expression_memory import (
-                                    build_expression_context,
-                                    build_jargon_context,
-                                )
-                                expr_ctx = build_expression_context(chat_stream_id)
-                                if expr_ctx:
-                                    conv.append("system", expr_ctx)
-                                    logger.info("[NanobotBridge] ExpressionContext injected stream=%s chars=%d",
-                                                chat_stream_id, len(expr_ctx))
-                                jargon_ctx = build_jargon_context(chat_stream_id)
-                                if jargon_ctx:
-                                    conv.append("system", jargon_ctx)
-                                    logger.info("[NanobotBridge] JargonContext injected stream=%s chars=%d",
-                                                chat_stream_id, len(jargon_ctx))
-                            except Exception as e:
-                                logger.warning("[NanobotBridge] Expression/Jargon inject failed session=%s: %s",
-                                               group_session_id, e)
-                        except Exception as e:
-                            logger.warning("[NanobotBridge] GroupProfile inject failed session=%s: %s",
-                                           profile_group_id, e)
+                    # 注入群表达/黑话（GroupProfile 已移至 ContextBuilder history_header 统一注入）
+                    try:
+                        from core.group_runtime.ids import normalize_group_stream_id
+                        from core.expression_memory import (
+                            build_expression_context,
+                            build_jargon_context,
+                        )
+                        chat_stream_id = normalize_group_stream_id(
+                            normalize_group_session_id(str(meta.get("group_id") or session_id or "")))
+                        if chat_stream_id:
+                            expr_ctx = build_expression_context(chat_stream_id)
+                            if expr_ctx:
+                                conv.append("system", expr_ctx)
+                                logger.info("[NanobotBridge] ExpressionContext injected stream=%s chars=%d",
+                                            chat_stream_id, len(expr_ctx))
+                            jargon_ctx = build_jargon_context(chat_stream_id)
+                            if jargon_ctx:
+                                conv.append("system", jargon_ctx)
+                                logger.info("[NanobotBridge] JargonContext injected stream=%s chars=%d",
+                                            chat_stream_id, len(jargon_ctx))
+                    except Exception as e:
+                        logger.warning("[NanobotBridge] Expression/Jargon inject failed session=%s: %s",
+                                       group_session_id, e)
             else:
                 # 私聊注入专属行为规则
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):

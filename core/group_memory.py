@@ -74,7 +74,9 @@ def upsert(
             existing.last_seen = datetime.now()
             existing.confidence = min(1.0, existing.confidence + confidence_hint * 0.1)
             existing.decay_score = min(1.0, existing.decay_score + 0.05)
-            if existing.status == "archived" and existing.confidence >= CONFIDENCE_FLOOR:
+            if existing.status in ("review", "archived") and existing.confidence >= 0.7 and existing.evidence_count >= 2:
+                existing.status = "active"
+            elif existing.status == "archived" and existing.confidence >= CONFIDENCE_FLOOR:
                 existing.status = "active"
             if evidence_log_ids:
                 _merge_evidence(existing, evidence_log_ids)
@@ -158,12 +160,41 @@ def apply_decay(group_id: str):
         db.close()
 
 
+def query_injectable(group_id: str, *, limit: int = 50) -> list[dict]:
+    """查询可注入的 GroupMemory——与 build_profile 口径一致。"""
+    group_id = _norm_group(group_id)
+    return [
+        m for m in query_active(group_id, min_confidence=0.7, limit=limit)
+        if should_inject(m)
+    ]
+
+
+def build_profile_from_memories(memories: list[dict]) -> dict:
+    """从已筛选的 memory 列表生成 profile——避免重复查库。"""
+    by_type: dict[str, list[dict]] = {}
+    for m in memories:
+        by_type.setdefault(m["memory_type"], []).append(m)
+
+    def _top(kind: str, n: int) -> list[str]:
+        return [m["content"] for m in by_type.get(kind, [])[:n]]
+
+    return {
+        "common_topics": _top("topic", 5),
+        "slang": {
+            m["content"]: _safe_meta(m.get("meta_json", "{}")).get("meaning", "")
+            for m in by_type.get("slang", [])[:8]
+        },
+        "style": _top("style", 5),
+        "events": _top("event", 3),
+        "relationships": _top("relationship", 5),
+        "bot_preferences": _top("preference", 3),
+    }
+
+
 def build_profile(group_id: str) -> dict:
     """从 GroupMemory 动态生成 GroupProfile JSON。"""
-    all_mem = [m for m in query_active(group_id, min_confidence=0.7) if should_inject(m)]
-    by_type: dict[str, list[dict]] = {}
-    for m in all_mem:
-        by_type.setdefault(m["memory_type"], []).append(m)
+    all_mem = query_injectable(group_id)
+    return build_profile_from_memories(all_mem)
 
     def _top(kind: str, n: int) -> list[str]:
         return [m["content"] for m in by_type.get(kind, [])[:n]]

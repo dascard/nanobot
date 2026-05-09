@@ -228,31 +228,19 @@ def _build_profile_section(db, group_id: str) -> tuple[str, dict]:
         if mode not in ("preview", "on"):
             return "", debug
 
-        from core.group_memory import build_profile, query_active, should_inject
+        from core.group_memory import query_injectable, build_profile_from_memories
 
-        profile = build_profile(group_id)
-        if not profile:
+        memories = query_injectable(group_id)
+        if not memories:
             return "", debug
 
-        items_count = sum(
+        profile = build_profile_from_memories(memories)
+        debug["profile_memory_ids"] = [m["id"] for m in memories[:20]]
+        debug["profile_items_count"] = sum(
             len(v) if isinstance(v, (list, dict)) else 1
             for v in profile.values() if v
         )
-        debug["profile_items_count"] = items_count
-
-        # preview 记录裁剪版 profile 内容
-        if mode == "preview":
-            debug["profile_preview"] = _compact_profile(profile)
-
-        # 从 query_active + should_inject 获取真实 memory IDs
-        try:
-            memories = [
-                m for m in query_active(group_id, min_confidence=0.7)
-                if should_inject(m)
-            ]
-            debug["profile_memory_ids"] = [m["id"] for m in memories[:20]]
-        except Exception:
-            pass
+        debug["profile_preview"] = _compact_profile(profile)
 
         if mode == "on":
             ctx = _render_profile_context(group_id, profile)
