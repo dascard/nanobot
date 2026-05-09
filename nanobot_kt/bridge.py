@@ -271,19 +271,21 @@ class NanobotBridge:
         timing_decision = str(meta.get("timing_decision") or "").strip()
         if timing_decision:
             lines.append(f"timing_decision: {timing_decision}")
-        # bot 自我身份
+        # bot 自我身份（self_id == bot_id 时不重复）
         self_id = str(meta.get("self_id") or "").strip()
         bot_id = str(meta.get("bot_id") or self_id or "").strip()
         bot_name = str(meta.get("bot_name") or "").strip()
-        if self_id:
+        if self_id and self_id != bot_id:
             lines.append(f"self_id: {self_id}")
         if bot_id:
             lines.append(f"bot_id: {bot_id}")
         if bot_name:
             lines.append(f"bot_name: {bot_name}")
         aliases = meta.get("bot_aliases")
-        if isinstance(aliases, list) and aliases:
-            lines.append(f"bot_aliases: {', '.join(str(a) for a in aliases[:10])}")
+        if isinstance(aliases, list):
+            clean = [str(a)[:40].strip() for a in aliases[:10] if str(a).strip()]
+            if clean:
+                lines.append(f"bot_aliases: {', '.join(clean)}")
         lines.append(f"current_time: {_current_time_label()}")
         lines.append("timezone: Asia/Shanghai")
         lines.append("</runtime_context>")

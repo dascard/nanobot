@@ -1591,6 +1591,12 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                 group_recent_context = _build_group_recent_context(
                     db, group_user_id, exclude_message_ids=source_message_ids,
                 )
+                # 从 runtime state 取回调时保留的 bot identity
+                timer_state = runtime._states.get(_normalize_group_session_id(req.group_id))
+                timer_bot_id = (timer_state.bot_id if timer_state else "") or ""
+                timer_bot_name = (timer_state.bot_name if timer_state else "") or ""
+                timer_bot_aliases = list(timer_state.bot_aliases if timer_state else []) or list(req.bot_aliases or [])
+
                 bridge_meta = {
                     "chat_type": "group",
                     "user_id": group_user_id, "session_id": group_user_id,
@@ -1601,7 +1607,10 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     "group_recent_context": group_recent_context,
                     "source_message_ids": source_message_ids,
                     "context_debug": _ctx_debug,
-                    "bot_aliases": list(req.bot_aliases or []),
+                    "self_id": timer_bot_id,
+                    "bot_id": timer_bot_id,
+                    "bot_name": timer_bot_name,
+                    "bot_aliases": timer_bot_aliases,
                 }
                 chat_query = _build_multimodal_user_input_text(
                     result.get("pending_text", ""), None, max_chars=MAX_QUERY_CHARS,

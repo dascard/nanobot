@@ -144,6 +144,8 @@ class GroupChatState:
     stream_id: str = ""
     session_name: str = ""
     bot_aliases: list[str] = field(default_factory=list)
+    bot_id: str = ""
+    bot_name: str = ""
     pending: list[GroupPendingMessage] = field(default_factory=list)
     message_cache: list[GroupPendingMessage] = field(default_factory=list)
     generation: int = 0
@@ -373,6 +375,8 @@ class GroupRuntime:
             state.last_trigger_reason = tr
             state.session_name = session_name
             state.bot_aliases = list(bot_aliases or [])
+            state.bot_id = pm.bot_id or state.bot_id
+            state.bot_name = pm.bot_name or state.bot_name
             state.add_message(pm)
 
             ctx = {
