@@ -60,6 +60,8 @@ def sanitize_prompt_text(text: str, max_chars: int = 0) -> str:
         "[PROMPT]": "(PROMPT_TAG)",
         "[INSTRUCTION]": "(INSTRUCTION_TAG)",
         "[CMD]": "(CMD_TAG)",
+        "[GroupProfileContext]": "(GROUP_PROFILE_CONTEXT_TAG)",
+        "[/GroupProfileContext]": "(/GROUP_PROFILE_CONTEXT_TAG)",
     }
     for old, new in replacements.items():
         cleaned = cleaned.replace(old, new)

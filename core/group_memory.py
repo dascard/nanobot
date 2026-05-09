@@ -74,12 +74,12 @@ def upsert(
             existing.last_seen = datetime.now()
             existing.confidence = min(1.0, existing.confidence + confidence_hint * 0.1)
             existing.decay_score = min(1.0, existing.decay_score + 0.05)
-            if existing.status in ("review", "archived") and existing.confidence >= 0.7 and existing.evidence_count >= 2:
+            if evidence_log_ids:
+                _merge_evidence(existing, evidence_log_ids)
+            if existing.status == "review" and existing.confidence >= 0.7 and existing.evidence_count >= 2:
                 existing.status = "active"
             elif existing.status == "archived" and existing.confidence >= CONFIDENCE_FLOOR:
                 existing.status = "active"
-            if evidence_log_ids:
-                _merge_evidence(existing, evidence_log_ids)
             if meta:
                 existing.meta_json = json.dumps(
                     {**_safe_meta(existing.meta_json), **meta}, ensure_ascii=False)
@@ -195,19 +195,6 @@ def build_profile(group_id: str) -> dict:
     """从 GroupMemory 动态生成 GroupProfile JSON。"""
     all_mem = query_injectable(group_id)
     return build_profile_from_memories(all_mem)
-
-    def _top(kind: str, n: int) -> list[str]:
-        return [m["content"] for m in by_type.get(kind, [])[:n]]
-
-    return {
-        "common_topics": _top("topic", 5),
-        "slang": {m["content"]: _safe_meta(m["meta_json"]).get("meaning", "")
-                  for m in by_type.get("slang", [])[:8]},
-        "style": _top("style", 5),
-        "events": _top("event", 3),
-        "relationships": _top("relationship", 5),
-        "bot_preferences": _top("preference", 3),
-    }
 
 
 def build_profile_with_evidence(group_id: str, db) -> tuple[dict, dict[str, list[str]]]:

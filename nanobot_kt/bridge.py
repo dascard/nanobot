@@ -483,7 +483,7 @@ class NanobotBridge:
 
                     # 注入群表达/黑话（GroupProfile 已移至 ContextBuilder history_header 统一注入）
                     try:
-                        from core.group_runtime.ids import normalize_group_stream_id
+                        from core.group_runtime.ids import normalize_group_session_id, normalize_group_stream_id
                         from core.expression_memory import (
                             build_expression_context,
                             build_jargon_context,
