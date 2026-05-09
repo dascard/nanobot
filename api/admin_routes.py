@@ -51,52 +51,79 @@ def admin_me(_auth=Depends(verify_admin)):
     return {"ok": True, "user": "admin"}
 
 
+_VERSION_CACHE: dict | None = None
+
+
 @router.get("/version")
 def admin_version(_auth=Depends(verify_admin)):
-    import subprocess
+    global _VERSION_CACHE
+    if _VERSION_CACHE is not None:
+        return _VERSION_CACHE
 
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # 优先读环境变量（Docker build-arg 注入），无则 git fallback
+    commit = os.environ.get("NANOBOT_GIT_COMMIT") or ""
+    branch = os.environ.get("NANOBOT_GIT_BRANCH") or ""
+    commit_date = os.environ.get("NANOBOT_GIT_COMMIT_DATE") or ""
+    dirty_raw = os.environ.get("NANOBOT_GIT_DIRTY") or ""
 
-    def _git(args: list[str]) -> str:
-        try:
-            return subprocess.check_output(
-                ["git", *args],
-                cwd=base,
-                text=True,
-                stderr=subprocess.DEVNULL,
-                timeout=3,
-            ).strip()
-        except Exception:
-            return ""
+    if not commit or not branch:
+        import subprocess
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    commit = _git(["rev-parse", "--short", "HEAD"]) or "unknown"
-    full_commit = _git(["rev-parse", "HEAD"]) or ""
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]) or ""
-    commit_date = _git(["log", "-1", "--format=%ci", "--date=iso-strict"]) or ""
-    dirty = bool(
-        _git([
-            "status",
-            "--porcelain",
-            "--untracked-files=no",
-            "--",
-            ".",
-            ":(exclude)data",
-            ":(exclude).claude",
-            ":(exclude)sentinel/model.safetensors",
-            ":(exclude).env",
-            ":(exclude).vscode",
-            ":(exclude).idea",
-            ":(exclude)webui/node_modules",
-        ])
-    )
-    return {
-        "commit": commit,
-        "full_commit": full_commit,
-        "branch": branch,
-        "commit_date": commit_date,
+        def _git(args: list[str]) -> str:
+            try:
+                return subprocess.check_output(
+                    ["git", *args],
+                    cwd=base,
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                    timeout=3,
+                ).strip()
+            except Exception:
+                return ""
+
+        commit = commit or _git(["rev-parse", "--short", "HEAD"]) or "unknown"
+        branch = branch or _git(["rev-parse", "--abbrev-ref", "HEAD"]) or ""
+        commit_date = commit_date or _git(["log", "-1", "--format=%ci", "--date=iso-strict"]) or ""
+
+        if not dirty_raw:
+            dirty_raw = _git([
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+                "--",
+                ".",
+                ":(exclude)data",
+                ":(exclude).claude",
+                ":(exclude)sentinel/model.safetensors",
+                ":(exclude).env",
+                ":(exclude).vscode",
+                ":(exclude).idea",
+                ":(exclude)webui/node_modules",
+            ])
+            # git status 失败 → null 而非 false
+            if dirty_raw:
+                dirty_raw = "true"
+            elif dirty_raw == "":
+                dirty_raw = "false"
+
+    # 解析 dirty 状态：null=未知, true=有改动, false=干净
+    if dirty_raw == "true":
+        dirty = True
+    elif dirty_raw == "false":
+        dirty = False
+    else:
+        dirty = None
+
+    _VERSION_CACHE = {
+        "commit": commit or "unknown",
+        "full_commit": os.environ.get("NANOBOT_GIT_FULL_COMMIT", "") or "",
+        "branch": branch or "",
+        "commit_date": commit_date or "",
         "dirty": dirty,
         "display": f"{commit}{'-dirty' if dirty and commit != 'unknown' else ''}",
     }
+    return _VERSION_CACHE
 
 
 # ── Models ──

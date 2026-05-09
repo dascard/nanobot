@@ -9,3 +9,4 @@ sentinel/model.safetensors
 .idea/
 webui/node_modules/
 .claude/
+.git/

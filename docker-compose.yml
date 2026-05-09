@@ -2,7 +2,13 @@ version: "3.8"
 
 services:
   nanobot-server:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
+        GIT_COMMIT_DATE: ${GIT_COMMIT_DATE:-}
+        GIT_DIRTY: ${GIT_DIRTY:-null}
     container_name: nanobot-server
     ports:
       - "8000:8000"

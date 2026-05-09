@@ -2,7 +2,6 @@
 FROM node:20-slim AS webui-builder
 WORKDIR /webui
 RUN apt-get update && apt-get install -y --no-install-recommends \
-	git \
 	ca-certificates \
 	&& rm -rf /var/lib/apt/lists/*
 COPY webui/package.json webui/package-lock.json ./
@@ -14,7 +13,6 @@ RUN npm run build
 FROM python:3.10-slim-bullseye
 WORKDIR /app
 RUN apt-get update && apt-get install -y \
-	git \
 	tzdata \
 	sqlite3 \
 	wkhtmltopdf \
@@ -23,6 +21,18 @@ RUN apt-get update && apt-get install -y \
 	curl \
 	&& rm -rf /var/lib/apt/lists/*
 ENV TZ=Asia/Shanghai
+
+# 版本信息通过 build-arg 注入，不依赖 .git 目录
+ARG GIT_COMMIT=unknown
+ARG GIT_BRANCH=unknown
+ARG GIT_COMMIT_DATE=
+ARG GIT_DIRTY=null
+
+ENV NANOBOT_GIT_COMMIT=$GIT_COMMIT
+ENV NANOBOT_GIT_BRANCH=$GIT_BRANCH
+ENV NANOBOT_GIT_COMMIT_DATE=$GIT_COMMIT_DATE
+ENV NANOBOT_GIT_DIRTY=$GIT_DIRTY
+
 COPY requirements.txt .
 COPY vendor/ ./vendor/
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
