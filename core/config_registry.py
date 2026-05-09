@@ -18,6 +18,7 @@ class SettingDef:
     min_value: float | None = None
     max_value: float | None = None
     sensitive: bool = False
+    dangerous: bool = False
 
 
 SETTING_DEFS: dict[str, SettingDef] = {

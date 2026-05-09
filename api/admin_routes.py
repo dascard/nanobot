@@ -33,15 +33,27 @@ def verify_admin(authorization: str = Header(default="")) -> str:
     return "admin"
 
 
-def _audit(db: Session, action: str, target_type: str = "", target_id: str = "", detail: dict | None = None):
+def _audit(db: Session, action: str, target_type: str = "", target_id: str = "", detail: dict | None = None,
+            ip_address: str = ""):
     try:
         db.add(AdminAuditLog(
             action=action, target_type=target_type, target_id=str(target_id),
             detail_json=json.dumps(detail or {}, ensure_ascii=False),
+            ip_address=(ip_address or "")[:45],
         ))
         db.commit()
     except Exception:
         pass
+
+
+def _client_ip(request) -> str:
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[0].strip()[:45]
+    client = getattr(request, "client", None)
+    if client and hasattr(client, "host"):
+        return str(client.host)[:45]
+    return ""
 
 
 # ── Auth check endpoint ──
@@ -1469,9 +1481,22 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
 # ═══════════════════════════════════════════
 
 @router.get("/audit-logs")
-def list_audit_logs(page: int = 1, limit: int = 50,
-                    db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def list_audit_logs(
+    page: int = 1, limit: int = 50,
+    action: str = "", target_type: str = "", since: str = "",
+    db: Session = Depends(get_db), _auth=Depends(verify_admin),
+):
     q = db.query(AdminAuditLog).order_by(AdminAuditLog.id.desc())
+    if action:
+        q = q.filter(AdminAuditLog.action == action)
+    if target_type:
+        q = q.filter(AdminAuditLog.target_type == target_type)
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since)
+            q = q.filter(AdminAuditLog.created_at >= since_dt)
+        except ValueError:
+            pass
     total = q.count()
     rows = q.offset((page - 1) * limit).limit(limit).all()
     return {"total": total, "items": [{
@@ -1561,6 +1586,7 @@ def list_settings(_auth=Depends(verify_admin)):
             "default": defn.default, "value_type": defn.value_type,
             "category": defn.category, "description": defn.description,
             "restart_required": defn.restart_required,
+            "dangerous": defn.dangerous, "sensitive": defn.sensitive,
             "readonly": defn.key == "database.url","min_value": defn.min_value, "max_value": defn.max_value,
         })
     return {"settings": result, "version": settings.version}

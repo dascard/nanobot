@@ -974,6 +974,7 @@ function SettingsPage() {
                     className={`w-28 p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-center ${s.readonly ? 'opacity-50 cursor-not-allowed' : ''}`}
                     onBlur={e => { const v = e.target.value.trim(); if (!v || v === String(s.value)) return; const p = s.value_type === 'float' ? parseFloat(v) : parseInt(v); if (Number.isNaN(p)) { e.target.value = s.value; return } update(s.key, p) }} />
                 )}
+                {s.dangerous && <span className="text-red-500 text-xs">危险</span>}
                 {s.restart_required && <span className="text-amber-500 text-xs">需重启</span>}
                 {s.readonly && <span className="text-slate-600 text-xs">只读</span>}
                 {!s.readonly && <button onClick={() => resetKey(s.key)} className="px-2 py-1 bg-slate-800 hover:bg-slate-700 rounded text-xs text-slate-500">默认</button>}
@@ -1416,9 +1417,11 @@ function MemoryPage() {
 function AuditPage() {
   const [data, setData] = useState({ items: [], total: 0 })
   const [page, setPage] = useState(1)
+  const [actionFilter, setActionFilter] = useState('')
+  const [typeFilter, setTypeFilter] = useState('')
   const load = useCallback(() => {
-    api.get('/audit-logs', { params: { page, limit: 50 } }).then(r => setData(r.data))
-  }, [page])
+    api.get('/audit-logs', { params: { page, limit: 50, action: actionFilter, target_type: typeFilter } }).then(r => setData(r.data))
+  }, [page, actionFilter, typeFilter])
   useEffect(() => { load() }, [load])
   return (
     <div>
@@ -1428,6 +1431,22 @@ function AuditPage() {
           <p className="text-slate-500 text-sm">Prompt、表情包、屏蔽规则、配置等高风险操作</p>
         </div>
         <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
+      </div>
+      <div className="flex items-center gap-3 mb-4">
+        <select value={actionFilter} onChange={e => { setActionFilter(e.target.value); setPage(1) }}
+          className="p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs">
+          <option value="">全部操作</option>
+          {['update_setting','reset_setting','update_prompt_fragment','rebuild_prompt','rollback_prompt_fragment',
+            'create_sticker','update_sticker','enable_sticker','disable_sticker','delete_sticker','redescribe_sticker','batch_delete_stickers',
+            'create_block_rule','update_block_rule','delete_block_rule','update_config'].map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+        <select value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setPage(1) }}
+          className="p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs">
+          <option value="">全部类型</option>
+          <option value="setting">setting</option><option value="prompt">prompt</option>
+          <option value="sticker">sticker</option><option value="block_rule">block_rule</option>
+          <option value="config">config</option>
+        </select>
       </div>
       <Card className="overflow-x-auto">
         <table className="w-full text-xs">
