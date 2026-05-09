@@ -489,6 +489,14 @@ class GroupRuntime:
             "cooldown_ago": cooldown,
             "reason": result.get("reason", ""),
         }
+        for key in (
+            "raw", "error_type", "latency_ms", "context", "context_chars",
+            "pending_count", "trigger_reason",
+        ):
+            if key in result:
+                response[key] = result.get(key)
+        if response.get("error_type"):
+            response["fallback_action"] = action
         if action == "continue":
             response.update(payload)
         return response
@@ -505,6 +513,32 @@ class GroupRuntime:
         if stale:
             logger.info("[GroupRuntime] cleaned %d idle states", len(stale))
 
+    def snapshot_states(self) -> dict[str, dict]:
+        """返回 Admin WebUI 可读的轻量运行时快照。"""
+        now = _time.time()
+        out: dict[str, dict] = {}
+        for gid, state in self._states.items():
+            pending = state.take_snapshot()
+            out[gid] = {
+                "group_id": state.group_id,
+                "stream_id": state.stream_id,
+                "session_name": state.session_name,
+                "generation": state.generation,
+                "running": state.running,
+                "pending_count": len(pending),
+                "pending_messages": [m.to_dict() for m in pending[-10:]],
+                "has_pending_timer": bool(pending and state.wait_count > 0),
+                "wait_count": state.wait_count,
+                "total_wait_s": round(state.total_wait_s, 1),
+                "last_trigger_reason": state.last_trigger_reason,
+                "last_bot_reply_ago": round(state.bot_reply_ago(), 1),
+                "msg_1m": state.recent_message_count(60),
+                "msg_5m": state.recent_message_count(300),
+                "talk_value": state.talk_value,
+                "last_active_ago": round(now - state.last_active_ts, 1),
+            }
+        return out
+
     async def _call_gate(self, group_id: str, pending: list[GroupPendingMessage],
                          ctx: dict, trigger_reason: str) -> dict:
         """调用 TimingGate 模型判断——to_thread 避免阻塞 event loop。"""
@@ -514,7 +548,14 @@ class GroupRuntime:
         context = self._build_timing_context(
             pending=pending, trigger_reason=trigger_reason, **ctx,
         )
-        return await asyncio.to_thread(gate.judge, context)
+        t0 = _time.time()
+        result = await asyncio.to_thread(gate.judge, context)
+        result.setdefault("latency_ms", int((_time.time() - t0) * 1000))
+        result["context"] = context
+        result["context_chars"] = len(context)
+        result["pending_count"] = len(pending)
+        result["trigger_reason"] = trigger_reason
+        return result
 
     @staticmethod
     def _build_timing_context(

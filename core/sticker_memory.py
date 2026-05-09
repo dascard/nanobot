@@ -382,7 +382,7 @@ def expand_sticker_refs_in_content(content: str, db: Session | None = None) -> s
             .all()
         )
         code_by_id = {
-            int(row.id): f"[IMAGE:{row.file_ref}]"
+            int(row.id): _canonical_row_send_code(row)
             for row in rows
         }
 

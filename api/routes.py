@@ -130,9 +130,15 @@ class ModelSyncRequest(BaseModel):
 
 def _safe_meta(meta_json: str) -> dict:
     try:
-        return json.loads(meta_json or "{}")
+        data = json.loads(meta_json or "{}")
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _short_text(text: str, limit: int = 400) -> str:
+    value = str(text or "")
+    return value if len(value) <= limit else value[:limit] + "...[截断]"
 
 
 def _calc_recall_confidence(keyword: str, content: str, meta: dict) -> float:
@@ -842,6 +848,48 @@ def _register_group_stickers_from_message(
     return registered
 
 
+def _annotate_group_timing_event(
+    db: Session,
+    ambient_log: ChatLog | None,
+    result: dict,
+    *,
+    trigger_reason: str,
+    latency_ms: int,
+    mode: str = "message",
+) -> None:
+    """把本轮 TimingGate/节奏控制结果写回 ambient ChatLog.meta_json。"""
+    if ambient_log is None:
+        return
+    try:
+        meta = _safe_meta(ambient_log.meta_json)
+        error_type = str(result.get("error_type") or "")
+        timing = {
+            "mode": mode,
+            "action": str(result.get("action") or "no_reply"),
+            "delay_seconds": result.get("delay_seconds"),
+            "reason": str(result.get("reason") or "")[:300],
+            "generation": int(result.get("generation") or 0),
+            "trigger_reason": trigger_reason,
+            "latency_ms": int(result.get("latency_ms") or latency_ms or 0),
+            "cooldown_ago": result.get("cooldown_ago"),
+            "pending_count": result.get("pending_count"),
+            "context_chars": result.get("context_chars"),
+            "raw": _short_text(str(result.get("raw") or ""), 1000),
+            "error_type": error_type or None,
+            "parse_error": error_type == "parse_error",
+            "fallback_action": result.get("fallback_action") or (
+                result.get("action") if error_type else None
+            ),
+            "context_summary": _short_text(str(result.get("context") or ""), 1200),
+        }
+        meta["timing_gate"] = {k: v for k, v in timing.items() if v not in ("", None)}
+        ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)
+        db.commit()
+    except Exception as e:
+        logger.warning("[TimingGate] annotate meta failed log_id=%s: %s",
+                       getattr(ambient_log, "id", None), e)
+
+
 def _cache_sticker_preview_bg(sticker_id: int) -> None:
     from core.database import SessionLocal, StickerMemory
     from core.sticker_preview import cache_sticker_preview
@@ -926,19 +974,27 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     meta = _safe_group_client_meta(req)
     if registered_stickers:
         meta = {**meta, "registered_sticker_ids": [item["id"] for item in registered_stickers]}
-    db.add(ChatLog(
+    ambient_log = ChatLog(
         user_id=group_user_id, session_id=group_user_id,
         sender_name=req.sender_name, session_name=req.session_name,
         role="ambient", content=formatted, processed=1,
         message_id=req.message_id,
         meta_json=json.dumps(meta, ensure_ascii=False),
-    ))
+    )
+    db.add(ambient_log)
     db.commit()
+    db.refresh(ambient_log)
     logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
 
     # 2.5 检查用户屏蔽规则——命中后只写 ChatLog，不进入 TimingGate
     if _check_user_blocked(db, req.sender_id, target_type="group", group_id=req.group_id):
         logger.info("[GroupMsg] blocked group=%s sender=%s", req.group_id, req.sender_id)
+        _annotate_group_timing_event(
+            db, ambient_log,
+            {"action": "no_reply", "reason": "user_blocked", "generation": 0},
+            trigger_reason="user_blocked",
+            latency_ms=0,
+        )
         return {"action": "no_reply", "reason": "user_blocked"}
 
     # 3. 所有非重复群消息进入 TimingGate；不再用 L0 关键词预筛。
@@ -967,6 +1023,11 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
         )
         elapsed_ms = int((_t.time() - t0) * 1000)
         action = result.get("action", "no_reply")
+        _annotate_group_timing_event(
+            db, ambient_log, result,
+            trigger_reason=reason,
+            latency_ms=elapsed_ms,
+        )
 
         logger.info(
             "[GroupMsg] group=%s trigger=%s ➜ %s delay=%s gen=%d latency=%dms cooldown=%.0fs reason=%.80s",

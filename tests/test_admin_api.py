@@ -1,10 +1,13 @@
 """Admin API 集成测试——Sticker CRUD + Block Rules + status 枚举 + 认证。"""
+import json
+from datetime import datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, get_db
+from core.database import Base, ChatLog, ChatStreamConfig, StickerMemory, User, get_db
 from server import app
 
 
@@ -224,3 +227,112 @@ class TestPrivateBlockFlow:
         assert "[图片附件" in (row.get("content") or ""), \
             f"content should contain image attachment: {row.get('content')}"
         assert "img.png" in (row.get("content") or "")
+
+
+class TestObservabilityAPI:
+    def test_overview_counts_recent_runtime_signals(self, client, auth_header):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(User(id="group_1001", name="测试群"))
+            db.add(ChatStreamConfig(chat_stream_id="qq:1001:group", talk_value=0.35))
+            db.add(ChatLog(
+                user_id="group_1001", session_id="group_1001",
+                role="ambient", content="[A]: 你好", session_name="测试群",
+                created_at=now - timedelta(minutes=5),
+                meta_json=json.dumps({
+                    "timing_gate": {
+                        "action": "wait",
+                        "reason": "talk_value gate",
+                        "generation": 3,
+                        "latency_ms": 42,
+                        "error_type": None,
+                    }
+                }, ensure_ascii=False),
+            ))
+            db.add(ChatLog(
+                user_id="group_1001", session_id="group_1001",
+                role="assistant", content="你好", sender_name="nanobot",
+                created_at=now - timedelta(minutes=4),
+            ))
+            db.add(StickerMemory(
+                chat_stream_id="qq:1001:group",
+                sticker_hash="h1",
+                file_ref="http://x.com/a.png",
+                preview_status="fetch_failed",
+                describe_status="failed",
+                status="active",
+            ))
+            db.commit()
+
+        r = client.get("/api/v1/admin/overview", headers=auth_header)
+        data = _ok(r)
+        assert data["counters"]["requests_1h"] >= 2
+        assert data["counters"]["group_messages_1h"] == 1
+        assert data["counters"]["replies_1h"] == 1
+        assert data["counters"]["sticker_cache_failures"] == 1
+        assert data["counters"]["sticker_describe_failures"] == 1
+        assert any(item["name"] == "数据库可用" and item["ok"] for item in data["health"])
+
+    def test_group_list_and_detail_expose_recent_decision(self, client, auth_header):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(User(id="group_2002", name="运行群"))
+            db.add(ChatStreamConfig(chat_stream_id="qq:2002:group", talk_value=0.6))
+            db.add(ChatLog(
+                user_id="group_2002", session_id="group_2002",
+                role="ambient", content="[B]: 刚才为什么不回", sender_name="B",
+                session_name="运行群", message_id="m-1",
+                created_at=now - timedelta(seconds=30),
+                meta_json=json.dumps({
+                    "timing_gate": {
+                        "action": "no_reply",
+                        "reason": "普通群聊不插话",
+                        "generation": 8,
+                        "latency_ms": 120,
+                        "raw": "节奏普通 {\"action\":\"no_reply\"}",
+                    }
+                }, ensure_ascii=False),
+            ))
+            db.add(ChatLog(
+                user_id="group_2002", session_id="group_2002",
+                role="assistant", content="我在", sender_name="nanobot",
+                created_at=now - timedelta(seconds=20),
+            ))
+            db.commit()
+
+        groups = _ok(client.get("/api/v1/admin/groups", headers=auth_header))
+        row = next(item for item in groups["items"] if item["group_id"] == "2002")
+        assert row["session_name"] == "运行群"
+        assert row["talk_value"] == 0.6
+        assert row["recent_action"] == "no_reply"
+        assert row["recent_reason"] == "普通群聊不插话"
+
+        detail = _ok(client.get("/api/v1/admin/groups/2002", headers=auth_header))
+        assert detail["group"]["group_id"] == "2002"
+        assert detail["ambient_messages"][0]["message_id"] == "m-1"
+        assert detail["timing_events"][0]["raw"].startswith("节奏普通")
+
+    def test_timing_gate_events_returns_stats(self, client, auth_header):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(ChatLog(
+                user_id="group_3003", session_id="group_3003",
+                role="ambient", content="[C]: 测试", session_name="统计群",
+                created_at=now,
+                meta_json=json.dumps({
+                    "timing_gate": {
+                        "action": "no_reply",
+                        "reason": "非法输出",
+                        "latency_ms": 90,
+                        "error_type": "parse_error",
+                        "fallback_action": "no_reply",
+                    }
+                }, ensure_ascii=False),
+            ))
+            db.commit()
+
+        data = _ok(client.get("/api/v1/admin/timing-gate/events", headers=auth_header))
+        assert data["stats"]["parse_error"] >= 1
+        assert data["stats"]["actions"]["no_reply"] >= 1
+        assert data["items"][0]["parse_error"] is True
+        assert data["items"][0]["fallback_action"] == "no_reply"
