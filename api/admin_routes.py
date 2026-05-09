@@ -1533,6 +1533,17 @@ def download_backup(_auth=Depends(verify_admin)):
     return FileResponse(db_path, media_type="application/octet-stream", filename="nanobot.db")
 
 
+@router.post("/db/vacuum")
+def db_vacuum(request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    import time as _time
+    t0 = _time.time()
+    db.execute(text("VACUUM"))
+    db.commit()
+    elapsed = int((_time.time() - t0) * 1000)
+    _audit_request(db, request, "vacuum_db", "db", "main")
+    return {"ok": True, "elapsed_ms": elapsed}
+
+
 # ═══════════════════════════════════════════
 # Log viewer
 # ═══════════════════════════════════════════
