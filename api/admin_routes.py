@@ -1340,6 +1340,7 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
     default_cases = [
         {"name": "普通玩梗", "context": "<recent>\n[用户A]: 笑死我了\n[用户B]: 哈哈哈哈\n</recent>", "pending_count": 2},
         {"name": "技术求助", "context": "<recent>\n[用户C]: 问一下这个报错怎么修\n[用户D]: 贴代码看看\n</recent>", "pending_count": 1},
+        {"name": "连续发材料", "context": "<recent>\n[用户G]: 等下我发日志\n[用户G]: 还有一张图\n</recent>", "pending_count": 2},
         {"name": "直接叫bot", "context": "<recent>\n[用户E]: @bot 你在吗\n</recent>", "pending_count": 1},
         {"name": "群命令", "context": "<recent>\n[用户F]: /status\n</recent>", "pending_count": 0},
     ]
@@ -1353,6 +1354,7 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
         parse_errors = 0
         latencies: list[float] = []
         actions: dict[str, int] = {}
+        errors: dict[str, int] = {}
         raw_samples: list[str] = []
 
         # 构造接近真实 TimingGate 输入的 context
@@ -1377,6 +1379,7 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
             if error_type == "parse_error":
                 parse_errors += 1
             actions[action] = actions.get(action, 0) + 1
+            errors[error_type or "none"] = errors.get(error_type or "none", 0) + 1
             runs_list.append({
                 "index": i,
                 "action": action,
@@ -1397,6 +1400,7 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
             "parse_error_ratio": round(parse_errors / n, 3),
             "avg_latency_ms": int(sum(latencies) / len(latencies) * 1000),
             "action_dist": actions,
+            "error_dist": errors,
             "runs": runs_list,
             "raw_samples": raw_samples,
         })
