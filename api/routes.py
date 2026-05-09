@@ -1344,6 +1344,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     metadata=bridge_meta,
                 )
                 answer = reply if isinstance(reply, str) else str(reply or "")
+                reply_meta = bridge.get_last_reply_meta() if hasattr(bridge, "get_last_reply_meta") else None
                 if answer.strip():
                     _persist_group_bridge_reply(
                         db,
@@ -1359,6 +1360,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                 return {
                     "action": "continue",
                     "reply": _sanitize_prompt_text(answer, max_chars=4000),
+                    "reply_meta": reply_meta,
                     "generation": result.get("generation", 0),
                     "reason": str(result.get("reason", ""))[:120],
                 }
@@ -1624,6 +1626,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                 )
                 answer = reply if isinstance(reply, str) else str(reply or "")
                 result["reply"] = _sanitize_prompt_text(answer, max_chars=4000)
+                result["reply_meta"] = bridge.get_last_reply_meta() if hasattr(bridge, "get_last_reply_meta") else None
                 result["group_id"] = req.group_id
                 if answer.strip():
                     _persist_group_bridge_reply(

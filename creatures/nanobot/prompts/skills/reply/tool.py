@@ -25,6 +25,12 @@ class ReplyTool(BaseTool):
     def get_parameters_schema(self) -> dict[str, Any]:
         return {"type": "object", "properties": {
             "content": {"type": "string", "description": "发送给用户的回复内容"},
+            "reply_to_message_id": {"type": "string", "description": "（可选）要引用的消息 ID"},
+            "mentions": {"type": "array", "items": {"type": "string"}, "description": "（可选）要 @ 的用户 QQ 号列表"},
+            "quote": {"type": "boolean", "description": "（可选）是否引用被回复消息原文"},
+            "at_sender": {"type": "boolean", "description": "（可选）是否 @ 当前消息发送者"},
+            "send_mode": {"type": "string", "enum": ["normal", "quote", "mention", "quote_and_mention"],
+                          "description": "normal/quote/mention/quote_and_mention"},
         }, "required": ["content"]}
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
@@ -37,8 +43,20 @@ class ReplyTool(BaseTool):
             record_sticker_uses_in_content(content)
         except Exception:
             pass
-        # 结构化输出——bridge 解析此 JSON，不依赖文本标签
+        mentions = args.get("mentions")
+        if isinstance(mentions, list):
+            mentions = [str(m)[:20] for m in mentions if str(m).strip()][:10]
+        else:
+            mentions = []
+        reply_meta = {
+            "content": content,
+            "reply_to_message_id": str(args.get("reply_to_message_id", ""))[:50] or None,
+            "mentions": mentions,
+            "quote": bool(args.get("quote")),
+            "at_sender": bool(args.get("at_sender")),
+            "send_mode": str(args.get("send_mode", "normal") or "normal"),
+        }
         return ToolResult(
-            output=json.dumps({REPLY_MARKER: {"content": content}}, ensure_ascii=False),
+            output=json.dumps({REPLY_MARKER: reply_meta}, ensure_ascii=False),
             exit_code=0,
         )

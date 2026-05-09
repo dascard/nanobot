@@ -303,7 +303,10 @@ class NanobotBridge:
         ]
 
     def _extract_reply_from_tool_output(self) -> str:
-        """从 conversation 中提取 reply() 工具的结构化输出。"""
+        """从 conversation 中提取 reply() 工具的结构化输出。
+
+        返回 reply 文本内容；同时将 reply_meta 存入 per-session dict。
+        """
         if not self._agent:
             return ""
         try:
@@ -316,18 +319,28 @@ class NanobotBridge:
                     continue
                 raw_content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
                 content = _message_content_to_text(raw_content)
-                # 新格式：JSON 结构化
                 try:
                     data = json.loads(content)
                 except (json.JSONDecodeError, TypeError, ValueError):
                     data = {}
                 if isinstance(data, dict) and REPLY_MARKER in data:
-                    reply_content = str(data[REPLY_MARKER].get("content", "")).strip()
-                    if reply_content:
-                        return reply_content
+                    payload = data[REPLY_MARKER]
+                    reply_text = str(payload.get("content", "")).strip()
+                    if reply_text:
+                        self._last_reply_meta = {
+                            "reply_to_message_id": payload.get("reply_to_message_id"),
+                            "mentions": payload.get("mentions") if isinstance(payload.get("mentions"), list) else [],
+                            "quote": bool(payload.get("quote")),
+                            "at_sender": bool(payload.get("at_sender")),
+                            "send_mode": payload.get("send_mode", "normal"),
+                        }
+                        return reply_text
         except Exception as e:
             logger.debug("[Reply] extraction failed: %s", e)
         return ""
+
+    def get_last_reply_meta(self) -> dict | None:
+        return getattr(self, "_last_reply_meta", None)
 
     def _extract_last_rich_tool_output(
         self,
