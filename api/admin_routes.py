@@ -70,7 +70,7 @@ def admin_version(_auth=Depends(verify_admin)):
         import subprocess
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-        def _git(args: list[str]) -> str:
+        def _git(args: list[str]) -> str | None:
             try:
                 return subprocess.check_output(
                     ["git", *args],
@@ -80,14 +80,14 @@ def admin_version(_auth=Depends(verify_admin)):
                     timeout=3,
                 ).strip()
             except Exception:
-                return ""
+                return None
 
         commit = commit or _git(["rev-parse", "--short", "HEAD"]) or "unknown"
         branch = branch or _git(["rev-parse", "--abbrev-ref", "HEAD"]) or ""
         commit_date = commit_date or _git(["log", "-1", "--format=%ci", "--date=iso-strict"]) or ""
 
         if not dirty_raw:
-            dirty_raw = _git([
+            status = _git([
                 "status",
                 "--porcelain",
                 "--untracked-files=no",
@@ -101,10 +101,11 @@ def admin_version(_auth=Depends(verify_admin)):
                 ":(exclude).idea",
                 ":(exclude)webui/node_modules",
             ])
-            # git status 失败 → null 而非 false
-            if dirty_raw:
+            if status is None:
+                dirty_raw = "null"
+            elif status:
                 dirty_raw = "true"
-            elif dirty_raw == "":
+            else:
                 dirty_raw = "false"
 
     # 解析 dirty 状态：null=未知, true=有改动, false=干净
