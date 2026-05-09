@@ -25,7 +25,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
     "database.url": SettingDef(
         key="database.url", env_name="DATABASE_URL",
         default="sqlite:///./data/nanobot.db", value_type="str",
-        category="system", description="数据库连接地址", restart_required=True,
+        category="system", description="数据库连接地址", restart_required=True, dangerous=True,
     ),
     "log.level": SettingDef(
         key="log.level", env_name="LOG_LEVEL",

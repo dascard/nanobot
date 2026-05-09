@@ -1557,7 +1557,8 @@ def _is_allowed_log_name(name: str) -> bool:
 
 
 @router.get("/logs/{name}")
-def read_log(name: str, lines: int = 200, _auth=Depends(verify_admin)):
+def read_log(name: str, lines: int = 200, level: str = "", q: str = "",
+             _auth=Depends(verify_admin)):
     from collections import deque
 
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1568,10 +1569,21 @@ def read_log(name: str, lines: int = 200, _auth=Depends(verify_admin)):
     fpath = os.path.abspath(os.path.join(log_dir, fname))
     if not fpath.startswith(log_dir + os.sep) or not os.path.isfile(fpath):
         raise HTTPException(404, "Log not found")
-    max_lines = max(1, min(int(lines), 2000))
+    max_lines = max(1, min(int(lines), 5000))
     with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
         tail = deque(fh, maxlen=max_lines)
-    return {"name": fname, "lines": len(tail), "content": "".join(tail)}
+    content = "".join(tail)
+    if level or q:
+        filtered = []
+        for line in content.splitlines(True):
+            if level and level.upper() not in line.upper():
+                continue
+            if q and q.lower() not in line.lower():
+                continue
+            filtered.append(line)
+        content = "".join(filtered)
+    return {"name": fname, "lines": content.count("\n"), "content": content,
+            "raw_lines": len(tail)}
 
 
 # ═══════════════════════════════════════════

@@ -1051,14 +1051,19 @@ function LogsPage() {
   const [files, setFiles] = useState([])
   const [sel, setSel] = useState('')
   const [content, setContent] = useState('')
-  const [lines, setLines] = useState(200)
+  const [lines, setLines] = useState(500)
+  const [logLevel, setLogLevel] = useState('')
+  const [searchQ, setSearchQ] = useState('')
 
   const refreshFiles = () => api.get('/logs').then(r => setFiles(r.data.files))
   useEffect(() => { refreshFiles() }, [])
 
-  const loadLog = (name, n = lines) => {
+  const loadLog = (name, n = lines, lv = logLevel, q = searchQ) => {
     setSel(name)
-    api.get(`/logs/${encodeURIComponent(name)}?lines=${n}`).then(r => setContent(r.data.content))
+    const params = { lines: n }
+    if (lv) params.level = lv
+    if (q) params.q = q
+    api.get(`/logs/${encodeURIComponent(name)}`, { params }).then(r => setContent(r.data.content))
   }
 
   const formatSize = (s) => s < 1024 ? `${s}B` : s < 1048576 ? `${(s/1024).toFixed(1)}KB` : `${(s/1048576).toFixed(1)}MB`
@@ -1080,12 +1085,19 @@ function LogsPage() {
           ))}
         </div>
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <span className="text-sm text-slate-400">行数:</span>
             <select value={lines} onChange={e => { const n = Number(e.target.value); setLines(n); if (sel) loadLog(sel, n) }}
               className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
               <option value="100">100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option>
             </select>
+            <select value={logLevel} onChange={e => { setLogLevel(e.target.value); if (sel) loadLog(sel, lines, e.target.value, searchQ) }}
+              className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
+              <option value="">全部级别</option>
+              <option value="ERROR">ERROR</option><option value="WARNING">WARNING</option><option value="INFO">INFO</option><option value="DEBUG">DEBUG</option>
+            </select>
+            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && sel && loadLog(sel, lines, logLevel, searchQ)}
+              placeholder="搜索..." className="w-40 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
             {sel && <button onClick={() => loadLog(sel)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>}
           </div>
           <pre className="flex-1 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs leading-relaxed overflow-auto text-slate-300 font-mono whitespace-pre-wrap">{content || '点击左侧文件查看'}</pre>
