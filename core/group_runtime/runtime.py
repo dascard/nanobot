@@ -128,8 +128,9 @@ def _pending_payload(pending: list[GroupPendingMessage]) -> dict:
         )
         if direction_lines:
             block = "\n".join(direction_lines + [block])
-        if sanitize_prompt_text(block, 500).strip():
-            blocks.append(block)
+        cleaned = sanitize_prompt_text(block, 500).strip()
+        if cleaned:
+            blocks.append(cleaned)
     return {
         "pending_text": "\n\n".join(blocks),
         "source_message_ids": source_ids,
@@ -388,10 +389,16 @@ class GroupRuntime:
 
             # directed_to_other hard rule：全部指向别人 → no_reply
             if should_suppress_directed_to_other(state.pending):
+                payload = _pending_payload(state.pending)
                 return {
                     "action": "no_reply",
                     "generation": state.generation,
                     "reason": "directed_to_other_no_bot_target",
+                    "hard_rule": "directed_to_other_no_bot_target",
+                    "pending_count": len(state.pending),
+                    "trigger_reason": tr,
+                    "directed_to_other": True,
+                    **payload,
                 }
 
             # 硬 cooldown：bot 刚回复过且非直接互动 → wait

@@ -663,3 +663,47 @@ class TestShouldSuppressDirected:
             ),
         ]
         assert should_suppress_directed_to_other(msgs) is False
+
+
+class TestProcessMessageDirected:
+    """process_message() 集成——directed_to_other hard rule"""
+
+    @pytest.mark.asyncio
+    async def test_process_message_directed_to_other_returns_no_reply(self):
+        from core.group_runtime.runtime import GroupRuntime
+        runtime = GroupRuntime()
+        result = await runtime.process_message(
+            "group_123",
+            {
+                "sender_id": "111", "sender_name": "A",
+                "message": "@B 你看", "message_id": "m1",
+                "is_directed_to_other": True,
+                "directed": {"at_others": True, "directed_to_other": True},
+                "mentions": [{"user_id": "222", "nickname": "B"}],
+            },
+            trigger_reason="ambient", talk_value=1.0,
+        )
+        assert result["action"] == "no_reply"
+        assert result["reason"] == "directed_to_other_no_bot_target"
+        assert result["hard_rule"] == "directed_to_other_no_bot_target"
+        assert "source_message_ids" in result
+        assert result["pending_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_process_message_at_bot_not_suppressed(self):
+        from core.group_runtime.runtime import GroupRuntime
+        runtime = GroupRuntime()
+        result = await runtime.process_message(
+            "group_123",
+            {
+                "sender_id": "111", "sender_name": "A",
+                "message": "@bot @B 你看", "message_id": "m1",
+                "is_at_bot": True, "is_directed_to_other": False,
+                "directed": {
+                    "at_bot": True, "at_others": True,
+                    "directed_to_other": False,
+                },
+            },
+            trigger_reason="at_bot", talk_value=1.0,
+        )
+        assert result["action"] == "continue"
