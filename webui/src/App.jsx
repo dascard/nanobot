@@ -525,7 +525,12 @@ function TimingEventsTable({ rows = [] }) {
           ))}
         </tbody>
       </table>
-      {expanded && <JsonBlock value={rows.find(r => r.id === expanded)} className="mt-3 max-h-96" />}
+      {expanded && (() => { const er = rows.find(r => r.id === expanded); return (
+        <div className="mt-3">
+          {er?.pending_text && <div className="mb-2"><div className="text-slate-500 text-xs mb-1">pending_text</div><pre className="whitespace-pre-wrap text-xs bg-slate-950 rounded p-2 max-h-48 overflow-auto">{er.pending_text}</pre></div>}
+          <JsonBlock value={er} className="max-h-96" />
+        </div>
+      )})()}
     </div>
   )
 }
