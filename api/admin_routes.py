@@ -51,6 +51,54 @@ def admin_me(_auth=Depends(verify_admin)):
     return {"ok": True, "user": "admin"}
 
 
+@router.get("/version")
+def admin_version(_auth=Depends(verify_admin)):
+    import subprocess
+
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _git(args: list[str]) -> str:
+        try:
+            return subprocess.check_output(
+                ["git", *args],
+                cwd=base,
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+            ).strip()
+        except Exception:
+            return ""
+
+    commit = _git(["rev-parse", "--short", "HEAD"]) or "unknown"
+    full_commit = _git(["rev-parse", "HEAD"]) or ""
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]) or ""
+    commit_date = _git(["log", "-1", "--format=%ci", "--date=iso-strict"]) or ""
+    dirty = bool(
+        _git([
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--",
+            ".",
+            ":(exclude)data",
+            ":(exclude).claude",
+            ":(exclude)sentinel/model.safetensors",
+            ":(exclude).env",
+            ":(exclude).vscode",
+            ":(exclude).idea",
+            ":(exclude)webui/node_modules",
+        ])
+    )
+    return {
+        "commit": commit,
+        "full_commit": full_commit,
+        "branch": branch,
+        "commit_date": commit_date,
+        "dirty": dirty,
+        "display": f"{commit}{'-dirty' if dirty and commit != 'unknown' else ''}",
+    }
+
+
 # ── Models ──
 
 from typing import Literal

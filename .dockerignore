@@ -3,7 +3,6 @@ __pycache__/
 *.pyo
 data/
 sentinel/model.safetensors
-.git/
 .env
 *.egg-info/
 .vscode/

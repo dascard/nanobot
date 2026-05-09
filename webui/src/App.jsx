@@ -67,14 +67,23 @@ const NAV = [
 ]
 
 function Layout({ children, onLogout }) {
+  const [version, setVersion] = useState(null)
+  useEffect(() => {
+    api.get('/version').then(r => setVersion(r.data)).catch(() => setVersion(null))
+  }, [])
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 flex">
       <nav className="w-48 bg-slate-900/80 backdrop-blur-sm border-r border-slate-800 p-4 flex flex-col gap-0.5">
-        <div className="flex items-center gap-2 mb-6 px-2">
-          <div className="w-7 h-7 bg-emerald-500/20 rounded-lg flex items-center justify-center">
-            <span className="text-emerald-400 text-sm font-bold">N</span>
+        <div className="mb-6 px-2">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 bg-emerald-500/20 rounded-lg flex items-center justify-center">
+              <span className="text-emerald-400 text-sm font-bold">N</span>
+            </div>
+            <span className="text-sm font-semibold text-white tracking-wide">Nanobot</span>
           </div>
-          <span className="text-sm font-semibold text-white tracking-wide">Nanobot</span>
+          <div className="mt-2 text-[11px] text-slate-500 font-mono truncate" title={version?.full_commit || ''}>
+            {version?.display ? `版本 ${version.display}` : '版本 unknown'}
+          </div>
         </div>
         {NAV.map(n => (
           <NavLink key={n.to} to={n.to} end={n.end}

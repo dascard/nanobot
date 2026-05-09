@@ -1,6 +1,10 @@
 # ── 第一阶段：构建 React 前端 ──
 FROM node:20-slim AS webui-builder
 WORKDIR /webui
+RUN apt-get update && apt-get install -y --no-install-recommends \
+	git \
+	ca-certificates \
+	&& rm -rf /var/lib/apt/lists/*
 COPY webui/package.json webui/package-lock.json ./
 RUN npm ci
 COPY webui/ ./
