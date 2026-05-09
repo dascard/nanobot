@@ -302,7 +302,10 @@ class NanobotBridge:
             )
         ]
 
-    def _extract_reply_from_tool_output(self) -> str:
+    _ALLOWED_SEND_MODES = frozenset({"normal", "quote", "mention", "quote_and_mention"})
+    _reply_meta_by_session: dict[str, dict] = {}
+
+    def _extract_reply_from_tool_output(self, session_id: str = "") -> str:
         """从 conversation 中提取 reply() 工具的结构化输出。
 
         返回 reply 文本内容；同时将 reply_meta 存入 per-session dict。
@@ -327,20 +330,31 @@ class NanobotBridge:
                     payload = data[REPLY_MARKER]
                     reply_text = str(payload.get("content", "")).strip()
                     if reply_text:
-                        self._last_reply_meta = {
+                        send_mode = str(payload.get("send_mode") or "normal")
+                        if send_mode not in self._ALLOWED_SEND_MODES:
+                            send_mode = "normal"
+                        rm = {
                             "reply_to_message_id": payload.get("reply_to_message_id"),
-                            "mentions": payload.get("mentions") if isinstance(payload.get("mentions"), list) else [],
+                            "mentions": [
+                                s for s in (
+                                    str(m).strip()[:20] for m in (
+                                        payload.get("mentions") if isinstance(payload.get("mentions"), list) else []
+                                    )
+                                ) if s.isdigit()
+                            ][:10],
                             "quote": bool(payload.get("quote")),
                             "at_sender": bool(payload.get("at_sender")),
-                            "send_mode": payload.get("send_mode", "normal"),
+                            "send_mode": send_mode,
                         }
+                        if session_id:
+                            self._reply_meta_by_session[session_id] = rm
                         return reply_text
         except Exception as e:
             logger.debug("[Reply] extraction failed: %s", e)
         return ""
 
-    def get_last_reply_meta(self) -> dict | None:
-        return getattr(self, "_last_reply_meta", None)
+    def pop_last_reply_meta(self, session_id: str = "") -> dict | None:
+        return self._reply_meta_by_session.pop(session_id, None)
 
     def _extract_last_rich_tool_output(
         self,
@@ -735,7 +749,7 @@ class NanobotBridge:
                     await _call_tracker_method(tracker, "record_success", target_model)
                     break
 
-                reply_text = self._extract_reply_from_tool_output()
+                reply_text = self._extract_reply_from_tool_output(session_id)
                 if reply_text:
                     from core.reply_postprocess import strip_chat_end_punct
                     reply_text = strip_chat_end_punct(reply_text)

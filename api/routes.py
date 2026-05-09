@@ -449,16 +449,16 @@ def _persist_group_bridge_reply(
     answer: str,
     message_id: str | None = None,
     source_message_ids: list[str] | None = None,
+    reply_meta: dict | None = None,
 ) -> None:
-    """群聊 bridge 直出回复落库。
-
-    原始用户消息已经以 ambient 写入 ChatLog，这里只补 assistant 档案和
-    ConversationTurn 工作内存，避免重复归档同一条用户消息。
-    """
+    """群聊 bridge 直出回复落库。"""
     source_ids = list(source_message_ids or [])
     if message_id and message_id not in source_ids:
         source_ids.insert(0, message_id)
     source_ids_json = json.dumps(source_ids, ensure_ascii=False) if source_ids else "[]"
+    meta = {"kind": "group_reply"}
+    if reply_meta:
+        meta["reply_meta"] = reply_meta
 
     db.add(ChatLog(
         user_id=group_user_id,
@@ -468,6 +468,7 @@ def _persist_group_bridge_reply(
         sender_name="nanobot",
         session_name=session_name or "",
         processed=1,
+        meta_json=json.dumps(meta, ensure_ascii=False),
     ))
     db.add(ConversationTurn(
         user_id=group_user_id,
@@ -1344,7 +1345,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     metadata=bridge_meta,
                 )
                 answer = reply if isinstance(reply, str) else str(reply or "")
-                reply_meta = bridge.get_last_reply_meta() if hasattr(bridge, "get_last_reply_meta") else None
+                reply_meta = bridge.pop_last_reply_meta(group_user_id)
                 if answer.strip():
                     _persist_group_bridge_reply(
                         db,
@@ -1355,6 +1356,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                         answer=answer,
                         message_id=req.message_id,
                         source_message_ids=source_message_ids,
+                        reply_meta=reply_meta,
                     )
                     runtime.note_bot_replied(req.group_id)
                 return {
@@ -1637,6 +1639,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                         query=chat_query,
                         answer=answer,
                         source_message_ids=source_message_ids,
+                        reply_meta=reply_meta,
                     )
                     runtime.note_bot_replied(req.group_id)
                 logger.info("[TimingGate.timer] reply group=%s len=%d", req.group_id, len(answer))
