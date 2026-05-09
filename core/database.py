@@ -496,6 +496,51 @@ def init_db():
                     conn.commit()
                 except Exception as e:
                     print(f"  ⚠ Migration failed for group_memories.{col_name}: {e}")
+
+            # 回填 content_hash
+            import hashlib as _hashlib
+            rows = conn.execute(text(
+                "SELECT id, content FROM group_memories WHERE content_hash IS NULL OR content_hash = ''"
+            )).fetchall()
+            if rows:
+                print(f"  → Backfilling content_hash for {len(rows)} group_memories rows...")
+                for row in rows:
+                    h = _hashlib.sha256((row.content or "").strip().encode()).hexdigest()[:32]
+                    conn.execute(
+                        text("UPDATE group_memories SET content_hash = :h WHERE id = :id"),
+                        {"h": h, "id": row.id},
+                    )
+                conn.commit()
+                print(f"  → content_hash backfill complete")
+
+            # 查旧数据重复 → 合并后建唯一索引
+            try:
+                dup_rows = conn.execute(text(
+                    "SELECT group_id, memory_type, content_hash, COUNT(*) AS n "
+                    "FROM group_memories "
+                    "GROUP BY group_id, memory_type, content_hash "
+                    "HAVING n > 1"
+                )).fetchall()
+                if dup_rows:
+                    print(f"  → Deduplicating {len(dup_rows)} conflicting group_memory groups...")
+                    for drow in dup_rows:
+                        dup_ids = conn.execute(text(
+                            "SELECT id FROM group_memories "
+                            "WHERE group_id = :g AND memory_type = :t AND content_hash = :h "
+                            "ORDER BY confidence DESC, evidence_count DESC, id ASC"
+                        ), {"g": drow.group_id, "t": drow.memory_type, "h": drow.content_hash}).fetchall()
+                        canonical_id = dup_ids[0][0]
+                        for (dup_id,) in dup_ids[1:]:
+                            conn.execute(text(
+                                "UPDATE group_memories SET status = 'archived', "
+                                "cluster_key = (SELECT cluster_key FROM group_memories WHERE id = :c) "
+                                "WHERE id = :d"
+                            ), {"c": canonical_id, "d": dup_id})
+                        conn.commit()
+                    print(f"  → Deduplication complete")
+            except Exception as e:
+                print(f"  ⚠ GroupMemory dedup failed: {e}")
+
             try:
                 conn.execute(text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_group_memory_hash "

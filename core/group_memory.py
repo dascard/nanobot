@@ -11,6 +11,7 @@ from datetime import datetime
 from sqlalchemy import and_
 
 from core.database import GroupMemory, SessionLocal
+from core.group_runtime.ids import normalize_group_session_id
 
 logger = logging.getLogger("nanobot.group_memory")
 
@@ -18,8 +19,17 @@ MEMORY_TYPES = {"topic", "slang", "relationship", "style", "event", "preference"
 CONFIDENCE_FLOOR = 0.55
 
 
+def _normalize_content(content: str) -> str:
+    import re
+    return re.sub(r"\s+", " ", (content or "").strip().lower()).rstrip("。.!！?？")
+
+
+def _norm_group(prefix: str) -> str:
+    return normalize_group_session_id(prefix) if prefix else prefix
+
+
 def _content_hash(content: str) -> str:
-    return hashlib.sha256(content.strip().encode()).hexdigest()[:32]
+    return hashlib.sha256(_normalize_content(content).encode("utf-8")).hexdigest()[:32]
 
 
 def _cluster_key(content: str) -> str:
@@ -44,6 +54,8 @@ def upsert(
     """
     if memory_type not in MEMORY_TYPES:
         return "skipped"
+
+    group_id = _norm_group(group_id)
 
     db = SessionLocal()
     try:
@@ -100,6 +112,7 @@ def query_active(
     min_confidence: float = 0.5, limit: int = 20,
 ) -> list[dict]:
     """查询活跃记忆——用于注入 GroupProfile。"""
+    group_id = _norm_group(group_id)
     db = SessionLocal()
     try:
         q = db.query(GroupMemory).filter(and_(
@@ -121,6 +134,7 @@ def query_active(
 
 def apply_decay(group_id: str):
     """对活跃记忆降 decay_score。<0.2 → archived。"""
+    group_id = _norm_group(group_id)
     db = SessionLocal()
     try:
         rows = (
@@ -144,7 +158,7 @@ def apply_decay(group_id: str):
 
 def build_profile(group_id: str) -> dict:
     """从 GroupMemory 动态生成 GroupProfile JSON。"""
-    all_mem = query_active(group_id, min_confidence=0.7)
+    all_mem = [m for m in query_active(group_id, min_confidence=0.7) if should_inject(m)]
     by_type: dict[str, list[dict]] = {}
     for m in all_mem:
         by_type.setdefault(m["memory_type"], []).append(m)
@@ -170,7 +184,7 @@ def build_profile_with_evidence(group_id: str, db) -> tuple[dict, dict[str, list
     """
     from core.database import ChatLog
 
-    all_mem = query_active(group_id, min_confidence=0.7)
+    all_mem = [m for m in query_active(group_id, min_confidence=0.7) if should_inject(m)]
     by_type: dict[str, list[dict]] = {}
     for m in all_mem:
         by_type.setdefault(m["memory_type"], []).append(m)
@@ -223,10 +237,10 @@ def _safe_evidence_ids(raw: str) -> list[int]:
 def _merge_evidence(memory, new_ids: list[int]):
     try:
         existing = json.loads(memory.evidence_log_ids_json or "[]")
-        merged = list(set(existing + new_ids))[:50]
+        merged = list(dict.fromkeys(existing + new_ids))[-10:]
         memory.evidence_log_ids_json = json.dumps(merged)
     except (json.JSONDecodeError, TypeError):
-        memory.evidence_log_ids_json = json.dumps(new_ids[:50])
+        memory.evidence_log_ids_json = json.dumps(new_ids[:10])
 
 
 def _safe_meta(raw: str) -> dict:
