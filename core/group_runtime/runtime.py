@@ -83,21 +83,52 @@ class GroupPendingMessage:
         }
 
 
+def _format_direction_for_pending(msg: GroupPendingMessage) -> list[str]:
+    """生成 [指向性] 和 [引用] 行。"""
+    lines: list[str] = []
+    d = msg.directed or {}
+    if d.get("at_bot"):
+        lines.append("[指向性] @bot")
+    if d.get("reply_to_bot"):
+        lines.append("[指向性] 回复bot")
+    if d.get("at_others"):
+        names = [
+            m.get("nickname") or m.get("user_id", "") or "?"
+            for m in (msg.mentions or [])
+            if not m.get("is_bot")
+        ]
+        if names:
+            lines.append(f"[指向性] @其他人: {', '.join(names[:5])}")
+        else:
+            lines.append("[指向性] @其他人")
+    if d.get("reply_to_others"):
+        lines.append("[指向性] 回复其他人")
+    if msg.reply_to:
+        sender = msg.reply_to.get("sender_name") or msg.reply_to.get("sender_id") or "未知用户"
+        content = str(msg.reply_to.get("content") or "")
+        if content:
+            lines.append(f"[引用] {sender}: {content[:160]}")
+    return lines
+
+
 def _pending_payload(pending: list[GroupPendingMessage]) -> dict:
-    from core.context_builder import format_group_planner_message
+    from core.context_builder import format_group_planner_message, sanitize_prompt_text
 
     blocks: list[str] = []
     source_ids: list[str] = []
     for msg in pending:
         if msg.message_id:
             source_ids.append(msg.message_id)
+        direction_lines = _format_direction_for_pending(msg)
         block = format_group_planner_message(
             sender_name=msg.sender_name or msg.sender_id or "未知用户",
             content=msg.message,
             timestamp=datetime.fromtimestamp(msg.ts) if msg.ts > 0 else datetime.now(),
             message_id=msg.message_id,
         )
-        if block.strip():
+        if direction_lines:
+            block = "\n".join(direction_lines + [block])
+        if sanitize_prompt_text(block, 500).strip():
             blocks.append(block)
     return {
         "pending_text": "\n\n".join(blocks),

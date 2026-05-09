@@ -1253,6 +1253,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     runtime = get_group_runtime()
     t0 = _t.time()
     try:
+        ambient_meta = meta  # _build_group_message_meta 已在入库前构造
         result = await runtime.process_message(
             req.group_id,
             {
@@ -1260,8 +1261,16 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                 "sender_name": req.sender_name,
                 "message": message_text,
                 "message_id": req.message_id or "",
-                "is_reply_to_bot": req.is_reply_to_bot,
-                "is_at_bot": req.is_at_bot,
+                "is_reply_to_bot": bool(ambient_meta.get("directed", {}).get("reply_to_bot")),
+                "is_at_bot": bool(ambient_meta.get("directed", {}).get("at_bot")),
+                "segments": ambient_meta.get("segments", []),
+                "mentions": ambient_meta.get("mentions", []),
+                "reply_to": ambient_meta.get("reply_to"),
+                "directed": ambient_meta.get("directed", {}),
+                "is_directed_to_other": bool(ambient_meta.get("directed", {}).get("directed_to_other")),
+                "self_id": ambient_meta.get("bot", {}).get("self_id", ""),
+                "bot_id": ambient_meta.get("bot", {}).get("bot_id", ""),
+                "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
             },
             session_name=req.session_name or "",
             bot_aliases=list(req.bot_aliases or []),
