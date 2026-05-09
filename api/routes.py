@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Any, Optional, List
 
 from config import (
     NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT, ADMIN_USER_ID,
@@ -713,6 +713,12 @@ def submit_ambient_log(req: AmbientLogRequest, db: Session = Depends(get_db),
 
 # ── 统一群聊入口 /group/message ──
 
+class OneBotMessageSegmentPayload(BaseModel):
+    """OneBot/NapCat 消息段——不要和 NoneBot MessageSegment 混淆。"""
+    type: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
 class GroupMessageRequest(BaseModel):
     group_id: str
     sender_id: str = ""
@@ -724,11 +730,196 @@ class GroupMessageRequest(BaseModel):
     session_name: str | None = None
     is_at_bot: bool = False
     is_reply_to_bot: bool = False
-    bot_aliases: list[str] = []
+    bot_aliases: list[str] = Field(default_factory=list)
+    # ── 结构化消息字段（Batch 1）──
+    segments: list[dict] = Field(default_factory=list)
+    raw_message: str = ""
+    self_id: str = ""
+    bot_id: str = ""
+    bot_name: str = ""
+    mentions: list[dict] = Field(default_factory=list)
+    reply_to: dict | None = None
+    reply_to_message_id: str | None = None
+    reply_to_sender_id: str | None = None
+    reply_to_sender_name: str | None = None
+    reply_to_content: str | None = None
+    is_directed_to_other: bool = False
+
+
+# ── 结构化消息 helper（Batch 1）──
+
+_MAX_SEGMENTS = 30
+_MAX_MENTIONS = 20
+_MAX_REPLY_CONTENT = 300
+_MAX_SEGMENT_TEXT = 500
+_MAX_MENTION_NICK = 80
+
+
+def _normalize_onebot_segments(req: GroupMessageRequest) -> list[dict]:
+    """清理 OneBot segments：去空、限制数量、裁剪字段长度。"""
+    result: list[dict] = []
+    for seg in req.segments[: _MAX_SEGMENTS]:
+        if not isinstance(seg, dict):
+            continue
+        t = str(seg.get("type", "")).strip()
+        if not t:
+            continue
+        data = seg.get("data") if isinstance(seg.get("data"), dict) else {}
+        if t == "text":
+            text = str(data.get("text", ""))[:_MAX_SEGMENT_TEXT]
+            result.append({"type": t, "data": {"text": text}})
+        elif t == "at":
+            result.append({"type": t, "data": {"qq": str(data.get("qq", ""))[:20]}})
+        elif t == "reply":
+            result.append({"type": t, "data": {"id": str(data.get("id", ""))[:50]}})
+        elif t in ("image", "mface", "file", "forward"):
+            result.append({"type": t, "data": data})
+    return result
+
+
+def _extract_mentions_from_segments(segments: list[dict], req: GroupMessageRequest) -> list[dict]:
+    """从 at segment 推导 mentions。"""
+    bot_id = req.bot_id or req.self_id
+    mentions: list[dict] = []
+    seen: set[str] = set()
+    for seg in segments:
+        if seg.get("type") != "at":
+            continue
+        qq = str(seg.get("data", {}).get("qq", "")).strip()
+        if not qq or qq == "all":
+            continue
+        if qq in seen:
+            continue
+        seen.add(qq)
+        is_bot = bool(bot_id and qq == bot_id)
+        mentions.append({"user_id": qq, "is_bot": is_bot, "nickname": ""})
+    return mentions
+
+
+def _normalize_group_mentions(req: GroupMessageRequest, segments: list[dict]) -> list[dict]:
+    """合并显式 mentions 和 segment 推导 mentions，去重。"""
+    explicit = [
+        {"user_id": str(m.get("user_id", "")).strip()[:20],
+         "nickname": str(m.get("nickname", ""))[:_MAX_MENTION_NICK],
+         "is_bot": bool(m.get("is_bot"))}
+        for m in req.mentions
+        if isinstance(m, dict) and str(m.get("user_id", "")).strip()
+    ]
+    derived = _extract_mentions_from_segments(segments, req)
+    merged: dict[str, dict] = {}
+    for m in derived + explicit:
+        uid = m["user_id"]
+        if uid not in merged:
+            merged[uid] = m
+        else:
+            if m["nickname"]:
+                merged[uid]["nickname"] = m["nickname"]
+            if m["is_bot"]:
+                merged[uid]["is_bot"] = True
+    return list(merged.values())[:_MAX_MENTIONS]
+
+
+def _normalize_group_reply_to(req: GroupMessageRequest, segments: list[dict]) -> dict | None:
+    """标准化 reply_to 信息。"""
+    if req.reply_to and isinstance(req.reply_to, dict) and req.reply_to.get("message_id"):
+        r = req.reply_to
+        return {
+            "message_id": str(r.get("message_id", ""))[:50],
+            "sender_id": str(r.get("sender_id", ""))[:20],
+            "sender_name": str(r.get("sender_name", ""))[:80],
+            "content": str(r.get("content", ""))[:_MAX_REPLY_CONTENT],
+            "is_bot": bool(r.get("is_bot")),
+        }
+    if req.reply_to_message_id:
+        return {
+            "message_id": str(req.reply_to_message_id)[:50],
+            "sender_id": str(req.reply_to_sender_id or "")[:20],
+            "sender_name": str(req.reply_to_sender_name or "")[:80],
+            "content": str(req.reply_to_content or "")[:_MAX_REPLY_CONTENT],
+            "is_bot": False,
+        }
+    for seg in segments:
+        if seg.get("type") == "reply":
+            mid = str(seg.get("data", {}).get("id", "")).strip()
+            if mid:
+                return {"message_id": mid[:50], "sender_id": "",
+                        "sender_name": "", "content": "", "is_bot": False}
+    return None
+
+
+def _derive_group_direction(
+    req: GroupMessageRequest,
+    mentions: list[dict],
+    reply_to: dict | None,
+) -> dict:
+    """推导消息指向性。"""
+    bot_id = req.bot_id or req.self_id
+    d = {
+        "at_bot": False, "reply_to_bot": False,
+        "at_others": False, "reply_to_others": False,
+        "directed_to_other": False, "mentions_bot": False,
+        "mentions_others": False,
+    }
+    for m in mentions:
+        if m.get("is_bot") or (bot_id and m["user_id"] == bot_id):
+            d["mentions_bot"] = True
+            d["at_bot"] = True
+        else:
+            d["mentions_others"] = True
+            d["at_others"] = True
+    if reply_to:
+        if reply_to.get("is_bot") or (bot_id and reply_to.get("sender_id") == bot_id):
+            d["reply_to_bot"] = True
+        elif reply_to.get("sender_id"):
+            d["reply_to_others"] = True
+    d["directed_to_other"] = (
+        (d["at_others"] or d["reply_to_others"])
+        and not d["at_bot"]
+        and not d["reply_to_bot"]
+        and not d["mentions_bot"]
+    )
+    return d
+
+
+def _build_group_message_meta(req: GroupMessageRequest, registered_stickers: list[dict]) -> dict:
+    """构建 ChatLog.meta_json 标准结构。"""
+    segments = _normalize_onebot_segments(req)
+    mentions = _normalize_group_mentions(req, segments)
+    reply_to = _normalize_group_reply_to(req, segments)
+    directed = _derive_group_direction(req, mentions, reply_to)
+    return {
+        "message_type": "group_message",
+        "raw_message": str(req.raw_message or "")[:2000],
+        "segments": segments,
+        "mentions": mentions,
+        "reply_to": reply_to,
+        "directed": directed,
+        "bot": {
+            "self_id": str(req.self_id or "")[:20],
+            "bot_id": str(req.bot_id or req.self_id or "")[:20],
+            "bot_name": str(req.bot_name or "")[:80],
+        },
+        "files": _normalize_files(req.files),
+        "client_meta": req.client_meta if isinstance(req.client_meta, dict) else {},
+    }
 
 
 def _safe_group_client_meta(req: GroupMessageRequest) -> dict:
+    """读取 client_meta——兼容新旧结构。
+
+    新结构下 client_meta 嵌套在 meta_json.client_meta 中，
+    此函数只用于 sticker 注册等需要原始 client_meta 的场景。
+    """
     return req.client_meta if isinstance(req.client_meta, dict) else {}
+
+
+def _read_client_meta_from_log(log_meta: dict) -> dict:
+    """从 ChatLog.meta_json 兼容读取 client_meta。"""
+    cm = log_meta.get("client_meta")
+    if isinstance(cm, dict):
+        return cm
+    # 旧结构：顶层直接就是 client_meta 字段
+    return log_meta if isinstance(log_meta.get("message_type"), str) else {}
 
 
 def _group_sticker_payloads(req: GroupMessageRequest) -> list[dict]:
@@ -969,11 +1160,11 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
         db, group_user_id, limit=5,
     )
 
-    # 2. 当前消息入库
+    # 2. 当前消息入库（结构化 meta）
     formatted = f"[{req.sender_name}]: {message_text}" if message_text else ""
-    meta = _safe_group_client_meta(req)
+    meta = _build_group_message_meta(req, registered_stickers)
     if registered_stickers:
-        meta = {**meta, "registered_sticker_ids": [item["id"] for item in registered_stickers]}
+        meta["registered_sticker_ids"] = [item["id"] for item in registered_stickers]
     ambient_log = ChatLog(
         user_id=group_user_id, session_id=group_user_id,
         sender_name=req.sender_name, session_name=req.session_name,

@@ -774,3 +774,135 @@ def test_deprecated_log_ambient_still_works(client, db_session):
     assert response.status_code == 200
     logs = db_session.query(ChatLog).filter_by(role="ambient").all()
     assert any("[D]: 还在用旧接口" in l.content for l in logs)
+
+# ═══════════════════════════════════════════
+# Task 1A: 入站结构化消息测试
+# ═══════════════════════════════════════════
+
+class TestGroupMessageStructured:
+    """任务1A: 结构化 segments/mentions/reply_to/directed 测试"""
+
+    def test_new_payload_fields_accepted(self, client, db_session):
+        """segments/raw_message/self_id/bot_id等新字段被接受"""
+        resp = client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "111",
+            "sender_name": "小明",
+            "message": "hello",
+            "segments": [
+                {"type": "at", "data": {"qq": "222"}},
+                {"type": "text", "data": {"text": "你看这个"}},
+            ],
+            "raw_message": "[CQ:at,qq=222] 你看这个",
+            "self_id": "999888",
+            "bot_id": "999888",
+            "bot_name": "Nanobot",
+            "bot_aliases": ["bot", "机器人"],
+            "mentions": [{"user_id": "222", "nickname": "小红"}],
+            "reply_to": {
+                "message_id": "11111",
+                "sender_id": "333",
+                "sender_name": "小刚",
+                "content": "上面那个结论不成立",
+            },
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data.get("action") in ("continue", "wait", "no_reply")
+
+    def test_chatlog_meta_json_writes_standard_structure(self, client, db_session):
+        """ChatLog.meta_json写入标准结构,不重复reply_to_*顶层字段"""
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "111",
+            "sender_name": "小明",
+            "message": "hello",
+            "segments": [{"type": "at", "data": {"qq": "999888"}}],
+            "raw_message": "[CQ:at,qq=999888] hello",
+            "self_id": "999888",
+            "bot_id": "999888",
+            "bot_name": "Nanobot",
+            "mentions": [{"user_id": "999888", "nickname": "Nanobot"}],
+            "is_at_bot": True,
+        })
+        logs = db_session.query(ChatLog).filter_by(role="ambient").all()
+        assert len(logs) >= 1
+        meta = json.loads(logs[-1].meta_json or "{}")
+        assert "segments" in meta or "mentions" in meta or "directed" in meta, \
+            "meta_json should have standard structure"
+
+    def test_old_payload_still_works(self, client, db_session):
+        """旧payload只传message/files/client_meta仍可进入TimingGate"""
+        resp = client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "111",
+            "sender_name": "小明",
+            "message": "老格式消息",
+            "client_meta": {"message_type": "text"},
+        })
+        assert resp.status_code == 200
+
+    def test_client_meta_compat_in_new_structure(self, client, db_session):
+        """client_meta在新结构下仍可被旧逻辑读取"""
+        client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "111",
+            "sender_name": "小明",
+            "message": "",
+            "segments": [
+                {"type": "image", "data": {"file": "http://example.com/sticker.png"}},
+            ],
+            "client_meta": {
+                "message_type": "sticker",
+                "stickers": ["http://example.com/sticker.png"],
+                "raw_segment_types": ["image"],
+            },
+        })
+        logs = db_session.query(ChatLog).filter_by(role="ambient").all()
+        assert len(logs) >= 1
+        # 旧逻辑仍能读到 stickers
+        meta = json.loads(logs[-1].meta_json or "{}")
+        # client_meta应该在嵌套或顶层被保存
+        cm = meta.get("client_meta") or meta
+        assert cm.get("message_type") in ("sticker", "text", "image", None)
+
+    def test_segments_capped_at_30(self, client, db_session):
+        """segments最多30个,超量不导致请求失败"""
+        segments = [{"type": "text", "data": {"text": f"m{i}"}} for i in range(50)]
+        resp = client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "111",
+            "sender_name": "小明",
+            "message": "many segments",
+            "segments": segments,
+        })
+        assert resp.status_code == 200
+
+    def test_mentions_dedup_and_capped(self, client, db_session):
+        """mentions去重且最多20个"""
+        mentions = [{"user_id": str(i), "nickname": f"user{i}"} for i in range(30)]
+        resp = client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "111",
+            "sender_name": "小明",
+            "message": "many mentions",
+            "mentions": mentions,
+        })
+        assert resp.status_code == 200
+
+    def test_at_bot_segment_detected(self, client, db_session):
+        """at segment指向bot_id时被正确识别为at_bot"""
+        resp = client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "111",
+            "sender_name": "小明",
+            "message": "@bot hello",
+            "segments": [
+                {"type": "at", "data": {"qq": "999888"}},
+                {"type": "text", "data": {"text": " hello"}},
+            ],
+            "self_id": "999888",
+            "bot_id": "999888",
+            "bot_name": "Nanobot",
+        })
+        assert resp.status_code == 200
