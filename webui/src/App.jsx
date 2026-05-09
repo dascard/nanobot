@@ -1378,6 +1378,7 @@ function MemoryPage() {
   const [memType, setMemType] = useState('')
   const [memories, setMemories] = useState([])
   const [loading, setLoading] = useState(false)
+  const [expandedEvidence, setExpandedEvidence] = useState(null)
 
   const load = () => {
     if (!groupId) return
@@ -1408,7 +1409,7 @@ function MemoryPage() {
         <Card className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-              <th className="py-2 px-3">id</th><th className="py-2 px-3">类型</th><th className="py-2 px-3">内容</th><th className="py-2 px-3">confidence</th><th className="py-2 px-3">证据数</th><th className="py-2 px-3">decay</th><th className="py-2 px-3">来源</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">更新</th>
+              <th className="py-2 px-3">id</th><th className="py-2 px-3">类型</th><th className="py-2 px-3">内容</th><th className="py-2 px-3">confidence</th><th className="py-2 px-3">证据</th><th className="py-2 px-3">decay</th><th className="py-2 px-3">来源</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">更新</th>
             </tr></thead>
             <tbody>
               {memories.map(m => (
@@ -1417,7 +1418,7 @@ function MemoryPage() {
                   <td className="py-2 px-3"><Badge>{m.memory_type}</Badge></td>
                   <td className="py-2 px-3 max-w-[400px] truncate">{m.content}</td>
                   <td className="py-2 px-3">{Number(m.confidence).toFixed(2)}</td>
-                  <td className="py-2 px-3">{m.evidence_count}</td>
+                  <td className="py-2 px-3"><button onClick={() => setExpandedEvidence(expandedEvidence === m.id ? null : m.id)} className="text-xs underline text-slate-500 hover:text-emerald-400">{m.evidence_count}</button></td>
                   <td className="py-2 px-3">{Number(m.decay_score).toFixed(2)}</td>
                   <td className="py-2 px-3 text-slate-500">{m.source}</td>
                   <td className="py-2 px-3">{m.status === 'active' ? <Badge tone="emerald">active</Badge> : m.status === 'archived' ? <Badge tone="slate">archived</Badge> : <Badge tone="amber">{m.status}</Badge>}</td>
@@ -1428,6 +1429,15 @@ function MemoryPage() {
           </table>
         </Card>
       )}
+      {expandedEvidence && (() => {
+        const m = memories.find(x => x.id === expandedEvidence)
+        return m ? (
+          <Card className="p-3 mt-3">
+            <div className="text-xs text-slate-500 mb-2">证据日志 ID: {m.id}</div>
+            <JsonBlock value={m.evidence_log_ids_json} className="max-h-48" />
+          </Card>
+        ) : null
+      })()}
     </div>
   )
 }
