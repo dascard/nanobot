@@ -1074,6 +1074,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     "timing_decision": "continue",
                     "group_recent_context": group_recent_context,
                     "source_message_ids": source_message_ids,
+                    "context_debug": _ctx_debug,
                 }
                 enriched = f"<user_input>\n{chat_query}\n</user_input>"
 
@@ -1338,6 +1339,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     "timing_decision": "continue",
                     "group_recent_context": group_recent_context,
                     "source_message_ids": source_message_ids,
+                    "context_debug": _ctx_debug,
                 }
                 chat_query = _build_multimodal_user_input_text(
                     result.get("pending_text", ""), None, max_chars=MAX_QUERY_CHARS,
