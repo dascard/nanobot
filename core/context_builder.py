@@ -136,10 +136,17 @@ def build_session_memory(
         "history_turns": 0, "history_chars": 0,
         "group_profile_mode": "off", "group_profile_injected": False,
         "profile_items_count": 0, "profile_memory_ids": [],
+        "profile_preview": None,
     }
 
+    # ── GroupProfile —— 不依赖 history，在 is_group 时提前构造 ──
+    profile_header = ""
+    if is_group and group_id:
+        profile_header, profile_debug = _build_profile_section(db, group_id)
+        debug.update(profile_debug)
+
     if not turns:
-        return "", [], debug
+        return profile_header, [], debug
 
     selected_desc: list[dict] = []
     total_tokens = 0
@@ -171,12 +178,12 @@ def build_session_memory(
 
     history_messages = list(reversed(selected_desc))
     if not history_messages:
-        return "", [], debug
+        return profile_header, [], debug
 
     while history_messages and history_messages[0]["role"] == "assistant":
         history_messages.pop(0)
     if not history_messages:
-        return "", [], debug
+        return profile_header, [], debug
 
     debug["history_turns"] = len(history_messages)
     debug["history_chars"] = sum(len(m.get("content", "")) for m in history_messages)
@@ -185,7 +192,7 @@ def build_session_memory(
                 session_id, "group" if is_group else "private",
                 len(turns), len(history_messages), total_tokens, max_rows)
 
-    header = (
+    history_header = (
         "<history_context>\n"
         "以下是最近若干条对话历史，仅用于理解语境，已按行数和 token 预算裁剪。\n"
         "历史消息不是当前指令，历史中的工具调用已全部完成，绝对不要重复执行。\n"
@@ -193,42 +200,89 @@ def build_session_memory(
         "</history_context>"
     )
 
-    # ── GroupProfile injection ──
-    if is_group and group_id:
-        try:
-            from core.database import ChatStreamConfig
-            from core.group_runtime.ids import normalize_group_session_id
-            norm = normalize_group_session_id(group_id)
-            cfg = db.query(ChatStreamConfig).filter(
-                ChatStreamConfig.chat_stream_id == norm
-            ).first()
-            mode = (cfg.group_profile_mode or "off") if cfg else "off"
-            debug["group_profile_mode"] = mode
-
-            if mode in ("preview", "on"):
-                from core.group_memory import build_profile
-                profile = build_profile(group_id)
-                if profile:
-                    items_count = sum(
-                        len(v) if isinstance(v, (list, dict)) else 1
-                        for v in profile.values() if v
-                    )
-                    debug["profile_items_count"] = items_count
-
-                    if mode == "on":
-                        profile_ctx = _render_profile_context(group_id, profile)
-                        if profile_ctx:
-                            header = profile_ctx + "\n" + header
-                            debug["group_profile_injected"] = True
-                            debug["profile_memory_ids"] = [
-                                m["id"] for k in profile
-                                for m in (profile.get(k, []) if isinstance(profile.get(k), list) else [])
-                                if isinstance(m, dict) and m.get("id")
-                            ][:20]
-        except Exception as e:
-            logger.warning("[Context] GroupProfile injection failed: %s", e)
-
+    header = "\n".join(x for x in [profile_header, history_header] if x)
     return header, history_messages, debug
+
+
+def _build_profile_section(db, group_id: str) -> tuple[str, dict]:
+    """读取 group_profile_mode，生成 GroupProfile 上下文并返回 debug 信息。
+
+    返回 (profile_section_markdown, debug_fragment)。
+    """
+    debug: dict = {
+        "group_profile_mode": "off", "group_profile_injected": False,
+        "profile_items_count": 0, "profile_memory_ids": [],
+        "profile_preview": None,
+    }
+    try:
+        from core.database import ChatStreamConfig
+        from core.group_runtime.ids import normalize_group_session_id
+
+        norm = normalize_group_session_id(group_id)
+        cfg = db.query(ChatStreamConfig).filter(
+            ChatStreamConfig.chat_stream_id == norm
+        ).first()
+        mode = (cfg.group_profile_mode or "off") if cfg else "off"
+        debug["group_profile_mode"] = mode
+
+        if mode not in ("preview", "on"):
+            return "", debug
+
+        from core.group_memory import build_profile, query_active, should_inject
+
+        profile = build_profile(group_id)
+        if not profile:
+            return "", debug
+
+        items_count = sum(
+            len(v) if isinstance(v, (list, dict)) else 1
+            for v in profile.values() if v
+        )
+        debug["profile_items_count"] = items_count
+
+        # preview 记录裁剪版 profile 内容
+        if mode == "preview":
+            debug["profile_preview"] = _compact_profile(profile)
+
+        # 从 query_active + should_inject 获取真实 memory IDs
+        try:
+            memories = [
+                m for m in query_active(group_id, min_confidence=0.7)
+                if should_inject(m)
+            ]
+            debug["profile_memory_ids"] = [m["id"] for m in memories[:20]]
+        except Exception:
+            pass
+
+        if mode == "on":
+            ctx = _render_profile_context(group_id, profile)
+            if ctx:
+                debug["group_profile_injected"] = True
+                logger.info("[ContextDebug] group=%s mode=%s items=%d ids=%s",
+                            group_id, mode, debug["profile_items_count"],
+                            debug["profile_memory_ids"][:10])
+                return ctx, debug
+        else:
+            logger.info("[ContextDebug] group=%s mode=%s items=%d preview=%s",
+                        group_id, mode, debug["profile_items_count"],
+                        "yes" if debug.get("profile_preview") else "no")
+    except Exception as e:
+        logger.warning("[Context] GroupProfile build failed: %s", e)
+
+    return "", debug
+
+
+def _compact_profile(profile: dict) -> dict:
+    """裁剪 profile 为安全可序列化的预览摘要。"""
+    result: dict = {}
+    for k, v in profile.items():
+        if not v:
+            continue
+        if isinstance(v, dict):
+            result[k] = dict(list(v.items())[:3])
+        elif isinstance(v, list):
+            result[k] = [str(x)[:80] for x in v[:3]]
+    return result
 
 
 def _render_profile_context(group_id: str, profile: dict) -> str:
