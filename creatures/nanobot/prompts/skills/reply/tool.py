@@ -46,7 +46,7 @@ class ReplyTool(BaseTool):
             pass
         mentions = args.get("mentions")
         if isinstance(mentions, list):
-            mentions = [str(m)[:20] for m in mentions if str(m).strip()][:10]
+            mentions = [str(m)[:20] for m in mentions if str(m).strip() and str(m).strip().isdigit()][:10]
         else:
             mentions = []
         send_mode = str(args.get("send_mode", "normal") or "normal")

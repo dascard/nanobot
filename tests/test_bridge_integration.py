@@ -174,24 +174,48 @@ class TestNoLeak:
 class TestReplyMeta:
     """Batch 2: reply_meta per-session 隔离和校验"""
 
-    def test_per_session_store_popped_isolated(self):
-        """pop 后第二次 None，两个 session 不串"""
-        store = {"s_A": {"send_mode": "quote"}, "s_B": {"send_mode": "mention"}}
-        assert store.pop("s_A")["send_mode"] == "quote"
-        assert store.pop("s_B")["send_mode"] == "mention"
-        assert store.pop("s_A", None) is None
+    def test_reply_meta_store_popped_isolated(self):
+        """NanobotBridge per-session pop"""
+        from nanobot_kt.bridge import NanobotBridge
 
-    def test_invalid_send_mode_normalized(self):
-        """非法 send_mode 被 normalize 为 normal"""
-        from creatures.nanobot.prompts.skills.reply.tool import _ALLOWED_SEND_MODES
-        assert "invalid" not in _ALLOWED_SEND_MODES
-        mode = "invalid"
-        if mode not in _ALLOWED_SEND_MODES:
-            mode = "normal"
-        assert mode == "normal"
+        b = NanobotBridge()
+        b._reply_meta_store()["s_A"] = {"send_mode": "quote"}
+        b._reply_meta_store()["s_B"] = {"send_mode": "mention"}
+        assert b.pop_last_reply_meta("s_A")["send_mode"] == "quote"
+        assert b.pop_last_reply_meta("s_B")["send_mode"] == "mention"
+        assert b.pop_last_reply_meta("s_A") is None
 
-    def test_mentions_filter_non_digit(self):
-        """mentions 中非数字被过滤"""
-        mentions = ["12345", "abc", "67890", ""]
-        f = [s for s in (str(m).strip()[:20] for m in mentions) if s.isdigit()][:10]
-        assert f == ["12345", "67890"]
+    def test_reply_meta_store_is_instance_local(self):
+        """两个 NanobotBridge 实例不共享 store"""
+        from nanobot_kt.bridge import NanobotBridge
+
+        a = NanobotBridge()
+        b = NanobotBridge()
+        a._reply_meta_store()["s"] = {"send_mode": "quote"}
+        assert b.pop_last_reply_meta("s") is None
+        assert a.pop_last_reply_meta("s")["send_mode"] == "quote"
+
+    @pytest.mark.asyncio
+    async def test_reply_tool_invalid_send_mode_normalized(self):
+        """ReplyTool._execute() 非法 send_mode → normal"""
+        import json
+        from creatures.nanobot.prompts.skills.reply.tool import ReplyTool, REPLY_MARKER
+
+        tool = ReplyTool()
+        result = await tool._execute({"content": "hello", "send_mode": "invalid"})
+        data = json.loads(result.output)
+        assert data[REPLY_MARKER]["send_mode"] == "normal"
+
+    @pytest.mark.asyncio
+    async def test_reply_tool_mentions_filter_non_digit(self):
+        """ReplyTool._execute() 过滤非数字 mentions"""
+        import json
+        from creatures.nanobot.prompts.skills.reply.tool import ReplyTool, REPLY_MARKER
+
+        tool = ReplyTool()
+        result = await tool._execute({
+            "content": "hello",
+            "mentions": ["12345", "abc", "67890", ""],
+        })
+        data = json.loads(result.output)
+        assert data[REPLY_MARKER]["mentions"] == ["12345", "67890"]

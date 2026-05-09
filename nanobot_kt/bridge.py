@@ -353,9 +353,9 @@ class NanobotBridge:
         return ""
 
     def _reply_meta_store(self) -> dict:
-        if not hasattr(self, "__reply_meta_by_session"):
-            self.__reply_meta_by_session = {}
-        return self.__reply_meta_by_session
+        if not hasattr(self, "_reply_meta_by_session_cache"):
+            self._reply_meta_by_session_cache = {}
+        return self._reply_meta_by_session_cache
 
     def pop_last_reply_meta(self, session_id: str = "") -> dict | None:
         return self._reply_meta_store().pop(session_id, None)
