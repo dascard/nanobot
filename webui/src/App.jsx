@@ -64,6 +64,7 @@ const NAV = [
   { to: '/audit', label: '审计' },
   { to: '/configs', label: '配置' },
   { to: '/settings', label: '设置' },
+  { to: '/memory', label: '群体记忆' },
   { to: '/db', label: '数据库' },
 ]
 
@@ -1308,6 +1309,66 @@ function ModelsPage() {
   )
 }
 
+// ── Memory ──
+function MemoryPage() {
+  const [groupId, setGroupId] = useState('')
+  const [memType, setMemType] = useState('')
+  const [memories, setMemories] = useState([])
+  const [loading, setLoading] = useState(false)
+
+  const load = () => {
+    if (!groupId) return
+    setLoading(true)
+    api.get(`/admin/groups/${encodeURIComponent(groupId)}/memories${memType ? `?memory_type=${memType}` : ''}`)
+      .then(r => setMemories(r.data.memories || [])).finally(() => setLoading(false))
+  }
+
+  return (
+    <div>
+      <div className="flex items-start justify-between mb-4">
+        <div>
+          <h1 className="text-2xl font-bold">群体记忆</h1>
+          <p className="text-slate-500 text-sm">按群查看 GroupMemory：话题/黑话/风格/关系/事件/偏好</p>
+        </div>
+      </div>
+      <div className="flex items-center gap-3 mb-4">
+        <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="group_id"
+          className="w-48 p-2 rounded-lg bg-slate-950 border border-slate-700 text-sm" />
+        <select value={memType} onChange={e => setMemType(e.target.value)}
+          className="p-2 rounded-lg bg-slate-950 border border-slate-700 text-sm">
+          <option value="">全部类型</option>
+          {['topic', 'slang', 'style', 'relationship', 'event', 'preference'].map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">查询</button>
+      </div>
+      {loading ? <Spinner /> : memories.length === 0 ? <div className="text-sm text-slate-600 py-10 text-center">{groupId ? '暂无记忆' : '输入群号后查询'}</div> : (
+        <Card className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+              <th className="py-2 px-3">id</th><th className="py-2 px-3">类型</th><th className="py-2 px-3">内容</th><th className="py-2 px-3">confidence</th><th className="py-2 px-3">证据数</th><th className="py-2 px-3">decay</th><th className="py-2 px-3">来源</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">更新</th>
+            </tr></thead>
+            <tbody>
+              {memories.map(m => (
+                <tr key={m.id} className="border-b border-slate-800/50">
+                  <td className="py-2 px-3 text-slate-500">{m.id}</td>
+                  <td className="py-2 px-3"><Badge>{m.memory_type}</Badge></td>
+                  <td className="py-2 px-3 max-w-[400px] truncate">{m.content}</td>
+                  <td className="py-2 px-3">{Number(m.confidence).toFixed(2)}</td>
+                  <td className="py-2 px-3">{m.evidence_count}</td>
+                  <td className="py-2 px-3">{Number(m.decay_score).toFixed(2)}</td>
+                  <td className="py-2 px-3 text-slate-500">{m.source}</td>
+                  <td className="py-2 px-3">{m.status === 'active' ? <Badge tone="emerald">active</Badge> : m.status === 'archived' ? <Badge tone="slate">archived</Badge> : <Badge tone="amber">{m.status}</Badge>}</td>
+                  <td className="py-2 px-3 text-slate-500 text-xs">{m.updated_at}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </div>
+  )
+}
+
 // ── Audit ──
 function AuditPage() {
   const [data, setData] = useState({ items: [], total: 0 })
@@ -1362,6 +1423,7 @@ export default function App() {
           <Route path="/blocks" element={<BlocksPage />} />
           <Route path="/configs" element={<ConfigsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/memory" element={<MemoryPage />} />
           <Route path="/db" element={<DbPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/prompt" element={<PromptPage />} />

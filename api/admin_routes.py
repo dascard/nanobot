@@ -625,6 +625,42 @@ def group_detail(group_id: str, db: Session = Depends(get_db), _auth=Depends(ver
     }
 
 
+@router.get("/groups/{group_id:path}/memories")
+def group_memories_list(
+    group_id: str,
+    memory_type: str = "",
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """查询某群的 GroupMemory 列表——用于 WebUI 群体记忆页。"""
+    from core.database import GroupMemory
+    from core.group_runtime.ids import normalize_group_session_id
+
+    norm = normalize_group_session_id(group_id)
+    q = db.query(GroupMemory).filter(GroupMemory.group_id == norm)
+    if memory_type:
+        q = q.filter(GroupMemory.memory_type == memory_type)
+    rows = q.order_by(GroupMemory.confidence.desc(), GroupMemory.last_seen.desc()).limit(100).all()
+    return {
+        "memories": [
+            {
+                "id": r.id, "group_id": r.group_id,
+                "memory_type": r.memory_type, "content": r.content,
+                "content_hash": r.content_hash or "",
+                "cluster_key": r.cluster_key or "",
+                "confidence": r.confidence, "evidence_count": r.evidence_count,
+                "decay_score": r.decay_score,
+                "first_seen": r.first_seen.strftime("%Y-%m-%d") if r.first_seen else "",
+                "last_seen": r.last_seen.strftime("%Y-%m-%d") if r.last_seen else "",
+                "updated_at": r.updated_at.strftime("%Y-%m-%d %H:%M") if r.updated_at else "",
+                "status": r.status, "source": r.source or "group_analysis",
+                "evidence_log_ids_json": r.evidence_log_ids_json,
+            }
+            for r in rows
+        ]
+    }
+
+
 @router.get("/timing-gate/events")
 def timing_gate_events(
     group_id: str = "",

@@ -18,49 +18,69 @@ MEMORY_TYPES = {"topic", "slang", "relationship", "style", "event", "preference"
 CONFIDENCE_FLOOR = 0.55
 
 
-def _norm_key(content: str) -> str:
-    return hashlib.md5(content.strip().lower().encode()).hexdigest()[:12]
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.strip().encode()).hexdigest()[:32]
+
+
+def _cluster_key(content: str) -> str:
+    stopwords = {"的", "了", "是", "在", "和", "也", "都", "就", "不", "会",
+                 "很", "有", "这", "那", "群", "里", "经常", "喜欢", "大家",
+                 "比较", "觉得", "有点", "非常", "特别"}
+    words = content.strip().split()
+    keywords = [w for w in words if w.lower() not in stopwords]
+    return " ".join(keywords[:3]) if keywords else content.strip()[:20]
 
 
 def upsert(
     group_id: str, memory_type: str, content: str,
     *, evidence_log_ids: list[int] | None = None,
     confidence_hint: float = 0.5, meta: dict | None = None,
+    source: str = "group_analysis",
+    cluster_key: str = "",
 ) -> str:
-    """写入或更新一条群体记忆。返回 new/updated/skipped。"""
+    """写入或更新一条群体记忆。返回 new/updated/skipped。
+
+    去重逻辑：同 group_id + memory_type + content_hash 不重复插入。
+    """
     if memory_type not in MEMORY_TYPES:
         return "skipped"
 
     db = SessionLocal()
     try:
-        key = _norm_key(content)
+        ch = _content_hash(content)
         existing = (
             db.query(GroupMemory)
-            .filter(and_(GroupMemory.group_id == group_id,
-                         GroupMemory.memory_type == memory_type))
-            .all()
+            .filter(and_(
+                GroupMemory.group_id == group_id,
+                GroupMemory.memory_type == memory_type,
+                GroupMemory.content_hash == ch,
+            ))
+            .first()
         )
-        for m in existing:
-            if _norm_key(m.content) == key:
-                m.evidence_count += 1
-                m.last_seen = datetime.now()
-                m.confidence = min(1.0, m.confidence + confidence_hint * 0.1)
-                m.decay_score = min(1.0, m.decay_score + 0.05)
-                if evidence_log_ids:
-                    _merge_evidence(m, evidence_log_ids)
-                if meta:
-                    m.meta_json = json.dumps(
-                        {**_safe_meta(m.meta_json), **meta}, ensure_ascii=False)
-                db.commit()
-                return "updated"
+        if existing:
+            existing.evidence_count += 1
+            existing.last_seen = datetime.now()
+            existing.confidence = min(1.0, existing.confidence + confidence_hint * 0.1)
+            existing.decay_score = min(1.0, existing.decay_score + 0.05)
+            if evidence_log_ids:
+                _merge_evidence(existing, evidence_log_ids)
+            if meta:
+                existing.meta_json = json.dumps(
+                    {**_safe_meta(existing.meta_json), **meta}, ensure_ascii=False)
+            if source and source != existing.source:
+                existing.source = source
+            db.commit()
+            return "updated"
 
+        ck = cluster_key or _cluster_key(content)
         entry = GroupMemory(
             group_id=group_id, memory_type=memory_type,
-            content=content.strip(),
+            content=content.strip(), content_hash=ch,
+            cluster_key=ck,
             evidence_log_ids_json=json.dumps(evidence_log_ids or []),
             confidence=confidence_hint, evidence_count=1,
             first_seen=datetime.now(), last_seen=datetime.now(),
-            decay_score=1.0,
+            decay_score=1.0, source=source,
             status="active" if confidence_hint >= CONFIDENCE_FLOOR else "review",
             meta_json=json.dumps(meta or {}, ensure_ascii=False),
         )
@@ -217,15 +237,29 @@ def _safe_meta(raw: str) -> dict:
         return {}
 
 
+def should_inject(memory: dict) -> bool:
+    """判断一条记忆是否应注入 GroupProfile。"""
+    return (
+        memory.get("status") == "active"
+        and memory.get("confidence", 0) >= 0.7
+        and memory.get("decay_score", 0) >= 0.3
+        and bool(_safe_evidence_ids(memory.get("evidence_log_ids_json", "")))
+    )
+
+
 def _row_to_dict(r: GroupMemory) -> dict:
     return {
         "id": r.id, "group_id": r.group_id,
         "memory_type": r.memory_type, "content": r.content,
+        "content_hash": r.content_hash or "",
+        "cluster_key": r.cluster_key or "",
         "confidence": r.confidence, "evidence_count": r.evidence_count,
         "decay_score": r.decay_score,
         "first_seen": r.first_seen.strftime("%Y-%m-%d") if r.first_seen else "",
         "last_seen": r.last_seen.strftime("%Y-%m-%d") if r.last_seen else "",
+        "updated_at": r.updated_at.strftime("%Y-%m-%d %H:%M") if r.updated_at else "",
         "status": r.status,
+        "source": r.source or "group_analysis",
         "meta_json": r.meta_json,
         "evidence_log_ids_json": r.evidence_log_ids_json,
     }

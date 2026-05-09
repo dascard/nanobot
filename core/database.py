@@ -194,15 +194,23 @@ class GroupMemory(Base):
     group_id = Column(String, index=True, nullable=False)
     memory_type = Column(String, index=True, nullable=False)
     content = Column(Text, nullable=False)
+    content_hash = Column(String, default="")  # SHA256 前 32 位，快速去重
+    cluster_key = Column(String, nullable=True)  # 语义聚类稳定 key
     evidence_log_ids_json = Column(Text, default="[]")
     confidence = Column(Float, default=0.5)
     evidence_count = Column(Integer, default=1)
     first_seen = Column(DateTime, default=datetime.now)
     last_seen = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     decay_score = Column(Float, default=1.0)
-    status = Column(String, default="active")
+    status = Column(String, default="active")  # active/archived/review
+    source = Column(String, default="group_analysis")  # group_analysis/slang_miner/manual/profile_feedback
     meta_json = Column(Text, default="{}")
     created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("group_id", "memory_type", "content_hash", name="uq_group_memory_hash"),
+    )
 
 
 class ExpressionMemory(Base):
@@ -468,6 +476,34 @@ def init_db():
                 conn.commit()
             except Exception as e:
                 print(f"  ⚠ Sticker index creation failed: {e}")
+
+        if "group_memories" in inspector.get_table_names():
+            gm_columns = [col["name"] for col in inspector.get_columns("group_memories")]
+            gm_required = {
+                "content_hash": "TEXT DEFAULT ''",
+                "cluster_key": "TEXT",
+                "updated_at": "TIMESTAMP",
+                "source": "TEXT DEFAULT 'group_analysis'",
+            }
+            for col_name, col_type in gm_required.items():
+                if col_name in gm_columns:
+                    continue
+                print(f"  → Migrating: Adding missing column [{col_name}] to group_memories...")
+                try:
+                    conn.execute(
+                        text(f"ALTER TABLE group_memories ADD COLUMN {col_name} {col_type}")
+                    )
+                    conn.commit()
+                except Exception as e:
+                    print(f"  ⚠ Migration failed for group_memories.{col_name}: {e}")
+            try:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_group_memory_hash "
+                    "ON group_memories(group_id, memory_type, content_hash)"
+                ))
+                conn.commit()
+            except Exception as e:
+                print(f"  ⚠ GroupMemory index creation failed: {e}")
 
         # index: (session_id, message_id) for chat_logs
         try:
