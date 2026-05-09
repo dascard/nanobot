@@ -1332,6 +1332,10 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     "group_recent_context": group_recent_context,
                     "source_message_ids": source_message_ids,
                     "context_debug": _ctx_debug,
+                    "self_id": ambient_meta.get("bot", {}).get("self_id", ""),
+                    "bot_id": ambient_meta.get("bot", {}).get("bot_id", ""),
+                    "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
+                    "bot_aliases": list(req.bot_aliases or []),
                 }
                 enriched = f"<user_input>\n{chat_query}\n</user_input>"
 
@@ -1597,6 +1601,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     "group_recent_context": group_recent_context,
                     "source_message_ids": source_message_ids,
                     "context_debug": _ctx_debug,
+                    "bot_aliases": list(req.bot_aliases or []),
                 }
                 chat_query = _build_multimodal_user_input_text(
                     result.get("pending_text", ""), None, max_chars=MAX_QUERY_CHARS,
