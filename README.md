@@ -1,76 +1,200 @@
-# Nanobot Server (v4 KT + new-api Gateway)
+# Nanobot Server
 
-Nanobot Server 是一个独立的自进化 Python 微服务网关。它与 Dify 分离，通过 Tampermonkey 脚本对 Gemini Web 网页端进行浏览器端“无痛注入”以实现持久化记忆和系统角色护栏。
+Nanobot Server 是 Nanobot 的服务端运行核心，负责接收 QQbot / Web 客户端消息，运行 KohakuTerrarium Agent，维护聊天记忆、群聊运行状态、TimingGate 判定、表情包数据和 Prompt 构建结果。
 
-## 架构（当前实现）
+这个仓库关注的是 Nanobot 端能力：运行可观测性、模型判定调试、记忆 / 表情包 / Prompt 数据治理。QQbot 插件开关和平台适配逻辑应放在 QQbot 端。
+
+## 主要能力
+
+- KT Agent 回复链路：基于 `vendor/KohakuTerrarium` 和 `creatures/nanobot` 配置运行。
+- 模型路由：支持 new-api / OpenAI 兼容网关、主模型、快模型、回复模型和本地 Qwen 分类 / 视觉模型。
+- TimingGate：对群聊消息做 `continue` / `wait` / `no_reply` 判定，支持延迟 timer 和 parse_error 观测。
+- 群聊上下文：保留消息、引用、@、指向性、冷却和 generation 信息，减少 bot 打断用户之间定向对话。
+- 表情包系统：自动入库、缓存预览、视觉打标、搜索、禁用、去重和使用统计。
+- 记忆系统：保存 `ChatLog`、`ConversationTurn`、Persona、Digest、群记忆和近期上下文。
+- Admin WebUI：提供运行总览、群详情、TimingGate、表情包、Prompt、模型、日志、数据库和设置页面。
+
+## 架构概览
 
 ```mermaid
 graph TD
-    subgraph Frontend [Browser]
-        A[Tampermonkey 脚本] -->|1. 注入 config.txt| B[Gemini Web Chat]
-        B -->|2. 监听并拦截气泡| A
-    end
-
-    subgraph Backend [Nanobot Server]
-        A <---|GET /api/v1/context| C[FastAPI 接口层]
-        A --->|POST /api/v1/log| C
-        A --->|POST /api/v1/chat| C
-        C --> K[NanobotBridge]
-        K --> L[KT Agent]
-        L --> M[Native Tools\nSQL / Python / News]
-        C <--> D[(SQLite\n持久化状态)]
-        
-        C -.->|阈值满 20 触发| E((后台自进化任务\nEvolution Thread))
-    end
-
-    subgraph Evolution Pipeline [Local Sub-Agents]
-        E --> F[LogAnalystAgent\n日志结构化提炼]
-        E --> G[PersonaArchitectAgent\n画像合并 + 审查]
-        E --> H[PromptAuditorAgent\n五问审计 + 精简]
-        H --> D
-    end
-
-    subgraph OptionalSync [Optional Dify Dataset Sync]
-        F -.->|可选写入| I[(DATASET_ID_LOGS)]
-        G -.->|可选写入| J[(DATASET_ID_PERSONAS)]
-    end
+    QQ[QQbot / OneBot Adapter] -->|/api/v1/group/message| API[FastAPI API]
+    WEB[WebUI] -->|/api/v1/admin/*| API
+    API --> DB[(SQLite)]
+    API --> RT[Group Runtime / TimingGate]
+    RT -->|continue| Bridge[NanobotBridge]
+    RT -->|wait| Timer[/group_timing/timer]
+    Bridge --> KT[KohakuTerrarium Agent]
+    KT --> Tools[Tools: reply / sticker_search / news / sql / image / group_analysis]
+    Tools --> DB
+    KT --> API
+    API -->|reply + reply_meta| QQ
 ```
 
-说明：
-- 聊天主链路已迁移为 KT Bridge + KT Agent，不再由 Dify 01 直接承载对话编排。
-- 进化链路在本地 Python 子代理内闭环执行（日志提炼 -> 画像更新 -> Prompt 审计 -> 回写数据库）。
-- 若配置了 `DATASET_ID_LOGS` / `DATASET_ID_PERSONAS`，会额外同步摘要到 Dify 知识库（可选）。
+## 目录说明
 
-## 本地开发启动
+| 路径 | 用途 |
+| --- | --- |
+| `server.py` | FastAPI 应用入口、日志、启动检查和后台任务 |
+| `api/routes.py` | 普通 API、群聊入口、TimingGate timer、私聊、任务和记忆端点 |
+| `api/admin_routes.py` | WebUI 管理 API |
+| `core/` | 数据库、群运行态、TimingGate、表情包、记忆和配置 |
+| `nanobot_kt/` | KT Bridge、输出适配和工具实现 |
+| `creatures/nanobot/` | KT creature 配置、Prompt fragment 和工具说明 |
+| `webui/` | Admin WebUI 前端 |
+| `vendor/KohakuTerrarium/` | KT 框架子模块 |
+| `tests/` | pytest 测试 |
+
+## 快速开始
+
+### 1. 拉取子模块
 
 ```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 运行服务器 (热重载模式)
-uvicorn server:app --reload --port 8000
+git submodule update --init --recursive
 ```
 
-## new-api 配置
+如果需要固定到发布版 KT：
+
+```bash
+git -C vendor/KohakuTerrarium checkout --detach v1.3.0
+```
+
+### 2. 准备配置
+
+```bash
+cp .env.example .env
+```
+
+至少建议配置：
 
 ```env
 LLM_PROVIDER=new-api
-NEW_API_BASE_URL=https://api.new-api.com/v1
-NEW_API_KEY=sk-xxx
+NEW_API_BASE_URL=https://api.example.com/v1
+NEW_API_KEY=<your-new-api-key>
 NEW_API_TIMEOUT=180
 
-# 模型分级
-LLM_MODEL_SMART=gpt-4o
-LLM_MODEL_FAST=gpt-4o-mini
-LLM_MODEL_REASONING=o1-mini
+NANOBOT_API_TOKEN=<random-api-token>
+NANOBOT_ADMIN_TOKEN=<random-admin-token>
+
+DATABASE_URL=sqlite:///./data/nanobot.db
+LOG_DIR=./data
+LOG_LEVEL=INFO
 ```
 
-## Docker 部署
+可选本地 Qwen / 分类器：
+
+```env
+CLASSIFIER_API_URL=http://host.docker.internal:9999/v1
+IMAGE_SUMMARY_API_URL=http://host.docker.internal:9999/v1
+```
+
+### 3. 本地运行
 
 ```bash
-# 复制并配置你的 .env 文件
-cp .env.example .env
-
-# 构建并启动
-docker-compose up -d --build
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
+
+访问：
+
+```text
+http://localhost:8000
+```
+
+WebUI 管理接口使用 `NANOBOT_ADMIN_TOKEN` 登录。
+
+### 4. Docker 运行
+
+```bash
+docker compose up -d --build
+```
+
+如果服务器部署需要先更新代码和子模块：
+
+```bash
+git pull --ff-only
+git submodule sync --recursive
+git submodule update --init --recursive
+docker compose up -d --build
+```
+
+## 常用 API
+
+普通 API 前缀为 `/api/v1`，管理 API 前缀为 `/api/v1/admin`。
+
+| 端点 | 说明 |
+| --- | --- |
+| `POST /api/v1/chat` | 私聊 / Web 聊天入口 |
+| `POST /api/v1/group/message` | 群聊统一入口 |
+| `POST /api/v1/group_timing/timer` | 延迟回复 timer 回调 |
+| `POST /api/v1/stickers/register` | 注册表情包 |
+| `GET /api/v1/stickers/search` | 搜索表情包 |
+| `GET /api/v1/health` | 服务健康检查 |
+| `GET /api/v1/admin/overview` | WebUI 首页总览数据 |
+| `GET /api/v1/admin/groups` | 群聊运行状态 |
+| `GET /api/v1/admin/timing-gate/events` | TimingGate 事件与统计 |
+| `GET /api/v1/admin/stickers` | 表情包管理 |
+| `GET /api/v1/admin/prompt` | Prompt 预览 / 构建相关数据 |
+| `GET /api/v1/admin/models/status` | 模型状态 |
+| `GET /api/v1/admin/logs` | 日志列表 |
+
+## Prompt 构建
+
+Prompt fragment 位于：
+
+```text
+creatures/nanobot/prompts/
+```
+
+构建并检查：
+
+```bash
+python scripts/build_nanobot_prompt.py --check
+python scripts/build_nanobot_prompt.py
+```
+
+生成结果写入：
+
+```text
+creatures/nanobot/prompt.md
+```
+
+## 测试
+
+```bash
+python -m pytest tests/ -v
+```
+
+常用局部测试：
+
+```bash
+python -m pytest tests/test_kt_framework.py tests/test_bridge_integration.py tests/test_sticker_tool.py -q
+python -m pytest tests/test_timing_runtime.py tests/test_timing_gate.py -q
+python -m pytest tests/test_admin_api.py -q
+```
+
+## 安全与公开仓库注意事项
+
+不要提交以下内容：
+
+- `.env` 和任何真实 token / key
+- `data/` 下的数据库、备份、日志和缓存
+- `webui/data/`
+- `tests/chat_resp/` 这类本地响应产物
+- Prompt 私有版本、真实聊天记录、群号 / 用户号映射表
+
+公开前建议执行：
+
+```bash
+gitleaks detect --source . --verbose
+git log --all --oneline -- .env data/nanobot.db data/nanobot.log tests/chat_resp webui/data
+git rev-list --objects --all | rg '(\.env$|data/nanobot|tests/chat_resp|webui/data)'
+```
+
+如果历史中曾经出现过真实 key，即使仓库已清理，也应轮换对应凭证。
+
+## License
+
+请在公开发布前补充明确的许可证文件。
