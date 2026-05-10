@@ -45,6 +45,7 @@ class TestExtractAndPersist:
     def test_source_meta_written_to_db(self):
         import json
         from core.database import SessionLocal, GroupMemory
+        from core.group_runtime.ids import normalize_group_session_id
         analysis = {
             "topics": {"topics": [{"topic": "测试", "detail": ""}]},
             "quality": {"dimensions": [], "summary": ""},
@@ -58,7 +59,7 @@ class TestExtractAndPersist:
         assert stats["new"] >= 1
         db = SessionLocal()
         row = db.query(GroupMemory).filter(
-            GroupMemory.group_id == "g_meta",
+            GroupMemory.group_id == normalize_group_session_id("g_meta"),
             GroupMemory.memory_type == "topic",
         ).first()
         assert row is not None

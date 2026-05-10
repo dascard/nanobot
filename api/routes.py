@@ -1161,6 +1161,18 @@ def _cache_sticker_preview_bg(sticker_id: int) -> None:
         db.close()
 
 
+def _pop_bridge_reply_meta(bridge: Any, session_id: str) -> dict | None:
+    """从真实 bridge 取 reply_meta；测试 mock 没有该能力时返回 None。"""
+    if getattr(type(bridge), "pop_last_reply_meta", None) is None:
+        return None
+    try:
+        meta = bridge.pop_last_reply_meta(session_id)
+    except Exception as e:
+        logger.warning("[ReplyMeta] pop failed session=%s: %s", session_id, e)
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
 def _derive_group_trigger_reason(req: GroupMessageRequest) -> str:
     """推断群消息触发来源；是否发言统一交给 TimingGate 判断。"""
     text = (req.message or "").strip()
@@ -1348,7 +1360,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     metadata=bridge_meta,
                 )
                 answer = reply if isinstance(reply, str) else str(reply or "")
-                reply_meta = bridge.pop_last_reply_meta(group_user_id)
+                reply_meta = _pop_bridge_reply_meta(bridge, group_user_id)
                 if answer.strip():
                     _persist_group_bridge_reply(
                         db,
@@ -1631,7 +1643,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                 )
                 answer = reply if isinstance(reply, str) else str(reply or "")
                 result["reply"] = _sanitize_prompt_text(answer, max_chars=4000)
-                reply_meta_timer = bridge.pop_last_reply_meta(group_user_id)
+                reply_meta_timer = _pop_bridge_reply_meta(bridge, group_user_id)
                 result["reply_meta"] = reply_meta_timer
                 result["group_id"] = req.group_id
                 if answer.strip():

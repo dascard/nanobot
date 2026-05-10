@@ -73,7 +73,7 @@ def test_sanitize_caps_at_max_chars():
 def test_build_memory_empty_db(db_session):
     """Empty database returns empty tuple."""
     from api.routes import _build_session_memory
-    header, messages = _build_session_memory(db_session, "no_such_session")
+    header, messages, _debug = _build_session_memory(db_session, "no_such_session")
     assert header == ""
     assert messages == []
 
@@ -84,7 +84,7 @@ def test_build_memory_single_turn(db_session):
     _seed_chat_logs(db_session, "s1", [
         ("user", "你好"),
     ])
-    header, messages = _build_session_memory(db_session, "s1")
+    header, messages, _debug = _build_session_memory(db_session, "s1")
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
     assert "你好" in messages[0]["content"]
@@ -99,7 +99,7 @@ def test_build_memory_role_alternation(db_session):
         ("user", "今天天气如何"),
         ("assistant", "晴天，25度"),
     ])
-    header, messages = _build_session_memory(db_session, "s1")
+    header, messages, _debug = _build_session_memory(db_session, "s1")
     assert len(messages) == 4
     assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant"]
 
@@ -113,7 +113,7 @@ def test_build_memory_caps_total_chars(db_session):
         ("user", "C" * 500),
         ("assistant", "D" * 500),
     ])
-    header, messages = _build_session_memory(db_session, "s1", max_total=800)
+    header, messages, _debug = _build_session_memory(db_session, "s1", max_total=800)
     total = sum(len(m["content"]) for m in messages)
     assert total <= 800 + 100  # tolerance for truncation overhead
 
@@ -127,7 +127,7 @@ def test_build_memory_token_cap_keeps_latest_rows(db_session):
         ("user", "最新问题" * 40),
     ])
 
-    header, messages = _build_session_memory(
+    header, messages, _debug = _build_session_memory(
         db_session, "s1", max_total=180, max_per_msg=400,
     )
 
@@ -156,7 +156,7 @@ def test_build_memory_uses_latest_rows_not_time_window(db_session):
     ])
     db_session.commit()
 
-    header, messages = _build_session_memory(db_session, "s1")
+    header, messages, _debug = _build_session_memory(db_session, "s1")
     contents = [m["content"] for m in messages]
     assert "recent" in " ".join(contents)
     assert "old message" in " ".join(contents)
@@ -170,7 +170,7 @@ def test_build_memory_returns_struct_dicts(db_session):
         ("user", "hello"),
         ("assistant", "hi"),
     ])
-    header, messages = _build_session_memory(db_session, "s1")
+    header, messages, _debug = _build_session_memory(db_session, "s1")
     for m in messages:
         assert isinstance(m, dict)
         assert "role" in m
@@ -205,7 +205,7 @@ def test_mark_clear_respected(db_session):
             role=role, content=content, created_at=ct))
     db_session.commit()
 
-    header, messages = _build_session_memory(db_session, "s1", user_id="test_user")
+    header, messages, _debug = _build_session_memory(db_session, "s1", user_id="test_user")
     contents = [m["content"] for m in messages]
     assert not any("before clear" in c for c in contents)
 

@@ -549,7 +549,7 @@ class NanobotBridge:
                                             chat_stream_id, len(jargon_ctx))
                     except Exception as e:
                         logger.warning("[NanobotBridge] Expression/Jargon inject failed session=%s: %s",
-                                       group_session_id, e)
+                                       chat_stream_id if 'chat_stream_id' in locals() else session_id, e)
             else:
                 # 私聊注入专属行为规则
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):

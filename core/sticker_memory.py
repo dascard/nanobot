@@ -289,7 +289,7 @@ def search_stickers(
         .filter(
             StickerMemory.status == ACTIVE_STATUS,
             StickerMemory.dedupe_status != "duplicate",
-            StickerMemory.preview_status == "ok",
+            StickerMemory.preview_status.in_(("ok", "pending")),
         )
         .all()
     )
