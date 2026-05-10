@@ -20,6 +20,15 @@ from config import (
     IMAGE_SUMMARY_TIMEOUT,
     IMAGE_SUMMARY_TOP_P,
 )
+
+
+def _get_image_summary_url() -> str:
+    """解析打标 API URL：settings override > env > 默认"""
+    from core.settings_service import settings
+    val = settings.get("model.route.sticker_describe")
+    if val:
+        return str(val)
+    return str(IMAGE_SUMMARY_API_URL or "")
 from nanobot_kt.image_pipeline import prepare_image_parts
 
 logger = logging.getLogger("nanobot.tool.image_summary")
@@ -167,7 +176,7 @@ class ImageSummaryTool(BaseTool):
     def _call_qwen(self, files: list[str], focus: str) -> str:
         payload = self._build_payload(files, focus)
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        url = f"{IMAGE_SUMMARY_API_URL.rstrip('/')}/chat/completions"
+        url = f"{_get_image_summary_url().rstrip('/')}/chat/completions"
 
         logger.info("  [image_summary] >> Qwen: %s | files=%d", url, len(files))
         req = urllib.request.Request(

@@ -18,6 +18,15 @@ from config import CLASSIFIER_API_URL
 logger = logging.getLogger("nanobot.classifier")
 
 
+def _get_classifier_url() -> str:
+    """解析分类器 URL：settings override > env > 默认"""
+    from core.settings_service import settings
+    val = settings.get("model.route.timing_gate")
+    if val:
+        return str(val)
+    return str(CLASSIFIER_API_URL or "")
+
+
 def _classifier_timeout() -> float:
     from core.settings_service import settings
     return settings.get_float("classifier.timeout", 15.0)
@@ -150,7 +159,7 @@ class Guardrail:
             "temperature": 0,
         }
         data = json.dumps(payload).encode("utf-8")
-        url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
+        url = f"{_get_classifier_url().rstrip('/')}/chat/completions"
 
         logger.info("  [classifier] >> Qwen: %s | message: %.80s", url, message)
 
@@ -333,7 +342,7 @@ class PrivateDecisionClassifier:
             "temperature": 0,
         }
         data = json.dumps(payload).encode("utf-8")
-        url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
+        url = f"{_get_classifier_url().rstrip('/')}/chat/completions"
         logger.info(
             "[private_decision] >> Qwen | message=%.80s has_files=%s",
             message,
@@ -523,7 +532,7 @@ class TimingGate:
             "temperature": 0,
         }
         data = json.dumps(payload).encode("utf-8")
-        url = f"{CLASSIFIER_API_URL.rstrip('/')}/chat/completions"
+        url = f"{_get_classifier_url().rstrip('/')}/chat/completions"
         req = urllib.request.Request(
             url,
             data=data,

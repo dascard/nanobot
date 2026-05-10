@@ -572,10 +572,35 @@ class TestModelHealthCheck:
         assert "classifier" in eps
         assert "image_summary" in eps
         assert eps["new_api"]["reachable"] is True
+        assert eps["new_api"]["usable"] is True
+        assert eps["new_api"]["auth_error"] is False
         assert eps["new_api"]["status"] == 200
 
+    def test_health_check_401_is_reachable_not_usable(self, client, auth_header, monkeypatch):
+        """401 可达但不可用，且 auth_error=true"""
+        import aiohttp
+
+        class FakeResponse:
+            status = 401
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+
+        class FakeSession:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            def get(self, url, **kwargs): return FakeResponse()
+
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        r = client.post("/api/v1/admin/models/health-check", headers=auth_header)
+        data = r.json()
+        ep = data["endpoints"]["new_api"]
+        assert ep["reachable"] is True
+        assert ep["usable"] is False
+        assert ep["auth_error"] is True
+
     def test_health_check_unreachable(self, client, auth_header, monkeypatch):
-        """不可达端点返回 reachable=False + error"""
+        """不可达端点返回 reachable=False + usable=False"""
         import aiohttp
 
         class FakeSession:
@@ -590,4 +615,5 @@ class TestModelHealthCheck:
         assert r.status_code == 200, r.text
         data = r.json()
         assert data["endpoints"]["new_api"]["reachable"] is False
+        assert data["endpoints"]["new_api"]["usable"] is False
         assert "Connection refused" in data["endpoints"]["new_api"]["error"]
