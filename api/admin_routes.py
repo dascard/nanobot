@@ -1392,6 +1392,72 @@ async def chat_model_test(body: ChatModelTestRequest, _auth=Depends(verify_admin
     return {"latency_ms": latency_ms, "result": result}
 
 
+# ── Model Catalog & Routes ──
+
+@router.get("/model-catalog")
+def get_model_catalog(_auth=Depends(verify_admin)):
+    from clients.model_registry import registry
+
+    models = []
+    for key, info in registry.models.items():
+        models.append({
+            "key": key, "model": getattr(info, "model", key),
+            "provider": getattr(info, "provider", "openai-compatible"),
+            "base_url": getattr(info, "base_url", ""),
+            "intel": getattr(info, "intelligence", 50),
+            "input_cost": getattr(info, "cost_input_1m", 0),
+            "output_cost": getattr(info, "cost_output_1m", 0),
+            "enabled": getattr(info, "enabled", True),
+            "available": getattr(info, "available", True),
+        })
+    return {"models": models}
+
+
+@router.get("/model-routes")
+def get_model_routes(_auth=Depends(verify_admin)):
+    from config import (
+        LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
+        CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
+    )
+    return {"routes": {
+        "main_chat": LLM_MODEL_REPLY,
+        "fast_chat": LLM_MODEL_FAST,
+        "smart_chat": LLM_MODEL_SMART,
+        "timing_gate": str(CLASSIFIER_API_URL or ""),
+        "sticker_describe": str(IMAGE_SUMMARY_API_URL or ""),
+    }}
+
+
+# ── Model Replies ──
+
+@router.get("/model-replies")
+def model_replies(
+    group_id: str = "", limit: int = 50,
+    db: Session = Depends(get_db), _auth=Depends(verify_admin),
+):
+    from core.database import ChatLog
+
+    q = db.query(ChatLog).filter(ChatLog.role == "assistant")
+    if group_id:
+        from core.group_runtime.ids import normalize_group_session_id
+        q = q.filter(ChatLog.session_id == normalize_group_session_id(group_id))
+    q = q.order_by(ChatLog.id.desc()).limit(max(1, min(limit, 200)))
+    rows = q.all()
+
+    items = []
+    for r in rows:
+        meta = _safe_dict(r.meta_json)
+        items.append({
+            "id": r.id, "time": _iso(r.created_at),
+            "session_id": r.session_id or "",
+            "session_name": r.session_name or "",
+            "content": str(r.content or "")[:500],
+            "reply_meta": meta.get("reply_meta"),
+            "kind": meta.get("kind", ""),
+        })
+    return {"items": items, "total": len(items)}
+
+
 class TimingGateStabilityRequest(BaseModel):
     cases: list[dict] = Field(default_factory=list, max_length=10)
     runs: int = Field(default=20, ge=1, le=20)
