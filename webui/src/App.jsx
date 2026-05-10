@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import axios from 'axios'
 
@@ -1061,16 +1061,61 @@ function LogsPage() {
   const [lines, setLines] = useState(500)
   const [logLevel, setLogLevel] = useState('')
   const [searchQ, setSearchQ] = useState('')
+  const [follow, setFollow] = useState(false)
+  const [fileSize, setFileSize] = useState(0)
+  const preRef = useRef(null)
 
   const refreshFiles = () => api.get('/logs').then(r => setFiles(r.data.files))
   useEffect(() => { refreshFiles() }, [])
 
   const loadLog = (name, n = lines, lv = logLevel, q = searchQ) => {
     setSel(name)
+    setFollow(false)
+    setFileSize(0)
     const params = { lines: n }
     if (lv) params.level = lv
     if (q) params.q = q
-    api.get(`/logs/${encodeURIComponent(name)}`, { params }).then(r => setContent(r.data.content))
+    api.get(`/logs/${encodeURIComponent(name)}`, { params }).then(r => {
+      setContent(r.data.content)
+      if (r.data.file_size) setFileSize(r.data.file_size)
+    })
+  }
+
+  const pollTail = useCallback(() => {
+    if (!sel || !follow) return
+    const params = { since_bytes: fileSize }
+    if (logLevel) params.level = logLevel
+    if (searchQ) params.q = searchQ
+    api.get(`/logs/${encodeURIComponent(sel)}`, { params }).then(r => {
+      if (r.data.content) {
+        setContent(prev => prev + r.data.content)
+        setFileSize(r.data.file_size)
+        setTimeout(() => {
+          if (preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight
+        }, 0)
+      }
+    })
+  }, [sel, follow, fileSize, logLevel, searchQ])
+
+  useEffect(() => {
+    if (!follow) return
+    const id = setInterval(pollTail, 2000)
+    return () => clearInterval(id)
+  }, [pollTail, follow])
+
+  const startFollow = (name) => {
+    setSel(name)
+    setFollow(true)
+    const params = { lines: 200, since_bytes: 0 }
+    if (logLevel) params.level = logLevel
+    if (searchQ) params.q = searchQ
+    api.get(`/logs/${encodeURIComponent(name)}`, { params }).then(r => {
+      setContent(r.data.content)
+      if (r.data.file_size) setFileSize(r.data.file_size)
+      setTimeout(() => {
+        if (preRef.current) preRef.current.scrollTop = preRef.current.scrollHeight
+      }, 0)
+    })
   }
 
   const formatSize = (s) => s < 1024 ? `${s}B` : s < 1048576 ? `${(s/1024).toFixed(1)}KB` : `${(s/1048576).toFixed(1)}MB`
@@ -1084,7 +1129,7 @@ function LogsPage() {
       <div className="flex gap-4" style={{ height: 'calc(100vh - 140px)' }}>
         <div className="w-56 flex-shrink-0 space-y-1 overflow-auto">
           {files.map(f => (
-            <button key={f.name} onClick={() => loadLog(f.name)}
+            <button key={f.name} onClick={() => { setFollow(false); loadLog(f.name) }}
               className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors ${sel === f.name ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}`}>
               <div className="truncate">{f.name}</div>
               <div className="text-slate-600">{formatSize(f.size)}</div>
@@ -1106,8 +1151,16 @@ function LogsPage() {
             <input value={searchQ} onChange={e => setSearchQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && sel && loadLog(sel, lines, logLevel, searchQ)}
               placeholder="搜索..." className="w-40 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
             {sel && <button onClick={() => loadLog(sel)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>}
+            {sel && (
+              <button
+                onClick={() => follow ? setFollow(false) : startFollow(sel)}
+                className={`px-3 py-1 rounded-lg text-xs transition-colors ${follow ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-slate-700 hover:bg-slate-600'}`}>
+                {follow ? '⏸ 停止跟随' : '▶ 跟随'}
+              </button>
+            )}
+            {follow && <span className="text-xs text-emerald-400">实时 {formatSize(fileSize)}</span>}
           </div>
-          <pre className="flex-1 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs leading-relaxed overflow-auto text-slate-300 font-mono whitespace-pre-wrap">{content || '点击左侧文件查看'}</pre>
+          <pre ref={preRef} className="flex-1 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs leading-relaxed overflow-auto text-slate-300 font-mono whitespace-pre-wrap">{content || '点击左侧文件查看'}</pre>
         </div>
       </div>
     </div>

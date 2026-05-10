@@ -1791,7 +1791,7 @@ def _is_allowed_log_name(name: str) -> bool:
 
 @router.get("/logs/{name}")
 def read_log(name: str, lines: int = 200, level: str = "", q: str = "",
-             _auth=Depends(verify_admin)):
+             since_bytes: int = 0, _auth=Depends(verify_admin)):
     from collections import deque
 
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1802,6 +1802,29 @@ def read_log(name: str, lines: int = 200, level: str = "", q: str = "",
     fpath = os.path.abspath(os.path.join(log_dir, fname))
     if not fpath.startswith(log_dir + os.sep) or not os.path.isfile(fpath):
         raise HTTPException(404, "Log not found")
+
+    file_size = os.path.getsize(fpath)
+
+    # tail 模式：从 since_bytes 增量读取
+    if since_bytes > 0:
+        if since_bytes >= file_size:
+            return {"name": fname, "content": "", "lines": 0,
+                    "raw_lines": 0, "file_size": file_size, "tail": True}
+        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+            fh.seek(since_bytes)
+            content = fh.read()
+        if level or q:
+            filtered = []
+            for line in content.splitlines(True):
+                if level and level.upper() not in line.upper():
+                    continue
+                if q and q.lower() not in line.lower():
+                    continue
+                filtered.append(line)
+            content = "".join(filtered)
+        return {"name": fname, "content": content, "lines": content.count("\n"),
+                "raw_lines": len(content.splitlines()), "file_size": file_size, "tail": True}
+
     max_lines = max(1, min(int(lines), 5000))
     with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
         tail = deque(fh, maxlen=max_lines)
@@ -1816,7 +1839,7 @@ def read_log(name: str, lines: int = 200, level: str = "", q: str = "",
             filtered.append(line)
         content = "".join(filtered)
     return {"name": fname, "lines": content.count("\n"), "content": content,
-            "raw_lines": len(tail)}
+            "raw_lines": len(tail), "file_size": file_size}
 
 
 # ═══════════════════════════════════════════
