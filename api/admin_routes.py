@@ -1586,10 +1586,12 @@ def model_replies(
     """模型主动回复日志——游标分页（before_id），按 id DESC 翻页。"""
     from core.database import ChatLog
     from core.group_runtime.ids import normalize_group_session_id
+    from sqlalchemy import func
 
     _limit = max(1, min(limit, 100))
+    BATCH = max(_limit * 3, 200)
 
-    # COUNT：全量匹配总数
+    # COUNT：SQL 层精确过滤 kind
     count_q = db.query(ChatLog).filter(
         ChatLog.role == "assistant",
         ChatLog.session_id.like("group_%"),
@@ -1597,43 +1599,59 @@ def model_replies(
     if group_id:
         count_q = count_q.filter(ChatLog.session_id == normalize_group_session_id(group_id))
     if kind:
-        # COUNT 无法精确过滤 meta_json.kind，取近似（role + session 前缀）
-        # 精确计数由前端 page_info.has_more 判断
-        pass
-    approx_total = count_q.count()
+        count_q = count_q.filter(
+            func.json_extract(ChatLog.meta_json, "$.kind") == kind
+        )
+    total = count_q.count()
 
-    # 数据查询
-    q = db.query(ChatLog).filter(ChatLog.role == "assistant",
-                                  ChatLog.session_id.like("group_%"))
+    # 数据查询：循环拉取直到凑够 _limit 个匹配项
+    base_q = db.query(ChatLog).filter(
+        ChatLog.role == "assistant",
+        ChatLog.session_id.like("group_%"),
+    )
     if group_id:
-        q = q.filter(ChatLog.session_id == normalize_group_session_id(group_id))
-    if before_id:
-        q = q.filter(ChatLog.id < before_id)
-    q = q.order_by(ChatLog.id.desc()).limit(_limit + 1)  # +1 判断 has_more
-    rows = q.all()
+        base_q = base_q.filter(ChatLog.session_id == normalize_group_session_id(group_id))
 
-    items = []
-    for r in rows:
-        meta = _safe_dict(r.meta_json)
-        if kind and meta.get("kind") != kind:
-            continue
-        items.append({
-            "id": r.id,
-            "created_at": _iso(r.created_at),
-            "group_id": str(r.session_id or "").removeprefix("group_"),
-            "content": str(r.content or "")[:500],
-            "reply_meta": meta.get("reply_meta"),
-            "kind": meta.get("kind", ""),
-        })
-        if len(items) >= _limit:
+    items: list[dict] = []
+    cursor = before_id if before_id else None
+    last_scanned_id = 0
+
+    while len(items) <= _limit:
+        q = base_q
+        if cursor:
+            q = q.filter(ChatLog.id < cursor)
+        batch = q.order_by(ChatLog.id.desc()).limit(BATCH).all()
+        if not batch:
             break
 
-    has_more = len(rows) > len(items) or (len(items) == _limit and len(rows) > _limit)
-    next_before_id = items[-1]["id"] if items else 0
+        cursor = batch[-1].id
+        last_scanned_id = cursor
+
+        for r in batch:
+            meta = _safe_dict(r.meta_json)
+            if kind and meta.get("kind") != kind:
+                continue
+            items.append({
+                "id": r.id,
+                "created_at": _iso(r.created_at),
+                "group_id": str(r.session_id or "").removeprefix("group_"),
+                "content": str(r.content or "")[:500],
+                "reply_meta": meta.get("reply_meta"),
+                "kind": meta.get("kind", ""),
+            })
+            if len(items) > _limit:
+                break
+
+        if len(batch) < BATCH:
+            break  # 已扫完 DB
+
+    has_more = len(items) > _limit
+    items = items[:_limit]
+    next_before_id = items[-1]["id"] if items else last_scanned_id
 
     return {
         "items": items,
-        "count": approx_total,
+        "count": total,
         "page_info": {
             "has_more": has_more,
             "next_before_id": next_before_id,

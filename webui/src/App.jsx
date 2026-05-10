@@ -1183,7 +1183,7 @@ function ModelRepliesTab() {
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
   const [groupId, setGroupId] = useState('')
-  const [cursorStack, setCursorStack] = useState([])  // 前进历史
+  const [cursorStack, setCursorStack] = useState([])  // 后退历史：每前进一次 push 当前页起点
   const [currentBeforeId, setCurrentBeforeId] = useState(0)
   const [nextBeforeId, setNextBeforeId] = useState(0)
   const [hasMore, setHasMore] = useState(false)
@@ -1195,7 +1195,7 @@ function ModelRepliesTab() {
     if (beforeId) params.before_id = beforeId
     api.get('/model-replies', { params }).then(r => {
       const data = r.data
-      if (pushStack && currentBeforeId > 0) {
+      if (pushStack) {
         setCursorStack(prev => [...prev, currentBeforeId])
       }
       setItems(data.items || [])
