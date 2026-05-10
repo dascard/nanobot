@@ -175,26 +175,6 @@ python -m pytest tests/test_timing_runtime.py tests/test_timing_gate.py -q
 python -m pytest tests/test_admin_api.py -q
 ```
 
-## 安全与公开仓库注意事项
-
-不要提交以下内容：
-
-- `.env` 和任何真实 token / key
-- `data/` 下的数据库、备份、日志和缓存
-- `webui/data/`
-- `tests/chat_resp/` 这类本地响应产物
-- Prompt 私有版本、真实聊天记录、群号 / 用户号映射表
-
-公开前建议执行：
-
-```bash
-gitleaks detect --source . --verbose
-git log --all --oneline -- .env data/nanobot.db data/nanobot.log tests/chat_resp webui/data
-git rev-list --objects --all | rg '(\.env$|data/nanobot|tests/chat_resp|webui/data)'
-```
-
-如果历史中曾经出现过真实 key，即使仓库已清理，也应轮换对应凭证。
-
 ## License
 
 请在公开发布前补充明确的许可证文件。
