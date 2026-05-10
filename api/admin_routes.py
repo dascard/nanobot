@@ -1580,6 +1580,7 @@ def patch_model_route(
 @router.get("/model-replies")
 def model_replies(
     group_id: str = "", limit: int = 50, kind: str = "group_reply",
+    offset: int = 0,
     db: Session = Depends(get_db), _auth=Depends(verify_admin),
 ):
     from core.database import ChatLog
@@ -1588,27 +1589,31 @@ def model_replies(
     if group_id:
         from core.group_runtime.ids import normalize_group_session_id
         q = q.filter(ChatLog.session_id == normalize_group_session_id(group_id))
-    q = q.order_by(ChatLog.id.desc()).limit(max(50, min(limit * 3, 500)))
+    q = q.order_by(ChatLog.id.desc()).limit(max(100, min(limit * 5, 2000)))
     rows = q.all()
+    _limit = max(1, min(limit, 200))
 
-    items = []
+    all_items = []
     for r in rows:
         if not str(r.session_id or "").startswith("group_"):
             continue
         meta = _safe_dict(r.meta_json)
         if kind and meta.get("kind") != kind:
             continue
-        items.append({
+        all_items.append({
             "id": r.id, "time": _iso(r.created_at),
+            "created_at": _iso(r.created_at),
             "group_id": str(r.session_id or "").removeprefix("group_"),
+            "user_id": str(r.session_id or "").removeprefix("group_"),
             "session_id": r.session_id or "",
             "content": str(r.content or "")[:500],
             "reply_meta": meta.get("reply_meta"),
             "kind": meta.get("kind", ""),
         })
-        if len(items) >= limit:
-            break
-    return {"items": items, "count": len(items)}
+    total = len(all_items)
+    start = max(0, min(offset, total))
+    end = min(start + _limit, total)
+    return {"items": all_items[start:end], "count": total}
 
 
 class TimingGateStabilityRequest(BaseModel):

@@ -1055,6 +1055,7 @@ function DbPage() {
 
 // ── Logs ──
 function LogsPage() {
+  const [tab, setTab] = useState('files')
   const [files, setFiles] = useState([])
   const [sel, setSel] = useState('')
   const [content, setContent] = useState('')
@@ -1123,45 +1124,122 @@ function LogsPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">日志</h1>
-        <button onClick={refreshFiles} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">刷新列表</button>
-      </div>
-      <div className="flex gap-4" style={{ height: 'calc(100vh - 140px)' }}>
-        <div className="w-56 flex-shrink-0 space-y-1 overflow-auto">
-          {files.map(f => (
-            <button key={f.name} onClick={() => { setFollow(false); loadLog(f.name) }}
-              className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors ${sel === f.name ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}`}>
-              <div className="truncate">{f.name}</div>
-              <div className="text-slate-600">{formatSize(f.size)}</div>
-            </button>
-          ))}
-        </div>
-        <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center gap-2 mb-2 flex-wrap">
-            <span className="text-sm text-slate-400">行数:</span>
-            <select value={lines} onChange={e => { const n = Number(e.target.value); setLines(n); if (sel) loadLog(sel, n) }}
-              className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
-              <option value="100">100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option>
-            </select>
-            <select value={logLevel} onChange={e => { setLogLevel(e.target.value); if (sel) loadLog(sel, lines, e.target.value, searchQ) }}
-              className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
-              <option value="">全部级别</option>
-              <option value="ERROR">ERROR</option><option value="WARNING">WARNING</option><option value="INFO">INFO</option><option value="DEBUG">DEBUG</option>
-            </select>
-            <input value={searchQ} onChange={e => setSearchQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && sel && loadLog(sel, lines, logLevel, searchQ)}
-              placeholder="搜索..." className="w-40 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
-            {sel && <button onClick={() => loadLog(sel)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>}
-            {sel && (
-              <button
-                onClick={() => follow ? setFollow(false) : startFollow(sel)}
-                className={`px-3 py-1 rounded-lg text-xs transition-colors ${follow ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-slate-700 hover:bg-slate-600'}`}>
-                {follow ? '⏸ 停止跟随' : '▶ 跟随'}
-              </button>
-            )}
-            {follow && <span className="text-xs text-emerald-400">实时 {formatSize(fileSize)}</span>}
+        <div className="flex items-center gap-4">
+          <h1 className="text-2xl font-bold">日志</h1>
+          <div className="flex rounded-lg bg-slate-900 border border-slate-700 p-0.5">
+            <button onClick={() => setTab('files')} className={`px-3 py-1 rounded-md text-xs transition-colors ${tab === 'files' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:text-white'}`}>日志文件</button>
+            <button onClick={() => { setTab('replies'); setFollow(false) }} className={`px-3 py-1 rounded-md text-xs transition-colors ${tab === 'replies' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:text-white'}`}>模型回复</button>
           </div>
-          <pre ref={preRef} className="flex-1 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs leading-relaxed overflow-auto text-slate-300 font-mono whitespace-pre-wrap">{content || '点击左侧文件查看'}</pre>
         </div>
+        {tab === 'files' && <button onClick={refreshFiles} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">刷新列表</button>}
+      </div>
+      {tab === 'files' ? (
+        <div className="flex gap-4" style={{ height: 'calc(100vh - 140px)' }}>
+          <div className="w-56 flex-shrink-0 space-y-1 overflow-auto">
+            {files.map(f => (
+              <button key={f.name} onClick={() => { setFollow(false); loadLog(f.name) }}
+                className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors ${sel === f.name ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}`}>
+                <div className="truncate">{f.name}</div>
+                <div className="text-slate-600">{formatSize(f.size)}</div>
+              </button>
+            ))}
+          </div>
+          <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <span className="text-sm text-slate-400">行数:</span>
+              <select value={lines} onChange={e => { const n = Number(e.target.value); setLines(n); if (sel) loadLog(sel, n) }}
+                className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
+                <option value="100">100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option>
+              </select>
+              <select value={logLevel} onChange={e => { setLogLevel(e.target.value); if (sel) loadLog(sel, lines, e.target.value, searchQ) }}
+                className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
+                <option value="">全部级别</option>
+                <option value="ERROR">ERROR</option><option value="WARNING">WARNING</option><option value="INFO">INFO</option><option value="DEBUG">DEBUG</option>
+              </select>
+              <input value={searchQ} onChange={e => setSearchQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && sel && loadLog(sel, lines, logLevel, searchQ)}
+                placeholder="搜索..." className="w-40 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
+              {sel && <button onClick={() => loadLog(sel)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>}
+              {sel && (
+                <button
+                  onClick={() => follow ? setFollow(false) : startFollow(sel)}
+                  className={`px-3 py-1 rounded-lg text-xs transition-colors ${follow ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-slate-700 hover:bg-slate-600'}`}>
+                  {follow ? '⏸ 停止跟随' : '▶ 跟随'}
+                </button>
+              )}
+              {follow && <span className="text-xs text-emerald-400">实时 {formatSize(fileSize)}</span>}
+            </div>
+            <pre ref={preRef} className="flex-1 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs leading-relaxed overflow-auto text-slate-300 font-mono whitespace-pre-wrap">{content || '点击左侧文件查看'}</pre>
+          </div>
+        </div>
+      ) : (
+        <ModelRepliesTab />
+      )}
+    </div>
+  )
+}
+
+
+function ModelRepliesTab() {
+  const [items, setItems] = useState([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [groupId, setGroupId] = useState('')
+  const limit = 30
+
+  const load = (p = page) => {
+    const params = { limit, kind: 'group_reply' }
+    if (groupId) params.group_id = groupId
+    // page offset
+    params.offset = (p - 1) * limit
+    api.get('/model-replies', { params }).then(r => {
+      setItems(r.data.items || [])
+      setTotal(r.data.count || 0)
+      setPage(p)
+    })
+  }
+  useEffect(() => { load(1) }, [])
+
+  const totalPages = Math.max(1, Math.ceil(total / limit))
+  const formatTime = (ts) => ts ? new Date(ts).toLocaleString('zh-CN', { hour12: false }) : ''
+
+  return (
+    <div style={{ height: 'calc(100vh - 140px)' }} className="flex flex-col">
+      <div className="flex items-center gap-2 mb-3">
+        <input value={groupId} onChange={e => setGroupId(e.target.value)} onKeyDown={e => e.key === 'Enter' && load(1)}
+          placeholder="群号筛选..." className="w-32 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
+        <button onClick={() => load(1)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">查询</button>
+        <span className="text-xs text-slate-500 ml-2">共 {total} 条</span>
+        <div className="flex-1" />
+        {totalPages > 1 && (
+          <div className="flex items-center gap-1">
+            <button disabled={page <= 1} onClick={() => load(page - 1)} className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 rounded text-xs">‹</button>
+            <span className="text-xs text-slate-400">{page}/{totalPages}</span>
+            <button disabled={page >= totalPages} onClick={() => load(page + 1)} className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-40 rounded text-xs">›</button>
+          </div>
+        )}
+      </div>
+      <div className="flex-1 overflow-auto rounded-xl bg-slate-950 border border-slate-800">
+        <table className="w-full text-xs">
+          <thead className="sticky top-0 bg-slate-900 text-slate-400">
+            <tr>
+              <th className="py-2 px-3 text-left w-28">时间</th>
+              <th className="py-2 px-3 text-left w-20">群号</th>
+              <th className="py-2 px-3 text-left">回复内容</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-800">
+            {items.map((m, i) => (
+              <tr key={m.id || i} className="hover:bg-slate-900/50 transition-colors">
+                <td className="py-2 px-3 text-slate-500 whitespace-nowrap align-top">{formatTime(m.created_at)}</td>
+                <td className="py-2 px-3 text-slate-400 font-mono align-top">{m.user_id || '-'}</td>
+                <td className="py-2 px-3 text-slate-300 whitespace-pre-wrap break-all">{m.content?.substring(0, 300)}{m.content?.length > 300 ? '…' : ''}</td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr><td colSpan={3} className="py-8 text-center text-slate-600">暂无数据</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   )
