@@ -1399,18 +1399,27 @@ def get_model_catalog(_auth=Depends(verify_admin)):
     from clients.model_registry import registry
 
     models = []
-    for key, info in registry.models.items():
+    for m in registry.data.get("models", []):
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("id") or "")
+        if not mid:
+            continue
         models.append({
-            "key": key, "model": getattr(info, "model", key),
-            "provider": getattr(info, "provider", "openai-compatible"),
-            "base_url": getattr(info, "base_url", ""),
-            "intel": getattr(info, "intelligence", 50),
-            "input_cost": getattr(info, "cost_input_1m", 0),
-            "output_cost": getattr(info, "cost_output_1m", 0),
-            "enabled": getattr(info, "enabled", True),
-            "available": getattr(info, "available", True),
+            "key": mid, "id": mid,
+            "model": m.get("model") or mid,
+            "provider": m.get("provider") or "",
+            "tier": m.get("tier") or "",
+            "intel": m.get("intelligence", 0),
+            "intelligence": m.get("intelligence", 0),
+            "input_cost": m.get("cost_input_1m", 0),
+            "output_cost": m.get("cost_output_1m", 0),
+            "cost_input_1m": m.get("cost_input_1m", 0),
+            "cost_output_1m": m.get("cost_output_1m", 0),
+            "tags": m.get("tags") or [],
+            "description": m.get("description") or "",
         })
-    return {"models": models}
+    return {"models": models, "last_updated": registry.data.get("last_updated", "never")}
 
 
 @router.get("/model-routes")
@@ -1420,11 +1429,11 @@ def get_model_routes(_auth=Depends(verify_admin)):
         CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
     )
     return {"routes": {
-        "main_chat": LLM_MODEL_REPLY,
-        "fast_chat": LLM_MODEL_FAST,
-        "smart_chat": LLM_MODEL_SMART,
-        "timing_gate": str(CLASSIFIER_API_URL or ""),
-        "sticker_describe": str(IMAGE_SUMMARY_API_URL or ""),
+        "main_chat": {"model": LLM_MODEL_REPLY, "source": "LLM_MODEL_REPLY", "editable": False},
+        "fast_chat": {"model": LLM_MODEL_FAST, "source": "LLM_MODEL_FAST", "editable": False},
+        "smart_chat": {"model": LLM_MODEL_SMART, "source": "LLM_MODEL_SMART", "editable": False},
+        "timing_gate": {"model": "", "api_url": str(CLASSIFIER_API_URL or ""), "source": "CLASSIFIER_API_URL", "editable": False},
+        "sticker_describe": {"model": "", "api_url": str(IMAGE_SUMMARY_API_URL or ""), "source": "IMAGE_SUMMARY_API_URL", "editable": False},
     }}
 
 
@@ -1432,7 +1441,7 @@ def get_model_routes(_auth=Depends(verify_admin)):
 
 @router.get("/model-replies")
 def model_replies(
-    group_id: str = "", limit: int = 50,
+    group_id: str = "", limit: int = 50, kind: str = "group_reply",
     db: Session = Depends(get_db), _auth=Depends(verify_admin),
 ):
     from core.database import ChatLog
@@ -1441,21 +1450,27 @@ def model_replies(
     if group_id:
         from core.group_runtime.ids import normalize_group_session_id
         q = q.filter(ChatLog.session_id == normalize_group_session_id(group_id))
-    q = q.order_by(ChatLog.id.desc()).limit(max(1, min(limit, 200)))
+    q = q.order_by(ChatLog.id.desc()).limit(max(50, min(limit * 3, 500)))
     rows = q.all()
 
     items = []
     for r in rows:
+        if not str(r.session_id or "").startswith("group_"):
+            continue
         meta = _safe_dict(r.meta_json)
+        if kind and meta.get("kind") != kind:
+            continue
         items.append({
             "id": r.id, "time": _iso(r.created_at),
+            "group_id": str(r.session_id or "").removeprefix("group_"),
             "session_id": r.session_id or "",
-            "session_name": r.session_name or "",
             "content": str(r.content or "")[:500],
             "reply_meta": meta.get("reply_meta"),
             "kind": meta.get("kind", ""),
         })
-    return {"items": items, "total": len(items)}
+        if len(items) >= limit:
+            break
+    return {"items": items, "count": len(items)}
 
 
 class TimingGateStabilityRequest(BaseModel):
