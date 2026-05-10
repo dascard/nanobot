@@ -307,6 +307,9 @@ class ModelRegistry:
                 candidates = [m for m in candidates if m.get("intelligence", 0) >= min_intelligence]
                 logger.debug(f"select_model: tier={t}, after_intel_filter={len(candidates)}")
 
+            # WebUI 禁用的模型不参与路由
+            candidates = [m for m in candidates if m.get("enabled", True) is not False]
+
             # Apply tag constraints (soft requirement if possible)
             if required_tags:
                 tagged = [m for m in candidates if any(rt in _tags_of(m) for rt in required_tags)]

@@ -377,8 +377,11 @@ class TestModelCatalog:
 
     def test_patch_catalog_updates_fields(self, client, auth_header, monkeypatch):
         """PATCH 成功修改后 GET 能读到新值"""
-        # 在 registry 里临时插入一个测试模型
         from clients.model_registry import registry
+
+        # 隔离：禁止写入真实 models.json
+        monkeypatch.setattr(registry, "save_registry", lambda: None)
+
         test_model = {
             "id": "test-patch-model", "model": "test-patch-model",
             "provider": "openai-compatible", "tier": "fast",
@@ -386,18 +389,80 @@ class TestModelCatalog:
             "enabled": True, "tags": ["test"],
         }
         registry.add_or_update_model(test_model)
+        try:
+            r = client.patch("/api/v1/admin/model-catalog/test-patch-model", json={
+                "intelligence": 9, "cost_input_1m": 0.123, "enabled": False,
+            }, headers=auth_header)
+            assert r.status_code == 200
+            assert r.json()["ok"] is True
 
-        r = client.patch("/api/v1/admin/model-catalog/test-patch-model", json={
-            "intelligence": 9, "cost_input_1m": 0.123, "enabled": False,
-        }, headers=auth_header)
-        assert r.status_code == 200
-        assert r.json()["ok"] is True
+            # 验证 GET
+            r2 = client.get("/api/v1/admin/model-catalog", headers=auth_header)
+            models = {m["id"]: m for m in r2.json()["models"]}
+            m = models.get("test-patch-model")
+            assert m is not None
+            assert m["intelligence"] == 9
+            assert m["cost_input_1m"] == 0.123
+            assert m["enabled"] is False
+        finally:
+            # 清理内存中的测试模型，避免污染后续测试
+            registry.data["models"] = [
+                x for x in registry.data.get("models", [])
+                if x.get("id") != "test-patch-model"
+            ]
 
-        # 验证 GET
-        r2 = client.get("/api/v1/admin/model-catalog", headers=auth_header)
-        models = {m["id"]: m for m in r2.json()["models"]}
-        m = models.get("test-patch-model")
-        assert m is not None
-        assert m["intelligence"] == 9
-        assert m["cost_input_1m"] == 0.123
-        assert m["enabled"] is False
+    def test_patch_catalog_invalid_tier_returns_422(self, client, auth_header, monkeypatch):
+        """PATCH 传非法 tier 返回 422"""
+        from clients.model_registry import registry
+
+        monkeypatch.setattr(registry, "save_registry", lambda: None)
+
+        test_model = {
+            "id": "test-invalid-tier", "model": "test-invalid-tier",
+            "provider": "openai-compatible", "tier": "fast",
+            "intelligence": 5, "cost_input_1m": 0.5, "cost_output_1m": 2.0,
+            "enabled": True,
+        }
+        registry.add_or_update_model(test_model)
+        try:
+            r = client.patch("/api/v1/admin/model-catalog/test-invalid-tier", json={
+                "tier": "invalid-tier-name",
+            }, headers=auth_header)
+            assert r.status_code == 422
+        finally:
+            registry.data["models"] = [
+                x for x in registry.data.get("models", [])
+                if x.get("id") != "test-invalid-tier"
+            ]
+
+    def test_patch_catalog_tags_dedup_and_lowercase(self, client, auth_header, monkeypatch):
+        """PATCH tags 去重、小写、去空格——空字符串被过滤"""
+        from clients.model_registry import registry
+
+        monkeypatch.setattr(registry, "save_registry", lambda: None)
+
+        test_model = {
+            "id": "test-tags-sanitize", "model": "test-tags-sanitize",
+            "provider": "openai-compatible", "tier": "fast",
+            "intelligence": 5, "cost_input_1m": 0.5, "cost_output_1m": 2.0,
+            "enabled": True, "tags": [],
+        }
+        registry.add_or_update_model(test_model)
+        try:
+            r = client.patch("/api/v1/admin/model-catalog/test-tags-sanitize", json={
+                "tags": ["  Free  ", "FREE", "New", ""],
+            }, headers=auth_header)
+            assert r.status_code == 200
+            updates = r.json()["updates"]
+            assert updates["tags"] == ["free", "new"], f"unexpected tags: {updates['tags']}"
+
+            # GET 验证
+            r2 = client.get("/api/v1/admin/model-catalog", headers=auth_header)
+            models = {m["id"]: m for m in r2.json()["models"]}
+            m = models.get("test-tags-sanitize")
+            assert m["tags"] == ["free", "new"]
+        finally:
+            registry.data["models"] = [
+                x for x in registry.data.get("models", [])
+                if x.get("id") != "test-tags-sanitize"
+            ]

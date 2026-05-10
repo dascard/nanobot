@@ -1456,6 +1456,7 @@ def patch_model_catalog(
         "cost_output_1m": m.get("cost_output_1m"),
         "tier": m.get("tier"),
         "enabled": m.get("enabled", True),
+        "tags": list(m.get("tags") or []),
     }
     updates = {}
     if body.intelligence is not None:
