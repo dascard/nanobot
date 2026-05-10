@@ -1551,9 +1551,16 @@ def patch_model_route(
 
     from core.config_registry import SETTING_DEFS
     from core.settings_service import settings
+    from clients.model_registry import registry
 
-    key = _STAGE_META[stage]["key"]
+    meta = _STAGE_META[stage]
+    key = meta["key"]
     defn = SETTING_DEFS[key]
+
+    # 模型路由：校验 value 是否存在于 registry
+    if meta["field"] == "model" and body.value:
+        if not registry.get_model_info(body.value):
+            raise HTTPException(404, f"model not found in catalog: {body.value}")
 
     row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
     if not row:

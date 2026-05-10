@@ -409,7 +409,169 @@ class TestNanobotBridge:
         assert captured["intel_floor"] == 12
         assert captured["max_cost"] == 10.0
 
+    @patch("nanobot_kt.bridge.registry")
+    @patch("nanobot_kt.bridge.NewAPIClient")
     @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_reply_model_uses_settings_override(
+        self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
+    ):
+        """settings.get("model.reply") 覆盖 > LLM_MODEL_REPLY > 默认值"""
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.bridge import NanobotBridge
+        import json
+
+        # settings 返回 override-model，LLM_MODEL_REPLY 是 env-model
+        fake_settings = {"model.reply": "override-model"}
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: fake_settings.get(key, default),
+        )
+        monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "env-model", raising=False)
+        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_FLOOR", 12, raising=False)
+        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_BOOST", 2, raising=False)
+        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_MAX_COST", 10.0, raising=False)
+
+        # registry 确认 override-model 存在且 enabled
+        mock_registry.get_model_info = MagicMock(return_value={
+            "id": "override-model", "enabled": True, "provider": "new-api",
+            "intelligence": 12, "cost_input_1m": 0.4, "tier": "smart",
+        })
+        mock_registry.get_models_by_provider.return_value = [{"id": "override-model"}]
+
+        auto_called = []
+
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+        route_client.get_ordered_candidates = MagicMock(side_effect=lambda **kw: auto_called.append(True) or [
+            {"id": "auto-model", "intelligence": 12, "cost_input_1m": 0.5, "context_window": 128000},
+        ])
+        MockClient.return_value = route_client
+        MockClient.get_failure_tracker.return_value = MagicMock(
+            record_success=AsyncMock(),
+            record_failure=AsyncMock(),
+        )
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        reply_output = json.dumps({REPLY_MARKER: {"content": "覆盖测试"}}, ensure_ascii=False)
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [
+            {"role": "tool", "content": reply_output},
+        ]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(
+            conversation=mock_conv,
+            llm=MagicMock(config=MagicMock(model="old-model")),
+        )
+        mock_agent._process_event = AsyncMock(return_value=None)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "你好", user_id="u1", session_id="private_u1",
+                metadata={"complexity": 3},
+            )
+
+        result = asyncio.run(_run())
+        assert result == "覆盖测试"
+        # 手动模型路径：不应调用 get_ordered_candidates
+        assert not auto_called, "settings override should use manual model, not auto-routing"
+
+    @patch("nanobot_kt.bridge.registry")
+    @patch("nanobot_kt.bridge.NewAPIClient")
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_reply_model_disabled_falls_back_to_auto(
+        self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
+    ):
+        """settings 返回 disabled 模型 → 回退到自动路由"""
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.bridge import NanobotBridge
+        import json
+
+        # settings 返回 disabled-model，registry 说 enabled=False
+        fake_settings = {"model.reply": "disabled-model"}
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: fake_settings.get(key, default),
+        )
+        monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "env-model", raising=False)
+        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_FLOOR", 12, raising=False)
+        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_BOOST", 2, raising=False)
+        monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_MAX_COST", 10.0, raising=False)
+
+        mock_registry.get_model_info = MagicMock(return_value={
+            "id": "disabled-model", "enabled": False, "provider": "new-api",
+            "intelligence": 12, "cost_input_1m": 0.4, "tier": "smart",
+        })
+        mock_registry.get_models_by_provider.return_value = [{"id": "auto-model"}]
+
+        auto_kwargs = {}
+
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+
+        def fake_candidates(**kwargs):
+            auto_kwargs.update(kwargs)
+            return [{"id": "auto-model", "intelligence": 12, "cost_input_1m": 0.5, "context_window": 128000}]
+
+        route_client.get_ordered_candidates.side_effect = fake_candidates
+        MockClient.return_value = route_client
+        MockClient.get_failure_tracker.return_value = MagicMock(
+            record_success=AsyncMock(),
+            record_failure=AsyncMock(),
+        )
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        reply_output = json.dumps({REPLY_MARKER: {"content": "自动回退"}}, ensure_ascii=False)
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [
+            {"role": "tool", "content": reply_output},
+        ]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(
+            conversation=mock_conv,
+            llm=MagicMock(config=MagicMock(model="old-model")),
+        )
+        mock_agent._process_event = AsyncMock(return_value=None)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "你好", user_id="u1", session_id="private_u1",
+                metadata={"complexity": 3},
+            )
+
+        result = asyncio.run(_run())
+        assert result == "自动回退"
+        # disabled 模型应触发自动路由
+        assert auto_kwargs.get("intel_floor") == 12, f"Expected auto-routing, got kwargs={auto_kwargs}"
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_prefers_news_tool_html_over_plaintext_rewrite(self, MockAgent, mock_load):
         from nanobot_kt.bridge import NanobotBridge

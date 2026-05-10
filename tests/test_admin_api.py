@@ -470,12 +470,23 @@ class TestModelCatalog:
     def test_patch_route_updates_and_reads_back(self, client, auth_header, monkeypatch):
         """PATCH /model-routes/{stage} 成功写入后 GET 能读到新值"""
         from core.settings_service import settings
+        from clients.model_registry import registry
 
         # 让 settings service 用测试 DB（通过 FastAPI get_db override）
         def test_session_factory():
             return next(app.dependency_overrides[get_db]())
 
         monkeypatch.setattr(settings, "_session_factory", test_session_factory)
+        monkeypatch.setattr(registry, "save_registry", lambda: None)
+
+        # 先在 registry 里注册一个测试模型（否则 PATCH 会 404）
+        test_model = {
+            "id": "test-override-model", "model": "test-override-model",
+            "provider": "new-api", "tier": "smart",
+            "intelligence": 8, "cost_input_1m": 1.0, "cost_output_1m": 2.0,
+            "enabled": True,
+        }
+        registry.add_or_update_model(test_model)
 
         # 保存原值以便恢复
         r0 = client.get("/api/v1/admin/model-routes", headers=auth_header)
@@ -494,6 +505,11 @@ class TestModelCatalog:
             assert r2.json()["routes"]["main_chat"]["model"] == "test-override-model"
             assert r2.json()["routes"]["main_chat"]["source"] == "db_override"
         finally:
+            # 清理
+            registry.data["models"] = [
+                x for x in registry.data.get("models", [])
+                if x.get("id") != "test-override-model"
+            ]
             # 恢复原值
             client.patch("/api/v1/admin/model-routes/main_chat", json={
                 "value": original,
@@ -512,3 +528,18 @@ class TestModelCatalog:
         }, headers=auth_header)
         assert r.status_code == 200, r.text
         assert r.json()["value"] == ""
+
+    def test_patch_route_nonexistent_model_404(self, client, auth_header):
+        """field=model 的 stage，不存在的模型 ID 返回 404"""
+        r = client.patch("/api/v1/admin/model-routes/main_chat", json={
+            "value": "nonexistent-model-xyz-999",
+        }, headers=auth_header)
+        assert r.status_code == 404
+
+    def test_patch_route_api_url_no_validation(self, client, auth_header):
+        """field=api_url 的 stage 不校验模型存在性"""
+        r = client.patch("/api/v1/admin/model-routes/timing_gate", json={
+            "value": "http://custom-classifier:9999/v1",
+        }, headers=auth_header)
+        assert r.status_code == 200, r.text
+        assert r.json()["ok"]
