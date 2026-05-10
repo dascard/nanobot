@@ -589,7 +589,7 @@ function StickerDedupPage() {
 function StickersPage() {
   const [data, setData] = useState({ items: [], total: 0 })
   const [search, setSearch] = useState('')
-  const [sf, setSf] = useState('')
+  const [sf, setSf] = useState('active')
   const [failure, setFailure] = useState('')
   const [page, setPage] = useState(1)
   const [edit, setEdit] = useState(null)

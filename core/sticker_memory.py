@@ -283,26 +283,26 @@ def search_stickers(
     limit: int = 5,
     include_global: bool = True,
 ) -> list[dict[str, Any]]:
-    stream_id = normalize_sticker_stream_id(group_id=group_id, chat_stream_id=chat_stream_id)
-    scopes = [stream_id]
-    if include_global and GLOBAL_STICKER_STREAM_ID not in scopes:
-        scopes.append(GLOBAL_STICKER_STREAM_ID)
+    """全局表情包搜索——不再按群隔离，所有群共享 active sticker pool。"""
     rows = (
         db.query(StickerMemory)
-        .filter(StickerMemory.status == ACTIVE_STATUS, StickerMemory.chat_stream_id.in_(scopes))
+        .filter(
+            StickerMemory.status == ACTIVE_STATUS,
+            StickerMemory.dedupe_status != "duplicate",
+            StickerMemory.preview_status == "ok",
+        )
         .all()
     )
     scored = []
     q = str(query or "").strip()
     for row in rows:
-        score = _score_row(row, q, stream_id)
-        if q and score <= (10 if row.chat_stream_id == stream_id else 0):
+        score = _score_row(row, q, "")
+        if q and score <= 0:
             continue
         scored.append((score, row))
     scored.sort(
         key=lambda item: (
             item[0],
-            1 if item[1].chat_stream_id == stream_id else 0,
             int(item[1].usage_count or 0),
             item[1].last_seen or item[1].created_at,
         ),

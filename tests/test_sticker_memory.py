@@ -41,13 +41,15 @@ def test_register_sticker_upserts_by_stream_and_hash(db_session):
     assert rows[0].source_count == 2
 
 
-def test_search_stickers_prefers_group_over_global_and_filters_disabled(db_session):
+def test_search_stickers_global_pool_returns_all_groups(db_session):
+    """全局池：查询返回所有群的 active sticker，不按群隔离。"""
     global_item = register_sticker(
         db_session,
         chat_stream_id="global",
         file_ref="https://example.com/global.png",
         sticker_hash="global-hash",
         description="震惊表情",
+        status="active",
         tags=["震惊"],
         emotions=["surprised"],
     )
@@ -57,19 +59,25 @@ def test_search_stickers_prefers_group_over_global_and_filters_disabled(db_sessi
         file_ref="https://example.com/group.png",
         sticker_hash="group-hash",
         description="群里常用的震惊猫",
+        status="active",
         tags=["震惊", "猫"],
         emotions=["surprised"],
     )
 
-    results = search_stickers(db_session, "震惊", chat_stream_id="qq:123:group", limit=5)
-    assert [item["id"] for item in results[:2]] == [group_item["id"], global_item["id"]]
-    assert results[0]["send_code"] == "[CQ:image,file=https://example.com/group.png]"
+    db_session.query(StickerMemory).filter(StickerMemory.id.in_([global_item["id"], group_item["id"]])).update({"preview_status": "ok"}, synchronize_session=False)
+    db_session.commit()
+
+    results = search_stickers(db_session, "震惊", limit=5)
+    assert len(results) == 2
+    ids = [item["id"] for item in results]
+    assert global_item["id"] in ids
+    assert group_item["id"] in ids
 
     row = db_session.query(StickerMemory).filter_by(id=group_item["id"]).one()
     row.status = "disabled"
     db_session.commit()
 
-    filtered = search_stickers(db_session, "震惊", chat_stream_id="qq:123:group", limit=5)
+    filtered = search_stickers(db_session, "震惊", limit=5)
     assert all(item["id"] != group_item["id"] for item in filtered)
 
 
@@ -115,11 +123,14 @@ def test_bare_chat_stream_id_normalizes_to_group_stream(db_session):
         file_ref="https://example.com/bare.png",
         sticker_hash="bare-hash",
         description="裸群号注册",
+        status="active",
         tags=["裸群号"],
     )
 
-    results = search_stickers(db_session, "裸群号", group_id="123", limit=5)
+    db_session.query(StickerMemory).filter_by(description="裸群号注册").update({"preview_status": "ok"}, synchronize_session=False)
+    db_session.commit()
 
+    results = search_stickers(db_session, "裸群号", limit=5)
     assert len(results) == 1
     assert results[0]["chat_stream_id"] == "qq:123:group"
 
