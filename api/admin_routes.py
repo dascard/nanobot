@@ -1424,6 +1424,9 @@ def get_model_catalog(_auth=Depends(verify_admin)):
     return {"models": models, "last_updated": registry.data.get("last_updated", "never")}
 
 
+_ALLOWED_TIERS = {"fast", "smart", "reasoning", "unknown"}
+
+
 class ModelCatalogPatch(BaseModel):
     intelligence: int | None = Field(default=None, ge=0, le=15)
     cost_input_1m: float | None = Field(default=None, ge=0)
@@ -1444,7 +1447,16 @@ def patch_model_catalog(
     m = registry.get_model_info(model_id)
     if not m:
         raise HTTPException(404, f"model '{model_id}' not found")
+    if body.tier is not None and body.tier not in _ALLOWED_TIERS:
+        raise HTTPException(422, f"invalid tier: {body.tier}")
 
+    before = {
+        "intelligence": m.get("intelligence"),
+        "cost_input_1m": m.get("cost_input_1m"),
+        "cost_output_1m": m.get("cost_output_1m"),
+        "tier": m.get("tier"),
+        "enabled": m.get("enabled", True),
+    }
     updates = {}
     if body.intelligence is not None:
         m["intelligence"] = body.intelligence
@@ -1462,11 +1474,17 @@ def patch_model_catalog(
         m["enabled"] = body.enabled
         updates["enabled"] = body.enabled
     if body.tags is not None:
-        m["tags"] = body.tags
-        updates["tags"] = body.tags
+        cleaned = []
+        for t in body.tags:
+            s = str(t).strip().lower()[:40]
+            if s and s not in cleaned:
+                cleaned.append(s)
+        m["tags"] = cleaned[:20]
+        updates["tags"] = cleaned
 
     registry.add_or_update_model(m)
-    _audit_request(db, request, "update_model_catalog", "model", model_id, updates)
+    _audit_request(db, request, "update_model_catalog", "model", model_id,
+                   {"before": before, "after": updates})
     return {"ok": True, "model": model_id, "updates": updates}
 
 

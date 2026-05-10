@@ -374,3 +374,30 @@ class TestModelCatalog:
         data = r.json()
         assert "items" in data
         assert "count" in data
+
+    def test_patch_catalog_updates_fields(self, client, auth_header, monkeypatch):
+        """PATCH 成功修改后 GET 能读到新值"""
+        # 在 registry 里临时插入一个测试模型
+        from clients.model_registry import registry
+        test_model = {
+            "id": "test-patch-model", "model": "test-patch-model",
+            "provider": "openai-compatible", "tier": "fast",
+            "intelligence": 5, "cost_input_1m": 0.5, "cost_output_1m": 2.0,
+            "enabled": True, "tags": ["test"],
+        }
+        registry.add_or_update_model(test_model)
+
+        r = client.patch("/api/v1/admin/model-catalog/test-patch-model", json={
+            "intelligence": 9, "cost_input_1m": 0.123, "enabled": False,
+        }, headers=auth_header)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+        # 验证 GET
+        r2 = client.get("/api/v1/admin/model-catalog", headers=auth_header)
+        models = {m["id"]: m for m in r2.json()["models"]}
+        m = models.get("test-patch-model")
+        assert m is not None
+        assert m["intelligence"] == 9
+        assert m["cost_input_1m"] == 0.123
+        assert m["enabled"] is False
