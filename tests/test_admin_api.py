@@ -342,3 +342,35 @@ class TestObservabilityAPI:
         assert data["stats"]["actions"]["no_reply"] >= 1
         assert data["items"][0]["parse_error"] is True
         assert data["items"][0]["fallback_action"] == "no_reply"
+
+
+class TestModelCatalog:
+    """模型目录 + 路由 API 测试"""
+
+    def test_get_catalog_returns_models(self, client, auth_header):
+        r = client.get("/api/v1/admin/model-catalog", headers=auth_header)
+        assert r.status_code == 200
+        data = r.json()
+        assert "models" in data
+        assert "last_updated" in data
+
+    def test_patch_catalog_not_found(self, client, auth_header):
+        r = client.patch("/api/v1/admin/model-catalog/nonexistent-model-xyz",
+                          json={"intelligence": 5}, headers=auth_header)
+        assert r.status_code == 404
+
+    def test_get_routes_returns_stages(self, client, auth_header):
+        r = client.get("/api/v1/admin/model-routes", headers=auth_header)
+        assert r.status_code == 200
+        data = r.json()
+        assert "main_chat" in data["routes"]
+        r0 = data["routes"]["main_chat"]
+        assert "model" in r0
+        assert "editable" in r0
+
+    def test_get_model_replies(self, client, auth_header):
+        r = client.get("/api/v1/admin/model-replies", headers=auth_header)
+        assert r.status_code == 200
+        data = r.json()
+        assert "items" in data
+        assert "count" in data

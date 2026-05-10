@@ -1418,8 +1418,56 @@ def get_model_catalog(_auth=Depends(verify_admin)):
             "cost_output_1m": m.get("cost_output_1m", 0),
             "tags": m.get("tags") or [],
             "description": m.get("description") or "",
+            "enabled": bool(m.get("enabled", True)),
+            "available": bool(m.get("available", True)),
         })
     return {"models": models, "last_updated": registry.data.get("last_updated", "never")}
+
+
+class ModelCatalogPatch(BaseModel):
+    intelligence: int | None = Field(default=None, ge=0, le=15)
+    cost_input_1m: float | None = Field(default=None, ge=0)
+    cost_output_1m: float | None = Field(default=None, ge=0)
+    tier: str | None = None
+    enabled: bool | None = None
+    tags: list[str] | None = None
+
+
+@router.patch("/model-catalog/{model_id}")
+def patch_model_catalog(
+    model_id: str, body: ModelCatalogPatch,
+    request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from clients.model_registry import registry
+
+    m = registry.get_model_info(model_id)
+    if not m:
+        raise HTTPException(404, f"model '{model_id}' not found")
+
+    updates = {}
+    if body.intelligence is not None:
+        m["intelligence"] = body.intelligence
+        updates["intelligence"] = body.intelligence
+    if body.cost_input_1m is not None:
+        m["cost_input_1m"] = body.cost_input_1m
+        updates["cost_input_1m"] = body.cost_input_1m
+    if body.cost_output_1m is not None:
+        m["cost_output_1m"] = body.cost_output_1m
+        updates["cost_output_1m"] = body.cost_output_1m
+    if body.tier is not None:
+        m["tier"] = body.tier
+        updates["tier"] = body.tier
+    if body.enabled is not None:
+        m["enabled"] = body.enabled
+        updates["enabled"] = body.enabled
+    if body.tags is not None:
+        m["tags"] = body.tags
+        updates["tags"] = body.tags
+
+    registry.add_or_update_model(m)
+    _audit_request(db, request, "update_model_catalog", "model", model_id, updates)
+    return {"ok": True, "model": model_id, "updates": updates}
 
 
 @router.get("/model-routes")
