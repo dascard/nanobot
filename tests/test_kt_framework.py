@@ -357,6 +357,8 @@ class TestNanobotBridge:
         monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_FLOOR", 12, raising=False)
         monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_BOOST", 2, raising=False)
         monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_MAX_COST", 10.0, raising=False)
+        # settings.get("model.reply") 优先于 LLM_MODEL_REPLY，mock 为空以触发 auto-routing
+        monkeypatch.setattr("core.settings_service.settings.get", lambda key, default=None: default)
 
         captured = {}
 

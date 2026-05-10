@@ -1500,24 +1500,34 @@ _STAGE_META = {
 }
 
 
-def _resolve_route_value(stage: str) -> tuple[str, str, str]:
-    """Return (value, source, is_overridden)."""
+def _resolve_route_value(stage: str, db: Session) -> tuple[str, str, str]:
+    """Return (value, source, is_overridden). source 准确反映值来源。"""
     from core.settings_service import settings
+    from config import (
+        LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
+        CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
+    )
     meta = _STAGE_META[stage]
-    db_val = settings.get(meta["key"])
-    env_val = os.environ.get(meta["env"], "")
-    if db_val and str(db_val) != str(env_val):
-        return str(db_val), "db_override", True
-    if env_val:
-        return env_val, meta["env"], True
-    return str(db_val or ""), "default", True
+    key = meta["key"]
+
+    # 检查 DB 是否有覆盖
+    db_row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if db_row and db_row.value is not None:
+        return db_row.value, "db_override", True
+
+    # 没有 DB 覆盖，查 config 值
+    env_name = meta["env"]
+    val = settings.get(key)
+    if val:
+        return str(val), env_name, True
+    return "", "default", True
 
 
 @router.get("/model-routes")
-def get_model_routes(_auth=Depends(verify_admin)):
+def get_model_routes(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     routes = {}
     for stage, meta in _STAGE_META.items():
-        val, source, editable = _resolve_route_value(stage)
+        val, source, editable = _resolve_route_value(stage, db)
         field = meta["field"]
         entry = {"editable": editable, "source": source, field: val}
         if field == "api_url":

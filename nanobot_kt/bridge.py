@@ -642,7 +642,22 @@ class NanobotBridge:
                     base_intel_floor + max(0, REPLY_MODEL_INTEL_BOOST),
                     max(1, REPLY_MODEL_INTEL_FLOOR),
                 )
-                manual_reply_model = str(meta.get("reply_model") or LLM_MODEL_REPLY or "").strip()
+                from core.settings_service import settings
+                manual_reply_model = str(
+                    meta.get("reply_model")
+                    or settings.get("model.reply")
+                    or LLM_MODEL_REPLY
+                    or ""
+                ).strip()
+                if manual_reply_model:
+                    info = registry.get_model_info(manual_reply_model)
+                    if info and info.get("enabled", True) is False:
+                        logger.warning(
+                            "[ReplyModel] configured model disabled: %s, falling back to auto",
+                            manual_reply_model,
+                        )
+                        manual_reply_model = ""
+
                 if manual_reply_model:
                     candidates = [{
                         "id": manual_reply_model,
