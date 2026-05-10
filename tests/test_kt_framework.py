@@ -572,6 +572,8 @@ class TestNanobotBridge:
         assert result == "自动回退"
         # disabled 模型应触发自动路由
         assert auto_kwargs.get("intel_floor") == 12, f"Expected auto-routing, got kwargs={auto_kwargs}"
+
+    @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_prefers_news_tool_html_over_plaintext_rewrite(self, MockAgent, mock_load):
         from nanobot_kt.bridge import NanobotBridge

@@ -543,3 +543,51 @@ class TestModelCatalog:
         }, headers=auth_header)
         assert r.status_code == 200, r.text
         assert r.json()["ok"]
+
+
+class TestModelHealthCheck:
+    """模型连通性健康检查"""
+
+    def test_health_check_returns_all_endpoints(self, client, auth_header, monkeypatch):
+        """健康检查返回三个端点（new_api/classifier/image_summary）"""
+        import aiohttp
+
+        class FakeResponse:
+            status = 200
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+
+        class FakeSession:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            def get(self, url, **kwargs): return FakeResponse()
+
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        r = client.post("/api/v1/admin/models/health-check", headers=auth_header)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        eps = data["endpoints"]
+        assert "new_api" in eps
+        assert "classifier" in eps
+        assert "image_summary" in eps
+        assert eps["new_api"]["reachable"] is True
+        assert eps["new_api"]["status"] == 200
+
+    def test_health_check_unreachable(self, client, auth_header, monkeypatch):
+        """不可达端点返回 reachable=False + error"""
+        import aiohttp
+
+        class FakeSession:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *a): pass
+            def get(self, url, **kwargs):
+                raise Exception("Connection refused")
+
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda **kw: FakeSession())
+
+        r = client.post("/api/v1/admin/models/health-check", headers=auth_header)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["endpoints"]["new_api"]["reachable"] is False
+        assert "Connection refused" in data["endpoints"]["new_api"]["error"]

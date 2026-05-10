@@ -1917,6 +1917,52 @@ def reload_settings(_auth=Depends(verify_admin)):
     return {"version": settings.version}
 
 
+# ── Model Health Check ──
+
+@router.post("/models/health-check")
+async def model_health_check(_auth=Depends(verify_admin)):
+    """连通性探测：对每个配置的 API 端点做 GET /models，返回可达性和延迟。"""
+    import time
+    import aiohttp
+    from core.settings_service import settings
+    from config import NEW_API_BASE_URL, CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
+
+    targets = {
+        "new_api": str(NEW_API_BASE_URL or ""),
+        "classifier": str(settings.get("model.route.timing_gate") or CLASSIFIER_API_URL or ""),
+        "image_summary": str(settings.get("model.route.sticker_describe") or IMAGE_SUMMARY_API_URL or ""),
+    }
+
+    results = {}
+    async with aiohttp.ClientSession() as session:
+        for name, url in targets.items():
+            if not url:
+                results[name] = {"reachable": False, "latency_ms": 0, "error": "not configured"}
+                continue
+            start = time.monotonic()
+            try:
+                async with session.get(
+                    f"{url.rstrip('/')}/models",
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    latency = (time.monotonic() - start) * 1000
+                    results[name] = {
+                        "reachable": resp.status < 500,
+                        "latency_ms": round(latency, 1),
+                        "status": resp.status,
+                        "url": url,
+                    }
+            except TimeoutError:
+                latency = (time.monotonic() - start) * 1000
+                results[name] = {"reachable": False, "latency_ms": round(latency, 1),
+                                 "error": "timeout (10s)", "url": url}
+            except Exception as e:
+                latency = (time.monotonic() - start) * 1000
+                results[name] = {"reachable": False, "latency_ms": round(latency, 1),
+                                 "error": str(e)[:200], "url": url}
+
+    return {"endpoints": results}
+
 @router.get("/health")
 def health():
     return {"ok": True, "time": datetime.now().isoformat()}
