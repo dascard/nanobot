@@ -1580,40 +1580,65 @@ def patch_model_route(
 @router.get("/model-replies")
 def model_replies(
     group_id: str = "", limit: int = 50, kind: str = "group_reply",
-    offset: int = 0,
+    before_id: int = 0,
     db: Session = Depends(get_db), _auth=Depends(verify_admin),
 ):
+    """模型主动回复日志——游标分页（before_id），按 id DESC 翻页。"""
     from core.database import ChatLog
+    from core.group_runtime.ids import normalize_group_session_id
 
-    q = db.query(ChatLog).filter(ChatLog.role == "assistant")
+    _limit = max(1, min(limit, 100))
+
+    # COUNT：全量匹配总数
+    count_q = db.query(ChatLog).filter(
+        ChatLog.role == "assistant",
+        ChatLog.session_id.like("group_%"),
+    )
     if group_id:
-        from core.group_runtime.ids import normalize_group_session_id
-        q = q.filter(ChatLog.session_id == normalize_group_session_id(group_id))
-    q = q.order_by(ChatLog.id.desc()).limit(max(100, min(limit * 5, 2000)))
-    rows = q.all()
-    _limit = max(1, min(limit, 200))
+        count_q = count_q.filter(ChatLog.session_id == normalize_group_session_id(group_id))
+    if kind:
+        # COUNT 无法精确过滤 meta_json.kind，取近似（role + session 前缀）
+        # 精确计数由前端 page_info.has_more 判断
+        pass
+    approx_total = count_q.count()
 
-    all_items = []
+    # 数据查询
+    q = db.query(ChatLog).filter(ChatLog.role == "assistant",
+                                  ChatLog.session_id.like("group_%"))
+    if group_id:
+        q = q.filter(ChatLog.session_id == normalize_group_session_id(group_id))
+    if before_id:
+        q = q.filter(ChatLog.id < before_id)
+    q = q.order_by(ChatLog.id.desc()).limit(_limit + 1)  # +1 判断 has_more
+    rows = q.all()
+
+    items = []
     for r in rows:
-        if not str(r.session_id or "").startswith("group_"):
-            continue
         meta = _safe_dict(r.meta_json)
         if kind and meta.get("kind") != kind:
             continue
-        all_items.append({
-            "id": r.id, "time": _iso(r.created_at),
+        items.append({
+            "id": r.id,
             "created_at": _iso(r.created_at),
             "group_id": str(r.session_id or "").removeprefix("group_"),
-            "user_id": str(r.session_id or "").removeprefix("group_"),
-            "session_id": r.session_id or "",
             "content": str(r.content or "")[:500],
             "reply_meta": meta.get("reply_meta"),
             "kind": meta.get("kind", ""),
         })
-    total = len(all_items)
-    start = max(0, min(offset, total))
-    end = min(start + _limit, total)
-    return {"items": all_items[start:end], "count": total}
+        if len(items) >= _limit:
+            break
+
+    has_more = len(rows) > len(items) or (len(items) == _limit and len(rows) > _limit)
+    next_before_id = items[-1]["id"] if items else 0
+
+    return {
+        "items": items,
+        "count": approx_total,
+        "page_info": {
+            "has_more": has_more,
+            "next_before_id": next_before_id,
+        },
+    }
 
 
 class TimingGateStabilityRequest(BaseModel):
