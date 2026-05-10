@@ -23,7 +23,7 @@ graph TD
     API --> DB[(SQLite)]
     API --> RT[Group Runtime / TimingGate]
     RT -->|continue| Bridge[NanobotBridge]
-    RT -->|wait| Timer[/group_timing/timer]
+    RT -->|wait| Timer["/group_timing/timer"]
     Bridge --> KT[KohakuTerrarium Agent]
     KT --> Tools[Tools: reply / sticker_search / news / sql / image / group_analysis]
     Tools --> DB
