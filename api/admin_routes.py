@@ -1489,19 +1489,73 @@ def patch_model_catalog(
     return {"ok": True, "model": model_id, "updates": updates}
 
 
+# ── Stage Routes ──
+
+_STAGE_META = {
+    "main_chat":       {"key": "model.reply",              "field": "model",   "env": "LLM_MODEL_REPLY"},
+    "fast_chat":       {"key": "model.fast",               "field": "model",   "env": "LLM_MODEL_FAST"},
+    "smart_chat":      {"key": "model.smart",              "field": "model",   "env": "LLM_MODEL_SMART"},
+    "timing_gate":     {"key": "model.route.timing_gate",  "field": "api_url", "env": "CLASSIFIER_API_URL"},
+    "sticker_describe":{"key": "model.route.sticker_describe","field": "api_url","env": "IMAGE_SUMMARY_API_URL"},
+}
+
+
+def _resolve_route_value(stage: str) -> tuple[str, str, str]:
+    """Return (value, source, is_overridden)."""
+    from core.settings_service import settings
+    meta = _STAGE_META[stage]
+    db_val = settings.get(meta["key"])
+    env_val = os.environ.get(meta["env"], "")
+    if db_val and str(db_val) != str(env_val):
+        return str(db_val), "db_override", True
+    if env_val:
+        return env_val, meta["env"], True
+    return str(db_val or ""), "default", True
+
+
 @router.get("/model-routes")
 def get_model_routes(_auth=Depends(verify_admin)):
-    from config import (
-        LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
-        CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
-    )
-    return {"routes": {
-        "main_chat": {"model": LLM_MODEL_REPLY, "source": "LLM_MODEL_REPLY", "editable": False},
-        "fast_chat": {"model": LLM_MODEL_FAST, "source": "LLM_MODEL_FAST", "editable": False},
-        "smart_chat": {"model": LLM_MODEL_SMART, "source": "LLM_MODEL_SMART", "editable": False},
-        "timing_gate": {"model": "", "api_url": str(CLASSIFIER_API_URL or ""), "source": "CLASSIFIER_API_URL", "editable": False},
-        "sticker_describe": {"model": "", "api_url": str(IMAGE_SUMMARY_API_URL or ""), "source": "IMAGE_SUMMARY_API_URL", "editable": False},
-    }}
+    routes = {}
+    for stage, meta in _STAGE_META.items():
+        val, source, editable = _resolve_route_value(stage)
+        field = meta["field"]
+        entry = {"editable": editable, "source": source, field: val}
+        if field == "api_url":
+            entry["model"] = ""
+        routes[stage] = entry
+    return {"routes": routes}
+
+
+class ModelRoutePatch(BaseModel):
+    value: str = Field(default="", max_length=256)
+
+
+@router.patch("/model-routes/{stage}")
+def patch_model_route(
+    stage: str, body: ModelRoutePatch,
+    request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    if stage not in _STAGE_META:
+        raise HTTPException(404, f"unknown stage: {stage}")
+
+    from core.config_registry import SETTING_DEFS
+    from core.settings_service import settings
+
+    key = _STAGE_META[stage]["key"]
+    defn = SETTING_DEFS[key]
+
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if not row:
+        row = SystemSetting(key=key, value=body.value, description=defn.description)
+        db.add(row)
+    else:
+        row.value = body.value
+    db.commit()
+    _audit(db, "update_model_route", "route", stage, {"value": body.value},
+           ip_address=_client_ip(request))
+    settings.invalidate()
+    return {"ok": True, "stage": stage, "value": body.value, "version": settings.version}
 
 
 # ── Model Replies ──

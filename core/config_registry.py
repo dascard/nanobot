@@ -87,6 +87,16 @@ SETTING_DEFS: dict[str, SettingDef] = {
         key="model.reasoning", env_name="LLM_MODEL_REASONING",
         default="", value_type="str", category="model", description="推理模型",
     ),
+    "model.route.timing_gate": SettingDef(
+        key="model.route.timing_gate", env_name="CLASSIFIER_API_URL",
+        default="http://172.17.0.1:9999/v1", value_type="str",
+        category="model", description="TimingGate 分类器地址",
+    ),
+    "model.route.sticker_describe": SettingDef(
+        key="model.route.sticker_describe", env_name="IMAGE_SUMMARY_API_URL",
+        default="http://172.17.0.1:9999/v1", value_type="str",
+        category="model", description="表情包打标 API 地址",
+    ),
     "new_api.timeout": SettingDef(
         key="new_api.timeout", env_name="NEW_API_TIMEOUT",
         default=180, value_type="int",

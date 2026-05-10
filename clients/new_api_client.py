@@ -449,6 +449,8 @@ class NewAPIClient:
                 continue
             if "unstable" in tags:
                 continue
+            if m.get("enabled", True) is False:
+                continue
             if avoid_tags_set and any(at in tags for at in avoid_tags_set):
                 continue
             if m.get("cost_input_1m", 999) > max_cost_val:
@@ -533,6 +535,9 @@ class NewAPIClient:
 
         complexity = self.estimate_complexity(messages, tools)
         if manual_model:
+            info = registry.get_model_info(manual_model)
+            if info and info.get("enabled", True) is False:
+                return {"error": f"Model disabled: {manual_model}"}
             candidates = [{
                 "id": manual_model,
                 "intelligence": 0,
@@ -627,6 +632,10 @@ class NewAPIClient:
 
         complexity = self.estimate_complexity(messages, tools)
         if manual_model:
+            info = registry.get_model_info(manual_model)
+            if info and info.get("enabled", True) is False:
+                yield {"error": f"Model disabled: {manual_model}"}
+                return
             target_model = manual_model
         else:
             intel_floor = max(1, complexity - 1)

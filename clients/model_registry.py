@@ -338,6 +338,8 @@ class ModelRegistry:
                         tags_c = _tags_of(c)
                         if "free" not in tags_c:
                             continue
+                        if c.get("enabled", True) is False:
+                            continue
                         if c.get("intelligence", 0) < sel_intel - 1:
                             continue
                         if max_cost is not None and c.get("cost_input_1m", 999) > max_cost:
@@ -363,9 +365,12 @@ class ModelRegistry:
                 )
                 return selected.get("id")
 
-        # Ultimate Fallback: return the cheapest model if still no candidates
-        all_candidates.sort(key=lambda x: x.get("cost_input_1m", 999))
-        cheap_model = all_candidates[0]
+        # Ultimate Fallback: return the cheapest enabled model
+        # 如果全部 disabled，则退回最便宜的（总得给手动指定留后路）
+        enabled = [m for m in all_candidates if m.get("enabled", True) is not False]
+        pool = enabled if enabled else all_candidates
+        pool.sort(key=lambda x: x.get("cost_input_1m", 999))
+        cheap_model = pool[0]
 
         target_id = cheap_model.get("id")
         if max_cost is not None and cheap_model.get("cost_input_1m", 999) > max_cost:

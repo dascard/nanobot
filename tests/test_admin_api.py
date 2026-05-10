@@ -466,3 +466,49 @@ class TestModelCatalog:
                 x for x in registry.data.get("models", [])
                 if x.get("id") != "test-tags-sanitize"
             ]
+
+    def test_patch_route_updates_and_reads_back(self, client, auth_header, monkeypatch):
+        """PATCH /model-routes/{stage} 成功写入后 GET 能读到新值"""
+        from core.settings_service import settings
+
+        # 让 settings service 用测试 DB（通过 FastAPI get_db override）
+        def test_session_factory():
+            return next(app.dependency_overrides[get_db]())
+
+        monkeypatch.setattr(settings, "_session_factory", test_session_factory)
+
+        # 保存原值以便恢复
+        r0 = client.get("/api/v1/admin/model-routes", headers=auth_header)
+        original = r0.json()["routes"]["main_chat"]["model"]
+
+        try:
+            r = client.patch("/api/v1/admin/model-routes/main_chat", json={
+                "value": "test-override-model",
+            }, headers=auth_header)
+            assert r.status_code == 200, r.text
+            assert r.json()["ok"] is True
+
+            # GET 使用 settings service → 测试 DB
+            settings.invalidate()
+            r2 = client.get("/api/v1/admin/model-routes", headers=auth_header)
+            assert r2.json()["routes"]["main_chat"]["model"] == "test-override-model"
+            assert r2.json()["routes"]["main_chat"]["source"] == "db_override"
+        finally:
+            # 恢复原值
+            client.patch("/api/v1/admin/model-routes/main_chat", json={
+                "value": original,
+            }, headers=auth_header)
+
+    def test_patch_route_unknown_stage_404(self, client, auth_header):
+        r = client.patch("/api/v1/admin/model-routes/unknown_stage", json={
+            "value": "x",
+        }, headers=auth_header)
+        assert r.status_code == 404
+
+    def test_patch_route_empty_value_allowed(self, client, auth_header):
+        """空 value 允许（相当于恢复默认）"""
+        r = client.patch("/api/v1/admin/model-routes/smart_chat", json={
+            "value": "",
+        }, headers=auth_header)
+        assert r.status_code == 200, r.text
+        assert r.json()["value"] == ""
