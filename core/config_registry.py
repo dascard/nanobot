@@ -150,6 +150,31 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=1800, value_type="int",
         category="router", description="熔断最大冷却(秒,需重建tracker)", min_value=60, max_value=36000,
     ),
+    "eval.sample_log_enabled": SettingDef(
+        key="eval.sample_log_enabled", env_name="EVAL_SAMPLE_LOG_ENABLED",
+        default=True, value_type="bool", category="eval",
+        description="启用日志自动采样",
+    ),
+    "eval.sample_db_enabled": SettingDef(
+        key="eval.sample_db_enabled", env_name="EVAL_SAMPLE_DB_ENABLED",
+        default=True, value_type="bool", category="eval",
+        description="启用 DB 自动采样",
+    ),
+    "eval.sample_interval_sec": SettingDef(
+        key="eval.sample_interval_sec", env_name="EVAL_SAMPLE_INTERVAL_SEC",
+        default=600, value_type="int", category="eval",
+        description="自动采样间隔(秒)", min_value=60, max_value=3600,
+    ),
+    "eval.sample_limit_per_cycle": SettingDef(
+        key="eval.sample_limit_per_cycle", env_name="EVAL_SAMPLE_LIMIT_PER_CYCLE",
+        default=100, value_type="int", category="eval",
+        description="每轮采样上限", min_value=10, max_value=500,
+    ),
+    "eval.log_path": SettingDef(
+        key="eval.log_path", env_name="EVAL_LOG_PATH",
+        default="data/nanobot.log", value_type="str", category="eval",
+        description="采样日志路径",
+    ),
     "daily_digest.enabled": SettingDef(
         key="daily_digest.enabled", env_name="DAILY_DIGEST_ENABLED",
         default=True, value_type="bool",

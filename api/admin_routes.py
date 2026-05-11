@@ -2050,6 +2050,222 @@ async def model_health_check(_auth=Depends(verify_admin)):
 
     return {"endpoints": results}
 
+# ═══════════════════════════════════════════
+# Eval 系统 API
+# ═══════════════════════════════════════════
+
+from core.database import EvalCandidate, EvalRun, EvalRunResult
+from core.eval_sampling.store import (
+    list_candidates, get_candidate, update_candidate,
+    label_candidate, ignore_candidate, promote_candidate,
+    save_run, save_run_results, get_runs, get_run,
+)
+
+
+@router.get("/evals/candidates")
+def eval_list_candidates(
+    suite: str = "",
+    status: str = "",
+    source: str = "",
+    page: int = 1,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    items, total = list_candidates(
+        db, suite=suite, status=status, source=source,
+        limit=max(1, min(limit, 200)),
+        offset=(max(page, 1) - 1) * limit,
+    )
+    return {"items": items, "total": total, "page": page}
+
+
+@router.get("/evals/candidates/{case_id}")
+def eval_get_candidate(case_id: str, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    from core.eval_sampling.store import _candidate_dict
+    row = get_candidate(db, case_id)
+    if not row:
+        raise HTTPException(404, "candidate not found")
+    return _candidate_dict(row)
+
+
+class EvalCandidatePatch(BaseModel):
+    priority: Optional[int] = None
+    note: Optional[str] = None
+    status: Optional[str] = None
+
+
+@router.patch("/evals/candidates/{case_id}")
+def eval_patch_candidate(
+    case_id: str, body: EvalCandidatePatch,
+    request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    updates = {}
+    if body.priority is not None:
+        updates["priority"] = body.priority
+    if body.note is not None:
+        updates["note"] = body.note
+    if body.status is not None:
+        updates["status"] = body.status
+    result = update_candidate(db, case_id, **updates)
+    if not result:
+        raise HTTPException(404, "candidate not found")
+    _audit_request(db, request, "update_candidate", "eval_candidate", case_id, updates)
+    return result
+
+
+class LabelRequest(BaseModel):
+    expected: dict = Field(default_factory=dict)
+
+
+@router.post("/evals/candidates/{case_id}/label")
+def eval_label_candidate(
+    case_id: str, body: LabelRequest,
+    request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    result = label_candidate(db, case_id, body.expected)
+    if not result:
+        raise HTTPException(404, "candidate not found")
+    _audit_request(db, request, "label_candidate", "eval_candidate", case_id,
+                   {"expected_keys": list(body.expected.keys())})
+    return result
+
+
+@router.post("/evals/candidates/{case_id}/ignore")
+def eval_ignore_candidate(
+    case_id: str, request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    result = ignore_candidate(db, case_id)
+    if not result:
+        raise HTTPException(404, "candidate not found")
+    _audit_request(db, request, "ignore_candidate", "eval_candidate", case_id)
+    return result
+
+
+@router.post("/evals/candidates/{case_id}/promote")
+def eval_promote_candidate(
+    case_id: str, request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    path = promote_candidate(db, case_id)
+    if not path:
+        raise HTTPException(404, "candidate not found")
+    _audit_request(db, request, "promote_candidate", "eval_candidate", case_id, {"path": path})
+    return {"ok": True, "path": path}
+
+
+@router.post("/evals/sample/run")
+async def eval_run_sample(
+    request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.eval_sampling.scheduler import run_sampling_cycle
+    created = await run_sampling_cycle()
+    _audit_request(db, request, "run_eval_sample", "eval", "", {"created": created})
+    return {"ok": True, "created": created}
+
+
+@router.get("/evals/sample/status")
+def eval_sample_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    from core.database import EvalSampleCursor
+    rows = db.query(EvalSampleCursor).order_by(EvalSampleCursor.id.desc()).all()
+    return {
+        "cursors": [
+            {
+                "source_type": r.source_type,
+                "source_key": r.source_key,
+                "cursor": json.loads(r.cursor_json or "{}"),
+                "updated_at": str(r.updated_at) if r.updated_at else "",
+            }
+            for r in rows
+        ]
+    }
+
+
+class EvalRunRequest(BaseModel):
+    suite: str = "regression"
+    include_candidates: bool = False
+
+
+@router.post("/evals/run")
+def eval_run_suite(
+    body: EvalRunRequest,
+    request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from evals.run import run_suite
+
+    try:
+        report = run_suite(body.suite, include_candidates=body.include_candidates)
+    except Exception as e:
+        raise HTTPException(500, f"eval run failed: {e}")
+
+    run_record = save_run(db, body.suite, {
+        "total": report.total,
+        "passed": report.passed,
+        "failed": report.failed,
+        "pass_rate": report.pass_rate,
+        "summary": {"failed_cases": report.failed_cases or []},
+    })
+
+    results = _load_results_from_report(report)
+    save_run_results(db, run_record.id, results)
+
+    _audit_request(db, request, "run_eval_suite", "eval", body.suite,
+                   {"run_id": run_record.id, "passed": report.passed, "failed": report.failed})
+
+    return {
+        "run_id": run_record.id,
+        "suite": report.suite,
+        "total": report.total,
+        "passed": report.passed,
+        "failed": report.failed,
+        "pass_rate": report.pass_rate,
+        "failed_cases": report.failed_cases or [],
+    }
+
+
+def _load_results_from_report(report) -> list[dict]:
+    """从 SuiteReport 对象提取 results list，重新跑一遍获取详细结果。"""
+    from evals.run import load_cases, run_case
+    cases = load_cases(report.suite)
+    results = []
+    for case in cases:
+        result = run_case(case)
+        results.append({
+            "case_id": result.case_id,
+            "suite": result.suite,
+            "passed": result.passed,
+            "score": result.score,
+            "errors": result.errors,
+            "output": result.output,
+        })
+    return results
+
+
+@router.get("/evals/runs")
+def eval_list_runs(
+    limit: int = 20, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    items = get_runs(db, limit=max(1, min(limit, 100)))
+    return {"items": items}
+
+
+@router.get("/evals/runs/{run_id}")
+def eval_get_run(
+    run_id: int, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    run_dict, results = get_run(db, run_id)
+    if not run_dict:
+        raise HTTPException(404, "run not found")
+    return {"run": run_dict, "results": results}
+
+
 @router.get("/health")
 def health():
     return {"ok": True, "time": datetime.now().isoformat()}

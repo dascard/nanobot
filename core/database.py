@@ -367,6 +367,62 @@ class SystemSetting(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+# ── Eval tables ──
+
+class EvalCandidate(Base):
+    __tablename__ = "eval_candidates"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    case_id = Column(String, unique=True, nullable=False)
+    suite = Column(String, nullable=False)
+    source = Column(String, default="log")
+    source_ref = Column(String, default="")
+    description = Column(Text, default="")
+    input_json = Column(Text, default="{}")
+    expected_json = Column(Text, default='{"needs_label": true}')
+    tags_json = Column(Text, default="[]")
+    status = Column(String, default="candidate")
+    priority = Column(Integer, default=0)
+    fingerprint = Column(String, index=True, default="")
+    note = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class EvalSampleCursor(Base):
+    __tablename__ = "eval_sample_cursors"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_type = Column(String, nullable=False)
+    source_key = Column(String, nullable=False)
+    cursor_json = Column(Text, default="{}")
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class EvalRun(Base):
+    __tablename__ = "eval_runs"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    suite = Column(String)
+    git_sha = Column(String, default="")
+    status = Column(String, default="running")
+    total = Column(Integer, default=0)
+    passed = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+    pass_rate = Column(Float, default=0.0)
+    summary_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class EvalRunResult(Base):
+    __tablename__ = "eval_run_results"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, index=True)
+    case_id = Column(String)
+    suite = Column(String)
+    passed = Column(Integer)
+    score = Column(Float)
+    errors_json = Column(Text, default="[]")
+    output_json = Column(Text, default="{}")
+
+
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
 
