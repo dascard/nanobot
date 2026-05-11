@@ -1263,13 +1263,18 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
         return {"action": "no_reply", "reason": "user_blocked"}
 
     # 2.6 内容屏蔽规则检查——写入 ChatLog.meta_json.moderation
-    stream_id = _normalize_group_session_id(req.group_id)
+    from core.group_runtime.ids import normalize_group_stream_id
+    stream_id = normalize_group_stream_id(req.group_id)
     mod_result = check_message_moderation_db(db, message_text, chat_stream_id=stream_id)
     if mod_result:
         meta["moderation"] = {
             "matched": True,
             "match_type": "content_rule",
             "pattern": mod_result["pattern"],
+            "rule_id": mod_result.get("rule_id"),
+            "category": mod_result.get("category", ""),
+            "match_mode": mod_result.get("match_type", "contains"),
+            "scope_type": mod_result.get("scope_type", ""),
             "no_reply": mod_result["no_reply"],
             "no_learn": mod_result["no_learn"],
             "no_context": mod_result["no_context"],

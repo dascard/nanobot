@@ -20,8 +20,7 @@ def _match_rule(pattern: str, message: str, match_type: str = "contains") -> boo
     elif match_type == "exact":
         return message == pattern
     else:
-        # contains (default): 子串匹配，转义正则特殊字符
-        return re.escape(pattern) in message or pattern in message
+        return pattern in message
 
 
 def check_message_moderation(
@@ -59,11 +58,13 @@ def check_message_moderation(
             return {
                 "pattern": pattern,
                 "match_type": match_type,
+                "rule_id": rule.get("rule_id"),
+                "category": str(rule.get("category") or "no_learn"),
+                "reason": str(rule.get("reason") or ""),
+                "scope_type": scope,
                 "no_reply": bool(rule.get("no_reply", False)),
                 "no_learn": bool(rule.get("no_learn", True)),
                 "no_context": bool(rule.get("no_context", False)),
-                "scope_type": scope,
-                "category": str(rule.get("category") or "no_learn"),
             }
 
     return None
@@ -96,6 +97,7 @@ def check_message_moderation_db(
 
     rules = [
         {
+            "rule_id": r.id,
             "pattern": r.pattern,
             "match_type": r.match_type or "contains",
             "scope_type": r.scope_type or "session",
@@ -104,6 +106,7 @@ def check_message_moderation_db(
             "no_learn": bool(r.no_learn),
             "no_context": bool(r.no_context),
             "category": r.category or "no_learn",
+            "reason": r.reason or "",
             "enabled": True,
         }
         for r in rows
