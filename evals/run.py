@@ -102,6 +102,31 @@ def run_suite(suite: str = "regression", *, include_candidates: bool = False) ->
     return report
 
 
+def run_suite_with_details(
+    suite: str = "regression", *, include_candidates: bool = False
+) -> tuple[SuiteReport, list[dict]]:
+    """同 run_suite，但同时返回每个 case 的详细结果（避免二次跑 eval）。"""
+    cases = load_cases(suite, include_candidates=include_candidates)
+    if not cases:
+        return SuiteReport(suite=suite, total=0, passed=0, failed=0, pass_rate=0.0), []
+    results = [run_case(c) for c in cases]
+    passed = sum(1 for r in results if r.passed)
+    failed = len(results) - passed
+    report = SuiteReport(
+        suite=suite, total=len(results), passed=passed, failed=failed,
+        pass_rate=passed / len(results) if results else 0.0,
+        failed_cases=[{"case_id": r.case_id, "errors": r.errors} for r in results if not r.passed],
+    )
+    case_results = [
+        {
+            "case_id": r.case_id, "suite": r.suite, "passed": r.passed,
+            "score": r.score, "errors": r.errors, "output": r.output,
+        }
+        for r in results
+    ]
+    return report, case_results
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", default="regression")

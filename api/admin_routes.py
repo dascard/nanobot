@@ -2196,10 +2196,11 @@ def eval_run_suite(
     request: Request, db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    from evals.run import run_suite
+    from evals.run import run_suite_with_details
 
     try:
-        report = run_suite(body.suite, include_candidates=body.include_candidates)
+        report, case_results = run_suite_with_details(
+            body.suite, include_candidates=body.include_candidates)
     except Exception as e:
         raise HTTPException(500, f"eval run failed: {e}")
 
@@ -2210,9 +2211,7 @@ def eval_run_suite(
         "pass_rate": report.pass_rate,
         "summary": {"failed_cases": report.failed_cases or []},
     })
-
-    results = _load_results_from_report(report)
-    save_run_results(db, run_record.id, results)
+    save_run_results(db, run_record.id, case_results)
 
     _audit_request(db, request, "run_eval_suite", "eval", body.suite,
                    {"run_id": run_record.id, "passed": report.passed, "failed": report.failed})
@@ -2226,24 +2225,6 @@ def eval_run_suite(
         "pass_rate": report.pass_rate,
         "failed_cases": report.failed_cases or [],
     }
-
-
-def _load_results_from_report(report) -> list[dict]:
-    """从 SuiteReport 对象提取 results list，重新跑一遍获取详细结果。"""
-    from evals.run import load_cases, run_case
-    cases = load_cases(report.suite)
-    results = []
-    for case in cases:
-        result = run_case(case)
-        results.append({
-            "case_id": result.case_id,
-            "suite": result.suite,
-            "passed": result.passed,
-            "score": result.score,
-            "errors": result.errors,
-            "output": result.output,
-        })
-    return results
 
 
 @router.get("/evals/runs")

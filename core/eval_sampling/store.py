@@ -62,8 +62,9 @@ def upsert_candidate(db, case_dict: dict) -> bool:
         case_dict.get("description", "")[:40],
         json.dumps(case_dict.get("input", {}), ensure_ascii=False),
     )
+    case_id = case_dict.get("case_id", "")
     existing = db.query(EvalCandidate).filter(
-        EvalCandidate.fingerprint == fingerprint
+        (EvalCandidate.fingerprint == fingerprint) | (EvalCandidate.case_id == case_id)
     ).first()
     if existing:
         return False
@@ -151,10 +152,15 @@ def ignore_candidate(db, case_id: str):
 
 
 def promote_candidate(db, case_id: str) -> str | None:
-    """提升候选到 regression 目录。返回文件路径或 None。"""
+    """提升候选到 regression 目录。必须已标注 (status=labeled, needs_label 已移除)。"""
     row = get_candidate(db, case_id)
     if not row:
         return None
+    if row.status != "labeled":
+        raise ValueError("candidate must be labeled before promote")
+    expected = json.loads(row.expected_json or "{}")
+    if expected.get("needs_label"):
+        raise ValueError("candidate must have explicit expected values (not needs_label)")
     # 写 JSON 文件到 evals/cases/regression/
     base = Path(__file__).resolve().parent.parent.parent
     target_dir = base / "evals" / "cases" / "regression"

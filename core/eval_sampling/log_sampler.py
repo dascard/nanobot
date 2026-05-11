@@ -29,28 +29,26 @@ def sample_log_file(
     log_path: str,
     *,
     start_offset: int = 0,
+    start_line: int = 0,
     limit: int = 100,
 ) -> tuple[list[dict], dict]:
     """增量扫描日志文件，返回 (candidates, new_cursor)。
 
-    candidate 字段:
-        case_id, suite, source="log", source_ref, description,
-        input, expected={"needs_label": true}, tags, fingerprint
-    new_cursor = {"byte_offset": ...}
+    new_cursor = {"byte_offset": ..., "line_no": ...}
     """
     if not os.path.isfile(log_path):
-        return [], {"byte_offset": 0}
+        return [], {"byte_offset": 0, "line_no": 0}
 
     compiled = [(re.compile(pat, re.IGNORECASE), suite, desc) for pat, suite, desc in ERROR_PATTERNS]
     candidates: list[dict] = []
     seen: set[str] = set()
 
-    # 使用 readlines 分块避免大文件全部读入内存
     with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         f.seek(start_offset)
         lines = f.readlines()
 
     new_offset = start_offset + sum(len(line.encode("utf-8")) for line in lines)
+    new_line = start_line + len(lines)
 
     for i, line in enumerate(lines):
         if len(candidates) >= limit:
@@ -70,7 +68,7 @@ def sample_log_file(
             seen.add(key)
 
             error_msg = (m.group(1) if m.lastindex and m.lastindex >= 1 else m.group(0))[:200]
-            global_line = start_offset + i + 1
+            global_line = start_line + i + 1
 
             case_id = f"cand_log_{suite}_{hashlib.md5(key.encode()).hexdigest()[:8]}"
             input_data = {
@@ -94,4 +92,4 @@ def sample_log_file(
             })
             break
 
-    return candidates, {"byte_offset": new_offset}
+    return candidates, {"byte_offset": new_offset, "line_no": new_line}

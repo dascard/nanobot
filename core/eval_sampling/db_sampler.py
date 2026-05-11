@@ -139,21 +139,29 @@ def sample_timing_events(db, *, after_id: int = 0, limit: int = 50) -> list[dict
     return candidates
 
 
-def sample_memory_learning(db, *, after_latest: int = 0, limit: int = 50) -> list[dict]:
+def sample_memory_learning(db, *, after_latest: int = 0, limit: int = 50,
+                           table: str = "all") -> list[dict]:
     """从 JargonMemory / ExpressionMemory 抽取低质量候选。
+    table: "jargon" / "expression" / "all"
     游标追踪：after_latest 是上次最大 id。
     """
     from core.database import JargonMemory, ExpressionMemory
 
     candidates: list[dict] = []
+    do_jargon = table in ("all", "jargon")
+    do_expr = table in ("all", "expression")
 
-    jargon_rows = (
-        db.query(JargonMemory)
-        .filter(JargonMemory.id > after_latest, JargonMemory.status == "candidate")
-        .order_by(JargonMemory.id.asc())
-        .limit(limit * 2)
-        .all()
-    )
+    if do_jargon:
+        jargon_rows = (
+            db.query(JargonMemory)
+            .filter(JargonMemory.id > after_latest, JargonMemory.status == "candidate")
+            .order_by(JargonMemory.id.asc())
+            .limit(limit * 2)
+            .all()
+        )
+    else:
+        jargon_rows = []
+
     for j in jargon_rows:
         term = j.term or ""
         is_suspicious = bool(re.search(r"[×xX\*\/\=\+\-\d\.]{2,}", term))
@@ -188,13 +196,16 @@ def sample_memory_learning(db, *, after_latest: int = 0, limit: int = 50) -> lis
             "fingerprint": fingerprint,
         })
 
-    expr_rows = (
-        db.query(ExpressionMemory)
-        .filter(ExpressionMemory.id > after_latest, ExpressionMemory.status == "candidate")
-        .order_by(ExpressionMemory.id.asc())
-        .limit(limit * 2)
-        .all()
-    )
+    if do_expr:
+        expr_rows = (
+            db.query(ExpressionMemory)
+            .filter(ExpressionMemory.id > after_latest, ExpressionMemory.status == "candidate")
+            .order_by(ExpressionMemory.id.asc())
+            .limit(limit * 2)
+            .all()
+        )
+    else:
+        expr_rows = []
     for e in expr_rows:
         expr = e.expression or ""
         is_suspicious = bool(re.search(r"[×xX\*\/\=\+\-\d\.]{2,}", expr))

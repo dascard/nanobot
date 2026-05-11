@@ -26,7 +26,10 @@ async def run_sampling_cycle():
             if os.path.isfile(log_path):
                 cursor = get_cursor(db, "log", log_path)
                 offset = cursor.get("byte_offset", 0)
-                candidates, new_cursor = sample_log_file(log_path, start_offset=offset, limit=settings.get_int("eval.sample_limit_per_cycle", 100))
+                start_line = cursor.get("line_no", 0)
+                candidates, new_cursor = sample_log_file(
+                    log_path, start_offset=offset, start_line=start_line,
+                    limit=settings.get_int("eval.sample_limit_per_cycle", 100))
                 for c in candidates:
                     if upsert_candidate(db, c):
                         created += 1
@@ -37,21 +40,42 @@ async def run_sampling_cycle():
             cursors = {
                 "chatlog_replies": get_cursor(db, "db", "chatlog_replies"),
                 "timing_events": get_cursor(db, "db", "timing_events"),
-                "memory_learning": get_cursor(db, "db", "memory_learning"),
+                "memory_jargon": get_cursor(db, "db", "memory_jargon"),
+                "memory_expression": get_cursor(db, "db", "memory_expression"),
             }
-            after_id = cursors["chatlog_replies"].get("after_id", 0)
-            for c in sample_chatlog_replies(db, after_id=after_id, limit=30):
-                if upsert_candidate(db, c):
-                    created += 1
-            if c and c.get("source_ref"):
-                cursors["chatlog_replies"] = {"after_id": int(c["source_ref"].split(":")[-1])}
 
-            after_id = cursors["timing_events"].get("after_id", 0)
-            for c in sample_timing_events(db, after_id=after_id, limit=30):
-                if upsert_candidate(db, c):
+            items = sample_chatlog_replies(db, after_id=cursors["chatlog_replies"].get("after_id", 0), limit=30)
+            for item in items:
+                if upsert_candidate(db, item):
                     created += 1
-            if c:
-                cursors["timing_events"] = {"after_id": int(c.get("source_ref", ":0").split(":")[-1])}
+            if items:
+                cursors["chatlog_replies"] = {"after_id": int(items[-1]["source_ref"].split(":")[-1])}
+
+            items = sample_timing_events(db, after_id=cursors["timing_events"].get("after_id", 0), limit=30)
+            for item in items:
+                if upsert_candidate(db, item):
+                    created += 1
+            if items:
+                cursors["timing_events"] = {"after_id": int(items[-1].get("source_ref", ":0").split(":")[-1])}
+
+            # JargonMemory 和 ExpressionMemory 分开采样
+            items = sample_memory_learning(db, after_latest=cursors["memory_jargon"].get("after_id", 0),
+                                            table="jargon", limit=30)
+            for item in items:
+                if upsert_candidate(db, item):
+                    created += 1
+            if items:
+                max_id = max(int(i["source_ref"].split(":")[-1]) for i in items)
+                cursors["memory_jargon"] = {"after_id": max_id}
+
+            items = sample_memory_learning(db, after_latest=cursors["memory_expression"].get("after_id", 0),
+                                            table="expression", limit=30)
+            for item in items:
+                if upsert_candidate(db, item):
+                    created += 1
+            if items:
+                max_id = max(int(i["source_ref"].split(":")[-1]) for i in items)
+                cursors["memory_expression"] = {"after_id": max_id}
 
             for cursor_key in cursors:
                 save_cursor(db, "db", cursor_key, cursors[cursor_key])
