@@ -13,11 +13,28 @@ def run_group_reply_case(case: EvalCase) -> EvalOutput:
     is_directed_to_other = inp.get("is_directed_to_other", False)
     mentions = inp.get("mentions", [])
     reply_to_message_id = inp.get("reply_to_message_id", "")
+    trigger_reason = inp.get("trigger_reason", "")
+    self_id = inp.get("self_id", "")
 
-    # directed_to_other → 不回复
-    if is_directed_to_other:
+    # 调用真实 should_suppress_directed_to_other
+    from core.group_runtime.runtime import should_suppress_directed_to_other, GroupPendingMessage
+
+    pm = GroupPendingMessage(
+        sender_id=inp.get("sender_id", "user1"),
+        sender_name=inp.get("sender_name", ""),
+        message=inp.get("message", ""),
+        is_at_bot=is_at_bot,
+        is_reply_to_bot=is_reply_to_bot,
+        trigger_reason=trigger_reason or ("ambient" if not (is_at_bot or is_reply_to_bot) else "at_bot"),
+        is_directed_to_other=is_directed_to_other,
+        self_id=self_id,
+    )
+    suppressed = should_suppress_directed_to_other([pm])
+
+    if suppressed:
         out.should_reply = False
         out.tool_calls = []
+        out.db_writes["directed_to_other"] = True
         return out
 
     # 需要回复的场景

@@ -34,7 +34,7 @@ def _cjk_chars(text: str) -> str:
 
 
 def _is_noise_phrase(phrase: str) -> bool:
-    """过滤无意义的常见词。"""
+    """过滤无意义的常见词、纯符号/数字串。"""
     noise = {
         "什么", "怎么", "为什么", "不知道", "我觉得", "我也是",
         "哈哈哈", "就是", "那个", "这个", "可以", "没有", "不是",
@@ -45,7 +45,12 @@ def _is_noise_phrase(phrase: str) -> bool:
         "其实", "最近", "之前", "以后", "直接", "真的假", "怎么办",
         "不知道怎", "这个问题",
     }
-    return phrase in noise or len(phrase) < MIN_PHRASE_LEN
+    if phrase in noise or len(phrase) < MIN_PHRASE_LEN:
+        return True
+    import re
+    if re.fullmatch(r"[\d\s\.\,\+\-\*\/\=×xX%％\(\)（）\$€¥₩]+", phrase):
+        return True
+    return False
 
 
 def _short_cjk_phrases(text: str) -> list[str]:

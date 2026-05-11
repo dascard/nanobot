@@ -7,9 +7,13 @@ def score_case(case: EvalCase, output: EvalOutput) -> dict:
     errors: list[str] = []
     exp = case.expected
 
+    # 如果 runner 报告了错误，自动 fail
+    if output.errors:
+        errors.append(f"runner errors: {output.errors}")
+
     # should_reply
     if "should_reply" in exp:
-        actual = bool(output.reply_text)
+        actual = bool(output.should_reply) if output.should_reply is not None else bool(output.reply_text)
         expected = bool(exp["should_reply"])
         if actual != expected:
             errors.append(f"should_reply mismatch: expected={expected} actual={actual}")
@@ -73,13 +77,15 @@ def score_case(case: EvalCase, output: EvalOutput) -> dict:
         if not str(output.content_type or "").startswith(exp["content_type_prefix"]):
             errors.append(f"content_type mismatch: expected prefix={exp['content_type_prefix']} actual={output.content_type}")
 
-    # forbidden_terms — terms that should NOT appear in the bot's reply text
+    # forbidden_terms — check jargon_terms / expression_terms in db_writes
     forbidden_terms = exp.get("forbidden_terms", [])
     if isinstance(forbidden_terms, str):
         forbidden_terms = [forbidden_terms]
     for term in forbidden_terms:
-        if output.reply_text and term in output.reply_text:
-            errors.append(f"forbidden term found in reply: {term}")
+        jargon_terms = output.db_writes.get("jargon_terms", [])
+        expr_terms = output.db_writes.get("expression_terms", [])
+        if term in jargon_terms or term in expr_terms:
+            errors.append(f"forbidden term learned: {term}")
 
     # should_create_jargon
     if "should_create_jargon" in exp:

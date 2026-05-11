@@ -1,6 +1,8 @@
 """Moderation suite runner——block rules、no_reply/no_learn/no_context。"""
 from __future__ import annotations
 
+import os
+import tempfile
 from evals.schema import EvalCase, EvalOutput
 
 
@@ -13,6 +15,7 @@ def run_moderation_case(case: EvalCase) -> EvalOutput:
 
     # 屏蔽词规则
     if matched_rule:
+        out.errors.append("moderation block-word check not yet implemented as pure function")
         out.db_writes["no_reply"] = bool(matched_rule.get("no_reply", False))
         out.db_writes["no_learn"] = bool(matched_rule.get("no_learn", False))
         out.db_writes["no_context"] = bool(matched_rule.get("no_context", False))
@@ -21,10 +24,39 @@ def run_moderation_case(case: EvalCase) -> EvalOutput:
         out.db_writes["expression_created"] = not bool(matched_rule.get("no_learn", False))
         out.should_reply = not bool(matched_rule.get("no_reply", False))
 
-    # 屏蔽用户规则
+    # 屏蔽用户规则：用真实 SQLite DB 调用 real _check_user_blocked
     if user_block_rule:
-        enabled = user_block_rule.get("enabled", False)
-        if enabled:
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from core.database import UserBlockRule, Base
+
+        db_path = os.path.join(tempfile.mkdtemp(), "moderation_eval.db")
+        engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(bind=engine)
+        db = Session()
+
+        try:
+            block = UserBlockRule(
+                user_id=user_block_rule.get("user_id", "blocked_user"),
+                target_type=user_block_rule.get("target_type", "private"),
+                group_id=user_block_rule.get("group_id", ""),
+                enabled=1 if user_block_rule.get("enabled", False) else 0,
+            )
+            db.add(block)
+            db.commit()
+
+            from api.routes import _check_user_blocked
+            blocked = _check_user_blocked(
+                db,
+                user_id=user_block_rule.get("user_id", "blocked_user"),
+                target_type=user_block_rule.get("target_type", "private"),
+                group_id=user_block_rule.get("group_id", ""),
+            )
+        finally:
+            db.close()
+
+        if blocked:
             out.db_writes["chatlog_written"] = True
             out.db_writes["conversation_turn_written"] = False
             out.db_writes["no_reply"] = True
@@ -34,5 +66,15 @@ def run_moderation_case(case: EvalCase) -> EvalOutput:
             out.db_writes["jargon_created"] = False
             out.db_writes["expression_created"] = False
             out.should_reply = False
+        else:
+            out.db_writes["chatlog_written"] = True
+            out.db_writes["conversation_turn_written"] = True
+            out.db_writes["no_reply"] = False
+            out.db_writes["no_learn"] = False
+            out.db_writes["no_context"] = False
+            out.db_writes["in_context"] = True
+            out.db_writes["jargon_created"] = True
+            out.db_writes["expression_created"] = True
+            out.should_reply = True
 
     return out

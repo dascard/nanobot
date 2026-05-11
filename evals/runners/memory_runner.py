@@ -1,4 +1,4 @@
-"""Memory/Jargon learning suite runner。"""
+"""Memory/Jargon learning suite runner——调用真实的 expression_learner 过滤函数。"""
 from __future__ import annotations
 
 from evals.schema import EvalCase, EvalOutput
@@ -7,35 +7,18 @@ from evals.schema import EvalCase, EvalOutput
 def run_memory_case(case: EvalCase) -> EvalOutput:
     inp = case.input
     out = EvalOutput(case_id=case.id, suite=case.suite, raw=dict(inp))
-
     message = inp.get("message", "")
-    forbidden_terms = inp.get("expected", {}).get("forbidden_terms", []) or case.expected.get("forbidden_terms", [])
 
-    # jargon 过滤：纯符号/数字不应被学习
-    should_create_jargon = True
-    import re
-    # 简单规则：包含中文/字母且不全是符号/数字
-    has_text = bool(re.search(r"[a-zA-Z一-鿿]", message))
-    is_pure_number = bool(re.match(r"^[\d\.\s×xX\*\+\-\=%,，。、:：;；]+$", message))
+    # 调用真实 _extract_jargon_candidates：它按定义句式匹配，不会误学纯数字/符号
+    from core.expression_learner import _extract_jargon_candidates, _extract_expression_candidates
 
-    if not has_text or is_pure_number:
-        should_create_jargon = False
+    jargon_candidates = _extract_jargon_candidates([{"content": message}])
+    expr_candidates = _extract_expression_candidates([{"content": message}])
 
-    # 检查 forbidden_terms
-    for term in forbidden_terms:
-        if term in message:
-            should_create_jargon = False
-            break
-
-    out.db_writes["jargon_created"] = should_create_jargon
-    out.db_writes["expression_created"] = False  # 也是符号/数字不应学习
+    out.db_writes["jargon_created"] = len(jargon_candidates) > 0
+    out.db_writes["jargon_terms"] = [c.get("term", "") for c in jargon_candidates]
+    out.db_writes["expression_created"] = len(expr_candidates) > 0
+    out.db_writes["expression_terms"] = [c.get("expression", "") for c in expr_candidates]
     out.db_writes["in_context"] = True
-
-    # 如果 case 明确指定 expected，用 expected 覆盖
-    exp = case.expected
-    if "should_create_jargon" in exp:
-        out.db_writes["jargon_created"] = exp["should_create_jargon"]
-    if "should_create_expression" in exp:
-        out.db_writes["expression_created"] = exp["should_create_expression"]
 
     return out
