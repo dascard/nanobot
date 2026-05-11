@@ -20,3 +20,4 @@ sentinel/model.safetensors
 cc2codex/
 creatures/nanobot/prompt_private.md
 evals/reports/*.json
+evals/cases/candidates/**/*.json
