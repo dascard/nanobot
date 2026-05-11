@@ -338,6 +338,22 @@ class UserBlockRule(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class ContentBlockRule(Base):
+    """内容屏蔽规则——匹配消息正文，支持 no_reply/no_learn/no_context 控制。"""
+    __tablename__ = "content_block_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pattern = Column(String, nullable=False)
+    scope_type = Column(String, default="session")  # session / global
+    chat_stream_id = Column(String, default="")
+    no_reply = Column(Integer, default=0)
+    no_learn = Column(Integer, default=1)
+    no_context = Column(Integer, default=0)
+    enabled = Column(Integer, default=1)
+    reason = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class SystemSetting(Base):
     """WebUI 系统设置——KV 存储。"""
     __tablename__ = "system_settings"

@@ -13,16 +13,40 @@ def run_moderation_case(case: EvalCase) -> EvalOutput:
     matched_rule = inp.get("matched_rule", {})
     user_block_rule = inp.get("user_block_rule", {})
 
-    # 屏蔽词规则
+    # 屏蔽词规则：调用真实 check_message_moderation
     if matched_rule:
-        out.errors.append("moderation block-word check not yet implemented as pure function")
-        out.db_writes["no_reply"] = bool(matched_rule.get("no_reply", False))
-        out.db_writes["no_learn"] = bool(matched_rule.get("no_learn", False))
-        out.db_writes["no_context"] = bool(matched_rule.get("no_context", False))
-        out.db_writes["in_context"] = not bool(matched_rule.get("no_context", False))
-        out.db_writes["jargon_created"] = not bool(matched_rule.get("no_learn", False))
-        out.db_writes["expression_created"] = not bool(matched_rule.get("no_learn", False))
-        out.should_reply = not bool(matched_rule.get("no_reply", False))
+        from core.moderation import check_message_moderation
+
+        rules = [{
+            "pattern": matched_rule.get("pattern", ""),
+            "scope_type": matched_rule.get("scope_type", "session"),
+            "no_reply": matched_rule.get("no_reply", False),
+            "no_learn": matched_rule.get("no_learn", True),
+            "no_context": matched_rule.get("no_context", False),
+            "enabled": True,
+        }]
+        result = check_message_moderation(
+            inp.get("message", ""),
+            chat_stream_id=inp.get("chat_stream_id", ""),
+            rules=rules,
+        )
+        if result:
+            out.db_writes["no_reply"] = result["no_reply"]
+            out.db_writes["no_learn"] = result["no_learn"]
+            out.db_writes["no_context"] = result["no_context"]
+            out.db_writes["in_context"] = not result["no_context"]
+            out.db_writes["jargon_created"] = not result["no_learn"]
+            out.db_writes["expression_created"] = not result["no_learn"]
+            out.should_reply = not result["no_reply"]
+        else:
+            # 无规则命中——正常处理
+            out.db_writes["no_reply"] = False
+            out.db_writes["no_learn"] = False
+            out.db_writes["no_context"] = False
+            out.db_writes["in_context"] = True
+            out.db_writes["jargon_created"] = True
+            out.db_writes["expression_created"] = True
+            out.should_reply = True
 
     # 屏蔽用户规则：用真实 SQLite DB 调用 real _check_user_blocked
     if user_block_rule:
