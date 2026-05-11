@@ -153,6 +153,8 @@ def sticker_to_dict(row: StickerMemory) -> dict[str, Any]:
         "sticker_hash": row.sticker_hash,
         "file_ref": row.file_ref,
         "send_code": _canonical_row_send_code(row),
+        "original_send_code": build_sticker_send_code(row.file_ref or "", row.send_code or ""),
+        "send_source": "public_proxy" if _public_sticker_image_url(row) else "original",
         "reply_token": f"[sticker:{row.id}]",
         "name": row.name or "",
         "description": row.description or "",
