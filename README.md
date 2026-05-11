@@ -1,8 +1,6 @@
 # Nanobot Server
 
-Nanobot Server 是 Nanobot 的服务端运行核心，负责接收 QQbot / Web 客户端消息，运行 KohakuTerrarium Agent，维护聊天记忆、群聊运行状态、TimingGate 判定、表情包数据和 Prompt 构建结果。
-
-这个仓库关注的是 Nanobot 端能力：运行可观测性、模型判定调试、记忆 / 表情包 / Prompt 数据治理。QQbot 插件开关和平台适配逻辑应放在 QQbot 端。
+Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配器 / Web 客户端消息，运行 KohakuTerrarium Agent，维护聊天记忆、群聊运行状态、TimingGate 判定、表情包数据和 Prompt 构建结果。
 
 ## 主要能力
 
@@ -18,7 +16,7 @@ Nanobot Server 是 Nanobot 的服务端运行核心，负责接收 QQbot / Web �
 
 ```mermaid
 graph TD
-    QQ[QQbot / OneBot Adapter] -->|/api/v1/group/message| API[FastAPI API]
+    Chat[Chat Adapter] -->|/api/v1/group/message| API[FastAPI API]
     WEB[WebUI] -->|/api/v1/admin/*| API
     API --> DB[(SQLite)]
     API --> RT[Group Runtime / TimingGate]
@@ -28,7 +26,7 @@ graph TD
     KT --> Tools[Tools: reply / sticker_search / news / sql / image / group_analysis]
     Tools --> DB
     KT --> API
-    API -->|reply + reply_meta| QQ
+    API -->|reply + reply_meta| Chat
 ```
 
 ## 目录说明
