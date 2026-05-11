@@ -1,0 +1,16 @@
+{
+  "id": "regression_sticker_duplicate_canonical_001",
+  "suite": "sticker",
+  "description": "duplicate sticker 请求 image 时应先跳 canonical，再判断 active",
+  "input": {
+    "sticker_id": 200,
+    "duplicate_of_id": 74,
+    "method": "GET",
+    "path": "/api/v1/stickers/200/image"
+  },
+  "expected": {
+    "http_status": 200,
+    "served_sticker_id": 74
+  },
+  "tags": ["sticker", "duplicate", "canonical"]
+}

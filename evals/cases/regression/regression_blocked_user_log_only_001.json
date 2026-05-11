@@ -1,0 +1,25 @@
+{
+  "id": "regression_blocked_user_log_only_001",
+  "suite": "moderation",
+  "description": "屏蔽用户消息只写 ChatLog，不触发回复/学习/上下文",
+  "input": {
+    "group_id": "1027790249",
+    "sender_id": "blocked_user",
+    "message": "测试消息",
+    "user_block_rule": {
+      "user_id": "blocked_user",
+      "target_type": "group",
+      "group_id": "1027790249",
+      "enabled": true
+    }
+  },
+  "expected": {
+    "should_write_chatlog": true,
+    "should_reply": false,
+    "should_write_conversation_turn": false,
+    "no_reply": true,
+    "no_learn": true,
+    "no_context": true
+  },
+  "tags": ["moderation", "blocked_user", "log_only"]
+}

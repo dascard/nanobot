@@ -1,0 +1,21 @@
+{
+  "id": "regression_group_at_other_no_reply_001",
+  "suite": "group_reply",
+  "description": "用户 @ 另一个群友，bot 不应误以为是在叫自己",
+  "input": {
+    "group_id": "1027790249",
+    "sender_id": "123",
+    "sender_name": "用户A",
+    "message": "@456 你刚才那个链接呢",
+    "is_at_bot": false,
+    "is_reply_to_bot": false,
+    "is_directed_to_other": true,
+    "mentions": [{"user_id": "456", "name": "用户B"}],
+    "recent_context": []
+  },
+  "expected": {
+    "should_reply": false,
+    "forbidden_tools": ["reply"]
+  },
+  "tags": ["group", "at", "directed_to_other", "no_reply"]
+}

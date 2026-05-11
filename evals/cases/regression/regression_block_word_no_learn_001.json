@@ -1,0 +1,25 @@
+{
+  "id": "regression_block_word_no_learn_001",
+  "suite": "moderation",
+  "description": "屏蔽词是 no-learn 规则，不应阻断上下文或回复",
+  "input": {
+    "chat_stream_id": "qq:1027790249:group",
+    "message": "500股 × 140.62 = 70310金币",
+    "matched_rule": {
+      "pattern": "×",
+      "scope_type": "session",
+      "no_reply": false,
+      "no_learn": true,
+      "no_context": false
+    }
+  },
+  "expected": {
+    "no_reply": false,
+    "no_learn": true,
+    "no_context": false,
+    "should_enter_context": true,
+    "should_create_jargon": false,
+    "should_create_expression": false
+  },
+  "tags": ["moderation", "no_learn", "jargon"]
+}

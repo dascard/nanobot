@@ -1,0 +1,15 @@
+{
+  "id": "regression_sticker_image_endpoint_001",
+  "suite": "sticker",
+  "description": "公开 sticker image 端点应返回本地缓存图片",
+  "input": {
+    "method": "GET",
+    "path": "/api/v1/stickers/74/image",
+    "sticker_id": 74
+  },
+  "expected": {
+    "http_status": 200,
+    "content_type_prefix": "image/"
+  },
+  "tags": ["sticker", "endpoint", "public_proxy"]
+}

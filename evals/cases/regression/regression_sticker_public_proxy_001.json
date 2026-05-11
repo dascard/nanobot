@@ -1,0 +1,16 @@
+{
+  "id": "regression_sticker_public_proxy_001",
+  "suite": "sticker",
+  "description": "[sticker:74] 应展开为 Nanobot public proxy URL，而不是原始 QQ 临时 URL",
+  "input": {
+    "content": "[sticker:74]",
+    "sticker_id": 74,
+    "public_base_url": "http://127.0.0.1:8000"
+  },
+  "expected": {
+    "send_source": "public_proxy",
+    "must_contain": ["/api/v1/stickers/74/image"],
+    "must_not_contain": ["gchat.qpic.cn"]
+  },
+  "tags": ["sticker", "public_proxy"]
+}

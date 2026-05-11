@@ -1,0 +1,17 @@
+{
+  "id": "regression_disabled_model_skip_001",
+  "suite": "model_routing",
+  "description": "enabled=false 的模型不能被 select_model 或 manual_model 使用",
+  "input": {
+    "models": [
+      {"id": "bad-model", "provider": "new-api", "tier": "fast", "intelligence": 10, "enabled": false, "cost_input_1m": 0.1},
+      {"id": "ok-model", "provider": "new-api", "tier": "fast", "intelligence": 7, "enabled": true, "cost_input_1m": 1.0}
+    ],
+    "requested_tier": "fast"
+  },
+  "expected": {
+    "model_used": "ok-model",
+    "must_not_use": ["bad-model"]
+  },
+  "tags": ["model_routing", "enabled"]
+}

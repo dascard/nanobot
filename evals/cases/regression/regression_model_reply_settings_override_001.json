@@ -1,0 +1,14 @@
+{
+  "id": "regression_model_reply_settings_override_001",
+  "suite": "model_routing",
+  "description": "main_chat 应优先使用 settings.get('model.reply')",
+  "input": {
+    "env_model": "env-model",
+    "settings_model_reply": "override-model"
+  },
+  "expected": {
+    "model_used": "override-model",
+    "should_call_auto_routing": false
+  },
+  "tags": ["model_routing", "settings"]
+}

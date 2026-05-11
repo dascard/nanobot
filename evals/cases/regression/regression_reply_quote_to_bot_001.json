@@ -1,0 +1,22 @@
+{
+  "id": "regression_reply_quote_to_bot_001",
+  "suite": "reply_contract",
+  "description": "用户引用 bot 消息提问时，bot 应带 quote 回复",
+  "input": {
+    "group_id": "1027790249",
+    "sender_id": "123",
+    "message": "这个是什么意思？",
+    "is_at_bot": false,
+    "is_reply_to_bot": true,
+    "reply_to_message_id": "10001",
+    "reply_to_sender_id": "bot",
+    "reply_to_content": "之前的回答内容"
+  },
+  "expected": {
+    "should_reply": true,
+    "send_mode": "quote",
+    "reply_to_message_id": "10001",
+    "required_tools": ["reply"]
+  },
+  "tags": ["reply_contract", "quote"]
+}

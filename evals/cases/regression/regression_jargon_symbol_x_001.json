@@ -1,0 +1,14 @@
+{
+  "id": "regression_jargon_symbol_x_001",
+  "suite": "memory_learning",
+  "description": "数学乘号不应进入 JargonMemory",
+  "input": {
+    "chat_stream_id": "qq:1027790249:group",
+    "message": "梦铃股: 500股 × 140.62 = 70310.00金币"
+  },
+  "expected": {
+    "should_create_jargon": false,
+    "forbidden_terms": ["×", "140.62", "70310.00金币"]
+  },
+  "tags": ["jargon", "memory", "false_positive"]
+}
