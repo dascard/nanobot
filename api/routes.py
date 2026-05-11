@@ -1472,6 +1472,62 @@ def search_sticker_endpoint(
     }
 
 
+@router.get("/stickers/{sticker_id}/image")
+def public_sticker_image(
+    sticker_id: int,
+    token: str = "",
+    db: Session = Depends(get_db),
+):
+    """公开表情包图片代理端点——用于 OneBot/NapCat 通过 HTTP 拉取本地缓存。"""
+    expected_token = str(os.environ.get("NANOBOT_STICKER_IMAGE_TOKEN") or "").strip()
+    if expected_token and not compare_digest(str(token or ""), expected_token):
+        raise HTTPException(status_code=403, detail="invalid sticker image token")
+
+    from fastapi.responses import FileResponse
+    from core.database import StickerMemory
+    from core.sticker_preview import (
+        cache_sticker_preview,
+        media_type_for_path,
+        safe_existing_local_path,
+    )
+
+    try:
+        row = db.query(StickerMemory).filter(StickerMemory.id == int(sticker_id)).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="sticker not found")
+
+        if str(row.status or "") not in ("active",):
+            raise HTTPException(status_code=404, detail="sticker not active")
+
+        # duplicate → 转到 canonical
+        if row.duplicate_of_id:
+            canonical = db.query(StickerMemory).filter(
+                StickerMemory.id == row.duplicate_of_id
+            ).first()
+            if canonical:
+                row = canonical
+
+        local = safe_existing_local_path(row.local_path or "")
+        if not local:
+            result = cache_sticker_preview(db, row.id, force=True)
+            if not result.ok:
+                raise HTTPException(status_code=404,
+                                    detail=f"sticker cache unavailable: {result.status}")
+            local = safe_existing_local_path(result.local_path)
+
+        if not local:
+            raise HTTPException(status_code=404, detail="local sticker file missing")
+
+        return FileResponse(local, media_type=media_type_for_path(local),
+                           filename=os.path.basename(local))
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[StickerImage] serve failed id={sticker_id}: {e}")
+        raise HTTPException(status_code=500, detail="sticker image serve failed")
+
+
 @router.post("/stickers/{sticker_id}/disable")
 def disable_sticker_endpoint(
     sticker_id: int,
