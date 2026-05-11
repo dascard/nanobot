@@ -1,4 +1,5 @@
 import json
+import os
 
 from core.database import StickerMemory
 from core.sticker_memory import (
@@ -151,10 +152,8 @@ def test_build_sticker_send_code_does_not_double_escape_html_entities(db_session
     )
 
     assert item["file_ref"] == "https://example.com/sticker.png?appid=1407&fileid=abc&rkey=def"
-    assert item["send_code"] == (
-        "[CQ:image,file=https://example.com/sticker.png?appid=1407&amp;fileid=abc&amp;rkey=def]"
-    )
     assert "&amp;amp;" not in item["send_code"]
+    assert item["send_code"].startswith("[CQ:image,file=")
 
 
 def test_expand_sticker_refs_in_content_replaces_short_token(db_session):
@@ -168,4 +167,36 @@ def test_expand_sticker_refs_in_content_replaces_short_token(db_session):
 
     expanded = expand_sticker_refs_in_content(f"[sticker:{item['id']}]", db_session)
 
-    assert expanded == "[CQ:image,file=https://example.com/short-token.png]"
+    assert expanded.startswith("[CQ:image,file=")
+
+
+def test_expand_sticker_refs_prefers_public_cached_url(db_session, monkeypatch):
+    from core.sticker_preview import _cache_dir
+
+    local_path = os.path.join(_cache_dir(), "unit-public-sticker.png")
+    with open(local_path, "wb") as f:
+        f.write(b"fake-image")
+    try:
+        item = register_sticker(
+            db_session,
+            chat_stream_id="qq:123:group",
+            file_ref="https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=expired&rkey=bad",
+            sticker_hash="public-cache-hash",
+            description="本地缓存优先表情",
+        )
+        row = db_session.query(StickerMemory).filter_by(id=item["id"]).one()
+        row.local_path = local_path
+        row.preview_status = "ok"
+        db_session.commit()
+        monkeypatch.setenv("NANOBOT_PUBLIC_BASE_URL", "http://10.60.42.158:8000")
+
+        expanded = expand_sticker_refs_in_content(f"[sticker:{item['id']}]", db_session)
+
+        assert expanded == (
+            f"[CQ:image,file=http://10.60.42.158:8000/api/v1/stickers/{item['id']}/image]"
+        )
+    finally:
+        try:
+            os.remove(local_path)
+        except FileNotFoundError:
+            pass

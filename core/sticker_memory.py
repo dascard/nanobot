@@ -8,9 +8,11 @@ import html
 import json
 import logging
 import mimetypes
+import os
 import re
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlencode
 
 from sqlalchemy.orm import Session
 
@@ -126,7 +128,22 @@ def extract_sticker_send_codes(content: str) -> list[str]:
 
 
 def _canonical_row_send_code(row: StickerMemory) -> str:
+    public_url = _public_sticker_image_url(row)
+    if public_url:
+        return build_sticker_send_code(public_url)
     return build_sticker_send_code(row.file_ref or "", row.send_code or "")
+
+
+def _public_sticker_image_url(row: StickerMemory) -> str:
+    base_url = str(os.environ.get("NANOBOT_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if not base_url or not getattr(row, "id", None):
+        return ""
+    query = {}
+    token = str(os.environ.get("NANOBOT_STICKER_IMAGE_TOKEN") or "").strip()
+    if token:
+        query["token"] = token
+    suffix = f"?{urlencode(query)}" if query else ""
+    return f"{base_url}/api/v1/stickers/{int(row.id)}/image{suffix}"
 
 
 def sticker_to_dict(row: StickerMemory) -> dict[str, Any]:
@@ -289,7 +306,7 @@ def search_stickers(
         .filter(
             StickerMemory.status == ACTIVE_STATUS,
             StickerMemory.dedupe_status != "duplicate",
-            StickerMemory.preview_status.in_(("ok", "pending")),
+            StickerMemory.preview_status == "ok",
         )
         .all()
     )
