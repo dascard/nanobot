@@ -1496,16 +1496,17 @@ def public_sticker_image(
         if row is None:
             raise HTTPException(status_code=404, detail="sticker not found")
 
-        if str(row.status or "") not in ("active",):
-            raise HTTPException(status_code=404, detail="sticker not active")
-
-        # duplicate → 转到 canonical
+        # duplicate → 先跳转到 canonical，再判断状态
         if row.duplicate_of_id:
             canonical = db.query(StickerMemory).filter(
                 StickerMemory.id == row.duplicate_of_id
             ).first()
-            if canonical:
-                row = canonical
+            if canonical is None:
+                raise HTTPException(status_code=404, detail="canonical sticker not found")
+            row = canonical
+
+        if str(row.status or "") not in ("active",):
+            raise HTTPException(status_code=404, detail="sticker not active")
 
         local = safe_existing_local_path(row.local_path or "")
         if not local:
