@@ -16,12 +16,14 @@ CASES_DIR = HERE / "cases"
 REPORTS_DIR = HERE / "reports"
 
 
-def load_cases(suite: str) -> list[EvalCase]:
+def load_cases(suite: str, *, include_candidates: bool = False) -> list[EvalCase]:
     cases: list[EvalCase] = []
     suite_dir = CASES_DIR / suite
     if not suite_dir.is_dir():
-        # 递归搜索所有子目录
         for root, _, files in os.walk(CASES_DIR):
+            # 默认排除 candidates 目录，避免 needs_label 的 case 混入正式 eval
+            if not include_candidates and "candidates" in Path(root).parts:
+                continue
             for f in files:
                 if f.endswith(".json"):
                     data = json.loads((Path(root) / f).read_text(encoding="utf-8"))
@@ -54,6 +56,15 @@ def run_case(case: EvalCase) -> EvalResult:
     elif suite in ("group_reply", "reply_contract"):
         from evals.runners.group_reply_runner import run_group_reply_case
         output = run_group_reply_case(case)
+    elif suite in ("timing_gate",):
+        from evals.runners.timing_gate_runner import run_timing_gate_case
+        output = run_timing_gate_case(case)
+    elif suite in ("error",):
+        # error 候选来自日志抽样，只有 needs_label=True，不可运行
+        return EvalResult(
+            case_id=case.id, suite=case.suite, passed=False, score=0.0,
+            errors=[f"error suite candidates are not runnable — needs manual labeling first"],
+        )
     else:
         return EvalResult(
             case_id=case.id, suite=case.suite, passed=False, score=0.0,
@@ -68,8 +79,8 @@ def run_case(case: EvalCase) -> EvalResult:
     )
 
 
-def run_suite(suite: str = "regression") -> SuiteReport:
-    cases = load_cases(suite)
+def run_suite(suite: str = "regression", *, include_candidates: bool = False) -> SuiteReport:
+    cases = load_cases(suite, include_candidates=include_candidates)
     if not cases:
         return SuiteReport(suite=suite, total=0, passed=0, failed=0, pass_rate=0.0)
     results = [run_case(c) for c in cases]
@@ -94,8 +105,10 @@ def run_suite(suite: str = "regression") -> SuiteReport:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", default="regression")
+    parser.add_argument("--include-candidates", action="store_true",
+                        help="Include candidates/ directory in case search")
     args = parser.parse_args()
-    report = run_suite(args.suite)
+    report = run_suite(args.suite, include_candidates=args.include_candidates)
     print(f"Suite: {report.suite}  total={report.total}  passed={report.passed}  failed={report.failed}  pass_rate={report.pass_rate:.1%}")
     if report.failed_cases:
         print("Failed:")

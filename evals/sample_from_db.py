@@ -10,9 +10,7 @@ import argparse
 import json
 import os
 import re
-from pathlib import Path
-
-HERE = Path(__file__).resolve().parent
+from datetime import timedelta
 
 
 def _open_db(db_path: str):
@@ -49,25 +47,35 @@ def _sample_group_reply(db, limit: int) -> list[dict]:
     )
 
     cases: list[dict] = []
-    seen_groups: set[str] = set()
+    group_counts: dict[str, int] = {}
+    per_group = max(1, min(limit // 3, 20))  # 每群最多取 N 条，默认取 limit/3
     for r in rows:
         meta = _safe_json(r.meta_json)
         if meta.get("kind") != "group_reply":
             continue
         group_id = str(r.session_id or "").removeprefix("group_")
-        if not group_id or group_id in seen_groups:
+        if not group_id:
             continue
-        seen_groups.add(group_id)
+        gc = group_counts.get(group_id, 0)
+        if gc >= per_group:
+            continue
+        group_counts[group_id] = gc + 1
         if len(cases) >= limit:
             break
 
+        # 按时间窗口取上下文：助理回复前 2 分钟到后 30 秒
+        created = r.created_at
         context_rows = (
             db.query(ChatLog)
             .filter(
                 ChatLog.session_id == r.session_id,
-                ChatLog.id.between(r.id - 10, r.id + 10),
+                ChatLog.created_at.between(
+                    created - timedelta(minutes=2),
+                    created + timedelta(seconds=30),
+                ),
             )
-            .order_by(ChatLog.id)
+            .order_by(ChatLog.created_at)
+            .limit(20)
             .all()
         )
         context = [

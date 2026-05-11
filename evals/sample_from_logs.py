@@ -9,13 +9,12 @@ import argparse
 import json
 import os
 import re
-from pathlib import Path
 
 # (regex, suite, description_prefix)
 ERROR_PATTERNS: list[tuple[str, str, str]] = [
     (r"ActionFailed.*retcode=\d+.*message='([^']+)'", "error", "ActionFailed"),
     (r"tool_error.*\[([^\]]+)\].*ERROR:\s*(.+)", "error", "tool_error"),
-    (r"HTTP\s+(40[03]|500|502|503)\b", "error", "HTTP error"),
+    (r"HTTP\s+(400|401|403|404|500|502|503)\b", "error", "HTTP error"),
     (r"ECONNREFUSED\s+([^\s]+)", "error", "ECONNREFUSED"),
     (r"image_summary\s+(HTTP\s+\d+|failed|timeout)", "sticker", "image_summary error"),
     (r"sticker image\s+(404|500|failed|not found)", "sticker", "sticker image error"),
