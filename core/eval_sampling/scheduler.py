@@ -87,3 +87,20 @@ async def run_sampling_cycle():
     finally:
         db.close()
     return created
+
+
+def eval_sampling_scheduler(stop_event):
+    """后台采样调度线程——定期扫描日志和 DB。"""
+    import time as _time
+    from core.settings_service import settings
+
+    logger.info("[EvalSample] scheduler started")
+    interval = max(60, settings.get_int("eval.sample_interval_sec", 600))
+    while not stop_event.wait(timeout=interval):
+        try:
+            created = asyncio.run(run_sampling_cycle())
+            if created:
+                logger.debug(f"[EvalSample] cycle created {created} candidates")
+        except Exception as e:
+            logger.error(f"[EvalSample] scheduler error: {e}")
+    logger.info("[EvalSample] scheduler stopped")

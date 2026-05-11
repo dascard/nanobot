@@ -176,6 +176,18 @@ async def lifespan(app: FastAPI):
     )
     learner_thread.start()
 
+    # ── Eval 自动采样 ──
+    from core.eval_sampling.scheduler import eval_sampling_scheduler
+    eval_sample_stop = threading.Event()
+    eval_sample_thread = threading.Thread(
+        target=eval_sampling_scheduler,
+        args=(eval_sample_stop,),
+        daemon=True,
+        name="eval-sampling-scheduler",
+    )
+    eval_sample_thread.start()
+    logger.info("Eval sampling scheduler initialized.")
+
     # ── 启动网络连通性检测 ──
     _startup_network_check(logger)
 
@@ -196,6 +208,8 @@ async def lifespan(app: FastAPI):
         learner_stop_event.set()
     if learner_thread is not None:
         learner_thread.join(timeout=5)
+    eval_sample_stop.set()
+    eval_sample_thread.join(timeout=5)
     await shutdown_bridge()
 
 

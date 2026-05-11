@@ -2150,7 +2150,10 @@ def eval_promote_candidate(
     case_id: str, request: Request, db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    path = promote_candidate(db, case_id)
+    try:
+        path = promote_candidate(db, case_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not path:
         raise HTTPException(404, "candidate not found")
     _audit_request(db, request, "promote_candidate", "eval_candidate", case_id, {"path": path})

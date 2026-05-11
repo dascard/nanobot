@@ -39,6 +39,12 @@ def sample_log_file(
     if not os.path.isfile(log_path):
         return [], {"byte_offset": 0, "line_no": 0}
 
+    # 日志轮转/truncate 检测：光标超出文件则从头开始
+    file_size = os.path.getsize(log_path)
+    if file_size < start_offset:
+        start_offset = 0
+        start_line = 0
+
     compiled = [(re.compile(pat, re.IGNORECASE), suite, desc) for pat, suite, desc in ERROR_PATTERNS]
     candidates: list[dict] = []
     seen: set[str] = set()
