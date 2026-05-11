@@ -195,6 +195,18 @@ class TestReplyMeta:
         assert b.pop_last_reply_meta("s") is None
         assert a.pop_last_reply_meta("s")["send_mode"] == "quote"
 
+    def test_reply_meta_pool_pops_from_child_bridge(self):
+        """NanobotBridgePool 暴露与 child bridge 一致的 reply_meta pop 接口"""
+        from nanobot_kt.bridge import NanobotBridge, NanobotBridgePool
+
+        pool = NanobotBridgePool()
+        child = NanobotBridge()
+        pool._bridges["group_100"] = child
+        child._reply_meta_store()["group_100"] = {"send_mode": "quote"}
+
+        assert pool.pop_last_reply_meta("group_100")["send_mode"] == "quote"
+        assert pool.pop_last_reply_meta("group_100") is None
+
     @pytest.mark.asyncio
     async def test_reply_tool_invalid_send_mode_normalized(self):
         """ReplyTool._execute() 非法 send_mode → normal"""

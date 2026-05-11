@@ -978,6 +978,18 @@ class NanobotBridgePool:
             stream_queue=stream_queue,
         )
 
+    def pop_last_reply_meta(self, session_id: str = "") -> dict | None:
+        """从对应会话的 child bridge 取出最近一次 reply_meta。"""
+        key = self._session_key(session_id=session_id)
+        bridge = self._bridges.get(key)
+        if bridge is not None:
+            return bridge.pop_last_reply_meta(session_id)
+        for bridge in self._bridges.values():
+            meta = bridge.pop_last_reply_meta(session_id)
+            if meta is not None:
+                return meta
+        return None
+
     @property
     def agent(self) -> Optional[Agent]:
         for bridge in self._bridges.values():
