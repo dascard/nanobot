@@ -153,6 +153,10 @@ def run_learning_cycle():
         if not rows:
             return {"scanned": 0, "expression_new": 0, "jargon_new": 0}
 
+        # 过滤 no_learn 标记的消息
+        from core.moderation import is_no_learn_meta
+        rows = [r for r in rows if not is_no_learn_meta(r.meta_json)]
+
         # 按 stream_id 分组，content 剥离 sender 前缀
         from core.context_builder import _strip_speaker_prefix
 

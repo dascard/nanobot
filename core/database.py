@@ -344,14 +344,17 @@ class ContentBlockRule(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     pattern = Column(String, nullable=False)
-    scope_type = Column(String, default="session")  # session / global
+    match_type = Column(String, default="contains")  # contains / exact / regex
+    scope_type = Column(String, default="session")   # session / global
     chat_stream_id = Column(String, default="")
     no_reply = Column(Integer, default=0)
     no_learn = Column(Integer, default=1)
     no_context = Column(Integer, default=0)
+    category = Column(String, default="no_learn")
     enabled = Column(Integer, default=1)
     reason = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class SystemSetting(Base):

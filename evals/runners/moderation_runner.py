@@ -19,7 +19,9 @@ def run_moderation_case(case: EvalCase) -> EvalOutput:
 
         rules = [{
             "pattern": matched_rule.get("pattern", ""),
+            "match_type": matched_rule.get("match_type", "contains"),
             "scope_type": matched_rule.get("scope_type", "session"),
+            "chat_stream_id": matched_rule.get("chat_stream_id", inp.get("chat_stream_id", "")),
             "no_reply": matched_rule.get("no_reply", False),
             "no_learn": matched_rule.get("no_learn", True),
             "no_context": matched_rule.get("no_context", False),

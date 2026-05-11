@@ -24,6 +24,7 @@ from config import (
 from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest
 from core.evolution import evolution_task
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
+from core.moderation import check_message_moderation_db
 from nanobot_kt.bridge import get_bridge
 from core.compaction import run_autocompact_circuit_breaker
 from core.daily_digest import generate_daily_digest_for_date
@@ -1260,6 +1261,32 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
             latency_ms=0,
         )
         return {"action": "no_reply", "reason": "user_blocked"}
+
+    # 2.6 内容屏蔽规则检查——写入 ChatLog.meta_json.moderation
+    stream_id = _normalize_group_session_id(req.group_id)
+    mod_result = check_message_moderation_db(db, message_text, chat_stream_id=stream_id)
+    if mod_result:
+        meta["moderation"] = {
+            "matched": True,
+            "match_type": "content_rule",
+            "pattern": mod_result["pattern"],
+            "no_reply": mod_result["no_reply"],
+            "no_learn": mod_result["no_learn"],
+            "no_context": mod_result["no_context"],
+        }
+        ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)
+        db.commit()
+        db.refresh(ambient_log)
+        if mod_result["no_reply"]:
+            logger.info("[GroupMsg] content-blocked group=%s pattern=%s",
+                        req.group_id, mod_result["pattern"])
+            _annotate_group_timing_event(
+                db, ambient_log,
+                {"action": "no_reply", "reason": "content_blocked", "generation": 0},
+                trigger_reason="content_blocked",
+                latency_ms=0,
+            )
+            return {"action": "no_reply", "reason": "content_blocked"}
 
     # 3. 所有非重复群消息进入 TimingGate；不再用 L0 关键词预筛。
     reason = _derive_group_trigger_reason(req)
