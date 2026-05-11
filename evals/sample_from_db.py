@@ -1,0 +1,292 @@
+"""从运行 DB 抽样生成候选 eval case——不修改数据，不自动标 expected。
+
+用法:
+    python -m evals.sample_from_db --db data/nanobot.db --out evals/cases/candidates --limit 100
+    python -m evals.sample_from_db --db data/nanobot.db --suite group_reply --limit 30
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+
+def _open_db(db_path: str):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+    Session = sessionmaker(bind=engine)
+    return Session()
+
+
+def _safe_json(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+# ── Suite samplers ──
+
+def _sample_group_reply(db, limit: int) -> list[dict]:
+    """从 ChatLog 抽 bot 回复 + 前后 ambient 上下文。"""
+    from core.database import ChatLog
+
+    rows = (
+        db.query(ChatLog)
+        .filter(ChatLog.role == "assistant")
+        .order_by(ChatLog.id.desc())
+        .limit(limit * 3)
+        .all()
+    )
+
+    cases: list[dict] = []
+    seen_groups: set[str] = set()
+    for r in rows:
+        meta = _safe_json(r.meta_json)
+        if meta.get("kind") != "group_reply":
+            continue
+        group_id = str(r.session_id or "").removeprefix("group_")
+        if not group_id or group_id in seen_groups:
+            continue
+        seen_groups.add(group_id)
+        if len(cases) >= limit:
+            break
+
+        context_rows = (
+            db.query(ChatLog)
+            .filter(
+                ChatLog.session_id == r.session_id,
+                ChatLog.id.between(r.id - 10, r.id + 10),
+            )
+            .order_by(ChatLog.id)
+            .all()
+        )
+        context = [
+            {"role": cr.role, "content": (cr.content or "")[:200], "sender_name": cr.sender_name or ""}
+            for cr in context_rows
+        ]
+
+        cases.append({
+            "id": f"candidate_group_reply_{r.id}",
+            "suite": "group_reply",
+            "description": f"群 {group_id} bot 回复 #{r.id}",
+            "input": {
+                "group_id": group_id,
+                "bot_reply": (r.content or "")[:300],
+                "reply_meta": meta.get("reply_meta"),
+                "context": context,
+            },
+            "expected": {"needs_label": True},
+            "tags": ["sampled", "group_reply"],
+            "source": "db",
+            "source_ref": f"chatlog:{r.id}",
+        })
+    return cases
+
+
+def _sample_reply_contract(db, limit: int) -> list[dict]:
+    """抽取 reply_meta 非空的 bot 回复。"""
+    from core.database import ChatLog
+
+    rows = (
+        db.query(ChatLog)
+        .filter(ChatLog.role == "assistant")
+        .order_by(ChatLog.id.desc())
+        .limit(limit * 5)
+        .all()
+    )
+
+    cases: list[dict] = []
+    for r in rows:
+        meta = _safe_json(r.meta_json)
+        reply_meta = meta.get("reply_meta")
+        if not reply_meta:
+            continue
+        if len(cases) >= limit:
+            break
+
+        cases.append({
+            "id": f"candidate_reply_contract_{r.id}",
+            "suite": "reply_contract",
+            "description": f"reply #{r.id} send_mode={reply_meta.get('send_mode', '')}",
+            "input": {
+                "group_id": str(r.session_id or "").removeprefix("group_"),
+                "reply_meta": reply_meta,
+                "content": (r.content or "")[:300],
+            },
+            "expected": {"needs_label": True},
+            "tags": ["sampled", "reply_contract"],
+            "source": "db",
+            "source_ref": f"chatlog:{r.id}",
+        })
+    return cases
+
+
+def _sample_timing_gate(db, limit: int) -> list[dict]:
+    """从 ChatLog.meta_json.timing_gate 抽 TimingGate 判定样本。"""
+    from core.database import ChatLog
+
+    rows = (
+        db.query(ChatLog)
+        .filter(ChatLog.role == "ambient")
+        .order_by(ChatLog.id.desc())
+        .limit(limit * 5)
+        .all()
+    )
+
+    cases: list[dict] = []
+    for r in rows:
+        meta = _safe_json(r.meta_json)
+        tg = meta.get("timing_gate")
+        if not tg:
+            continue
+        if len(cases) >= limit:
+            break
+
+        cases.append({
+            "id": f"candidate_timing_gate_{r.id}",
+            "suite": "timing_gate",
+            "description": f"action={tg.get('action', '')} reason={tg.get('reason', '')}",
+            "input": {
+                "group_id": str(r.session_id or "").removeprefix("group_"),
+                "action": tg.get("action", ""),
+                "trigger_reason": tg.get("reason", ""),
+                "generation": tg.get("generation", 0),
+                "latency_ms": tg.get("latency_ms", 0),
+                "pending_count": tg.get("pending_count", 0),
+                "talk_value": tg.get("talk_value"),
+                "message": (r.content or "")[:200],
+            },
+            "expected": {"needs_label": True},
+            "tags": ["sampled", "timing_gate"],
+            "source": "db",
+            "source_ref": f"chatlog:{r.id}",
+        })
+    return cases
+
+
+def _sample_memory_learning(db, limit: int) -> list[dict]:
+    """从 JargonMemory / ExpressionMemory 抽低质量候选。"""
+    from core.database import JargonMemory, ExpressionMemory
+
+    cases: list[dict] = []
+
+    jargon_rows = (
+        db.query(JargonMemory)
+        .filter(JargonMemory.status == "candidate")
+        .order_by(JargonMemory.confidence.asc())
+        .limit(limit * 2)
+        .all()
+    )
+    for j in jargon_rows:
+        term = j.term or ""
+        is_suspicious = bool(re.search(r"[×xX\*\/\=\+\-\d\.]{2,}", term))
+        low_conf = (j.confidence or 1.0) < 0.6
+        if not (is_suspicious or low_conf):
+            continue
+        if len(cases) >= limit:
+            break
+
+        examples = (_safe_json(j.examples_json) if isinstance(j.examples_json, str)
+                    else (j.examples_json or []))
+        cases.append({
+            "id": f"candidate_memory_learning_j_{j.id}",
+            "suite": "memory_learning",
+            "description": f"可疑 jargon term={term} conf={j.confidence}",
+            "input": {
+                "chat_stream_id": j.chat_stream_id,
+                "term": term,
+                "meaning": j.meaning or "",
+                "confidence": j.confidence,
+                "examples": examples,
+            },
+            "expected": {"needs_label": True},
+            "tags": ["sampled", "memory_learning", "jargon"],
+            "source": "db",
+            "source_ref": f"jargon:{j.id}",
+        })
+
+    expr_rows = (
+        db.query(ExpressionMemory)
+        .filter(ExpressionMemory.status == "candidate")
+        .order_by(ExpressionMemory.confidence.asc())
+        .limit(limit * 2)
+        .all()
+    )
+    for e in expr_rows:
+        expr = e.expression or ""
+        is_suspicious = bool(re.search(r"[×xX\*\/\=\+\-\d\.]{2,}", expr))
+        low_conf = (e.confidence or 1.0) < 0.6
+        if not (is_suspicious or low_conf):
+            continue
+        if len(cases) >= limit * 2:
+            break
+
+        cases.append({
+            "id": f"candidate_memory_learning_e_{e.id}",
+            "suite": "memory_learning",
+            "description": f"可疑 expression expr={expr} conf={e.confidence}",
+            "input": {
+                "chat_stream_id": e.chat_stream_id,
+                "expression": expr,
+                "expression_type": e.expression_type or "phrase",
+                "confidence": e.confidence,
+            },
+            "expected": {"needs_label": True},
+            "tags": ["sampled", "memory_learning", "expression"],
+            "source": "db",
+            "source_ref": f"expression:{e.id}",
+        })
+    return cases
+
+
+SUITE_SAMPLERS = {
+    "group_reply": _sample_group_reply,
+    "reply_contract": _sample_reply_contract,
+    "timing_gate": _sample_timing_gate,
+    "memory_learning": _sample_memory_learning,
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="从运行 DB 抽样候选 eval case")
+    parser.add_argument("--db", default="data/nanobot.db")
+    parser.add_argument("--out", default="evals/cases/candidates")
+    parser.add_argument("--limit", type=int, default=100)
+    parser.add_argument("--suite", default="")
+    args = parser.parse_args()
+
+    os.makedirs(args.out, exist_ok=True)
+    db = _open_db(args.db)
+
+    try:
+        suites = [s.strip() for s in args.suite.split(",") if s.strip()] if args.suite else list(SUITE_SAMPLERS)
+        total = 0
+        for suite in suites:
+            sampler = SUITE_SAMPLERS.get(suite)
+            if sampler is None:
+                print(f"Unknown suite: {suite}, skipping")
+                continue
+            cases = sampler(db, args.limit)
+            for case in cases:
+                fpath = os.path.join(args.out, f"{case['id']}.json")
+                with open(fpath, "w", encoding="utf-8") as f:
+                    json.dump(case, f, indent=2, ensure_ascii=False)
+                total += 1
+            print(f"[{suite}] {len(cases)} candidates")
+        print(f"Total: {total} → {args.out}")
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    main()
