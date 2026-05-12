@@ -691,6 +691,8 @@ def timing_gate_events(
     group_id: str = "",
     page: int = 1,
     limit: int = 50,
+    error_only: int = 0,
+    parse_error_only: int = 0,
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
@@ -699,6 +701,10 @@ def timing_gate_events(
         q = q.filter(ChatLog.session_id == _group_session_id(group_id))
     rows = q.order_by(ChatLog.id.desc()).offset((max(page, 1) - 1) * limit).limit(limit).all()
     items = [_timing_event_dict(r) for r in rows if _timing_meta(r)]
+    if error_only:
+        items = [x for x in items if x.get("error_type")]
+    if parse_error_only:
+        items = [x for x in items if x.get("parse_error")]
 
     stat_rows = q.order_by(ChatLog.id.desc()).limit(500).all()
     stat_items = [_timing_event_dict(r) for r in stat_rows if _timing_meta(r)]
@@ -1899,6 +1905,8 @@ class FrontendErrorBody(BaseModel):
 @router.post("/logs/frontend-error")
 def log_frontend_error(body: FrontendErrorBody, _auth=Depends(verify_admin)):
     logger.warning(f"[FrontendError] url={body.url} message={body.message}")
+    if body.stack:
+        logger.warning(f"[FrontendError] stack: {body.stack[:2000]}")
     return {"ok": True}
 
 

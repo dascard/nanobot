@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api/v1/admin' })
@@ -12,9 +12,13 @@ api.interceptors.request.use(c => {
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null }; }
   static getDerivedStateFromError(error) { return { hasError: true, error } }
-  componentDidCatch(error, _info) {
-    console.error('WebUI ErrorBoundary:', error)
-    api.post('/logs/frontend-error', { message: error?.message || '', url: window.location.href }).catch(() => {})
+  componentDidCatch(error, info) {
+    console.error('WebUI ErrorBoundary:', error, info)
+    api.post('/logs/frontend-error', {
+      message: error?.message || '',
+      stack: `${error?.stack || ''}\n${info?.componentStack || ''}`,
+      url: window.location.href,
+    }).catch(() => {})
   }
   render() {
     if (this.state.hasError) {
@@ -97,6 +101,7 @@ const NAV = [
 
 function Layout({ children, onLogout }) {
   const [version, setVersion] = useState(null)
+  const location = useLocation()
   useEffect(() => {
     api.get('/version').then(r => setVersion(r.data)).catch(() => setVersion(null))
   }, [])
@@ -126,7 +131,7 @@ function Layout({ children, onLogout }) {
           退出
         </button>
       </nav>
-      <main className="flex-1 p-6 overflow-auto"><ErrorBoundary>{children}</ErrorBoundary></main>
+      <main className="flex-1 p-6 overflow-auto"><ErrorBoundary key={location.pathname}>{children}</ErrorBoundary></main>
     </div>
   )
 }
@@ -450,10 +455,14 @@ function TimingGatePage() {
   const [repeats, setRepeats] = useState(1)
   const [testResult, setTestResult] = useState(null)
   const [running, setRunning] = useState(false)
+  const queryParams = new URLSearchParams(window.location.search)
+  const errorOnly = queryParams.get('error_only') === '1'
 
   const load = useCallback(() => {
-    api.get('/timing-gate/events', { params: { group_id: groupId, limit: 80 } }).then(r => setData(r.data))
-  }, [groupId])
+    const params = { group_id: groupId, limit: 80 }
+    if (errorOnly) params.error_only = 1
+    api.get('/timing-gate/events', { params }).then(r => setData(r.data))
+  }, [groupId, errorOnly])
   useEffect(() => { load() }, [load])
 
   const stats = data.stats || {}
