@@ -962,15 +962,22 @@ def retry_preview(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(
 
 @router.post("/stickers/dedupe/exact/backfill")
 def stickers_dedupe_backfill(
-    db: Session = Depends(get_db), _auth=Depends(verify_admin),
+    request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin),
 ):
     from core.sticker_preview import backfill_exact_dedupe
-    return backfill_exact_dedupe(db)
+    result = backfill_exact_dedupe(db)
+    _audit_request(db, request, "sticker.dedupe.backfill", "sticker", "", result)
+    return result
+
+
+class SetCanonicalBody(BaseModel):
+    activate: bool = Field(default=True)
 
 
 @router.post("/stickers/{sticker_id}/set-canonical")
 def sticker_set_canonical(
-    sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin),
+    sticker_id: int, request: Request, body: SetCanonicalBody = SetCanonicalBody(),
+    db: Session = Depends(get_db), _auth=Depends(verify_admin),
 ):
     from core.sticker_preview import dedupe_by_content_hash
 
@@ -980,19 +987,45 @@ def sticker_set_canonical(
     if not row.content_hash:
         raise HTTPException(400, "no content_hash")
 
+    if body.activate and row.status in ("duplicate", "disabled"):
+        row.status = "active"
+        db.commit()
+
     canonical_id = dedupe_by_content_hash(db, sticker_id, force_set_canonical=sticker_id)
+    _audit_request(db, request, "sticker.set_canonical", "sticker", str(sticker_id),
+                   {"canonical_id": canonical_id})
     return {"ok": True, "canonical_id": canonical_id}
+
+
+class MarkDuplicateBody(BaseModel):
+    canonical_id: int = Field(default=0)
 
 
 @router.post("/stickers/{sticker_id}/mark-duplicate")
 def sticker_mark_duplicate(
-    sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin),
+    sticker_id: int, request: Request, body: MarkDuplicateBody = MarkDuplicateBody(),
+    db: Session = Depends(get_db), _auth=Depends(verify_admin),
 ):
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
+    if not body.canonical_id:
+        raise HTTPException(400, "canonical_id required")
+
+    canonical = db.query(StickerMemory).filter(StickerMemory.id == body.canonical_id).first()
+    if not canonical:
+        raise HTTPException(404, "canonical not found")
+    if canonical.id == sticker_id:
+        raise HTTPException(400, "cannot mark self as duplicate")
+    if canonical.content_hash != row.content_hash:
+        raise HTTPException(400, "content_hash mismatch")
+
+    row.status = "duplicate"
     row.dedupe_status = "duplicate"
+    row.duplicate_of_id = canonical.id
     db.commit()
+    _audit_request(db, request, "sticker.mark_duplicate", "sticker", str(sticker_id),
+                   {"canonical_id": canonical.id})
     return {"ok": True}
 
 
