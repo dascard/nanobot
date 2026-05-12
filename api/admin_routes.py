@@ -1044,6 +1044,8 @@ def update_near_duplicate_candidate(
     row = db.query(StickerDuplicateCandidate).filter(StickerDuplicateCandidate.id == candidate_id).first()
     if not row:
         raise HTTPException(404, "Not found")
+    if row.status != "pending":
+        raise HTTPException(400, f"candidate already {row.status}")
     if action == "ignore":
         row.status = "ignored"
         db.commit()
