@@ -11,6 +11,7 @@ import urllib.request
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+import imagehash
 from PIL import Image
 from sqlalchemy.orm import Session
 
@@ -195,6 +196,17 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
         if hasattr(row, "byte_size"): row.byte_size = len(data)
         if hasattr(row, "width"): row.width = width
         if hasattr(row, "height"): row.height = height
+
+        # 计算感知哈希
+        if local:
+            try:
+                img = Image.open(local)
+                row.phash = str(imagehash.phash(img))
+                row.dhash = str(imagehash.dhash(img))
+                row.ahash = str(imagehash.average_hash(img))
+            except Exception:
+                pass  # 哈希计算失败不影响主流程
+
         db.commit()
 
         # 内容去重
@@ -334,3 +346,77 @@ def backfill_exact_dedupe(db: Session) -> dict:
         except Exception as e:
             result["errors"].append(str(e)[:200])
     return result
+
+
+def find_near_duplicates(db: Session, sticker_id: int) -> list[dict]:
+    """查找感知哈希接近的候选重复。返回 [{sticker_b_id, phash_dist, dhash_dist}]。"""
+    row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
+    if not row or not row.phash:
+        return []
+
+    # 查找同 content_hash 且 phash/dhash 不为空的 active stickers
+    candidates = (
+        db.query(StickerMemory)
+        .filter(
+            StickerMemory.id != sticker_id,
+            StickerMemory.status == "active",
+            StickerMemory.dedupe_status != "duplicate",
+            StickerMemory.phash != "",
+            StickerMemory.dhash != "",
+        )
+        .all()
+    )
+
+    results = []
+    for c in candidates:
+        try:
+            ph = int(row.phash) - int(c.phash) if row.phash and c.phash else 999
+            dh = int(row.dhash) - int(c.dhash) if row.dhash and c.dhash else 999
+        except (ValueError, TypeError):
+            continue
+        ph_dist = bin(abs(ph)).count("1")  # Hamming distance
+        dh_dist = bin(abs(dh)).count("1")
+
+        if ph_dist <= 8 and dh_dist <= 8:
+            results.append({
+                "sticker_b_id": c.id,
+                "phash_dist": ph_dist,
+                "dhash_dist": dh_dist,
+            })
+
+    results.sort(key=lambda x: x["phash_dist"] + x["dhash_dist"])
+    return results[:20]
+
+
+def scan_near_duplicates(db: Session, limit: int = 100) -> dict:
+    """扫描全库，为有 phash 的 active sticker 查找近邻重复候选。"""
+    from core.database import StickerDuplicateCandidate
+
+    rows = (
+        db.query(StickerMemory)
+        .filter(StickerMemory.status == "active", StickerMemory.dedupe_status != "duplicate",
+                StickerMemory.phash != "")
+        .limit(limit)
+        .all()
+    )
+
+    created = 0
+    for row in rows:
+        nears = find_near_duplicates(db, row.id)
+        for n in nears:
+            existing = db.query(StickerDuplicateCandidate).filter(
+                ((StickerDuplicateCandidate.sticker_a_id == row.id) & (StickerDuplicateCandidate.sticker_b_id == n["sticker_b_id"])) |
+                ((StickerDuplicateCandidate.sticker_a_id == n["sticker_b_id"]) & (StickerDuplicateCandidate.sticker_b_id == row.id))
+            ).first()
+            if existing:
+                continue
+            db.add(StickerDuplicateCandidate(
+                sticker_a_id=min(row.id, n["sticker_b_id"]),
+                sticker_b_id=max(row.id, n["sticker_b_id"]),
+                phash_dist=n["phash_dist"],
+                dhash_dist=n["dhash_dist"],
+                content_hash=row.content_hash or "",
+            ))
+            created += 1
+    db.commit()
+    return {"scanned": len(rows), "candidates_created": created}

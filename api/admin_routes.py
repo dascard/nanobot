@@ -976,6 +976,71 @@ def stickers_dedupe_backfill(
     return result
 
 
+@router.get("/stickers/near-duplicate-candidates")
+def list_near_duplicate_candidates(
+    limit: int = 50, db: Session = Depends(get_db), _auth=Depends(verify_admin),
+):
+    from core.database import StickerDuplicateCandidate, StickerMemory as SM
+    rows = (
+        db.query(StickerDuplicateCandidate)
+        .filter(StickerDuplicateCandidate.status == "pending")
+        .order_by((StickerDuplicateCandidate.phash_dist + StickerDuplicateCandidate.dhash_dist).asc())
+        .limit(max(1, min(limit, 200)))
+        .all()
+    )
+    items = []
+    for r in rows:
+        a = db.query(SM).filter(SM.id == r.sticker_a_id).first()
+        b = db.query(SM).filter(SM.id == r.sticker_b_id).first()
+        if a and b:
+            items.append({
+                "id": r.id,
+                "sticker_a": _sticker_dict(a),
+                "sticker_b": _sticker_dict(b),
+                "phash_dist": r.phash_dist,
+                "dhash_dist": r.dhash_dist,
+                "content_hash": r.content_hash,
+                "status": r.status,
+                "created_at": _iso(r.created_at),
+            })
+    return {"items": items, "total": len(rows)}
+
+
+@router.post("/stickers/near-duplicate/scan")
+def scan_near_duplicates_endpoint(
+    limit: int = 100, db: Session = Depends(get_db), _auth=Depends(verify_admin),
+):
+    from core.sticker_preview import scan_near_duplicates
+    return scan_near_duplicates(db, limit=min(limit, 500))
+
+
+class NearDuplicateAction(BaseModel):
+    action: str = "ignore"  # ignore or confirm
+    sticker_b_id: int = 0
+
+
+@router.post("/stickers/near-duplicate-candidates/{candidate_id}/{action}")
+def update_near_duplicate_candidate(
+    candidate_id: int, action: str,
+    db: Session = Depends(get_db), _auth=Depends(verify_admin),
+):
+    from core.database import StickerDuplicateCandidate
+    row = db.query(StickerDuplicateCandidate).filter(StickerDuplicateCandidate.id == candidate_id).first()
+    if not row:
+        raise HTTPException(404, "Not found")
+    if action == "ignore":
+        row.status = "ignored"
+    elif action == "confirm":
+        row.status = "confirmed"
+        # Also run exact dedupe on sticker_a
+        from core.sticker_preview import dedupe_by_content_hash
+        dedupe_by_content_hash(db, row.sticker_a_id)
+    else:
+        raise HTTPException(400, "action must be ignore or confirm")
+    db.commit()
+    return {"ok": True, "status": row.status}
+
+
 class SetCanonicalBody(BaseModel):
     activate: bool = Field(default=True)
 

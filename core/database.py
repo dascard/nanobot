@@ -280,6 +280,9 @@ class StickerMemory(Base):
     byte_size = Column(Integer, default=0)
     width = Column(Integer, default=0)
     height = Column(Integer, default=0)
+    phash = Column(String(32), default="")
+    dhash = Column(String(32), default="")
+    ahash = Column(String(32), default="")
     duplicate_of_id = Column(Integer, nullable=True, index=True)
     dedupe_status = Column(String, default="unique")
     describe_status = Column(String, default="pending")
@@ -423,6 +426,21 @@ class EvalRunResult(Base):
     output_json = Column(Text, default="{}")
 
 
+class StickerDuplicateCandidate(Base):
+    """感知哈希近邻重复候选——手工确认后执行精确去重。"""
+    __tablename__ = "sticker_duplicate_candidates"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    sticker_a_id = Column(Integer, index=True, nullable=False)
+    sticker_b_id = Column(Integer, index=True, nullable=False)
+    content_hash = Column(String(64), default="")  # for grouping by same image
+    phash_dist = Column(Integer, default=0)
+    dhash_dist = Column(Integer, default=0)
+    ahash_dist = Column(Integer, default=0)
+    status = Column(String, default="pending")  # pending/confirmed/ignored
+    created_at = Column(DateTime, default=datetime.now)
+    __table_args__ = (UniqueConstraint("sticker_a_id", "sticker_b_id"),)
+
+
 def init_db():
     os.makedirs(DB_DIR, exist_ok=True)
 
@@ -525,6 +543,9 @@ def init_db():
                 "byte_size": "INTEGER DEFAULT 0",
                 "width": "INTEGER DEFAULT 0",
                 "height": "INTEGER DEFAULT 0",
+                "phash": "TEXT DEFAULT ''",
+                "dhash": "TEXT DEFAULT ''",
+                "ahash": "TEXT DEFAULT ''",
                 "duplicate_of_id": "INTEGER",
                 "dedupe_status": "TEXT DEFAULT 'unique'",
                 "describe_status": "TEXT DEFAULT 'pending'",

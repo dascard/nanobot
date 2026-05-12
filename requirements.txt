@@ -22,6 +22,7 @@ sentence-transformers>=2.7.0
 
 # ── Image Pipeline ──
 Pillow>=10.0.0
+ImageHash
 
 # ── Tests ──
 pytest>=7.0.0

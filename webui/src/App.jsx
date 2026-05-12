@@ -622,7 +622,14 @@ function StickerDedupPage() {
   const [error, setError] = useState('')
   const [selectedGroup, setSelectedGroup] = useState(null)
   const [showDisabled, setShowDisabled] = useState(false)
+  const [dedupTab, setDedupTab] = useState('exact')
+  const [nearDuplicates, setNearDuplicates] = useState([])
   const navigate = useNavigate()
+
+  const loadNear = () => api.get('/stickers/near-duplicate-candidates?limit=100')
+    .then(r => setNearDuplicates(r.data.items || []))
+    .catch(e => alert(e?.response?.data?.detail || e.message))
+
   const load = () => api.get('/stickers/duplicate-groups?limit=100')
     .then(r => { setData(r.data || {}); setError(''); if (!selectedGroup && (r.data?.groups || []).length) setSelectedGroup(r.data.groups[0]) })
     .catch(e => { setError(e?.response?.data?.detail || e.message || '加载失败') })
@@ -652,92 +659,133 @@ function StickerDedupPage() {
       <div className="flex items-start justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold">去重工作台</h1>
-          <p className="text-slate-500 text-sm">{groups.length} 组重复，点击左侧分组查看详情</p>
+          <div className="flex items-center gap-2 mt-1">
+            <button onClick={() => setDedupTab('exact')} className={`px-3 py-1 rounded text-xs ${dedupTab === 'exact' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400'}`}>精确重复</button>
+            <button onClick={() => { setDedupTab('near'); loadNear() }} className={`px-3 py-1 rounded text-xs ${dedupTab === 'near' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400'}`}>疑似重复</button>
+          </div>
         </div>
         <div className="flex gap-2">
           <button onClick={() => navigate('/stickers')} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">返回列表</button>
           <button onClick={runBackfill} className="px-3 py-1.5 bg-amber-700/50 hover:bg-amber-700 rounded-lg text-xs">一键历史去重</button>
+          <button onClick={() => api.post('/stickers/near-duplicate/scan?limit=100').then(r => { alert(`扫描完成: ${r.data.candidates_created} 个候选`); loadNear() })}
+            className="px-3 py-1.5 bg-purple-700/50 hover:bg-purple-700 rounded-lg text-xs">扫描疑似重复</button>
           <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
         </div>
       </div>
       {error && <Card className="p-4 mb-4 border border-red-800 bg-red-900/20"><p className="text-sm text-red-400">{error}</p></Card>}
-      {groups.length === 0 && !error && <p className="text-slate-500 text-sm py-8 text-center">暂无重复表情包</p>}
 
-      {groups.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
-          <Card className="p-2 max-h-[calc(100vh-160px)] overflow-auto">
-            {groups.map(g => (
-              <button key={g.content_hash || '-'} onClick={() => setSelectedGroup(g)}
-                className={`w-full text-left p-2 rounded-lg text-xs transition-colors mb-1 ${selectedGroup?.content_hash === g.content_hash ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:bg-slate-800/50'}`}>
-                <div className="truncate font-mono">{g.content_hash?.substring(0, 16) || '-'}</div>
-                <span className="text-slate-600">{g.count || 0} 个重复</span>
-              </button>
-            ))}
-          </Card>
+      {dedupTab === 'exact' && (
+        <>
+          {groups.length === 0 && !error && <p className="text-slate-500 text-sm py-8 text-center">暂无重复表情包</p>}
 
-          {selectedGroup && (
-            <Card className="p-4 max-h-[calc(100vh-160px)] overflow-auto">
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <code className="text-xs bg-slate-950 px-2 py-0.5 rounded break-all">{selectedGroup.content_hash || '-'}</code>
-                  <span className="text-xs text-slate-500 ml-2">{selectedGroup.count || 0} 个</span>
-                </div>
-                <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
-                  <input type="checkbox" checked={showDisabled} onChange={e => setShowDisabled(e.target.checked)} className="rounded" />
-                  显示 disabled
-                </label>
-              </div>
+          {groups.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4">
+              <Card className="p-2 max-h-[calc(100vh-160px)] overflow-auto">
+                {groups.map(g => (
+                  <button key={g.content_hash || '-'} onClick={() => setSelectedGroup(g)}
+                    className={`w-full text-left p-2 rounded-lg text-xs transition-colors mb-1 ${selectedGroup?.content_hash === g.content_hash ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:bg-slate-800/50'}`}>
+                    <div className="truncate font-mono">{g.content_hash?.substring(0, 16) || '-'}</div>
+                    <span className="text-slate-600">{g.count || 0} 个重复</span>
+                  </button>
+                ))}
+              </Card>
 
-              {canonical && (
-                <div className="mb-3 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
-                  <div className="text-xs text-emerald-400 mb-1">当前 canonical</div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm">{canonical.name || '-'} <span className="text-slate-500">#{canonical.id}</span></span>
-                    <span className="text-xs text-slate-500">使用 {canonical.usage_count ?? 0} 次</span>
+              {selectedGroup && (
+                <Card className="p-4 max-h-[calc(100vh-160px)] overflow-auto">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <code className="text-xs bg-slate-950 px-2 py-0.5 rounded break-all">{selectedGroup.content_hash || '-'}</code>
+                      <span className="text-xs text-slate-500 ml-2">{selectedGroup.count || 0} 个</span>
+                    </div>
+                    <label className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer">
+                      <input type="checkbox" checked={showDisabled} onChange={e => setShowDisabled(e.target.checked)} className="rounded" />
+                      显示 disabled
+                    </label>
                   </div>
-                </div>
-              )}
 
-              <table className="w-full text-xs">
-                <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-                  <th className="py-2 px-1 w-10">预览</th><th className="py-2 px-1">id</th><th className="py-2 px-1">名称</th><th className="py-2 px-1">状态</th><th className="py-2 px-1">dedupe</th><th className="py-2 px-1">使用</th><th className="py-2 px-1">操作</th>
-                </tr></thead>
-                <tbody>
-                  {selItems.map(s => (
-                    <tr key={s.id} className="border-b border-slate-800/50">
-                      <td className="py-2 px-1"><AuthImage url={`/api/v1/admin/stickers/${s.id}/preview`} alt="" className="w-8 h-8 object-cover rounded" /></td>
-                      <td className="py-2 px-1">{s.id}</td>
-                      <td className="py-2 px-1 max-w-[80px] truncate">{s.name || '-'}</td>
-                      <td className="py-2 px-1"><Badge tone={s.status === 'active' ? 'emerald' : 'amber'}>{s.status || '-'}</Badge></td>
-                      <td className="py-2 px-1">{s.dedupe_status || 'unique'}</td>
-                      <td className="py-2 px-1 text-slate-500">{s.usage_count ?? 0}</td>
-                      <td className="py-2 px-1">
-                        <div className="flex gap-1 flex-wrap">
-                          {s.dedupe_status !== 'canonical' && s.status === 'active' && (
-                            <button onClick={() => doAction(s.id, 'set-canonical')} className="px-1.5 py-0.5 bg-emerald-700/40 hover:bg-emerald-700 rounded text-[10px] text-emerald-300">canonical</button>
-                          )}
-                          {s.id !== canonical?.id && s.dedupe_status !== 'duplicate' && canonical && (
-                            <button onClick={() => doAction(s.id, 'mark-duplicate', {canonical_id: canonical.id})} className="px-1.5 py-0.5 bg-purple-700/40 hover:bg-purple-700 rounded text-[10px] text-purple-300">重复</button>
-                          )}
-                          {s.dedupe_status === 'duplicate' ? (
-                            <button onClick={() => doAction(s.id, 'set-canonical')} className="px-1.5 py-0.5 bg-emerald-700/40 hover:bg-emerald-700 rounded text-[10px] text-emerald-300">恢复</button>
-                          ) : s.status === 'active' ? (
-                            <button onClick={() => doAction(s.id, 'disable')} className="px-1.5 py-0.5 bg-amber-700/40 hover:bg-amber-700 rounded text-[10px] text-amber-300">禁用</button>
-                          ) : (
-                            <button onClick={() => doAction(s.id, 'enable')} className="px-1.5 py-0.5 bg-slate-700/40 hover:bg-slate-700 rounded text-[10px]">启用</button>
-                          )}
-                          {/* 预览/打标工具 */}
-                          <button onClick={() => doAction(s.id, 'preview/retry')} className="px-1.5 py-0.5 bg-slate-700/30 hover:bg-slate-700 rounded text-[10px]" title="重试预览">🔄</button>
-                          <button onClick={() => doAction(s.id, 'redescribe')} className="px-1.5 py-0.5 bg-slate-700/30 hover:bg-slate-700 rounded text-[10px]" title="重试打标">🏷</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </Card>
+                  {canonical && (
+                    <div className="mb-3 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+                      <div className="text-xs text-emerald-400 mb-1">当前 canonical</div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm">{canonical.name || '-'} <span className="text-slate-500">#{canonical.id}</span></span>
+                        <span className="text-xs text-slate-500">使用 {canonical.usage_count ?? 0} 次</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <table className="w-full text-xs">
+                    <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+                      <th className="py-2 px-1 w-10">预览</th><th className="py-2 px-1">id</th><th className="py-2 px-1">名称</th><th className="py-2 px-1">状态</th><th className="py-2 px-1">dedupe</th><th className="py-2 px-1">使用</th><th className="py-2 px-1">操作</th>
+                    </tr></thead>
+                    <tbody>
+                      {selItems.map(s => (
+                        <tr key={s.id} className="border-b border-slate-800/50">
+                          <td className="py-2 px-1"><AuthImage url={`/api/v1/admin/stickers/${s.id}/preview`} alt="" className="w-8 h-8 object-cover rounded" /></td>
+                          <td className="py-2 px-1">{s.id}</td>
+                          <td className="py-2 px-1 max-w-[80px] truncate">{s.name || '-'}</td>
+                          <td className="py-2 px-1"><Badge tone={s.status === 'active' ? 'emerald' : 'amber'}>{s.status || '-'}</Badge></td>
+                          <td className="py-2 px-1">{s.dedupe_status || 'unique'}</td>
+                          <td className="py-2 px-1 text-slate-500">{s.usage_count ?? 0}</td>
+                          <td className="py-2 px-1">
+                            <div className="flex gap-1 flex-wrap">
+                              {s.dedupe_status !== 'canonical' && s.status === 'active' && (
+                                <button onClick={() => doAction(s.id, 'set-canonical')} className="px-1.5 py-0.5 bg-emerald-700/40 hover:bg-emerald-700 rounded text-[10px] text-emerald-300">canonical</button>
+                              )}
+                              {s.id !== canonical?.id && s.dedupe_status !== 'duplicate' && canonical && (
+                                <button onClick={() => doAction(s.id, 'mark-duplicate', {canonical_id: canonical.id})} className="px-1.5 py-0.5 bg-purple-700/40 hover:bg-purple-700 rounded text-[10px] text-purple-300">重复</button>
+                              )}
+                              {s.dedupe_status === 'duplicate' ? (
+                                <button onClick={() => doAction(s.id, 'set-canonical')} className="px-1.5 py-0.5 bg-emerald-700/40 hover:bg-emerald-700 rounded text-[10px] text-emerald-300">恢复</button>
+                              ) : s.status === 'active' ? (
+                                <button onClick={() => doAction(s.id, 'disable')} className="px-1.5 py-0.5 bg-amber-700/40 hover:bg-amber-700 rounded text-[10px] text-amber-300">禁用</button>
+                              ) : (
+                                <button onClick={() => doAction(s.id, 'enable')} className="px-1.5 py-0.5 bg-slate-700/40 hover:bg-slate-700 rounded text-[10px]">启用</button>
+                              )}
+                              {/* 预览/打标工具 */}
+                              <button onClick={() => doAction(s.id, 'preview/retry')} className="px-1.5 py-0.5 bg-slate-700/30 hover:bg-slate-700 rounded text-[10px]" title="重试预览">🔄</button>
+                              <button onClick={() => doAction(s.id, 'redescribe')} className="px-1.5 py-0.5 bg-slate-700/30 hover:bg-slate-700 rounded text-[10px]" title="重试打标">🏷</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </Card>
+              )}
+            </div>
           )}
-        </div>
+        </>
+      )}
+
+      {dedupTab === 'near' && (
+        <Card className="p-4 max-h-[calc(100vh-160px)] overflow-auto">
+          <table className="w-full text-xs">
+            <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+              <th className="py-2 px-1 w-10">A</th><th className="py-2 px-1">名称</th><th className="py-2 px-1 w-10">B</th><th className="py-2 px-1">名称</th>
+              <th className="py-2 px-1">pH</th><th className="py-2 px-1">dH</th><th className="py-2 px-1">操作</th>
+            </tr></thead>
+            <tbody>
+              {nearDuplicates.map(r => (
+                <tr key={r.id} className="border-b border-slate-800/50">
+                  <td className="py-2 px-1"><AuthImage url={`/api/v1/admin/stickers/${r.sticker_a.id}/preview`} alt="" className="w-8 h-8 object-cover rounded" /></td>
+                  <td className="py-2 px-1 max-w-[100px] truncate">{r.sticker_a.name || '-'} <span className="text-slate-600">#{r.sticker_a.id}</span></td>
+                  <td className="py-2 px-1"><AuthImage url={`/api/v1/admin/stickers/${r.sticker_b.id}/preview`} alt="" className="w-8 h-8 object-cover rounded" /></td>
+                  <td className="py-2 px-1 max-w-[100px] truncate">{r.sticker_b.name || '-'} <span className="text-slate-600">#{r.sticker_b.id}</span></td>
+                  <td className="py-2 px-1"><Badge tone={r.phash_dist <= 4 ? 'red' : 'amber'}>{r.phash_dist}</Badge></td>
+                  <td className="py-2 px-1"><Badge tone={r.dhash_dist <= 4 ? 'red' : 'amber'}>{r.dhash_dist}</Badge></td>
+                  <td className="py-2 px-1">
+                    <div className="flex gap-1">
+                      <button onClick={() => api.post(`/stickers/near-duplicate-candidates/${r.id}/confirm`).then(loadNear)}
+                        className="px-1.5 py-0.5 bg-emerald-700/40 rounded text-[10px]">确认</button>
+                      <button onClick={() => api.post(`/stickers/near-duplicate-candidates/${r.id}/ignore`).then(loadNear)}
+                        className="px-1.5 py-0.5 bg-slate-700/40 rounded text-[10px]">忽略</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
       )}
     </div>
   )
