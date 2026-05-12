@@ -1710,13 +1710,14 @@ function ModelsPage() {
           <Card key={r.stage} className="p-4">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-medium text-sm">{r.label}</h3>
-              <Badge tone={r.editable ? 'emerald' : 'slate'}>{r.editable ? '可编辑' : '只读'}</Badge>
+              <Badge tone="slate">只读</Badge>
             </div>
             <div className="space-y-1 text-xs text-slate-400">
               <div>模型: <span className="text-slate-200 font-mono">{r.model || '未配置'}</span></div>
               {r.base_url && <div>base_url: <span className="text-slate-500">{r.base_url}</span></div>}
               {r.api_url && <div>api_url: <span className="text-slate-500">{r.api_url}</span></div>}
               {r.api_key_configured !== undefined && <div>API key: {r.api_key_configured ? '✅ 已配置' : '❌ 未配置'}</div>}
+              {r.edit_note && <div className="text-slate-600 italic mt-1">{r.edit_note}</div>}
             </div>
           </Card>
         ))}
@@ -1729,12 +1730,15 @@ function ModelsPage() {
           <Card key={key} className="p-4">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-medium text-sm">{key}</h3>
-              <Badge tone={c.loaded ? 'emerald' : c.error ? 'red' : 'amber'}>{c.loaded ? '已加载' : c.error ? '加载失败' : '未加载'}</Badge>
+              <Badge tone={c.load_state === 'loaded' ? 'emerald' : c.load_state === 'unavailable' ? 'red' : 'amber'}>
+                {c.load_state === 'loaded' ? '已加载' : c.load_state === 'unavailable' ? '不可用' : '未加载'}
+              </Badge>
             </div>
             <div className="space-y-1 text-xs text-slate-400">
               <div>模型: <span className="text-slate-200">{c.model}</span></div>
               <div>加载器: {c.loader}</div>
               <div>用途: {c.role}</div>
+              {c.note && <div className="text-slate-600 italic">{c.note}</div>}
               {c.error && <div className="text-red-400">{c.error}</div>}
             </div>
           </Card>

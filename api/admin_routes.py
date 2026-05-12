@@ -1243,21 +1243,56 @@ def delete_block_rule(rule_id: int, request: Request, db: Session = Depends(get_
 @router.get("/configs")
 def list_configs(search: str = "", page: int = 1, limit: int = 20, effective: int = 0,
                  db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    if effective:
+        stream_ids: set[str] = set()
+
+        # 1. ChatStreamConfig 覆写表
+        all_overrides = db.query(ChatStreamConfig).all()
+        for r in all_overrides:
+            stream_ids.add(r.chat_stream_id)
+
+        # 2. User 表里 group_* 开头的 ID
+        for u in db.query(User).filter(User.id.like("group_%")).all():
+            stream_ids.add(_group_stream_id(_raw_group_id(u.id)))
+
+        # 3. ChatLog 里出现过的群聊 session
+        for (sid,) in db.query(ChatLog.session_id).filter(
+            ChatLog.session_id.like("group_%")
+        ).distinct().all():
+            stream_ids.add(_group_stream_id(_raw_group_id(sid)))
+
+        # 4. runtime snapshot
+        runtime_snap = _runtime_snapshot()
+        for sid in runtime_snap:
+            stream_ids.add(_group_stream_id(_raw_group_id(sid)))
+
+        rows_by_id = {r.chat_stream_id: r for r in all_overrides}
+
+        items = []
+        for sid in sorted(stream_ids):
+            row = rows_by_id.get(sid)
+            if row:
+                cfg = _config_dict(row)
+                cfg["has_override"] = True
+                cfg["source"] = "db"
+            else:
+                cfg = _config_default(sid)
+                cfg["has_override"] = False
+                cfg["source"] = "default"
+            items.append(cfg)
+
+        if search:
+            items = [x for x in items if search in x["chat_stream_id"]]
+
+        total = len(items)
+        page_items = items[(page - 1) * limit: page * limit]
+        return {"items": page_items, "total": total, "page": page}
+
     q = db.query(ChatStreamConfig)
     if search:
         q = q.filter(ChatStreamConfig.chat_stream_id.contains(search))
     total = q.count()
     rows = q.order_by(ChatStreamConfig.chat_stream_id).offset((page - 1) * limit).limit(limit).all()
-
-    if effective:
-        items = []
-        for r in rows:
-            cfg = _config_dict(r)
-            cfg["has_override"] = True
-            cfg["source"] = "db"
-            items.append(cfg)
-        return {"items": items, "total": len(items)}
-
     return {"total": total, "page": page, "items": [_config_dict(r) for r in rows]}
 
 
@@ -1545,73 +1580,92 @@ def models_status(_auth=Depends(verify_admin)):
     from config import (
         NEW_API_BASE_URL, NEW_API_KEY,
         CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
+        LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
     )
     from clients.classifier_client import Guardrail
     import os
 
+    _editable = False
+    _edit_note = "当前只读，修改请通过 Settings/env 或后续 ModelRouteConfig"
+
     api_routes = {
         "reply": {
             "stage": "reply", "label": "主回复模型",
-            "model": settings.get("model.reply") or os.environ.get("LLM_MODEL_REPLY", ""),
+            "model": settings.get("model.reply") or os.environ.get("LLM_MODEL_REPLY", "") or LLM_MODEL_REPLY,
             "provider": "openai-compatible",
             "base_url": str(NEW_API_BASE_URL or ""),
             "api_key_configured": bool(NEW_API_KEY),
-            "editable": True,
+            "editable": _editable,
+            "edit_note": _edit_note,
         },
         "fast": {
             "stage": "fast", "label": "快速模型",
-            "model": settings.get("model.fast") or os.environ.get("LLM_MODEL_FAST", ""),
+            "model": settings.get("model.fast") or os.environ.get("LLM_MODEL_FAST", "") or LLM_MODEL_FAST,
             "provider": "openai-compatible",
             "base_url": str(NEW_API_BASE_URL or ""),
             "api_key_configured": bool(NEW_API_KEY),
-            "editable": True,
+            "editable": _editable,
+            "edit_note": _edit_note,
         },
         "smart": {
             "stage": "smart", "label": "智能模型",
-            "model": settings.get("model.smart") or os.environ.get("LLM_MODEL_SMART", ""),
+            "model": settings.get("model.smart") or os.environ.get("LLM_MODEL_SMART", "") or LLM_MODEL_SMART,
             "provider": "openai-compatible",
             "base_url": str(NEW_API_BASE_URL or ""),
             "api_key_configured": bool(NEW_API_KEY),
-            "editable": True,
+            "editable": _editable,
+            "edit_note": _edit_note,
         },
         "timing_gate": {
             "stage": "timing_gate", "label": "TimingGate 判定",
             "model": "Qwen",
             "api_url": settings.get("model.route.timing_gate") or str(CLASSIFIER_API_URL or ""),
-            "editable": True,
+            "editable": _editable,
+            "edit_note": _edit_note,
         },
         "vision": {
             "stage": "vision", "label": "图片/表情包描述",
             "model": "Qwen-VL",
             "api_url": settings.get("model.route.sticker_describe") or str(IMAGE_SUMMARY_API_URL or ""),
-            "editable": True,
+            "editable": _editable,
+            "edit_note": _edit_note,
         },
     }
 
-    # Persona embedder status
-    persona_loaded = False
+    # Persona embedder status —— import 成功 ≠ 模型已加载（SentenceTransformer 是懒加载）
+    persona_configured = False
+    persona_load_state = "not_loaded"
     persona_error = ""
     try:
-        from core.persona_preprocess import _EMBEDDER_MODEL, embed_text
-        persona_loaded = True
+        from core.persona_preprocess import _EMBEDDER_MODEL, embed_text  # noqa: F401
+        persona_configured = True
+        persona_load_state = "not_loaded"
     except Exception as e:
         persona_error = str(e)[:200]
+        persona_load_state = "unavailable"
 
-    # NLI status
-    nli_loaded = False
+    # NLI status —— 同上，常量能 import ≠ transformers pipeline 可用
+    nli_configured = False
+    nli_load_state = "not_loaded"
     nli_error = ""
     try:
-        from core.persona_preprocess import _NLI_MODEL
-        nli_loaded = True
+        from core.persona_preprocess import _NLI_MODEL  # noqa: F401
+        nli_configured = True
+        nli_load_state = "not_loaded"
     except Exception as e:
         nli_error = str(e)[:200]
+        nli_load_state = "unavailable"
 
-    sentinel_loaded = False
+    # Sentinel —— _sentinel 初始为 None，真正加载在 _load_sentinel()
+    sentinel_configured = True
+    sentinel_load_state = "not_loaded"
     try:
         g = Guardrail()
-        sentinel_loaded = g._sentinel is not None
+        if g._sentinel is not None:
+            sentinel_load_state = "loaded"
     except Exception:
-        sentinel_loaded = False
+        sentinel_configured = False
+        sentinel_load_state = "unavailable"
 
     return {
         "api_routes": api_routes,
@@ -1619,25 +1673,28 @@ def models_status(_auth=Depends(verify_admin)):
             "persona_embed": {
                 "model": "BAAI/bge-base-zh-v1.5",
                 "loader": "sentence-transformers / HuggingFace",
-                "loaded": persona_loaded,
+                "configured": persona_configured,
+                "load_state": persona_load_state,
                 "error": persona_error,
                 "role": "PersonaFact/PersonaBehavior 语义去重、聚类",
-                "editable": False,
+                "note": "懒加载；首次调用 embed_text() 时加载模型",
             },
             "nli": {
                 "model": "roberta-large-mnli",
                 "loader": "transformers pipeline / HuggingFace",
-                "loaded": nli_loaded,
+                "configured": nli_configured,
+                "load_state": nli_load_state,
                 "error": nli_error,
                 "role": "画像矛盾检测 (fallback: cosine)",
-                "editable": False,
+                "note": "懒加载；首次调用 NLI pipeline 时加载模型",
             },
             "sentinel": {
                 "model": "prompt-injection-sentinel",
                 "loader": "transformers pipeline",
-                "loaded": sentinel_loaded,
+                "configured": sentinel_configured,
+                "load_state": sentinel_load_state,
                 "role": "L1 prompt injection 检测",
-                "editable": False,
+                "note": "懒加载；首次调用 _load_sentinel() 时加载模型",
             },
         },
         "unsupported": {
