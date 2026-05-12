@@ -10,3 +10,4 @@ sentinel/model.safetensors
 webui/node_modules/
 .claude/
 .git/
+vendor/**/.git
