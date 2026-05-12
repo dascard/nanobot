@@ -53,7 +53,7 @@ class BufferedOutput(BaseOutputModule):
         "memory_write": "正在写入记忆...",
     }
 
-    _INTERRUPT_TOOLS = {"news_search", "group_analysis", "reply"}
+    _INTERRUPT_TOOLS = {"news_search", "group_analysis", "reply", "no_reply"}
 
     def __init__(self, **kwargs: Any):
         super().__init__()

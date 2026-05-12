@@ -489,6 +489,23 @@ def _persist_group_bridge_reply(
     db.commit()
 
 
+def _log_group_no_reply(db: Session, user_id: str, query: str, agent_result: str, message_id: str = ""):
+    """记录空回复/无工具调用的 ChatLog 标记，供 WebUI 调试。"""
+    import json as _json
+    db.add(ChatLog(
+        user_id=user_id,
+        session_id=user_id,
+        role="assistant",
+        content=query[:500],
+        message_id=message_id,
+        meta_json=_json.dumps({
+            "agent_result": agent_result,
+            "note": "群聊主流程未调用 reply/no_reply 工具，无消息发送",
+        }, ensure_ascii=False),
+    ))
+    db.commit()
+
+
 
 # ── 端点 ──
 
@@ -1408,6 +1425,14 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                         reply_meta=reply_meta,
                     )
                     runtime.note_bot_replied(req.group_id)
+                else:
+                    # 空回复：记录 agent_result 到 ChatLog 供调试
+                    agent_result = "no_tool_call"
+                    if hasattr(bridge, "is_no_reply_session") and bridge.is_no_reply_session(group_user_id):
+                        agent_result = "no_reply_tool"
+                    elif hasattr(bridge, "is_no_tool_call") and bridge.is_no_tool_call(group_user_id):
+                        agent_result = "no_tool_call"
+                    _log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
                 return {
                     "action": "continue",
                     "reply": _sanitize_prompt_text(answer, max_chars=4000),
@@ -1749,6 +1774,13 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                         reply_meta=reply_meta_timer,
                     )
                     runtime.note_bot_replied(req.group_id)
+                else:
+                    agent_result = "no_tool_call"
+                    if hasattr(bridge, "is_no_reply_session") and bridge.is_no_reply_session(group_user_id):
+                        agent_result = "no_reply_tool"
+                    elif hasattr(bridge, "is_no_tool_call") and bridge.is_no_tool_call(group_user_id):
+                        agent_result = "no_tool_call"
+                    _log_group_no_reply(db, group_user_id, chat_query, agent_result, "")
                 logger.info("[TimingGate.timer] reply group=%s len=%d", req.group_id, len(answer))
             except Exception as e:
                 logger.error("[TimingGate.timer] bridge failed group=%s: %s", req.group_id, e)

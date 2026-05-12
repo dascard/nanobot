@@ -65,3 +65,38 @@ class ReplyTool(BaseTool):
             output=json.dumps({REPLY_MARKER: reply_meta}, ensure_ascii=False),
             exit_code=0,
         )
+
+
+class NoReplyTool(BaseTool):
+    """主动选择不回复——与 reply() 互斥，只调用其中一个。"""
+
+    @property
+    def tool_name(self) -> str:
+        return "no_reply"
+
+    @property
+    def description(self) -> str:
+        return (
+            "主动决定不回复当前消息。当群聊内容不需要 bot 参与（闲聊、语气词、"
+            "签到打卡、bot 未被点名等），调用此工具。调用后不会发送任何消息。"
+            "和 reply() 互斥——每轮只调用其中一个。"
+        )
+
+    @property
+    def execution_mode(self) -> ExecutionMode:
+        return ExecutionMode.DIRECT
+
+    def get_parameters_schema(self) -> dict[str, Any]:
+        return {"type": "object", "properties": {
+            "reason": {"type": "string", "description": "不回复的原因（内部日志用，不会发送给用户）"},
+        }, "required": ["reason"]}
+
+    async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
+        reason = str(args.get("reason", "")).strip()[:200]
+        return ToolResult(
+            output=json.dumps(
+                {REPLY_MARKER: {"content": "", "no_reply": True, "reason": reason}},
+                ensure_ascii=False,
+            ),
+            exit_code=0,
+        )

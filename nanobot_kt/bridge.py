@@ -305,9 +305,10 @@ class NanobotBridge:
     _ALLOWED_SEND_MODES = frozenset({"normal", "quote", "mention", "quote_and_mention"})
 
     def _extract_reply_from_tool_output(self, session_id: str = "") -> str:
-        """从 conversation 中提取 reply() 工具的结构化输出。
+        """从 conversation 中提取 reply() / no_reply() 工具的结构化输出。
 
         返回 reply 文本内容；同时将 reply_meta 存入 per-session dict。
+        如果是 no_reply() 工具，则记录 no_reply 标志并返回空字符串。
         """
         if not self._agent:
             return ""
@@ -327,6 +328,17 @@ class NanobotBridge:
                     data = {}
                 if isinstance(data, dict) and REPLY_MARKER in data:
                     payload = data[REPLY_MARKER]
+                    # 检查 no_reply 标志
+                    if payload.get("no_reply"):
+                        reason = str(payload.get("reason", ""))[:200]
+                        if session_id:
+                            store = self._reply_meta_store()
+                            store[session_id] = {
+                                "_no_reply": True,
+                                "_no_reply_reason": reason,
+                            }
+                        logger.info("[Reply] no_reply tool called, reason=%s", reason)
+                        return ""
                     reply_text = str(payload.get("content", "")).strip()
                     if reply_text:
                         send_mode = str(payload.get("send_mode") or "normal")
@@ -359,6 +371,22 @@ class NanobotBridge:
 
     def pop_last_reply_meta(self, session_id: str = "") -> dict | None:
         return self._reply_meta_store().pop(session_id, None)
+
+    def is_no_reply_session(self, session_id: str) -> bool:
+        store = self._reply_meta_store()
+        return bool(store.get(session_id, {}).get("_no_reply", False))
+
+    def is_no_tool_call(self, session_id: str) -> bool:
+        store = self._reply_meta_store()
+        return bool(store.get(session_id, {}).get("_no_tool_call", False))
+
+    def _log_agent_result(self, session_id: str, result: str):
+        """记录 agent 结果类型到 meta store，供 routes.py 读取。"""
+        if session_id:
+            store = self._reply_meta_store()
+            entry = store.get(session_id, {})
+            entry["_agent_result"] = result
+            store[session_id] = entry
 
     def _extract_last_rich_tool_output(
         self,
@@ -841,16 +869,25 @@ class NanobotBridge:
                 logger.warning(f"[NanobotBridge] EMPTY RESPONSE!")
                 logger.warning(f"[NanobotBridge] buffer={buffer_list}, result={result}")
 
-            # Reply extraction: 优先从 reply() 工具输出提取用户可见文本
-            reply_text = self._extract_reply_from_tool_output()
+            # Reply extraction: 优先从 reply() / no_reply() 工具输出提取
+            reply_text = self._extract_reply_from_tool_output(session_id)
+            if self.is_no_reply_session(session_id):
+                logger.info("[Reply] no_reply session=%s - skipping message send", session_id)
+                self._log_agent_result(session_id, "no_reply_tool")
+                return ""
             if reply_text:
                 from core.reply_postprocess import strip_chat_end_punct
                 reply_text = strip_chat_end_punct(reply_text)
                 logger.info("[Reply] extracted from tool output len=%d", len(reply_text))
                 response = reply_text
-                # 如果 response 之前是空或者被污染了，用 reply 替换
-                if not response or len(response) < len(reply_text):
-                    response = reply_text
+            else:
+                # 没有 reply() 也没有 no_reply() 工具调用 —— 记录 no_tool_call
+                logger.warning("[Reply] NO TOOL CALLED - suppressing buffer output (session=%s)", session_id)
+                if session_id:
+                    store = self._reply_meta_store()
+                    store[session_id] = {"_no_tool_call": True}
+                self._log_agent_result(session_id, "no_tool_call")
+                return ""
 
             if not response.strip():
                 logger.warning("[NanobotBridge] KT agent returned empty response after strip")

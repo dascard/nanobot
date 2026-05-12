@@ -56,6 +56,10 @@ tools:
     type: package
     module: nanobot_kt.tools.reply
     class: ReplyTool
+  - name: no_reply
+    type: package
+    module: nanobot_kt.tools.reply
+    class: NoReplyTool
   # KT built-in file tools — sandboxed to ./workspace (PathBoundaryGuard mode=block)
   - name: read
     type: builtin
