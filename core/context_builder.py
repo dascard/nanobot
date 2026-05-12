@@ -6,13 +6,19 @@
 import json
 import logging
 from html import escape
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger("nanobot.context_builder")
 
 MAX_GROUP_CONTEXT_ROWS = 10
 MAX_PRIVATE_CONTEXT_ROWS = 32
 MAX_GROUP_RECENT_ROWS = 12
+
+# 时间窗口限制——超过此时间的消息不进入当前上下文
+PRIVATE_CONTEXT_MAX_AGE_MIN = 30      # 私聊: 30 分钟
+GROUP_CONTEXT_MAX_AGE_MIN = 10        # 群聊: 10 分钟
+TIMING_CONTEXT_MAX_AGE_MIN = 5        # TimingGate context: 5 分钟
+CONTEXT_BREAK_ON_GAP_MIN = 20         # 相邻消息间隔超过此值视为话题断裂
 
 
 def _cap_text(text: str, max_chars: int, label: str = "") -> str:
@@ -117,12 +123,21 @@ def build_session_memory(
     from core.database import User, ConversationTurn
 
     max_rows = MAX_GROUP_CONTEXT_ROWS if is_group else MAX_PRIVATE_CONTEXT_ROWS
+    max_age_min = GROUP_CONTEXT_MAX_AGE_MIN if is_group else PRIVATE_CONTEXT_MAX_AGE_MIN
 
+    age_cutoff = datetime.now() - timedelta(minutes=max_age_min)
     cutoff = None
     if user_id:
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.history_clear_at:
             cutoff = user.history_clear_at
+            # 取更早的 cutoff：历史清除时间 vs 时间窗口
+            if cutoff < age_cutoff:
+                cutoff = age_cutoff
+        else:
+            cutoff = age_cutoff
+    else:
+        cutoff = age_cutoff
 
     query = db.query(ConversationTurn).filter(
         ConversationTurn.session_id == session_id)
@@ -131,7 +146,8 @@ def build_session_memory(
     turns = (
         query.order_by(ConversationTurn.created_at.desc(),
                        ConversationTurn.id.desc())
-        .limit(max_rows).all()
+        .limit(max_rows * 2)  # 多取一些，因为 no_context 会过滤
+        .all()
     )
 
     debug: dict = {
@@ -152,14 +168,20 @@ def build_session_memory(
 
     selected_desc: list[dict] = []
     total_tokens = 0
+    skipped_no_context = 0
     for t in turns:
+        meta = _safe_meta(t.meta_json)
+        # 过滤 no_context 标记的消息
+        if meta.get("moderation", {}).get("no_context"):
+            skipped_no_context += 1
+            continue
         content = t.content.strip()
         if not content:
             continue
         content = sanitize_prompt_text(content, max_per_msg)
         if not content:
             continue
-        kind = _safe_meta(t.meta_json).get("kind", "chat")
+        kind = meta.get("kind", "chat")
         # casual_template 最多保留 1 条，避免短句污染历史
         if kind == "casual_template" and t.role == "assistant":
             casual_count = sum(1 for d in selected_desc if d.get("role") == "assistant"
@@ -176,19 +198,48 @@ def build_session_memory(
 
         time_label = relative_time_label(t.created_at) if t.created_at else ""
         display = f"{time_label} {content}".strip() if time_label else content
-        selected_desc.append({"role": t.role, "content": display, "meta_json": t.meta_json})
+        selected_desc.append({
+            "role": t.role, "content": display, "meta_json": t.meta_json,
+            "_created_at": t.created_at,
+        })
 
     history_messages = list(reversed(selected_desc))
     if not history_messages:
+        debug["skipped_no_context"] = skipped_no_context
         return profile_header, [], debug
+
+    # gap detection: 相邻消息间隔 > CONTEXT_BREAK_ON_GAP_MIN 时插入话题中断标记
+    gap_breaks = 0
+    messages_with_gaps: list[dict] = []
+    prev_dt: datetime | None = None
+    for i, msg in enumerate(history_messages):
+        cur_dt = msg.get("_created_at")
+        if prev_dt is not None and cur_dt is not None:
+            gap_min = (cur_dt - prev_dt).total_seconds() / 60
+            if gap_min > CONTEXT_BREAK_ON_GAP_MIN:
+                messages_with_gaps.append({
+                    "role": "system",
+                    "content": f"[话题中断: 间隔约{int(gap_min)}分钟，请不要将此前后的内容视为同一话题]",
+                    "meta_json": "{}",
+                })
+                gap_breaks += 1
+        messages_with_gaps.append(msg)
+        if cur_dt is not None:
+            prev_dt = cur_dt
+
+    history_messages = messages_with_gaps
 
     while history_messages and history_messages[0]["role"] == "assistant":
         history_messages.pop(0)
     if not history_messages:
+        debug["skipped_no_context"] = skipped_no_context
+        debug["gap_breaks"] = gap_breaks
         return profile_header, [], debug
 
     debug["history_turns"] = len(history_messages)
     debug["history_chars"] = sum(len(m.get("content", "")) for m in history_messages)
+    debug["skipped_no_context"] = skipped_no_context
+    debug["gap_breaks"] = gap_breaks
 
     logger.info("[Context] session=%s type=%s rows=%d→%d tokens~%d max=%d",
                 session_id, "group" if is_group else "private",
@@ -340,10 +391,12 @@ def build_timing_recent_context(
     """构建 TimingGate 轻量 recent context——仅最近 3-5 条 ambient 消息，精简格式。"""
     from core.database import ChatLog
 
+    age_cutoff = datetime.now() - timedelta(minutes=TIMING_CONTEXT_MAX_AGE_MIN)
     excluded = {str(x) for x in (exclude_message_ids or []) if str(x).strip()}
     rows = (
         db.query(ChatLog)
-        .filter(ChatLog.session_id == session_id, ChatLog.role == "ambient")
+        .filter(ChatLog.session_id == session_id, ChatLog.role == "ambient",
+                ChatLog.created_at >= age_cutoff)
         .order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
         .limit(limit * 2)
         .all()
@@ -389,10 +442,13 @@ def build_group_recent_context(
     """从 ChatLog 构建群聊最近现场上下文。"""
     from core.database import ChatLog
 
+    age_cutoff = datetime.now() - timedelta(minutes=GROUP_CONTEXT_MAX_AGE_MIN)
     excluded = {str(x) for x in (exclude_message_ids or []) if str(x).strip()}
     rows = (
         db.query(ChatLog)
-        .filter(ChatLog.session_id == session_id, ChatLog.role.in_(("ambient", "assistant")))
+        .filter(ChatLog.session_id == session_id,
+                ChatLog.role.in_(("ambient", "assistant")),
+                ChatLog.created_at >= age_cutoff)
         .order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
         .limit(max(1, limit * 2))
         .all()
