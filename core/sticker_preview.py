@@ -197,10 +197,10 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
         if hasattr(row, "width"): row.width = width
         if hasattr(row, "height"): row.height = height
 
-        # 计算感知哈希
+        # 计算感知哈希（动图取首帧，透明背景转白底）
         if local:
             try:
-                img = Image.open(local)
+                img = _image_for_hash(local)
                 row.phash = str(imagehash.phash(img))
                 row.dhash = str(imagehash.dhash(img))
                 row.ahash = str(imagehash.average_hash(img))
@@ -348,13 +348,62 @@ def backfill_exact_dedupe(db: Session) -> dict:
     return result
 
 
+def _image_for_hash(path: str) -> Image.Image:
+    """预处理：动图取首帧，RGBA 转白底 RGB，稳定 hash。"""
+    img = Image.open(path)
+    try:
+        img.seek(0)
+    except Exception:
+        pass
+    img = img.convert("RGBA")
+    bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+    bg.alpha_composite(img)
+    return bg.convert("RGB")
+
+
+def _hash_distance(a: str, b: str) -> int:
+    """imagehash hex 字符串 → 汉明距离。"""
+    if not a or not b:
+        return 999
+    try:
+        return imagehash.hex_to_hash(a) - imagehash.hex_to_hash(b)
+    except Exception:
+        return 999
+
+
+def backfill_phash(db: Session, limit: int = 200) -> dict:
+    """历史表情补 phash/dhash/ahash。扫描 local_path 存在且 hash 为空的表情。"""
+    rows = (
+        db.query(StickerMemory)
+        .filter(StickerMemory.local_path != "", StickerMemory.phash == "")
+        .limit(limit)
+        .all()
+    )
+    ok = 0
+    skip = 0
+    for r in rows:
+        local = safe_existing_local_path(r.local_path or "")
+        if not local:
+            skip += 1
+            continue
+        try:
+            img = _image_for_hash(local)
+            r.phash = str(imagehash.phash(img))
+            r.dhash = str(imagehash.dhash(img))
+            r.ahash = str(imagehash.average_hash(img))
+            ok += 1
+        except Exception:
+            skip += 1
+    db.commit()
+    return {"scanned": len(rows), "ok": ok, "skipped": skip}
+
+
 def find_near_duplicates(db: Session, sticker_id: int) -> list[dict]:
     """查找感知哈希接近的候选重复。返回 [{sticker_b_id, phash_dist, dhash_dist}]。"""
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row or not row.phash:
         return []
 
-    # 查找同 content_hash 且 phash/dhash 不为空的 active stickers
     candidates = (
         db.query(StickerMemory)
         .filter(
@@ -369,14 +418,8 @@ def find_near_duplicates(db: Session, sticker_id: int) -> list[dict]:
 
     results = []
     for c in candidates:
-        try:
-            ph = int(row.phash) - int(c.phash) if row.phash and c.phash else 999
-            dh = int(row.dhash) - int(c.dhash) if row.dhash and c.dhash else 999
-        except (ValueError, TypeError):
-            continue
-        ph_dist = bin(abs(ph)).count("1")  # Hamming distance
-        dh_dist = bin(abs(dh)).count("1")
-
+        ph_dist = _hash_distance(row.phash, c.phash)
+        dh_dist = _hash_distance(row.dhash, c.dhash)
         if ph_dist <= 8 and dh_dist <= 8:
             results.append({
                 "sticker_b_id": c.id,
@@ -388,7 +431,7 @@ def find_near_duplicates(db: Session, sticker_id: int) -> list[dict]:
     return results[:20]
 
 
-def scan_near_duplicates(db: Session, limit: int = 100) -> dict:
+def backfill_phash(db: Session, limit: int = 200) -> dict:
     """扫描全库，为有 phash 的 active sticker 查找近邻重复候选。"""
     from core.database import StickerDuplicateCandidate
 

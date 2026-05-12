@@ -1008,37 +1008,77 @@ def list_near_duplicate_candidates(
 
 @router.post("/stickers/near-duplicate/scan")
 def scan_near_duplicates_endpoint(
-    limit: int = 100, db: Session = Depends(get_db), _auth=Depends(verify_admin),
+    request: Request, limit: int = 100,
+    db: Session = Depends(get_db), _auth=Depends(verify_admin),
 ):
     from core.sticker_preview import scan_near_duplicates
-    return scan_near_duplicates(db, limit=min(limit, 500))
+    result = scan_near_duplicates(db, limit=min(limit, 500))
+    _audit_request(db, request, "sticker.near_duplicate.scan", "sticker", "", result)
+    return result
+
+
+@router.post("/stickers/phash/backfill")
+def backfill_phash_endpoint(
+    request: Request, limit: int = 200,
+    db: Session = Depends(get_db), _auth=Depends(verify_admin),
+):
+    from core.sticker_preview import backfill_phash
+    result = backfill_phash(db, limit=min(limit, 1000))
+    _audit_request(db, request, "sticker.phash.backfill", "sticker", "", result)
+    return result
 
 
 class NearDuplicateAction(BaseModel):
     action: str = "ignore"  # ignore or confirm
-    sticker_b_id: int = 0
+    canonical_id: int = 0
 
 
 @router.post("/stickers/near-duplicate-candidates/{candidate_id}/{action}")
 def update_near_duplicate_candidate(
-    candidate_id: int, action: str,
+    candidate_id: int, action: str, request: Request,
+    body: NearDuplicateAction = NearDuplicateAction(),
     db: Session = Depends(get_db), _auth=Depends(verify_admin),
 ):
-    from core.database import StickerDuplicateCandidate
+    from core.database import StickerDuplicateCandidate, StickerMemory as SM
+
     row = db.query(StickerDuplicateCandidate).filter(StickerDuplicateCandidate.id == candidate_id).first()
     if not row:
         raise HTTPException(404, "Not found")
     if action == "ignore":
         row.status = "ignored"
-    elif action == "confirm":
-        row.status = "confirmed"
-        # Also run exact dedupe on sticker_a
-        from core.sticker_preview import dedupe_by_content_hash
-        dedupe_by_content_hash(db, row.sticker_a_id)
-    else:
+        db.commit()
+        _audit_request(db, request, "sticker.near_duplicate.ignore", "sticker", str(candidate_id))
+        return {"ok": True, "status": row.status}
+
+    if action != "confirm":
         raise HTTPException(400, "action must be ignore or confirm")
+
+    # 确认疑似重复：将 sticker_b 标记为 sticker_a 的 duplicate
+    canonical_id = body.canonical_id or row.sticker_a_id
+    dup_id = row.sticker_b_id if canonical_id == row.sticker_a_id else row.sticker_a_id
+
+    canonical = db.query(SM).filter(SM.id == canonical_id).first()
+    dup = db.query(SM).filter(SM.id == dup_id).first()
+    if not canonical or not dup:
+        raise HTTPException(404, "sticker not found")
+
+    dup.status = "duplicate"
+    dup.dedupe_status = "duplicate"
+    dup.duplicate_of_id = canonical.id
+
+    import json as _json
+    meta = _json.loads(dup.meta_json or "{}") if isinstance(dup.meta_json, str) else (dup.meta_json or {})
+    meta["dedupe_reason"] = "near_duplicate"
+    meta["near_duplicate_candidate_id"] = candidate_id
+    meta["phash_dist"] = row.phash_dist
+    meta["dhash_dist"] = row.dhash_dist
+    dup.meta_json = _json.dumps(meta, ensure_ascii=False)
+
+    row.status = "confirmed"
     db.commit()
-    return {"ok": True, "status": row.status}
+    _audit_request(db, request, "sticker.near_duplicate.confirm", "sticker",
+                   str(dup_id), {"canonical_id": canonical_id, "candidate_id": candidate_id})
+    return {"ok": True, "status": "confirmed", "duplicate_id": dup_id}
 
 
 class SetCanonicalBody(BaseModel):
