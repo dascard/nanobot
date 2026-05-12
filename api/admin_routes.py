@@ -1890,6 +1890,18 @@ def read_log(name: str, lines: int = 200, level: str = "", q: str = "",
             "raw_lines": len(tail), "file_size": file_size}
 
 
+class FrontendErrorBody(BaseModel):
+    message: str = Field(default="")
+    stack: str = Field(default="")
+    url: str = Field(default="")
+
+
+@router.post("/logs/frontend-error")
+def log_frontend_error(body: FrontendErrorBody, _auth=Depends(verify_admin)):
+    logger.warning(f"[FrontendError] url={body.url} message={body.message}")
+    return {"ok": True}
+
+
 # ═══════════════════════════════════════════
 # Settings (热重载配置)
 # ═══════════════════════════════════════════

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { BrowserRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api/v1/admin' })
@@ -8,6 +8,32 @@ api.interceptors.request.use(c => {
   if (t) c.headers.Authorization = `Bearer ${t}`
   return c
 })
+
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error } }
+  componentDidCatch(error, _info) {
+    console.error('WebUI ErrorBoundary:', error)
+    api.post('/logs/frontend-error', { message: error?.message || '', url: window.location.href }).catch(() => {})
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-64 flex items-center justify-center p-8">
+          <div className="bg-slate-900 border border-red-800 rounded-xl p-8 max-w-lg text-center">
+            <h2 className="text-xl font-bold text-red-400 mb-2">页面出错</h2>
+            <p className="text-slate-400 text-sm mb-4">{this.state.error?.message || '未知错误'}</p>
+            <button onClick={() => { this.setState({ hasError: false }); window.location.href = '/'; }}
+              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-white transition-colors">
+              回到首页
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
 
 function useAuth() {
   const [token, setToken] = useState(localStorage.getItem('nanobot_token') || '')
@@ -100,7 +126,7 @@ function Layout({ children, onLogout }) {
           退出
         </button>
       </nav>
-      <main className="flex-1 p-6 overflow-auto">{children}</main>
+      <main className="flex-1 p-6 overflow-auto"><ErrorBoundary>{children}</ErrorBoundary></main>
     </div>
   )
 }
@@ -163,7 +189,7 @@ function formatAgo(seconds) {
   return `${Math.round(n / 3600)}h`
 }
 
-function MiniStat({ label, value, tone = 'slate' }) {
+function MiniStat({ label, value, tone = 'slate', onClick }) {
   const color = {
     emerald: 'text-emerald-300',
     amber: 'text-amber-300',
@@ -172,7 +198,7 @@ function MiniStat({ label, value, tone = 'slate' }) {
     slate: 'text-white',
   }[tone] || 'text-white'
   return (
-    <Card className="p-4 min-h-[92px]">
+    <Card className={`p-4 min-h-[92px] ${onClick ? 'cursor-pointer hover:bg-slate-800/60' : ''}`} onClick={onClick}>
       <div className="text-xs text-slate-500 mb-2">{label}</div>
       <div className={`text-2xl font-semibold tracking-tight ${color}`}>{value ?? '...'}</div>
     </Card>
@@ -207,6 +233,7 @@ function AuthImage({ url, alt, className, onClick }) {
 // ── Dashboard ──
 function Dashboard() {
   const [data, setData] = useState(null)
+  const navigate = useNavigate()
   useEffect(() => {
     api.get('/overview').then(r => setData(r.data)).catch(() => setData(null))
   }, [])
@@ -227,7 +254,7 @@ function Dashboard() {
         <MiniStat label="最近 1h 请求数" value={c.requests_1h} tone="blue" />
         <MiniStat label="最近 1h 群消息数" value={c.group_messages_1h} />
         <MiniStat label="最近 1h 回复数" value={c.replies_1h} tone="emerald" />
-        <MiniStat label="最近错误数" value={c.recent_errors} tone={c.recent_errors ? 'red' : 'slate'} />
+        <MiniStat label="TimingGate 错误数" value={c.recent_errors} tone={c.recent_errors ? 'red' : 'slate'} onClick={() => navigate('/timing-gate?error_only=1')} />
         <MiniStat label="TimingGate parse_error" value={c.timing_parse_errors} tone={c.timing_parse_errors ? 'red' : 'slate'} />
         <MiniStat label="Sticker 缓存失败" value={c.sticker_cache_failures} tone={c.sticker_cache_failures ? 'amber' : 'slate'} />
         <MiniStat label="打标失败" value={c.tagging_failures} tone={c.tagging_failures ? 'amber' : 'slate'} />
@@ -539,7 +566,11 @@ function TimingEventsTable({ rows = [] }) {
 // ── Sticker Dedup ──
 function StickerDedupPage() {
   const [data, setData] = useState({ groups: [] })
-  const load = () => api.get('/stickers/duplicate-groups?limit=100').then(r => setData(r.data))
+  const [error, setError] = useState('')
+  const navigate = useNavigate()
+  const load = () => api.get('/stickers/duplicate-groups?limit=100')
+    .then(r => { setData(r.data || {}); setError('') })
+    .catch(e => { setError(e?.response?.data?.detail || e.message || '加载失败') })
   useEffect(() => { load() }, [])
 
   return (
@@ -549,32 +580,36 @@ function StickerDedupPage() {
           <h1 className="text-2xl font-bold">去重工作台</h1>
           <p className="text-slate-500 text-sm">按 content_hash 分组，展示重复表情包</p>
         </div>
-        <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
+        <div className="flex gap-2">
+          <button onClick={() => navigate('/stickers')} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">返回表情包列表</button>
+          <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
+        </div>
       </div>
+      {error && <Card className="p-4 mb-4 border border-red-800 bg-red-900/20"><p className="text-sm text-red-400">{error}</p></Card>}
+      {(data.groups || []).length === 0 && !error && <p className="text-slate-500 text-sm">暂无重复表情包</p>}
       {(data.groups || []).map(g => (
-        <Card key={g.content_hash} className="p-4 mb-4">
+        <Card key={g.content_hash || 'unknown'} className="p-4 mb-4">
           <div className="flex items-center gap-2 mb-3">
             <span className="text-xs text-slate-400">hash:</span>
-            <code className="text-xs bg-slate-950 px-2 py-0.5 rounded">{g.content_hash}</code>
-            <Badge tone="amber">{g.count} 个重复</Badge>
+            <code className="text-xs bg-slate-950 px-2 py-0.5 rounded">{g.content_hash || '-'}</code>
+            <Badge tone="amber">{g.count || 0} 个重复</Badge>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-                <th className="py-2 px-2">id</th><th className="py-2 px-2">预览</th><th className="py-2 px-2">名称</th><th className="py-2 px-2">描述</th><th className="py-2 px-2">状态</th><th className="py-2 px-2">dedupe</th><th className="py-2 px-2">使用次数</th><th className="py-2 px-2">preview</th><th className="py-2 px-2">describe</th>
+                <th className="py-2 px-2">id</th><th className="py-2 px-2">名称</th><th className="py-2 px-2">描述</th><th className="py-2 px-2">状态</th><th className="py-2 px-2">dedupe</th><th className="py-2 px-2">使用次数</th><th className="py-2 px-2">preview</th><th className="py-2 px-2">describe</th>
               </tr></thead>
               <tbody>
                 {(g.items || []).map(s => (
                   <tr key={s.id} className="border-b border-slate-800/50">
                     <td className="py-2 px-2">{s.id}</td>
-                    <td className="py-2 px-2">{s.local_path ? <img src={`${API_BASE}/stickers/${s.id}/preview`} className="w-8 h-8 object-cover rounded" alt="" /> : '-'}</td>
                     <td className="py-2 px-2 max-w-[120px] truncate">{s.name || '-'}</td>
                     <td className="py-2 px-2 max-w-[200px] truncate">{s.description || '-'}</td>
-                    <td className="py-2 px-2"><Badge tone={s.status === 'active' ? 'emerald' : s.status === 'disabled' ? 'amber' : 'slate'}>{s.status}</Badge></td>
+                    <td className="py-2 px-2"><Badge tone={s.status === 'active' ? 'emerald' : s.status === 'disabled' ? 'amber' : 'slate'}>{s.status || '-'}</Badge></td>
                     <td className="py-2 px-2">{s.dedupe_status !== 'unique' ? <Badge tone="purple">{s.dedupe_status}</Badge> : <span className="text-slate-600">unique</span>}</td>
-                    <td className="py-2 px-2">{s.usage_count}</td>
-                    <td className="py-2 px-2"><Badge tone={s.preview_status === 'ok' ? 'emerald' : 'amber'}>{s.preview_status}</Badge></td>
-                    <td className="py-2 px-2"><Badge tone={s.describe_status === 'ok' ? 'emerald' : s.describe_status === 'failed' ? 'red' : 'slate'}>{s.describe_status}</Badge></td>
+                    <td className="py-2 px-2">{s.usage_count ?? 0}</td>
+                    <td className="py-2 px-2"><Badge tone={s.preview_status === 'ok' ? 'emerald' : 'amber'}>{s.preview_status || '-'}</Badge></td>
+                    <td className="py-2 px-2"><Badge tone={s.describe_status === 'ok' ? 'emerald' : s.describe_status === 'failed' ? 'red' : 'slate'}>{s.describe_status || '-'}</Badge></td>
                   </tr>
                 ))}
               </tbody>
@@ -1652,7 +1687,9 @@ function EvalsPage() {
   const [sourceFilter, setSourceFilter] = useState('')
   const [detail, setDetail] = useState(null)
   const [showLabel, setShowLabel] = useState(null)
-  const [labelForm, setLabelForm] = useState('{}')
+  const [labelSuite, setLabelSuite] = useState('')
+  const [labelFields, setLabelFields] = useState({})
+  const [labelShowJson, setLabelShowJson] = useState(false)
   const [runs, setRuns] = useState([])
   const [runDetail, setRunDetail] = useState(null)
   const [running, setRunning] = useState(false)
@@ -1696,9 +1733,17 @@ function EvalsPage() {
   }
 
   const doLabel = (caseId) => {
-    let expected
-    try { expected = JSON.parse(labelForm) } catch { alert('JSON 格式错误'); return }
-    api.post(`/evals/candidates/${encodeURIComponent(caseId)}/label`, { expected })
+    // 从表单构建 expected_json
+    let expectedJson = { ...labelFields }
+    delete expectedJson._rawJson
+    if (labelShowJson && labelFields._rawJson) {
+      try { expectedJson = JSON.parse(labelFields._rawJson) } catch { alert('JSON 格式错误'); return }
+    }
+    if (Object.keys(expectedJson).length === 0 || expectedJson.needs_label) {
+      alert('请先选择期望值')
+      return
+    }
+    api.post(`/evals/candidates/${encodeURIComponent(caseId)}/label`, { expected_json: expectedJson })
       .then(() => { setShowLabel(null); loadCandidates() })
       .catch(e => alert(e.response?.data?.detail || e.message))
   }
@@ -1793,7 +1838,7 @@ function EvalsPage() {
                         <button onClick={() => loadDetail(c.case_id)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">详情</button>
                         {c.status === 'candidate' && (
                           <>
-                            <button onClick={() => { setShowLabel(c.case_id); setLabelForm(JSON.stringify(c.expected || {needs_label: true}, null, 2)) }}
+                            <button onClick={() => { setShowLabel(c.case_id); setLabelSuite(c.suite); setLabelFields({}); setLabelShowJson(false) }}
                               className="px-2 py-1 bg-indigo-700/50 hover:bg-indigo-700 text-indigo-300 rounded text-xs">标记</button>
                             <button onClick={() => doIgnore(c.case_id)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">忽略</button>
                           </>
@@ -1832,10 +1877,94 @@ function EvalsPage() {
             <Modal onClose={() => setShowLabel(null)}>
               <div className="p-6">
                 <h2 className="text-lg font-bold mb-2">标记期望值</h2>
-                <p className="text-xs text-slate-500 mb-4">{showLabel}</p>
-                <textarea value={labelForm} onChange={e => setLabelForm(e.target.value)} rows={10}
-                  className="w-full p-3 rounded-xl bg-slate-900 border border-slate-700 font-mono text-xs mb-3" />
-                <div className="flex gap-2 justify-end">
+                <p className="text-xs text-slate-500 mb-2">{showLabel}</p>
+                <Badge className="mb-4">{labelSuite || 'unknown'}</Badge>
+
+                {labelSuite === 'memory_learning' && (
+                  <div className="space-y-3">
+                    <div><div className="text-xs text-slate-400 mb-1">是否应该学习</div>
+                      <select value={labelFields.should_learn || ''} onChange={e => setLabelFields({...labelFields, should_learn: e.target.value})}
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
+                        <option value="">选择...</option>
+                        <option value="true">应该学习</option>
+                        <option value="false">不应学习</option>
+                        <option value="uncertain">不确定</option>
+                      </select></div>
+                    <div><div className="text-xs text-slate-400 mb-1">分类</div>
+                      <input value={labelFields.category || ''} onChange={e => setLabelFields({...labelFields, category: e.target.value})}
+                        placeholder="stock_formula, spam_symbol..."
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                    <div><div className="text-xs text-slate-400 mb-1">原因</div>
+                      <input value={labelFields.reason || ''} onChange={e => setLabelFields({...labelFields, reason: e.target.value})}
+                        placeholder="× 不应被学成黑话"
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                    <div><div className="text-xs text-slate-400 mb-1">含义（可选）</div>
+                      <textarea value={labelFields.meaning || ''} onChange={e => setLabelFields({...labelFields, meaning: e.target.value})}
+                        rows={2} className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                  </div>
+                )}
+
+                {labelSuite === 'timing_gate' && (
+                  <div className="space-y-3">
+                    <div><div className="text-xs text-slate-400 mb-1">期望动作</div>
+                      <select value={labelFields.expected_action || ''} onChange={e => setLabelFields({...labelFields, expected_action: e.target.value})}
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
+                        <option value="">选择...</option>
+                        <option value="continue">continue</option>
+                        <option value="wait">wait</option>
+                        <option value="no_reply">no_reply</option>
+                      </select></div>
+                    <div><div className="text-xs text-slate-400 mb-1">延迟（秒）</div>
+                      <input type="number" value={labelFields.delay_seconds || ''} onChange={e => setLabelFields({...labelFields, delay_seconds: e.target.value})}
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                    <div><div className="text-xs text-slate-400 mb-1">原因</div>
+                      <input value={labelFields.reason || ''} onChange={e => setLabelFields({...labelFields, reason: e.target.value})}
+                        placeholder="应该继续回复"
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                  </div>
+                )}
+
+                {labelSuite === 'group_reply' && (
+                  <div className="space-y-3">
+                    <div><div className="text-xs text-slate-400 mb-1">质量评价</div>
+                      <select value={labelFields.quality || ''} onChange={e => setLabelFields({...labelFields, quality: e.target.value})}
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
+                        <option value="">选择...</option>
+                        <option value="good">合适</option>
+                        <option value="bad">不合适</option>
+                        <option value="interrupt">过度插话</option>
+                        <option value="tone">语气不对</option>
+                        <option value="context_error">上下文错误</option>
+                        <option value="permission_error">权限错误</option>
+                      </select></div>
+                    <div><div className="text-xs text-slate-400 mb-1">原因</div>
+                      <input value={labelFields.reason || ''} onChange={e => setLabelFields({...labelFields, reason: e.target.value})}
+                        placeholder="描述问题"
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                  </div>
+                )}
+
+                {/* 其他 suite：默认表单 + JSON 高级模式 */}
+                {!['memory_learning','timing_gate','group_reply'].includes(labelSuite) && (
+                  <div className="space-y-3">
+                    <p className="text-xs text-slate-500">此 suite 暂无专用表单，请使用高级 JSON 模式或直接在下方编辑。</p>
+                    <textarea value={labelFields._rawJson || JSON.stringify({needs_label: true}, null, 2)} onChange={e => setLabelFields({...labelFields, _rawJson: e.target.value})}
+                      rows={8} className="w-full p-3 rounded-xl bg-slate-900 border border-slate-700 font-mono text-xs" />
+                  </div>
+                )}
+
+                {/* 高级 JSON 模式（所有 suite 都有） */}
+                <div className="mt-4">
+                  <button onClick={() => setLabelShowJson(!labelShowJson)} className="text-xs text-slate-500 hover:text-slate-300">
+                    {labelShowJson ? '收起' : '▶'} 高级 JSON 模式
+                  </button>
+                  {labelShowJson && (
+                    <textarea value={labelFields._rawJson || JSON.stringify(labelFields, null, 2)} onChange={e => setLabelFields({...labelFields, _rawJson: e.target.value})}
+                      rows={8} className="w-full p-3 mt-2 rounded-xl bg-slate-900 border border-slate-700 font-mono text-xs" />
+                  )}
+                </div>
+
+                <div className="flex gap-2 justify-end mt-4">
                   <button onClick={() => setShowLabel(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">取消</button>
                   <button onClick={() => doLabel(showLabel)}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">保存标记</button>
