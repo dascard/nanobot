@@ -604,6 +604,8 @@ class TimingGate:
         try:
             raw = self._call_qwen(context)
             result = self._parse_output(raw)
+            result["context"] = context
+            result["raw"] = raw
             elapsed_ms = int((_t.time() - t0) * 1000)
             logger.info(
                 "[TimingGate] action=%s delay=%s latency=%dms reason=%.60s error=%s",
