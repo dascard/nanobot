@@ -849,7 +849,8 @@ def sticker_duplicate_groups(limit: int = 50, db: Session = Depends(get_db), _au
         groups.append({
             "content_hash": content_hash,
             "count": n,
-            "canonical_id": canonical.id if canonical else (stickers[0].id if stickers else None),
+            "canonical_id": canonical.id if canonical else None,
+            "needs_canonical": canonical is None,
             "items": [_sticker_dict(r) for r in stickers],
         })
     return {"groups": groups}

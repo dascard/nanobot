@@ -705,14 +705,14 @@ function StickerDedupPage() {
                 <tbody>
                   {selItems.map(s => (
                     <tr key={s.id} className="border-b border-slate-800/50">
-                      <td className="py-2 px-1">{s.local_path ? <img src={`/api/v1/admin/stickers/${s.id}/preview`} className="w-8 h-8 object-cover rounded" alt="" /> : <span className="text-slate-600 text-[10px]">-</span>}</td>
+                      <td className="py-2 px-1"><AuthImage url={`/api/v1/admin/stickers/${s.id}/preview`} alt="" className="w-8 h-8 object-cover rounded" /></td>
                       <td className="py-2 px-1">{s.id}</td>
                       <td className="py-2 px-1 max-w-[80px] truncate">{s.name || '-'}</td>
                       <td className="py-2 px-1"><Badge tone={s.status === 'active' ? 'emerald' : 'amber'}>{s.status || '-'}</Badge></td>
                       <td className="py-2 px-1">{s.dedupe_status || 'unique'}</td>
                       <td className="py-2 px-1 text-slate-500">{s.usage_count ?? 0}</td>
                       <td className="py-2 px-1">
-                        <div className="flex gap-1">
+                        <div className="flex gap-1 flex-wrap">
                           {s.dedupe_status !== 'canonical' && s.status === 'active' && (
                             <button onClick={() => doAction(s.id, 'set-canonical')} className="px-1.5 py-0.5 bg-emerald-700/40 hover:bg-emerald-700 rounded text-[10px] text-emerald-300">canonical</button>
                           )}
@@ -726,6 +726,9 @@ function StickerDedupPage() {
                           ) : (
                             <button onClick={() => doAction(s.id, 'enable')} className="px-1.5 py-0.5 bg-slate-700/40 hover:bg-slate-700 rounded text-[10px]">启用</button>
                           )}
+                          {/* 预览/打标工具 */}
+                          <button onClick={() => doAction(s.id, 'preview/retry')} className="px-1.5 py-0.5 bg-slate-700/30 hover:bg-slate-700 rounded text-[10px]" title="重试预览">🔄</button>
+                          <button onClick={() => doAction(s.id, 'redescribe')} className="px-1.5 py-0.5 bg-slate-700/30 hover:bg-slate-700 rounded text-[10px]" title="重试打标">🏷</button>
                         </div>
                       </td>
                     </tr>
