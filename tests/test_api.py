@@ -997,3 +997,117 @@ class TestGroupMessageStructured:
         assert "@小红" in content
         assert "你看这个" in content
         assert "[图片" in content
+
+
+def test_effective_configs_returns_default_for_chatlog_groups(client, db_session, monkeypatch):
+    """没有 ChatStreamConfig 但有 ChatLog group_* 时，effective=1 应返回默认配置。"""
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    db_session.add(ChatLog(
+        session_id="group_987654321",
+        user_id="qq:987654321:group",
+        role="user",
+        content="测试消息",
+    ))
+    db_session.commit()
+
+    resp = client.get(
+        "/api/v1/admin/configs?effective=1",
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] >= 1
+
+    item = next(
+        (x for x in data["items"] if x["chat_stream_id"] == "qq:987654321:group"),
+        None,
+    )
+    assert item is not None, f"expected qq:987654321:group in items: {data['items']}"
+    assert item["has_override"] is False
+    assert item["source"] == "default"
+    assert item["talk_value"] == 0.5
+    assert item["mentioned_bot_reply"] is True
+    assert item["group_profile_mode"] == "off"
+
+
+def test_effective_configs_shows_override_when_config_exists(client, db_session, monkeypatch):
+    """有 ChatStreamConfig 覆写时 effective=1 应返回覆写值。"""
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    from core.database import ChatStreamConfig
+
+    db_session.add(ChatStreamConfig(
+        chat_stream_id="qq:555:group",
+        talk_value=0.8,
+        group_profile_mode="preview",
+    ))
+    db_session.commit()
+
+    resp = client.get(
+        "/api/v1/admin/configs?effective=1",
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+
+    item = next(
+        (x for x in data["items"] if x["chat_stream_id"] == "qq:555:group"),
+        None,
+    )
+    assert item is not None
+    assert item["has_override"] is True
+    assert item["source"] == "db"
+    assert item["talk_value"] == 0.8
+    assert item["group_profile_mode"] == "preview"
+
+
+def test_effective_configs_respects_search_filter(client, db_session, monkeypatch):
+    """effective=1 时 search 参数应正确过滤。"""
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    db_session.add(ChatLog(
+        session_id="group_111",
+        user_id="qq:111:group",
+        role="user",
+        content="hello",
+    ))
+    db_session.add(ChatLog(
+        session_id="group_222",
+        user_id="qq:222:group",
+        role="user",
+        content="hello",
+    ))
+    db_session.commit()
+
+    resp = client.get(
+        "/api/v1/admin/configs?effective=1&search=111",
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total"] == 1
+    assert data["items"][0]["chat_stream_id"] == "qq:111:group"
+
+
+def test_effective_configs_paginates(client, db_session, monkeypatch):
+    """effective=1 应支持分页。"""
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    for i in range(5):
+        db_session.add(ChatLog(
+            session_id=f"group_pgtest_{i}",
+            user_id=f"qq:pgtest_{i}:group",
+            role="user",
+            content=f"msg{i}",
+        ))
+    db_session.commit()
+
+    resp = client.get(
+        "/api/v1/admin/configs?effective=1&limit=2&page=1&search=pgtest",
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 2
+    assert data["total"] == 5
+    assert data["page"] == 1
