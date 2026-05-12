@@ -642,8 +642,10 @@ function StickerDedupPage() {
   }
 
   const groups = data.groups || []
-  const selItems = (selectedGroup?.items || []).filter(s => showDisabled || s.status !== 'disabled')
-  const canonical = selItems.find(s => s.dedupe_status === 'canonical' || (s.status === 'active' && !s.duplicate_of_id))
+  const selGroup = selectedGroup || {}
+  const selItems = (selGroup.items || []).filter(s => showDisabled || s.status !== 'disabled')
+  const canonicalId = selGroup.canonical_id
+  const canonical = selItems.find(s => s.id === canonicalId) || selItems.find(s => s.status === 'active' && !s.duplicate_of_id)
 
   return (
     <div>
@@ -698,13 +700,14 @@ function StickerDedupPage() {
 
               <table className="w-full text-xs">
                 <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-                  <th className="py-2 px-1">id</th><th className="py-2 px-1">名称</th><th className="py-2 px-1">状态</th><th className="py-2 px-1">dedupe</th><th className="py-2 px-1">使用</th><th className="py-2 px-1">操作</th>
+                  <th className="py-2 px-1 w-10">预览</th><th className="py-2 px-1">id</th><th className="py-2 px-1">名称</th><th className="py-2 px-1">状态</th><th className="py-2 px-1">dedupe</th><th className="py-2 px-1">使用</th><th className="py-2 px-1">操作</th>
                 </tr></thead>
                 <tbody>
                   {selItems.map(s => (
                     <tr key={s.id} className="border-b border-slate-800/50">
+                      <td className="py-2 px-1">{s.local_path ? <img src={`/api/v1/admin/stickers/${s.id}/preview`} className="w-8 h-8 object-cover rounded" alt="" /> : <span className="text-slate-600 text-[10px]">-</span>}</td>
                       <td className="py-2 px-1">{s.id}</td>
-                      <td className="py-2 px-1 max-w-[100px] truncate">{s.name || '-'}</td>
+                      <td className="py-2 px-1 max-w-[80px] truncate">{s.name || '-'}</td>
                       <td className="py-2 px-1"><Badge tone={s.status === 'active' ? 'emerald' : 'amber'}>{s.status || '-'}</Badge></td>
                       <td className="py-2 px-1">{s.dedupe_status || 'unique'}</td>
                       <td className="py-2 px-1 text-slate-500">{s.usage_count ?? 0}</td>
@@ -713,11 +716,11 @@ function StickerDedupPage() {
                           {s.dedupe_status !== 'canonical' && s.status === 'active' && (
                             <button onClick={() => doAction(s.id, 'set-canonical')} className="px-1.5 py-0.5 bg-emerald-700/40 hover:bg-emerald-700 rounded text-[10px] text-emerald-300">canonical</button>
                           )}
-                          {s.dedupe_status !== 'duplicate' && canonical && (
+                          {s.id !== canonical?.id && s.dedupe_status !== 'duplicate' && canonical && (
                             <button onClick={() => doAction(s.id, 'mark-duplicate', {canonical_id: canonical.id})} className="px-1.5 py-0.5 bg-purple-700/40 hover:bg-purple-700 rounded text-[10px] text-purple-300">重复</button>
                           )}
                           {s.dedupe_status === 'duplicate' ? (
-                            <button onClick={() => doAction(s.id, 'enable')} className="px-1.5 py-0.5 bg-slate-700/40 hover:bg-slate-700 rounded text-[10px]">恢复</button>
+                            <button onClick={() => doAction(s.id, 'set-canonical')} className="px-1.5 py-0.5 bg-emerald-700/40 hover:bg-emerald-700 rounded text-[10px] text-emerald-300">恢复</button>
                           ) : s.status === 'active' ? (
                             <button onClick={() => doAction(s.id, 'disable')} className="px-1.5 py-0.5 bg-amber-700/40 hover:bg-amber-700 rounded text-[10px] text-amber-300">禁用</button>
                           ) : (

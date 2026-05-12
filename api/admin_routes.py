@@ -842,9 +842,14 @@ def sticker_duplicate_groups(limit: int = 50, db: Session = Depends(get_db), _au
             .order_by(StickerMemory.status.asc(), StickerMemory.usage_count.desc(), StickerMemory.id.asc())
             .all()
         )
+        # canonical: active, 非 duplicate, duplicate_of_id 为空
+        canonical = next((r for r in stickers if r.status == "active"
+                         and r.dedupe_status != "duplicate"
+                         and not r.duplicate_of_id), None)
         groups.append({
             "content_hash": content_hash,
             "count": n,
+            "canonical_id": canonical.id if canonical else (stickers[0].id if stickers else None),
             "items": [_sticker_dict(r) for r in stickers],
         })
     return {"groups": groups}
