@@ -197,41 +197,86 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
         return StickerPreviewCacheResult(ok=False, status="fetch_failed", error=str(e))
 
 
-def dedupe_by_content_hash(db: Session, sticker_id: int) -> int | None:
-    """content_hash 相同 → 选出最佳 canonical，其余标 duplicate。
+def _canonical_score(r: StickerMemory) -> tuple:
+    """canonical 评分：值越低越优先。"""
+    status_order = {"active": 0, "disabled": 1, "duplicate": 2}
+    return (
+        status_order.get(r.status or "", 3),
+        0 if (r.preview_status or "") == "ok" else 1,
+        0 if safe_existing_local_path(r.local_path or "") else 1,
+        0 if (r.describe_status or "") == "ok" else 1,
+        0 if r.description else 1,
+        -(len(_loads_list(r.tags_json)) + len(_loads_list(r.emotions_json))),
+        -(r.usage_count or 0),
+        -(r.source_count or 0),
+        r.id or 0,
+    )
 
-    canonical 优先级：active > disabled，有 description > 无，
-    usage_count 高 > 低，id 小 > 大。
+
+def dedupe_by_content_hash(db: Session, sticker_id: int, *, force_set_canonical: int = 0) -> int | None:
+    """content_hash 全局去重——不再按 chat_stream_id 限定。
+
+    选出最佳 canonical，其余标 duplicate；合并 tags/description/usage/source。
+    force_set_canonical: 人工强制指定 canonical id。
     """
+    import json as _json
+
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row or not row.content_hash:
         return None
 
     all_rows = (
         db.query(StickerMemory)
-        .filter(
-            StickerMemory.chat_stream_id == row.chat_stream_id,
-            StickerMemory.content_hash == row.content_hash,
-            StickerMemory.status.in_(["active", "disabled"]),
-            StickerMemory.dedupe_status == "unique",
-        )
+        .filter(StickerMemory.content_hash == row.content_hash,
+                StickerMemory.status != "deleted")
         .all()
     )
     if len(all_rows) <= 1:
         return None
 
-    def _priority(r: StickerMemory) -> tuple[int, int, int, int]:
-        return (
-            0 if r.status == "active" else 1,
-            0 if r.description else 1,
-            -(r.usage_count or 0),
-            r.id or 0,
-        )
-
-    canonical = sorted(all_rows, key=_priority)[0]
+    if force_set_canonical and any(r.id == force_set_canonical for r in all_rows):
+        canonical = next(r for r in all_rows if r.id == force_set_canonical)
+    else:
+        # duplicate 不能抢 canonical（除非全部都是 duplicate）
+        non_dup = [r for r in all_rows if r.status != "duplicate"]
+        pool = sorted(non_dup if non_dup else all_rows, key=_canonical_score)
+        canonical = pool[0]
 
     merged_source = sum(r.source_count or 0 for r in all_rows)
     merged_usage = sum(r.usage_count or 0 for r in all_rows)
+
+    all_tags: list[str] = []
+    all_emotions: list[str] = []
+    desc_candidates: list[dict] = []
+    source_streams: list[str] = []
+    source_ids: list[int] = []
+
+    for r in all_rows:
+        if r.chat_stream_id and r.chat_stream_id not in source_streams:
+            source_streams.append(r.chat_stream_id)
+        if r.id not in source_ids:
+            source_ids.append(r.id)
+        for t in _loads_list(r.tags_json):
+            if t not in all_tags:
+                all_tags.append(t)
+        for e in _loads_list(r.emotions_json):
+            if e not in all_emotions:
+                all_emotions.append(e)
+        if r.id != canonical.id and r.description:
+            desc_candidates.append({"id": r.id, "description": r.description})
+
+    canonical.source_count = merged_source
+    canonical.usage_count = merged_usage
+    canonical.tags_json = _json.dumps(all_tags, ensure_ascii=False)
+    canonical.emotions_json = _json.dumps(all_emotions, ensure_ascii=False)
+    if not canonical.description and desc_candidates:
+        canonical.description = desc_candidates[0]["description"]
+
+    meta = _safe_json(canonical.meta_json)
+    meta["description_candidates"] = desc_candidates
+    meta["source_streams"] = source_streams
+    meta["source_record_ids"] = source_ids
+    canonical.meta_json = _json.dumps(meta, ensure_ascii=False)
 
     for dup in all_rows:
         if dup.id == canonical.id:
@@ -240,13 +285,34 @@ def dedupe_by_content_hash(db: Session, sticker_id: int) -> int | None:
         dup.duplicate_of_id = canonical.id
         dup.dedupe_status = "duplicate"
 
-    canonical.source_count = merged_source
-    canonical.usage_count = merged_usage
-    if not canonical.description:
-        for r in all_rows:
-            if r.description:
-                canonical.description = r.description
-                break
-
     db.commit()
     return canonical.id
+
+
+def backfill_exact_dedupe(db: Session) -> dict:
+    """全库 content_hash 重复分组批量去重。返回报告。"""
+    from sqlalchemy import func
+
+    dup_hashes = (
+        db.query(StickerMemory.content_hash, func.count(StickerMemory.id).label("cnt"))
+        .filter(StickerMemory.content_hash.isnot(None), StickerMemory.content_hash != "",
+                StickerMemory.status != "deleted")
+        .group_by(StickerMemory.content_hash)
+        .having(func.count(StickerMemory.id) > 1)
+        .all()
+    )
+    result = {"total_groups": len(dup_hashes), "total_duplicates": 0, "canonical_ids": [], "errors": []}
+    for ch, _ in dup_hashes:
+        try:
+            first = db.query(StickerMemory).filter(
+                StickerMemory.content_hash == ch, StickerMemory.status != "deleted").first()
+            if first:
+                cid = dedupe_by_content_hash(db, first.id)
+                if cid:
+                    result["canonical_ids"].append(cid)
+                    cnt = db.query(StickerMemory).filter(
+                        StickerMemory.content_hash == ch, StickerMemory.dedupe_status == "duplicate").count()
+                    result["total_duplicates"] += cnt
+        except Exception as e:
+            result["errors"].append(str(e)[:200])
+    return result
