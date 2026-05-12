@@ -37,6 +37,69 @@ OUTPUT_PATTERN = re.compile(r"^(是|否)[,，](-?\d+)$")
 # Pattern to strip think/thought blocks from Qwen response
 THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
 
+
+def strip_think_blocks(text: str) -> str:
+    """迭代去除 Qwen 的 <think> 块（可能有嵌套）。"""
+    for _ in range(5):
+        prev = text
+        text = THINK_PATTERN.sub("", text).strip()
+        if text == prev:
+            break
+    return text
+
+
+def call_model_route(
+    route_key: str = "timing_gate",
+    messages: list[dict] | None = None,
+    *,
+    system_prompt: str = "",
+    user_message: str = "",
+    max_tokens: int = 30,
+    temperature: float = 0,
+    timeout: float | None = None,
+) -> str:
+    """统一的分类器模型路由调用。
+
+    从 settings.get(f"model.route.{route_key}") 读取 URL，
+    fallback CLASSIFIER_API_URL。
+    调用 llama.cpp 兼容 API /chat/completions，返回 cleaned text。
+    """
+    from core.settings_service import settings
+
+    url_key = f"model.route.{route_key}"
+    base_url = str(settings.get(url_key) or "")
+    if not base_url:
+        base_url = str(CLASSIFIER_API_URL or "http://172.17.0.1:9999/v1")
+    base_url = base_url.rstrip("/")
+
+    if not messages:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+
+    payload = {
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    data = json.dumps(payload).encode("utf-8")
+    url = f"{base_url}/chat/completions"
+
+    timeout_s = timeout or _classifier_timeout()
+    req = urllib.request.Request(
+        url, data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    proxy_handler = urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(proxy_handler)
+    with opener.open(req, timeout=timeout_s) as response:
+        body = json.loads(response.read().decode("utf-8"))
+
+    content = body["choices"][0]["message"]["content"]
+    return strip_think_blocks(content)
+
 # Control characters to strip (exclude \n, \t, \r)
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -146,48 +209,15 @@ class Guardrail:
     # ── L2: Qwen Call ──
 
     def _call_qwen(self, message: str) -> str:
-        """Call Qwen model via llama.cpp API (synchronous).
-
-        Returns the cleaned response text with <think> blocks stripped.
-        """
-        payload = {
-            "messages": [
-                {"role": "system", "content": self._system_prompt},
-                {"role": "user", "content": message},
-            ],
-            "max_tokens": 30,
-            "temperature": 0,
-        }
-        data = json.dumps(payload).encode("utf-8")
-        url = f"{_get_classifier_url().rstrip('/')}/chat/completions"
-
-        logger.info("  [classifier] >> Qwen: %s | message: %.80s", url, message)
-
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        """调用分类器模型路由（同步）。"""
+        logger.info("  [classifier] >> message: %.80s", message)
+        content = call_model_route(
+            route_key="timing_gate",
+            system_prompt=self._system_prompt,
+            user_message=message,
+            max_tokens=30,
         )
-
-        # 绕过本地 HTTP 代理（Clash 等），直连内网 llama-server
-        proxy_handler = urllib.request.ProxyHandler({})
-        opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(req, timeout=_classifier_timeout()) as response:
-            body = json.loads(response.read().decode("utf-8"))
-
-        content = body["choices"][0]["message"]["content"]
-
-        logger.info("  [classifier] << Qwen raw: %.120s", content)
-
-        # Strip think blocks iteratively — Qwen can produce nested ones
-        for _ in range(5):
-            prev = content
-            content = THINK_PATTERN.sub("", content).strip()
-            if content == prev:
-                break
-
-        logger.info("  [classifier] << Qwen cleaned: %.120s", content)
+        logger.info("  [classifier] << cleaned: %.120s", content)
         return content
 
     # ── L3: Output Validation ──
@@ -333,33 +363,15 @@ class PrivateDecisionClassifier:
 
     def _call_qwen(self, message: str, has_files: bool = False) -> str:
         ctx = f"{message}\n[附带图片]" if has_files else message
-        payload = {
-            "messages": [
-                {"role": "system", "content": PRIVATE_DECISION_PROMPT},
-                {"role": "user", "content": ctx},
-            ],
-            "max_tokens": 120,
-            "temperature": 0,
-        }
-        data = json.dumps(payload).encode("utf-8")
-        url = f"{_get_classifier_url().rstrip('/')}/chat/completions"
         logger.info(
-            "[private_decision] >> Qwen | message=%.80s has_files=%s",
-            message,
-            has_files,
+            "[private_decision] >> message=%.80s has_files=%s", message, has_files,
         )
-
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        return call_model_route(
+            route_key="timing_gate",
+            system_prompt=PRIVATE_DECISION_PROMPT,
+            user_message=ctx,
+            max_tokens=120,
         )
-        proxy_handler = urllib.request.ProxyHandler({})
-        opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(req, timeout=_classifier_timeout()) as response:
-            body = json.loads(response.read().decode("utf-8"))
-        return body["choices"][0]["message"]["content"]
 
     def _parse(self, raw: str) -> dict:
         cleaned = raw or ""
@@ -523,27 +535,12 @@ class TimingGate:
     """群聊节奏判断器——Qwen 三态输出，与 Guardrail 完全独立。"""
 
     def _call_qwen(self, message: str) -> str:
-        payload = {
-            "messages": [
-                {"role": "system", "content": TIMING_GATE_PROMPT},
-                {"role": "user", "content": message},
-            ],
-            "max_tokens": TIMING_GATE_MAX_TOKENS,
-            "temperature": 0,
-        }
-        data = json.dumps(payload).encode("utf-8")
-        url = f"{_get_classifier_url().rstrip('/')}/chat/completions"
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        return call_model_route(
+            route_key="timing_gate",
+            system_prompt=TIMING_GATE_PROMPT,
+            user_message=message,
+            max_tokens=TIMING_GATE_MAX_TOKENS,
         )
-        proxy_handler = urllib.request.ProxyHandler({})
-        opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(req, timeout=_classifier_timeout()) as response:
-            body = json.loads(response.read().decode("utf-8"))
-        return body["choices"][0]["message"]["content"]
 
     def _parse_output(self, raw: str) -> dict:
         result = {"raw": raw[:200], "error_type": None}
