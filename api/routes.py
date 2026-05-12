@@ -1132,6 +1132,7 @@ def _annotate_group_timing_event(
                 result.get("action") if error_type else None
             ),
             "context_summary": _short_text(str(result.get("context") or ""), 1200),
+            "context": str(result.get("context") or "")[:8000],
             "hard_rule": result.get("hard_rule"),
             "directed_to_other": result.get("directed_to_other"),
         }

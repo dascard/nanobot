@@ -449,8 +449,11 @@ function StickerMiniTable({ rows }) {
 
 // ── TimingGate ──
 function TimingGatePage() {
-  const [data, setData] = useState({ items: [], stats: {} })
+  const [data, setData] = useState({ items: [], stats: {}, total: 0 })
   const [groupId, setGroupId] = useState('')
+  const [page, setPage] = useState(1)
+  const [limit, setLimit] = useState(30)
+  const [selected, setSelected] = useState(null)
   const [context, setContext] = useState('<timing_context>\n群: 测试群\n触发原因: ambient\n[用户名]用户A\n[发言内容]刚才这个报错怎么回事\n</timing_context>')
   const [repeats, setRepeats] = useState(1)
   const [testResult, setTestResult] = useState(null)
@@ -460,11 +463,14 @@ function TimingGatePage() {
   const parseErrorOnly = queryParams.get('parse_error_only') === '1'
 
   const load = useCallback(() => {
-    const params = { group_id: groupId, limit: 80 }
+    const params = { group_id: groupId, page, limit }
     if (errorOnly) params.error_only = 1
     if (parseErrorOnly) params.parse_error_only = 1
-    api.get('/timing-gate/events', { params }).then(r => setData(r.data))
-  }, [groupId, errorOnly, parseErrorOnly])
+    api.get('/timing-gate/events', { params }).then(r => {
+      setData(r.data)
+      if (!selected && r.data.items?.length) setSelected(r.data.items[0])
+    }).catch(() => setData({ items: [], stats: {}, total: 0 }))
+  }, [groupId, page, limit, errorOnly, parseErrorOnly])
   useEffect(() => { load() }, [load])
 
   const stats = data.stats || {}
@@ -476,100 +482,126 @@ function TimingGatePage() {
       .finally(() => setRunning(false))
   }
 
+  const handleUseAsTest = () => {
+    const ctx = selected?.context || selected?.input_summary || selected?.pending_text || ''
+    setContext(ctx)
+    if (!selected?.context) alert('该记录没有完整模型输入，仅使用摘要复测')
+  }
+
   return (
     <div>
       <div className="flex items-start justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold">TimingGate 调试</h1>
-          <p className="text-slate-500 text-sm">查看 raw 输出、解析结果、fallback 和延迟统计</p>
+          <p className="text-slate-500 text-sm">左右布局：列表 + 详情/复测</p>
         </div>
-        <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
+        <div className="flex gap-2">
+          <input value={groupId} onChange={e => { setGroupId(e.target.value); setPage(1) }} placeholder="群号过滤"
+            className="w-36 p-2 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
+          <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-6 gap-3 mb-4">
-        <MiniStat label="总记录" value={stats.total || 0} />
         <MiniStat label="continue" value={stats.actions?.continue || 0} tone="emerald" />
         <MiniStat label="wait" value={stats.actions?.wait || 0} tone="amber" />
         <MiniStat label="no_reply" value={stats.actions?.no_reply || 0} />
         <MiniStat label="parse_error" value={stats.parse_error || 0} tone={stats.parse_error ? 'red' : 'slate'} />
-        <MiniStat label="parse_error% " value={`${(stats.parse_error_ratio != null ? (stats.parse_error_ratio * 100).toFixed(1) : '0')}%`} />
-        <MiniStat label="continue% " value={`${(stats.continue_ratio != null ? (stats.continue_ratio * 100).toFixed(1) : '0')}%`} tone="emerald" />
-        <MiniStat label="wait% " value={`${(stats.wait_ratio != null ? (stats.wait_ratio * 100).toFixed(1) : '0')}%`} tone="amber" />
-        <MiniStat label="no_reply% " value={`${(stats.no_reply_ratio != null ? (stats.no_reply_ratio * 100).toFixed(1) : '0')}%`} />
-        <MiniStat label="avg 延迟" value={`${stats.avg_latency_ms || 0}ms`} />
-        <MiniStat label="p95 延迟" value={`${stats.p95_latency_ms || 0}ms`} />
+        <MiniStat label="error%" value={`${(stats.parse_error_ratio != null ? (stats.parse_error_ratio * 100).toFixed(1) : '0')}%`} />
+        <MiniStat label="p95" value={`${stats.p95_latency_ms || 0}ms`} />
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
-        <Card className="p-4 xl:col-span-2">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-medium text-slate-400">最近 TimingGate 记录</h2>
-            <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="按群号过滤"
-              className="w-40 p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs" />
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.5fr)_minmax(420px,1fr)] gap-4">
+        <Card className="overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 260px)' }}>
+          <div className="p-3 border-b border-slate-800 flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-slate-500">limit:</span>
+            <select value={limit} onChange={e => { setLimit(Number(e.target.value)); setPage(1) }}
+              className="p-1.5 rounded bg-slate-900 border border-slate-700 text-xs">
+              <option value="20">20</option><option value="30">30</option><option value="50">50</option>
+            </select>
           </div>
-          <TimingEventsTable rows={data.items || []} />
+          <div className="flex-1 overflow-auto">
+            <TimingEventsTable rows={data.items || []} selectedId={selected?.id} onSelect={setSelected} />
+          </div>
+          <div className="p-2 border-t border-slate-800">
+            <Pagination page={page} total={data.total || 0} limit={limit} onChange={(p) => { setPage(p); setSelected(null) }} />
+          </div>
         </Card>
 
-        <Card className="p-4">
-          <h2 className="text-sm font-medium text-slate-400 mb-3">手动测试</h2>
-          <textarea value={context} onChange={e => setContext(e.target.value)} rows={9}
-            className="w-full p-3 rounded-xl bg-slate-950 border border-slate-700 font-mono text-xs mb-3" />
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-xs text-slate-500">次数</span>
-            <input type="number" min="1" max="20" value={repeats} onChange={e => setRepeats(e.target.value)}
-              className="w-20 p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs" />
-            <button onClick={() => setRepeats(20)} className="px-2 py-1 bg-slate-800 rounded text-xs">20 次稳定性</button>
+        <Card className="p-4 sticky top-4 self-start overflow-auto" style={{ maxHeight: 'calc(100vh - 140px)' }}>
+          <TimingEventDetail event={selected} onUseAsTest={handleUseAsTest} />
+          <div className="mt-4 pt-4 border-t border-slate-800">
+            <h3 className="text-sm font-medium text-slate-400 mb-2">手动测试</h3>
+            <textarea value={context} onChange={e => setContext(e.target.value)} rows={6}
+              className="w-full p-2 rounded-lg bg-slate-950 border border-slate-700 font-mono text-xs mb-2" />
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs text-slate-500">次数</span>
+              <input type="number" min="1" max="20" value={repeats} onChange={e => setRepeats(e.target.value)}
+                className="w-16 p-1.5 rounded bg-slate-950 border border-slate-700 text-xs" />
+              <button onClick={() => setRepeats(20)} className="px-2 py-1 bg-slate-800 rounded text-xs">20次</button>
+            </div>
+            <button onClick={runTest} disabled={running}
+              className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-xs font-medium w-full">
+              {running ? '运行中...' : '运行 TimingGate'}
+            </button>
+            {testResult && <JsonBlock value={testResult} className="mt-2 max-h-60" />}
           </div>
-          <button onClick={runTest} disabled={running}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium">
-            {running ? '运行中...' : '运行 TimingGate'}
-          </button>
-          {testResult && <JsonBlock value={testResult} className="mt-3 max-h-80" />}
         </Card>
       </div>
     </div>
   )
 }
 
-function TimingEventsTable({ rows = [] }) {
-  const [expanded, setExpanded] = useState(null)
-  if (!rows.length) return <div className="text-sm text-slate-600 py-10 text-center">暂无 TimingGate 记录</div>
+function TimingEventsTable({ rows = [], selectedId, onSelect }) {
+  if (!rows.length) return <div className="text-sm text-slate-600 py-10 text-center">暂无记录</div>
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs">
-        <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-2">时间</th><th className="py-2 px-2">群</th><th className="py-2 px-2">触发消息</th><th className="py-2 px-2">action</th><th className="py-2 px-2">mode</th><th className="py-2 px-2">pending</th><th className="py-2 px-2">ctx_ch</th><th className="py-2 px-2">talk</th><th className="py-2 px-2">msg1/5m</th><th className="py-2 px-2">delay</th><th className="py-2 px-2">gen</th><th className="py-2 px-2">latency</th><th className="py-2 px-2">parse</th><th className="py-2 px-2">trigger</th><th className="py-2 px-2">hard</th><th className="py-2 px-2">dir</th><th className="py-2 px-2">fallback</th><th className="py-2 px-2">reason</th></tr></thead>
-        <tbody>
-          {rows.map(r => (
-            <tr key={r.id} onClick={() => setExpanded(expanded === r.id ? null : r.id)}
-              className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer align-top">
-              <td className="py-2 px-2 whitespace-nowrap text-slate-500">{r.time}</td>
-              <td className="py-2 px-2">{r.group_id}</td>
-              <td className="py-2 px-2 max-w-[160px] truncate">{r.trigger_message}</td>
-              <td className="py-2 px-2"><Badge tone={actionTone(r.action)}>{r.action || '-'}</Badge></td>
-              <td className="py-2 px-2 text-slate-500">{r.mode || '-'}</td>
-              <td className="py-2 px-2">{r.pending_count ?? '-'}</td>
-              <td className="py-2 px-2 text-slate-500">{r.context_chars ?? '-'}</td>
-              <td className="py-2 px-2">{r.talk_value != null ? Number(r.talk_value).toFixed(2) : '-'}</td>
-              <td className="py-2 px-2 text-slate-500">{r.msg_1m ?? '-'}/{r.msg_5m ?? '-'}</td>
-              <td className="py-2 px-2">{r.delay_seconds ?? '-'}</td>
-              <td className="py-2 px-2">{r.generation ?? '-'}</td>
-              <td className="py-2 px-2">{r.latency_ms ? `${r.latency_ms}ms` : '-'}</td>
-              <td className="py-2 px-2">{r.parse_error ? <Badge tone="red">parse_error</Badge> : <span className="text-slate-600">ok</span>}</td>
-              <td className="py-2 px-2 max-w-[120px] truncate text-slate-500">{r.trigger_reason || '-'}</td>
-              <td className="py-2 px-2">{r.hard_rule ? <Badge tone="red">{r.hard_rule === 'directed_to_other_no_bot_target' ? 'dir_other' : r.hard_rule}</Badge> : '-'}</td>
-              <td className="py-2 px-2">{r.directed_to_other ? <Badge tone="amber">other</Badge> : '-'}</td>
-              <td className="py-2 px-2 max-w-[100px] truncate">{r.fallback_action || '-'}</td>
-              <td className="py-2 px-2 max-w-[200px] truncate text-slate-400">{r.reason}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {expanded && (() => { const er = rows.find(r => r.id === expanded); return (
-        <div className="mt-3">
-          {er?.pending_text && <div className="mb-2"><div className="text-slate-500 text-xs mb-1">pending_text</div><pre className="whitespace-pre-wrap text-xs bg-slate-950 rounded p-2 max-h-48 overflow-auto">{er.pending_text}</pre></div>}
-          <JsonBlock value={er} className="max-h-96" />
+    <table className="w-full text-xs">
+      <thead className="sticky top-0 bg-slate-900 z-10"><tr className="text-left text-slate-500 border-b border-slate-800">
+        <th className="py-2 px-2">时间</th><th className="py-2 px-2">群</th><th className="py-2 px-2">消息</th><th className="py-2 px-2">action</th><th className="py-2 px-2">delay</th><th className="py-2 px-2">latency</th><th className="py-2 px-2">reason</th>
+      </tr></thead>
+      <tbody>
+        {rows.map(r => (
+          <tr key={r.id} onClick={() => onSelect(r)}
+            className={`border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer ${selectedId === r.id ? 'bg-emerald-500/10' : ''}`}>
+            <td className="py-2 px-2 whitespace-nowrap text-slate-500">{r.time}</td>
+            <td className="py-2 px-2">{r.group_id}</td>
+            <td className="py-2 px-2 max-w-[120px] truncate">{r.trigger_message}</td>
+            <td className="py-2 px-2"><Badge tone={actionTone(r.action)}>{r.action || '-'}</Badge></td>
+            <td className="py-2 px-2">{r.delay_seconds ?? '-'}</td>
+            <td className="py-2 px-2 text-slate-500">{r.latency_ms ? `${r.latency_ms}ms` : '-'}</td>
+            <td className="py-2 px-2 max-w-[120px] truncate text-slate-400 text-[10px]">{r.reason || '-'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function TimingEventDetail({ event, onUseAsTest }) {
+  if (!event) return <div className="text-slate-500 text-sm py-8 text-center">点击左侧记录查看详情</div>
+  const contextText = event.context || event.input_summary || event.pending_text || ''
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-slate-300">#{event.id}</h2>
+        <Badge tone={actionTone(event.action)}>{event.action || '-'}</Badge>
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+        <div>group: {event.group_id}</div><div>latency: {event.latency_ms || '-'}ms</div>
+        <div>gen: {event.generation ?? '-'}</div><div>pending: {event.pending_count ?? '-'}</div>
+        <div>talk: {event.talk_value != null ? Number(event.talk_value).toFixed(2) : '-'}</div><div>mode: {event.mode || '-'}</div>
+        <div>hard: {event.hard_rule || '-'}</div><div>dir: {event.directed_to_other ? 'yes' : '-'}</div>
+      </div>
+      <div><div className="text-xs text-slate-500 mb-1">触发消息</div><div className="text-xs bg-slate-950 rounded p-2 max-h-24 overflow-auto">{event.trigger_message || '-'}</div></div>
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <div className="text-xs text-slate-500">模型输入</div>
+          <button onClick={onUseAsTest} className="px-2 py-0.5 bg-emerald-700/50 hover:bg-emerald-700 rounded text-[10px]">用此复测</button>
         </div>
-      )})()}
+        <pre className="rounded bg-slate-950 border border-slate-800 p-2 text-[10px] whitespace-pre-wrap max-h-48 overflow-auto">{contextText || '(无)'}</pre>
+      </div>
+      <div><div className="text-xs text-slate-500 mb-1">raw</div><pre className="rounded bg-slate-950 border border-slate-800 p-2 text-[10px] whitespace-pre-wrap max-h-32 overflow-auto">{event.raw || '-'}</pre></div>
+      <JsonBlock value={{ action: event.action, delay: event.delay_seconds, reason: event.reason, error_type: event.error_type, parse_error: event.parse_error, fallback: event.fallback_action }} />
     </div>
   )
 }

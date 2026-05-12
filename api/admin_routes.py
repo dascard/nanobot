@@ -323,6 +323,7 @@ def _timing_event_dict(row: ChatLog) -> dict:
         "talk_value": timing.get("talk_value"),
         "msg_1m": timing.get("msg_1m"),
         "msg_5m": timing.get("msg_5m"),
+        "context": timing.get("context", "") or timing.get("model_input", ""),
         "input_summary": timing.get("context_summary", ""),
         "raw": timing.get("raw", ""),
         "action": timing.get("action", ""),
