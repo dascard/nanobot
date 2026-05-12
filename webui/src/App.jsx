@@ -1005,25 +1005,172 @@ function StickerEditModal({ sticker, onClose, onSaved }) {
 
 // ── Block Rules ──
 function BlocksPage() {
+  const tabs = [
+    { key: 'global', label: '全局内容规则' },
+    { key: 'session', label: '局部内容规则' },
+    { key: 'user', label: '用户屏蔽' },
+    { key: 'test', label: '命中测试' },
+  ]
+  const [tab, setTab] = useState('global')
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-2">内容规则 / 屏蔽规则</h1>
+      <p className="text-slate-500 text-sm mb-4">全局/局部内容规则 + 用户屏蔽 + 命中测试</p>
+      <div className="flex gap-2 mb-6 border-b border-slate-800 pb-2">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'global' && <ContentRuleTab scopeType="global" />}
+      {tab === 'session' && <ContentRuleTab scopeType="session" />}
+      {tab === 'user' && <UserBlockTab />}
+      {tab === 'test' && <BlockRuleTestTab />}
+    </div>
+  )
+}
+
+// ── 内容规则 Tab ──
+function ContentRuleTab({ scopeType }) {
+  const [data, setData] = useState({ items: [], total: 0 })
+  const [showModal, setShowModal] = useState(false)
+  const [editRow, setEditRow] = useState(null)
+  const [streams, setStreams] = useState([])
+  const isSession = scopeType === 'session'
+  const load = useCallback(() => {
+    api.get('/content-block-rules', { params: { scope_type: scopeType, limit: 200 } }).then(r => setData(r.data))
+  }, [scopeType])
+  useEffect(() => { load(); if (isSession) api.get('/chat-streams').then(r => setStreams(r.data.items || [])) }, [load, isSession])
+
+  const toggle = (r) => api.post(`/content-block-rules/${r.id}/toggle`).then(load)
+  const del = (r) => { if (confirm('确认删除？')) api.delete(`/content-block-rules/${r.id}`).then(load) }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-slate-500 text-sm">{data.total} 条{scopeType === 'global' ? '全局' : '局部'}规则</p>
+        <button onClick={() => { setEditRow(null); setShowModal(true) }}
+          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium transition-colors">+ 新建</button>
+      </div>
+      <Card className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+            <th className="py-1.5 px-2 font-medium">pattern</th>
+            <th className="py-1.5 px-2 font-medium">类型</th>
+            {isSession && <th className="py-1.5 px-2 font-medium">stream</th>}
+            <th className="py-1.5 px-2 font-medium w-10">禁回</th>
+            <th className="py-1.5 px-2 font-medium w-10">禁学</th>
+            <th className="py-1.5 px-2 font-medium w-10">禁上下</th>
+            <th className="py-1.5 px-2 font-medium">分类</th>
+            <th className="py-1.5 px-2 font-medium">状态</th>
+            <th className="py-1.5 px-2 font-medium">操作</th>
+          </tr></thead>
+          <tbody>
+            {data.items.map(r => (
+              <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                <td className="py-1.5 px-2 font-mono max-w-[150px] truncate" title={r.pattern}>{r.pattern}</td>
+                <td className="py-1.5 px-2 text-slate-400">{r.match_type}</td>
+                {isSession && <td className="py-1.5 px-2 text-slate-500 text-xs max-w-[120px] truncate" title={r.chat_stream_id}>{r.chat_stream_id || '(空)'}</td>}
+                <td className="py-1.5 px-2 text-center">{r.no_reply ? <span className="text-red-400">🚫</span> : '-'}</td>
+                <td className="py-1.5 px-2 text-center">{r.no_learn ? <span className="text-amber-400">🧠</span> : '-'}</td>
+                <td className="py-1.5 px-2 text-center">{r.no_context ? <span className="text-blue-400">📝</span> : '-'}</td>
+                <td className="py-1.5 px-2 text-slate-400">{r.category}</td>
+                <td className="py-1.5 px-2">
+                  <button onClick={() => toggle(r)} className={`px-2 py-0.5 rounded-full text-xs font-medium ${r.enabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'}`}>{r.enabled ? 'ON' : 'OFF'}</button>
+                </td>
+                <td className="py-1.5 px-2">
+                  <div className="flex gap-1">
+                    <button onClick={() => { setEditRow(r); setShowModal(true) }} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">编辑</button>
+                    <button onClick={() => del(r)} className="px-2 py-1 bg-red-700/50 hover:bg-red-700 text-red-300 rounded text-xs">删除</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+      {showModal && (
+        <ContentRuleModal
+          scopeType={scopeType}
+          editRow={editRow}
+          streams={streams}
+          onClose={() => setShowModal(false)}
+          onCreated={() => { setShowModal(false); load() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── 内容规则创建/编辑 Modal ──
+function ContentRuleModal({ scopeType, editRow, streams, onClose, onCreated }) {
+  const def = {
+    pattern: '', match_type: 'contains', scope_type: scopeType, chat_stream_id: '',
+    no_reply: 0, no_learn: 1, no_context: 0, category: 'no_learn', reason: '',
+  }
+  const [f, setF] = useState(editRow || def)
+  const save = () => {
+    if (!f.pattern.trim()) return alert('pattern 不能为空')
+    const payload = { ...f }
+    if (scopeType === 'global') payload.chat_stream_id = ''
+    const req = editRow
+      ? api.put(`/content-block-rules/${editRow.id}`, payload)
+      : api.post('/content-block-rules', payload)
+    req.then(onCreated)
+  }
+  return (
+    <Modal onClose={onClose}>
+      <div className="p-6 max-w-lg">
+        <h2 className="text-lg font-bold mb-4">{editRow ? '编辑' : '新建'}内容规则 ({scopeType === 'global' ? '全局' : '局部'})</h2>
+        <div className="space-y-3">
+          <input value={f.pattern} onChange={e => setF({ ...f, pattern: e.target.value })} placeholder="匹配模式 (pattern)" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
+          <div className="grid grid-cols-2 gap-3">
+            <select value={f.match_type} onChange={e => setF({ ...f, match_type: e.target.value })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm">
+              <option value="contains">contains</option><option value="exact">exact</option><option value="regex">regex</option></select>
+            <input value={f.category} onChange={e => setF({ ...f, category: e.target.value })} placeholder="分类" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
+          </div>
+          {scopeType === 'session' && (
+            <select value={f.chat_stream_id} onChange={e => setF({ ...f, chat_stream_id: e.target.value })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm">
+              <option value="">全部流 (空 = 所有局部)</option>
+              {streams.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          )}
+          <div className="flex items-center gap-4 text-sm">
+            <label className="flex items-center gap-1 text-slate-400"><input type="checkbox" checked={!!f.no_reply} onChange={e => setF({ ...f, no_reply: e.target.checked ? 1 : 0 })} className="rounded" /> 禁止回复</label>
+            <label className="flex items-center gap-1 text-slate-400"><input type="checkbox" checked={!!f.no_learn} onChange={e => setF({ ...f, no_learn: e.target.checked ? 1 : 0 })} className="rounded" /> 禁止学习</label>
+            <label className="flex items-center gap-1 text-slate-400"><input type="checkbox" checked={!!f.no_context} onChange={e => setF({ ...f, no_context: e.target.checked ? 1 : 0 })} className="rounded" /> 禁止入上下文</label>
+          </div>
+          <input value={f.reason} onChange={e => setF({ ...f, reason: e.target.value })} placeholder="原因备注" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
+        </div>
+        <div className="flex gap-2 justify-end mt-4">
+          <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">取消</button>
+          <button onClick={save} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">{editRow ? '保存' : '创建'}</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ── 用户屏蔽 Tab ──
+function UserBlockTab() {
   const [data, setData] = useState({ items: [], total: 0 })
   const [showCreate, setShowCreate] = useState(false)
   const load = useCallback(() => { api.get('/block-rules', { params: { limit: 50 } }).then(r => setData(r.data)) }, [])
   useEffect(() => { load() }, [load])
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h1 className="text-2xl font-bold">屏蔽规则</h1>
-          <p className="text-slate-500 text-sm">{data.total} 条规则</p>
-        </div>
-        <button onClick={() => setShowCreate(true)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium transition-colors">+ 新建</button>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-slate-500 text-sm">{data.total} 条规则</p>
+        <button onClick={() => setShowCreate(true)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm font-medium">+ 新建</button>
       </div>
       <Card>
         <table className="w-full text-sm">
           <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-3 font-medium">用户</th><th className="py-2 px-3 font-medium">类型</th><th className="py-2 px-3 font-medium">模式</th><th className="py-2 px-3 font-medium">原因</th><th className="py-2 px-3 font-medium">状态</th><th className="py-2 px-3 font-medium">操作</th></tr></thead>
           <tbody>
             {data.items.map(r => (
-              <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+              <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                 <td className="py-2 px-3">{r.user_id}</td>
                 <td className="py-2 px-3 text-slate-400">{r.target_type}</td>
                 <td className="py-2 px-3 text-slate-400">{r.rule_mode}</td>
@@ -1032,9 +1179,9 @@ function BlocksPage() {
                 <td className="py-2 px-3">
                   <div className="flex gap-1">
                     <button onClick={() => api.put(`/block-rules/${r.id}`, { enabled: r.enabled ? 0 : 1 }).then(load)}
-                      className={`px-2 py-1 rounded-lg text-xs transition-colors ${r.enabled ? 'bg-amber-700/50 hover:bg-amber-700 text-amber-300' : 'bg-emerald-700/50 hover:bg-emerald-700 text-emerald-300'}`}>{r.enabled ? '禁用' : '启用'}</button>
+                      className={`px-2 py-1 rounded-lg text-xs ${r.enabled ? 'bg-amber-700/50 hover:bg-amber-700 text-amber-300' : 'bg-emerald-700/50 hover:bg-emerald-700 text-emerald-300'}`}>{r.enabled ? '禁用' : '启用'}</button>
                     <button onClick={() => { if (confirm('确认删除?')) api.delete(`/block-rules/${r.id}`).then(load) }}
-                      className="px-2 py-1 bg-red-700/50 hover:bg-red-700 text-red-300 rounded-lg text-xs transition-colors">删除</button>
+                      className="px-2 py-1 bg-red-700/50 hover:bg-red-700 text-red-300 rounded-lg text-xs">删除</button>
                   </div>
                 </td>
               </tr>
@@ -1064,6 +1211,59 @@ function BlockCreateModal({ onClose, onCreated }) {
         </div>
       </div>
     </Modal>
+  )
+}
+
+// ── 命中测试 Tab ──
+function BlockRuleTestTab() {
+  const [msg, setMsg] = useState('')
+  const [streamId, setStreamId] = useState('')
+  const [result, setResult] = useState(null)
+  const [streams, setStreams] = useState([])
+  useEffect(() => { api.get('/chat-streams').then(r => setStreams(r.data.items || [])) }, [])
+  const test = () => {
+    if (!msg.trim()) return
+    api.post('/block-rules/test', { message: msg.trim(), chat_stream_id: streamId }).then(r => setResult(r.data))
+  }
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div>
+        <h2 className="text-lg font-medium mb-3">测试消息匹配</h2>
+        <textarea value={msg} onChange={e => setMsg(e.target.value)} rows={4}
+          placeholder="输入要测试的消息内容..."
+          className="w-full p-3 rounded-xl bg-slate-900 border border-slate-700 text-sm mb-3 resize-none" />
+        <select value={streamId} onChange={e => setStreamId(e.target.value)}
+          className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mb-3">
+          <option value="">无指定流 (全局规则)</option>
+          {streams.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button onClick={test} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">测试匹配</button>
+      </div>
+      <div>
+        <h2 className="text-lg font-medium mb-3">结果</h2>
+        {result === null ? (
+          <p className="text-slate-500 text-sm">输入消息后点击测试</p>
+        ) : result.matched ? (
+          <div className="space-y-3">
+            <Badge tone="red">已命中</Badge>
+            <div className="text-sm text-slate-300">
+              <div className="text-xs text-slate-500 mb-1">命中规则:</div>
+              {result.rules.map((r, i) => (
+                <div key={i} className="p-2 bg-slate-800 rounded-lg text-xs mb-2">
+                  <div className="font-mono text-slate-200">{r.pattern}</div>
+                  <div className="text-slate-500 mt-1">
+                    match_type: {r.match_type} | scope: {r.scope_type} | category: {r.category}
+                    {r.chat_stream_id && <span> | stream: {r.chat_stream_id}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <Badge tone="emerald">未命中</Badge>
+        )}
+      </div>
+    </div>
   )
 }
 
