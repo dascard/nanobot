@@ -699,12 +699,16 @@ def timing_gate_events(
     q = db.query(ChatLog).filter(ChatLog.meta_json.contains("timing_gate"))
     if group_id:
         q = q.filter(ChatLog.session_id == _group_session_id(group_id))
-    rows = q.order_by(ChatLog.id.desc()).offset((max(page, 1) - 1) * limit).limit(limit).all()
+    _limit = max(1, min(int(limit), 200))
+    # 过滤时多取 10 倍原始记录再切片，避免页面空
+    raw_limit = _limit * 10 if (error_only or parse_error_only) else _limit
+    rows = q.order_by(ChatLog.id.desc()).offset((max(page, 1) - 1) * _limit).limit(raw_limit).all()
     items = [_timing_event_dict(r) for r in rows if _timing_meta(r)]
     if error_only:
         items = [x for x in items if x.get("error_type")]
     if parse_error_only:
         items = [x for x in items if x.get("parse_error")]
+    items = items[:_limit]
 
     stat_rows = q.order_by(ChatLog.id.desc()).limit(500).all()
     stat_items = [_timing_event_dict(r) for r in stat_rows if _timing_meta(r)]

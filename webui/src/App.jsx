@@ -260,7 +260,7 @@ function Dashboard() {
         <MiniStat label="最近 1h 群消息数" value={c.group_messages_1h} />
         <MiniStat label="最近 1h 回复数" value={c.replies_1h} tone="emerald" />
         <MiniStat label="TimingGate 错误数" value={c.recent_errors} tone={c.recent_errors ? 'red' : 'slate'} onClick={() => navigate('/timing-gate?error_only=1')} />
-        <MiniStat label="TimingGate parse_error" value={c.timing_parse_errors} tone={c.timing_parse_errors ? 'red' : 'slate'} />
+        <MiniStat label="TimingGate parse_error" value={c.timing_parse_errors} tone={c.timing_parse_errors ? 'red' : 'slate'} onClick={() => navigate('/timing-gate?parse_error_only=1')} />
         <MiniStat label="Sticker 缓存失败" value={c.sticker_cache_failures} tone={c.sticker_cache_failures ? 'amber' : 'slate'} />
         <MiniStat label="打标失败" value={c.tagging_failures} tone={c.tagging_failures ? 'amber' : 'slate'} />
         <MiniStat label="打标描述失败" value={c.sticker_describe_failures || 0} tone={c.sticker_describe_failures ? 'amber' : 'slate'} />
@@ -457,12 +457,14 @@ function TimingGatePage() {
   const [running, setRunning] = useState(false)
   const queryParams = new URLSearchParams(window.location.search)
   const errorOnly = queryParams.get('error_only') === '1'
+  const parseErrorOnly = queryParams.get('parse_error_only') === '1'
 
   const load = useCallback(() => {
     const params = { group_id: groupId, limit: 80 }
     if (errorOnly) params.error_only = 1
+    if (parseErrorOnly) params.parse_error_only = 1
     api.get('/timing-gate/events', { params }).then(r => setData(r.data))
-  }, [groupId, errorOnly])
+  }, [groupId, errorOnly, parseErrorOnly])
   useEffect(() => { load() }, [load])
 
   const stats = data.stats || {}
