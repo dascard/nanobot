@@ -744,6 +744,40 @@ def test_sticker_register_search_and_disable_api(client):
     assert search_after_disable.json()["results"] == []
 
 
+def test_public_sticker_image_returns_cached_file(client, db_session):
+    import os
+    from core.database import StickerMemory
+    from core.sticker_memory import register_sticker
+    from core.sticker_preview import _cache_dir
+
+    local_path = os.path.join(_cache_dir(), "unit-public-api-sticker.png")
+    body = b"fake-public-image"
+    with open(local_path, "wb") as f:
+        f.write(body)
+    try:
+        sticker = register_sticker(
+            db_session,
+            chat_stream_id="qq:123:group",
+            file_ref="https://example.com/public-api.png",
+            sticker_hash="public-api-hash",
+            description="公开图片端点",
+        )
+        row = db_session.query(StickerMemory).filter_by(id=sticker["id"]).one()
+        row.local_path = local_path
+        row.preview_status = "ok"
+        db_session.commit()
+
+        resp = client.get(f"/api/v1/stickers/{sticker['id']}/image")
+
+        assert resp.status_code == 200
+        assert resp.content == body
+    finally:
+        try:
+            os.remove(local_path)
+        except FileNotFoundError:
+            pass
+
+
 def test_sticker_register_auto_describe_adds_background_task(db_session):
     from fastapi import BackgroundTasks
     from api.routes import StickerRegisterRequest, register_sticker_endpoint

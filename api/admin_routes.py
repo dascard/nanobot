@@ -1241,13 +1241,23 @@ def delete_block_rule(rule_id: int, request: Request, db: Session = Depends(get_
 # ═══════════════════════════════════════════
 
 @router.get("/configs")
-def list_configs(search: str = "", page: int = 1, limit: int = 20,
+def list_configs(search: str = "", page: int = 1, limit: int = 20, effective: int = 0,
                  db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     q = db.query(ChatStreamConfig)
     if search:
         q = q.filter(ChatStreamConfig.chat_stream_id.contains(search))
     total = q.count()
     rows = q.order_by(ChatStreamConfig.chat_stream_id).offset((page - 1) * limit).limit(limit).all()
+
+    if effective:
+        items = []
+        for r in rows:
+            cfg = _config_dict(r)
+            cfg["has_override"] = True
+            cfg["source"] = "db"
+            items.append(cfg)
+        return {"items": items, "total": len(items)}
+
     return {"total": total, "page": page, "items": [_config_dict(r) for r in rows]}
 
 
@@ -1292,6 +1302,17 @@ def update_config(chat_stream_id: str, body: ConfigUpdate, request: Request, db:
     db.commit()
     _audit(db, "update_config", "config", chat_stream_id, updates, ip_address=_client_ip(request))
     return _config_dict(row)
+
+
+@router.delete("/configs/{chat_stream_id:path}")
+def delete_config(chat_stream_id: str, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    row = db.query(ChatStreamConfig).filter(ChatStreamConfig.chat_stream_id == chat_stream_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Config not found")
+    db.delete(row)
+    db.commit()
+    _audit_request(db, request, "delete_config", "config", chat_stream_id)
+    return {"ok": True}
 
 
 # ═══════════════════════════════════════════
@@ -1519,53 +1540,109 @@ def rollback_prompt_backup(backup_name: str, db: Session = Depends(get_db), _aut
 # ═══════════════════════════════════════════
 
 @router.get("/models/status")
-def model_status(_auth=Depends(verify_admin)):
+def models_status(_auth=Depends(verify_admin)):
+    from core.settings_service import settings
     from config import (
-        NEW_API_BASE_URL, NEW_API_KEY, NEW_API_TIMEOUT,
-        LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
+        NEW_API_BASE_URL, NEW_API_KEY,
         CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
     )
-    from clients.model_registry import registry
-    from clients.new_api_client import NewAPIClient
+    from clients.classifier_client import Guardrail
+    import os
 
-    models = []
-    tracker = None
+    api_routes = {
+        "reply": {
+            "stage": "reply", "label": "主回复模型",
+            "model": settings.get("model.reply") or os.environ.get("LLM_MODEL_REPLY", ""),
+            "provider": "openai-compatible",
+            "base_url": str(NEW_API_BASE_URL or ""),
+            "api_key_configured": bool(NEW_API_KEY),
+            "editable": True,
+        },
+        "fast": {
+            "stage": "fast", "label": "快速模型",
+            "model": settings.get("model.fast") or os.environ.get("LLM_MODEL_FAST", ""),
+            "provider": "openai-compatible",
+            "base_url": str(NEW_API_BASE_URL or ""),
+            "api_key_configured": bool(NEW_API_KEY),
+            "editable": True,
+        },
+        "smart": {
+            "stage": "smart", "label": "智能模型",
+            "model": settings.get("model.smart") or os.environ.get("LLM_MODEL_SMART", ""),
+            "provider": "openai-compatible",
+            "base_url": str(NEW_API_BASE_URL or ""),
+            "api_key_configured": bool(NEW_API_KEY),
+            "editable": True,
+        },
+        "timing_gate": {
+            "stage": "timing_gate", "label": "TimingGate 判定",
+            "model": "Qwen",
+            "api_url": settings.get("model.route.timing_gate") or str(CLASSIFIER_API_URL or ""),
+            "editable": True,
+        },
+        "vision": {
+            "stage": "vision", "label": "图片/表情包描述",
+            "model": "Qwen-VL",
+            "api_url": settings.get("model.route.sticker_describe") or str(IMAGE_SUMMARY_API_URL or ""),
+            "editable": True,
+        },
+    }
+
+    # Persona embedder status
+    persona_loaded = False
+    persona_error = ""
     try:
-        tracker = NewAPIClient.get_failure_tracker()
+        from core.persona_preprocess import _EMBEDDER_MODEL, embed_text
+        persona_loaded = True
+    except Exception as e:
+        persona_error = str(e)[:200]
+
+    # NLI status
+    nli_loaded = False
+    nli_error = ""
+    try:
+        from core.persona_preprocess import _NLI_MODEL
+        nli_loaded = True
+    except Exception as e:
+        nli_error = str(e)[:200]
+
+    sentinel_loaded = False
+    try:
+        g = Guardrail()
+        sentinel_loaded = g._sentinel is not None
     except Exception:
-        tracker = None
+        sentinel_loaded = False
 
-    for item in registry.data.get("models", [])[:300]:
-        model_id = str(item.get("id") or "")
-        disabled = tracker.sync_is_disabled(model_id) if tracker is not None and model_id else False
-        models.append({
-            "name": model_id,
-            "provider": item.get("provider", "new-api"),
-            "tier": item.get("tier", ""),
-            "base_url": NEW_API_BASE_URL,
-            "available": not disabled,
-            "disabled": disabled,
-            "intelligence": item.get("intelligence", 0),
-            "cost_input_1m": item.get("cost_input_1m", 0),
-            "tags": item.get("tags", []),
-            "timeout": NEW_API_TIMEOUT,
-            "max_tokens": "",
-            "temperature": "",
-            "recent_error": "熔断冷却中" if disabled else "",
-        })
-
-    configured = [
-        {"role": "主模型", "name": LLM_MODEL_REPLY},
-        {"role": "快模型", "name": LLM_MODEL_FAST},
-        {"role": "智能模型", "name": LLM_MODEL_SMART},
-        {"role": "TimingGate", "name": "Qwen TimingGate", "base_url": CLASSIFIER_API_URL},
-        {"role": "图片打标", "name": "Qwen Vision", "base_url": IMAGE_SUMMARY_API_URL},
-    ]
     return {
-        "base_url": NEW_API_BASE_URL,
-        "api_key_configured": bool(NEW_API_KEY),
-        "configured": configured,
-        "models": models,
+        "api_routes": api_routes,
+        "local_components": {
+            "persona_embed": {
+                "model": "BAAI/bge-base-zh-v1.5",
+                "loader": "sentence-transformers / HuggingFace",
+                "loaded": persona_loaded,
+                "error": persona_error,
+                "role": "PersonaFact/PersonaBehavior 语义去重、聚类",
+                "editable": False,
+            },
+            "nli": {
+                "model": "roberta-large-mnli",
+                "loader": "transformers pipeline / HuggingFace",
+                "loaded": nli_loaded,
+                "error": nli_error,
+                "role": "画像矛盾检测 (fallback: cosine)",
+                "editable": False,
+            },
+            "sentinel": {
+                "model": "prompt-injection-sentinel",
+                "loader": "transformers pipeline",
+                "loaded": sentinel_loaded,
+                "role": "L1 prompt injection 检测",
+                "editable": False,
+            },
+        },
+        "unsupported": {
+            "rerank": {"implemented": False, "note": "当前仓库没有 rerank pipeline"},
+        },
     }
 
 

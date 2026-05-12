@@ -92,7 +92,7 @@ const NAV = [
   { to: '/blocks', label: '屏蔽' },
   { to: '/logs', label: '日志' },
   { to: '/audit', label: '审计' },
-  { to: '/configs', label: '配置' },
+  { to: '/configs', label: '群聊策略' },
   { to: '/settings', label: '设置' },
   { to: '/memory', label: '群体记忆' },
   { to: '/evals', label: 'Eval 评测' },
@@ -106,8 +106,8 @@ function Layout({ children, onLogout }) {
     api.get('/version').then(r => setVersion(r.data)).catch(() => setVersion(null))
   }, [])
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 flex">
-      <nav className="w-48 bg-slate-900/80 backdrop-blur-sm border-r border-slate-800 p-4 flex flex-col gap-0.5">
+    <div className="h-screen bg-slate-950 text-slate-200 flex overflow-hidden">
+      <nav className="w-48 h-screen overflow-y-auto bg-slate-900/80 backdrop-blur-sm border-r border-slate-800 p-4 flex flex-col gap-0.5">
         <div className="mb-6 px-2">
           <div className="flex items-center gap-2">
             <div className="w-7 h-7 bg-emerald-500/20 rounded-lg flex items-center justify-center">
@@ -131,7 +131,7 @@ function Layout({ children, onLogout }) {
           退出
         </button>
       </nav>
-      <main className="flex-1 p-6 overflow-auto"><ErrorBoundary key={location.pathname}>{children}</ErrorBoundary></main>
+      <main className="flex-1 h-screen overflow-y-auto p-6"><ErrorBoundary key={location.pathname}>{children}</ErrorBoundary></main>
     </div>
   )
 }
@@ -238,9 +238,13 @@ function AuthImage({ url, alt, className, onClick }) {
 // ── Dashboard ──
 function Dashboard() {
   const [data, setData] = useState(null)
+  const [modelStatus, setModelStatus] = useState(null)
   const navigate = useNavigate()
   useEffect(() => {
     api.get('/overview').then(r => setData(r.data)).catch(() => setData(null))
+  }, [])
+  useEffect(() => {
+    api.get('/models/status').then(r => setModelStatus(r.data)).catch(() => {})
   }, [])
   if (!data) return <Spinner />
   const c = data.counters || {}
@@ -286,12 +290,12 @@ function Dashboard() {
 
         <Card className="p-5">
           <h2 className="text-sm font-medium text-slate-400 mb-4">模型路由状态</h2>
-          <div className="space-y-3 text-sm">
-            <div className="flex justify-between gap-3"><span className="text-slate-500">主模型</span><span className="truncate">{data.models?.main || '-'}</span></div>
-            <div className="flex justify-between gap-3"><span className="text-slate-500">快模型</span><span className="truncate">{data.models?.fast || '-'}</span></div>
-            <div className="flex justify-between gap-3"><span className="text-slate-500">智能模型</span><span className="truncate">{data.models?.smart || '-'}</span></div>
-            <div className="flex justify-between gap-3"><span className="text-slate-500">TimingGate</span><span className="truncate">{data.models?.timing_gate || '-'}</span></div>
-          </div>
+          {modelStatus && Object.values(modelStatus.api_routes).map(r => (
+            <div key={r.stage} className="flex items-center justify-between py-2 border-b border-slate-800/50 text-xs">
+              <span className="text-slate-400">{r.label}</span>
+              <span className="text-slate-300 font-mono truncate max-w-[200px]">{r.model || '未配置'}</span>
+            </div>
+          ))}
           <div className="mt-5 flex gap-2">
             <NavLink to="/models" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">模型测试</NavLink>
             <NavLink to="/timing-gate" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">TimingGate 调试</NavLink>
@@ -397,7 +401,7 @@ function GroupDetailPage() {
         <MiniStat label="last trigger" value={data.runtime?.last_trigger_reason || '-'} />
         <MiniStat label="total_wait_s" value={data.runtime?.total_wait_s != null ? `${Number(data.runtime.total_wait_s).toFixed(1)}s` : '-'} />
       </div>
-      <Card className="p-2 mb-4 flex gap-1 flex-wrap">
+      <Card className="sticky top-0 z-10 p-2 mb-4 flex gap-1 flex-wrap bg-slate-950/95 backdrop-blur border border-slate-800">
         {[
           ['ambient', '最近 ambient'],
           ['replies', 'bot 回复'],
@@ -659,10 +663,6 @@ function StickerDedupPage() {
       <div className="flex items-start justify-between mb-4">
         <div>
           <h1 className="text-2xl font-bold">去重工作台</h1>
-          <div className="flex items-center gap-2 mt-1">
-            <button onClick={() => setDedupTab('exact')} className={`px-3 py-1 rounded text-xs ${dedupTab === 'exact' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400'}`}>精确重复</button>
-            <button onClick={() => { setDedupTab('near'); loadNear() }} className={`px-3 py-1 rounded text-xs ${dedupTab === 'near' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400'}`}>疑似重复</button>
-          </div>
         </div>
         <div className="flex gap-2">
           <button onClick={() => navigate('/stickers')} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">返回列表</button>
@@ -674,6 +674,10 @@ function StickerDedupPage() {
           <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
         </div>
       </div>
+      <Card className="sticky top-0 z-10 p-2 mb-4 flex gap-1 flex-wrap bg-slate-950/95 backdrop-blur border border-slate-800">
+        <button onClick={() => setDedupTab('exact')} className={`px-3 py-1 rounded text-xs ${dedupTab === 'exact' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400'}`}>精确重复</button>
+        <button onClick={() => { setDedupTab('near'); loadNear() }} className={`px-3 py-1 rounded text-xs ${dedupTab === 'near' ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400'}`}>疑似重复</button>
+      </Card>
       {error && <Card className="p-4 mb-4 border border-red-800 bg-red-900/20"><p className="text-sm text-red-400">{error}</p></Card>}
 
       {dedupTab === 'exact' && (
@@ -1067,26 +1071,73 @@ function BlockCreateModal({ onClose, onCreated }) {
 function ConfigsPage() {
   const [data, setData] = useState({ items: [], total: 0 })
   const [edit, setEdit] = useState(null)
-  const load = useCallback(() => { api.get('/configs', { params: { limit: 50 } }).then(r => setData(r.data)) }, [])
+  const [viewMode, setViewMode] = useState('effective')
+  const load = useCallback(() => {
+    const params = { limit: 50 }
+    if (viewMode === 'effective') params.effective = 1
+    api.get('/configs', { params }).then(r => setData(r.data))
+  }, [viewMode])
   useEffect(() => { load() }, [load])
+  const deleteConfig = (sid) => {
+    if (!confirm(`确认删除 ${sid} 的覆写配置？将恢复为系统默认值。`)) return
+    api.delete(`/configs/${encodeURIComponent(sid)}`).then(load).catch(e => alert(e.response?.data?.detail || e.message))
+  }
   return (
     <div>
-      <div className="mb-4"><h1 className="text-2xl font-bold">流配置</h1><p className="text-slate-500 text-sm">{data.total} 个配置</p></div>
-      <Card>
+      <div className="mb-4">
+        <h1 className="text-2xl font-bold">群聊策略配置</h1>
+        <p className="text-slate-500 text-sm mt-1">按群聊/私聊流覆写 talk_value、表达学习、群画像等策略。未覆写的流使用系统默认值。</p>
+      </div>
+      <div className="flex items-center gap-2 mb-4">
+        <div className="flex gap-1 bg-slate-900 rounded-lg p-0.5">
+          <button onClick={() => setViewMode('effective')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${viewMode === 'effective' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>有效配置</button>
+          <button onClick={() => setViewMode('override')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${viewMode === 'override' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>仅覆写</button>
+        </div>
+        <span className="text-xs text-slate-500">{data.total} 条</span>
+      </div>
+      <Card className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-2 font-medium">流 ID</th><th className="py-2 px-2 font-medium">发言</th><th className="py-2 px-2 font-medium w-10">@</th><th className="py-2 px-2 font-medium w-10">E</th><th className="py-2 px-2 font-medium w-10">L</th><th className="py-2 px-2 font-medium w-10">J</th><th className="py-2 px-2 font-medium w-10" title="GroupProfile 群画像注入">画像</th><th className="py-2 px-2 font-medium">平滑</th><th className="py-2 px-2 font-medium"></th></tr></thead>
+          <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+            <th className="py-2 px-3 font-medium">流 ID</th>
+            <th className="py-2 px-3 font-medium">发言值</th>
+            <th className="py-2 px-3 font-medium">@回复</th>
+            <th className="py-2 px-3 font-medium">表达注入</th>
+            <th className="py-2 px-3 font-medium">表达学习</th>
+            <th className="py-2 px-3 font-medium">黑话学习</th>
+            <th className="py-2 px-3 font-medium">群画像</th>
+            <th className="py-2 px-3 font-medium">平滑轮数</th>
+            {viewMode === 'effective' && <th className="py-2 px-3 font-medium">来源</th>}
+            <th className="py-2 px-3 font-medium"></th>
+          </tr></thead>
           <tbody>
             {data.items.map(c => (
               <tr key={c.chat_stream_id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                <td className="py-2 px-2 truncate max-w-[300px] text-xs text-slate-400">{c.chat_stream_id}</td>
-                <td className="py-2 px-2">{c.talk_value}</td>
-                <td className="py-2 px-2">{c.mentioned_bot_reply ? '✓' : '—'}</td>
-                <td className="py-2 px-2">{c.use_expression ? '✓' : '—'}</td>
-                <td className="py-2 px-2">{c.enable_expression_learning ? '✓' : '—'}</td>
-                <td className="py-2 px-2">{c.enable_jargon_learning ? '✓' : '—'}</td>
-                <td className="py-2 px-2"><Badge tone={c.group_profile_mode === 'on' ? 'emerald' : c.group_profile_mode === 'preview' ? 'amber' : 'slate'}>{c.group_profile_mode || 'off'}</Badge></td>
-                <td className="py-2 px-2">{c.planner_smooth}</td>
-                <td className="py-2 px-2"><button onClick={() => setEdit(c)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">编辑</button></td>
+                <td className="py-2 px-3 truncate max-w-[220px] text-xs text-slate-400">{c.chat_stream_id}</td>
+                <td className="py-2 px-3">{c.talk_value}</td>
+                <td className="py-2 px-3">{c.mentioned_bot_reply ? '✓' : '—'}</td>
+                <td className="py-2 px-3">{c.use_expression ? '✓' : '—'}</td>
+                <td className="py-2 px-3">{c.enable_expression_learning ? '✓' : '—'}</td>
+                <td className="py-2 px-3">{c.enable_jargon_learning ? '✓' : '—'}</td>
+                <td className="py-2 px-3"><Badge tone={c.group_profile_mode === 'on' ? 'emerald' : c.group_profile_mode === 'preview' ? 'amber' : 'slate'}>{c.group_profile_mode || 'off'}</Badge></td>
+                <td className="py-2 px-3">{c.planner_smooth}</td>
+                {viewMode === 'effective' && (
+                  <td className="py-2 px-3">
+                    <Badge tone={c.source === 'db' ? 'blue' : 'slate'}>{c.source === 'db' ? 'DB 覆写' : '默认'}</Badge>
+                  </td>
+                )}
+                <td className="py-2 px-3">
+                  <div className="flex gap-1">
+                    <button onClick={() => setEdit(c)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">编辑</button>
+                    {(viewMode === 'effective' && c.has_override) || viewMode === 'override' ? (
+                      <button onClick={() => deleteConfig(c.chat_stream_id)} className="px-2 py-1 bg-red-700/50 hover:bg-red-700 text-red-300 rounded-lg text-xs transition-colors">删除覆写</button>
+                    ) : null}
+                    {viewMode === 'effective' && !c.has_override && (
+                      <button onClick={() => { setEdit(c); }} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 text-emerald-300 rounded-lg text-xs transition-colors">创建覆写</button>
+                    )}
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -1642,84 +1693,67 @@ function PromptPage() {
 
 // ── Models ──
 function ModelsPage() {
-  const [data, setData] = useState(null)
-  const [prompt, setPrompt] = useState('用一句话回复：Nanobot 模型连通性测试')
-  const [model, setModel] = useState('')
-  const [jsonMode, setJsonMode] = useState(true)
-  const [result, setResult] = useState(null)
-  const [running, setRunning] = useState(false)
+  const [status, setStatus] = useState(null)
+  useEffect(() => { api.get('/models/status').then(r => setStatus(r.data)) }, [])
 
-  const load = () => api.get('/models/status').then(r => setData(r.data))
-  useEffect(() => { load() }, [])
-  const run = () => {
-    setRunning(true)
-    api.post('/models/chat-test', { model, prompt, json_mode: jsonMode })
-      .then(r => setResult(r.data))
-      .catch(e => alert(e.response?.data?.detail || e.message))
-      .finally(() => setRunning(false))
-  }
-  if (!data) return <Spinner />
+  if (!status) return <Spinner />
+
   return (
     <div>
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <h1 className="text-2xl font-bold">模型路由与测试</h1>
-          <p className="text-slate-500 text-sm">主模型、快模型、TimingGate 和图片打标模型状态</p>
-        </div>
-        <Badge tone={data.api_key_configured ? 'emerald' : 'red'}>{data.api_key_configured ? 'NEW_API_KEY 已配置' : 'NEW_API_KEY 未配置'}</Badge>
+      <h1 className="text-2xl font-bold mb-2">模型路由</h1>
+      <p className="text-slate-500 text-sm mb-6">API 模型路由 + 本地语义组件，不包含未实现能力</p>
+
+      {/* API Routes */}
+      <h2 className="text-lg font-medium mb-3">API 模型路由</h2>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-8">
+        {Object.values(status.api_routes).map(r => (
+          <Card key={r.stage} className="p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-medium text-sm">{r.label}</h3>
+              <Badge tone={r.editable ? 'emerald' : 'slate'}>{r.editable ? '可编辑' : '只读'}</Badge>
+            </div>
+            <div className="space-y-1 text-xs text-slate-400">
+              <div>模型: <span className="text-slate-200 font-mono">{r.model || '未配置'}</span></div>
+              {r.base_url && <div>base_url: <span className="text-slate-500">{r.base_url}</span></div>}
+              {r.api_url && <div>api_url: <span className="text-slate-500">{r.api_url}</span></div>}
+              {r.api_key_configured !== undefined && <div>API key: {r.api_key_configured ? '✅ 已配置' : '❌ 未配置'}</div>}
+            </div>
+          </Card>
+        ))}
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
-        <Card className="p-4">
-          <h2 className="text-sm font-medium text-slate-400 mb-3">当前配置</h2>
-          <div className="space-y-2">
-            {(data.configured || []).map(item => (
-              <div key={item.role} className="flex justify-between gap-3 text-sm">
-                <span className="text-slate-500">{item.role}</span>
-                <span className="truncate">{item.name || item.base_url || '-'}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-        <Card className="p-4 xl:col-span-2">
-          <h2 className="text-sm font-medium text-slate-400 mb-3">连通性测试</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
-            <select value={model} onChange={e => setModel(e.target.value)} className="p-2 rounded-xl bg-slate-950 border border-slate-700 text-sm">
-              <option value="">自动路由</option>
-              {(data.models || []).map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
-            </select>
-            <label className="flex items-center gap-2 text-sm text-slate-400 px-2">
-              <input type="checkbox" checked={jsonMode} onChange={e => setJsonMode(e.target.checked)} className="accent-emerald-500" />
-              JSON 输出测试
-            </label>
-            <button onClick={run} disabled={running}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium">
-              {running ? '测试中...' : '测试普通聊天/JSON'}
-            </button>
-          </div>
-          <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={3}
-            className="w-full p-3 rounded-xl bg-slate-950 border border-slate-700 text-sm mb-3" />
-          {result && <JsonBlock value={result} className="max-h-80" />}
-        </Card>
+      {/* Local Components */}
+      <h2 className="text-lg font-medium mb-3">本地语义组件</h2>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-8">
+        {Object.entries(status.local_components || {}).map(([key, c]) => (
+          <Card key={key} className="p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-medium text-sm">{key}</h3>
+              <Badge tone={c.loaded ? 'emerald' : c.error ? 'red' : 'amber'}>{c.loaded ? '已加载' : c.error ? '加载失败' : '未加载'}</Badge>
+            </div>
+            <div className="space-y-1 text-xs text-slate-400">
+              <div>模型: <span className="text-slate-200">{c.model}</span></div>
+              <div>加载器: {c.loader}</div>
+              <div>用途: {c.role}</div>
+              {c.error && <div className="text-red-400">{c.error}</div>}
+            </div>
+          </Card>
+        ))}
       </div>
 
-      <Card className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="px-3 py-2">模型</th><th className="px-3 py-2">tier</th><th className="px-3 py-2">base_url</th><th className="px-3 py-2">可用</th><th className="px-3 py-2">intel</th><th className="px-3 py-2">cost</th><th className="px-3 py-2">timeout</th><th className="px-3 py-2">最近错误</th></tr></thead>
-          <tbody>{(data.models || []).map(m => (
-            <tr key={m.name} className="border-b border-slate-800/50">
-              <td className="px-3 py-2 font-mono max-w-[260px] truncate">{m.name}</td>
-              <td className="px-3 py-2">{m.tier}</td>
-              <td className="px-3 py-2 max-w-[260px] truncate text-slate-500">{m.base_url}</td>
-              <td className="px-3 py-2"><Badge tone={m.available ? 'emerald' : 'red'}>{m.available ? '可用' : '不可用'}</Badge></td>
-              <td className="px-3 py-2">{m.intelligence}</td>
-              <td className="px-3 py-2">{m.cost_input_1m}</td>
-              <td className="px-3 py-2">{m.timeout}s</td>
-              <td className="px-3 py-2 text-red-300">{m.recent_error || '-'}</td>
-            </tr>
-          ))}</tbody>
-        </table>
-      </Card>
+      {/* Unsupported */}
+      <h2 className="text-lg font-medium mb-3 text-slate-500">未实现</h2>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        {Object.entries(status.unsupported || {}).map(([key, u]) => (
+          <Card key={key} className="p-4 opacity-50">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-medium text-sm text-slate-500">{key}</h3>
+              <Badge tone="slate">未实现</Badge>
+            </div>
+            <p className="text-xs text-slate-600">{u.note}</p>
+          </Card>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1956,12 +1990,12 @@ function EvalsPage() {
           采样完成: 新增 {sampleInfo.created} 个候选
         </div>
       )}
-      <div className="flex gap-1 bg-slate-900 rounded-lg p-0.5 mb-4 inline-flex">
+      <Card className="sticky top-0 z-10 p-2 mb-4 flex gap-1 flex-wrap bg-slate-950/95 backdrop-blur border border-slate-800">
         <button onClick={() => setTab('candidates')}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'candidates' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>候选列表</button>
         <button onClick={() => setTab('runs')}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'runs' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>运行历史</button>
-      </div>
+      </Card>
 
       {tab === 'candidates' && (
         <div>
