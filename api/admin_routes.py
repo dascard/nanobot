@@ -960,6 +960,42 @@ def retry_preview(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(
     }
 
 
+@router.post("/stickers/dedupe/exact/backfill")
+def stickers_dedupe_backfill(
+    db: Session = Depends(get_db), _auth=Depends(verify_admin),
+):
+    from core.sticker_preview import backfill_exact_dedupe
+    return backfill_exact_dedupe(db)
+
+
+@router.post("/stickers/{sticker_id}/set-canonical")
+def sticker_set_canonical(
+    sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin),
+):
+    from core.sticker_preview import dedupe_by_content_hash
+
+    row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
+    if not row:
+        raise HTTPException(404, "Not found")
+    if not row.content_hash:
+        raise HTTPException(400, "no content_hash")
+
+    canonical_id = dedupe_by_content_hash(db, sticker_id, force_set_canonical=sticker_id)
+    return {"ok": True, "canonical_id": canonical_id}
+
+
+@router.post("/stickers/{sticker_id}/mark-duplicate")
+def sticker_mark_duplicate(
+    sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin),
+):
+    row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
+    if not row:
+        raise HTTPException(404, "Not found")
+    row.dedupe_status = "duplicate"
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/stickers/batch-delete")
 def batch_delete_stickers(body: dict, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     raw = body.get("ids", [])

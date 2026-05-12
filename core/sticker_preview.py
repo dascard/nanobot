@@ -15,7 +15,17 @@ from PIL import Image
 from sqlalchemy.orm import Session
 
 from core.database import StickerMemory
-from core.sticker_memory import normalize_sticker_file_ref, CQ_IMAGE_PATTERN, _cq_unescape
+from core.sticker_memory import normalize_sticker_file_ref, CQ_IMAGE_PATTERN, _cq_unescape, _loads_list
+
+import json as _json
+
+
+def _safe_dict(raw) -> dict:
+    try:
+        parsed = _json.loads(raw) if isinstance(raw, str) else (raw or {})
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
 
 logger = logging.getLogger("nanobot.sticker_preview")
 
@@ -262,9 +272,17 @@ def dedupe_by_content_hash(db: Session, sticker_id: int, *, force_set_canonical:
         for e in _loads_list(r.emotions_json):
             if e not in all_emotions:
                 all_emotions.append(e)
-        if r.id != canonical.id and r.description:
-            desc_candidates.append({"id": r.id, "description": r.description})
+        if r.description:
+            desc_candidates.append({
+                "id": r.id,
+                "description": r.description,
+                "is_canonical": r.id == canonical.id,
+            })
 
+    canonical.dedupe_status = "unique"
+    canonical.duplicate_of_id = None
+    if canonical.status == "duplicate":
+        canonical.status = "active"
     canonical.source_count = merged_source
     canonical.usage_count = merged_usage
     canonical.tags_json = _json.dumps(all_tags, ensure_ascii=False)
@@ -272,7 +290,7 @@ def dedupe_by_content_hash(db: Session, sticker_id: int, *, force_set_canonical:
     if not canonical.description and desc_candidates:
         canonical.description = desc_candidates[0]["description"]
 
-    meta = _safe_json(canonical.meta_json)
+    meta = _safe_dict(canonical.meta_json)
     meta["description_candidates"] = desc_candidates
     meta["source_streams"] = source_streams
     meta["source_record_ids"] = source_ids
