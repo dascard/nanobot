@@ -18,33 +18,78 @@ from config import CLASSIFIER_API_URL
 logger = logging.getLogger("nanobot.classifier")
 
 
-def _get_classifier_url() -> str:
-    """解析分类器 URL：settings override > env > 默认"""
-    from core.settings_service import settings
-    val = settings.get("model.route.timing_gate")
-    if val:
-        return str(val)
-    return str(CLASSIFIER_API_URL or "")
-
-
 def _classifier_timeout() -> float:
     from core.settings_service import settings
     return settings.get_float("classifier.timeout", 15.0)
+
+
+def _resolve_classifier_route(route_key: str) -> dict:
+    """解析分类器路由配置。
+
+    返回 {provider, base_url, api_key, model, timeout, temperature, max_tokens}。
+    settings 中可按 model.route.<route_key>.{field} 覆盖各字段，
+    也可以直接设 model.route.<route_key> = base_url 字符串（兼容旧写法）。
+    fallback 到 CLASSIFIER_API_URL 或内网 Qwen。
+    """
+    from core.settings_service import settings
+
+    # 默认值：内网 llama.cpp Qwen
+    defaults = {
+        "provider": "llama.cpp",
+        "base_url": str(CLASSIFIER_API_URL or "http://172.17.0.1:9999/v1"),
+        "api_key": "",
+        "model": "",       # llama.cpp 不需要 model 字段
+        "timeout": 15.0,
+        "temperature": 0,
+        "max_tokens": 30,
+    }
+
+    prefix = f"model.route.{route_key}"
+    raw = settings.get(prefix)
+
+    if raw and isinstance(raw, dict):
+        # 完整配置：model.route.timing_gate = {base_url: ..., api_key: ..., model: ...}
+        cfg = {**defaults}
+        for k in ("provider", "base_url", "api_key", "model", "timeout", "temperature", "max_tokens"):
+            if k in raw:
+                cfg[k] = raw[k]
+        return cfg
+
+    if raw and isinstance(raw, str):
+        # 旧写法：model.route.timing_gate = "http://10.60.42.158:9999/v1"
+        return {**defaults, "base_url": str(raw)}
+
+    # 无 settings → 读每个字段
+    cfg = dict(defaults)
+    for k in ("provider", "base_url", "api_key", "model"):
+        v = settings.get(f"{prefix}.{k}")
+        if v:
+            cfg[k] = str(v)
+    for k in ("timeout", "temperature", "max_tokens"):
+        v = settings.get(f"{prefix}.{k}")
+        if v is not None:
+            cfg[k] = float(v) if k == "temperature" else (int(v) if k == "max_tokens" else float(v))
+    return cfg
+
 
 # Pattern for Qwen output validation: 是/否 + comma + number (optional negative)
 OUTPUT_PATTERN = re.compile(r"^(是|否)[,，](-?\d+)$")
 
 # Pattern to strip think/thought blocks from Qwen response
 THINK_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
+# 兜底：未闭合的 <think> 块
+THINK_OPEN_PATTERN = re.compile(r"<think>.*", re.DOTALL)
 
 
 def strip_think_blocks(text: str) -> str:
-    """迭代去除 Qwen 的 <think> 块（可能有嵌套）。"""
+    """迭代去除 Qwen 的 <think> 块（含未闭合的）。"""
     for _ in range(5):
         prev = text
         text = THINK_PATTERN.sub("", text).strip()
         if text == prev:
             break
+    # 兜底：未闭合的 <think> 标签
+    text = THINK_OPEN_PATTERN.sub("", text).strip()
     return text
 
 
@@ -54,23 +99,19 @@ def call_model_route(
     *,
     system_prompt: str = "",
     user_message: str = "",
-    max_tokens: int = 30,
-    temperature: float = 0,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
     timeout: float | None = None,
 ) -> str:
     """统一的分类器模型路由调用。
 
-    从 settings.get(f"model.route.{route_key}") 读取 URL，
-    fallback CLASSIFIER_API_URL。
-    调用 llama.cpp 兼容 API /chat/completions，返回 cleaned text。
+    从 settings.get(f"model.route.{route_key}") 读取完整路由配置
+    （provider/base_url/api_key/model/timeout/temperature/max_tokens），
+    支持 OpenAI-compatible API / New API / 本地 llama.cpp。
+    调用 /chat/completions，返回 cleaned text。
     """
-    from core.settings_service import settings
-
-    url_key = f"model.route.{route_key}"
-    base_url = str(settings.get(url_key) or "")
-    if not base_url:
-        base_url = str(CLASSIFIER_API_URL or "http://172.17.0.1:9999/v1")
-    base_url = base_url.rstrip("/")
+    route = _resolve_classifier_route(route_key)
+    base_url = str(route["base_url"]).rstrip("/")
 
     if not messages:
         messages = [
@@ -78,19 +119,25 @@ def call_model_route(
             {"role": "user", "content": user_message},
         ]
 
-    payload = {
+    payload: dict = {
         "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
+        "max_tokens": max_tokens if max_tokens is not None else route["max_tokens"],
+        "temperature": temperature if temperature is not None else route["temperature"],
     }
+    # OpenAI-compatible API 需要 model 字段；本地 llama.cpp 不传
+    if route.get("model"):
+        payload["model"] = route["model"]
+
     data = json.dumps(payload).encode("utf-8")
     url = f"{base_url}/chat/completions"
 
-    timeout_s = timeout or _classifier_timeout()
+    headers = {"Content-Type": "application/json"}
+    if route.get("api_key"):
+        headers["Authorization"] = f"Bearer {route['api_key']}"
+
+    timeout_s = timeout or float(route.get("timeout", 15))
     req = urllib.request.Request(
-        url, data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+        url, data=data, headers=headers, method="POST",
     )
     proxy_handler = urllib.request.ProxyHandler({})
     opener = urllib.request.build_opener(proxy_handler)
@@ -212,7 +259,7 @@ class Guardrail:
         """调用分类器模型路由（同步）。"""
         logger.info("  [classifier] >> message: %.80s", message)
         content = call_model_route(
-            route_key="timing_gate",
+            route_key="classifier_legacy",
             system_prompt=self._system_prompt,
             user_message=message,
             max_tokens=30,
@@ -367,7 +414,7 @@ class PrivateDecisionClassifier:
             "[private_decision] >> message=%.80s has_files=%s", message, has_files,
         )
         return call_model_route(
-            route_key="timing_gate",
+            route_key="private_decision",
             system_prompt=PRIVATE_DECISION_PROMPT,
             user_message=ctx,
             max_tokens=120,
