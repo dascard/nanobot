@@ -667,6 +667,8 @@ function StickerDedupPage() {
         <div className="flex gap-2">
           <button onClick={() => navigate('/stickers')} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">返回列表</button>
           <button onClick={runBackfill} className="px-3 py-1.5 bg-amber-700/50 hover:bg-amber-700 rounded-lg text-xs">一键历史去重</button>
+          <button onClick={() => api.post('/stickers/phash/backfill?limit=200').then(r => alert(`phash 补建: ${r.data.ok} OK / ${r.data.skipped} skip`))}
+            className="px-3 py-1.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs">phash 补建</button>
           <button onClick={() => api.post('/stickers/near-duplicate/scan?limit=100').then(r => { alert(`扫描完成: ${r.data.candidates_created} 个候选`); loadNear() })}
             className="px-3 py-1.5 bg-purple-700/50 hover:bg-purple-700 rounded-lg text-xs">扫描疑似重复</button>
           <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
