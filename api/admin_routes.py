@@ -989,7 +989,7 @@ def sticker_set_canonical(
 
     if body.activate and row.status in ("duplicate", "disabled"):
         row.status = "active"
-        db.commit()
+        # 不 commit，让 dedupe_by_content_hash 统一提交
 
     canonical_id = dedupe_by_content_hash(db, sticker_id, force_set_canonical=sticker_id)
     _audit_request(db, request, "sticker.set_canonical", "sticker", str(sticker_id),
@@ -1019,6 +1019,8 @@ def sticker_mark_duplicate(
         raise HTTPException(400, "cannot mark self as duplicate")
     if canonical.content_hash != row.content_hash:
         raise HTTPException(400, "content_hash mismatch")
+    if canonical.status == "duplicate" or canonical.dedupe_status == "duplicate" or canonical.duplicate_of_id:
+        raise HTTPException(400, "canonical is itself a duplicate — 不能形成链式重复")
 
     row.status = "duplicate"
     row.dedupe_status = "duplicate"
