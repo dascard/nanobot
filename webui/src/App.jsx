@@ -628,9 +628,16 @@ function StickerDedupPage() {
     .catch(e => { setError(e?.response?.data?.detail || e.message || '加载失败') })
   useEffect(() => { load() }, [])
 
-  const doAction = (stickerId, action) => {
-    api.post(`/stickers/${stickerId}/${action}`)
+  const doAction = (stickerId, action, body = {}) => {
+    api.post(`/stickers/${stickerId}/${action}`, body)
       .then(() => load())
+      .catch(e => alert(e?.response?.data?.detail || e.message))
+  }
+
+  const runBackfill = () => {
+    if (!confirm('将对全库 content_hash 重复分组执行精确去重，确定？')) return
+    api.post('/stickers/dedupe/exact/backfill')
+      .then(r => { alert(`完成：${r.data.total_groups} 组, ${r.data.total_duplicates} 个标记`); load() })
       .catch(e => alert(e?.response?.data?.detail || e.message))
   }
 
@@ -646,7 +653,8 @@ function StickerDedupPage() {
           <p className="text-slate-500 text-sm">{groups.length} 组重复，点击左侧分组查看详情</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => navigate('/stickers')} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">返回表情包列表</button>
+          <button onClick={() => navigate('/stickers')} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">返回列表</button>
+          <button onClick={runBackfill} className="px-3 py-1.5 bg-amber-700/50 hover:bg-amber-700 rounded-lg text-xs">一键历史去重</button>
           <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
         </div>
       </div>
@@ -705,13 +713,15 @@ function StickerDedupPage() {
                           {s.dedupe_status !== 'canonical' && s.status === 'active' && (
                             <button onClick={() => doAction(s.id, 'set-canonical')} className="px-1.5 py-0.5 bg-emerald-700/40 hover:bg-emerald-700 rounded text-[10px] text-emerald-300">canonical</button>
                           )}
-                          {s.dedupe_status !== 'duplicate' && (
-                            <button onClick={() => doAction(s.id, 'mark-duplicate')} className="px-1.5 py-0.5 bg-purple-700/40 hover:bg-purple-700 rounded text-[10px] text-purple-300">重复</button>
+                          {s.dedupe_status !== 'duplicate' && canonical && (
+                            <button onClick={() => doAction(s.id, 'mark-duplicate', {canonical_id: canonical.id})} className="px-1.5 py-0.5 bg-purple-700/40 hover:bg-purple-700 rounded text-[10px] text-purple-300">重复</button>
                           )}
-                          {s.status === 'active' ? (
+                          {s.dedupe_status === 'duplicate' ? (
+                            <button onClick={() => doAction(s.id, 'enable')} className="px-1.5 py-0.5 bg-slate-700/40 hover:bg-slate-700 rounded text-[10px]">恢复</button>
+                          ) : s.status === 'active' ? (
                             <button onClick={() => doAction(s.id, 'disable')} className="px-1.5 py-0.5 bg-amber-700/40 hover:bg-amber-700 rounded text-[10px] text-amber-300">禁用</button>
                           ) : (
-                            s.dedupe_status !== 'duplicate' && <button onClick={() => doAction(s.id, 'enable')} className="px-1.5 py-0.5 bg-slate-700/40 hover:bg-slate-700 rounded text-[10px]">启用</button>
+                            <button onClick={() => doAction(s.id, 'enable')} className="px-1.5 py-0.5 bg-slate-700/40 hover:bg-slate-700 rounded text-[10px]">启用</button>
                           )}
                         </div>
                       </td>
