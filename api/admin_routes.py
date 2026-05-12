@@ -1055,19 +1055,28 @@ def update_near_duplicate_candidate(
 
     # 确认疑似重复：将 sticker_b 标记为 sticker_a 的 duplicate
     canonical_id = body.canonical_id or row.sticker_a_id
+    if canonical_id not in {row.sticker_a_id, row.sticker_b_id}:
+        raise HTTPException(400, "canonical_id must be sticker_a_id or sticker_b_id")
     dup_id = row.sticker_b_id if canonical_id == row.sticker_a_id else row.sticker_a_id
 
     canonical = db.query(SM).filter(SM.id == canonical_id).first()
     dup = db.query(SM).filter(SM.id == dup_id).first()
     if not canonical or not dup:
         raise HTTPException(404, "sticker not found")
+    if canonical.status == "duplicate" or canonical.dedupe_status == "duplicate" or canonical.duplicate_of_id:
+        raise HTTPException(400, "canonical is itself duplicate")
 
     dup.status = "duplicate"
     dup.dedupe_status = "duplicate"
     dup.duplicate_of_id = canonical.id
 
     import json as _json
-    meta = _json.loads(dup.meta_json or "{}") if isinstance(dup.meta_json, str) else (dup.meta_json or {})
+    try:
+        meta = _json.loads(dup.meta_json or "{}")
+        if not isinstance(meta, dict):
+            meta = {}
+    except Exception:
+        meta = {}
     meta["dedupe_reason"] = "near_duplicate"
     meta["near_duplicate_candidate_id"] = candidate_id
     meta["phash_dist"] = row.phash_dist

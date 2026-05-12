@@ -431,7 +431,7 @@ def find_near_duplicates(db: Session, sticker_id: int) -> list[dict]:
     return results[:20]
 
 
-def backfill_phash(db: Session, limit: int = 200) -> dict:
+def scan_near_duplicates(db: Session, limit: int = 100) -> dict:
     """扫描全库，为有 phash 的 active sticker 查找近邻重复候选。"""
     from core.database import StickerDuplicateCandidate
 
