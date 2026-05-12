@@ -154,6 +154,12 @@ class GroupChatState:
     last_bot_reply_ts: float = 0.0
     wait_count: int = 0
     total_wait_s: float = 0.0
+    waiting_for_more: bool = False          # actively in wait state
+    wait_until: float = 0.0                 # absolute time when current wait expires
+    max_wait_until: float = 0.0             # hard deadline even with new messages
+    new_messages_during_wait: list[dict] = field(default_factory=list)
+    previous_gate_action: str = ""            # "wait"/"continue"/"no_reply"
+    wait_reason: str = ""                     # why we entered wait
     force_next_continue: bool = False
     force_reason: str = ""
     talk_value: float = 0.5
@@ -211,23 +217,60 @@ class GroupChatState:
 
     def handle_continue(self):
         self.pending.clear()
-        self.wait_count = 0
-        self.total_wait_s = 0.0
+        self._reset_wait_state()
         self._touch()
 
     def handle_no_reply(self):
         self.pending.clear()
-        self.wait_count = 0
-        self.total_wait_s = 0.0
+        self._reset_wait_state()
         self._touch()
 
-    def try_wait(self, delay: float) -> bool:
+    def _reset_wait_state(self):
+        self.wait_count = 0
+        self.total_wait_s = 0.0
+        self.waiting_for_more = False
+        self.wait_until = 0.0
+        self.max_wait_until = 0.0
+        self.new_messages_during_wait.clear()
+        self.previous_gate_action = ""
+        self.wait_reason = ""
+
+    def start_wait(self, delay: float, reason: str = ""):
+        """进入 waiting_for_more 状态。"""
+        now = _time.time()
+        self.waiting_for_more = True
         self.wait_count += 1
         self.total_wait_s += delay
-        if self.is_wait_exhausted():
-            self.pending.clear()
+        self.wait_until = now + delay
+        self.max_wait_until = max(self.max_wait_until, now + MAX_WAIT_SEC)
+        self.wait_reason = reason
+        self.previous_gate_action = "wait"
+        self.new_messages_during_wait.clear()
+
+    def receive_during_wait(self, msg_dict: dict):
+        """等待期间收到新消息——只累积，不判断。"""
+        self.new_messages_during_wait.append(msg_dict)
+
+    def refresh_wait(self, max_delay: int = 10) -> bool:
+        """新消息刷新 wait 计时器，但不超过 max_wait_until。返回 True 表示刷新成功。"""
+        now = _time.time()
+        remaining = self.max_wait_until - now
+        if remaining <= 0:
             return False
+        new_delay = min(max_delay, remaining)
+        self.wait_until = now + new_delay
+        self.total_wait_s += new_delay
         return True
+
+    def is_wait_expired(self) -> bool:
+        """wait 是否到期（到 wait_until 或已耗尽）。"""
+        return _time.time() >= self.wait_until or self.is_wait_exhausted()
+
+    def end_wait(self):
+        """退出 waiting_for_more 状态（不清理 pending）。"""
+        self.waiting_for_more = False
+        self.wait_until = 0.0
+        self.max_wait_until = 0.0
 
     def is_wait_exhausted(self) -> bool:
         return self.wait_count > MAX_RETRIES or self.total_wait_s >= MAX_WAIT_SEC
@@ -378,6 +421,32 @@ class GroupRuntime:
             state.bot_id = pm.bot_id or state.bot_id
             state.bot_name = pm.bot_name or state.bot_name
             state.add_message(pm)
+
+            # wait 期间收到新消息：累积 + 刷新计时器，不调用 TimingGate
+            if state.waiting_for_more:
+                wait_msg = {
+                    "sender_name": pm.sender_name,
+                    "message": pm.message[:200],
+                    "trigger_reason": pm.trigger_reason,
+                }
+                state.receive_during_wait(wait_msg)
+                refreshed = state.refresh_wait()
+                if refreshed:
+                    delay = max(1, int(state.wait_until - _time.time()))
+                    logger.info("[GroupRuntime] wait refresh group=%s delay=%d new_msgs=%d",
+                                group_id, delay, len(state.new_messages_during_wait))
+                    return {
+                        "action": "wait",
+                        "delay_seconds": delay,
+                        "generation": state.generation,
+                        "reason": f"waiting_for_more: {len(state.new_messages_during_wait)} new msgs",
+                        "waiting_for_more": True,
+                        "new_messages_during_wait": len(state.new_messages_during_wait),
+                    }
+                else:
+                    # max_wait_until 到期 → 结束 wait 继续正常 gate
+                    state.end_wait()
+                    logger.info("[GroupRuntime] wait max_exceeded group=%s proceeding to gate", group_id)
 
             ctx = {
                 "session_name": session_name,
@@ -533,6 +602,11 @@ class GroupRuntime:
                     "reason": "rate limited",
                 }
 
+            # timer 触发时退出 wait 状态
+            was_waiting = state.waiting_for_more
+            if was_waiting:
+                state.end_wait()
+
             state.mark_gate_start()
             snapshot = state.take_snapshot()
             gen = state.generation
@@ -543,6 +617,13 @@ class GroupRuntime:
             }
             if state.last_bot_reply_ts > 0:
                 ctx_saved["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
+            # 注入 wait 元信息
+            if was_waiting or state.previous_gate_action == "wait":
+                ctx_saved["previous_gate_action"] = "wait"
+                ctx_saved["wait_count"] = state.wait_count
+                ctx_saved["new_messages_during_wait"] = len(state.new_messages_during_wait)
+                ctx_saved["wait_reason"] = state.wait_reason
+                ctx_saved["wait_timeout"] = not state.new_messages_during_wait
 
         result = await self._call_gate(group_id, snapshot, ctx_saved, trigger_reason or "timer")
 
@@ -569,10 +650,24 @@ class GroupRuntime:
             state.handle_no_reply()
         elif action == "wait":
             delay = max(3, min(30, int(result.get("delay_seconds", 5) or 5)))
-            if not state.try_wait(delay):
+            # 防死循环：wait_count>=1 且无新消息 → force no_reply
+            if state.wait_count >= 1 and not state.new_messages_during_wait:
+                logger.info("[GroupRuntime] anti-loop: wait_count=%d no_new_msgs → force no_reply",
+                            state.wait_count)
                 state.handle_no_reply()
                 action = "no_reply"
                 delay = None
+            elif state.wait_count >= 2:
+                logger.info("[GroupRuntime] anti-loop: wait_count>=2 → force no_reply")
+                state.handle_no_reply()
+                action = "no_reply"
+                delay = None
+            elif state.is_wait_exhausted():
+                state.handle_no_reply()
+                action = "no_reply"
+                delay = None
+            else:
+                state.start_wait(delay, result.get("reason", ""))
         else:
             state.handle_no_reply()
             action = "no_reply"
@@ -626,6 +721,9 @@ class GroupRuntime:
                 "has_pending_timer": bool(pending and state.wait_count > 0),
                 "wait_count": state.wait_count,
                 "total_wait_s": round(state.total_wait_s, 1),
+                "waiting_for_more": state.waiting_for_more,
+                "new_messages_during_wait": len(state.new_messages_during_wait),
+                "wait_reason": state.wait_reason[:120],
                 "last_trigger_reason": state.last_trigger_reason,
                 "last_bot_reply_ago": round(state.bot_reply_ago(), 1),
                 "msg_1m": state.recent_message_count(60),
@@ -659,6 +757,7 @@ class GroupRuntime:
         session_name: str = "", bot_aliases: list[str] | None = None,
         last_bot_reply_ago: float | None = None,
         recent_context: str = "",
+        **kwargs,
     ) -> str:
         """构造 TimingGate prompt context。"""
         from core.context_builder import sanitize_prompt_text
@@ -678,6 +777,20 @@ class GroupRuntime:
         aliases = [sanitize_prompt_text(str(a), 40) for a in (bot_aliases or [])[:8] if str(a).strip()]
         if aliases:
             lines.append(f"bot别名: {', '.join(aliases)}")
+
+        # wait 元信息：让 TimingGate 知道这是 wait 结束后的重新判断
+        previous_action = str(kwargs.get("previous_gate_action", "")).strip()
+        if previous_action == "wait":
+            wait_count = kwargs.get("wait_count", 0)
+            new_msgs = kwargs.get("new_messages_during_wait", 0)
+            wait_timeout = kwargs.get("wait_timeout", False)
+            wait_reason = str(kwargs.get("wait_reason", ""))[:120]
+            lines.append(f"上一次判定: wait (第{wait_count}次)")
+            lines.append(f"等待期间新消息: {new_msgs}条")
+            if wait_timeout:
+                lines.append("等待超时且无新消息——禁止再次 wait")
+            if wait_reason:
+                lines.append(f"wait原因: {wait_reason}")
 
         rc = str(recent_context or "").strip()
         if rc:

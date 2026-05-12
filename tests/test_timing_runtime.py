@@ -42,16 +42,16 @@ class TestGateState:
         s.handle_no_reply()
         assert len(s.pending) == 0
 
-    def test_try_wait_exhausted_by_retries(self):
+    def test_start_wait_exhausted_by_retries(self):
         s = GateState()
         for _ in range(MAX_RETRIES + 1):
-            ok = s.try_wait(5)
-        assert not ok
+            s.start_wait(5, "test")
+        assert s.is_wait_exhausted()
 
-    def test_try_wait_exhausted_by_time(self):
+    def test_start_wait_exhausted_by_time(self):
         s = GateState()
-        ok = s.try_wait(MAX_WAIT_SEC + 1)
-        assert not ok
+        s.total_wait_s = MAX_WAIT_SEC + 1
+        assert s.is_wait_exhausted()
 
     def test_old_messages_pruned_on_add(self):
         s = GateState()
