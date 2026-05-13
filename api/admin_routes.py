@@ -1912,6 +1912,98 @@ def get_model_catalog(_auth=Depends(verify_admin)):
     return {"models": models, "last_updated": registry.data.get("last_updated", "never")}
 
 
+# ── Provider 管理 ──
+
+@router.get("/models/providers")
+def list_model_providers(_auth=Depends(verify_admin)):
+    """列出所有已配置的供应商。"""
+    from clients.classifier_client import list_providers
+    return {"providers": list_providers()}
+
+
+class ProviderUpdateBody(BaseModel):
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+@router.put("/models/providers/{provider_id}")
+def update_model_provider(
+    provider_id: str, body: ProviderUpdateBody,
+    request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """更新供应商配置——写入 SystemSetting。"""
+    from core.settings_service import settings
+
+    prefix = f"model.providers.{provider_id}"
+    written = {}
+    fields = {"base_url": body.base_url, "api_key": body.api_key}
+    for field, value in fields.items():
+        if value is None:
+            continue
+        key = f"{prefix}.{field}"
+        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+        if not row:
+            row = SystemSetting(key=key, value=str(value), description=f"provider {provider_id} {field}")
+            db.add(row)
+        else:
+            row.value = str(value)
+        written[key] = str(value)
+    if body.enabled is not None:
+        key = f"{prefix}.enabled"
+        val = "1" if body.enabled else "0"
+        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+        if not row:
+            row = SystemSetting(key=key, value=val, description=f"provider {provider_id} enabled")
+            db.add(row)
+        else:
+            row.value = val
+        written[key] = val
+    db.commit()
+    _audit(db, "update_provider", "provider", provider_id, _redact(written), ip_address=_client_ip(request))
+    settings.invalidate()
+    return {"ok": True, "provider_id": provider_id, "version": settings.version}
+
+
+# ── 模型目录 ──
+
+@router.get("/models/catalog")
+def get_model_catalog_v2(_auth=Depends(verify_admin)):
+    """增强版模型目录：从 route 解析 + provider 信息。"""
+    from clients.classifier_client import build_model_catalog
+    return {"catalog": build_model_catalog()}
+
+
+@router.post("/models/catalog/refresh")
+def refresh_model_catalog(_auth=Depends(verify_admin)):
+    """从各 provider 的 /models 端点刷新模型列表。"""
+    import urllib.request as _ur
+    from clients.classifier_client import list_providers, build_model_catalog
+
+    results = []
+    for p in list_providers():
+        base_url = p["base_url"].rstrip("/")
+        if not base_url:
+            continue
+        headers = {"Content-Type": "application/json"}
+        if p.get("api_key"):
+            headers["Authorization"] = f"Bearer {p['api_key']}"
+        try:
+            req = _ur.Request(f"{base_url}/models", headers=headers, method="GET")
+            proxy_handler = _ur.ProxyHandler({})
+            opener = _ur.build_opener(proxy_handler)
+            with opener.open(req, timeout=10) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            items = body.get("data", []) if isinstance(body, dict) else []
+            models = [m["id"] for m in items if isinstance(m, dict) and m.get("id")]
+            results.append({"provider": p["id"], "models": sorted(models)[:50], "ok": True})
+        except Exception as e:
+            results.append({"provider": p["id"], "models": [], "ok": False, "error": str(e)[:300]})
+
+    return {"results": results, "catalog": build_model_catalog()}
+
+
 _ALLOWED_TIERS = {"fast", "smart", "reasoning", "unknown"}
 
 
