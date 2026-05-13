@@ -2002,10 +2002,12 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
             with opener.open(req, timeout=10) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
             items = body.get("data", []) if isinstance(body, dict) else []
-            models = sorted([m["id"] for m in items if isinstance(m, dict) and m.get("id")])[:50]
-            # 持久化到 SystemSetting
+            models = sorted([m["id"] for m in items if isinstance(m, dict) and m.get("id")])[:500]
             key = f"model.catalog.{p['id']}"
-            val = json.dumps({"models": models, "updated_at": datetime.now().isoformat()}, ensure_ascii=False)
+            val = json.dumps({
+                "models": models, "updated_at": datetime.now().isoformat(),
+                "last_refresh_ok": True, "last_error": "",
+            }, ensure_ascii=False)
             row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
             if not row:
                 row = SystemSetting(key=key, value=val, description=f"model catalog for {p['id']}")
@@ -2014,7 +2016,22 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
                 row.value = val
             results.append({"provider": p["id"], "models": models, "ok": True})
         except Exception as e:
-            results.append({"provider": p["id"], "models": [], "ok": False, "error": str(e)[:300]})
+            key = f"model.catalog.{p['id']}"
+            old_models = []
+            old_row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+            if old_row:
+                try: old_models = json.loads(old_row.value or "{}").get("models", [])
+                except Exception: pass
+            val = json.dumps({
+                "models": old_models, "updated_at": datetime.now().isoformat(),
+                "last_refresh_ok": False, "last_error": str(e)[:300],
+            }, ensure_ascii=False)
+            if not old_row:
+                row = SystemSetting(key=key, value=val, description=f"model catalog for {p['id']}")
+                db.add(row)
+            else:
+                old_row.value = val
+            results.append({"provider": p["id"], "models": old_models, "ok": False, "error": str(e)[:300]})
     db.commit()
     return {"results": results, "catalog": build_model_catalog(db)}
 

@@ -1955,7 +1955,12 @@ function ModelCatalogTab({ catalog, routes }) {
                 <td className="py-2 px-3 font-mono text-slate-200">{m.model}</td>
                 <td className="py-2 px-3 text-slate-400">{m.provider}</td>
                 <td className="py-2 px-3">
-                  <div className="flex gap-1">{m.capabilities.map(c => <span key={c} className="px-1.5 py-0.5 rounded text-xs bg-slate-700 text-slate-300">{c}</span>)}</div>
+                  <div className="flex gap-1 flex-wrap">
+                    {m.capabilities.length > 0
+                      ? m.capabilities.map(c => <span key={c} className="px-1.5 py-0.5 rounded text-xs bg-slate-700 text-slate-300">{c}</span>)
+                      : <span className="px-1.5 py-0.5 rounded text-xs bg-slate-800 text-slate-600">未知</span>}
+                    {m.stale && <span className="px-1.5 py-0.5 rounded text-xs bg-red-900/30 text-red-400" title="上次刷新失败">stale</span>}
+                  </div>
                 </td>
                 <td className="py-2 px-3 text-slate-400 text-xs">{m.used_by.join(', ')}</td>
               </tr>

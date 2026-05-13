@@ -278,8 +278,14 @@ def build_model_catalog(db=None) -> list[dict]:
             provider = row.key.removeprefix("model.catalog.")
             for m in data.get("models", []):
                 if m not in model_map:
+                    ml = m.lower()
+                    caps = set()
+                    if "vl" in ml or "vision" in ml: caps.add("vision")
+                    if provider == "newapi" and "vl" not in ml: caps.add("chat")
+                    if provider in ("local_qwen", "vision_qwen") and "vl" not in ml: caps.add("classifier")
                     model_map[m] = {"model": m, "provider": provider,
-                                    "capabilities": set(), "used_by": []}
+                                    "capabilities": caps, "used_by": [],
+                                    "stale": not data.get("last_refresh_ok", True)}
     finally:
         if _close_db:
             db.close()
