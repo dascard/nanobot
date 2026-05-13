@@ -1738,7 +1738,7 @@ def rollback_prompt_backup(backup_name: str, db: Session = Depends(get_db), _aut
 # ═══════════════════════════════════════════
 
 @router.get("/models/status")
-def models_status(_auth=Depends(verify_admin)):
+def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     from clients.classifier_client import (
         Guardrail, resolve_model_route, list_providers, build_model_catalog,
     )
@@ -1781,7 +1781,7 @@ def models_status(_auth=Depends(verify_admin)):
         routes[rk] = entry
 
     # ── Model Catalog ──
-    catalog = build_model_catalog()
+    catalog = build_model_catalog(db)
 
     # ── Local Components ──
     persona_configured = False
@@ -1974,16 +1974,17 @@ def update_model_provider(
 # ── 模型目录 ──
 
 @router.get("/models/catalog")
-def get_model_catalog_v2(_auth=Depends(verify_admin)):
-    """增强版模型目录：从 route 解析 + provider 信息。"""
+def get_model_catalog_v2(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """增强版模型目录：持久化 provider 模型 + route 当前使用模型。"""
     from clients.classifier_client import build_model_catalog
-    return {"catalog": build_model_catalog()}
+    return {"catalog": build_model_catalog(db)}
 
 
 @router.post("/models/catalog/refresh")
-def refresh_model_catalog(_auth=Depends(verify_admin)):
-    """从各 provider 的 /models 端点刷新模型列表。"""
+def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """从各 provider 的 /models 端点刷新模型列表，持久化到 SystemSetting。"""
     import urllib.request as _ur
+    from datetime import datetime
     from clients.classifier_client import list_providers, build_model_catalog
 
     results = []
@@ -2001,12 +2002,21 @@ def refresh_model_catalog(_auth=Depends(verify_admin)):
             with opener.open(req, timeout=10) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
             items = body.get("data", []) if isinstance(body, dict) else []
-            models = [m["id"] for m in items if isinstance(m, dict) and m.get("id")]
-            results.append({"provider": p["id"], "models": sorted(models)[:50], "ok": True})
+            models = sorted([m["id"] for m in items if isinstance(m, dict) and m.get("id")])[:50]
+            # 持久化到 SystemSetting
+            key = f"model.catalog.{p['id']}"
+            val = json.dumps({"models": models, "updated_at": datetime.now().isoformat()}, ensure_ascii=False)
+            row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+            if not row:
+                row = SystemSetting(key=key, value=val, description=f"model catalog for {p['id']}")
+                db.add(row)
+            else:
+                row.value = val
+            results.append({"provider": p["id"], "models": models, "ok": True})
         except Exception as e:
             results.append({"provider": p["id"], "models": [], "ok": False, "error": str(e)[:300]})
-
-    return {"results": results, "catalog": build_model_catalog()}
+    db.commit()
+    return {"results": results, "catalog": build_model_catalog(db)}
 
 
 _ALLOWED_TIERS = {"fast", "smart", "reasoning", "unknown"}

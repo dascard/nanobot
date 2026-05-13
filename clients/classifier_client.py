@@ -250,13 +250,41 @@ def resolve_model_route(route_key: str) -> dict:
     return result
 
 
-def build_model_catalog() -> list[dict]:
-    """构建模型目录：列出所有已知模型及其能力/用途。"""
+def build_model_catalog(db=None) -> list[dict]:
+    """构建模型目录：合并持久化 provider 模型 + 当前 route 使用模型。"""
     from core.settings_service import settings
     from config import LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
+    import json
 
     model_map: dict[str, dict] = {}
 
+    # ── 1. 从持久化 provider catalog 读取 ──
+    if db is None:
+        from core.database import SessionLocal
+        db = SessionLocal()
+        _close_db = True
+    else:
+        _close_db = False
+    try:
+        from core.database import SystemSetting
+        rows = db.query(SystemSetting).filter(
+            SystemSetting.key.like("model.catalog.%")
+        ).all()
+        for row in rows:
+            try:
+                data = json.loads(row.value or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            provider = row.key.removeprefix("model.catalog.")
+            for m in data.get("models", []):
+                if m not in model_map:
+                    model_map[m] = {"model": m, "provider": provider,
+                                    "capabilities": set(), "used_by": []}
+    finally:
+        if _close_db:
+            db.close()
+
+    # ── 2. 从当前 route 补充 ──
     for rk in ("reply", "fast", "smart", "timing_gate", "private_decision",
                "classifier_legacy", "sticker_describe"):
         r = resolve_model_route(rk)
@@ -275,7 +303,7 @@ def build_model_catalog() -> list[dict]:
         elif rk == "sticker_describe":
             caps.add("vision")
 
-    # 补充 chat models
+    # ── 3. 补充 chat models ──
     chat_models = {
         "reply": settings.get("model.reply") or LLM_MODEL_REPLY,
         "fast": settings.get("model.fast") or LLM_MODEL_FAST,
