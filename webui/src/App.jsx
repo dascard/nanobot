@@ -1893,8 +1893,14 @@ function PromptPage() {
 
 // ── Models ──
 function ModelsPage() {
+  const tabs = [
+    { key: 'catalog', label: '模型列表' },
+    { key: 'routes', label: '路由配置' },
+    { key: 'providers', label: '供应商' },
+    { key: 'local', label: '本地组件' },
+  ]
+  const [tab, setTab] = useState('catalog')
   const [status, setStatus] = useState(null)
-  const [editRoute, setEditRoute] = useState(null)
   const [testResult, setTestResult] = useState({})
   const [localResult, setLocalResult] = useState({})
   const load = () => api.get('/models/status').then(r => setStatus(r.data))
@@ -1913,38 +1919,79 @@ function ModelsPage() {
 
   if (!status) return <Spinner />
 
-  const routeList = Object.entries(status.api_routes || {})
-
   return (
     <div>
       <h1 className="text-2xl font-bold mb-2">模型路由</h1>
-      <p className="text-slate-500 text-sm mb-6">
-        API 模型路由可编辑/测试；本地语义组件为按需懒加载，不属于 API 路由。
-      </p>
+      <div className="flex gap-2 mb-6 border-b border-slate-800 pb-2">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'catalog' && <ModelCatalogTab catalog={status.model_catalog || []} routes={status.routes || {}} />}
+      {tab === 'routes' && <RoutesTab routes={status.routes || {}} providers={status.providers || []} testResult={testResult} onTest={handleTest} onSaved={load} />}
+      {tab === 'providers' && <ProvidersTab providers={status.providers || []} onSaved={load} />}
+      {tab === 'local' && <LocalComponentsTab components={status.local_components || {}} localResult={localResult} onAction={handleLocal} />}
+    </div>
+  )
+}
 
-      <h2 className="text-lg font-medium mb-3">API 模型路由</h2>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-8">
+// ── Tab 1: 模型列表 ──
+function ModelCatalogTab({ catalog, routes }) {
+  const usedModels = Object.values(routes).map(r => r.model)
+  return (
+    <div>
+      <p className="text-slate-500 text-sm mb-3">所有已知模型及其能力/用途。从供应商同步可获取完整列表。</p>
+      <Card>
+        <table className="w-full text-sm">
+          <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+            <th className="py-2 px-3">模型</th><th className="py-2 px-3">供应商</th><th className="py-2 px-3">能力</th><th className="py-2 px-3">被使用</th>
+          </tr></thead>
+          <tbody>
+            {catalog.map(m => (
+              <tr key={m.model} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                <td className="py-2 px-3 font-mono text-slate-200">{m.model}</td>
+                <td className="py-2 px-3 text-slate-400">{m.provider}</td>
+                <td className="py-2 px-3">
+                  <div className="flex gap-1">{m.capabilities.map(c => <span key={c} className="px-1.5 py-0.5 rounded text-xs bg-slate-700 text-slate-300">{c}</span>)}</div>
+                </td>
+                <td className="py-2 px-3 text-slate-400 text-xs">{m.used_by.join(', ')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  )
+}
+
+// ── Tab 2: 路由配置 ──
+function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
+  const [editRoute, setEditRoute] = useState(null)
+  const routeList = Object.entries(routes)
+  return (
+    <div>
+      <p className="text-slate-500 text-sm mb-3">每个 route 选择一个模型和供应商。base_url/api_key 在「供应商」Tab 管理。</p>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {routeList.map(([key, r]) => (
           <Card key={key} className="p-4">
             <div className="flex items-center justify-between mb-2">
               <div>
-                <h3 className="font-medium text-sm">{r.label} <span className="text-xs text-slate-500 font-mono ml-1">{key}</span></h3>
-                {r.inherited_from && (
-                  <span className="text-xs text-amber-400">继承自 {r.inherited_from}{r.overridden_fields && Object.keys(r.overridden_fields).length > 0 ? ` (覆盖: ${Object.keys(r.overridden_fields).join(', ')})` : ''}</span>
-                )}
+                <h3 className="font-medium text-sm">{r.label} <span className="text-xs text-slate-500 ml-1">{key}</span></h3>
+                {r.inherited_from && <span className="text-xs text-amber-400">继承自 {r.inherited_from}{r.overridden_fields && Object.keys(r.overridden_fields).length > 0 ? ` (覆盖: ${Object.keys(r.overridden_fields).join(', ')})` : ''}</span>}
+                {r.note && <span className="text-xs text-slate-600 block">{r.note}</span>}
               </div>
               <div className="flex gap-1">
-                {r.editable !== false && (
-                  <button onClick={() => setEditRoute({ key, ...r })} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">编辑</button>
-                )}
-                <button onClick={() => handleTest(key)} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-xs">测试</button>
+                <button onClick={() => setEditRoute({ key, ...r })} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">编辑</button>
+                <button onClick={() => onTest(key)} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-xs">测试</button>
               </div>
             </div>
             <div className="space-y-0.5 text-xs text-slate-400">
-              <div>base_url: <span className="text-slate-500 font-mono break-all">{r.base_url || r.api_url || ''}</span></div>
-              {r.model && <div>model: <span className="text-slate-200 font-mono">{r.model}</span></div>}
-              {r.api_key_configured !== undefined && <div>API key: {r.api_key_configured ? '✅' : '❌'}</div>}
-              {r.max_tokens !== undefined && <div>max_tokens: {r.max_tokens} | timeout: {r.timeout}s | temp: {r.temperature}</div>}
+              <div>模型: <span className="text-slate-200">{r.model}</span></div>
+              <div>供应商: <span className="text-slate-500">{r.provider_id}</span></div>
+              <div>max_tokens: {r.max_tokens} | timeout: {r.timeout}s | temp: {r.temperature}</div>
               {r.source && <div className="text-slate-600">source: {r.source}</div>}
             </div>
             {testResult[key] && !testResult[key].loading && (
@@ -1952,14 +1999,104 @@ function ModelsPage() {
                 {testResult[key].ok ? `✅ ${testResult[key].latency_ms}ms` : `❌ ${testResult[key].error}`}
               </div>
             )}
-            {testResult[key] && testResult[key].loading && <div className="mt-2 text-xs text-slate-500">测试中...</div>}
           </Card>
         ))}
       </div>
+      {editRoute && (
+        <RouteEditModalV2 route={editRoute} providers={providers} onClose={() => setEditRoute(null)} onSaved={() => { setEditRoute(null); onSaved() }} />
+      )}
+    </div>
+  )
+}
 
-      <h2 className="text-lg font-medium mb-3">本地语义组件</h2>
+function RouteEditModalV2({ route, providers, onClose, onSaved }) {
+  const [f, setF] = useState({
+    provider_id: route.provider_id || '', model: route.model || '',
+    max_tokens: route.max_tokens || 30, temperature: route.temperature || 0,
+    timeout: route.timeout || 15,
+  })
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const save = () => {
+    const payload = {}
+    if (f.model && f.model.trim()) payload.model = f.model.trim()
+    if (f.provider_id) payload.provider_id = f.provider_id
+    payload.max_tokens = String(f.max_tokens)
+    payload.temperature = String(f.temperature)
+    payload.timeout = String(f.timeout)
+    api.put(`/models/routes/${route.route_key || route.key}`, payload).then(onSaved)
+  }
+  const fromTimingGate = route.route_key === 'private_decision' || route.route_key === 'classifier_legacy'
+  return (
+    <Modal onClose={onClose}>
+      <div className="p-6 max-w-md">
+        <h2 className="text-lg font-bold mb-3">编辑 {route.label} ({route.route_key || route.key})</h2>
+        {fromTimingGate && <p className="text-xs text-amber-400 mb-3">继承自 timing_gate。仅需配置需要覆盖的字段。</p>}
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-slate-500">供应商</label>
+            <select value={f.provider_id} onChange={e => setF({ ...f, provider_id: e.target.value })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1">
+              {(providers || []).map(p => <option key={p.id} value={p.id}>{p.id}{p.enabled === false ? ' (已禁用)' : ''}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500">模型</label>
+            <input value={f.model} onChange={e => setF({ ...f, model: e.target.value })} placeholder="模型名（如 gemma-4）" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+            <div><label className="text-xs text-slate-500">temp</label><input type="number" step="0.1" value={f.temperature} onChange={e => setF({ ...f, temperature: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+            <div><label className="text-xs text-slate-500">timeout</label><input type="number" value={f.timeout} onChange={e => setF({ ...f, timeout: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+          </div>
+          <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="text-xs text-slate-500 hover:text-slate-300">
+            {showAdvanced ? '收起高级' : '高级覆盖 ▼'}
+          </button>
+          {showAdvanced && (
+            <div className="p-3 bg-slate-900 rounded-lg space-y-2 text-sm">
+              <p className="text-xs text-slate-500">这些通常不需要改，除非此 route 使用独立供应商。</p>
+              <input placeholder="覆盖 base_url（可选）" className="w-full p-2 rounded-lg bg-slate-800 border border-slate-700 text-xs" />
+              <input type="password" placeholder="覆盖 api_key（可选）" className="w-full p-2 rounded-lg bg-slate-800 border border-slate-700 text-xs" />
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2 justify-end mt-4">
+          <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">取消</button>
+          <button onClick={save} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">保存</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ── Tab 3: 供应商 ──
+function ProvidersTab({ providers, onSaved }) {
+  return (
+    <div>
+      <p className="text-slate-500 text-sm mb-3">管理 API 供应商的 base_url 和 api_key。路由通过「路由配置」Tab 选择供应商和模型。</p>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {Object.entries(status.local_components || {}).map(([key, c]) => (
+        {(providers || []).map(p => (
+          <Card key={p.id} className="p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-medium text-sm">{p.id}</h3>
+              <Badge tone={p.enabled !== false ? 'emerald' : 'slate'}>{p.enabled !== false ? '启用' : '禁用'}</Badge>
+            </div>
+            <div className="space-y-1 text-xs text-slate-400">
+              <div>base_url: <span className="text-slate-500 font-mono break-all">{p.base_url || '未配置'}</span></div>
+              <div>API key: {p.api_key ? '✅ 已配置' : '❌ 未配置'}</div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Tab 4: 本地组件 ──
+function LocalComponentsTab({ components, localResult, onAction }) {
+  return (
+    <div>
+      <p className="text-slate-500 text-sm mb-3">本地语义组件为按需懒加载，不属于 API 路由。通过预热/测试按钮触发加载。</p>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        {Object.entries(components || {}).map(([key, c]) => (
           <Card key={key} className="p-4">
             <div className="flex items-center justify-between mb-2">
               <div>
@@ -1968,90 +2105,25 @@ function ModelsPage() {
                 {c.fallback && <span className="text-xs text-amber-400 ml-1">(降级: {c.fallback})</span>}
               </div>
               <div className="flex gap-1">
-                <button onClick={() => handleLocal(key, 'warmup')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">预热</button>
-                <button onClick={() => handleLocal(key, 'test')} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-xs">测试</button>
+                <button onClick={() => onAction(key, 'warmup')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">预热</button>
+                <button onClick={() => onAction(key, 'test')} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-xs">测试</button>
               </div>
             </div>
             <div className="space-y-1 text-xs text-slate-400">
               <div>模型: <span className="text-slate-200">{c.model}</span></div>
-              <div>加载器: {c.loader}</div>
               <div>用途: {c.role}</div>
               <div className="text-slate-600">触发: {c.trigger}</div>
               {c.note && <div className="text-slate-600 italic">{c.note}</div>}
-              {c.error && <div className="text-red-400 truncate">{c.error}</div>}
             </div>
             {localResult[key] && !localResult[key].loading && (
               <div className={`mt-2 p-2 rounded-lg text-xs ${localResult[key].ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
-                {localResult[key].ok
-                  ? `✅ ${localResult[key].latency_ms}ms${localResult[key].dim ? ' | dim=' + localResult[key].dim : ''}`
-                  : `❌ ${localResult[key].error || ''}${localResult[key].hint ? ' | ' + localResult[key].hint : ''}`}
+                {localResult[key].ok ? `✅ ${localResult[key].latency_ms}ms${localResult[key].dim ? ' | dim=' + localResult[key].dim : ''}` : `❌ ${localResult[key].error || ''}`}
               </div>
             )}
-            {localResult[key] && localResult[key].loading && <div className="mt-2 text-xs text-slate-500">执行中...</div>}
           </Card>
         ))}
       </div>
-
-      {editRoute && (
-        <RouteEditModal route={editRoute} onClose={() => setEditRoute(null)} onSaved={() => { setEditRoute(null); load() }} />
-      )}
     </div>
-  )
-}
-
-function RouteEditModal({ route, onClose, onSaved }) {
-  const [f, setF] = useState({
-    base_url: route.base_url || '', model: route.model || '',
-    api_key: '', timeout: route.timeout || 15, temperature: route.temperature || 0,
-    max_tokens: route.max_tokens || 30,
-  })
-  const [models, setModels] = useState([])
-  const [modelsLoading, setModelsLoading] = useState(false)
-  const loadModels = () => {
-    setModelsLoading(true)
-    api.get('/models/available', { params: { route_key: route.key } })
-      .then(r => setModels(r.data.models || [])).catch(() => {}).finally(() => setModelsLoading(false))
-  }
-  const save = () => {
-    const payload = {}
-    for (const k of ['base_url', 'model', 'timeout', 'temperature', 'max_tokens']) {
-      if (f[k] !== '' && f[k] !== undefined) payload[k] = String(f[k])
-    }
-    if (f.api_key && f.api_key.trim()) payload.api_key = f.api_key.trim()
-    api.put(`/models/routes/${route.key}`, payload).then(onSaved)
-  }
-  return (
-    <Modal onClose={onClose}>
-      <div className="p-6 max-w-lg">
-        <h2 className="text-lg font-bold mb-4">编辑 {route.label} ({route.key})</h2>
-        {route.inherited_from && (
-          <p className="text-xs text-amber-400 mb-3">继承自 {route.inherited_from}，仅需覆盖差异字段</p>
-        )}
-        <div className="space-y-3">
-          <input value={f.base_url} onChange={e => setF({ ...f, base_url: e.target.value })} placeholder="base_url" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
-          <div className="flex gap-2">
-            <input value={f.model} onChange={e => setF({ ...f, model: e.target.value })} placeholder="model" className="flex-1 p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
-            <button onClick={loadModels} disabled={modelsLoading} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-xs">{modelsLoading ? '...' : '可选'}</button>
-          </div>
-          {models.length > 0 && (
-            <select onChange={e => setF({ ...f, model: e.target.value })} value={f.model} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm">
-              <option value="">手动输入</option>
-              {models.map(m => <option key={m} value={m}>{m}</option>)}
-            </select>
-          )}
-          <input type="password" value={f.api_key} onChange={e => setF({ ...f, api_key: e.target.value })} placeholder="API key (留空不修改)" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
-          <div className="grid grid-cols-3 gap-3">
-            <div><label className="text-xs text-slate-500">timeout</label><input type="number" value={f.timeout} onChange={e => setF({ ...f, timeout: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
-            <div><label className="text-xs text-slate-500">temp</label><input type="number" step="0.1" value={f.temperature} onChange={e => setF({ ...f, temperature: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
-            <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
-          </div>
-        </div>
-        <div className="flex gap-2 justify-end mt-4">
-          <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">取消</button>
-          <button onClick={save} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">保存</button>
-        </div>
-      </div>
-    </Modal>
   )
 }
 
