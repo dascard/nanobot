@@ -2265,16 +2265,15 @@ def list_available_models(route_key: str = "", base_url_override: str = "",
 
     route_key = _ROUTE_ALIAS.get(route_key, route_key)
 
-    # base_url_override 优先（前端未保存前测试 provider 模型列表）
-    if base_url_override:
+    if route_key in _CHAT_ROUTES:
+        from config import NEW_API_BASE_URL, NEW_API_KEY
+        base_url = (base_url_override or str(NEW_API_BASE_URL or "")).rstrip("/")
+        api_key = str(NEW_API_KEY or "")
+    elif base_url_override:
         from clients.classifier_client import _resolve_classifier_route
         route = _resolve_classifier_route(route_key)
         base_url = base_url_override.rstrip("/")
         api_key = str(route.get("api_key", ""))
-    elif route_key in _CHAT_ROUTES:
-        from config import NEW_API_BASE_URL, NEW_API_KEY
-        base_url = str(NEW_API_BASE_URL or "").rstrip("/")
-        api_key = str(NEW_API_KEY or "")
     else:
         from clients.classifier_client import _resolve_classifier_route
         route = _resolve_classifier_route(route_key)
