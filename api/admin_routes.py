@@ -1759,6 +1759,7 @@ def models_status(_auth=Depends(verify_admin)):
             "temperature": route.get("temperature", 0),
             "max_tokens": route.get("max_tokens", 30),
             "source": "settings/env/default",
+            "editable": True,
         }
         if inherited:
             tg = _resolve_classifier_route("timing_gate")
@@ -1769,6 +1770,7 @@ def models_status(_auth=Depends(verify_admin)):
             result["inherited_from"] = "timing_gate"
             result["overridden_fields"] = overrides
             result["source"] = "inherited_from_timing_gate"
+        result["editable"] = True
         return result
 
     api_routes = {
@@ -2091,6 +2093,38 @@ def patch_model_route(
 
 # ── 模型路由编辑（完整字段）──
 
+# route_key → setting prefix 映射（reply/fast/smart 使用 model.*；classifier 使用 model.route.*）
+_ROUTE_SETTING_MAP: dict[str, str] = {
+    "reply": "model.reply",
+    "fast": "model.fast",
+    "smart": "model.smart",
+}
+# classifier routes: route_key 直接对应 model.route.<key>
+_CLASSIFIER_ROUTE_KEYS = {"timing_gate", "private_decision", "classifier_legacy", "sticker_describe"}
+# frontend 友好名称 → 后端 route_key
+_ROUTE_ALIAS: dict[str, str] = {
+    "vision": "sticker_describe",
+}
+
+_CHAT_ROUTES = {"reply", "fast", "smart"}
+
+
+def _resolve_route_key(route_key: str) -> tuple[str, str, bool]:
+    """解析前端 route_key → (prefix, db_key, is_classifier)。
+
+    返回 (setting_prefix, route_key_for_db, is_classifier_route)。
+    """
+    route_key = _ROUTE_ALIAS.get(route_key, route_key)
+    if route_key in _CHAT_ROUTES:
+        return _ROUTE_SETTING_MAP[route_key], route_key, False
+    return f"model.route.{route_key}", route_key, True
+
+
+def _redact(v: dict) -> dict:
+    """脱敏：api_key → ***"""
+    return {k: ("***" if k.endswith(".api_key") else v) for k, v in v.items()}
+
+
 class ModelRouteEditBody(BaseModel):
     base_url: Optional[str] = None
     model: Optional[str] = None
@@ -2110,8 +2144,8 @@ def edit_model_route(
     from core.config_registry import SETTING_DEFS
     from core.settings_service import settings
 
-    prefix = f"model.route.{route_key}"
-    if prefix not in SETTING_DEFS:
+    prefix, _, is_classifier = _resolve_route_key(route_key)
+    if not is_classifier and prefix not in SETTING_DEFS:
         raise HTTPException(404, f"unknown route: {route_key}")
 
     written = {}
@@ -2123,12 +2157,17 @@ def edit_model_route(
         "temperature": body.temperature,
         "max_tokens": body.max_tokens,
     }
+    # chat routes 只允许改 model
+    if not is_classifier:
+        allowed = {"model"}
+    else:
+        allowed = {"base_url", "model", "api_key", "timeout", "temperature", "max_tokens"}
 
     for field, value in fields.items():
-        if value is None:
+        if value is None or field not in allowed:
             continue
-        key = prefix if field == "base_url" else f"{prefix}.{field}"
-        if key not in SETTING_DEFS and field != "base_url":
+        key = prefix if (field == "base_url" or not is_classifier) else f"{prefix}.{field}"
+        if not is_classifier and field != "model":
             continue
         row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
         defn = SETTING_DEFS.get(key)
@@ -2140,25 +2179,32 @@ def edit_model_route(
             row.value = str(value)
         written[key] = str(value)
     db.commit()
-    _audit(db, "edit_model_route", "route", route_key, written, ip_address=_client_ip(request))
+    _audit(db, "edit_model_route", "route", route_key, _redact(written), ip_address=_client_ip(request))
     settings.invalidate()
-    return {"ok": True, "route_key": route_key, "written": written, "version": settings.version}
+    # 不返回 written，只返回 api_key_configured
+    resp: dict = {"ok": True, "route_key": route_key, "version": settings.version}
+    api_key_set = any(k.endswith(".api_key") for k in written)
+    if api_key_set:
+        resp["api_key_configured"] = True
+    return resp
 
 
 @router.post("/models/routes/{route_key}/test")
 async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
     """测试某个模型路由的连通性。"""
     import time, asyncio
-    from clients.classifier_client import call_model_route, _resolve_classifier_route
+    from core.settings_service import settings
+    from clients.classifier_client import call_model_route
 
     t0 = time.time()
-    route = _resolve_classifier_route(route_key)
+    route_key = _ROUTE_ALIAS.get(route_key, route_key)
 
-    if route_key in ("reply", "fast", "smart"):
+    if route_key in _CHAT_ROUTES:
         from clients.new_api_client import NewAPIClient
-        from config import NEW_API_KEY, NEW_API_BASE_URL
+        from config import NEW_API_KEY, NEW_API_BASE_URL, LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
+        models = {"reply": LLM_MODEL_REPLY, "fast": LLM_MODEL_FAST, "smart": LLM_MODEL_SMART}
+        model = settings.get(f"model.{route_key}") or models.get(route_key, "")
         client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
-        model = route.get("model") or route_key
         try:
             result = await client.chat_completion(
                 messages=[{"role": "user", "content": "回复OK"}],
@@ -2173,12 +2219,11 @@ async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
             return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
     else:
         try:
-            test_msg = "判断是否需要bot回复。输出JSON: {\"action\": \"continue|wait|no_reply\", \"reason\": \"...\"}"
             raw = await asyncio.to_thread(
                 call_model_route,
                 route_key=route_key,
-                user_message=test_msg,
-                system_prompt="群聊节奏判断——是否需要bot回复",
+                user_message="判断是否需要bot回复",
+                system_prompt="群聊节奏判断——是否需要bot回复。输出JSON",
                 max_tokens=60,
             )
             return {
@@ -2194,17 +2239,22 @@ async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
 def list_available_models(route_key: str = "", base_url_override: str = "",
                           db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """获取某个 route 的可选模型列表——从 provider /models 端点拉取。"""
-    import urllib.error
-    from clients.classifier_client import _resolve_classifier_route
+    import urllib.request as _ur
+    import urllib.error as _ure
 
-    if route_key and route_key in ("reply", "fast", "smart", "timing_gate",
-                                    "private_decision", "classifier_legacy", "vision"):
-        route = _resolve_classifier_route(route_key)
+    route_key = _ROUTE_ALIAS.get(route_key, route_key)
+
+    # chat routes: 使用 NewAPI base_url
+    if route_key in _CHAT_ROUTES:
+        from config import NEW_API_BASE_URL, NEW_API_KEY
+        base_url = str(NEW_API_BASE_URL or "").rstrip("/")
+        api_key = str(NEW_API_KEY or "")
     else:
-        route = _resolve_classifier_route("timing_gate")
+        from clients.classifier_client import _resolve_classifier_route
+        route = _resolve_classifier_route(route_key)
+        base_url = str(route.get("base_url", "")).rstrip("/")
+        api_key = str(route.get("api_key", ""))
 
-    base_url = (base_url_override or str(route.get("base_url", ""))).rstrip("/")
-    api_key = route.get("api_key", "")
     if not base_url:
         return {"models": [], "error": "no base_url configured", "source": "none"}
 
@@ -2212,24 +2262,39 @@ def list_available_models(route_key: str = "", base_url_override: str = "",
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
-        req = urllib.request.Request(
-            f"{base_url}/models", headers=headers, method="GET",
-        )
-        proxy_handler = urllib.request.ProxyHandler({})
-        opener = urllib.request.build_opener(proxy_handler)
+        req = _ur.Request(f"{base_url}/models", headers=headers, method="GET")
+        proxy_handler = _ur.ProxyHandler({})
+        opener = _ur.build_opener(proxy_handler)
         with opener.open(req, timeout=10) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         items = body.get("data", []) if isinstance(body, dict) else []
         ids = [m["id"] for m in items if isinstance(m, dict) and m.get("id")]
         return {"models": sorted(ids)[:100], "source": f"{base_url}/models"}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")[:300] if e.fp else ""
-        return {"models": [], "error": f"HTTP {e.code}: {body}", "source": base_url}
+    except _ure.HTTPError as e:
+        b = e.read().decode("utf-8", errors="ignore")[:300] if e.fp else ""
+        return {"models": [], "error": f"HTTP {e.code}: {b}", "source": base_url}
     except Exception as e:
         return {"models": [], "error": str(e)[:300], "source": base_url}
 
 
 # ── 本地语义组件测试/预热 ──
+
+def _test_nli_contradiction(a: str, b: str) -> dict:
+    """模块级 NLI 矛盾检测——避免调用实例方法。"""
+    from core.persona_preprocess import _get_nli
+    nli = _get_nli()
+    if nli is None:
+        return {"available": False, "fallback": "cosine", "label": "nli_unavailable"}
+    result = nli(f"{a} </s></s> {b}")
+    if isinstance(result, list) and result:
+        r = result[0]
+        return {
+            "available": True, "label": r.get("label", ""),
+            "score": round(float(r.get("score", 0)), 4),
+            "contradiction": r.get("label") == "CONTRADICTION",
+        }
+    return {"available": True, "raw": str(result)[:200]}
+
 
 @router.post("/models/local/{component}/test")
 async def test_local_component(component: str, _auth=Depends(verify_admin)):
@@ -2253,8 +2318,8 @@ async def test_local_component(component: str, _auth=Depends(verify_admin)):
             }
     elif component == "nli":
         try:
-            from core.persona_preprocess import detect_contradiction, _NLI_MODEL
-            result = detect_contradiction("我喜欢苹果", "我不喜欢苹果")
+            from core.persona_preprocess import _NLI_MODEL
+            result = _test_nli_contradiction("我喜欢苹果", "我不喜欢苹果")
             return {
                 "ok": True, "component": component, "model": str(_NLI_MODEL),
                 "load_state": "loaded",
@@ -2289,8 +2354,8 @@ async def warmup_local_component(component: str, _auth=Depends(verify_admin)):
             return {"ok": False, "component": component, "error": str(e)[:500]}
     elif component == "nli":
         try:
-            from core.persona_preprocess import detect_contradiction, _NLI_MODEL
-            detect_contradiction("预热", "预热")
+            from core.persona_preprocess import _NLI_MODEL
+            _test_nli_contradiction("预热", "预热")
             return {
                 "ok": True, "component": component, "model": str(_NLI_MODEL),
                 "load_state": "loaded",
