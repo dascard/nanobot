@@ -22,13 +22,20 @@ from config import (
 )
 
 
-def _get_image_summary_url() -> str:
-    """解析打标 API URL：settings override > env > 默认"""
-    from core.settings_service import settings
-    val = settings.get("model.route.sticker_describe")
-    if val:
-        return str(val)
-    return str(IMAGE_SUMMARY_API_URL or "")
+def _get_image_summary_route() -> dict:
+    """解析表情包打标完整路由配置——settings 覆盖 > config 默认。"""
+    from clients.classifier_client import _resolve_classifier_route
+    route = _resolve_classifier_route("sticker_describe")
+    # fallback: 用 config 常量兜底 settings 未配置的字段
+    if not route.get("base_url"):
+        route["base_url"] = str(IMAGE_SUMMARY_API_URL or "")
+    if not route.get("max_tokens") or route["max_tokens"] == 30:
+        route["max_tokens"] = IMAGE_SUMMARY_MAX_TOKENS
+    if not route.get("temperature"):
+        route["temperature"] = IMAGE_SUMMARY_TEMPERATURE
+    if not route.get("timeout") or route["timeout"] == 15:
+        route["timeout"] = IMAGE_SUMMARY_TIMEOUT
+    return route
 from nanobot_kt.image_pipeline import prepare_image_parts
 
 logger = logging.getLogger("nanobot.tool.image_summary")
@@ -163,32 +170,38 @@ class ImageSummaryTool(BaseTool):
         )
 
     def _build_payload(self, files: list[str], focus: str) -> dict[str, Any]:
-        return {
+        route = _get_image_summary_route()
+        payload: dict[str, Any] = {
             "messages": [
                 {"role": "system", "content": self._system_prompt()},
                 {"role": "user", "content": _build_multimodal_content(files, focus)},
             ],
-            "max_tokens": IMAGE_SUMMARY_MAX_TOKENS,
-            "temperature": IMAGE_SUMMARY_TEMPERATURE,
+            "max_tokens": route.get("max_tokens", IMAGE_SUMMARY_MAX_TOKENS),
+            "temperature": route.get("temperature", IMAGE_SUMMARY_TEMPERATURE),
             "top_p": IMAGE_SUMMARY_TOP_P,
         }
+        if route.get("model"):
+            payload["model"] = route["model"]
+        return payload
 
     def _call_qwen(self, files: list[str], focus: str) -> str:
+        route = _get_image_summary_route()
         payload = self._build_payload(files, focus)
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        url = f"{_get_image_summary_url().rstrip('/')}/chat/completions"
+        base_url = str(route.get("base_url", "")).rstrip("/")
+        url = f"{base_url}/chat/completions"
 
-        logger.info("  [image_summary] >> Qwen: %s | files=%d", url, len(files))
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        headers = {"Content-Type": "application/json"}
+        if route.get("api_key"):
+            headers["Authorization"] = f"Bearer {route['api_key']}"
 
+        logger.info("  [image_summary] >> %s | files=%d", url, len(files))
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+
+        timeout = route.get("timeout", IMAGE_SUMMARY_TIMEOUT)
         proxy_handler = urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(req, timeout=IMAGE_SUMMARY_TIMEOUT) as response:
+        with opener.open(req, timeout=timeout) as response:
             body = json.loads(response.read().decode("utf-8"))
 
         content = body["choices"][0]["message"]["content"]
