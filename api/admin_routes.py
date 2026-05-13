@@ -1745,53 +1745,63 @@ def models_status(_auth=Depends(verify_admin)):
         CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
         LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
     )
-    from clients.classifier_client import Guardrail
+    from clients.classifier_client import Guardrail, _resolve_classifier_route
     import os
 
-    _editable = False
-    _edit_note = "当前只读，修改请通过 Settings/env 或后续 ModelRouteConfig"
+    def _classifier_route_dict(route_key: str, label: str, inherited: bool = False) -> dict:
+        route = _resolve_classifier_route(route_key)
+        result: dict = {
+            "stage": route_key, "label": label, "type": "classifier",
+            "base_url": str(route.get("base_url", "")),
+            "model": str(route.get("model", "") or "未指定"),
+            "api_key_configured": bool(route.get("api_key", "")),
+            "timeout": route.get("timeout", 15),
+            "temperature": route.get("temperature", 0),
+            "max_tokens": route.get("max_tokens", 30),
+            "source": "settings/env/default",
+        }
+        if inherited:
+            tg = _resolve_classifier_route("timing_gate")
+            overrides = {}
+            for k in ("max_tokens", "timeout", "temperature"):
+                if route.get(k) != tg.get(k):
+                    overrides[k] = route.get(k)
+            result["inherited_from"] = "timing_gate"
+            result["overridden_fields"] = overrides
+            result["source"] = "inherited_from_timing_gate"
+        return result
 
     api_routes = {
         "reply": {
-            "stage": "reply", "label": "主回复模型",
+            "stage": "reply", "label": "主回复模型", "type": "chat",
             "model": settings.get("model.reply") or os.environ.get("LLM_MODEL_REPLY", "") or LLM_MODEL_REPLY,
-            "provider": "openai-compatible",
             "base_url": str(NEW_API_BASE_URL or ""),
             "api_key_configured": bool(NEW_API_KEY),
-            "editable": _editable,
-            "edit_note": _edit_note,
+            "editable": True,
         },
         "fast": {
-            "stage": "fast", "label": "快速模型",
+            "stage": "fast", "label": "快速模型", "type": "chat",
             "model": settings.get("model.fast") or os.environ.get("LLM_MODEL_FAST", "") or LLM_MODEL_FAST,
-            "provider": "openai-compatible",
             "base_url": str(NEW_API_BASE_URL or ""),
             "api_key_configured": bool(NEW_API_KEY),
-            "editable": _editable,
-            "edit_note": _edit_note,
+            "editable": True,
         },
         "smart": {
-            "stage": "smart", "label": "智能模型",
+            "stage": "smart", "label": "智能模型", "type": "chat",
             "model": settings.get("model.smart") or os.environ.get("LLM_MODEL_SMART", "") or LLM_MODEL_SMART,
-            "provider": "openai-compatible",
             "base_url": str(NEW_API_BASE_URL or ""),
             "api_key_configured": bool(NEW_API_KEY),
-            "editable": _editable,
-            "edit_note": _edit_note,
+            "editable": True,
         },
-        "timing_gate": {
-            "stage": "timing_gate", "label": "TimingGate 判定",
-            "model": "Qwen",
-            "api_url": settings.get("model.route.timing_gate") or str(CLASSIFIER_API_URL or ""),
-            "editable": _editable,
-            "edit_note": _edit_note,
-        },
+        "timing_gate": _classifier_route_dict("timing_gate", "TimingGate 判定"),
+        "private_decision": _classifier_route_dict("private_decision", "私聊决策", inherited=True),
+        "classifier_legacy": _classifier_route_dict("classifier_legacy", "旧回复分类器", inherited=True),
         "vision": {
-            "stage": "vision", "label": "图片/表情包描述",
+            "stage": "vision", "label": "图片/表情包描述", "type": "vision",
             "model": "Qwen-VL",
-            "api_url": settings.get("model.route.sticker_describe") or str(IMAGE_SUMMARY_API_URL or ""),
-            "editable": _editable,
-            "edit_note": _edit_note,
+            "base_url": settings.get("model.route.sticker_describe") or str(IMAGE_SUMMARY_API_URL or ""),
+            "api_key_configured": False,
+            "editable": True,
         },
     }
 
@@ -1840,7 +1850,8 @@ def models_status(_auth=Depends(verify_admin)):
                 "load_state": persona_load_state,
                 "error": persona_error,
                 "role": "PersonaFact/PersonaBehavior 语义去重、聚类",
-                "note": "懒加载；首次调用 embed_text() 时加载模型",
+                "trigger": "首次画像候选处理 / 点击「测试 embedding」",
+                "note": "按需懒加载；配置完成不等于已加载到内存",
             },
             "nli": {
                 "model": "roberta-large-mnli",
@@ -1849,7 +1860,8 @@ def models_status(_auth=Depends(verify_admin)):
                 "load_state": nli_load_state,
                 "error": nli_error,
                 "role": "画像矛盾检测 (fallback: cosine)",
-                "note": "懒加载；首次调用 NLI pipeline 时加载模型",
+                "trigger": "首次矛盾检测 / 点击「测试 NLI」",
+                "note": "按需懒加载；失败时降级为 cosine 检测",
             },
             "sentinel": {
                 "model": "prompt-injection-sentinel",
@@ -1857,7 +1869,8 @@ def models_status(_auth=Depends(verify_admin)):
                 "configured": sentinel_configured,
                 "load_state": sentinel_load_state,
                 "role": "L1 prompt injection 检测",
-                "note": "懒加载；首次调用 _load_sentinel() 时加载模型",
+                "trigger": "首次调用 _load_sentinel() 时加载",
+                "note": "按需懒加载",
             },
         },
         "unsupported": {
@@ -2074,6 +2087,219 @@ def patch_model_route(
            ip_address=_client_ip(request))
     settings.invalidate()
     return {"ok": True, "stage": stage, "value": body.value, "version": settings.version}
+
+
+# ── 模型路由编辑（完整字段）──
+
+class ModelRouteEditBody(BaseModel):
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    timeout: Optional[float] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+
+
+@router.put("/models/routes/{route_key}")
+def edit_model_route(
+    route_key: str, body: ModelRouteEditBody,
+    request: Request, db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """编辑模型路由配置——写入 SystemSetting 子字段。"""
+    from core.config_registry import SETTING_DEFS
+    from core.settings_service import settings
+
+    prefix = f"model.route.{route_key}"
+    if prefix not in SETTING_DEFS:
+        raise HTTPException(404, f"unknown route: {route_key}")
+
+    written = {}
+    fields = {
+        "base_url": body.base_url,
+        "model": body.model,
+        "api_key": body.api_key,
+        "timeout": body.timeout,
+        "temperature": body.temperature,
+        "max_tokens": body.max_tokens,
+    }
+
+    for field, value in fields.items():
+        if value is None:
+            continue
+        key = prefix if field == "base_url" else f"{prefix}.{field}"
+        if key not in SETTING_DEFS and field != "base_url":
+            continue
+        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+        defn = SETTING_DEFS.get(key)
+        desc = defn.description if defn else f"model route {route_key}.{field}"
+        if not row:
+            row = SystemSetting(key=key, value=str(value), description=desc)
+            db.add(row)
+        else:
+            row.value = str(value)
+        written[key] = str(value)
+    db.commit()
+    _audit(db, "edit_model_route", "route", route_key, written, ip_address=_client_ip(request))
+    settings.invalidate()
+    return {"ok": True, "route_key": route_key, "written": written, "version": settings.version}
+
+
+@router.post("/models/routes/{route_key}/test")
+async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
+    """测试某个模型路由的连通性。"""
+    import time, asyncio
+    from clients.classifier_client import call_model_route, _resolve_classifier_route
+
+    t0 = time.time()
+    route = _resolve_classifier_route(route_key)
+
+    if route_key in ("reply", "fast", "smart"):
+        from clients.new_api_client import NewAPIClient
+        from config import NEW_API_KEY, NEW_API_BASE_URL
+        client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+        model = route.get("model") or route_key
+        try:
+            result = await client.chat_completion(
+                messages=[{"role": "user", "content": "回复OK"}],
+                manual_model=model, max_tokens=10, temperature=0,
+            )
+            return {
+                "ok": True, "route_key": route_key, "model": model,
+                "latency_ms": int((time.time() - t0) * 1000),
+                "raw_output": str(result)[:300],
+            }
+        except Exception as e:
+            return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
+    else:
+        try:
+            test_msg = "判断是否需要bot回复。输出JSON: {\"action\": \"continue|wait|no_reply\", \"reason\": \"...\"}"
+            raw = await asyncio.to_thread(
+                call_model_route,
+                route_key=route_key,
+                user_message=test_msg,
+                system_prompt="群聊节奏判断——是否需要bot回复",
+                max_tokens=60,
+            )
+            return {
+                "ok": True, "route_key": route_key,
+                "latency_ms": int((time.time() - t0) * 1000),
+                "raw_output": raw[:500],
+            }
+        except Exception as e:
+            return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
+
+
+@router.get("/models/available")
+def list_available_models(route_key: str = "", base_url_override: str = "",
+                          db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """获取某个 route 的可选模型列表——从 provider /models 端点拉取。"""
+    import urllib.error
+    from clients.classifier_client import _resolve_classifier_route
+
+    if route_key and route_key in ("reply", "fast", "smart", "timing_gate",
+                                    "private_decision", "classifier_legacy", "vision"):
+        route = _resolve_classifier_route(route_key)
+    else:
+        route = _resolve_classifier_route("timing_gate")
+
+    base_url = (base_url_override or str(route.get("base_url", ""))).rstrip("/")
+    api_key = route.get("api_key", "")
+    if not base_url:
+        return {"models": [], "error": "no base_url configured", "source": "none"}
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        req = urllib.request.Request(
+            f"{base_url}/models", headers=headers, method="GET",
+        )
+        proxy_handler = urllib.request.ProxyHandler({})
+        opener = urllib.request.build_opener(proxy_handler)
+        with opener.open(req, timeout=10) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        items = body.get("data", []) if isinstance(body, dict) else []
+        ids = [m["id"] for m in items if isinstance(m, dict) and m.get("id")]
+        return {"models": sorted(ids)[:100], "source": f"{base_url}/models"}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore")[:300] if e.fp else ""
+        return {"models": [], "error": f"HTTP {e.code}: {body}", "source": base_url}
+    except Exception as e:
+        return {"models": [], "error": str(e)[:300], "source": base_url}
+
+
+# ── 本地语义组件测试/预热 ──
+
+@router.post("/models/local/{component}/test")
+async def test_local_component(component: str, _auth=Depends(verify_admin)):
+    """测试本地语义组件。component: persona_embed | nli"""
+    import time
+    t0 = time.time()
+    if component == "persona_embed":
+        try:
+            from core.persona_preprocess import embed_text, _EMBEDDER_MODEL
+            vec = embed_text("测试文本——用于验证embedding组件")
+            return {
+                "ok": True, "component": component, "model": str(_EMBEDDER_MODEL),
+                "load_state": "loaded", "dim": len(vec),
+                "latency_ms": int((time.time() - t0) * 1000),
+            }
+        except Exception as e:
+            return {
+                "ok": False, "component": component,
+                "load_state": "failed", "error": str(e)[:500],
+                "hint": "检查 HuggingFace 连接、磁盘缓存、sentence-transformers 安装",
+            }
+    elif component == "nli":
+        try:
+            from core.persona_preprocess import detect_contradiction, _NLI_MODEL
+            result = detect_contradiction("我喜欢苹果", "我不喜欢苹果")
+            return {
+                "ok": True, "component": component, "model": str(_NLI_MODEL),
+                "load_state": "loaded",
+                "result": result,
+                "latency_ms": int((time.time() - t0) * 1000),
+            }
+        except Exception as e:
+            return {
+                "ok": False, "component": component,
+                "load_state": "failed", "error": str(e)[:500],
+                "hint": "检查 HuggingFace 连接、磁盘缓存、transformers 安装",
+            }
+    else:
+        raise HTTPException(404, f"unknown component: {component}")
+
+
+@router.post("/models/local/{component}/warmup")
+async def warmup_local_component(component: str, _auth=Depends(verify_admin)):
+    """预热本地语义组件——触发懒加载。"""
+    import time
+    t0 = time.time()
+    if component == "persona_embed":
+        try:
+            from core.persona_preprocess import embed_text, _EMBEDDER_MODEL
+            vec = embed_text("预热文本")
+            return {
+                "ok": True, "component": component, "model": str(_EMBEDDER_MODEL),
+                "load_state": "loaded", "dim": len(vec),
+                "latency_ms": int((time.time() - t0) * 1000),
+            }
+        except Exception as e:
+            return {"ok": False, "component": component, "error": str(e)[:500]}
+    elif component == "nli":
+        try:
+            from core.persona_preprocess import detect_contradiction, _NLI_MODEL
+            detect_contradiction("预热", "预热")
+            return {
+                "ok": True, "component": component, "model": str(_NLI_MODEL),
+                "load_state": "loaded",
+                "latency_ms": int((time.time() - t0) * 1000),
+            }
+        except Exception as e:
+            return {"ok": False, "component": component, "error": str(e)[:500]}
+    else:
+        raise HTTPException(404, f"unknown component: {component}")
 
 
 # ── Model Replies ──
