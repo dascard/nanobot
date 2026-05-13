@@ -290,12 +290,16 @@ function Dashboard() {
 
         <Card className="p-5">
           <h2 className="text-sm font-medium text-slate-400 mb-4">模型路由状态</h2>
-          {modelStatus && Object.values(modelStatus.api_routes).map(r => (
-            <div key={r.stage} className="flex items-center justify-between py-2 border-b border-slate-800/50 text-xs">
-              <span className="text-slate-400">{r.label}</span>
-              <span className="text-slate-300 font-mono truncate max-w-[200px]">{r.model || '未配置'}</span>
-            </div>
-          ))}
+          {(() => {
+            const dashboardRoutes = Object.values(modelStatus?.routes || modelStatus?.api_routes || {})
+            if (!dashboardRoutes.length) return <div className="text-xs text-slate-500 py-2">暂无模型路由状态</div>
+            return dashboardRoutes.map(r => (
+              <div key={r.route_key || r.stage} className="flex items-center justify-between py-2 border-b border-slate-800/50 text-xs">
+                <span className="text-slate-400">{r.label || r.route_key || r.stage}</span>
+                <span className="text-slate-300 font-mono truncate max-w-[200px]">{r.model || '未配置'}</span>
+              </div>
+            ))
+          })()}
           <div className="mt-5 flex gap-2">
             <NavLink to="/models" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">模型测试</NavLink>
             <NavLink to="/timing-gate" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">TimingGate 调试</NavLink>
