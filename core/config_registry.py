@@ -90,7 +90,8 @@ SETTING_DEFS: dict[str, SettingDef] = {
     "model.route.timing_gate": SettingDef(
         key="model.route.timing_gate", env_name="CLASSIFIER_API_URL",
         default="http://172.17.0.1:9999/v1", value_type="str",
-        category="model", description="TimingGate 分类器地址（也可设为完整 JSON）",
+        category="model",
+        description="分类器地址；完整配置请使用 model.route.timing_gate.model/api_key/timeout 等子字段",
     ),
     "model.route.timing_gate.model": SettingDef(
         key="model.route.timing_gate.model", env_name="",

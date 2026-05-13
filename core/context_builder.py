@@ -219,8 +219,8 @@ def build_session_memory(
             if gap_min > CONTEXT_BREAK_ON_GAP_MIN:
                 messages_with_gaps.append({
                     "role": "user",
-                    "content": f"[上下文提示：距离上一条消息间隔约{int(gap_min)}分钟，此前后的内容不应视为同一话题，无需连续理解]",
-                    "meta_json": "{}",
+                    "content": f"[系统生成的上下文提示，不是用户发言：距离上一条消息间隔约{int(gap_min)}分钟，此前后的内容不应视为同一话题，无需连续理解]",
+                    "meta_json": '{"kind":"context_gap_marker"}',
                 })
                 gap_breaks += 1
         messages_with_gaps.append(msg)

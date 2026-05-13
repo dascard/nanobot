@@ -27,49 +27,45 @@ def _resolve_classifier_route(route_key: str) -> dict:
     """解析分类器路由配置。
 
     返回 {provider, base_url, api_key, model, timeout, temperature, max_tokens}。
-    settings 中可按 model.route.<route_key>.{field} 覆盖各字段，
-    也可以直接设 model.route.<route_key> = base_url 字符串（兼容旧写法）。
-    fallback 到 CLASSIFIER_API_URL 或内网 Qwen。
+    子路由（private_decision / classifier_legacy）空配置时继承 timing_gate 的完整配置，
+    字段级覆盖（如 private_decision.max_tokens=120）在继承后叠加。
     """
     from core.settings_service import settings
 
-    # 默认值：内网 llama.cpp Qwen
     defaults = {
         "provider": "llama.cpp",
         "base_url": str(CLASSIFIER_API_URL or "http://172.17.0.1:9999/v1"),
         "api_key": "",
-        "model": "",       # llama.cpp 不需要 model 字段
+        "model": "",
         "timeout": 15.0,
         "temperature": 0,
         "max_tokens": 30,
     }
 
+    # 非 timing_gate 的 route 先继承 timing_gate 的完整配置
+    if route_key != "timing_gate":
+        base = _resolve_classifier_route("timing_gate")
+    else:
+        base = dict(defaults)
+
     prefix = f"model.route.{route_key}"
     raw = settings.get(prefix)
 
-    if raw and isinstance(raw, dict):
-        # 完整配置：model.route.timing_gate = {base_url: ..., api_key: ..., model: ...}
-        cfg = {**defaults}
-        for k in ("provider", "base_url", "api_key", "model", "timeout", "temperature", "max_tokens"):
-            if k in raw:
-                cfg[k] = raw[k]
-        return cfg
+    if raw and isinstance(raw, str) and raw.strip():
+        # 旧写法：直接写 base_url 字符串，覆盖继承值
+        base["base_url"] = str(raw)
 
-    if raw and isinstance(raw, str):
-        # 旧写法：model.route.timing_gate = "http://10.60.42.158:9999/v1"
-        return {**defaults, "base_url": str(raw)}
-
-    # 无 settings → 读每个字段
-    cfg = dict(defaults)
+    # 字段级覆盖：只覆盖显式设置了值的字段
     for k in ("provider", "base_url", "api_key", "model"):
         v = settings.get(f"{prefix}.{k}")
         if v:
-            cfg[k] = str(v)
+            base[k] = str(v)
     for k in ("timeout", "temperature", "max_tokens"):
         v = settings.get(f"{prefix}.{k}")
         if v is not None:
-            cfg[k] = float(v) if k == "temperature" else (int(v) if k == "max_tokens" else float(v))
-    return cfg
+            base[k] = float(v) if k == "temperature" else (int(v) if k == "max_tokens" else float(v))
+
+    return base
 
 
 # Pattern for Qwen output validation: 是/否 + comma + number (optional negative)
