@@ -1744,13 +1744,15 @@ def models_status(_auth=Depends(verify_admin)):
     )
     from config import NEW_API_BASE_URL, NEW_API_KEY
 
-    # ── Providers ──
-    providers = list_providers()
-    if not any(p["id"] == "newapi" for p in providers):
-        providers.append({
+    # ── Providers (脱敏) ──
+    from clients.classifier_client import provider_public
+    raw_providers = list_providers()
+    if not any(p["id"] == "newapi" for p in raw_providers):
+        raw_providers.append({
             "id": "newapi", "base_url": str(NEW_API_BASE_URL or ""),
             "api_key": str(NEW_API_KEY or ""), "enabled": bool(NEW_API_BASE_URL),
         })
+    providers = [provider_public(p) for p in raw_providers]
 
     # ── Routes ──
     route_labels = {
@@ -1916,9 +1918,9 @@ def get_model_catalog(_auth=Depends(verify_admin)):
 
 @router.get("/models/providers")
 def list_model_providers(_auth=Depends(verify_admin)):
-    """列出所有已配置的供应商。"""
-    from clients.classifier_client import list_providers
-    return {"providers": list_providers()}
+    """列出所有已配置的供应商（api_key 脱敏）。"""
+    from clients.classifier_client import list_providers, provider_public
+    return {"providers": [provider_public(p) for p in list_providers()]}
 
 
 class ProviderUpdateBody(BaseModel):
@@ -1934,6 +1936,9 @@ def update_model_provider(
     _auth=Depends(verify_admin),
 ):
     """更新供应商配置——写入 SystemSetting。"""
+    _ALLOWED_PROVIDERS = {"newapi", "local_qwen", "vision_qwen"}
+    if provider_id not in _ALLOWED_PROVIDERS:
+        raise HTTPException(404, f"unknown provider: {provider_id}")
     from core.settings_service import settings
 
     prefix = f"model.providers.{provider_id}"

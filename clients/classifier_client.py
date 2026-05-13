@@ -147,7 +147,7 @@ def call_model_route(
 # ── 模型路由解析（provider + model）──
 
 def _get_provider_config(provider_id: str) -> dict | None:
-    """读取 provider 配置：{id, base_url, api_key, enabled}。"""
+    """读取 provider 内部配置（含 api_key，仅内部使用）。"""
     from core.settings_service import settings
     base_url = str(settings.get(f"model.providers.{provider_id}.base_url") or "")
     if not base_url:
@@ -157,6 +157,16 @@ def _get_provider_config(provider_id: str) -> dict | None:
         "base_url": base_url,
         "api_key": str(settings.get(f"model.providers.{provider_id}.api_key") or ""),
         "enabled": bool(settings.get(f"model.providers.{provider_id}.enabled")),
+    }
+
+
+def provider_public(p: dict) -> dict:
+    """脱敏返回：不暴露 api_key 明文。"""
+    return {
+        "id": p["id"],
+        "base_url": p.get("base_url", ""),
+        "api_key_configured": bool(p.get("api_key")),
+        "enabled": bool(p.get("enabled")),
     }
 
 
