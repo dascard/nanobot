@@ -23,18 +23,19 @@ from config import (
 
 
 def _get_image_summary_route() -> dict:
-    """解析表情包打标完整路由配置。
-
-    sticker_describe 默认从 classifier 继承；base_url 用 IMAGE_SUMMARY_API_URL 覆盖，
-    其他字段用 config 常量作为业务默认值。WebUI 显式保存的 settings 优先。
-    """
-    from core.settings_service import settings
+    """解析表情包打标完整路由配置。结果缓存 30s 避免频繁 DB 查询。"""
+    import time as _time
     from clients.classifier_client import _resolve_classifier_route
+    from core.database import SessionLocal, SystemSetting
+
+    # 缓存：避免每次图片描述都查 DB
+    cache = getattr(_get_image_summary_route, "_cache", None)
+    now = _time.time()
+    if cache and now - cache["ts"] < 30:
+        return cache["route"]
 
     route = _resolve_classifier_route("sticker_describe")
 
-    # 检测哪些 key 被 WebUI 显式保存过（DB 中有记录）
-    from core.database import SessionLocal, SystemSetting
     db = SessionLocal()
     try:
         saved_keys = {
@@ -46,16 +47,16 @@ def _get_image_summary_route() -> dict:
         db.close()
 
     prefix = "model.route.sticker_describe"
-    # 未显式保存 URL → 用 IMAGE_SUMMARY_API_URL
     if prefix not in saved_keys:
         route["base_url"] = str(IMAGE_SUMMARY_API_URL or route["base_url"])
-    # 未显式保存子字段 → 用 config 常量
     if f"{prefix}.max_tokens" not in saved_keys:
         route["max_tokens"] = IMAGE_SUMMARY_MAX_TOKENS
     if f"{prefix}.temperature" not in saved_keys:
         route["temperature"] = IMAGE_SUMMARY_TEMPERATURE
     if f"{prefix}.timeout" not in saved_keys:
         route["timeout"] = IMAGE_SUMMARY_TIMEOUT
+
+    _get_image_summary_route._cache = {"ts": now, "route": route}
     return route
 from nanobot_kt.image_pipeline import prepare_image_parts
 
@@ -190,8 +191,7 @@ class ImageSummaryTool(BaseTool):
             "}"
         )
 
-    def _build_payload(self, files: list[str], focus: str) -> dict[str, Any]:
-        route = _get_image_summary_route()
+    def _build_payload(self, files: list[str], focus: str, route: dict) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "messages": [
                 {"role": "system", "content": self._system_prompt()},
@@ -207,7 +207,7 @@ class ImageSummaryTool(BaseTool):
 
     def _call_qwen(self, files: list[str], focus: str) -> str:
         route = _get_image_summary_route()
-        payload = self._build_payload(files, focus)
+        payload = self._build_payload(files, focus, route)
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         base_url = str(route.get("base_url", "")).rstrip("/")
         url = f"{base_url}/chat/completions"
