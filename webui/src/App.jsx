@@ -1894,71 +1894,163 @@ function PromptPage() {
 // ── Models ──
 function ModelsPage() {
   const [status, setStatus] = useState(null)
-  useEffect(() => { api.get('/models/status').then(r => setStatus(r.data)) }, [])
+  const [editRoute, setEditRoute] = useState(null)
+  const [testResult, setTestResult] = useState({})
+  const [localResult, setLocalResult] = useState({})
+  const load = () => api.get('/models/status').then(r => setStatus(r.data))
+  useEffect(() => { load() }, [])
+
+  const handleTest = async (key) => {
+    setTestResult(p => ({ ...p, [key]: { loading: true } }))
+    try { const r = await api.post(`/models/routes/${key}/test`); setTestResult(p => ({ ...p, [key]: r.data })) }
+    catch (e) { setTestResult(p => ({ ...p, [key]: { ok: false, error: e.message } })) }
+  }
+  const handleLocal = async (comp, action) => {
+    setLocalResult(p => ({ ...p, [comp]: { loading: true } }))
+    try { const r = await api.post(`/models/local/${comp}/${action}`); setLocalResult(p => ({ ...p, [comp]: r.data })) }
+    catch (e) { setLocalResult(p => ({ ...p, [comp]: { ok: false, error: e.message } })) }
+  }
 
   if (!status) return <Spinner />
+
+  const routeList = Object.entries(status.api_routes || {})
 
   return (
     <div>
       <h1 className="text-2xl font-bold mb-2">模型路由</h1>
-      <p className="text-slate-500 text-sm mb-6">API 模型路由 + 本地语义组件，不包含未实现能力</p>
+      <p className="text-slate-500 text-sm mb-6">
+        API 模型路由可编辑/测试；本地语义组件为按需懒加载，不属于 API 路由。
+      </p>
 
-      {/* API Routes */}
       <h2 className="text-lg font-medium mb-3">API 模型路由</h2>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-8">
-        {Object.values(status.api_routes).map(r => (
-          <Card key={r.stage} className="p-4">
+        {routeList.map(([key, r]) => (
+          <Card key={key} className="p-4">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="font-medium text-sm">{r.label}</h3>
-              <Badge tone="slate">只读</Badge>
+              <div>
+                <h3 className="font-medium text-sm">{r.label} <span className="text-xs text-slate-500 font-mono ml-1">{key}</span></h3>
+                {r.inherited_from && (
+                  <span className="text-xs text-amber-400">继承自 {r.inherited_from}{r.overridden_fields && Object.keys(r.overridden_fields).length > 0 ? ` (覆盖: ${Object.keys(r.overridden_fields).join(', ')})` : ''}</span>
+                )}
+              </div>
+              <div className="flex gap-1">
+                {r.editable !== false && (
+                  <button onClick={() => setEditRoute({ key, ...r })} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">编辑</button>
+                )}
+                <button onClick={() => handleTest(key)} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-xs">测试</button>
+              </div>
             </div>
-            <div className="space-y-1 text-xs text-slate-400">
-              <div>模型: <span className="text-slate-200 font-mono">{r.model || '未配置'}</span></div>
-              {r.base_url && <div>base_url: <span className="text-slate-500">{r.base_url}</span></div>}
-              {r.api_url && <div>api_url: <span className="text-slate-500">{r.api_url}</span></div>}
-              {r.api_key_configured !== undefined && <div>API key: {r.api_key_configured ? '✅ 已配置' : '❌ 未配置'}</div>}
-              {r.edit_note && <div className="text-slate-600 italic mt-1">{r.edit_note}</div>}
+            <div className="space-y-0.5 text-xs text-slate-400">
+              <div>base_url: <span className="text-slate-500 font-mono break-all">{r.base_url || r.api_url || ''}</span></div>
+              {r.model && <div>model: <span className="text-slate-200 font-mono">{r.model}</span></div>}
+              {r.api_key_configured !== undefined && <div>API key: {r.api_key_configured ? '✅' : '❌'}</div>}
+              {r.max_tokens !== undefined && <div>max_tokens: {r.max_tokens} | timeout: {r.timeout}s | temp: {r.temperature}</div>}
+              {r.source && <div className="text-slate-600">source: {r.source}</div>}
             </div>
+            {testResult[key] && !testResult[key].loading && (
+              <div className={`mt-2 p-2 rounded-lg text-xs ${testResult[key].ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
+                {testResult[key].ok ? `✅ ${testResult[key].latency_ms}ms` : `❌ ${testResult[key].error}`}
+              </div>
+            )}
+            {testResult[key] && testResult[key].loading && <div className="mt-2 text-xs text-slate-500">测试中...</div>}
           </Card>
         ))}
       </div>
 
-      {/* Local Components */}
       <h2 className="text-lg font-medium mb-3">本地语义组件</h2>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-8">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {Object.entries(status.local_components || {}).map(([key, c]) => (
           <Card key={key} className="p-4">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="font-medium text-sm">{key}</h3>
-              <Badge tone={c.load_state === 'loaded' ? 'emerald' : c.load_state === 'unavailable' ? 'red' : 'amber'}>
-                {c.load_state === 'loaded' ? '已加载' : c.load_state === 'unavailable' ? '不可用' : '未加载'}
-              </Badge>
+              <div>
+                <h3 className="font-medium text-sm">{key}</h3>
+                <span className="text-xs text-slate-500">配置: {c.configured ? '已配置' : '未配置'} | 加载: {c.load_state === 'loaded' ? '已加载' : c.load_state === 'unavailable' ? '不可用' : '未加载'}</span>
+              </div>
+              <div className="flex gap-1">
+                <button onClick={() => handleLocal(key, 'warmup')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">预热</button>
+                <button onClick={() => handleLocal(key, 'test')} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-xs">测试</button>
+              </div>
             </div>
             <div className="space-y-1 text-xs text-slate-400">
               <div>模型: <span className="text-slate-200">{c.model}</span></div>
               <div>加载器: {c.loader}</div>
               <div>用途: {c.role}</div>
+              <div className="text-slate-600">触发: {c.trigger}</div>
               {c.note && <div className="text-slate-600 italic">{c.note}</div>}
-              {c.error && <div className="text-red-400">{c.error}</div>}
+              {c.error && <div className="text-red-400 truncate">{c.error}</div>}
             </div>
+            {localResult[key] && !localResult[key].loading && (
+              <div className={`mt-2 p-2 rounded-lg text-xs ${localResult[key].ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
+                {localResult[key].ok
+                  ? `✅ ${localResult[key].latency_ms}ms${localResult[key].dim ? ' | dim=' + localResult[key].dim : ''}`
+                  : `❌ ${localResult[key].error || ''}${localResult[key].hint ? ' | ' + localResult[key].hint : ''}`}
+              </div>
+            )}
+            {localResult[key] && localResult[key].loading && <div className="mt-2 text-xs text-slate-500">执行中...</div>}
           </Card>
         ))}
       </div>
 
-      {/* Unsupported */}
-      <h2 className="text-lg font-medium mb-3 text-slate-500">未实现</h2>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        {Object.entries(status.unsupported || {}).map(([key, u]) => (
-          <Card key={key} className="p-4 opacity-50">
-            <div className="flex items-center justify-between mb-1">
-              <h3 className="font-medium text-sm text-slate-500">{key}</h3>
-              <Badge tone="slate">未实现</Badge>
-            </div>
-            <p className="text-xs text-slate-600">{u.note}</p>
-          </Card>
-        ))}
-      </div>
+      {editRoute && (
+        <RouteEditModal route={editRoute} onClose={() => setEditRoute(null)} onSaved={() => { setEditRoute(null); load() }} />
+      )}
     </div>
+  )
+}
+
+function RouteEditModal({ route, onClose, onSaved }) {
+  const [f, setF] = useState({
+    base_url: route.base_url || '', model: route.model || '',
+    api_key: '', timeout: route.timeout || 15, temperature: route.temperature || 0,
+    max_tokens: route.max_tokens || 30,
+  })
+  const [models, setModels] = useState([])
+  const [modelsLoading, setModelsLoading] = useState(false)
+  const loadModels = () => {
+    setModelsLoading(true)
+    api.get('/models/available', { params: { route_key: route.key } })
+      .then(r => setModels(r.data.models || [])).catch(() => {}).finally(() => setModelsLoading(false))
+  }
+  const save = () => {
+    const payload = {}
+    for (const k of ['base_url', 'model', 'timeout', 'temperature', 'max_tokens']) {
+      if (f[k] !== '' && f[k] !== undefined) payload[k] = String(f[k])
+    }
+    if (f.api_key && f.api_key.trim()) payload.api_key = f.api_key.trim()
+    api.put(`/models/routes/${route.key}`, payload).then(onSaved)
+  }
+  return (
+    <Modal onClose={onClose}>
+      <div className="p-6 max-w-lg">
+        <h2 className="text-lg font-bold mb-4">编辑 {route.label} ({route.key})</h2>
+        {route.inherited_from && (
+          <p className="text-xs text-amber-400 mb-3">继承自 {route.inherited_from}，仅需覆盖差异字段</p>
+        )}
+        <div className="space-y-3">
+          <input value={f.base_url} onChange={e => setF({ ...f, base_url: e.target.value })} placeholder="base_url" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
+          <div className="flex gap-2">
+            <input value={f.model} onChange={e => setF({ ...f, model: e.target.value })} placeholder="model" className="flex-1 p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
+            <button onClick={loadModels} disabled={modelsLoading} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-xs">{modelsLoading ? '...' : '可选'}</button>
+          </div>
+          {models.length > 0 && (
+            <select onChange={e => setF({ ...f, model: e.target.value })} value={f.model} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm">
+              <option value="">手动输入</option>
+              {models.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          )}
+          <input type="password" value={f.api_key} onChange={e => setF({ ...f, api_key: e.target.value })} placeholder="API key (留空不修改)" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
+          <div className="grid grid-cols-3 gap-3">
+            <div><label className="text-xs text-slate-500">timeout</label><input type="number" value={f.timeout} onChange={e => setF({ ...f, timeout: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+            <div><label className="text-xs text-slate-500">temp</label><input type="number" step="0.1" value={f.temperature} onChange={e => setF({ ...f, temperature: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+            <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+          </div>
+        </div>
+        <div className="flex gap-2 justify-end mt-4">
+          <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">取消</button>
+          <button onClick={save} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">保存</button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
