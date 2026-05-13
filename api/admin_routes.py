@@ -2144,8 +2144,11 @@ def edit_model_route(
     from core.config_registry import SETTING_DEFS
     from core.settings_service import settings
 
-    prefix, _, is_classifier = _resolve_route_key(route_key)
-    if not is_classifier and prefix not in SETTING_DEFS:
+    prefix, db_key, is_classifier = _resolve_route_key(route_key)
+    if is_classifier:
+        if db_key not in _CLASSIFIER_ROUTE_KEYS:
+            raise HTTPException(404, f"unknown route: {route_key}")
+    elif prefix not in SETTING_DEFS:
         raise HTTPException(404, f"unknown route: {route_key}")
 
     written = {}
@@ -2183,9 +2186,9 @@ def edit_model_route(
     settings.invalidate()
     # 不返回 written，只返回 api_key_configured
     resp: dict = {"ok": True, "route_key": route_key, "version": settings.version}
-    api_key_set = any(k.endswith(".api_key") for k in written)
-    if api_key_set:
-        resp["api_key_configured"] = True
+    api_key_written = any(k.endswith(".api_key") for k in written)
+    if api_key_written:
+        resp["api_key_configured"] = bool(body.api_key)
     return resp
 
 
@@ -2217,6 +2220,24 @@ async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
             }
         except Exception as e:
             return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
+    elif route_key == "sticker_describe":
+        # vision route: 仅连通性测试（不是 TimingGate 分类器）
+        try:
+            raw = await asyncio.to_thread(
+                call_model_route,
+                route_key=route_key,
+                user_message="测试连通性",
+                system_prompt="你是一个视觉描述模型。收到图片时输出JSON描述。此消息仅测试连通性，回复 ok。",
+                max_tokens=20,
+            )
+            return {
+                "ok": True, "route_key": route_key,
+                "latency_ms": int((time.time() - t0) * 1000),
+                "raw_output": raw[:200],
+                "note": "仅连通性测试，非完整视觉描述测试",
+            }
+        except Exception as e:
+            return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
     else:
         try:
             raw = await asyncio.to_thread(
@@ -2244,8 +2265,13 @@ def list_available_models(route_key: str = "", base_url_override: str = "",
 
     route_key = _ROUTE_ALIAS.get(route_key, route_key)
 
-    # chat routes: 使用 NewAPI base_url
-    if route_key in _CHAT_ROUTES:
+    # base_url_override 优先（前端未保存前测试 provider 模型列表）
+    if base_url_override:
+        from clients.classifier_client import _resolve_classifier_route
+        route = _resolve_classifier_route(route_key)
+        base_url = base_url_override.rstrip("/")
+        api_key = str(route.get("api_key", ""))
+    elif route_key in _CHAT_ROUTES:
         from config import NEW_API_BASE_URL, NEW_API_KEY
         base_url = str(NEW_API_BASE_URL or "").rstrip("/")
         api_key = str(NEW_API_KEY or "")
@@ -2320,9 +2346,11 @@ async def test_local_component(component: str, _auth=Depends(verify_admin)):
         try:
             from core.persona_preprocess import _NLI_MODEL
             result = _test_nli_contradiction("我喜欢苹果", "我不喜欢苹果")
+            available = result.get("available", False)
             return {
                 "ok": True, "component": component, "model": str(_NLI_MODEL),
-                "load_state": "loaded",
+                "load_state": "loaded" if available else "fallback",
+                "fallback": "cosine" if not available else None,
                 "result": result,
                 "latency_ms": int((time.time() - t0) * 1000),
             }
@@ -2355,10 +2383,12 @@ async def warmup_local_component(component: str, _auth=Depends(verify_admin)):
     elif component == "nli":
         try:
             from core.persona_preprocess import _NLI_MODEL
-            _test_nli_contradiction("预热", "预热")
+            result = _test_nli_contradiction("预热", "预热")
+            available = result.get("available", False)
             return {
                 "ok": True, "component": component, "model": str(_NLI_MODEL),
-                "load_state": "loaded",
+                "load_state": "loaded" if available else "fallback",
+                "fallback": "cosine" if not available else None,
                 "latency_ms": int((time.time() - t0) * 1000),
             }
         except Exception as e:

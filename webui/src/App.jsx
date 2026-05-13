@@ -1964,7 +1964,8 @@ function ModelsPage() {
             <div className="flex items-center justify-between mb-2">
               <div>
                 <h3 className="font-medium text-sm">{key}</h3>
-                <span className="text-xs text-slate-500">配置: {c.configured ? '已配置' : '未配置'} | 加载: {c.load_state === 'loaded' ? '已加载' : c.load_state === 'unavailable' ? '不可用' : '未加载'}</span>
+                <span className="text-xs text-slate-500">配置: {c.configured ? '已配置' : '未配置'} | 加载: {c.load_state === 'loaded' ? '已加载' : c.load_state === 'fallback' ? '降级' : c.load_state === 'unavailable' ? '不可用' : '未加载'}</span>
+                {c.fallback && <span className="text-xs text-amber-400 ml-1">(降级: {c.fallback})</span>}
               </div>
               <div className="flex gap-1">
                 <button onClick={() => handleLocal(key, 'warmup')} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">预热</button>

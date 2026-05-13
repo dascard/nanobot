@@ -183,6 +183,31 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="http://172.17.0.1:9999/v1", value_type="str",
         category="model", description="表情包打标 API 地址",
     ),
+    "model.route.sticker_describe.model": SettingDef(
+        key="model.route.sticker_describe.model", env_name="",
+        default="", value_type="str",
+        category="model", description="表情包打标模型名",
+    ),
+    "model.route.sticker_describe.api_key": SettingDef(
+        key="model.route.sticker_describe.api_key", env_name="",
+        default="", value_type="str",
+        category="model", description="表情包打标 API key", sensitive=True,
+    ),
+    "model.route.sticker_describe.timeout": SettingDef(
+        key="model.route.sticker_describe.timeout", env_name="",
+        default=15, value_type="int",
+        category="model", min_value=3, max_value=120,
+    ),
+    "model.route.sticker_describe.temperature": SettingDef(
+        key="model.route.sticker_describe.temperature", env_name="",
+        default=0.0, value_type="float",
+        category="model", min_value=0, max_value=2,
+    ),
+    "model.route.sticker_describe.max_tokens": SettingDef(
+        key="model.route.sticker_describe.max_tokens", env_name="",
+        default=256, value_type="int",
+        category="model", min_value=10, max_value=2000,
+    ),
     "new_api.timeout": SettingDef(
         key="new_api.timeout", env_name="NEW_API_TIMEOUT",
         default=180, value_type="int",
