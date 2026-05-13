@@ -1739,99 +1739,69 @@ def rollback_prompt_backup(backup_name: str, db: Session = Depends(get_db), _aut
 
 @router.get("/models/status")
 def models_status(_auth=Depends(verify_admin)):
-    from core.settings_service import settings
-    from config import (
-        NEW_API_BASE_URL, NEW_API_KEY,
-        CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
-        LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
+    from clients.classifier_client import (
+        Guardrail, resolve_model_route, list_providers, build_model_catalog,
     )
-    from clients.classifier_client import Guardrail, _resolve_classifier_route
-    import os
+    from config import NEW_API_BASE_URL, NEW_API_KEY
 
-    def _classifier_route_dict(route_key: str, label: str, inherited: bool = False) -> dict:
-        route = _resolve_classifier_route(route_key)
-        result: dict = {
-            "stage": route_key, "label": label, "type": "classifier",
-            "base_url": str(route.get("base_url", "")),
-            "model": str(route.get("model", "") or "未指定"),
-            "api_key_configured": bool(route.get("api_key", "")),
-            "timeout": route.get("timeout", 15),
-            "temperature": route.get("temperature", 0),
-            "max_tokens": route.get("max_tokens", 30),
-            "source": "settings/env/default",
+    # ── Providers ──
+    providers = list_providers()
+    if not any(p["id"] == "newapi" for p in providers):
+        providers.append({
+            "id": "newapi", "base_url": str(NEW_API_BASE_URL or ""),
+            "api_key": str(NEW_API_KEY or ""), "enabled": bool(NEW_API_BASE_URL),
+        })
+
+    # ── Routes ──
+    route_labels = {
+        "reply": "主回复模型", "fast": "快速模型", "smart": "智能模型",
+        "timing_gate": "TimingGate 判定", "private_decision": "私聊决策",
+        "classifier_legacy": "旧回复分类器", "sticker_describe": "图片/表情包描述",
+    }
+    routes = {}
+    for rk, label in route_labels.items():
+        r = resolve_model_route(rk)
+        entry = {
+            "route_key": rk, "label": label,
+            "provider_id": r["provider_id"],
+            "model": r["model"],
+            "api_key_configured": r["api_key_configured"],
+            "timeout": r["timeout"], "temperature": r["temperature"],
+            "max_tokens": r["max_tokens"],
+            "source": r.get("source", "provider"),
             "editable": True,
         }
-        if inherited:
-            tg = _resolve_classifier_route("timing_gate")
-            overrides = {}
-            for k in ("max_tokens", "timeout", "temperature"):
-                if route.get(k) != tg.get(k):
-                    overrides[k] = route.get(k)
-            result["inherited_from"] = "timing_gate"
-            result["overridden_fields"] = overrides
-            result["source"] = "inherited_from_timing_gate"
-        result["editable"] = True
-        return result
+        if r.get("inherited_from"):
+            entry["inherited_from"] = r["inherited_from"]
+            entry["overridden_fields"] = r.get("overridden_fields", {})
+        if rk == "classifier_legacy":
+            entry["note"] = "兼容旧 reply/no_reply 分类路径；正常群聊优先使用 TimingGate"
+        routes[rk] = entry
 
-    api_routes = {
-        "reply": {
-            "stage": "reply", "label": "主回复模型", "type": "chat",
-            "model": settings.get("model.reply") or os.environ.get("LLM_MODEL_REPLY", "") or LLM_MODEL_REPLY,
-            "base_url": str(NEW_API_BASE_URL or ""),
-            "api_key_configured": bool(NEW_API_KEY),
-            "editable": True,
-        },
-        "fast": {
-            "stage": "fast", "label": "快速模型", "type": "chat",
-            "model": settings.get("model.fast") or os.environ.get("LLM_MODEL_FAST", "") or LLM_MODEL_FAST,
-            "base_url": str(NEW_API_BASE_URL or ""),
-            "api_key_configured": bool(NEW_API_KEY),
-            "editable": True,
-        },
-        "smart": {
-            "stage": "smart", "label": "智能模型", "type": "chat",
-            "model": settings.get("model.smart") or os.environ.get("LLM_MODEL_SMART", "") or LLM_MODEL_SMART,
-            "base_url": str(NEW_API_BASE_URL or ""),
-            "api_key_configured": bool(NEW_API_KEY),
-            "editable": True,
-        },
-        "timing_gate": _classifier_route_dict("timing_gate", "TimingGate 判定"),
-        "private_decision": _classifier_route_dict("private_decision", "私聊决策", inherited=True),
-        "classifier_legacy": _classifier_route_dict("classifier_legacy", "旧回复分类器", inherited=True),
-        "vision": {
-            "stage": "vision", "label": "图片/表情包描述", "type": "vision",
-            "model": "Qwen-VL",
-            "base_url": settings.get("model.route.sticker_describe") or str(IMAGE_SUMMARY_API_URL or ""),
-            "api_key_configured": False,
-            "editable": True,
-        },
-    }
+    # ── Model Catalog ──
+    catalog = build_model_catalog()
 
-    # Persona embedder status —— import 成功 ≠ 模型已加载（SentenceTransformer 是懒加载）
+    # ── Local Components ──
     persona_configured = False
     persona_load_state = "not_loaded"
     persona_error = ""
     try:
         from core.persona_preprocess import _EMBEDDER_MODEL, embed_text  # noqa: F401
         persona_configured = True
-        persona_load_state = "not_loaded"
     except Exception as e:
         persona_error = str(e)[:200]
         persona_load_state = "unavailable"
 
-    # NLI status —— 同上，常量能 import ≠ transformers pipeline 可用
     nli_configured = False
     nli_load_state = "not_loaded"
     nli_error = ""
     try:
         from core.persona_preprocess import _NLI_MODEL  # noqa: F401
         nli_configured = True
-        nli_load_state = "not_loaded"
     except Exception as e:
         nli_error = str(e)[:200]
         nli_load_state = "unavailable"
 
-    # Sentinel —— _sentinel 初始为 None，真正加载在 _load_sentinel()
     sentinel_configured = True
     sentinel_load_state = "not_loaded"
     try:
@@ -1843,7 +1813,9 @@ def models_status(_auth=Depends(verify_admin)):
         sentinel_load_state = "unavailable"
 
     return {
-        "api_routes": api_routes,
+        "providers": providers,
+        "routes": routes,
+        "model_catalog": catalog,
         "local_components": {
             "persona_embed": {
                 "model": "BAAI/bge-base-zh-v1.5",

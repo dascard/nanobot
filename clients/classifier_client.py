@@ -143,6 +143,144 @@ def call_model_route(
     content = body["choices"][0]["message"]["content"]
     return strip_think_blocks(content)
 
+
+# ── 模型路由解析（provider + model）──
+
+def _get_provider_config(provider_id: str) -> dict | None:
+    """读取 provider 配置：{id, base_url, api_key, enabled}。"""
+    from core.settings_service import settings
+    base_url = str(settings.get(f"model.providers.{provider_id}.base_url") or "")
+    if not base_url:
+        return None
+    return {
+        "id": provider_id,
+        "base_url": base_url,
+        "api_key": str(settings.get(f"model.providers.{provider_id}.api_key") or ""),
+        "enabled": bool(settings.get(f"model.providers.{provider_id}.enabled")),
+    }
+
+
+def list_providers() -> list[dict]:
+    """列出所有已配置的 provider。"""
+    from core.config_registry import SETTING_DEFS
+    providers: list[dict] = []
+    seen: set[str] = set()
+    for key in SETTING_DEFS:
+        if not key.startswith("model.providers.") or not key.endswith(".base_url"):
+            continue
+        pid = key.removeprefix("model.providers.").removesuffix(".base_url")
+        if pid in seen:
+            continue
+        seen.add(pid)
+        cfg = _get_provider_config(pid)
+        if cfg:
+            providers.append(cfg)
+    return providers
+
+
+def resolve_model_route(route_key: str) -> dict:
+    """三层模型路由解析：provider → model → route params。
+
+    返回 {route_key, provider_id, base_url, api_key, api_key_configured,
+          model, timeout, temperature, max_tokens, source, inherited_from,
+          overridden_fields}
+    """
+    from core.settings_service import settings
+    from config import (
+        LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
+    )
+
+    route = _resolve_classifier_route(route_key)
+
+    # 确定 provider
+    provider_id = str(settings.get(f"model.route.{route_key}.provider") or "")
+    if not provider_id:
+        if route_key in ("reply", "fast", "smart"):
+            provider_id = "newapi"
+        elif route_key == "sticker_describe":
+            provider_id = "vision_qwen"
+        else:
+            provider_id = "local_qwen"
+
+    provider = _get_provider_config(provider_id) or {
+        "id": provider_id, "base_url": route.get("base_url", ""),
+        "api_key": route.get("api_key", ""), "enabled": True,
+    }
+
+    # 确定 model
+    model = route.get("model", "")
+    if not model and route_key in ("reply", "fast", "smart"):
+        models = {"reply": LLM_MODEL_REPLY, "fast": LLM_MODEL_FAST, "smart": LLM_MODEL_SMART}
+        model = settings.get(f"model.{route_key}") or models.get(route_key, "")
+
+    result = {
+        "route_key": route_key,
+        "provider_id": provider_id,
+        "base_url": provider["base_url"],
+        "api_key": provider["api_key"],
+        "api_key_configured": bool(provider.get("api_key")),
+        "model": model or "未指定",
+        "timeout": route.get("timeout", 15),
+        "temperature": route.get("temperature", 0),
+        "max_tokens": route.get("max_tokens", 30),
+        "source": "provider",
+    }
+
+    # 继承信息（非 timing_gate 的 classifier routes）
+    if route_key in ("private_decision", "classifier_legacy"):
+        tg = resolve_model_route("timing_gate")
+        overrides = {}
+        for k in ("max_tokens", "timeout", "temperature", "model", "provider_id"):
+            if result[k] != tg.get(k) and result[k] not in ("", "未指定", 30):
+                overrides[k] = result[k]
+        result["inherited_from"] = "timing_gate"
+        result["overridden_fields"] = overrides
+        result["source"] = "inherited_from_timing_gate"
+
+    return result
+
+
+def build_model_catalog() -> list[dict]:
+    """构建模型目录：列出所有已知模型及其能力/用途。"""
+    from core.settings_service import settings
+    from config import LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
+
+    model_map: dict[str, dict] = {}
+
+    for rk in ("reply", "fast", "smart", "timing_gate", "private_decision",
+               "classifier_legacy", "sticker_describe"):
+        r = resolve_model_route(rk)
+        m = r.get("model", "")
+        if not m or m == "未指定":
+            continue
+        if m not in model_map:
+            model_map[m] = {"model": m, "provider": r["provider_id"],
+                            "capabilities": set(), "used_by": []}
+        model_map[m]["used_by"].append(rk)
+        caps = model_map[m]["capabilities"]
+        if rk in ("reply", "fast", "smart"):
+            caps.add("chat")
+        elif rk in ("timing_gate", "private_decision", "classifier_legacy"):
+            caps.add("classifier")
+        elif rk == "sticker_describe":
+            caps.add("vision")
+
+    # 补充 chat models
+    chat_models = {
+        "reply": settings.get("model.reply") or LLM_MODEL_REPLY,
+        "fast": settings.get("model.fast") or LLM_MODEL_FAST,
+        "smart": settings.get("model.smart") or LLM_MODEL_SMART,
+    }
+    for rk, m in chat_models.items():
+        if m and m not in model_map:
+            model_map[m] = {"model": m, "provider": "newapi",
+                            "capabilities": {"chat"}, "used_by": [rk]}
+
+    for entry in model_map.values():
+        entry["capabilities"] = sorted(entry["capabilities"])
+
+    return sorted(model_map.values(), key=lambda x: x["model"])
+
 # Control characters to strip (exclude \n, \t, \r)
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 

@@ -208,6 +208,73 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=256, value_type="int",
         category="model", min_value=10, max_value=2000,
     ),
+    # ── Provider 供应商配置 ──
+    "model.providers.newapi.base_url": SettingDef(
+        key="model.providers.newapi.base_url", env_name="NEW_API_BASE_URL",
+        default="", value_type="str",
+        category="model", description="NewAPI 供应商地址",
+    ),
+    "model.providers.newapi.api_key": SettingDef(
+        key="model.providers.newapi.api_key", env_name="NEW_API_KEY",
+        default="", value_type="str",
+        category="model", description="NewAPI API key", sensitive=True,
+    ),
+    "model.providers.newapi.enabled": SettingDef(
+        key="model.providers.newapi.enabled", env_name="",
+        default=True, value_type="bool",
+        category="model", description="NewAPI 是否启用",
+    ),
+    "model.providers.local_qwen.base_url": SettingDef(
+        key="model.providers.local_qwen.base_url", env_name="CLASSIFIER_API_URL",
+        default="http://172.17.0.1:9999/v1", value_type="str",
+        category="model", description="本地 Qwen 服务地址",
+    ),
+    "model.providers.local_qwen.api_key": SettingDef(
+        key="model.providers.local_qwen.api_key", env_name="",
+        default="", value_type="str",
+        category="model", description="本地 Qwen API key", sensitive=True,
+    ),
+    "model.providers.local_qwen.enabled": SettingDef(
+        key="model.providers.local_qwen.enabled", env_name="",
+        default=True, value_type="bool",
+        category="model", description="本地 Qwen 是否启用",
+    ),
+    "model.providers.vision_qwen.base_url": SettingDef(
+        key="model.providers.vision_qwen.base_url", env_name="IMAGE_SUMMARY_API_URL",
+        default="http://172.17.0.1:9999/v1", value_type="str",
+        category="model", description="视觉 Qwen 服务地址",
+    ),
+    "model.providers.vision_qwen.api_key": SettingDef(
+        key="model.providers.vision_qwen.api_key", env_name="",
+        default="", value_type="str",
+        category="model", description="视觉 Qwen API key", sensitive=True,
+    ),
+    "model.providers.vision_qwen.enabled": SettingDef(
+        key="model.providers.vision_qwen.enabled", env_name="",
+        default=True, value_type="bool",
+        category="model", description="视觉 Qwen 是否启用",
+    ),
+    # ── Route provider 关联 ──
+    "model.route.timing_gate.provider": SettingDef(
+        key="model.route.timing_gate.provider", env_name="",
+        default="local_qwen", value_type="str",
+        category="model", description="TimingGate 使用的供应商",
+    ),
+    "model.route.private_decision.provider": SettingDef(
+        key="model.route.private_decision.provider", env_name="",
+        default="", value_type="str",
+        category="model", description="私聊决策供应商（空=继承timing_gate）",
+    ),
+    "model.route.classifier_legacy.provider": SettingDef(
+        key="model.route.classifier_legacy.provider", env_name="",
+        default="", value_type="str",
+        category="model", description="旧分类器供应商（空=继承timing_gate）",
+    ),
+    "model.route.sticker_describe.provider": SettingDef(
+        key="model.route.sticker_describe.provider", env_name="",
+        default="vision_qwen", value_type="str",
+        category="model", description="图片描述供应商",
+    ),
     "new_api.timeout": SettingDef(
         key="new_api.timeout", env_name="NEW_API_TIMEOUT",
         default=180, value_type="int",
