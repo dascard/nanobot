@@ -155,6 +155,7 @@ class GroupChatState:
     wait_count: int = 0
     total_wait_s: float = 0.0
     waiting_for_more: bool = False          # actively in wait state
+    wait_started_at: float = 0.0            # when the current wait cycle started
     wait_until: float = 0.0                 # absolute time when current wait expires
     max_wait_until: float = 0.0             # hard deadline even with new messages
     new_messages_during_wait: list[dict] = field(default_factory=list)
@@ -229,6 +230,7 @@ class GroupChatState:
         self.wait_count = 0
         self.total_wait_s = 0.0
         self.waiting_for_more = False
+        self.wait_started_at = 0.0
         self.wait_until = 0.0
         self.max_wait_until = 0.0
         self.new_messages_during_wait.clear()
@@ -240,9 +242,9 @@ class GroupChatState:
         now = _time.time()
         self.waiting_for_more = True
         self.wait_count += 1
-        self.total_wait_s += delay
+        self.wait_started_at = now
         self.wait_until = now + delay
-        self.max_wait_until = max(self.max_wait_until, now + MAX_WAIT_SEC)
+        self.max_wait_until = max(now, self.max_wait_until) if self.max_wait_until > 0 else (now + MAX_WAIT_SEC)
         self.wait_reason = reason
         self.previous_gate_action = "wait"
         self.new_messages_during_wait.clear()
@@ -252,14 +254,13 @@ class GroupChatState:
         self.new_messages_during_wait.append(msg_dict)
 
     def refresh_wait(self, max_delay: int = 10) -> bool:
-        """新消息刷新 wait 计时器，但不超过 max_wait_until。返回 True 表示刷新成功。"""
+        """新消息刷新 wait 计时器，但不超过 max_wait_until。不累加 total_wait_s。返回 True 表示刷新成功。"""
         now = _time.time()
         remaining = self.max_wait_until - now
         if remaining <= 0:
             return False
         new_delay = min(max_delay, remaining)
         self.wait_until = now + new_delay
-        self.total_wait_s += new_delay
         return True
 
     def is_wait_expired(self) -> bool:
@@ -267,7 +268,11 @@ class GroupChatState:
         return _time.time() >= self.wait_until or self.is_wait_exhausted()
 
     def end_wait(self):
-        """退出 waiting_for_more 状态（不清理 pending）。"""
+        """退出 waiting_for_more 状态——结算真实等待时长。"""
+        if self.wait_started_at > 0:
+            elapsed = _time.time() - self.wait_started_at
+            self.total_wait_s += elapsed
+            self.wait_started_at = 0.0
         self.waiting_for_more = False
         self.wait_until = 0.0
         self.max_wait_until = 0.0

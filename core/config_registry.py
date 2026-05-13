@@ -90,7 +90,92 @@ SETTING_DEFS: dict[str, SettingDef] = {
     "model.route.timing_gate": SettingDef(
         key="model.route.timing_gate", env_name="CLASSIFIER_API_URL",
         default="http://172.17.0.1:9999/v1", value_type="str",
-        category="model", description="TimingGate 分类器地址",
+        category="model", description="TimingGate 分类器地址（也可设为完整 JSON）",
+    ),
+    "model.route.timing_gate.model": SettingDef(
+        key="model.route.timing_gate.model", env_name="",
+        default="", value_type="str",
+        category="model", description="TimingGate 模型名（API 调用时需要）",
+    ),
+    "model.route.timing_gate.api_key": SettingDef(
+        key="model.route.timing_gate.api_key", env_name="",
+        default="", value_type="str",
+        category="model", description="TimingGate API key", sensitive=True,
+    ),
+    "model.route.timing_gate.timeout": SettingDef(
+        key="model.route.timing_gate.timeout", env_name="",
+        default=15, value_type="int",
+        category="model", description="TimingGate 超时(秒)", min_value=3, max_value=120,
+    ),
+    "model.route.timing_gate.temperature": SettingDef(
+        key="model.route.timing_gate.temperature", env_name="",
+        default=0.0, value_type="float",
+        category="model", description="TimingGate 温度", min_value=0, max_value=2,
+    ),
+    "model.route.timing_gate.max_tokens": SettingDef(
+        key="model.route.timing_gate.max_tokens", env_name="",
+        default=30, value_type="int",
+        category="model", description="TimingGate 最大输出 tokens", min_value=5, max_value=500,
+    ),
+    "model.route.private_decision": SettingDef(
+        key="model.route.private_decision", env_name="",
+        default="", value_type="str",
+        category="model", description="私聊决策分类器地址（空则回退到 timing_gate）",
+    ),
+    "model.route.private_decision.model": SettingDef(
+        key="model.route.private_decision.model", env_name="",
+        default="", value_type="str",
+        category="model", description="私聊决策模型名",
+    ),
+    "model.route.private_decision.api_key": SettingDef(
+        key="model.route.private_decision.api_key", env_name="",
+        default="", value_type="str",
+        category="model", description="私聊决策 API key", sensitive=True,
+    ),
+    "model.route.private_decision.timeout": SettingDef(
+        key="model.route.private_decision.timeout", env_name="",
+        default=15, value_type="int",
+        category="model", min_value=3, max_value=120,
+    ),
+    "model.route.private_decision.temperature": SettingDef(
+        key="model.route.private_decision.temperature", env_name="",
+        default=0.0, value_type="float",
+        category="model", min_value=0, max_value=2,
+    ),
+    "model.route.private_decision.max_tokens": SettingDef(
+        key="model.route.private_decision.max_tokens", env_name="",
+        default=120, value_type="int",
+        category="model", min_value=5, max_value=500,
+    ),
+    "model.route.classifier_legacy": SettingDef(
+        key="model.route.classifier_legacy", env_name="",
+        default="", value_type="str",
+        category="model", description="旧Qwen分类器地址（空则回退到 timing_gate）",
+    ),
+    "model.route.classifier_legacy.model": SettingDef(
+        key="model.route.classifier_legacy.model", env_name="",
+        default="", value_type="str",
+        category="model", description="旧分类器模型名",
+    ),
+    "model.route.classifier_legacy.api_key": SettingDef(
+        key="model.route.classifier_legacy.api_key", env_name="",
+        default="", value_type="str",
+        category="model", description="旧分类器 API key", sensitive=True,
+    ),
+    "model.route.classifier_legacy.timeout": SettingDef(
+        key="model.route.classifier_legacy.timeout", env_name="",
+        default=15, value_type="int",
+        category="model", min_value=3, max_value=120,
+    ),
+    "model.route.classifier_legacy.temperature": SettingDef(
+        key="model.route.classifier_legacy.temperature", env_name="",
+        default=0.0, value_type="float",
+        category="model", min_value=0, max_value=2,
+    ),
+    "model.route.classifier_legacy.max_tokens": SettingDef(
+        key="model.route.classifier_legacy.max_tokens", env_name="",
+        default=30, value_type="int",
+        category="model", min_value=5, max_value=500,
     ),
     "model.route.sticker_describe": SettingDef(
         key="model.route.sticker_describe", env_name="IMAGE_SUMMARY_API_URL",

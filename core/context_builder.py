@@ -218,8 +218,8 @@ def build_session_memory(
             gap_min = (cur_dt - prev_dt).total_seconds() / 60
             if gap_min > CONTEXT_BREAK_ON_GAP_MIN:
                 messages_with_gaps.append({
-                    "role": "system",
-                    "content": f"[话题中断: 间隔约{int(gap_min)}分钟，请不要将此前后的内容视为同一话题]",
+                    "role": "user",
+                    "content": f"[上下文提示：距离上一条消息间隔约{int(gap_min)}分钟，此前后的内容不应视为同一话题，无需连续理解]",
                     "meta_json": "{}",
                 })
                 gap_breaks += 1

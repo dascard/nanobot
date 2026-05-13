@@ -490,17 +490,23 @@ def _persist_group_bridge_reply(
 
 
 def _log_group_no_reply(db: Session, user_id: str, query: str, agent_result: str, message_id: str = ""):
-    """记录空回复/无工具调用的 ChatLog 标记，供 WebUI 调试。"""
+    """记录空回复/无工具调用的 ChatLog 标记，供 WebUI 调试。
+
+    使用 role="system" + no_send=true 避免污染 replies_1h 和 bot 回复列表。
+    用户原文只通过 message_id 可回查 ChatLog。
+    """
     import json as _json
     db.add(ChatLog(
         user_id=user_id,
         session_id=user_id,
-        role="assistant",
-        content=query[:500],
+        role="system",
+        content=f"[NO_SEND] agent_result={agent_result}",
         message_id=message_id,
         meta_json=_json.dumps({
             "agent_result": agent_result,
+            "no_send": True,
             "note": "群聊主流程未调用 reply/no_reply 工具，无消息发送",
+            "source_message_id": message_id,
         }, ensure_ascii=False),
     ))
     db.commit()
