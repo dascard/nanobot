@@ -23,17 +23,38 @@ from config import (
 
 
 def _get_image_summary_route() -> dict:
-    """解析表情包打标完整路由配置——settings 覆盖 > config 默认。"""
+    """解析表情包打标完整路由配置。
+
+    sticker_describe 默认从 classifier 继承；base_url 用 IMAGE_SUMMARY_API_URL 覆盖，
+    其他字段用 config 常量作为业务默认值。WebUI 显式保存的 settings 优先。
+    """
+    from core.settings_service import settings
     from clients.classifier_client import _resolve_classifier_route
+
     route = _resolve_classifier_route("sticker_describe")
-    # fallback: 用 config 常量兜底 settings 未配置的字段
-    if not route.get("base_url"):
-        route["base_url"] = str(IMAGE_SUMMARY_API_URL or "")
-    if not route.get("max_tokens") or route["max_tokens"] == 30:
+
+    # 检测哪些 key 被 WebUI 显式保存过（DB 中有记录）
+    from core.database import SessionLocal, SystemSetting
+    db = SessionLocal()
+    try:
+        saved_keys = {
+            row.key for row in db.query(SystemSetting.key).filter(
+                SystemSetting.key.like("model.route.sticker_describe%")
+            ).all()
+        }
+    finally:
+        db.close()
+
+    prefix = "model.route.sticker_describe"
+    # 未显式保存 URL → 用 IMAGE_SUMMARY_API_URL
+    if prefix not in saved_keys:
+        route["base_url"] = str(IMAGE_SUMMARY_API_URL or route["base_url"])
+    # 未显式保存子字段 → 用 config 常量
+    if f"{prefix}.max_tokens" not in saved_keys:
         route["max_tokens"] = IMAGE_SUMMARY_MAX_TOKENS
-    if not route.get("temperature"):
+    if f"{prefix}.temperature" not in saved_keys:
         route["temperature"] = IMAGE_SUMMARY_TEMPERATURE
-    if not route.get("timeout") or route["timeout"] == 15:
+    if f"{prefix}.timeout" not in saved_keys:
         route["timeout"] = IMAGE_SUMMARY_TIMEOUT
     return route
 from nanobot_kt.image_pipeline import prepare_image_parts
