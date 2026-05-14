@@ -333,10 +333,10 @@ class NanobotBridge:
                         reason = str(payload.get("reason", ""))[:200]
                         if session_id:
                             store = self._reply_meta_store()
-                            store[session_id] = {
-                                "_no_reply": True,
-                                "_no_reply_reason": reason,
-                            }
+                            entry = store.get(session_id, {})
+                            entry["_no_reply"] = True
+                            entry["_no_reply_reason"] = reason
+                            store[session_id] = entry
                         logger.info("[Reply] no_reply tool called, reason=%s", reason)
                         return ""
                     reply_text = str(payload.get("content", "")).strip()
@@ -901,7 +901,8 @@ class NanobotBridge:
                 buffer_text = self._output.get_response() if hasattr(self._output, 'get_response') else ""
                 if buffer_text and isinstance(buffer_text, str):
                     fake_patterns = [
-                        r"(调用|使用|已调用|call)\s{0,6}reply",
+                        r"(调用|使用|已调用|已使用|通过|call)\s{0,12}`?reply`?",
+                        r"`?reply`?\s*工具.{0,8}(调用|使用|发送)",
                         r"reply\s*\(\s*[\"']",
                         r"(发送|回复|回答).{0,4}(调用|使用).{0,4}reply",
                     ]
@@ -914,7 +915,9 @@ class NanobotBridge:
                               session_id, agent_result)
                 if session_id:
                     store = self._reply_meta_store()
-                    store[session_id] = {"_no_tool_call": True}
+                    entry = store.get(session_id, {})
+                    entry["_no_tool_call"] = True
+                    store[session_id] = entry
                 self._log_agent_result(session_id, agent_result)
                 self._restore_saved_tools()
                 return ""
