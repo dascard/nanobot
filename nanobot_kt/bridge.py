@@ -635,6 +635,19 @@ class NanobotBridge:
                         tool_policy, chat_type, effective_tools, len(_saved_tools))
             meta["_tool_policy"] = tool_policy
             meta["_disabled_tools"] = {k: v for k, v in disabled.items()}
+
+            from core.tool_policy_service import record_tool_policy_decision
+            record_tool_policy_decision(
+                session_id=session_id,
+                message_id=meta.get("message_id", ""),
+                chat_type=chat_type,
+                group_id=group_id,
+                user_id=user_id,
+                tool_policy=tool_policy,
+                enabled=enabled,
+                disabled=disabled,
+                effective_tools=effective_tools,
+            )
             # ---------------------------------------------
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")

@@ -3070,6 +3070,33 @@ def get_effective_tools(chat_type: str = "group", group_id: str = "", user_id: s
     }
 
 
+@router.get("/tools/decisions")
+def list_tool_policy_decisions(session_id: str = "", limit: int = 50,
+                                db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """查询每轮工具策略决策记录。"""
+    from core.database import ToolPolicyDecision
+    import json as _json
+    q = db.query(ToolPolicyDecision).order_by(ToolPolicyDecision.id.desc())
+    if session_id:
+        q = q.filter(ToolPolicyDecision.session_id == session_id)
+    rows = q.limit(min(limit, 200)).all()
+    items = []
+    for r in rows:
+        try:
+            reasons = _json.loads(r.disabled_reasons_json or "{}")
+        except Exception:
+            reasons = {}
+        items.append({
+            "id": r.id, "session_id": r.session_id, "message_id": r.message_id,
+            "chat_type": r.chat_type, "group_id": r.group_id, "user_id": r.user_id,
+            "tool_policy": r.tool_policy,
+            "effective_tools": _json.loads(r.effective_tools_json or "[]") if isinstance(r.effective_tools_json or "", str) else [],
+            "disabled_reasons": reasons,
+            "created_at": r.created_at.isoformat() if r.created_at else "",
+        })
+    return {"items": items, "total": len(items)}
+
+
 # ── Model Health Check ──
 
 @router.post("/models/health-check")

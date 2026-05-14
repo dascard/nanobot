@@ -2167,12 +2167,16 @@ function ToolsPage() {
     { key: 'private', label: '私聊' },
     { key: 'group', label: '群聊' },
     { key: 'override', label: '指定群覆盖' },
+    { key: 'decisions', label: '策略记录' },
   ]
   const [tab, setTab] = useState('defaults')
   const [tools, setTools] = useState([])
   const [groupId, setGroupId] = useState('')
+  const [decisions, setDecisions] = useState([])
+  const [expandDecision, setExpandDecision] = useState(null)
   const load = () => api.get('/tools', { params: { chat_type: tab === 'private' ? 'private' : 'group', group_id: groupId } }).then(r => setTools(r.data.tools || []))
-  useEffect(() => { load() }, [tab, groupId])
+  const loadDecisions = () => api.get('/tools/decisions', { params: { limit: 50 } }).then(r => setDecisions(r.data.items || []))
+  useEffect(() => { if (tab === 'decisions') loadDecisions(); else load() }, [tab, groupId])
 
   const toggleDefault = (t, field) => {
     const val = field === 'private_default' ? !t.private_default : !t.group_default
@@ -2245,6 +2249,59 @@ function ToolsPage() {
           </tbody>
         </table>
       </Card>
+      {tab === 'decisions' && (
+        <Card className="mt-4 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+              <th className="py-2 px-2">时间</th><th className="py-2 px-2">会话</th><th className="py-2 px-2">类型</th><th className="py-2 px-2">策略</th><th className="py-2 px-2">启用</th><th className="py-2 px-2">禁用</th>
+            </tr></thead>
+            <tbody>
+              {decisions.map(d => (
+                <tr key={d.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer" onClick={() => setExpandDecision(expandDecision === d.id ? null : d.id)}>
+                  <td className="py-2 px-2 text-slate-500 whitespace-nowrap">{d.created_at ? d.created_at.slice(5, 19) : ''}</td>
+                  <td className="py-2 px-2 text-slate-400 font-mono truncate max-w-[120px]">{d.session_id}</td>
+                  <td className="py-2 px-2"><Badge tone={d.chat_type === 'group' ? 'emerald' : 'amber'}>{d.chat_type}</Badge></td>
+                  <td className="py-2 px-2"><span className={`px-1.5 py-0.5 rounded text-xs ${d.tool_policy === 'full' ? 'bg-emerald-500/15 text-emerald-400' : d.tool_policy === 'limited' ? 'bg-amber-500/15 text-amber-400' : 'bg-red-500/15 text-red-400'}`}>{d.tool_policy}</span></td>
+                  <td className="py-2 px-2 text-slate-400">{d.effective_tools?.length || 0}个</td>
+                  <td className="py-2 px-2 text-slate-400">{Object.keys(d.disabled_reasons || {}).length}个</td>
+                </tr>
+              ))}
+              {decisions.length === 0 && (
+                <tr><td colSpan={6} className="py-8 text-center text-slate-600">暂无策略决策记录（需实际触发群聊/私聊调用后生成）</td></tr>
+              )}
+            </tbody>
+          </table>
+          {expandDecision && (
+            <div className="p-3 bg-slate-900 border-t border-slate-800">
+              {(() => {
+                const d = decisions.find(x => x.id === expandDecision)
+                if (!d) return null
+                return (
+                  <div className="grid grid-cols-2 gap-4 text-xs">
+                    <div>
+                      <div className="text-slate-400 mb-2 font-medium">本轮可用工具</div>
+                      <div className="flex flex-wrap gap-1">
+                        {(d.effective_tools || []).map(t => <span key={t} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400">{t}</span>)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-400 mb-2 font-medium">本轮禁用工具</div>
+                      <div className="space-y-1">
+                        {Object.entries(d.disabled_reasons || {}).map(([name, reason]) => (
+                          <div key={name} className="flex items-center gap-2">
+                            <span className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 font-mono">{name}</span>
+                            <span className="text-slate-500">{String(reason)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   )
 }

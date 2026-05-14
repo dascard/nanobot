@@ -1,7 +1,8 @@
-"""工具策略服务——resolve_effective_tools + build_tool_policy_prompt。"""
+"""工具策略服务——resolve_effective_tools + build_tool_policy_prompt + 审计记录。"""
 
 import json
 import logging
+from datetime import datetime
 
 from core.tool_registry import TOOL_METADATA, get_tool_def
 
@@ -138,3 +139,41 @@ def build_tool_policy_prompt(
     lines.append("规则：只调用「可调用工具」列表中的工具。不要声称调用已禁用的工具。")
     lines.append("如需回复，必须真实调用 reply(content)。")
     return "\n".join(lines)
+
+
+def record_tool_policy_decision(
+    session_id: str = "",
+    message_id: str = "",
+    chat_type: str = "group",
+    group_id: str = "",
+    user_id: str = "",
+    tool_policy: str = "full",
+    enabled: dict | None = None,
+    disabled: dict | None = None,
+    effective_tools: list | None = None,
+):
+    """写入 ToolPolicyDecision 记录——供 WebUI 排查工具可用性。"""
+    try:
+        from core.database import SessionLocal, ToolPolicyDecision
+        db = SessionLocal()
+        try:
+            db.add(ToolPolicyDecision(
+                session_id=session_id,
+                message_id=message_id,
+                chat_type=chat_type,
+                group_id=group_id,
+                user_id=user_id,
+                tool_policy=tool_policy,
+                enabled_tools_json=json.dumps(
+                    sorted(enabled or {}), ensure_ascii=False),
+                disabled_tools_json=json.dumps(
+                    sorted(disabled or {}), ensure_ascii=False),
+                disabled_reasons_json=json.dumps(disabled or {}, ensure_ascii=False),
+                effective_tools_json=json.dumps(
+                    list(effective_tools or []), ensure_ascii=False),
+            ))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("Failed to record tool_policy_decision: %s", e)

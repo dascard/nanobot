@@ -378,6 +378,24 @@ class ToolOverride(Base):
     )
 
 
+class ToolPolicyDecision(Base):
+    """每轮工具策略决策记录——供 WebUI 排查'为什么某工具不可用'。"""
+    __tablename__ = "tool_policy_decisions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, index=True)
+    message_id = Column(String, default="")
+    chat_type = Column(String, default="group")  # "group" | "private"
+    group_id = Column(String, default="")
+    user_id = Column(String, default="")
+    tool_policy = Column(String, default="full")  # "none" | "limited" | "full"
+    enabled_tools_json = Column(Text, default="[]")
+    disabled_tools_json = Column(Text, default="[]")
+    disabled_reasons_json = Column(Text, default="{}")
+    effective_tools_json = Column(Text, default="[]")
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class SystemSetting(Base):
     """WebUI 系统设置——KV 存储。"""
     __tablename__ = "system_settings"
