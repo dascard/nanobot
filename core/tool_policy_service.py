@@ -2,7 +2,6 @@
 
 import json
 import logging
-from datetime import datetime
 
 from core.tool_registry import TOOL_METADATA, get_tool_def
 
@@ -165,14 +164,27 @@ def record_tool_policy_decision(
                 user_id=user_id,
                 tool_policy=tool_policy,
                 enabled_tools_json=json.dumps(
-                    sorted(enabled or {}), ensure_ascii=False),
+                    sorted([k for k, v in (enabled or {}).items() if v]),
+                    ensure_ascii=False),
                 disabled_tools_json=json.dumps(
-                    sorted(disabled or {}), ensure_ascii=False),
+                    sorted([k for k, v in (enabled or {}).items() if not v]),
+                    ensure_ascii=False),
                 disabled_reasons_json=json.dumps(disabled or {}, ensure_ascii=False),
                 effective_tools_json=json.dumps(
                     list(effective_tools or []), ensure_ascii=False),
             ))
             db.commit()
+            # 惰性清理：每次写入时清理 30 天前旧记录（概率 1/50 避免每次写入都扫表）
+            import random as _random
+            if _random.randint(1, 50) == 1:
+                from datetime import datetime as _dt, timedelta as _td
+                cutoff = _dt.now() - _td(days=30)
+                deleted = db.query(ToolPolicyDecision).filter(
+                    ToolPolicyDecision.created_at < cutoff
+                ).delete()
+                db.commit()
+                if deleted:
+                    logger.info("Cleaned %d old tool_policy_decisions", deleted)
         finally:
             db.close()
     except Exception as e:
