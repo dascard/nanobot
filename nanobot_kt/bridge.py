@@ -923,9 +923,6 @@ class NanobotBridge:
                 if stale_sids:
                     logger.info("[SessionRuntime] Cleaned %d idle session locks", len(stale_sids))
 
-            # restore tools removed by tool_policy enforcement
-            self._restore_saved_tools()
-
             # bot 回复后通知 GroupRuntime——触发 cooldown
             if response and meta.get("is_group"):
                 try:
@@ -934,6 +931,7 @@ class NanobotBridge:
                 except Exception as e:
                     logger.warning("[GroupRuntime] note_bot_replied failed: %s", e)
 
+            self._restore_saved_tools()
             return response
 
     @property
