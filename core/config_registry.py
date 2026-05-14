@@ -275,6 +275,21 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="vision_qwen", value_type="str",
         category="model", description="图片描述供应商",
     ),
+    "model.route.reply.provider": SettingDef(
+        key="model.route.reply.provider", env_name="",
+        default="newapi", value_type="str",
+        category="model", description="主回复供应商",
+    ),
+    "model.route.fast.provider": SettingDef(
+        key="model.route.fast.provider", env_name="",
+        default="newapi", value_type="str",
+        category="model", description="快速模型供应商",
+    ),
+    "model.route.smart.provider": SettingDef(
+        key="model.route.smart.provider", env_name="",
+        default="newapi", value_type="str",
+        category="model", description="智能模型供应商",
+    ),
     "new_api.timeout": SettingDef(
         key="new_api.timeout", env_name="NEW_API_TIMEOUT",
         default=180, value_type="int",

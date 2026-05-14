@@ -2025,11 +2025,16 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
     timeout: route.timeout || 15,
   })
   const [catalog, setCatalog] = useState([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [showManual, setShowManual] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   useEffect(() => {
-    api.get('/models/catalog', { params: { limit: 500 } }).then(r => setCatalog(r.data.catalog || [])).catch(() => {})
-  }, [])
-  const providerModels = catalog.filter(m => m.provider === f.provider_id)
+    const params = { limit: 200 }
+    if (f.provider_id) params.provider = f.provider_id
+    setCatalogLoading(true)
+    api.get('/models/catalog', { params }).then(r => setCatalog(r.data.catalog || [])).catch(() => {}).finally(() => setCatalogLoading(false))
+  }, [f.provider_id])
+  const providerModels = catalog
   const save = () => {
     const payload = {}
     if (f.model && f.model.trim()) payload.model = f.model.trim()
@@ -2061,9 +2066,13 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
                 {providerModels.map(m => <option key={m.id} value={m.model}>{m.model}{m.stale ? ' (stale)' : ''}</option>)}
               </select>
             )}
-            {catalog.length === 0 && <div className="text-xs text-slate-500 mt-1">模型目录为空，请先在「模型列表」Tab 刷新目录</div>}
-            {f.provider_id && providerModels.length === 0 && catalog.length > 0 && <div className="text-xs text-slate-500 mt-1">该供应商下暂无目录模型</div>}
-            <input value={f.model} onChange={e => setF({ ...f, model: e.target.value })} placeholder="也可手动输入模型 ID" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" />
+            {catalogLoading && <div className="text-xs text-slate-500 mt-1">加载中...</div>}
+            {!catalogLoading && catalog.length === 0 && <div className="text-xs text-slate-500 mt-1">模型目录为空，请先在「模型列表」Tab 刷新目录</div>}
+            {!catalogLoading && f.provider_id && providerModels.length === 0 && catalog.length > 0 && <div className="text-xs text-slate-500 mt-1">该供应商下暂无目录模型</div>}
+            <button type="button" onClick={() => setShowManual(!showManual)} className="text-xs text-slate-500 hover:text-slate-300 mt-1">
+              {showManual ? '收起手动输入' : '手动输入模型 ID...'}
+            </button>
+            {showManual && <input value={f.model} onChange={e => setF({ ...f, model: e.target.value })} placeholder="手动输入模型 ID" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" />}
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
