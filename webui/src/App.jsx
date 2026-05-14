@@ -2210,11 +2210,18 @@ function ToolsPage() {
             {tools.map(t => {
               const isForced = tab === 'group' && t.force_disabled_group
               const isLocked = t.force_enabled
+              const isSubagent = t.is_subagent
+              const registered = t.registered
               const tone = isLocked ? 'emerald' : t.effective ? 'emerald' : 'slate'
               const label = isForced ? '强制禁用' : isLocked ? '强制启用' : t.effective ? '启用' : t.disabled_reason || '禁用'
+              const regLabel = isSubagent ? 'subagent' : registered === false ? '未注册' : registered === true ? '已注册' : ''
               return (
                 <tr key={t.name} className="border-b border-slate-800/50 hover:bg-slate-800/30">
-                  <td className="py-2 px-2 font-mono text-slate-200">{t.name}</td>
+                  <td className="py-2 px-2 font-mono text-slate-200">
+                  {t.name}
+                  {t.is_subagent && <span className="ml-1 px-1 py-0.5 rounded text-xs bg-purple-900/30 text-purple-400">subagent</span>}
+                  {t.registered === false && <span className="ml-1 px-1 py-0.5 rounded text-xs bg-red-900/30 text-red-400">未注册</span>}
+                </td>
                   <td className="py-2 px-2 text-slate-400">{t.category}</td>
                   <td className="py-2 px-2">
                     <span className={`px-1.5 py-0.5 rounded text-xs ${t.risk_level === 'high' ? 'bg-red-900/30 text-red-400' : t.risk_level === 'medium' ? 'bg-amber-900/30 text-amber-400' : 'bg-slate-700 text-slate-300'}`}>{t.risk_level}</span>

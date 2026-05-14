@@ -178,6 +178,28 @@ class NanobotBridge:
         tools_list = self._agent.registry.list_tools()
         logger.info(f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}")
 
+        # 工具注册表一致性检查
+        try:
+            from core.tool_registry import TOOL_METADATA
+            kt_tools = set(tools_list)
+            meta_tools = set(TOOL_METADATA.keys())
+            # subagent 不在 KT registry._tools 中，跳过
+            missing_meta = kt_tools - meta_tools
+            missing_kt = {t for t in meta_tools - kt_tools
+                          if t not in {"memory_read", "memory_write"}}
+            if missing_meta:
+                logger.warning("[ToolRegistry] KT tools missing metadata: %s", sorted(missing_meta))
+            if missing_kt:
+                logger.warning("[ToolRegistry] TOOL_METADATA has tools not loaded by KT: %s", sorted(missing_kt))
+            self._tool_registry_info = {
+                "kt_loaded": sorted(kt_tools),
+                "missing_meta": sorted(missing_meta),
+                "missing_kt": sorted(missing_kt),
+            }
+        except Exception as e:
+            logger.warning("[ToolRegistry] consistency check failed: %s", e)
+            self._tool_registry_info = {}
+
         # 检查 controller 配置
         ctrl = getattr(self._agent, 'controller', None)
         if ctrl:

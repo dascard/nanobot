@@ -2945,8 +2945,20 @@ def list_tools(chat_type: str = "group", group_id: str = "",
     enabled, disabled = resolve_effective_tools(
         chat_type=chat_type, group_id=group_id, tool_policy="full", db=db,
     )
+    # 从 bridge 获取 KT registry 实际加载的工具列表
+    kt_loaded: set[str] = set()
+    try:
+        from server import app
+        bridge = getattr(app.state, 'bridge', None)
+        if bridge and hasattr(bridge, '_tool_registry_info'):
+            kt_loaded = set(bridge._tool_registry_info.get("kt_loaded", []))
+    except Exception:
+        pass
+
     items = []
     for name, td in sorted(TOOL_METADATA.items(), key=lambda x: x[1].label):
+        registered = name in kt_loaded if kt_loaded else None
+        is_subagent = name in ("memory_read", "memory_write")
         items.append({
             "name": td.name, "label": td.label, "category": td.category,
             "risk_level": td.risk_level,
@@ -2957,6 +2969,8 @@ def list_tools(chat_type: str = "group", group_id: str = "",
             "description": td.description,
             "effective": enabled.get(name, False),
             "disabled_reason": disabled.get(name, ""),
+            "registered": registered,
+            "is_subagent": is_subagent,
         })
     return {"tools": items}
 
