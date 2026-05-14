@@ -1974,10 +1974,12 @@ def update_model_provider(
 # ── 模型目录 ──
 
 @router.get("/models/catalog")
-def get_model_catalog_v2(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    """增强版模型目录：持久化 provider 模型 + route 当前使用模型。"""
+def get_model_catalog_v2(provider: str = "", q: str = "", limit: int = 0, offset: int = 0,
+                          db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """增强版模型目录：支持 provider/q/limit/offset 过滤。"""
     from clients.classifier_client import build_model_catalog
-    return {"catalog": build_model_catalog(db)}
+    return {"catalog": build_model_catalog(db,
+        provider_filter=provider, query=q, limit=limit, offset=offset)}
 
 
 @router.post("/models/catalog/refresh")
@@ -2002,7 +2004,7 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
             with opener.open(req, timeout=10) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
             items = body.get("data", []) if isinstance(body, dict) else []
-            models = sorted([m["id"] for m in items if isinstance(m, dict) and m.get("id")])[:500]
+            models = sorted(set(m["id"] for m in items if isinstance(m, dict) and m.get("id")))
             key = f"model.catalog.{p['id']}"
             val = json.dumps({
                 "models": models, "updated_at": datetime.now().isoformat(),
@@ -2222,7 +2224,7 @@ def _redact(v: dict) -> dict:
 
 
 class ModelRouteEditBody(BaseModel):
-    base_url: Optional[str] = None
+    provider: Optional[str] = None
     model: Optional[str] = None
     api_key: Optional[str] = None
     timeout: Optional[float] = None
@@ -2249,7 +2251,7 @@ def edit_model_route(
 
     written = {}
     fields = {
-        "base_url": body.base_url,
+        "provider": body.provider,
         "model": body.model,
         "api_key": body.api_key,
         "timeout": body.timeout,
@@ -2258,9 +2260,9 @@ def edit_model_route(
     }
     # chat routes 只允许改 model
     if not is_classifier:
-        allowed = {"model"}
+        allowed = {"model", "provider"}
     else:
-        allowed = {"base_url", "model", "api_key", "timeout", "temperature", "max_tokens"}
+        allowed = {"provider", "model", "api_key", "timeout", "temperature", "max_tokens"}
 
     for field, value in fields.items():
         if value is None or field not in allowed:

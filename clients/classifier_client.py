@@ -250,15 +250,32 @@ def resolve_model_route(route_key: str) -> dict:
     return result
 
 
-def build_model_catalog(db=None) -> list[dict]:
-    """构建模型目录：合并持久化 provider 模型 + 当前 route 使用模型。"""
+def build_model_catalog(db=None, *,
+                        provider_filter: str = "",
+                        query: str = "",
+                        limit: int = 0,
+                        offset: int = 0) -> list[dict]:
+    """构建模型目录：provider::model 唯一键，支持过滤/搜索/分页。"""
     from core.settings_service import settings
     from config import LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
     import json
 
     model_map: dict[str, dict] = {}
 
-    # ── 1. 从持久化 provider catalog 读取 ──
+    def _key(provider: str, model: str) -> str:
+        return f"{provider}::{model}"
+
+    def _infer_caps(provider: str, model_lower: str) -> set:
+        caps = set()
+        if "vl" in model_lower or "vision" in model_lower:
+            caps.add("vision")
+        if provider == "newapi" and "vl" not in model_lower:
+            caps.add("chat")
+        if provider in ("local_qwen", "vision_qwen") and "vl" not in model_lower:
+            caps.add("classifier")
+        return caps
+
+    # ── 1. 持久化 provider catalog ──
     if db is None:
         from core.database import SessionLocal
         db = SessionLocal()
@@ -277,31 +294,35 @@ def build_model_catalog(db=None) -> list[dict]:
                 continue
             provider = row.key.removeprefix("model.catalog.")
             for m in data.get("models", []):
-                if m not in model_map:
-                    ml = m.lower()
-                    caps = set()
-                    if "vl" in ml or "vision" in ml: caps.add("vision")
-                    if provider == "newapi" and "vl" not in ml: caps.add("chat")
-                    if provider in ("local_qwen", "vision_qwen") and "vl" not in ml: caps.add("classifier")
-                    model_map[m] = {"model": m, "provider": provider,
-                                    "capabilities": caps, "used_by": [],
-                                    "stale": not data.get("last_refresh_ok", True)}
+                k = _key(provider, m)
+                if k not in model_map:
+                    model_map[k] = {
+                        "id": k, "provider": provider, "model": m,
+                        "capabilities": _infer_caps(provider, m.lower()),
+                        "used_by": [],
+                        "stale": not data.get("last_refresh_ok", True),
+                        "source": "provider_catalog",
+                    }
     finally:
         if _close_db:
             db.close()
 
-    # ── 2. 从当前 route 补充 ──
+    # ── 2. 当前 route 补充 ──
     for rk in ("reply", "fast", "smart", "timing_gate", "private_decision",
                "classifier_legacy", "sticker_describe"):
         r = resolve_model_route(rk)
         m = r.get("model", "")
         if not m or m == "未指定":
             continue
-        if m not in model_map:
-            model_map[m] = {"model": m, "provider": r["provider_id"],
-                            "capabilities": set(), "used_by": []}
-        model_map[m]["used_by"].append(rk)
-        caps = model_map[m]["capabilities"]
+        pid = r.get("provider_id", "")
+        k = _key(pid, m) if pid else m
+        if k not in model_map:
+            model_map[k] = {
+                "id": k, "provider": pid, "model": m,
+                "capabilities": set(), "used_by": [], "source": "route",
+            }
+        model_map[k]["used_by"].append(rk)
+        caps = model_map[k]["capabilities"]
         if rk in ("reply", "fast", "smart"):
             caps.add("chat")
         elif rk in ("timing_gate", "private_decision", "classifier_legacy"):
@@ -309,21 +330,34 @@ def build_model_catalog(db=None) -> list[dict]:
         elif rk == "sticker_describe":
             caps.add("vision")
 
-    # ── 3. 补充 chat models ──
+    # ── 3. chat config 补充 ──
     chat_models = {
         "reply": settings.get("model.reply") or LLM_MODEL_REPLY,
         "fast": settings.get("model.fast") or LLM_MODEL_FAST,
         "smart": settings.get("model.smart") or LLM_MODEL_SMART,
     }
     for rk, m in chat_models.items():
-        if m and m not in model_map:
-            model_map[m] = {"model": m, "provider": "newapi",
-                            "capabilities": {"chat"}, "used_by": [rk]}
+        k = _key("newapi", m) if m else ""
+        if m and k not in model_map:
+            model_map[k] = {
+                "id": k, "provider": "newapi", "model": m,
+                "capabilities": {"chat"}, "used_by": [rk], "source": "config",
+            }
 
     for entry in model_map.values():
         entry["capabilities"] = sorted(entry["capabilities"])
 
-    return sorted(model_map.values(), key=lambda x: x["model"])
+    items = sorted(model_map.values(), key=lambda x: x["model"])
+    if provider_filter:
+        items = [e for e in items if e["provider"] == provider_filter]
+    if query:
+        q = query.lower()
+        items = [e for e in items if q in e["model"].lower() or q in e["provider"]]
+    if offset:
+        items = items[offset:]
+    if limit:
+        items = items[:limit]
+    return items
 
 # Control characters to strip (exclude \n, \t, \r)
 CONTROL_CHAR_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")

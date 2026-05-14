@@ -2024,11 +2024,16 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
     max_tokens: route.max_tokens || 30, temperature: route.temperature || 0,
     timeout: route.timeout || 15,
   })
+  const [catalog, setCatalog] = useState([])
   const [showAdvanced, setShowAdvanced] = useState(false)
+  useEffect(() => {
+    api.get('/models/catalog', { params: { limit: 500 } }).then(r => setCatalog(r.data.catalog || [])).catch(() => {})
+  }, [])
+  const providerModels = catalog.filter(m => m.provider === f.provider_id)
   const save = () => {
     const payload = {}
     if (f.model && f.model.trim()) payload.model = f.model.trim()
-    if (f.provider_id) payload.provider_id = f.provider_id
+    if (f.provider_id) payload.provider = f.provider_id
     payload.max_tokens = String(f.max_tokens)
     payload.temperature = String(f.temperature)
     payload.timeout = String(f.timeout)
@@ -2043,13 +2048,22 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
         <div className="space-y-3">
           <div>
             <label className="text-xs text-slate-500">供应商</label>
-            <select value={f.provider_id} onChange={e => setF({ ...f, provider_id: e.target.value })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1">
+            <select value={f.provider_id} onChange={e => setF({ ...f, provider_id: e.target.value, model: '' })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1">
+              <option value="">不指定</option>
               {(providers || []).map(p => <option key={p.id} value={p.id}>{p.id}{p.enabled === false ? ' (已禁用)' : ''}</option>)}
             </select>
           </div>
           <div>
             <label className="text-xs text-slate-500">模型</label>
-            <input value={f.model} onChange={e => setF({ ...f, model: e.target.value })} placeholder="模型名（如 gemma-4）" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" />
+            {providerModels.length > 0 && (
+              <select value={f.model} onChange={e => setF({ ...f, model: e.target.value })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1">
+                <option value="">请选择模型</option>
+                {providerModels.map(m => <option key={m.id} value={m.model}>{m.model}{m.stale ? ' (stale)' : ''}</option>)}
+              </select>
+            )}
+            {catalog.length === 0 && <div className="text-xs text-slate-500 mt-1">模型目录为空，请先在「模型列表」Tab 刷新目录</div>}
+            {f.provider_id && providerModels.length === 0 && catalog.length > 0 && <div className="text-xs text-slate-500 mt-1">该供应商下暂无目录模型</div>}
+            <input value={f.model} onChange={e => setF({ ...f, model: e.target.value })} placeholder="也可手动输入模型 ID" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" />
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
