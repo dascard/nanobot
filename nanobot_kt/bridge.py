@@ -380,6 +380,10 @@ class NanobotBridge:
         store = self._reply_meta_store()
         return bool(store.get(session_id, {}).get("_no_tool_call", False))
 
+    def is_fake_tool_call_claim(self, session_id: str) -> bool:
+        store = self._reply_meta_store()
+        return store.get(session_id, {}).get("_agent_result") == "fake_tool_call_claim"
+
     def _log_agent_result(self, session_id: str, result: str):
         """记录 agent 结果类型到 meta store，供 routes.py 读取。"""
         if session_id:
@@ -890,12 +894,28 @@ class NanobotBridge:
                 logger.info("[Reply] extracted from tool output len=%d", len(reply_text))
                 response = reply_text
             else:
-                # 没有 reply() 也没有 no_reply() 工具调用 —— 记录 no_tool_call
-                logger.warning("[Reply] NO TOOL CALLED - suppressing buffer output (session=%s)", session_id)
+                # 没有 reply() 也没有 no_reply() 工具调用
+                # 检测 buffer 中是否声称调用了 reply（fake tool call claim）
+                import re as _re
+                agent_result = "no_tool_call"
+                buffer_text = self._output.get_response() if hasattr(self._output, 'get_response') else ""
+                if buffer_text and isinstance(buffer_text, str):
+                    fake_patterns = [
+                        r"(调用|使用|已调用|call)\s{0,6}reply",
+                        r"reply\s*\(\s*[\"']",
+                        r"(发送|回复|回答).{0,4}(调用|使用).{0,4}reply",
+                    ]
+                    if any(_re.search(p, buffer_text, _re.IGNORECASE) for p in fake_patterns):
+                        agent_result = "fake_tool_call_claim"
+                        logger.warning("[Reply] fake_tool_call_claim session=%s buffer=%.200s",
+                                       session_id, buffer_text)
+
+                logger.warning("[Reply] NO TOOL CALLED - suppressing buffer output (session=%s agent_result=%s)",
+                              session_id, agent_result)
                 if session_id:
                     store = self._reply_meta_store()
                     store[session_id] = {"_no_tool_call": True}
-                self._log_agent_result(session_id, "no_tool_call")
+                self._log_agent_result(session_id, agent_result)
                 self._restore_saved_tools()
                 return ""
 

@@ -1436,6 +1436,8 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     agent_result = "no_tool_call"
                     if hasattr(bridge, "is_no_reply_session") and bridge.is_no_reply_session(group_user_id):
                         agent_result = "no_reply_tool"
+                    elif hasattr(bridge, "is_fake_tool_call_claim") and bridge.is_fake_tool_call_claim(group_user_id):
+                        agent_result = "fake_tool_call_claim"
                     elif hasattr(bridge, "is_no_tool_call") and bridge.is_no_tool_call(group_user_id):
                         agent_result = "no_tool_call"
                     _log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
@@ -1784,6 +1786,8 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     agent_result = "no_tool_call"
                     if hasattr(bridge, "is_no_reply_session") and bridge.is_no_reply_session(group_user_id):
                         agent_result = "no_reply_tool"
+                    elif hasattr(bridge, "is_fake_tool_call_claim") and bridge.is_fake_tool_call_claim(group_user_id):
+                        agent_result = "fake_tool_call_claim"
                     elif hasattr(bridge, "is_no_tool_call") and bridge.is_no_tool_call(group_user_id):
                         agent_result = "no_tool_call"
                     _log_group_no_reply(db, group_user_id, chat_query, agent_result, "")
