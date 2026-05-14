@@ -173,8 +173,7 @@ def record_tool_policy_decision(
                 effective_tools_json=json.dumps(
                     list(effective_tools or []), ensure_ascii=False),
             ))
-            db.commit()
-            # 惰性清理：每次写入时清理 30 天前旧记录（概率 1/50 避免每次写入都扫表）
+            # 惰性清理：概率 1/50 清理 30 天前旧记录（与写入同一事务）
             import random as _random
             if _random.randint(1, 50) == 1:
                 from datetime import datetime as _dt, timedelta as _td
@@ -182,9 +181,9 @@ def record_tool_policy_decision(
                 deleted = db.query(ToolPolicyDecision).filter(
                     ToolPolicyDecision.created_at < cutoff
                 ).delete()
-                db.commit()
                 if deleted:
                     logger.info("Cleaned %d old tool_policy_decisions", deleted)
+            db.commit()
         finally:
             db.close()
     except Exception as e:
