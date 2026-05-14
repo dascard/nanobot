@@ -537,17 +537,10 @@ class NanobotBridge:
             if is_group:
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                     conv = self._agent.controller.conversation
-                    conv.append("system",
-                        "[GroupRestriction] 本群聊中文件操作工具(read/write/edit/grep/glob/bash)不可用。"
-                        "允许使用 reply/sticker_search/sql_analysis/python_sandbox/news_search/"
-                        "group_analysis/schedule_task/persona_update。"
-                    )
-                    # 注入群聊专属行为规则
                     for frag in ("20_group_rules.md", "25_context_control.md"):
                         text = _load_prompt_fragment(frag)
                         if text:
                             conv.append("system", text)
-                    logger.info("[NanobotBridge] Group chat file tool restriction applied")
 
                     group_recent_context = str(meta.get("group_recent_context") or "").strip()
                     if group_recent_context:
@@ -585,44 +578,46 @@ class NanobotBridge:
                     if text:
                         self._agent.controller.conversation.append("system", text)
                         logger.info("[NanobotBridge] PrivateBehavior injected chars=%d", len(text))
-            # --- Effort constraint + tool_policy hard enforcement ---
+            # --- Dynamic tool policy enforcement ---
             effort_constraint = str(meta.get("effort_constraint", "")).strip()
             tool_policy = str(meta.get("tool_policy", "full")).strip()
+            chat_type = "group" if is_group else "private"
+            group_id = str(meta.get("group_id", session_id or "")).strip()
+            user_id = str(meta.get("user_id", session_id or "")).strip()
+
+            from core.tool_policy_service import resolve_effective_tools, build_tool_policy_prompt
+            from core.database import SessionLocal
+            db = SessionLocal()
+            try:
+                enabled, disabled = resolve_effective_tools(
+                    chat_type=chat_type, group_id=group_id, user_id=user_id,
+                    tool_policy=tool_policy, db=db,
+                )
+            finally:
+                db.close()
+
             _saved_tools: dict[str, bool] = {}
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                 conv = self._agent.controller.conversation
                 if effort_constraint:
                     conv.append("system", effort_constraint)
-                if tool_policy == "none":
-                    conv.append("system", "[ToolPolicy] 本轮禁止调用任何工具。必须只用 reply 工具。")
-                elif tool_policy == "limited":
-                    conv.append(
-                        "system",
-                        "[ToolPolicy] 本轮只允许 reply/image_summary/python_sandbox/sticker_search。"
-                        "禁止 sql_analysis/news_search/group_analysis/文件操作。",
-                    )
-                else:
-                    conv.append("system", "[ToolPolicy] 本轮允许使用必要工具。")
+                policy_prompt = build_tool_policy_prompt(enabled, disabled, chat_type)
+                conv.append("system", policy_prompt)
 
-            # hard enforcement: 动态移除不在允许列表的工具
-            _LIMITED_ALLOWED = {"reply", "image_summary", "python_sandbox", "sticker_search"}
             if hasattr(self._agent, 'registry') and hasattr(self._agent.registry, '_tools'):
                 reg = self._agent.registry
-                if tool_policy == "none":
-                    for name in list(reg._tools.keys()):
-                        if name != "reply":
-                            _saved_tools[name] = reg._tools[name]
-                            reg._tools.pop(name, None)
-                elif tool_policy == "limited":
-                    for name in list(reg._tools.keys()):
-                        if name not in _LIMITED_ALLOWED:
-                            _saved_tools[name] = reg._tools[name]
-                            reg._tools.pop(name, None)
+                for name in list(reg._tools.keys()):
+                    if not enabled.get(name, True):
+                        _saved_tools[name] = reg._tools[name]
+                        reg._tools.pop(name, None)
 
             self._saved_tools = _saved_tools
             effective_tools = list(self._agent.registry._tools.keys()) if hasattr(self._agent, 'registry') else []
-            logger.info("[Bridge] tool_policy=%s effective_tools=%s saved=%d",
-                        tool_policy, effective_tools, len(_saved_tools))
+            logger.info("[Bridge] tool_policy=%s chat=%s effective=%s saved=%d",
+                        tool_policy, chat_type, effective_tools, len(_saved_tools))
+            # 审计：写入 meta 供 ChatLog 记录
+            meta["_tool_policy"] = tool_policy
+            meta["_disabled_tools"] = {k: v for k, v in disabled.items()}
             # ---------------------------------------------
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")

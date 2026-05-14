@@ -360,6 +360,24 @@ class ContentBlockRule(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class ToolOverride(Base):
+    """工具权限覆盖——per-group/per-user/per-chat_type 启用/禁用。"""
+    __tablename__ = "tool_overrides"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tool_name = Column(String, nullable=False, index=True)
+    scope_type = Column(String, nullable=False)  # "group" | "user" | "chat_type"
+    scope_id = Column(String, nullable=False)    # group_id / user_id / "private"|"group"
+    enabled = Column(Integer, nullable=False, default=1)
+    reason = Column(Text, default="")
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    created_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("tool_name", "scope_type", "scope_id", name="uq_tool_override"),
+    )
+
+
 class SystemSetting(Base):
     """WebUI 系统设置——KV 存储。"""
     __tablename__ = "system_settings"

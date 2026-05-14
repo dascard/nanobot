@@ -90,6 +90,7 @@ const NAV = [
   { to: '/prompt', label: 'Prompt' },
   { to: '/models', label: '模型' },
   { to: '/blocks', label: '屏蔽' },
+  { to: '/tools', label: '工具管理' },
   { to: '/logs', label: '日志' },
   { to: '/audit', label: '审计' },
   { to: '/configs', label: '群聊策略' },
@@ -2159,6 +2160,95 @@ function LocalComponentsTab({ components, localResult, onAction }) {
   )
 }
 
+// ── Tools ──
+function ToolsPage() {
+  const tabs = [
+    { key: 'defaults', label: '全局默认' },
+    { key: 'private', label: '私聊' },
+    { key: 'group', label: '群聊' },
+    { key: 'override', label: '指定群覆盖' },
+  ]
+  const [tab, setTab] = useState('defaults')
+  const [tools, setTools] = useState([])
+  const [groupId, setGroupId] = useState('')
+  const load = () => api.get('/tools', { params: { chat_type: tab === 'private' ? 'private' : 'group', group_id: groupId } }).then(r => setTools(r.data.tools || []))
+  useEffect(() => { load() }, [tab, groupId])
+
+  const toggleDefault = (t, field) => {
+    const val = field === 'private_default' ? !t.private_default : !t.group_default
+    api.put(`/tools/${t.name}`, { [field]: val }).then(load)
+  }
+
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-2">工具管理</h1>
+      <p className="text-slate-500 text-sm mb-4">管理各场景下工具的启用/禁用。reply/no_reply 强制启用；bash/write/edit 群聊强制禁用。</p>
+      <div className="flex gap-2 mb-6 border-b border-slate-800 pb-2">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{t.label}</button>
+        ))}
+      </div>
+      {tab === 'override' && (
+        <div className="mb-4">
+          <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="群 stream_id (qq:123:group)" className="w-full max-w-md p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
+        </div>
+      )}
+      <Card className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+            <th className="py-2 px-2">工具</th><th className="py-2 px-2">类别</th><th className="py-2 px-2">风险</th>
+            {(tab === 'defaults') && <th className="py-2 px-2">私聊默认</th>}
+            {(tab === 'defaults') && <th className="py-2 px-2">群聊默认</th>}
+            {(tab !== 'defaults') && <th className="py-2 px-2">状态</th>}
+            <th className="py-2 px-2">说明</th>
+          </tr></thead>
+          <tbody>
+            {tools.map(t => {
+              const isForced = tab === 'group' && t.force_disabled_group
+              const isLocked = t.force_enabled
+              const tone = isLocked ? 'emerald' : t.effective ? 'emerald' : 'slate'
+              const label = isForced ? '强制禁用' : isLocked ? '强制启用' : t.effective ? '启用' : t.disabled_reason || '禁用'
+              return (
+                <tr key={t.name} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                  <td className="py-2 px-2 font-mono text-slate-200">{t.name}</td>
+                  <td className="py-2 px-2 text-slate-400">{t.category}</td>
+                  <td className="py-2 px-2">
+                    <span className={`px-1.5 py-0.5 rounded text-xs ${t.risk_level === 'high' ? 'bg-red-900/30 text-red-400' : t.risk_level === 'medium' ? 'bg-amber-900/30 text-amber-400' : 'bg-slate-700 text-slate-300'}`}>{t.risk_level}</span>
+                  </td>
+                  {tab === 'defaults' && (
+                    <td className="py-2 px-2">
+                      <button onClick={() => !t.force_enabled && toggleDefault(t, 'private_default')}
+                        disabled={t.force_enabled}
+                        className={`px-2 py-1 rounded text-xs ${t.private_default ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${t.force_enabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        {t.private_default ? 'ON' : 'OFF'}
+                      </button>
+                    </td>
+                  )}
+                  {tab === 'defaults' && (
+                    <td className="py-2 px-2">
+                      <button onClick={() => !t.force_enabled && !t.force_disabled_group && toggleDefault(t, 'group_default')}
+                        disabled={t.force_enabled || t.force_disabled_group}
+                        className={`px-2 py-1 rounded text-xs ${t.group_default ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${(t.force_enabled || t.force_disabled_group) ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        {t.group_default ? 'ON' : 'OFF'}
+                      </button>
+                    </td>
+                  )}
+                  {tab !== 'defaults' && (
+                    <td className="py-2 px-2">
+                      <span className={`px-2 py-0.5 rounded text-xs ${tone === 'emerald' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'}`}>{label}</span>
+                    </td>
+                  )}
+                  <td className="py-2 px-2 text-slate-500 text-xs max-w-[200px] truncate" title={t.description}>{t.description}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  )
+}
+
 // ── Memory ──
 function MemoryPage() {
   const [groupId, setGroupId] = useState('')
@@ -2670,6 +2760,7 @@ export default function App() {
           <Route path="/stickers" element={<StickersPage />} />
           <Route path="/stickers/duplicates" element={<StickerDedupPage />} />
           <Route path="/blocks" element={<BlocksPage />} />
+          <Route path="/tools" element={<ToolsPage />} />
           <Route path="/configs" element={<ConfigsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/memory" element={<MemoryPage />} />

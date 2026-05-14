@@ -2921,6 +2921,148 @@ def reload_settings(_auth=Depends(verify_admin)):
     return {"version": settings.version}
 
 
+# ── 工具管理 ──
+
+class ToolUpdateBody(BaseModel):
+    private_default: Optional[bool] = None
+    group_default: Optional[bool] = None
+
+
+class ToolOverrideBody(BaseModel):
+    scope_type: str  # "group" | "user" | "chat_type"
+    scope_id: str
+    enabled: bool
+    reason: str = ""
+
+
+@router.get("/tools")
+def list_tools(chat_type: str = "group", group_id: str = "",
+               db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """列出所有工具及当前 effective 状态。"""
+    from core.tool_registry import TOOL_METADATA
+    from core.tool_policy_service import resolve_effective_tools
+
+    enabled, disabled = resolve_effective_tools(
+        chat_type=chat_type, group_id=group_id, tool_policy="full", db=db,
+    )
+    items = []
+    for name, td in sorted(TOOL_METADATA.items(), key=lambda x: x[1].label):
+        items.append({
+            "name": td.name, "label": td.label, "category": td.category,
+            "risk_level": td.risk_level,
+            "private_default": td.private_default,
+            "group_default": td.group_default,
+            "force_enabled": td.force_enabled,
+            "force_disabled_group": td.force_disabled_group,
+            "description": td.description,
+            "effective": enabled.get(name, False),
+            "disabled_reason": disabled.get(name, ""),
+        })
+    return {"tools": items}
+
+
+@router.put("/tools/{tool_name}")
+def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
+                          db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """更新工具默认值——写入 SystemSetting。"""
+    from core.tool_registry import get_tool_def
+    from core.settings_service import settings
+
+    td = get_tool_def(tool_name)
+    if not td:
+        raise HTTPException(404, f"unknown tool: {tool_name}")
+
+    prefix = f"tool.defaults.{tool_name}"
+    for field, val in [("private_default", body.private_default),
+                        ("group_default", body.group_default)]:
+        if val is None:
+            continue
+        key = f"{prefix}.{field}"
+        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+        if not row:
+            row = SystemSetting(key=key, value="1" if val else "0", description=f"{tool_name} {field}")
+            db.add(row)
+        else:
+            row.value = "1" if val else "0"
+    db.commit()
+    settings.invalidate()
+    return {"ok": True, "tool": tool_name}
+
+
+@router.put("/tools/{tool_name}/override")
+def set_tool_override(tool_name: str, body: ToolOverrideBody,
+                      request: Request, db: Session = Depends(get_db),
+                      _auth=Depends(verify_admin)):
+    """设置工具作用域覆盖——upsert ToolOverride。"""
+    from core.tool_registry import get_tool_def
+    from core.database import ToolOverride
+
+    td = get_tool_def(tool_name)
+    if not td:
+        raise HTTPException(404, f"unknown tool: {tool_name}")
+    if td.force_enabled:
+        raise HTTPException(400, f"{tool_name} is force_enabled, cannot override")
+
+    row = db.query(ToolOverride).filter(
+        ToolOverride.tool_name == tool_name,
+        ToolOverride.scope_type == body.scope_type,
+        ToolOverride.scope_id == body.scope_id,
+    ).first()
+    if not row:
+        row = ToolOverride(tool_name=tool_name, scope_type=body.scope_type,
+                           scope_id=body.scope_id)
+        db.add(row)
+    row.enabled = 1 if body.enabled else 0
+    row.reason = body.reason
+    db.commit()
+    _audit(db, "tool_override", "tool", tool_name,
+           {"scope_type": body.scope_type, "scope_id": body.scope_id,
+            "enabled": row.enabled, "reason": body.reason},
+           ip_address=_client_ip(request))
+    return {"ok": True, "tool": tool_name}
+
+
+@router.delete("/tools/{tool_name}/override")
+def delete_tool_override(tool_name: str, request: Request, scope_type: str = "",
+                         scope_id: str = "", db: Session = Depends(get_db),
+                         _auth=Depends(verify_admin)):
+    """删除工具作用域覆盖。"""
+    from core.database import ToolOverride
+    row = db.query(ToolOverride).filter(
+        ToolOverride.tool_name == tool_name,
+        ToolOverride.scope_type == scope_type,
+        ToolOverride.scope_id == scope_id,
+    ).first()
+    if not row:
+        raise HTTPException(404, "Override not found")
+    db.delete(row)
+    db.commit()
+    _audit(db, "tool_override_delete", "tool", tool_name,
+           {"scope_type": scope_type, "scope_id": scope_id},
+           ip_address=_client_ip(request))
+    return {"ok": True}
+
+
+@router.get("/tools/effective")
+def get_effective_tools(chat_type: str = "group", group_id: str = "", user_id: str = "",
+                         tool_policy: str = "full",
+                         db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """查看给定上下文的实际生效工具列表。"""
+    from core.tool_policy_service import resolve_effective_tools, build_tool_policy_prompt
+    enabled, disabled = resolve_effective_tools(
+        chat_type=chat_type, group_id=group_id, user_id=user_id,
+        tool_policy=tool_policy, db=db,
+    )
+    prompt = build_tool_policy_prompt(enabled, disabled, chat_type)
+    return {
+        "chat_type": chat_type, "group_id": group_id, "user_id": user_id,
+        "tool_policy": tool_policy,
+        "enabled": {k: v for k, v in enabled.items() if v},
+        "disabled": {k: v for k, v in disabled.items()},
+        "prompt": prompt,
+    }
+
+
 # ── Model Health Check ──
 
 @router.post("/models/health-check")
