@@ -2171,10 +2171,11 @@ function ToolsPage() {
   ]
   const [tab, setTab] = useState('defaults')
   const [tools, setTools] = useState([])
+  const [regInfo, setRegInfo] = useState(null)
   const [groupId, setGroupId] = useState('')
   const [decisions, setDecisions] = useState([])
   const [expandDecision, setExpandDecision] = useState(null)
-  const load = () => api.get('/tools', { params: { chat_type: tab === 'private' ? 'private' : 'group', group_id: groupId } }).then(r => setTools(r.data.tools || []))
+  const load = () => api.get('/tools', { params: { chat_type: tab === 'private' ? 'private' : 'group', group_id: groupId } }).then(r => { setTools(r.data.tools || []); setRegInfo(r.data.registry_info || null) })
   const loadDecisions = () => api.get('/tools/decisions', { params: { limit: 50 } }).then(r => setDecisions(r.data.items || []))
   useEffect(() => { if (tab === 'decisions') loadDecisions(); else load() }, [tab, groupId])
 
@@ -2195,6 +2196,13 @@ function ToolsPage() {
       {tab === 'override' && (
         <div className="mb-4">
           <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="群 stream_id (qq:123:group)" className="w-full max-w-md p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
+        </div>
+      )}
+      {regInfo && (
+        <div className="mb-4 flex gap-4 text-xs text-slate-400">
+          <span>KT 已加载: <span className="text-slate-200 font-medium">{regInfo.kt_loaded?.length || 0}</span> 个</span>
+          {regInfo.missing_meta?.length > 0 && <span className="text-amber-400">元数据缺失: {regInfo.missing_meta.length} 个 ({regInfo.missing_meta.join(', ')})</span>}
+          {regInfo.missing_kt?.length > 0 && <span className="text-red-400">KT 未加载: {regInfo.missing_kt.length} 个 ({regInfo.missing_kt.join(', ')})</span>}
         </div>
       )}
       <Card className="overflow-x-auto">

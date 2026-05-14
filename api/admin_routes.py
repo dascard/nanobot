@@ -2946,14 +2946,21 @@ def list_tools(chat_type: str = "group", group_id: str = "",
         chat_type=chat_type, group_id=group_id, tool_policy="full", db=db,
     )
     # 从 bridge 获取 KT registry 实际加载的工具列表
-    kt_loaded: set[str] = set()
+    registry_info: dict = {}
     try:
         from server import app
         bridge = getattr(app.state, 'bridge', None)
         if bridge and hasattr(bridge, '_tool_registry_info'):
-            kt_loaded = set(bridge._tool_registry_info.get("kt_loaded", []))
+            info = bridge._tool_registry_info
+            registry_info = {
+                "kt_loaded": info.get("kt_loaded", []),
+                "missing_meta": info.get("missing_meta", []),
+                "missing_kt": info.get("missing_kt", []),
+            }
+            kt_loaded = set(info.get("kt_loaded", []))
     except Exception:
-        pass
+        registry_info = {}
+        kt_loaded: set[str] = set()
 
     items = []
     for name, td in sorted(TOOL_METADATA.items(), key=lambda x: x[1].label):
@@ -2972,7 +2979,7 @@ def list_tools(chat_type: str = "group", group_id: str = "",
             "registered": registered,
             "is_subagent": is_subagent,
         })
-    return {"tools": items}
+    return {"tools": items, "registry_info": registry_info}
 
 
 @router.put("/tools/{tool_name}")
