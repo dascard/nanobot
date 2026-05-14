@@ -2997,6 +2997,13 @@ def set_tool_override(tool_name: str, body: ToolOverrideBody,
     from core.tool_registry import get_tool_def
     from core.database import ToolOverride
 
+    if body.scope_type not in {"group", "user", "chat_type"}:
+        raise HTTPException(400, "scope_type must be group/user/chat_type")
+    if body.scope_type == "chat_type" and body.scope_id not in {"private", "group"}:
+        raise HTTPException(400, "chat_type scope_id must be private or group")
+    if body.scope_type in {"group", "user"} and not body.scope_id.strip():
+        raise HTTPException(400, "scope_id required for group/user scope")
+
     td = get_tool_def(tool_name)
     if not td:
         raise HTTPException(404, f"unknown tool: {tool_name}")

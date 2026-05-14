@@ -47,6 +47,18 @@ def resolve_effective_tools(
 
     for name, td in TOOL_METADATA.items():
         default = td.group_default if chat_type == "group" else td.private_default
+        # 读取 SystemSetting 覆盖默认值
+        if db is not None:
+            try:
+                from core.database import SystemSetting
+                field = "group_default" if chat_type == "group" else "private_default"
+                row = db.query(SystemSetting).filter(
+                    SystemSetting.key == f"tool.defaults.{name}.{field}"
+                ).first()
+                if row:
+                    default = str(row.value).lower() in ("1", "true", "yes", "on")
+            except Exception:
+                pass
         enabled[name] = default
 
     for name, td in TOOL_METADATA.items():

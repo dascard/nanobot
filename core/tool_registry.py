@@ -77,14 +77,14 @@ TOOL_METADATA: dict[str, ToolDef] = {
         description="创建/管理定时推送任务。",
     ),
     "memory_read": ToolDef(
-        name="memory_read", label="记忆读取", category="system", risk_level="low",
+        name="memory_read", label="记忆读取 (subagent)", category="system", risk_level="low",
         private_default=True, group_default=True,
-        description="读取长期记忆/上下文。",
+        description="读取长期记忆/上下文。注意：此工具为 subagent，运行时禁用支持有限。",
     ),
     "memory_write": ToolDef(
-        name="memory_write", label="记忆写入", category="system", risk_level="low",
+        name="memory_write", label="记忆写入 (subagent)", category="system", risk_level="low",
         private_default=True, group_default=True,
-        description="写入长期记忆/上下文。",
+        description="写入长期记忆/上下文。注意：此工具为 subagent，运行时禁用支持有限。",
     ),
 
     # ── 文件操作 ──

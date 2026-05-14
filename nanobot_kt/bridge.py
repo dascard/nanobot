@@ -388,6 +388,19 @@ class NanobotBridge:
             entry["_agent_result"] = result
             store[session_id] = entry
 
+    def _restore_saved_tools(self):
+        """恢复被 tool_policy 移除的工具——必须在所有 return 路径调用。"""
+        if not getattr(self, '_tool_cleanup_needed', False):
+            return
+        saved = getattr(self, '_saved_tools', {})
+        if saved and hasattr(self._agent, 'registry') and hasattr(self._agent.registry, '_tools'):
+            reg = self._agent.registry
+            for name, tool in saved.items():
+                reg._tools[name] = tool
+            logger.info("[Bridge] Restored %d tools", len(saved))
+        self._saved_tools = {}
+        self._tool_cleanup_needed = False
+
     def _extract_last_rich_tool_output(
         self,
         marker_classes: tuple[str, ...],
@@ -612,10 +625,10 @@ class NanobotBridge:
                         reg._tools.pop(name, None)
 
             self._saved_tools = _saved_tools
+            self._tool_cleanup_needed = bool(_saved_tools)
             effective_tools = list(self._agent.registry._tools.keys()) if hasattr(self._agent, 'registry') else []
             logger.info("[Bridge] tool_policy=%s chat=%s effective=%s saved=%d",
                         tool_policy, chat_type, effective_tools, len(_saved_tools))
-            # 审计：写入 meta 供 ChatLog 记录
             meta["_tool_policy"] = tool_policy
             meta["_disabled_tools"] = {k: v for k, v in disabled.items()}
             # ---------------------------------------------
@@ -869,6 +882,7 @@ class NanobotBridge:
             if self.is_no_reply_session(session_id):
                 logger.info("[Reply] no_reply session=%s - skipping message send", session_id)
                 self._log_agent_result(session_id, "no_reply_tool")
+                self._restore_saved_tools()
                 return ""
             if reply_text:
                 from core.reply_postprocess import strip_chat_end_punct
@@ -882,10 +896,12 @@ class NanobotBridge:
                     store = self._reply_meta_store()
                     store[session_id] = {"_no_tool_call": True}
                 self._log_agent_result(session_id, "no_tool_call")
+                self._restore_saved_tools()
                 return ""
 
             if not response.strip():
                 logger.warning("[NanobotBridge] KT agent returned empty response after strip")
+                self._restore_saved_tools()
                 return ""
 
             elapsed_ms = int((_time.time() - t_start) * 1000)
@@ -908,13 +924,7 @@ class NanobotBridge:
                     logger.info("[SessionRuntime] Cleaned %d idle session locks", len(stale_sids))
 
             # restore tools removed by tool_policy enforcement
-            saved = getattr(self, '_saved_tools', {})
-            if saved and hasattr(self._agent, 'registry') and hasattr(self._agent.registry, '_tools'):
-                reg = self._agent.registry
-                for name, tool in saved.items():
-                    reg._tools[name] = tool
-                logger.info("[Bridge] restored %d tools after tool_policy", len(saved))
-                self._saved_tools = {}
+            self._restore_saved_tools()
 
             # bot 回复后通知 GroupRuntime——触发 cooldown
             if response and meta.get("is_group"):
