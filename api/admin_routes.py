@@ -2936,9 +2936,18 @@ class ToolOverrideBody(BaseModel):
 
 
 @router.get("/tools")
-def list_tools(chat_type: str = "group", group_id: str = "",
-               db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+async def list_tools(chat_type: str = "group", group_id: str = "",
+                      db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """列出所有工具及当前 effective 状态。"""
+    # registry probe: 无 child bridge 时自动创建一个用于探测
+    try:
+        from server import app as _app
+        pool = getattr(_app.state, 'bridge', None)
+        if pool and hasattr(pool, 'ensure_registry_probe'):
+            await pool.ensure_registry_probe()
+    except Exception:
+        pass
+
     from core.tool_registry import TOOL_METADATA
     from core.tool_policy_service import resolve_effective_tools
 

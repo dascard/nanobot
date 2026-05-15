@@ -1117,6 +1117,11 @@ class NanobotBridgePool:
     def bridge_count(self) -> int:
         return len(self._bridges)
 
+    async def ensure_registry_probe(self):
+        """确保至少有一个 child bridge 提供 registry 信息。"""
+        if not self._tool_registry_info.get("kt_loaded"):
+            await self._get_bridge("_admin_registry_probe")
+
     async def stop(self) -> None:
         async with self._create_lock:
             bridges = list(self._bridges.values())
