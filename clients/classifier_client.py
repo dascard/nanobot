@@ -72,8 +72,8 @@ def _resolve_classifier_route(route_key: str) -> dict:
     if provider_id:
         provider = _get_provider_config(provider_id)
         if provider:
-            base["base_url"] = provider.get("base_url") or base.get("base_url", "")
-            base["api_key"] = provider.get("api_key") or base.get("api_key", "")
+            base["base_url"] = base.get("base_url") or provider.get("base_url", "")
+            base["api_key"] = base.get("api_key") or provider.get("api_key", "")
             base["provider_id"] = provider_id
 
     return base
@@ -357,20 +357,6 @@ def build_model_catalog(db=None, *,
             caps.add("classifier")
         elif rk == "sticker_describe":
             caps.add("vision")
-
-    # ── 3. chat config 补充 ──
-    chat_models = {
-        "reply": settings.get("model.reply") or LLM_MODEL_REPLY,
-        "fast": settings.get("model.fast") or LLM_MODEL_FAST,
-        "smart": settings.get("model.smart") or LLM_MODEL_SMART,
-    }
-    for rk, m in chat_models.items():
-        k = _key("newapi", m) if m else ""
-        if m and k not in model_map:
-            model_map[k] = {
-                "id": k, "provider": "newapi", "model": m,
-                "capabilities": {"chat"}, "used_by": [rk], "source": "config",
-            }
 
     for entry in model_map.values():
         entry["capabilities"] = sorted(entry["capabilities"])

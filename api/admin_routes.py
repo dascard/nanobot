@@ -2283,15 +2283,15 @@ def edit_model_route(
         written[key] = str(value)
     db.commit()
     _audit(db, "edit_model_route", "route", route_key, _redact(written), ip_address=_client_ip(request))
-    # 清除 image_summary 30s route cache
+    settings.invalidate()
+    # 清除 image_summary 30s route cache（invalidate 后清理，避免并发重建旧缓存）
     if db_key == "sticker_describe":
         try:
             from creatures.nanobot.prompts.skills.image_summary.tool import _get_image_summary_route
             if hasattr(_get_image_summary_route, "_cache"):
                 delattr(_get_image_summary_route, "_cache")
-        except Exception:
-            pass
-    settings.invalidate()
+        except Exception as e:
+            logger.warning("[models] clear image_summary route cache failed: %s", e, exc_info=True)
     # 不返回 written，只返回 api_key_configured
     resp: dict = {"ok": True, "route_key": route_key, "version": settings.version}
     api_key_written = any(k.endswith(".api_key") for k in written)
@@ -2312,10 +2312,10 @@ async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
 
     if route_key in _CHAT_ROUTES:
         from clients.new_api_client import NewAPIClient
-        from config import NEW_API_KEY, NEW_API_BASE_URL, LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
-        models = {"reply": LLM_MODEL_REPLY, "fast": LLM_MODEL_FAST, "smart": LLM_MODEL_SMART}
-        model = settings.get(f"model.{route_key}") or models.get(route_key, "")
-        client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+        from clients.classifier_client import resolve_model_route
+        route = resolve_model_route(route_key)
+        model = route.get("model", "") or route_key
+        client = NewAPIClient(api_key=route["api_key"], base_url=route["base_url"])
         try:
             result = await client.chat_completion(
                 messages=[{"role": "user", "content": "回复OK"}],
@@ -2323,6 +2323,7 @@ async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
             )
             return {
                 "ok": True, "route_key": route_key, "model": model,
+                "provider": route.get("provider_id", ""),
                 "latency_ms": int((time.time() - t0) * 1000),
                 "raw_output": str(result)[:300],
             }
@@ -2374,9 +2375,10 @@ def list_available_models(route_key: str = "", base_url_override: str = "",
     route_key = _ROUTE_ALIAS.get(route_key, route_key)
 
     if route_key in _CHAT_ROUTES:
-        from config import NEW_API_BASE_URL, NEW_API_KEY
-        base_url = (base_url_override or str(NEW_API_BASE_URL or "")).rstrip("/")
-        api_key = str(NEW_API_KEY or "")
+        from clients.classifier_client import resolve_model_route
+        route = resolve_model_route(route_key)
+        base_url = (base_url_override or str(route.get("base_url", ""))).rstrip("/")
+        api_key = str(route.get("api_key", "") or "")
     elif base_url_override:
         from clients.classifier_client import _resolve_classifier_route
         route = _resolve_classifier_route(route_key)
