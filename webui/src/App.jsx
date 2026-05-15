@@ -2064,6 +2064,7 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
   })
   const [catalog, setCatalog] = useState([])
   const [catalogLoading, setCatalogLoading] = useState(false)
+  const [modelSearch, setModelSearch] = useState('')
   const [showManual, setShowManual] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   useEffect(() => {
@@ -2072,7 +2073,9 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
     setCatalogLoading(true)
     api.get('/models/catalog', { params }).then(r => setCatalog(r.data.catalog || [])).catch(() => {}).finally(() => setCatalogLoading(false))
   }, [f.provider_id])
-  const providerModels = catalog
+  const providerModels = modelSearch
+    ? catalog.filter(m => m.model.toLowerCase().includes(modelSearch.toLowerCase()))
+    : catalog.slice(0, 100)
   const save = () => {
     const payload = {}
     if (f.model && f.model.trim()) payload.model = f.model.trim()
@@ -2098,6 +2101,7 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
           </div>
           <div>
             <label className="text-xs text-slate-500">模型</label>
+            {catalog.length > 10 && <input value={modelSearch} onChange={e => setModelSearch(e.target.value)} placeholder="搜索过滤模型..." className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-xs mt-1" />}
             {providerModels.length > 0 && (
               <select value={f.model} onChange={e => setF({ ...f, model: e.target.value })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1">
                 <option value="">请选择模型</option>

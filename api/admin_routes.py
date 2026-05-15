@@ -1780,9 +1780,6 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
             entry["note"] = "兼容旧 reply/no_reply 分类路径；正常群聊优先使用 TimingGate"
         routes[rk] = entry
 
-    # ── Model Catalog ──
-    catalog = build_model_catalog(db)
-
     # ── Local Components ──
     persona_configured = False
     persona_load_state = "not_loaded"
@@ -1817,7 +1814,6 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     return {
         "providers": providers,
         "routes": routes,
-        "model_catalog": catalog,
         "local_components": {
             "persona_embed": {
                 "model": "BAAI/bge-base-zh-v1.5",
