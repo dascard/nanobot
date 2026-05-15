@@ -47,7 +47,9 @@ def _get_image_summary_route() -> dict:
         db.close()
 
     prefix = "model.route.sticker_describe"
-    if prefix not in saved_keys:
+    has_provider = f"{prefix}.provider" in saved_keys
+    has_base_url = prefix in saved_keys or f"{prefix}.base_url" in saved_keys
+    if not has_provider and not has_base_url:
         route["base_url"] = str(IMAGE_SUMMARY_API_URL or route["base_url"])
     if f"{prefix}.max_tokens" not in saved_keys:
         route["max_tokens"] = IMAGE_SUMMARY_MAX_TOKENS

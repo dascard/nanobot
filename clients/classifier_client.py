@@ -65,6 +65,17 @@ def _resolve_classifier_route(route_key: str) -> dict:
         if v is not None:
             base[k] = float(v) if k == "temperature" else (int(v) if k == "max_tokens" else float(v))
 
+    # 合并 provider 配置：route.provider → provider base_url/api_key
+    provider_id = str(base.get("provider_id") or "").strip()
+    if not provider_id:
+        provider_id = str(settings.get(f"{prefix}.provider") or "").strip()
+    if provider_id:
+        provider = _get_provider_config(provider_id)
+        if provider:
+            base["base_url"] = provider.get("base_url") or base.get("base_url", "")
+            base["api_key"] = provider.get("api_key") or base.get("api_key", "")
+            base["provider_id"] = provider_id
+
     return base
 
 
@@ -108,6 +119,8 @@ def call_model_route(
     """
     route = _resolve_classifier_route(route_key)
     base_url = str(route["base_url"]).rstrip("/")
+    logger.info("[call_model_route] route=%s provider=%s base_url=%s model=%s",
+                route_key, route.get("provider_id", ""), base_url[:80], route.get("model", ""))
 
     if not messages:
         messages = [
