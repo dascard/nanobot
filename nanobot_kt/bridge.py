@@ -1019,6 +1019,7 @@ class NanobotBridge:
                             "send_mode": send_mode,
                         }
                     logger.info("[Reply] structured_buffer_reply session=%s len=%d", session_id, len(reply_text))
+                    self._log_agent_result(session_id, "structured_buffer_reply")
                     response = reply_text
                 elif fallback and fallback["action"] == "no_reply":
                     logger.info("[Reply] structured_buffer_no_reply session=%s reason=%s",
