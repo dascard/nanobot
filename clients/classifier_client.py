@@ -147,15 +147,30 @@ def call_model_route(
 # ── 模型路由解析（provider + model）──
 
 def _get_provider_config(provider_id: str) -> dict | None:
-    """读取 provider 内部配置（含 api_key，仅内部使用）。"""
+    """读取 provider 内部配置（含 api_key，仅内部使用）。
+
+    对已知 provider 使用 config 常量作为 fallback，避免 settings 空值覆盖 env。
+    """
     from core.settings_service import settings
+    from config import NEW_API_BASE_URL, NEW_API_KEY, CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
+
     base_url = str(settings.get(f"model.providers.{provider_id}.base_url") or "")
+    api_key = str(settings.get(f"model.providers.{provider_id}.api_key") or "")
+
+    if provider_id == "newapi":
+        base_url = base_url or str(NEW_API_BASE_URL or "")
+        api_key = api_key or str(NEW_API_KEY or "")
+    elif provider_id == "local_qwen":
+        base_url = base_url or str(CLASSIFIER_API_URL or "")
+    elif provider_id == "vision_qwen":
+        base_url = base_url or str(IMAGE_SUMMARY_API_URL or "")
+
     if not base_url:
         return None
     return {
         "id": provider_id,
         "base_url": base_url,
-        "api_key": str(settings.get(f"model.providers.{provider_id}.api_key") or ""),
+        "api_key": api_key,
         "enabled": bool(settings.get(f"model.providers.{provider_id}.enabled")),
     }
 
