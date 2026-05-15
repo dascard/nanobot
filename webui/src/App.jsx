@@ -2068,14 +2068,13 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
   const [showManual, setShowManual] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
   useEffect(() => {
-    const params = { limit: 200 }
+    const params = { limit: modelSearch ? 50 : 200 }
     if (f.provider_id) params.provider = f.provider_id
+    if (modelSearch) params.q = modelSearch
     setCatalogLoading(true)
     api.get('/models/catalog', { params }).then(r => setCatalog(r.data.catalog || [])).catch(() => {}).finally(() => setCatalogLoading(false))
-  }, [f.provider_id])
-  const providerModels = modelSearch
-    ? catalog.filter(m => m.model.toLowerCase().includes(modelSearch.toLowerCase()))
-    : catalog.slice(0, 100)
+  }, [f.provider_id, modelSearch])
+  const providerModels = catalog.slice(0, 100)
   const save = () => {
     const payload = {}
     if (f.model && f.model.trim()) payload.model = f.model.trim()
@@ -2094,7 +2093,7 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
         <div className="space-y-3">
           <div>
             <label className="text-xs text-slate-500">供应商</label>
-            <select value={f.provider_id} onChange={e => setF({ ...f, provider_id: e.target.value, model: '' })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1">
+            <select value={f.provider_id} onChange={e => { setModelSearch(''); setF({ ...f, provider_id: e.target.value, model: '' }) }} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1">
               <option value="">不指定</option>
               {(providers || []).map(p => <option key={p.id} value={p.id}>{p.id}{p.enabled === false ? ' (已禁用)' : ''}</option>)}
             </select>
