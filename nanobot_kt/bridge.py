@@ -437,6 +437,50 @@ class NanobotBridge:
             entry["_agent_result"] = result
             store[session_id] = entry
 
+    def _parse_structured_final_action(self, buffer_text: str) -> dict | None:
+        """尝试从 output_buffer 解析严格 JSON fallback。
+
+        仅当 buffer 开头是 { 且整体是合法 JSON、action 为 reply/no_reply 时返回。
+        不接受 Markdown 代码块、普通文本中嵌入 JSON、或其他格式。
+        """
+        import re as _re, json as _json
+        text = (buffer_text or "").strip()
+        if not text.startswith("{"):
+            return None
+        # 拒绝 Markdown 代码块包装的 JSON
+        if _re.search(r"```", text):
+            return None
+        # 拒绝 NANOBOT_REPLY_OUTPUT（真实 tool result marker 不应出现在 buffer 里）
+        if "NANOBOT_REPLY_OUTPUT" in text:
+            return None
+        try:
+            data = _json.loads(text)
+        except (_json.JSONDecodeError, TypeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        action = str(data.get("action", "")).strip().lower()
+        if action not in ("reply", "no_reply"):
+            return None
+        if action == "reply":
+            content = str(data.get("content", "")).strip()
+            if not content:
+                return None
+            return {
+                "action": "reply",
+                "content": content,
+                "send_mode": str(data.get("send_mode", "normal")),
+                "quote": bool(data.get("quote", False)),
+                "at_sender": bool(data.get("at_sender", False)),
+                "mentions": (
+                    [str(m)[:20] for m in data.get("mentions", []) if str(m).strip().isdigit()][:10]
+                    if isinstance(data.get("mentions"), list) else []
+                ),
+            }
+        if action == "no_reply":
+            return {"action": "no_reply", "reason": str(data.get("reason", ""))[:200]}
+        return None
+
     def _restore_saved_tools(self):
         """恢复被 tool_policy 移除的工具——必须在所有 return 路径调用。"""
         if not getattr(self, '_tool_cleanup_needed', False):
@@ -953,11 +997,31 @@ class NanobotBridge:
                 response = reply_text
             else:
                 # 没有 reply() 也没有 no_reply() 工具调用
-                # 检测 buffer 中是否声称调用了 reply（fake tool call claim）
                 import re as _re
                 agent_result = "no_tool_call"
                 buffer_text = self._output.get_response() if hasattr(self._output, 'get_response') else ""
-                if buffer_text and isinstance(buffer_text, str):
+
+                # P1: structured final_action JSON fallback
+                # 仅当 buffer 是严格 JSON {"action":"reply"|"no_reply",...} 时接受
+                fallback = self._parse_structured_final_action(buffer_text)
+                if fallback:
+                    if fallback["action"] == "reply":
+                        from core.reply_postprocess import strip_chat_end_punct
+                        reply_text = strip_chat_end_punct(fallback["content"])
+                        logger.info("[Reply] structured_buffer_reply session=%s len=%d", session_id, len(reply_text))
+                        self._log_agent_result(session_id, "structured_buffer_reply")
+                        response = reply_text
+                        # 跳过 no_tool_call 逻辑，直接进入后处理
+                        if not response.strip():
+                            self._restore_saved_tools()
+                            return ""
+                    elif fallback["action"] == "no_reply":
+                        logger.info("[Reply] structured_buffer_no_reply session=%s reason=%s",
+                                    session_id, fallback.get("reason", ""))
+                        self._log_agent_result(session_id, "structured_buffer_no_reply")
+                        self._restore_saved_tools()
+                        return ""
+                elif buffer_text and isinstance(buffer_text, str):
                     fake_patterns = [
                         r"(调用|使用|已调用|已使用|通过|call)\s{0,12}`?reply`?",
                         r"`?reply`?\s*工具.{0,8}(调用|使用|发送)",

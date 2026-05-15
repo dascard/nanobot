@@ -1439,7 +1439,12 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     elif hasattr(bridge, "is_fake_tool_call_claim") and bridge.is_fake_tool_call_claim(group_user_id):
                         agent_result = "fake_tool_call_claim"
                     elif hasattr(bridge, "is_no_tool_call") and bridge.is_no_tool_call(group_user_id):
-                        agent_result = "no_tool_call"
+                        store = bridge._reply_meta_store() if hasattr(bridge, '_reply_meta_store') else {}
+                        ag = store.get(group_user_id, {}).get("_agent_result", "")
+                        if ag in ("structured_buffer_reply", "structured_buffer_no_reply"):
+                            agent_result = ag
+                        else:
+                            agent_result = "no_tool_call"
                     _log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
                 return {
                     "action": "continue",
@@ -1789,7 +1794,12 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     elif hasattr(bridge, "is_fake_tool_call_claim") and bridge.is_fake_tool_call_claim(group_user_id):
                         agent_result = "fake_tool_call_claim"
                     elif hasattr(bridge, "is_no_tool_call") and bridge.is_no_tool_call(group_user_id):
-                        agent_result = "no_tool_call"
+                        store = bridge._reply_meta_store() if hasattr(bridge, '_reply_meta_store') else {}
+                        ag = store.get(group_user_id, {}).get("_agent_result", "")
+                        if ag in ("structured_buffer_reply", "structured_buffer_no_reply"):
+                            agent_result = ag
+                        else:
+                            agent_result = "no_tool_call"
                     _log_group_no_reply(db, group_user_id, chat_query, agent_result, "")
                 logger.info("[TimingGate.timer] reply group=%s len=%d", req.group_id, len(answer))
             except Exception as e:
