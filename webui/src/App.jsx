@@ -1935,7 +1935,7 @@ function ModelsPage() {
           </button>
         ))}
       </div>
-      {tab === 'catalog' && <ModelCatalogTab catalog={status.model_catalog || []} routes={status.routes || {}} />}
+      {tab === 'catalog' && <ModelCatalogTab routes={status.routes || {}} />}
       {tab === 'routes' && <RoutesTab routes={status.routes || {}} providers={status.providers || []} testResult={testResult} onTest={handleTest} onSaved={load} />}
       {tab === 'providers' && <ProvidersTab providers={status.providers || []} onSaved={load} />}
       {tab === 'local' && <LocalComponentsTab components={status.local_components || {}} localResult={localResult} onAction={handleLocal} />}
@@ -1944,19 +1944,56 @@ function ModelsPage() {
 }
 
 // ── Tab 1: 模型列表 ──
-function ModelCatalogTab({ catalog, routes }) {
-  const usedModels = Object.values(routes).map(r => r.model)
+function ModelCatalogTab({ routes }) {
+  const [catalog, setCatalog] = useState([])
+  const [catProvider, setCatProvider] = useState('')
+  const [catQ, setCatQ] = useState('')
+  const [catLoading, setCatLoading] = useState(false)
+  const [refreshResult, setRefreshResult] = useState(null)
+  const loadCatalog = () => {
+    setCatLoading(true)
+    const params = { limit: 200 }
+    if (catProvider) params.provider = catProvider
+    if (catQ) params.q = catQ
+    api.get('/models/catalog', { params }).then(r => setCatalog(r.data.catalog || [])).catch(() => {}).finally(() => setCatLoading(false))
+  }
+  useEffect(() => { loadCatalog() }, [catProvider, catQ])
+  const doRefresh = () => {
+    setRefreshResult({ loading: true })
+    api.post('/models/catalog/refresh').then(r => { setRefreshResult(r.data); loadCatalog() }).catch(() => setRefreshResult(null))
+  }
   return (
     <div>
-      <p className="text-slate-500 text-sm mb-3">所有已知模型及其能力/用途。从供应商同步可获取完整列表。</p>
+      <p className="text-slate-500 text-sm mb-3">从供应商同步可获取完整模型列表。点击刷新从各 provider /models 端点拉取。</p>
+      <div className="flex gap-2 mb-3">
+        <input value={catQ} onChange={e => setCatQ(e.target.value)} placeholder="搜索模型..." className="w-48 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
+        <select value={catProvider} onChange={e => setCatProvider(e.target.value)} className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
+          <option value="">全部供应商</option>
+          <option value="newapi">newapi</option><option value="local_qwen">local_qwen</option><option value="vision_qwen">vision_qwen</option>
+        </select>
+        <button onClick={doRefresh} disabled={refreshResult?.loading} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium">刷新供应商模型</button>
+      </div>
+      {refreshResult && !refreshResult.loading && (
+        <div className="mb-3 text-xs">
+          {refreshResult.results?.map(r => (
+            <span key={r.provider} className={`mr-3 ${r.ok ? 'text-emerald-400' : 'text-red-400'}`}>{r.provider}: {r.ok ? `${r.models.length} 个` : r.error}</span>
+          ))}
+        </div>
+      )}
+      {catalog.length === 0 && !catLoading && (
+        <div className="text-xs text-slate-500 mb-3 p-3 bg-slate-900 rounded-lg">
+          模型目录为空，请点击「刷新供应商模型」从 provider 同步；这不会改变路由，只会同步可选模型列表。
+        </div>
+      )}
       <Card>
         <table className="w-full text-sm">
           <thead><tr className="text-left text-slate-500 border-b border-slate-800">
             <th className="py-2 px-3">模型</th><th className="py-2 px-3">供应商</th><th className="py-2 px-3">能力</th><th className="py-2 px-3">被使用</th>
           </tr></thead>
           <tbody>
+            {catLoading && <tr><td colSpan={4} className="py-4 text-center text-slate-500">加载中...</td></tr>}
             {catalog.map(m => (
-              <tr key={m.model} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+              <tr key={m.id || m.model} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                 <td className="py-2 px-3 font-mono text-slate-200">{m.model}</td>
                 <td className="py-2 px-3 text-slate-400">{m.provider}</td>
                 <td className="py-2 px-3">
@@ -1967,7 +2004,7 @@ function ModelCatalogTab({ catalog, routes }) {
                     {m.stale && <span className="px-1.5 py-0.5 rounded text-xs bg-red-900/30 text-red-400" title="上次刷新失败">stale</span>}
                   </div>
                 </td>
-                <td className="py-2 px-3 text-slate-400 text-xs">{m.used_by.join(', ')}</td>
+                <td className="py-2 px-3 text-slate-400 text-xs">{m.used_by.join(', ') || '-'}</td>
               </tr>
             ))}
           </tbody>
@@ -2102,9 +2139,25 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
 
 // ── Tab 3: 供应商 ──
 function ProvidersTab({ providers, onSaved }) {
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState(null)
+  const doSync = () => {
+    setSyncing(true)
+    api.post('/models/catalog/refresh').then(r => setSyncResult(r.data)).catch(() => {}).finally(() => setSyncing(false))
+  }
   return (
     <div>
-      <p className="text-slate-500 text-sm mb-3">管理 API 供应商的 base_url 和 api_key。路由通过「路由配置」Tab 选择供应商和模型。</p>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-slate-500 text-sm">管理 API 供应商的 base_url 和 api_key。路由通过「路由配置」Tab 选择供应商和模型。</p>
+        <button onClick={doSync} disabled={syncing} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium">{syncing ? '同步中...' : '同步所有模型'}</button>
+      </div>
+      {syncResult && (
+        <div className="mb-3 text-xs">
+          {syncResult.results?.map(r => (
+            <span key={r.provider} className={`mr-3 ${r.ok ? 'text-emerald-400' : 'text-red-400'}`}>{r.provider}: {r.ok ? `${r.models.length} 个` : r.error}</span>
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {(providers || []).map(p => (
           <Card key={p.id} className="p-4">
