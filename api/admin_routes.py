@@ -2945,8 +2945,8 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
         pool = getattr(_app.state, 'bridge', None)
         if pool and hasattr(pool, 'ensure_registry_probe'):
             await pool.ensure_registry_probe()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("[Tools] registry probe failed: %s", e, exc_info=True)
 
     from core.tool_registry import TOOL_METADATA
     from core.tool_policy_service import resolve_effective_tools
