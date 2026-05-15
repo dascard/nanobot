@@ -149,7 +149,9 @@ class ImageSummaryTool(BaseTool):
         return (
             "生成图片摘要并输出结构化 JSON。"
             "当你需要 OCR、细节归档、版面分析或多图整理时使用。"
-            "这个工具直接调用本地 Qwen 视觉模型，也可以把同样的结构化摘要写进回复里。"
+            "files 必须是 http(s) URL 或 data:image/... base64。"
+            "不支持 QQ/OneBot file_id、CQ码、裸文件名、相对路径。"
+            "如果只有 file_id 而没有 URL，不要调用此工具。"
         )
 
     @property
@@ -163,7 +165,10 @@ class ImageSummaryTool(BaseTool):
                 "files": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "图片 URL 或可访问的文件引用列表",
+                    "description": (
+                        "图片 URL 列表。必须是 http(s) URL 或 data:image/... base64。"
+                        "不支持 QQ/OneBot file_id、CQ码、裸文件名、相对路径。"
+                    ),
                     "minItems": 1,
                 },
                 "focus": {
@@ -232,6 +237,7 @@ class ImageSummaryTool(BaseTool):
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         files = _normalize_files(args.get("files"))
         focus = str(args.get("focus", "")).strip()
+        logger.warning("[image_summary] input files=%r focus=%s", files, focus)
         if not files:
             return ToolResult(error="Missing 'files' argument")
 

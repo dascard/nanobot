@@ -273,8 +273,15 @@ def prepare_image_parts(
     detail: str = "low",
 ) -> list[ImagePart]:
     prepared_parts: list[ImagePart] = []
-    for idx, source in enumerate(_normalize_sources(files), start=1):
-        prepared = prepare_image(source)
+    errors: list[dict] = []
+    sources = _normalize_sources(files)
+    for idx, source in enumerate(sources, start=1):
+        try:
+            prepared = prepare_image(source)
+        except Exception as e:
+            logger.warning("[image_pipeline] skip unsupported source=%r error=%s", source[:200], e)
+            errors.append({"source": str(source)[:120], "error": str(e)})
+            continue
         prepared_parts.append(
             ImagePart(
                 url=prepared.data_url,
@@ -291,4 +298,9 @@ def prepare_image_parts(
             prepared.width,
             prepared.height,
         )
+    if not prepared_parts:
+        err_detail = "; ".join(f"{e['source']}: {e['error']}" for e in errors)
+        raise ValueError(f"没有可用图片源 (共{len(sources)}个, 全部失败): {err_detail}")
+    if errors:
+        logger.warning("[image_pipeline] %d/%d sources skipped", len(errors), len(sources))
     return prepared_parts
