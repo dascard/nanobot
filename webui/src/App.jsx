@@ -2172,16 +2172,37 @@ function ToolsPage() {
   const [tab, setTab] = useState('defaults')
   const [tools, setTools] = useState([])
   const [regInfo, setRegInfo] = useState(null)
+  const [regAvail, setRegAvail] = useState(false)
+  const [regEmpty, setRegEmpty] = useState(false)
   const [groupId, setGroupId] = useState('')
   const [decisions, setDecisions] = useState([])
   const [expandDecision, setExpandDecision] = useState(null)
-  const load = () => api.get('/tools', { params: { chat_type: tab === 'private' ? 'private' : 'group', group_id: groupId } }).then(r => { setTools(r.data.tools || []); setRegInfo(r.data.registry_info || null) })
+  const load = () => api.get('/tools', { params: { chat_type: tab === 'private' ? 'private' : 'group', group_id: groupId } }).then(r => { setTools(r.data.tools || []); setRegInfo(r.data.registry_info || null); setRegAvail(r.data.registry_available); setRegEmpty(r.data.registry_empty) })
   const loadDecisions = () => api.get('/tools/decisions', { params: { limit: 50 } }).then(r => setDecisions(r.data.items || []))
   useEffect(() => { if (tab === 'decisions') loadDecisions(); else load() }, [tab, groupId])
 
   const toggleDefault = (t, field) => {
     const val = field === 'private_default' ? !t.private_default : !t.group_default
     api.put(`/tools/${t.name}`, { [field]: val }).then(load)
+  }
+
+  const scopeForTab = () => {
+    if (tab === 'private') return { scope_type: 'chat_type', scope_id: 'private' }
+    if (tab === 'group') return { scope_type: 'chat_type', scope_id: 'group' }
+    if (!groupId.trim()) return null
+    return { scope_type: 'group', scope_id: groupId.trim() }
+  }
+
+  const setOverride = (t, enabled) => {
+    const scope = scopeForTab()
+    if (!scope) return
+    api.put(`/tools/${t.name}/override`, { ...scope, enabled, reason: '' }).then(load)
+  }
+
+  const clearOverride = (t) => {
+    const scope = scopeForTab()
+    if (!scope) return
+    api.delete(`/tools/${t.name}/override`, { params: scope }).then(load)
   }
 
   return (
@@ -2198,13 +2219,19 @@ function ToolsPage() {
           <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="群 stream_id (qq:123:group)" className="w-full max-w-md p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
         </div>
       )}
-      {regInfo && (
-        <div className="mb-4 flex gap-4 text-xs text-slate-400">
-          <span>KT 已加载: <span className="text-slate-200 font-medium">{regInfo.kt_loaded?.length || 0}</span> 个</span>
-          {regInfo.missing_meta?.length > 0 && <span className="text-amber-400">元数据缺失: {regInfo.missing_meta.length} 个 ({regInfo.missing_meta.join(', ')})</span>}
-          {regInfo.missing_kt?.length > 0 && <span className="text-red-400">KT 未加载: {regInfo.missing_kt.length} 个 ({regInfo.missing_kt.join(', ')})</span>}
-        </div>
-      )}
+      <div className="mb-4 flex gap-4 text-xs text-slate-400">
+        {!regAvail ? (
+          <span className="text-slate-500">运行时注册状态未知（bridge 未就绪）</span>
+        ) : regEmpty ? (
+          <span className="text-amber-400">KT registry 返回空，请检查 bridge/list_tools</span>
+        ) : regInfo ? (
+          <>
+            <span>KT 已加载: <span className="text-slate-200 font-medium">{regInfo.kt_loaded?.length || 0}</span> 个</span>
+            {regInfo.missing_meta?.length > 0 && <span className="text-amber-400">元数据缺失: {regInfo.missing_meta.length} 个 ({regInfo.missing_meta.join(', ')})</span>}
+            {regInfo.missing_kt?.length > 0 && <span className="text-red-400">KT 未加载: {regInfo.missing_kt.length} 个 ({regInfo.missing_kt.join(', ')})</span>}
+          </>
+        ) : null}
+      </div>
       <Card className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="text-left text-slate-500 border-b border-slate-800">
@@ -2253,7 +2280,25 @@ function ToolsPage() {
                       </button>
                     </td>
                   )}
-                  {tab !== 'defaults' && (
+                  {tab !== 'defaults' && tab !== 'decisions' && (
+                    <td className="py-2 px-2">
+                      <div className="flex items-center gap-1">
+                        <span className={`px-2 py-0.5 rounded text-xs whitespace-nowrap ${tone === 'emerald' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'}`}>{label}</span>
+                        {!isForced && !isLocked && !isSubagent && (
+                          <>
+                            <button onClick={() => setOverride(t, true)} disabled={tab === 'override' && !groupId.trim()} title={tab === 'override' && !groupId.trim() ? '请先输入群 stream_id' : '启用'}
+                              className={`px-1.5 py-0.5 rounded text-xs bg-emerald-700/50 hover:bg-emerald-700 text-emerald-300 ${tab === 'override' && !groupId.trim() ? 'opacity-30 cursor-not-allowed' : ''}`}>启用</button>
+                            <button onClick={() => setOverride(t, false)} disabled={tab === 'override' && !groupId.trim()} title={tab === 'override' && !groupId.trim() ? '请先输入群 stream_id' : '禁用'}
+                              className={`px-1.5 py-0.5 rounded text-xs bg-red-700/50 hover:bg-red-700 text-red-300 ${tab === 'override' && !groupId.trim() ? 'opacity-30 cursor-not-allowed' : ''}`}>禁用</button>
+                            <button onClick={() => clearOverride(t)} disabled={tab === 'override' && !groupId.trim()}
+                              className={`px-1.5 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 ${tab === 'override' && !groupId.trim() ? 'opacity-30 cursor-not-allowed' : ''}`}>清除</button>
+                          </>
+                        )}
+                        {isSubagent && <span className="text-xs text-purple-400 ml-1">运行时禁用有限</span>}
+                      </div>
+                    </td>
+                  )}
+                  {tab === 'decisions' && (
                     <td className="py-2 px-2">
                       <span className={`px-2 py-0.5 rounded text-xs ${tone === 'emerald' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'}`}>{label}</span>
                     </td>

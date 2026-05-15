@@ -2982,7 +2982,9 @@ def list_tools(chat_type: str = "group", group_id: str = "",
             "registered": registered,
             "is_subagent": is_subagent,
         })
-    return {"tools": items, "registry_info": registry_info, "registry_available": registry_available}
+    return {"tools": items, "registry_info": registry_info,
+            "registry_available": registry_available,
+            "registry_empty": bool(registry_available and len(kt_loaded) == 0)}
 
 
 @router.put("/tools/{tool_name}")

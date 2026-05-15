@@ -175,7 +175,30 @@ class NanobotBridge:
                 self._agent.controller.llm.extra_body["thinking"] = {"type": "disabled"}
                 logger.info("[NanobotBridge] DeepSeek thinking disabled via extra_body")
 
-        tools_list = self._agent.registry.list_tools()
+        # 获取 KT 工具列表（多级 fallback）
+        tools_list: list[str] = []
+        try:
+            raw = self._agent.registry.list_tools() or []
+            tools_list = list(raw)
+        except Exception:
+            pass
+        if not tools_list and hasattr(self._agent.registry, "_tools"):
+            raw_tools = getattr(self._agent.registry, "_tools", {})
+            if isinstance(raw_tools, dict):
+                tools_list = list(raw_tools.keys())
+                logger.info("[NanobotBridge] Used registry._tools fallback (%d tools)", len(tools_list))
+        normalized: list[str] = []
+        for item in tools_list:
+            if isinstance(item, str):
+                normalized.append(item)
+            elif isinstance(item, dict) and item.get("name"):
+                normalized.append(str(item["name"]))
+            elif hasattr(item, "name"):
+                normalized.append(str(item.name))
+        tools_list = sorted(set(normalized))
+        if not tools_list:
+            logger.warning("[ToolRegistry] KT tool list empty; registry type=%s",
+                           type(self._agent.registry).__name__ if hasattr(self._agent, 'registry') else 'N/A')
         logger.info(f"KT Agent '{config.name}' initialized with {len(tools_list)} tools: {tools_list}")
 
         # 工具注册表一致性检查
