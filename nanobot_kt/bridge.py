@@ -985,6 +985,7 @@ class NanobotBridge:
 
             # Reply extraction: 优先从 reply() / no_reply() 工具输出提取
             reply_text = self._extract_reply_from_tool_output(session_id)
+            reply_source = "reply_tool"
             if self.is_no_reply_session(session_id):
                 logger.info("[Reply] no_reply session=%s - skipping message send", session_id)
                 self._log_agent_result(session_id, "no_reply_tool")
@@ -996,53 +997,60 @@ class NanobotBridge:
                 logger.info("[Reply] extracted from tool output len=%d", len(reply_text))
                 response = reply_text
             else:
-                # 没有 reply() 也没有 no_reply() 工具调用
+                # 没有真实 tool call——尝试 structured JSON fallback
                 import re as _re
-                agent_result = "no_tool_call"
                 buffer_text = self._output.get_response() if hasattr(self._output, 'get_response') else ""
 
-                # P1: structured final_action JSON fallback
-                # 仅当 buffer 是严格 JSON {"action":"reply"|"no_reply",...} 时接受
                 fallback = self._parse_structured_final_action(buffer_text)
-                if fallback:
-                    if fallback["action"] == "reply":
-                        from core.reply_postprocess import strip_chat_end_punct
-                        reply_text = strip_chat_end_punct(fallback["content"])
-                        logger.info("[Reply] structured_buffer_reply session=%s len=%d", session_id, len(reply_text))
-                        self._log_agent_result(session_id, "structured_buffer_reply")
-                        response = reply_text
-                        # 跳过 no_tool_call 逻辑，直接进入后处理
-                        if not response.strip():
-                            self._restore_saved_tools()
-                            return ""
-                    elif fallback["action"] == "no_reply":
-                        logger.info("[Reply] structured_buffer_no_reply session=%s reason=%s",
-                                    session_id, fallback.get("reason", ""))
-                        self._log_agent_result(session_id, "structured_buffer_no_reply")
-                        self._restore_saved_tools()
-                        return ""
-                elif buffer_text and isinstance(buffer_text, str):
-                    fake_patterns = [
-                        r"(调用|使用|已调用|已使用|通过|call)\s{0,12}`?reply`?",
-                        r"`?reply`?\s*工具.{0,8}(调用|使用|发送)",
-                        r"reply\s*\(\s*[\"']",
-                        r"(发送|回复|回答).{0,4}(调用|使用).{0,4}reply",
-                    ]
-                    if any(_re.search(p, buffer_text, _re.IGNORECASE) for p in fake_patterns):
-                        agent_result = "fake_tool_call_claim"
-                        logger.warning("[Reply] fake_tool_call_claim session=%s buffer=%.200s",
-                                       session_id, buffer_text)
+                if fallback and fallback["action"] == "reply":
+                    from core.reply_postprocess import strip_chat_end_punct
+                    reply_text = strip_chat_end_punct(fallback["content"])
+                    reply_source = "structured_buffer_reply"
+                    # 保存 reply_meta 到 store（与真实 reply 一致）
+                    if session_id:
+                        send_mode = fallback.get("send_mode", "normal")
+                        if send_mode not in self._ALLOWED_SEND_MODES:
+                            send_mode = "normal"
+                        self._reply_meta_store()[session_id] = {
+                            "reply_to_message_id": None,
+                            "mentions": fallback.get("mentions", []),
+                            "quote": bool(fallback.get("quote")),
+                            "at_sender": bool(fallback.get("at_sender")),
+                            "send_mode": send_mode,
+                        }
+                    logger.info("[Reply] structured_buffer_reply session=%s len=%d", session_id, len(reply_text))
+                    response = reply_text
+                elif fallback and fallback["action"] == "no_reply":
+                    logger.info("[Reply] structured_buffer_no_reply session=%s reason=%s",
+                                session_id, fallback.get("reason", ""))
+                    self._log_agent_result(session_id, "structured_buffer_no_reply")
+                    self._restore_saved_tools()
+                    return ""
+                else:
+                    # 既无 real tool call 也无合法 fallback
+                    agent_result = "no_tool_call"
+                    if buffer_text and isinstance(buffer_text, str):
+                        fake_patterns = [
+                            r"(调用|使用|已调用|已使用|通过|call)\s{0,12}`?reply`?",
+                            r"`?reply`?\s*工具.{0,8}(调用|使用|发送)",
+                            r"reply\s*\(\s*[\"']",
+                            r"(发送|回复|回答).{0,4}(调用|使用).{0,4}reply",
+                        ]
+                        if any(_re.search(p, buffer_text, _re.IGNORECASE) for p in fake_patterns):
+                            agent_result = "fake_tool_call_claim"
+                            logger.warning("[Reply] fake_tool_call_claim session=%s buffer=%.200s",
+                                           session_id, buffer_text)
 
-                logger.warning("[Reply] NO TOOL CALLED - suppressing buffer output (session=%s agent_result=%s)",
-                              session_id, agent_result)
-                if session_id:
-                    store = self._reply_meta_store()
-                    entry = store.get(session_id, {})
-                    entry["_no_tool_call"] = True
-                    store[session_id] = entry
-                self._log_agent_result(session_id, agent_result)
-                self._restore_saved_tools()
-                return ""
+                    logger.warning("[Reply] NO TOOL CALLED - suppressing buffer output (session=%s agent_result=%s)",
+                                  session_id, agent_result)
+                    if session_id:
+                        store = self._reply_meta_store()
+                        entry = store.get(session_id, {})
+                        entry["_no_tool_call"] = True
+                        store[session_id] = entry
+                    self._log_agent_result(session_id, agent_result)
+                    self._restore_saved_tools()
+                    return ""
 
             if not response.strip():
                 logger.warning("[NanobotBridge] KT agent returned empty response after strip")
@@ -1050,12 +1058,7 @@ class NanobotBridge:
                 return ""
 
             elapsed_ms = int((_time.time() - t_start) * 1000)
-            response_source = (
-                "reply_tool" if reply_text else
-                "html_tool" if preserved_html else
-                "buffer" if response else
-                "empty"
-            )
+            response_source = reply_source
             logger.info("[SessionRuntime] DONE session=%s latency=%dms resp_len=%d source=%s",
                         session_id, elapsed_ms, len(response), response_source)
 

@@ -24,3 +24,21 @@
 - `persona_update`：用户说"记住了"时更新画像。参数 user_id 优先使用 `<runtime_context>` 中的 `user_id`
 - `schedule_task`：创建定时推送任务。参数 target_id 优先使用 `<runtime_context>` 中的 `user_id` 或 `group_id`
 - `read`/`write`/`edit`/`grep`/`glob`/`bash`：文件操作工具，**沙箱限制在 workspace 目录**。可以帮用户处理文档、整理数据、生成报告
+
+## 最终回复纪律
+
+每轮对话必须用以下方式之一结束：
+
+**首选：真实工具调用**
+- 需要回复 → 调用 `reply(content=...)`
+- 不需要回复 → 调用 `no_reply(reason=...)`
+
+**备用（仅当模型/接口无法发出真实工具调用时）**
+输出严格 JSON，禁止 Markdown、禁止代码块、禁止解释文字：
+- 回复：`{"action":"reply","content":"你的回复正文","send_mode":"normal","quote":false,"at_sender":false}`
+- 不回复：`{"action":"no_reply","reason":"这条消息不需要回复"}`
+
+**禁止**：
+- 在普通文本里写"我调用了 reply 工具"作为回复
+- 把 JSON 放进代码块
+- 混合 JSON 和普通文字
