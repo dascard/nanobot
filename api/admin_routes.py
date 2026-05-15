@@ -2263,9 +2263,15 @@ def edit_model_route(
     for field, value in fields.items():
         if value is None or field not in allowed:
             continue
-        key = prefix if (field == "base_url" or not is_classifier) else f"{prefix}.{field}"
-        if not is_classifier and field not in ("model", "provider"):
-            continue
+        if not is_classifier:
+            if field == "model":
+                key = prefix
+            elif field == "provider":
+                key = f"model.route.{db_key}.provider"
+            else:
+                continue
+        else:
+            key = f"{prefix}.{field}"
         row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
         defn = SETTING_DEFS.get(key)
         desc = defn.description if defn else f"model route {route_key}.{field}"
