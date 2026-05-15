@@ -2261,8 +2261,9 @@ function ToolsPage() {
                   <td className="py-2 px-2 font-mono text-slate-200">
                   {t.name}
                   {t.is_subagent && <span className="ml-1 px-1 py-0.5 rounded text-xs bg-purple-900/30 text-purple-400">subagent</span>}
-                  {t.registered === false && <span className="ml-1 px-1 py-0.5 rounded text-xs bg-red-900/30 text-red-400">未注册</span>}
-                  {t.registered === null && <span className="ml-1 px-1 py-0.5 rounded text-xs bg-slate-800 text-slate-500">未知</span>}
+                  {regAvail && t.registered === false && <span className="ml-1 px-1 py-0.5 rounded text-xs bg-red-900/30 text-red-400">未注册</span>}
+                  {regAvail && t.registered === null && <span className="ml-1 px-1 py-0.5 rounded text-xs bg-slate-800 text-slate-500">未知</span>}
+                  {regAvail && t.registered === true && <span className="ml-1 px-1 py-0.5 rounded text-xs bg-emerald-900/30 text-emerald-400">已注册</span>}
                 </td>
                   <td className="py-2 px-2 text-slate-400">{t.category}</td>
                   <td className="py-2 px-2">

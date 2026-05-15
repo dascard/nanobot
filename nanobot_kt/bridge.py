@@ -1108,8 +1108,8 @@ class NanobotBridgePool:
     def _tool_registry_info(self) -> dict:
         """从第一个 child bridge 获取工具注册表信息。"""
         for b in self._bridges.values():
-            info = getattr(b, '_tool_registry_info', None)
-            if info:
+            info = getattr(b, '_tool_registry_info', {})
+            if info and info.get("kt_loaded"):
                 return info
         return {}
 
