@@ -1104,6 +1104,19 @@ class NanobotBridgePool:
         self._started = True
         logger.info("[NanobotBridgePool] started")
 
+    @property
+    def _tool_registry_info(self) -> dict:
+        """从第一个 child bridge 获取工具注册表信息。"""
+        for b in self._bridges.values():
+            info = getattr(b, '_tool_registry_info', None)
+            if info:
+                return info
+        return {}
+
+    @property
+    def bridge_count(self) -> int:
+        return len(self._bridges)
+
     async def stop(self) -> None:
         async with self._create_lock:
             bridges = list(self._bridges.values())

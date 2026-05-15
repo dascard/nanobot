@@ -2982,9 +2982,16 @@ def list_tools(chat_type: str = "group", group_id: str = "",
             "registered": registered,
             "is_subagent": is_subagent,
         })
+    bridge_count = 0
+    try:
+        bridge_count = getattr(app.state.bridge, 'bridge_count', 0)
+    except Exception:
+        pass
+
     return {"tools": items, "registry_info": registry_info,
             "registry_available": registry_available,
-            "registry_empty": bool(registry_available and len(kt_loaded) == 0)}
+            "registry_empty": bool(registry_available and len(kt_loaded) == 0),
+            "bridge_count": bridge_count}
 
 
 @router.put("/tools/{tool_name}")

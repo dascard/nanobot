@@ -2174,10 +2174,11 @@ function ToolsPage() {
   const [regInfo, setRegInfo] = useState(null)
   const [regAvail, setRegAvail] = useState(false)
   const [regEmpty, setRegEmpty] = useState(false)
+  const [bridgeCt, setBridgeCt] = useState(0)
   const [groupId, setGroupId] = useState('')
   const [decisions, setDecisions] = useState([])
   const [expandDecision, setExpandDecision] = useState(null)
-  const load = () => api.get('/tools', { params: { chat_type: tab === 'private' ? 'private' : 'group', group_id: groupId } }).then(r => { setTools(r.data.tools || []); setRegInfo(r.data.registry_info || null); setRegAvail(r.data.registry_available); setRegEmpty(r.data.registry_empty) })
+  const load = () => api.get('/tools', { params: { chat_type: tab === 'private' ? 'private' : 'group', group_id: groupId } }).then(r => { setTools(r.data.tools || []); setRegInfo(r.data.registry_info || null); setRegAvail(r.data.registry_available); setRegEmpty(r.data.registry_empty); setBridgeCt(r.data.bridge_count || 0) })
   const loadDecisions = () => api.get('/tools/decisions', { params: { limit: 50 } }).then(r => setDecisions(r.data.items || []))
   useEffect(() => { if (tab === 'decisions') loadDecisions(); else load() }, [tab, groupId])
 
@@ -2221,11 +2222,16 @@ function ToolsPage() {
       )}
       <div className="mb-4 flex gap-4 text-xs text-slate-400">
         {!regAvail ? (
-          <span className="text-slate-500">运行时注册状态未知（bridge 未就绪）</span>
+          bridgeCt === 0 ? (
+            <span className="text-slate-500">会话 bridge 尚未创建（{bridgeCt} 个活跃），触发一条消息后可用</span>
+          ) : (
+            <span className="text-slate-500">运行时注册状态未知（bridge 未就绪，{bridgeCt} 个活跃）</span>
+          )
         ) : regEmpty ? (
           <span className="text-amber-400">KT registry 返回空，请检查 bridge/list_tools</span>
         ) : regInfo ? (
           <>
+            <span>会话 bridge: <span className="text-slate-200 font-medium">{bridgeCt}</span> 个</span>
             <span>KT 已加载: <span className="text-slate-200 font-medium">{regInfo.kt_loaded?.length || 0}</span> 个</span>
             {regInfo.missing_meta?.length > 0 && <span className="text-amber-400">元数据缺失: {regInfo.missing_meta.length} 个 ({regInfo.missing_meta.join(', ')})</span>}
             {regInfo.missing_kt?.length > 0 && <span className="text-red-400">KT 未加载: {regInfo.missing_kt.length} 个 ({regInfo.missing_kt.join(', ')})</span>}
