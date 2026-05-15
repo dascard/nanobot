@@ -194,7 +194,8 @@ async def lifespan(app: FastAPI):
     # Initialize KT Framework bridge (replaces old manual controller)
     from nanobot_kt.bridge import init_bridge, shutdown_bridge
     bridge = await init_bridge()
-    logger.info(f"KT Agent initialized via bridge.")
+    app.state.bridge = bridge
+    logger.info("KT Agent initialized via bridge.")
     # Also init legacy controller for endpoints that still use SQLiteMemory
     from api.routes import init_legacy_memory
     init_legacy_memory()
@@ -211,6 +212,7 @@ async def lifespan(app: FastAPI):
     eval_sample_stop.set()
     eval_sample_thread.join(timeout=5)
     await shutdown_bridge()
+    app.state.bridge = None
 
 
 # ── 应用初始化 ──

@@ -2282,20 +2282,19 @@ function ToolsPage() {
                   )}
                   {tab !== 'defaults' && tab !== 'decisions' && (
                     <td className="py-2 px-2">
-                      <div className="flex items-center gap-1">
-                        <span className={`px-2 py-0.5 rounded text-xs whitespace-nowrap ${tone === 'emerald' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'}`}>{label}</span>
-                        {!isForced && !isLocked && !isSubagent && (
-                          <>
-                            <button onClick={() => setOverride(t, true)} disabled={tab === 'override' && !groupId.trim()} title={tab === 'override' && !groupId.trim() ? '请先输入群 stream_id' : '启用'}
-                              className={`px-1.5 py-0.5 rounded text-xs bg-emerald-700/50 hover:bg-emerald-700 text-emerald-300 ${tab === 'override' && !groupId.trim() ? 'opacity-30 cursor-not-allowed' : ''}`}>启用</button>
-                            <button onClick={() => setOverride(t, false)} disabled={tab === 'override' && !groupId.trim()} title={tab === 'override' && !groupId.trim() ? '请先输入群 stream_id' : '禁用'}
-                              className={`px-1.5 py-0.5 rounded text-xs bg-red-700/50 hover:bg-red-700 text-red-300 ${tab === 'override' && !groupId.trim() ? 'opacity-30 cursor-not-allowed' : ''}`}>禁用</button>
-                            <button onClick={() => clearOverride(t)} disabled={tab === 'override' && !groupId.trim()}
-                              className={`px-1.5 py-0.5 rounded text-xs bg-slate-700 hover:bg-slate-600 ${tab === 'override' && !groupId.trim() ? 'opacity-30 cursor-not-allowed' : ''}`}>清除</button>
-                          </>
-                        )}
-                        {isSubagent && <span className="text-xs text-purple-400 ml-1">运行时禁用有限</span>}
-                      </div>
+                      {isForced && <span className="text-xs text-slate-500">群聊强制禁用</span>}
+                      {isLocked && <span className="text-xs text-emerald-400">强制启用</span>}
+                      {isSubagent && <span className="text-xs text-purple-400">subagent（运行时禁用有限）</span>}
+                      {!isForced && !isLocked && !isSubagent && (
+                        <select value={t.effective ? 'enabled' : 'disabled'}
+                          onChange={e => { const v = e.target.value; if (v === 'inherit') clearOverride(t); else setOverride(t, v === 'enabled') }}
+                          disabled={tab === 'override' && !groupId.trim()}
+                          className={`p-1 rounded text-xs bg-slate-900 border border-slate-700 ${tab === 'override' && !groupId.trim() ? 'opacity-40' : ''}`}>
+                          <option value="inherit">继承</option>
+                          <option value="enabled">启用</option>
+                          <option value="disabled">禁用</option>
+                        </select>
+                      )}
                     </td>
                   )}
                   {tab === 'decisions' && (
