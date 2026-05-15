@@ -2283,6 +2283,14 @@ def edit_model_route(
         written[key] = str(value)
     db.commit()
     _audit(db, "edit_model_route", "route", route_key, _redact(written), ip_address=_client_ip(request))
+    # 清除 image_summary 30s route cache
+    if db_key == "sticker_describe":
+        try:
+            from creatures.nanobot.prompts.skills.image_summary.tool import _get_image_summary_route
+            if hasattr(_get_image_summary_route, "_cache"):
+                delattr(_get_image_summary_route, "_cache")
+        except Exception:
+            pass
     settings.invalidate()
     # 不返回 written，只返回 api_key_configured
     resp: dict = {"ok": True, "route_key": route_key, "version": settings.version}
