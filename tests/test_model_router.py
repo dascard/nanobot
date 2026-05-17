@@ -113,6 +113,30 @@ class TestClassifierRouteProviderResolution:
         assert route["base_url"] == "http://newapi:9000/v1"
         assert route["api_key"] == "newapi-key"
 
+    def test_reply_model_does_not_inherit_timing_gate_model(self, monkeypatch):
+        from clients.classifier_client import resolve_model_route
+
+        values = {
+            "model.route.timing_gate.provider": "local_llama",
+            "model.route.timing_gate.model": "timing-model",
+            "model.providers.local_llama.base_url": "http://local-llama:9999/v1",
+            "model.providers.local_llama.enabled": True,
+            "model.route.reply.provider": "newapi",
+            "model.reply": "selected-reply-model",
+            "model.providers.newapi.base_url": "http://newapi:9000/v1",
+            "model.providers.newapi.api_key": "newapi-key",
+            "model.providers.newapi.enabled": True,
+        }
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        route = resolve_model_route("reply")
+
+        assert route["provider_id"] == "newapi"
+        assert route["model"] == "selected-reply-model"
+
     def test_call_model_route_rejects_disabled_provider(self, monkeypatch):
         from clients.classifier_client import call_model_route
 

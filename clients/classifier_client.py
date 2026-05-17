@@ -109,8 +109,8 @@ def _resolve_classifier_route(route_key: str) -> dict:
         "max_tokens": 30,
     }
 
-    # 非 timing_gate 的 route 先继承 timing_gate 的完整配置
-    if route_key != "timing_gate":
+    # 只有分类器子路由继承 timing_gate；controller/vision route 独立解析。
+    if route_key in ("private_decision", "classifier_legacy"):
         base = _resolve_classifier_route("timing_gate")
     else:
         base = dict(defaults)
