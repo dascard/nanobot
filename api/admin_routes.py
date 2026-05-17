@@ -1929,6 +1929,7 @@ class ProviderUpdateBody(BaseModel):
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     enabled: Optional[bool] = None
+    registry_provider: Optional[str] = None
 
 
 @router.put("/models/providers/{provider_id}")
@@ -1937,11 +1938,15 @@ def update_model_provider(
     request: Request, db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    """更新供应商配置——写入 SystemSetting。"""
+    """更新供应商配置——写入 SystemSetting。旧 provider 名自动 canonicalize。"""
     _ALLOWED_PROVIDERS = {"newapi", "local_llama", "local_vision", "local_qwen", "vision_qwen"}
     if provider_id not in _ALLOWED_PROVIDERS:
         raise HTTPException(404, f"unknown provider: {provider_id}")
     from core.settings_service import settings
+    from core.route_metadata import canonical_provider_id
+
+    raw_provider_id = provider_id
+    provider_id = canonical_provider_id(provider_id)
 
     prefix = f"model.providers.{provider_id}"
     written = {}
@@ -1967,10 +1972,25 @@ def update_model_provider(
         else:
             row.value = val
         written[key] = val
+    if body.registry_provider is not None:
+        key = f"{prefix}.registry_provider"
+        val = str(body.registry_provider).strip()
+        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+        if not row:
+            row = SystemSetting(key=key, value=val, description=f"provider {provider_id} registry_provider")
+            db.add(row)
+        else:
+            row.value = val
+        written[key] = val
     db.commit()
     _audit(db, "update_provider", "provider", provider_id, _redact(written), ip_address=_client_ip(request))
     settings.invalidate()
-    return {"ok": True, "provider_id": provider_id, "version": settings.version}
+    return {
+        "ok": True,
+        "provider_id": provider_id,
+        "input_provider_id": raw_provider_id if raw_provider_id != provider_id else None,
+        "version": settings.version,
+    }
 
 
 # ── 模型目录 ──

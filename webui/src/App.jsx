@@ -2012,9 +2012,11 @@ function ModelCatalogTab({ routes, providers }) {
                 </td>
                 <td className="py-2 px-3 text-xs">
                   {m.source === 'provider_catalog'
-                    ? <span className="px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400">供应商同步</span>
+                    ? <span className="px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400">已同步</span>
                     : m.source === 'route'
-                    ? <span className="px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-400" title="未在供应商模型列表中确认">路由引用</span>
+                    ? (m.verified
+                      ? <span className="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400" title="已存在于此供应商的真实模型列表中">已确认</span>
+                      : <span className="px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-400" title="路由引用但未在供应商模型列表中找到——可能不存在于该 provider">未验证</span>)
                     : <span className="text-slate-600">{m.source || '-'}</span>}
                 </td>
                 <td className="py-2 px-3 text-slate-400 text-xs">{m.used_by.join(', ') || '-'}</td>

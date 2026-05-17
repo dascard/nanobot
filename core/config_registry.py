@@ -224,6 +224,11 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=True, value_type="bool",
         category="model", description="NewAPI 是否启用",
     ),
+    "model.providers.newapi.registry_provider": SettingDef(
+        key="model.providers.newapi.registry_provider", env_name="",
+        default="new-api", value_type="str",
+        category="model", description="NewAPI 在 registry 中的 provider 名",
+    ),
     # [DEPRECATED] local_qwen is an alias — use local_llama instead
     "model.providers.local_qwen.base_url": SettingDef(
         key="model.providers.local_qwen.base_url", env_name="CLASSIFIER_API_URL",
@@ -272,6 +277,11 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=True, value_type="bool",
         category="model", description="本地 llama.cpp 是否启用",
     ),
+    "model.providers.local_llama.registry_provider": SettingDef(
+        key="model.providers.local_llama.registry_provider", env_name="",
+        default="", value_type="str",
+        category="model", description="local_llama 在 registry 中的 provider 名",
+    ),
     # ── 本地视觉模型（仅当 IMAGE_SUMMARY_API_URL != CLASSIFIER_API_URL 时才在列表中出现） ──
     "model.providers.local_vision.base_url": SettingDef(
         key="model.providers.local_vision.base_url", env_name="IMAGE_SUMMARY_API_URL",
@@ -287,6 +297,11 @@ SETTING_DEFS: dict[str, SettingDef] = {
         key="model.providers.local_vision.enabled", env_name="",
         default=True, value_type="bool",
         category="model", description="本地视觉模型是否启用",
+    ),
+    "model.providers.local_vision.registry_provider": SettingDef(
+        key="model.providers.local_vision.registry_provider", env_name="",
+        default="", value_type="str",
+        category="model", description="local_vision 在 registry 中的 provider 名",
     ),
     # ── Route provider 关联 ──
     "model.route.timing_gate.provider": SettingDef(
