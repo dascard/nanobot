@@ -471,31 +471,14 @@ def resolve_model_route(route_key: str) -> dict:
     return result
 
 
-def build_model_catalog(db=None, *,
-                        provider_filter: str = "",
-                        query: str = "",
-                        limit: int = 0,
-                        offset: int = 0) -> list[dict]:
-    """构建模型目录：provider::model 唯一键，支持过滤/搜索/分页。"""
-    from core.settings_service import settings
-    from config import LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
-    from core.route_metadata import route_capability_for, canonical_provider_id, is_deprecated_provider
+def build_provider_catalog(db=None) -> list[dict]:
+    """返回从 /v1/models 同步的真实模型列表（仅 provider_catalog）。
+
+    不包含 route 引用。用于「模型列表」Tab。
+    """
+    from core.route_metadata import canonical_provider_id, is_deprecated_provider
     import json
 
-    model_map: dict[str, dict] = {}
-    # 记录 provider_catalog 中已确认存在的 key，用于标记 route 引用是否 verified
-    catalog_verified_keys: set[str] = set()
-
-    def _key(provider: str, model: str) -> str:
-        return f"{provider}::{model}"
-
-    def _infer_caps(provider: str, model_lower: str) -> set:
-        caps = set()
-        if "vl" in model_lower or "vision" in model_lower:
-            caps.add("vision")
-        return caps
-
-    # ── 1. 持久化 provider catalog ──
     if db is None:
         from core.database import SessionLocal
         db = SessionLocal()
@@ -507,34 +490,64 @@ def build_model_catalog(db=None, *,
         rows = db.query(SystemSetting).filter(
             SystemSetting.key.like("model.catalog.%")
         ).all()
+        items: list[dict] = []
         for row in rows:
             try:
                 data = json.loads(row.value or "{}")
             except (json.JSONDecodeError, TypeError):
                 continue
             raw_provider = row.key.removeprefix("model.catalog.")
-            # 跳过 deprecated provider 的 catalog key（迁移已处理，残留跳过）
             if is_deprecated_provider(raw_provider):
                 continue
-            # canonicalize provider 名
             provider = canonical_provider_id(raw_provider)
             for m in data.get("models", []):
-                k = _key(provider, m)
-                if k not in model_map:
-                    model_map[k] = {
-                        "id": k, "provider": provider, "model": m,
-                        "capabilities": _infer_caps(provider, m.lower()),
-                        "used_by": [],
-                        "stale": not data.get("last_refresh_ok", True),
-                        "source": "provider_catalog",
-                        "verified": True,
-                    }
-                    catalog_verified_keys.add(k)
+                items.append({
+                    "id": f"{provider}::{m}",
+                    "provider": provider,
+                    "model": m,
+                    "capabilities": ["vision"] if ("vl" in m.lower() or "vision" in m.lower()) else [],
+                    "stale": not data.get("last_refresh_ok", True),
+                    "source": "provider_catalog",
+                    "verified": True,
+                })
+        return sorted(items, key=lambda x: x["model"])
     finally:
         if _close_db:
             db.close()
 
-    # ── 2. 当前 route 补充 ──
+
+def build_route_references() -> list[dict]:
+    """返回当前所有 route 引用的模型，标记是否在 provider_catalog 中确认。
+
+    用于「路由引用异常」展示——未确认的条目会高亮。
+    """
+    from core.route_metadata import route_capability_for, canonical_provider_id, is_deprecated_provider
+    from core.database import SessionLocal, SystemSetting
+    import json
+
+    # 先收集 provider_catalog 中已确认的 key
+    catalog_keys: set[str] = set()
+    db = SessionLocal()
+    try:
+        rows = db.query(SystemSetting).filter(
+            SystemSetting.key.like("model.catalog.%")
+        ).all()
+        for row in rows:
+            try:
+                data = json.loads(row.value or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            raw_provider = row.key.removeprefix("model.catalog.")
+            if is_deprecated_provider(raw_provider):
+                continue
+            provider = canonical_provider_id(raw_provider)
+            for m in data.get("models", []):
+                catalog_keys.add(f"{provider}::{m}")
+    finally:
+        db.close()
+
+    items: list[dict] = []
+    seen: set[str] = set()
     for rk in ("reply", "fast", "smart", "timing_gate", "private_decision",
                "classifier_legacy", "sticker_describe"):
         r = resolve_model_route(rk)
@@ -542,26 +555,45 @@ def build_model_catalog(db=None, *,
         if not m or m == "未指定":
             continue
         pid = r.get("provider_id", "")
-        k = _key(pid, m) if pid else m
-        if k not in model_map:
-            model_map[k] = {
-                "id": k, "provider": pid, "model": m,
-                "capabilities": set(), "used_by": [],
+        k = f"{pid}::{m}" if pid else m
+        if k not in seen:
+            seen.add(k)
+            items.append({
+                "id": k,
+                "provider": pid,
+                "model": m,
+                "route_key": rk,
+                "route_type": r.get("route_type", "unknown"),
+                "verified": k in catalog_keys,
                 "source": "route",
-                "verified": k in catalog_verified_keys,
-            }
-        model_map[k]["used_by"].append(rk)
-        caps = model_map[k]["capabilities"]
-        cap = route_capability_for(rk)
-        if cap:
-            caps.add(cap)
+            })
+    items.sort(key=lambda x: (x["verified"], x["model"]))
+    return items
 
-    for entry in model_map.values():
-        if "verified" not in entry:
-            entry["verified"] = entry.get("source") == "provider_catalog"
-        entry["capabilities"] = sorted(entry["capabilities"])
 
-    items = sorted(model_map.values(), key=lambda x: x["model"])
+def build_model_catalog(db=None, *,
+                        provider_filter: str = "",
+                        query: str = "",
+                        limit: int = 0,
+                        offset: int = 0) -> list[dict]:
+    """组合 catalog（兼容旧接口，诊断页用）。"""
+    catalog = build_provider_catalog(db)
+    refs = build_route_references()
+    # 合并：provider_catalog 条目 + route-only 条目
+    cat_keys = {e["id"] for e in catalog}
+    merged = list(catalog)
+    for ref in refs:
+        if ref["id"] not in cat_keys:
+            ref["capabilities"] = []
+            ref["used_by"] = [ref["route_key"]]
+            ref["stale"] = False
+            merged.append(ref)
+        else:
+            for e in merged:
+                if e["id"] == ref["id"]:
+                    e.setdefault("used_by", []).append(ref["route_key"])
+                    break
+    items = sorted(merged, key=lambda x: x["model"])
     if provider_filter:
         items = [e for e in items if e["provider"] == provider_filter]
     if query:

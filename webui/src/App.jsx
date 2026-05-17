@@ -1950,6 +1950,7 @@ function ModelsPage() {
 // ── Tab 1: 模型列表 ──
 function ModelCatalogTab({ routes, providers }) {
   const [catalog, setCatalog] = useState([])
+  const [routeRefs, setRouteRefs] = useState([])
   const [catProvider, setCatProvider] = useState('')
   const [catQ, setCatQ] = useState('')
   const [catLoading, setCatLoading] = useState(false)
@@ -1962,13 +1963,25 @@ function ModelCatalogTab({ routes, providers }) {
     api.get('/models/catalog', { params }).then(r => setCatalog(r.data.catalog || [])).catch(() => {}).finally(() => setCatLoading(false))
   }
   useEffect(() => { loadCatalog() }, [catProvider, catQ])
+  useEffect(() => { api.get('/models/route-references').then(r => setRouteRefs(r.data.route_references || [])).catch(() => {}) }, [])
   const doRefresh = () => {
     setRefreshResult({ loading: true })
     api.post('/models/catalog/refresh').then(r => { setRefreshResult(r.data); loadCatalog() }).catch(() => setRefreshResult(null))
   }
+  // 用 route_references 标记哪些 catalog 模型被路由使用
+  const usedBy = {}
+  routeRefs.forEach(ref => {
+    if (ref.verified) {
+      const k = ref.id
+      if (!usedBy[k]) usedBy[k] = []
+      usedBy[k].push(ref.route_key)
+    }
+  })
+  const unverified = routeRefs.filter(ref => !ref.verified)
   return (
     <div>
-      <p className="text-slate-500 text-sm mb-3">从供应商同步可获取完整模型列表。点击刷新从各 provider /models 端点拉取。</p>
+      {/* 供应商模型列表 */}
+      <p className="text-slate-500 text-sm mb-2">从供应商 /v1/models 同步的真实模型列表。</p>
       <div className="flex gap-2 mb-3">
         <input value={catQ} onChange={e => setCatQ(e.target.value)} placeholder="搜索模型..." className="w-48 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
         <select value={catProvider} onChange={e => setCatProvider(e.target.value)} className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
@@ -1988,45 +2001,54 @@ function ModelCatalogTab({ routes, providers }) {
       )}
       {catalog.length === 0 && !catLoading && (
         <div className="text-xs text-slate-500 mb-3 p-3 bg-slate-900 rounded-lg">
-          模型目录为空，请点击「刷新供应商模型」从 provider 同步；这不会改变路由，只会同步可选模型列表。
+          模型列表为空，请点击「刷新供应商模型」从 provider /v1/models 同步。
         </div>
       )}
       <Card>
         <table className="w-full text-sm">
           <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-            <th className="py-2 px-3">模型</th><th className="py-2 px-3">供应商</th><th className="py-2 px-3">能力</th><th className="py-2 px-3">来源</th><th className="py-2 px-3">被使用</th>
+            <th className="py-2 px-3">模型</th><th className="py-2 px-3">供应商</th><th className="py-2 px-3">路由使用</th>
           </tr></thead>
           <tbody>
-            {catLoading && <tr><td colSpan={5} className="py-4 text-center text-slate-500">加载中...</td></tr>}
+            {catLoading && <tr><td colSpan={3} className="py-4 text-center text-slate-500">加载中...</td></tr>}
             {catalog.map(m => (
               <tr key={m.id || m.model} className="border-b border-slate-800/50 hover:bg-slate-800/30">
-                <td className="py-2 px-3 font-mono text-slate-200">{m.model}</td>
+                <td className="py-2 px-3 font-mono text-slate-200">
+                  {m.model}
+                  {m.stale && <span className="ml-1 px-1 py-0.5 rounded text-[10px] bg-red-900/30 text-red-400">stale</span>}
+                </td>
                 <td className="py-2 px-3 text-slate-400">{m.provider}</td>
-                <td className="py-2 px-3">
-                  <div className="flex gap-1 flex-wrap">
-                    {m.capabilities.length > 0
-                      ? m.capabilities.map(c => <span key={c} className="px-1.5 py-0.5 rounded text-xs bg-slate-700 text-slate-300">{c}</span>)
-                      : <span className="px-1.5 py-0.5 rounded text-xs bg-slate-800 text-slate-600">未知</span>}
-                    {m.stale && <span className="px-1.5 py-0.5 rounded text-xs bg-red-900/30 text-red-400" title="上次刷新失败">stale</span>}
-                  </div>
-                </td>
-                <td className="py-2 px-3 text-xs">
-                  {m.source === 'provider_catalog' && m.used_by?.length > 0
-                    ? <span className="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400" title="供应商同步且被路由使用">已确认</span>
-                    : m.source === 'provider_catalog'
-                    ? <span className="px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400">已同步</span>
-                    : m.source === 'route'
-                    ? (m.verified
-                      ? <span className="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400" title="已存在于此供应商的真实模型列表中">已确认</span>
-                      : <span className="px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-400" title="路由引用但未在供应商模型列表中找到——可能不存在于该 provider">未验证</span>)
-                    : <span className="text-slate-600">{m.source || '-'}</span>}
-                </td>
-                <td className="py-2 px-3 text-slate-400 text-xs">{m.used_by.join(', ') || '-'}</td>
+                <td className="py-2 px-3 text-slate-400 text-xs">{(usedBy[m.id] || []).join(', ') || <span className="text-slate-600">-</span>}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </Card>
+
+      {/* 路由引用异常：未在 provider catalog 中确认的模型 */}
+      {unverified.length > 0 && (
+        <div className="mt-6">
+          <h2 className="text-sm font-medium text-amber-400 mb-2">路由引用异常</h2>
+          <p className="text-xs text-slate-500 mb-2">以下模型被路由引用，但未在供应商 /v1/models 中找到——可能不存在于该 provider。</p>
+          <Card>
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+                <th className="py-2 px-3">模型</th><th className="py-2 px-3">供应商</th><th className="py-2 px-3">路由</th><th className="py-2 px-3">类型</th>
+              </tr></thead>
+              <tbody>
+                {unverified.map(ref => (
+                  <tr key={ref.id} className="border-b border-slate-800/50 bg-amber-500/5">
+                    <td className="py-2 px-3 font-mono text-amber-300">{ref.model}</td>
+                    <td className="py-2 px-3 text-slate-400">{ref.provider}</td>
+                    <td className="py-2 px-3 text-slate-400">{ref.route_key}</td>
+                    <td className="py-2 px-3 text-xs text-slate-500">{ref.route_type}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      )}
     </div>
   )
 }

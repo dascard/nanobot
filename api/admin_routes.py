@@ -2004,6 +2004,13 @@ def get_model_catalog_v2(provider: str = "", q: str = "", limit: int = 0, offset
         provider_filter=provider, query=q, limit=limit, offset=offset)}
 
 
+@router.get("/models/route-references")
+def get_route_references(_auth=Depends(verify_admin)):
+    """路由引用模型——标记是否在 provider_catalog 中确认存在。"""
+    from clients.classifier_client import build_route_references
+    return {"route_references": build_route_references()}
+
+
 @router.post("/models/catalog/refresh")
 def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """从各 provider 的 /models 端点刷新模型列表，持久化到 SystemSetting。"""
