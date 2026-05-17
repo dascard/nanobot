@@ -2409,6 +2409,31 @@ async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(ver
             return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
 
 
+@router.get("/models/routes/{route_key}/resolved")
+def get_resolved_route(route_key: str, _auth=Depends(verify_admin)):
+    """路由诊断——返回 resolve_model_route() 的脱敏完整结果。
+
+    用于排查"页面显示 newapi，实际走不走 newapi"一类问题。
+    """
+    from clients.classifier_client import resolve_model_route
+    from nanobot_kt.bridge import _registry_provider_for_route
+
+    route = resolve_model_route(route_key)
+    return {
+        "route_key": route_key,
+        "provider_id": route.get("provider_id", ""),
+        "registry_provider": _registry_provider_for_route(route.get("provider_id", "")),
+        "base_url": route.get("base_url", ""),
+        "model": route.get("model", ""),
+        "api_key_configured": bool(route.get("api_key")),
+        "api_key_source": route.get("api_key_source", ""),
+        "source": route.get("source", ""),
+        "provider_enabled": route.get("provider_enabled", True),
+        "inherited_from": route.get("inherited_from", None),
+        "overridden_fields": route.get("overridden_fields", None),
+    }
+
+
 @router.get("/models/available")
 def list_available_models(route_key: str = "", base_url_override: str = "",
                           db: Session = Depends(get_db), _auth=Depends(verify_admin)):

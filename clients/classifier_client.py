@@ -289,11 +289,13 @@ def _get_provider_config(provider_id: str) -> dict | None:
     if not base_url:
         return None
     enabled = settings.get(f"model.providers.{provider_id}.enabled", True)
+    registry_provider = str(settings.get(f"model.providers.{provider_id}.registry_provider") or "").strip()
     return {
         "id": provider_id,
         "base_url": base_url,
         "api_key": api_key,
         "enabled": _as_bool(enabled, default=True),
+        "registry_provider": registry_provider or None,
     }
 
 

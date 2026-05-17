@@ -2021,6 +2021,7 @@ function ModelCatalogTab({ routes }) {
 // ── Tab 2: 路由配置 ──
 function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
   const [editRoute, setEditRoute] = useState(null)
+  const [resolvedData, setResolvedData] = useState({})
   const routeList = Object.entries(routes)
   return (
     <div>
@@ -2039,6 +2040,15 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
                 <button onClick={() => setEditRoute({ key, ...r })} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">编辑</button>
                 <button onClick={() => onTest(key)} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-xs">测试</button>
                 {key === 'sticker_describe' && <button onClick={() => onTest(key, 'vision')} className="px-2 py-1 bg-cyan-700/50 hover:bg-cyan-700 rounded text-xs">视觉测试</button>}
+                <button onClick={() => {
+                  const k = key
+                  setResolvedData(prev => ({ ...prev, [k]: { loading: true } }))
+                  api.get(`/models/routes/${encodeURIComponent(k)}/resolved`).then(r => {
+                    setResolvedData(prev => ({ ...prev, [k]: r.data }))
+                  }).catch(e => {
+                    setResolvedData(prev => ({ ...prev, [k]: { error: e.message } }))
+                  })
+                }} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">诊断</button>
               </div>
             </div>
             <div className="space-y-0.5 text-xs text-slate-400">
@@ -2052,6 +2062,20 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
               <div className={`mt-2 p-2 rounded-lg text-xs ${testResult[key].ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
                 {testResult[key].ok ? `✅ ${testResult[key].latency_ms}ms${testResult[key].vision_payload_ok ? ' | vision payload OK' : ''}` : `❌ ${testResult[key].error}`}
                 {testResult[key].note && <div className="text-slate-400 mt-1">{testResult[key].note}</div>}
+              </div>
+            )}
+            {resolvedData[key] && !resolvedData[key].loading && !resolvedData[key].error && (
+              <div className="mt-2 p-2 rounded-lg bg-slate-800/50 text-xs space-y-0.5">
+                <div className="text-slate-400">解析结果 <span className="text-slate-600">(diagnostic)</span></div>
+                <div>base_url: <span className="text-slate-200 font-mono break-all">{resolvedData[key].base_url}</span></div>
+                <div>registry_provider: <span className="text-slate-200">{resolvedData[key].registry_provider}</span></div>
+                <div>source: <span className="text-slate-300">{resolvedData[key].source}</span></div>
+                <div>api_key_source: <span className="text-slate-300">{resolvedData[key].api_key_source || '-'}</span></div>
+                {resolvedData[key].inherited_from && <div>继承自: <span className="text-amber-400">{resolvedData[key].inherited_from}</span></div>}
+                {resolvedData[key].overridden_fields && Object.keys(resolvedData[key].overridden_fields || {}).length > 0 && (
+                  <div>覆盖字段: <span className="text-amber-400">{Object.entries(resolvedData[key].overridden_fields).map(([k,v]) => `${k}=${v}`).join(', ')}</span></div>
+                )}
+                <div>provider_enabled: {resolvedData[key].provider_enabled ? <span className="text-emerald-400">是</span> : <span className="text-red-400">否</span>}</div>
               </div>
             )}
           </Card>

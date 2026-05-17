@@ -55,9 +55,21 @@ def _current_time_label() -> str:
 
 
 def _registry_provider_for_route(provider_id: str) -> str:
-    """把 WebUI provider id 映射到模型目录里的 provider 名。"""
+    """把 WebUI provider id 映射到模型目录里的 provider 名。
+
+    优先读 model.providers.<id>.registry_provider 配置；
+    未配置时 newapi → "new-api"，其他保留原 id。
+    """
     provider_id = (provider_id or "").strip()
-    if provider_id in ("", "newapi", "new-api"):
+    if not provider_id:
+        return "new-api"
+    # 从 provider 配置读取显式 registry_provider
+    from clients.classifier_client import _get_provider_config
+    cfg = _get_provider_config(provider_id)
+    if cfg and cfg.get("registry_provider"):
+        return cfg["registry_provider"]
+    # fallback 映射
+    if provider_id in ("newapi", "new-api"):
         return "new-api"
     return provider_id
 
