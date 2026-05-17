@@ -271,16 +271,38 @@ def _get_provider_config(provider_id: str) -> dict | None:
     """读取 provider 内部配置（含 api_key，仅内部使用）。
 
     对已知 provider 使用 config 常量作为 fallback，避免 settings 空值覆盖 env。
-    旧 provider 名通过 PROVIDER_ALIASES 映射到 canonical 名。
+    旧 provider 名通过 canonical_provider_id 映射到 canonical 名。
+    canonical key 无值时回退到旧 alias key，保证旧 DB 配置兼容。
     """
     from core.settings_service import settings
     from config import NEW_API_BASE_URL, NEW_API_KEY, CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
-    from core.route_metadata import canonical_provider_id
+    from core.route_metadata import canonical_provider_id, PROVIDER_ALIASES
 
+    raw_id = provider_id
     provider_id = canonical_provider_id(provider_id)
 
-    base_url = str(settings.get(f"model.providers.{provider_id}.base_url") or "")
-    api_key = str(settings.get(f"model.providers.{provider_id}.api_key") or "")
+    # 找到此 canonical 名对应的旧 alias
+    alias_key = None
+    for old, new in PROVIDER_ALIASES.items():
+        if new == provider_id and old != raw_id:
+            alias_key = old
+            break
+    # vision_qwen → canonical 动态映射
+    if not alias_key and raw_id == "vision_qwen":
+        alias_key = "vision_qwen"
+    if not alias_key and provider_id == "local_llama":
+        alias_key = "local_qwen"
+    if not alias_key and provider_id == "local_vision":
+        alias_key = "vision_qwen"
+
+    def _get_with_fallback(field: str) -> str:
+        val = str(settings.get(f"model.providers.{provider_id}.{field}") or "")
+        if not val and alias_key:
+            val = str(settings.get(f"model.providers.{alias_key}.{field}") or "")
+        return val
+
+    base_url = _get_with_fallback("base_url")
+    api_key = _get_with_fallback("api_key")
 
     if provider_id == "newapi":
         base_url = base_url or str(NEW_API_BASE_URL or "")
@@ -292,8 +314,8 @@ def _get_provider_config(provider_id: str) -> dict | None:
 
     if not base_url:
         return None
-    enabled = settings.get(f"model.providers.{provider_id}.enabled", True)
-    registry_provider = str(settings.get(f"model.providers.{provider_id}.registry_provider") or "").strip()
+    enabled = _get_with_fallback("enabled") or "1"
+    registry_provider = _get_with_fallback("registry_provider").strip()
     return {
         "id": provider_id,
         "base_url": base_url,
@@ -318,7 +340,9 @@ def provider_public(p: dict) -> dict:
 def list_providers() -> list[dict]:
     """列出所有已配置的 provider（仅返回 canonical 名，跳过 deprecated alias）。"""
     from core.config_registry import SETTING_DEFS
-    from core.route_metadata import is_deprecated_provider, canonical_provider_id, normalize_base_url
+    from core.route_metadata import (
+        is_deprecated_provider, canonical_provider_id, normalize_base_url, PROVIDER_ALIASES,
+    )
     from config import CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
 
     providers: list[dict] = []
@@ -432,7 +456,7 @@ def build_model_catalog(db=None, *,
     """构建模型目录：provider::model 唯一键，支持过滤/搜索/分页。"""
     from core.settings_service import settings
     from config import LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
-    from core.route_metadata import route_capability_for, canonical_provider_id
+    from core.route_metadata import route_capability_for, canonical_provider_id, is_deprecated_provider
     import json
 
     model_map: dict[str, dict] = {}
@@ -465,8 +489,12 @@ def build_model_catalog(db=None, *,
                 data = json.loads(row.value or "{}")
             except (json.JSONDecodeError, TypeError):
                 continue
-            # canonicalize provider 名，避免旧 local_qwen catalog key 残留
-            provider = canonical_provider_id(row.key.removeprefix("model.catalog."))
+            raw_provider = row.key.removeprefix("model.catalog.")
+            # 跳过 deprecated provider 的 catalog key（迁移已处理，残留跳过）
+            if is_deprecated_provider(raw_provider):
+                continue
+            # canonicalize provider 名
+            provider = canonical_provider_id(raw_provider)
             for m in data.get("models", []):
                 k = _key(provider, m)
                 if k not in model_map:

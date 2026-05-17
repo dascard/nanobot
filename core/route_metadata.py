@@ -38,11 +38,31 @@ def route_capability_for(route_key: str) -> str | None:
 
 
 # ── Provider 别名（旧名 → canonical） ──
+# 注意：vision_qwen 的 canonical 名取决于端点是否相同，见 canonical_provider_id()
 PROVIDER_ALIASES: dict[str, str] = {
     "local_qwen": "local_llama",
-    "vision_qwen": "local_vision",
+    # vision_qwen 不在此处硬编码，由 canonical_provider_id() 动态决定
 }
-_DEPRECATED_PROVIDERS: set[str] = set(PROVIDER_ALIASES.keys())
+_DEPRECATED_PROVIDERS: set[str] = {"local_qwen", "vision_qwen"}
+
+
+# 缓存 endpoint 比较结果（进程生命周期不变）
+_cached_vision_canonical: str | None = None
+
+
+def _resolve_vision_alias() -> str:
+    """vision_qwen 的 canonical 名：同 endpoint 则 local_llama，否则 local_vision。"""
+    global _cached_vision_canonical
+    if _cached_vision_canonical is not None:
+        return _cached_vision_canonical
+    try:
+        from config import CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
+        classifier = normalize_base_url(str(CLASSIFIER_API_URL or ""))
+        vision = normalize_base_url(str(IMAGE_SUMMARY_API_URL or ""))
+        _cached_vision_canonical = "local_llama" if (vision and vision == classifier) else "local_vision"
+    except Exception:
+        _cached_vision_canonical = "local_vision"
+    return _cached_vision_canonical
 
 
 def canonical_provider_id(provider_id: str) -> str:
@@ -50,7 +70,12 @@ def canonical_provider_id(provider_id: str) -> str:
     pid = (provider_id or "").strip()
     if not pid:
         return pid
-    return PROVIDER_ALIASES.get(pid, pid)
+    mapped = PROVIDER_ALIASES.get(pid)
+    if mapped is not None:
+        return mapped
+    if pid == "vision_qwen":
+        return _resolve_vision_alias()
+    return pid
 
 
 def is_deprecated_provider(provider_id: str) -> bool:

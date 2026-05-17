@@ -2351,8 +2351,13 @@ async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(ver
 
     if route_key in _CHAT_ROUTES:
         from clients.new_api_client import NewAPIClient
+        from nanobot_kt.bridge import _registry_provider_for_route
         model = route.get("model", "") or route_key
-        client = NewAPIClient(api_key=route["api_key"], base_url=route["base_url"])
+        client = NewAPIClient(
+            api_key=route["api_key"],
+            base_url=route["base_url"],
+            registry_provider=_registry_provider_for_route(route.get("provider_id", "")),
+        )
         try:
             result = await client.chat_completion(
                 messages=[{"role": "user", "content": "回复OK"}],
