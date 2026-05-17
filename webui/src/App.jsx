@@ -2125,7 +2125,8 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
 
 function RouteEditModalV2({ route, providers, onClose, onSaved }) {
   const routeKey = route.route_key || route.key
-  const supportsRouteApiKey = !['reply', 'fast', 'smart'].includes(routeKey)
+  const isChatRoute = ['reply', 'fast', 'smart'].includes(routeKey)
+  const supportsRouteApiKey = !isChatRoute
   const [f, setF] = useState({
     provider_id: route.provider_id || '', model: route.model || '',
     max_tokens: route.max_tokens || 30, temperature: route.temperature || 0,
@@ -2137,6 +2138,7 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
   const [modelSearch, setModelSearch] = useState('')
   const [showManual, setShowManual] = useState(false)
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [saveError, setSaveError] = useState('')
   useEffect(() => {
     const params = { limit: modelSearch ? 50 : 200 }
     if (f.provider_id) params.provider = f.provider_id
@@ -2145,17 +2147,21 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
     api.get('/models/catalog', { params }).then(r => setCatalog(r.data.catalog || [])).catch(() => {}).finally(() => setCatalogLoading(false))
   }, [f.provider_id, modelSearch])
   const providerModels = catalog.slice(0, 100)
+  const hasCurrentModel = f.model && providerModels.some(m => m.model === f.model)
   const save = () => {
+    setSaveError('')
     const payload = {}
     if (f.model && f.model.trim()) payload.model = f.model.trim()
     if (f.provider_id) payload.provider = f.provider_id
-    payload.max_tokens = String(f.max_tokens)
-    payload.temperature = String(f.temperature)
-    payload.timeout = String(f.timeout)
+    if (!isChatRoute) {
+      payload.max_tokens = String(f.max_tokens)
+      payload.temperature = String(f.temperature)
+      payload.timeout = String(f.timeout)
+    }
     if (supportsRouteApiKey && showAdvanced && (f.api_key.trim() || clearApiKey)) {
       payload.api_key = clearApiKey ? '' : f.api_key.trim()
     }
-    api.put(`/models/routes/${routeKey}`, payload).then(onSaved)
+    api.put(`/models/routes/${routeKey}`, payload).then(onSaved).catch(e => setSaveError(e.response?.data?.detail || e.message))
   }
   const fromTimingGate = routeKey === 'private_decision' || routeKey === 'classifier_legacy'
   return (
@@ -2177,6 +2183,9 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
             {providerModels.length > 0 && (
               <select value={f.model} onChange={e => setF({ ...f, model: e.target.value })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1">
                 <option value="">请选择模型</option>
+                {f.model && !hasCurrentModel && (
+                  <option value={f.model}>当前配置：{f.model}（未在该 provider /models 中确认）</option>
+                )}
                 {providerModels.map(m => <option key={m.id} value={m.model}>{m.model}{m.stale ? ' (stale)' : ''}</option>)}
               </select>
             )}
@@ -2188,11 +2197,14 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
             </button>
             {showManual && <input value={f.model} onChange={e => setF({ ...f, model: e.target.value })} placeholder="手动输入模型 ID" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" />}
           </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
-            <div><label className="text-xs text-slate-500">temp</label><input type="number" step="0.1" value={f.temperature} onChange={e => setF({ ...f, temperature: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
-            <div><label className="text-xs text-slate-500">timeout</label><input type="number" value={f.timeout} onChange={e => setF({ ...f, timeout: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
-          </div>
+          {!isChatRoute && (
+            <div className="grid grid-cols-3 gap-3">
+              <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+              <div><label className="text-xs text-slate-500">temp</label><input type="number" step="0.1" value={f.temperature} onChange={e => setF({ ...f, temperature: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+              <div><label className="text-xs text-slate-500">timeout</label><input type="number" value={f.timeout} onChange={e => setF({ ...f, timeout: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+            </div>
+          )}
+          {isChatRoute && <p className="text-xs text-slate-600">reply/fast/smart 只保存 provider 和 model；超时/温度/tokens 由 bridge 运行时控制。</p>}
           <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="text-xs text-slate-500 hover:text-slate-300">
             {showAdvanced ? '收起高级' : '高级覆盖 ▼'}
           </button>
@@ -2211,11 +2223,12 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
                   )}
                 </>
               ) : (
-                <p className="text-xs text-slate-500">reply/fast/smart 当前只在 route 选择供应商和模型；API key 统一在供应商页管理。</p>
+                <p className="text-xs text-slate-500">reply/fast/smart API key 统一在供应商页管理。</p>
               )}
             </div>
           )}
         </div>
+        {saveError && <div className="text-xs text-red-400 mt-2 p-2 bg-red-500/10 rounded-lg">{saveError}</div>}
         <div className="flex gap-2 justify-end mt-4">
           <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">取消</button>
           <button onClick={save} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">保存</button>
