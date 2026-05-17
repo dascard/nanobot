@@ -1999,9 +1999,18 @@ def update_model_provider(
 def get_model_catalog_v2(provider: str = "", q: str = "", limit: int = 0, offset: int = 0,
                           db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """增强版模型目录：支持 provider/q/limit/offset 过滤。"""
-    from clients.classifier_client import build_model_catalog
-    return {"catalog": build_model_catalog(db,
-        provider_filter=provider, query=q, limit=limit, offset=offset)}
+    from clients.classifier_client import build_provider_catalog
+    items = build_provider_catalog(db)
+    if provider:
+        items = [e for e in items if e["provider"] == provider]
+    if q:
+        ql = q.lower()
+        items = [e for e in items if ql in e["model"].lower() or ql in e["provider"]]
+    if offset:
+        items = items[offset:]
+    if limit:
+        items = items[:limit]
+    return {"catalog": items}
 
 
 @router.get("/models/route-references")
@@ -2016,7 +2025,7 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
     """从各 provider 的 /models 端点刷新模型列表，持久化到 SystemSetting。"""
     import urllib.request as _ur
     from datetime import datetime
-    from clients.classifier_client import list_providers, build_model_catalog
+    from clients.classifier_client import list_providers, build_provider_catalog
 
     results = []
     for p in list_providers():
@@ -2067,7 +2076,7 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
                 old_row.value = val
             results.append({"provider": p["id"], "models": old_models, "ok": False, "error": str(e)[:300]})
     db.commit()
-    return {"results": results, "catalog": build_model_catalog(db)}
+    return {"results": results, "catalog": build_provider_catalog(db)}
 
 
 _ALLOWED_TIERS = {"fast", "smart", "reasoning", "unknown"}
