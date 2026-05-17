@@ -272,6 +272,22 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=True, value_type="bool",
         category="model", description="本地 llama.cpp 是否启用",
     ),
+    # ── 本地视觉模型（仅当 IMAGE_SUMMARY_API_URL != CLASSIFIER_API_URL 时才在列表中出现） ──
+    "model.providers.local_vision.base_url": SettingDef(
+        key="model.providers.local_vision.base_url", env_name="IMAGE_SUMMARY_API_URL",
+        default="http://172.17.0.1:9999/v1", value_type="str",
+        category="model", description="本地视觉模型服务地址（独立端点时启用）",
+    ),
+    "model.providers.local_vision.api_key": SettingDef(
+        key="model.providers.local_vision.api_key", env_name="",
+        default="", value_type="str",
+        category="model", description="本地视觉模型 API key", sensitive=True,
+    ),
+    "model.providers.local_vision.enabled": SettingDef(
+        key="model.providers.local_vision.enabled", env_name="",
+        default=True, value_type="bool",
+        category="model", description="本地视觉模型是否启用",
+    ),
     # ── Route provider 关联 ──
     "model.route.timing_gate.provider": SettingDef(
         key="model.route.timing_gate.provider", env_name="",

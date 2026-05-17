@@ -310,6 +310,8 @@ def provider_public(p: dict) -> dict:
         "base_url": p.get("base_url", ""),
         "api_key_configured": bool(p.get("api_key")),
         "enabled": bool(p.get("enabled")),
+        "legacy_aliases": p.get("legacy_aliases", []),
+        "registry_provider": p.get("registry_provider") or None,
     }
 
 
@@ -365,17 +367,19 @@ def resolve_model_route(route_key: str) -> dict:
     from config import (
         LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
     )
-    from core.route_metadata import route_type_for
+    from core.route_metadata import route_type_for, canonical_provider_id
 
     route = _resolve_classifier_route(route_key)
 
     # 确定 provider（使用 canonical 名）
-    provider_id = str(route.get("provider_id") or settings.get(f"model.route.{route_key}.provider") or "")
+    provider_id = canonical_provider_id(
+        str(route.get("provider_id") or settings.get(f"model.route.{route_key}.provider") or "")
+    )
     if not provider_id:
         if route_key in ("reply", "fast", "smart"):
             provider_id = "newapi"
         elif route_key == "sticker_describe":
-            provider_id = "local_llama"  # 默认与 timing_gate 共用同一端点
+            provider_id = "local_llama"
         else:
             provider_id = "local_llama"
 
@@ -428,10 +432,12 @@ def build_model_catalog(db=None, *,
     """构建模型目录：provider::model 唯一键，支持过滤/搜索/分页。"""
     from core.settings_service import settings
     from config import LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
-    from core.route_metadata import route_capability_for
+    from core.route_metadata import route_capability_for, canonical_provider_id
     import json
 
     model_map: dict[str, dict] = {}
+    # 记录 provider_catalog 中已确认存在的 key，用于标记 route 引用是否 verified
+    catalog_verified_keys: set[str] = set()
 
     def _key(provider: str, model: str) -> str:
         return f"{provider}::{model}"
@@ -440,7 +446,6 @@ def build_model_catalog(db=None, *,
         caps = set()
         if "vl" in model_lower or "vision" in model_lower:
             caps.add("vision")
-        # provider_catalog 条目：仅从模型名推断；不再根据 provider 名推断能力
         return caps
 
     # ── 1. 持久化 provider catalog ──
@@ -460,7 +465,8 @@ def build_model_catalog(db=None, *,
                 data = json.loads(row.value or "{}")
             except (json.JSONDecodeError, TypeError):
                 continue
-            provider = row.key.removeprefix("model.catalog.")
+            # canonicalize provider 名，避免旧 local_qwen catalog key 残留
+            provider = canonical_provider_id(row.key.removeprefix("model.catalog."))
             for m in data.get("models", []):
                 k = _key(provider, m)
                 if k not in model_map:
@@ -470,7 +476,9 @@ def build_model_catalog(db=None, *,
                         "used_by": [],
                         "stale": not data.get("last_refresh_ok", True),
                         "source": "provider_catalog",
+                        "verified": True,
                     }
+                    catalog_verified_keys.add(k)
     finally:
         if _close_db:
             db.close()
@@ -487,7 +495,9 @@ def build_model_catalog(db=None, *,
         if k not in model_map:
             model_map[k] = {
                 "id": k, "provider": pid, "model": m,
-                "capabilities": set(), "used_by": [], "source": "route",
+                "capabilities": set(), "used_by": [],
+                "source": "route",
+                "verified": k in catalog_verified_keys,
             }
         model_map[k]["used_by"].append(rk)
         caps = model_map[k]["capabilities"]
@@ -496,6 +506,8 @@ def build_model_catalog(db=None, *,
             caps.add(cap)
 
     for entry in model_map.values():
+        if "verified" not in entry:
+            entry["verified"] = entry.get("source") == "provider_catalog"
         entry["capabilities"] = sorted(entry["capabilities"])
 
     items = sorted(model_map.values(), key=lambda x: x["model"])
