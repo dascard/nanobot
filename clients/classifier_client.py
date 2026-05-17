@@ -295,14 +295,20 @@ def _get_provider_config(provider_id: str) -> dict | None:
     if not alias_key and provider_id == "local_vision":
         alias_key = "vision_qwen"
 
-    def _get_with_fallback(field: str) -> str:
-        val = str(settings.get(f"model.providers.{provider_id}.{field}") or "")
-        if not val and alias_key:
-            val = str(settings.get(f"model.providers.{alias_key}.{field}") or "")
-        return val
+    def _get_with_fallback(field: str):
+        """读取配置字段，canonical key 无值时回退到旧 alias key。
+        返回 settings 原始值（保留 bool/int），未找到时返回 None。"""
+        v = settings.get(f"model.providers.{provider_id}.{field}", None)
+        if v not in (None, ""):
+            return v
+        if alias_key:
+            av = settings.get(f"model.providers.{alias_key}.{field}", None)
+            if av not in (None, ""):
+                return av
+        return None
 
-    base_url = _get_with_fallback("base_url")
-    api_key = _get_with_fallback("api_key")
+    base_url = str(_get_with_fallback("base_url") or "")
+    api_key = str(_get_with_fallback("api_key") or "")
 
     if provider_id == "newapi":
         base_url = base_url or str(NEW_API_BASE_URL or "")
@@ -314,8 +320,10 @@ def _get_provider_config(provider_id: str) -> dict | None:
 
     if not base_url:
         return None
-    enabled = _get_with_fallback("enabled") or "1"
-    registry_provider = _get_with_fallback("registry_provider").strip()
+    enabled = _get_with_fallback("enabled")
+    if enabled is None or enabled == "":
+        enabled = True
+    registry_provider = str(_get_with_fallback("registry_provider") or "").strip()
     return {
         "id": provider_id,
         "base_url": base_url,

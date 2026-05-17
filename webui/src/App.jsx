@@ -2011,7 +2011,9 @@ function ModelCatalogTab({ routes, providers }) {
                   </div>
                 </td>
                 <td className="py-2 px-3 text-xs">
-                  {m.source === 'provider_catalog'
+                  {m.source === 'provider_catalog' && m.used_by?.length > 0
+                    ? <span className="px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400" title="供应商同步且被路由使用">已确认</span>
+                    : m.source === 'provider_catalog'
                     ? <span className="px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400">已同步</span>
                     : m.source === 'route'
                     ? (m.verified
