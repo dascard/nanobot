@@ -224,40 +224,58 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=True, value_type="bool",
         category="model", description="NewAPI 是否启用",
     ),
+    # [DEPRECATED] local_qwen is an alias — use local_llama instead
     "model.providers.local_qwen.base_url": SettingDef(
         key="model.providers.local_qwen.base_url", env_name="CLASSIFIER_API_URL",
         default="http://172.17.0.1:9999/v1", value_type="str",
-        category="model", description="本地 Qwen 服务地址",
+        category="model", description="[DEPRECATED] 本地 Qwen 服务地址——请使用 local_llama",
     ),
     "model.providers.local_qwen.api_key": SettingDef(
         key="model.providers.local_qwen.api_key", env_name="",
         default="", value_type="str",
-        category="model", description="本地 Qwen API key", sensitive=True,
+        category="model", description="[DEPRECATED] 本地 Qwen API key", sensitive=True,
     ),
     "model.providers.local_qwen.enabled": SettingDef(
         key="model.providers.local_qwen.enabled", env_name="",
         default=True, value_type="bool",
-        category="model", description="本地 Qwen 是否启用",
+        category="model", description="[DEPRECATED] 本地 Qwen 是否启用",
     ),
+    # [DEPRECATED] vision_qwen is an alias — use local_vision instead
     "model.providers.vision_qwen.base_url": SettingDef(
         key="model.providers.vision_qwen.base_url", env_name="IMAGE_SUMMARY_API_URL",
         default="http://172.17.0.1:9999/v1", value_type="str",
-        category="model", description="视觉 Qwen 服务地址",
+        category="model", description="[DEPRECATED] 视觉 Qwen 服务地址——请使用 local_vision",
     ),
     "model.providers.vision_qwen.api_key": SettingDef(
         key="model.providers.vision_qwen.api_key", env_name="",
         default="", value_type="str",
-        category="model", description="视觉 Qwen API key", sensitive=True,
+        category="model", description="[DEPRECATED] 视觉 Qwen API key", sensitive=True,
     ),
     "model.providers.vision_qwen.enabled": SettingDef(
         key="model.providers.vision_qwen.enabled", env_name="",
         default=True, value_type="bool",
-        category="model", description="视觉 Qwen 是否启用",
+        category="model", description="[DEPRECATED] 视觉 Qwen 是否启用",
+    ),
+    # ── 本地 llama.cpp 服务（原 local_qwen） ──
+    "model.providers.local_llama.base_url": SettingDef(
+        key="model.providers.local_llama.base_url", env_name="CLASSIFIER_API_URL",
+        default="http://172.17.0.1:9999/v1", value_type="str",
+        category="model", description="本地 llama.cpp 服务地址",
+    ),
+    "model.providers.local_llama.api_key": SettingDef(
+        key="model.providers.local_llama.api_key", env_name="",
+        default="", value_type="str",
+        category="model", description="本地 llama.cpp API key", sensitive=True,
+    ),
+    "model.providers.local_llama.enabled": SettingDef(
+        key="model.providers.local_llama.enabled", env_name="",
+        default=True, value_type="bool",
+        category="model", description="本地 llama.cpp 是否启用",
     ),
     # ── Route provider 关联 ──
     "model.route.timing_gate.provider": SettingDef(
         key="model.route.timing_gate.provider", env_name="",
-        default="local_qwen", value_type="str",
+        default="local_llama", value_type="str",
         category="model", description="TimingGate 使用的供应商",
     ),
     "model.route.private_decision.provider": SettingDef(
@@ -272,8 +290,8 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
     "model.route.sticker_describe.provider": SettingDef(
         key="model.route.sticker_describe.provider", env_name="",
-        default="vision_qwen", value_type="str",
-        category="model", description="图片描述供应商",
+        default="local_llama", value_type="str",
+        category="model", description="图片描述供应商（默认与 timing_gate 共用同一端点）",
     ),
     "model.route.reply.provider": SettingDef(
         key="model.route.reply.provider", env_name="",

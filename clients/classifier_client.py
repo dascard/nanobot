@@ -271,9 +271,13 @@ def _get_provider_config(provider_id: str) -> dict | None:
     """读取 provider 内部配置（含 api_key，仅内部使用）。
 
     对已知 provider 使用 config 常量作为 fallback，避免 settings 空值覆盖 env。
+    旧 provider 名通过 PROVIDER_ALIASES 映射到 canonical 名。
     """
     from core.settings_service import settings
     from config import NEW_API_BASE_URL, NEW_API_KEY, CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
+    from core.route_metadata import canonical_provider_id
+
+    provider_id = canonical_provider_id(provider_id)
 
     base_url = str(settings.get(f"model.providers.{provider_id}.base_url") or "")
     api_key = str(settings.get(f"model.providers.{provider_id}.api_key") or "")
@@ -281,9 +285,9 @@ def _get_provider_config(provider_id: str) -> dict | None:
     if provider_id == "newapi":
         base_url = base_url or str(NEW_API_BASE_URL or "")
         api_key = api_key or str(NEW_API_KEY or "")
-    elif provider_id == "local_qwen":
+    elif provider_id == "local_llama":
         base_url = base_url or str(CLASSIFIER_API_URL or "")
-    elif provider_id == "vision_qwen":
+    elif provider_id == "local_vision":
         base_url = base_url or str(IMAGE_SUMMARY_API_URL or "")
 
     if not base_url:
@@ -310,20 +314,43 @@ def provider_public(p: dict) -> dict:
 
 
 def list_providers() -> list[dict]:
-    """列出所有已配置的 provider。"""
+    """列出所有已配置的 provider（仅返回 canonical 名，跳过 deprecated alias）。"""
     from core.config_registry import SETTING_DEFS
+    from core.route_metadata import is_deprecated_provider, canonical_provider_id, normalize_base_url
+    from config import CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
+
     providers: list[dict] = []
-    seen: set[str] = set()
+    seen_canonical: set[str] = set()
+    deprecated_pids: list[str] = []
     for key in SETTING_DEFS:
         if not key.startswith("model.providers.") or not key.endswith(".base_url"):
             continue
         pid = key.removeprefix("model.providers.").removesuffix(".base_url")
-        if pid in seen:
+        if is_deprecated_provider(pid):
+            deprecated_pids.append(pid)
             continue
-        seen.add(pid)
-        cfg = _get_provider_config(pid)
+        canonical = canonical_provider_id(pid)
+        if canonical in seen_canonical:
+            continue
+        seen_canonical.add(canonical)
+        cfg = _get_provider_config(canonical)
         if cfg:
+            # 附上此 canonical 名对应的旧别名
+            aliases = [old for old, new in PROVIDER_ALIASES.items() if new == canonical]
+            if aliases:
+                cfg["legacy_aliases"] = aliases
             providers.append(cfg)
+
+    # local_vision 仅在 IMAGE_SUMMARY_API_URL != CLASSIFIER_API_URL 时出现
+    normalized_classifier = normalize_base_url(str(CLASSIFIER_API_URL or ""))
+    normalized_vision = normalize_base_url(str(IMAGE_SUMMARY_API_URL or ""))
+    if normalized_vision and normalized_vision != normalized_classifier:
+        if "local_vision" not in seen_canonical:
+            cfg = _get_provider_config("local_vision")
+            if cfg:
+                cfg["legacy_aliases"] = ["vision_qwen"]
+                providers.append(cfg)
+
     return providers
 
 
@@ -338,18 +365,19 @@ def resolve_model_route(route_key: str) -> dict:
     from config import (
         LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
     )
+    from core.route_metadata import route_type_for
 
     route = _resolve_classifier_route(route_key)
 
-    # 确定 provider
+    # 确定 provider（使用 canonical 名）
     provider_id = str(route.get("provider_id") or settings.get(f"model.route.{route_key}.provider") or "")
     if not provider_id:
         if route_key in ("reply", "fast", "smart"):
             provider_id = "newapi"
         elif route_key == "sticker_describe":
-            provider_id = "vision_qwen"
+            provider_id = "local_llama"  # 默认与 timing_gate 共用同一端点
         else:
-            provider_id = "local_qwen"
+            provider_id = "local_llama"
 
     provider = _get_provider_config(provider_id) or {
         "id": provider_id, "base_url": route.get("base_url", ""),
@@ -364,6 +392,7 @@ def resolve_model_route(route_key: str) -> dict:
 
     result = {
         "route_key": route_key,
+        "route_type": route_type_for(route_key),
         "provider_id": provider_id,
         "base_url": route.get("base_url") or provider["base_url"],
         "api_key": route.get("api_key") or provider["api_key"],
@@ -399,6 +428,7 @@ def build_model_catalog(db=None, *,
     """构建模型目录：provider::model 唯一键，支持过滤/搜索/分页。"""
     from core.settings_service import settings
     from config import LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
+    from core.route_metadata import route_capability_for
     import json
 
     model_map: dict[str, dict] = {}
@@ -410,10 +440,7 @@ def build_model_catalog(db=None, *,
         caps = set()
         if "vl" in model_lower or "vision" in model_lower:
             caps.add("vision")
-        if provider == "newapi" and "vl" not in model_lower:
-            caps.add("chat")
-        if provider in ("local_qwen", "vision_qwen") and "vl" not in model_lower:
-            caps.add("classifier")
+        # provider_catalog 条目：仅从模型名推断；不再根据 provider 名推断能力
         return caps
 
     # ── 1. 持久化 provider catalog ──
@@ -464,12 +491,9 @@ def build_model_catalog(db=None, *,
             }
         model_map[k]["used_by"].append(rk)
         caps = model_map[k]["capabilities"]
-        if rk in ("reply", "fast", "smart"):
-            caps.add("chat")
-        elif rk in ("timing_gate", "private_decision", "classifier_legacy"):
-            caps.add("classifier")
-        elif rk == "sticker_describe":
-            caps.add("vision")
+        cap = route_capability_for(rk)
+        if cap:
+            caps.add(cap)
 
     for entry in model_map.values():
         entry["capabilities"] = sorted(entry["capabilities"])

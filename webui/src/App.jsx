@@ -1939,7 +1939,7 @@ function ModelsPage() {
           </button>
         ))}
       </div>
-      {tab === 'catalog' && <ModelCatalogTab routes={status.routes || {}} />}
+      {tab === 'catalog' && <ModelCatalogTab routes={status.routes || {}} providers={status.providers || []} />}
       {tab === 'routes' && <RoutesTab routes={status.routes || {}} providers={status.providers || []} testResult={testResult} onTest={handleTest} onSaved={load} />}
       {tab === 'providers' && <ProvidersTab providers={status.providers || []} onSaved={load} />}
       {tab === 'local' && <LocalComponentsTab components={status.local_components || {}} localResult={localResult} onAction={handleLocal} />}
@@ -1948,7 +1948,7 @@ function ModelsPage() {
 }
 
 // ── Tab 1: 模型列表 ──
-function ModelCatalogTab({ routes }) {
+function ModelCatalogTab({ routes, providers }) {
   const [catalog, setCatalog] = useState([])
   const [catProvider, setCatProvider] = useState('')
   const [catQ, setCatQ] = useState('')
@@ -1973,7 +1973,9 @@ function ModelCatalogTab({ routes }) {
         <input value={catQ} onChange={e => setCatQ(e.target.value)} placeholder="搜索模型..." className="w-48 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
         <select value={catProvider} onChange={e => setCatProvider(e.target.value)} className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
           <option value="">全部供应商</option>
-          <option value="newapi">newapi</option><option value="local_qwen">local_qwen</option><option value="vision_qwen">vision_qwen</option>
+          {(providers || []).map(p => (
+            <option key={p.id} value={p.id}>{p.id}{p.legacy_aliases?.length > 0 ? ` (原 ${p.legacy_aliases.join(',')})` : ''}</option>
+          ))}
         </select>
         <button onClick={doRefresh} disabled={refreshResult?.loading} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium">刷新供应商模型</button>
       </div>
@@ -1992,10 +1994,10 @@ function ModelCatalogTab({ routes }) {
       <Card>
         <table className="w-full text-sm">
           <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-            <th className="py-2 px-3">模型</th><th className="py-2 px-3">供应商</th><th className="py-2 px-3">能力</th><th className="py-2 px-3">被使用</th>
+            <th className="py-2 px-3">模型</th><th className="py-2 px-3">供应商</th><th className="py-2 px-3">能力</th><th className="py-2 px-3">来源</th><th className="py-2 px-3">被使用</th>
           </tr></thead>
           <tbody>
-            {catLoading && <tr><td colSpan={4} className="py-4 text-center text-slate-500">加载中...</td></tr>}
+            {catLoading && <tr><td colSpan={5} className="py-4 text-center text-slate-500">加载中...</td></tr>}
             {catalog.map(m => (
               <tr key={m.id || m.model} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                 <td className="py-2 px-3 font-mono text-slate-200">{m.model}</td>
@@ -2007,6 +2009,13 @@ function ModelCatalogTab({ routes }) {
                       : <span className="px-1.5 py-0.5 rounded text-xs bg-slate-800 text-slate-600">未知</span>}
                     {m.stale && <span className="px-1.5 py-0.5 rounded text-xs bg-red-900/30 text-red-400" title="上次刷新失败">stale</span>}
                   </div>
+                </td>
+                <td className="py-2 px-3 text-xs">
+                  {m.source === 'provider_catalog'
+                    ? <span className="px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400">供应商同步</span>
+                    : m.source === 'route'
+                    ? <span className="px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-400" title="未在供应商模型列表中确认">路由引用</span>
+                    : <span className="text-slate-600">{m.source || '-'}</span>}
                 </td>
                 <td className="py-2 px-3 text-slate-400 text-xs">{m.used_by.join(', ') || '-'}</td>
               </tr>
@@ -2032,7 +2041,7 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
           <Card key={key} className="p-4">
             <div className="flex items-center justify-between mb-2">
               <div>
-                <h3 className="font-medium text-sm">{r.label} <span className="text-xs text-slate-500 ml-1">{key}</span></h3>
+                <h3 className="font-medium text-sm">{r.label} <span className="text-xs text-slate-500 ml-1">{key}</span>{r.route_type && <span className={`ml-1 px-1 py-0.5 rounded text-[10px] ${r.route_type === 'controller' ? 'bg-blue-900/30 text-blue-400' : r.route_type === 'classifier' ? 'bg-purple-900/30 text-purple-400' : 'bg-cyan-900/30 text-cyan-400'}`}>{r.route_type}</span>}</h3>
                 {r.inherited_from && <span className="text-xs text-amber-400">继承自 {r.inherited_from}{r.overridden_fields && Object.keys(r.overridden_fields).length > 0 ? ` (覆盖: ${Object.keys(r.overridden_fields).join(', ')})` : ''}</span>}
                 {r.note && <span className="text-xs text-slate-600 block">{r.note}</span>}
               </div>

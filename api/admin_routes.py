@@ -1747,24 +1747,28 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     # ── Providers (脱敏) ──
     from clients.classifier_client import provider_public
     raw_providers = list_providers()
+    # 确保内置 provider 始终存在（即使无 DB 配置时通过 env fallback 出现）
     if not any(p["id"] == "newapi" for p in raw_providers):
         raw_providers.append({
             "id": "newapi", "base_url": str(NEW_API_BASE_URL or ""),
             "api_key": str(NEW_API_KEY or ""), "enabled": bool(NEW_API_BASE_URL),
         })
+    if not any(p["id"] in ("local_llama", "local_qwen") for p in raw_providers):
+        raw_providers.append({
+            "id": "local_llama", "base_url": str(CLASSIFIER_API_URL or ""),
+            "api_key": "", "enabled": bool(CLASSIFIER_API_URL),
+        })
     providers = [provider_public(p) for p in raw_providers]
 
     # ── Routes ──
-    route_labels = {
-        "reply": "主回复模型", "fast": "快速模型", "smart": "智能模型",
-        "timing_gate": "TimingGate 判定", "private_decision": "私聊决策",
-        "classifier_legacy": "旧回复分类器", "sticker_describe": "图片/表情包描述",
-    }
+    from core.route_metadata import ROUTE_METADATA, route_label_for
     routes = {}
-    for rk, label in route_labels.items():
+    for rk in ROUTE_METADATA:
         r = resolve_model_route(rk)
         entry = {
-            "route_key": rk, "label": label,
+            "route_key": rk,
+            "label": route_label_for(rk),
+            "route_type": r.get("route_type", "unknown"),
             "provider_id": r["provider_id"],
             "model": r["model"],
             "api_key_configured": r["api_key_configured"],
@@ -1934,7 +1938,7 @@ def update_model_provider(
     _auth=Depends(verify_admin),
 ):
     """更新供应商配置——写入 SystemSetting。"""
-    _ALLOWED_PROVIDERS = {"newapi", "local_qwen", "vision_qwen"}
+    _ALLOWED_PROVIDERS = {"newapi", "local_llama", "local_vision", "local_qwen", "vision_qwen"}
     if provider_id not in _ALLOWED_PROVIDERS:
         raise HTTPException(404, f"unknown provider: {provider_id}")
     from core.settings_service import settings
