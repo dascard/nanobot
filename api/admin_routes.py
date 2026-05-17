@@ -2299,9 +2299,8 @@ def edit_model_route(
         "temperature": body.temperature,
         "max_tokens": body.max_tokens,
     }
-    # chat routes 只允许改 model
     if not is_classifier:
-        allowed = {"model", "provider"}
+        allowed = {"model", "provider", "timeout", "temperature", "max_tokens"}
     else:
         allowed = {"provider", "model", "api_key", "timeout", "temperature", "max_tokens"}
 
@@ -2313,6 +2312,8 @@ def edit_model_route(
                 key = prefix
             elif field == "provider":
                 key = f"model.route.{db_key}.provider"
+            elif field in {"timeout", "temperature", "max_tokens"}:
+                key = f"model.route.{db_key}.{field}"
             else:
                 continue
         else:
@@ -2320,12 +2321,18 @@ def edit_model_route(
         row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
         defn = SETTING_DEFS.get(key)
         desc = defn.description if defn else f"model route {route_key}.{field}"
+        if defn and defn.value_type == "int":
+            stored_value = str(int(value))
+        elif defn and defn.value_type == "float":
+            stored_value = str(float(value))
+        else:
+            stored_value = str(value)
         if not row:
-            row = SystemSetting(key=key, value=str(value), description=desc)
+            row = SystemSetting(key=key, value=stored_value, description=desc)
             db.add(row)
         else:
-            row.value = str(value)
-        written[key] = str(value)
+            row.value = stored_value
+        written[key] = stored_value
     db.commit()
     _audit(db, "edit_model_route", "route", route_key, _redact(written), ip_address=_client_ip(request))
     settings.invalidate()
@@ -2472,6 +2479,9 @@ def get_resolved_route(route_key: str, _auth=Depends(verify_admin)):
         "model": route.get("model", ""),
         "api_key_configured": bool(route.get("api_key")),
         "api_key_source": route.get("api_key_source", ""),
+        "timeout": route.get("timeout", 15),
+        "temperature": route.get("temperature", 0),
+        "max_tokens": route.get("max_tokens", 30),
         "source": route.get("source", ""),
         "provider_enabled": route.get("provider_enabled", True),
         "inherited_from": route.get("inherited_from", None),

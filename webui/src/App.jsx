@@ -2129,8 +2129,8 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
   const supportsRouteApiKey = !isChatRoute
   const [f, setF] = useState({
     provider_id: route.provider_id || '', model: route.model || '',
-    max_tokens: route.max_tokens || 30, temperature: route.temperature || 0,
-    timeout: route.timeout || 15, api_key: '',
+    max_tokens: route.max_tokens ?? 30, temperature: route.temperature ?? 0,
+    timeout: route.timeout ?? 15, api_key: '',
   })
   const [clearApiKey, setClearApiKey] = useState(false)
   const [catalog, setCatalog] = useState([])
@@ -2153,11 +2153,9 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
     const payload = {}
     if (f.model && f.model.trim()) payload.model = f.model.trim()
     if (f.provider_id) payload.provider = f.provider_id
-    if (!isChatRoute) {
-      payload.max_tokens = String(f.max_tokens)
-      payload.temperature = String(f.temperature)
-      payload.timeout = String(f.timeout)
-    }
+    payload.max_tokens = String(f.max_tokens)
+    payload.temperature = String(f.temperature)
+    payload.timeout = String(f.timeout)
     if (supportsRouteApiKey && showAdvanced && (f.api_key.trim() || clearApiKey)) {
       payload.api_key = clearApiKey ? '' : f.api_key.trim()
     }
@@ -2197,14 +2195,12 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
             </button>
             {showManual && <input value={f.model} onChange={e => setF({ ...f, model: e.target.value })} placeholder="手动输入模型 ID" className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" />}
           </div>
-          {!isChatRoute && (
-            <div className="grid grid-cols-3 gap-3">
-              <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
-              <div><label className="text-xs text-slate-500">temp</label><input type="number" step="0.1" value={f.temperature} onChange={e => setF({ ...f, temperature: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
-              <div><label className="text-xs text-slate-500">timeout</label><input type="number" value={f.timeout} onChange={e => setF({ ...f, timeout: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
-            </div>
-          )}
-          {isChatRoute && <p className="text-xs text-slate-600">reply/fast/smart 只保存 provider 和 model；超时/温度/tokens 由 bridge 运行时控制。</p>}
+          <div className="grid grid-cols-3 gap-3">
+            <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" min="0" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+            <div><label className="text-xs text-slate-500">temp</label><input type="number" step="0.1" min="0" max="2" value={f.temperature} onChange={e => setF({ ...f, temperature: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+            <div><label className="text-xs text-slate-500">timeout</label><input type="number" min="1" value={f.timeout} onChange={e => setF({ ...f, timeout: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+          </div>
+          {isChatRoute && <p className="text-xs text-slate-600">reply 当前会在每次主回复前同步 provider/model/timeout/temperature/max_tokens；fast/smart 仍为预留配置。</p>}
           <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="text-xs text-slate-500 hover:text-slate-300">
             {showAdvanced ? '收起高级' : '高级覆盖 ▼'}
           </button>

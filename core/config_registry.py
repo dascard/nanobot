@@ -329,15 +329,60 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="newapi", value_type="str",
         category="model", description="主回复供应商",
     ),
+    "model.route.reply.timeout": SettingDef(
+        key="model.route.reply.timeout", env_name="",
+        default=120, value_type="int",
+        category="model", description="主回复请求超时(秒)", min_value=3, max_value=300,
+    ),
+    "model.route.reply.temperature": SettingDef(
+        key="model.route.reply.temperature", env_name="",
+        default=0.7, value_type="float",
+        category="model", description="主回复温度", min_value=0, max_value=2,
+    ),
+    "model.route.reply.max_tokens": SettingDef(
+        key="model.route.reply.max_tokens", env_name="",
+        default=0, value_type="int",
+        category="model", description="主回复最大输出 tokens（0=由API决定）", min_value=0, max_value=200000,
+    ),
     "model.route.fast.provider": SettingDef(
         key="model.route.fast.provider", env_name="",
         default="newapi", value_type="str",
         category="model", description="快速模型供应商",
     ),
+    "model.route.fast.timeout": SettingDef(
+        key="model.route.fast.timeout", env_name="",
+        default=120, value_type="int",
+        category="model", description="快速模型请求超时(秒)", min_value=3, max_value=300,
+    ),
+    "model.route.fast.temperature": SettingDef(
+        key="model.route.fast.temperature", env_name="",
+        default=0.7, value_type="float",
+        category="model", description="快速模型温度", min_value=0, max_value=2,
+    ),
+    "model.route.fast.max_tokens": SettingDef(
+        key="model.route.fast.max_tokens", env_name="",
+        default=0, value_type="int",
+        category="model", description="快速模型最大输出 tokens（0=由API决定）", min_value=0, max_value=200000,
+    ),
     "model.route.smart.provider": SettingDef(
         key="model.route.smart.provider", env_name="",
         default="newapi", value_type="str",
         category="model", description="智能模型供应商",
+    ),
+    "model.route.smart.timeout": SettingDef(
+        key="model.route.smart.timeout", env_name="",
+        default=120, value_type="int",
+        category="model", description="智能模型请求超时(秒)", min_value=3, max_value=300,
+    ),
+    "model.route.smart.temperature": SettingDef(
+        key="model.route.smart.temperature", env_name="",
+        default=0.7, value_type="float",
+        category="model", description="智能模型温度", min_value=0, max_value=2,
+    ),
+    "model.route.smart.max_tokens": SettingDef(
+        key="model.route.smart.max_tokens", env_name="",
+        default=0, value_type="int",
+        category="model", description="智能模型最大输出 tokens（0=由API决定）", min_value=0, max_value=200000,
     ),
     "new_api.timeout": SettingDef(
         key="new_api.timeout", env_name="NEW_API_TIMEOUT",

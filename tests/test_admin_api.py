@@ -620,6 +620,53 @@ class TestModelHealthCheck:
 
 
 class TestModelRouteV2:
+    def test_reply_route_params_update_and_read_back(self, client, auth_header, monkeypatch):
+        from core.settings_service import settings
+
+        def test_session_factory():
+            gen = app.dependency_overrides[get_db]()
+            db = next(gen)
+            db._test_generator = gen
+            return db
+
+        monkeypatch.setattr(settings, "_session_factory", test_session_factory)
+        settings.invalidate()
+
+        r = client.put(
+            "/api/v1/admin/models/routes/reply",
+            json={
+                "provider": "newapi",
+                "model": "param-test-model",
+                "timeout": 88,
+                "temperature": 0.2,
+                "max_tokens": 1234,
+            },
+            headers=auth_header,
+        )
+
+        assert r.status_code == 200, r.text
+        settings.invalidate()
+        status = client.get("/api/v1/admin/models/status", headers=auth_header)
+        assert status.status_code == 200, status.text
+        reply = status.json()["routes"]["reply"]
+        assert reply["model"] == "param-test-model"
+        assert reply["timeout"] == 88
+        assert reply["temperature"] == 0.2
+        assert reply["max_tokens"] == 1234
+
+        r = client.put(
+            "/api/v1/admin/models/routes/reply",
+            json={"max_tokens": 0},
+            headers=auth_header,
+        )
+
+        assert r.status_code == 200, r.text
+        settings.invalidate()
+        status = client.get("/api/v1/admin/models/status", headers=auth_header)
+        assert status.status_code == 200, status.text
+        reply = status.json()["routes"]["reply"]
+        assert reply["max_tokens"] == 0
+
     def test_sticker_describe_vision_test_sends_multimodal_payload(self, client, auth_header, monkeypatch):
         captured = {}
 

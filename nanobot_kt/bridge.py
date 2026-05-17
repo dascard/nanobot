@@ -798,13 +798,22 @@ class NanobotBridge:
             _route_api_key = str(_reply_route.get("api_key", "") or "")
             _route_provider_id = str(_reply_route.get("provider_id", "") or "")
             _route_registry_provider = _registry_provider_for_route(_route_provider_id)
+            _route_timeout = float(_reply_route.get("timeout") or 120.0)
+            _route_temperature = _reply_route.get("temperature")
+            _route_max_tokens_raw = _reply_route.get("max_tokens")
+            _route_max_tokens = int(_route_max_tokens_raw) if _route_max_tokens_raw else None
+            if _route_max_tokens is not None and _route_max_tokens <= 0:
+                _route_max_tokens = None
             _client_base_url = _route_base_url or NEW_API_BASE_URL
             _client_api_key = _route_api_key or NEW_API_KEY
             logger.info(
-                "[Model Router] route provider=%s registry_provider=%s base_url=%s",
+                "[Model Router] route provider=%s registry_provider=%s base_url=%s timeout=%s temperature=%s max_tokens=%s",
                 _route_provider_id,
                 _route_registry_provider,
                 _client_base_url[:80] if _client_base_url else "(empty)",
+                _route_timeout,
+                _route_temperature,
+                _route_max_tokens,
             )
 
             try:
@@ -930,26 +939,34 @@ class NanobotBridge:
                     self._agent.controller.llm.config.model = target_model
                     # 同步 route provider 的 base_url / api_key 到 controller
                     llm = self._agent.controller.llm
+                    if hasattr(llm.config, 'temperature') and _route_temperature is not None:
+                        llm.config.temperature = float(_route_temperature)
+                    if hasattr(llm.config, 'max_tokens'):
+                        llm.config.max_tokens = _route_max_tokens
                     _target_base_url = str(_client_base_url or "").rstrip("/")
                     _target_api_key = str(_client_api_key or "")
                     _current_base_url = str(getattr(llm, 'base_url', '') or "").rstrip("/")
                     _current_api_key = str(getattr(llm, '_api_key', '') or "")
+                    _current_timeout = float(getattr(llm, '_timeout', 120.0) or 120.0)
                     _base_url_changed = bool(_target_base_url and _current_base_url != _target_base_url)
                     _api_key_changed = _current_api_key != _target_api_key
-                    if _base_url_changed or _api_key_changed:
+                    _timeout_changed = _current_timeout != _route_timeout
+                    if _base_url_changed or _api_key_changed or _timeout_changed:
                         llm.base_url = _target_base_url
                         llm._api_key = _target_api_key
+                        llm._timeout = _route_timeout
                         llm._client = AsyncOpenAI(
                             api_key=_target_api_key,
                             base_url=_target_base_url,
-                            timeout=getattr(llm, '_timeout', 120.0),
+                            timeout=_route_timeout,
                             max_retries=getattr(llm, '_max_retries', 3),
                             default_headers=getattr(llm, '_extra_headers', {}),
                         )
                         logger.info(
-                            "[Model Router] Switched provider base_url=%s api_key_changed=%s",
+                            "[Model Router] Switched provider base_url=%s api_key_changed=%s timeout_changed=%s",
                             _target_base_url[:80],
                             _api_key_changed,
+                            _timeout_changed,
                         )
                     logger.info(
                         f"[Model Router] Attempt {attempt+1}: {target_model} "
