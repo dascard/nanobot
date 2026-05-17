@@ -444,22 +444,27 @@ def scan_near_duplicates(db: Session, limit: int = 100) -> dict:
     )
 
     created = 0
+    existing_pairs = {
+        (min(a_id, b_id), max(a_id, b_id))
+        for a_id, b_id in db.query(
+            StickerDuplicateCandidate.sticker_a_id,
+            StickerDuplicateCandidate.sticker_b_id,
+        ).all()
+    }
     for row in rows:
         nears = find_near_duplicates(db, row.id)
         for n in nears:
-            existing = db.query(StickerDuplicateCandidate).filter(
-                ((StickerDuplicateCandidate.sticker_a_id == row.id) & (StickerDuplicateCandidate.sticker_b_id == n["sticker_b_id"])) |
-                ((StickerDuplicateCandidate.sticker_a_id == n["sticker_b_id"]) & (StickerDuplicateCandidate.sticker_b_id == row.id))
-            ).first()
-            if existing:
+            pair = (min(row.id, n["sticker_b_id"]), max(row.id, n["sticker_b_id"]))
+            if pair in existing_pairs:
                 continue
             db.add(StickerDuplicateCandidate(
-                sticker_a_id=min(row.id, n["sticker_b_id"]),
-                sticker_b_id=max(row.id, n["sticker_b_id"]),
+                sticker_a_id=pair[0],
+                sticker_b_id=pair[1],
                 phash_dist=n["phash_dist"],
                 dhash_dist=n["dhash_dist"],
                 content_hash=row.content_hash or "",
             ))
+            existing_pairs.add(pair)
             created += 1
     db.commit()
     return {"scanned": len(rows), "candidates_created": created}

@@ -82,6 +82,46 @@ def test_search_stickers_global_pool_returns_all_groups(db_session):
     assert all(item["id"] != group_item["id"] for item in filtered)
 
 
+def test_scan_near_duplicates_dedupes_reverse_pair_without_autoflush(db_session):
+    from core.database import StickerDuplicateCandidate
+    from core.sticker_preview import scan_near_duplicates
+
+    db_session.add_all([
+        StickerMemory(
+            chat_stream_id="qq:123:group",
+            sticker_hash="near-a",
+            file_ref="https://example.com/near-a.png",
+            status="active",
+            dedupe_status="unique",
+            content_hash="hash-a",
+            phash="0000000000000000",
+            dhash="0000000000000000",
+        ),
+        StickerMemory(
+            chat_stream_id="qq:123:group",
+            sticker_hash="near-b",
+            file_ref="https://example.com/near-b.png",
+            status="active",
+            dedupe_status="unique",
+            content_hash="hash-b",
+            phash="0000000000000000",
+            dhash="0000000000000000",
+        ),
+    ])
+    db_session.commit()
+
+    result = scan_near_duplicates(db_session, limit=10)
+
+    assert result["candidates_created"] == 1
+    rows = db_session.query(StickerDuplicateCandidate).all()
+    assert len(rows) == 1
+
+    result = scan_near_duplicates(db_session, limit=10)
+
+    assert result["candidates_created"] == 0
+    assert db_session.query(StickerDuplicateCandidate).count() == 1
+
+
 def test_record_sticker_use_updates_counter_and_last_used(db_session):
     item = register_sticker(
         db_session,
