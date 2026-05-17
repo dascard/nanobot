@@ -763,8 +763,28 @@ class NanobotBridge:
             route_client = None
             meta = metadata or {}
             raw_query = str(meta.get("raw_query", query)).strip() or query
+
+            # 从 WebUI route 读取 provider 配置，让 route provider 控制实际 API 调用
+            from clients.classifier_client import ensure_model_route_enabled, resolve_model_route
+            _reply_route = resolve_model_route("reply")
             try:
-                route_client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+                ensure_model_route_enabled("reply", _reply_route)
+            except RuntimeError as e:
+                logger.error("[Model Router] reply route disabled: %s", e)
+                self._restore_saved_tools()
+                return f"[系统内部错误] {e}"
+            _route_base_url = str(_reply_route.get("base_url", "") or "").rstrip("/")
+            _route_api_key = str(_reply_route.get("api_key", "") or "")
+            _route_provider_id = str(_reply_route.get("provider_id", "") or "")
+            _client_base_url = _route_base_url or NEW_API_BASE_URL
+            _client_api_key = _route_api_key or NEW_API_KEY
+            logger.info(
+                "[Model Router] route provider=%s base_url=%s",
+                _route_provider_id, _client_base_url[:80] if _client_base_url else "(empty)",
+            )
+
+            try:
+                route_client = NewAPIClient(api_key=_client_api_key, base_url=_client_base_url)
                 existing = registry.get_models_by_provider("new-api")
                 if not existing:
                     logger.info("[Model Router] Registry empty, forcing model sync...")
@@ -876,10 +896,27 @@ class NanobotBridge:
                     logger.warning(f"[Model Router] No more candidates after {attempt} attempts")
                     break
 
-                # Update KT agent's LLM model
+                # Update KT agent's LLM model + provider base_url/api_key
                 if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
                     old_model = self._agent.controller.llm.config.model
                     self._agent.controller.llm.config.model = target_model
+                    # 同步 route provider 的 base_url / api_key 到 controller
+                    llm = self._agent.controller.llm
+                    if _route_base_url and getattr(llm, 'base_url', '') != _route_base_url:
+                        llm.base_url = _route_base_url
+                        llm._api_key = _route_api_key
+                        from openai import AsyncOpenAI
+                        llm._client = AsyncOpenAI(
+                            api_key=_route_api_key,
+                            base_url=_route_base_url,
+                            timeout=getattr(llm, '_timeout', 120.0),
+                            max_retries=getattr(llm, '_max_retries', 3),
+                            default_headers=getattr(llm, '_extra_headers', {}),
+                        )
+                        logger.info(
+                            "[Model Router] Switched provider base_url=%s",
+                            _route_base_url[:80],
+                        )
                     logger.info(
                         f"[Model Router] Attempt {attempt+1}: {target_model} "
                         f"(intel={candidate.get('intelligence')}, "

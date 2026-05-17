@@ -1768,6 +1768,8 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
             "provider_id": r["provider_id"],
             "model": r["model"],
             "api_key_configured": r["api_key_configured"],
+            "route_api_key_configured": r.get("route_api_key_configured", False),
+            "provider_enabled": r.get("provider_enabled", True),
             "timeout": r["timeout"], "temperature": r["temperature"],
             "max_tokens": r["max_tokens"],
             "source": r.get("source", "provider"),
@@ -1989,6 +1991,9 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
     for p in list_providers():
         base_url = p["base_url"].rstrip("/")
         if not base_url:
+            continue
+        if p.get("enabled") is False:
+            results.append({"provider": p["id"], "models": [], "ok": False, "error": "provider disabled"})
             continue
         headers = {"Content-Type": "application/json"}
         if p.get("api_key"):
@@ -2300,20 +2305,28 @@ def edit_model_route(
     return resp
 
 
+_TINY_TEST_PNG = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
+
+
 @router.post("/models/routes/{route_key}/test")
-async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
+async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(verify_admin)):
     """测试某个模型路由的连通性。"""
     import time, asyncio
-    from core.settings_service import settings
-    from clients.classifier_client import call_model_route
+    from clients.classifier_client import call_model_route, ensure_model_route_enabled, resolve_model_route
 
     t0 = time.time()
     route_key = _ROUTE_ALIAS.get(route_key, route_key)
+    route = resolve_model_route(route_key)
+    try:
+        ensure_model_route_enabled(route_key, route)
+    except RuntimeError as e:
+        return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
 
     if route_key in _CHAT_ROUTES:
         from clients.new_api_client import NewAPIClient
-        from clients.classifier_client import resolve_model_route
-        route = resolve_model_route(route_key)
         model = route.get("model", "") or route_key
         client = NewAPIClient(api_key=route["api_key"], base_url=route["base_url"])
         try:
@@ -2324,26 +2337,54 @@ async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
             return {
                 "ok": True, "route_key": route_key, "model": model,
                 "provider": route.get("provider_id", ""),
+                "base_url": route.get("base_url", ""),
                 "latency_ms": int((time.time() - t0) * 1000),
                 "raw_output": str(result)[:300],
             }
         except Exception as e:
             return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
     elif route_key == "sticker_describe":
-        # vision route: 仅连通性测试（不是 TimingGate 分类器）
+        # vision route: ping 为文本连通性；vision 会真实发送 OpenAI-compatible 多模态 payload。
         try:
-            raw = await asyncio.to_thread(
-                call_model_route,
-                route_key=route_key,
-                user_message="测试连通性",
-                system_prompt="你是一个视觉描述模型。收到图片时输出JSON描述。此消息仅测试连通性，回复 ok。",
-                max_tokens=20,
-            )
+            if mode == "vision":
+                messages = [
+                    {"role": "system", "content": "你是视觉连通性测试模型。只回复 ok。"},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "请确认你收到了这张 1x1 测试图片，只回复 ok。"},
+                            {"type": "image_url", "image_url": {"url": _TINY_TEST_PNG}},
+                        ],
+                    },
+                ]
+                raw = await asyncio.to_thread(
+                    call_model_route,
+                    route_key=route_key,
+                    messages=messages,
+                    max_tokens=20,
+                    temperature=0,
+                )
+                vision_payload_ok = True
+                note = "真实视觉 payload 连通性测试"
+            else:
+                raw = await asyncio.to_thread(
+                    call_model_route,
+                    route_key=route_key,
+                    user_message="测试连通性",
+                    system_prompt="你是一个视觉描述模型。收到图片时输出JSON描述。此消息仅测试连通性，回复 ok。",
+                    max_tokens=20,
+                )
+                vision_payload_ok = False
+                note = "仅文本连通性测试，非完整视觉描述测试"
             return {
                 "ok": True, "route_key": route_key,
+                "provider": route.get("provider_id", ""),
+                "base_url": route.get("base_url", ""),
+                "model": route.get("model", ""),
                 "latency_ms": int((time.time() - t0) * 1000),
                 "raw_output": raw[:200],
-                "note": "仅连通性测试，非完整视觉描述测试",
+                "vision_payload_ok": vision_payload_ok,
+                "note": note,
             }
         except Exception as e:
             return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
@@ -2358,6 +2399,9 @@ async def test_model_route(route_key: str, _auth=Depends(verify_admin)):
             )
             return {
                 "ok": True, "route_key": route_key,
+                "provider": route.get("provider_id", ""),
+                "base_url": route.get("base_url", ""),
+                "model": route.get("model", ""),
                 "latency_ms": int((time.time() - t0) * 1000),
                 "raw_output": raw[:500],
             }
@@ -2374,21 +2418,25 @@ def list_available_models(route_key: str = "", base_url_override: str = "",
 
     route_key = _ROUTE_ALIAS.get(route_key, route_key)
 
-    if route_key in _CHAT_ROUTES:
-        from clients.classifier_client import resolve_model_route
-        route = resolve_model_route(route_key)
-        base_url = (base_url_override or str(route.get("base_url", ""))).rstrip("/")
-        api_key = str(route.get("api_key", "") or "")
-    elif base_url_override:
-        from clients.classifier_client import _resolve_classifier_route
-        route = _resolve_classifier_route(route_key)
-        base_url = base_url_override.rstrip("/")
-        api_key = str(route.get("api_key", ""))
+    from clients.classifier_client import resolve_model_route, _resolve_classifier_route
+    effective_route_key = route_key or "timing_gate"
+    if effective_route_key in _CHAT_ROUTES or effective_route_key in _CLASSIFIER_ROUTE_KEYS:
+        route = resolve_model_route(effective_route_key)
     else:
-        from clients.classifier_client import _resolve_classifier_route
-        route = _resolve_classifier_route(route_key)
-        base_url = str(route.get("base_url", "")).rstrip("/")
-        api_key = str(route.get("api_key", ""))
+        route = _resolve_classifier_route(effective_route_key)
+
+    provider_id = str(route.get("provider_id", "") or "")
+    if provider_id and route.get("provider_enabled") is False:
+        return {"models": [], "error": f"provider disabled: {provider_id}", "source": "provider_disabled"}
+
+    route_base_url = str(route.get("base_url", "")).rstrip("/")
+    api_key = str(route.get("api_key", "") or "")
+    if base_url_override:
+        base_url = base_url_override.rstrip("/")
+        if base_url != route_base_url:
+            api_key = ""
+    else:
+        base_url = route_base_url
 
     if not base_url:
         return {"models": [], "error": "no base_url configured", "source": "none"}

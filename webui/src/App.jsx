@@ -1911,9 +1911,13 @@ function ModelsPage() {
   const load = () => api.get('/models/status').then(r => setStatus(r.data))
   useEffect(() => { load() }, [])
 
-  const handleTest = async (key) => {
-    setTestResult(p => ({ ...p, [key]: { loading: true } }))
-    try { const r = await api.post(`/models/routes/${key}/test`); setTestResult(p => ({ ...p, [key]: r.data })) }
+  const handleTest = async (key, mode = 'ping') => {
+    setTestResult(p => ({ ...p, [key]: { loading: true, mode } }))
+    try {
+      const config = mode === 'vision' ? { params: { mode } } : undefined
+      const r = await api.post(`/models/routes/${key}/test`, null, config)
+      setTestResult(p => ({ ...p, [key]: r.data }))
+    }
     catch (e) { setTestResult(p => ({ ...p, [key]: { ok: false, error: e.message } })) }
   }
   const handleLocal = async (comp, action) => {
@@ -2020,7 +2024,8 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
   const routeList = Object.entries(routes)
   return (
     <div>
-      <p className="text-slate-500 text-sm mb-3">每个 route 选择一个模型和供应商。base_url/api_key 在「供应商」Tab 管理。</p>
+      <p className="text-slate-500 text-sm mb-2">每个 route 选择一个模型和供应商。base_url/API key 默认在「供应商」Tab 管理；route API key 只作为高级覆盖。</p>
+      <p className="text-amber-400/80 text-xs mb-3">主回复 controller 初始化仍来自 config.yaml/env；桥接层会在每次回复前同步 reply route 的 provider/base_url/model，其他 controller 初始化参数变更仍需重启或重建 bridge。</p>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {routeList.map(([key, r]) => (
           <Card key={key} className="p-4">
@@ -2033,17 +2038,20 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
               <div className="flex gap-1">
                 <button onClick={() => setEditRoute({ key, ...r })} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">编辑</button>
                 <button onClick={() => onTest(key)} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 rounded text-xs">测试</button>
+                {key === 'sticker_describe' && <button onClick={() => onTest(key, 'vision')} className="px-2 py-1 bg-cyan-700/50 hover:bg-cyan-700 rounded text-xs">视觉测试</button>}
               </div>
             </div>
             <div className="space-y-0.5 text-xs text-slate-400">
               <div>模型: <span className="text-slate-200">{r.model}</span></div>
-              <div>供应商: <span className="text-slate-500">{r.provider_id}</span></div>
+              <div>供应商: <span className="text-slate-500">{r.provider_id}</span>{r.provider_enabled === false && <span className="text-red-400 ml-1">已禁用</span>}</div>
+              <div>API key: {r.route_api_key_configured ? <span className="text-amber-400">route 覆盖</span> : <span className="text-slate-600">继承供应商</span>}</div>
               <div>max_tokens: {r.max_tokens} | timeout: {r.timeout}s | temp: {r.temperature}</div>
               {r.source && <div className="text-slate-600">source: {r.source}</div>}
             </div>
             {testResult[key] && !testResult[key].loading && (
               <div className={`mt-2 p-2 rounded-lg text-xs ${testResult[key].ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
-                {testResult[key].ok ? `✅ ${testResult[key].latency_ms}ms` : `❌ ${testResult[key].error}`}
+                {testResult[key].ok ? `✅ ${testResult[key].latency_ms}ms${testResult[key].vision_payload_ok ? ' | vision payload OK' : ''}` : `❌ ${testResult[key].error}`}
+                {testResult[key].note && <div className="text-slate-400 mt-1">{testResult[key].note}</div>}
               </div>
             )}
           </Card>
@@ -2057,11 +2065,14 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
 }
 
 function RouteEditModalV2({ route, providers, onClose, onSaved }) {
+  const routeKey = route.route_key || route.key
+  const supportsRouteApiKey = !['reply', 'fast', 'smart'].includes(routeKey)
   const [f, setF] = useState({
     provider_id: route.provider_id || '', model: route.model || '',
     max_tokens: route.max_tokens || 30, temperature: route.temperature || 0,
-    timeout: route.timeout || 15,
+    timeout: route.timeout || 15, api_key: '',
   })
+  const [clearApiKey, setClearApiKey] = useState(false)
   const [catalog, setCatalog] = useState([])
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [modelSearch, setModelSearch] = useState('')
@@ -2082,13 +2093,16 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
     payload.max_tokens = String(f.max_tokens)
     payload.temperature = String(f.temperature)
     payload.timeout = String(f.timeout)
-    api.put(`/models/routes/${route.route_key || route.key}`, payload).then(onSaved)
+    if (supportsRouteApiKey && showAdvanced && (f.api_key.trim() || clearApiKey)) {
+      payload.api_key = clearApiKey ? '' : f.api_key.trim()
+    }
+    api.put(`/models/routes/${routeKey}`, payload).then(onSaved)
   }
-  const fromTimingGate = route.route_key === 'private_decision' || route.route_key === 'classifier_legacy'
+  const fromTimingGate = routeKey === 'private_decision' || routeKey === 'classifier_legacy'
   return (
     <Modal onClose={onClose}>
       <div className="p-6 max-w-md">
-        <h2 className="text-lg font-bold mb-3">编辑 {route.label} ({route.route_key || route.key})</h2>
+        <h2 className="text-lg font-bold mb-3">编辑 {route.label} ({routeKey})</h2>
         {fromTimingGate && <p className="text-xs text-amber-400 mb-3">继承自 timing_gate。仅需配置需要覆盖的字段。</p>}
         <div className="space-y-3">
           <div>
@@ -2125,9 +2139,21 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
           </button>
           {showAdvanced && (
             <div className="p-3 bg-slate-900 rounded-lg space-y-2 text-sm">
-              <p className="text-xs text-slate-500">这些通常不需要改，除非此 route 使用独立供应商。</p>
-              <input placeholder="覆盖 base_url（可选）" className="w-full p-2 rounded-lg bg-slate-800 border border-slate-700 text-xs" />
-              <input type="password" placeholder="覆盖 api_key（可选）" className="w-full p-2 rounded-lg bg-slate-800 border border-slate-700 text-xs" />
+              {supportsRouteApiKey ? (
+                <>
+                  <p className="text-xs text-slate-500">Route API key 是高级覆盖；为空时继承供应商 API key。</p>
+                  {route.route_api_key_configured && <p className="text-xs text-amber-400">当前已配置 route 级 API key 覆盖。</p>}
+                  <input type="password" value={f.api_key} onChange={e => { setClearApiKey(false); setF({ ...f, api_key: e.target.value }) }} placeholder="填写后只覆盖此 route" className="w-full p-2 rounded-lg bg-slate-800 border border-slate-700 text-xs" />
+                  {route.route_api_key_configured && (
+                    <label className="flex items-center gap-2 text-xs text-slate-400">
+                      <input type="checkbox" checked={clearApiKey} onChange={e => setClearApiKey(e.target.checked)} />
+                      清除 route 覆盖，恢复继承供应商 key
+                    </label>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-slate-500">reply/fast/smart 当前只在 route 选择供应商和模型；API key 统一在供应商页管理。</p>
+              )}
             </div>
           )}
         </div>
@@ -2170,7 +2196,7 @@ function ProvidersTab({ providers, onSaved }) {
             </div>
             <div className="space-y-1 text-xs text-slate-400">
               <div>base_url: <span className="text-slate-500 font-mono break-all">{p.base_url || '未配置'}</span></div>
-              <div>API key: {p.api_key ? '✅ 已配置' : '❌ 未配置'}</div>
+              <div>API key: {p.api_key_configured ? '✅ 已配置' : '❌ 未配置'}</div>
             </div>
           </Card>
         ))}

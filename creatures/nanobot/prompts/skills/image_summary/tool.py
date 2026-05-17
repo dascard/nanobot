@@ -36,15 +36,19 @@ def _get_image_summary_route() -> dict:
 
     route = _resolve_classifier_route("sticker_describe")
 
-    db = SessionLocal()
+    saved_keys: set[str] = set()
     try:
-        saved_keys = {
-            row.key for row in db.query(SystemSetting.key).filter(
-                SystemSetting.key.like("model.route.sticker_describe%")
-            ).all()
-        }
-    finally:
-        db.close()
+        db = SessionLocal()
+        try:
+            saved_keys = {
+                row.key for row in db.query(SystemSetting.key).filter(
+                    SystemSetting.key.like("model.route.sticker_describe%")
+                ).all()
+            }
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("[image_summary] route setting lookup failed, using defaults: %s", e)
 
     prefix = "model.route.sticker_describe"
     has_provider = f"{prefix}.provider" in saved_keys
@@ -213,7 +217,10 @@ class ImageSummaryTool(BaseTool):
         return payload
 
     def _call_qwen(self, files: list[str], focus: str) -> str:
+        from clients.classifier_client import ensure_model_route_enabled
+
         route = _get_image_summary_route()
+        ensure_model_route_enabled("sticker_describe", route)
         payload = self._build_payload(files, focus, route)
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         base_url = str(route.get("base_url", "")).rstrip("/")

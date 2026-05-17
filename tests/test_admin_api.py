@@ -617,3 +617,92 @@ class TestModelHealthCheck:
         assert data["endpoints"]["new_api"]["reachable"] is False
         assert data["endpoints"]["new_api"]["usable"] is False
         assert "Connection refused" in data["endpoints"]["new_api"]["error"]
+
+
+class TestModelRouteV2:
+    def test_sticker_describe_vision_test_sends_multimodal_payload(self, client, auth_header, monkeypatch):
+        captured = {}
+
+        def fake_call_model_route(**kwargs):
+            captured.update(kwargs)
+            return "ok"
+
+        monkeypatch.setattr("clients.classifier_client.call_model_route", fake_call_model_route)
+
+        r = client.post(
+            "/api/v1/admin/models/routes/sticker_describe/test?mode=vision",
+            headers=auth_header,
+        )
+
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["ok"] is True
+        assert data["vision_payload_ok"] is True
+        assert captured["route_key"] == "sticker_describe"
+        user_content = captured["messages"][1]["content"]
+        assert isinstance(user_content, list)
+        assert user_content[0]["type"] == "text"
+        assert user_content[1]["type"] == "image_url"
+        assert user_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+    def test_available_override_does_not_reuse_route_api_key(self, client, auth_header, monkeypatch):
+        captured = {}
+
+        def fake_resolve_model_route(route_key):
+            return {
+                "route_key": route_key,
+                "provider_id": "newapi",
+                "base_url": "http://provider-a:9000/v1",
+                "api_key": "provider-a-key",
+                "provider_enabled": True,
+            }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"data":[]}'
+
+        class FakeOpener:
+            def open(self, req, timeout=10):
+                captured["authorization"] = req.headers.get("Authorization")
+                captured["url"] = req.full_url
+                return FakeResponse()
+
+        monkeypatch.setattr("clients.classifier_client.resolve_model_route", fake_resolve_model_route)
+        monkeypatch.setattr("urllib.request.build_opener", lambda *args, **kwargs: FakeOpener())
+
+        r = client.get(
+            "/api/v1/admin/models/available?route_key=reply&base_url_override=http://provider-b:9000/v1",
+            headers=auth_header,
+        )
+
+        assert r.status_code == 200, r.text
+        assert captured["authorization"] is None
+        assert captured["url"] == "http://provider-b:9000/v1/models"
+
+    def test_available_rejects_disabled_provider(self, client, auth_header, monkeypatch):
+        def fake_resolve_model_route(route_key):
+            return {
+                "route_key": route_key,
+                "provider_id": "newapi",
+                "base_url": "http://provider-a:9000/v1",
+                "api_key": "provider-a-key",
+                "provider_enabled": False,
+            }
+
+        monkeypatch.setattr("clients.classifier_client.resolve_model_route", fake_resolve_model_route)
+
+        r = client.get(
+            "/api/v1/admin/models/available?route_key=reply",
+            headers=auth_header,
+        )
+
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["models"] == []
+        assert data["error"] == "provider disabled: newapi"

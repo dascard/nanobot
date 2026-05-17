@@ -18,6 +18,59 @@ from config import CLASSIFIER_API_URL
 logger = logging.getLogger("nanobot.classifier")
 
 
+_MISSING = object()
+
+
+def _get_db_setting_value(key: str) -> tuple[bool, str | None]:
+    """读取单个 SystemSetting，兼容尚未进入 SETTING_DEFS 的旧/实验键。"""
+    try:
+        from core.database import SessionLocal, SystemSetting
+
+        db = SessionLocal()
+        try:
+            row = db.query(SystemSetting.value).filter(SystemSetting.key == key).first()
+            if row is None:
+                return False, None
+            return True, row[0]
+        finally:
+            db.close()
+    except Exception:
+        return False, None
+
+
+def _get_setting_value(key: str, default=None):
+    """读取设置；settings 不认识的实验键再从 DB 兜底读一次。"""
+    from core.settings_service import settings
+
+    value = settings.get(key, default)
+    if value not in (None, ""):
+        return value
+    exists, db_value = _get_db_setting_value(key)
+    if exists:
+        return db_value
+    return value
+
+
+def _setting_is_explicit(key: str, value: object = _MISSING) -> bool:
+    """判断配置是否来自 DB/env/非默认值，而不是 SettingDef 默认值。"""
+    from core.config_registry import SETTING_DEFS
+
+    exists, db_value = _get_db_setting_value(key)
+    if exists:
+        return bool(str(db_value or "").strip())
+
+    defn = SETTING_DEFS.get(key)
+    if value is _MISSING:
+        value = _get_setting_value(key)
+    if value is None or not str(value).strip():
+        return False
+    if defn is None:
+        return True
+    if defn.env_name and os.environ.get(defn.env_name):
+        return True
+    return str(value).strip() != str(defn.default).strip()
+
+
 def _classifier_timeout() -> float:
     from core.settings_service import settings
     return settings.get_float("classifier.timeout", 15.0)
@@ -49,34 +102,75 @@ def _resolve_classifier_route(route_key: str) -> dict:
         base = dict(defaults)
 
     prefix = f"model.route.{route_key}"
-    raw = settings.get(prefix)
+    raw = _get_setting_value(prefix)
 
-    if raw and isinstance(raw, str) and raw.strip():
+    if _setting_is_explicit(prefix, raw) and raw and isinstance(raw, str) and raw.strip():
         # 旧写法：直接写 base_url 字符串，覆盖继承值
         base["base_url"] = str(raw)
 
-    # 字段级覆盖：只覆盖显式设置了值的字段
-    for k in ("provider", "base_url", "api_key", "model"):
-        v = settings.get(f"{prefix}.{k}")
-        if v:
-            base[k] = str(v)
+    route_provider = str(_get_setting_value(f"{prefix}.provider", "") or "").strip()
+    route_base_url = str(_get_setting_value(f"{prefix}.base_url", "") or "").strip()
+    route_api_key = str(_get_setting_value(f"{prefix}.api_key", "") or "").strip()
+
+    # 字段级覆盖：只覆盖 route 自己显式设置了值的字段
+    if route_provider:
+        base["provider"] = route_provider
+    if route_base_url and _setting_is_explicit(f"{prefix}.base_url", route_base_url):
+        base["base_url"] = route_base_url
+    if route_api_key:
+        base["api_key"] = route_api_key
+    v = _get_setting_value(f"{prefix}.model")
+    if v:
+        base["model"] = str(v)
     for k in ("timeout", "temperature", "max_tokens"):
-        v = settings.get(f"{prefix}.{k}")
+        v = _get_setting_value(f"{prefix}.{k}")
         if v is not None:
             base[k] = float(v) if k == "temperature" else (int(v) if k == "max_tokens" else float(v))
 
     # 合并 provider 配置：route.provider → provider base_url/api_key
-    provider_id = str(base.get("provider_id") or "").strip()
-    if not provider_id:
-        provider_id = str(settings.get(f"{prefix}.provider") or "").strip()
+    inherited_provider_id = str(base.get("provider_id") or "").strip()
+    provider_id = route_provider or inherited_provider_id
+
+    # 检测 base_url 是显式配置还是继承/默认来的
+    explicit_base_url = bool(
+        (_setting_is_explicit(prefix, raw) and raw and isinstance(raw, str) and raw.strip())
+        or (route_base_url and _setting_is_explicit(f"{prefix}.base_url", route_base_url))
+    )
+
     if provider_id:
         provider = _get_provider_config(provider_id)
         if provider:
-            base["base_url"] = base.get("base_url") or provider.get("base_url", "")
-            base["api_key"] = base.get("api_key") or provider.get("api_key", "")
+            if explicit_base_url:
+                # 用户显式配置了 base_url → route 优先
+                base["base_url"] = base.get("base_url") or provider.get("base_url", "")
+                base["source"] = "route_override"
+            else:
+                # 无显式 base_url（继承/默认） → provider 优先
+                base["base_url"] = provider.get("base_url") or base.get("base_url", "")
+                base["source"] = "provider"
+            # api_key: route 自己配置优先；否则使用当前 provider，不沿用继承 provider 的 key
+            if route_api_key:
+                base["api_key"] = route_api_key
+                base["api_key_source"] = "route"
+            elif route_provider:
+                base["api_key"] = provider.get("api_key", "")
+                base["api_key_source"] = "provider"
+            else:
+                base["api_key"] = base.get("api_key") or provider.get("api_key", "")
+                base["api_key_source"] = "inherited"
             base["provider_id"] = provider_id
+            base["provider_enabled"] = bool(provider.get("enabled", True))
 
     return base
+
+
+def ensure_model_route_enabled(route_key: str, route: dict | None = None) -> dict:
+    """实际调用前强制检查 provider.enabled。展示/目录解析不调用此函数。"""
+    route = route or _resolve_classifier_route(route_key)
+    provider_id = str(route.get("provider_id") or "").strip()
+    if provider_id and route.get("provider_enabled") is False:
+        raise RuntimeError(f"provider disabled: {provider_id}")
+    return route
 
 
 # Pattern for Qwen output validation: 是/否 + comma + number (optional negative)
@@ -117,7 +211,7 @@ def call_model_route(
     支持 OpenAI-compatible API / New API / 本地 llama.cpp。
     调用 /chat/completions，返回 cleaned text。
     """
-    route = _resolve_classifier_route(route_key)
+    route = ensure_model_route_enabled(route_key)
     base_url = str(route["base_url"]).rstrip("/")
     logger.info("[call_model_route] route=%s provider=%s base_url=%s model=%s",
                 route_key, route.get("provider_id", ""), base_url[:80], route.get("model", ""))
@@ -180,11 +274,12 @@ def _get_provider_config(provider_id: str) -> dict | None:
 
     if not base_url:
         return None
+    enabled = settings.get(f"model.providers.{provider_id}.enabled", True)
     return {
         "id": provider_id,
         "base_url": base_url,
         "api_key": api_key,
-        "enabled": bool(settings.get(f"model.providers.{provider_id}.enabled")),
+        "enabled": bool(True if enabled is None else enabled),
     }
 
 
@@ -231,7 +326,7 @@ def resolve_model_route(route_key: str) -> dict:
     route = _resolve_classifier_route(route_key)
 
     # 确定 provider
-    provider_id = str(settings.get(f"model.route.{route_key}.provider") or "")
+    provider_id = str(route.get("provider_id") or settings.get(f"model.route.{route_key}.provider") or "")
     if not provider_id:
         if route_key in ("reply", "fast", "smart"):
             provider_id = "newapi"
@@ -254,14 +349,16 @@ def resolve_model_route(route_key: str) -> dict:
     result = {
         "route_key": route_key,
         "provider_id": provider_id,
-        "base_url": provider["base_url"],
-        "api_key": provider["api_key"],
-        "api_key_configured": bool(provider.get("api_key")),
+        "base_url": route.get("base_url") or provider["base_url"],
+        "api_key": route.get("api_key") or provider["api_key"],
+        "api_key_configured": bool(route.get("api_key") or provider.get("api_key")),
+        "route_api_key_configured": route.get("api_key_source") == "route",
+        "provider_enabled": bool(provider.get("enabled", True)),
         "model": model or "未指定",
         "timeout": route.get("timeout", 15),
         "temperature": route.get("temperature", 0),
         "max_tokens": route.get("max_tokens", 30),
-        "source": "provider",
+        "source": route.get("source", "provider"),
     }
 
     # 继承信息（非 timing_gate 的 classifier routes）
