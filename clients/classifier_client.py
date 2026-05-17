@@ -295,18 +295,16 @@ def _get_provider_config(provider_id: str) -> dict | None:
 
     # 一次性查询 DB，判断哪些 key 实际存在
     db_keys: set[str] = set()
+    db = SessionLocal()
     try:
-        db = SessionLocal()
-        prefixes = [f"model.providers.{provider_id}."]
-        if alias_key:
-            prefixes.append(f"model.providers.{alias_key}.")
         rows = db.query(SystemSetting.key).filter(
             SystemSetting.key.like("model.providers.%")
         ).all()
         db_keys = {r.key for r in rows}
-        db.close()
     except Exception:
         pass
+    finally:
+        db.close()
 
     def _get_with_fallback(field: str):
         """读取配置：DB 中有 canonical key → 用 canonical；
