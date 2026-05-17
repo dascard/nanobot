@@ -272,9 +272,10 @@ def _get_provider_config(provider_id: str) -> dict | None:
 
     对已知 provider 使用 config 常量作为 fallback，避免 settings 空值覆盖 env。
     旧 provider 名通过 canonical_provider_id 映射到 canonical 名。
-    canonical key 无值时回退到旧 alias key，保证旧 DB 配置兼容。
+    优先读 DB 中实际存在的 key（canonical 或旧 alias），再回退到 settings 默认值。
     """
     from core.settings_service import settings
+    from core.database import SessionLocal, SystemSetting
     from config import NEW_API_BASE_URL, NEW_API_KEY, CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL
     from core.route_metadata import canonical_provider_id, PROVIDER_ALIASES
 
@@ -287,25 +288,38 @@ def _get_provider_config(provider_id: str) -> dict | None:
         if new == provider_id and old != raw_id:
             alias_key = old
             break
-    # vision_qwen → canonical 动态映射
-    if not alias_key and raw_id == "vision_qwen":
-        alias_key = "vision_qwen"
     if not alias_key and provider_id == "local_llama":
         alias_key = "local_qwen"
     if not alias_key and provider_id == "local_vision":
         alias_key = "vision_qwen"
 
-    def _get_with_fallback(field: str):
-        """读取配置字段，canonical key 无值时回退到旧 alias key。
-        返回 settings 原始值（保留 bool/int），未找到时返回 None。"""
-        v = settings.get(f"model.providers.{provider_id}.{field}", None)
-        if v not in (None, ""):
-            return v
+    # 一次性查询 DB，判断哪些 key 实际存在
+    db_keys: set[str] = set()
+    try:
+        db = SessionLocal()
+        prefixes = [f"model.providers.{provider_id}."]
         if alias_key:
-            av = settings.get(f"model.providers.{alias_key}.{field}", None)
-            if av not in (None, ""):
-                return av
-        return None
+            prefixes.append(f"model.providers.{alias_key}.")
+        rows = db.query(SystemSetting.key).filter(
+            SystemSetting.key.like("model.providers.%")
+        ).all()
+        db_keys = {r.key for r in rows}
+        db.close()
+    except Exception:
+        pass
+
+    def _get_with_fallback(field: str):
+        """读取配置：DB 中有 canonical key → 用 canonical；
+        DB 中只有 alias key → 用 alias；否则用 settings 默认值。"""
+        ck = f"model.providers.{provider_id}.{field}"
+        if ck in db_keys:
+            return settings.get(ck, None)
+        if alias_key:
+            ak = f"model.providers.{alias_key}.{field}"
+            if ak in db_keys:
+                return settings.get(ak, None)
+        v = settings.get(ck, None)
+        return v
 
     base_url = str(_get_with_fallback("base_url") or "")
     api_key = str(_get_with_fallback("api_key") or "")
@@ -362,6 +376,9 @@ def list_providers() -> list[dict]:
         pid = key.removeprefix("model.providers.").removesuffix(".base_url")
         if is_deprecated_provider(pid):
             deprecated_pids.append(pid)
+            continue
+        # local_vision 仅在 endpoint 不同时条件性添加，不在此处扫描
+        if pid == "local_vision":
             continue
         canonical = canonical_provider_id(pid)
         if canonical in seen_canonical:
