@@ -51,6 +51,20 @@ def _get_setting_value(key: str, default=None):
     return value
 
 
+def _as_bool(value, default: bool = True) -> bool:
+    """把 settings/DB/env 里的 bool-like 值统一解析为 bool。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _setting_is_explicit(key: str, value: object = _MISSING) -> bool:
     """判断配置是否来自 DB/env/非默认值，而不是 SettingDef 默认值。"""
     from core.config_registry import SETTING_DEFS
@@ -159,7 +173,7 @@ def _resolve_classifier_route(route_key: str) -> dict:
                 base["api_key"] = base.get("api_key") or provider.get("api_key", "")
                 base["api_key_source"] = "inherited"
             base["provider_id"] = provider_id
-            base["provider_enabled"] = bool(provider.get("enabled", True))
+            base["provider_enabled"] = _as_bool(provider.get("enabled", True), default=True)
 
     return base
 
@@ -279,7 +293,7 @@ def _get_provider_config(provider_id: str) -> dict | None:
         "id": provider_id,
         "base_url": base_url,
         "api_key": api_key,
-        "enabled": bool(True if enabled is None else enabled),
+        "enabled": _as_bool(enabled, default=True),
     }
 
 
@@ -353,7 +367,7 @@ def resolve_model_route(route_key: str) -> dict:
         "api_key": route.get("api_key") or provider["api_key"],
         "api_key_configured": bool(route.get("api_key") or provider.get("api_key")),
         "route_api_key_configured": route.get("api_key_source") == "route",
-        "provider_enabled": bool(provider.get("enabled", True)),
+        "provider_enabled": _as_bool(provider.get("enabled", True), default=True),
         "model": model or "未指定",
         "timeout": route.get("timeout", 15),
         "temperature": route.get("temperature", 0),

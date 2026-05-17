@@ -18,6 +18,7 @@ from kohakuterrarium.core.agent import Agent
 from kohakuterrarium.core.config import load_agent_config
 from kohakuterrarium.core.events import create_user_input_event
 from kohakuterrarium.llm.message import make_multimodal_content
+from openai import AsyncOpenAI
 
 from nanobot_kt.output import BufferedOutput
 from nanobot_kt.image_pipeline import prepare_image_parts
@@ -51,6 +52,14 @@ logger = logging.getLogger("nanobot.kt.bridge")
 
 def _current_time_label() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S CST")
+
+
+def _registry_provider_for_route(provider_id: str) -> str:
+    """把 WebUI provider id 映射到模型目录里的 provider 名。"""
+    provider_id = (provider_id or "").strip()
+    if provider_id in ("", "newapi", "new-api"):
+        return "new-api"
+    return provider_id
 
 
 def _is_news_request(query: str) -> bool:
@@ -776,16 +785,23 @@ class NanobotBridge:
             _route_base_url = str(_reply_route.get("base_url", "") or "").rstrip("/")
             _route_api_key = str(_reply_route.get("api_key", "") or "")
             _route_provider_id = str(_reply_route.get("provider_id", "") or "")
+            _route_registry_provider = _registry_provider_for_route(_route_provider_id)
             _client_base_url = _route_base_url or NEW_API_BASE_URL
             _client_api_key = _route_api_key or NEW_API_KEY
             logger.info(
-                "[Model Router] route provider=%s base_url=%s",
-                _route_provider_id, _client_base_url[:80] if _client_base_url else "(empty)",
+                "[Model Router] route provider=%s registry_provider=%s base_url=%s",
+                _route_provider_id,
+                _route_registry_provider,
+                _client_base_url[:80] if _client_base_url else "(empty)",
             )
 
             try:
-                route_client = NewAPIClient(api_key=_client_api_key, base_url=_client_base_url)
-                existing = registry.get_models_by_provider("new-api")
+                route_client = NewAPIClient(
+                    api_key=_client_api_key,
+                    base_url=_client_base_url,
+                    registry_provider=_route_registry_provider,
+                )
+                existing = registry.get_models_by_provider(_route_registry_provider)
                 if not existing:
                     logger.info("[Model Router] Registry empty, forcing model sync...")
                     await route_client.sync_models_to_registry(force=True)
@@ -833,7 +849,7 @@ class NanobotBridge:
                     )
                 else:
                     candidates = route_client.get_ordered_candidates(
-                        provider="new-api",
+                        provider=_route_registry_provider,
                         intel_floor=reply_intel_floor,
                         max_cost=REPLY_MODEL_MAX_COST,
                     )
@@ -902,20 +918,26 @@ class NanobotBridge:
                     self._agent.controller.llm.config.model = target_model
                     # 同步 route provider 的 base_url / api_key 到 controller
                     llm = self._agent.controller.llm
-                    if _route_base_url and getattr(llm, 'base_url', '') != _route_base_url:
-                        llm.base_url = _route_base_url
-                        llm._api_key = _route_api_key
-                        from openai import AsyncOpenAI
+                    _target_base_url = str(_client_base_url or "").rstrip("/")
+                    _target_api_key = str(_client_api_key or "")
+                    _current_base_url = str(getattr(llm, 'base_url', '') or "").rstrip("/")
+                    _current_api_key = str(getattr(llm, '_api_key', '') or "")
+                    _base_url_changed = bool(_target_base_url and _current_base_url != _target_base_url)
+                    _api_key_changed = _current_api_key != _target_api_key
+                    if _base_url_changed or _api_key_changed:
+                        llm.base_url = _target_base_url
+                        llm._api_key = _target_api_key
                         llm._client = AsyncOpenAI(
-                            api_key=_route_api_key,
-                            base_url=_route_base_url,
+                            api_key=_target_api_key,
+                            base_url=_target_base_url,
                             timeout=getattr(llm, '_timeout', 120.0),
                             max_retries=getattr(llm, '_max_retries', 3),
                             default_headers=getattr(llm, '_extra_headers', {}),
                         )
                         logger.info(
-                            "[Model Router] Switched provider base_url=%s",
-                            _route_base_url[:80],
+                            "[Model Router] Switched provider base_url=%s api_key_changed=%s",
+                            _target_base_url[:80],
+                            _api_key_changed,
                         )
                     logger.info(
                         f"[Model Router] Attempt {attempt+1}: {target_model} "

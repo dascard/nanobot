@@ -2025,7 +2025,7 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
   return (
     <div>
       <p className="text-slate-500 text-sm mb-2">每个 route 选择一个模型和供应商。base_url/API key 默认在「供应商」Tab 管理；route API key 只作为高级覆盖。</p>
-      <p className="text-amber-400/80 text-xs mb-3">主回复 controller 初始化仍来自 config.yaml/env；桥接层会在每次回复前同步 reply route 的 provider/base_url/model，其他 controller 初始化参数变更仍需重启或重建 bridge。</p>
+      <p className="text-amber-400/80 text-xs mb-3">reply 是当前主回复运行路径；fast/smart 目前用于展示、测试、目录和后续统一路由，主流程暂不自动切换 fast/smart。主回复 controller 初始化仍来自 config.yaml/env；桥接层会在每次回复前同步 reply route 的 provider/base_url/model，其他 controller 初始化参数变更仍需重启或重建 bridge。</p>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
         {routeList.map(([key, r]) => (
           <Card key={key} className="p-4">

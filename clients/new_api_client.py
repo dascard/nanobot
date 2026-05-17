@@ -57,9 +57,11 @@ class NewAPIClient:
         base_url: str = "",
         timeout: Optional[int] = None,
         max_retries: int = 3,
+        registry_provider: str = "new-api",
     ):
         self.api_key = api_key
         self.base_url = (base_url or NEW_API_BASE_URL).rstrip("/")
+        self.registry_provider = (registry_provider or "new-api").strip() or "new-api"
         self._timeout_override = timeout
         self.max_retries = max_retries
         self.last_usage: Dict[str, int] = {}
@@ -248,7 +250,7 @@ class NewAPIClient:
 
                         base_model = {
                             "id": model_id,
-                            "provider": "new-api",
+                            "provider": self.registry_provider,
                             "intelligence": profile["intelligence"],
                             "cost_input_1m": api_cost_input if api_cost_input is not None else (0.0 if is_free else 9.99),
                             "cost_output_1m": (0.0 if is_free else 9.99),
@@ -314,7 +316,7 @@ class NewAPIClient:
             asyncio.ensure_future(_rs.set("last_model_sync_ts", now))
 
             # Post-sync summary: list all models by tier with free/paid breakdown
-            all_models = registry.get_models_by_provider("new-api")
+            all_models = registry.get_models_by_provider(self.registry_provider)
             tiers = {}
             free_ids = []
             for m in all_models:
@@ -341,7 +343,7 @@ class NewAPIClient:
         """Simple fallback: cheapest available model."""
         if manual_model:
             return manual_model
-        models = registry.get_models_by_provider("new-api")
+        models = registry.get_models_by_provider(self.registry_provider)
         if models:
             models.sort(key=lambda m: m.get("cost_input_1m", 999))
             return models[0]["id"]
@@ -493,14 +495,14 @@ class NewAPIClient:
         intel_floor = max(1, complexity - 1)
 
         candidates = self.get_ordered_candidates(
-            provider="new-api",
+            provider=self.registry_provider,
             intel_floor=intel_floor,
             exclude_models=exclude_models,
             avoid_tags=None,
         )
 
         if not candidates:
-            all_models = registry.get_models_by_provider("new-api")
+            all_models = registry.get_models_by_provider(self.registry_provider)
             all_models.sort(key=lambda m: m.get("cost_input_1m", 999))
             if all_models:
                 fallback = all_models[0]["id"]
@@ -546,7 +548,7 @@ class NewAPIClient:
         else:
             intel_floor = max(1, complexity - 1)
             candidates = self.get_ordered_candidates(
-                provider="new-api",
+                provider=self.registry_provider,
                 intel_floor=intel_floor,
             )
             if not candidates:
@@ -640,7 +642,7 @@ class NewAPIClient:
         else:
             intel_floor = max(1, complexity - 1)
             candidates = self.get_ordered_candidates(
-                provider="new-api",
+                provider=self.registry_provider,
                 intel_floor=intel_floor,
             )
             if candidates:

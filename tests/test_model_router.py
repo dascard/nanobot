@@ -3,6 +3,24 @@ import pytest
 
 
 class TestClassifierRouteProviderResolution:
+    def test_provider_enabled_string_false_is_disabled(self, monkeypatch):
+        from clients.classifier_client import _get_provider_config
+
+        values = {
+            "model.providers.newapi.base_url": "http://newapi:9000/v1",
+            "model.providers.newapi.api_key": "key",
+            "model.providers.newapi.enabled": "false",
+        }
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        provider = _get_provider_config("newapi")
+
+        assert provider is not None
+        assert provider["enabled"] is False
+
     def test_route_provider_uses_provider_base_url_when_route_base_url_not_explicit(self, monkeypatch):
         from clients.classifier_client import _resolve_classifier_route
 

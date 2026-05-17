@@ -573,6 +573,152 @@ class TestNanobotBridge:
         # disabled 模型应触发自动路由
         assert auto_kwargs.get("intel_floor") == 12, f"Expected auto-routing, got kwargs={auto_kwargs}"
 
+    @patch("nanobot_kt.bridge.registry")
+    @patch("nanobot_kt.bridge.NewAPIClient")
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_reply_route_uses_route_provider_for_registry_candidates(
+        self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
+    ):
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.bridge import NanobotBridge
+        import json
+
+        values = {
+            "model.reply": "",
+            "model.route.reply.provider": "openrouter",
+            "model.providers.openrouter.base_url": "http://openrouter.test/v1",
+            "model.providers.openrouter.api_key": "route-key",
+            "model.providers.openrouter.enabled": True,
+        }
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+        monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "", raising=False)
+
+        client_kwargs = {}
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+        route_client.get_ordered_candidates.return_value = [
+            {"id": "openrouter-model", "intelligence": 12, "cost_input_1m": 0.5, "context_window": 128000},
+        ]
+
+        def fake_client(*args, **kwargs):
+            client_kwargs.update(kwargs)
+            return route_client
+
+        MockClient.side_effect = fake_client
+        MockClient.get_failure_tracker.return_value = MagicMock(
+            record_success=AsyncMock(),
+            record_failure=AsyncMock(),
+        )
+        mock_registry.get_models_by_provider.return_value = [{"id": "openrouter-model"}]
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        reply_output = json.dumps({REPLY_MARKER: {"content": "openrouter 回复"}}, ensure_ascii=False)
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+
+        llm = MagicMock(config=MagicMock(model="old-model"))
+        llm.base_url = "http://old-provider.test/v1"
+        llm._api_key = "old-key"
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=llm)
+        mock_agent._process_event = AsyncMock(return_value=None)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("你好", user_id="u1", session_id="private_u1", metadata={"complexity": 3})
+
+        result = asyncio.run(_run())
+
+        assert result == "openrouter 回复"
+        assert client_kwargs["registry_provider"] == "openrouter"
+        mock_registry.get_models_by_provider.assert_called_with("openrouter")
+        assert route_client.get_ordered_candidates.call_args.kwargs["provider"] == "openrouter"
+
+    @patch("nanobot_kt.bridge.AsyncOpenAI")
+    @patch("nanobot_kt.bridge.registry")
+    @patch("nanobot_kt.bridge.NewAPIClient")
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_reply_route_rebuilds_controller_client_when_api_key_changes(
+        self, MockAgent, mock_load, MockClient, mock_registry, MockAsyncOpenAI, monkeypatch
+    ):
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.bridge import NanobotBridge
+        import json
+
+        values = {
+            "model.reply": "manual-model",
+            "model.route.reply.provider": "newapi",
+            "model.providers.newapi.base_url": "http://same-provider.test/v1",
+            "model.providers.newapi.api_key": "new-key",
+            "model.providers.newapi.enabled": True,
+        }
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+        MockClient.return_value = route_client
+        MockClient.get_failure_tracker.return_value = MagicMock(
+            record_success=AsyncMock(),
+            record_failure=AsyncMock(),
+        )
+        mock_registry.get_model_info.return_value = {"id": "manual-model", "enabled": True}
+        mock_registry.get_models_by_provider.return_value = [{"id": "manual-model"}]
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        reply_output = json.dumps({REPLY_MARKER: {"content": "换 key 回复"}}, ensure_ascii=False)
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+
+        llm = MagicMock(config=MagicMock(model="old-model"))
+        llm.base_url = "http://same-provider.test/v1"
+        llm._api_key = "old-key"
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=llm)
+        mock_agent._process_event = AsyncMock(return_value=None)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("你好", user_id="u1", session_id="private_u1", metadata={"complexity": 3})
+
+        result = asyncio.run(_run())
+
+        assert result == "换 key 回复"
+        assert llm._api_key == "new-key"
+        MockAsyncOpenAI.assert_called_once()
+        assert MockAsyncOpenAI.call_args.kwargs["api_key"] == "new-key"
+
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_prefers_news_tool_html_over_plaintext_rewrite(self, MockAgent, mock_load):
