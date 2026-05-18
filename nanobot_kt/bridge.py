@@ -700,6 +700,7 @@ class NanobotBridge:
                 if trace_closed:
                     return
                 trace_closed = True
+                self._restore_saved_tools()
                 RunTracer.finish_run(
                     run_handle.run_id,
                     status=status,
