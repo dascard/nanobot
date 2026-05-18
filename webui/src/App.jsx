@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate, useLocation } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, NavLink, Navigate, useNavigate, useLocation, useParams } from 'react-router-dom'
 import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api/v1/admin' })
@@ -88,6 +88,8 @@ const NAV = [
   { to: '/stickers', label: '表情包' },
   { to: '/stickers/duplicates', label: '去重工作台' },
   { to: '/prompt', label: 'Prompt' },
+  { to: '/prompts', label: '模板管理' },
+  { to: '/agent-runs', label: '运行追踪' },
   { to: '/models', label: '模型' },
   { to: '/blocks', label: '屏蔽' },
   { to: '/tools', label: '工具管理' },
@@ -1896,6 +1898,451 @@ function PromptPage() {
   )
 }
 
+// ── Managed Prompts ──
+function defaultVarsForPrompt(item) {
+  const vars = {}
+  const keys = [...(item?.required_vars || []), ...(item?.optional_vars || [])]
+  keys.forEach(k => { vars[k] = '' })
+  if ('user_input' in vars) vars.user_input = '你好'
+  if ('history_context' in vars) vars.history_context = '上一轮上下文'
+  if ('pending_text' in vars) vars.pending_text = '有人在群里问机器人问题'
+  if ('question' in vars) vars.question = '最近有哪些异常?'
+  if ('conversation' in vars) vars.conversation = '用户: 我喜欢简洁的中文回复'
+  if ('group_id' in vars) vars.group_id = 'group_1001'
+  if ('logs' in vars) vars.logs = '张三: 今天部署完成\n李四: 发现一个错误'
+  return JSON.stringify(vars, null, 2)
+}
+
+function ManagedPromptsPage() {
+  const [items, setItems] = useState([])
+  const [mode, setMode] = useState('')
+  const [selected, setSelected] = useState('')
+  const [detail, setDetail] = useState(null)
+  const [content, setContent] = useState('')
+  const [varsText, setVarsText] = useState('{}')
+  const [preview, setPreview] = useState(null)
+  const [history, setHistory] = useState([])
+  const [toast, setToast] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const loadList = useCallback(() => {
+    setLoading(true)
+    api.get('/prompts').then(r => {
+      const list = r.data.items || []
+      setItems(list)
+      setMode(r.data.mode || '')
+      if (!selected && list.length) setSelected(list[0].prompt_key)
+    }).finally(() => setLoading(false))
+  }, [selected])
+
+  useEffect(() => { loadList() }, [loadList])
+  useEffect(() => {
+    if (!selected) return
+    api.get(`/prompts/${encodeURIComponent(selected)}`).then(r => {
+      setDetail(r.data)
+      setContent(r.data.content || '')
+      setVarsText(defaultVarsForPrompt(r.data))
+      setPreview(null)
+    }).catch(e => alert(e.response?.data?.detail || '加载模板失败'))
+    api.get(`/prompts/${encodeURIComponent(selected)}/history`).then(r => setHistory(r.data.items || [])).catch(() => setHistory([]))
+  }, [selected])
+
+  const save = () => {
+    api.put(`/prompts/${encodeURIComponent(selected)}`, { content }).then(r => {
+      setToast(`已保存 ${r.data.after_hash}`)
+      loadList()
+      api.get(`/prompts/${encodeURIComponent(selected)}/history`).then(x => setHistory(x.data.items || []))
+    }).catch(e => alert(e.response?.data?.detail || '保存失败'))
+  }
+  const runPreview = () => {
+    let variables
+    try { variables = JSON.parse(varsText || '{}') }
+    catch { alert('变量 JSON 格式错误'); return }
+    api.post(`/prompts/${encodeURIComponent(selected)}/preview`, { variables, mode: 'preview' }).then(r => setPreview(r.data))
+      .catch(e => alert(e.response?.data?.detail || '预览失败'))
+  }
+  const reload = () => api.post('/prompts/reload').then(() => { setToast('已重新加载模板缓存'); loadList() })
+  const rollback = (name) => {
+    if (!confirm(`确认回滚 ${selected} 到该版本?`)) return
+    api.post(`/prompts/${encodeURIComponent(selected)}/rollback`, { backup_name: name }).then(() => {
+      setToast('已回滚')
+      api.get(`/prompts/${encodeURIComponent(selected)}`).then(r => { setDetail(r.data); setContent(r.data.content || '') })
+      api.get(`/prompts/${encodeURIComponent(selected)}/history`).then(r => setHistory(r.data.items || []))
+    }).catch(e => alert(e.response?.data?.detail || '回滚失败'))
+  }
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(''), 2500)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  if (loading && !items.length) return <Spinner />
+  return (
+    <div>
+      {toast && <div className="mb-3 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-sm text-emerald-400">{toast}</div>}
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h1 className="text-2xl font-bold mb-1">模板管理</h1>
+          <p className="text-slate-500 text-sm">Markdown frontmatter 模板、变量预览、备份与回滚</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge tone={mode === 'managed' ? 'emerald' : mode === 'shadow' ? 'blue' : 'slate'}>{mode || 'unknown'}</Badge>
+          <button onClick={reload} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">Reload</button>
+          <button onClick={save} disabled={!selected} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 rounded-xl text-sm font-medium">保存</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4" style={{ minHeight: 'calc(100vh - 150px)' }}>
+        <Card className="p-3 xl:col-span-2 overflow-auto">
+          <div className="text-xs text-slate-500 mb-2">{items.length} 个模板</div>
+          {items.map(item => (
+            <button key={item.prompt_key} onClick={() => setSelected(item.prompt_key)}
+              className={`w-full text-left px-3 py-2 rounded-lg text-xs mb-1 ${selected === item.prompt_key ? 'bg-emerald-500/15 text-emerald-400' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+              <div className="font-medium truncate">{item.prompt_key}</div>
+              {item.parse_error ? <div className="text-red-400 truncate">{item.parse_error}</div> : <div className="text-slate-600 truncate">{item.name}</div>}
+            </button>
+          ))}
+        </Card>
+        <div className="xl:col-span-6 flex flex-col min-w-0">
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h2 className="text-sm font-medium text-emerald-400">{selected || '未选择'}</h2>
+              <div className="text-xs text-slate-600">{detail?.description || ''}</div>
+            </div>
+            <div className="text-xs text-slate-500">{content.length} 字符</div>
+          </div>
+          <textarea value={content} onChange={e => setContent(e.target.value)}
+            className="flex-1 min-h-[520px] w-full p-4 rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-300 font-mono leading-relaxed resize-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
+        </div>
+        <div className="xl:col-span-4 space-y-4 min-w-0">
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-sm font-medium text-slate-300">预览变量</h2>
+              <button onClick={runPreview} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs">预览</button>
+            </div>
+            <textarea value={varsText} onChange={e => setVarsText(e.target.value)}
+              className="w-full h-44 p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-slate-300 resize-none" />
+            {preview && (
+              <div className="mt-3">
+                <div className="flex gap-2 mb-2">
+                  <Badge tone="blue">{preview.token_estimate || 0} tokens</Badge>
+                  {(preview.warnings || []).length > 0 && <Badge tone="amber">{preview.warnings.length} warnings</Badge>}
+                </div>
+                <pre className="max-h-72 overflow-auto whitespace-pre-wrap text-xs bg-slate-950 border border-slate-800 rounded-xl p-3 text-slate-300">{preview.content}</pre>
+              </div>
+            )}
+          </Card>
+          <Card className="p-4">
+            <h2 className="text-sm font-medium text-slate-300 mb-3">备份历史</h2>
+            <div className="space-y-2 max-h-72 overflow-auto">
+              {history.map(h => (
+                <div key={h.name} className="flex items-center justify-between gap-2 text-xs border-b border-slate-800 pb-2">
+                  <div className="min-w-0">
+                    <div className="font-mono text-slate-400 truncate">{h.created_at}</div>
+                    <div className="text-slate-600">{h.hash} · {h.size} bytes</div>
+                  </div>
+                  <button onClick={() => rollback(h.name)} className="px-2 py-1 bg-amber-700/50 hover:bg-amber-700 text-amber-300 rounded-lg">回滚</button>
+                </div>
+              ))}
+              {!history.length && <div className="py-8 text-center text-sm text-slate-600">暂无备份</div>}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Agent Runs ──
+function AgentRunsPage() {
+  const [runs, setRuns] = useState([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [selected, setSelected] = useState('')
+  const [detail, setDetail] = useState(null)
+  const [toolDetail, setToolDetail] = useState(null)
+  const [status, setStatus] = useState('')
+  const [sessionFilter, setSessionFilter] = useState('')
+  const limit = 30
+
+  const loadRuns = useCallback(() => {
+    api.get('/agent-runs', { params: { page, limit, status, session_id: sessionFilter } }).then(r => {
+      setRuns(r.data.items || [])
+      setTotal(r.data.total || 0)
+      if (!selected && r.data.items?.length) setSelected(r.data.items[0].run_id)
+    }).catch(() => setRuns([]))
+  }, [page, status, sessionFilter, selected])
+  useEffect(() => { loadRuns() }, [loadRuns])
+  useEffect(() => {
+    if (!selected) return
+    api.get(`/agent-runs/${encodeURIComponent(selected)}`).then(r => { setDetail(r.data); setToolDetail(null) }).catch(() => setDetail(null))
+  }, [selected])
+
+  const openTool = (id) => {
+    api.get(`/tool-calls/${encodeURIComponent(id)}`).then(r => setToolDetail(r.data)).catch(() => setToolDetail(null))
+  }
+  const tone = (s) => s === 'success' ? 'emerald' : s === 'error' ? 'red' : s === 'running' ? 'blue' : s === 'no_reply' ? 'slate' : 'amber'
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h1 className="text-2xl font-bold mb-1">运行追踪</h1>
+          <p className="text-slate-500 text-sm">Agent run、Prompt render 与 Tool call 的只读审计视图</p>
+        </div>
+        <button onClick={loadRuns} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">刷新</button>
+      </div>
+      <div className="flex gap-2 mb-4">
+        <select value={status} onChange={e => { setStatus(e.target.value); setPage(1) }}
+          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm">
+          <option value="">全部状态</option>
+          <option value="success">success</option>
+          <option value="error">error</option>
+          <option value="no_reply">no_reply</option>
+          <option value="suppressed">suppressed</option>
+          <option value="empty">empty</option>
+        </select>
+        <input value={sessionFilter} onChange={e => { setSessionFilter(e.target.value); setPage(1) }}
+          placeholder="session_id" className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500" />
+      </div>
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+        <Card className="xl:col-span-5 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-3">开始</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">会话</th><th className="py-2 px-3">模型</th></tr></thead>
+            <tbody>
+              {runs.map(r => (
+                <tr key={r.run_id} onClick={() => setSelected(r.run_id)}
+                  className={`border-b border-slate-800/50 cursor-pointer ${selected === r.run_id ? 'bg-emerald-500/10' : 'hover:bg-slate-800/40'}`}>
+                  <td className="py-2 px-3 text-xs text-slate-400">{String(r.started_at || '').replace('T', ' ').slice(0, 19)}</td>
+                  <td className="py-2 px-3"><Badge tone={tone(r.status)}>{r.status}</Badge></td>
+                  <td className="py-2 px-3 text-xs text-slate-400 max-w-32 truncate">{r.session_id || '-'}</td>
+                  <td className="py-2 px-3 text-xs text-slate-500 max-w-40 truncate">{r.model || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!runs.length && <div className="py-16 text-center text-sm text-slate-600">暂无运行记录</div>}
+          <div className="p-3"><Pagination page={page} total={total} limit={limit} onChange={setPage} /></div>
+        </Card>
+        <div className="xl:col-span-7 space-y-4 min-w-0">
+          {detail ? (
+            <>
+              <Card className="p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h2 className="text-sm font-medium text-emerald-400 font-mono">{detail.run_id}</h2>
+                    <div className="text-xs text-slate-600 font-mono">{detail.trace_id}</div>
+                  </div>
+                  <Badge tone={tone(detail.status)}>{detail.status}</Badge>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
+                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Prompt</div><div className="text-white font-medium truncate">{detail.prompt_key || '-'}</div></div>
+                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Mode</div><div className="text-blue-300 font-medium truncate">{detail.prompt_mode || '-'}</div></div>
+                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Latency</div><div className="text-white font-medium">{detail.latency_ms || 0}ms</div></div>
+                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Tools</div><div className="text-emerald-300 font-medium">{(detail.tool_calls || []).length}</div></div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div><div className="text-xs text-slate-500 mb-1">输入预览</div><JsonBlock value={detail.input_preview} className="max-h-40" /></div>
+                  <div><div className="text-xs text-slate-500 mb-1">输出预览</div><JsonBlock value={detail.output_preview || detail.error} className="max-h-40" /></div>
+                </div>
+              </Card>
+              <Card className="p-4">
+                <h2 className="text-sm font-medium text-slate-300 mb-3">工具调用</h2>
+                <div className="space-y-2">
+                  {(detail.tool_calls || []).map(t => (
+                    <button key={t.tool_call_id} onClick={() => openTool(t.tool_call_id)}
+                      className="w-full text-left p-3 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-slate-200">{t.tool_name}</span>
+                        <Badge tone={tone(t.status)}>{t.status}</Badge>
+                      </div>
+                      <div className="text-xs text-slate-600 mt-1">{t.latency_ms || 0}ms · {t.tool_call_id}</div>
+                    </button>
+                  ))}
+                  {!(detail.tool_calls || []).length && <div className="py-8 text-center text-sm text-slate-600">本次没有工具调用</div>}
+                </div>
+              </Card>
+              <Card className="p-4">
+                <h2 className="text-sm font-medium text-slate-300 mb-3">Prompt 渲染记录</h2>
+                {(detail.prompt_render_logs || []).map(log => (
+                  <div key={log.id} className="mb-3">
+                    <div className="flex gap-2 mb-2"><Badge tone="blue">{log.prompt_key}</Badge><Badge>{log.mode}</Badge><Badge>{log.token_estimate} tokens</Badge></div>
+                    <JsonBlock value={log.rendered_preview || log.error} className="max-h-44" />
+                  </div>
+                ))}
+                {!(detail.prompt_render_logs || []).length && <div className="py-8 text-center text-sm text-slate-600">暂无 prompt 渲染记录</div>}
+              </Card>
+              {toolDetail && (
+                <Card className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-sm font-medium text-slate-300">工具详情: {toolDetail.tool_name}</h2>
+                    <button onClick={() => setToolDetail(null)} className="text-xs text-slate-500 hover:text-white">关闭</button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div><div className="text-xs text-slate-500 mb-1">参数</div><JsonBlock value={toolDetail.args_json} className="max-h-72" /></div>
+                    <div><div className="text-xs text-slate-500 mb-1">结果/错误</div><JsonBlock value={toolDetail.result_preview || toolDetail.error} className="max-h-72" /></div>
+                  </div>
+                </Card>
+              )}
+            </>
+          ) : (
+            <Card className="p-12 text-center text-slate-600 text-sm">选择一条运行记录查看详情</Card>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Agent Run 详情（深链 /agent-runs/:runId） ──
+function AgentRunDetailPage() {
+  const { runId } = useParams()
+  const [detail, setDetail] = useState(null)
+  const [toolDetail, setToolDetail] = useState(null)
+  useEffect(() => {
+    api.get(`/agent-runs/${encodeURIComponent(runId)}`).then(r => setDetail(r.data)).catch(() => setDetail(null))
+  }, [runId])
+  if (!detail || !detail.run) return <Card className="p-12 text-center text-slate-500"><Spinner /></Card>
+  const r = detail.run
+  return (
+    <div>
+      <NavLink to="/agent-runs" className="text-xs text-slate-500 hover:text-slate-300 mb-4 inline-block">← 运行追踪</NavLink>
+      <h1 className="text-2xl font-bold mb-4">运行详情</h1>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <MiniStat label="run_id" value={r.run_id || ''} />
+        <MiniStat label="status" value={r.status || ''} tone={r.status === 'success' ? 'emerald' : r.status === 'error' ? 'red' : 'slate'} />
+        <MiniStat label="延迟" value={r.latency_ms ? `${r.latency_ms}ms` : '-'} />
+        <MiniStat label="trace_id" value={(r.trace_id || '').slice(0, 16)} />
+        <MiniStat label="prompt_key" value={r.prompt_key || '-'} />
+        <MiniStat label="prompt_mode" value={r.prompt_mode || '-'} />
+        <MiniStat label="model" value={r.model || '-'} />
+        <MiniStat label="session_id" value={(r.session_id || '').slice(0, 16) || '-'} />
+        <MiniStat label="user_id" value={r.user_id || '-'} />
+      </div>
+      {r.error && <div className="p-3 bg-red-500/10 text-red-400 rounded-lg mb-4 text-sm">{r.error}</div>}
+      {r.input_preview && <Card className="p-4 mb-4"><h3 className="text-sm font-medium text-slate-400 mb-2">输入摘要</h3><pre className="text-xs text-slate-300 whitespace-pre-wrap">{r.input_preview}</pre></Card>}
+      {r.output_preview && <Card className="p-4 mb-4"><h3 className="text-sm font-medium text-slate-400 mb-2">输出摘要</h3><pre className="text-xs text-slate-300 whitespace-pre-wrap">{r.output_preview}</pre></Card>}
+
+      {/* Tool Calls */}
+      <h2 className="text-lg font-bold mt-6 mb-3">工具调用 ({detail.tool_calls?.length || 0})</h2>
+      {detail.tool_calls?.length > 0 && (
+        <Card>
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+              <th className="py-2 px-3">工具</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">延迟</th><th className="py-2 px-3">时间</th>
+            </tr></thead>
+            <tbody>
+              {detail.tool_calls.map(tc => (
+                <tr key={tc.tool_call_id} className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer" onClick={() => setToolDetail(toolDetail?.tool_call_id === tc.tool_call_id ? null : tc)}>
+                  <td className="py-2 px-3 text-slate-200">{tc.tool_name}</td>
+                  <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${tc.status === 'success' ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{tc.status}</span></td>
+                  <td className="py-2 px-3 text-slate-400">{tc.latency_ms ? `${tc.latency_ms}ms` : '-'}</td>
+                  <td className="py-2 px-3 text-xs text-slate-500">{tc.started_at || '-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {toolDetail && (
+            <div className="p-3 border-t border-slate-800">
+              <h3 className="text-sm font-medium text-slate-400 mb-2">{toolDetail.tool_name} 详情</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div><div className="text-xs text-slate-500 mb-1">参数</div><JsonBlock value={toolDetail.args_json} className="max-h-72" /></div>
+                <div><div className="text-xs text-slate-500 mb-1">结果/错误</div><JsonBlock value={toolDetail.result_preview || toolDetail.error} className="max-h-72" /></div>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+      {detail.tool_calls?.length === 0 && <p className="text-xs text-slate-500">无工具调用</p>}
+
+      {/* Prompt Render Logs */}
+      {detail.prompt_render_logs?.length > 0 && (
+        <>
+          <h2 className="text-lg font-bold mt-6 mb-3">Prompt 渲染日志</h2>
+          <Card>
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+                <th className="py-2 px-3">prompt_key</th><th className="py-2 px-3">mode</th><th className="py-2 px-3">tokens</th><th className="py-2 px-3">警告</th>
+              </tr></thead>
+              <tbody>
+                {detail.prompt_render_logs.map(pr => (
+                  <tr key={pr.id} className="border-b border-slate-800/50">
+                    <td className="py-2 px-3 text-slate-200">{pr.prompt_key}</td>
+                    <td className="py-2 px-3 text-slate-400">{pr.mode || '-'}</td>
+                    <td className="py-2 px-3 text-slate-400">{pr.token_estimate || '-'}</td>
+                    <td className="py-2 px-3 text-xs text-amber-400">{pr.warnings_json || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Tool Calls 独立页面 ──
+function ToolCallsPage() {
+  const [items, setItems] = useState([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [runFilter, setRunFilter] = useState('')
+  const [toolFilter, setToolFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const limit = 30
+  const load = useCallback(() => {
+    const params = { page, limit }
+    if (runFilter) params.run_id = runFilter
+    if (toolFilter) params.tool_name = toolFilter
+    if (statusFilter) params.status = statusFilter
+    api.get('/tool-calls', { params }).then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0) }).catch(() => {})
+  }, [page, runFilter, toolFilter, statusFilter])
+  useEffect(() => { load() }, [load])
+  const totalPages = Math.max(1, Math.ceil(total / limit))
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-4">工具调用</h1>
+      <div className="flex gap-2 mb-4">
+        <input value={runFilter} onChange={e => { setRunFilter(e.target.value); setPage(1) }} placeholder="run_id..." className="w-40 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
+        <input value={toolFilter} onChange={e => { setToolFilter(e.target.value); setPage(1) }} placeholder="tool_name..." className="w-32 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
+        <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1) }} className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
+          <option value="">全部状态</option>
+          <option value="success">success</option>
+          <option value="error">error</option>
+        </select>
+        <button onClick={() => { setRunFilter(''); setToolFilter(''); setStatusFilter(''); setPage(1) }} className="px-2 py-1 bg-slate-700 rounded text-xs">清除</button>
+      </div>
+      <Card>
+        <table className="w-full text-sm">
+          <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+            <th className="py-2 px-3">工具</th><th className="py-2 px-3">run_id</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">延迟</th><th className="py-2 px-3">时间</th>
+          </tr></thead>
+          <tbody>
+            {items.map(tc => (
+              <tr key={tc.tool_call_id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                <td className="py-2 px-3 font-mono text-slate-200">{tc.tool_name}</td>
+                <td className="py-2 px-3 text-slate-400 text-xs">{(tc.run_id || '').slice(0, 12)}</td>
+                <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${tc.status === 'success' ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{tc.status}</span></td>
+                <td className="py-2 px-3 text-slate-400">{tc.latency_ms ? `${tc.latency_ms}ms` : '-'}</td>
+                <td className="py-2 px-3 text-xs text-slate-500">{tc.started_at || '-'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {total > limit && (
+          <div className="flex justify-between p-3 text-xs border-t border-slate-800">
+            <span className="text-slate-500">共 {total} 条 | 第 {page}/{totalPages} 页</span>
+            <div className="flex gap-2">
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50">上一页</button>
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50">下一页</button>
+            </div>
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
 // ── Models ──
 function ModelsPage() {
   const tabs = [
@@ -3042,6 +3489,10 @@ export default function App() {
           <Route path="/db" element={<DbPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/prompt" element={<PromptPage />} />
+          <Route path="/prompts" element={<ManagedPromptsPage />} />
+          <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />
+          <Route path="/agent-runs" element={<AgentRunsPage />} />
+          <Route path="/tool-calls" element={<ToolCallsPage />} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="*" element={<Navigate to="/" />} />
