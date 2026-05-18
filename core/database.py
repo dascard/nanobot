@@ -829,6 +829,28 @@ def init_db():
                 conn.close()
     except Exception:
         pass
+
+    # ── agent_runs 热迁移：补 chat_type / group_id（旧库缺列） ──
+    try:
+        if "agent_runs" in inspector.get_table_names():
+            ar_columns = [col["name"] for col in inspector.get_columns("agent_runs")]
+            ar_add = {
+                "chat_type": "TEXT DEFAULT ''",
+                "group_id": "TEXT DEFAULT ''",
+            }
+            for col_name, col_type in ar_add.items():
+                if col_name not in ar_columns:
+                    print(f"  → Migrating: Adding missing column [{col_name}] to agent_runs...")
+                    with engine.connect() as conn:
+                        conn.execute(text(f"ALTER TABLE agent_runs ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+            with engine.connect() as conn:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_runs_chat_type ON agent_runs(chat_type)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_runs_group_id ON agent_runs(group_id)"))
+                conn.commit()
+    except Exception as e:
+        print(f"  ⚠ agent_runs migration skipped: {e}")
+
 def get_db():
     db = SessionLocal()
     try:

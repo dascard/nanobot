@@ -2124,25 +2124,24 @@ function AgentRunsPage() {
           <div className="p-3"><Pagination page={page} total={total} limit={limit} onChange={setPage} /></div>
         </Card>
         <div className="xl:col-span-7 space-y-4 min-w-0">
-          {detail ? (
-            <>
+          {detail ? (<>
               <Card className="p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div>
-                    <h2 className="text-sm font-medium text-emerald-400 font-mono">{detail.run_id}</h2>
-                    <div className="text-xs text-slate-600 font-mono">{detail.trace_id}</div>
+                    <h2 className="text-sm font-medium text-emerald-400 font-mono">{(detail.run || detail).run_id}</h2>
+                    <div className="text-xs text-slate-600 font-mono">{(detail.run || detail).trace_id}</div>
                   </div>
-                  <Badge tone={tone(detail.status)}>{detail.status}</Badge>
+                  <Badge tone={tone((detail.run || detail).status)}>{(detail.run || detail).status}</Badge>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
-                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Prompt</div><div className="text-white font-medium truncate">{detail.prompt_key || '-'}</div></div>
-                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Mode</div><div className="text-blue-300 font-medium truncate">{detail.prompt_mode || '-'}</div></div>
-                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Latency</div><div className="text-white font-medium">{detail.latency_ms || 0}ms</div></div>
+                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Prompt</div><div className="text-white font-medium truncate">{(detail.run || detail).prompt_key || '-'}</div></div>
+                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Mode</div><div className="text-blue-300 font-medium truncate">{(detail.run || detail).prompt_mode || '-'}</div></div>
+                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Latency</div><div className="text-white font-medium">{(detail.run || detail).latency_ms || 0}ms</div></div>
                   <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Tools</div><div className="text-emerald-300 font-medium">{(detail.tool_calls || []).length}</div></div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div><div className="text-xs text-slate-500 mb-1">输入预览</div><JsonBlock value={detail.input_preview} className="max-h-40" /></div>
-                  <div><div className="text-xs text-slate-500 mb-1">输出预览</div><JsonBlock value={detail.output_preview || detail.error} className="max-h-40" /></div>
+                  <div><div className="text-xs text-slate-500 mb-1">输入预览</div><JsonBlock value={(detail.run || detail).input_preview} className="max-h-40" /></div>
+                  <div><div className="text-xs text-slate-500 mb-1">输出预览</div><JsonBlock value={(detail.run || detail).output_preview || (detail.run || detail).error} className="max-h-40" /></div>
                 </div>
               </Card>
               <Card className="p-4">
