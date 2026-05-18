@@ -123,21 +123,11 @@ def build_session_memory(
     from core.database import User, ConversationTurn
 
     max_rows = MAX_GROUP_CONTEXT_ROWS if is_group else MAX_PRIVATE_CONTEXT_ROWS
-    max_age_min = GROUP_CONTEXT_MAX_AGE_MIN if is_group else PRIVATE_CONTEXT_MAX_AGE_MIN
-
-    age_cutoff = datetime.now() - timedelta(minutes=max_age_min)
     cutoff = None
     if user_id:
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.history_clear_at:
             cutoff = user.history_clear_at
-            # 取更早的 cutoff：历史清除时间 vs 时间窗口
-            if cutoff < age_cutoff:
-                cutoff = age_cutoff
-        else:
-            cutoff = age_cutoff
-    else:
-        cutoff = age_cutoff
 
     query = db.query(ConversationTurn).filter(
         ConversationTurn.session_id == session_id)

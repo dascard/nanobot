@@ -136,7 +136,12 @@ def _canonical_row_send_code(row: StickerMemory) -> str:
 
 def _public_sticker_image_url(row: StickerMemory) -> str:
     base_url = str(os.environ.get("NANOBOT_PUBLIC_BASE_URL") or "").strip().rstrip("/")
-    if not base_url or not getattr(row, "id", None):
+    if (
+        not base_url
+        or not getattr(row, "id", None)
+        or not str(getattr(row, "local_path", "") or "").strip()
+        or str(getattr(row, "preview_status", "") or "") != "ok"
+    ):
         return ""
     query = {}
     token = str(os.environ.get("NANOBOT_STICKER_IMAGE_TOKEN") or "").strip()
@@ -309,7 +314,6 @@ def search_stickers(
             StickerMemory.status == ACTIVE_STATUS,
             StickerMemory.dedupe_status != "duplicate",
             StickerMemory.duplicate_of_id.is_(None),
-            StickerMemory.preview_status == "ok",
         )
         .all()
     )

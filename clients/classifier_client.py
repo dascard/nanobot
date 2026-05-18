@@ -235,6 +235,29 @@ def call_model_route(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ]
+        try:
+            from core.prompt_runtime import render_model_messages
+
+            prompt_key = {
+                "timing_gate": "timing_gate",
+                "private_decision": "private_decision",
+                "classifier_legacy": "classifier_legacy",
+            }.get(route_key, "")
+            if prompt_key:
+                messages = render_model_messages(
+                    prompt_key,
+                    {
+                        "message": user_message,
+                        "system_prompt": system_prompt,
+                        "pending_text": user_message,
+                        "recent_context": "",
+                        "bot_name": "",
+                        "group_profile": "",
+                    },
+                    messages,
+                )
+        except Exception as e:
+            logger.warning("[call_model_route] PromptManager fallback route=%s error=%s", route_key, e)
 
     payload: dict = {
         "messages": messages,
@@ -316,6 +339,9 @@ def _get_provider_config(provider_id: str) -> dict | None:
             ak = f"model.providers.{alias_key}.{field}"
             if ak in db_keys:
                 return settings.get(ak, None)
+            alias_value = settings.get(ak, None)
+            if alias_value is not None and alias_value != "":
+                return alias_value
         v = settings.get(ck, None)
         return v
 

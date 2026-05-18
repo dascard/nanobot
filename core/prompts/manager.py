@@ -45,6 +45,8 @@ class RenderedPrompt:
     frontmatter: dict[str, Any]
     required_vars: list[str]
     optional_vars: list[str]
+    missing_required_vars: list[str]
+    unknown_vars: list[str]
     warnings: list[str]
     token_estimate: int
     mode: str
@@ -59,6 +61,8 @@ class RenderedPrompt:
             "frontmatter": self.frontmatter,
             "required_vars": self.required_vars,
             "optional_vars": self.optional_vars,
+            "missing_required_vars": self.missing_required_vars,
+            "unknown_vars": self.unknown_vars,
             "warnings": self.warnings,
             "token_estimate": self.token_estimate,
             "mode": self.mode,
@@ -305,7 +309,7 @@ class PromptManager:
         trace_id: str | None = None,
         run_id: str | None = None,
         mode: str | None = None,
-        strict: bool = True,
+        strict: bool = False,
     ) -> RenderedPrompt:
         """渲染提示词模板。strict=False 时缺必需变量不抛错，改为 warnings。"""
         variables = dict(variables or {})
@@ -314,13 +318,14 @@ class PromptManager:
         optional = tmpl.optional_vars
         declared = set(required + optional)
         missing = [name for name in required if name not in variables or variables[name] is None]
+        placeholders = set(_VAR_PATTERN.findall(tmpl.body))
+        unknown_vars = sorted(set(variables) - declared)
+        warnings: list[str] = []
         if missing:
             if strict:
                 raise PromptRenderError(f"缺少必需变量: {', '.join(missing)}")
-
-        placeholders = set(_VAR_PATTERN.findall(tmpl.body))
-        warnings: list[str] = []
-        for name in sorted(set(variables) - declared):
+            warnings.append(f"missing required variable: {', '.join(missing)}")
+        for name in unknown_vars:
             warnings.append(f"unknown variable provided: {name}")
         for name in sorted(placeholders - declared):
             warnings.append(f"placeholder not declared: {name}")
@@ -339,6 +344,8 @@ class PromptManager:
             frontmatter=tmpl.frontmatter,
             required_vars=required,
             optional_vars=optional,
+            missing_required_vars=missing,
+            unknown_vars=unknown_vars,
             warnings=warnings,
             token_estimate=_estimate_tokens(content),
             mode=mode or "preview",

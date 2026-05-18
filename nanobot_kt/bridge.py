@@ -408,6 +408,7 @@ class NanobotBridge:
                 trace_id=trace_id,
                 run_id=run_id,
                 mode=mode,
+                strict=False,
             )
             logger.info("[PromptManager] rendered key=%s mode=%s tokens=%s warnings=%d",
                         prompt_key, mode, rendered.token_estimate, len(rendered.warnings))

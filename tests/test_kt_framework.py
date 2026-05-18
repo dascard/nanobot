@@ -252,6 +252,79 @@ class TestNanobotBridge:
         result = asyncio.run(_run())
         assert result == "Hello from KT"
 
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_serializes_same_session(self, MockAgent, mock_load, monkeypatch):
+        """同一个 session 的模型处理必须串行，避免共享 conversation 串扰。"""
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.bridge import NanobotBridge
+        import json
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        monkeypatch.setattr(
+            "clients.classifier_client.resolve_model_route",
+            lambda _key: {"base_url": "http://unit/v1", "api_key": "", "provider_id": "", "timeout": 1},
+        )
+        monkeypatch.setattr(
+            "clients.classifier_client.ensure_model_route_enabled",
+            lambda _key, route=None: route or {},
+        )
+        monkeypatch.setattr(
+            "nanobot_kt.bridge.NewAPIClient.sync_models_to_registry",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "nanobot_kt.bridge.NewAPIClient.estimate_complexity",
+            lambda *_args, **_kwargs: 1,
+        )
+        monkeypatch.setattr(
+            "nanobot_kt.bridge.NewAPIClient.get_ordered_candidates",
+            lambda *_args, **_kwargs: [{"id": "unit-model", "intelligence": 1, "context_window": 128000}],
+        )
+
+        reply_output = json.dumps({REPLY_MARKER: {"content": "ok"}}, ensure_ascii=False)
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.registry._tools = {}
+        mock_agent.controller = MagicMock(
+            conversation=mock_conv,
+            llm=MagicMock(config=MagicMock(model="test-model")),
+        )
+
+        active = 0
+        max_active = 0
+
+        async def fake_process(_event):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            await asyncio.sleep(0.03)
+            active -= 1
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        async def _run():
+            bridge = NanobotBridge()
+            await bridge.start()
+            return await asyncio.gather(
+                bridge.handle_message("a", user_id="u1", session_id="same-session", metadata={"complexity": 1}),
+                bridge.handle_message("b", user_id="u1", session_id="same-session", metadata={"complexity": 1}),
+            )
+
+        assert asyncio.run(_run()) == ["ok", "ok"]
+        assert max_active == 1
+
     def test_handle_message_without_init(self):
         """Test that handle_message returns error if agent not started."""
         from nanobot_kt.bridge import NanobotBridge

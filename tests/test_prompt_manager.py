@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 
 def write_template(root: Path, name: str, content: str) -> None:
     root.mkdir(parents=True, exist_ok=True)
@@ -50,8 +48,8 @@ optional_vars:
     assert rendered.required_vars == ["user_input"]
 
 
-def test_prompt_manager_missing_required_variable_raises(tmp_path):
-    from core.prompts import PromptManager, PromptRenderError
+def test_prompt_manager_missing_required_variable_warns_without_raising(tmp_path):
+    from core.prompts import PromptManager
 
     prompt_dir = tmp_path / "prompts"
     write_template(
@@ -68,10 +66,10 @@ required_vars:
 
     manager = PromptManager(prompt_dir=prompt_dir, backup_dir=tmp_path / "backups")
 
-    with pytest.raises(PromptRenderError) as exc:
-        manager.render("memory_extract", {})
+    rendered = manager.render("memory_extract", {})
 
-    assert "conversation" in str(exc.value)
+    assert rendered.missing_required_vars == ["conversation"]
+    assert any("conversation" in warning for warning in rendered.warnings)
 
 
 def test_prompt_manager_save_creates_backup_and_history(tmp_path):

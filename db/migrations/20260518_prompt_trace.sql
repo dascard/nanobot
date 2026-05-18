@@ -26,6 +26,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_trace_id ON agent_runs(trace_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_session_id ON agent_runs(session_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_user_id ON agent_runs(user_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_prompt_key ON agent_runs(prompt_key);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_started_at ON agent_runs(started_at);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_chat_type ON agent_runs(chat_type);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_group_id ON agent_runs(group_id);

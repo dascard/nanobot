@@ -514,25 +514,44 @@ class NanobotKTController:
         
         handler = self.local_tools.get(cmd)
         if handler:
-            if cmd == "vibe":
-                return f"[Local Tool]: {handler(tool_args, session_id)}"
-            # Run sync handlers in thread to avoid blocking event loop
-            if cmd == "news_scout":
-                result = await asyncio.to_thread(handler, tool_args)
-            else:
-                result = handler(tool_args)
+            from core.tool_tracing import begin_tool_trace, finish_tool_trace
+
+            trace_args = {"query": tool_args, "user_id": user_id, "session_id": session_id}
+            tool_call_id, started = begin_tool_trace(cmd, trace_args)
+            try:
+                if cmd == "vibe":
+                    result = handler(tool_args, session_id)
+                # Run sync handlers in thread to avoid blocking event loop
+                elif cmd == "news_scout":
+                    result = await asyncio.to_thread(handler, tool_args)
+                else:
+                    result = handler(tool_args)
+            except Exception as e:
+                finish_tool_trace(tool_call_id, started, status="error", error=str(e))
+                raise
+            finish_tool_trace(tool_call_id, started, result=result)
             return f"[Local Tool]: {result}"
         return "Unknown local tool."
 
     def _execute_native_tool(self, func_name: str, args: Dict[str, Any]) -> str:
         """Execute a native tool call and return the result string."""
-        if func_name == "run_sql_analysis":
-            return self.sandbox.run_query(args.get("sql", ""))
-        elif func_name == "run_python_analysis":
-            return self.sandbox.execute_python_analysis(args.get("code", ""))
-        elif func_name == "search_news":
-            return search_and_extract_news(args.get("query", ""))
-        return f"Unknown tool: {func_name}"
+        from core.tool_tracing import begin_tool_trace, finish_tool_trace
+
+        tool_call_id, started = begin_tool_trace(func_name, args)
+        try:
+            if func_name == "run_sql_analysis":
+                result = self.sandbox.run_query(args.get("sql", ""))
+            elif func_name == "run_python_analysis":
+                result = self.sandbox.execute_python_analysis(args.get("code", ""))
+            elif func_name == "search_news":
+                result = search_and_extract_news(args.get("query", ""))
+            else:
+                result = f"Unknown tool: {func_name}"
+            finish_tool_trace(tool_call_id, started, result=result)
+            return result
+        except Exception as e:
+            finish_tool_trace(tool_call_id, started, status="error", error=str(e))
+            raise
 
     async def chat(self, user_id: str, session_id: str, query: str, metadata: Dict[str, Any]) -> str:
         # 1. Local Tool Interceptor
@@ -651,6 +670,16 @@ class NanobotKTController:
             return
 
         extraction_prompt = build_candidate_extraction_prompt(existing_persona, logs_text)
+        try:
+            from core.prompt_runtime import render_prompt_content
+
+            extraction_prompt = render_prompt_content(
+                "memory_extract",
+                {"conversation": logs_text, "existing_memory": existing_persona},
+                extraction_prompt,
+            )
+        except Exception:
+            pass
 
         # 3b. LLM 调用（只用 fast tier，因为只做提取不推理）
         candidate_res = await self.provider.invoke_raw(

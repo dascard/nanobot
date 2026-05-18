@@ -153,6 +153,74 @@ class TestClassifierRouteProviderResolution:
         with pytest.raises(RuntimeError, match="provider disabled: local_qwen"):
             call_model_route(route_key="timing_gate", user_message="ping")
 
+    def test_call_model_route_uses_prompt_manager_in_managed_mode(self, tmp_path, monkeypatch):
+        import json
+
+        from clients.classifier_client import call_model_route
+        import core.prompts.manager as prompt_manager_module
+
+        prompt_dir = tmp_path / "prompts"
+        prompt_dir.mkdir()
+        (prompt_dir / "timing_gate.md").write_text(
+            """---
+name: Timing Gate
+required_vars:
+  - pending_text
+---
+模板判定: {{ pending_text }}
+""",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("NANOBOT_PROMPT_DIR", str(prompt_dir))
+        prompt_manager_module._MANAGER = None
+
+        values = {
+            "prompt_system.mode": "managed",
+            "model.route.timing_gate.base_url": "http://local-test/v1",
+            "model.route.timing_gate.model": "unit-model",
+            "model.route.timing_gate.max_tokens": 80,
+            "model.route.timing_gate.temperature": 0,
+            "model.route.timing_gate.timeout": 5,
+        }
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "choices": [{"message": {"content": "ok"}}],
+                }).encode("utf-8")
+
+        class FakeOpener:
+            def open(self, req, timeout=0):
+                captured["payload"] = json.loads(req.data.decode("utf-8"))
+                return FakeResponse()
+
+        monkeypatch.setattr(
+            "urllib.request.build_opener",
+            lambda *_args, **_kwargs: FakeOpener(),
+        )
+
+        assert call_model_route(
+            route_key="timing_gate",
+            system_prompt="legacy system",
+            user_message="ping",
+        ) == "ok"
+
+        messages = captured["payload"]["messages"]
+        assert "模板判定: ping" in messages[0]["content"]
+        assert "legacy system" not in json.dumps(messages, ensure_ascii=False)
+
 
 class TestComplexityEstimator:
     def test_simple_greeting(self):

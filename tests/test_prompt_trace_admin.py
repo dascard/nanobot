@@ -197,6 +197,22 @@ optional_vars:
     assert runs_resp.status_code == 200, runs_resp.text
     assert runs_resp.json()["items"][0]["trace_id"] == "trace-admin"
 
+    filtered = client.get(
+        "/api/v1/admin/agent-runs",
+        params={"trace_id": "trace-admin", "user_id": "u1", "prompt_key": "group_chat"},
+        headers=auth_header,
+    )
+    assert filtered.status_code == 200, filtered.text
+    assert filtered.json()["total"] == 1
+
+    empty_filtered = client.get(
+        "/api/v1/admin/agent-runs",
+        params={"trace_id": "missing-trace"},
+        headers=auth_header,
+    )
+    assert empty_filtered.status_code == 200, empty_filtered.text
+    assert empty_filtered.json()["total"] == 0
+
     detail_resp = client.get(f"/api/v1/admin/agent-runs/{run.run_id}", headers=auth_header)
     assert detail_resp.status_code == 200, detail_resp.text
     assert detail_resp.json()["tool_calls"][0]["tool_name"] == "reply"

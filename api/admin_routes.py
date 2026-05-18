@@ -1698,6 +1698,7 @@ def rollback_managed_prompt(
 def list_agent_runs(
     limit: int = Query(50, ge=1, le=200),
     page: int = Query(1, ge=1),
+    offset: int | None = Query(None, ge=0),
     status: str = "",
     session_id: str = "",
     group_id: str = "",
@@ -1730,13 +1731,20 @@ def list_agent_runs(
     if run_type:
         q = q.filter(AgentRun.run_type == run_type)
     total = q.count()
+    row_offset = offset if offset is not None else (page - 1) * limit
     rows = (
         q.order_by(AgentRun.started_at.desc())
-        .offset((page - 1) * limit)
+        .offset(row_offset)
         .limit(limit)
         .all()
     )
-    return {"items": [row_to_dict(row) for row in rows], "total": total, "page": page, "limit": limit}
+    return {
+        "items": [row_to_dict(row) for row in rows],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "offset": row_offset,
+    }
 
 
 @router.get("/agent-runs/{run_id}")
@@ -1767,6 +1775,7 @@ def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(veri
 def list_tool_calls(
     limit: int = Query(50, ge=1, le=200),
     page: int = Query(1, ge=1),
+    offset: int | None = Query(None, ge=0),
     run_id: str = "",
     trace_id: str = "",
     tool_name: str = "",
@@ -1784,13 +1793,20 @@ def list_tool_calls(
     if status:
         q = q.filter(ToolCall.status == status)
     total = q.count()
+    row_offset = offset if offset is not None else (page - 1) * limit
     rows = (
         q.order_by(ToolCall.started_at.desc())
-        .offset((page - 1) * limit)
+        .offset(row_offset)
         .limit(limit)
         .all()
     )
-    return {"items": [row_to_dict(row) for row in rows], "total": total, "page": page, "limit": limit}
+    return {
+        "items": [row_to_dict(row) for row in rows],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "offset": row_offset,
+    }
 
 
 @router.get("/tool-calls/{tool_call_id}")

@@ -1,6 +1,7 @@
 """LLM 调用层——不碰数据库。"""
 
 import asyncio
+import inspect
 import json
 import logging
 
@@ -80,15 +81,31 @@ CHAT_QUALITY_PROMPT = """请根据以下群聊记录，给出结构化的聊天�
 {messages_text}"""
 
 
-async def _call_llm_with_retry(client, sys_prompt: str, prompt: str, max_retries: int = 2) -> str:
+async def _call_llm_with_retry(
+    client,
+    sys_prompt: str,
+    prompt: str,
+    max_retries: int = 2,
+    *,
+    prompt_key: str = "",
+    prompt_vars: dict | None = None,
+) -> str:
     last_raw = ""
     for attempt in range(max_retries + 1):
         t = max(0.05, 0.3 * (0.5 ** attempt))
+        messages = [
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        if prompt_key:
+            try:
+                from core.prompt_runtime import render_model_messages
+
+                messages = render_model_messages(prompt_key, prompt_vars or {}, messages)
+            except Exception:
+                pass
         resp = await client.chat_completion(
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": prompt},
-            ],
+            messages=messages,
             model_tier="smart",
             manual_model="deepseek-v4-flash",
             temperature=t,
@@ -138,6 +155,29 @@ def _parse_result(raw, branch: str) -> dict:
     return _FALLBACKS[branch]
 
 
+async def _call_llm_branch(
+    client,
+    sys_prompt: str,
+    prompt: str,
+    *,
+    prompt_key: str,
+    prompt_vars: dict,
+) -> str:
+    """调用分支 LLM；兼容测试中 monkeypatch 的旧签名 helper。"""
+    signature = inspect.signature(_call_llm_with_retry)
+    params = signature.parameters
+    supports_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+    if supports_kwargs or "prompt_key" in params:
+        return await _call_llm_with_retry(
+            client,
+            sys_prompt,
+            prompt,
+            prompt_key=prompt_key,
+            prompt_vars=prompt_vars,
+        )
+    return await _call_llm_with_retry(client, sys_prompt, prompt)
+
+
 async def analyze_group(payload: dict, instructions: str = "") -> dict:
     """四路并发 LLM 分析——任意一路失败不影响其他。"""
     from clients.new_api_client import NewAPIClient
@@ -151,24 +191,36 @@ async def analyze_group(payload: dict, instructions: str = "") -> dict:
     SYS = "你是群聊分析助手。只输出JSON，不要markdown或额外说明。"
 
     results = await asyncio.gather(
-        _call_llm_with_retry(
+        _call_llm_branch(
             client, SYS,
             _with_instructions(TOPIC_PROMPT.format(messages_text=msg_text), instructions),
+            prompt_key="group_analysis_topics",
+            prompt_vars={"messages_text": msg_text, "instructions": instructions},
         ),
-        _call_llm_with_retry(
+        _call_llm_branch(
             client, SYS,
             _with_instructions(
                 USER_TITLE_PROMPT.format(users_text=users_text, messages_text=style_msg_text),
                 instructions,
             ),
+            prompt_key="group_analysis_titles",
+            prompt_vars={
+                "users_text": users_text,
+                "messages_text": style_msg_text,
+                "instructions": instructions,
+            },
         ),
-        _call_llm_with_retry(
+        _call_llm_branch(
             client, SYS,
             _with_instructions(GOLDEN_QUOTE_PROMPT.format(messages_text=msg_text), instructions),
+            prompt_key="group_analysis_quotes",
+            prompt_vars={"messages_text": msg_text, "instructions": instructions},
         ),
-        _call_llm_with_retry(
+        _call_llm_branch(
             client, SYS,
             _with_instructions(CHAT_QUALITY_PROMPT.format(messages_text=msg_text), instructions),
+            prompt_key="group_analysis_quality",
+            prompt_vars={"messages_text": msg_text, "instructions": instructions},
         ),
         return_exceptions=True,
     )
