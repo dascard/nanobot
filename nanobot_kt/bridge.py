@@ -674,6 +674,8 @@ class NanobotBridge:
                 trace_id=trace_id,
                 session_id=session_id,
                 user_id=user_id,
+                chat_type=str(meta.get("chat_type") or ""),
+                group_id=str(meta.get("group_id") or ""),
                 run_type="chat",
                 prompt_mode=prompt_mode,
                 prompt_key=prompt_key,

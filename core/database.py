@@ -414,6 +414,8 @@ class AgentRun(Base):
     trace_id = Column(String, index=True, default="")
     session_id = Column(String, index=True, default="")
     user_id = Column(String, index=True, default="")
+    chat_type = Column(String, index=True, default="")
+    group_id = Column(String, index=True, default="")
     run_type = Column(String, index=True, default="chat")
     prompt_mode = Column(String, index=True, default="legacy")
     prompt_key = Column(String, index=True, default="")

@@ -1700,6 +1700,8 @@ def list_agent_runs(
     page: int = Query(1, ge=1),
     status: str = "",
     session_id: str = "",
+    group_id: str = "",
+    chat_type: str = "",
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
@@ -1708,6 +1710,10 @@ def list_agent_runs(
         q = q.filter(AgentRun.status == status)
     if session_id:
         q = q.filter(AgentRun.session_id == session_id)
+    if group_id:
+        q = q.filter(AgentRun.group_id == group_id)
+    if chat_type:
+        q = q.filter(AgentRun.chat_type == chat_type)
     total = q.count()
     rows = (
         q.order_by(AgentRun.started_at.desc())
@@ -1735,10 +1741,11 @@ def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(veri
         .order_by(PromptRenderLog.created_at.asc())
         .all()
     )
-    data = row_to_dict(run)
-    data["tool_calls"] = [row_to_dict(row) for row in tool_calls]
-    data["prompt_render_logs"] = [row_to_dict(row) for row in prompt_logs]
-    return data
+    return {
+        "run": row_to_dict(run),
+        "tool_calls": [row_to_dict(row) for row in tool_calls],
+        "prompt_render_logs": [row_to_dict(row) for row in prompt_logs],
+    }
 
 
 @router.get("/tool-calls")

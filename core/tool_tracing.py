@@ -27,7 +27,23 @@ def install_executor_tracing(executor: Any) -> None:
         except Exception:
             tool_call_id = ""
 
-        result = await original_run_tool(job_id, tool, args, is_direct)
+        try:
+            result = await original_run_tool(job_id, tool, args, is_direct)
+        except Exception as e:
+            if tool_call_id:
+                try:
+                    from core.tracing import ToolTracer
+
+                    ToolTracer.finish_tool_call(
+                        tool_call_id,
+                        status="error",
+                        result="",
+                        error=str(e),
+                        latency_ms=int((time.time() - started) * 1000),
+                    )
+                except Exception:
+                    pass
+            raise
 
         if tool_call_id:
             try:
