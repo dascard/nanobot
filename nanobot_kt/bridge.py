@@ -660,56 +660,91 @@ class NanobotBridge:
             logger.info("[SessionRuntime] Interrupt flag set for session=%s", session_id)
             self._agent._interrupt_requested = True
 
-        async with sess_lock:
-            t_start = _time.time()
-            meta = metadata or {}
-            prompt_mode = self._prompt_system_mode()
-            prompt_key = "group_chat" if meta.get("is_group", False) else "private_chat"
-            from core.tracing import RunTracer, new_trace_id
-            from core.tracing_context import reset_trace_context, set_trace_context
+        self._active_run_handle = None
+        self._active_trace_tokens = None
+        try:
+            async with sess_lock:
+                t_start = _time.time()
+                meta = metadata or {}
+                prompt_mode = self._prompt_system_mode()
+                prompt_key = "group_chat" if meta.get("is_group", False) else "private_chat"
+                from core.tracing import RunTracer, new_trace_id
+                from core.tracing_context import reset_trace_context, set_trace_context
 
-            trace_id = str(meta.get("trace_id") or new_trace_id())
-            meta["trace_id"] = trace_id
-            run_handle = RunTracer.start_run(
-                trace_id=trace_id,
-                session_id=session_id,
-                user_id=user_id,
-                chat_type=str(meta.get("chat_type") or ""),
-                group_id=str(meta.get("group_id") or ""),
-                run_type="chat",
-                prompt_mode=prompt_mode,
-                prompt_key=prompt_key,
-                input_preview=query,
-                meta={
-                    "sender_name": sender_name,
-                    "is_group": bool(meta.get("is_group", False)),
-                    "message_id": meta.get("message_id", ""),
-                },
-            )
-            trace_tokens = set_trace_context(trace_id, run_handle.run_id)
-            trace_closed = False
-
-            def _finish_agent_trace(
-                status: str,
-                *,
-                output_preview: str = "",
-                error: str = "",
-                model: str = "",
-            ) -> None:
-                nonlocal trace_closed
-                if trace_closed:
-                    return
-                trace_closed = True
-                self._restore_saved_tools()
-                RunTracer.finish_run(
-                    run_handle.run_id,
-                    status=status,
-                    output_preview=output_preview,
-                    error=error,
-                    latency_ms=int((_time.time() - t_start) * 1000),
-                    model=model,
+                trace_id = str(meta.get("trace_id") or new_trace_id())
+                meta["trace_id"] = trace_id
+                run_handle = RunTracer.start_run(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    user_id=user_id,
+                    chat_type=str(meta.get("chat_type") or ""),
+                    group_id=str(meta.get("group_id") or ""),
+                    run_type="chat",
+                    prompt_mode=prompt_mode,
+                    prompt_key=prompt_key,
+                    input_preview=query,
+                    meta={
+                        "sender_name": sender_name,
+                        "is_group": bool(meta.get("is_group", False)),
+                        "message_id": meta.get("message_id", ""),
+                    },
                 )
-                reset_trace_context(trace_tokens)
+                trace_tokens = set_trace_context(trace_id, run_handle.run_id)
+                self._active_run_handle = run_handle
+                self._active_trace_tokens = trace_tokens
+                trace_closed = False
+
+                def _finish_agent_trace(
+                    status: str,
+                    *,
+                    output_preview: str = "",
+                    error: str = "",
+                    model: str = "",
+                ) -> None:
+                    nonlocal trace_closed
+                    if trace_closed:
+                        return
+                    trace_closed = True
+                    try:
+                        self._restore_saved_tools()
+                    except Exception as _e:
+                        logger.warning("[Bridge] restore tools failed: %s", _e, exc_info=True)
+                    try:
+                        RunTracer.finish_run(
+                            run_handle.run_id,
+                            status=status,
+                            output_preview=output_preview,
+                            error=error,
+                            latency_ms=int((_time.time() - t_start) * 1000),
+                            model=model,
+                        )
+                    finally:
+                        reset_trace_context(trace_tokens)
+        except Exception as e:
+            logger.error("[NanobotBridge] unhandled error session=%s: %s", session_id, e, exc_info=True)
+            try:
+                self._restore_saved_tools()
+            except Exception:
+                pass
+            try:
+                if self._active_run_handle:
+                    RunTracer.finish_run(
+                        self._active_run_handle.run_id,
+                        status="error",
+                        error=str(e),
+                    )
+            except Exception:
+                pass
+            try:
+                if self._active_trace_tokens:
+                    from core.tracing_context import reset_trace_context
+                    reset_trace_context(self._active_trace_tokens)
+            except Exception:
+                pass
+            raise
+        finally:
+            self._active_run_handle = None
+            self._active_trace_tokens = None
 
             self._output.clear()
             if stream_queue is not None:
