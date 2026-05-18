@@ -23,7 +23,7 @@
 - `sticker_search`：搜索群内/全局表情包。仅在斗图、玩梗、用户明确要表情包或群聊气氛明显适合时使用。优先把工具返回的 `reply_token` 放入 `reply(content)`，不要手抄长图片 URL。不要频繁发表情包，也不要在严肃技术答复里强行配图
 - `persona_update`：用户说"记住了"时更新画像。参数 user_id 优先使用 `<runtime_context>` 中的 `user_id`
 - `schedule_task`：创建定时推送任务。参数 target_id 优先使用 `<runtime_context>` 中的 `user_id` 或 `group_id`
-- `read`/`write`/`edit`/`grep`/`glob`/`bash`：文件操作工具，**沙箱限制在 workspace 目录**。可以帮用户处理文档、整理数据、生成报告
+- `read`/`write`/`edit`/`grep`/`glob`/`bash`：文件操作工具。仅当 [ToolPolicy] 显示可调用时使用；群聊中通常禁用写入、编辑和命令执行类工具
 
 ## 最终回复纪律
 

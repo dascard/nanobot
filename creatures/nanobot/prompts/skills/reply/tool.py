@@ -9,6 +9,49 @@ REPLY_MARKER = "NANOBOT_REPLY_OUTPUT"
 _ALLOWED_SEND_MODES = {"normal", "quote", "mention", "quote_and_mention"}
 
 
+def build_reply_payload(
+    content: str,
+    *,
+    reply_to_message_id: Any = None,
+    mentions: Any = None,
+    quote: bool = False,
+    at_sender: bool = False,
+    send_mode: str = "normal",
+) -> dict[str, Any]:
+    """构造 bridge 可识别的最终回复协议。"""
+    text = str(content or "").strip()
+    if isinstance(mentions, list):
+        clean_mentions = [
+            str(m)[:20] for m in mentions
+            if str(m).strip() and str(m).strip().isdigit()
+        ][:10]
+    else:
+        clean_mentions = []
+
+    mode = str(send_mode or "normal")
+    if mode not in _ALLOWED_SEND_MODES:
+        mode = "normal"
+
+    return {
+        REPLY_MARKER: {
+            "content": text,
+            "reply_to_message_id": str(reply_to_message_id or "")[:50] or None,
+            "mentions": clean_mentions,
+            "quote": bool(quote),
+            "at_sender": bool(at_sender),
+            "send_mode": mode,
+        }
+    }
+
+
+def build_reply_output(content: str, **kwargs: Any) -> str:
+    return json.dumps(build_reply_payload(content, **kwargs), ensure_ascii=False)
+
+
+def build_reply_tool_result(content: str, **kwargs: Any) -> ToolResult:
+    return ToolResult(output=build_reply_output(content, **kwargs), exit_code=0)
+
+
 class ReplyTool(BaseTool):
 
     @property
@@ -44,26 +87,13 @@ class ReplyTool(BaseTool):
             record_sticker_uses_in_content(content)
         except Exception:
             pass
-        mentions = args.get("mentions")
-        if isinstance(mentions, list):
-            mentions = [str(m)[:20] for m in mentions if str(m).strip() and str(m).strip().isdigit()][:10]
-        else:
-            mentions = []
-        send_mode = str(args.get("send_mode", "normal") or "normal")
-        if send_mode not in _ALLOWED_SEND_MODES:
-            send_mode = "normal"
-
-        reply_meta = {
-            "content": content,
-            "reply_to_message_id": str(args.get("reply_to_message_id", ""))[:50] or None,
-            "mentions": mentions,
-            "quote": bool(args.get("quote")),
-            "at_sender": bool(args.get("at_sender")),
-            "send_mode": send_mode,
-        }
-        return ToolResult(
-            output=json.dumps({REPLY_MARKER: reply_meta}, ensure_ascii=False),
-            exit_code=0,
+        return build_reply_tool_result(
+            content,
+            reply_to_message_id=args.get("reply_to_message_id"),
+            mentions=args.get("mentions"),
+            quote=bool(args.get("quote")),
+            at_sender=bool(args.get("at_sender")),
+            send_mode=str(args.get("send_mode", "normal") or "normal"),
         )
 
 

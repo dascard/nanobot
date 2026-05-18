@@ -60,10 +60,14 @@ def test_contains_reply_contract(prompt_text):
     assert '禁止用 assistant 普通文本作为最终回复' in prompt_text
 
 
-def test_contains_html_passthrough(prompt_text):
+def test_contains_report_tool_contract(prompt_text):
     assert "news_search" in prompt_text
     assert "group_analysis" in prompt_text
-    assert "HTML" in prompt_text
+    assert "报告的提取、渲染和发送由工具与系统处理" in prompt_text
+    assert "用户指定哪个群" in prompt_text
+    assert "这个群/本群" in prompt_text
+    assert "reply 协议" not in prompt_text
+    assert "直接输出该 HTML" not in prompt_text
 
 
 def test_contains_tool_discipline(prompt_text):
@@ -122,7 +126,7 @@ def test_no_outdated_markers(prompt_text):
 
 def test_no_conflicting_instructions(prompt_text):
     """不应存在互相矛盾的指令。"""
-    assert "HTML" in prompt_text
+    assert "报告工具结束规则" in prompt_text
     assert "口语化" in prompt_text or "短" in prompt_text
     assert "markdown" in prompt_text.lower()
 

@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import asyncio
+import json
 
 
 def test_clean_message_filters_commands_and_noise():
@@ -308,10 +309,13 @@ def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
     result = asyncio.run(tool.execute({"group_id": "123", "instructions": "最近2小时"}))
 
     assert result.success
-    assert "<!DOCTYPE html>" in result.output
-    assert "group-analysis-report" in result.output
-    assert "消息总数" in result.output
-    assert "24H 活跃轨迹" in result.output
-    assert "话题总结" in result.output
-    assert "聊天质量锐评" in result.output
-    assert "INTP" in result.output
+    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+    payload = json.loads(result.output)
+    html = payload[REPLY_MARKER]["content"]
+    assert "<!DOCTYPE html>" in html
+    assert "group-analysis-report" in html
+    assert "消息总数" in html
+    assert "24H 活跃轨迹" in html
+    assert "话题总结" in html
+    assert "聊天质量锐评" in html
+    assert "INTP" in html

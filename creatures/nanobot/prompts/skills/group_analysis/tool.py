@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
 
 logger = logging.getLogger("nanobot.tool.group_analysis")
 
@@ -35,8 +36,9 @@ class GroupAnalysisTool(BaseTool):
     def description(self) -> str:
         return ("分析群聊消息并生成群日报。提取话题总结、活跃用户称号、金句和氛围。"
                 "当用户要求总结群聊、分析群消息、生成群日报、查看某群近期讨论时使用。"
-                "group_id 可以直接传群号、group_前缀ID或群名；工具内部会自动解析群号/群名"
-                "并查询消息记录。不要为了查找群号而先调用 sql_analysis。")
+                "group_id 是被分析的群，可以直接传群号、group_前缀ID、session_id或群名；"
+                "用户说这个群/本群时才使用当前会话的 group_id。工具内部会自动解析群号/群名"
+                "并查询消息记录，回复仍发送回当前会话。不要为了查找群号而先调用 sql_analysis。")
 
     @property
     def execution_mode(self) -> ExecutionMode:
@@ -46,7 +48,7 @@ class GroupAnalysisTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "group_id": {"type": "string", "description": "要分析的群号或 session_id"},
+                "group_id": {"type": "string", "description": "被分析群的群号、group_前缀ID、session_id或群名"},
                 "instructions": {"type": "string", "description": "可选的分析指引"},
             },
             "required": ["group_id"],
@@ -78,20 +80,18 @@ class GroupAnalysisTool(BaseTool):
                     candidates = repo.get_group_candidates(group_id)
                     if candidates:
                         lines = [f"group_{c['id']} — {c['name']}" for c in candidates[:10]]
-                        return ToolResult(
-                            output=format_error_html(
+                        return build_reply_tool_result(
+                            format_error_html(
                                 "匹配到多个群",
                                 f"关键词 \"{group_id}\" 匹配到 {len(candidates)} 个群，请使用精确的群号或群名：",
                                 lines,
-                            ),
-                            exit_code=0,
+                            )
                         )
-                    return ToolResult(
-                        output=format_error_html(
+                    return build_reply_tool_result(
+                        format_error_html(
                             "未找到群",
                             f"未找到群 \"{group_id}\"，群号或群名不匹配。",
-                        ),
-                        exit_code=0,
+                        )
                     )
 
                 window_hours = parse_instruction_window_hours(instructions)
@@ -108,13 +108,12 @@ class GroupAnalysisTool(BaseTool):
                 if cached:
                     cache.remember_group_analysis_report(cached)
                     logger.info("[group_analysis] cache_hit=true group=%s", group.group_id)
-                    return ToolResult(output=cached, exit_code=0)
+                    return build_reply_tool_result(cached)
 
                 logs = dedupe_group_logs(batch.logs)
                 if not logs:
-                    return ToolResult(
-                        output=format_error_html("消息不足", f"群 {group.name} 暂无消息记录。"),
-                        exit_code=0,
+                    return build_reply_tool_result(
+                        format_error_html("消息不足", f"群 {group.name} 暂无消息记录。")
                     )
 
                 preprocess_t0 = time.monotonic()
@@ -126,11 +125,10 @@ class GroupAnalysisTool(BaseTool):
                 preprocess_ms = round((time.monotonic() - preprocess_t0) * 1000)
 
                 if len(payload["messages"]) < 3:
-                    return ToolResult(
-                        output=format_error_html(
+                    return build_reply_tool_result(
+                        format_error_html(
                             "消息不足", f"群 {group.name} 可分析的消息不足（需≥3条）。",
-                        ),
-                        exit_code=0,
+                        )
                     )
 
                 llm_t0 = time.monotonic()
@@ -175,7 +173,7 @@ class GroupAnalysisTool(BaseTool):
                     preprocess_ms, llm_ms, render_ms, total_ms,
                 )
 
-                return ToolResult(output=report, exit_code=0)
+                return build_reply_tool_result(report)
 
             finally:
                 db.close()
@@ -183,7 +181,6 @@ class GroupAnalysisTool(BaseTool):
         except Exception as e:
             logger.error("[group_analysis] Failed: %s", e, exc_info=True)
             from .render import format_error_html
-            return ToolResult(
-                output=format_error_html("群聊分析失败", "工具执行时发生异常。", [str(e)[:300]]),
-                exit_code=0,
+            return build_reply_tool_result(
+                format_error_html("群聊分析失败", "工具执行时发生异常。", [str(e)[:300]])
             )

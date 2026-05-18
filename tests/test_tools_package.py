@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -6,6 +7,7 @@ from datetime import datetime, timedelta
 
 from creatures.nanobot.prompts.skills.news_search import tool as news_tool
 from creatures.nanobot.prompts.skills.news_search.tool import (
+    NewsSearchTool,
     WebTools,
     search_and_extract_news,
     _parse_news_layout_payload,
@@ -372,6 +374,20 @@ def test_combined_news_tool_returns_unavailable_html_when_search_backends_fail()
         assert "class=\"news-brief" in final_report
         assert "暂时不可用" in final_report or "稍后再试" in final_report
         assert "不要继续重试" in final_report or "搜索源" in final_report
+
+
+def test_news_search_tool_wraps_html_as_reply_output():
+    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+
+    html = '<!DOCTYPE html><html><body><article class="news-brief">AI 资讯</article></body></html>'
+
+    with patch("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline", return_value=html):
+        result = asyncio.run(NewsSearchTool().execute({"query": "今天 AI 新闻"}))
+
+    assert result.success
+    payload = json.loads(result.output)
+    assert payload[REPLY_MARKER]["content"] == html
+    assert payload[REPLY_MARKER]["send_mode"] == "normal"
 
 
 def test_web_search_preserves_partial_results_when_later_variant_fails(monkeypatch):

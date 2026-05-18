@@ -22,6 +22,7 @@ from email.utils import parsedate_to_datetime
 from duckduckgo_search import DDGS
 import trafilatura
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
 
 logger = logging.getLogger("nanobot.news_search")
 
@@ -1773,7 +1774,7 @@ class NewsSearchTool(BaseTool):
             cached = _get_cached_news_result(cache_key)
             if cached is not None:
                 logger.info("[news_search] cache HIT")
-                return ToolResult(output=cached, exit_code=0)
+                return build_reply_tool_result(cached)
 
         # KT runs tools concurrently; run blocking code in thread
         import asyncio
@@ -1792,4 +1793,4 @@ class NewsSearchTool(BaseTool):
                 "verdict": "本轮生成结果非标准HTML，已转换兜底。",
                 "missing_info": [str(result)[:200]]})
         _store_cached_news_result(cache_key, result)
-        return ToolResult(output=result, exit_code=0)
+        return build_reply_tool_result(result)

@@ -406,6 +406,75 @@ class SystemSetting(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class AgentRun(Base):
+    """一次模型/Agent 处理请求的运行记录。"""
+    __tablename__ = "agent_runs"
+
+    run_id = Column(String, primary_key=True, index=True)
+    trace_id = Column(String, index=True, default="")
+    session_id = Column(String, index=True, default="")
+    user_id = Column(String, index=True, default="")
+    run_type = Column(String, index=True, default="chat")
+    prompt_mode = Column(String, index=True, default="legacy")
+    prompt_key = Column(String, index=True, default="")
+    model = Column(String, index=True, default="")
+    status = Column(String, index=True, default="running")
+    input_preview = Column(Text, default="")
+    output_preview = Column(Text, default="")
+    error = Column(Text, default="")
+    latency_ms = Column(Integer, default=0)
+    meta_json = Column(Text, default="{}")
+    started_at = Column(DateTime, default=datetime.now, index=True)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class ToolCall(Base):
+    """工具调用记录——只保存脱敏参数和截断结果预览。"""
+    __tablename__ = "tool_calls"
+
+    tool_call_id = Column(String, primary_key=True, index=True)
+    trace_id = Column(String, index=True, default="")
+    run_id = Column(String, index=True, default="")
+    tool_name = Column(String, index=True, default="")
+    args_json = Column(Text, default="{}")
+    result_preview = Column(Text, default="")
+    status = Column(String, index=True, default="running")
+    latency_ms = Column(Integer, default=0)
+    error = Column(Text, default="")
+    started_at = Column(DateTime, default=datetime.now, index=True)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class PromptRenderLog(Base):
+    """PromptManager 渲染记录——默认不存完整 prompt，只存预览。"""
+    __tablename__ = "prompt_render_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trace_id = Column(String, index=True, default="")
+    run_id = Column(String, index=True, default="")
+    prompt_key = Column(String, index=True, default="")
+    mode = Column(String, index=True, default="preview")
+    variables_json = Column(Text, default="{}")
+    rendered_preview = Column(Text, default="")
+    token_estimate = Column(Integer, default=0)
+    warnings_json = Column(Text, default="[]")
+    error = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class PromptFileVersion(Base):
+    """Prompt 文件版本元数据（实际备份文件仍在 data/prompt_template_backups）。"""
+    __tablename__ = "prompt_file_versions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    prompt_key = Column(String, index=True, default="")
+    backup_name = Column(String, index=True, default="")
+    content_hash = Column(String, index=True, default="")
+    operator = Column(String, default="")
+    note = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
 # ── Eval tables ──
 
 class EvalCandidate(Base):

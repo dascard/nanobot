@@ -217,8 +217,10 @@ class TestNanobotBridge:
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_returns_output(self, MockAgent, mock_load):
-        """Test that handle_message() returns the buffered response."""
+        """Test that handle_message() returns reply tool output."""
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
+        import json
 
         mock_config = MagicMock()
         mock_config.name = "test"
@@ -227,10 +229,16 @@ class TestNanobotBridge:
         mock_agent = MagicMock()
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
+        reply_output = json.dumps({REPLY_MARKER: {"content": "Hello from KT!"}}, ensure_ascii=False)
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
 
         async def fake_process(event):
-            # Simulate the agent writing to the output buffer
-            bridge._output._buffer.append("Hello from KT!")
+            pass
 
         mock_agent._process_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
@@ -242,7 +250,7 @@ class TestNanobotBridge:
             return await bridge.handle_message("test query", user_id="u1")
 
         result = asyncio.run(_run())
-        assert result == "Hello from KT!"
+        assert result == "Hello from KT"
 
     def test_handle_message_without_init(self):
         """Test that handle_message returns error if agent not started."""
@@ -254,8 +262,10 @@ class TestNanobotBridge:
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_uses_multimodal_event_for_files(self, MockAgent, mock_load):
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         from kohakuterrarium.llm.message import ImagePart
+        import json
 
         mock_config = MagicMock()
         mock_config.name = "test"
@@ -264,15 +274,18 @@ class TestNanobotBridge:
         mock_agent = MagicMock()
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
+        reply_output = json.dumps({REPLY_MARKER: {"content": "ok"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
+        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
 
         captured = {}
 
         async def fake_process(event):
             captured["event"] = event
-            bridge._output._buffer.append("ok")
 
         mock_agent._process_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
@@ -305,7 +318,9 @@ class TestNanobotBridge:
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_injects_runtime_context_system_message(self, MockAgent, mock_load):
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
+        import json
 
         mock_config = MagicMock()
         mock_config.name = "test"
@@ -314,12 +329,16 @@ class TestNanobotBridge:
         mock_agent = MagicMock()
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
+        reply_output = json.dumps({REPLY_MARKER: {"content": "ok"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
+        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
 
         async def fake_process(event):
-            bridge._output._buffer.append("ok")
+            pass
 
         mock_agent._process_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
@@ -1023,7 +1042,7 @@ class TestNanobotBridge:
         assert "sticker_search" in mock_agent.registry._tools
         restriction_text = "\n".join(msg["content"] for msg in messages)
         assert "sticker_search" in restriction_text
-        assert "本轮只允许 reply/image_summary/python_sandbox/sticker_search" in restriction_text
+        assert "本群可调用工具" in restriction_text
 
 
 # ── Creature Config Loading Test ──

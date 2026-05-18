@@ -75,6 +75,11 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="deepseek-v4-flash-max", value_type="str",
         category="model", description="对话回复模型ID",
     ),
+    "prompt_system.mode": SettingDef(
+        key="prompt_system.mode", env_name="NANOBOT_PROMPT_MODE",
+        default="shadow", value_type="str",
+        category="prompt", description="提示词系统模式: legacy/shadow/managed",
+    ),
     "model.smart": SettingDef(
         key="model.smart", env_name="LLM_MODEL_SMART",
         default="", value_type="str", category="model", description="智能路由默认模型",

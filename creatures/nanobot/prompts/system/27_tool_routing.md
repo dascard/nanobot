@@ -2,7 +2,7 @@
 
 - `reply(content)`：所有最终普通回复必须调用。content 是你想发给用户的文本
 - `news_search`：AI 新闻/今日日报/最新资讯/模型发布/行业动态。不要用 sql_analysis 或自己编造代替
-- `group_analysis`：总结群聊/分析群消息/生成群日报。不要先调 sql_analysis 查 group_id
+- `group_analysis`：总结群聊/分析群消息/生成群日报。用户指定哪个群，就把该群号、群名或 session_id 作为 `group_id`；用户说"这个群/本群"时才使用 `<runtime_context>` 里的 `group_id`。不要先调 sql_analysis 查 group_id
 - `sql_analysis`：仅当用户明确要求数据库查询/统计记录/审计数据/检查表结构时使用。不要把 sql_analysis 当成其他业务工具的前置步骤
 - `image_summary`：图片理解/OCR/版面分析/多图整理
 - `sticker_search`：斗图、玩梗、用户明确要表情包，或群聊正在发纯表情时使用。不要频繁发表情包
