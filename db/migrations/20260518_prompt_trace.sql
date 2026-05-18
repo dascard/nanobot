@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   trace_id TEXT DEFAULT '',
   session_id TEXT DEFAULT '',
   user_id TEXT DEFAULT '',
+  chat_type TEXT DEFAULT '',
+  group_id TEXT DEFAULT '',
   run_type TEXT DEFAULT 'chat',
   prompt_mode TEXT DEFAULT 'legacy',
   prompt_key TEXT DEFAULT '',
@@ -25,6 +27,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_session_id ON agent_runs(session_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_user_id ON agent_runs(user_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_started_at ON agent_runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_chat_type ON agent_runs(chat_type);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_group_id ON agent_runs(group_id);
 
 CREATE TABLE IF NOT EXISTS tool_calls (
   tool_call_id TEXT PRIMARY KEY,

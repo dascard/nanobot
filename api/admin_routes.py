@@ -1702,6 +1702,11 @@ def list_agent_runs(
     session_id: str = "",
     group_id: str = "",
     chat_type: str = "",
+    trace_id: str = "",
+    user_id: str = "",
+    prompt_key: str = "",
+    prompt_mode: str = "",
+    run_type: str = "",
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
@@ -1714,6 +1719,16 @@ def list_agent_runs(
         q = q.filter(AgentRun.group_id == group_id)
     if chat_type:
         q = q.filter(AgentRun.chat_type == chat_type)
+    if trace_id:
+        q = q.filter(AgentRun.trace_id == trace_id)
+    if user_id:
+        q = q.filter(AgentRun.user_id == user_id)
+    if prompt_key:
+        q = q.filter(AgentRun.prompt_key == prompt_key)
+    if prompt_mode:
+        q = q.filter(AgentRun.prompt_mode == prompt_mode)
+    if run_type:
+        q = q.filter(AgentRun.run_type == run_type)
     total = q.count()
     rows = (
         q.order_by(AgentRun.started_at.desc())

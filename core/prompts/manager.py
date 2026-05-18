@@ -305,7 +305,9 @@ class PromptManager:
         trace_id: str | None = None,
         run_id: str | None = None,
         mode: str | None = None,
+        strict: bool = True,
     ) -> RenderedPrompt:
+        """渲染提示词模板。strict=False 时缺必需变量不抛错，改为 warnings。"""
         variables = dict(variables or {})
         tmpl = self.get_template(prompt_key)
         required = tmpl.required_vars
@@ -313,7 +315,8 @@ class PromptManager:
         declared = set(required + optional)
         missing = [name for name in required if name not in variables or variables[name] is None]
         if missing:
-            raise PromptRenderError(f"缺少必需变量: {', '.join(missing)}")
+            if strict:
+                raise PromptRenderError(f"缺少必需变量: {', '.join(missing)}")
 
         placeholders = set(_VAR_PATTERN.findall(tmpl.body))
         warnings: list[str] = []
