@@ -686,22 +686,6 @@ class NanobotBridge:
                     "message_id": meta.get("message_id", ""),
                 },
             )
-            run_handle = RunTracer.start_run(
-                trace_id=trace_id,
-                session_id=session_id,
-                user_id=user_id,
-                chat_type=str(meta.get("chat_type") or ""),
-                group_id=str(meta.get("group_id") or ""),
-                run_type="chat",
-                prompt_mode=prompt_mode,
-                prompt_key=prompt_key,
-                input_preview=query,
-                meta={
-                    "sender_name": sender_name,
-                    "is_group": bool(meta.get("is_group", False)),
-                    "message_id": meta.get("message_id", ""),
-                },
-            )
             trace_tokens = set_trace_context(trace_id, run_handle.run_id)
             trace_closed = False
 
