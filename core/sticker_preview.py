@@ -434,6 +434,7 @@ def find_near_duplicates(db: Session, sticker_id: int) -> list[dict]:
 def scan_near_duplicates(db: Session, limit: int = 100) -> dict:
     """扫描全库，为有 phash 的 active sticker 查找近邻重复候选。"""
     from core.database import StickerDuplicateCandidate
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
     rows = (
         db.query(StickerMemory)
@@ -457,14 +458,21 @@ def scan_near_duplicates(db: Session, limit: int = 100) -> dict:
             pair = (min(row.id, n["sticker_b_id"]), max(row.id, n["sticker_b_id"]))
             if pair in existing_pairs:
                 continue
-            db.add(StickerDuplicateCandidate(
+            stmt = sqlite_insert(StickerDuplicateCandidate).values(
                 sticker_a_id=pair[0],
                 sticker_b_id=pair[1],
                 phash_dist=n["phash_dist"],
                 dhash_dist=n["dhash_dist"],
                 content_hash=row.content_hash or "",
-            ))
+                status="pending",
+            ).prefix_with("OR IGNORE")
+            result = db.execute(stmt)
+            if result.rowcount:
+                created += 1
             existing_pairs.add(pair)
-            created += 1
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return {"scanned": len(rows), "candidates_created": created}

@@ -3,11 +3,12 @@
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta
 from hmac import compare_digest
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -17,7 +18,10 @@ from core.database import (
     StickerMemory, ChatStreamConfig, UserBlockRule, ContentBlockRule,
     SystemSetting, AdminAuditLog,
     ChatLog, User,
+    AgentRun, ToolCall, PromptRenderLog,
 )
+from core.prompts import PromptRenderError, get_prompt_manager
+from core.tracing import row_to_dict
 from config import NANOBOT_ADMIN_TOKEN
 
 logger = logging.getLogger("nanobot.admin")
@@ -229,6 +233,19 @@ class ConfigUpdate(BaseModel):
 
 class DbQuery(BaseModel):
     query: str
+
+
+class PromptSaveRequest(BaseModel):
+    content: str
+
+
+class PromptPreviewRequest(BaseModel):
+    variables: dict = Field(default_factory=dict)
+    mode: str = "preview"
+
+
+class PromptRollbackRequest(BaseModel):
+    backup_name: str
 
 
 # ── Helpers ──
@@ -1037,15 +1054,25 @@ def list_near_duplicate_candidates(
     return {"items": items, "total": len(rows)}
 
 
+_NEAR_DUP_SCAN_LOCK = threading.Lock()
+
 @router.post("/stickers/near-duplicate/scan")
 def scan_near_duplicates_endpoint(
     request: Request, limit: int = 100,
     db: Session = Depends(get_db), _auth=Depends(verify_admin),
 ):
-    from core.sticker_preview import scan_near_duplicates
-    result = scan_near_duplicates(db, limit=min(limit, 500))
-    _audit_request(db, request, "sticker.near_duplicate.scan", "sticker", "", result)
-    return result
+    if not _NEAR_DUP_SCAN_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "扫描正在进行中，请稍后再试")
+    try:
+        from core.sticker_preview import scan_near_duplicates
+        result = scan_near_duplicates(db, limit=min(limit, 500))
+        _audit_request(db, request, "sticker.near_duplicate.scan", "sticker", "", result)
+        return result
+    except Exception as e:
+        logger.exception("scan near duplicates failed")
+        raise HTTPException(500, f"扫描失败: {str(e)[:300]}")
+    finally:
+        _NEAR_DUP_SCAN_LOCK.release()
 
 
 @router.post("/stickers/phash/backfill")
@@ -1577,6 +1604,182 @@ def execute_readonly_query(body: DbQuery, db: Session = Depends(get_db), _auth=D
 
 
 # ═══════════════════════════════════════════
+# PromptManager templates
+# ═══════════════════════════════════════════
+
+@router.get("/prompts")
+def list_managed_prompts(_auth=Depends(verify_admin)):
+    from core.settings_service import settings
+
+    manager = get_prompt_manager()
+    return {
+        "items": manager.list_prompts(),
+        "prompt_dir": str(manager.prompt_dir),
+        "backup_dir": str(manager.backup_dir),
+        "mode": str(settings.get("prompt_system.mode", "shadow") or "shadow"),
+    }
+
+
+@router.get("/prompts/{prompt_key}")
+def get_managed_prompt(prompt_key: str, _auth=Depends(verify_admin)):
+    try:
+        return get_prompt_manager().get_prompt(prompt_key)
+    except PromptRenderError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/prompts/{prompt_key}")
+def save_managed_prompt(
+    prompt_key: str,
+    body: PromptSaveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    try:
+        result = get_prompt_manager().save_prompt(prompt_key, body.content, operator="admin")
+    except PromptRenderError as e:
+        raise HTTPException(400, str(e))
+    _audit_request(db, request, "save_managed_prompt", "prompt", prompt_key, result)
+    return result
+
+
+@router.post("/prompts/{prompt_key}/preview")
+def preview_managed_prompt(prompt_key: str, body: PromptPreviewRequest, _auth=Depends(verify_admin)):
+    try:
+        rendered = get_prompt_manager().render(
+            prompt_key,
+            body.variables,
+            mode=body.mode or "preview",
+        )
+        return rendered.to_dict()
+    except PromptRenderError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/prompts/reload")
+def reload_managed_prompts(_auth=Depends(verify_admin)):
+    return get_prompt_manager().reload()
+
+
+@router.get("/prompts/{prompt_key}/history")
+def managed_prompt_history(prompt_key: str, _auth=Depends(verify_admin)):
+    try:
+        return {"items": get_prompt_manager().history(prompt_key)}
+    except PromptRenderError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/prompts/{prompt_key}/rollback")
+def rollback_managed_prompt(
+    prompt_key: str,
+    body: PromptRollbackRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    try:
+        result = get_prompt_manager().rollback(prompt_key, body.backup_name, operator="admin")
+    except PromptRenderError as e:
+        raise HTTPException(400, str(e))
+    _audit_request(db, request, "rollback_managed_prompt", "prompt", prompt_key, result)
+    return result
+
+
+# ═══════════════════════════════════════════
+# Agent trace
+# ═══════════════════════════════════════════
+
+@router.get("/agent-runs")
+def list_agent_runs(
+    limit: int = Query(50, ge=1, le=200),
+    page: int = Query(1, ge=1),
+    status: str = "",
+    session_id: str = "",
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    q = db.query(AgentRun)
+    if status:
+        q = q.filter(AgentRun.status == status)
+    if session_id:
+        q = q.filter(AgentRun.session_id == session_id)
+    total = q.count()
+    rows = (
+        q.order_by(AgentRun.started_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+    return {"items": [row_to_dict(row) for row in rows], "total": total, "page": page, "limit": limit}
+
+
+@router.get("/agent-runs/{run_id}")
+def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    run = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
+    if not run:
+        raise HTTPException(404, "Agent run not found")
+    tool_calls = (
+        db.query(ToolCall)
+        .filter(ToolCall.run_id == run_id)
+        .order_by(ToolCall.started_at.asc())
+        .all()
+    )
+    prompt_logs = (
+        db.query(PromptRenderLog)
+        .filter(PromptRenderLog.run_id == run_id)
+        .order_by(PromptRenderLog.created_at.asc())
+        .all()
+    )
+    data = row_to_dict(run)
+    data["tool_calls"] = [row_to_dict(row) for row in tool_calls]
+    data["prompt_render_logs"] = [row_to_dict(row) for row in prompt_logs]
+    return data
+
+
+@router.get("/tool-calls")
+def list_tool_calls(
+    limit: int = Query(50, ge=1, le=200),
+    page: int = Query(1, ge=1),
+    run_id: str = "",
+    trace_id: str = "",
+    tool_name: str = "",
+    status: str = "",
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    q = db.query(ToolCall)
+    if run_id:
+        q = q.filter(ToolCall.run_id == run_id)
+    if trace_id:
+        q = q.filter(ToolCall.trace_id == trace_id)
+    if tool_name:
+        q = q.filter(ToolCall.tool_name == tool_name)
+    if status:
+        q = q.filter(ToolCall.status == status)
+    total = q.count()
+    rows = (
+        q.order_by(ToolCall.started_at.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+    return {"items": [row_to_dict(row) for row in rows], "total": total, "page": page, "limit": limit}
+
+
+@router.get("/tool-calls/{tool_call_id}")
+def get_tool_call(tool_call_id: str, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    row = db.query(ToolCall).filter(ToolCall.tool_call_id == tool_call_id).first()
+    if not row:
+        raise HTTPException(404, "Tool call not found")
+    return row_to_dict(row)
+
+
+# ═══════════════════════════════════════════
 # Prompt (read-only)
 # ═══════════════════════════════════════════
 
@@ -1608,7 +1811,7 @@ def list_prompt_fragments(_auth=Depends(verify_admin)):
 
 
 @router.put("/prompt/fragments/{name}")
-def update_prompt_fragment(name: str, body: dict, db: Session = Depends(get_db),
+def update_prompt_fragment(name: str, body: dict, request: Request, db: Session = Depends(get_db),
                            _auth=Depends(verify_admin)):
     import os as _os, hashlib, re, shutil
     base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
@@ -1640,7 +1843,7 @@ def update_prompt_fragment(name: str, body: dict, db: Session = Depends(get_db),
 
 
 @router.post("/prompt/build")
-def rebuild_prompt(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def rebuild_prompt(request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     import subprocess, os as _os
     base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
     script = _os.path.join(base, "scripts", "build_nanobot_prompt.py")
@@ -1699,7 +1902,7 @@ def list_prompt_backups(_auth=Depends(verify_admin)):
 
 
 @router.post("/prompt/backups/{backup_name}/rollback")
-def rollback_prompt_backup(backup_name: str, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def rollback_prompt_backup(backup_name: str, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     import hashlib, shutil
 
     parsed = _parse_prompt_backup_name(os.path.basename(backup_name))
