@@ -745,7 +745,6 @@ class NanobotBridge:
                     f"name_hint: {identity_vars['name_hint']}\n"
                     f"alias_names:\n{identity_vars['alias_names']}\n"
                     f"sender_id: {identity_vars['sender_id']}\n"
-                    f"super_user_id: {identity_vars['super_user_id']}\n"
                     f"is_super_user: {identity_vars['is_super_user']}\n"
                     "</identity_context>"
                 )

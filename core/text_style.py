@@ -2,9 +2,6 @@
 
 import re
 
-PUNCT_TO_NEWLINE = "，,。．；;：:！!、"
-QUOTE_PARENS = "（）()「」『』“”‘’《》"
-
 
 def normalize_chat_reply_style(text: str) -> str:
     if not text:
@@ -14,7 +11,7 @@ def normalize_chat_reply_style(text: str) -> str:
     if "```" in text:
         return text
 
-    # 跳过 URL（避免误伤 http://... 中的标点）
+    # 跳过 URL
     if "http://" in text or "https://" in text:
         return text
 
@@ -23,17 +20,22 @@ def normalize_chat_reply_style(text: str) -> str:
     if (s.startswith("{") and s.endswith("}")) or (s.startswith("[") and s.endswith("]")):
         return text
 
-    for ch in PUNCT_TO_NEWLINE:
+    # 全角标点 → 半角
+    text = text.replace("？", "?")
+    text = text.replace("！", "!")
+
+    # 用占位符保护组合标点 ?! / !?
+    placeholders = {"?!": "__QEXCL__", "!?": "__EXCLQ__"}
+    for k, v in placeholders.items():
+        text = text.replace(k, v)
+
+    for ch in "，,。．；;：:!、":
         text = text.replace(ch, "\n")
-    for ch in QUOTE_PARENS:
+    for ch in "（）()「」『』“”‘’《》":
         text = text.replace(ch, "")
 
-    # 中文问号 → 英文问号
-    text = text.replace("？", "?")
-
-    # 恢复组合标点 ?! / !?
-    text = text.replace("?\n", "?!")
-    text = text.replace("\n?", "!?")
+    for k, v in placeholders.items():
+        text = text.replace(v, k)
 
     # 清理多余换行
     text = re.sub(r"\n{3,}", "\n\n", text)
