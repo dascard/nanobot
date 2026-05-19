@@ -41,6 +41,21 @@ if not NANOBOT_ADMIN_TOKEN:
         pass
 ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "0000000000")
 
+
+# ── 超级用户列表 ──
+def _parse_id_set(raw: str) -> set[str]:
+    return {
+        x.strip()
+        for x in str(raw or "").replace("，", ",").split(",")
+        if x.strip()
+    }
+
+SUPER_USER_IDS = _parse_id_set(
+    os.environ.get("NANOBOT_SUPER_USER_IDS")
+    or os.environ.get("SUPER_USER_IDS")
+    or os.environ.get("ADMIN_USER_ID", "")
+)
+
 # ── 数据库 ──
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./data/nanobot.db")
 

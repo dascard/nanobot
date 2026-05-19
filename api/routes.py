@@ -1390,11 +1390,19 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                 group_recent_context = _build_group_recent_context(
                     db, group_user_id, exclude_message_ids=source_message_ids,
                 )
+                from core.identity import build_identity_vars
+                sender_id = str(req.user_id or "")
+                identity_vars = build_identity_vars(
+                    sender_id=sender_id,
+                    bot_name=ambient_meta.get("bot", {}).get("bot_name", ""),
+                    bot_aliases=list(req.bot_aliases or []),
+                )
                 bridge_meta = {
                     "chat_type": "group",
                     "user_id": group_user_id,
                     "session_id": group_user_id,
                     "sender_name": req.sender_name,
+                    "sender_id": sender_id,
                     "is_group": True,
                     "history_header": memory_header,
                     "history_messages": history_messages,
@@ -1409,6 +1417,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     "bot_id": ambient_meta.get("bot", {}).get("bot_id", ""),
                     "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
                     "bot_aliases": list(req.bot_aliases or []),
+                    **identity_vars,
                 }
                 enriched = f"<user_input>\n{chat_query}\n</user_input>"
 
@@ -1745,11 +1754,19 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                 timer_bot_name = (timer_state.bot_name if timer_state else "") or ""
                 timer_bot_aliases = list(timer_state.bot_aliases if timer_state else []) or list(req.bot_aliases or [])
 
+                from core.identity import build_identity_vars
+                timer_sender_id = str(req.user_id or "")
+                timer_identity_vars = build_identity_vars(
+                    sender_id=timer_sender_id,
+                    bot_name=timer_bot_name,
+                    bot_aliases=timer_bot_aliases,
+                )
                 bridge_meta = {
                     "chat_type": "group",
                     "user_id": group_user_id, "session_id": group_user_id,
                     "is_group": True, "history_header": memory_header,
                     "history_messages": history_messages, "group_id": req.group_id,
+                    "sender_id": timer_sender_id,
                     "trigger_reason": req.trigger_reason or "timer",
                     "timing_decision": "continue",
                     "group_recent_context": group_recent_context,
@@ -1759,6 +1776,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     "bot_id": timer_bot_id,
                     "bot_name": timer_bot_name,
                     "bot_aliases": timer_bot_aliases,
+                    **timer_identity_vars,
                 }
                 chat_query = _build_multimodal_user_input_text(
                     result.get("pending_text", ""), None, max_chars=MAX_QUERY_CHARS,
