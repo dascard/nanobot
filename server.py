@@ -273,6 +273,19 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Database initialized.")
     _run_provider_migration()
+    # 从 prompts.default 初始化缺失的运行时模板到 data/prompts
+    try:
+        from core.prompts.manager import PromptManager
+        init_result = PromptManager.init_runtime_dir()
+        if init_result["copied"]:
+            logger.info("[PromptManager] initialized %d templates from %s → %s",
+                        len(init_result["copied"]),
+                        init_result["source_dir"],
+                        init_result["runtime_dir"])
+        else:
+            logger.info("[PromptManager] runtime dir ready: %s", init_result["runtime_dir"])
+    except Exception as e:
+        logger.warning("[PromptManager] init_runtime_dir failed: %s", e)
     digest_thread = None
     digest_stop_event = None
     learner_thread = None

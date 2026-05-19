@@ -1,4 +1,6 @@
 data/*
+data/prompts/
+data/prompts_history/
 /data/nanobot.db
 /data/nanobot.db-*
 /data/nanobot.db.bak.*

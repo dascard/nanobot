@@ -80,13 +80,21 @@ def _repo_root() -> Path:
 
 
 def _default_prompt_dir() -> Path:
-    return Path(os.environ.get("NANOBOT_PROMPT_DIR") or (_repo_root() / "prompts"))
+    return Path(os.environ.get("NANOBOT_PROMPT_DIR") or (_repo_root() / "data" / "prompts"))
 
 
 def _default_backup_dir() -> Path:
     return Path(
         os.environ.get("NANOBOT_PROMPT_BACKUP_DIR")
-        or (_repo_root() / "data" / "prompt_template_backups")
+        or (_repo_root() / "data" / "prompts_history")
+    )
+
+
+def _default_source_dir() -> Path:
+    """默认模板源目录（Git 管理），用于首次初始化运行时目录。"""
+    return Path(
+        os.environ.get("NANOBOT_PROMPT_DEFAULT_DIR")
+        or (_repo_root() / "prompts.default")
     )
 
 
@@ -217,9 +225,32 @@ class PromptManager:
         self.hot_reload = hot_reload
         self._cache: dict[str, PromptTemplate] = {}
 
+    @property
+    def default_dir(self) -> str:
+        return str(_default_source_dir())
+
     def reload(self) -> dict[str, Any]:
         self._cache.clear()
-        return {"ok": True, "prompt_dir": str(self.prompt_dir)}
+        return {"ok": True, "prompt_dir": str(self.prompt_dir), "default_dir": self.default_dir}
+
+    @staticmethod
+    def init_runtime_dir(
+        runtime_dir: str | Path | None = None,
+        source_dir: str | Path | None = None,
+    ) -> dict[str, Any]:
+        """启动时从默认模板目录初始化缺失的运行时模板文件。只复制缺失文件，不覆盖已有。"""
+        import shutil
+        src = Path(source_dir) if source_dir else _default_source_dir()
+        dst = Path(runtime_dir) if runtime_dir else _default_prompt_dir()
+        dst.mkdir(parents=True, exist_ok=True)
+        copied: list[str] = []
+        if src.is_dir():
+            for f in src.glob("*.md"):
+                target = dst / f.name
+                if not target.exists():
+                    shutil.copy2(f, target)
+                    copied.append(f.name)
+        return {"runtime_dir": str(dst), "source_dir": str(src), "copied": copied}
 
     def _path_for(self, prompt_key: str) -> Path:
         key = _safe_key(prompt_key)

@@ -1615,6 +1615,7 @@ def list_managed_prompts(_auth=Depends(verify_admin)):
     return {
         "items": manager.list_prompts(),
         "prompt_dir": str(manager.prompt_dir),
+        "default_dir": manager.default_dir,
         "backup_dir": str(manager.backup_dir),
         "mode": str(settings.get("prompt_system.mode", "shadow") or "shadow"),
     }

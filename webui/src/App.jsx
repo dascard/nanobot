@@ -1924,6 +1924,8 @@ function ManagedPromptsPage() {
   const [history, setHistory] = useState([])
   const [toast, setToast] = useState('')
   const [loading, setLoading] = useState(false)
+  const [promptDir, setPromptDir] = useState('')
+  const [defaultDir, setDefaultDir] = useState('')
 
   const loadList = useCallback(() => {
     setLoading(true)
@@ -1931,6 +1933,8 @@ function ManagedPromptsPage() {
       const list = r.data.items || []
       setItems(list)
       setMode(r.data.mode || '')
+      setPromptDir(r.data.prompt_dir || '')
+      setDefaultDir(r.data.default_dir || '')
       if (!selected && list.length) setSelected(list[0].prompt_key)
     }).finally(() => setLoading(false))
   }, [selected])
@@ -1984,6 +1988,10 @@ function ManagedPromptsPage() {
         <div>
           <h1 className="text-2xl font-bold mb-1">模板管理</h1>
           <p className="text-slate-500 text-sm">Markdown frontmatter 模板、变量预览、备份与回滚</p>
+          {(promptDir || defaultDir) && <div className="flex gap-4 mt-1 text-[10px] text-slate-600">
+            {defaultDir && <span>默认模板: <span className="text-slate-500 font-mono">{defaultDir}</span></span>}
+            {promptDir && <span>运行目录: <span className="text-slate-500 font-mono">{promptDir}</span></span>}
+          </div>}
         </div>
         <div className="flex items-center gap-2">
           <Badge tone={mode === 'managed' ? 'emerald' : mode === 'shadow' ? 'blue' : 'slate'}>{mode || 'unknown'}</Badge>
