@@ -1391,7 +1391,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     db, group_user_id, exclude_message_ids=source_message_ids,
                 )
                 from core.identity import build_identity_vars
-                sender_id = str(req.user_id or "")
+                sender_id = str(getattr(req, "sender_id", "") or getattr(req, "user_id", "") or "")
                 identity_vars = build_identity_vars(
                     sender_id=sender_id,
                     bot_name=ambient_meta.get("bot", {}).get("bot_name", ""),
@@ -1755,7 +1755,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                 timer_bot_aliases = list(timer_state.bot_aliases if timer_state else []) or list(req.bot_aliases or [])
 
                 from core.identity import build_identity_vars
-                timer_sender_id = str(req.user_id or "")
+                timer_sender_id = str(getattr(req, "sender_id", "") or getattr(req, "user_id", "") or "")
                 timer_identity_vars = build_identity_vars(
                     sender_id=timer_sender_id,
                     bot_name=timer_bot_name,

@@ -732,6 +732,23 @@ class NanobotBridge:
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                 conv = self._agent.controller.conversation
                 self._remove_system_contexts(conv, self.DYNAMIC_SYSTEM_PREFIXES)
+                # identity_context 放在所有 system context 最前面
+                from core.identity import build_identity_vars
+                identity_vars = build_identity_vars(
+                    sender_id=meta.get("sender_id") or meta.get("user_id") or user_id,
+                    bot_name=str(meta.get("bot_name") or ""),
+                    bot_aliases=meta.get("bot_aliases", []),
+                )
+                conv.append("system",
+                    "<identity_context>\n"
+                    f"character_name: {identity_vars['character_name']}\n"
+                    f"name_hint: {identity_vars['name_hint']}\n"
+                    f"alias_names:\n{identity_vars['alias_names']}\n"
+                    f"sender_id: {identity_vars['sender_id']}\n"
+                    f"super_user_id: {identity_vars['super_user_id']}\n"
+                    f"is_super_user: {identity_vars['is_super_user']}\n"
+                    "</identity_context>"
+                )
                 conv.append(
                     "system",
                     self._build_runtime_context(
@@ -881,26 +898,6 @@ class NanobotBridge:
                 effective_tools=effective_tools,
             )
             # ---------------------------------------------
-
-            from core.identity import build_identity_vars
-            identity_vars = build_identity_vars(
-                sender_id=meta.get("sender_id") or meta.get("user_id") or user_id,
-                bot_name=str(meta.get("bot_name") or ""),
-                bot_aliases=meta.get("bot_aliases", []),
-            )
-            # identity_context 注入旧 system fragment（非 PromptManager 路径）
-            identity_context = (
-                "<identity_context>\n"
-                f"character_name: {identity_vars['character_name']}\n"
-                f"name_hint: {identity_vars['name_hint']}\n"
-                f"alias_names:\n{identity_vars['alias_names']}\n"
-                f"sender_id: {identity_vars['sender_id']}\n"
-                f"is_super_user: {identity_vars['is_super_user']}\n"
-                "</identity_context>"
-            )
-            # 注入 identity_context 到旧 system fragment 路径
-            if identity_context and hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                self._agent.controller.conversation.append("system", identity_context)
 
             managed_prompt = self._render_runtime_prompt(
                 prompt_key=prompt_key,
