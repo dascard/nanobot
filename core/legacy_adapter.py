@@ -376,12 +376,14 @@ class UnifiedProvider:
             }
 
         messages = format_openai_messages(sys_prompt, persona, context_str, query)
-        return await self.client.chat_completion(
-            messages=messages,
-            tools=tools,
-            temperature=0.7,
-            model_tier=model_tier
-        )
+        from core.llm_trace_context import llm_trace_scope
+        with llm_trace_scope(source="legacy_adapter"):
+            return await self.client.chat_completion(
+                messages=messages,
+                tools=tools,
+                temperature=0.7,
+                model_tier=model_tier
+            )
 
     async def invoke_with_messages(self,
                                     messages: List[Dict[str, Any]],
@@ -405,12 +407,14 @@ class UnifiedProvider:
             )
             return {"choices": [{"message": {"role": "assistant", "content": answer}}]}
 
-        return await self.client.chat_completion(
-            messages=messages,
-            tools=tools,
-            temperature=0.7,
-            model_tier=model_tier
-        )
+        from core.llm_trace_context import llm_trace_scope
+        with llm_trace_scope(source="legacy_adapter"):
+            return await self.client.chat_completion(
+                messages=messages,
+                tools=tools,
+                temperature=0.7,
+                model_tier=model_tier
+            )
 
     async def invoke_raw(self, query: str, system_prompt: str, user_id: str, model_tier: str = "smart") -> str:
         """无画像/上下文注入的原始调用 (用于进化子代理)"""
@@ -428,7 +432,9 @@ class UnifiedProvider:
                 active_persona="",
                 active_system_prompt=system_prompt,
             )
-        resp = await self.client.chat_completion(messages=messages, model_tier=model_tier)
+        from core.llm_trace_context import llm_trace_scope
+        with llm_trace_scope(source="legacy_adapter"):
+            resp = await self.client.chat_completion(messages=messages, model_tier=model_tier)
         if isinstance(resp, dict) and "choices" in resp:
             return resp["choices"][0]["message"]["content"]
         return str(resp.get("error", "Unknown error"))

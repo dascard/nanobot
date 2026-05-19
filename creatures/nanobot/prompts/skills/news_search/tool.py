@@ -586,11 +586,13 @@ def _summarize_news_layout(
                 base_url=NEW_API_BASE_URL,
                 max_retries=1,
             )
-            return await client.chat_completion(
-                messages=messages,
-                temperature=0.1,
-                model_tier="fast",
-            )
+            from core.llm_trace_context import llm_trace_scope
+            with llm_trace_scope(source="news_search"):
+                return await client.chat_completion(
+                    messages=messages,
+                    temperature=0.1,
+                    model_tier="fast",
+                )
 
         resp = _run_async_blocking(_ask())
         raw = (

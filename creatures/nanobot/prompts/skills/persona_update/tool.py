@@ -115,11 +115,13 @@ class PersonaUpdateTool(BaseTool):
                             {"role": "user", "content": query},
                         ]
                         last_error = ""
+                        from core.llm_trace_context import llm_trace_scope
                         for attempt in range(3):
-                            resp = await self.client.chat_completion(
-                                messages=messages, model_tier=model_tier,
-                                manual_model=target,
-                            )
+                            with llm_trace_scope(source="persona_update"):
+                                resp = await self.client.chat_completion(
+                                    messages=messages, model_tier=model_tier,
+                                    manual_model=target,
+                                )
                             if isinstance(resp, dict) and "choices" in resp:
                                 return resp["choices"][0]["message"]["content"]
                             last_error = str(resp.get("error", resp))[:200]
