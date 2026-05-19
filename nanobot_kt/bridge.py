@@ -1143,17 +1143,9 @@ class NanobotBridge:
 
                 try:
                     logger.info(f"[NanobotBridge] Calling _process_event (Attempt {attempt+1})...")
-                    # contextvars 传递 trace_id/run_id/source 到深层 LLM 调用
-                    from core.llm_trace_context import llm_trace_id, llm_run_id, llm_source
-                    tok_trace = llm_trace_id.set(trace_id)
-                    tok_run = llm_run_id.set(run_handle.run_id)
-                    tok_source = llm_source.set("replyer")
-                    try:
+                    from core.llm_trace_context import llm_trace_scope
+                    with llm_trace_scope(trace_id=trace_id, run_id=run_handle.run_id, source="replyer"):
                         result = await self._agent._process_event(event)
-                    finally:
-                        llm_source.reset(tok_source)
-                        llm_run_id.reset(tok_run)
-                        llm_trace_id.reset(tok_trace)
                     logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
                 except Exception as e:
                     logger.error(f"[NanobotBridge] Agent processing error: {e}", exc_info=True)

@@ -1,6 +1,6 @@
-"""测试 llm_trace_context ContextVar 传递。"""
+"""测试 llm_trace_context ContextVar 传递与嵌套。"""
 
-from core.llm_trace_context import llm_trace_id, llm_run_id, llm_source
+from core.llm_trace_context import llm_trace_id, llm_run_id, llm_source, llm_trace_scope, get_llm_trace_vars
 
 
 def test_contextvar_default_empty():
@@ -25,3 +25,21 @@ def test_contextvar_set_and_reset():
     assert llm_trace_id.get() == ""
     assert llm_run_id.get() == ""
     assert llm_source.get() == ""
+
+
+def test_scope_inherits_run_id():
+    """内层 scope 继承外层 run_id，可选覆盖 source。"""
+    with llm_trace_scope(trace_id="t1", run_id="r1", source="replyer"):
+        assert get_llm_trace_vars() == ("t1", "r1", "replyer")
+        with llm_trace_scope(source="group_analysis"):
+            assert get_llm_trace_vars() == ("t1", "r1", "group_analysis")
+        assert get_llm_trace_vars() == ("t1", "r1", "replyer")
+    assert get_llm_trace_vars() == ("", "", "")
+
+
+def test_get_llm_trace_vars():
+    with llm_trace_scope(trace_id="tx", run_id="rx", source="news_search"):
+        t, r, s = get_llm_trace_vars()
+        assert t == "tx"
+        assert r == "rx"
+        assert s == "news_search"

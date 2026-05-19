@@ -580,10 +580,11 @@ class NewAPIClient:
                 _source = llm_source
                 if not _trace_id or not _run_id or not _source:
                     try:
-                        from core.llm_trace_context import llm_trace_id, llm_run_id, llm_source as ctx_llm_source
-                        _trace_id = _trace_id or llm_trace_id.get()
-                        _run_id = _run_id or llm_run_id.get()
-                        _source = _source or ctx_llm_source.get()
+                        from core.llm_trace_context import get_llm_trace_vars
+                        _t, _r, _s = get_llm_trace_vars()
+                        _trace_id = _trace_id or _t
+                        _run_id = _run_id or _r
+                        _source = _source or _s
                     except Exception:
                         pass
                 try:
@@ -655,6 +656,9 @@ class NewAPIClient:
         temperature: float = 0.7,
         model_tier: str = "smart",
         manual_model: str = "",
+        trace_id: str = "",
+        run_id: str = "",
+        llm_source: str = "",
     ) -> AsyncIterator[Dict[str, Any]]:
         """Streaming chat completion. Yields parsed SSE chunks."""
         if not self.api_key:
@@ -684,6 +688,35 @@ class NewAPIClient:
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
         payload = self._build_payload(messages, tools, temperature, True, target_model)
+        # 记录 stream LLM API 请求
+        _trace_id = trace_id
+        _run_id = run_id
+        _source = llm_source
+        if not _trace_id or not _run_id or not _source:
+            try:
+                from core.llm_trace_context import get_llm_trace_vars
+                _t, _r, _s = get_llm_trace_vars()
+                _trace_id = _trace_id or _t
+                _run_id = _run_id or _r
+                _source = _source or _s
+            except Exception:
+                pass
+        try:
+            from core.tracing import LLMRequestTracer
+            LLMRequestTracer.record_request(
+                trace_id=_trace_id,
+                run_id=_run_id,
+                source=_source or "unknown",
+                provider=self.registry_provider,
+                model=target_model,
+                url=url,
+                method="POST",
+                headers=headers,
+                request=payload,
+                status="created",
+            )
+        except Exception as _e:
+            logger.warning("record llm api stream request failed: %s", _e)
         tracker = self._safe_get_failure_tracker()
 
         async with aiohttp.ClientSession() as session:

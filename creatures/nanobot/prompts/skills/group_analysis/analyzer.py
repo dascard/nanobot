@@ -104,12 +104,14 @@ async def _call_llm_with_retry(
                 messages = render_model_messages(prompt_key, prompt_vars or {}, messages)
             except Exception:
                 pass
-        resp = await client.chat_completion(
-            messages=messages,
-            model_tier="smart",
-            manual_model="deepseek-v4-flash",
-            temperature=t,
-        )
+        from core.llm_trace_context import llm_trace_scope
+        with llm_trace_scope(source="group_analysis"):
+            resp = await client.chat_completion(
+                messages=messages,
+                model_tier="smart",
+                manual_model="deepseek-v4-flash",
+                temperature=t,
+            )
         if "error" in resp:
             if attempt < max_retries:
                 await asyncio.sleep(1.5 * (attempt + 1))
