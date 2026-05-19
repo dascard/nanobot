@@ -528,6 +528,9 @@ class NewAPIClient:
         model_tier: str = "smart",
         manual_model: str = "",
         max_tokens: int | None = None,
+        trace_id: str = "",
+        run_id: str = "",
+        llm_source: str = "",
     ) -> Dict[str, Any]:
         """Non-streaming chat completion with retry."""
         if not self.api_key:
@@ -571,6 +574,22 @@ class NewAPIClient:
 
             for attempt in range(_attempts):  # per-model retry from settings
                 payload = self._build_payload(messages, tools, temperature, False, target_model, max_tokens=max_tokens)
+                try:
+                    from core.tracing import LLMRequestTracer
+                    LLMRequestTracer.record_request(
+                        trace_id=trace_id,
+                        run_id=run_id,
+                        source=llm_source or "unknown",
+                        provider=self.registry_provider,
+                        model=target_model,
+                        url=url,
+                        method="POST",
+                        headers=headers,
+                        request=payload,
+                        status="created",
+                    )
+                except Exception as _e:
+                    logger.warning("record llm api request failed: %s", _e)
                 async with aiohttp.ClientSession() as session:
                     try:
                         async with session.post(

@@ -477,6 +477,27 @@ class PromptFileVersion(Base):
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class LLMApiRequestLog(Base):
+    """LLM API 请求记录——保存发往模型网关的完整请求体。"""
+    __tablename__ = "llm_api_request_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trace_id = Column(String, index=True, default="")
+    run_id = Column(String, index=True, default="")
+    source = Column(String, index=True, default="")
+    provider = Column(String, index=True, default="")
+    model = Column(String, index=True, default="")
+    url = Column(Text, default="")
+    method = Column(String, default="POST")
+    request_json = Column(Text, default="{}")
+    request_preview = Column(Text, default="")
+    headers_json = Column(Text, default="{}")
+    status = Column(String, index=True, default="created")
+    response_status = Column(Integer, default=0)
+    error = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
 # ── Eval tables ──
 
 class EvalCandidate(Base):

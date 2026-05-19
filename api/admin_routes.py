@@ -1765,10 +1765,18 @@ def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(veri
         .order_by(PromptRenderLog.created_at.asc())
         .all()
     )
+    from core.database import LLMApiRequestLog
+    llm_logs = (
+        db.query(LLMApiRequestLog)
+        .filter(LLMApiRequestLog.run_id == run_id)
+        .order_by(LLMApiRequestLog.created_at.asc())
+        .all()
+    )
     return {
         "run": row_to_dict(run),
         "tool_calls": [row_to_dict(row) for row in tool_calls],
         "prompt_render_logs": [row_to_dict(row) for row in prompt_logs],
+        "llm_api_request_logs": [row_to_dict(x) for x in llm_logs],
     }
 
 

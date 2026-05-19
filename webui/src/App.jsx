@@ -2284,6 +2284,30 @@ function AgentRunDetailPage() {
           </Card>
         </>
       )}
+
+      {/* LLM API Requests */}
+      {detail.llm_api_request_logs?.length > 0 && (
+        <>
+          <h2 className="text-lg font-bold mt-6 mb-3">API 请求</h2>
+          <Card>
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+                <th className="py-2 px-3">来源</th><th className="py-2 px-3">模型</th><th className="py-2 px-3">URL</th><th className="py-2 px-3">时间</th>
+              </tr></thead>
+              <tbody>
+                {detail.llm_api_request_logs.map(ll => (
+                  <tr key={ll.id} className="border-b border-slate-800/50">
+                    <td className="py-2 px-3 text-slate-200">{ll.source || '-'}</td>
+                    <td className="py-2 px-3 text-slate-400">{ll.model || '-'}</td>
+                    <td className="py-2 px-3 text-slate-500 text-xs max-w-[200px] truncate">{ll.url || '-'}</td>
+                    <td className="py-2 px-3 text-xs text-slate-500">{ll.created_at || '-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
     </div>
   )
 }

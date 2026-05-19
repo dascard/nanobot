@@ -275,6 +275,51 @@ class PromptTracer:
             logger.warning("prompt_render_log failed: %s", e)
 
 
+class LLMRequestTracer:
+    @staticmethod
+    def record_request(
+        *,
+        trace_id: str = "",
+        run_id: str = "",
+        source: str = "",
+        provider: str = "",
+        model: str = "",
+        url: str = "",
+        method: str = "POST",
+        headers: Any = None,
+        request: Any = None,
+        status: str = "created",
+        response_status: int = 0,
+        error: str = "",
+    ) -> None:
+        try:
+            from core.database import LLMApiRequestLog
+
+            db = _session()
+            try:
+                db.add(LLMApiRequestLog(
+                    trace_id=str(trace_id or "")[:64],
+                    run_id=str(run_id or "")[:80],
+                    source=str(source or "")[:64],
+                    provider=str(provider or "")[:64],
+                    model=str(model or "")[:160],
+                    url=str(url or ""),
+                    method=str(method or "POST")[:16],
+                    headers_json=_json_dumps(headers or {}, max_chars=12000),
+                    request_json=_json_dumps(request or {}, max_chars=200000),
+                    request_preview=_preview(request or {}, max_chars=4000),
+                    status=str(status or "created")[:32],
+                    response_status=int(response_status or 0),
+                    error=_preview(error, max_chars=2000),
+                    created_at=datetime.now(),
+                ))
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning("llm api request log failed: %s", e)
+
+
 def row_to_dict(row: Any) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for col in row.__table__.columns:

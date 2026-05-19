@@ -1143,6 +1143,23 @@ class NanobotBridge:
 
                 try:
                     logger.info(f"[NanobotBridge] Calling _process_event (Attempt {attempt+1})...")
+                    # 记录 LLM API 请求元数据
+                    try:
+                        from core.tracing import LLMRequestTracer
+                        llm_url = getattr(getattr(self._agent, 'controller', None), 'llm', None)
+                        llm_url = getattr(llm_url, 'base_url', '') if llm_url else ''
+                        LLMRequestTracer.record_request(
+                            trace_id=trace_id,
+                            run_id=run_handle.run_id,
+                            source="replyer",
+                            provider=_route_provider_id or "unknown",
+                            model=target_model,
+                            url=llm_url or _route_base_url,
+                            method="POST",
+                            status="created",
+                        )
+                    except Exception:
+                        pass
                     result = await self._agent._process_event(event)
                     logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
                 except Exception as e:
