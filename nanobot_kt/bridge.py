@@ -271,6 +271,7 @@ class NanobotBridge:
 
     # 所有运行时注入的 system 消息前缀——每轮 reset 时统一清理
     DYNAMIC_SYSTEM_PREFIXES = (
+        "<identity_context>",
         "<runtime_context>",
         "<persona_reference",
         "[PersonaContext]",
@@ -729,16 +730,16 @@ class NanobotBridge:
                 logger.info("[SessionRuntime] Reset conversation: %d→%d (system=%d)",
                             before_len, after_len, after_len)
 
+            from core.identity import build_identity_vars
+            identity_vars = build_identity_vars(
+                sender_id=meta.get("sender_id") or meta.get("user_id") or user_id,
+                bot_name=str(meta.get("bot_name") or ""),
+                bot_aliases=meta.get("bot_aliases", []),
+            )
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                 conv = self._agent.controller.conversation
                 self._remove_system_contexts(conv, self.DYNAMIC_SYSTEM_PREFIXES)
                 # identity_context 放在所有 system context 最前面
-                from core.identity import build_identity_vars
-                identity_vars = build_identity_vars(
-                    sender_id=meta.get("sender_id") or meta.get("user_id") or user_id,
-                    bot_name=str(meta.get("bot_name") or ""),
-                    bot_aliases=meta.get("bot_aliases", []),
-                )
                 conv.append("system",
                     "<identity_context>\n"
                     f"character_name: {identity_vars['character_name']}\n"
