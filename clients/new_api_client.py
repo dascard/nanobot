@@ -574,12 +574,24 @@ class NewAPIClient:
 
             for attempt in range(_attempts):  # per-model retry from settings
                 payload = self._build_payload(messages, tools, temperature, False, target_model, max_tokens=max_tokens)
+                # 兜底从 contextvars 读取 trace 上下文
+                _trace_id = trace_id
+                _run_id = run_id
+                _source = llm_source
+                if not _trace_id or not _run_id or not _source:
+                    try:
+                        from core.llm_trace_context import llm_trace_id, llm_run_id, llm_source as ctx_llm_source
+                        _trace_id = _trace_id or llm_trace_id.get()
+                        _run_id = _run_id or llm_run_id.get()
+                        _source = _source or ctx_llm_source.get()
+                    except Exception:
+                        pass
                 try:
                     from core.tracing import LLMRequestTracer
                     LLMRequestTracer.record_request(
-                        trace_id=trace_id,
-                        run_id=run_id,
-                        source=llm_source or "unknown",
+                        trace_id=_trace_id,
+                        run_id=_run_id,
+                        source=_source or "unknown",
                         provider=self.registry_provider,
                         model=target_model,
                         url=url,

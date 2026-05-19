@@ -2290,21 +2290,19 @@ function AgentRunDetailPage() {
         <>
           <h2 className="text-lg font-bold mt-6 mb-3">API 请求</h2>
           <Card>
-            <table className="w-full text-sm">
-              <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-                <th className="py-2 px-3">来源</th><th className="py-2 px-3">模型</th><th className="py-2 px-3">URL</th><th className="py-2 px-3">时间</th>
-              </tr></thead>
-              <tbody>
-                {detail.llm_api_request_logs.map(ll => (
-                  <tr key={ll.id} className="border-b border-slate-800/50">
-                    <td className="py-2 px-3 text-slate-200">{ll.source || '-'}</td>
-                    <td className="py-2 px-3 text-slate-400">{ll.model || '-'}</td>
-                    <td className="py-2 px-3 text-slate-500 text-xs max-w-[200px] truncate">{ll.url || '-'}</td>
-                    <td className="py-2 px-3 text-xs text-slate-500">{ll.created_at || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="space-y-1">
+              {detail.llm_api_request_logs.map(ll => (
+                <details key={ll.id} className="border-b border-slate-800/50">
+                  <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-sm flex gap-3">
+                    <span className="text-slate-200 w-16">{ll.source || '-'}</span>
+                    <span className="text-slate-400 w-32 truncate">{ll.model || '-'}</span>
+                    <span className="text-slate-500 text-xs truncate flex-1">{ll.url || '-'}</span>
+                    <span className="text-xs text-slate-500">{ll.created_at || '-'}</span>
+                  </summary>
+                  <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 m-2 rounded text-slate-300 max-h-96 overflow-auto">{ll.request_json || '{}'}</pre>
+                </details>
+              ))}
+            </div>
           </Card>
         </>
       )}
