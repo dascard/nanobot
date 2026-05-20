@@ -2124,9 +2124,11 @@ async def chat_model_test(body: ChatModelTestRequest, _auth=Depends(verify_admin
     if body.json_mode:
         user_prompt = body.prompt + "\n只输出 JSON: {\"ok\": true, \"summary\": \"...\"}"
     t0 = time.time()
-    result = await client.chat_completion(
-        messages=[{"role": "user", "content": user_prompt}],
-        temperature=0,
+    from core.llm_trace_context import llm_trace_scope
+    with llm_trace_scope(source="admin"):
+        result = await client.chat_completion(
+            messages=[{"role": "user", "content": user_prompt}],
+            temperature=0,
         manual_model=body.model,
         max_tokens=200,
     )

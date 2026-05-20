@@ -1129,6 +1129,27 @@ class NanobotBridge:
                             max_retries=getattr(llm, '_max_retries', 3),
                             default_headers=getattr(llm, '_extra_headers', {}),
                         )
+                        _orig_create = llm._client.chat.completions.create
+                        async def _traced_create(*, _orig=_orig_create, **kw):
+                            try:
+                                from core.tracing import LLMRequestTracer
+                                from core.llm_trace_context import get_llm_trace_vars
+                                _t, _r, _s = get_llm_trace_vars()
+                                LLMRequestTracer.record_request(
+                                    trace_id=_t, run_id=_r,
+                                    source=_s or "replyer",
+                                    provider=_route_provider_id or "unknown",
+                                    model=kw.get("model", ""),
+                                    url=f"{_target_base_url}/chat/completions",
+                                    method="POST",
+                                    headers={"Authorization": "[REDACTED]"},
+                                    request=kw,
+                                    status="created",
+                                )
+                            except Exception:
+                                pass
+                            return await _orig(**kw)
+                        llm._client.chat.completions.create = _traced_create  # type: ignore[method-assign]
                         logger.info(
                             "[Model Router] Switched provider base_url=%s api_key_changed=%s timeout_changed=%s",
                             _target_base_url[:80],

@@ -950,7 +950,9 @@ def _model_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_r
 
         async def _ask() -> Dict[str, Any]:
             client = NewAPIClient(api_key=NEW_API_KEY, max_retries=1)
-            return await client.chat_completion(messages=messages, temperature=0.0, model_tier="fast")
+            from core.llm_trace_context import llm_trace_scope
+            with llm_trace_scope(source="news_search"):
+                return await client.chat_completion(messages=messages, temperature=0.0, model_tier="fast")
 
         resp = __import__("asyncio").run(_ask())
         content = (

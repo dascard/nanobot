@@ -82,3 +82,27 @@ CREATE TABLE IF NOT EXISTS prompt_file_versions (
 
 CREATE INDEX IF NOT EXISTS idx_prompt_file_versions_prompt_key ON prompt_file_versions(prompt_key);
 CREATE INDEX IF NOT EXISTS idx_prompt_file_versions_backup_name ON prompt_file_versions(backup_name);
+
+-- LLM API 请求记录
+CREATE TABLE IF NOT EXISTS llm_api_request_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  trace_id TEXT DEFAULT '',
+  run_id TEXT DEFAULT '',
+  source TEXT DEFAULT '',
+  provider TEXT DEFAULT '',
+  model TEXT DEFAULT '',
+  url TEXT DEFAULT '',
+  method TEXT DEFAULT 'POST',
+  request_json TEXT DEFAULT '{}',
+  request_preview TEXT DEFAULT '',
+  headers_json TEXT DEFAULT '{}',
+  status TEXT DEFAULT 'created',
+  response_status INTEGER DEFAULT 0,
+  error TEXT DEFAULT '',
+  created_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_api_request_logs_trace_id ON llm_api_request_logs(trace_id);
+CREATE INDEX IF NOT EXISTS idx_llm_api_request_logs_run_id ON llm_api_request_logs(run_id);
+CREATE INDEX IF NOT EXISTS idx_llm_api_request_logs_source ON llm_api_request_logs(source);
+CREATE INDEX IF NOT EXISTS idx_llm_api_request_logs_created_at ON llm_api_request_logs(created_at);

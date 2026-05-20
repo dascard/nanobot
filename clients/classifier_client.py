@@ -275,6 +275,23 @@ def call_model_route(
     if route.get("api_key"):
         headers["Authorization"] = f"Bearer {route['api_key']}"
 
+    try:
+        from core.tracing import LLMRequestTracer
+        from core.llm_trace_context import get_llm_trace_vars
+        _t, _r, _s = get_llm_trace_vars()
+        LLMRequestTracer.record_request(
+            trace_id=_t, run_id=_r,
+            source=_s or "classifier",
+            provider=route.get("provider_id", ""),
+            model=route.get("model", ""),
+            url=url, method="POST",
+            headers=headers,
+            request=payload,
+            status="created",
+        )
+    except Exception:
+        pass
+
     timeout_s = timeout or float(route.get("timeout", 15))
     req = urllib.request.Request(
         url, data=data, headers=headers, method="POST",
