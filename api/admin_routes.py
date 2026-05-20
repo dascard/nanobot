@@ -2129,9 +2129,9 @@ async def chat_model_test(body: ChatModelTestRequest, _auth=Depends(verify_admin
         result = await client.chat_completion(
             messages=[{"role": "user", "content": user_prompt}],
             temperature=0,
-        manual_model=body.model,
-        max_tokens=200,
-    )
+            manual_model=body.model,
+            max_tokens=200,
+        )
     latency_ms = int((time.time() - t0) * 1000)
     return {"latency_ms": latency_ms, "result": result}
 
@@ -2615,6 +2615,7 @@ async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(ver
     """测试某个模型路由的连通性。"""
     import time, asyncio
     from clients.classifier_client import call_model_route, ensure_model_route_enabled, resolve_model_route
+    from core.llm_trace_context import llm_trace_scope
 
     t0 = time.time()
     route_key = _ROUTE_ALIAS.get(route_key, route_key)
@@ -2634,10 +2635,11 @@ async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(ver
             registry_provider=_registry_provider_for_route(route.get("provider_id", "")),
         )
         try:
-            result = await client.chat_completion(
-                messages=[{"role": "user", "content": "回复OK"}],
-                manual_model=model, max_tokens=10, temperature=0,
-            )
+            with llm_trace_scope(source="admin"):
+                result = await client.chat_completion(
+                    messages=[{"role": "user", "content": "回复OK"}],
+                    manual_model=model, max_tokens=10, temperature=0,
+                )
             return {
                 "ok": True, "route_key": route_key, "model": model,
                 "provider": route.get("provider_id", ""),
@@ -2661,23 +2663,25 @@ async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(ver
                         ],
                     },
                 ]
-                raw = await asyncio.to_thread(
-                    call_model_route,
-                    route_key=route_key,
-                    messages=messages,
-                    max_tokens=20,
-                    temperature=0,
-                )
+                with llm_trace_scope(source="admin"):
+                    raw = await asyncio.to_thread(
+                        call_model_route,
+                        route_key=route_key,
+                        messages=messages,
+                        max_tokens=20,
+                        temperature=0,
+                    )
                 vision_payload_ok = True
                 note = "真实视觉 payload 连通性测试"
             else:
-                raw = await asyncio.to_thread(
-                    call_model_route,
-                    route_key=route_key,
-                    user_message="测试连通性",
-                    system_prompt="你是一个视觉描述模型。收到图片时输出JSON描述。此消息仅测试连通性，回复 ok。",
-                    max_tokens=20,
-                )
+                with llm_trace_scope(source="admin"):
+                    raw = await asyncio.to_thread(
+                        call_model_route,
+                        route_key=route_key,
+                        user_message="测试连通性",
+                        system_prompt="你是一个视觉描述模型。收到图片时输出JSON描述。此消息仅测试连通性，回复 ok。",
+                        max_tokens=20,
+                    )
                 vision_payload_ok = False
                 note = "仅文本连通性测试，非完整视觉描述测试"
             return {
@@ -2694,13 +2698,14 @@ async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(ver
             return {"ok": False, "route_key": route_key, "error": str(e)[:500]}
     else:
         try:
-            raw = await asyncio.to_thread(
-                call_model_route,
-                route_key=route_key,
-                user_message="判断是否需要bot回复",
-                system_prompt="群聊节奏判断——是否需要bot回复。输出JSON",
-                max_tokens=60,
-            )
+            with llm_trace_scope(source="admin"):
+                raw = await asyncio.to_thread(
+                    call_model_route,
+                    route_key=route_key,
+                    user_message="判断是否需要bot回复",
+                    system_prompt="群聊节奏判断——是否需要bot回复。输出JSON",
+                    max_tokens=60,
+                )
             return {
                 "ok": True, "route_key": route_key,
                 "provider": route.get("provider_id", ""),

@@ -24,6 +24,7 @@ from nanobot_kt.output import BufferedOutput
 from nanobot_kt.image_pipeline import prepare_image_parts
 from clients.new_api_client import NewAPIClient
 from clients.model_registry import registry
+from core.llm_sdk_tracing import install_openai_chat_completion_tracer
 
 _PROMPT_FRAGMENTS_DIR: Path | None = None
 
@@ -1129,33 +1130,18 @@ class NanobotBridge:
                             max_retries=getattr(llm, '_max_retries', 3),
                             default_headers=getattr(llm, '_extra_headers', {}),
                         )
-                        _orig_create = llm._client.chat.completions.create
-                        async def _traced_create(*, _orig=_orig_create, **kw):
-                            try:
-                                from core.tracing import LLMRequestTracer
-                                from core.llm_trace_context import get_llm_trace_vars
-                                _t, _r, _s = get_llm_trace_vars()
-                                LLMRequestTracer.record_request(
-                                    trace_id=_t, run_id=_r,
-                                    source=_s or "replyer",
-                                    provider=_route_provider_id or "unknown",
-                                    model=kw.get("model", ""),
-                                    url=f"{_target_base_url}/chat/completions",
-                                    method="POST",
-                                    headers={"Authorization": "[REDACTED]"},
-                                    request=kw,
-                                    status="created",
-                                )
-                            except Exception:
-                                pass
-                            return await _orig(**kw)
-                        llm._client.chat.completions.create = _traced_create  # type: ignore[method-assign]
                         logger.info(
                             "[Model Router] Switched provider base_url=%s api_key_changed=%s timeout_changed=%s",
                             _target_base_url[:80],
                             _api_key_changed,
                             _timeout_changed,
                         )
+                    llm.provider_name = _route_provider_id or _route_registry_provider
+                    install_openai_chat_completion_tracer(
+                        llm,
+                        provider=llm.provider_name,
+                        base_url=_target_base_url,
+                    )
                     logger.info(
                         f"[Model Router] Attempt {attempt+1}: {target_model} "
                         f"(intel={candidate.get('intelligence')}, "

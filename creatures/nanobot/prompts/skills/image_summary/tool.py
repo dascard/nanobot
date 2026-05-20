@@ -231,6 +231,25 @@ class ImageSummaryTool(BaseTool):
             headers["Authorization"] = f"Bearer {route['api_key']}"
 
         logger.info("  [image_summary] >> %s | files=%d", url, len(files))
+        try:
+            from core.llm_trace_context import get_llm_trace_vars
+            from core.tracing import LLMRequestTracer
+
+            trace_id, run_id, _ = get_llm_trace_vars()
+            LLMRequestTracer.record_request(
+                trace_id=trace_id,
+                run_id=run_id,
+                source="image_summary",
+                provider=str(route.get("provider_id", "") or "local_vision"),
+                model=str(route.get("model", "") or ""),
+                url=url,
+                method="POST",
+                headers=headers,
+                request=payload,
+                status="created",
+            )
+        except Exception:
+            pass
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
         timeout = route.get("timeout", IMAGE_SUMMARY_TIMEOUT)

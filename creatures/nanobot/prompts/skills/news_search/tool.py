@@ -1627,11 +1627,13 @@ def _call_llm_simple(system: str, prompt: str, temperature: float = 0.1, max_tok
 
         async def _call():
             client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
-            resp = await client.chat_completion(
-                messages=[{"role": "system", "content": system},
-                          {"role": "user", "content": prompt}],
-                model_tier="fast", temperature=temperature,
-            )
+            from core.llm_trace_context import llm_trace_scope
+            with llm_trace_scope(source="news_search"):
+                resp = await client.chat_completion(
+                    messages=[{"role": "system", "content": system},
+                              {"role": "user", "content": prompt}],
+                    model_tier="fast", temperature=temperature,
+                )
             if isinstance(resp, dict) and "choices" in resp:
                 return resp["choices"][0]["message"]["content"]
             return ""

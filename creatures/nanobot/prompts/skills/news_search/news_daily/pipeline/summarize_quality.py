@@ -99,14 +99,16 @@ def summarize_quality(cards: list[dict], fallback: dict) -> dict:
 
         async def _call():
             client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=20)
-            resp = await client.chat_completion(
-                messages=[
-                    {"role": "system", "content": QUALITY_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                model_tier="fast", temperature=0.1,
-                manual_model="deepseek-v4-flash", max_tokens=3200,
-            )
+            from core.llm_trace_context import llm_trace_scope
+            with llm_trace_scope(source="news_daily.summarize_quality"):
+                resp = await client.chat_completion(
+                    messages=[
+                        {"role": "system", "content": QUALITY_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    model_tier="fast", temperature=0.1,
+                    manual_model="deepseek-v4-flash", max_tokens=3200,
+                )
             if isinstance(resp, dict) and "choices" in resp:
                 return resp["choices"][0]["message"]["content"]
             return ""

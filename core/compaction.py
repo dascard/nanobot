@@ -78,6 +78,26 @@ def call_compaction_llm(context_text: str) -> str:
         ],
         "temperature": 0.3
     }
+
+    try:
+        from core.llm_trace_context import get_llm_trace_vars
+        from core.tracing import LLMRequestTracer
+
+        trace_id, run_id, _ = get_llm_trace_vars()
+        LLMRequestTracer.record_request(
+            trace_id=trace_id,
+            run_id=run_id,
+            source="compaction",
+            provider="compaction",
+            model=COMPACT_MODEL,
+            url=url,
+            method="POST",
+            headers=headers,
+            request=payload,
+            status="created",
+        )
+    except Exception:
+        pass
     
     resp = requests.post(url, headers=headers, json=payload, timeout=60)
     resp.raise_for_status()

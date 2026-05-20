@@ -116,6 +116,66 @@ def test_execute_calls_local_qwen_with_multimodal_payload():
     assert user_content[1]["image_url"]["url"] == "data:image/jpeg;base64,ZmFrZQ=="
 
 
+def test_execute_records_direct_llm_request():
+    from core.llm_trace_context import llm_trace_scope
+    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
+    from kohakuterrarium.llm.message import ImagePart
+
+    recorded = []
+    mock_response = _mock_qwen_response(
+        '{"overall_summary":"测试","per_image":[],"keywords":[],"risk_flags":[],"confidence":"high"}'
+    )
+
+    with patch(
+        "core.tracing.LLMRequestTracer.record_request",
+        side_effect=lambda **kwargs: recorded.append(kwargs),
+    ):
+        with patch(
+            "creatures.nanobot.prompts.skills.image_summary.tool._get_image_summary_route",
+            return_value={
+                "base_url": "http://vision.test/v1",
+                "api_key": "vision-key",
+                "model": "vision-model",
+                "max_tokens": 512,
+                "temperature": 0.1,
+                "timeout": 5,
+                "provider_id": "local_vision",
+                "enabled": True,
+            },
+        ):
+            with patch(
+                "creatures.nanobot.prompts.skills.image_summary.tool.prepare_image_parts",
+                return_value=[
+                    ImagePart(
+                        url="data:image/jpeg;base64,ZmFrZQ==",
+                        detail="low",
+                        source_type="image_summary",
+                        source_name="image_summary_1",
+                    )
+                ],
+            ):
+                with patch("urllib.request.build_opener") as mock_build_opener:
+                    mock_opener = MagicMock()
+                    mock_opener.open.return_value = mock_response
+                    mock_build_opener.return_value = mock_opener
+
+                    with llm_trace_scope(trace_id="trace-img", run_id="run-img", source="replyer"):
+                        result = asyncio.run(
+                            ImageSummaryTool().execute({"files": ["https://example.com/a.png"]})
+                        )
+
+    assert result.success
+    assert recorded
+    row = recorded[0]
+    assert row["trace_id"] == "trace-img"
+    assert row["run_id"] == "run-img"
+    assert row["source"] == "image_summary"
+    assert row["provider"] == "local_vision"
+    assert row["model"] == "vision-model"
+    assert row["url"] == "http://vision.test/v1/chat/completions"
+    assert row["request"]["messages"][1]["content"][1]["type"] == "image_url"
+
+
 def test_execute_accepts_json_codeblock():
     from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
     from kohakuterrarium.llm.message import ImagePart

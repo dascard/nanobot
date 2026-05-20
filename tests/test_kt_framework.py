@@ -741,6 +741,7 @@ class TestNanobotBridge:
         assert client_kwargs["registry_provider"] == "openrouter"
         mock_registry.get_models_by_provider.assert_called_with("openrouter")
         assert route_client.get_ordered_candidates.call_args.kwargs["provider"] == "openrouter"
+        assert llm.provider_name == "openrouter"
 
     @patch("nanobot_kt.bridge.AsyncOpenAI")
     @patch("nanobot_kt.bridge.registry")
@@ -765,7 +766,6 @@ class TestNanobotBridge:
             "core.settings_service.settings.get",
             lambda key, default=None: values.get(key, default),
         )
-
         route_client = MagicMock()
         route_client.sync_models_to_registry = AsyncMock()
         route_client.estimate_complexity.return_value = 3
@@ -837,6 +837,11 @@ class TestNanobotBridge:
             "core.settings_service.settings.get",
             lambda key, default=None: values.get(key, default),
         )
+        install_calls = []
+        monkeypatch.setattr(
+            "nanobot_kt.bridge.install_openai_chat_completion_tracer",
+            lambda llm_arg, **kwargs: install_calls.append((llm_arg, kwargs)) or True,
+        )
 
         route_client = MagicMock()
         route_client.sync_models_to_registry = AsyncMock()
@@ -883,6 +888,11 @@ class TestNanobotBridge:
         assert llm.config.temperature == 0.2
         assert llm.config.max_tokens == 1234
         assert llm._timeout == 88
+        assert llm.provider_name == "newapi"
+        assert install_calls
+        assert install_calls[0][0] is llm
+        assert install_calls[0][1]["provider"] == "newapi"
+        assert install_calls[0][1]["base_url"] == "http://same-provider.test/v1"
         MockAsyncOpenAI.assert_called_once()
         assert MockAsyncOpenAI.call_args.kwargs["timeout"] == 88
 
