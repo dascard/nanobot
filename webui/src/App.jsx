@@ -2225,11 +2225,7 @@ function MessageAccordion({ message, index }) {
         {hasToolCalls && <span className="text-amber-400 text-[10px]">· tool_calls: {message.tool_calls.map(t => t.function?.name || '?').join(', ')}</span>}
       </summary>
       <div className="p-3 border-t border-slate-700/50">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] text-slate-600">message.content</span>
-          <CopyButton text={typeof content === 'string' ? content : JSON.stringify(content, null, 2)} />
-        </div>
-        <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-[600px] overflow-auto">{typeof content === 'string' ? content : JSON.stringify(content, null, 2)}</pre>
+        <ContentBlockViewer content={content} />
         {hasToolCalls && (
           <div className="mt-3 space-y-2">
             {message.tool_calls.map((tc, j) => {
@@ -2292,7 +2288,7 @@ function ContentBlockViewer({ content }) {
                   <span className="text-[10px] text-slate-600">完整 image_url</span>
                   <CopyButton text={url} label="复制 URL" />
                 </div>
-                <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{url.length > 200 ? url.slice(0, 200) + '...[truncated in preview, use copy button]' : url}</pre>
+                <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{url}</pre>
               </div>
             </details>
           )
