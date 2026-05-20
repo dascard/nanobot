@@ -1890,95 +1890,126 @@ def get_llm_api_log(log_id: int, db: Session = Depends(get_db), _auth=Depends(ve
 
 
 # ═══════════════════════════════════════════
-# Prompt (read-only)
+# Legacy Prompt——运行时分离
 # ═══════════════════════════════════════════
 
 @router.get("/prompt")
 def get_prompt(_auth=Depends(verify_admin)):
-    import os as _os
-    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    prompt_path = _os.path.join(base, "creatures", "nanobot", "prompt.md")
-    if not _os.path.exists(prompt_path):
-        raise HTTPException(404, "prompt.md not found")
-    with open(prompt_path, "r", encoding="utf-8") as fh:
-        content = fh.read()
-        return {"content": content, "metrics": _prompt_metrics(content)}
+    from core.legacy_prompt_runtime import read_runtime_or_default_prompt
+    result = read_runtime_or_default_prompt()
+    if result["source"] == "none":
+        raise HTTPException(404, "prompt.md not found (no runtime or default)")
+    return {
+        "content": result["content"],
+        "source": result["source"],
+        "output_path": result["output_path"],
+        "default_path": result["default_path"],
+        "metrics": _prompt_metrics(result["content"]),
+    }
 
 
 @router.get("/prompt/fragments")
 def list_prompt_fragments(_auth=Depends(verify_admin)):
-    import os as _os
-    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    frag_dir = _os.path.join(base, "creatures", "nanobot", "prompts", "system")
-    items = []
-    if _os.path.isdir(frag_dir):
-        for fname in sorted(_os.listdir(frag_dir)):
-            if fname.endswith(".md"):
-                fpath = _os.path.join(frag_dir, fname)
-                with open(fpath, "r", encoding="utf-8") as fh:
-                    items.append({"name": fname, "content": fh.read()})
-    return {"fragments": items}
+    from core.legacy_prompt_runtime import list_fragments_with_status, default_fragments_dir, runtime_fragments_dir, runtime_prompt_output, backup_dir as _lbkp_dir
+    items = list_fragments_with_status()
+    return {
+        "fragments": items,
+        "default_dir": default_fragments_dir(),
+        "runtime_dir": runtime_fragments_dir(),
+        "output_path": runtime_prompt_output(),
+        "backup_dir": _lbkp_dir(),
+    }
 
 
 @router.put("/prompt/fragments/{name}")
 def update_prompt_fragment(name: str, body: dict, request: Request, db: Session = Depends(get_db),
                            _auth=Depends(verify_admin)):
-    import os as _os, hashlib, re, shutil
-    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    frag_dir = _os.path.join(base, "creatures", "nanobot", "prompts", "system")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+\.md", name):
-        raise HTTPException(400, "Invalid fragment name")
-    fpath = _os.path.join(frag_dir, name)
-    if not _os.path.exists(fpath):
-        raise HTTPException(404, "Fragment not found")
+    from core.legacy_prompt_runtime import save_fragment
     content = str(body.get("content", ""))
     if not content.strip():
         raise HTTPException(400, "Refuse to save empty prompt fragment")
-    with open(fpath, "r", encoding="utf-8") as fh:
-        old = fh.read()
-    old_hash = hashlib.sha256(old.encode()).hexdigest()[:12]
-    backup_dir = _os.path.join(base, "data", "prompt_backups")
-    _os.makedirs(backup_dir, exist_ok=True)
-    ts = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    backup_path = _os.path.join(backup_dir, f"{name}.{ts}.{old_hash}.bak")
-    shutil.copy2(fpath, backup_path)
-    with open(fpath, "w", encoding="utf-8") as fh:
-        fh.write(content)
-    new_hash = hashlib.sha256(content.encode()).hexdigest()[:12]
+    try:
+        result = save_fragment(name, content)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     _audit_request(db, request, "update_prompt_fragment", "prompt_fragment", name, {
-        "before_hash": old_hash, "after_hash": new_hash,
-        "size_before": len(old), "size_after": len(content),
+        "before_hash": result["before_hash"], "after_hash": result["after_hash"],
+        "runtime_path": result["runtime_path"],
     })
-    return {"name": name, "saved": True, "before_hash": old_hash, "after_hash": new_hash}
+    return result
 
 
 @router.post("/prompt/build")
 def rebuild_prompt(request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    import subprocess, os as _os
-    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    script = _os.path.join(base, "scripts", "build_nanobot_prompt.py")
+    from core.legacy_prompt_runtime import build_prompt_from_runtime
     try:
-        result = subprocess.run(["python", script], capture_output=True, text=True, cwd=base, timeout=10)
-        ok = result.returncode == 0
-        _audit_request(db, request, "rebuild_prompt", "prompt", "nanobot", {
-            "ok": ok, "returncode": result.returncode,
+        result = build_prompt_from_runtime(chat_type="group")
+        _audit_request(db, request, "rebuild_prompt", "prompt", "legacy", {
+            "ok": result.get("ok"), "output": result.get("output", ""),
         })
-        if not ok:
-            return {"ok": False, "stdout": result.stdout.strip(), "stderr": result.stderr.strip(), "returncode": result.returncode}
-        return {
-            "ok": True,
-            "output": result.stdout.strip(),
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
-            "returncode": result.returncode,
-        }
+        return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
+@router.get("/prompt/fragments/{name}/default")
+def get_prompt_fragment_default(name: str, _auth=Depends(verify_admin)):
+    from core.legacy_prompt_runtime import get_default_fragment
+    result = get_default_fragment(name)
+    if not result:
+        raise HTTPException(404, f"Default fragment not found: {name}")
+    return result
+
+
+@router.get("/prompt/fragments/{name}/diff-default")
+def diff_prompt_fragment(name: str, _auth=Depends(verify_admin)):
+    import difflib
+    from core.legacy_prompt_runtime import get_default_fragment, list_fragments_with_status
+    default = get_default_fragment(name)
+    if not default:
+        raise HTTPException(404, f"Default fragment not found: {name}")
+    # 找运行时版本
+    items = [f for f in list_fragments_with_status() if f["name"] == name]
+    runtime_content = items[0]["content"] if items else ""
+    diff_lines = list(difflib.unified_diff(
+        default["content"].splitlines(keepends=True),
+        runtime_content.splitlines(keepends=True) if runtime_content else [""],
+        fromfile=f"default/{name}",
+        tofile=f"runtime/{name}",
+    ))
+    return {
+        "name": name,
+        "default_hash": default["hash"],
+        "runtime_hash": items[0]["runtime_hash"] if items else "",
+        "is_modified": items[0]["is_modified"] if items else True,
+        "diff": "".join(diff_lines) if diff_lines else "无差异",
+    }
+
+
+@router.post("/prompt/fragments/{name}/reset-to-default")
+def reset_prompt_fragment(name: str, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    from core.legacy_prompt_runtime import reset_to_default
+    try:
+        result = reset_to_default(name)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    _audit_request(db, request, "reset_prompt_fragment", "prompt_fragment", name, result)
+    return result
+
+
+@router.post("/prompt/init-runtime")
+def init_prompt_runtime(request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    from core.legacy_prompt_runtime import init_legacy_prompt_runtime_dir
+    result = init_legacy_prompt_runtime_dir()
+    _audit_request(db, request, "init_prompt_runtime", "prompt", "legacy", {
+        "copied": result["copied"],
+    })
+    return result
+
+
 def _prompt_backup_dir() -> str:
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, "data", "prompt_backups")
+    from core.legacy_prompt_runtime import backup_dir
+    return backup_dir()
 
 
 def _parse_prompt_backup_name(name: str) -> dict | None:
@@ -1992,14 +2023,14 @@ def _parse_prompt_backup_name(name: str) -> dict | None:
 
 @router.get("/prompt/backups")
 def list_prompt_backups(_auth=Depends(verify_admin)):
-    backup_dir = _prompt_backup_dir()
+    bkp_dir = _prompt_backup_dir()
     items = []
-    if os.path.isdir(backup_dir):
-        for fname in sorted(os.listdir(backup_dir), reverse=True):
+    if os.path.isdir(bkp_dir):
+        for fname in sorted(os.listdir(bkp_dir), reverse=True):
             parsed = _parse_prompt_backup_name(fname)
             if not parsed:
                 continue
-            path = os.path.join(backup_dir, fname)
+            path = os.path.join(bkp_dir, fname)
             items.append({
                 "name": fname,
                 "fragment": parsed["fragment"],
@@ -2014,34 +2045,35 @@ def list_prompt_backups(_auth=Depends(verify_admin)):
 @router.post("/prompt/backups/{backup_name}/rollback")
 def rollback_prompt_backup(backup_name: str, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     import hashlib, shutil
+    from core.legacy_prompt_runtime import runtime_fragments_dir
 
     parsed = _parse_prompt_backup_name(os.path.basename(backup_name))
     if not parsed:
         raise HTTPException(400, "Invalid backup name")
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    backup_path = os.path.abspath(os.path.join(_prompt_backup_dir(), backup_name))
-    backup_dir = os.path.abspath(_prompt_backup_dir())
-    if not backup_path.startswith(backup_dir + os.sep) or not os.path.isfile(backup_path):
+    bkp_dir = os.path.abspath(_prompt_backup_dir())
+    backup_path = os.path.abspath(os.path.join(bkp_dir, backup_name))
+    if not backup_path.startswith(bkp_dir + os.sep) or not os.path.isfile(backup_path):
         raise HTTPException(404, "Backup not found")
 
-    frag_dir = os.path.join(base, "creatures", "nanobot", "prompts", "system")
-    target = os.path.abspath(os.path.join(frag_dir, parsed["fragment"]))
-    if not target.startswith(os.path.abspath(frag_dir) + os.sep) or not os.path.isfile(target):
-        raise HTTPException(404, "Target fragment not found")
+    runtime_dir = os.path.abspath(runtime_fragments_dir())
+    target = os.path.abspath(os.path.join(runtime_dir, parsed["fragment"]))
+    if not target.startswith(runtime_dir + os.sep):
+        raise HTTPException(400, "Invalid fragment name")
 
-    with open(target, "r", encoding="utf-8") as fh:
-        current = fh.read()
-    current_hash = hashlib.sha256(current.encode()).hexdigest()[:12]
-    rollback_guard = os.path.join(
-        backup_dir,
-        f"{parsed['fragment']}.{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.{current_hash}.bak",
-    )
-    os.makedirs(backup_dir, exist_ok=True)
-    shutil.copy2(target, rollback_guard)
+    # 回滚到运行时 fragment（不写 default）
+    if os.path.isfile(target):
+        with open(target, "r", encoding="utf-8") as fh:
+            current = fh.read()
+        current_hash = hashlib.sha256(current.encode()).hexdigest()[:12]
+        rollback_guard = os.path.join(
+            bkp_dir,
+            f"{parsed['fragment']}.{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.{current_hash}.bak",
+        )
+        shutil.copy2(target, rollback_guard)
+    os.makedirs(runtime_dir, exist_ok=True)
     shutil.copy2(backup_path, target)
     _audit_request(db, request, "rollback_prompt_fragment", "prompt_fragment", parsed["fragment"], {
         "backup": backup_name,
-        "before_hash": current_hash,
     })
     return {"ok": True, "fragment": parsed["fragment"], "backup": backup_name}
 

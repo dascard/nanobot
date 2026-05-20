@@ -1729,39 +1729,63 @@ function ModelRepliesTab() {
 // ── Prompt ──
 function PromptPage() {
   const [prompt, setPrompt] = useState('')
+  const [promptSource, setPromptSource] = useState('')
+  const [promptOutputPath, setPromptOutputPath] = useState('')
   const [metrics, setMetrics] = useState({})
   const [frags, setFrags] = useState([])
+  const [defaultDir, setDefaultDir] = useState('')
+  const [runtimeDir, setRuntimeDir] = useState('')
+  const [outputPath, setOutputPath] = useState('')
+  const [backupDir, setBackupDir] = useState('')
   const [backups, setBackups] = useState([])
   const [editing, setEditing] = useState(null)
   const [editContent, setEditContent] = useState('')
   const [building, setBuilding] = useState(false)
+  const [defaultPreview, setDefaultPreview] = useState(null)
+  const [diffPreview, setDiffPreview] = useState(null)
   const [tab, setTab] = useState('fragments')
   const [toast, setToast] = useState('')
 
   const load = useCallback(() => {
-    api.get('/prompt').then(r => { setPrompt(r.data.content); setMetrics(r.data.metrics || {}) }).catch(() => {})
-    api.get('/prompt/fragments').then(r => setFrags(r.data.fragments)).catch(() => {})
+    api.get('/prompt').then(r => {
+      setPrompt(r.data.content)
+      setMetrics(r.data.metrics || {})
+      setPromptSource(r.data.source || '')
+      setPromptOutputPath(r.data.output_path || '')
+    }).catch(() => {})
+    api.get('/prompt/fragments').then(r => {
+      setFrags(r.data.fragments || [])
+      setDefaultDir(r.data.default_dir || '')
+      setRuntimeDir(r.data.runtime_dir || '')
+      setOutputPath(r.data.output_path || '')
+      setBackupDir(r.data.backup_dir || '')
+    }).catch(() => {})
     api.get('/prompt/backups').then(r => setBackups(r.data.backups || [])).catch(() => {})
   }, [])
   useEffect(() => { load() }, [load])
 
-  const origContent = frags.find(f => f.name === editing)?.content || ''
+  const editingFrag = frags.find(f => f.name === editing)
+  const origContent = editingFrag?.content || ''
   const dirty = editing && editContent !== origContent
 
   const openEditor = (f) => {
     if (dirty && editing !== f.name && !confirm('当前修改未保存，确认切换？')) return
     setEditing(f.name)
     setEditContent(f.content)
+    setDefaultPreview(null)
+    setDiffPreview(null)
   }
   const closeEditor = (force = false) => {
     if (!force && dirty && !confirm('当前修改未保存，确认关闭？')) return
     setEditing(null)
     setEditContent('')
+    setDefaultPreview(null)
+    setDiffPreview(null)
   }
   const saveFragment = useCallback(() => {
     if (!editing || !dirty) return
-    api.put(`/prompt/fragments/${encodeURIComponent(editing)}`, { content: editContent }).then(() => {
-      setToast('已保存，记得重新构建 prompt.md 才能生效')
+    api.put(`/prompt/fragments/${encodeURIComponent(editing)}`, { content: editContent }).then(r => {
+      setToast(`已保存到运行时片段 · ${r.data.after_hash}`)
       setEditing(null)
       setEditContent('')
       load()
@@ -1785,9 +1809,30 @@ function PromptPage() {
         setToast('构建成功: ' + r.data.output)
         load()
       } else {
-        alert('构建失败\n' + (r.data.stderr || r.data.error || ''))
+        alert('构建失败\n' + (r.data.error || r.data.stderr || ''))
       }
     }).finally(() => setBuilding(false))
+  }
+  const initRuntime = () => {
+    api.post('/prompt/init-runtime').then(r => {
+      setToast(r.data.copied?.length ? `已初始化 ${r.data.copied.length} 个缺失片段` : '所有片段已存在')
+      load()
+    }).catch(e => alert(e.response?.data?.detail || '初始化失败'))
+  }
+  const viewDefault = (name) => {
+    api.get(`/prompt/fragments/${encodeURIComponent(name)}/default`).then(r => setDefaultPreview(r.data))
+      .catch(e => alert(e.response?.data?.detail || '获取默认片段失败'))
+  }
+  const viewDiff = (name) => {
+    api.get(`/prompt/fragments/${encodeURIComponent(name)}/diff-default`).then(r => setDiffPreview(r.data))
+      .catch(e => alert(e.response?.data?.detail || '对比失败'))
+  }
+  const resetToDefault = (name) => {
+    if (!confirm(`确认用默认版本覆盖运行时片段 ${name}？当前运行时内容将先备份。`)) return
+    api.post(`/prompt/fragments/${encodeURIComponent(name)}/reset-to-default`).then(() => {
+      setToast(`已恢复 ${name} 到默认版本`)
+      load()
+    }).catch(e => alert(e.response?.data?.detail || '恢复失败'))
   }
   useEffect(() => {
     if (!toast) return
@@ -1803,7 +1848,13 @@ function PromptPage() {
           <span className="text-xs text-amber-400 mt-0.5">⚠</span>
           <div>
             <p className="text-sm text-amber-300 mb-1">这是旧版 prompt.md 片段构建系统。</p>
-            <p className="text-xs text-slate-500">编辑的是 prompt fragments，保存片段后需要点击"重新构建 prompt.md"才会更新完整 prompt。此页面不会修改 PromptManager 运行时模板 data/prompts。如果你要修改模型调用模板，请使用"PromptManager 模板"。</p>
+            <p className="text-xs text-slate-500">默认片段目录由 Git 管理。WebUI 保存只写入运行时片段目录。重新构建输出到运行时 prompt.md。Git 更新不会覆盖运行时片段。</p>
+            {(defaultDir || runtimeDir || outputPath) && <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-2 text-[10px] text-slate-600">
+              {defaultDir && <span>默认片段: <span className="text-slate-500 font-mono">{defaultDir}</span></span>}
+              {runtimeDir && <span>运行时片段: <span className="text-slate-500 font-mono">{runtimeDir}</span></span>}
+              {outputPath && <span>构建输出: <span className="text-slate-500 font-mono">{outputPath}</span></span>}
+              {backupDir && <span>备份: <span className="text-slate-500 font-mono">{backupDir}</span></span>}
+            </div>}
           </div>
         </div>
       </Card>
@@ -1820,10 +1871,13 @@ function PromptPage() {
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'backups' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>备份回滚</button>
           </div>
         </div>
-        <button onClick={rebuild} disabled={building}
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium transition-colors">
-          {building ? '构建中...' : '重新构建 prompt.md'}
-        </button>
+        <div className="flex gap-2">
+          <button onClick={initRuntime} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">初始化缺失片段</button>
+          <button onClick={rebuild} disabled={building}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium transition-colors">
+            {building ? '构建中...' : '重新构建运行时 prompt.md'}
+          </button>
+        </div>
       </div>
 
       {tab === 'preview' ? (
@@ -1834,6 +1888,8 @@ function PromptPage() {
           <Card className="p-4">
             <h2 className="text-sm font-medium text-slate-400 mb-3">校验</h2>
             <div className="space-y-3 text-sm">
+              <div><span className="text-slate-500 text-xs">来源</span><div className="text-slate-300"><Badge tone={promptSource === 'runtime' ? 'emerald' : 'slate'}>{promptSource}</Badge></div></div>
+              {promptOutputPath && <div><span className="text-slate-500 text-xs">输出路径</span><div className="text-slate-400 text-[10px] font-mono break-all">{promptOutputPath}</div></div>}
               <div className="flex justify-between"><span className="text-slate-500">字符数</span><span>{metrics.chars || 0}</span></div>
               <div className="flex justify-between"><span className="text-slate-500">估算 token</span><span>{metrics.estimated_tokens || 0}</span></div>
               <div><span className="text-slate-500 text-xs">重复片段</span><JsonBlock value={metrics.duplicate_fragments || []} className="mt-1 max-h-32" /></div>
@@ -1853,7 +1909,7 @@ function PromptPage() {
                   <td className="py-2 px-3 font-mono text-xs text-slate-400">{b.hash}</td>
                   <td className="py-2 px-3 text-slate-400">{b.size}</td>
                   <td className="py-2 px-3">
-                    <button onClick={() => { if (confirm(`确认回滚 ${b.fragment} 到该备份?`)) api.post(`/prompt/backups/${encodeURIComponent(b.name)}/rollback`).then(() => { setToast('已回滚片段，请重新构建 prompt.md'); load() }) }}
+                    <button onClick={() => { if (confirm(`确认回滚 ${b.fragment} 到该备份?`)) api.post(`/prompt/backups/${encodeURIComponent(b.name)}/rollback`).then(() => { setToast('已回滚运行时片段，请重新构建 prompt.md'); load() }) }}
                       className="px-2 py-1 bg-amber-700/50 hover:bg-amber-700 text-amber-300 rounded-lg text-xs">回滚</button>
                   </td>
                 </tr>
@@ -1870,8 +1926,13 @@ function PromptPage() {
             {frags.map(f => (
               <button key={f.name}
                 onClick={() => openEditor(f)}
-                className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors truncate block ${editing === f.name ? 'bg-emerald-500/15 text-emerald-400 font-medium' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}`}>
-                {f.name}
+                className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-colors block ${editing === f.name ? 'bg-emerald-500/15 text-emerald-400 font-medium' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}`}>
+                <div className="truncate">{f.name}</div>
+                <div className="text-[10px] mt-0.5 truncate">
+                  {!f.has_default ? <span className="text-amber-500">无默认版本</span>
+                   : f.is_modified ? <span className="text-emerald-400">已修改</span>
+                   : <span className="text-slate-600">未修改</span>}
+                </div>
               </button>
             ))}
           </div>
@@ -1882,21 +1943,44 @@ function PromptPage() {
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <h2 className="text-sm font-medium text-emerald-400">{editing}</h2>
+                    {editingFrag && (
+                      <>
+                        {!editingFrag.has_default ? <Badge tone="amber">无默认</Badge>
+                         : editingFrag.is_modified ? <Badge tone="emerald">已修改</Badge>
+                         : <Badge tone="slate">未修改</Badge>}
+                        {editingFrag.runtime_hash && <span className="text-[10px] text-slate-600 font-mono">{editingFrag.runtime_hash}</span>}
+                      </>
+                    )}
                     {dirty && <span className="text-xs text-amber-400">● 未保存</span>}
                   </div>
                   <div className="flex gap-2">
+                    {editingFrag?.has_default && <button onClick={() => viewDefault(editing)} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">查看默认</button>}
+                    {editingFrag?.has_default && <button onClick={() => viewDiff(editing)} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">对比默认</button>}
+                    {editingFrag?.has_default && <button onClick={() => resetToDefault(editing)} className="px-3 py-1.5 bg-amber-700/50 hover:bg-amber-700 text-amber-300 rounded-lg text-xs transition-colors">恢复默认</button>}
                     <button onClick={closeEditor}
                       className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">取消</button>
                     <button onClick={saveFragment}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium transition-colors">保存片段</button>
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium transition-colors">保存到运行时片段</button>
                   </div>
                 </div>
                 <textarea value={editContent}
                   onChange={e => setEditContent(e.target.value)}
                   className="flex-1 w-full p-4 rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-300 font-mono leading-relaxed resize-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
                 <div className="text-xs text-slate-600 mt-1">
-                  Ctrl+S 或 Cmd+S 保存 · 保存后需点"重新构建 prompt.md"生效 · {editContent.length} 字符
+                  Ctrl+S 或 Cmd+S 保存 · 保存后需点"重新构建运行时 prompt.md"生效 · {editContent.length} 字符
                 </div>
+                {defaultPreview && (
+                  <Card className="mt-3 p-4">
+                    <h3 className="text-sm font-medium text-slate-400 mb-2">默认版本: {defaultPreview.name} · {defaultPreview.hash}</h3>
+                    <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-60 overflow-auto">{defaultPreview.content}</pre>
+                  </Card>
+                )}
+                {diffPreview && (
+                  <Card className="mt-3 p-4">
+                    <h3 className="text-sm font-medium text-slate-400 mb-2">差异对比 · runtime(default) → runtime(edited)</h3>
+                    <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-60 overflow-auto">{diffPreview.diff}</pre>
+                  </Card>
+                )}
               </>
             ) : (
               <div className="flex-1 flex items-center justify-center text-slate-600 text-sm">

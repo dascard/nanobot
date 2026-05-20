@@ -286,6 +286,19 @@ async def lifespan(app: FastAPI):
             logger.info("[PromptManager] runtime dir ready: %s", init_result["runtime_dir"])
     except Exception as e:
         logger.warning("[PromptManager] init_runtime_dir failed: %s", e)
+    # 从 prompts.legacy.default/fragments 初始化缺失的运行时 fragment 到 data/prompt_fragments
+    try:
+        from core.legacy_prompt_runtime import init_legacy_prompt_runtime_dir
+        legacy_result = init_legacy_prompt_runtime_dir()
+        if legacy_result["copied"]:
+            logger.info("[LegacyPrompt] initialized %d fragments from %s → %s",
+                        len(legacy_result["copied"]),
+                        legacy_result["source_dir"],
+                        legacy_result["runtime_dir"])
+        else:
+            logger.info("[LegacyPrompt] runtime fragments ready: %s", legacy_result["runtime_dir"])
+    except Exception as e:
+        logger.warning("[LegacyPrompt] init_runtime_dir failed: %s", e)
     digest_thread = None
     digest_stop_event = None
     learner_thread = None
