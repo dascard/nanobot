@@ -1,6 +1,6 @@
 """
 KohakuTerrarium (KT) Adapter for Nanobot.
-This module bridges the KT framework components with the Nanobot SQLite DB and Dify's stateless API.
+This module bridges the KT framework components with the Nanobot SQLite DB and OpenAI-compatible APIs.
 """
 import asyncio
 import copy
@@ -11,7 +11,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from core.database import ChatLog, Persona, SystemPrompt, User, SessionLocal
 from config import (
-    ADMIN_USER_ID, OPENAI_API_KEY, API_KEY_01_CHAT, OPENAI_BASE_URL,
+    ADMIN_USER_ID, OPENAI_API_KEY, OPENAI_BASE_URL,
     MAX_TOOL_ROUNDS,
 )
 from core.state_manager import StateManager
@@ -329,7 +329,7 @@ class SQLiteMemory:
 
 class UnifiedProvider:
     """
-    Vendor-agnostic provider that wraps NewAPIClient OR Dify client.
+    Vendor-agnostic provider that wraps OpenAI-compatible NewAPIClient.
     Acts as a bridge for the NanobotKTController.
     Supports model tiering (fast/smart/reasoning).
     """
@@ -337,11 +337,8 @@ class UnifiedProvider:
         self.provider_type = provider_type
         self.api_key = api_key
         if provider_type == "dify":
-            # Dify mode: no NewAPIClient needed, use dify_client directly
-            self.client = None
-        else:
-            # OpenAI-compatible mode (new-api, openai, deepseek, etc.)
-            self.client = NewAPIClient(api_key=api_key, base_url=base_url, timeout=timeout)
+            raise RuntimeError("Dify provider has been removed. Please migrate to NewAPI/OpenAI-compatible route.")
+        self.client = NewAPIClient(api_key=api_key, base_url=base_url, timeout=timeout)
 
     async def invoke(self, 
                       query: str, 
@@ -356,25 +353,6 @@ class UnifiedProvider:
         sys_prompt = memory.get_system_prompt(user_id)
         context_str = memory.get_recent_context_summary(session_id)
         
-        if self.provider_type == "dify":
-            # Dify fallback: call dify_client synchronously via thread
-            from clients.dify_client import call_dify_chat
-            answer = await asyncio.to_thread(
-                call_dify_chat,
-                api_key=self.api_key,
-                user_id=user_id,
-                query=query,
-                active_persona=persona,
-                active_system_prompt=sys_prompt,
-                recent_context_summary=context_str,
-                files=files,
-            )
-            # Wrap in OpenAI-compatible format for downstream compatibility
-            return {
-                "choices": [{"message": {"role": "assistant", "content": answer}}],
-                "usage": {},
-            }
-
         messages = format_openai_messages(sys_prompt, persona, context_str, query)
         from core.llm_trace_context import llm_trace_scope
         with llm_trace_scope(source="legacy_adapter"):
@@ -390,23 +368,6 @@ class UnifiedProvider:
                                     tools: Optional[List[Dict[str, Any]]] = None,
                                     model_tier: str = "smart") -> Dict[str, Any]:
         """直接传入已组装好的 messages 调用 LLM (多轮工具循环场景)"""
-        if self.provider_type == "dify":
-            # Dify 不支持 OpenAI tool calling 协议，直接拼 user 内容调用
-            from clients.dify_client import call_dify_chat
-            combined = "\n".join(
-                m.get("content", "") for m in messages if m.get("role") != "system"
-            )
-            sys_prompt = next((m["content"] for m in messages if m["role"] == "system"), "")
-            answer = await asyncio.to_thread(
-                call_dify_chat,
-                api_key=self.api_key,
-                user_id="tool_loop",
-                query=combined,
-                active_persona="",
-                active_system_prompt=sys_prompt,
-            )
-            return {"choices": [{"message": {"role": "assistant", "content": answer}}]}
-
         from core.llm_trace_context import llm_trace_scope
         with llm_trace_scope(source="legacy_adapter"):
             return await self.client.chat_completion(
@@ -422,16 +383,6 @@ class UnifiedProvider:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": query}
         ]
-        if self.provider_type == "dify":
-            from clients.dify_client import call_dify_chat
-            return await asyncio.to_thread(
-                call_dify_chat,
-                api_key=self.api_key,
-                user_id=user_id,
-                query=query,
-                active_persona="",
-                active_system_prompt=system_prompt,
-            )
         from core.llm_trace_context import llm_trace_scope
         with llm_trace_scope(source="legacy_adapter"):
             resp = await self.client.chat_completion(messages=messages, model_tier=model_tier)
@@ -582,8 +533,7 @@ class NanobotKTController:
         context_str = self.memory.get_recent_context_summary(session_id)
         messages = format_openai_messages(sys_prompt, persona, context_str, query)
         
-        # Determine if tools are supported (dify mode doesn't support native tool calling)
-        tools = self.native_tool_definitions if self.provider.provider_type != "dify" else None
+        tools = self.native_tool_definitions
         
         for round_idx in range(MAX_TOOL_ROUNDS):
             if round_idx == 0:
@@ -642,12 +592,8 @@ class NanobotKTController:
     async def evolve(self, user_id: str):
         """
         Implementation of the local evolution loop using specialized sub-agents.
-        Decoupled from Dify workflows; logic resides entirely in Python.
+        Decoupled from hosted workflow providers; logic resides entirely in Python.
         """
-        from config import DATASET_ID_LOGS, DATASET_ID_PERSONAS
-        from clients.dify_client import write_dify_dataset
-        import datetime
-
         # 1. Memory Stage: Fetch logs (now returns list of dicts, not ORM objects)
         logs = self.memory.get_unprocessed_logs(user_id)
         if not logs: return
@@ -656,10 +602,6 @@ class NanobotKTController:
         logger.info(f"  [KT Local Analyst] Analyzing logs for {user_id}...")
         results_02 = await self.log_analyst.run(logs, self.provider)
         
-        # Optional: Sync STATIC summary to Dify KB (if configured)
-        if results_02.get("kb_document") and DATASET_ID_LOGS:
-             write_dify_dataset(DATASET_ID_LOGS, f"Summary_{user_id}_{datetime.datetime.now().strftime('%Y%H%M%S')}", results_02["kb_document"])
-
         # 3. Design Stage: LLM 候选提取 + Python 状态机（替代旧的 PersonaArchitectAgent）
         logger.info(f"  [KT Local StateMachine] Extracting persona candidates for {user_id}...")
         existing_persona = self.memory.get_user_persona(user_id)
@@ -715,20 +657,6 @@ class NanobotKTController:
 
         logger.info(f"  [KT Local StateMachine] {stats}")
 
-        # Optional: Sync persona snapshot to Dify KB (if configured)
-        if DATASET_ID_PERSONAS:
-            persona_doc = (
-                f"# Persona Snapshot\n"
-                f"User: {user_id}\n\n"
-                f"## Summary\n{persona_summary}\n\n"
-                f"## Stats\n{json.dumps(stats, ensure_ascii=False)}"
-            )
-            write_dify_dataset(
-                DATASET_ID_PERSONAS,
-                f"Persona_{user_id}_{datetime.datetime.now().strftime('%Y%H%M%S')}",
-                persona_doc,
-            )
-
         # 4. Quality Stage: PromptAuditor sub-agent
         logger.info(f"  [KT Local Auditor] Auditing system prompt for {user_id}...")
         current_prompt = self.memory.get_system_prompt(user_id)
@@ -744,11 +672,11 @@ class NanobotKTController:
         logger.info(f"  [KT Local Success] User {user_id} evolved successfully.")
 
 class EvolutionUtils:
-    """封装 port 自 Dify 'Code Node' 的 Python 逻辑"""
+    """封装历史工作流迁移来的 Python 容错逻辑。"""
     
     @staticmethod
     def json_repair(raw: str) -> Dict[str, Any]:
-        """对标 Dify 02/03 的 JSON 格式容错修补逻辑 (BUG-18 FIX: proper exception types)"""
+        """JSON 格式容错修补逻辑。"""
         raw = raw.strip()
         # 1. 直接解析
         try: return json.loads(raw)
@@ -783,7 +711,7 @@ class EvolutionUtils:
 
     @staticmethod
     def pre_clean_logs(logs: List[Any], user_id: str) -> Dict[str, Any]:
-        """对标 Dify 02 '日志预清洗与质量分级' 逻辑"""
+        """日志预清洗与质量分级逻辑。"""
         turn_count: int = 0
         user_corrections: int = 0
         max_consecutive: int = 0
@@ -864,7 +792,7 @@ class LogAnalystAgent:
         return structured
 
     def _format_kb(self, structured: Dict[str, Any], clean_res: Dict[str, Any]) -> str:
-        """生成符合 Dify 02 规范的知识库文档"""
+        """生成结构化知识库文档。"""
         return f"""# 对话日志摘要
 {clean_res['meta_info']}
 Tier: {structured.get('quality_tier')} | Summary: {structured.get('summary')}

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.request
 
 from config import CLASSIFIER_API_URL
@@ -275,11 +276,13 @@ def call_model_route(
     if route.get("api_key"):
         headers["Authorization"] = f"Bearer {route['api_key']}"
 
+    started = time.time()
+    log_id = 0
     try:
         from core.tracing import LLMRequestTracer
         from core.llm_trace_context import get_llm_trace_vars
         _t, _r, _s = get_llm_trace_vars()
-        LLMRequestTracer.record_request(
+        log_id = LLMRequestTracer.record_request(
             trace_id=_t, run_id=_r,
             source=_s or "classifier",
             provider=route.get("provider_id", ""),
@@ -298,8 +301,38 @@ def call_model_route(
     )
     proxy_handler = urllib.request.ProxyHandler({})
     opener = urllib.request.build_opener(proxy_handler)
-    with opener.open(req, timeout=timeout_s) as response:
-        body = json.loads(response.read().decode("utf-8"))
+    try:
+        with opener.open(req, timeout=timeout_s) as response:
+            response_status = getattr(response, "status", None) or (
+                response.getcode() if hasattr(response, "getcode") else 200
+            )
+            body = json.loads(response.read().decode("utf-8"))
+        try:
+            from core.tracing import LLMRequestTracer
+            LLMRequestTracer.finish_request(
+                log_id=log_id,
+                response=body,
+                response_status=response_status,
+                status="success",
+                latency_ms=int((time.time() - started) * 1000),
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            from core.tracing import LLMRequestTracer
+            status = getattr(e, "code", 0) or 0
+            LLMRequestTracer.finish_request(
+                log_id=log_id,
+                response={},
+                response_status=status,
+                status="error",
+                error=str(e),
+                latency_ms=int((time.time() - started) * 1000),
+            )
+        except Exception:
+            pass
+        raise
 
     content = body["choices"][0]["message"]["content"]
     return strip_think_blocks(content)

@@ -1,0 +1,5 @@
+{
+  "target_type": "private",
+  "target_id": "local_test",
+  "message": "<!DOCTYPE html><html><body><h1>Push 测试</h1><p>链路通</p></body></html>"
+}

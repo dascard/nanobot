@@ -98,6 +98,7 @@ const NAV = [
   { to: '/configs', label: '群聊策略' },
   { to: '/settings', label: '设置' },
   { to: '/memory', label: '群体记忆' },
+  { to: '/reply-eval', label: 'Reply 测试' },
   { to: '/evals', label: 'Eval 评测' },
   { to: '/db', label: '数据库' },
 ]
@@ -2285,6 +2286,29 @@ function AgentRunDetailPage() {
         </>
       )}
 
+      {/* Reply Contract Checks */}
+      {detail.reply_contract_check_logs?.length > 0 && (
+        <>
+          <h2 className="text-lg font-bold mt-6 mb-3">Reply 调用检查</h2>
+          <Card>
+            <div className="divide-y divide-slate-800">
+              {detail.reply_contract_check_logs.map(log => (
+                <details key={log.id} className="group">
+                  <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-sm flex gap-3">
+                    <span className="text-slate-400 w-16">#{log.attempt}</span>
+                    <span className="text-slate-200 w-32">{log.result || '-'}</span>
+                    <span className="text-slate-500 w-20">reply:{log.has_reply_tool || 0}</span>
+                    <span className="text-slate-500 w-24">no_reply:{log.has_no_reply_tool || 0}</span>
+                    <span className="text-slate-500 flex-1 truncate">{log.created_at || '-'}</span>
+                  </summary>
+                  <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 m-2 rounded text-slate-300 max-h-72 overflow-auto">{log.raw_output_preview || ''}</pre>
+                </details>
+              ))}
+            </div>
+          </Card>
+        </>
+      )}
+
       {/* LLM API Requests */}
       {detail.llm_api_request_logs?.length > 0 && (
         <>
@@ -2296,10 +2320,23 @@ function AgentRunDetailPage() {
                   <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-sm flex gap-3">
                     <span className="text-slate-200 w-16">{ll.source || '-'}</span>
                     <span className="text-slate-400 w-32 truncate">{ll.model || '-'}</span>
+                    <span className="text-slate-400 w-20">{ll.status || '-'}</span>
+                    <span className="text-slate-400 w-16">{ll.response_status || 0}</span>
+                    <span className="text-slate-500 w-20">{ll.latency_ms || 0}ms</span>
                     <span className="text-slate-500 text-xs truncate flex-1">{ll.url || '-'}</span>
                     <span className="text-xs text-slate-500">{ll.created_at || '-'}</span>
                   </summary>
-                  <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 m-2 rounded text-slate-300 max-h-96 overflow-auto">{ll.request_json || '{}'}</pre>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">request_json</div>
+                      <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{ll.request_json || '{}'}</pre>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">response_json</div>
+                      <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{ll.response_json || '{}'}</pre>
+                    </div>
+                    {ll.error && <div className="lg:col-span-2 text-xs text-red-300 bg-red-500/10 rounded p-2">{ll.error}</div>}
+                  </div>
                 </details>
               ))}
             </div>
@@ -3124,6 +3161,171 @@ function AuditPage() {
   )
 }
 
+// ── Reply Test / Eval ──
+function ReplyEvalPage() {
+  const [form, setForm] = useState({
+    chat_type: 'group',
+    session_id: 'reply-test',
+    sender_id: 'admin',
+    sender_name: 'admin',
+    message: '你在吗',
+    variant: 'code_retry',
+    enable_reply_contract_retry: true,
+    dry_run: true,
+  })
+  const [testResult, setTestResult] = useState(null)
+  const [cases, setCases] = useState([])
+  const [preview, setPreview] = useState([])
+  const [runs, setRuns] = useState([])
+  const [runResult, setRunResult] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [newCase, setNewCase] = useState({ case_id: '', title: '', input_text: '', expected_action: 'any', tags: '' })
+
+  const loadCases = useCallback(() => {
+    api.get('/reply-eval/cases').then(r => setCases(r.data.items || [])).catch(() => setCases([]))
+  }, [])
+  const loadRuns = useCallback(() => {
+    api.get('/reply-eval/runs').then(r => setRuns(r.data.items || [])).catch(() => setRuns([]))
+  }, [])
+  useEffect(() => { loadCases(); loadRuns() }, [loadCases, loadRuns])
+
+  const setField = (key, value) => setForm(v => ({ ...v, [key]: value }))
+  const runDryTest = () => {
+    setLoading(true)
+    api.post('/reply-test/run', form)
+      .then(r => setTestResult(r.data))
+      .finally(() => setLoading(false))
+  }
+  const createCase = () => {
+    api.post('/reply-eval/cases', {
+      case_id: newCase.case_id,
+      title: newCase.title,
+      chat_type: 'group',
+      input_text: newCase.input_text,
+      expected_action: newCase.expected_action,
+      tags: newCase.tags.split(',').map(x => x.trim()).filter(Boolean),
+    }).then(() => { setNewCase({ case_id: '', title: '', input_text: '', expected_action: 'any', tags: '' }); loadCases() })
+  }
+  const generatePreview = () => {
+    api.post('/reply-eval/generate-preview', {}).then(r => setPreview(r.data.items || []))
+  }
+  const savePreview = () => {
+    api.post('/reply-eval/save-generated', { items: preview }).then(() => { setPreview([]); loadCases() })
+  }
+  const runEval = (variant) => {
+    setLoading(true)
+    api.post('/reply-eval/run', { variant, limit: 50 })
+      .then(r => { setRunResult(r.data); loadRuns() })
+      .finally(() => setLoading(false))
+  }
+  const delCase = (caseId) => {
+    api.delete(`/reply-eval/cases/${encodeURIComponent(caseId)}`).then(loadCases)
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold mb-1">Reply 测试</h1>
+          <p className="text-sm text-slate-500">手动 dry-run、测试集管理与 reply/no_reply 评估</p>
+        </div>
+        <button onClick={() => { loadCases(); loadRuns() }} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">刷新</button>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <Card className="p-4">
+          <h2 className="text-sm font-medium text-slate-300 mb-3">单条 dry-run</h2>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <select value={form.chat_type} onChange={e => setField('chat_type', e.target.value)} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm">
+              <option value="group">group</option>
+              <option value="private">private</option>
+            </select>
+            <select value={form.variant} onChange={e => setField('variant', e.target.value)} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm">
+              <option value="baseline">baseline</option>
+              <option value="prompt_only">prompt_only</option>
+              <option value="code_retry">code_retry</option>
+            </select>
+            <input value={form.session_id} onChange={e => setField('session_id', e.target.value)} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" placeholder="session_id" />
+            <input value={form.sender_id} onChange={e => setField('sender_id', e.target.value)} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" placeholder="sender_id" />
+          </div>
+          <textarea value={form.message} onChange={e => setField('message', e.target.value)} className="w-full h-24 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm mb-3" />
+          <div className="flex items-center gap-4 mb-3 text-sm text-slate-400">
+            <label className="flex items-center gap-2"><input type="checkbox" checked={form.enable_reply_contract_retry} onChange={e => setField('enable_reply_contract_retry', e.target.checked)} /> retry</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={form.dry_run} onChange={e => setField('dry_run', e.target.checked)} /> dry-run</label>
+          </div>
+          <button onClick={runDryTest} disabled={loading} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-sm">运行</button>
+          {testResult && (
+            <div className="mt-4 space-y-3">
+              <div className="grid grid-cols-3 gap-2">
+                <MiniStat label="final" value={testResult.final?.action || '-'} tone={testResult.final?.action === 'reply' ? 'emerald' : 'slate'} />
+                <MiniStat label="retry" value={testResult.metrics?.retry_used ? 'used' : 'no'} tone={testResult.metrics?.retry_used ? 'amber' : 'slate'} />
+                <MiniStat label="LLM logs" value={(testResult.llm_api_request_logs || []).length} tone="blue" />
+              </div>
+              <JsonBlock value={testResult} className="max-h-96" />
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-4">
+          <h2 className="text-sm font-medium text-slate-300 mb-3">A/B 评估</h2>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {['baseline', 'prompt_only', 'code_retry'].map(v => (
+              <button key={v} onClick={() => runEval(v)} disabled={loading || !cases.length} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-lg text-sm">{v}</button>
+            ))}
+          </div>
+          {runResult && <JsonBlock value={runResult} className="max-h-96 mb-4" />}
+          <h3 className="text-xs text-slate-500 mb-2">最近评估</h3>
+          <div className="space-y-2 max-h-64 overflow-auto">
+            {runs.map(r => (
+              <div key={r.id} className="flex items-center gap-2 rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm">
+                <Badge tone="blue">{r.variant}</Badge>
+                <span className="text-slate-300">total {r.total}</span>
+                <span className="text-emerald-300">pass {r.metrics?.expected_action_accuracy ?? 0}</span>
+                <span className="text-slate-500 text-xs ml-auto">{r.created_at}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-medium text-slate-300">测试集</h2>
+          <div className="flex gap-2">
+            <button onClick={generatePreview} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">生成预览</button>
+            {preview.length > 0 && <button onClick={savePreview} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm">保存预览</button>}
+          </div>
+        </div>
+        {preview.length > 0 && <JsonBlock value={preview.slice(0, 8)} className="max-h-72 mb-4" />}
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-4">
+          <input value={newCase.case_id} onChange={e => setNewCase(v => ({ ...v, case_id: e.target.value }))} placeholder="case_id" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" />
+          <input value={newCase.title} onChange={e => setNewCase(v => ({ ...v, title: e.target.value }))} placeholder="标题" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" />
+          <input value={newCase.input_text} onChange={e => setNewCase(v => ({ ...v, input_text: e.target.value }))} placeholder="输入" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" />
+          <select value={newCase.expected_action} onChange={e => setNewCase(v => ({ ...v, expected_action: e.target.value }))} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm">
+            <option value="any">any</option><option value="reply">reply</option><option value="no_reply">no_reply</option>
+          </select>
+          <button onClick={createCase} disabled={!newCase.input_text} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 rounded-lg text-sm">新增</button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-3">case_id</th><th className="py-2 px-3">标题</th><th className="py-2 px-3">输入</th><th className="py-2 px-3">预期</th><th className="py-2 px-3">tags</th><th className="py-2 px-3"></th></tr></thead>
+            <tbody>{cases.map(c => (
+              <tr key={c.case_id} className="border-b border-slate-800/50">
+                <td className="py-2 px-3 text-xs text-slate-500">{c.case_id}</td>
+                <td className="py-2 px-3">{c.title}</td>
+                <td className="py-2 px-3 max-w-md truncate">{c.input_text}</td>
+                <td className="py-2 px-3"><Badge>{c.expected_action}</Badge></td>
+                <td className="py-2 px-3 text-xs text-slate-500">{(c.tags || []).join(', ')}</td>
+                <td className="py-2 px-3 text-right"><button onClick={() => delCase(c.case_id)} className="text-xs text-red-300 hover:text-red-200">删除</button></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  )
+}
+
 // ── Eval ──
 function EvalsPage() {
   const [tab, setTab] = useState('candidates')
@@ -3514,6 +3716,7 @@ export default function App() {
           <Route path="/configs" element={<ConfigsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/reply-eval" element={<ReplyEvalPage />} />
           <Route path="/evals" element={<EvalsPage />} />
           <Route path="/db" element={<DbPage />} />
           <Route path="/logs" element={<LogsPage />} />

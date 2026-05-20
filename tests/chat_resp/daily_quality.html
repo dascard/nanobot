@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><style>
+:root{--bg:#faf9f7;--card:#fff;--ink:#1a1a2e;--sub:#666;--accent:#e65100;
+  --tag-bg:#fff3e0;--tag-ink:#bf360c;--green:#2e7d32;--border:#e8e5df;
+  --shadow:0 2px 8px rgba(0,0,0,.06)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  background:var(--bg);color:var(--ink);line-height:1.7;padding:24px 16px 40px}
+.container{max-width:720px;margin:0 auto}
+.header{margin-bottom:28px;padding-bottom:20px;border-bottom:2px solid var(--border)}
+.header h1{font-size:1.6rem;font-weight:700;color:var(--ink)}
+.header .sub{font-size:.9rem;color:var(--sub);margin-top:4px}
+.header .meta{font-size:.75rem;color:#999;margin-top:6px}
+.verdict{background:var(--card);border:1px solid var(--border);border-radius:12px;
+  padding:18px 20px;margin-bottom:24px;font-size:.95rem;box-shadow:var(--shadow)}
+.verdict .label{font-size:.75rem;color:var(--accent);font-weight:600;
+  text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+.top-story{background:linear-gradient(135deg,#fff8e1,#fff3e0);
+  border:2px solid var(--accent);border-radius:14px;padding:22px;margin-bottom:24px;
+  box-shadow:var(--shadow)}
+.top-story .flag{font-size:.7rem;color:var(--accent);font-weight:700;
+  text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+.top-story h2{font-size:1.15rem;margin-bottom:8px}
+.top-story .what{font-size:.9rem;color:var(--ink);margin-bottom:8px}
+.top-story .why{font-size:.82rem;color:var(--sub);font-style:italic}
+.top-story .confidence{display:inline-block;margin-top:10px;padding:2px 10px;
+  border-radius:10px;font-size:.72rem;background:var(--tag-bg);color:var(--tag-ink)}
+.highlights{margin-bottom:24px}
+.highlights .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.highlight-card{background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:14px 18px;margin-bottom:10px;box-shadow:var(--shadow)}
+.highlight-card .label{font-size:.72rem;font-weight:600;color:var(--accent);
+  margin-bottom:4px}
+.highlight-card .txt{font-size:.9rem}
+.highlight-card .src{font-size:.72rem;color:#999;margin-top:6px}
+.importance{display:inline-block;margin-left:6px}
+.importance .dot{display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--accent);margin-right:2px;opacity:.3}
+.importance .dot.active{opacity:1}
+.watchlist{background:var(--card);border:1px solid var(--border);
+  border-radius:12px;padding:18px 20px;margin-bottom:24px;box-shadow:var(--shadow)}
+.watchlist .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.watch-item{font-size:.88rem;padding:6px 0;border-bottom:1px solid #f5f3ef}
+.watch-item:last-child{border-bottom:none}
+.watch-item .reason{font-size:.78rem;color:var(--sub);margin-left:4px}
+.details{margin-bottom:24px}
+.details .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.detail-card{background:var(--card);border:1px solid var(--border);
+  border-radius:10px;padding:14px 18px;margin-bottom:10px;box-shadow:var(--shadow)}
+.detail-title{font-weight:700;font-size:.95rem;margin-bottom:8px;color:var(--ink)}
+.detail-block{font-size:.88rem;color:var(--ink);margin-top:6px}
+.detail-block ul{margin:4px 0 0 16px;padding:0}
+.detail-block li{margin-bottom:2px}
+.detail-impact{font-size:.86rem;color:var(--sub);margin-top:8px;font-style:italic}
+.detail-src{font-size:.72rem;color:#999;margin-top:6px}
+.missing{font-size:.8rem;color:#999;padding:12px 16px;margin-bottom:24px;
+  border-left:3px solid #ddd;background:#f8f8f6;border-radius:0 8px 8px 0}
+.closing{font-size:.88rem;color:var(--sub);text-align:center;
+  padding:16px 0;border-top:1px solid var(--border);margin-top:8px}
+.footer{text-align:center;font-size:.7rem;color:#ccc;margin-top:20px}
+</style></head>
+<body class="news-brief">
+<div class="container">
+  <div class="header">
+    <h1>商汤Token Plan公测，DeepSeek修复兼容性</h1>
+    <div class="sub">Google Omni视频模型传闻，网易内测AI邮箱</div>
+    <div class="meta">2026-05-04 14:07 · quality mode</div>
+  </div>
+  <div class="verdict"><div class="label">今日总评</div>商汤免费公测Token Plan服务，支持DeepSeek-V4-flash；DeepSeek API修复第三方框架400错误；Google据称测试Omni视频模型，或于I/O大会亮相。</div>
+  <div class="top-story">
+    <div class="flag">⚡ Top Story</div>
+    <h2>商汤科技推出Token Plan服务，限量免费公测</h2>
+    <div class="what">商汤科技SenseNova平台推出Token Plan服务公测，Free套餐限时放量，公测期间可免费调用SenseNova系列和DeepSeek-V4-flash模型。</div>
+    <div class="why">该服务降低了开发者调用大模型的门槛，尤其是免费提供DeepSeek-V4-flash，可能吸引更多开发者试用商汤平台，加剧AI API市场竞争。</div>
+    <span class="confidence">medium</span>
+    <div style="margin-top:8px;font-size:.72rem;color:#999">
+juya_ai_daily · 2026-05-04
+    </div>
+  </div>
+  <div class="highlights"><div class="section-title">📌 要点速览</div>
+    <div class="highlight-card">
+      <div class="label">API更新<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot"></span></span></div>
+      <div class="txt">DeepSeek API调整兼容性，修复部分第三方框架400错误。这一修复解决了开发者在使用非官方框架调用API时遇到的请求失败问题，提升了生态兼容性，对依赖第三方工具的开发者影响较大。</div>
+      <div class="src">juya_ai_daily  2026-05-04</div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">开发生态<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot"></span><span class="dot"></span></span></div>
+      <div class="txt">Codex发布Codex Security插件，集成五个安全工作流。该插件为开发者提供安全扫描、漏洞检测等功能，有助于在开发早期发现安全问题，对使用Codex平台的团队有直接价值。</div>
+      <div class="src">juya_ai_daily  2026-05-04</div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">工具更新<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot"></span><span class="dot"></span></span></div>
+      <div class="txt">OpenClaw发布2026.5.2版本，重写插件架构优化运行性能。新架构可能提升插件加载速度和稳定性，对OpenClaw用户而言是一次重要的性能升级，但具体改进幅度未披露。</div>
+      <div class="src">juya_ai_daily  2026-05-04</div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">产品内测<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot"></span></span></div>
+      <div class="txt">网易内测ClawEmail，为AI Agent分配真实邮箱。该产品允许AI Agent拥有独立邮箱地址，可能用于自动化邮件处理、客服等场景，对探索AI与通信工具结合有示范意义。</div>
+      <div class="src">juya_ai_daily  2026-05-04</div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">前瞻传闻<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span></span></div>
+      <div class="txt">据称Google正在测试Omni视频模型，或于I/O大会亮相。若属实，该模型可能整合视频理解与生成能力，对视频内容创作、分析领域产生重大影响，但官方尚未确认。</div>
+      <div class="src">juya_ai_daily  2026-05-04</div>
+    </div>
+    <div class="highlight-card">
+      <div class="label">免费服务<span class="importance"><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot active"></span><span class="dot"></span></span></div>
+      <div class="txt">商汤科技SenseNova平台推出Token Plan服务公测，Free套餐限时放量，可免费调用SenseNova系列和DeepSeek-V4-flash模型。此举旨在吸引开发者试用，可能推动更多应用迁移至商汤平台。</div>
+      <div class="src">juya_ai_daily  2026-05-04</div>
+    </div>
+  </div>
+  <div class="details"><div class="section-title">🧩 重点详情</div>
+    <div class="detail-card">
+      <div class="detail-title">商汤Token Plan服务公测</div>
+      <div class="detail-block"><b>已知：</b><ul><li>商汤SenseNova平台推出Token Plan服务公测</li><li>Free套餐限时放量，公测期间免费调用SenseNova系列和DeepSeek-V4-flash模型</li></ul></div>
+      <div class="detail-block"><b>缺失：</b><ul><li>公测结束时间及后续定价策略</li><li>免费套餐的具体调用限额</li></ul></div>
+      <div class="detail-impact"><b>影响：</b>降低开发者使用大模型成本，可能加速商汤平台生态建设，对API市场格局产生短期扰动。</div>
+      <div class="detail-src">来源：juya_ai_daily (curated)</div>
+    </div>
+    <div class="detail-card">
+      <div class="detail-title">DeepSeek API兼容性修复</div>
+      <div class="detail-block"><b>已知：</b><ul><li>DeepSeek API调整兼容性</li><li>修复部分第三方框架400错误</li></ul></div>
+      <div class="detail-block"><b>缺失：</b><ul><li>具体涉及哪些第三方框架</li><li>修复是否完全解决所有兼容性问题</li></ul></div>
+      <div class="detail-impact"><b>影响：</b>提升开发者体验，减少因框架不兼容导致的调用失败，有利于DeepSeek API在第三方工具中的集成。</div>
+      <div class="detail-src">来源：juya_ai_daily (curated)</div>
+    </div>
+    <div class="detail-card">
+      <div class="detail-title">Google Omni视频模型传闻</div>
+      <div class="detail-block"><b>已知：</b><ul><li>据称Google正在测试Omni视频模型</li><li>可能于I/O大会亮相</li></ul></div>
+      <div class="detail-block"><b>缺失：</b><ul><li>模型具体功能（视频理解/生成/两者兼有）</li><li>Google官方未确认该消息</li></ul></div>
+      <div class="detail-impact"><b>影响：</b>若属实，将推动视频AI能力边界扩展，对视频创作、分析行业产生深远影响，但需等待官方发布。</div>
+      <div class="detail-src">来源：juya_ai_daily (curated)</div>
+    </div>
+  </div>
+  <div class="watchlist"><div class="section-title">🔍 持续关注</div>
+    <div class="watch-item">
+      Google I/O大会是否发布Omni视频模型
+      <span class="reason">传闻称Google测试Omni视频模型，若在I/O亮相，将定义视频AI新方向，影响行业竞争格局。</span>
+      <span style="font-size:.7rem;color:#ccc;margin-left:8px">#1</span>
+    </div>
+    <div class="watch-item">
+      网易ClawEmail内测进展及开放时间
+      <span class="reason">AI Agent分配真实邮箱是创新应用，若成功可能引发邮件自动化领域变革，需关注后续反馈。</span>
+      <span style="font-size:.7rem;color:#ccc;margin-left:8px">#1</span>
+    </div>
+  </div>
+  <div class="missing"><div>⚠ 商汤Token Plan公测结束时间及定价</div><div>⚠ DeepSeek API修复的具体第三方框架列表</div><div>⚠ Google Omni视频模型的功能细节和官方确认</div><div>⚠ closing 空泛</div>
+  </div>
+  <div class="closing">今日AI动态密集，商汤免费公测与Google传闻最值得关注。</div>
+  <div class="footer">Nanobot AI 日报 · 2026-05-04 14:07</div>
+</div>
+</body>
+</html>

@@ -450,19 +450,88 @@ def _extract_emotions_from_keywords(keywords: list[str], summary: str) -> list[s
     return result[:5]
 
 
+def _fallback_sticker_summary(summary: str) -> dict[str, Any]:
+    summary = re.sub(r"\s+", " ", str(summary or "")).strip()[:300]
+    return {
+        "image_count": 1,
+        "overall_summary": summary,
+        "per_image": [{"index": 1, "summary": summary}],
+        "keywords": [],
+        "risk_flags": [],
+        "confidence": "low",
+        "_parse_fallback": True,
+    }
+
+
+def _extract_summary_field_from_raw(raw: str) -> str:
+    pattern = re.compile(
+        r'"(?:overall_summary|summary|description)"\s*:\s*"((?:\\.|[^"\\])*)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.search(raw or "")
+    if not match:
+        return ""
+    value = match.group(1).strip()
+    try:
+        return json.loads(f'"{value}"').strip()
+    except Exception:
+        return value.replace(r"\"", '"').replace(r"\n", "\n").strip()
+
+
+def _safe_parse_sticker_summary(raw: str) -> dict[str, Any]:
+    """表情包描述专用容错解析。"""
+    raw_text = str(raw or "")
+    try:
+        from creatures.nanobot.prompts.skills.image_summary.tool import _parse_json_payload
+
+        parsed = _parse_json_payload(raw_text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+
+    try:
+        from core.legacy_adapter import EvolutionUtils
+
+        repaired = EvolutionUtils.json_repair(raw_text)
+        if isinstance(repaired, dict) and not repaired.get("parse_error"):
+            summary = str(
+                repaired.get("overall_summary")
+                or repaired.get("summary")
+                or repaired.get("description")
+                or ""
+            ).strip()
+            per_image = repaired.get("per_image")
+            if summary or (isinstance(per_image, list) and per_image):
+                return repaired
+    except Exception:
+        pass
+
+    summary = _extract_summary_field_from_raw(raw_text)
+    if summary:
+        return _fallback_sticker_summary(summary)
+
+    try:
+        from creatures.nanobot.prompts.skills.image_summary.tool import _strip_code_fences
+
+        cleaned = _strip_code_fences(raw_text)
+    except Exception:
+        cleaned = raw_text
+    cleaned = re.sub(r"```(?:json)?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"</?[^>]+>", " ", cleaned)
+    return _fallback_sticker_summary(cleaned)
+
+
 def describe_sticker_with_qwen(file_ref: str) -> dict[str, Any]:
     """调用现有 image_summary/Qwen 通道，为表情包生成轻量描述。"""
-    from creatures.nanobot.prompts.skills.image_summary.tool import (
-        ImageSummaryTool,
-        _parse_json_payload,
-    )
+    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
 
     tool = ImageSummaryTool()
     raw = tool._call_qwen(
         [file_ref],
         "这是一张聊天表情包。请重点识别可用于检索的中文描述、图片文字、梗点、情绪和适合使用的聊天场景。",
     )
-    parsed = _parse_json_payload(raw)
+    parsed = _safe_parse_sticker_summary(raw)
     per_image = parsed.get("per_image") if isinstance(parsed.get("per_image"), list) else []
     first = per_image[0] if per_image and isinstance(per_image[0], dict) else {}
     summary = str(first.get("summary") or parsed.get("overall_summary") or "").strip()
@@ -470,11 +539,13 @@ def describe_sticker_with_qwen(file_ref: str) -> dict[str, Any]:
     objects = _json_list(first.get("objects"))
     text_items = _json_list(first.get("text"))
     tags = _json_list(keywords + objects + text_items)
+    if not tags and summary:
+        tags = _json_list(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,8}", summary)[:8])
     return {
         "description": summary,
         "tags": tags,
         "emotions": _extract_emotions_from_keywords(tags, summary),
-        "raw_summary": parsed,
+        "raw_summary": parsed | {"_raw_text": str(raw or "")[:2000]},
     }
 
 
@@ -539,7 +610,14 @@ def auto_describe_sticker(sticker_id: int, *, force: bool = False) -> None:
             db.commit()
             logger.warning("[StickerMemory] auto describe failed id=%s: %s", sticker_id, e)
             return
-        row.description = str(payload.get("description") or "").strip()
+        description = str(payload.get("description") or "").strip()
+        if not description:
+            row.describe_status = "failed"
+            row.describe_attempts = (row.describe_attempts or 0) + 1
+            row.describe_last_error = "empty description after parse"
+            db.commit()
+            return
+        row.description = description
         if payload.get("tags"):
             row.tags_json = _dumps_list(payload.get("tags"))
         if payload.get("emotions"):

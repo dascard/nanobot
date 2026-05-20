@@ -574,6 +574,8 @@ class NewAPIClient:
 
             for attempt in range(_attempts):  # per-model retry from settings
                 payload = self._build_payload(messages, tools, temperature, False, target_model, max_tokens=max_tokens)
+                started = time.time()
+                log_id = 0
                 # 兜底从 contextvars 读取 trace 上下文
                 _trace_id = trace_id
                 _run_id = run_id
@@ -589,7 +591,7 @@ class NewAPIClient:
                         pass
                 try:
                     from core.tracing import LLMRequestTracer
-                    LLMRequestTracer.record_request(
+                    log_id = LLMRequestTracer.record_request(
                         trace_id=_trace_id,
                         run_id=_run_id,
                         source=_source or "unknown",
@@ -611,6 +613,17 @@ class NewAPIClient:
                         ) as resp:
                             if resp.status == 200:
                                 result = await resp.json()
+                                try:
+                                    from core.tracing import LLMRequestTracer
+                                    LLMRequestTracer.finish_request(
+                                        log_id=log_id,
+                                        response=result,
+                                        response_status=resp.status,
+                                        status="success",
+                                        latency_ms=int((time.time() - started) * 1000),
+                                    )
+                                except Exception as _e:
+                                    logger.warning("finish llm api request failed: %s", _e)
                                 if tracker is not None:
                                     asyncio.create_task(tracker.record_success(target_model))
                                 self.last_usage = result.get("usage", {})
@@ -620,6 +633,18 @@ class NewAPIClient:
 
                             detail = await resp.text()
                             last_error = f"API Error {resp.status}: {detail[:200]}"
+                            try:
+                                from core.tracing import LLMRequestTracer
+                                LLMRequestTracer.finish_request(
+                                    log_id=log_id,
+                                    response={"detail": detail[:4000]},
+                                    response_status=resp.status,
+                                    status="failed",
+                                    error=last_error,
+                                    latency_ms=int((time.time() - started) * 1000),
+                                )
+                            except Exception as _e:
+                                logger.warning("finish llm api request failed: %s", _e)
                             if tracker is not None:
                                 asyncio.create_task(tracker.record_failure(target_model))
 
@@ -636,12 +661,36 @@ class NewAPIClient:
 
                     except asyncio.TimeoutError as e:
                         last_error = f"timeout: {e}"
+                        try:
+                            from core.tracing import LLMRequestTracer
+                            LLMRequestTracer.finish_request(
+                                log_id=log_id,
+                                response={},
+                                response_status=0,
+                                status="error",
+                                error=last_error,
+                                latency_ms=int((time.time() - started) * 1000),
+                            )
+                        except Exception:
+                            pass
                         if tracker is not None:
                             asyncio.create_task(tracker.record_failure(target_model))
                         logger.warning(f"new-api timeout: {target_model}, switching")
                         break
                     except aiohttp.ClientError as e:
                         last_error = str(e)
+                        try:
+                            from core.tracing import LLMRequestTracer
+                            LLMRequestTracer.finish_request(
+                                log_id=log_id,
+                                response={},
+                                response_status=0,
+                                status="error",
+                                error=last_error,
+                                latency_ms=int((time.time() - started) * 1000),
+                            )
+                        except Exception:
+                            pass
                         if tracker is not None:
                             asyncio.create_task(tracker.record_failure(target_model))
                         logger.warning(f"new-api network error: {target_model}, {e}, switching")
@@ -688,6 +737,8 @@ class NewAPIClient:
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
         payload = self._build_payload(messages, tools, temperature, True, target_model)
+        started = time.time()
+        log_id = 0
         # 记录 stream LLM API 请求
         _trace_id = trace_id
         _run_id = run_id
@@ -703,7 +754,7 @@ class NewAPIClient:
                 pass
         try:
             from core.tracing import LLMRequestTracer
-            LLMRequestTracer.record_request(
+            log_id = LLMRequestTracer.record_request(
                 trace_id=_trace_id,
                 run_id=_run_id,
                 source=_source or "unknown",
@@ -729,11 +780,25 @@ class NewAPIClient:
                 ) as resp:
                     if resp.status != 200:
                         detail = await resp.text()
+                        try:
+                            from core.tracing import LLMRequestTracer
+                            LLMRequestTracer.finish_request(
+                                log_id=log_id,
+                                response={"detail": detail[:4000]},
+                                response_status=resp.status,
+                                status="failed",
+                                error=f"API Error {resp.status}",
+                                latency_ms=int((time.time() - started) * 1000),
+                            )
+                        except Exception:
+                            pass
                         if tracker is not None:
                             asyncio.create_task(tracker.record_failure(target_model))
                         yield {"error": f"API Error {resp.status}", "detail": detail}
                         return
 
+                    text_parts: list[str] = []
+                    chunks_sample: list[dict[str, Any]] = []
                     async for line in resp.content:
                         line_str = line.decode("utf-8").strip()
                         if not line_str or not line_str.startswith("data: "):
@@ -748,17 +813,65 @@ class NewAPIClient:
                                 self.last_usage = chunk["usage"]
                                 if tracker is not None:
                                     asyncio.create_task(tracker.record_success(target_model))
+                            if len(chunks_sample) >= 20:
+                                chunks_sample.pop(0)
+                            chunks_sample.append(chunk)
+                            try:
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content") or ""
+                                if content:
+                                    text_parts.append(str(content))
+                            except Exception:
+                                pass
                             yield chunk
                         except json.JSONDecodeError:
                             continue
+                    try:
+                        from core.tracing import LLMRequestTracer
+                        LLMRequestTracer.finish_request(
+                            log_id=log_id,
+                            response={
+                                "content": "".join(text_parts),
+                                "chunks_sample": chunks_sample,
+                            },
+                            response_status=resp.status,
+                            status="success",
+                            latency_ms=int((time.time() - started) * 1000),
+                        )
+                    except Exception:
+                        pass
 
             except asyncio.TimeoutError:
                 logger.error("new-api stream timed out")
+                try:
+                    from core.tracing import LLMRequestTracer
+                    LLMRequestTracer.finish_request(
+                        log_id=log_id,
+                        response={},
+                        response_status=0,
+                        status="error",
+                        error="stream timed out",
+                        latency_ms=int((time.time() - started) * 1000),
+                    )
+                except Exception:
+                    pass
                 if tracker is not None:
                     asyncio.create_task(tracker.record_failure(target_model))
                 yield {"error": "Timeout", "detail": "stream timed out"}
             except aiohttp.ClientError as e:
                 logger.error(f"new-api stream error: {e}")
+                try:
+                    from core.tracing import LLMRequestTracer
+                    LLMRequestTracer.finish_request(
+                        log_id=log_id,
+                        response={},
+                        response_status=0,
+                        status="error",
+                        error=str(e),
+                        latency_ms=int((time.time() - started) * 1000),
+                    )
+                except Exception:
+                    pass
                 if tracker is not None:
                     asyncio.create_task(tracker.record_failure(target_model))
                 yield {"error": "NetworkError", "detail": str(e)}

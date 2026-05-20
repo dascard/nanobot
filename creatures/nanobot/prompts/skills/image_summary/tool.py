@@ -231,12 +231,15 @@ class ImageSummaryTool(BaseTool):
             headers["Authorization"] = f"Bearer {route['api_key']}"
 
         logger.info("  [image_summary] >> %s | files=%d", url, len(files))
+        import time as _time
+        started = _time.time()
+        log_id = 0
         try:
             from core.llm_trace_context import get_llm_trace_vars
             from core.tracing import LLMRequestTracer
 
             trace_id, run_id, _ = get_llm_trace_vars()
-            LLMRequestTracer.record_request(
+            log_id = LLMRequestTracer.record_request(
                 trace_id=trace_id,
                 run_id=run_id,
                 source="image_summary",
@@ -255,8 +258,38 @@ class ImageSummaryTool(BaseTool):
         timeout = route.get("timeout", IMAGE_SUMMARY_TIMEOUT)
         proxy_handler = urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
-        with opener.open(req, timeout=timeout) as response:
-            body = json.loads(response.read().decode("utf-8"))
+        try:
+            with opener.open(req, timeout=timeout) as response:
+                response_status = getattr(response, "status", None) or (
+                    response.getcode() if hasattr(response, "getcode") else 200
+                )
+                body = json.loads(response.read().decode("utf-8"))
+            try:
+                from core.tracing import LLMRequestTracer
+                LLMRequestTracer.finish_request(
+                    log_id=log_id,
+                    response=body,
+                    response_status=response_status,
+                    status="success",
+                    latency_ms=int((_time.time() - started) * 1000),
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                from core.tracing import LLMRequestTracer
+                status = getattr(e, "code", 0) or 0
+                LLMRequestTracer.finish_request(
+                    log_id=log_id,
+                    response={},
+                    response_status=status,
+                    status="error",
+                    error=str(e),
+                    latency_ms=int((_time.time() - started) * 1000),
+                )
+            except Exception:
+                pass
+            raise
 
         content = body["choices"][0]["message"]["content"]
         logger.info("  [image_summary] << raw: %.120s", content)

@@ -8,7 +8,7 @@ import logging
 from core.database import SessionLocal
 from core.legacy_adapter import SQLiteMemory, UnifiedProvider, NanobotKTController
 from config import (
-    API_KEY_01_CHAT, OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER,
+    OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER,
     LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING,
     NEW_API_KEY, NEW_API_BASE_URL
 )
@@ -32,6 +32,8 @@ def _get_lock(user_id: str) -> threading.Lock:
 
 def _build_provider() -> UnifiedProvider:
     """构建统一推理提供者 (DRY: 避免在多处重复初始化)"""
+    if LLM_PROVIDER == "dify":
+        raise RuntimeError("Dify provider has been removed. Please migrate to NewAPI/OpenAI-compatible route.")
     model_map = {
         "smart": LLM_MODEL_SMART,
         "fast": LLM_MODEL_FAST,
@@ -39,7 +41,7 @@ def _build_provider() -> UnifiedProvider:
     }
     return UnifiedProvider(
         provider_type=LLM_PROVIDER, 
-        api_key=NEW_API_KEY if LLM_PROVIDER == "new-api" else (OPENAI_API_KEY or (API_KEY_01_CHAT if LLM_PROVIDER == "dify" else "")),
+        api_key=NEW_API_KEY if LLM_PROVIDER == "new-api" else OPENAI_API_KEY,
         base_url=NEW_API_BASE_URL if LLM_PROVIDER == "new-api" else OPENAI_BASE_URL,
         model_map=model_map,
         timeout=_evo_timeout() if LLM_PROVIDER == "new-api" else None,

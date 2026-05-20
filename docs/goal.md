@@ -1,2167 +1,1111 @@
-# 任务：重构项目提示词系统，并增加工具调用记录与前端管理页面
+# Nanobot 最近需求综合任务指导
+
+## 总目标
+
+把最近几轮需求收敛成四条主线
+
+1. 修复表情包自动描述失败
+2. 完善 LLM API 请求与响应日志
+3. 建立 reply/no_reply 调用审核与兜底重试机制
+4. 在 Web 端提供 reply 手动测试、测试集管理、A/B 评估能力
+
+另外
+Dify 相关代码不再继续补 trace
+后续应作为独立清理任务删除
+
+---
+
+# 一、执行优先级
+
+## P0 必须优先完成
+
+1. 表情包自动描述 JSON 容错解析
+2. LLM API 日志写入 response_json / response_status / latency_ms
+3. reply/no_reply 未调用时最多重试一次
+4. Web 端能手动 dry-run 测试 reply 调用
+
+## P1 第二阶段完成
+
+1. ReplyContractCheckLog 审核日志表
+2. AgentRun 详情页展示 reply 调用检查日志
+3. Reply 测试集 CRUD
+4. 测试集生成预览
+5. baseline / prompt_only / code_retry 三组 A/B 评估
+
+## P2 后续清理
+
+1. 删除 Dify 相关代码
+2. 清理旧配置
+3. 清理旧测试
+4. 给历史数据库做迁移或兼容
+
+---
+
+# 二、任务一：修复表情包自动描述失败
 
 ## 背景
 
-当前项目是一个 QQbot / nanobot / 个人 agent 系统，已有后端、数据库、模型调用、工具调用、群聊上下文、记忆、Admin WebUI 等模块。
-
-现在需要重构提示词系统，并增加工具调用记录功能。
-
-这次重构不要做过度复杂的 PromptOps 平台。不要设计复杂的 SQL 分层提示词系统，不要做 prompt_blocks / prompt_presets / prompt_preset_blocks / prompt_entries 这种复杂结构。
-
-推荐方案如下：
-
-- 提示词模板使用 `Markdown + frontmatter`
-- 提示词文件保存在文件系统中，例如 `prompts/*.md`
-- 前端可以编辑、预览、保存、回滚、热重载提示词
-- 提示词“深度 / 顺序”只作为模板注释和前端编辑提示，不做数据库强制分层
-- 动态内容通过占位符插入，例如 `{{recent_messages}}`、`{{user_memory}}`、`{{retrieved_knowledge}}`
-- SQLite 只用于记录：
-  - agent run
-  - tool call
-  - prompt render log
-  - prompt file version manifest / 保存历史
-- 所有模型调用统一经过 `PromptManager`
-- 所有工具调用统一经过 `ToolRegistry` 或等价包装层记录
-
-## 核心目标
-
-完成以下四件事：
-
-1. 重构提示词系统
-   - 新增 `PromptManager`
-   - 支持从 `prompts/*.md` 读取 Markdown + frontmatter 模板
-   - 支持变量替换
-   - 支持模板校验
-   - 支持预览渲染结果
-   - 支持运行时热重载
-   - 支持保存前自动备份
-
-2. 改造运行链路
-   - 不再让 bridge / route / model caller 到处手动拼 prompt
-   - 模型调用前统一调用 `PromptManager.render(...)`
-   - 保留旧逻辑 fallback，避免一次重构导致运行失败
-   - 支持 `legacy / shadow / managed` 三种模式
-
-3. 增加工具调用记录
-   - 新增 `agent_runs`
-   - 新增 `tool_calls`
-   - 新增 `prompt_render_logs`
-   - 所有工具调用都记录：
-     - trace_id
-     - run_id
-     - tool_name
-     - args_json
-     - result_preview
-     - status
-     - latency_ms
-     - error
-     - started_at
-     - finished_at
-
-4. 修改前端 Admin WebUI
-   - 新增 Prompt 文件列表页
-   - 新增 Prompt 编辑页
-   - 新增 Prompt 预览功能
-   - 新增 Agent Run 列表页
-   - 新增 Agent Run 详情页
-   - 新增 Tool Call 详情展示
-
----
-
-## 非目标
-
-本次不要做以下事情：
-
-- 不要做复杂 SQL 分层 prompt 管理
-- 不要做 worldbook / prompt entry 动态激活系统
-- 不要做复杂拖拽式 prompt 编排器
-- 不要把知识库检索逻辑放进 PromptManager
-- 不要让 PromptManager 决定该检索什么知识
-- 不要让 prompt 文本成为工具权限的唯一依据
-- 不要破坏现有 bot 运行链路
-- 不要删除旧 prompt 逻辑，先保留 fallback
-
----
-
-## 推荐目录结构
-
-请根据实际项目结构调整，但大体按以下方式新增或修改：
+日志示例
 
 ```text
-nanobot/
-  prompts/
-    __init__.py
-    manager.py
-    loader.py
-    renderer.py
-    validator.py
-    history.py
-    defaults/
-      group_chat.md
-      private_chat.md
-      timing_gate.md
-      sql_analysis.md
-      group_analysis.md
-      memory_extract.md
+[image_summary] << raw: {"image_count": 1, "overall_summary": "...", "per_image": [...]
+[StickerMemory] auto describe failed id=744: Expecting ',' delimiter...
+```
 
-  tracing/
-    __init__.py
-    run_tracer.py
-    tool_tracer.py
-    prompt_tracer.py
+这说明 image_summary 已经返回了内容
+失败点在 sticker_memory 自动描述阶段解析 JSON
 
-  tools/
-    registry.py
-    policy.py
+当前问题是
 
-  db/
-    migrations/
-      20260518_prompt_trace.sql
+```python
+parsed = _parse_json_payload(raw)
+```
 
-前端大体结构：
+只要模型返回半截 JSON
+或者字符串里有未转义引号
+或者尾部多文本
+就会导致整张表情包打标失败
 
-admin-ui/
-  src/
-    pages/
-      PromptFilesPage.tsx
-      PromptEditorPage.tsx
-      PromptPreviewPage.tsx
-      AgentRunsPage.tsx
-      AgentRunDetailPage.tsx
+## 修改目标
 
-    api/
-      prompts.ts
-      traces.ts
+表情包自动描述不能依赖严格 JSON
+应该尽可能保住 description
 
-    components/
-      PromptEditor.tsx
-      PromptPreviewPanel.tsx
-      PromptHelpPanel.tsx
-      RunTimeline.tsx
-      ToolCallDetail.tsx
+即使 JSON 解析失败
+也要 fallback 到 raw 文本摘要
+不能直接 failed
 
-如果项目目录不是这个结构，请先阅读当前项目结构，再用当前风格落地。
+## 修改文件
 
-一、提示词模板格式
+```text
+core/sticker_memory.py
+```
 
-提示词模板采用 Markdown + frontmatter。
+## 新增函数
 
-示例：prompts/group_chat.md
+```python
+def _safe_parse_sticker_summary(raw: str) -> dict[str, Any]:
+    """表情包描述专用容错解析。"""
+```
+
+逻辑顺序
+
+1. 优先调用 image_summary.tool.\_parse_json_payload
+2. 失败后尝试 EvolutionUtils.json_repair
+3. 再失败用正则提取 overall_summary / summary / description
+4. 还失败就清理 raw 文本并截取前 300 字作为 summary
+5. 返回结构至少包含
+
+```python
+{
+    "image_count": 1,
+    "overall_summary": summary,
+    "per_image": [{"index": 1, "summary": summary}],
+    "keywords": [],
+    "risk_flags": [],
+    "confidence": "low",
+    "_parse_fallback": True,
+}
+```
+
+## 修改 describe_sticker_with_qwen
+
+原逻辑
+
+```python
+parsed = _parse_json_payload(raw)
+```
+
+改成
+
+```python
+parsed = _safe_parse_sticker_summary(raw)
+```
+
+并将 raw[:2000] 放进 raw_summary
+
+```python
+"raw_summary": parsed | {"_raw_text": raw[:2000]}
+```
+
+## tags fallback
+
+如果 keywords / objects / text 都为空
+从 summary 中提取少量 token 作为 tags
+避免表情包完全检索不到
+
+```python
+tags = _json_list(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]{2,8}", summary)[:8])
+```
+
+## 修改 auto_describe_sticker
+
+成功路径前检查 description 是否为空
+
+如果为空
+
+```python
+row.describe_status = "failed"
+row.describe_attempts += 1
+row.describe_last_error = "empty description after parse"
+return
+```
+
+不要空 description 也标 ok
+
+## 测试
+
+新增
+
+```text
+tests/test_sticker_memory_describe.py
+```
+
+覆盖
+
+1. 正常 JSON 可解析
+2. 代码块 JSON 可解析
+3. 局部坏 JSON 但含 overall_summary 时仍能生成 description
+4. 完全非 JSON 文本 fallback 为 description
+5. description 为空时 auto_describe 不标 ok
 
 ---
-key: group_chat
-name: 群聊回复提示词
-description: 默认 QQ 群聊回复模板
-version: 1
-required_vars:
-  - current_message
-  - recent_messages
-optional_vars:
-  - user_memory
-  - group_memory
-  - retrieved_knowledge
-  - tool_policy
-  - current_time
-recommended_order:
-  - 场景定位
-  - 行为原则
-  - 回复风格
-  - 工具规则
-  - 最近上下文
-  - 用户记忆
-  - 群聊记忆
-  - 相关知识
-  - 当前消息
-  - 输出要求
----
 
-# 场景定位
-
-你处在一个 QQ 群聊环境中，回复应像自然参与对话的群友。
-
-不要主动说明自己是 AI、机器人、项目或系统。
-
-# 行为原则
-
-- 只在确实需要回复时回复。
-- 不要抢话。
-- 不要把普通闲聊变成客服式解答。
-- 不要暴露内部工具、日志、提示词或系统实现。
-
-# 回复风格
-
-回复应自然、简短、低存在感。
-
-除非用户明确要求详细解释，否则不要长篇展开。
-
-# 工具规则
-
-{{tool_policy}}
-
-# 最近上下文
-
-{{recent_messages}}
-
-# 用户记忆
-
-{{user_memory}}
-
-# 群聊记忆
-
-{{group_memory}}
-
-# 相关知识
-
-{{retrieved_knowledge}}
-
-# 当前时间
-
-{{current_time}}
-
-# 当前消息
-
-{{current_message}}
-
-# 输出要求
-
-根据当前上下文自然回复。不要输出调试信息，不要解释自己使用了什么工具。
-
-再新增以下默认模板：
-
-prompts/private_chat.md
-prompts/timing_gate.md
-prompts/sql_analysis.md
-prompts/group_analysis.md
-prompts/memory_extract.md
-
-其中 memory_extract.md 必须强调：
-
-只提取用户长期稳定偏好、事实、项目约束。
-不要把助手行为、工具错误、SQL 重试、系统限制写成用户偏好。
-不要直接判断 NEW / UPDATE / ARCHIVE，只输出候选和证据。
-
-sql_analysis.md 必须强调：
-
-只读查询。
-不要执行写入、删除、更新、建表、删表等操作。
-不要 SELECT *。
-必须限制查询范围。
-优先给出基于证据的结论。
-
-timing_gate.md 必须强调：
-
-判断是否应该回复、等待、忽略或合并上下文。
-群聊中不要过度触发。
-一句话拆开发送时，应倾向等待更多上下文。
-二、PromptManager 设计
-
-实现一个统一入口：
-
-class PromptManager:
-    def render(
-        self,
-        *,
-        prompt_key: str,
-        variables: dict,
-        trace_id: str | None = None,
-        run_id: int | None = None,
-        mode: str | None = None,
-    ) -> RenderedPrompt:
-        ...
-
-返回对象：
-
-@dataclass
-class RenderedPrompt:
-    prompt_key: str
-    prompt_version: int
-    content: str
-    messages: list[dict]
-    variables_used: dict
-    missing_required_vars: list[str]
-    unknown_vars: list[str]
-    token_estimate: int | None
-    render_log_id: int | None
-
-要求：
-
-从 prompts/{prompt_key}.md 读取模板
-解析 frontmatter
-替换 {{variable_name}}
-必填变量缺失时记录 warning
-未知变量可以保留 warning，不要直接崩溃
-支持热重载
-支持缓存
-支持保存渲染日志
-不要在 PromptManager 内部做知识库检索
-不要在 PromptManager 内部做记忆筛选
-PromptManager 只负责渲染
-三、ContextBuilder 与 PromptManager 的边界
-
-ContextBuilder 负责准备变量，例如：
-
-variables = {
-    "current_message": current_message,
-    "recent_messages": recent_messages_text,
-    "user_memory": user_memory_text,
-    "group_memory": group_memory_text,
-    "retrieved_knowledge": retrieved_knowledge_text,
-    "tool_policy": tool_policy_text,
-    "current_time": current_time_text,
-}
-
-PromptManager 只负责：
-
-rendered = prompt_manager.render(
-    prompt_key="group_chat",
-    variables=variables,
-    trace_id=trace_id,
-    run_id=run_id,
-)
-
-不要把检索逻辑、记忆选择逻辑、SQL 查询逻辑写进 PromptManager。
-
-四、运行模式
-
-新增配置：
-
-prompt_system:
-  mode: legacy
-
-支持三种模式：
-
-legacy:
-  继续使用旧提示词拼接逻辑。
-
-shadow:
-  运行时仍使用旧提示词，但同时用新 PromptManager 渲染一份并记录 prompt_render_log，用于对比。
-
-managed:
-  正式使用 PromptManager 渲染结果。
-
-要求：
-
-默认先使用 legacy 或 shadow
-不要默认直接切到 managed
-在代码中保留 fallback
-如果新模板渲染失败，自动回退旧逻辑，并记录错误
-五、提示词文件保存与版本备份
-
-提示词文件保存在：
-
-prompts/*.md
-
-每次前端保存提示词时：
-
-读取旧文件
-将旧文件备份到：
-prompts_history/{prompt_key}/YYYYMMDD_HHMMSS.md
-写入新文件
-更新 manifest
-
-manifest 可以是 JSON 文件：
-
-prompts_history/manifest.json
-
-结构示例：
-
-{
-  "group_chat": {
-    "version": 12,
-    "updated_at": "2026-05-18T22:30:00+08:00",
-    "updated_by": "admin",
-    "current_path": "prompts/group_chat.md",
-    "latest_backup_path": "prompts_history/group_chat/20260518_223000.md"
-  }
-}
-
-也可以用 SQLite 表记录版本，但不要把完整 prompt 系统做成复杂 SQL 分层。
-
-如果使用 SQLite，最多新增简单表：
-
-CREATE TABLE prompt_file_versions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    prompt_key TEXT NOT NULL,
-    version INTEGER NOT NULL,
-    file_path TEXT NOT NULL,
-    backup_path TEXT,
-    updated_by TEXT,
-    created_at TEXT NOT NULL,
-    note TEXT
-);
-六、数据库迁移
-
-新增迁移文件，例如：
-
-db/migrations/20260518_prompt_trace.sql
-
-至少包含三张表。
-
-agent_runs
-CREATE TABLE IF NOT EXISTS agent_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    trace_id TEXT NOT NULL UNIQUE,
-    session_id TEXT,
-    chat_type TEXT,
-    group_id TEXT,
-    user_id TEXT,
-    trigger_type TEXT,
-    status TEXT NOT NULL,
-    prompt_key TEXT,
-    model TEXT,
-    input_preview TEXT,
-    output_preview TEXT,
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    error TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_runs_trace_id ON agent_runs(trace_id);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_group_id ON agent_runs(group_id);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_user_id ON agent_runs(user_id);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_started_at ON agent_runs(started_at);
-tool_calls
-CREATE TABLE IF NOT EXISTS tool_calls (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER,
-    trace_id TEXT NOT NULL,
-    tool_name TEXT NOT NULL,
-    args_json TEXT,
-    result_preview TEXT,
-    status TEXT NOT NULL,
-    latency_ms INTEGER,
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    error TEXT,
-    FOREIGN KEY (run_id) REFERENCES agent_runs(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id ON tool_calls(run_id);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_trace_id ON tool_calls(trace_id);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_name ON tool_calls(tool_name);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_started_at ON tool_calls(started_at);
-prompt_render_logs
-CREATE TABLE IF NOT EXISTS prompt_render_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER,
-    trace_id TEXT NOT NULL,
-    prompt_key TEXT NOT NULL,
-    prompt_version INTEGER,
-    variables_json TEXT,
-    rendered_preview TEXT,
-    token_estimate INTEGER,
-    missing_vars_json TEXT,
-    warnings_json TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (run_id) REFERENCES agent_runs(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_prompt_render_logs_run_id ON prompt_render_logs(run_id);
-CREATE INDEX IF NOT EXISTS idx_prompt_render_logs_trace_id ON prompt_render_logs(trace_id);
-CREATE INDEX IF NOT EXISTS idx_prompt_render_logs_prompt_key ON prompt_render_logs(prompt_key);
-CREATE INDEX IF NOT EXISTS idx_prompt_render_logs_created_at ON prompt_render_logs(created_at);
-
-注意：
-
-rendered_preview 只存截断后的内容，避免数据库膨胀。
-完整 prompt 只在 debug 模式保存，或者不保存。
-args_json 需要做长度限制或截断策略。
-result_preview 必须截断。
-敏感字段需要脱敏。
-七、AgentRun 记录
-
-新增 tracer：
-
-class RunTracer:
-    def start_run(
-        self,
-        *,
-        trace_id: str,
-        session_id: str | None,
-        chat_type: str | None,
-        group_id: str | None,
-        user_id: str | None,
-        trigger_type: str | None,
-        prompt_key: str | None,
-        model: str | None,
-        input_preview: str | None,
-    ) -> int:
-        ...
-
-    def finish_run(
-        self,
-        *,
-        run_id: int,
-        status: str,
-        output_preview: str | None = None,
-        error: str | None = None,
-    ) -> None:
-        ...
-
-要求：
-
-每次外部消息进入并触发一次 agent 流程时创建 agent_runs
-所有 prompt render / model call / tool call 都关联同一个 trace_id
-能在前端根据 trace_id 查完整链路
-八、工具调用记录
-
-所有工具调用必须通过统一包装层。
-
-如果已有 ToolRegistry，则改造它。
-
-如果没有，则新增一个轻量 ToolRegistry 或 ToolTracer 包装器。
-
-示例逻辑：
-
-class ToolRegistry:
-    async def call_tool(self, name: str, args: dict, ctx: ToolContext):
-        started = now()
-        call_id = tool_tracer.start_tool_call(
-            run_id=ctx.run_id,
-            trace_id=ctx.trace_id,
-            tool_name=name,
-            args=args,
-        )
-
-        try:
-            result = await self.tools[name].invoke(args, ctx)
-            tool_tracer.finish_tool_call(
-                call_id=call_id,
-                status="success",
-                result_preview=summarize_result(result),
-                latency_ms=elapsed_ms(started),
-            )
-            return result
-        except Exception as e:
-            tool_tracer.finish_tool_call(
-                call_id=call_id,
-                status="error",
-                error=str(e),
-                latency_ms=elapsed_ms(started),
-            )
-            raise
-
-要求：
-
-不要让每个工具手动写日志
-工具调用日志应该集中处理
-支持同步和异步工具
-支持异常记录
-支持 result 截断
-支持 args 脱敏
-至少记录：
-tool_name
-args_json
-result_preview
-status
-latency_ms
-error
-九、后端 API
-
-新增或扩展 Admin API。
-
-Prompt API
-GET /admin/prompts
-
-返回所有 prompts/*.md 文件及 metadata。
-
-GET /admin/prompts/{prompt_key}
-
-返回模板内容、frontmatter、版本信息。
-
-PUT /admin/prompts/{prompt_key}
-
-保存模板，保存前自动备份。
-
-请求：
-
-{
-  "content": "...完整 Markdown...",
-  "note": "调整群聊回复风格"
-}
-POST /admin/prompts/{prompt_key}/preview
-
-根据输入变量预览渲染结果。
-
-请求：
-
-{
-  "variables": {
-    "current_message": "这个 cooldown 怎么这么大",
-    "recent_messages": "...",
-    "user_memory": "",
-    "group_memory": "",
-    "retrieved_knowledge": "",
-    "tool_policy": "..."
-  }
-}
-
-返回：
-
-{
-  "prompt_key": "group_chat",
-  "prompt_version": 1,
-  "content": "...渲染后的 prompt...",
-  "messages": [
-    {
-      "role": "system",
-      "content": "..."
-    }
-  ],
-  "missing_required_vars": [],
-  "unknown_vars": [],
-  "token_estimate": 1234,
-  "warnings": []
-}
-POST /admin/prompts/reload
-
-热重载 prompt 缓存。
-
-GET /admin/prompts/{prompt_key}/history
-
-查看历史版本。
-
-POST /admin/prompts/{prompt_key}/rollback
-
-回滚到某个历史版本。
-
-Trace API
-GET /admin/agent-runs
-
-支持 query 参数：
-
-trace_id
-group_id
-user_id
-status
-prompt_key
-limit
-offset
-GET /admin/agent-runs/{run_id}
-
-返回单次 run 的详情，包括：
-
-{
-  "run": {},
-  "prompt_render_logs": [],
-  "tool_calls": []
-}
-GET /admin/tool-calls
-
-支持过滤：
-
-trace_id
-run_id
-tool_name
-status
-limit
-offset
-GET /admin/tool-calls/{tool_call_id}
-
-返回工具调用详情。
-
-十、前端页面
-1. PromptFilesPage
-
-路径建议：
-
-/admin/prompts
-
-展示：
-
-prompt_key
-name
-description
-version
-updated_at
-required_vars
-optional_vars
-
-操作：
-
-编辑
-预览
-历史
-热重载
-2. PromptEditorPage
-
-路径建议：
-
-/admin/prompts/:promptKey
-
-布局：
-
-左侧：Markdown 编辑器
-右侧：提示词组织建议 + 变量说明 + 校验结果
-底部：保存 / 预览 / 回滚 / 热重载
-
-右侧固定显示提示词组织建议：
-
-推荐组织顺序：
-
-1. 场景定位
-2. 行为原则
-3. 回复风格
-4. 工具规则
-5. 最近上下文
-6. 用户记忆
-7. 群聊记忆
-8. 相关知识
-9. 当前消息
-10. 输出要求
-
-变量说明：
-
-{{current_message}}       当前用户消息，通常必填
-{{recent_messages}}       最近上下文，通常必填
-{{user_memory}}           用户长期记忆，可选
-{{group_memory}}          群聊风格 / 群记忆，可选
-{{retrieved_knowledge}}   知识库检索结果，可选
-{{tool_policy}}           工具使用规则，可选
-{{current_time}}          当前时间，可选
-
-校验结果显示：
-
-缺少 required_vars
-出现未知变量
-frontmatter 解析失败
-模板为空
-token 估算过长
-保存成功 / 失败
-3. PromptPreviewPage 或编辑页内预览面板
-
-支持输入模拟变量。
-
-至少提供：
-
-current_message
-recent_messages
-user_memory
-group_memory
-retrieved_knowledge
-tool_policy
-current_time
-
-点击预览后显示：
-
-渲染后的 prompt
-messages JSON
-缺失变量
-token 估算
-warnings
-4. AgentRunsPage
-
-路径建议：
-
-/admin/agent-runs
-
-展示：
-
-trace_id
-chat_type
-group_id
-user_id
-prompt_key
-status
-model
-started_at
-latency
-tool_call_count
-
-支持过滤：
-
-trace_id
-group_id
-user_id
-status
-prompt_key
-5. AgentRunDetailPage
-
-路径建议：
-
-/admin/agent-runs/:runId
-
-展示：
-
-基本信息
-Prompt Render Logs
-Tool Calls
-错误信息
-输入摘要
-输出摘要
-
-Tool Calls 表格：
-
-tool_name
-status
-latency_ms
-started_at
-args_json
-result_preview
-error
-十一、运行链路改造要求
-
-找到当前模型调用链路，大概率类似：
-
-route / handler
-  → context builder
-  → prompt 拼接
-  → model call
-  → tool call
-  → reply
-
-改造为：
-
-route / handler
-  → trace_id
-  → RunTracer.start_run
-  → ContextBuilder 准备 variables
-  → PromptManager.render
-  → model call
-  → ToolRegistry.call_tool
-  → reply
-  → RunTracer.finish_run
-
-注意：
-
-每次 run 必须有 trace_id
-trace_id 传递到 prompt render 和 tool call
-工具调用必须带 run_id
-如果模型调用失败，agent_run 状态为 error
-如果工具调用失败，tool_call 状态为 error，但是否终止 run 按原业务逻辑决定
-如果 PromptManager 渲染失败，按配置 fallback 到 legacy prompt
-十二、默认模板内容
-
-请至少初始化以下模板。
-
-group_chat.md
-
-用途：群聊自然回复。
-
-核心要求：
-
-像群友，不像客服
-短回复
-低存在感
-不主动暴露 AI / bot / 项目名
-不暴露工具和日志
-private_chat.md
-
-用途：私聊助手回复。
-
-核心要求：
-
-直接、有帮助
-可以比群聊更详细
-但仍然不要暴露内部系统实现
-timing_gate.md
-
-用途：判断是否回复。
-
-核心要求：
-
-输出结构化判断
-判断 reply / wait / ignore
-群聊里避免过度触发
-一句话拆开时倾向等待
-sql_analysis.md
-
-用途：SQL 分析工具提示词。
-
-核心要求：
-
-只读
-不 SELECT *
-限制范围
-优先查必要字段
-避免反复查询
-总结时引用查询依据
-group_analysis.md
-
-用途：群聊总结 / 群聊分析。
-
-核心要求：
-
-基于证据总结
-不要把助手行为当成用户偏好
-区分事实、推测、建议
-memory_extract.md
-
-用途：记忆候选提取。
-
-核心要求：
-
-只输出候选和证据
-不决定 NEW / UPDATE / ARCHIVE
-不把 bot 行为、工具错误、系统限制写成用户偏好
-关注长期稳定偏好、事实、项目约束
-十三、测试要求
-
-至少补以下测试。
-
-后端测试
-frontmatter 解析测试
-required_vars 缺失测试
-变量替换测试
-未知变量 warning 测试
-prompt 保存自动备份测试
-prompt reload 测试
-prompt preview API 测试
-agent_run 创建 / 完成测试
-tool_call success / error 记录测试
-PromptManager legacy fallback 测试
-前端测试或手动验收
-能看到 prompt 文件列表
-能打开并编辑 prompt
-保存后能生成历史备份
-preview 能看到渲染结果
-缺变量时有提示
-agent_runs 页面能看到最近运行
-run detail 能看到 tool calls
-tool call error 能正确展示
-十四、兼容性要求
-
-非常重要：
-
-不要破坏当前启动流程
-不要强制依赖前端才能运行
-不要让 prompt 文件不存在时直接崩溃
-如果模板不存在，使用旧逻辑 fallback
-如果 frontmatter 解析失败，返回明确错误
-如果工具调用记录失败，不应该影响工具本身执行
-如果 tracing 数据库写入失败，不应该导致 bot 主流程失败，但要写普通日志
-默认不要保存完整 prompt 到数据库，避免膨胀
-十五、安全与脱敏要求
-
-记录 tool call 时需要处理：
-
-args_json 截断
-result_preview 截断
-敏感字段脱敏，例如：
-token
-api_key
-password
-secret
-cookie
-authorization
-不要在前端默认展示完整敏感内容
-前端展示 JSON 时要格式化，但不要执行 HTML
-后端 API 需复用现有 Admin 鉴权逻辑
-十六、提交内容要求
-
-完成后输出：
-
-修改了哪些文件
-新增了哪些文件
-数据库迁移说明
-新增 API 列表
-前端新增页面列表
-如何切换 prompt_system.mode
-如何测试
-当前还有哪些未完成或风险点
-十七、建议实现顺序
-
-请按以下顺序实现，避免一次性改崩：
-
-Step 1：先审查项目结构
-
-先阅读：
-
-后端入口
-当前 prompt 拼接逻辑
-当前 model call 逻辑
-当前 tool call 逻辑
-当前 Admin WebUI 结构
-当前 DB migration 方式
-
-不要假设目录一定存在，按实际项目结构落地。
-
-Step 2：增加数据库迁移
-
-新增：
-
-agent_runs
-tool_calls
-prompt_render_logs
-可选 prompt_file_versions
-Step 3：实现 PromptManager
-
-实现：
-
-loader
-renderer
-validator
-history backup
-reload cache
-preview
-Step 4：新增默认 prompt 文件
-
-新增：
-
-group_chat.md
-private_chat.md
-timing_gate.md
-sql_analysis.md
-group_analysis.md
-memory_extract.md
-Step 5：接入 shadow 模式
-
-先不要完全替换旧 prompt。
-
-在现有运行链路中：
-
-旧 prompt 正常使用
-新 PromptManager 同时 render
-记录 prompt_render_log
-对比是否报错
-Step 6：封装工具调用记录
-
-改造 ToolRegistry 或工具调用入口，统一记录 tool_calls。
-
-Step 7：接入 managed 模式
-
-当配置为 managed 时，模型调用使用 PromptManager 渲染结果。
-
-Step 8：增加 Admin API
-
-新增 Prompt API 和 Trace API。
-
-Step 9：增加前端页面
-
-新增：
-
-PromptFilesPage
-PromptEditorPage
-PromptPreview 功能
-AgentRunsPage
-AgentRunDetailPage
-Step 10：测试和整理
-
-跑现有测试。
-
-补充必要测试。
-
-确认 legacy / shadow / managed 三种模式都能正常工作。
-
-十八、验收标准
-
-最终必须满足：
-
-后端能从 prompts/*.md 读取提示词
-前端能编辑并保存提示词
-保存提示词时自动备份旧版本
-前端能预览变量替换后的 prompt
-运行时能记录 prompt_render_logs
-每次 agent run 有 trace_id
-工具调用能记录到 tool_calls
-前端能查看 agent_runs 和 tool_calls
-legacy 模式不影响旧逻辑
-shadow 模式能同时渲染新 prompt 并记录日志
-managed 模式能正式使用新 PromptManager
-出错时有 fallback，不会直接导致 bot 崩溃
-十九、特别注意
-
-本次重构重点是“轻量可管理”，不是“复杂 PromptOps”。
-
-不要把提示词拆成一堆 SQL block。
-
-不要把提示词深度做成强制数据库层级。
-
-提示词深度只体现在：
-
-模板内推荐顺序
-Markdown 标题结构
-前端编辑提示
-渲染时变量插入位置
-
-知识库动态拼接只需要：
-
-ContextBuilder 负责检索
-PromptManager 负责插入 {{retrieved_knowledge}}
-
-工具调用记录必须结构化，因为这是 agent runtime 可观测性的基础。
-
-请优先保证运行链路稳定，再逐步切到新提示词系统。# 任务：重构项目提示词系统，并增加工具调用记录与前端管理页面
+# 三、任务二：LLM API 日志增加响应记录
 
 ## 背景
 
-当前项目是一个 QQbot / nanobot / 个人 agent 系统，已有后端、数据库、模型调用、工具调用、群聊上下文、记忆、Admin WebUI 等模块。
+当前已经记录 request_json
+但还没有把 response 写回同一条日志
 
-现在需要重构提示词系统，并增加工具调用记录功能。
+要求不是新增一条 response log
+而是同一条 LLMApiRequestLog 同时包含 request 和 response
 
-这次重构不要做过度复杂的 PromptOps 平台。不要设计复杂的 SQL 分层提示词系统，不要做 prompt_blocks / prompt_presets / prompt_preset_blocks / prompt_entries 这种复杂结构。
-
-推荐方案如下：
-
-- 提示词模板使用 `Markdown + frontmatter`
-- 提示词文件保存在文件系统中，例如 `prompts/*.md`
-- 前端可以编辑、预览、保存、回滚、热重载提示词
-- 提示词“深度 / 顺序”只作为模板注释和前端编辑提示，不做数据库强制分层
-- 动态内容通过占位符插入，例如 `{{recent_messages}}`、`{{user_memory}}`、`{{retrieved_knowledge}}`
-- SQLite 只用于记录：
-  - agent run
-  - tool call
-  - prompt render log
-  - prompt file version manifest / 保存历史
-- 所有模型调用统一经过 `PromptManager`
-- 所有工具调用统一经过 `ToolRegistry` 或等价包装层记录
-
-## 核心目标
-
-完成以下四件事：
-
-1. 重构提示词系统
-   - 新增 `PromptManager`
-   - 支持从 `prompts/*.md` 读取 Markdown + frontmatter 模板
-   - 支持变量替换
-   - 支持模板校验
-   - 支持预览渲染结果
-   - 支持运行时热重载
-   - 支持保存前自动备份
-
-2. 改造运行链路
-   - 不再让 bridge / route / model caller 到处手动拼 prompt
-   - 模型调用前统一调用 `PromptManager.render(...)`
-   - 保留旧逻辑 fallback，避免一次重构导致运行失败
-   - 支持 `legacy / shadow / managed` 三种模式
-
-3. 增加工具调用记录
-   - 新增 `agent_runs`
-   - 新增 `tool_calls`
-   - 新增 `prompt_render_logs`
-   - 所有工具调用都记录：
-     - trace_id
-     - run_id
-     - tool_name
-     - args_json
-     - result_preview
-     - status
-     - latency_ms
-     - error
-     - started_at
-     - finished_at
-
-4. 修改前端 Admin WebUI
-   - 新增 Prompt 文件列表页
-   - 新增 Prompt 编辑页
-   - 新增 Prompt 预览功能
-   - 新增 Agent Run 列表页
-   - 新增 Agent Run 详情页
-   - 新增 Tool Call 详情展示
-
----
-
-## 非目标
-
-本次不要做以下事情：
-
-- 不要做复杂 SQL 分层 prompt 管理
-- 不要做 worldbook / prompt entry 动态激活系统
-- 不要做复杂拖拽式 prompt 编排器
-- 不要把知识库检索逻辑放进 PromptManager
-- 不要让 PromptManager 决定该检索什么知识
-- 不要让 prompt 文本成为工具权限的唯一依据
-- 不要破坏现有 bot 运行链路
-- 不要删除旧 prompt 逻辑，先保留 fallback
-
----
-
-## 推荐目录结构
-
-请根据实际项目结构调整，但大体按以下方式新增或修改：
+## 修改文件
 
 ```text
-nanobot/
-  prompts/
-    __init__.py
-    manager.py
-    loader.py
-    renderer.py
-    validator.py
-    history.py
-    defaults/
-      group_chat.md
-      private_chat.md
-      timing_gate.md
-      sql_analysis.md
-      group_analysis.md
-      memory_extract.md
+core/database.py
+core/tracing.py
+clients/new_api_client.py
+core/llm_sdk_tracing.py
+clients/classifier_client.py
+creatures/nanobot/prompts/skills/image_summary/tool.py
+core/compaction.py
+webui/src/App.jsx
+api/admin_routes.py
+```
 
-  tracing/
-    __init__.py
-    run_tracer.py
-    tool_tracer.py
-    prompt_tracer.py
+## 数据库字段
 
-  tools/
-    registry.py
-    policy.py
+在 LLMApiRequestLog 增加
 
-  db/
-    migrations/
-      20260518_prompt_trace.sql
+```python
+response_json = Column(Text, default="{}")
+response_preview = Column(Text, default="")
+latency_ms = Column(Integer, default=0)
+finished_at = Column(DateTime, nullable=True)
+```
 
-前端大体结构：
+保留已有字段
 
-admin-ui/
-  src/
-    pages/
-      PromptFilesPage.tsx
-      PromptEditorPage.tsx
-      PromptPreviewPage.tsx
-      AgentRunsPage.tsx
-      AgentRunDetailPage.tsx
+```python
+response_status
+status
+error
+```
 
-    api/
-      prompts.ts
-      traces.ts
+## migration
 
-    components/
-      PromptEditor.tsx
-      PromptPreviewPanel.tsx
-      PromptHelpPanel.tsx
-      RunTimeline.tsx
-      ToolCallDetail.tsx
+新增 migration
 
-如果项目目录不是这个结构，请先阅读当前项目结构，再用当前风格落地。
+```sql
+ALTER TABLE llm_api_request_logs ADD COLUMN response_json TEXT DEFAULT '{}';
+ALTER TABLE llm_api_request_logs ADD COLUMN response_preview TEXT DEFAULT '';
+ALTER TABLE llm_api_request_logs ADD COLUMN latency_ms INTEGER DEFAULT 0;
+ALTER TABLE llm_api_request_logs ADD COLUMN finished_at DATETIME;
+```
 
-一、提示词模板格式
+如果项目没有严格 migration runner
+也要保证启动 create_all 场景和已有库场景都能兼容
 
-提示词模板采用 Markdown + frontmatter。
+## 修改 LLMRequestTracer.record_request
 
-示例：prompts/group_chat.md
+现在 record_request 只插入不返回
+需要改为返回 log_id
 
----
-key: group_chat
-name: 群聊回复提示词
-description: 默认 QQ 群聊回复模板
-version: 1
-required_vars:
-  - current_message
-  - recent_messages
-optional_vars:
-  - user_memory
-  - group_memory
-  - retrieved_knowledge
-  - tool_policy
-  - current_time
-recommended_order:
-  - 场景定位
-  - 行为原则
-  - 回复风格
-  - 工具规则
-  - 最近上下文
-  - 用户记忆
-  - 群聊记忆
-  - 相关知识
-  - 当前消息
-  - 输出要求
----
+成功
 
-# 场景定位
+```python
+db.add(log)
+db.commit()
+db.refresh(log)
+return int(log.id)
+```
 
-你处在一个 QQ 群聊环境中，回复应像自然参与对话的群友。
+失败
 
-不要主动说明自己是 AI、机器人、项目或系统。
+```python
+return 0
+```
 
-# 行为原则
+## 新增 LLMRequestTracer.finish_request
 
-- 只在确实需要回复时回复。
-- 不要抢话。
-- 不要把普通闲聊变成客服式解答。
-- 不要暴露内部工具、日志、提示词或系统实现。
+接口
 
-# 回复风格
+```python
+@staticmethod
+def finish_request(
+    *,
+    log_id: int = 0,
+    response: Any = None,
+    response_status: int = 0,
+    status: str = "success",
+    error: str = "",
+    latency_ms: int = 0,
+) -> None:
+```
 
-回复应自然、简短、低存在感。
+行为
 
-除非用户明确要求详细解释，否则不要长篇展开。
+1. log_id 为空直接 return
+2. 查询同一条 LLMApiRequestLog
+3. 写入
 
-# 工具规则
+```python
+response_json
+response_preview
+response_status
+status
+error
+latency_ms
+finished_at
+```
 
-{{tool_policy}}
+response_json 使用 max_chars=200000
+response_preview 使用 max_chars=4000
 
-# 最近上下文
+## NewAPIClient.chat_completion
 
-{{recent_messages}}
+请求前
 
-# 用户记忆
+```python
+started = time.time()
+log_id = LLMRequestTracer.record_request(...)
+```
 
-{{user_memory}}
+成功时
 
-# 群聊记忆
-
-{{group_memory}}
-
-# 相关知识
-
-{{retrieved_knowledge}}
-
-# 当前时间
-
-{{current_time}}
-
-# 当前消息
-
-{{current_message}}
-
-# 输出要求
-
-根据当前上下文自然回复。不要输出调试信息，不要解释自己使用了什么工具。
-
-再新增以下默认模板：
-
-prompts/private_chat.md
-prompts/timing_gate.md
-prompts/sql_analysis.md
-prompts/group_analysis.md
-prompts/memory_extract.md
-
-其中 memory_extract.md 必须强调：
-
-只提取用户长期稳定偏好、事实、项目约束。
-不要把助手行为、工具错误、SQL 重试、系统限制写成用户偏好。
-不要直接判断 NEW / UPDATE / ARCHIVE，只输出候选和证据。
-
-sql_analysis.md 必须强调：
-
-只读查询。
-不要执行写入、删除、更新、建表、删表等操作。
-不要 SELECT *。
-必须限制查询范围。
-优先给出基于证据的结论。
-
-timing_gate.md 必须强调：
-
-判断是否应该回复、等待、忽略或合并上下文。
-群聊中不要过度触发。
-一句话拆开发送时，应倾向等待更多上下文。
-二、PromptManager 设计
-
-实现一个统一入口：
-
-class PromptManager:
-    def render(
-        self,
-        *,
-        prompt_key: str,
-        variables: dict,
-        trace_id: str | None = None,
-        run_id: int | None = None,
-        mode: str | None = None,
-    ) -> RenderedPrompt:
-        ...
-
-返回对象：
-
-@dataclass
-class RenderedPrompt:
-    prompt_key: str
-    prompt_version: int
-    content: str
-    messages: list[dict]
-    variables_used: dict
-    missing_required_vars: list[str]
-    unknown_vars: list[str]
-    token_estimate: int | None
-    render_log_id: int | None
-
-要求：
-
-从 prompts/{prompt_key}.md 读取模板
-解析 frontmatter
-替换 {{variable_name}}
-必填变量缺失时记录 warning
-未知变量可以保留 warning，不要直接崩溃
-支持热重载
-支持缓存
-支持保存渲染日志
-不要在 PromptManager 内部做知识库检索
-不要在 PromptManager 内部做记忆筛选
-PromptManager 只负责渲染
-三、ContextBuilder 与 PromptManager 的边界
-
-ContextBuilder 负责准备变量，例如：
-
-variables = {
-    "current_message": current_message,
-    "recent_messages": recent_messages_text,
-    "user_memory": user_memory_text,
-    "group_memory": group_memory_text,
-    "retrieved_knowledge": retrieved_knowledge_text,
-    "tool_policy": tool_policy_text,
-    "current_time": current_time_text,
-}
-
-PromptManager 只负责：
-
-rendered = prompt_manager.render(
-    prompt_key="group_chat",
-    variables=variables,
-    trace_id=trace_id,
-    run_id=run_id,
+```python
+result = await resp.json()
+LLMRequestTracer.finish_request(
+    log_id=log_id,
+    response=result,
+    response_status=resp.status,
+    status="success",
+    latency_ms=int((time.time() - started) * 1000),
 )
+```
 
-不要把检索逻辑、记忆选择逻辑、SQL 查询逻辑写进 PromptManager。
+HTTP 非 2xx 时
 
-四、运行模式
+```python
+LLMRequestTracer.finish_request(
+    log_id=log_id,
+    response={"detail": detail[:4000]},
+    response_status=resp.status,
+    status="failed",
+    error=last_error,
+    latency_ms=...,
+)
+```
 
-新增配置：
+异常时
 
-prompt_system:
-  mode: legacy
+```python
+LLMRequestTracer.finish_request(
+    log_id=log_id,
+    response={},
+    response_status=0,
+    status="error",
+    error=str(e),
+    latency_ms=...,
+)
+raise
+```
 
-支持三种模式：
+## NewAPIClient.chat_completion_stream
 
-legacy:
-  继续使用旧提示词拼接逻辑。
+也要 finish_request
 
-shadow:
-  运行时仍使用旧提示词，但同时用新 PromptManager 渲染一份并记录 prompt_render_log，用于对比。
+推荐记录最终 assistant 文本和少量 chunks sample
 
-managed:
-  正式使用 PromptManager 渲染结果。
-
-要求：
-
-默认先使用 legacy 或 shadow
-不要默认直接切到 managed
-在代码中保留 fallback
-如果新模板渲染失败，自动回退旧逻辑，并记录错误
-五、提示词文件保存与版本备份
-
-提示词文件保存在：
-
-prompts/*.md
-
-每次前端保存提示词时：
-
-读取旧文件
-将旧文件备份到：
-prompts_history/{prompt_key}/YYYYMMDD_HHMMSS.md
-写入新文件
-更新 manifest
-
-manifest 可以是 JSON 文件：
-
-prompts_history/manifest.json
-
-结构示例：
-
-{
-  "group_chat": {
-    "version": 12,
-    "updated_at": "2026-05-18T22:30:00+08:00",
-    "updated_by": "admin",
-    "current_path": "prompts/group_chat.md",
-    "latest_backup_path": "prompts_history/group_chat/20260518_223000.md"
-  }
+```python
+response={
+    "content": "".join(text_parts),
+    "chunks_sample": chunks[-20:],
 }
+```
 
-也可以用 SQLite 表记录版本，但不要把完整 prompt 系统做成复杂 SQL 分层。
+不要无限保存所有 chunks
 
-如果使用 SQLite，最多新增简单表：
+## OpenAI SDK tracer
 
-CREATE TABLE prompt_file_versions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    prompt_key TEXT NOT NULL,
-    version INTEGER NOT NULL,
-    file_path TEXT NOT NULL,
-    backup_path TEXT,
-    updated_by TEXT,
-    created_at TEXT NOT NULL,
-    note TEXT
-);
-六、数据库迁移
+文件
 
-新增迁移文件，例如：
+```text
+core/llm_sdk_tracing.py
+```
 
-db/migrations/20260518_prompt_trace.sql
+逻辑
 
-至少包含三张表。
+1. create 前 record_request 得到 log_id
+2. 调用原始 create
+3. 如果返回普通 response
+   - 转为可 JSON 序列化
+   - finish_request success
 
-agent_runs
-CREATE TABLE IF NOT EXISTS agent_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    trace_id TEXT NOT NULL UNIQUE,
-    session_id TEXT,
-    chat_type TEXT,
-    group_id TEXT,
-    user_id TEXT,
-    trigger_type TEXT,
-    status TEXT NOT NULL,
-    prompt_key TEXT,
-    model TEXT,
-    input_preview TEXT,
-    output_preview TEXT,
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    error TEXT
-);
+4. 如果抛异常
+   - finish_request error
+   - 重新 raise
 
-CREATE INDEX IF NOT EXISTS idx_agent_runs_trace_id ON agent_runs(trace_id);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_group_id ON agent_runs(group_id);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_user_id ON agent_runs(user_id);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_started_at ON agent_runs(started_at);
-tool_calls
-CREATE TABLE IF NOT EXISTS tool_calls (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER,
-    trace_id TEXT NOT NULL,
-    tool_name TEXT NOT NULL,
-    args_json TEXT,
-    result_preview TEXT,
-    status TEXT NOT NULL,
-    latency_ms INTEGER,
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    error TEXT,
-    FOREIGN KEY (run_id) REFERENCES agent_runs(id)
-);
+5. 如果返回 stream iterator
+   - 可以先记录 status="stream_created"
+   - 完整包装 stream iterator 后续再做
 
-CREATE INDEX IF NOT EXISTS idx_tool_calls_run_id ON tool_calls(run_id);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_trace_id ON tool_calls(trace_id);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_tool_name ON tool_calls(tool_name);
-CREATE INDEX IF NOT EXISTS idx_tool_calls_started_at ON tool_calls(started_at);
-prompt_render_logs
-CREATE TABLE IF NOT EXISTS prompt_render_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER,
-    trace_id TEXT NOT NULL,
-    prompt_key TEXT NOT NULL,
-    prompt_version INTEGER,
-    variables_json TEXT,
-    rendered_preview TEXT,
-    token_estimate INTEGER,
-    missing_vars_json TEXT,
-    warnings_json TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (run_id) REFERENCES agent_runs(id)
-);
+安全转换函数
 
-CREATE INDEX IF NOT EXISTS idx_prompt_render_logs_run_id ON prompt_render_logs(run_id);
-CREATE INDEX IF NOT EXISTS idx_prompt_render_logs_trace_id ON prompt_render_logs(trace_id);
-CREATE INDEX IF NOT EXISTS idx_prompt_render_logs_prompt_key ON prompt_render_logs(prompt_key);
-CREATE INDEX IF NOT EXISTS idx_prompt_render_logs_created_at ON prompt_render_logs(created_at);
+```python
+def _safe_sdk_response(result: Any) -> Any:
+    if result is None:
+        return {}
+    if hasattr(result, "model_dump"):
+        return result.model_dump()
+    if hasattr(result, "dict"):
+        return result.dict()
+    if isinstance(result, (dict, list, str, int, float, bool)):
+        return result
+    return {"repr": repr(result)[:4000]}
+```
 
-注意：
+## 直接 HTTP 出口
 
-rendered_preview 只存截断后的内容，避免数据库膨胀。
-完整 prompt 只在 debug 模式保存，或者不保存。
-args_json 需要做长度限制或截断策略。
-result_preview 必须截断。
-敏感字段需要脱敏。
-七、AgentRun 记录
+以下路径请求前已经 record_request
+现在需要成功/失败后 finish_request
 
-新增 tracer：
+```text
+clients/classifier_client.py call_model_route
+creatures/nanobot/prompts/skills/image_summary/tool.py _call_qwen
+core/compaction.py call_compaction_llm
+```
 
-class RunTracer:
-    def start_run(
-        self,
-        *,
-        trace_id: str,
-        session_id: str | None,
-        chat_type: str | None,
-        group_id: str | None,
-        user_id: str | None,
-        trigger_type: str | None,
-        prompt_key: str | None,
-        model: str | None,
-        input_preview: str | None,
-    ) -> int:
-        ...
+模式统一
 
-    def finish_run(
-        self,
-        *,
-        run_id: int,
-        status: str,
-        output_preview: str | None = None,
-        error: str | None = None,
-    ) -> None:
-        ...
+```python
+started = time.time()
+log_id = LLMRequestTracer.record_request(...)
+try:
+    ...
+    body = ...
+    LLMRequestTracer.finish_request(
+        log_id=log_id,
+        response=body,
+        response_status=200,
+        status="success",
+        latency_ms=...,
+    )
+except Exception as e:
+    LLMRequestTracer.finish_request(
+        log_id=log_id,
+        status="error",
+        error=str(e),
+        latency_ms=...,
+    )
+    raise
+```
 
-要求：
+## WebUI
 
-每次外部消息进入并触发一次 agent 流程时创建 agent_runs
-所有 prompt render / model call / tool call 都关联同一个 trace_id
-能在前端根据 trace_id 查完整链路
-八、工具调用记录
+AgentRun 详情 API 请求区域显示
 
-所有工具调用必须通过统一包装层。
-
-如果已有 ToolRegistry，则改造它。
-
-如果没有，则新增一个轻量 ToolRegistry 或 ToolTracer 包装器。
-
-示例逻辑：
-
-class ToolRegistry:
-    async def call_tool(self, name: str, args: dict, ctx: ToolContext):
-        started = now()
-        call_id = tool_tracer.start_tool_call(
-            run_id=ctx.run_id,
-            trace_id=ctx.trace_id,
-            tool_name=name,
-            args=args,
-        )
-
-        try:
-            result = await self.tools[name].invoke(args, ctx)
-            tool_tracer.finish_tool_call(
-                call_id=call_id,
-                status="success",
-                result_preview=summarize_result(result),
-                latency_ms=elapsed_ms(started),
-            )
-            return result
-        except Exception as e:
-            tool_tracer.finish_tool_call(
-                call_id=call_id,
-                status="error",
-                error=str(e),
-                latency_ms=elapsed_ms(started),
-            )
-            raise
-
-要求：
-
-不要让每个工具手动写日志
-工具调用日志应该集中处理
-支持同步和异步工具
-支持异常记录
-支持 result 截断
-支持 args 脱敏
-至少记录：
-tool_name
-args_json
-result_preview
+```text
 status
+response_status
 latency_ms
 error
-九、后端 API
+request_json
+response_json
+```
 
-新增或扩展 Admin API。
+request_json 和 response_json 都用 details + pre 展开
 
-Prompt API
-GET /admin/prompts
+## 测试
 
-返回所有 prompts/*.md 文件及 metadata。
+新增/补充
 
-GET /admin/prompts/{prompt_key}
+1. record_request 返回 id
+2. finish_request 更新同一条记录
+3. response_json 保存完整响应
+4. error 路径写 status=error
+5. NewAPIClient 成功时写 response_json
+6. image_summary 直接 HTTP 成功时写 response_json
 
-返回模板内容、frontmatter、版本信息。
+---
 
-PUT /admin/prompts/{prompt_key}
+# 四、任务三：reply/no_reply 调用审核与兜底重试
 
-保存模板，保存前自动备份。
+## 背景
 
-请求：
+当前 reply/no_reply 工具位于
 
+```text
+creatures/nanobot/prompts/skills/reply/tool.py
+```
+
+输出通过 marker 识别
+
+```text
+NANOBOT_REPLY_OUTPUT
+```
+
+bridge 当前能识别
+
+```text
+reply_tool
+no_reply_tool
+structured_buffer_reply
+structured_buffer_no_reply
+no_tool_call
+fake_tool_call_claim
+```
+
+但是现在 no_tool_call 会直接 suppress
+不会重试
+
+## 修改目标
+
+如果模型没有调用 reply/no_reply
+最多重试一次
+
+重试逻辑必须在 bridge 中实现
+不要放到 reply 工具里
+
+## 触发条件
+
+满足以下条件才重试
+
+1. 没有真实 reply tool
+2. 没有 no_reply tool
+3. 没有合法 structured fallback
+4. 不是 HTML 工具输出
+5. 当前还没 retry 过
+
+## retry prompt
+
+固定内容
+
+```text
+你刚才没有调用 reply 或 no_reply 工具
+
+原始输出如下
+{{raw_model_output}}
+
+这轮必须只调用一个工具
+
+如果你原本想回复用户
+请调用 reply(content=...)
+
+如果你认为不该回复
+请调用 no_reply(reason=...)
+
+不要直接输出普通文本
+```
+
+raw_model_output 截断到 3000 字
+
+## bridge 实现建议
+
+在 no_tool_call suppress 前插入
+
+```python
+if agent_result in {"no_tool_call", "fake_tool_call_claim"} and reply_contract_retry_count < 1:
+    retry_prompt = _build_reply_contract_retry_prompt(buffer_text or response)
+    append correction to conversation
+    reply_contract_retry_count += 1
+    rerun model once
+    continue
+```
+
+重试时不要把用户消息重复塞一遍
+应该向当前 conversation 追加 correction system/user 消息
+然后触发空事件或继续模型循环
+
+## 不能做的事
+
+1. 不允许无限重试
+2. 不允许把普通文本直接发出去
+3. 不允许在 reply 工具内部 retry
+4. retry 后仍失败则保持 suppress
+
+---
+
+# 五、任务四：ReplyContractCheckLog 审核日志
+
+## 新增表
+
+```python
+class ReplyContractCheckLog(Base):
+    __tablename__ = "reply_contract_check_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trace_id = Column(String, index=True, default="")
+    run_id = Column(String, index=True, default="")
+    session_id = Column(String, index=True, default="")
+    attempt = Column(Integer, default=0)
+    raw_output_preview = Column(Text, default="")
+    has_reply_tool = Column(Integer, default=0)
+    has_no_reply_tool = Column(Integer, default=0)
+    has_structured_fallback = Column(Integer, default=0)
+    result = Column(String, index=True, default="")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+```
+
+result 取值
+
+```text
+ok
+retry
+retry_success
+suppressed
+fake_tool_call_claim
+no_tool_call
+```
+
+## 记录时机
+
+每次模型尝试结束后
+进入 reply extraction 阶段时记录
+
+记录字段
+
+```text
+attempt
+raw output preview
+是否有 reply tool
+是否有 no_reply tool
+是否有 structured fallback
+result
+```
+
+## AgentRun 详情返回
+
+`/agent-runs/{run_id}` 返回新增字段
+
+```json
 {
-  "content": "...完整 Markdown...",
-  "note": "调整群聊回复风格"
+  "reply_contract_check_logs": []
 }
-POST /admin/prompts/{prompt_key}/preview
+```
 
-根据输入变量预览渲染结果。
+WebUI AgentRun 详情新增区域
 
-请求：
+```text
+Reply 调用检查
+```
 
+显示
+
+```text
+attempt
+result
+raw_output_preview
+has_reply_tool
+has_no_reply_tool
+has_structured_fallback
+```
+
+---
+
+# 六、任务五：Web 端 Reply 手动测试工具
+
+## 页面名称
+
+```text
+Reply 调用测试
+```
+
+## 入口位置
+
+Admin WebUI 中与 AgentRun / Prompt 管理相邻
+
+## 功能
+
+手动构造一条消息
+dry-run 执行 agent
+查看模型是否调用 reply/no_reply
+查看 retry 是否生效
+查看最终结果
+查看 LLM API request/response
+
+## 表单字段
+
+```text
+chat_type group/private
+session_id
+sender_id
+sender_name
+character_name
+message
+recent_context
+persona_text
+variant baseline/prompt_only/code_retry
+enable_reply_contract_retry
+dry_run
+```
+
+默认
+
+```text
+dry_run=true
+enable_reply_contract_retry=true
+```
+
+真实发送必须单独按钮
+并明确提示会发送到真实会话
+
+## 后端接口
+
+```text
+POST /api/admin/reply-test/run
+```
+
+请求示例
+
+```json
 {
-  "variables": {
-    "current_message": "这个 cooldown 怎么这么大",
-    "recent_messages": "...",
-    "user_memory": "",
-    "group_memory": "",
-    "retrieved_knowledge": "",
-    "tool_policy": "..."
-  }
+  "message": "你在吗",
+  "chat_type": "group",
+  "session_id": "test-group-1",
+  "sender_id": "123",
+  "sender_name": "tester",
+  "character_name": "凛音",
+  "recent_context": "",
+  "persona_text": "",
+  "variant": "code_retry",
+  "enable_reply_contract_retry": true,
+  "dry_run": true
 }
+```
 
-返回：
+返回示例
 
+```json
 {
-  "prompt_key": "group_chat",
-  "prompt_version": 1,
-  "content": "...渲染后的 prompt...",
-  "messages": [
-    {
-      "role": "system",
-      "content": "..."
-    }
-  ],
-  "missing_required_vars": [],
-  "unknown_vars": [],
-  "token_estimate": 1234,
-  "warnings": []
+  "ok": true,
+  "run_id": "...",
+  "first_attempt": {
+    "raw_output": "...",
+    "called_reply": false,
+    "called_no_reply": false
+  },
+  "retry_attempt": {
+    "enabled": true,
+    "raw_output": "...",
+    "called_reply": true
+  },
+  "final": {
+    "action": "reply",
+    "content": "在\n怎么了?"
+  },
+  "metrics": {
+    "reply_contract_ok": true,
+    "retry_used": true
+  },
+  "llm_api_request_logs": []
 }
-POST /admin/prompts/reload
+```
 
-热重载 prompt 缓存。
+---
 
-GET /admin/prompts/{prompt_key}/history
+# 七、任务六：测试集管理与 A/B 评估
 
-查看历史版本。
+## 新增表 ReplyEvalCase
 
-POST /admin/prompts/{prompt_key}/rollback
+```python
+class ReplyEvalCase(Base):
+    __tablename__ = "reply_eval_cases"
 
-回滚到某个历史版本。
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    case_id = Column(String, unique=True, index=True)
+    title = Column(String, default="")
+    chat_type = Column(String, default="group")
+    input_text = Column(Text, default="")
+    context_json = Column(Text, default="{}")
+    expected_action = Column(String, default="any")
+    expected_keywords_json = Column(Text, default="[]")
+    forbidden_keywords_json = Column(Text, default="[]")
+    source = Column(String, default="manual")
+    tags_json = Column(Text, default="[]")
+    enabled = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+```
 
-Trace API
-GET /admin/agent-runs
+expected_action 取值
 
-支持 query 参数：
+```text
+reply
+no_reply
+any
+```
 
-trace_id
-group_id
-user_id
-status
-prompt_key
-limit
-offset
-GET /admin/agent-runs/{run_id}
+## 新增表 ReplyEvalRun
 
-返回单次 run 的详情，包括：
+```python
+class ReplyEvalRun(Base):
+    __tablename__ = "reply_eval_runs"
 
-{
-  "run": {},
-  "prompt_render_logs": [],
-  "tool_calls": []
-}
-GET /admin/tool-calls
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, default="")
+    variant = Column(String, default="")
+    total = Column(Integer, default=0)
+    reply_contract_ok = Column(Integer, default=0)
+    retry_used = Column(Integer, default=0)
+    passed = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+    summary_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+```
 
-支持过滤：
+## 新增表 ReplyEvalResult
 
-trace_id
-run_id
-tool_name
-status
-limit
-offset
-GET /admin/tool-calls/{tool_call_id}
+```python
+class ReplyEvalResult(Base):
+    __tablename__ = "reply_eval_results"
 
-返回工具调用详情。
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, index=True)
+    case_id = Column(String, index=True)
+    variant = Column(String, default="")
+    expected_action = Column(String, default="")
+    actual_action = Column(String, default="")
+    called_reply_or_no_reply = Column(Integer, default=0)
+    retry_used = Column(Integer, default=0)
+    passed = Column(Integer, default=0)
+    raw_output_preview = Column(Text, default="")
+    final_content_preview = Column(Text, default="")
+    error = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+```
 
-十、前端页面
-1. PromptFilesPage
+## 测试集 API
 
-路径建议：
+```text
+GET    /api/admin/reply-eval/cases
+POST   /api/admin/reply-eval/cases
+PUT    /api/admin/reply-eval/cases/{id}
+DELETE /api/admin/reply-eval/cases/{id}
 
-/admin/prompts
+POST /api/admin/reply-eval/generate-preview
+POST /api/admin/reply-eval/save-generated
 
-展示：
+POST /api/admin/reply-eval/run
+GET  /api/admin/reply-eval/runs
+GET  /api/admin/reply-eval/runs/{id}
+```
 
-prompt_key
-name
-description
-version
-updated_at
-required_vars
-optional_vars
+## 测试集生成
 
-操作：
+先用规则生成
+不要上 LLM
 
-编辑
-预览
-历史
-热重载
-2. PromptEditorPage
+生成类型
 
-路径建议：
+```text
+被叫到
+直接问题
+普通闲聊
+情绪低落
+技术求助
+信息不足
+纯哈哈哈
+别人在和别人说话
+半句话
+身份试探
+生活场景邀请
+```
 
-/admin/prompts/:promptKey
+每类 3 到 5 条
+默认 40 到 60 条
 
-布局：
+生成流程
 
-左侧：Markdown 编辑器
-右侧：提示词组织建议 + 变量说明 + 校验结果
-底部：保存 / 预览 / 回滚 / 热重载
+```text
+generate-preview
+→ Web 端预览
+→ 勾选/编辑
+→ save-generated
+```
 
-右侧固定显示提示词组织建议：
+不能生成后直接启用写入
 
-推荐组织顺序：
+## A/B 评估 variant
 
-1. 场景定位
-2. 行为原则
-3. 回复风格
-4. 工具规则
-5. 最近上下文
-6. 用户记忆
-7. 群聊记忆
-8. 相关知识
-9. 当前消息
-10. 输出要求
+```text
+baseline
+当前 prompt
+retry disabled
 
-变量说明：
+prompt_only
+实验 prompt
+retry disabled
 
-{{current_message}}       当前用户消息，通常必填
-{{recent_messages}}       最近上下文，通常必填
-{{user_memory}}           用户长期记忆，可选
-{{group_memory}}          群聊风格 / 群记忆，可选
-{{retrieved_knowledge}}   知识库检索结果，可选
-{{tool_policy}}           工具使用规则，可选
-{{current_time}}          当前时间，可选
+code_retry
+当前 prompt
+retry enabled
+```
 
-校验结果显示：
+## 评估指标
 
-缺少 required_vars
-出现未知变量
-frontmatter 解析失败
-模板为空
-token 估算过长
-保存成功 / 失败
-3. PromptPreviewPage 或编辑页内预览面板
+```text
+reply_call_rate
+valid_action_rate
+expected_action_accuracy
+retry_used_rate
+retry_success_rate
+no_tool_call_rate
+fake_tool_claim_rate
+empty_output_rate
+```
 
-支持输入模拟变量。
+## WebUI 展示
 
-至少提供：
+测试集页面
 
-current_message
-recent_messages
-user_memory
-group_memory
-retrieved_knowledge
-tool_policy
-current_time
+```text
+case_id
+title
+input_text
+expected_action
+tags
+enabled
+编辑/删除
+```
 
-点击预览后显示：
+生成预览页面
 
-渲染后的 prompt
-messages JSON
-缺失变量
-token 估算
-warnings
-4. AgentRunsPage
+```text
+可勾选
+可编辑
+保存选中
+```
 
-路径建议：
+评估结果页面
 
-/admin/agent-runs
+```text
+variant | total | reply_call_rate | expected_action_accuracy | retry_used_rate | retry_success_rate | no_tool_call_rate | fake_tool_claim_rate
+```
 
-展示：
+每条 result 可展开查看
 
-trace_id
-chat_type
-group_id
-user_id
-prompt_key
-status
-model
-started_at
-latency
-tool_call_count
-
-支持过滤：
-
-trace_id
-group_id
-user_id
-status
-prompt_key
-5. AgentRunDetailPage
-
-路径建议：
-
-/admin/agent-runs/:runId
-
-展示：
-
-基本信息
-Prompt Render Logs
-Tool Calls
-错误信息
-输入摘要
-输出摘要
-
-Tool Calls 表格：
-
-tool_name
-status
-latency_ms
-started_at
-args_json
-result_preview
+```text
+raw_output_preview
+final_content_preview
 error
-十一、运行链路改造要求
+AgentRun 链接
+LLM API logs
+```
 
-找到当前模型调用链路，大概率类似：
+---
 
-route / handler
-  → context builder
-  → prompt 拼接
-  → model call
-  → tool call
-  → reply
+# 八、Dify 清理任务
 
-改造为：
+不要继续给 Dify 补 trace
+Dify 应作为独立删除任务
 
-route / handler
-  → trace_id
-  → RunTracer.start_run
-  → ContextBuilder 准备 variables
-  → PromptManager.render
-  → model call
-  → ToolRegistry.call_tool
-  → reply
-  → RunTracer.finish_run
-
-注意：
-
-每次 run 必须有 trace_id
-trace_id 传递到 prompt render 和 tool call
-工具调用必须带 run_id
-如果模型调用失败，agent_run 状态为 error
-如果工具调用失败，tool_call 状态为 error，但是否终止 run 按原业务逻辑决定
-如果 PromptManager 渲染失败，按配置 fallback 到 legacy prompt
-十二、默认模板内容
-
-请至少初始化以下模板。
-
-group_chat.md
-
-用途：群聊自然回复。
-
-核心要求：
-
-像群友，不像客服
-短回复
-低存在感
-不主动暴露 AI / bot / 项目名
-不暴露工具和日志
-private_chat.md
-
-用途：私聊助手回复。
-
-核心要求：
-
-直接、有帮助
-可以比群聊更详细
-但仍然不要暴露内部系统实现
-timing_gate.md
-
-用途：判断是否回复。
-
-核心要求：
-
-输出结构化判断
-判断 reply / wait / ignore
-群聊里避免过度触发
-一句话拆开时倾向等待
-sql_analysis.md
-
-用途：SQL 分析工具提示词。
-
-核心要求：
-
-只读
-不 SELECT *
-限制范围
-优先查必要字段
-避免反复查询
-总结时引用查询依据
-group_analysis.md
-
-用途：群聊总结 / 群聊分析。
-
-核心要求：
-
-基于证据总结
-不要把助手行为当成用户偏好
-区分事实、推测、建议
-memory_extract.md
-
-用途：记忆候选提取。
-
-核心要求：
-
-只输出候选和证据
-不决定 NEW / UPDATE / ARCHIVE
-不把 bot 行为、工具错误、系统限制写成用户偏好
-关注长期稳定偏好、事实、项目约束
-十三、测试要求
-
-至少补以下测试。
-
-后端测试
-frontmatter 解析测试
-required_vars 缺失测试
-变量替换测试
-未知变量 warning 测试
-prompt 保存自动备份测试
-prompt reload 测试
-prompt preview API 测试
-agent_run 创建 / 完成测试
-tool_call success / error 记录测试
-PromptManager legacy fallback 测试
-前端测试或手动验收
-能看到 prompt 文件列表
-能打开并编辑 prompt
-保存后能生成历史备份
-preview 能看到渲染结果
-缺变量时有提示
-agent_runs 页面能看到最近运行
-run detail 能看到 tool calls
-tool call error 能正确展示
-十四、兼容性要求
-
-非常重要：
-
-不要破坏当前启动流程
-不要强制依赖前端才能运行
-不要让 prompt 文件不存在时直接崩溃
-如果模板不存在，使用旧逻辑 fallback
-如果 frontmatter 解析失败，返回明确错误
-如果工具调用记录失败，不应该影响工具本身执行
-如果 tracing 数据库写入失败，不应该导致 bot 主流程失败，但要写普通日志
-默认不要保存完整 prompt 到数据库，避免膨胀
-十五、安全与脱敏要求
-
-记录 tool call 时需要处理：
-
-args_json 截断
-result_preview 截断
-敏感字段脱敏，例如：
-token
-api_key
-password
-secret
-cookie
-authorization
-不要在前端默认展示完整敏感内容
-前端展示 JSON 时要格式化，但不要执行 HTML
-后端 API 需复用现有 Admin 鉴权逻辑
-十六、提交内容要求
-
-完成后输出：
-
-修改了哪些文件
-新增了哪些文件
-数据库迁移说明
-新增 API 列表
-前端新增页面列表
-如何切换 prompt_system.mode
-如何测试
-当前还有哪些未完成或风险点
-十七、建议实现顺序
-
-请按以下顺序实现，避免一次性改崩：
-
-Step 1：先审查项目结构
-
-先阅读：
-
-后端入口
-当前 prompt 拼接逻辑
-当前 model call 逻辑
-当前 tool call 逻辑
-当前 Admin WebUI 结构
-当前 DB migration 方式
-
-不要假设目录一定存在，按实际项目结构落地。
-
-Step 2：增加数据库迁移
-
-新增：
-
-agent_runs
-tool_calls
-prompt_render_logs
-可选 prompt_file_versions
-Step 3：实现 PromptManager
-
-实现：
-
-loader
-renderer
-validator
-history backup
-reload cache
-preview
-Step 4：新增默认 prompt 文件
-
-新增：
-
-group_chat.md
-private_chat.md
-timing_gate.md
-sql_analysis.md
-group_analysis.md
-memory_extract.md
-Step 5：接入 shadow 模式
-
-先不要完全替换旧 prompt。
-
-在现有运行链路中：
-
-旧 prompt 正常使用
-新 PromptManager 同时 render
-记录 prompt_render_log
-对比是否报错
-Step 6：封装工具调用记录
-
-改造 ToolRegistry 或工具调用入口，统一记录 tool_calls。
-
-Step 7：接入 managed 模式
-
-当配置为 managed 时，模型调用使用 PromptManager 渲染结果。
-
-Step 8：增加 Admin API
-
-新增 Prompt API 和 Trace API。
-
-Step 9：增加前端页面
-
-新增：
-
-PromptFilesPage
-PromptEditorPage
-PromptPreview 功能
-AgentRunsPage
-AgentRunDetailPage
-Step 10：测试和整理
-
-跑现有测试。
-
-补充必要测试。
-
-确认 legacy / shadow / managed 三种模式都能正常工作。
-
-十八、验收标准
-
-最终必须满足：
-
-后端能从 prompts/*.md 读取提示词
-前端能编辑并保存提示词
-保存提示词时自动备份旧版本
-前端能预览变量替换后的 prompt
-运行时能记录 prompt_render_logs
-每次 agent run 有 trace_id
-工具调用能记录到 tool_calls
-前端能查看 agent_runs 和 tool_calls
-legacy 模式不影响旧逻辑
-shadow 模式能同时渲染新 prompt 并记录日志
-managed 模式能正式使用新 PromptManager
-出错时有 fallback，不会直接导致 bot 崩溃
-十九、特别注意
-
-本次重构重点是“轻量可管理”，不是“复杂 PromptOps”。
-
-不要把提示词拆成一堆 SQL block。
-
-不要把提示词深度做成强制数据库层级。
-
-提示词深度只体现在：
-
-模板内推荐顺序
-Markdown 标题结构
-前端编辑提示
-渲染时变量插入位置
-
-知识库动态拼接只需要：
-
-ContextBuilder 负责检索
-PromptManager 负责插入 {{retrieved_knowledge}}
-
-工具调用记录必须结构化，因为这是 agent runtime 可观测性的基础。
-
-请优先保证运行链路稳定，再逐步切到新提示词系统。
+## 删除范围
+
+```text
+clients/dify_client.py
+legacy_adapter 中 provider_type == "dify" 分支
+config.py 中 DIFY_* 配置
+相关文档
+相关测试
+```
+
+## 兼容处理
+
+如果旧配置里 provider_type=dify
+启动时给出明确错误
+
+```text
+Dify provider has been removed. Please migrate to NewAPI/OpenAI-compatible route.
+```
+
+或者提供一次性迁移脚本
+
+---
+
+# 九、最终验收标准
+
+## 表情包
+
+1. 损坏 JSON 不再导致 auto_describe failed
+2. 至少能写入 description
+3. description 为空不会标 ok
+4. meta 中保留 raw_summary 和 raw_text 便于排查
+
+## LLM API 日志
+
+1. 每条请求有 request_json
+2. 每条成功响应有 response_json
+3. 同一 row 里有 request 和 response
+4. headers 脱敏
+5. response_status / latency_ms / finished_at 正确
+6. AgentRun 详情可展开查看 request_json 和 response_json
+
+## Reply 审核
+
+1. 正常 reply tool 不触发 retry
+2. 正常 no_reply tool 不触发 retry
+3. 第一次无工具调用时触发一次 retry
+4. retry 成功后最终发送 reply 或 no_reply
+5. retry 失败后 suppress
+6. fake_tool_call_claim 能识别并记录
+7. ReplyContractCheckLog 能在 AgentRun 详情看到
+
+## Web 手动测试
+
+1. 能 dry-run 单条消息
+2. 能看到 first_attempt / retry_attempt / final
+3. 能看到 LLM API request/response
+4. dry-run 不真实发群消息
+5. 真实发送必须单独确认入口
+
+## 测试集与 A/B
+
+1. Web 可 CRUD 测试集
+2. 规则生成可预览
+3. 预览后才保存
+4. baseline / prompt_only / code_retry 可运行
+5. 能输出 reply 调用率和预期动作准确率
+
+---
+
+# 十、建议提交顺序
+
+## Commit 1
+
+修复 sticker_memory 容错解析
+
+```text
+fix(sticker): tolerate broken image_summary JSON in auto describe
+```
+
+## Commit 2
+
+LLM API 日志增加 response 记录
+
+```text
+feat(trace): persist llm api responses with request logs
+```
+
+## Commit 3
+
+reply/no_reply 兜底重试和审核日志
+
+```text
+feat(reply): add reply contract retry and audit logs
+```
+
+## Commit 4
+
+Web 手动测试工具
+
+```text
+feat(admin): add reply contract manual test page
+```
+
+## Commit 5
+
+测试集和 A/B eval
+
+```text
+feat(eval): add reply contract eval cases and comparison runs
+```
+
+## Commit 6
+
+Dify 清理
+
+```text
+chore: remove dify provider legacy code
+```
+
+---
+
+# 十一、给开发 agent 的压缩版任务提示词
+
+```md
+你要完成 Nanobot 最近需求的综合改造
+请按阶段提交
+不要一次性大爆炸修改
+
+阶段 1 修复表情包自动描述
+
+- core/sticker_memory.py 增加 \_safe_parse_sticker_summary
+- describe_sticker_with_qwen 使用容错解析
+- JSON 坏掉时 fallback 到 summary/raw text
+- description 为空不能标 ok
+- 补测试
+
+阶段 2 完善 LLM API 日志
+
+- LLMApiRequestLog 增加 response_json/response_preview/latency_ms/finished_at
+- record_request 返回 log_id
+- 新增 finish_request 更新同一 row
+- NewAPIClient 非流式和流式都写 response
+- OpenAI SDK tracer 写 response
+- classifier/image_summary/compaction 直接 HTTP 出口写 response
+- WebUI AgentRun 详情展示 request 和 response
+- 补测试
+
+阶段 3 reply/no_reply 运行时兜底
+
+- bridge 中 no_tool_call/fake_tool_call_claim 不再直接 suppress
+- 第一次失败时追加 correction prompt 重试一次
+- retry 后仍失败才 suppress
+- 不允许普通文本直接发出
+- 新增 ReplyContractCheckLog
+- AgentRun 详情返回并展示审核日志
+- 补测试
+
+阶段 4 Web 手动测试
+
+- 新增 /api/admin/reply-test/run
+- WebUI 新增 Reply 调用测试页面
+- 支持 dry-run
+- 展示 first_attempt/retry_attempt/final/LLM logs
+- 真实发送必须单独按钮
+
+阶段 5 测试集和 A/B eval
+
+- 新增 ReplyEvalCase/ReplyEvalRun/ReplyEvalResult
+- Web 可查看/新增/编辑/删除测试集
+- 规则生成测试集必须先 preview
+- 支持 baseline/prompt_only/code_retry 三组评估
+- 输出 reply_call_rate/expected_action_accuracy/retry_success_rate 等指标
+
+阶段 6 Dify 清理
+
+- 删除 Dify 相关 provider/client/config/tests
+- 旧配置给明确错误或迁移提示
+
+注意
+
+- 不要再给 Dify 补 trace
+- 不要把 response 另插一条日志
+- request 和 response 必须在同一条 LLMApiRequestLog
+- reply retry 只能最多一次
+- retry 逻辑放 bridge 不放 reply 工具
+- Web 测试默认 dry-run
+```

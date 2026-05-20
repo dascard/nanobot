@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,24 @@ def _request_payload_from_sdk_kwargs(args: tuple[Any, ...], kwargs: dict[str, An
     if args:
         payload["_args"] = list(args)
     return payload
+
+
+def _safe_sdk_response(result: Any) -> Any:
+    if result is None:
+        return {}
+    if hasattr(result, "model_dump"):
+        try:
+            return result.model_dump()
+        except Exception:
+            pass
+    if hasattr(result, "dict"):
+        try:
+            return result.dict()
+        except Exception:
+            pass
+    if isinstance(result, (dict, list, str, int, float, bool)):
+        return result
+    return {"repr": repr(result)[:4000]}
 
 
 def install_openai_chat_completion_tracer(
@@ -50,6 +69,9 @@ def install_openai_chat_completion_tracer(
         ).rstrip("/")
 
         async def _traced_create(*args: Any, _orig=original_create, **kwargs: Any) -> Any:
+            started = time.time()
+            log_id = 0
+            request_payload: dict[str, Any] = {}
             try:
                 from core.llm_trace_context import get_llm_trace_vars
                 from core.tracing import LLMRequestTracer
@@ -64,7 +86,7 @@ def install_openai_chat_completion_tracer(
                 if isinstance(extra_headers, dict):
                     headers.update(extra_headers)
 
-                LLMRequestTracer.record_request(
+                log_id = LLMRequestTracer.record_request(
                     trace_id=trace_id,
                     run_id=run_id,
                     source=source or "unknown",
@@ -79,10 +101,47 @@ def install_openai_chat_completion_tracer(
             except Exception as exc:
                 logger.debug("OpenAI SDK request tracing skipped: %s", exc)
 
-            result = _orig(*args, **kwargs)
-            if inspect.isawaitable(result):
-                return await result
-            return result
+            try:
+                result = _orig(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                try:
+                    from core.tracing import LLMRequestTracer
+
+                    if request_payload.get("stream"):
+                        LLMRequestTracer.finish_request(
+                            log_id=log_id,
+                            response={"stream": True, "repr": repr(result)[:1000]},
+                            response_status=0,
+                            status="stream_created",
+                            latency_ms=int((time.time() - started) * 1000),
+                        )
+                    else:
+                        LLMRequestTracer.finish_request(
+                            log_id=log_id,
+                            response=_safe_sdk_response(result),
+                            response_status=200,
+                            status="success",
+                            latency_ms=int((time.time() - started) * 1000),
+                        )
+                except Exception as exc:
+                    logger.debug("OpenAI SDK response tracing skipped: %s", exc)
+                return result
+            except Exception as exc:
+                try:
+                    from core.tracing import LLMRequestTracer
+
+                    LLMRequestTracer.finish_request(
+                        log_id=log_id,
+                        response={},
+                        response_status=0,
+                        status="error",
+                        error=str(exc),
+                        latency_ms=int((time.time() - started) * 1000),
+                    )
+                except Exception:
+                    pass
+                raise
 
         setattr(_traced_create, "_nanobot_original_create", original_create)
         completions.create = _traced_create  # type: ignore[method-assign]

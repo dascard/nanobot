@@ -494,6 +494,82 @@ class LLMApiRequestLog(Base):
     headers_json = Column(Text, default="{}")
     status = Column(String, index=True, default="created")
     response_status = Column(Integer, default=0)
+    response_json = Column(Text, default="{}")
+    response_preview = Column(Text, default="")
+    latency_ms = Column(Integer, default=0)
+    finished_at = Column(DateTime, nullable=True)
+    error = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class ReplyContractCheckLog(Base):
+    """reply/no_reply 调用合约审核日志。"""
+    __tablename__ = "reply_contract_check_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trace_id = Column(String, index=True, default="")
+    run_id = Column(String, index=True, default="")
+    session_id = Column(String, index=True, default="")
+    attempt = Column(Integer, default=0)
+    raw_output_preview = Column(Text, default="")
+    has_reply_tool = Column(Integer, default=0)
+    has_no_reply_tool = Column(Integer, default=0)
+    has_structured_fallback = Column(Integer, default=0)
+    result = Column(String, index=True, default="")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class ReplyEvalCase(Base):
+    """Reply 合约评估用例。"""
+    __tablename__ = "reply_eval_cases"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    case_id = Column(String, unique=True, index=True)
+    title = Column(String, default="")
+    chat_type = Column(String, default="group")
+    input_text = Column(Text, default="")
+    context_json = Column(Text, default="{}")
+    expected_action = Column(String, default="any")
+    expected_keywords_json = Column(Text, default="[]")
+    forbidden_keywords_json = Column(Text, default="[]")
+    source = Column(String, default="manual")
+    tags_json = Column(Text, default="[]")
+    enabled = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ReplyEvalRun(Base):
+    """Reply 合约评估批次。"""
+    __tablename__ = "reply_eval_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, default="")
+    variant = Column(String, default="")
+    total = Column(Integer, default=0)
+    reply_contract_ok = Column(Integer, default=0)
+    retry_used = Column(Integer, default=0)
+    passed = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+    summary_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class ReplyEvalResult(Base):
+    """Reply 合约评估单条结果。"""
+    __tablename__ = "reply_eval_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_id = Column(Integer, index=True)
+    case_id = Column(String, index=True)
+    variant = Column(String, default="")
+    expected_action = Column(String, default="")
+    actual_action = Column(String, default="")
+    called_reply_or_no_reply = Column(Integer, default=0)
+    retry_used = Column(Integer, default=0)
+    passed = Column(Integer, default=0)
+    raw_output_preview = Column(Text, default="")
+    final_content_preview = Column(Text, default="")
     error = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.now, index=True)
 
@@ -871,6 +947,57 @@ def init_db():
                 conn.commit()
     except Exception as e:
         print(f"  ⚠ agent_runs migration skipped: {e}")
+
+    # ── llm_api_request_logs 热迁移：补 response/latency 字段 ──
+    try:
+        inspector = inspect(engine)
+        if "llm_api_request_logs" in inspector.get_table_names():
+            llm_columns = [col["name"] for col in inspector.get_columns("llm_api_request_logs")]
+            llm_add = {
+                "response_json": "TEXT DEFAULT '{}'",
+                "response_preview": "TEXT DEFAULT ''",
+                "latency_ms": "INTEGER DEFAULT 0",
+                "finished_at": "DATETIME",
+            }
+            for col_name, col_type in llm_add.items():
+                if col_name not in llm_columns:
+                    print(f"  → Migrating: Adding missing column [{col_name}] to llm_api_request_logs...")
+                    with engine.connect() as conn:
+                        conn.execute(text(f"ALTER TABLE llm_api_request_logs ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+    except Exception as e:
+        print(f"  ⚠ llm_api_request_logs migration skipped: {e}")
+
+    # ── reply_contract_check_logs 兼容：旧库没有时由 create_all 创建；已有旧表时补列/索引 ──
+    try:
+        inspector = inspect(engine)
+        if "reply_contract_check_logs" in inspector.get_table_names():
+            rc_columns = [col["name"] for col in inspector.get_columns("reply_contract_check_logs")]
+            rc_add = {
+                "trace_id": "TEXT DEFAULT ''",
+                "run_id": "TEXT DEFAULT ''",
+                "session_id": "TEXT DEFAULT ''",
+                "attempt": "INTEGER DEFAULT 0",
+                "raw_output_preview": "TEXT DEFAULT ''",
+                "has_reply_tool": "INTEGER DEFAULT 0",
+                "has_no_reply_tool": "INTEGER DEFAULT 0",
+                "has_structured_fallback": "INTEGER DEFAULT 0",
+                "result": "TEXT DEFAULT ''",
+                "created_at": "DATETIME",
+            }
+            for col_name, col_type in rc_add.items():
+                if col_name not in rc_columns:
+                    print(f"  → Migrating: Adding missing column [{col_name}] to reply_contract_check_logs...")
+                    with engine.connect() as conn:
+                        conn.execute(text(f"ALTER TABLE reply_contract_check_logs ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+            with engine.connect() as conn:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reply_contract_run_id ON reply_contract_check_logs(run_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reply_contract_trace_id ON reply_contract_check_logs(trace_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reply_contract_session_id ON reply_contract_check_logs(session_id)"))
+                conn.commit()
+    except Exception as e:
+        print(f"  ⚠ reply_contract_check_logs migration skipped: {e}")
 
 def get_db():
     db = SessionLocal()

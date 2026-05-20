@@ -79,12 +79,14 @@ def call_compaction_llm(context_text: str) -> str:
         "temperature": 0.3
     }
 
+    started = time.time()
+    log_id = 0
     try:
         from core.llm_trace_context import get_llm_trace_vars
         from core.tracing import LLMRequestTracer
 
         trace_id, run_id, _ = get_llm_trace_vars()
-        LLMRequestTracer.record_request(
+        log_id = LLMRequestTracer.record_request(
             trace_id=trace_id,
             run_id=run_id,
             source="compaction",
@@ -98,11 +100,43 @@ def call_compaction_llm(context_text: str) -> str:
         )
     except Exception:
         pass
-    
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
-    resp.raise_for_status()
-    body = resp.json()
-    return body.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+    finished = False
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        try:
+            body = resp.json()
+        except Exception:
+            body = {"detail": resp.text[:4000]}
+        try:
+            from core.tracing import LLMRequestTracer
+            LLMRequestTracer.finish_request(
+                log_id=log_id,
+                response=body,
+                response_status=getattr(resp, "status_code", 0) or 0,
+                status="success" if getattr(resp, "ok", True) else "failed",
+                latency_ms=int((time.time() - started) * 1000),
+            )
+            finished = True
+        except Exception:
+            pass
+        resp.raise_for_status()
+        return body.get("choices", [{}])[0].get("message", {}).get("content", "")
+    except Exception as e:
+        try:
+            from core.tracing import LLMRequestTracer
+            if not finished:
+                LLMRequestTracer.finish_request(
+                    log_id=log_id,
+                    response={},
+                    response_status=0,
+                    status="error",
+                    error=str(e),
+                    latency_ms=int((time.time() - started) * 1000),
+                )
+        except Exception:
+            pass
+        raise
 
 def run_autocompact_circuit_breaker(context_lines: List[str], max_length: int = 4000) -> str:
     """

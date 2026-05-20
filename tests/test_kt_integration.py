@@ -134,26 +134,12 @@ class TestUnifiedProvider:
     """Test dual-backend provider routing."""
 
     @pytest.mark.asyncio
-    async def test_dify_backend_routing(self):
-        """When provider_type is 'dify', should call dify_client, not NewAPIClient."""
-        from core.legacy_adapter import UnifiedProvider, SQLiteMemory
+    async def test_dify_backend_removed_with_clear_error(self):
+        """旧 dify provider 配置应给出明确迁移错误。"""
+        from core.legacy_adapter import UnifiedProvider
 
-        provider = UnifiedProvider(provider_type="dify", api_key="app-test-key")
-        assert provider.client is None  # No NewAPIClient for dify mode
-
-        # Mock memory
-        mock_memory = MagicMock(spec=SQLiteMemory)
-        mock_memory.get_user_persona.return_value = "{}"
-        mock_memory.get_system_prompt.return_value = "You are helpful."
-        mock_memory.get_recent_context_summary.return_value = ""
-
-        # Mock dify_client.call_dify_chat
-        with patch('clients.dify_client.call_dify_chat', return_value="Dify response") as mock_dify:
-            result = await provider.invoke(
-                query="hello", user_id="u1", session_id="s1",
-                memory=mock_memory
-            )
-            assert result["choices"][0]["message"]["content"] == "Dify response"
+        with pytest.raises(RuntimeError, match="Dify provider has been removed"):
+            UnifiedProvider(provider_type="dify", api_key="app-test-key")
 
     @pytest.mark.asyncio
     async def test_newapi_backend_routing(self):
@@ -164,20 +150,12 @@ class TestUnifiedProvider:
         assert provider.client is not None
 
     @pytest.mark.asyncio
-    async def test_invoke_with_messages_dify(self):
-        """invoke_with_messages should work with dify backend."""
+    async def test_invoke_with_messages_dify_removed(self):
+        """dify backend 不再保留兼容调用分支。"""
         from core.legacy_adapter import UnifiedProvider
 
-        provider = UnifiedProvider(provider_type="dify", api_key="app-test")
-
-        with patch('clients.dify_client.call_dify_chat', return_value="answer from dify"):
-            result = await provider.invoke_with_messages(
-                messages=[
-                    {"role": "system", "content": "Be helpful."},
-                    {"role": "user", "content": "What is 2+2?"},
-                ]
-            )
-            assert result["choices"][0]["message"]["content"] == "answer from dify"
+        with pytest.raises(RuntimeError, match="Dify provider has been removed"):
+            UnifiedProvider(provider_type="dify", api_key="app-test")
 
 
 # ── Multi-turn Tool Loop Tests ──
@@ -371,8 +349,7 @@ class TestEvolveWithDictLogs:
         controller.persona_architect.run = AsyncMock(return_value={"traits": []})
         controller.prompt_auditor.run = AsyncMock(return_value={"final_system_prompt": "new prompt"})
 
-        with patch('clients.dify_client.write_dify_dataset'):
-            await controller.evolve("u1")
+        await controller.evolve("u1")
 
         # Verify mark_logs_processed was called with [1, 2] (dict access)
         mock_memory.mark_logs_processed.assert_called_once_with([1, 2])

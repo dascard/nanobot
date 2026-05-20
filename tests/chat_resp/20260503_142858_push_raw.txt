@@ -1,0 +1,1 @@
+{"target_type": "private", "target_id": "local_test", "message": "<!DOCTYPE html><html><body><h1>Push \u6d4b\u8bd5</h1><p>\u94fe\u8def\u901a</p></body></html>"}

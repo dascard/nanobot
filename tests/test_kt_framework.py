@@ -1281,6 +1281,128 @@ class TestReplyContract:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
+    def test_no_tool_call_retries_once_and_sends_reply(self, MockAgent, mock_load, db_session, monkeypatch):
+        """第一次无 reply/no_reply → bridge 追加纠正 prompt 重试一次，成功后发送 reply。"""
+        from core.database import ReplyContractCheckLog
+        from nanobot_kt.bridge import NanobotBridge
+
+        monkeypatch.setattr("clients.classifier_client.resolve_model_route", lambda key: {"base_url": "http://llm.test/v1", "api_key": "k", "provider_id": "newapi"})
+        monkeypatch.setattr("clients.classifier_client.ensure_model_route_enabled", lambda key, route: None)
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.sync_models_to_registry", AsyncMock(return_value=None))
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.estimate_complexity", lambda self, messages, tools=None: 1)
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.get_ordered_candidates", lambda self, **kwargs: [{"id": "test-model", "intelligence": 7, "cost_input_1m": 0}])
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.get_failure_tracker", classmethod(lambda cls: None))
+        monkeypatch.setattr("nanobot_kt.bridge.registry.get_models_by_provider", lambda provider: [{"id": "test-model"}])
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        messages = []
+        mock_conv = MagicMock()
+        mock_conv._messages = messages
+        mock_conv.append.side_effect = lambda role, content: messages.append({"role": role, "content": content})
+        mock_conv.get_messages.side_effect = lambda: messages
+        mock_conv.to_messages.side_effect = lambda: messages
+        mock_conv.find_last_user_index.return_value = -1
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.registry._tools = {"reply": object(), "no_reply": object()}
+        mock_agent.controller = MagicMock(
+            conversation=mock_conv,
+            llm=MagicMock(config=MagicMock(model="test-model")),
+            max_attempts=1,
+        )
+
+        process_calls = []
+
+        async def fake_process(_event):
+            process_calls.append(1)
+            if len(process_calls) == 1:
+                bridge._output._buffer.append("我会直接回复，但没有调用工具")
+            else:
+                messages.append({"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "重试后的回复"}}'})
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("你好", user_id="u1", session_id="s-retry")
+
+        result = asyncio.run(_run())
+
+        assert result == "重试后的回复"
+        assert mock_agent._process_event.await_count == 2
+        assert any("你刚才没有调用 reply 或 no_reply 工具" in msg["content"] for msg in messages)
+        logs = db_session.query(ReplyContractCheckLog).order_by(ReplyContractCheckLog.attempt.asc()).all()
+        assert [log.attempt for log in logs] == [0, 1]
+        assert logs[0].result == "no_tool_call"
+        assert logs[1].result == "retry_success"
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_no_tool_call_retry_failure_stays_suppressed(self, MockAgent, mock_load, db_session, monkeypatch):
+        """重试后仍没有 reply/no_reply → 不发送普通文本，只记录 suppressed。"""
+        from core.database import ReplyContractCheckLog
+        from nanobot_kt.bridge import NanobotBridge
+
+        monkeypatch.setattr("clients.classifier_client.resolve_model_route", lambda key: {"base_url": "http://llm.test/v1", "api_key": "k", "provider_id": "newapi"})
+        monkeypatch.setattr("clients.classifier_client.ensure_model_route_enabled", lambda key, route: None)
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.sync_models_to_registry", AsyncMock(return_value=None))
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.estimate_complexity", lambda self, messages, tools=None: 1)
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.get_ordered_candidates", lambda self, **kwargs: [{"id": "test-model", "intelligence": 7, "cost_input_1m": 0}])
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.get_failure_tracker", classmethod(lambda cls: None))
+        monkeypatch.setattr("nanobot_kt.bridge.registry.get_models_by_provider", lambda provider: [{"id": "test-model"}])
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        messages = []
+        mock_conv = MagicMock()
+        mock_conv._messages = messages
+        mock_conv.append.side_effect = lambda role, content: messages.append({"role": role, "content": content})
+        mock_conv.get_messages.side_effect = lambda: messages
+        mock_conv.to_messages.side_effect = lambda: messages
+        mock_conv.find_last_user_index.return_value = -1
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.registry._tools = {"reply": object(), "no_reply": object()}
+        mock_agent.controller = MagicMock(
+            conversation=mock_conv,
+            llm=MagicMock(config=MagicMock(model="test-model")),
+            max_attempts=1,
+        )
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("还是直接输出普通文本")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message("你好", user_id="u1", session_id="s-suppress")
+
+        result = asyncio.run(_run())
+
+        assert result == ""
+        assert mock_agent._process_event.await_count == 2
+        assert bridge.is_no_tool_call("s-suppress") is True
+        logs = db_session.query(ReplyContractCheckLog).order_by(ReplyContractCheckLog.attempt.asc()).all()
+        assert [log.result for log in logs] == ["no_tool_call", "suppressed"]
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
     def test_reasoning_content_never_sent(self, MockAgent, mock_load):
         """reasoning_content 绝不能泄漏为用户可见回复。"""
         from nanobot_kt.bridge import NanobotBridge

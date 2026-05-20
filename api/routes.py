@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from typing import Any, Optional, List
 
 from config import (
-    NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, API_KEY_01_CHAT, ADMIN_USER_ID,
+    NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, ADMIN_USER_ID,
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER, NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT,
     LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING,
 )
@@ -1838,7 +1838,7 @@ def search_history_logs(
     _auth=Depends(verify_token),
 ):
     """
-    提供给 Dify Agent 作为 Custom Tool 调用的数据库本地精确检索 API。
+    提供给外部工具调用的数据库本地精确检索 API。
     实现无需全量 RAG 的按需、极速精准回忆。带有上下文支持。
     """
     base_query = db.query(ChatLog)

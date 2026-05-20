@@ -136,7 +136,7 @@ def test_executor_records_tool_call_with_contextvars(tmp_path, monkeypatch):
 
 def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeypatch):
     from core import database
-    from core.tracing import RunTracer, ToolTracer
+    from core.tracing import LLMRequestTracer, ReplyContractTracer, RunTracer, ToolTracer
 
     prompt_dir = tmp_path / "prompts"
     backup_dir = tmp_path / "backups"
@@ -191,6 +191,29 @@ optional_vars:
     )
     tool_id = ToolTracer.start_tool_call("trace-admin", run.run_id, "reply", {"text": "ok"})
     ToolTracer.finish_tool_call(tool_id, status="error", error="boom")
+    ReplyContractTracer.record_check(
+        trace_id="trace-admin",
+        run_id=run.run_id,
+        session_id="s1",
+        attempt=0,
+        raw_output="模型输出",
+        has_reply_tool=False,
+        result="no_tool_call",
+    )
+    llm_log_id = LLMRequestTracer.record_request(
+        trace_id="trace-admin",
+        run_id=run.run_id,
+        source="replyer",
+        model="model-a",
+        request={"messages": [{"role": "user", "content": "输入"}]},
+    )
+    LLMRequestTracer.finish_request(
+        log_id=llm_log_id,
+        response={"choices": [{"message": {"content": "输出"}}]},
+        response_status=200,
+        status="success",
+        latency_ms=7,
+    )
     RunTracer.finish_run(run.run_id, status="error", error="boom", finished_at=datetime.now())
 
     runs_resp = client.get("/api/v1/admin/agent-runs", headers=auth_header)
@@ -216,6 +239,9 @@ optional_vars:
     detail_resp = client.get(f"/api/v1/admin/agent-runs/{run.run_id}", headers=auth_header)
     assert detail_resp.status_code == 200, detail_resp.text
     assert detail_resp.json()["tool_calls"][0]["tool_name"] == "reply"
+    assert detail_resp.json()["reply_contract_check_logs"][0]["result"] == "no_tool_call"
+    assert json.loads(detail_resp.json()["llm_api_request_logs"][0]["response_json"])["choices"][0]["message"]["content"] == "输出"
+    assert detail_resp.json()["llm_api_request_logs"][0]["response_status"] == 200
 
     tools_resp = client.get("/api/v1/admin/tool-calls", headers=auth_header)
     assert tools_resp.status_code == 200, tools_resp.text

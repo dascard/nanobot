@@ -291,13 +291,13 @@ class LLMRequestTracer:
         status: str = "created",
         response_status: int = 0,
         error: str = "",
-    ) -> None:
+    ) -> int:
         try:
             from core.database import LLMApiRequestLog
 
             db = _session()
             try:
-                db.add(LLMApiRequestLog(
+                log = LLMApiRequestLog(
                     trace_id=str(trace_id or "")[:64],
                     run_id=str(run_id or "")[:80],
                     source=str(source or "")[:64],
@@ -312,12 +312,87 @@ class LLMRequestTracer:
                     response_status=int(response_status or 0),
                     error=_preview(error, max_chars=2000),
                     created_at=datetime.now(),
+                )
+                db.add(log)
+                db.commit()
+                db.refresh(log)
+                return int(log.id or 0)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning("llm api request log failed: %s", e)
+            return 0
+
+    @staticmethod
+    def finish_request(
+        *,
+        log_id: int = 0,
+        response: Any = None,
+        response_status: int = 0,
+        status: str = "success",
+        error: str = "",
+        latency_ms: int = 0,
+    ) -> None:
+        if not log_id:
+            return
+        try:
+            from core.database import LLMApiRequestLog
+
+            db = _session()
+            try:
+                log = db.query(LLMApiRequestLog).filter(LLMApiRequestLog.id == int(log_id)).first()
+                if log is None:
+                    return
+                log.response_json = _json_dumps(response or {}, max_chars=200000)
+                log.response_preview = _preview(response or {}, max_chars=4000)
+                log.response_status = int(response_status or 0)
+                log.status = str(status or "success")[:32]
+                log.error = _preview(error, max_chars=2000)
+                log.latency_ms = int(latency_ms or 0)
+                log.finished_at = datetime.now()
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning("llm api request finish failed: %s", e)
+
+
+class ReplyContractTracer:
+    @staticmethod
+    def record_check(
+        *,
+        trace_id: str = "",
+        run_id: str = "",
+        session_id: str = "",
+        attempt: int = 0,
+        raw_output: str = "",
+        has_reply_tool: bool = False,
+        has_no_reply_tool: bool = False,
+        has_structured_fallback: bool = False,
+        result: str = "",
+    ) -> None:
+        try:
+            from core.database import ReplyContractCheckLog
+
+            db = _session()
+            try:
+                db.add(ReplyContractCheckLog(
+                    trace_id=str(trace_id or "")[:64],
+                    run_id=str(run_id or "")[:80],
+                    session_id=str(session_id or "")[:128],
+                    attempt=int(attempt or 0),
+                    raw_output_preview=_preview(raw_output or "", max_chars=3000),
+                    has_reply_tool=1 if has_reply_tool else 0,
+                    has_no_reply_tool=1 if has_no_reply_tool else 0,
+                    has_structured_fallback=1 if has_structured_fallback else 0,
+                    result=str(result or "")[:64],
+                    created_at=datetime.now(),
                 ))
                 db.commit()
             finally:
                 db.close()
         except Exception as e:
-            logger.warning("llm api request log failed: %s", e)
+            logger.warning("reply contract check log failed: %s", e)
 
 
 def row_to_dict(row: Any) -> dict[str, Any]:
