@@ -2429,18 +2429,21 @@ function LLMApiLogsPage() {
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [runFilter, setRunFilter] = useState('')
+  const [traceFilter, setTraceFilter] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
   const [modelFilter, setModelFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [openId, setOpenId] = useState(null)
   const limit = 30
   const load = useCallback(() => {
     const params = { page, limit }
     if (runFilter) params.run_id = runFilter
+    if (traceFilter) params.trace_id = traceFilter
     if (sourceFilter) params.source = sourceFilter
     if (modelFilter) params.model = modelFilter
     if (statusFilter) params.status = statusFilter
     api.get('/llm-api-logs', { params }).then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0) }).catch(() => {})
-  }, [page, runFilter, sourceFilter, modelFilter, statusFilter])
+  }, [page, runFilter, traceFilter, sourceFilter, modelFilter, statusFilter])
   useEffect(() => { load() }, [load])
   const totalPages = Math.max(1, Math.ceil(total / limit))
   return (
@@ -2450,6 +2453,8 @@ function LLMApiLogsPage() {
       <div className="flex gap-2 mb-4 flex-wrap">
         <input value={runFilter} onChange={e => { setRunFilter(e.target.value); setPage(1) }}
           placeholder="run_id" className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 w-40" />
+        <input value={traceFilter} onChange={e => { setTraceFilter(e.target.value); setPage(1) }}
+          placeholder="trace_id" className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 w-40" />
         <input value={sourceFilter} onChange={e => { setSourceFilter(e.target.value); setPage(1) }}
           placeholder="source" className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 w-28" />
         <input value={modelFilter} onChange={e => { setModelFilter(e.target.value); setPage(1) }}
@@ -2471,12 +2476,8 @@ function LLMApiLogsPage() {
           <tbody>
             {items.map(ll => (
               <React.Fragment key={ll.id}>
-                <tr className="border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/30" onClick={(e) => {
-                  const detail = e.currentTarget.nextElementSibling
-                  if (detail?.tagName === 'TR') {
-                    detail.classList.toggle('hidden')
-                  }
-                }}>
+                <tr className="border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/30"
+                  onClick={() => setOpenId(openId === ll.id ? null : ll.id)}>
                   <td className="py-2 px-3 text-slate-200">{ll.source || '-'}</td>
                   <td className="py-2 px-3 text-slate-400 max-w-40 truncate">{ll.model || '-'}</td>
                   <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${ll.status === 'success' ? 'bg-emerald-500/10 text-emerald-300' : ll.status === 'error' ? 'bg-red-500/10 text-red-300' : 'bg-slate-500/10 text-slate-400'}`}>{ll.status || '-'}</span></td>
@@ -2484,7 +2485,8 @@ function LLMApiLogsPage() {
                   <td className="py-2 px-3 text-xs text-slate-500">{String(ll.created_at || '').replace('T', ' ').slice(0, 19)}</td>
                   <td className="py-2 px-3 text-slate-400">{ll.latency_ms || 0}ms</td>
                 </tr>
-                <tr className="hidden border-b border-slate-800/50">
+                {openId === ll.id && (
+                <tr className="border-b border-slate-800/50">
                   <td colSpan={6} className="p-3">
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                       <div><div className="text-xs text-slate-500 mb-1">request_json</div><pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{ll.request_json || '{}'}</pre></div>
@@ -2498,6 +2500,7 @@ function LLMApiLogsPage() {
                     </div>
                   </td>
                 </tr>
+                )}
               </React.Fragment>
             ))}
           </tbody>
