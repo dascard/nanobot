@@ -90,6 +90,7 @@ const NAV = [
   { to: '/prompt', label: 'Prompt' },
   { to: '/prompts', label: '模板管理' },
   { to: '/agent-runs', label: '运行追踪' },
+  { to: '/llm-api-logs', label: 'LLM API 日志' },
   { to: '/models', label: '模型' },
   { to: '/blocks', label: '屏蔽' },
   { to: '/tools', label: '工具管理' },
@@ -2061,6 +2062,48 @@ function ManagedPromptsPage() {
   )
 }
 
+// ── LLM API 请求日志块（可复用） ──
+function LLMApiRequestLogsBlock({ logs = [] }) {
+  if (!logs.length) {
+    return (
+      <Card className="p-8 text-center">
+        <p className="text-slate-500 text-sm mb-2">暂无 API 请求日志</p>
+        <p className="text-slate-600 text-xs">可能原因：本次调用未绑定 run_id 或该模型出口未接入追踪</p>
+      </Card>
+    )
+  }
+  return (
+    <Card>
+      <div className="space-y-1">
+        {logs.map(ll => (
+          <details key={ll.id} className="border-b border-slate-800/50">
+            <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-sm flex gap-3">
+              <span className="text-slate-200 w-16">{ll.source || '-'}</span>
+              <span className="text-slate-400 w-32 truncate">{ll.model || '-'}</span>
+              <span className="text-slate-400 w-20">{ll.status || '-'}</span>
+              <span className="text-slate-400 w-16">{ll.response_status || 0}</span>
+              <span className="text-slate-500 w-20">{ll.latency_ms || 0}ms</span>
+              <span className="text-slate-500 text-xs truncate flex-1">{ll.url || '-'}</span>
+              <span className="text-xs text-slate-500">{ll.created_at || '-'}</span>
+            </summary>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
+              <div>
+                <div className="text-xs text-slate-500 mb-1">request_json</div>
+                <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{ll.request_json || '{}'}</pre>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500 mb-1">response_json</div>
+                <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{ll.response_json || '{}'}</pre>
+              </div>
+              {ll.error && <div className="lg:col-span-2 text-xs text-red-300 bg-red-500/10 rounded p-2">{ll.error}</div>}
+            </div>
+          </details>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
 // ── Agent Runs ──
 function AgentRunsPage() {
   const [runs, setRuns] = useState([])
@@ -2179,6 +2222,8 @@ function AgentRunsPage() {
                 ))}
                 {!(detail.prompt_render_logs || []).length && <div className="py-8 text-center text-sm text-slate-600">暂无 prompt 渲染记录</div>}
               </Card>
+              <h2 className="text-sm font-medium text-slate-300 mb-3 mt-4">API 请求</h2>
+              <LLMApiRequestLogsBlock logs={detail.llm_api_request_logs || []} />
               {toolDetail && (
                 <Card className="p-4">
                   <div className="flex items-center justify-between mb-3">
@@ -2310,39 +2355,8 @@ function AgentRunDetailPage() {
       )}
 
       {/* LLM API Requests */}
-      {detail.llm_api_request_logs?.length > 0 && (
-        <>
-          <h2 className="text-lg font-bold mt-6 mb-3">API 请求</h2>
-          <Card>
-            <div className="space-y-1">
-              {detail.llm_api_request_logs.map(ll => (
-                <details key={ll.id} className="border-b border-slate-800/50">
-                  <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-sm flex gap-3">
-                    <span className="text-slate-200 w-16">{ll.source || '-'}</span>
-                    <span className="text-slate-400 w-32 truncate">{ll.model || '-'}</span>
-                    <span className="text-slate-400 w-20">{ll.status || '-'}</span>
-                    <span className="text-slate-400 w-16">{ll.response_status || 0}</span>
-                    <span className="text-slate-500 w-20">{ll.latency_ms || 0}ms</span>
-                    <span className="text-slate-500 text-xs truncate flex-1">{ll.url || '-'}</span>
-                    <span className="text-xs text-slate-500">{ll.created_at || '-'}</span>
-                  </summary>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 p-3">
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">request_json</div>
-                      <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{ll.request_json || '{}'}</pre>
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">response_json</div>
-                      <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{ll.response_json || '{}'}</pre>
-                    </div>
-                    {ll.error && <div className="lg:col-span-2 text-xs text-red-300 bg-red-500/10 rounded p-2">{ll.error}</div>}
-                  </div>
-                </details>
-              ))}
-            </div>
-          </Card>
-        </>
-      )}
+      <h2 className="text-lg font-bold mt-6 mb-3">API 请求</h2>
+      <LLMApiRequestLogsBlock logs={detail.llm_api_request_logs || []} />
     </div>
   )
 }
@@ -2397,6 +2411,100 @@ function ToolCallsPage() {
         </table>
         {total > limit && (
           <div className="flex justify-between p-3 text-xs border-t border-slate-800">
+            <span className="text-slate-500">共 {total} 条 | 第 {page}/{totalPages} 页</span>
+            <div className="flex gap-2">
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50">上一页</button>
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50">下一页</button>
+            </div>
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
+// ── LLM API 日志独立页面 ──
+function LLMApiLogsPage() {
+  const [items, setItems] = useState([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [runFilter, setRunFilter] = useState('')
+  const [sourceFilter, setSourceFilter] = useState('')
+  const [modelFilter, setModelFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const limit = 30
+  const load = useCallback(() => {
+    const params = { page, limit }
+    if (runFilter) params.run_id = runFilter
+    if (sourceFilter) params.source = sourceFilter
+    if (modelFilter) params.model = modelFilter
+    if (statusFilter) params.status = statusFilter
+    api.get('/llm-api-logs', { params }).then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0) }).catch(() => {})
+  }, [page, runFilter, sourceFilter, modelFilter, statusFilter])
+  useEffect(() => { load() }, [load])
+  const totalPages = Math.max(1, Math.ceil(total / limit))
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-1">LLM API 日志</h1>
+      <p className="text-slate-500 text-sm mb-4">发往模型网关的完整请求记录</p>
+      <div className="flex gap-2 mb-4 flex-wrap">
+        <input value={runFilter} onChange={e => { setRunFilter(e.target.value); setPage(1) }}
+          placeholder="run_id" className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 w-40" />
+        <input value={sourceFilter} onChange={e => { setSourceFilter(e.target.value); setPage(1) }}
+          placeholder="source" className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 w-28" />
+        <input value={modelFilter} onChange={e => { setModelFilter(e.target.value); setPage(1) }}
+          placeholder="model" className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 w-40" />
+        <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value); setPage(1) }}
+          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm">
+          <option value="">全部状态</option>
+          <option value="created">created</option>
+          <option value="success">success</option>
+          <option value="error">error</option>
+        </select>
+        <button onClick={load} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">刷新</button>
+      </div>
+      <Card className="overflow-hidden">
+        <table className="w-full text-sm">
+          <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+            <th className="py-2 px-3">source</th><th className="py-2 px-3">model</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">run_id</th><th className="py-2 px-3">时间</th><th className="py-2 px-3">延迟</th>
+          </tr></thead>
+          <tbody>
+            {items.map(ll => (
+              <React.Fragment key={ll.id}>
+                <tr className="border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/30" onClick={(e) => {
+                  const detail = e.currentTarget.nextElementSibling
+                  if (detail?.tagName === 'TR') {
+                    detail.classList.toggle('hidden')
+                  }
+                }}>
+                  <td className="py-2 px-3 text-slate-200">{ll.source || '-'}</td>
+                  <td className="py-2 px-3 text-slate-400 max-w-40 truncate">{ll.model || '-'}</td>
+                  <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${ll.status === 'success' ? 'bg-emerald-500/10 text-emerald-300' : ll.status === 'error' ? 'bg-red-500/10 text-red-300' : 'bg-slate-500/10 text-slate-400'}`}>{ll.status || '-'}</span></td>
+                  <td className="py-2 px-3 text-xs text-slate-500 max-w-32 truncate font-mono">{ll.run_id || '-'}</td>
+                  <td className="py-2 px-3 text-xs text-slate-500">{String(ll.created_at || '').replace('T', ' ').slice(0, 19)}</td>
+                  <td className="py-2 px-3 text-slate-400">{ll.latency_ms || 0}ms</td>
+                </tr>
+                <tr className="hidden border-b border-slate-800/50">
+                  <td colSpan={6} className="p-3">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                      <div><div className="text-xs text-slate-500 mb-1">request_json</div><pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{ll.request_json || '{}'}</pre></div>
+                      <div><div className="text-xs text-slate-500 mb-1">response_json</div><pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-96 overflow-auto">{ll.response_json || '{}'}</pre></div>
+                      <div><div className="text-xs text-slate-500 mb-1">headers_json</div><pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-48 overflow-auto">{ll.headers_json || '{}'}</pre></div>
+                      <div className="space-y-3">
+                        <div><div className="text-xs text-slate-500 mb-1">状态信息</div><div className="text-xs text-slate-400">status: <Badge tone={ll.status === 'success' ? 'emerald' : ll.status === 'error' ? 'red' : 'slate'}>{ll.status}</Badge> · response_status: {ll.response_status || 0} · latency: {ll.latency_ms || 0}ms</div></div>
+                        <div><div className="text-xs text-slate-500 mb-1">URL</div><div className="text-xs text-slate-400 break-all">{ll.url || '-'}</div></div>
+                        {ll.error && <div className="text-xs text-red-300 bg-red-500/10 rounded p-2">{ll.error}</div>}
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+        {!items.length && <div className="py-16 text-center text-sm text-slate-600">暂无 API 请求日志</div>}
+        {total > limit && (
+          <div className="p-3 flex items-center justify-between text-xs">
             <span className="text-slate-500">共 {total} 条 | 第 {page}/{totalPages} 页</span>
             <div className="flex gap-2">
               <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50">上一页</button>
@@ -3724,6 +3832,7 @@ export default function App() {
           <Route path="/prompts" element={<ManagedPromptsPage />} />
           <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />
           <Route path="/agent-runs" element={<AgentRunsPage />} />
+          <Route path="/llm-api-logs" element={<LLMApiLogsPage />} />
           <Route path="/tool-calls" element={<ToolCallsPage />} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/audit" element={<AuditPage />} />

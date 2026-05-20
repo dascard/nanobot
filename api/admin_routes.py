@@ -1835,6 +1835,61 @@ def get_tool_call(tool_call_id: str, db: Session = Depends(get_db), _auth=Depend
 
 
 # ═══════════════════════════════════════════
+# LLM API 请求日志
+# ═══════════════════════════════════════════
+
+@router.get("/llm-api-logs")
+def list_llm_api_logs(
+    limit: int = Query(50, ge=1, le=200),
+    page: int = Query(1, ge=1),
+    offset: int | None = Query(None, ge=0),
+    run_id: str = "",
+    trace_id: str = "",
+    source: str = "",
+    model: str = "",
+    status: str = "",
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.database import LLMApiRequestLog
+    q = db.query(LLMApiRequestLog)
+    if run_id:
+        q = q.filter(LLMApiRequestLog.run_id == run_id)
+    if trace_id:
+        q = q.filter(LLMApiRequestLog.trace_id == trace_id)
+    if source:
+        q = q.filter(LLMApiRequestLog.source == source)
+    if model:
+        q = q.filter(LLMApiRequestLog.model == model)
+    if status:
+        q = q.filter(LLMApiRequestLog.status == status)
+    total = q.count()
+    row_offset = offset if offset is not None else (page - 1) * limit
+    rows = (
+        q.order_by(LLMApiRequestLog.created_at.desc())
+        .offset(row_offset)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "items": [row_to_dict(row) for row in rows],
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "offset": row_offset,
+    }
+
+
+@router.get("/llm-api-logs/{log_id}")
+def get_llm_api_log(log_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    from core.database import LLMApiRequestLog
+    row = db.query(LLMApiRequestLog).filter(LLMApiRequestLog.id == log_id).first()
+    if not row:
+        raise HTTPException(404, "LLM API request log not found")
+    return row_to_dict(row)
+
+
+# ═══════════════════════════════════════════
 # Prompt (read-only)
 # ═══════════════════════════════════════════
 
