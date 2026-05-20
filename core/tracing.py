@@ -9,7 +9,6 @@ from typing import Any
 logger = logging.getLogger("nanobot.tracing")
 
 SENSITIVE_KEY_PARTS = ("api_key", "apikey", "authorization", "password", "secret", "token")
-MAX_JSON_CHARS = 8000
 MAX_PREVIEW_CHARS = 2000
 
 
@@ -48,12 +47,12 @@ def _redact(value: Any) -> Any:
     return value
 
 
-def _json_dumps(value: Any, *, max_chars: int = MAX_JSON_CHARS) -> str:
+def _json_dumps(value: Any, *, max_chars: int = 0) -> str:
     try:
         text = json.dumps(_redact(value), ensure_ascii=False, default=str)
     except Exception:
         text = json.dumps(str(value), ensure_ascii=False)
-    if len(text) > max_chars:
+    if max_chars > 0 and len(text) > max_chars:
         return text[:max_chars] + "...[truncated]"
     return text
 
@@ -306,7 +305,7 @@ class LLMRequestTracer:
                     url=str(url or ""),
                     method=str(method or "POST")[:16],
                     headers_json=_json_dumps(headers or {}, max_chars=12000),
-                    request_json=_json_dumps(request or {}, max_chars=200000),
+                    request_json=_json_dumps(request or {}, max_chars=0),
                     request_preview=_preview(request or {}, max_chars=4000),
                     status=str(status or "created")[:32],
                     response_status=int(response_status or 0),
@@ -343,7 +342,7 @@ class LLMRequestTracer:
                 log = db.query(LLMApiRequestLog).filter(LLMApiRequestLog.id == int(log_id)).first()
                 if log is None:
                     return
-                log.response_json = _json_dumps(response or {}, max_chars=200000)
+                log.response_json = _json_dumps(response or {}, max_chars=0)
                 log.response_preview = _preview(response or {}, max_chars=4000)
                 log.response_status = int(response_status or 0)
                 log.status = str(status or "success")[:32]
