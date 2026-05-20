@@ -87,8 +87,8 @@ const NAV = [
   { to: '/timing-gate', label: 'TimingGate' },
   { to: '/stickers', label: '表情包' },
   { to: '/stickers/duplicates', label: '去重工作台' },
-  { to: '/prompt', label: 'Prompt' },
-  { to: '/prompts', label: '模板管理' },
+  { to: '/prompt', label: '旧版 Prompt 构建' },
+  { to: '/prompts', label: 'PromptManager 模板' },
   { to: '/agent-runs', label: '运行追踪' },
   { to: '/llm-api-logs', label: 'LLM API 日志' },
   { to: '/models', label: '模型' },
@@ -1798,9 +1798,19 @@ function PromptPage() {
   return (
     <div>
       {toast && <div className="mb-3 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-sm text-emerald-400">{toast}</div>}
+      <Card className="p-4 mb-4 border-amber-500/20 bg-amber-500/5">
+        <div className="flex gap-3">
+          <span className="text-xs text-amber-400 mt-0.5">⚠</span>
+          <div>
+            <p className="text-sm text-amber-300 mb-1">这是旧版 prompt.md 片段构建系统。</p>
+            <p className="text-xs text-slate-500">编辑的是 prompt fragments，保存片段后需要点击"重新构建 prompt.md"才会更新完整 prompt。此页面不会修改 PromptManager 运行时模板 data/prompts。如果你要修改模型调用模板，请使用"PromptManager 模板"。</p>
+          </div>
+        </div>
+      </Card>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">
-          <h1 className="text-2xl font-bold">提示词</h1>
+          <h1 className="text-2xl font-bold">旧版 Prompt 构建</h1>
+          <Badge tone="amber">Legacy</Badge>
           <div className="flex gap-1 bg-slate-900 rounded-lg p-0.5">
             <button onClick={() => setTab('fragments')}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'fragments' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>编辑片段</button>
@@ -1878,7 +1888,7 @@ function PromptPage() {
                     <button onClick={closeEditor}
                       className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">取消</button>
                     <button onClick={saveFragment}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium transition-colors">保存</button>
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium transition-colors">保存片段</button>
                   </div>
                 </div>
                 <textarea value={editContent}
@@ -1986,9 +1996,18 @@ function ManagedPromptsPage() {
   return (
     <div>
       {toast && <div className="mb-3 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-sm text-emerald-400">{toast}</div>}
+      <Card className="p-4 mb-4 border-emerald-500/20 bg-emerald-500/5">
+        <div className="flex gap-3">
+          <span className="text-xs text-emerald-400 mt-0.5">ℹ</span>
+          <div>
+            <p className="text-sm text-emerald-300 mb-1">这是新版 PromptManager 模板系统。</p>
+            <p className="text-xs text-slate-500">默认模板目录：<span className="text-slate-400 font-mono">{defaultDir || 'prompts.default'}</span> · 运行时模板目录：<span className="text-slate-400 font-mono">{promptDir || 'data/prompts'}</span> · WebUI 保存写入运行时模板，Git 更新只影响默认模板，不应覆盖运行时模板。</p>
+          </div>
+        </div>
+      </Card>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold mb-1">模板管理</h1>
+          <h1 className="text-2xl font-bold mb-1">PromptManager 模板</h1>
           <p className="text-slate-500 text-sm">Markdown frontmatter 模板、变量预览、备份与回滚</p>
           {(promptDir || defaultDir) && <div className="flex gap-4 mt-1 text-[10px] text-slate-600">
             {defaultDir && <span>默认模板: <span className="text-slate-500 font-mono">{defaultDir}</span></span>}
@@ -1998,7 +2017,7 @@ function ManagedPromptsPage() {
         <div className="flex items-center gap-2">
           <Badge tone={mode === 'managed' ? 'emerald' : mode === 'shadow' ? 'blue' : 'slate'}>{mode || 'unknown'}</Badge>
           <button onClick={reload} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">Reload</button>
-          <button onClick={save} disabled={!selected} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 rounded-xl text-sm font-medium">保存</button>
+          <button onClick={save} disabled={!selected} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 rounded-xl text-sm font-medium">保存到运行时模板</button>
         </div>
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4" style={{ minHeight: 'calc(100vh - 150px)' }}>
