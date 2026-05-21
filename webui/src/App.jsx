@@ -2461,8 +2461,17 @@ function LLMApiLogViewer({ log }) {
   if (!log) return <div className="py-8 text-center text-sm text-slate-600">无数据</div>
   const request = safeJsonParse(log.request_json, {})
   const response = safeJsonParse(log.response_json, {})
+  const requestLint = safeJsonParse(log.request_lint_json, {})
+  const lintIssues = Array.isArray(requestLint.issues) ? requestLint.issues : []
+  const lintCounts = requestLint.severity_counts || {}
+  const messageSources = safeJsonParse(log.message_sources_json, [])
+  const actualSentTools = safeJsonParse(log.actual_sent_tools_json, requestLint.actual_sent_tools || [])
+  const policyEnabledTools = safeJsonParse(log.policy_enabled_tools_json, requestLint.policy_enabled_tools || [])
+  const policyDisabledTools = safeJsonParse(log.policy_disabled_tools_json, requestLint.policy_disabled_tools || [])
+  const frameworkInjectedTools = safeJsonParse(log.framework_injected_tools_json, requestLint.framework_injected_tools || [])
   const isIncomplete = (log.status === 'created') && (log.latency_ms === 0 || !log.latency_ms)
   const statusTone = log.status === 'success' ? 'emerald' : log.status === 'stream_success' ? 'blue' : log.status === 'error' || log.status === 'failed' || log.status === 'stream_error' ? 'red' : log.status === 'stream_created' ? 'blue' : 'slate'
+  const issueTone = (severity) => severity === 'P0' ? 'red' : severity === 'P1' ? 'amber' : 'slate'
 
   return (
     <div className="space-y-4 text-sm">
@@ -2508,6 +2517,67 @@ function LLMApiLogViewer({ log }) {
             <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">tools: <span className="text-slate-400">{request.tools?.length || 0}</span></span>
             {request.tool_choice && <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">tool_choice: <span className="text-slate-400">{typeof request.tool_choice === 'string' ? request.tool_choice : JSON.stringify(request.tool_choice)}</span></span>}
           </div>
+        </section>
+      )}
+
+      {/* Request Lint */}
+      {(lintIssues.length > 0 || actualSentTools.length > 0 || messageSources.length > 0) && (
+        <section>
+          <h3 className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">Request Lint</h3>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-2">
+            <MiniStat label="P0" value={lintCounts.P0 || 0} tone={(lintCounts.P0 || 0) > 0 ? 'red' : 'emerald'} />
+            <MiniStat label="P1" value={lintCounts.P1 || 0} tone={(lintCounts.P1 || 0) > 0 ? 'amber' : 'slate'} />
+            <MiniStat label="P2" value={lintCounts.P2 || 0} />
+            <MiniStat label="actual_tools" value={actualSentTools.length} />
+            <MiniStat label="message_sources" value={messageSources.length} />
+          </div>
+          {lintIssues.length > 0 && (
+            <div className="space-y-1 mb-2">
+              {lintIssues.slice(0, 20).map((issue, i) => (
+                <div key={i} className="flex items-start gap-2 rounded-lg border border-slate-800 bg-slate-950 p-2 text-xs">
+                  <Badge tone={issueTone(issue.severity)}>{issue.severity || '-'}</Badge>
+                  <div className="min-w-0">
+                    <div className="text-slate-300 font-mono">{issue.code || '-'}</div>
+                    <div className="text-slate-500 break-words">{issue.message || ''}</div>
+                    {issue.details && <pre className="text-[10px] text-slate-600 whitespace-pre-wrap break-all mt-1">{JSON.stringify(issue.details, null, 2)}</pre>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
+              <div className="text-[10px] text-slate-600 mb-1">Actual Sent Tools</div>
+              <div className="flex flex-wrap gap-1">{actualSentTools.length ? actualSentTools.map(name => <Badge key={name} tone="blue">{name}</Badge>) : <span className="text-xs text-slate-600">无</span>}</div>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
+              <div className="text-[10px] text-slate-600 mb-1">Policy Enabled</div>
+              <div className="flex flex-wrap gap-1">{policyEnabledTools.length ? policyEnabledTools.map(name => <Badge key={name} tone="emerald">{name}</Badge>) : <span className="text-xs text-slate-600">无</span>}</div>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
+              <div className="text-[10px] text-slate-600 mb-1">Policy Disabled</div>
+              <div className="flex flex-wrap gap-1">{policyDisabledTools.length ? policyDisabledTools.map(name => <Badge key={name} tone="amber">{name}</Badge>) : <span className="text-xs text-slate-600">无</span>}</div>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
+              <div className="text-[10px] text-slate-600 mb-1">Framework Docs</div>
+              <div className="flex flex-wrap gap-1">{frameworkInjectedTools.length ? frameworkInjectedTools.map(name => <Badge key={name} tone="red">{name}</Badge>) : <span className="text-xs text-slate-600">无</span>}</div>
+            </div>
+          </div>
+          {messageSources.length > 0 && (
+            <details className="border border-slate-700/50 rounded-lg mt-2">
+              <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-xs text-slate-400">Message Sources ({messageSources.length})</summary>
+              <div className="p-2 space-y-1 max-h-[360px] overflow-auto">
+                {messageSources.map(src => (
+                  <div key={src.index} className="grid grid-cols-[40px_70px_180px_1fr] gap-2 rounded bg-slate-950 px-2 py-1 text-xs">
+                    <span className="text-slate-600">#{src.index}</span>
+                    <span className="text-slate-500">{src.role || '-'}</span>
+                    <span className="text-slate-300 font-mono truncate">{src.source || '-'}</span>
+                    <span className="text-slate-600 truncate">{src.chars || 0} chars · {(src.sha256 || '').slice(0, 12)} · {src.preview || ''}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </section>
       )}
 
@@ -2595,6 +2665,8 @@ function LLMApiLogViewer({ log }) {
           <RawJsonAccordion label="原始 request_json" text={log.request_json} />
           <RawJsonAccordion label="原始 response_json" text={log.response_json} />
           <RawJsonAccordion label="headers_json" text={log.headers_json} />
+          <RawJsonAccordion label="request_lint_json" text={log.request_lint_json} />
+          <RawJsonAccordion label="message_sources_json" text={log.message_sources_json} />
         </div>
       </section>
     </div>
@@ -2617,10 +2689,13 @@ function LLMApiRequestLogsBlock({ logs = [] }) {
         {logs.map(ll => {
           const isIncomplete = (ll.status === 'created') && (ll.latency_ms === 0 || !ll.latency_ms)
           const statusTone = ll.status === 'success' ? 'emerald' : ll.status === 'stream_success' ? 'blue' : ll.status === 'error' || ll.status === 'failed' || ll.status === 'stream_error' ? 'red' : ll.status === 'stream_created' ? 'blue' : 'slate'
+          const requestLint = safeJsonParse(ll.request_lint_json, {})
+          const p0Count = requestLint.severity_counts?.P0 || 0
           return (
             <details key={ll.id} className="border-b border-slate-800/50">
               <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-sm flex gap-3 items-center">
                 <Badge tone={statusTone}>{ll.status || '-'}</Badge>
+                {p0Count > 0 && <Badge tone="red">P0 {p0Count}</Badge>}
                 <span className="text-slate-200 w-16">{ll.source || '-'}</span>
                 <span className="text-slate-400 w-32 truncate">{ll.model || '-'}</span>
                 {isIncomplete ? (

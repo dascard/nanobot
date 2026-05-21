@@ -507,6 +507,12 @@ class LLMApiRequestLog(Base):
     latency_ms = Column(Integer, default=0)
     finished_at = Column(DateTime, nullable=True)
     error = Column(Text, default="")
+    message_sources_json = Column(Text, default="[]")
+    request_lint_json = Column(Text, default="{}")
+    actual_sent_tools_json = Column(Text, default="[]")
+    policy_enabled_tools_json = Column(Text, default="[]")
+    policy_disabled_tools_json = Column(Text, default="[]")
+    framework_injected_tools_json = Column(Text, default="[]")
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
@@ -996,6 +1002,12 @@ def init_db():
                 "response_preview": "TEXT DEFAULT ''",
                 "latency_ms": "INTEGER DEFAULT 0",
                 "finished_at": "DATETIME",
+                "message_sources_json": "TEXT DEFAULT '[]'",
+                "request_lint_json": "TEXT DEFAULT '{}'",
+                "actual_sent_tools_json": "TEXT DEFAULT '[]'",
+                "policy_enabled_tools_json": "TEXT DEFAULT '[]'",
+                "policy_disabled_tools_json": "TEXT DEFAULT '[]'",
+                "framework_injected_tools_json": "TEXT DEFAULT '[]'",
             }
             for col_name, col_type in llm_add.items():
                 if col_name not in llm_columns:

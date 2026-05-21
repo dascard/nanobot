@@ -338,6 +338,27 @@ class LLMRequestTracer:
     ) -> int:
         try:
             from core.database import LLMApiRequestLog
+            from core.llm_request_linter import lint_llm_request
+
+            request_payload = request or {}
+            try:
+                lint_result = lint_llm_request(request_payload)
+            except Exception as e:
+                logger.warning("llm request lint failed: %s", e)
+                lint_result = {
+                    "ok": False,
+                    "severity_counts": {"P0": 0, "P1": 0, "P2": 1},
+                    "issues": [{
+                        "severity": "P2",
+                        "code": "lint_error",
+                        "message": str(e),
+                    }],
+                    "message_sources": [],
+                    "actual_sent_tools": [],
+                    "policy_enabled_tools": [],
+                    "policy_disabled_tools": [],
+                    "framework_injected_tools": [],
+                }
 
             db = _session()
             try:
@@ -350,11 +371,17 @@ class LLMRequestTracer:
                     url=str(url or ""),
                     method=str(method or "POST")[:16],
                     headers_json=_json_dumps(headers or {}, max_chars=12000),
-                    request_json=_json_dumps(request or {}, max_chars=0),
-                    request_preview=_preview(request or {}, max_chars=4000),
+                    request_json=_json_dumps(request_payload, max_chars=0),
+                    request_preview=_preview(request_payload, max_chars=4000),
                     status=str(status or "created")[:32],
                     response_status=int(response_status or 0),
                     error=_preview(error, max_chars=2000),
+                    message_sources_json=_json_dumps(lint_result.get("message_sources") or [], max_chars=0),
+                    request_lint_json=_json_dumps(lint_result, max_chars=0),
+                    actual_sent_tools_json=_json_dumps(lint_result.get("actual_sent_tools") or [], max_chars=0),
+                    policy_enabled_tools_json=_json_dumps(lint_result.get("policy_enabled_tools") or [], max_chars=0),
+                    policy_disabled_tools_json=_json_dumps(lint_result.get("policy_disabled_tools") or [], max_chars=0),
+                    framework_injected_tools_json=_json_dumps(lint_result.get("framework_injected_tools") or [], max_chars=0),
                     created_at=datetime.now(),
                 )
                 db.add(log)

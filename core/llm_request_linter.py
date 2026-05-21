@@ -1,0 +1,318 @@
+"""LLM 请求发出前的非阻塞 lint 与可观测性提取。"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from collections import Counter
+from typing import Any
+
+
+_FRAMEWORK_MARKERS = {
+    "available_functions": "Available Functions",
+    "available_sub_agents": "Available Sub-Agents",
+    "skills": "## Skills",
+    "tool_usage": "## Tool Usage",
+    "background_execution": "Background Execution",
+}
+
+_TOOL_LINE_RE = re.compile(r"^\s*-\s*`?([A-Za-z0-9_.-]+)`?\s*[：:].*$")
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,4}\s+(.+?)\s*$", re.MULTILINE)
+
+
+def _as_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _tool_name(tool: Any) -> str:
+    if not isinstance(tool, dict):
+        return ""
+    function = tool.get("function")
+    if isinstance(function, dict) and function.get("name"):
+        return str(function.get("name") or "")
+    if tool.get("name"):
+        return str(tool.get("name") or "")
+    return ""
+
+
+def extract_actual_sent_tools(request: dict[str, Any]) -> list[str]:
+    """从 OpenAI-compatible payload 中提取实际发送的 tools 名称。"""
+    tools = request.get("tools") if isinstance(request, dict) else []
+    if not isinstance(tools, list):
+        return []
+    names = [_tool_name(tool) for tool in tools]
+    return [name for name in names if name]
+
+
+def _extract_policy_tools(messages: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    enabled: list[str] = []
+    disabled: list[str] = []
+    section = ""
+    in_policy = False
+
+    for msg in messages:
+        content = _as_text(msg.get("content") if isinstance(msg, dict) else "")
+        if "[ToolPolicy]" not in content:
+            continue
+        in_policy = True
+        for line in content.splitlines():
+            if "可调用工具" in line:
+                section = "enabled"
+                continue
+            if "已禁用工具" in line:
+                section = "disabled"
+                continue
+            if line.strip().startswith("规则"):
+                section = ""
+                continue
+            match = _TOOL_LINE_RE.match(line)
+            if not match or not in_policy:
+                continue
+            name = match.group(1)
+            if section == "enabled" and name not in enabled:
+                enabled.append(name)
+            elif section == "disabled" and name not in disabled:
+                disabled.append(name)
+    return enabled, disabled
+
+
+def _detect_framework_markers(text: str) -> list[str]:
+    return [key for key, marker in _FRAMEWORK_MARKERS.items() if marker in text]
+
+
+def infer_message_sources(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """给最终 messages 做轻量来源推断，供日志排查使用。"""
+    sources: list[dict[str, Any]] = []
+    for index, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            content = _as_text(msg)
+            role = ""
+        else:
+            content = _as_text(msg.get("content"))
+            role = _as_text(msg.get("role"))
+        explicit_source = ""
+        if isinstance(msg, dict):
+            explicit_source = _as_text(msg.get("_nanobot_source") or msg.get("source"))
+
+        source = explicit_source
+        if not source:
+            if role == "system" and "[ToolPolicy]" in content:
+                source = "tool_policy"
+            elif role == "system" and _detect_framework_markers(content):
+                source = "kt_framework_tools_doc"
+            elif role == "system" and "本轮简短处理" in content:
+                source = "effort_constraint"
+            elif role == "system" and "群聊行为" in content:
+                source = "group_rules"
+            elif role == "system" and "群聊上下文使用规则" in content:
+                source = "group_context_rules"
+            elif role == "system" and ("<runtime_context>" in content or "运行时上下文" in content):
+                source = "runtime_context"
+            elif role == "system":
+                source = "unknown_system"
+            elif role == "user" and ("[Tool None completed]" in content or content.startswith("[Tool ")):
+                source = "internal_tool_completion"
+            elif role == "user" and "你刚才没有调用 reply 或 no_reply 工具" in content:
+                source = "reply_contract_retry"
+            elif role == "user" and "系统生成的上下文提示，不是用户发言" in content:
+                source = "history_gap_marker"
+            elif role == "tool":
+                source = "tool_result"
+            elif role == "assistant":
+                source = "assistant"
+            elif role == "user":
+                source = "user"
+            else:
+                source = role or "unknown"
+
+        sources.append({
+            "index": index,
+            "role": role,
+            "source": source,
+            "chars": len(content),
+            "sha256": _sha256(content),
+            "preview": content[:160],
+        })
+    return sources
+
+
+def _add_issue(
+    issues: list[dict[str, Any]],
+    severity: str,
+    code: str,
+    message: str,
+    **details: Any,
+) -> None:
+    issue: dict[str, Any] = {
+        "severity": severity,
+        "code": code,
+        "message": message,
+    }
+    if details:
+        issue["details"] = details
+    issues.append(issue)
+
+
+def lint_llm_request(request: Any) -> dict[str, Any]:
+    """对真实待发送 payload 做非阻塞 lint。
+
+    返回结构会直接写入 LLMApiRequestLog.request_lint_json。
+    """
+    payload = request if isinstance(request, dict) else {}
+    raw_messages = payload.get("messages") or []
+    messages = [msg for msg in raw_messages if isinstance(msg, dict)] if isinstance(raw_messages, list) else []
+    actual_sent_tools = extract_actual_sent_tools(payload)
+    policy_enabled, policy_disabled = _extract_policy_tools(messages)
+    message_sources = infer_message_sources(messages)
+    issues: list[dict[str, Any]] = []
+
+    system_contents = [
+        _as_text(msg.get("content"))
+        for msg in messages
+        if _as_text(msg.get("role")) == "system"
+    ]
+    duplicates = [content for content, count in Counter(system_contents).items() if content and count > 1]
+    if duplicates:
+        _add_issue(
+            issues,
+            "P1",
+            "system_exact_duplicate",
+            "存在完全重复的 system message。",
+            duplicate_count=len(duplicates),
+        )
+
+    heading_counts: Counter[str] = Counter()
+    for content in system_contents:
+        heading_counts.update(h.strip() for h in _HEADING_RE.findall(content) if h.strip())
+    duplicate_headings = sorted([heading for heading, count in heading_counts.items() if count > 1])
+    if duplicate_headings:
+        _add_issue(
+            issues,
+            "P1",
+            "system_heading_duplicate",
+            "system message 中存在重复标题。",
+            headings=duplicate_headings[:20],
+        )
+
+    unknown_system_indexes = [
+        src["index"] for src in message_sources
+        if src["role"] == "system" and src["source"] == "unknown_system"
+    ]
+    if unknown_system_indexes:
+        _add_issue(
+            issues,
+            "P2",
+            "unknown_system_source",
+            "存在无法推断来源的 system message。",
+            indexes=unknown_system_indexes[:20],
+        )
+
+    sent_set = set(actual_sent_tools)
+    enabled_set = set(policy_enabled)
+    disabled_set = set(policy_disabled)
+    if enabled_set:
+        extra = sorted(sent_set - enabled_set)
+        missing = sorted(enabled_set - sent_set)
+        if extra or missing:
+            _add_issue(
+                issues,
+                "P0",
+                "tool_policy_mismatch",
+                "ToolPolicy 可调用工具与实际发送 tools 不一致。",
+                extra_sent=extra,
+                missing_sent=missing,
+            )
+
+    disabled_sent = sorted(sent_set & disabled_set)
+    if disabled_sent:
+        _add_issue(
+            issues,
+            "P0",
+            "disabled_tool_sent",
+            "已禁用工具仍出现在 API tools_schema 中。",
+            tools=disabled_sent,
+        )
+
+    framework_markers: set[str] = set()
+    for msg in messages:
+        content = _as_text(msg.get("content"))
+        markers = _detect_framework_markers(content)
+        framework_markers.update(markers)
+        if markers:
+            _add_issue(
+                issues,
+                "P0",
+                "kt_framework_tool_docs",
+                "KT 自动工具说明进入最终 prompt。",
+                markers=markers,
+            )
+
+    non_policy_prompt = "\n".join(
+        _as_text(msg.get("content"))
+        for msg in messages
+        if "[ToolPolicy]" not in _as_text(msg.get("content"))
+    )
+    disabled_mentions = [
+        name for name in policy_disabled
+        if re.search(rf"(`{re.escape(name)}`|\b{re.escape(name)}\b)", non_policy_prompt)
+    ]
+    if disabled_mentions:
+        _add_issue(
+            issues,
+            "P0",
+            "disabled_tool_mentioned",
+            "已禁用工具仍出现在非 ToolPolicy prompt 文本中。",
+            tools=disabled_mentions,
+        )
+
+    for src in message_sources:
+        if src["role"] != "user":
+            continue
+        if src["source"] == "internal_tool_completion":
+            _add_issue(
+                issues,
+                "P0",
+                "internal_tool_message_as_user",
+                "内部工具完成消息以 user role 注入。",
+                index=src["index"],
+            )
+        elif src["source"] == "reply_contract_retry":
+            _add_issue(
+                issues,
+                "P1",
+                "reply_retry_as_user",
+                "reply/no_reply 重试修正提示以 user role 注入。",
+                index=src["index"],
+            )
+        elif src["source"] == "history_gap_marker":
+            _add_issue(
+                issues,
+                "P1",
+                "history_gap_marker_as_user",
+                "历史 gap marker 以 user role 注入。",
+                index=src["index"],
+            )
+
+    severity_counts = {
+        "P0": sum(1 for issue in issues if issue["severity"] == "P0"),
+        "P1": sum(1 for issue in issues if issue["severity"] == "P1"),
+        "P2": sum(1 for issue in issues if issue["severity"] == "P2"),
+    }
+    return {
+        "ok": severity_counts["P0"] == 0,
+        "severity_counts": severity_counts,
+        "issues": issues,
+        "message_sources": message_sources,
+        "actual_sent_tools": actual_sent_tools,
+        "policy_enabled_tools": policy_enabled,
+        "policy_disabled_tools": policy_disabled,
+        "framework_injected_tools": sorted(framework_markers),
+    }
