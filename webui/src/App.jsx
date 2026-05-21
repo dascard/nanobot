@@ -2235,6 +2235,15 @@ function EffectivePromptPreviewPage() {
           {result?.recent_agent_run_id && <NavLink to={`/agent-runs/${result.recent_agent_run_id}`} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">最近运行</NavLink>}
         </div>
       </Card>
+      <Card className="p-3 mb-4 border-blue-500/20 bg-blue-500/5">
+        <div className="flex gap-2">
+          <span className="text-xs text-blue-400 mt-0.5">ℹ</span>
+          <div className="text-xs text-slate-500">
+            这是预览构造结果（根据 session_id 读取历史+画像+tool policy 模拟构造），<strong>不是从真实模型调用链路抓取的最终 payload</strong>。
+            真实发送的 request 请以 <NavLink to="/llm-api-logs" className="text-blue-400 underline">LLM API 日志</NavLink> 中的 request_json 为准。
+          </div>
+        </div>
+      </Card>
       {result && (
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-5 gap-3">

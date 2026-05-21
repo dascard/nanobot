@@ -1051,23 +1051,25 @@ class NanobotBridge:
                 trace_id=trace_id,
                 run_id=run_handle.run_id,
             )
-            if managed_prompt and prompt_mode == "managed":
-                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                    self._agent.controller.conversation.append(
-                        "system",
-                        "[ManagedPrompt]\n"
-                        "以下是 PromptManager 渲染出的托管提示词，优先作为本轮运行时指导。\n"
-                        f"{managed_prompt}",
+            if managed_prompt:
+                # prompt_source 无论 shadow/managed 都更新，确保 AgentRun 记录实际渲染源
+                try:
+                    RunTracer.update_prompt_source(
+                        run_handle.run_id,
+                        **(self._last_prompt_render_meta or {}),
                     )
-                    try:
-                        RunTracer.update_prompt_source(
-                            run_handle.run_id,
-                            **(self._last_prompt_render_meta or {}),
+                except Exception:
+                    pass
+                if prompt_mode == "managed":
+                    if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                        self._agent.controller.conversation.append(
+                            "system",
+                            "[ManagedPrompt]\n"
+                            "以下是 PromptManager 渲染出的托管提示词，优先作为本轮运行时指导。\n"
+                            f"{managed_prompt}",
                         )
-                    except Exception:
-                        pass
-                    logger.info("[PromptManager] managed prompt injected key=%s chars=%d",
-                                prompt_key, len(managed_prompt))
+                        logger.info("[PromptManager] managed prompt injected key=%s chars=%d",
+                                    prompt_key, len(managed_prompt))
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")
             logger.debug(f"[NanobotBridge] Output module: {self._output}")
