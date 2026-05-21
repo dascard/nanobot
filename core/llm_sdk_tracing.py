@@ -77,9 +77,11 @@ def install_openai_chat_completion_tracer(
                 from core.llm_trace_context import get_llm_trace_vars
                 from core.tracing import LLMRequestTracer
                 from core.final_tools import filter_sdk_kwargs
+                from core.llm_request_sanitizer import sanitize_sdk_kwargs
 
                 trace_id, run_id, source = get_llm_trace_vars()
                 filtered_kwargs = filter_sdk_kwargs(kwargs)
+                filtered_kwargs = sanitize_sdk_kwargs(filtered_kwargs)
                 request_payload = _request_payload_from_sdk_kwargs(args, filtered_kwargs)
                 headers = {"Content-Type": "application/json"}
                 api_key = str(getattr(llm, "_api_key", "") or "")
