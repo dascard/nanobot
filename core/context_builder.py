@@ -14,11 +14,24 @@ MAX_GROUP_CONTEXT_ROWS = 10
 MAX_PRIVATE_CONTEXT_ROWS = 32
 MAX_GROUP_RECENT_ROWS = 12
 
+# 长用户消息阈值——超过此长度的历史消息会被摘要化
+LONG_USER_MESSAGE_CHARS = 2000
+
 # 时间窗口限制——超过此时间的消息不进入当前上下文
 PRIVATE_CONTEXT_MAX_AGE_MIN = 30      # 私聊: 30 分钟
 GROUP_CONTEXT_MAX_AGE_MIN = 10        # 群聊: 10 分钟
 TIMING_CONTEXT_MAX_AGE_MIN = 5        # TimingGate context: 5 分钟
 CONTEXT_BREAK_ON_GAP_MIN = 20         # 相邻消息间隔超过此值视为话题断裂
+
+# 不应进入模型上下文的内部消息 kind
+_INTERNAL_KINDS = frozenset({
+    "context_gap_marker",
+    "tool_internal",
+    "no_send",
+    "reply_contract_retry",
+    "system_control",
+    "empty_reply",
+})
 
 
 def _cap_text(text: str, max_chars: int, label: str = "") -> str:
@@ -165,12 +178,23 @@ def build_session_memory(
         if meta.get("moderation", {}).get("no_context"):
             skipped_no_context += 1
             continue
+        # 过滤内部消息 kind——不应出现在模型上下文中
+        if meta.get("kind", "chat") in _INTERNAL_KINDS:
+            skipped_no_context += 1
+            continue
         content = t.content.strip()
         if not content:
             continue
         content = sanitize_prompt_text(content, max_per_msg)
         if not content:
             continue
+        # 长 prompt-like 用户消息摘要化——角色卡/代码等不应全文注入
+        if t.role == "user" and len(content) > LONG_USER_MESSAGE_CHARS:
+            preview = content[:200].rstrip()
+            content = (
+                f"[长消息摘要] 用户发送了约 {len(content)} 字符的长消息，"
+                f"开头为: {preview}...[截断]"
+            )
         kind = meta.get("kind", "chat")
         # casual_template 最多保留 1 条，避免短句污染历史
         if kind == "casual_template" and t.role == "assistant":
@@ -208,8 +232,8 @@ def build_session_memory(
             gap_min = (cur_dt - prev_dt).total_seconds() / 60
             if gap_min > CONTEXT_BREAK_ON_GAP_MIN:
                 messages_with_gaps.append({
-                    "role": "user",
-                    "content": f"[系统生成的上下文提示，不是用户发言：距离上一条消息间隔约{int(gap_min)}分钟，此前后的内容不应视为同一话题，无需连续理解]",
+                    "role": "system",
+                    "content": f"[话题断裂标记] 距离上一条消息间隔约{int(gap_min)}分钟，此前后的内容不应视为同一话题",
                     "meta_json": '{"kind":"context_gap_marker"}',
                 })
                 gap_breaks += 1
