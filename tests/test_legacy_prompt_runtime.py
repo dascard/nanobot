@@ -24,6 +24,9 @@ def legacy_env(monkeypatch, tmp_path):
 
     (default_dir / "00_test.md").write_text("# Test fragment\n")
     (default_dir / "05_core.md").write_text("# Core fragment\n")
+    (default_dir / "20_group_rules.md").write_text("# Group-only fragment\n")
+    (default_dir / "26_private_behavior.md").write_text("# Private-only fragment\n")
+    (default_dir / "27_tool_routing.md").write_text("# Tool routing fragment\n")
 
     from core.legacy_prompt_runtime import (
         default_fragments_dir,
@@ -44,7 +47,7 @@ def test_init_copies_missing_only(legacy_env):
     from core.legacy_prompt_runtime import init_legacy_prompt_runtime_dir
 
     result = init_legacy_prompt_runtime_dir()
-    assert len(result["copied"]) == 2
+    assert len(result["copied"]) == 5
     assert os.path.exists(os.path.join(legacy_env["runtime_dir"], "00_test.md"))
     assert os.path.exists(os.path.join(legacy_env["runtime_dir"], "05_core.md"))
 
@@ -70,7 +73,7 @@ def test_list_fragments_with_status(legacy_env):
 
     init_legacy_prompt_runtime_dir()
     items = list_fragments_with_status()
-    assert len(items) == 2
+    assert len(items) == 5
     for item in items:
         assert item["has_default"] is True
         assert item["has_runtime"] is True
@@ -116,7 +119,12 @@ def test_build_from_runtime(legacy_env):
     assert len(result["fragments_used"]) > 0
     assert os.path.isfile(result["output"])
     with open(legacy_env["output_path"]) as fh:
-        assert "# Test fragment" in fh.read()
+        text = fh.read()
+    assert "# Test fragment" in text
+    assert "# Core fragment" in text
+    assert "# Group-only fragment" not in text
+    assert "# Private-only fragment" not in text
+    assert "# Tool routing fragment" not in text
 
 
 def test_read_runtime_preferred(legacy_env):

@@ -32,6 +32,7 @@ def test_prompt_has_required_fragments(fragments):
         "10_chat_style.md",
         "20_group_rules.md",
         "25_context_control.md",
+        "26_private_behavior.md",
         "27_tool_routing.md",
         "30_tool_discipline.md",
         "40_memory_policy.md",
@@ -42,10 +43,10 @@ def test_prompt_has_required_fragments(fragments):
 
 
 def test_generated_matches_committed():
-    """CI guard: committed prompt.md must equal build output."""
+    """CI guard: committed prompt.md must equal common-base build output."""
     import scripts.build_nanobot_prompt as bp
     generated = bp.build_prompt()
-    output_file = bp.OUTPUT_DIR + "/" + bp.OUTPUT_FILES["group"]
+    output_file = bp.OUTPUT_DIR + "/" + bp.OUTPUT_FILES["base"]
     with open(output_file, "r", encoding="utf-8") as fh:
         committed = fh.read()
     assert generated == committed, (
@@ -60,25 +61,29 @@ def test_contains_reply_contract(prompt_text):
     assert '禁止用 assistant 普通文本作为最终回复' in prompt_text
 
 
-def test_contains_report_tool_contract(prompt_text):
-    assert "news_search" in prompt_text
-    assert "group_analysis" in prompt_text
-    assert "报告的提取、渲染和发送由工具与系统处理" in prompt_text
-    assert "用户指定哪个群" in prompt_text
-    assert "这个群/本群" in prompt_text
+def test_common_prompt_has_only_minimal_tool_contract(prompt_text):
+    assert "本轮只会提供实际可用工具" in prompt_text
+    assert "no_reply(reason" in prompt_text
+    assert "工具用途、参数和可用性以本轮 API tools_schema 为准" in prompt_text
+    assert "## 工具路由" not in prompt_text
+    assert "## 工具" not in prompt_text
+    assert "## 报告工具结束规则" not in prompt_text
+    assert "用户指定哪个群" not in prompt_text
+    assert "直接调用本地 Qwen 视觉模型" not in prompt_text
     assert "reply 协议" not in prompt_text
     assert "直接输出该 HTML" not in prompt_text
 
 
 def test_contains_tool_discipline(prompt_text):
-    assert "工具调用纪律" in prompt_text
-    assert "禁止用不同参数反复调同一个工具" in prompt_text
+    assert "最终可见回复必须调用" in prompt_text
+    assert "不需要回复" in prompt_text
 
 
 def test_contains_sticker_tool_policy(prompt_text):
-    assert "sticker_search" in prompt_text
-    assert "表情包" in prompt_text
-    assert "不要频繁发表情包" in prompt_text
+    from scripts.build_nanobot_prompt import build_prompt
+    text = build_prompt(chat_type="group")
+    assert "表情包" in text
+    assert "不要频繁发表情包" in text
 
 
 def test_contains_chat_style(prompt_text):
@@ -88,19 +93,18 @@ def test_contains_chat_style(prompt_text):
 
 def test_contains_memory_policy(prompt_text):
     assert "history_clear_at" not in prompt_text  # implementation detail, not user-facing
-    assert "sql_analysis" in prompt_text  # tool is mentioned
+    assert "chat_logs 表包含完整历史" not in prompt_text
 
 
 def test_contains_structured_runtime_context(prompt_text):
     assert "<runtime_context>" in prompt_text
-    assert "<group_memory_context" in prompt_text
+    assert "<group_memory_context" not in prompt_text
     assert "[GroupProfileContext]" not in prompt_text
 
 
-def test_group_prompt_has_planner_and_replyer_rules(prompt_text):
-    assert "先判断当前聊天节奏" in prompt_text
+def test_common_prompt_has_current_input_priority(prompt_text):
+    assert "当前用户消息优先" in prompt_text
     assert "reply(content)" in prompt_text
-    assert "把真正要发出去的普通文本放进 `reply(content)`" in prompt_text
     assert "recent context" not in prompt_text.lower()
 
 
@@ -108,8 +112,8 @@ def test_group_prompt_has_planner_and_replyer_rules(prompt_text):
 
 def test_no_duplicate_tool_descriptions(prompt_text):
     """工具描述段不应重复出现。工具名可被其他 section 交叉引用。"""
-    assert prompt_text.count("chat_logs 表包含完整历史") == 1
-    assert prompt_text.count("直接调用本地 Qwen 视觉模型") == 1
+    assert prompt_text.count("chat_logs 表包含完整历史") == 0
+    assert prompt_text.count("直接调用本地 Qwen 视觉模型") == 0
 
 
 def test_no_outdated_markers(prompt_text):
@@ -126,7 +130,7 @@ def test_no_outdated_markers(prompt_text):
 
 def test_no_conflicting_instructions(prompt_text):
     """不应存在互相矛盾的指令。"""
-    assert "报告工具结束规则" in prompt_text
+    assert "报告工具结束规则" not in prompt_text
     assert "口语化" in prompt_text or "短" in prompt_text
     assert "markdown" in prompt_text.lower()
 
@@ -138,15 +142,28 @@ def test_identity_fragment_is_first(fragments):
     assert names[0].startswith("00_")
 
 
-def test_tool_descriptions_only_in_tool_fragment(fragments):
-    """工具的长描述（含参数/用法说明）只在 30_tool_discipline 中定义。"""
-    tool_frag = fragments.get("30_tool_discipline.md", "")
+def test_tool_descriptions_not_in_common_fragments(fragments):
+    """工具长描述不能进入 common base。"""
     for fname, content in fragments.items():
-        if "tool" in fname.lower():
+        if fname.startswith(("20_", "25_", "26_", "27_", "40_", "60_")):
             continue
         assert "直接调用本地 Qwen 视觉模型" not in content, (
             f"{fname} contains image_summary description"
         )
+
+
+def test_default_prompt_is_common_base_only(prompt_text):
+    """默认 prompt.md 是 common base，不携带 chat_type 专属规则。"""
+    forbidden = [
+        "## 群聊行为",
+        "## 群聊上下文使用规则",
+        "## 群聊发言时机",
+        "## 私聊行为",
+        "## 工具路由",
+        "## 报告工具结束规则",
+    ]
+    for term in forbidden:
+        assert term not in prompt_text
 
 
 # ── Chat-type specific builds ──

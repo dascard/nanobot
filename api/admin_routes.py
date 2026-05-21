@@ -2199,7 +2199,7 @@ def update_prompt_fragment(name: str, body: dict, request: Request, db: Session 
 def rebuild_prompt(request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     from core.legacy_prompt_runtime import build_prompt_from_runtime
     try:
-        result = build_prompt_from_runtime(chat_type="group")
+        result = build_prompt_from_runtime(chat_type="base")
         _audit_request(db, request, "rebuild_prompt", "prompt", "legacy", {
             "ok": result.get("ok"), "output": result.get("output", ""),
         })

@@ -225,13 +225,15 @@ def reset_to_default(name: str) -> dict[str, Any]:
     }
 
 
-def build_prompt_from_runtime(chat_type: str = "group") -> dict[str, Any]:
+def build_prompt_from_runtime(chat_type: str = "base") -> dict[str, Any]:
     """从运行时 fragments 构建 prompt.md 输出到 runtime_prompt_output()。"""
     fragments_dir = runtime_fragments_dir()
-    if chat_type == "group":
-        allowed = ("00_", "05_", "10_", "20_", "25_", "27_", "30_", "40_", "60_")
+    if chat_type == "base":
+        allowed = ("00_", "05_", "10_", "30_")
+    elif chat_type == "group":
+        allowed = ("00_", "05_", "10_", "20_", "25_", "30_")
     elif chat_type == "private":
-        allowed = ("00_", "05_", "10_", "26_", "27_", "30_", "40_", "60_")
+        allowed = ("00_", "05_", "10_", "26_", "30_")
     else:
         raise ValueError(f"Unknown chat_type: {chat_type}")
 
