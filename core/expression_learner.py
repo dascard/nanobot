@@ -20,6 +20,41 @@ MIN_REPEAT_COUNT = 2          # 短词最少重复次数
 MIN_PHRASE_LEN = 2            # 短词最少 CJK 字符数
 MAX_PHRASE_LEN = 8            # 短词最多 CJK 字符数
 
+# 绝对不能学习为群表达/黑话的系统词和工具名
+BAD_LEARN_TERMS: set[str] = {
+    "tool_error", "reply", "no_reply", "ToolPolicy", "AvailableFunctions",
+    "memory_read", "memory_write", "sql_analysis", "group_analysis",
+    "python_sandbox", "image_summary", "sticker_search", "news_search",
+    "news_daily", "Traceback", "Exception", "HTTPError",
+    "request_json", "response_json", "skill", "subagent",
+    "AgentRun", "PromptRender", "conversation",
+    "nanobot", "runtime", "prompt", "home", "end",
+}
+
+# 消息内容中的内部标记——出现则不学习
+_INTERNAL_CONTENT_MARKERS = (
+    "[Tool",
+    "Tool completed",
+    "tool_error",
+    "Traceback",
+    "Exception",
+    "HTTPError",
+    "response_json",
+    "request_json",
+    "AgentRun",
+    "PromptRender",
+    "ToolPolicy",
+    "Available Functions",
+    "Available Sub-Agents",
+    "Background Execution",
+    "reply/no_reply",
+    "<runtime_context>",
+    "<user_input>",
+    "<history_context>",
+    "<persona_reference>",
+    "[CQ:image,file=http://127.0.0.1",
+)
+
 # 定义句式正则
 _DEFINITION_PATTERNS = [
     re.compile(r"(.{1,10})就是(.{1,30})"),
@@ -83,6 +118,8 @@ def _extract_expression_candidates(messages: list[dict]) -> list[dict]:
         for phrase in _short_cjk_phrases(text):
             if _is_noise_phrase(phrase):
                 continue
+            if phrase.lower() in BAD_LEARN_TERMS or phrase in BAD_LEARN_TERMS:
+                continue
             phrase_counts[phrase] += 1
             if sender:
                 phrase_senders.setdefault(phrase, set()).add(sender)
@@ -119,6 +156,12 @@ def _extract_jargon_candidates(messages: list[dict]) -> list[dict]:
                     continue
                 if _is_noise_phrase(term):
                     continue
+                # 过滤系统词和内部标记
+                if term.lower() in BAD_LEARN_TERMS or term in BAD_LEARN_TERMS:
+                    continue
+                meaning_lower = meaning.lower()
+                if any(bad in meaning_lower for bad in ("error", "trace", "json", "http", "tool", "reply", "prompt")):
+                    continue
                 seen_terms.add(key)
                 candidates.append({
                     "term": term,
@@ -126,6 +169,65 @@ def _extract_jargon_candidates(messages: list[dict]) -> list[dict]:
                     "examples": [text[:120]],
                 })
     return candidates
+
+
+def should_learn_from_chatlog(row) -> tuple[bool, str]:
+    """判断 ChatLog 行是否可以作为群表达/黑话学习素材。返回 (可学习, 拒绝原因)。"""
+    if not row or row.role != "ambient":
+        return False, "not_ambient"
+
+    content = str(row.content or "").strip()
+    if not content or len(content) > 2000:
+        return False, "empty_or_too_long"
+
+    # meta 标记检查
+    try:
+        meta = json.loads(row.meta_json or "{}")
+    except (json.JSONDecodeError, TypeError):
+        meta = {}
+    if meta.get("no_learn") or meta.get("internal") or meta.get("control"):
+        return False, "meta_no_learn"
+
+    sender = str(row.sender_name or "").lower()
+    if sender in ("nanobot", "bot", "self", ""):
+        return False, "system_sender"
+
+    # 内部标记硬过滤
+    content_lower = content.lower()
+    for marker in _INTERNAL_CONTENT_MARKERS:
+        if marker.lower() in content_lower:
+            return False, f"internal_marker:{marker[:30]}"
+
+    # 拒绝纯 URL / CQ 码 / JSON / stack trace
+    stripped = content.strip()
+    if stripped.startswith("http://") or stripped.startswith("https://") or stripped.startswith("[CQ:"):
+        return False, "cq_or_url"
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return False, "json_object"
+    if "File " in content and 'line ' in content:
+        return False, "stack_trace"
+
+    return True, "ok"
+
+
+def sanitize_learnable_group_text(text: str) -> str:
+    """清洗可学习文本——去掉 CQ 码、URL、时间戳、code block、JSON。"""
+    import re as _re
+    cleaned = str(text or "")
+    # 去掉 CQ 码
+    cleaned = _re.sub(r"\[CQ:[^\]]+\]", "", cleaned)
+    # 去掉 URL
+    cleaned = _re.sub(r"https?://\S+", "", cleaned)
+    # 去掉时间戳
+    cleaned = _re.sub(r"\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2}", "", cleaned)
+    cleaned = _re.sub(r"\d{2}:\d{2}:\d{2}", "", cleaned)
+    # 去掉 markdown code block
+    cleaned = _re.sub(r"```[\s\S]*?```", "", cleaned)
+    # 去掉 JSON 大对象
+    cleaned = _re.sub(r"\{[^}]{50,}\}", "", cleaned)
+    # 去掉多余空白
+    cleaned = _re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned if len(cleaned) >= MIN_PHRASE_LEN else ""
 
 
 def run_learning_cycle():
@@ -153,9 +255,16 @@ def run_learning_cycle():
         if not rows:
             return {"scanned": 0, "expression_new": 0, "jargon_new": 0}
 
-        # 过滤 no_learn 标记的消息
-        from core.moderation import is_no_learn_meta
-        rows = [r for r in rows if not is_no_learn_meta(r.meta_json)]
+        # 硬过滤不可学习的消息
+        accepted_rows: list = []
+        reject_reasons: Counter = Counter()
+        for r in rows:
+            ok, reason = should_learn_from_chatlog(r)
+            if ok:
+                accepted_rows.append(r)
+            else:
+                reject_reasons[reason] += 1
+        rows = accepted_rows
 
         # 按 stream_id 分组，content 剥离 sender 前缀
         from core.context_builder import _strip_speaker_prefix
@@ -163,7 +272,11 @@ def run_learning_cycle():
         group_msgs: dict[str, list[dict]] = {}
         for row in rows:
             stream_id = normalize_group_stream_id(row.session_id)
-            clean_content = _strip_speaker_prefix(row.content or "", row.sender_name or "")
+            clean_content = sanitize_learnable_group_text(
+                _strip_speaker_prefix(row.content or "", row.sender_name or "")
+            )
+            if not clean_content:
+                continue
             group_msgs.setdefault(stream_id, []).append({
                 "content": clean_content,
                 "sender_name": row.sender_name or "",
@@ -192,15 +305,22 @@ def run_learning_cycle():
                     jargon_upd += 1
 
         total = len(rows)
-        if expr_new or jargon_new:
-            logger.info("[ExpressionLearner] scanned=%d groups=%d "
-                         "expr_new=%d expr_upd=%d jargon_new=%d jargon_upd=%d",
-                         total, len(group_msgs),
-                         expr_new, expr_upd, jargon_new, jargon_upd)
+        # 记录本轮拒绝原因 Top-5
+        top_reject = reject_reasons.most_common(5) if reject_reasons else []
+        if expr_new or jargon_new or top_reject:
+            logger.info("[ExpressionLearner] scanned=%d accepted=%d groups=%d "
+                         "expr_new=%d expr_upd=%d jargon_new=%d jargon_upd=%d "
+                         "reject_top=%s",
+                         total + sum(reject_reasons.values()), total, len(group_msgs),
+                         expr_new, expr_upd, jargon_new, jargon_upd,
+                         json.dumps(top_reject, ensure_ascii=False))
         return {
-            "scanned": total, "groups": len(group_msgs),
+            "scanned": total + sum(reject_reasons.values()),
+            "accepted": total,
+            "groups": len(group_msgs),
             "expression_new": expr_new, "expression_updated": expr_upd,
             "jargon_new": jargon_new, "jargon_updated": jargon_upd,
+            "reject_reasons": dict(reject_reasons.most_common(10)),
         }
     except Exception:
         logger.exception("[ExpressionLearner] cycle failed")
