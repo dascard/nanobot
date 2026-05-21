@@ -143,6 +143,39 @@ def _build_multimodal_content(files: list[str], focus: str) -> list[Any] | str:
     return content
 
 
+def _extract_completion_content(body: dict[str, Any]) -> str:
+    choice = (body.get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
+    content = msg.get("content")
+    finish_reason = choice.get("finish_reason") or choice.get("native_finish_reason")
+    reasoning = msg.get("reasoning")
+
+    if isinstance(content, str) and content.strip():
+        return content
+
+    reasoning_preview = str(reasoning or "")[:300]
+
+    if finish_reason == "length":
+        raise ValueError(
+            "truncated_empty_content: "
+            f"finish_reason={finish_reason}, "
+            f"has_reasoning={bool(reasoning)}, "
+            f"reasoning_preview={reasoning_preview}"
+        )
+
+    if reasoning:
+        raise ValueError(
+            "reasoning_only_empty_content: "
+            f"finish_reason={finish_reason}, "
+            f"has_reasoning=true, "
+            f"reasoning_preview={reasoning_preview}"
+        )
+
+    raise ValueError(
+        f"empty_message_content: finish_reason={finish_reason}, has_reasoning=false"
+    )
+
+
 class ImageSummaryTool(BaseTool):
     """使用本地 Qwen 视觉模型对图片做结构化摘要。"""
 
@@ -214,7 +247,12 @@ class ImageSummaryTool(BaseTool):
         }
         if route.get("model"):
             payload["model"] = route["model"]
-        return payload
+        from core.model_route_options import apply_enable_thinking_to_payload
+        return apply_enable_thinking_to_payload(
+            payload,
+            str(route.get("model", "")),
+            route.get("enable_thinking", "auto"),
+        )
 
     def _call_qwen(self, files: list[str], focus: str) -> str:
         from clients.classifier_client import ensure_model_route_enabled
@@ -296,9 +334,9 @@ class ImageSummaryTool(BaseTool):
                 pass
             raise
 
-        content = body["choices"][0]["message"]["content"]
+        content = _extract_completion_content(body)
         logger.info("  [image_summary] << raw: %.120s", content)
-        return str(content)
+        return content
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         files = _normalize_files(args.get("files"))

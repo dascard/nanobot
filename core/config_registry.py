@@ -492,7 +492,6 @@ for _route_key in (
     "timing_gate",
     "private_decision",
     "classifier_legacy",
-    "sticker_describe",
 ):
     SETTING_DEFS.setdefault(
         f"model.route.{_route_key}.enable_thinking",
@@ -505,3 +504,15 @@ for _route_key in (
             description=f"{_route_key} thinking 模式: auto/true/false",
         ),
     )
+# sticker_describe 是视觉/JSON 输出任务，默认禁用 thinking 减少不必要 reasoning
+SETTING_DEFS.setdefault(
+    "model.route.sticker_describe.enable_thinking",
+    SettingDef(
+        key="model.route.sticker_describe.enable_thinking",
+        env_name="",
+        default="false",
+        value_type="str",
+        category="model",
+        description="sticker_describe thinking 模式: auto/true/false（视觉摘要默认禁用）",
+    ),
+)
