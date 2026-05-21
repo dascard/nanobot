@@ -648,7 +648,7 @@ class NanobotBridge:
         event = create_user_input_event("")
         try:
             if hasattr(self._agent, "controller") and hasattr(self._agent.controller, "conversation"):
-                self._agent.controller.conversation.append("user", retry_prompt)
+                self._agent.controller.conversation.append("system", retry_prompt)
             else:
                 event = create_user_input_event(retry_prompt)
         except Exception:

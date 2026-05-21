@@ -14,6 +14,8 @@ _KT_BLOCK_HEADINGS = {
     "tool usage",
 }
 
+_TOOL_COMPLETED_RE = re.compile(r"^\[Tool .*? completed\]\n?")
+
 _KT_STANDALONE_PATTERNS = (
     "Use the `info` tool for full documentation on any function.",
     "Sub-agents are called as tools via the API",
@@ -94,6 +96,10 @@ def strip_kt_framework_tool_docs(messages: Any) -> list[Any]:
             continue
         role = str(msg.get("role") or "")
         content = msg.get("content")
+        # 剥离 KT 框架注入的工具完成内部控制消息
+        if role in ("user", "tool") and isinstance(content, str):
+            if _TOOL_COMPLETED_RE.match(content.strip()):
+                continue
         if role != "system" or not isinstance(content, str):
             sanitized.append(dict(msg))
             continue
