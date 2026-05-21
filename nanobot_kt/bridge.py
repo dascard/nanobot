@@ -797,7 +797,7 @@ class NanobotBridge:
             meta = metadata or {}
             prompt_mode = self._prompt_system_mode()
             prompt_key = "group_chat" if meta.get("is_group", False) else "private_chat"
-            legacy_prompt_meta = dict(self._legacy_prompt_meta or {})
+            legacy_prompt_meta = dict(getattr(self, "_legacy_prompt_meta", {}) or {})
             from core.tracing import RunTracer, new_trace_id
             from core.tracing_context import reset_trace_context, set_trace_context
 
