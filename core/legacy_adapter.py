@@ -355,7 +355,7 @@ class UnifiedProvider:
         
         messages = format_openai_messages(sys_prompt, persona, context_str, query)
         from core.llm_trace_context import llm_trace_scope
-        with llm_trace_scope(source="legacy_adapter"):
+        with llm_trace_scope(source="legacy_adapter.chat"):
             return await self.client.chat_completion(
                 messages=messages,
                 tools=tools,
@@ -369,7 +369,7 @@ class UnifiedProvider:
                                     model_tier: str = "smart") -> Dict[str, Any]:
         """直接传入已组装好的 messages 调用 LLM (多轮工具循环场景)"""
         from core.llm_trace_context import llm_trace_scope
-        with llm_trace_scope(source="legacy_adapter"):
+        with llm_trace_scope(source="legacy_adapter.tool_loop"):
             return await self.client.chat_completion(
                 messages=messages,
                 tools=tools,
@@ -384,7 +384,7 @@ class UnifiedProvider:
             {"role": "user", "content": query}
         ]
         from core.llm_trace_context import llm_trace_scope
-        with llm_trace_scope(source="legacy_adapter"):
+        with llm_trace_scope(source="legacy_adapter.raw"):
             resp = await self.client.chat_completion(messages=messages, model_tier=model_tier)
         if isinstance(resp, dict) and "choices" in resp:
             return resp["choices"][0]["message"]["content"]

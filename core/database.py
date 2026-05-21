@@ -419,6 +419,10 @@ class AgentRun(Base):
     run_type = Column(String, index=True, default="chat")
     prompt_mode = Column(String, index=True, default="legacy")
     prompt_key = Column(String, index=True, default="")
+    prompt_source = Column(String, index=True, default="")
+    prompt_runtime_path = Column(Text, default="")
+    prompt_default_path = Column(Text, default="")
+    prompt_sha256 = Column(String, index=True, default="")
     model = Column(String, index=True, default="")
     status = Column(String, index=True, default="running")
     input_preview = Column(Text, default="")
@@ -456,6 +460,10 @@ class PromptRenderLog(Base):
     run_id = Column(String, index=True, default="")
     prompt_key = Column(String, index=True, default="")
     mode = Column(String, index=True, default="preview")
+    prompt_source = Column(String, index=True, default="")
+    prompt_runtime_path = Column(Text, default="")
+    prompt_default_path = Column(Text, default="")
+    prompt_sha256 = Column(String, index=True, default="")
     variables_json = Column(Text, default="{}")
     rendered_preview = Column(Text, default="")
     token_estimate = Column(Integer, default=0)
@@ -934,6 +942,10 @@ def init_db():
             ar_add = {
                 "chat_type": "TEXT DEFAULT ''",
                 "group_id": "TEXT DEFAULT ''",
+                "prompt_source": "TEXT DEFAULT ''",
+                "prompt_runtime_path": "TEXT DEFAULT ''",
+                "prompt_default_path": "TEXT DEFAULT ''",
+                "prompt_sha256": "TEXT DEFAULT ''",
             }
             for col_name, col_type in ar_add.items():
                 if col_name not in ar_columns:
@@ -944,9 +956,35 @@ def init_db():
             with engine.connect() as conn:
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_runs_chat_type ON agent_runs(chat_type)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_runs_group_id ON agent_runs(group_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_runs_prompt_source ON agent_runs(prompt_source)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_agent_runs_prompt_sha256 ON agent_runs(prompt_sha256)"))
                 conn.commit()
     except Exception as e:
         print(f"  ⚠ agent_runs migration skipped: {e}")
+
+    # ── prompt_render_logs 热迁移：补 prompt 来源字段 ──
+    try:
+        inspector = inspect(engine)
+        if "prompt_render_logs" in inspector.get_table_names():
+            pr_columns = [col["name"] for col in inspector.get_columns("prompt_render_logs")]
+            pr_add = {
+                "prompt_source": "TEXT DEFAULT ''",
+                "prompt_runtime_path": "TEXT DEFAULT ''",
+                "prompt_default_path": "TEXT DEFAULT ''",
+                "prompt_sha256": "TEXT DEFAULT ''",
+            }
+            for col_name, col_type in pr_add.items():
+                if col_name not in pr_columns:
+                    print(f"  → Migrating: Adding missing column [{col_name}] to prompt_render_logs...")
+                    with engine.connect() as conn:
+                        conn.execute(text(f"ALTER TABLE prompt_render_logs ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+            with engine.connect() as conn:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_prompt_render_source ON prompt_render_logs(prompt_source)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_prompt_render_sha256 ON prompt_render_logs(prompt_sha256)"))
+                conn.commit()
+    except Exception as e:
+        print(f"  ⚠ prompt_render_logs migration skipped: {e}")
 
     # ── llm_api_request_logs 热迁移：补 response/latency 字段 ──
     try:

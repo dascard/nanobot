@@ -169,7 +169,7 @@ def test_execute_records_direct_llm_request():
     row = recorded[0]
     assert row["trace_id"] == "trace-img"
     assert row["run_id"] == "run-img"
-    assert row["source"] == "image_summary"
+    assert row["source"] == "image_summary.tool"
     assert row["provider"] == "local_vision"
     assert row["model"] == "vision-model"
     assert row["url"] == "http://vision.test/v1/chat/completions"

@@ -525,12 +525,14 @@ def _safe_parse_sticker_summary(raw: str) -> dict[str, Any]:
 def describe_sticker_with_qwen(file_ref: str) -> dict[str, Any]:
     """调用现有 image_summary/Qwen 通道，为表情包生成轻量描述。"""
     from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
+    from core.llm_trace_context import llm_trace_scope
 
     tool = ImageSummaryTool()
-    raw = tool._call_qwen(
-        [file_ref],
-        "这是一张聊天表情包。请重点识别可用于检索的中文描述、图片文字、梗点、情绪和适合使用的聊天场景。",
-    )
+    with llm_trace_scope(source="image_summary.sticker_auto_describe"):
+        raw = tool._call_qwen(
+            [file_ref],
+            "这是一张聊天表情包。请重点识别可用于检索的中文描述、图片文字、梗点、情绪和适合使用的聊天场景。",
+        )
     parsed = _safe_parse_sticker_summary(raw)
     per_image = parsed.get("per_image") if isinstance(parsed.get("per_image"), list) else []
     first = per_image[0] if per_image and isinstance(per_image[0], dict) else {}

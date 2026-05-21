@@ -35,6 +35,10 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         run_type="chat",
         prompt_mode="shadow",
         prompt_key="group_chat",
+        prompt_source="Legacy runtime prompt",
+        prompt_runtime_path="/runtime/prompt.md",
+        prompt_default_path="/default/prompt.md",
+        prompt_sha256="a" * 64,
         model="model-a",
         input_preview="你好",
     )
@@ -54,6 +58,10 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         rendered_content="系统提示词不应完整入库",
         token_estimate=8,
         warnings=["unused: x"],
+        prompt_source="PromptManager runtime template",
+        prompt_runtime_path="/runtime/group_chat.md",
+        prompt_default_path="/default/group_chat.md",
+        prompt_sha256="b" * 64,
     )
     RunTracer.finish_run(run.run_id, status="success", output_preview="回复", latency_ms=12)
 
@@ -67,12 +75,18 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
 
         log = db.query(database.PromptRenderLog).first()
         assert log.prompt_key == "group_chat"
+        assert log.prompt_source == "PromptManager runtime template"
+        assert log.prompt_runtime_path == "/runtime/group_chat.md"
+        assert log.prompt_default_path == "/default/group_chat.md"
+        assert log.prompt_sha256 == "b" * 64
         assert log.rendered_preview != "系统提示词不应完整入库"
         assert "系统提示词" in log.rendered_preview
 
         run_row = db.query(database.AgentRun).first()
         assert run_row.status == "success"
         assert run_row.latency_ms == 12
+        assert run_row.prompt_source == "Legacy runtime prompt"
+        assert run_row.prompt_sha256 == "a" * 64
     finally:
         db.close()
 
@@ -157,6 +171,9 @@ optional_vars:
     monkeypatch.setenv("NANOBOT_PROMPT_DIR", str(prompt_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_BACKUP_DIR", str(backup_dir))
     monkeypatch.setattr("api.admin_routes.get_prompt_manager", lambda: __import__("core.prompts", fromlist=["PromptManager"]).PromptManager(prompt_dir=prompt_dir, backup_dir=backup_dir))
+    legacy_prompt = tmp_path / "runtime_prompt.md"
+    legacy_prompt.write_text("旧 Prompt 运行时标记 LEGACY_RUNTIME_MARKER", encoding="utf-8")
+    monkeypatch.setenv("NANOBOT_LEGACY_PROMPT_OUTPUT", str(legacy_prompt))
 
     list_resp = client.get("/api/v1/admin/prompts", headers=auth_header)
     assert list_resp.status_code == 200, list_resp.text
@@ -179,6 +196,28 @@ optional_vars:
     assert put_resp.json()["saved"] is True
     assert client.get("/api/v1/admin/prompts/group_chat/history", headers=auth_header).json()["items"]
 
+    effective = client.post(
+        "/api/v1/admin/prompt/effective-preview",
+        json={
+            "chat_type": "group",
+            "session_id": "group_1001",
+            "user_id": "u1",
+            "group_id": "1001",
+            "prompt_key": "group_chat",
+            "mode": "managed",
+            "user_input": "EFFECTIVE_PROMPT_MARKER",
+        },
+        headers=auth_header,
+    )
+    assert effective.status_code == 200, effective.text
+    effective_json = effective.json()
+    assert effective_json["prompt_source"] == "PromptManager runtime template"
+    assert effective_json["prompt_runtime_path"] == str(prompt_dir / "group_chat.md")
+    assert effective_json["prompt_default_path"]
+    assert len(effective_json["prompt_sha256"]) == 64
+    assert "LEGACY_RUNTIME_MARKER" in effective_json["request_json"]["messages"][0]["content"]
+    assert "更新 EFFECTIVE_PROMPT_MARKER" in json.dumps(effective_json["request_json"], ensure_ascii=False)
+
     run = RunTracer.start_run(
         trace_id="trace-admin",
         session_id="s1",
@@ -186,6 +225,10 @@ optional_vars:
         run_type="chat",
         prompt_mode="shadow",
         prompt_key="group_chat",
+        prompt_source="Legacy runtime prompt",
+        prompt_runtime_path="/runtime/prompt.md",
+        prompt_default_path="/default/prompt.md",
+        prompt_sha256="c" * 64,
         model="model-a",
         input_preview="输入",
     )
@@ -238,10 +281,20 @@ optional_vars:
 
     detail_resp = client.get(f"/api/v1/admin/agent-runs/{run.run_id}", headers=auth_header)
     assert detail_resp.status_code == 200, detail_resp.text
+    assert detail_resp.json()["run"]["prompt_source"] == "Legacy runtime prompt"
+    assert detail_resp.json()["run"]["prompt_runtime_path"] == "/runtime/prompt.md"
+    assert detail_resp.json()["run"]["prompt_default_path"] == "/default/prompt.md"
+    assert detail_resp.json()["run"]["prompt_sha256"] == "c" * 64
     assert detail_resp.json()["tool_calls"][0]["tool_name"] == "reply"
     assert detail_resp.json()["reply_contract_check_logs"][0]["result"] == "no_tool_call"
     assert json.loads(detail_resp.json()["llm_api_request_logs"][0]["response_json"])["choices"][0]["message"]["content"] == "输出"
     assert detail_resp.json()["llm_api_request_logs"][0]["response_status"] == 200
+
+    llm_logs_resp = client.get("/api/v1/admin/llm-api-logs", params={"trace_id": "trace-admin"}, headers=auth_header)
+    assert llm_logs_resp.status_code == 200, llm_logs_resp.text
+    assert llm_logs_resp.json()["stats"]["total"] == 1
+    assert llm_logs_resp.json()["stats"]["success"] == 1
+    assert llm_logs_resp.json()["stats"]["avg_latency_ms"] == 7
 
     tools_resp = client.get("/api/v1/admin/tool-calls", headers=auth_header)
     assert tools_resp.status_code == 200, tools_resp.text

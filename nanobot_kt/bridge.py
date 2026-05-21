@@ -7,6 +7,7 @@ and provides a simple async handle_message() interface for use in routes.py.
 """
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -137,6 +138,10 @@ def _conversation_msg_content(msg: Any) -> str:
     return _message_content_to_text(getattr(msg, "content", ""))
 
 
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
+
+
 async def _call_tracker_method(tracker: Any, method_name: str, model_id: str) -> None:
     if tracker is None:
         return
@@ -167,11 +172,53 @@ class NanobotBridge:
         self._output = BufferedOutput()
         self._agent: Optional[Agent] = None
         self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session 分锁
+        self._legacy_prompt_meta: dict[str, str] = {}
+        self._last_prompt_render_meta: dict[str, str] = {}
+
+    def _load_legacy_prompt_into_config(self, config: Any) -> dict[str, str]:
+        """让 KT 基础 system prompt 优先使用 WebUI 构建出的运行时旧 prompt。"""
+        try:
+            from core.legacy_prompt_runtime import read_runtime_or_default_prompt
+
+            prompt_info = read_runtime_or_default_prompt()
+            content = str(prompt_info.get("content") or "")
+            runtime_path = str(prompt_info.get("output_path") or "")
+            default_path = str(prompt_info.get("default_path") or "")
+            source_key = str(prompt_info.get("source") or "")
+            if content.strip():
+                config.system_prompt = content
+                source = (
+                    "Legacy runtime prompt"
+                    if source_key == "runtime"
+                    else "Legacy default prompt"
+                )
+                return {
+                    "prompt_source": source,
+                    "prompt_runtime_path": runtime_path,
+                    "prompt_default_path": default_path,
+                    "prompt_sha256": _sha256_text(content),
+                }
+        except Exception as e:
+            logger.warning("[Prompt] legacy runtime prompt load failed: %s", e)
+
+        fallback_content = str(getattr(config, "system_prompt", "") or "")
+        return {
+            "prompt_source": "bridge manual assembly",
+            "prompt_runtime_path": "",
+            "prompt_default_path": "",
+            "prompt_sha256": _sha256_text(fallback_content) if fallback_content else "",
+        }
 
     async def start(self) -> None:
         """Initialize the KT agent from creature config."""
         logger.info(f"Loading KT agent from {self.creature_path}")
         config = load_agent_config(self.creature_path)
+        self._legacy_prompt_meta = self._load_legacy_prompt_into_config(config)
+        logger.info(
+            "[Prompt] effective legacy source=%s sha=%s",
+            self._legacy_prompt_meta.get("prompt_source") or "",
+            (self._legacy_prompt_meta.get("prompt_sha256") or "")[:12],
+        )
         self._agent = Agent(
             config,
             output_module=self._output,
@@ -399,6 +446,7 @@ class NanobotBridge:
         trace_id: str,
         run_id: str,
     ) -> str:
+        self._last_prompt_render_meta = {}
         if mode == "legacy":
             return ""
         try:
@@ -412,6 +460,12 @@ class NanobotBridge:
                 mode=mode,
                 strict=False,
             )
+            self._last_prompt_render_meta = {
+                "prompt_source": rendered.prompt_source,
+                "prompt_runtime_path": rendered.prompt_runtime_path,
+                "prompt_default_path": rendered.prompt_default_path,
+                "prompt_sha256": rendered.prompt_sha256,
+            }
             logger.info("[PromptManager] rendered key=%s mode=%s tokens=%s warnings=%d",
                         prompt_key, mode, rendered.token_estimate, len(rendered.warnings))
             return rendered.content
@@ -584,6 +638,7 @@ class NanobotBridge:
         raw_model_output: str,
         trace_id: str,
         run_id: str,
+        llm_source: str = "replyer",
     ) -> tuple[Any, str]:
         retry_prompt = self._build_reply_contract_retry_prompt(raw_model_output)
         event = create_user_input_event("")
@@ -597,7 +652,7 @@ class NanobotBridge:
 
         self._output.clear()
         from core.llm_trace_context import llm_trace_scope
-        with llm_trace_scope(trace_id=trace_id, run_id=run_id, source="replyer"):
+        with llm_trace_scope(trace_id=trace_id, run_id=run_id, source=llm_source):
             retry_result = await self._agent._process_event(event)
         retry_response = self._output.get_response()
         if not retry_response and retry_result:
@@ -738,6 +793,7 @@ class NanobotBridge:
             meta = metadata or {}
             prompt_mode = self._prompt_system_mode()
             prompt_key = "group_chat" if meta.get("is_group", False) else "private_chat"
+            legacy_prompt_meta = dict(self._legacy_prompt_meta or {})
             from core.tracing import RunTracer, new_trace_id
             from core.tracing_context import reset_trace_context, set_trace_context
 
@@ -752,6 +808,10 @@ class NanobotBridge:
                 run_type="chat",
                 prompt_mode=prompt_mode,
                 prompt_key=prompt_key,
+                prompt_source=legacy_prompt_meta.get("prompt_source", ""),
+                prompt_runtime_path=legacy_prompt_meta.get("prompt_runtime_path", ""),
+                prompt_default_path=legacy_prompt_meta.get("prompt_default_path", ""),
+                prompt_sha256=legacy_prompt_meta.get("prompt_sha256", ""),
                 input_preview=query,
                 meta={
                     "sender_name": sender_name,
@@ -995,6 +1055,13 @@ class NanobotBridge:
                         "以下是 PromptManager 渲染出的托管提示词，优先作为本轮运行时指导。\n"
                         f"{managed_prompt}",
                     )
+                    try:
+                        RunTracer.update_prompt_source(
+                            run_handle.run_id,
+                            **(self._last_prompt_render_meta or {}),
+                        )
+                    except Exception:
+                        pass
                     logger.info("[PromptManager] managed prompt injected key=%s chars=%d",
                                 prompt_key, len(managed_prompt))
 
@@ -1021,6 +1088,7 @@ class NanobotBridge:
             # --- Dynamic Model Routing (new priority-ordered system) ---
             route_client = None
             raw_query = str(meta.get("raw_query", query)).strip() or query
+            reply_llm_source = "replyer.group_chat" if is_group else "replyer.private_chat"
 
             # 从 WebUI route 读取 provider 配置，让 route provider 控制实际 API 调用
             from clients.classifier_client import ensure_model_route_enabled, resolve_model_route
@@ -1221,7 +1289,7 @@ class NanobotBridge:
                 try:
                     logger.info(f"[NanobotBridge] Calling _process_event (Attempt {attempt+1})...")
                     from core.llm_trace_context import llm_trace_scope
-                    with llm_trace_scope(trace_id=trace_id, run_id=run_handle.run_id, source="replyer"):
+                    with llm_trace_scope(trace_id=trace_id, run_id=run_handle.run_id, source=reply_llm_source):
                         result = await self._agent._process_event(event)
                     logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
                 except Exception as e:
@@ -1482,6 +1550,7 @@ class NanobotBridge:
                                 raw_model_output=buffer_text or response_text,
                                 trace_id=trace_id,
                                 run_id=run_handle.run_id,
+                                llm_source=reply_llm_source,
                             )
                             response = retry_response
                             retry_buffer_text = (

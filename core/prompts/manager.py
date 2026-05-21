@@ -23,6 +23,9 @@ class PromptRenderError(ValueError):
 class PromptTemplate:
     prompt_key: str
     path: Path
+    runtime_path: Path
+    default_path: Path
+    source: str
     frontmatter: dict[str, Any]
     body: str
     raw: str
@@ -50,6 +53,10 @@ class RenderedPrompt:
     warnings: list[str]
     token_estimate: int
     mode: str
+    prompt_source: str = ""
+    prompt_runtime_path: str = ""
+    prompt_default_path: str = ""
+    prompt_sha256: str = ""
     trace_id: str | None = None
     run_id: str | None = None
 
@@ -66,6 +73,10 @@ class RenderedPrompt:
             "warnings": self.warnings,
             "token_estimate": self.token_estimate,
             "mode": self.mode,
+            "prompt_source": self.prompt_source,
+            "prompt_runtime_path": self.prompt_runtime_path,
+            "prompt_default_path": self.prompt_default_path,
+            "prompt_sha256": self.prompt_sha256,
             "trace_id": self.trace_id,
             "run_id": self.run_id,
         }
@@ -200,6 +211,10 @@ def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _safe_key(prompt_key: str) -> str:
     prompt_key = prompt_key.removesuffix(".md").strip()
     if not _KEY_PATTERN.fullmatch(prompt_key):
@@ -258,8 +273,15 @@ class PromptManager:
 
     def _load_template(self, prompt_key: str) -> PromptTemplate:
         key = _safe_key(prompt_key)
-        path = self._path_for(key)
-        if not path.exists():
+        runtime_path = self._path_for(key)
+        default_path = _default_source_dir() / f"{key}.md"
+        if runtime_path.exists():
+            path = runtime_path
+            source = "PromptManager runtime template"
+        elif default_path.exists():
+            path = default_path
+            source = "PromptManager default fallback"
+        else:
             raise PromptRenderError(f"提示词模板不存在: {key}")
         raw = path.read_text(encoding="utf-8")
         frontmatter, body = _split_template(raw)
@@ -267,6 +289,9 @@ class PromptManager:
         return PromptTemplate(
             prompt_key=key,
             path=path,
+            runtime_path=runtime_path,
+            default_path=default_path,
+            source=source,
             frontmatter=frontmatter,
             body=body,
             raw=raw,
@@ -278,6 +303,8 @@ class PromptManager:
         cached = self._cache.get(key)
         if cached and not self.hot_reload:
             return cached
+        if cached and cached.source == "PromptManager default fallback" and cached.runtime_path.exists():
+            cached = None
         if cached and cached.path.exists() and cached.path.stat().st_mtime == cached.mtime:
             return cached
         tmpl = self._load_template(key)
@@ -380,6 +407,10 @@ class PromptManager:
             warnings=warnings,
             token_estimate=_estimate_tokens(content),
             mode=mode or "preview",
+            prompt_source=tmpl.source,
+            prompt_runtime_path=str(tmpl.runtime_path),
+            prompt_default_path=str(tmpl.default_path),
+            prompt_sha256=_sha256_text(content),
             trace_id=trace_id,
             run_id=run_id,
         )
@@ -396,6 +427,10 @@ class PromptManager:
                     rendered_content=content,
                     token_estimate=rendered.token_estimate,
                     warnings=warnings,
+                    prompt_source=rendered.prompt_source,
+                    prompt_runtime_path=rendered.prompt_runtime_path,
+                    prompt_default_path=rendered.prompt_default_path,
+                    prompt_sha256=rendered.prompt_sha256,
                 )
             except Exception:
                 pass

@@ -145,6 +145,49 @@ required_vars:
     assert "新 问题" in manager.render("sql_analysis", {"question": "问题"}).content
 
 
+def test_prompt_manager_default_fallback_records_source(tmp_path, monkeypatch):
+    from core.prompts import PromptManager
+
+    runtime_dir = tmp_path / "runtime_prompts"
+    default_dir = tmp_path / "default_prompts"
+    runtime_dir.mkdir()
+    default_dir.mkdir()
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    (default_dir / "group_chat.md").write_text(
+        """---
+name: 默认群聊
+required_vars:
+  - user_input
+---
+默认 {{ user_input }}
+""",
+        encoding="utf-8",
+    )
+
+    manager = PromptManager(prompt_dir=runtime_dir, backup_dir=tmp_path / "backups")
+    rendered = manager.render("group_chat", {"user_input": "你好"}, mode="managed")
+
+    assert rendered.content.strip() == "默认 你好"
+    assert rendered.prompt_source == "PromptManager default fallback"
+    assert rendered.prompt_runtime_path == str(runtime_dir / "group_chat.md")
+    assert rendered.prompt_default_path == str(default_dir / "group_chat.md")
+    assert len(rendered.prompt_sha256) == 64
+
+    (runtime_dir / "group_chat.md").write_text(
+        """---
+name: 运行时群聊
+required_vars:
+  - user_input
+---
+运行时 {{ user_input }}
+""",
+        encoding="utf-8",
+    )
+    rendered_runtime = manager.render("group_chat", {"user_input": "你好"}, mode="managed")
+    assert rendered_runtime.content.strip() == "运行时 你好"
+    assert rendered_runtime.prompt_source == "PromptManager runtime template"
+
+
 def test_bridge_prompt_render_legacy_and_failure_fallback(tmp_path, monkeypatch):
     from nanobot_kt.bridge import NanobotBridge
     import core.prompts.manager as prompt_manager_module
@@ -170,3 +213,31 @@ def test_bridge_prompt_render_legacy_and_failure_fallback(tmp_path, monkeypatch)
         trace_id="trace",
         run_id="run",
     ) == ""
+
+
+def test_bridge_loads_legacy_runtime_prompt_into_config(monkeypatch):
+    from types import SimpleNamespace
+
+    from nanobot_kt.bridge import NanobotBridge
+
+    def fake_read_runtime_or_default_prompt():
+        return {
+            "content": "运行时旧 prompt 生效标记",
+            "source": "runtime",
+            "output_path": "/runtime/prompt.md",
+            "default_path": "/default/prompt.md",
+        }
+
+    monkeypatch.setattr(
+        "core.legacy_prompt_runtime.read_runtime_or_default_prompt",
+        fake_read_runtime_or_default_prompt,
+    )
+
+    config = SimpleNamespace(system_prompt="默认 prompt")
+    meta = NanobotBridge()._load_legacy_prompt_into_config(config)
+
+    assert config.system_prompt == "运行时旧 prompt 生效标记"
+    assert meta["prompt_source"] == "Legacy runtime prompt"
+    assert meta["prompt_runtime_path"] == "/runtime/prompt.md"
+    assert meta["prompt_default_path"] == "/default/prompt.md"
+    assert len(meta["prompt_sha256"]) == 64

@@ -11,7 +11,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from core.database import (
@@ -243,6 +243,18 @@ class PromptSaveRequest(BaseModel):
 class PromptPreviewRequest(BaseModel):
     variables: dict = Field(default_factory=dict)
     mode: str = "preview"
+
+
+class EffectivePromptPreviewRequest(BaseModel):
+    chat_type: Literal["private", "group"] = "private"
+    session_id: str = ""
+    user_id: str = ""
+    group_id: str = ""
+    sender_name: str = ""
+    prompt_key: str = ""
+    mode: Literal["legacy", "shadow", "managed"] = "shadow"
+    user_input: str = ""
+    tool_policy: str = "full"
 
 
 class PromptRollbackRequest(BaseModel):
@@ -1663,6 +1675,224 @@ def preview_managed_prompt(prompt_key: str, body: PromptPreviewRequest, _auth=De
         raise HTTPException(400, str(e))
 
 
+def _prompt_sha256(content: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(str(content or "").encode("utf-8")).hexdigest()
+
+
+def _legacy_prompt_preview_meta() -> dict:
+    from core.legacy_prompt_runtime import read_runtime_or_default_prompt
+
+    result = read_runtime_or_default_prompt()
+    content = str(result.get("content") or "")
+    source_key = str(result.get("source") or "")
+    if source_key == "runtime":
+        source = "Legacy runtime prompt"
+    elif source_key == "default":
+        source = "Legacy default prompt"
+    else:
+        source = "bridge manual assembly"
+    return {
+        "content": content,
+        "prompt_source": source,
+        "prompt_runtime_path": str(result.get("output_path") or ""),
+        "prompt_default_path": str(result.get("default_path") or ""),
+        "prompt_sha256": _prompt_sha256(content) if content else "",
+    }
+
+
+def _recent_prompt_preview_logs(db: Session, body: EffectivePromptPreviewRequest) -> tuple[str, list[dict]]:
+    from core.database import LLMApiRequestLog
+
+    q = db.query(AgentRun)
+    if body.session_id:
+        q = q.filter(AgentRun.session_id == body.session_id)
+    if body.user_id:
+        q = q.filter(AgentRun.user_id == body.user_id)
+    if body.group_id:
+        q = q.filter(AgentRun.group_id == body.group_id)
+    if body.chat_type:
+        q = q.filter(AgentRun.chat_type == body.chat_type)
+    run = q.order_by(AgentRun.started_at.desc()).first()
+    if not run:
+        return "", []
+    logs = (
+        db.query(LLMApiRequestLog)
+        .filter(LLMApiRequestLog.run_id == run.run_id)
+        .order_by(LLMApiRequestLog.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    return run.run_id, [row_to_dict(row) for row in logs]
+
+
+@router.post("/prompt/effective-preview")
+def preview_effective_prompt(
+    body: EffectivePromptPreviewRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.context_builder import build_group_recent_context, build_session_memory
+    from core.database import Persona
+    from core.identity import build_identity_vars
+    from core.tool_policy_service import build_tool_policy_prompt, resolve_effective_tools
+    from nanobot_kt.bridge import NanobotBridge, _load_prompt_fragment
+
+    is_group = body.chat_type == "group"
+    group_id = body.group_id.strip()
+    session_id = body.session_id.strip() or (f"group_{group_id}" if is_group and group_id else "")
+    user_id = body.user_id.strip()
+    prompt_key = body.prompt_key.strip() or ("group_chat" if is_group else "private_chat")
+    bridge = NanobotBridge()
+
+    legacy = _legacy_prompt_preview_meta()
+    messages: list[dict] = []
+    if legacy["content"]:
+        messages.append({"role": "system", "content": legacy["content"]})
+
+    persona_text = ""
+    if user_id:
+        persona = db.query(Persona).filter(Persona.user_id == user_id).first()
+        if persona and persona.persona_json:
+            persona_text = persona.persona_json
+
+    history_header, history_messages, history_debug = build_session_memory(
+        db,
+        session_id,
+        user_id=user_id,
+        is_group=is_group,
+        group_id=group_id,
+    )
+    group_recent_context = build_group_recent_context(db, session_id) if is_group and session_id else ""
+    identity_vars = build_identity_vars(sender_id=user_id, bot_name="", bot_aliases=[])
+    meta = {
+        "chat_type": body.chat_type,
+        "is_group": is_group,
+        "session_id": session_id,
+        "user_id": user_id,
+        "group_id": group_id,
+        "group_recent_context": group_recent_context,
+    }
+    runtime_context = bridge._build_runtime_context(
+        user_id=user_id,
+        session_id=session_id,
+        sender_name=body.sender_name,
+        meta=meta,
+    )
+    persona_reference = (
+        bridge._build_persona_system_reference(user_id, persona_text or "无已存储画像")
+        if user_id else ""
+    )
+    identity_context = (
+        "<identity_context>\n"
+        f"character_name: {identity_vars['character_name']}\n"
+        f"name_hint: {identity_vars['name_hint']}\n"
+        f"alias_names:\n{identity_vars['alias_names']}\n"
+        f"sender_id: {identity_vars['sender_id']}\n"
+        f"super_user_id: {identity_vars['super_user_id']}\n"
+        f"is_super_user: {identity_vars['is_super_user']}\n"
+        "</identity_context>"
+    )
+
+    messages.append({"role": "system", "content": identity_context})
+    messages.append({"role": "system", "content": runtime_context})
+    if persona_reference:
+        messages.append({"role": "system", "content": persona_reference})
+    if history_header:
+        messages.append({"role": "system", "content": history_header})
+    messages.extend(history_messages)
+
+    if is_group:
+        for frag in ("20_group_rules.md", "25_context_control.md"):
+            text_part = _load_prompt_fragment(frag)
+            if text_part:
+                messages.append({"role": "system", "content": text_part})
+        if group_recent_context:
+            messages.append({"role": "system", "content": group_recent_context})
+    else:
+        private_behavior = _load_prompt_fragment("26_private_behavior.md")
+        if private_behavior:
+            messages.append({"role": "system", "content": private_behavior})
+
+    enabled, disabled = resolve_effective_tools(
+        chat_type=body.chat_type,
+        group_id=group_id,
+        user_id=user_id,
+        tool_policy=body.tool_policy,
+        db=db,
+    )
+    tool_policy_prompt = build_tool_policy_prompt(enabled, disabled, body.chat_type)
+    messages.append({"role": "system", "content": tool_policy_prompt})
+
+    prompt_manager_render = None
+    prompt_source = legacy["prompt_source"]
+    prompt_runtime_path = legacy["prompt_runtime_path"]
+    prompt_default_path = legacy["prompt_default_path"]
+    prompt_sha256 = legacy["prompt_sha256"]
+    variables = {
+        "user_input": body.user_input,
+        "history_context": bridge._history_context_text(history_header, history_messages),
+        "persona_text": persona_text or "无已存储画像",
+        "group_recent_context": group_recent_context,
+        "tool_policy": tool_policy_prompt,
+        "sender_name": body.sender_name,
+        "session_id": session_id,
+        **identity_vars,
+    }
+    if body.mode != "legacy":
+        try:
+            rendered = get_prompt_manager().render(prompt_key, variables, mode=body.mode, strict=False)
+            prompt_manager_render = rendered.to_dict()
+            if body.mode == "managed":
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "[ManagedPrompt]\n"
+                        "以下是 PromptManager 渲染出的托管提示词，优先作为本轮运行时指导。\n"
+                        f"{rendered.content}"
+                    ),
+                })
+                prompt_source = rendered.prompt_source
+                prompt_runtime_path = rendered.prompt_runtime_path
+                prompt_default_path = rendered.prompt_default_path
+                prompt_sha256 = rendered.prompt_sha256
+        except PromptRenderError as e:
+            prompt_manager_render = {"error": str(e), "prompt_key": prompt_key, "mode": body.mode}
+
+    messages.append({"role": "user", "content": body.user_input})
+    recent_run_id, recent_logs = _recent_prompt_preview_logs(db, body)
+    tools = [{"name": name, "enabled": bool(enabled.get(name, True))} for name in sorted(enabled.keys())]
+    request_json = {"messages": messages, "tools": tools}
+    return {
+        "chat_type": body.chat_type,
+        "session_id": session_id,
+        "user_id": user_id,
+        "group_id": group_id,
+        "prompt_key": prompt_key,
+        "prompt_mode": body.mode,
+        "prompt_source": prompt_source,
+        "prompt_runtime_path": prompt_runtime_path,
+        "prompt_default_path": prompt_default_path,
+        "prompt_sha256": prompt_sha256,
+        "system_message": legacy["content"],
+        "identity_context": identity_context,
+        "runtime_context": runtime_context,
+        "persona_reference": persona_reference,
+        "history_context": bridge._history_context_text(history_header, history_messages),
+        "history_debug": history_debug,
+        "group_recent_context": group_recent_context,
+        "tool_policy": tool_policy_prompt,
+        "tools": tools,
+        "disabled_tools": disabled,
+        "prompt_manager_render": prompt_manager_render,
+        "messages": messages,
+        "request_json": request_json,
+        "recent_agent_run_id": recent_run_id,
+        "recent_llm_api_logs": recent_logs,
+    }
+
+
 @router.post("/prompts/reload")
 def reload_managed_prompts(_auth=Depends(verify_admin)):
     return get_prompt_manager().reload()
@@ -1864,6 +2094,23 @@ def list_llm_api_logs(
     if status:
         q = q.filter(LLMApiRequestLog.status == status)
     total = q.count()
+    by_status = {
+        str(row[0] or "created"): int(row[1] or 0)
+        for row in q.with_entities(LLMApiRequestLog.status, func.count(LLMApiRequestLog.id))
+        .group_by(LLMApiRequestLog.status)
+        .all()
+    }
+    success_count = sum(by_status.get(s, 0) for s in ("success", "stream_success"))
+    failed_error_count = sum(by_status.get(s, 0) for s in ("failed", "error", "stream_error"))
+    created_count = sum(by_status.get(s, 0) for s in ("created", "stream_created"))
+    avg_latency = (
+        q.filter(LLMApiRequestLog.latency_ms > 0)
+        .with_entities(func.avg(LLMApiRequestLog.latency_ms))
+        .scalar()
+    )
+    unbound_run_count = q.filter(
+        (LLMApiRequestLog.run_id.is_(None)) | (LLMApiRequestLog.run_id == "")
+    ).count()
     row_offset = offset if offset is not None else (page - 1) * limit
     rows = (
         q.order_by(LLMApiRequestLog.created_at.desc())
@@ -1877,6 +2124,15 @@ def list_llm_api_logs(
         "page": page,
         "limit": limit,
         "offset": row_offset,
+        "stats": {
+            "total": total,
+            "success": success_count,
+            "failed_error": failed_error_count,
+            "created": created_count,
+            "avg_latency_ms": int(avg_latency or 0),
+            "unbound_run_count": unbound_run_count,
+            "by_status": by_status,
+        },
     }
 
 

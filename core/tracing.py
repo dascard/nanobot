@@ -97,6 +97,10 @@ class RunTracer:
         run_type: str = "chat",
         prompt_mode: str = "legacy",
         prompt_key: str = "",
+        prompt_source: str = "",
+        prompt_runtime_path: str = "",
+        prompt_default_path: str = "",
+        prompt_sha256: str = "",
         model: str = "",
         input_preview: str = "",
         meta: dict[str, Any] | None = None,
@@ -118,6 +122,10 @@ class RunTracer:
                     run_type=str(run_type or "chat")[:32],
                     prompt_mode=str(prompt_mode or "legacy")[:32],
                     prompt_key=str(prompt_key or "")[:96],
+                    prompt_source=str(prompt_source or "")[:96],
+                    prompt_runtime_path=str(prompt_runtime_path or ""),
+                    prompt_default_path=str(prompt_default_path or ""),
+                    prompt_sha256=str(prompt_sha256 or "")[:64],
                     model=str(model or "")[:160],
                     status="running",
                     input_preview=_preview(input_preview, max_chars=1000),
@@ -130,6 +138,35 @@ class RunTracer:
         except Exception as e:
             logger.warning("agent_run start failed: %s", e)
         return RunHandle(run_id=run_id, trace_id=trace_id)
+
+    @staticmethod
+    def update_prompt_source(
+        run_id: str,
+        *,
+        prompt_source: str = "",
+        prompt_runtime_path: str = "",
+        prompt_default_path: str = "",
+        prompt_sha256: str = "",
+    ) -> None:
+        if not run_id:
+            return
+        try:
+            from core.database import AgentRun
+
+            db = _session()
+            try:
+                row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
+                if not row:
+                    return
+                row.prompt_source = str(prompt_source or "")[:96]
+                row.prompt_runtime_path = str(prompt_runtime_path or "")
+                row.prompt_default_path = str(prompt_default_path or "")
+                row.prompt_sha256 = str(prompt_sha256 or "")[:64]
+                db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning("agent_run prompt source update failed: %s", e)
 
     @staticmethod
     def finish_run(
@@ -249,6 +286,10 @@ class PromptTracer:
         token_estimate: int = 0,
         warnings: list[str] | None = None,
         error: str = "",
+        prompt_source: str = "",
+        prompt_runtime_path: str = "",
+        prompt_default_path: str = "",
+        prompt_sha256: str = "",
     ) -> None:
         try:
             from core.database import PromptRenderLog
@@ -260,6 +301,10 @@ class PromptTracer:
                     run_id=str(run_id or "")[:80],
                     prompt_key=str(prompt_key or "")[:96],
                     mode=str(mode or "preview")[:32],
+                    prompt_source=str(prompt_source or "")[:96],
+                    prompt_runtime_path=str(prompt_runtime_path or ""),
+                    prompt_default_path=str(prompt_default_path or ""),
+                    prompt_sha256=str(prompt_sha256 or "")[:64],
                     variables_json=_json_dumps(variables or {}, max_chars=6000),
                     rendered_preview=_prompt_preview(rendered_content, max_chars=1000),
                     token_estimate=int(token_estimate or 0),

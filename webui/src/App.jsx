@@ -89,6 +89,7 @@ const NAV = [
   { to: '/stickers/duplicates', label: '去重工作台' },
   { to: '/prompt', label: '旧版 Prompt 构建' },
   { to: '/prompts', label: 'PromptManager 模板' },
+  { to: '/prompt-preview', label: '有效 Prompt 预览' },
   { to: '/agent-runs', label: '运行追踪' },
   { to: '/llm-api-logs', label: 'LLM API 日志' },
   { to: '/models', label: '模型' },
@@ -2165,6 +2166,115 @@ function ManagedPromptsPage() {
   )
 }
 
+function EffectivePromptPreviewPage() {
+  const [form, setForm] = useState({
+    chat_type: 'private',
+    session_id: '',
+    user_id: '',
+    group_id: '',
+    sender_name: '',
+    prompt_key: '',
+    mode: 'shadow',
+    user_input: '你好',
+    tool_policy: 'full',
+  })
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const update = (key, value) => setForm(prev => ({ ...prev, [key]: value }))
+  const run = () => {
+    setLoading(true)
+    api.post('/prompt/effective-preview', form)
+      .then(r => setResult(r.data))
+      .catch(e => alert(e.response?.data?.detail || '预览失败'))
+      .finally(() => setLoading(false))
+  }
+  useEffect(() => { run() }, [])
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-1">有效 Prompt 预览</h1>
+      <p className="text-slate-500 text-sm mb-4">按 chat/session 还原本轮实际发给模型的 messages、上下文和 Prompt 来源</p>
+      <Card className="p-4 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <label className="text-xs text-slate-500">chat_type
+            <select value={form.chat_type} onChange={e => update('chat_type', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200">
+              <option value="private">private</option>
+              <option value="group">group</option>
+            </select>
+          </label>
+          <label className="text-xs text-slate-500">mode
+            <select value={form.mode} onChange={e => update('mode', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200">
+              <option value="shadow">shadow</option>
+              <option value="managed">managed</option>
+              <option value="legacy">legacy</option>
+            </select>
+          </label>
+          <label className="text-xs text-slate-500">session_id
+            <input value={form.session_id} onChange={e => update('session_id', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
+          </label>
+          <label className="text-xs text-slate-500">group_id
+            <input value={form.group_id} onChange={e => update('group_id', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
+          </label>
+          <label className="text-xs text-slate-500">user_id
+            <input value={form.user_id} onChange={e => update('user_id', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
+          </label>
+          <label className="text-xs text-slate-500">sender_name
+            <input value={form.sender_name} onChange={e => update('sender_name', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
+          </label>
+          <label className="text-xs text-slate-500">prompt_key
+            <input value={form.prompt_key} onChange={e => update('prompt_key', e.target.value)} placeholder={form.chat_type === 'group' ? 'group_chat' : 'private_chat'} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
+          </label>
+          <label className="text-xs text-slate-500">tool_policy
+            <input value={form.tool_policy} onChange={e => update('tool_policy', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
+          </label>
+        </div>
+        <label className="block text-xs text-slate-500 mt-3">user_input
+          <textarea value={form.user_input} onChange={e => update('user_input', e.target.value)} className="mt-1 w-full h-24 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 resize-none" />
+        </label>
+        <div className="mt-3 flex gap-2">
+          <button onClick={run} disabled={loading} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium">{loading ? '生成中...' : '生成预览'}</button>
+          {result?.recent_agent_run_id && <NavLink to={`/agent-runs/${result.recent_agent_run_id}`} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">最近运行</NavLink>}
+        </div>
+      </Card>
+      {result && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+            <MiniStat label="prompt_source" value={result.prompt_source || '-'} />
+            <MiniStat label="prompt_mode" value={result.prompt_mode || '-'} />
+            <MiniStat label="prompt_key" value={result.prompt_key || '-'} />
+            <MiniStat label="prompt_sha" value={(result.prompt_sha256 || '').slice(0, 16) || '-'} />
+            <MiniStat label="messages" value={(result.messages || []).length} />
+          </div>
+          <Card className="p-4">
+            <h2 className="text-sm font-medium text-slate-300 mb-3">Prompt 来源</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <JsonBlock value={result.prompt_runtime_path || '-'} className="max-h-24" />
+              <JsonBlock value={result.prompt_default_path || '-'} className="max-h-24" />
+            </div>
+          </Card>
+          <Card className="p-4">
+            <h2 className="text-sm font-medium text-slate-300 mb-3">Messages</h2>
+            <div className="space-y-1">{(result.messages || []).map((msg, i) => <MessageAccordion key={i} message={msg} index={i} />)}</div>
+          </Card>
+          <Card className="p-4">
+            <h2 className="text-sm font-medium text-slate-300 mb-3">上下文与工具</h2>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+              <RawJsonAccordion label="runtime_context" text={result.runtime_context || ''} defaultOpen />
+              <RawJsonAccordion label="persona_reference" text={result.persona_reference || ''} />
+              <RawJsonAccordion label="history_context" text={result.history_context || ''} />
+              <RawJsonAccordion label="tool_policy" text={result.tool_policy || ''} />
+            </div>
+          </Card>
+          <Card className="p-4">
+            <h2 className="text-sm font-medium text-slate-300 mb-3">完整 request_json</h2>
+            <JsonBlock value={result.request_json} className="max-h-[700px]" />
+          </Card>
+          {(result.recent_llm_api_logs || []).length > 0 && <LLMApiRequestLogsBlock logs={result.recent_llm_api_logs} />}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Helpers ──
 function safeJsonParse(value, fallback = null) {
   if (!value) return fallback
@@ -2343,7 +2453,7 @@ function LLMApiLogViewer({ log }) {
   const request = safeJsonParse(log.request_json, {})
   const response = safeJsonParse(log.response_json, {})
   const isIncomplete = (log.status === 'created') && (log.latency_ms === 0 || !log.latency_ms)
-  const statusTone = log.status === 'success' ? 'emerald' : log.status === 'stream_success' ? 'blue' : log.status === 'error' || log.status === 'failed' ? 'red' : log.status === 'stream_created' ? 'blue' : 'slate'
+  const statusTone = log.status === 'success' ? 'emerald' : log.status === 'stream_success' ? 'blue' : log.status === 'error' || log.status === 'failed' || log.status === 'stream_error' ? 'red' : log.status === 'stream_created' ? 'blue' : 'slate'
 
   return (
     <div className="space-y-4 text-sm">
@@ -2497,7 +2607,7 @@ function LLMApiRequestLogsBlock({ logs = [] }) {
       <div className="space-y-1">
         {logs.map(ll => {
           const isIncomplete = (ll.status === 'created') && (ll.latency_ms === 0 || !ll.latency_ms)
-          const statusTone = ll.status === 'success' ? 'emerald' : ll.status === 'stream_success' ? 'blue' : ll.status === 'error' || ll.status === 'failed' ? 'red' : ll.status === 'stream_created' ? 'blue' : 'slate'
+          const statusTone = ll.status === 'success' ? 'emerald' : ll.status === 'stream_success' ? 'blue' : ll.status === 'error' || ll.status === 'failed' || ll.status === 'stream_error' ? 'red' : ll.status === 'stream_created' ? 'blue' : 'slate'
           return (
             <details key={ll.id} className="border-b border-slate-800/50">
               <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-sm flex gap-3 items-center">
@@ -2610,8 +2720,14 @@ function AgentRunsPage() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
                   <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Prompt</div><div className="text-white font-medium truncate">{(detail.run || detail).prompt_key || '-'}</div></div>
                   <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Mode</div><div className="text-blue-300 font-medium truncate">{(detail.run || detail).prompt_mode || '-'}</div></div>
+                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Prompt Source</div><div className="text-emerald-300 font-medium truncate">{(detail.run || detail).prompt_source || '-'}</div></div>
+                  <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Prompt SHA</div><div className="text-slate-300 font-mono text-xs truncate">{((detail.run || detail).prompt_sha256 || '-').slice(0, 16)}</div></div>
                   <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Latency</div><div className="text-white font-medium">{(detail.run || detail).latency_ms || 0}ms</div></div>
                   <div className="rounded-lg bg-slate-950 border border-slate-800 p-3"><div className="text-xs text-slate-500 mb-1">Tools</div><div className="text-emerald-300 font-medium">{(detail.tool_calls || []).length}</div></div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                  <div><div className="text-xs text-slate-500 mb-1">运行时路径</div><JsonBlock value={(detail.run || detail).prompt_runtime_path || '-'} className="max-h-20" /></div>
+                  <div><div className="text-xs text-slate-500 mb-1">默认路径</div><JsonBlock value={(detail.run || detail).prompt_default_path || '-'} className="max-h-20" /></div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div><div className="text-xs text-slate-500 mb-1">输入预览</div><JsonBlock value={(detail.run || detail).input_preview} className="max-h-40" /></div>
@@ -2638,7 +2754,7 @@ function AgentRunsPage() {
                 <h2 className="text-sm font-medium text-slate-300 mb-3">Prompt 渲染记录</h2>
                 {(detail.prompt_render_logs || []).map(log => (
                   <div key={log.id} className="mb-3">
-                    <div className="flex gap-2 mb-2"><Badge tone="blue">{log.prompt_key}</Badge><Badge>{log.mode}</Badge><Badge>{log.token_estimate} tokens</Badge></div>
+                    <div className="flex gap-2 mb-2 flex-wrap"><Badge tone="blue">{log.prompt_key}</Badge><Badge>{log.mode}</Badge><Badge>{log.prompt_source || '-'}</Badge><Badge>{log.token_estimate} tokens</Badge><Badge>{(log.prompt_sha256 || '').slice(0, 12) || '-'}</Badge></div>
                     <JsonBlock value={log.rendered_preview || log.error} className="max-h-44" />
                   </div>
                 ))}
@@ -2689,10 +2805,21 @@ function AgentRunDetailPage() {
         <MiniStat label="trace_id" value={(r.trace_id || '').slice(0, 16)} />
         <MiniStat label="prompt_key" value={r.prompt_key || '-'} />
         <MiniStat label="prompt_mode" value={r.prompt_mode || '-'} />
+        <MiniStat label="prompt_source" value={r.prompt_source || '-'} />
+        <MiniStat label="prompt_sha" value={(r.prompt_sha256 || '').slice(0, 16) || '-'} />
         <MiniStat label="model" value={r.model || '-'} />
         <MiniStat label="session_id" value={(r.session_id || '').slice(0, 16) || '-'} />
         <MiniStat label="user_id" value={r.user_id || '-'} />
       </div>
+      {(r.prompt_runtime_path || r.prompt_default_path) && (
+        <Card className="p-4 mb-4">
+          <h3 className="text-sm font-medium text-slate-400 mb-2">Prompt 来源</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div><div className="text-xs text-slate-500 mb-1">运行时路径</div><JsonBlock value={r.prompt_runtime_path || '-'} className="max-h-24" /></div>
+            <div><div className="text-xs text-slate-500 mb-1">默认路径</div><JsonBlock value={r.prompt_default_path || '-'} className="max-h-24" /></div>
+          </div>
+        </Card>
+      )}
       {r.error && <div className="p-3 bg-red-500/10 text-red-400 rounded-lg mb-4 text-sm">{r.error}</div>}
       {r.input_preview && <Card className="p-4 mb-4"><h3 className="text-sm font-medium text-slate-400 mb-2">输入摘要</h3><pre className="text-xs text-slate-300 whitespace-pre-wrap">{r.input_preview}</pre></Card>}
       {r.output_preview && <Card className="p-4 mb-4"><h3 className="text-sm font-medium text-slate-400 mb-2">输出摘要</h3><pre className="text-xs text-slate-300 whitespace-pre-wrap">{r.output_preview}</pre></Card>}
@@ -2736,13 +2863,15 @@ function AgentRunDetailPage() {
           <Card>
             <table className="w-full text-sm">
               <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-                <th className="py-2 px-3">prompt_key</th><th className="py-2 px-3">mode</th><th className="py-2 px-3">tokens</th><th className="py-2 px-3">警告</th>
+                <th className="py-2 px-3">prompt_key</th><th className="py-2 px-3">mode</th><th className="py-2 px-3">source</th><th className="py-2 px-3">sha</th><th className="py-2 px-3">tokens</th><th className="py-2 px-3">警告</th>
               </tr></thead>
               <tbody>
                 {detail.prompt_render_logs.map(pr => (
                   <tr key={pr.id} className="border-b border-slate-800/50">
                     <td className="py-2 px-3 text-slate-200">{pr.prompt_key}</td>
                     <td className="py-2 px-3 text-slate-400">{pr.mode || '-'}</td>
+                    <td className="py-2 px-3 text-slate-400 max-w-56 truncate">{pr.prompt_source || '-'}</td>
+                    <td className="py-2 px-3 text-slate-500 font-mono text-xs">{(pr.prompt_sha256 || '').slice(0, 12) || '-'}</td>
                     <td className="py-2 px-3 text-slate-400">{pr.token_estimate || '-'}</td>
                     <td className="py-2 px-3 text-xs text-amber-400">{pr.warnings_json || '-'}</td>
                   </tr>
@@ -2849,6 +2978,7 @@ function ToolCallsPage() {
 function LLMApiLogsPage() {
   const [items, setItems] = useState([])
   const [total, setTotal] = useState(0)
+  const [stats, setStats] = useState(null)
   const [page, setPage] = useState(1)
   const [runFilter, setRunFilter] = useState('')
   const [traceFilter, setTraceFilter] = useState('')
@@ -2864,10 +2994,26 @@ function LLMApiLogsPage() {
     if (sourceFilter) params.source = sourceFilter
     if (modelFilter) params.model = modelFilter
     if (statusFilter) params.status = statusFilter
-    api.get('/llm-api-logs', { params }).then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0) }).catch(() => {})
+    api.get('/llm-api-logs', { params }).then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0); setStats(r.data.stats || null) }).catch(() => {})
   }, [page, runFilter, traceFilter, sourceFilter, modelFilter, statusFilter])
   useEffect(() => { load() }, [load])
   const totalPages = Math.max(1, Math.ceil(total / limit))
+  const pageStats = stats || items.reduce((acc, item) => {
+    const status = item.status || 'created'
+    acc.total += 1
+    acc[status] = (acc[status] || 0) + 1
+    if (status === 'success' || status === 'stream_success') acc.success += 1
+    if (status === 'failed' || status === 'error' || status === 'stream_error') acc.failed += 1
+    if (status === 'created' || status === 'stream_created') acc.created += 1
+    if (!item.run_id) acc.unbound += 1
+    const latency = Number(item.latency_ms || 0)
+    if (latency > 0) {
+      acc.latencyTotal += latency
+      acc.latencyCount += 1
+    }
+    return acc
+  }, { total: 0, success: 0, failed: 0, created: 0, unbound: 0, latencyTotal: 0, latencyCount: 0 })
+  const avgLatency = stats ? (stats.avg_latency_ms || 0) : (pageStats.latencyCount ? Math.round(pageStats.latencyTotal / pageStats.latencyCount) : 0)
   return (
     <div>
       <h1 className="text-2xl font-bold mb-1">LLM API 日志</h1>
@@ -2886,9 +3032,21 @@ function LLMApiLogsPage() {
           <option value="">全部状态</option>
           <option value="created">created</option>
           <option value="success">success</option>
+          <option value="failed">failed</option>
           <option value="error">error</option>
+          <option value="stream_created">stream_created</option>
+          <option value="stream_success">stream_success</option>
+          <option value="stream_error">stream_error</option>
         </select>
         <button onClick={load} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">刷新</button>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
+        <MiniStat label={stats ? '筛选总数' : '当前页总数'} value={pageStats.total} />
+        <MiniStat label="success" value={pageStats.success} tone="emerald" />
+        <MiniStat label="failed/error" value={pageStats.failed_error ?? pageStats.failed} tone={(pageStats.failed_error ?? pageStats.failed) ? 'red' : 'slate'} />
+        <MiniStat label="created" value={pageStats.created} tone={pageStats.created ? 'amber' : 'slate'} />
+        <MiniStat label="平均延迟" value={avgLatency ? `${avgLatency}ms` : '-'} />
+        <MiniStat label="未绑定 run" value={pageStats.unbound_run_count ?? pageStats.unbound} tone={(pageStats.unbound_run_count ?? pageStats.unbound) ? 'amber' : 'slate'} />
       </div>
       <Card className="overflow-hidden">
         <table className="w-full text-sm">
@@ -2898,7 +3056,7 @@ function LLMApiLogsPage() {
           <tbody>
             {items.map(ll => {
               const isIncomplete = (ll.status === 'created') && (ll.latency_ms === 0 || !ll.latency_ms)
-              const statusTone = ll.status === 'success' ? 'emerald' : ll.status === 'stream_success' ? 'blue' : ll.status === 'error' || ll.status === 'failed' ? 'red' : ll.status === 'stream_created' ? 'blue' : 'slate'
+              const statusTone = ll.status === 'success' ? 'emerald' : ll.status === 'stream_success' ? 'blue' : ll.status === 'error' || ll.status === 'failed' || ll.status === 'stream_error' ? 'red' : ll.status === 'stream_created' ? 'blue' : 'slate'
               const request = safeJsonParse(ll.request_json, {})
               const messagesCount = request.messages?.length || 0
               const toolsCount = request.tools?.length || 0
@@ -4253,6 +4411,7 @@ export default function App() {
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/prompt" element={<PromptPage />} />
           <Route path="/prompts" element={<ManagedPromptsPage />} />
+          <Route path="/prompt-preview" element={<EffectivePromptPreviewPage />} />
           <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />
           <Route path="/agent-runs" element={<AgentRunsPage />} />
           <Route path="/llm-api-logs" element={<LLMApiLogsPage />} />

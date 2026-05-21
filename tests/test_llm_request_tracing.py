@@ -305,6 +305,83 @@ def test_new_api_chat_completion_finishes_request_on_success(monkeypatch):
     assert finished[0]["response"]["choices"][0]["message"]["content"] == "成功"
 
 
+def test_new_api_chat_completion_stream_finishes_request_on_success(monkeypatch):
+    from clients.new_api_client import NewAPIClient
+
+    recorded = []
+    finished = []
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **kwargs: recorded.append(kwargs) or 987),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **kwargs: finished.append(kwargs)),
+    )
+    monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
+    monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
+    monkeypatch.setattr(NewAPIClient, "get_ordered_candidates", lambda self, **kwargs: [{"id": "model-stream", "intelligence": 7}])
+    monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
+
+    class _FakeContent:
+        def __init__(self):
+            self._lines = iter([
+                'data: {"choices":[{"delta":{"content":"你"}}]}\n\n'.encode("utf-8"),
+                'data: {"choices":[{"delta":{"content":"好"}}]}\n\n'.encode("utf-8"),
+                b"data: [DONE]\n\n",
+            ])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._lines)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class _FakeResp:
+        status = 200
+        content = _FakeContent()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return "ok"
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResp()
+
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", lambda: _FakeSession())
+
+    async def collect():
+        client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
+        return [chunk async for chunk in client.chat_completion_stream([{"role": "user", "content": "流式"}])]
+
+    chunks = asyncio.run(collect())
+
+    assert len(chunks) == 2
+    assert recorded
+    assert recorded[0]["request"]["stream"] is True
+    assert recorded[0]["request"]["model"] == "model-stream"
+    assert finished
+    assert finished[0]["log_id"] == 987
+    assert finished[0]["response_status"] == 200
+    assert finished[0]["status"] == "stream_success"
+    assert finished[0]["response"]["content"] == "你好"
+
+
 def test_news_search_simple_llm_sets_news_search_source(monkeypatch):
     from core.llm_trace_context import get_llm_trace_vars
     from creatures.nanobot.prompts.skills.news_search import tool as news_tool

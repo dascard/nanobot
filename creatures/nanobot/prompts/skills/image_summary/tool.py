@@ -238,11 +238,16 @@ class ImageSummaryTool(BaseTool):
             from core.llm_trace_context import get_llm_trace_vars
             from core.tracing import LLMRequestTracer
 
-            trace_id, run_id, _ = get_llm_trace_vars()
+            trace_id, run_id, trace_source = get_llm_trace_vars()
+            source = (
+                trace_source
+                if str(trace_source or "").startswith("image_summary.")
+                else "image_summary.tool"
+            )
             log_id = LLMRequestTracer.record_request(
                 trace_id=trace_id,
                 run_id=run_id,
-                source="image_summary",
+                source=source,
                 provider=str(route.get("provider_id", "") or "local_vision"),
                 model=str(route.get("model", "") or ""),
                 url=url,

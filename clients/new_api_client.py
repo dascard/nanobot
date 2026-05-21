@@ -835,7 +835,7 @@ class NewAPIClient:
                                 "chunks_sample": chunks_sample,
                             },
                             response_status=resp.status,
-                            status="success",
+                            status="stream_success",
                             latency_ms=int((time.time() - started) * 1000),
                         )
                     except Exception:
@@ -849,7 +849,7 @@ class NewAPIClient:
                         log_id=log_id,
                         response={},
                         response_status=0,
-                        status="error",
+                        status="stream_error",
                         error="stream timed out",
                         latency_ms=int((time.time() - started) * 1000),
                     )
@@ -866,7 +866,7 @@ class NewAPIClient:
                         log_id=log_id,
                         response={},
                         response_status=0,
-                        status="error",
+                        status="stream_error",
                         error=str(e),
                         latency_ms=int((time.time() - started) * 1000),
                     )

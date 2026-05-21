@@ -282,9 +282,13 @@ def call_model_route(
         from core.tracing import LLMRequestTracer
         from core.llm_trace_context import get_llm_trace_vars
         _t, _r, _s = get_llm_trace_vars()
+        default_source = {
+            "timing_gate": "classifier.timing_gate",
+            "private_decision": "classifier.private_decision",
+        }.get(route_key, f"classifier.{route_key}" if route_key else "classifier")
         log_id = LLMRequestTracer.record_request(
             trace_id=_t, run_id=_r,
-            source=_s or "classifier",
+            source=_s or default_source,
             provider=route.get("provider_id", ""),
             model=route.get("model", ""),
             url=url, method="POST",
