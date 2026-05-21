@@ -137,6 +137,30 @@ class TestClassifierRouteProviderResolution:
         assert route["provider_id"] == "newapi"
         assert route["model"] == "selected-reply-model"
 
+    def test_route_enable_thinking_inherits_and_overrides(self, monkeypatch):
+        from clients.classifier_client import resolve_model_route
+
+        values = {
+            "model.route.timing_gate.provider": "newapi",
+            "model.route.timing_gate.enable_thinking": "false",
+            "model.providers.newapi.base_url": "http://newapi:9000/v1",
+            "model.providers.newapi.api_key": "newapi-key",
+            "model.providers.newapi.enabled": True,
+            "model.route.private_decision.provider": "",
+        }
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        inherited = resolve_model_route("private_decision")
+        assert inherited["enable_thinking"] == "false"
+
+        values["model.route.private_decision.enable_thinking"] = "true"
+        overridden = resolve_model_route("private_decision")
+        assert overridden["enable_thinking"] == "true"
+        assert overridden["overridden_fields"]["enable_thinking"] == "true"
+
     def test_call_model_route_rejects_disabled_provider(self, monkeypatch):
         from clients.classifier_client import call_model_route
 
@@ -181,6 +205,7 @@ required_vars:
             "model.route.timing_gate.max_tokens": 80,
             "model.route.timing_gate.temperature": 0,
             "model.route.timing_gate.timeout": 5,
+            "model.route.timing_gate.enable_thinking": "false",
         }
         monkeypatch.setattr(
             "core.settings_service.settings.get",
@@ -220,6 +245,8 @@ required_vars:
         messages = captured["payload"]["messages"]
         assert "模板判定: ping" in messages[0]["content"]
         assert "legacy system" not in json.dumps(messages, ensure_ascii=False)
+        assert captured["payload"]["enable_thinking"] is False
+        assert captured["payload"]["thinking"] == {"type": "disabled"}
 
 
 class TestComplexityEstimator:

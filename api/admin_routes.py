@@ -2377,6 +2377,7 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
             "provider_enabled": r.get("provider_enabled", True),
             "timeout": r["timeout"], "temperature": r["temperature"],
             "max_tokens": r["max_tokens"],
+            "enable_thinking": r.get("enable_thinking", "auto"),
             "source": r.get("source", "provider"),
             "editable": True,
         }
@@ -2874,6 +2875,7 @@ class ModelRouteEditBody(BaseModel):
     timeout: Optional[float] = None
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
+    enable_thinking: Optional[str] = None
 
 
 @router.put("/models/routes/{route_key}")
@@ -2901,11 +2903,12 @@ def edit_model_route(
         "timeout": body.timeout,
         "temperature": body.temperature,
         "max_tokens": body.max_tokens,
+        "enable_thinking": body.enable_thinking,
     }
     if not is_classifier:
-        allowed = {"model", "provider", "timeout", "temperature", "max_tokens"}
+        allowed = {"model", "provider", "timeout", "temperature", "max_tokens", "enable_thinking"}
     else:
-        allowed = {"provider", "model", "api_key", "timeout", "temperature", "max_tokens"}
+        allowed = {"provider", "model", "api_key", "timeout", "temperature", "max_tokens", "enable_thinking"}
 
     for field, value in fields.items():
         if value is None or field not in allowed:
@@ -2915,7 +2918,7 @@ def edit_model_route(
                 key = prefix
             elif field == "provider":
                 key = f"model.route.{db_key}.provider"
-            elif field in {"timeout", "temperature", "max_tokens"}:
+            elif field in {"timeout", "temperature", "max_tokens", "enable_thinking"}:
                 key = f"model.route.{db_key}.{field}"
             else:
                 continue
@@ -2924,7 +2927,13 @@ def edit_model_route(
         row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
         defn = SETTING_DEFS.get(key)
         desc = defn.description if defn else f"model route {route_key}.{field}"
-        if defn and defn.value_type == "int":
+        if field == "enable_thinking":
+            from core.model_route_options import normalize_enable_thinking
+            try:
+                stored_value = normalize_enable_thinking(value)
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e)) from e
+        elif defn and defn.value_type == "int":
             stored_value = str(int(value))
         elif defn and defn.value_type == "float":
             stored_value = str(float(value))
@@ -2990,6 +2999,7 @@ async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(ver
                 result = await client.chat_completion(
                     messages=[{"role": "user", "content": "回复OK"}],
                     manual_model=model, max_tokens=10, temperature=0,
+                    enable_thinking=route.get("enable_thinking", "auto"),
                 )
             return {
                 "ok": True, "route_key": route_key, "model": model,
@@ -3090,6 +3100,7 @@ def get_resolved_route(route_key: str, _auth=Depends(verify_admin)):
         "timeout": route.get("timeout", 15),
         "temperature": route.get("temperature", 0),
         "max_tokens": route.get("max_tokens", 30),
+        "enable_thinking": route.get("enable_thinking", "auto"),
         "source": route.get("source", ""),
         "provider_enabled": route.get("provider_enabled", True),
         "inherited_from": route.get("inherited_from", None),

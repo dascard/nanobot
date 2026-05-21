@@ -20,6 +20,7 @@ from config import (
     AUTO_MODEL_ROUTING_MODE,
 )
 from clients.model_registry import registry
+from core.model_route_options import apply_enable_thinking_to_payload
 
 logger = logging.getLogger("nanobot.new_api")
 
@@ -363,6 +364,7 @@ class NewAPIClient:
         stream: bool,
         model: str,
         max_tokens: int | None = None,
+        enable_thinking: Any = "auto",
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": model,
@@ -375,10 +377,7 @@ class NewAPIClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
-        # 禁用 DeepSeek 推理思考——reasoning_content 会泄漏系统提示词到用户可见输出
-        if "deepseek" in str(model).lower():
-            payload["thinking"] = {"type": "disabled"}
-        return payload
+        return apply_enable_thinking_to_payload(payload, model, enable_thinking)
 
     def _safe_get_failure_tracker(self):
         try:
@@ -531,6 +530,7 @@ class NewAPIClient:
         trace_id: str = "",
         run_id: str = "",
         llm_source: str = "",
+        enable_thinking: Any = "auto",
     ) -> Dict[str, Any]:
         """Non-streaming chat completion with retry."""
         if not self.api_key:
@@ -573,7 +573,15 @@ class NewAPIClient:
                             f"(complexity={complexity}, intel={model.get('intelligence')})")
 
             for attempt in range(_attempts):  # per-model retry from settings
-                payload = self._build_payload(messages, tools, temperature, False, target_model, max_tokens=max_tokens)
+                payload = self._build_payload(
+                    messages,
+                    tools,
+                    temperature,
+                    False,
+                    target_model,
+                    max_tokens=max_tokens,
+                    enable_thinking=enable_thinking,
+                )
                 started = time.time()
                 log_id = 0
                 # 兜底从 contextvars 读取 trace 上下文
@@ -708,6 +716,7 @@ class NewAPIClient:
         trace_id: str = "",
         run_id: str = "",
         llm_source: str = "",
+        enable_thinking: Any = "auto",
     ) -> AsyncIterator[Dict[str, Any]]:
         """Streaming chat completion. Yields parsed SSE chunks."""
         if not self.api_key:
@@ -736,7 +745,14 @@ class NewAPIClient:
 
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
-        payload = self._build_payload(messages, tools, temperature, True, target_model)
+        payload = self._build_payload(
+            messages,
+            tools,
+            temperature,
+            True,
+            target_model,
+            enable_thinking=enable_thinking,
+        )
         started = time.time()
         log_id = 0
         # 记录 stream LLM API 请求

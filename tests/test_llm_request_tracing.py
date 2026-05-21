@@ -382,6 +382,33 @@ def test_new_api_chat_completion_stream_finishes_request_on_success(monkeypatch)
     assert finished[0]["response"]["content"] == "你好"
 
 
+def test_new_api_payload_applies_enable_thinking_policy():
+    from clients.new_api_client import NewAPIClient
+
+    client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
+    messages = [{"role": "user", "content": "你好"}]
+
+    auto_payload = client._build_payload(
+        messages, None, 0, False, "deepseek-r1",
+        enable_thinking="auto",
+    )
+    assert auto_payload["thinking"] == {"type": "disabled"}
+
+    enabled_payload = client._build_payload(
+        messages, None, 0, False, "deepseek-r1",
+        enable_thinking="true",
+    )
+    assert enabled_payload["enable_thinking"] is True
+    assert "thinking" not in enabled_payload
+
+    disabled_payload = client._build_payload(
+        messages, None, 0, False, "qwen3",
+        enable_thinking="false",
+    )
+    assert disabled_payload["enable_thinking"] is False
+    assert disabled_payload["thinking"] == {"type": "disabled"}
+
+
 def test_news_search_simple_llm_sets_news_search_source(monkeypatch):
     from core.llm_trace_context import get_llm_trace_vars
     from creatures.nanobot.prompts.skills.news_search import tool as news_tool

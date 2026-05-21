@@ -247,9 +247,13 @@ class NanobotBridge:
 
         # DeepSeek thinking 禁用——阻止模型复述系统提示词
         if hasattr(self._agent.controller, "llm") and hasattr(self._agent.controller.llm, "extra_body"):
-            model = getattr(self._agent.controller.llm.config, "model", "") if hasattr(self._agent.controller.llm, "config") else ""
-            if "deepseek" in str(model).lower():
-                self._agent.controller.llm.extra_body["thinking"] = {"type": "disabled"}
+            llm = self._agent.controller.llm
+            model = getattr(llm.config, "model", "") if hasattr(llm, "config") else ""
+            if getattr(llm, "extra_body", None) is None:
+                llm.extra_body = {}
+            from core.model_route_options import apply_enable_thinking_to_payload
+            apply_enable_thinking_to_payload(llm.extra_body, model, "auto")
+            if "thinking" in llm.extra_body:
                 logger.info("[NanobotBridge] DeepSeek thinking disabled via extra_body")
 
         # 获取 KT 工具列表（多级 fallback）
@@ -1107,19 +1111,21 @@ class NanobotBridge:
             _route_timeout = float(_reply_route.get("timeout") or 120.0)
             _route_temperature = _reply_route.get("temperature")
             _route_max_tokens_raw = _reply_route.get("max_tokens")
+            _route_enable_thinking = _reply_route.get("enable_thinking", "auto")
             _route_max_tokens = int(_route_max_tokens_raw) if _route_max_tokens_raw else None
             if _route_max_tokens is not None and _route_max_tokens <= 0:
                 _route_max_tokens = None
             _client_base_url = _route_base_url or NEW_API_BASE_URL
             _client_api_key = _route_api_key or NEW_API_KEY
             logger.info(
-                "[Model Router] route provider=%s registry_provider=%s base_url=%s timeout=%s temperature=%s max_tokens=%s",
+                "[Model Router] route provider=%s registry_provider=%s base_url=%s timeout=%s temperature=%s max_tokens=%s enable_thinking=%s",
                 _route_provider_id,
                 _route_registry_provider,
                 _client_base_url[:80] if _client_base_url else "(empty)",
                 _route_timeout,
                 _route_temperature,
                 _route_max_tokens,
+                _route_enable_thinking,
             )
 
             try:
@@ -1249,6 +1255,15 @@ class NanobotBridge:
                         llm.config.temperature = float(_route_temperature)
                     if hasattr(llm.config, 'max_tokens'):
                         llm.config.max_tokens = _route_max_tokens
+                    if hasattr(llm, "extra_body"):
+                        from core.model_route_options import apply_enable_thinking_to_payload
+                        if getattr(llm, "extra_body", None) is None:
+                            llm.extra_body = {}
+                        apply_enable_thinking_to_payload(
+                            llm.extra_body,
+                            target_model,
+                            _route_enable_thinking,
+                        )
                     _target_base_url = str(_client_base_url or "").rstrip("/")
                     _target_api_key = str(_client_api_key or "")
                     _current_base_url = str(getattr(llm, 'base_url', '') or "").rstrip("/")

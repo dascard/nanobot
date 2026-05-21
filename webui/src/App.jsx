@@ -3260,6 +3260,7 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
   const [editRoute, setEditRoute] = useState(null)
   const [resolvedData, setResolvedData] = useState({})
   const routeList = Object.entries(routes)
+  const thinkingLabel = (v) => v === 'true' ? '启用' : (v === 'false' ? '禁用' : '自动')
   return (
     <div>
       <p className="text-slate-500 text-sm mb-2">每个 route 选择一个模型和供应商。base_url/API key 默认在「供应商」Tab 管理；route API key 只作为高级覆盖。</p>
@@ -3292,7 +3293,7 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
               <div>模型: <span className="text-slate-200">{r.model}</span></div>
               <div>供应商: <span className="text-slate-500">{r.provider_id}</span>{r.provider_enabled === false && <span className="text-red-400 ml-1">已禁用</span>}</div>
               <div>API key: {r.route_api_key_configured ? <span className="text-amber-400">route 覆盖</span> : <span className="text-slate-600">继承供应商</span>}</div>
-              <div>max_tokens: {r.max_tokens} | timeout: {r.timeout}s | temp: {r.temperature}</div>
+              <div>max_tokens: {r.max_tokens} | timeout: {r.timeout}s | temp: {r.temperature} | thinking: {thinkingLabel(r.enable_thinking)}</div>
               {r.source && <div className="text-slate-600">source: {r.source}</div>}
             </div>
             {testResult[key] && !testResult[key].loading && (
@@ -3308,6 +3309,7 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
                 <div>registry_provider: <span className="text-slate-200">{resolvedData[key].registry_provider}</span></div>
                 <div>source: <span className="text-slate-300">{resolvedData[key].source}</span></div>
                 <div>api_key_source: <span className="text-slate-300">{resolvedData[key].api_key_source || '-'}</span></div>
+                <div>enable_thinking: <span className="text-slate-300">{thinkingLabel(resolvedData[key].enable_thinking)}</span></div>
                 {resolvedData[key].inherited_from && <div>继承自: <span className="text-amber-400">{resolvedData[key].inherited_from}</span></div>}
                 {resolvedData[key].overridden_fields && Object.keys(resolvedData[key].overridden_fields || {}).length > 0 && (
                   <div>覆盖字段: <span className="text-amber-400">{Object.entries(resolvedData[key].overridden_fields).map(([k,v]) => `${k}=${v}`).join(', ')}</span></div>
@@ -3332,7 +3334,8 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
   const [f, setF] = useState({
     provider_id: route.provider_id || '', model: route.model || '',
     max_tokens: route.max_tokens ?? 30, temperature: route.temperature ?? 0,
-    timeout: route.timeout ?? 15, api_key: '',
+    timeout: route.timeout ?? 15, enable_thinking: route.enable_thinking || 'auto',
+    api_key: '',
   })
   const [clearApiKey, setClearApiKey] = useState(false)
   const [catalog, setCatalog] = useState([])
@@ -3358,6 +3361,7 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
     payload.max_tokens = String(f.max_tokens)
     payload.temperature = String(f.temperature)
     payload.timeout = String(f.timeout)
+    payload.enable_thinking = f.enable_thinking || 'auto'
     if (supportsRouteApiKey && showAdvanced && (f.api_key.trim() || clearApiKey)) {
       payload.api_key = clearApiKey ? '' : f.api_key.trim()
     }
@@ -3401,6 +3405,14 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
             <div><label className="text-xs text-slate-500">max_tokens</label><input type="number" min="0" value={f.max_tokens} onChange={e => setF({ ...f, max_tokens: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
             <div><label className="text-xs text-slate-500">temp</label><input type="number" step="0.1" min="0" max="2" value={f.temperature} onChange={e => setF({ ...f, temperature: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
             <div><label className="text-xs text-slate-500">timeout</label><input type="number" min="1" value={f.timeout} onChange={e => setF({ ...f, timeout: Number(e.target.value) })} className="w-full p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1" /></div>
+          </div>
+          <div>
+            <label className="text-xs text-slate-500">enable_thinking</label>
+            <select value={f.enable_thinking} onChange={e => setF({ ...f, enable_thinking: e.target.value })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm mt-1">
+              <option value="auto">自动</option>
+              <option value="true">启用</option>
+              <option value="false">禁用</option>
+            </select>
           </div>
           {isChatRoute && <p className="text-xs text-slate-600">reply 当前会在每次主回复前同步 provider/model/timeout/temperature/max_tokens；fast/smart 仍为预留配置。</p>}
           <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className="text-xs text-slate-500 hover:text-slate-300">

@@ -484,3 +484,24 @@ SETTING_DEFS: dict[str, SettingDef] = {
         category="scheduler", description="日报推送小时", min_value=0, max_value=23,
     ),
 }
+
+for _route_key in (
+    "reply",
+    "fast",
+    "smart",
+    "timing_gate",
+    "private_decision",
+    "classifier_legacy",
+    "sticker_describe",
+):
+    SETTING_DEFS.setdefault(
+        f"model.route.{_route_key}.enable_thinking",
+        SettingDef(
+            key=f"model.route.{_route_key}.enable_thinking",
+            env_name="",
+            default="auto",
+            value_type="str",
+            category="model",
+            description=f"{_route_key} thinking 模式: auto/true/false",
+        ),
+    )

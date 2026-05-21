@@ -640,6 +640,7 @@ class TestModelRouteV2:
                 "timeout": 88,
                 "temperature": 0.2,
                 "max_tokens": 1234,
+                "enable_thinking": "true",
             },
             headers=auth_header,
         )
@@ -653,10 +654,11 @@ class TestModelRouteV2:
         assert reply["timeout"] == 88
         assert reply["temperature"] == 0.2
         assert reply["max_tokens"] == 1234
+        assert reply["enable_thinking"] == "true"
 
         r = client.put(
             "/api/v1/admin/models/routes/reply",
-            json={"max_tokens": 0},
+            json={"max_tokens": 0, "enable_thinking": "auto"},
             headers=auth_header,
         )
 
@@ -666,6 +668,7 @@ class TestModelRouteV2:
         assert status.status_code == 200, status.text
         reply = status.json()["routes"]["reply"]
         assert reply["max_tokens"] == 0
+        assert reply["enable_thinking"] == "auto"
 
     def test_sticker_describe_vision_test_sends_multimodal_payload(self, client, auth_header, monkeypatch):
         captured = {}

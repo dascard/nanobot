@@ -15,6 +15,7 @@ import time
 import urllib.request
 
 from config import CLASSIFIER_API_URL
+from core.model_route_options import apply_enable_thinking_to_payload, normalize_enable_thinking
 
 logger = logging.getLogger("nanobot.classifier")
 
@@ -108,6 +109,7 @@ def _resolve_classifier_route(route_key: str) -> dict:
         "timeout": 15.0,
         "temperature": 0,
         "max_tokens": 30,
+        "enable_thinking": "auto",
     }
 
     # 只有分类器子路由继承 timing_gate；controller/vision route 独立解析。
@@ -141,6 +143,11 @@ def _resolve_classifier_route(route_key: str) -> dict:
         v = _get_setting_value(f"{prefix}.{k}")
         if v is not None:
             base[k] = float(v) if k == "temperature" else (int(v) if k == "max_tokens" else float(v))
+
+    enable_thinking_key = f"{prefix}.enable_thinking"
+    enable_thinking = _get_setting_value(enable_thinking_key, "")
+    if _setting_is_explicit(enable_thinking_key, enable_thinking):
+        base["enable_thinking"] = normalize_enable_thinking(enable_thinking)
 
     # 合并 provider 配置：route.provider → provider base_url/api_key
     inherited_provider_id = str(base.get("provider_id") or "").strip()
@@ -268,6 +275,11 @@ def call_model_route(
     # OpenAI-compatible API 需要 model 字段；本地 llama.cpp 不传
     if route.get("model"):
         payload["model"] = route["model"]
+    apply_enable_thinking_to_payload(
+        payload,
+        route.get("model", ""),
+        route.get("enable_thinking", "auto"),
+    )
 
     data = json.dumps(payload).encode("utf-8")
     url = f"{base_url}/chat/completions"
@@ -534,6 +546,7 @@ def resolve_model_route(route_key: str) -> dict:
         "timeout": route.get("timeout", 15),
         "temperature": route.get("temperature", 0),
         "max_tokens": route.get("max_tokens", 30),
+        "enable_thinking": normalize_enable_thinking(route.get("enable_thinking", "auto")),
         "source": route.get("source", "provider"),
     }
 
@@ -541,7 +554,7 @@ def resolve_model_route(route_key: str) -> dict:
     if route_key in ("private_decision", "classifier_legacy"):
         tg = resolve_model_route("timing_gate")
         overrides = {}
-        for k in ("max_tokens", "timeout", "temperature", "model", "provider_id"):
+        for k in ("max_tokens", "timeout", "temperature", "model", "provider_id", "enable_thinking"):
             if result[k] != tg.get(k) and result[k] not in ("", "未指定", 30):
                 overrides[k] = result[k]
         result["inherited_from"] = "timing_gate"
