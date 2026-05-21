@@ -176,7 +176,22 @@ class NanobotBridge:
         self._last_prompt_render_meta: dict[str, str] = {}
 
     def _load_legacy_prompt_into_config(self, config: Any) -> dict[str, str]:
-        """让 KT 基础 system prompt 优先使用 WebUI 构建出的运行时旧 prompt。"""
+        """让 KT 基础 system prompt 使用 WebUI 构建出的运行时旧 prompt。
+
+        managed 模式由 PromptManager 接管，跳过 legacy prompt 加载。
+        managed: PromptManager 输出替换 legacy 行为规则
+        shadow: 加载 legacy + render PromptManager 仅记录
+        legacy: 仅加载 legacy prompt
+        """
+        mode = self._prompt_system_mode()
+        if mode == "managed":
+            logger.info("[Prompt] managed mode — skipping legacy prompt, PromptManager will take over")
+            return {
+                "prompt_source": "prompt_manager (managed mode)",
+                "prompt_runtime_path": "",
+                "prompt_default_path": "",
+                "prompt_sha256": "",
+            }
         try:
             from core.legacy_prompt_runtime import read_runtime_or_default_prompt
 
