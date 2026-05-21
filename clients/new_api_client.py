@@ -20,6 +20,7 @@ from config import (
     AUTO_MODEL_ROUTING_MODE,
 )
 from clients.model_registry import registry
+from core.final_tools import filter_payload_tools
 from core.model_route_options import apply_enable_thinking_to_payload
 
 logger = logging.getLogger("nanobot.new_api")
@@ -377,6 +378,7 @@ class NewAPIClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        payload = filter_payload_tools(payload)
         return apply_enable_thinking_to_payload(payload, model, enable_thinking)
 
     def _safe_get_failure_tracker(self):

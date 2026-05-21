@@ -72,12 +72,15 @@ def install_openai_chat_completion_tracer(
             started = time.time()
             log_id = 0
             request_payload: dict[str, Any] = {}
+            filtered_kwargs = kwargs
             try:
                 from core.llm_trace_context import get_llm_trace_vars
                 from core.tracing import LLMRequestTracer
+                from core.final_tools import filter_sdk_kwargs
 
                 trace_id, run_id, source = get_llm_trace_vars()
-                request_payload = _request_payload_from_sdk_kwargs(args, kwargs)
+                filtered_kwargs = filter_sdk_kwargs(kwargs)
+                request_payload = _request_payload_from_sdk_kwargs(args, filtered_kwargs)
                 headers = {"Content-Type": "application/json"}
                 api_key = str(getattr(llm, "_api_key", "") or "")
                 if api_key:
@@ -102,7 +105,7 @@ def install_openai_chat_completion_tracer(
                 logger.debug("OpenAI SDK request tracing skipped: %s", exc)
 
             try:
-                result = _orig(*args, **kwargs)
+                result = _orig(*args, **filtered_kwargs)
                 if inspect.isawaitable(result):
                     result = await result
                 try:

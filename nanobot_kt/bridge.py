@@ -825,6 +825,7 @@ class NanobotBridge:
             )
             trace_tokens = set_trace_context(trace_id, run_handle.run_id)
             trace_closed = False
+            final_tools_token = None
 
             def _finish_agent_trace(
                 status: str,
@@ -833,7 +834,7 @@ class NanobotBridge:
                 error: str = "",
                 model: str = "",
             ) -> None:
-                nonlocal trace_closed
+                nonlocal trace_closed, final_tools_token
                 if trace_closed:
                     return
                 trace_closed = True
@@ -846,6 +847,14 @@ class NanobotBridge:
                     latency_ms=int((_time.time() - t_start) * 1000),
                     model=model,
                 )
+                if final_tools_token is not None:
+                    try:
+                        from core.final_tools import reset_current_final_tools
+
+                        reset_current_final_tools(final_tools_token)
+                    except Exception:
+                        pass
+                    final_tools_token = None
                 reset_trace_context(trace_tokens)
 
             self._output.clear()
@@ -987,16 +996,20 @@ class NanobotBridge:
             group_id = str(meta.get("group_id", session_id or "")).strip()
             user_id = str(meta.get("user_id", session_id or "")).strip()
 
-            from core.tool_policy_service import resolve_effective_tools, build_tool_policy_prompt
+            from core.final_tools import resolve_final_tools, set_current_final_tools
+            from core.tool_policy_service import build_tool_policy_prompt
             from core.database import SessionLocal
             db = SessionLocal()
             try:
-                enabled, disabled = resolve_effective_tools(
+                final_tool_set = resolve_final_tools(
                     chat_type=chat_type, group_id=group_id, user_id=user_id,
                     tool_policy=tool_policy, db=db,
                 )
             finally:
                 db.close()
+            final_tools_token = set_current_final_tools(final_tool_set)
+            enabled = dict(final_tool_set.enabled or {})
+            disabled = dict(final_tool_set.disabled or {})
 
             _saved_tools: dict[str, bool] = {}
             policy_prompt = build_tool_policy_prompt(enabled, disabled, chat_type)
