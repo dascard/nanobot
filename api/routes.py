@@ -2063,6 +2063,7 @@ async def proxy_chat(
     )
 
     is_group = not str(req.session_id).startswith("private_")
+    is_superuser = (not is_group) and _is_guardrail_superuser(req.user_id)
 
     # 3. 构建会话记忆上下文 (时间窗口 + clear 标记感知)
     memory_header, history_messages, _ctx_debug = _build_chat_context(
@@ -2085,12 +2086,11 @@ async def proxy_chat(
     if not is_group and not req.classification_request:
         from core.private_timing import get_private_gate, PrivateDecision, get_effort_constraint
         try:
-            _is_superuser = _is_guardrail_superuser(req.user_id)
             private_gate = get_private_gate()
             try:
                 _private_decision = await private_gate.classify(
                     req.query, user_id=req.user_id, has_files=bool(req.files),
-                    is_superuser=_is_superuser,
+                    is_superuser=is_superuser,
                 )
             except TypeError as te:
                 if "is_superuser" not in str(te):
@@ -2103,7 +2103,7 @@ async def proxy_chat(
                 return {"status": "no_reply", "user_id": req.user_id}
             if _private_decision.effort == "casual":
                 from core.reply_templates import get_casual_reply
-                reply = get_casual_reply(req.query, is_superuser=_is_superuser)
+                reply = get_casual_reply(req.query, is_superuser=is_superuser)
                 if reply:
                     _persist_chat_turn(db, req, reply, guardrail_status="casual_template")
                     return {"status": "ok", "answer": reply, "source": "casual_template", "intent": _private_decision.reason}
@@ -2309,6 +2309,7 @@ async def proxy_chat(
         "history_header": memory_header,
         "history_messages": history_messages,
         "is_group": is_group,
+        "is_superuser": is_superuser,
         "complexity": _complexity,
         "private_decision": {
             "action": _private_decision.action,

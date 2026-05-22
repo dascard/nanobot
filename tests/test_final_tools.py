@@ -120,3 +120,14 @@ def test_tool_policy_prompt_does_not_expand_enabled_tool_schema():
     assert "news_search：" not in prompt
     assert "bash：群聊强制禁用" in prompt
     assert "no_reply(reason)" in prompt
+
+
+def test_superuser_private_tool_defaults_are_more_open():
+    from core.tool_policy_service import resolve_effective_tools
+
+    private_enabled, _ = resolve_effective_tools(chat_type="private", tool_policy="full")
+    superuser_enabled, _ = resolve_effective_tools(chat_type="private_superuser", tool_policy="full")
+
+    assert private_enabled["group_analysis"] is False
+    assert superuser_enabled["group_analysis"] is True
+    assert superuser_enabled["bash"] is True

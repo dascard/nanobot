@@ -3704,11 +3704,9 @@ function LocalComponentsTab({ components, localResult, onAction }) {
 // ── Tools ──
 function ToolsPage() {
   const tabs = [
-    { key: 'defaults', label: '全局默认' },
-    { key: 'private', label: '私聊' },
-    { key: 'group', label: '群聊' },
-    { key: 'override', label: '指定群覆盖' },
-    { key: 'decisions', label: '策略记录' },
+    { key: 'defaults', label: '默认模板' },
+    { key: 'overrides', label: '指定覆盖' },
+    { key: 'audit', label: '修改记录' },
   ]
   const [tab, setTab] = useState('defaults')
   const [tools, setTools] = useState([])
@@ -3716,23 +3714,40 @@ function ToolsPage() {
   const [regAvail, setRegAvail] = useState(false)
   const [regEmpty, setRegEmpty] = useState(false)
   const [bridgeCt, setBridgeCt] = useState(0)
-  const [groupId, setGroupId] = useState('')
-  const [decisions, setDecisions] = useState([])
-  const [expandDecision, setExpandDecision] = useState(null)
-  const load = () => api.get('/tools', { params: { chat_type: tab === 'private' ? 'private' : 'group', group_id: groupId } }).then(r => { setTools(r.data.tools || []); setRegInfo(r.data.registry_info || null); setRegAvail(r.data.registry_available); setRegEmpty(r.data.registry_empty); setBridgeCt(r.data.bridge_count || 0) })
-  const loadDecisions = () => api.get('/tools/decisions', { params: { limit: 50 } }).then(r => setDecisions(r.data.items || []))
-  useEffect(() => { if (tab === 'decisions') loadDecisions(); else load() }, [tab, groupId])
+  const [overrideScope, setOverrideScope] = useState('group')
+  const [targetId, setTargetId] = useState('')
+  const [auditLogs, setAuditLogs] = useState([])
+  const [expandAudit, setExpandAudit] = useState(null)
+  const load = useCallback(() => {
+    const isUserOverride = tab === 'overrides' && overrideScope === 'user'
+    api.get('/tools', {
+      params: {
+        chat_type: isUserOverride ? 'private' : 'group',
+        group_id: tab === 'overrides' && overrideScope === 'group' ? targetId : '',
+        user_id: isUserOverride ? targetId : '',
+      },
+    }).then(r => {
+      setTools(r.data.tools || [])
+      setRegInfo(r.data.registry_info || null)
+      setRegAvail(r.data.registry_available)
+      setRegEmpty(r.data.registry_empty)
+      setBridgeCt(r.data.bridge_count || 0)
+    })
+  }, [tab, overrideScope, targetId])
+  const loadAudit = useCallback(() => api.get('/audit-logs', { params: { target_type: 'tool', limit: 50 } }).then(r => setAuditLogs(r.data.items || [])), [])
+  useEffect(() => { if (tab === 'audit') loadAudit(); else load() }, [tab, load, loadAudit])
 
   const toggleDefault = (t, field) => {
-    const val = field === 'private_default' ? !t.private_default : !t.group_default
+    const val = !t[field]
     api.put(`/tools/${t.name}`, { [field]: val }).then(load)
   }
 
   const scopeForTab = () => {
-    if (tab === 'private') return { scope_type: 'chat_type', scope_id: 'private' }
-    if (tab === 'group') return { scope_type: 'chat_type', scope_id: 'group' }
-    if (!groupId.trim()) return null
-    return { scope_type: 'group', scope_id: groupId.trim() }
+    if (tab !== 'overrides' || !targetId.trim()) return null
+    return {
+      scope_type: overrideScope,
+      scope_id: targetId.trim(),
+    }
   }
 
   const setOverride = (t, enabled) => {
@@ -3750,18 +3765,32 @@ function ToolsPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold mb-2">工具管理</h1>
-      <p className="text-slate-500 text-sm mb-4">管理各场景下工具的启用/禁用。reply/no_reply 强制启用；bash/write/edit 群聊强制禁用。</p>
+      <p className="text-slate-500 text-sm mb-4">管理工具配置：默认模板决定基础权限，轻量预设用于运行时自动降档，指定覆盖用于具体群聊或私聊用户。</p>
       <div className="flex gap-2 mb-6 border-b border-slate-800 pb-2">
         {tabs.map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{t.label}</button>
         ))}
       </div>
-      {tab === 'override' && (
-        <div className="mb-4">
-          <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="群 stream_id (qq:123:group)" className="w-full max-w-md p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm" />
+      {tab === 'overrides' && (
+        <div className="mb-4 flex flex-wrap items-end gap-3">
+          <label htmlFor="tool-override-scope" className="text-xs text-slate-500">
+            覆盖对象
+            <select id="tool-override-scope" value={overrideScope} onChange={e => { setOverrideScope(e.target.value); setTargetId('') }}
+              className="mt-1 block min-w-[120px] rounded-lg bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200">
+              <option value="group">指定群聊</option>
+              <option value="user">指定私聊</option>
+            </select>
+          </label>
+          <label htmlFor="tool-override-target" className="text-xs text-slate-500">
+            {overrideScope === 'group' ? '群聊 group_id' : '私聊 user_id'}
+            <input id="tool-override-target" value={targetId} onChange={e => setTargetId(e.target.value)}
+              placeholder={overrideScope === 'group' ? 'qq:123:group 或 123' : '用户 ID'}
+              className="mt-1 block w-56 rounded-lg bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200" />
+          </label>
+          <span className="pb-1.5 text-xs text-slate-500">覆盖只在填入目标后生效；实际可用工具仍会经过运行时自动降档和强制规则裁剪。</span>
         </div>
       )}
-      <div className="mb-4 flex gap-4 text-xs text-slate-400">
+      {tab !== 'audit' && <div className="mb-4 flex gap-4 text-xs text-slate-400">
         {!regAvail ? (
           bridgeCt === 0 ? (
             <span className="text-slate-500">会话 bridge 尚未创建（{bridgeCt} 个活跃），触发一条消息后可用</span>
@@ -3778,23 +3807,24 @@ function ToolsPage() {
             {regInfo.missing_kt?.length > 0 && <span className="text-red-400">KT 未加载: {regInfo.missing_kt.length} 个 ({regInfo.missing_kt.join(', ')})</span>}
           </>
         ) : null}
-      </div>
-      <Card className="overflow-x-auto">
+      </div>}
+      {tab !== 'audit' && <Card className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="text-left text-slate-500 border-b border-slate-800">
             <th className="py-2 px-2">工具</th><th className="py-2 px-2">类别</th><th className="py-2 px-2">风险</th>
-            {(tab === 'defaults') && <th className="py-2 px-2">私聊默认</th>}
-            {(tab === 'defaults') && <th className="py-2 px-2">群聊默认</th>}
-            {(tab !== 'defaults') && <th className="py-2 px-2">状态</th>}
+            {tab === 'defaults' && <th className="py-2 px-2">普通私聊</th>}
+            {tab === 'defaults' && <th className="py-2 px-2">私聊 superuser</th>}
+            {tab === 'defaults' && <th className="py-2 px-2">群聊</th>}
+            {tab === 'defaults' && <th className="py-2 px-2">轻量预设</th>}
+            {tab === 'overrides' && <th className="py-2 px-2">配置状态</th>}
             <th className="py-2 px-2">说明</th>
           </tr></thead>
           <tbody>
             {tools.map(t => {
-              const isForced = tab === 'group' && t.force_disabled_group
+              const isForced = overrideScope === 'group' && t.force_disabled_group
               const isLocked = t.force_enabled
               const isSubagent = t.is_subagent
-              const tone = isLocked ? 'emerald' : t.effective ? 'emerald' : 'slate'
-              const label = isForced ? '强制禁用' : isLocked ? '强制启用' : t.effective ? '启用' : t.disabled_reason || '禁用'
+              const configured = t.configured_enabled ?? t.effective
               return (
                 <tr key={t.name} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                   <td className="py-2 px-2 font-mono text-slate-200">
@@ -3819,6 +3849,15 @@ function ToolsPage() {
                   )}
                   {tab === 'defaults' && (
                     <td className="py-2 px-2">
+                      <button onClick={() => !t.force_enabled && toggleDefault(t, 'private_superuser_default')}
+                        disabled={t.force_enabled}
+                        className={`px-2 py-1 rounded text-xs ${t.private_superuser_default ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${t.force_enabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        {t.private_superuser_default ? 'ON' : 'OFF'}
+                      </button>
+                    </td>
+                  )}
+                  {tab === 'defaults' && (
+                    <td className="py-2 px-2">
                       <button onClick={() => !t.force_enabled && !t.force_disabled_group && toggleDefault(t, 'group_default')}
                         disabled={t.force_enabled || t.force_disabled_group}
                         className={`px-2 py-1 rounded text-xs ${t.group_default ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${(t.force_enabled || t.force_disabled_group) ? 'opacity-50 cursor-not-allowed' : ''}`}>
@@ -3826,26 +3865,31 @@ function ToolsPage() {
                       </button>
                     </td>
                   )}
-                  {tab !== 'defaults' && tab !== 'decisions' && (
+                  {tab === 'defaults' && (
+                    <td className="py-2 px-2">
+                      <button onClick={() => !t.force_enabled && toggleDefault(t, 'limited_default')}
+                        disabled={t.force_enabled}
+                        title="运行时自动降档会使用这套轻量工具预设"
+                        className={`px-2 py-1 rounded text-xs ${t.limited_default ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${t.force_enabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        {t.limited_default ? 'ON' : 'OFF'}
+                      </button>
+                    </td>
+                  )}
+                  {tab === 'overrides' && (
                     <td className="py-2 px-2">
                       {isForced && <span className="text-xs text-slate-500">群聊强制禁用</span>}
                       {isLocked && <span className="text-xs text-emerald-400">强制启用</span>}
                       {isSubagent && <span className="text-xs text-purple-400">subagent（运行时禁用有限）</span>}
                       {!isForced && !isLocked && !isSubagent && (
-                        <select value={t.effective ? 'enabled' : 'disabled'}
+                        <select value={configured ? 'enabled' : 'disabled'}
                           onChange={e => { const v = e.target.value; if (v === 'inherit') clearOverride(t); else setOverride(t, v === 'enabled') }}
-                          disabled={tab === 'override' && !groupId.trim()}
-                          className={`p-1 rounded text-xs bg-slate-900 border border-slate-700 ${tab === 'override' && !groupId.trim() ? 'opacity-40' : ''}`}>
+                          disabled={!targetId.trim()}
+                          className={`p-1 rounded text-xs bg-slate-900 border border-slate-700 ${!targetId.trim() ? 'opacity-40' : ''}`}>
                           <option value="inherit">继承</option>
                           <option value="enabled">启用</option>
                           <option value="disabled">禁用</option>
                         </select>
                       )}
-                    </td>
-                  )}
-                  {tab === 'decisions' && (
-                    <td className="py-2 px-2">
-                      <span className={`px-2 py-0.5 rounded text-xs ${tone === 'emerald' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'}`}>{label}</span>
                     </td>
                   )}
                   <td className="py-2 px-2 text-slate-500 text-xs max-w-[200px] truncate" title={t.description}>{t.description}</td>
@@ -3854,54 +3898,35 @@ function ToolsPage() {
             })}
           </tbody>
         </table>
-      </Card>
-      {tab === 'decisions' && (
+      </Card>}
+      {tab === 'audit' && (
         <Card className="mt-4 overflow-x-auto">
           <table className="w-full text-xs">
             <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-              <th className="py-2 px-2">时间</th><th className="py-2 px-2">会话</th><th className="py-2 px-2">类型</th><th className="py-2 px-2">策略</th><th className="py-2 px-2">启用</th><th className="py-2 px-2">禁用</th>
+              <th className="py-2 px-2">时间</th><th className="py-2 px-2">动作</th><th className="py-2 px-2">工具</th><th className="py-2 px-2">操作者</th><th className="py-2 px-2">IP</th>
             </tr></thead>
             <tbody>
-              {decisions.map(d => (
-                <tr key={d.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer" onClick={() => setExpandDecision(expandDecision === d.id ? null : d.id)}>
+              {auditLogs.map(d => (
+                <tr key={d.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 cursor-pointer" onClick={() => setExpandAudit(expandAudit === d.id ? null : d.id)}>
                   <td className="py-2 px-2 text-slate-500 whitespace-nowrap">{d.created_at ? d.created_at.slice(5, 19) : ''}</td>
-                  <td className="py-2 px-2 text-slate-400 font-mono truncate max-w-[120px]">{d.session_id}</td>
-                  <td className="py-2 px-2"><Badge tone={d.chat_type === 'group' ? 'emerald' : 'amber'}>{d.chat_type}</Badge></td>
-                  <td className="py-2 px-2"><span className={`px-1.5 py-0.5 rounded text-xs ${d.tool_policy === 'full' ? 'bg-emerald-500/15 text-emerald-400' : d.tool_policy === 'limited' ? 'bg-amber-500/15 text-amber-400' : 'bg-red-500/15 text-red-400'}`}>{d.tool_policy}</span></td>
-                  <td className="py-2 px-2 text-slate-400">{d.effective_tools?.length || 0}个</td>
-                  <td className="py-2 px-2 text-slate-400">{Object.keys(d.disabled_reasons || {}).length}个</td>
+                  <td className="py-2 px-2"><Badge tone={d.action === 'tool_default_update' ? 'emerald' : 'amber'}>{d.action}</Badge></td>
+                  <td className="py-2 px-2 text-slate-300 font-mono">{d.target_id}</td>
+                  <td className="py-2 px-2 text-slate-400">{d.admin_user}</td>
+                  <td className="py-2 px-2 text-slate-500">{d.ip_address || '-'}</td>
                 </tr>
               ))}
-              {decisions.length === 0 && (
-                <tr><td colSpan={6} className="py-8 text-center text-slate-600">暂无策略决策记录（需实际触发群聊/私聊调用后生成）</td></tr>
+              {auditLogs.length === 0 && (
+                <tr><td colSpan={5} className="py-8 text-center text-slate-600">暂无工具修改记录</td></tr>
               )}
             </tbody>
           </table>
-          {expandDecision && (
+          {expandAudit && (
             <div className="p-3 bg-slate-900 border-t border-slate-800">
               {(() => {
-                const d = decisions.find(x => x.id === expandDecision)
+                const d = auditLogs.find(x => x.id === expandAudit)
                 if (!d) return null
                 return (
-                  <div className="grid grid-cols-2 gap-4 text-xs">
-                    <div>
-                      <div className="text-slate-400 mb-2 font-medium">本轮可用工具</div>
-                      <div className="flex flex-wrap gap-1">
-                        {(d.effective_tools || []).map(t => <span key={t} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400">{t}</span>)}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-slate-400 mb-2 font-medium">本轮禁用工具</div>
-                      <div className="space-y-1">
-                        {Object.entries(d.disabled_reasons || {}).map(([name, reason]) => (
-                          <div key={name} className="flex items-center gap-2">
-                            <span className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 font-mono">{name}</span>
-                            <span className="text-slate-500">{String(reason)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
+                  <pre className="text-xs text-slate-300 whitespace-pre-wrap break-all">{JSON.stringify(d.detail_json || {}, null, 2)}</pre>
                 )
               })()}
             </div>

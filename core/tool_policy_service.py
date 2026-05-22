@@ -11,10 +11,56 @@ _DEFAULT_LIMITED_SET = {
     "reply", "no_reply", "image_summary", "python_sandbox", "sticker_search",
 }
 
+_SUPPORTED_CHAT_TYPES = {"group", "private", "private_superuser"}
+_DEFAULT_FIELD_BY_CHAT_TYPE = {
+    "group": "group_default",
+    "private": "private_default",
+    "private_superuser": "private_superuser_default",
+}
 
-def _load_limited_set() -> set[str]:
-    from core.settings_service import settings
-    raw = settings.get("tool.limited_set")
+
+def normalize_tool_chat_type(chat_type: str = "group") -> str:
+    value = str(chat_type or "group").strip().lower()
+    if value in {"superuser_private", "private_admin", "admin_private"}:
+        return "private_superuser"
+    if value in _SUPPORTED_CHAT_TYPES:
+        return value
+    return "private" if value.startswith("private") else "group"
+
+
+def _metadata_default(tool_name: str, chat_type: str) -> bool:
+    td = get_tool_def(tool_name)
+    if not td:
+        return False
+    normalized = normalize_tool_chat_type(chat_type)
+    if normalized == "group":
+        return bool(td.group_default)
+    if normalized == "private_superuser":
+        # superuser 私聊默认比普通私聊更开放，具体禁用仍可由默认模板或用户覆盖控制。
+        return True
+    return bool(td.private_default)
+
+
+def resolve_tool_default(tool_name: str, chat_type: str = "group", db=None) -> bool:
+    """读取某个默认模板下的工具启用状态，不包含指定覆盖和 tool_policy。"""
+    normalized = normalize_tool_chat_type(chat_type)
+    default = _metadata_default(tool_name, normalized)
+    if db is None:
+        return default
+    try:
+        from core.database import SystemSetting
+        field = _DEFAULT_FIELD_BY_CHAT_TYPE[normalized]
+        row = db.query(SystemSetting).filter(
+            SystemSetting.key == f"tool.defaults.{tool_name}.{field}"
+        ).first()
+        if row:
+            return str(row.value).lower() in ("1", "true", "yes", "on")
+    except Exception:
+        pass
+    return default
+
+
+def _parse_limited_set(raw: object) -> set[str] | None:
     if raw and isinstance(raw, str):
         try:
             parsed = json.loads(raw)
@@ -22,7 +68,35 @@ def _load_limited_set() -> set[str]:
                 return {str(x) for x in parsed if str(x).strip()}
         except (json.JSONDecodeError, TypeError):
             pass
+    return None
+
+
+def _load_limited_set(db=None) -> set[str]:
+    if db is not None:
+        try:
+            from core.database import SystemSetting
+            row = db.query(SystemSetting).filter(
+                SystemSetting.key == "tool.limited_set"
+            ).first()
+            parsed = _parse_limited_set(row.value if row else None)
+            if parsed is not None:
+                return parsed
+            return _DEFAULT_LIMITED_SET
+        except Exception:
+            pass
+    from core.settings_service import settings
+    parsed = _parse_limited_set(settings.get("tool.limited_set"))
+    if parsed is not None:
+        return parsed
     return _DEFAULT_LIMITED_SET
+
+
+def resolve_limited_default(tool_name: str, db=None) -> bool:
+    """读取自动降档轻量预设中的工具启用状态。"""
+    td = get_tool_def(tool_name)
+    if td and td.force_enabled:
+        return True
+    return tool_name in _load_limited_set(db=db)
 
 
 def resolve_effective_tools(
@@ -42,24 +116,12 @@ def resolve_effective_tools(
 
     返回 (enabled: {tool_name: bool}, disabled_reasons: {tool_name: reason})
     """
+    chat_type = normalize_tool_chat_type(chat_type)
     enabled: dict[str, bool] = {}
     disabled: dict[str, str] = {}
 
     for name, td in TOOL_METADATA.items():
-        default = td.group_default if chat_type == "group" else td.private_default
-        # 读取 SystemSetting 覆盖默认值
-        if db is not None:
-            try:
-                from core.database import SystemSetting
-                field = "group_default" if chat_type == "group" else "private_default"
-                row = db.query(SystemSetting).filter(
-                    SystemSetting.key == f"tool.defaults.{name}.{field}"
-                ).first()
-                if row:
-                    default = str(row.value).lower() in ("1", "true", "yes", "on")
-            except Exception:
-                pass
-        enabled[name] = default
+        enabled[name] = resolve_tool_default(name, chat_type, db=db)
 
     for name, td in TOOL_METADATA.items():
         if td.force_enabled:
@@ -99,7 +161,7 @@ def resolve_effective_tools(
                 enabled[name] = False
                 disabled[name] = "tool_policy=none"
     elif tool_policy == "limited":
-        limited = _load_limited_set()
+        limited = _load_limited_set(db=db)
         for name in list(enabled.keys()):
             td = get_tool_def(name)
             if td and td.force_enabled:

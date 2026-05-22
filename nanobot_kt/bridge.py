@@ -1003,6 +1003,7 @@ class NanobotBridge:
             effort_constraint = str(meta.get("effort_constraint", "")).strip()
             tool_policy = str(meta.get("tool_policy", "full")).strip()
             chat_type = "group" if is_group else "private"
+            policy_chat_type = "private_superuser" if (not is_group and meta.get("is_superuser")) else chat_type
             group_id = str(meta.get("group_id", session_id or "")).strip()
             user_id = str(meta.get("user_id", session_id or "")).strip()
 
@@ -1012,7 +1013,7 @@ class NanobotBridge:
             db = SessionLocal()
             try:
                 final_tool_set = resolve_final_tools(
-                    chat_type=chat_type, group_id=group_id, user_id=user_id,
+                    chat_type=policy_chat_type, group_id=group_id, user_id=user_id,
                     tool_policy=tool_policy, db=db,
                 )
             finally:
@@ -1040,7 +1041,7 @@ class NanobotBridge:
             self._tool_cleanup_needed = bool(_saved_tools)
             effective_tools = list(self._agent.registry._tools.keys()) if hasattr(self._agent, 'registry') else []
             logger.info("[Bridge] tool_policy=%s chat=%s effective=%s saved=%d",
-                        tool_policy, chat_type, effective_tools, len(_saved_tools))
+                        tool_policy, policy_chat_type, effective_tools, len(_saved_tools))
             meta["_tool_policy"] = tool_policy
             meta["_disabled_tools"] = {k: v for k, v in disabled.items()}
 
@@ -1048,7 +1049,7 @@ class NanobotBridge:
             record_tool_policy_decision(
                 session_id=session_id,
                 message_id=meta.get("message_id", ""),
-                chat_type=chat_type,
+                chat_type=policy_chat_type,
                 group_id=group_id,
                 user_id=user_id,
                 tool_policy=tool_policy,

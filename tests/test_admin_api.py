@@ -467,6 +467,101 @@ class TestModelCatalog:
                 if x.get("id") != "test-tags-sanitize"
             ]
 
+
+class TestToolAdmin:
+    def test_tools_separate_config_enabled_from_policy_preview(self, client, auth_header):
+        r = client.get(
+            "/api/v1/admin/tools",
+            params={"chat_type": "group", "tool_policy": "limited"},
+            headers=auth_header,
+        )
+
+        data = _ok(r)
+        tools = {item["name"]: item for item in data["tools"]}
+
+        assert data["tool_policy"] == "limited"
+        assert tools["ai_daily"]["configured_enabled"] is True
+        assert tools["ai_daily"]["effective"] is True
+        assert tools["ai_daily"]["policy_effective"] is False
+        assert tools["ai_daily"]["policy_disabled_reason"] == "tool_policy=limited"
+        assert tools["reply"]["configured_enabled"] is True
+        assert tools["reply"]["policy_effective"] is True
+
+    def test_tools_have_separate_superuser_private_default_template(self, client, auth_header):
+        r = client.get(
+            "/api/v1/admin/tools",
+            params={"chat_type": "private_superuser", "tool_policy": "full"},
+            headers=auth_header,
+        )
+
+        data = _ok(r)
+        tools = {item["name"]: item for item in data["tools"]}
+        assert tools["group_analysis"]["private_default"] is False
+        assert tools["group_analysis"]["private_superuser_default"] is True
+        assert tools["group_analysis"]["configured_enabled"] is True
+
+        r2 = client.put(
+            "/api/v1/admin/tools/group_analysis",
+            json={"private_superuser_default": False},
+            headers=auth_header,
+        )
+        _ok(r2)
+
+        r3 = client.get(
+            "/api/v1/admin/tools",
+            params={"chat_type": "private_superuser", "tool_policy": "full"},
+            headers=auth_header,
+        )
+        tools_after = {item["name"]: item for item in _ok(r3)["tools"]}
+        assert tools_after["group_analysis"]["private_superuser_default"] is False
+        assert tools_after["group_analysis"]["configured_enabled"] is False
+
+        audit = _ok(client.get(
+            "/api/v1/admin/audit-logs",
+            params={"target_type": "tool", "limit": 10},
+            headers=auth_header,
+        ))
+        assert any(
+            item["action"] == "tool_default_update"
+            and item["target_id"] == "group_analysis"
+            and item["detail_json"].get("private_superuser_default") is False
+            for item in audit["items"]
+        )
+
+    def test_tools_limited_profile_is_configurable_preset(self, client, auth_header):
+        r = client.get(
+            "/api/v1/admin/tools",
+            params={"chat_type": "group"},
+            headers=auth_header,
+        )
+        tools = {item["name"]: item for item in _ok(r)["tools"]}
+        assert tools["ai_daily"]["limited_default"] is False
+        assert tools["reply"]["limited_default"] is True
+
+        _ok(client.put(
+            "/api/v1/admin/tools/ai_daily",
+            json={"limited_default": True},
+            headers=auth_header,
+        ))
+
+        r2 = client.get(
+            "/api/v1/admin/tools",
+            params={"chat_type": "group", "tool_policy": "limited"},
+            headers=auth_header,
+        )
+        tools_after = {item["name"]: item for item in _ok(r2)["tools"]}
+        assert tools_after["ai_daily"]["limited_default"] is True
+        assert tools_after["ai_daily"]["policy_effective"] is True
+
+        effective = _ok(client.get(
+            "/api/v1/admin/tools/effective",
+            params={"chat_type": "group", "tool_policy": "limited"},
+            headers=auth_header,
+        ))
+        assert "ai_daily" in effective["enabled"]
+
+
+class TestModelRoutes:
     def test_patch_route_updates_and_reads_back(self, client, auth_header, monkeypatch):
         """PATCH /model-routes/{stage} 成功写入后 GET 能读到新值"""
         from core.settings_service import settings

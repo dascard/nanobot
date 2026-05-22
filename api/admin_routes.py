@@ -3719,7 +3719,9 @@ def reload_settings(_auth=Depends(verify_admin)):
 
 class ToolUpdateBody(BaseModel):
     private_default: Optional[bool] = None
+    private_superuser_default: Optional[bool] = None
     group_default: Optional[bool] = None
+    limited_default: Optional[bool] = None
 
 
 class ToolOverrideBody(BaseModel):
@@ -3731,8 +3733,9 @@ class ToolOverrideBody(BaseModel):
 
 @router.get("/tools")
 async def list_tools(chat_type: str = "group", group_id: str = "",
+                      user_id: str = "", tool_policy: str = "full",
                       db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    """列出所有工具及当前 effective 状态。"""
+    """列出所有工具配置状态，并可预览指定 tool_policy 下的运行时可用性。"""
     # registry probe: 无 child bridge 时自动创建一个用于探测
     try:
         from server import app as _app
@@ -3743,10 +3746,21 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
         logger.warning("[Tools] registry probe failed: %s", e, exc_info=True)
 
     from core.tool_registry import TOOL_METADATA
-    from core.tool_policy_service import resolve_effective_tools
+    from core.tool_policy_service import (
+        normalize_tool_chat_type,
+        resolve_effective_tools,
+        resolve_limited_default,
+        resolve_tool_default,
+    )
 
-    enabled, disabled = resolve_effective_tools(
-        chat_type=chat_type, group_id=group_id, tool_policy="full", db=db,
+    chat_type = normalize_tool_chat_type(chat_type)
+    configured_enabled, configured_disabled = resolve_effective_tools(
+        chat_type=chat_type, group_id=group_id, user_id=user_id,
+        tool_policy="full", db=db,
+    )
+    policy_enabled, policy_disabled = resolve_effective_tools(
+        chat_type=chat_type, group_id=group_id, user_id=user_id,
+        tool_policy=tool_policy, db=db,
     )
     # 从 bridge 获取 KT registry 实际加载的工具列表
     registry_info: dict = {}
@@ -3775,13 +3789,20 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
         items.append({
             "name": td.name, "label": td.label, "category": td.category,
             "risk_level": td.risk_level,
-            "private_default": td.private_default,
-            "group_default": td.group_default,
+            "private_default": resolve_tool_default(name, "private", db=db),
+            "private_superuser_default": resolve_tool_default(name, "private_superuser", db=db),
+            "group_default": resolve_tool_default(name, "group", db=db),
+            "limited_default": resolve_limited_default(name, db=db),
             "force_enabled": td.force_enabled,
             "force_disabled_group": td.force_disabled_group,
             "description": td.description,
-            "effective": enabled.get(name, False),
-            "disabled_reason": disabled.get(name, ""),
+            "configured_enabled": configured_enabled.get(name, False),
+            "configured_disabled_reason": configured_disabled.get(name, ""),
+            "policy_effective": policy_enabled.get(name, False),
+            "policy_disabled_reason": policy_disabled.get(name, ""),
+            # 兼容旧前端字段：工具管理页的 effective 表示配置启用状态，不混入 limited/none 策略。
+            "effective": configured_enabled.get(name, False),
+            "disabled_reason": configured_disabled.get(name, ""),
             "registered": registered,
             "is_subagent": is_subagent,
         })
@@ -3794,12 +3815,14 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
     return {"tools": items, "registry_info": registry_info,
             "registry_available": registry_available,
             "registry_empty": bool(registry_available and len(kt_loaded) == 0),
-            "bridge_count": bridge_count}
+            "bridge_count": bridge_count,
+            "tool_policy": tool_policy}
 
 
 @router.put("/tools/{tool_name}")
 def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
-                          db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+                          request: Request, db: Session = Depends(get_db),
+                          _auth=Depends(verify_admin)):
     """更新工具默认值——写入 SystemSetting。"""
     from core.tool_registry import get_tool_def
     from core.settings_service import settings
@@ -3809,10 +3832,13 @@ def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
         raise HTTPException(404, f"unknown tool: {tool_name}")
 
     prefix = f"tool.defaults.{tool_name}"
+    updates = {}
     for field, val in [("private_default", body.private_default),
-                        ("group_default", body.group_default)]:
+                       ("private_superuser_default", body.private_superuser_default),
+                       ("group_default", body.group_default)]:
         if val is None:
             continue
+        updates[field] = bool(val)
         key = f"{prefix}.{field}"
         row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
         if not row:
@@ -3820,8 +3846,38 @@ def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
             db.add(row)
         else:
             row.value = "1" if val else "0"
+    if body.limited_default is not None and not td.force_enabled:
+        key = "tool.limited_set"
+        row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+        try:
+            raw_limited_set = row.value if row and row.value else ""
+            if raw_limited_set:
+                parsed_limited_set = json.loads(raw_limited_set)
+                if not isinstance(parsed_limited_set, list):
+                    raise TypeError("tool.limited_set must be a list")
+                limited_set = {str(x) for x in parsed_limited_set if str(x).strip()}
+            else:
+                from core.tool_policy_service import _DEFAULT_LIMITED_SET
+                limited_set = set(_DEFAULT_LIMITED_SET)
+        except (json.JSONDecodeError, TypeError):
+            from core.tool_policy_service import _DEFAULT_LIMITED_SET
+            limited_set = set(_DEFAULT_LIMITED_SET)
+        if body.limited_default:
+            limited_set.add(tool_name)
+        else:
+            limited_set.discard(tool_name)
+        value = json.dumps(sorted(limited_set), ensure_ascii=False)
+        if not row:
+            row = SystemSetting(key=key, value=value, description="自动降档轻量工具预设")
+            db.add(row)
+        else:
+            row.value = value
+        updates["limited_default"] = bool(body.limited_default)
     db.commit()
     settings.invalidate()
+    if updates:
+        _audit(db, "tool_default_update", "tool", tool_name, updates,
+               ip_address=_client_ip(request))
     return {"ok": True, "tool": tool_name}
 
 
@@ -3835,8 +3891,8 @@ def set_tool_override(tool_name: str, body: ToolOverrideBody,
 
     if body.scope_type not in {"group", "user", "chat_type"}:
         raise HTTPException(400, "scope_type must be group/user/chat_type")
-    if body.scope_type == "chat_type" and body.scope_id not in {"private", "group"}:
-        raise HTTPException(400, "chat_type scope_id must be private or group")
+    if body.scope_type == "chat_type" and body.scope_id not in {"private", "private_superuser", "group"}:
+        raise HTTPException(400, "chat_type scope_id must be private/private_superuser/group")
     if body.scope_type in {"group", "user"} and not body.scope_id.strip():
         raise HTTPException(400, "scope_id required for group/user scope")
 

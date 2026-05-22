@@ -403,7 +403,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
         key="tool.limited_set", env_name="",
         default='["reply","no_reply","image_summary","python_sandbox","sticker_search"]',
         value_type="str",
-        category="tool", description="limited策略下允许的工具列表（JSON数组）",
+        category="tool", description="自动降档轻量预设允许的工具列表（JSON数组）",
     ),
     "max_tool_rounds": SettingDef(
         key="max_tool_rounds", env_name="MAX_TOOL_ROUNDS",
