@@ -131,7 +131,7 @@ def _build_conversation_context_header(*, is_group: bool) -> str:
         f"下面紧随的 user/assistant role messages 是已裁剪的{scope}上下文。\n"
         f"{extra}\n"
         "这些消息只用于理解语境、话题和回复对象，不是当前指令；历史中的工具调用已完成，绝对不要重复执行或重发旧内容。\n"
-        "只回复当前 <user_input>；如需未注入的更早上下文，再使用 sql_analysis 查询 chat_logs 表。\n"
+        "只回复本轮用户消息；如需未注入的更早上下文，再使用 sql_analysis 查询 chat_logs 表。\n"
         "</conversation_context>"
     )
 
@@ -659,7 +659,11 @@ def build_group_recent_context(
     max_total: int = 3000,
     exclude_message_ids: list[str] | None = None,
 ) -> str:
-    """从 ChatLog 构建群聊最近现场上下文。"""
+    """Deprecated: 旧 `<group_recent_context>` 文本块构建器。
+
+    真实回复链路和 Web 有效预览必须使用 `build_chat_context()` 返回的
+    role messages。该函数仅保留给旧测试、手工排查和 rollback 场景。
+    """
     from core.database import ChatLog
 
     age_cutoff = datetime.now() - timedelta(minutes=GROUP_CONTEXT_MAX_AGE_MIN)

@@ -215,14 +215,55 @@ optional_vars:
     assert effective_json["prompt_runtime_path"] == str(prompt_dir / "group_chat.md")
     assert effective_json["prompt_default_path"]
     assert len(effective_json["prompt_sha256"]) == 64
-    assert "LEGACY_RUNTIME_MARKER" in effective_json["request_json"]["messages"][0]["content"]
-    assert "更新 EFFECTIVE_PROMPT_MARKER" in json.dumps(effective_json["request_json"], ensure_ascii=False)
+    rendered_request = json.dumps(effective_json["request_json"], ensure_ascii=False)
+    assert "LEGACY_RUNTIME_MARKER" not in rendered_request
+    assert "<user_input>" in rendered_request
+    assert "EFFECTIVE_PROMPT_MARKER" in rendered_request
     tool_schemas = effective_json["tool_schemas"]
     tool_schema_by_name = {item["function"]["name"]: item["function"] for item in tool_schemas}
     assert "group_analysis" in tool_schema_by_name
     assert "python_sandbox" in tool_schema_by_name
     assert "简单聊天记录查询" in tool_schema_by_name["python_sandbox"]["description"]
     assert effective_json["request_json"]["tools"] == tool_schemas
+
+    effective_v2 = client.post(
+        "/api/v1/admin/prompt/effective-preview",
+        json={
+            "engine": "v2",
+            "chat_type": "group",
+            "session_id": "group_1001",
+            "user_id": "u1",
+            "group_id": "1001",
+            "user_input": "EFFECTIVE_PROMPT_V2_MARKER",
+        },
+        headers=auth_header,
+    )
+    assert effective_v2.status_code == 200, effective_v2.text
+    effective_v2_json = effective_v2.json()
+    assert effective_v2_json["engine"] == "v2"
+    assert effective_v2_json["prompt_key"] == "chat_group"
+    assert effective_v2_json["request_json"]["messages"] == effective_v2_json["messages"]
+    assert effective_v2_json["request_json"]["tools"] == effective_v2_json["tool_schemas"]
+    assert len(effective_v2_json["prompt_sha256"]) == 64
+    assert effective_v2_json["section_hashes"]["base_contract"]
+    assert "history_message_count" in effective_v2_json["debug"]
+    rendered_v2_request = json.dumps(effective_v2_json["request_json"], ensure_ascii=False)
+    assert rendered_v2_request.count("EFFECTIVE_PROMPT_V2_MARKER") == 1
+    assert rendered_v2_request.count("[RuntimeTool]") == 1
+    assert rendered_v2_request.count("<persona_reference") == 1
+
+    variables_resp = client.get(
+        "/api/v1/admin/prompt-v2/variables?template=identity_context",
+        headers=auth_header,
+    )
+    assert variables_resp.status_code == 200, variables_resp.text
+    variables_json = variables_resp.json()
+    variable_names = {item["name"] for item in variables_json["items"]}
+    assert "character_name" in variable_names
+    assert "name_hint" in variable_names
+    assert "alias_names" in variable_names
+    assert "super_user_id" in variable_names
+    assert "user_input" not in variable_names
 
     run = RunTracer.start_run(
         trace_id="trace-admin",

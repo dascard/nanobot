@@ -80,6 +80,11 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="shadow", value_type="str",
         category="prompt", description="提示词系统模式: legacy/shadow/managed",
     ),
+    "prompt_runtime.engine": SettingDef(
+        key="prompt_runtime.engine", env_name="NANOBOT_PROMPT_ENGINE",
+        default="v1", value_type="str",
+        category="prompt", description="提示词运行引擎: v1/v2",
+    ),
     "model.smart": SettingDef(
         key="model.smart", env_name="LLM_MODEL_SMART",
         default="", value_type="str", category="model", description="智能路由默认模型",

@@ -12,7 +12,7 @@ import inspect
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -27,19 +27,6 @@ from nanobot_kt.image_pipeline import prepare_image_parts
 from clients.new_api_client import NewAPIClient
 from clients.model_registry import registry
 from core.llm_sdk_tracing import install_openai_chat_completion_tracer
-
-_PROMPT_FRAGMENTS_DIR: Path | None = None
-
-
-def _load_prompt_fragment(name: str) -> str:
-    """加载单段 prompt fragment，用于运行时按 chat_type 注入。"""
-    global _PROMPT_FRAGMENTS_DIR
-    if _PROMPT_FRAGMENTS_DIR is None:
-        _PROMPT_FRAGMENTS_DIR = Path(__file__).resolve().parent.parent / "creatures" / "nanobot" / "prompts" / "system"
-    fpath = _PROMPT_FRAGMENTS_DIR / name
-    if not fpath.exists():
-        return ""
-    return fpath.read_text(encoding="utf-8").strip()
 
 from config import (
     NEW_API_KEY,
@@ -196,49 +183,31 @@ class NanobotBridge:
         self._last_prompt_render_meta: dict[str, str] = {}
 
     def _load_legacy_prompt_into_config(self, config: Any) -> dict[str, str]:
-        """让 KT 基础 system prompt 使用 WebUI 构建出的运行时旧 prompt。
-
-        managed 模式由 PromptManager 接管，跳过 legacy prompt 加载。
-        managed: PromptManager 输出替换 legacy 行为规则
-        shadow: 加载 legacy + render PromptManager 仅记录
-        legacy: 仅加载 legacy prompt
-        """
-        mode = self._prompt_system_mode()
-        if mode == "managed":
-            logger.info("[Prompt] managed mode — skipping legacy prompt, PromptManager will take over")
-            return {
-                "prompt_source": "prompt_manager (managed mode)",
-                "prompt_runtime_path": "",
-                "prompt_default_path": "",
-                "prompt_sha256": "",
-            }
+        """禁用 KT config 内置 prompt，legacy 只保留为 PromptAssembler rollback 来源。"""
+        fallback_content = str(getattr(config, "system_prompt", "") or "")
+        config.system_prompt = ""
         try:
             from core.legacy_prompt_runtime import read_runtime_or_default_prompt
 
-            prompt_info = read_runtime_or_default_prompt()
-            content = str(prompt_info.get("content") or "")
-            runtime_path = str(prompt_info.get("output_path") or "")
-            default_path = str(prompt_info.get("default_path") or "")
-            source_key = str(prompt_info.get("source") or "")
-            if content.strip():
-                config.system_prompt = content
-                source = (
-                    "Legacy runtime prompt"
-                    if source_key == "runtime"
-                    else "Legacy default prompt"
-                )
-                return {
-                    "prompt_source": source,
-                    "prompt_runtime_path": runtime_path,
-                    "prompt_default_path": default_path,
-                    "prompt_sha256": _sha256_text(content),
-                }
-        except Exception as e:
-            logger.warning("[Prompt] legacy runtime prompt load failed: %s", e)
-
-        fallback_content = str(getattr(config, "system_prompt", "") or "")
+            result = read_runtime_or_default_prompt()
+            content = str(result.get("content") or fallback_content or "")
+            source_key = str(result.get("source") or "")
+            if source_key == "runtime":
+                source = "Legacy runtime prompt"
+            elif source_key == "default":
+                source = "Legacy default prompt"
+            else:
+                source = "Legacy rollback prompt"
+            return {
+                "prompt_source": source,
+                "prompt_runtime_path": str(result.get("output_path") or ""),
+                "prompt_default_path": str(result.get("default_path") or ""),
+                "prompt_sha256": _sha256_text(content) if content else "",
+            }
+        except Exception:
+            logger.warning("[Prompt] failed to load legacy rollback prompt meta", exc_info=True)
         return {
-            "prompt_source": "bridge manual assembly",
+            "prompt_source": "Legacy rollback prompt",
             "prompt_runtime_path": "",
             "prompt_default_path": "",
             "prompt_sha256": _sha256_text(fallback_content) if fallback_content else "",
@@ -253,7 +222,7 @@ class NanobotBridge:
         config.include_hints_in_prompt = False
         config.skill_index_budget_bytes = 0
         logger.info(
-            "[Prompt] effective legacy source=%s sha=%s",
+            "[Prompt] config prompt disabled; effective source=%s sha=%s",
             self._legacy_prompt_meta.get("prompt_source") or "",
             (self._legacy_prompt_meta.get("prompt_sha256") or "")[:12],
         )
@@ -465,6 +434,13 @@ class NanobotBridge:
         trigger_reason = str(meta.get("trigger_reason") or "").strip()
         if trigger_reason:
             lines.append(f"trigger_reason: {trigger_reason}")
+        message_id = str(meta.get("message_id") or "").strip()
+        if not message_id:
+            source_ids = meta.get("source_message_ids")
+            if isinstance(source_ids, list) and source_ids:
+                message_id = str(source_ids[0] or "").strip()
+        if message_id:
+            lines.append(f"current_message_id: {message_id}")
         timing_decision = str(meta.get("timing_decision") or "").strip()
         if timing_decision:
             lines.append(f"timing_decision: {timing_decision}")
@@ -498,6 +474,15 @@ class NanobotBridge:
         if mode not in {"legacy", "shadow", "managed"}:
             return "shadow"
         return mode
+
+    def _prompt_runtime_engine(self) -> str:
+        try:
+            from core.settings_service import settings
+
+            engine = str(settings.get("prompt_runtime.engine", "v1") or "v1").strip().lower()
+        except Exception:
+            engine = "v1"
+        return engine if engine in {"v1", "v2"} else "v1"
 
     def _history_context_text(self, history_header: str, history_messages: list[dict[str, Any]]) -> str:
         parts: list[str] = []
@@ -722,6 +707,7 @@ class NanobotBridge:
         event = create_user_input_event(retry_prompt)
 
         self._output.clear()
+        self._clear_controller_event_state()
         from core.llm_trace_context import llm_trace_scope
         with llm_trace_scope(trace_id=trace_id, run_id=run_id, source=llm_source):
             retry_result = await self._agent._process_event(event)
@@ -786,6 +772,50 @@ class NanobotBridge:
             logger.info("[Bridge] Restored %d tools", len(saved))
         self._saved_tools = {}
         self._tool_cleanup_needed = False
+
+    def _clear_controller_event_state(self) -> None:
+        """清理 KT controller 的跨请求事件残留。
+
+        Nanobot 的 HTTP 入口是无状态的：每个请求都会从 DB 重建上下文。
+        KT controller 本身是长生命周期对象，上一轮未消费的 pending event
+        如果留到下一轮，会优先于当前 user_input 被处理，导致真实 LLM 请求缺失
+        本轮 <user_input>。
+        """
+        ctrl = getattr(getattr(self, "_agent", None), "controller", None)
+        if ctrl is None:
+            return
+
+        pending = getattr(ctrl, "_pending_events", None)
+        pending_count = len(pending) if isinstance(pending, list) else 0
+        if isinstance(pending, list):
+            pending.clear()
+
+        drained = 0
+        queue = getattr(ctrl, "_event_queue", None)
+        if isinstance(queue, asyncio.Queue):
+            # 真实 KT controller 使用 asyncio.Queue；单测中的 MagicMock 也有
+            # get_nowait，但不会抛 QueueEmpty，不能按队列 drain。
+            while True:
+                try:
+                    queue.get_nowait()
+                    drained += 1
+                except asyncio.QueueEmpty:
+                    break
+                except Exception:
+                    break
+
+        injections = getattr(ctrl, "_pending_injections", None)
+        injection_count = len(injections) if isinstance(injections, list) else 0
+        if isinstance(injections, list):
+            injections.clear()
+
+        if pending_count or drained or injection_count:
+            logger.warning(
+                "[SessionRuntime] Cleared stale KT event state pending=%d queued=%d injections=%d",
+                pending_count,
+                drained,
+                injection_count,
+            )
 
     def _extract_last_rich_tool_output(
         self,
@@ -862,8 +892,25 @@ class NanobotBridge:
         async with sess_lock:
             t_start = _time.time()
             meta = metadata or {}
-            prompt_mode = self._prompt_system_mode()
-            prompt_key = "group_chat" if meta.get("is_group", False) else "private_chat"
+            prompt_engine = str(
+                meta.get("prompt_runtime_engine_override")
+                or meta.get("prompt_engine_override")
+                or self._prompt_runtime_engine()
+            ).strip().lower()
+            if prompt_engine not in {"v1", "v2"}:
+                prompt_engine = "v1"
+            if prompt_engine == "v2":
+                prompt_mode = "v2"
+                prompt_key = "chat_group" if meta.get("is_group", False) else "chat_private"
+            else:
+                prompt_mode = str(
+                    meta.get("prompt_system_mode_override")
+                    or meta.get("prompt_mode_override")
+                    or self._prompt_system_mode()
+                ).strip().lower()
+                if prompt_mode not in {"legacy", "shadow", "managed"}:
+                    prompt_mode = "shadow"
+                prompt_key = "group_chat" if meta.get("is_group", False) else "private_chat"
             legacy_prompt_meta = dict(getattr(self, "_legacy_prompt_meta", {}) or {})
             from core.tracing import RunTracer, new_trace_id
             from core.tracing_context import reset_trace_context, set_trace_context
@@ -879,7 +926,7 @@ class NanobotBridge:
                 run_type="chat",
                 prompt_mode=prompt_mode,
                 prompt_key=prompt_key,
-                prompt_source=legacy_prompt_meta.get("prompt_source", ""),
+                prompt_source=legacy_prompt_meta.get("prompt_source", "Legacy rollback prompt"),
                 prompt_runtime_path=legacy_prompt_meta.get("prompt_runtime_path", ""),
                 prompt_default_path=legacy_prompt_meta.get("prompt_default_path", ""),
                 prompt_sha256=legacy_prompt_meta.get("prompt_sha256", ""),
@@ -940,14 +987,16 @@ class NanobotBridge:
                 after_len = len(conv._messages)
                 logger.info("[SessionRuntime] Reset conversation: %d→%d (system=%d)",
                             before_len, after_len, after_len)
+            self._clear_controller_event_state()
 
-            from core.identity import build_identity_vars
-            identity_vars = build_identity_vars(
-                sender_id=meta.get("sender_id") or meta.get("user_id") or user_id,
-                bot_name=str(meta.get("bot_name") or ""),
-                bot_aliases=meta.get("bot_aliases", []),
-            )
-            if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+            if prompt_engine != "v2" and hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                from core.identity import build_identity_vars
+
+                identity_vars = build_identity_vars(
+                    sender_id=meta.get("sender_id") or meta.get("user_id") or user_id,
+                    bot_name=str(meta.get("bot_name") or ""),
+                    bot_aliases=meta.get("bot_aliases", []),
+                )
                 conv = self._agent.controller.conversation
                 self._remove_system_contexts(conv, self.DYNAMIC_SYSTEM_PREFIXES)
                 # identity_context 放在所有 system context 最前面
@@ -971,85 +1020,11 @@ class NanobotBridge:
                     ),
                 )
 
-            # --- Inject persona as system message (authoritative weight, persists across clears) ---
+            # --- PromptAssembler 输入：只收集结构化上下文，不在 bridge 手工注入 prompt ---
             persona_text = str(meta.get("persona_text", "")).strip()
-            if persona_text:
-                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                    conv = self._agent.controller.conversation
-                    conv.append("system", self._build_persona_system_reference(user_id, persona_text))
-                    logger.info(f"[NanobotBridge] Persona injected as system message: len={len(persona_text)}")
-                else:
-                    logger.warning("[NanobotBridge] Cannot inject persona: agent has no controller/conversation")
-            elif user_id:
-                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                    conv = self._agent.controller.conversation
-                    conv.append("system", self._build_persona_system_reference(user_id, "无已存储画像"))
-                    logger.info(f"[NanobotBridge] User ID tag injected (no persona yet): user={user_id}")
-                else:
-                    logger.warning("[NanobotBridge] Cannot inject user_id tag: no controller/conversation")
-            else:
-                logger.info(f"[NanobotBridge] No persona_text or user_id in metadata (keys={list(meta.keys())})")
-            # -------------------------------------------------------------------------------------
-
-            # --- Inject history messages as structured conversation (proper role boundaries) ---
             history_messages = meta.get("history_messages", [])
             history_header = str(meta.get("history_header", "")).strip()
-            if history_messages:
-                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                    conv = self._agent.controller.conversation
-                    if history_header:
-                        conv.append("system", history_header)
-                    for msg in history_messages:
-                        role = msg.get("role", "user")
-                        content = msg.get("content", "")
-                        if role in ("user", "assistant") and content:
-                            conv.append(role, content)
-                    logger.info("[NanobotBridge] Injected %d history messages (header=%d chars)",
-                                len(history_messages), len(history_header))
-                else:
-                    logger.warning("[NanobotBridge] Cannot inject history: no controller/conversation")
-            # ------------------------------------------------------------------------------------
-
-            # --- Group chat file tool restriction + prompt fragments ---
             is_group = meta.get("is_group", False)
-            if is_group:
-                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                    conv = self._agent.controller.conversation
-                    for frag in ("20_group_rules.md", "25_context_control.md"):
-                        text = _load_prompt_fragment(frag)
-                        if text:
-                            conv.append("system", text)
-
-                    # 注入群表达/黑话（GroupProfile 已移至 ContextBuilder history_header 统一注入）
-                    try:
-                        from core.group_runtime.ids import normalize_group_session_id, normalize_group_stream_id
-                        from core.expression_memory import (
-                            build_expression_context,
-                            build_jargon_context,
-                        )
-                        chat_stream_id = normalize_group_stream_id(
-                            normalize_group_session_id(str(meta.get("group_id") or session_id or "")))
-                        if chat_stream_id:
-                            expr_ctx = build_expression_context(chat_stream_id)
-                            if expr_ctx:
-                                conv.append("system", expr_ctx)
-                                logger.info("[NanobotBridge] ExpressionContext injected stream=%s chars=%d",
-                                            chat_stream_id, len(expr_ctx))
-                            jargon_ctx = build_jargon_context(chat_stream_id)
-                            if jargon_ctx:
-                                conv.append("system", jargon_ctx)
-                                logger.info("[NanobotBridge] JargonContext injected stream=%s chars=%d",
-                                            chat_stream_id, len(jargon_ctx))
-                    except Exception as e:
-                        logger.warning("[NanobotBridge] Expression/Jargon inject failed session=%s: %s",
-                                       chat_stream_id if 'chat_stream_id' in locals() else session_id, e)
-            else:
-                # 私聊注入专属行为规则
-                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                    text = _load_prompt_fragment("26_private_behavior.md")
-                    if text:
-                        self._agent.controller.conversation.append("system", text)
-                        logger.info("[NanobotBridge] PrivateBehavior injected chars=%d", len(text))
             # --- Dynamic runtime preset enforcement ---
             effort_constraint = str(meta.get("effort_constraint", "")).strip()
             runtime_preset = str(meta.get("runtime_preset", "full")).strip()
@@ -1075,11 +1050,6 @@ class NanobotBridge:
 
             _saved_tools: dict[str, bool] = {}
             runtime_tool_prompt = build_runtime_tool_prompt(enabled, disabled, chat_type)
-            if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                conv = self._agent.controller.conversation
-                if effort_constraint:
-                    conv.append("system", effort_constraint)
-                conv.append("system", runtime_tool_prompt)
 
             if hasattr(self._agent, 'registry') and hasattr(self._agent.registry, '_tools'):
                 reg = self._agent.registry
@@ -1124,40 +1094,136 @@ class NanobotBridge:
             )
             # ---------------------------------------------
 
-            managed_prompt = self._render_runtime_prompt(
-                prompt_key=prompt_key,
-                mode=prompt_mode,
-                variables={
-                    "user_input": query,
-                    "history_context": self._history_context_text(history_header, history_messages),
-                    "persona_text": persona_text or "无已存储画像",
-                    "runtime_tool_prompt": runtime_tool_prompt,
-                    "sender_name": sender_name,
-                    "session_id": session_id,
-                    **identity_vars,
-                },
-                trace_id=trace_id,
-                run_id=run_handle.run_id,
-            )
-            if managed_prompt:
-                # prompt_source 无论 shadow/managed 都更新，确保 AgentRun 记录实际渲染源
+            if prompt_engine == "v2":
+                from core.prompt_v2.compiler import compile_prompt_plan
+                from core.prompt_v2.schema import PromptCompileRequest
+                from core.tracing import PromptTracer
+                from core.tool_schema_preview import build_effective_tool_schemas
+
                 try:
-                    RunTracer.update_prompt_source(
-                        run_handle.run_id,
-                        **(self._last_prompt_render_meta or {}),
+                    tool_schemas = build_effective_tool_schemas(enabled)
+                except Exception as e:
+                    logger.warning("[PromptV2] failed to build tool schemas: %s", e)
+                    tool_schemas = []
+
+                prompt_plan = await compile_prompt_plan(
+                    PromptCompileRequest(
+                        chat_type=chat_type,
+                        prompt_key=prompt_key,
+                        session_id=session_id,
+                        user_id=user_id,
+                        group_id=group_id,
+                        sender_name=sender_name,
+                        sender_id=str(meta.get("sender_id") or meta.get("user_id") or user_id),
+                        session_name=str(meta.get("session_name") or ""),
+                        trigger_reason=str(meta.get("trigger_reason") or ""),
+                        timing_decision=str(meta.get("timing_decision") or ""),
+                        current_message_id=str(meta.get("message_id") or ""),
+                        source_message_ids=[
+                            str(x) for x in (meta.get("source_message_ids") or [])
+                            if str(x).strip()
+                        ],
+                        self_id=str(meta.get("self_id") or ""),
+                        bot_id=str(meta.get("bot_id") or ""),
+                        bot_name=str(meta.get("bot_name") or ""),
+                        bot_aliases=list(meta.get("bot_aliases") or []),
+                        user_input=query,
+                        persona_text=persona_text or "无已存储画像",
+                        history_header=history_header,
+                        history_messages=history_messages,
+                        group_profile_context=str(meta.get("group_profile_context") or ""),
+                        expression_context=str(meta.get("expression_context") or ""),
+                        jargon_context=str(meta.get("jargon_context") or ""),
+                        runtime_tool_prompt=runtime_tool_prompt,
+                        effort_constraint=effort_constraint,
+                        tool_schemas=tool_schemas,
+                        debug={"context_debug": meta.get("context_debug") or {}},
                     )
-                except Exception:
-                    pass
-                if prompt_mode == "managed":
-                    if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                        self._agent.controller.conversation.append(
-                            "system",
-                            "[ManagedPrompt]\n"
-                            "以下是 PromptManager 渲染出的托管提示词，优先作为本轮运行时指导。\n"
-                            f"{managed_prompt}",
-                        )
-                        logger.info("[PromptManager] managed prompt injected key=%s chars=%d",
-                                    prompt_key, len(managed_prompt))
+                )
+                PromptTracer.record_render(
+                    trace_id=trace_id,
+                    run_id=run_handle.run_id,
+                    prompt_key=prompt_plan.prompt_key,
+                    mode="v2",
+                    variables=prompt_plan.debug,
+                    rendered_content=json.dumps(prompt_plan.request_json, ensure_ascii=False),
+                    token_estimate=prompt_plan.token_estimate,
+                    warnings=prompt_plan.warnings,
+                    prompt_source="Prompt Runtime V2",
+                    prompt_runtime_path=str(prompt_plan.debug.get("template_path", "")),
+                    prompt_default_path=str(prompt_plan.debug.get("template_path", "")),
+                    prompt_sha256=prompt_plan.prompt_sha256,
+                )
+                prompt_build = SimpleNamespace(
+                    prompt_key=prompt_plan.prompt_key,
+                    prompt_mode="v2",
+                    prompt_source="Prompt Runtime V2",
+                    prompt_runtime_path=str(prompt_plan.debug.get("template_path", "")),
+                    prompt_default_path=str(prompt_plan.debug.get("template_path", "")),
+                    prompt_sha256=prompt_plan.prompt_sha256,
+                    pre_event_messages=prompt_plan.messages_without_current_user,
+                    event_content=prompt_plan.current_user_content,
+                )
+            else:
+                from core.prompt_assembler import PromptAssembler, PromptBuildContext
+                prompt_build = PromptAssembler().build(
+                    PromptBuildContext(
+                        mode=prompt_mode,
+                        chat_type=runtime_chat_type,
+                        prompt_key=prompt_key,
+                        session_id=session_id,
+                        user_id=user_id,
+                        group_id=group_id,
+                        sender_name=sender_name,
+                        sender_id=str(meta.get("sender_id") or meta.get("user_id") or user_id),
+                        session_name=str(meta.get("session_name") or ""),
+                        trigger_reason=str(meta.get("trigger_reason") or ""),
+                        timing_decision=str(meta.get("timing_decision") or ""),
+                        current_message_id=str(meta.get("message_id") or ""),
+                        source_message_ids=[
+                            str(x) for x in (meta.get("source_message_ids") or [])
+                            if str(x).strip()
+                        ],
+                        self_id=str(meta.get("self_id") or ""),
+                        bot_id=str(meta.get("bot_id") or ""),
+                        bot_name=str(meta.get("bot_name") or ""),
+                        bot_aliases=list(meta.get("bot_aliases") or []),
+                        user_input=query,
+                        persona_text=persona_text or "无已存储画像",
+                        history_header=history_header,
+                        history_messages=history_messages,
+                        runtime_tool_prompt=runtime_tool_prompt,
+                        effort_constraint=effort_constraint,
+                    ),
+                    trace_id=trace_id,
+                    run_id=run_handle.run_id,
+                )
+            self._last_prompt_render_meta = {
+                "prompt_source": prompt_build.prompt_source,
+                "prompt_runtime_path": prompt_build.prompt_runtime_path,
+                "prompt_default_path": prompt_build.prompt_default_path,
+                "prompt_sha256": prompt_build.prompt_sha256,
+            }
+            try:
+                RunTracer.update_prompt_source(
+                    run_handle.run_id,
+                    **self._last_prompt_render_meta,
+                )
+            except Exception:
+                pass
+            if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
+                conv = self._agent.controller.conversation
+                conv._messages = []
+                for msg in prompt_build.pre_event_messages:
+                    conv.append(str(msg.get("role") or "system"), msg.get("content") or "")
+                logger.info(
+                    "[PromptRuntime] built key=%s mode=%s source=%s pre_messages=%d sha=%s",
+                    prompt_build.prompt_key,
+                    prompt_build.prompt_mode,
+                    prompt_build.prompt_source,
+                    len(prompt_build.pre_event_messages),
+                    prompt_build.prompt_sha256[:12],
+                )
 
             logger.debug(f"[NanobotBridge] Agent initialized: {self._agent is not None}")
             logger.debug(f"[NanobotBridge] Output module: {self._output}")
@@ -1173,9 +1239,9 @@ class NanobotBridge:
                     source_name_prefix="attachment",
                     detail="low",
                 )
-                event_content = make_multimodal_content(query, images=image_parts)
+                event_content = make_multimodal_content(prompt_build.event_content, images=image_parts)
             else:
-                event_content = query
+                event_content = prompt_build.event_content
             event = create_user_input_event(event_content)
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 

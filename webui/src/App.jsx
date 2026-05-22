@@ -2211,6 +2211,7 @@ function ManagedPromptsPage() {
 
 function EffectivePromptPreviewPage() {
   const [form, setForm] = useState({
+    engine: 'v1',
     chat_type: 'private',
     session_id: '',
     user_id: '',
@@ -2222,6 +2223,8 @@ function EffectivePromptPreviewPage() {
   })
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [v2VariableTemplate, setV2VariableTemplate] = useState('identity_context')
+  const [v2Variables, setV2Variables] = useState([])
   const update = (key, value) => setForm(prev => ({ ...prev, [key]: value }))
   const run = () => {
     setLoading(true)
@@ -2234,12 +2237,27 @@ function EffectivePromptPreviewPage() {
     const id = setTimeout(run, 0)
     return () => clearTimeout(id)
   }, [])
+  useEffect(() => {
+    if (form.engine !== 'v2') {
+      setV2Variables([])
+      return
+    }
+    api.get('/prompt-v2/variables', { params: { template: v2VariableTemplate } })
+      .then(r => setV2Variables(r.data.items || []))
+      .catch(() => setV2Variables([]))
+  }, [form.engine, v2VariableTemplate])
   return (
     <div>
       <h1 className="text-2xl font-bold mb-1">有效 Prompt 预览</h1>
       <p className="text-slate-500 text-sm mb-4">按 chat/session 还原本轮实际发给模型的 messages、上下文和 Prompt 来源</p>
       <Card className="p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <label className="text-xs text-slate-500">engine
+            <select value={form.engine} onChange={e => update('engine', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200">
+              <option value="v1">v1</option>
+              <option value="v2">v2</option>
+            </select>
+          </label>
           <label className="text-xs text-slate-500">chat_type
             <select value={form.chat_type} onChange={e => update('chat_type', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200">
               <option value="private">private</option>
@@ -2269,6 +2287,28 @@ function EffectivePromptPreviewPage() {
             <input value={form.prompt_key} onChange={e => update('prompt_key', e.target.value)} placeholder={form.chat_type === 'group' ? 'group_chat' : 'private_chat'} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
           </label>
         </div>
+        {form.engine === 'v2' && (
+          <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
+            <div className="flex flex-col md:flex-row md:items-center gap-3 mb-3">
+              <div>
+                <div className="text-xs font-medium text-emerald-300">V2 模板变量</div>
+                <div className="text-[11px] text-slate-500">仅展示当前 section 白名单变量；未列出的变量保存/渲染会被拒绝。</div>
+              </div>
+              <select value={v2VariableTemplate} onChange={e => setV2VariableTemplate(e.target.value)} className="md:ml-auto bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                <option value="identity_context">identity_context</option>
+              </select>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {v2Variables.map(v => (
+                <span key={v.name} title={`${v.description || ''}${v.example ? ` · 示例: ${v.example}` : ''}`} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs">
+                  <code className="text-emerald-300">{`{{ ${v.name} }}`}</code>
+                  <span className="text-slate-500">{v.description}</span>
+                </span>
+              ))}
+              {!v2Variables.length && <span className="text-xs text-slate-600">暂无可插入变量</span>}
+            </div>
+          </div>
+        )}
         <label className="block text-xs text-slate-500 mt-3">user_input
           <textarea value={form.user_input} onChange={e => update('user_input', e.target.value)} className="mt-1 w-full h-24 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 resize-none" />
         </label>

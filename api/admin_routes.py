@@ -252,6 +252,7 @@ class EffectivePromptPreviewRequest(BaseModel):
     group_id: str = ""
     sender_name: str = ""
     prompt_key: str = ""
+    engine: Literal["v1", "v2"] = "v1"
     mode: Literal["legacy", "shadow", "managed"] = "shadow"
     user_input: str = ""
     runtime_preset: str = "full"
@@ -259,6 +260,20 @@ class EffectivePromptPreviewRequest(BaseModel):
 
 class PromptRollbackRequest(BaseModel):
     backup_name: str
+
+
+@router.get("/prompt-v2/variables")
+def list_prompt_v2_variables(
+    template: str = Query(""),
+    _auth=Depends(verify_admin),
+):
+    from core.prompt_v2.variables import list_variables
+
+    template_key = str(template or "").removesuffix(".md").strip()
+    return {
+        "template": template_key,
+        "items": list_variables(template_key),
+    }
 
 
 # ── Helpers ──
@@ -1728,29 +1743,22 @@ def _recent_prompt_preview_logs(db: Session, body: EffectivePromptPreviewRequest
 
 
 @router.post("/prompt/effective-preview")
-def preview_effective_prompt(
+async def preview_effective_prompt(
     body: EffectivePromptPreviewRequest,
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    from core.context_builder import build_chat_context
     from core.database import Persona
-    from core.identity import build_identity_vars
+    from core.context_builder import build_chat_context
+    from core.prompt_assembler import PromptAssembler, PromptBuildContext
     from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
     from core.tool_schema_preview import build_effective_tool_schemas
-    from nanobot_kt.bridge import NanobotBridge, _load_prompt_fragment
 
     is_group = body.chat_type == "group"
     group_id = body.group_id.strip()
     session_id = body.session_id.strip() or (f"group_{group_id}" if is_group and group_id else "")
     user_id = body.user_id.strip()
     prompt_key = body.prompt_key.strip() or ("group_chat" if is_group else "private_chat")
-    bridge = NanobotBridge()
-
-    legacy = _legacy_prompt_preview_meta()
-    messages: list[dict] = []
-    if legacy["content"]:
-        messages.append({"role": "system", "content": legacy["content"]})
 
     persona_text = ""
     if user_id:
@@ -1765,53 +1773,6 @@ def preview_effective_prompt(
         is_group=is_group,
         group_id=group_id,
     )
-    identity_vars = build_identity_vars(sender_id=user_id, bot_name="", bot_aliases=[])
-    meta = {
-        "chat_type": body.chat_type,
-        "is_group": is_group,
-        "session_id": session_id,
-        "user_id": user_id,
-        "group_id": group_id,
-    }
-    runtime_context = bridge._build_runtime_context(
-        user_id=user_id,
-        session_id=session_id,
-        sender_name=body.sender_name,
-        meta=meta,
-    )
-    persona_reference = (
-        bridge._build_persona_system_reference(user_id, persona_text or "无已存储画像")
-        if user_id else ""
-    )
-    identity_context = (
-        "<identity_context>\n"
-        f"character_name: {identity_vars['character_name']}\n"
-        f"name_hint: {identity_vars['name_hint']}\n"
-        f"alias_names:\n{identity_vars['alias_names']}\n"
-        f"sender_id: {identity_vars['sender_id']}\n"
-        f"super_user_id: {identity_vars['super_user_id']}\n"
-        f"is_super_user: {identity_vars['is_super_user']}\n"
-        "</identity_context>"
-    )
-
-    messages.append({"role": "system", "content": identity_context})
-    messages.append({"role": "system", "content": runtime_context})
-    if persona_reference:
-        messages.append({"role": "system", "content": persona_reference})
-    if history_header:
-        messages.append({"role": "system", "content": history_header})
-    messages.extend(history_messages)
-
-    if is_group:
-        for frag in ("20_group_rules.md", "25_context_control.md"):
-            text_part = _load_prompt_fragment(frag)
-            if text_part:
-                messages.append({"role": "system", "content": text_part})
-    else:
-        private_behavior = _load_prompt_fragment("26_private_behavior.md")
-        if private_behavior:
-            messages.append({"role": "system", "content": private_behavior})
-
     runtime_preset = (body.runtime_preset or "full").strip() or "full"
     enabled, disabled = resolve_effective_tools(
         chat_type=body.chat_type,
@@ -1822,62 +1783,107 @@ def preview_effective_prompt(
     )
     runtime_tool_prompt = build_runtime_tool_prompt(enabled, disabled, body.chat_type)
     tool_schemas = build_effective_tool_schemas(enabled)
-    messages.append({"role": "system", "content": runtime_tool_prompt})
 
-    prompt_manager_render = None
-    prompt_source = legacy["prompt_source"]
-    prompt_runtime_path = legacy["prompt_runtime_path"]
-    prompt_default_path = legacy["prompt_default_path"]
-    prompt_sha256 = legacy["prompt_sha256"]
-    variables = {
-        "user_input": body.user_input,
-        "history_context": bridge._history_context_text(history_header, history_messages),
-        "persona_text": persona_text or "无已存储画像",
-        "runtime_tool_prompt": runtime_tool_prompt,
-        "sender_name": body.sender_name,
-        "session_id": session_id,
-        **identity_vars,
-    }
-    if body.mode != "legacy":
-        try:
-            rendered = get_prompt_manager().render(prompt_key, variables, mode=body.mode, strict=False)
-            prompt_manager_render = rendered.to_dict()
-            if body.mode == "managed":
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        "[ManagedPrompt]\n"
-                        "以下是 PromptManager 渲染出的托管提示词，优先作为本轮运行时指导。\n"
-                        f"{rendered.content}"
-                    ),
-                })
-                prompt_source = rendered.prompt_source
-                prompt_runtime_path = rendered.prompt_runtime_path
-                prompt_default_path = rendered.prompt_default_path
-                prompt_sha256 = rendered.prompt_sha256
-        except PromptRenderError as e:
-            prompt_manager_render = {"error": str(e), "prompt_key": prompt_key, "mode": body.mode}
+    if body.engine == "v2":
+        from core.prompt_v2.preview import build_preview_plan
+        from core.prompt_v2.schema import PromptCompileRequest
 
-    messages.append({"role": "user", "content": body.user_input})
+        v2_prompt_key = body.prompt_key.strip()
+        if v2_prompt_key in {"", "group_chat", "private_chat"}:
+            v2_prompt_key = "chat_group" if is_group else "chat_private"
+        plan = await build_preview_plan(
+            PromptCompileRequest(
+                chat_type=body.chat_type,
+                prompt_key=v2_prompt_key,
+                session_id=session_id,
+                user_id=user_id,
+                group_id=group_id,
+                sender_name=body.sender_name,
+                sender_id=user_id,
+                user_input=body.user_input,
+                persona_text=persona_text or "无已存储画像",
+                history_header=history_header,
+                history_messages=history_messages,
+                runtime_tool_prompt=runtime_tool_prompt,
+                tool_schemas=tool_schemas,
+                debug={"history_debug": history_debug},
+            )
+        )
+        recent_run_id, recent_logs = _recent_prompt_preview_logs(db, body)
+        tools = [{"name": name, "enabled": bool(enabled.get(name, True))} for name in sorted(enabled.keys())]
+        return {
+            "engine": "v2",
+            "chat_type": body.chat_type,
+            "session_id": session_id,
+            "user_id": user_id,
+            "group_id": group_id,
+            "prompt_key": plan.prompt_key,
+            "prompt_mode": "v2",
+            "prompt_source": "Prompt Runtime V2",
+            "prompt_runtime_path": plan.debug.get("template_path", ""),
+            "prompt_default_path": plan.debug.get("template_path", ""),
+            "prompt_sha256": plan.prompt_sha256,
+            "section_hashes": plan.section_hashes,
+            "warnings": plan.warnings,
+            "debug": plan.debug,
+            "history_debug": history_debug,
+            "runtime_preset": runtime_preset,
+            "runtime_tool_prompt": runtime_tool_prompt,
+            "tools": tools,
+            "tool_schemas": tool_schemas,
+            "effective_tool_schemas": tool_schemas,
+            "disabled_tools": disabled,
+            "messages": plan.messages,
+            "request_json": plan.request_json,
+            "prompt_plan": plan.to_dict(),
+            "compiled_prompt": plan.to_dict(),
+            "prompt_build": plan.to_dict(),
+            "recent_agent_run_id": recent_run_id,
+            "recent_llm_api_logs": recent_logs,
+        }
+
+    prompt_build = PromptAssembler().build(
+        PromptBuildContext(
+            mode=body.mode,
+            chat_type=body.chat_type,
+            prompt_key=prompt_key,
+            session_id=session_id,
+            user_id=user_id,
+            group_id=group_id,
+            sender_name=body.sender_name,
+            sender_id=user_id,
+            user_input=body.user_input,
+            persona_text=persona_text or "无已存储画像",
+            history_header=history_header,
+            history_messages=history_messages,
+            runtime_tool_prompt=runtime_tool_prompt,
+            tool_schemas=tool_schemas,
+        )
+    )
+    messages = prompt_build.messages
     recent_run_id, recent_logs = _recent_prompt_preview_logs(db, body)
     tools = [{"name": name, "enabled": bool(enabled.get(name, True))} for name in sorted(enabled.keys())]
-    request_json = {"messages": messages, "tools": tool_schemas}
+    request_json = prompt_build.request_json
     return {
         "chat_type": body.chat_type,
         "session_id": session_id,
         "user_id": user_id,
         "group_id": group_id,
         "prompt_key": prompt_key,
-        "prompt_mode": body.mode,
-        "prompt_source": prompt_source,
-        "prompt_runtime_path": prompt_runtime_path,
-        "prompt_default_path": prompt_default_path,
-        "prompt_sha256": prompt_sha256,
-        "system_message": legacy["content"],
-        "identity_context": identity_context,
-        "runtime_context": runtime_context,
-        "persona_reference": persona_reference,
-        "history_context": bridge._history_context_text(history_header, history_messages),
+        "prompt_mode": prompt_build.prompt_mode,
+        "prompt_source": prompt_build.prompt_source,
+        "prompt_runtime_path": prompt_build.prompt_runtime_path,
+        "prompt_default_path": prompt_build.prompt_default_path,
+        "prompt_sha256": prompt_build.prompt_sha256,
+        "managed_prompt_sha256": prompt_build.managed_prompt_sha256,
+        "legacy_prompt_sha256": prompt_build.legacy_prompt_sha256,
+        "legacy_vs_managed_diff": prompt_build.diff,
+        "warnings": prompt_build.warnings,
+        "system_message": messages[0]["content"] if messages else "",
+        "identity_context": next((m["content"] for m in messages if "<identity_context>" in str(m.get("content", ""))), ""),
+        "runtime_context": next((m["content"] for m in messages if "<runtime_context>" in str(m.get("content", ""))), ""),
+        "persona_reference": next((m["content"] for m in messages if "<persona_reference" in str(m.get("content", ""))), ""),
+        "history_context": prompt_build.variables.get("history_context", ""),
         "history_debug": history_debug,
         "group_recent_context": "",
         "runtime_preset": runtime_preset,
@@ -1886,7 +1892,11 @@ def preview_effective_prompt(
         "tool_schemas": tool_schemas,
         "effective_tool_schemas": tool_schemas,
         "disabled_tools": disabled,
-        "prompt_manager_render": prompt_manager_render,
+        "prompt_manager_render": prompt_build.render,
+        "compiled_prompt": prompt_build.to_dict(),
+        "prompt_build": prompt_build.to_dict(),
+        "managed_messages": prompt_build.managed_messages,
+        "legacy_messages": prompt_build.legacy_messages,
         "messages": messages,
         "request_json": request_json,
         "recent_agent_run_id": recent_run_id,
@@ -4239,7 +4249,15 @@ class ReplyTestRunRequest(BaseModel):
     message: str
     recent_context: str = ""
     persona_text: str = ""
-    variant: Literal["baseline", "prompt_only", "code_retry"] = "code_retry"
+    prompt_engine: Literal["v1", "v2"] = "v1"
+    variant: Literal[
+        "baseline",
+        "prompt_only",
+        "code_retry",
+        "v1_baseline",
+        "v2_prompt_only",
+        "v2_code_retry",
+    ] = "code_retry"
     enable_reply_contract_retry: bool = True
     dry_run: bool = True
 
@@ -4288,6 +4306,39 @@ def _reply_log_attempt(log) -> dict:
     }
 
 
+def _resolve_reply_test_prompt_settings(body: ReplyTestRunRequest) -> tuple[str, str, bool]:
+    variant = str(body.variant or "code_retry")
+    engine = str(body.prompt_engine or "v1")
+    prompt_mode = "legacy"
+    enable_retry = bool(body.enable_reply_contract_retry)
+
+    if variant == "prompt_only":
+        prompt_mode = "managed"
+        enable_retry = False
+    elif variant == "code_retry":
+        prompt_mode = "legacy"
+        enable_retry = enable_retry
+    elif variant == "baseline":
+        prompt_mode = "legacy"
+        enable_retry = False
+    elif variant == "v1_baseline":
+        engine = "v1"
+        prompt_mode = "legacy"
+        enable_retry = False
+    elif variant == "v2_prompt_only":
+        engine = "v2"
+        prompt_mode = "legacy"
+        enable_retry = False
+    elif variant == "v2_code_retry":
+        engine = "v2"
+        prompt_mode = "legacy"
+        enable_retry = enable_retry
+
+    if engine not in {"v1", "v2"}:
+        engine = "v1"
+    return engine, prompt_mode, enable_retry
+
+
 async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
     from core.database import AgentRun, LLMApiRequestLog, ReplyContractCheckLog
     from core.tracing import new_trace_id
@@ -4296,9 +4347,7 @@ async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
     trace_id = new_trace_id()
     session_id = (body.session_id or f"reply-test-{uuid.uuid4().hex[:8]}").strip()
     sender_id = (body.sender_id or "admin").strip()
-    enable_retry = bool(body.enable_reply_contract_retry)
-    if body.variant in ("baseline", "prompt_only"):
-        enable_retry = False
+    prompt_engine, prompt_mode, enable_retry = _resolve_reply_test_prompt_settings(body)
     metadata = {
         "trace_id": trace_id,
         "chat_type": body.chat_type,
@@ -4310,6 +4359,8 @@ async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
         "persona_text": body.persona_text,
         "history_header": body.recent_context,
         "variant": body.variant,
+        "prompt_runtime_engine_override": prompt_engine,
+        "prompt_system_mode_override": prompt_mode,
         "enable_reply_contract_retry": enable_retry,
         "dry_run": bool(body.dry_run),
     }
@@ -4329,6 +4380,9 @@ async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
         .first()
     )
     run_id = run.run_id if run else ""
+    prompt_sha256 = run.prompt_sha256 if run else ""
+    prompt_source = run.prompt_source if run else ""
+    prompt_mode_actual = run.prompt_mode if run else prompt_mode
     reply_logs = []
     llm_logs = []
     if run_id:
@@ -4356,6 +4410,10 @@ async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
         "ok": True,
         "trace_id": trace_id,
         "run_id": run_id,
+        "prompt_engine": prompt_engine,
+        "prompt_mode": prompt_mode_actual,
+        "prompt_source": prompt_source,
+        "prompt_sha256": prompt_sha256,
         "first_attempt": _reply_log_attempt(first_log),
         "retry_attempt": {
             "enabled": enable_retry,
@@ -4414,7 +4472,14 @@ class ReplyEvalSaveGeneratedIn(BaseModel):
 
 class ReplyEvalRunIn(BaseModel):
     name: str = ""
-    variant: Literal["baseline", "prompt_only", "code_retry"] = "code_retry"
+    variant: Literal[
+        "baseline",
+        "prompt_only",
+        "code_retry",
+        "v1_baseline",
+        "v2_prompt_only",
+        "v2_code_retry",
+    ] = "code_retry"
     case_ids: list[str] = Field(default_factory=list)
     limit: int = 50
 
@@ -4609,7 +4674,7 @@ async def reply_eval_run(
             recent_context=str(context.get("recent_context") or ""),
             persona_text=str(context.get("persona_text") or ""),
             variant=body.variant,
-            enable_reply_contract_retry=body.variant == "code_retry",
+            enable_reply_contract_retry=body.variant in {"code_retry", "v2_code_retry"},
             dry_run=True,
         )
         try:
@@ -4639,6 +4704,7 @@ async def reply_eval_run(
                 run_id=run.id,
                 agent_run_id=str(outcome.get("run_id") or ""),
                 trace_id=str(outcome.get("trace_id") or ""),
+                prompt_sha256=str(outcome.get("prompt_sha256") or ""),
                 case_id=case.case_id,
                 variant=body.variant,
                 expected_action=expected_action,
@@ -4656,6 +4722,7 @@ async def reply_eval_run(
                 run_id=run.id,
                 agent_run_id="",
                 trace_id="",
+                prompt_sha256="",
                 case_id=case.case_id,
                 variant=body.variant,
                 expected_action=case.expected_action or "any",

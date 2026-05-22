@@ -316,10 +316,14 @@ def test_mark_clear_respected(db_session):
 # ── history injection via bridge ──
 
 @pytest.mark.asyncio
-async def test_bridge_injects_history_messages():
+async def test_bridge_injects_history_messages(db_session):
     """Bridge should inject history_messages from metadata into conversation."""
     from unittest.mock import AsyncMock, MagicMock, patch
+    from core import database
+    from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
+
+    settings.set_session_factory(database.SessionLocal)
 
     bridge = NanobotBridge.__new__(NanobotBridge)
     bridge._output = MagicMock()
@@ -344,6 +348,7 @@ async def test_bridge_injects_history_messages():
     # Mock model routing
     with patch("nanobot_kt.bridge.NewAPIClient") as mock_client_cls:
         mock_client = MagicMock()
+        mock_client.sync_models_to_registry = AsyncMock()
         mock_client.estimate_complexity = MagicMock(return_value=3)
         mock_client.get_ordered_candidates = MagicMock(return_value=[
             {"id": "test-model", "intelligence": 8, "cost_input_1m": 0.0}
@@ -355,12 +360,15 @@ async def test_bridge_injects_history_messages():
             user_id="u1",
             session_id="s1",
             metadata={
+                "prompt_system_mode_override": "shadow",
                 "persona_text": "",
                 "raw_query": "当前消息",
+                "reply_model": "test-model",
                 "history_messages": [
                     {"role": "user", "content": "之前的问题"},
                     {"role": "assistant", "content": "之前的回复"},
                 ],
+                "enable_reply_contract_retry": False,
             },
         )
 
@@ -371,6 +379,25 @@ async def test_bridge_injects_history_messages():
                      if call.args[0] in ("user", "assistant")]
     assert "user" in history_roles
     assert "assistant" in history_roles
+
+
+def test_bridge_event_state_clear_ignores_mock_queue():
+    """MagicMock 不是 asyncio.Queue，不能按真实队列 drain。"""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from nanobot_kt.bridge import NanobotBridge
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    mock_queue = MagicMock()
+    bridge._agent = SimpleNamespace(controller=SimpleNamespace(
+        _pending_events=[],
+        _event_queue=mock_queue,
+        _pending_injections=[],
+    ))
+
+    bridge._clear_controller_event_state()
+
+    mock_queue.get_nowait.assert_not_called()
 
 
 def test_bridge_no_crash_on_empty_history():

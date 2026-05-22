@@ -9,12 +9,17 @@ def auth_header(monkeypatch):
     return {"Authorization": "Bearer test-token"}
 
 
-def _install_fake_reply_bridge(monkeypatch, reply_text="测试回复"):
+def _install_fake_reply_bridge(monkeypatch, reply_text="测试回复", capture=None):
     class FakeBridge:
         async def handle_message(self, message, *, user_id="", session_id="", sender_name="", metadata=None, stream_queue=None):
             from core.tracing import LLMRequestTracer, ReplyContractTracer, RunTracer
 
+            if capture is not None:
+                capture.append(dict(metadata or {}))
             trace_id = metadata.get("trace_id") if metadata else ""
+            prompt_engine = str((metadata or {}).get("prompt_runtime_engine_override") or "v1")
+            prompt_mode = str((metadata or {}).get("prompt_system_mode_override") or "legacy")
+            prompt_sha = ("v" if prompt_engine == "v2" else ("m" if prompt_mode == "managed" else "l")) * 64
             run = RunTracer.start_run(
                 trace_id=trace_id,
                 session_id=session_id,
@@ -22,8 +27,10 @@ def _install_fake_reply_bridge(monkeypatch, reply_text="测试回复"):
                 chat_type=metadata.get("chat_type", "group") if metadata else "group",
                 group_id=metadata.get("group_id", "") if metadata else "",
                 run_type="reply_test",
-                prompt_mode=str(metadata.get("variant", "code_retry") if metadata else "code_retry"),
-                prompt_key="group_chat",
+                prompt_mode=prompt_engine if prompt_engine == "v2" else prompt_mode,
+                prompt_key="chat_group" if prompt_engine == "v2" else "group_chat",
+                prompt_source="Prompt Runtime V2" if prompt_engine == "v2" else ("PromptManager runtime template" if prompt_mode == "managed" else "Legacy runtime prompt"),
+                prompt_sha256=prompt_sha,
                 input_preview=message,
             )
             ReplyContractTracer.record_check(
@@ -92,6 +99,62 @@ def test_reply_test_run_returns_attempts_final_and_llm_logs(client, auth_header,
     assert data["metrics"]["retry_used"] is True
     assert data["llm_api_request_logs"]
     assert json.loads(data["llm_api_request_logs"][0]["response_json"])["choices"][0]["message"]["content"] == "在，怎么了"
+
+
+def test_reply_test_prompt_only_uses_managed_prompt_without_retry(client, auth_header, monkeypatch):
+    captured = []
+    _install_fake_reply_bridge(monkeypatch, reply_text="可以", capture=captured)
+
+    resp = client.post(
+        "/api/v1/admin/reply-test/run",
+        headers=auth_header,
+        json={
+            "message": "你在吗",
+            "chat_type": "group",
+            "session_id": "test-group-prompt-only",
+            "sender_id": "123",
+            "sender_name": "tester",
+            "variant": "prompt_only",
+            "enable_reply_contract_retry": True,
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert captured[-1]["prompt_system_mode_override"] == "managed"
+    assert captured[-1]["enable_reply_contract_retry"] is False
+    assert data["prompt_sha256"] == "m" * 64
+    assert data["retry_attempt"]["enabled"] is False
+
+
+def test_reply_test_supports_prompt_engine_v2(client, auth_header, monkeypatch):
+    captured = []
+    _install_fake_reply_bridge(monkeypatch, reply_text="可以", capture=captured)
+
+    resp = client.post(
+        "/api/v1/admin/reply-test/run",
+        headers=auth_header,
+        json={
+            "message": "你在吗",
+            "chat_type": "group",
+            "session_id": "test-group-v2",
+            "sender_id": "123",
+            "sender_name": "tester",
+            "prompt_engine": "v2",
+            "variant": "code_retry",
+            "enable_reply_contract_retry": True,
+            "dry_run": True,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert captured[-1]["prompt_runtime_engine_override"] == "v2"
+    assert captured[-1]["enable_reply_contract_retry"] is True
+    assert data["prompt_engine"] == "v2"
+    assert data["prompt_mode"] == "v2"
+    assert data["prompt_sha256"] == "v" * 64
 
 
 def test_group_agent_result_uses_popped_no_reply_meta():
@@ -170,6 +233,7 @@ def test_reply_eval_case_crud_preview_and_run(client, auth_header, monkeypatch):
     assert run_data["passed"] == 1
     assert run_data["results"][0]["agent_run_id"]
     assert run_data["results"][0]["trace_id"]
+    assert run_data["results"][0]["prompt_sha256"] == "l" * 64
     assert run_data["metrics"]["expected_action_accuracy"] == 1.0
     assert run_data["metrics"]["retry_success_rate"] == 1.0
 
@@ -180,3 +244,38 @@ def test_reply_eval_case_crud_preview_and_run(client, auth_header, monkeypatch):
     detail = client.get(f"/api/v1/admin/reply-eval/runs/{run_data['id']}", headers=auth_header)
     assert detail.status_code == 200
     assert detail.json()["results"][0]["case_id"] == "reply_case_manual"
+
+
+def test_reply_eval_supports_v2_named_variants(client, auth_header, monkeypatch):
+    captured = []
+    _install_fake_reply_bridge(monkeypatch, reply_text="可以", capture=captured)
+
+    create = client.post(
+        "/api/v1/admin/reply-eval/cases",
+        headers=auth_header,
+        json={
+            "case_id": "reply_case_v2",
+            "title": "V2 直接问候",
+            "chat_type": "group",
+            "input_text": "你在吗",
+            "expected_action": "reply",
+            "expected_keywords": ["可以"],
+        },
+    )
+    assert create.status_code == 200, create.text
+
+    run = client.post(
+        "/api/v1/admin/reply-eval/run",
+        headers=auth_header,
+        json={"variant": "v2_code_retry", "case_ids": ["reply_case_v2"]},
+    )
+
+    assert run.status_code == 200, run.text
+    data = run.json()
+    assert data["variant"] == "v2_code_retry"
+    assert data["metrics"]["reply_call_rate"] == 1.0
+    assert data["metrics"]["expected_action_accuracy"] == 1.0
+    assert data["metrics"]["no_tool_call_rate"] == 1.0
+    assert data["metrics"]["fake_tool_claim_rate"] == 0.0
+    assert captured[-1]["prompt_runtime_engine_override"] == "v2"
+    assert captured[-1]["enable_reply_contract_retry"] is True
