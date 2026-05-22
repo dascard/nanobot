@@ -79,7 +79,7 @@ def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]
     if is_superuser:
         if _looks_task_request(t):
             return "serious", "full", "superuser_task"
-        return "short", "limited", "superuser_query"
+        return "short", "full", "superuser_query"
     if any(w in t for w in _IDENTITY_PROBE_WORDS):
         return "casual", "none", "identity_probe"
     if any(w in t for w in _CHECK_CAPABILITY_WORDS):

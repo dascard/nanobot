@@ -3812,6 +3812,26 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
         kt_loaded = set()
 
     registry_available = bool(registry_info)
+    override_scope_type = ""
+    override_scope_id = ""
+    if user_id:
+        override_scope_type = "user"
+        override_scope_id = str(user_id).strip()
+    elif group_id:
+        override_scope_type = "group"
+        override_scope_id = str(group_id).strip()
+    override_state: dict[str, bool] = {}
+    if override_scope_type and override_scope_id:
+        try:
+            from core.database import ToolOverride
+            rows = db.query(ToolOverride).filter(
+                ToolOverride.scope_type == override_scope_type,
+                ToolOverride.scope_id == override_scope_id,
+            ).all()
+            override_state = {row.tool_name: bool(row.enabled) for row in rows}
+        except Exception as e:
+            logger.warning("[Tools] failed to load override state: %s", e)
+            override_state = {}
 
     items = []
     for name, td in sorted(TOOL_METADATA.items(), key=lambda x: x[1].label):
@@ -3831,6 +3851,8 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             "configured_disabled_reason": configured_disabled.get(name, ""),
             "policy_effective": policy_enabled.get(name, False),
             "policy_disabled_reason": policy_disabled.get(name, ""),
+            "override_present": name in override_state,
+            "override_enabled": override_state.get(name) if name in override_state else None,
             # 兼容旧前端字段：工具管理页的 effective 表示配置启用状态，不混入 limited/none 策略。
             "effective": configured_enabled.get(name, False),
             "disabled_reason": configured_disabled.get(name, ""),

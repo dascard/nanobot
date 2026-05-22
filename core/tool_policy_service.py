@@ -110,9 +110,10 @@ def resolve_effective_tools(
 
     合并顺序（后面覆盖前面）：
     1. TOOL_METADATA 默认值 (private_default/group_default)
-    2. force_enabled / force_disabled_group
-    3. ToolOverride 表 (scope_type=chat_type/group/user)
-    4. tool_policy 安全兜底 (none/limited/full)
+    2. force_enabled / force_disabled_group 初始硬约束
+    3. tool_policy 运行时预设 (none/limited/full)
+    4. ToolOverride 表 (scope_type=chat_type/group/user)，显式覆盖可放开 limited 预设
+    5. force_enabled / force_disabled_group 硬约束最终兜底
 
     返回 (enabled: {tool_name: bool}, disabled_reasons: {tool_name: reason})
     """
@@ -130,7 +131,23 @@ def resolve_effective_tools(
             enabled[name] = False
             disabled[name] = "群聊强制禁用"
 
-    if db is not None:
+    if tool_policy == "none":
+        for name in list(enabled.keys()):
+            td = get_tool_def(name)
+            if not (td and td.force_enabled):
+                enabled[name] = False
+                disabled[name] = "tool_policy=none"
+    elif tool_policy == "limited":
+        limited = _load_limited_set(db=db)
+        for name in list(enabled.keys()):
+            td = get_tool_def(name)
+            if td and td.force_enabled:
+                continue
+            if name not in limited:
+                enabled[name] = False
+                disabled[name] = "tool_policy=limited"
+
+    if db is not None and tool_policy != "none":
         try:
             from core.database import ToolOverride
             rows = db.query(ToolOverride).filter(
@@ -154,21 +171,13 @@ def resolve_effective_tools(
         except Exception as e:
             logger.warning("Failed to load ToolOverride: %s", e)
 
-    if tool_policy == "none":
-        for name in list(enabled.keys()):
-            td = get_tool_def(name)
-            if not (td and td.force_enabled):
-                enabled[name] = False
-                disabled[name] = "tool_policy=none"
-    elif tool_policy == "limited":
-        limited = _load_limited_set(db=db)
-        for name in list(enabled.keys()):
-            td = get_tool_def(name)
-            if td and td.force_enabled:
-                continue
-            if name not in limited:
-                enabled[name] = False
-                disabled[name] = f"tool_policy=limited"
+    for name, td in TOOL_METADATA.items():
+        if td.force_enabled:
+            enabled[name] = True
+            disabled.pop(name, None)
+        if td.force_disabled_group and chat_type == "group":
+            enabled[name] = False
+            disabled[name] = "群聊强制禁用"
 
     return enabled, disabled
 

@@ -3885,6 +3885,9 @@ function ToolsPage() {
               const isLocked = t.force_enabled
               const isSubagent = t.is_subagent
               const configured = t.configured_enabled ?? t.effective
+              const overrideValue = t.override_present
+                ? (t.override_enabled ? 'enabled' : 'disabled')
+                : 'inherit'
               return (
                 <tr key={t.name} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                   <td className="py-2 px-2 font-mono text-slate-200">
@@ -3915,11 +3918,11 @@ function ToolsPage() {
                       {isLocked && <span className="text-xs text-emerald-400">强制启用</span>}
                       {isSubagent && <span className="text-xs text-purple-400">subagent（运行时禁用有限）</span>}
                       {!isForced && !isLocked && !isSubagent && (
-                        <select value={configured ? 'enabled' : 'disabled'}
+                        <select value={overrideValue}
                           onChange={e => { const v = e.target.value; if (v === 'inherit') clearOverride(t); else setOverride(t, v === 'enabled') }}
                           disabled={!targetId.trim()}
                           className={`p-1 rounded text-xs bg-slate-900 border border-slate-700 ${!targetId.trim() ? 'opacity-40' : ''}`}>
-                          <option value="inherit">继承</option>
+                          <option value="inherit">继承（{configured ? '启用' : '禁用'}）</option>
                           <option value="enabled">启用</option>
                           <option value="disabled">禁用</option>
                         </select>

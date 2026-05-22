@@ -575,6 +575,75 @@ class TestToolAdmin:
         ))
         assert "ai_daily" in effective["enabled"]
 
+    def test_user_override_can_enable_tool_under_limited_policy(self, client, auth_header):
+        before = _ok(client.get(
+            "/api/v1/admin/tools/effective",
+            params={
+                "chat_type": "private",
+                "user_id": "0000000000",
+                "tool_policy": "limited",
+            },
+            headers=auth_header,
+        ))
+        assert "ai_daily" not in before["enabled"]
+        assert before["disabled"]["ai_daily"] == "tool_policy=limited"
+
+        _ok(client.put(
+            "/api/v1/admin/tools/ai_daily/override",
+            json={
+                "scope_type": "user",
+                "scope_id": "0000000000",
+                "enabled": True,
+            },
+            headers=auth_header,
+        ))
+
+        after = _ok(client.get(
+            "/api/v1/admin/tools/effective",
+            params={
+                "chat_type": "private",
+                "user_id": "0000000000",
+                "tool_policy": "limited",
+            },
+            headers=auth_header,
+        ))
+        assert "ai_daily" in after["enabled"]
+        assert "ai_daily" not in after["disabled"]
+
+        none_policy = _ok(client.get(
+            "/api/v1/admin/tools/effective",
+            params={
+                "chat_type": "private",
+                "user_id": "0000000000",
+                "tool_policy": "none",
+            },
+            headers=auth_header,
+        ))
+        assert "ai_daily" not in none_policy["enabled"]
+        assert none_policy["disabled"]["ai_daily"] == "tool_policy=none"
+
+    def test_tools_report_explicit_override_state(self, client, auth_header):
+        _ok(client.put(
+            "/api/v1/admin/tools/ai_daily/override",
+            json={
+                "scope_type": "user",
+                "scope_id": "0000000000",
+                "enabled": True,
+            },
+            headers=auth_header,
+        ))
+
+        data = _ok(client.get(
+            "/api/v1/admin/tools",
+            params={"chat_type": "private", "user_id": "0000000000"},
+            headers=auth_header,
+        ))
+        tools = {item["name"]: item for item in data["tools"]}
+        assert tools["ai_daily"]["override_present"] is True
+        assert tools["ai_daily"]["override_enabled"] is True
+        assert tools["python_sandbox"]["override_present"] is False
+        assert tools["python_sandbox"]["override_enabled"] is None
+
     def test_tool_targets_list_real_groups_and_users(self, client, auth_header):
         now = datetime.now()
         with next(app.dependency_overrides[get_db]()) as db:
