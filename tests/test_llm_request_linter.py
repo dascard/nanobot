@@ -121,6 +121,62 @@ def test_linter_accepts_schema_authoritative_runtime_tool():
     assert "runtime_tool_mismatch" not in codes
 
 
+def test_linter_flags_nanobot_request_without_current_user_input():
+    from core.llm_request_linter import lint_llm_request
+
+    request = {
+        "model": "test-model",
+        "messages": [
+            {
+                "role": "system",
+                "content": "<runtime_context>\nchat_type: group\n</runtime_context>",
+            },
+            {
+                "role": "system",
+                "content": (
+                    "<conversation_context>\n"
+                    "下面紧随的是历史消息\n"
+                    "</conversation_context>"
+                ),
+            },
+            {
+                "role": "user",
+                "content": "[msg_id]old\n[发言内容]上一轮消息",
+            },
+        ],
+        "tools": [],
+    }
+
+    result = lint_llm_request(request)
+
+    codes = {issue["code"] for issue in result["issues"]}
+    assert "missing_current_user_input" in codes
+
+
+def test_linter_accepts_nanobot_request_with_current_user_input():
+    from core.llm_request_linter import lint_llm_request
+
+    request = {
+        "model": "test-model",
+        "messages": [
+            {
+                "role": "system",
+                "content": "<runtime_context>\nchat_type: group\n</runtime_context>",
+            },
+            {
+                "role": "user",
+                "content": "<user_input>\n当前消息\n</user_input>",
+            },
+        ],
+        "tools": [],
+    }
+
+    result = lint_llm_request(request)
+
+    codes = {issue["code"] for issue in result["issues"]}
+    assert "missing_current_user_input" not in codes
+
+
 def test_linter_classifies_runtime_context_sources():
     from core.llm_request_linter import infer_message_sources
 

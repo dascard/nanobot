@@ -250,6 +250,25 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
             indexes=unknown_system_indexes[:20],
         )
 
+    has_nanobot_runtime = any("<runtime_context>" in _as_text(msg.get("content")) for msg in messages)
+    has_current_user_input = any(
+        _as_text(msg.get("role")) == "user"
+        and "<user_input>" in _as_text(msg.get("content"))
+        and "</user_input>" in _as_text(msg.get("content"))
+        for msg in messages
+    )
+    has_reply_contract_retry = any(
+        "<reply_contract_retry>" in _as_text(msg.get("content"))
+        for msg in messages
+    )
+    if has_nanobot_runtime and not has_current_user_input and not has_reply_contract_retry:
+        _add_issue(
+            issues,
+            "P0",
+            "missing_current_user_input",
+            "Nanobot 运行时请求缺少当前 <user_input> user message。",
+        )
+
     sent_set = set(actual_sent_tools)
     enabled_set = set(runtime_enabled)
     disabled_set = set(runtime_disabled)

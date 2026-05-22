@@ -577,6 +577,7 @@ class ReplyEvalResult(Base):
     run_id = Column(Integer, index=True)
     agent_run_id = Column(String, index=True, default="")
     trace_id = Column(String, index=True, default="")
+    prompt_sha256 = Column(String, index=True, default="")
     case_id = Column(String, index=True)
     variant = Column(String, default="")
     expected_action = Column(String, default="")
@@ -1051,7 +1052,7 @@ def init_db():
     except Exception as e:
         print(f"  ⚠ reply_contract_check_logs migration skipped: {e}")
 
-    # ── reply_eval_results 热迁移：补 AgentRun/trace 追溯字段 ──
+    # ── reply_eval_results 热迁移：补 AgentRun/trace/prompt 追溯字段 ──
     try:
         inspector = inspect(engine)
         if "reply_eval_results" in inspector.get_table_names():
@@ -1059,6 +1060,7 @@ def init_db():
             rer_add = {
                 "agent_run_id": "TEXT DEFAULT ''",
                 "trace_id": "TEXT DEFAULT ''",
+                "prompt_sha256": "TEXT DEFAULT ''",
             }
             for col_name, col_type in rer_add.items():
                 if col_name not in rer_columns:
@@ -1069,6 +1071,7 @@ def init_db():
             with engine.connect() as conn:
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reply_eval_results_agent_run_id ON reply_eval_results(agent_run_id)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reply_eval_results_trace_id ON reply_eval_results(trace_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reply_eval_results_prompt_sha256 ON reply_eval_results(prompt_sha256)"))
                 conn.commit()
     except Exception as e:
         print(f"  ⚠ reply_eval_results migration skipped: {e}")

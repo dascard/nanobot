@@ -1,4 +1,7 @@
-"""旧版 Prompt 片段的运行时分离管理。
+"""Deprecated: 旧版 Prompt 片段的运行时分离管理。
+
+仅作为 PromptAssembler legacy rollback mode 保留；新主回复编排请使用
+`core.prompt_assembler.PromptAssembler` 和 `prompts.default/*.md`。
 
 Git 管理默认片段：prompts.legacy.default/fragments/
 WebUI 写入运行时片段：data/prompt_fragments/
@@ -264,11 +267,62 @@ def build_prompt_from_runtime(chat_type: str = "base") -> dict[str, Any]:
 
     return {
         "ok": True,
+        "deprecated": True,
         "output": output_path,
         "fragments_used": [name for name, _ in fragments],
         "output_hash": _file_hash(output_path),
         "output_size": len(output),
     }
+
+
+_STALE_RUNTIME_PROMPT_MARKERS = (
+    "## 工具路由",
+    "\n## 工具\n",
+    "{{ name_hint",
+    "{{name_hint",
+    "{{ alias_names",
+    "{{alias_names",
+    "{{ character_name",
+    "{{character_name",
+    "`persona_update`：用户说\"记住了\"时更新画像",
+    "`read`/`write`/`edit`/`grep`/`glob`/`bash`：文件操作工具",
+)
+
+
+def _included_runtime_fragment_mtime(chat_type: str = "base") -> float:
+    fragments_dir = runtime_fragments_dir()
+    if chat_type == "base":
+        allowed = ("00_", "05_", "10_", "30_")
+    elif chat_type == "group":
+        allowed = ("00_", "05_", "10_", "20_", "25_", "30_")
+    elif chat_type == "private":
+        allowed = ("00_", "05_", "10_", "26_", "30_")
+    else:
+        allowed = ("00_", "05_", "10_", "30_")
+    newest = 0.0
+    if not os.path.isdir(fragments_dir):
+        return newest
+    for fname in os.listdir(fragments_dir):
+        if not fname.endswith(".md"):
+            continue
+        if not any(fname.startswith(p) for p in allowed):
+            continue
+        try:
+            newest = max(newest, os.path.getmtime(os.path.join(fragments_dir, fname)))
+        except OSError:
+            pass
+    return newest
+
+
+def _runtime_prompt_needs_rebuild(path: str, content: str) -> bool:
+    """判断运行时 prompt.md 是否是旧构建产物。"""
+    if any(marker in content for marker in _STALE_RUNTIME_PROMPT_MARKERS):
+        return True
+    try:
+        output_mtime = os.path.getmtime(path)
+    except OSError:
+        return True
+    return _included_runtime_fragment_mtime("base") > output_mtime
 
 
 def read_runtime_or_default_prompt() -> dict[str, Any]:
@@ -278,11 +332,20 @@ def read_runtime_or_default_prompt() -> dict[str, Any]:
     if os.path.isfile(rp):
         with open(rp, "r", encoding="utf-8") as fh:
             content = fh.read()
+        auto_rebuilt = False
+        if _runtime_prompt_needs_rebuild(rp, content):
+            result = build_prompt_from_runtime("base")
+            if result.get("ok") and os.path.isfile(rp):
+                with open(rp, "r", encoding="utf-8") as fh:
+                    content = fh.read()
+                auto_rebuilt = True
         return {
             "content": content,
             "source": "runtime",
+            "deprecated": True,
             "output_path": rp,
             "default_path": dp,
+            "auto_rebuilt": auto_rebuilt,
         }
     if os.path.isfile(dp):
         with open(dp, "r", encoding="utf-8") as fh:
@@ -290,7 +353,8 @@ def read_runtime_or_default_prompt() -> dict[str, Any]:
         return {
             "content": content,
             "source": "default",
+            "deprecated": True,
             "output_path": rp,
             "default_path": dp,
         }
-    return {"content": "", "source": "none", "output_path": rp, "default_path": dp}
+    return {"content": "", "source": "none", "deprecated": True, "output_path": rp, "default_path": dp}

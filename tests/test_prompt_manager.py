@@ -236,7 +236,7 @@ def test_bridge_loads_legacy_runtime_prompt_into_config(monkeypatch):
     config = SimpleNamespace(system_prompt="默认 prompt")
     meta = NanobotBridge()._load_legacy_prompt_into_config(config)
 
-    assert config.system_prompt == "运行时旧 prompt 生效标记"
+    assert config.system_prompt == ""
     assert meta["prompt_source"] == "Legacy runtime prompt"
     assert meta["prompt_runtime_path"] == "/runtime/prompt.md"
     assert meta["prompt_default_path"] == "/default/prompt.md"

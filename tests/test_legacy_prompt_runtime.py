@@ -137,6 +137,42 @@ def test_read_runtime_preferred(legacy_env):
     assert result["output_path"] == legacy_env["output_path"]
 
 
+def test_read_runtime_auto_rebuilds_stale_tool_prompt(legacy_env):
+    from core.legacy_prompt_runtime import (
+        init_legacy_prompt_runtime_dir,
+        read_runtime_or_default_prompt,
+    )
+
+    init_legacy_prompt_runtime_dir()
+    with open(legacy_env["output_path"], "w") as fh:
+        fh.write("# Test fragment\n\n## 工具路由\n旧工具说明\n")
+
+    result = read_runtime_or_default_prompt()
+
+    assert result["source"] == "runtime"
+    assert result["auto_rebuilt"] is True
+    assert "## 工具路由" not in result["content"]
+    assert "# Test fragment" in result["content"]
+
+
+def test_read_runtime_auto_rebuilds_unrendered_identity_variables(legacy_env):
+    from core.legacy_prompt_runtime import (
+        init_legacy_prompt_runtime_dir,
+        read_runtime_or_default_prompt,
+    )
+
+    init_legacy_prompt_runtime_dir()
+    with open(legacy_env["output_path"], "w") as fh:
+        fh.write("# 旧产物\n\n你叫 {{ name_hint }}\n别人可能这样叫你 {{ alias_names }}\n")
+
+    result = read_runtime_or_default_prompt()
+
+    assert result["source"] == "runtime"
+    assert result["auto_rebuilt"] is True
+    assert "{{ name_hint" not in result["content"]
+    assert "{{ alias_names" not in result["content"]
+
+
 def test_reset_to_default(legacy_env):
     from core.legacy_prompt_runtime import init_legacy_prompt_runtime_dir, save_fragment, reset_to_default, list_fragments_with_status
 
