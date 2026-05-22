@@ -16,6 +16,24 @@ class SQLAnalysisTool(BaseTool):
     """Execute read-only SQL queries against the nanobot chat log database."""
 
     _sandbox: AnalysisSandbox | None = None
+    _DB_GUIDE = (
+        "可查询 SQLite 表："
+        "chat_logs 原始消息档案(id,user_id=发件人QQ,session_id=private_用户ID/group_群号,"
+        "sender_name,session_name,role=user/assistant/ambient/tool/model,content,created_at,message_id,meta_json)；"
+        "conversation_turns 精简对话上下文(id,user_id,session_id,role=user/assistant,content,created_at,meta_json)；"
+        "users 用户/群聊(id,name,history_clear_at,created_at)；"
+        "personas 用户画像(user_id,persona_json,updated_at)。"
+        "查“上一句/刚才说过什么/聊天记录/某用户历史发言”时优先查 chat_logs 或 conversation_turns，"
+        "不要用 memory_read、read、grep 去找聊天数据库。"
+        "常用示例：SELECT id, created_at, content FROM chat_logs "
+        "WHERE session_id='private_0000000000' AND role='user' "
+        "ORDER BY id DESC LIMIT 5；"
+        "SELECT id, created_at, sender_name, content FROM chat_logs "
+        "WHERE session_id='group_123456' AND role IN ('user','ambient') "
+        "ORDER BY id DESC LIMIT 20；"
+        "PRAGMA table_info(chat_logs)。"
+        "如果查询被拒绝为缺 LIMIT 或 SELECT *，直接修正同一查询后重试，不要改用 memory_read/read/grep。"
+    )
 
     @property
     def tool_name(self) -> str:
@@ -24,10 +42,12 @@ class SQLAnalysisTool(BaseTool):
     @property
     def description(self) -> str:
         return ("只读 SQL 分析工具，用于用户明确要求查询数据库、审计数据、检查表结构或调试 SQL 时使用。"
+                "也用于查询聊天记录、上一句、刚才说过什么、历史发言、会话日志。"
                 "不要将本工具作为业务工具的前置步骤。"
                 "如果用户要分析群聊、生成群日报、总结某个群的消息，应直接调用 group_analysis，"
                 "不要先用 SQL 查询群号、User 表或 ChatLog。"
-                "SELECT/WITH 必须包含 LIMIT（普通≤1000/聚合≤5000/原文内容≤500）；禁止 SELECT *。")
+                "SELECT/WITH 必须包含 LIMIT（普通≤1000/聚合≤5000/原文内容≤500）；禁止 SELECT *。"
+                f"{self._DB_GUIDE}")
 
     @property
     def execution_mode(self) -> ExecutionMode:
@@ -45,6 +65,7 @@ class SQLAnalysisTool(BaseTool):
                         "SELECT/WITH 必须包含 LIMIT；禁止 SELECT *；"
                         "普通查询≤1000，聚合查询(COUNT/GROUP BY)≤5000，"
                         "原文内容字段(content/message/text/html)≤500。"
+                        f"{self._DB_GUIDE}"
                     ),
                 }
             },

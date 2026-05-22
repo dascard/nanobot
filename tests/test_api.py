@@ -52,6 +52,37 @@ def test_get_context_with_auth(client):
     # 在这个作用域去改 environ 可能需要重新加载模块
     pass # 留作集成测试，我们在 conftest.py 里禁用了 Token
 
+
+def test_format_persona_facts_without_truncated_json():
+    from api.routes import _format_persona_for_prompt
+
+    text = _format_persona_for_prompt({
+        "facts": [
+            {
+                "content": "User expects the assistant to use the SQL tool when appropriate",
+                "domain": "助手操作",
+                "confidence": "确认",
+                "evidence": 10,
+                "type": "preference",
+            },
+            {
+                "content": "用户偏好直接输出对话历史记录而不调用工具",
+                "domain": "助手行为",
+                "confidence": "可能",
+                "evidence": 2,
+                "type": "preference",
+            },
+        ],
+        "count": 2,
+    })
+
+    assert "【稳定画像事实】" in text
+    assert "User expects the assistant" in text
+    assert "用户偏好直接输出对话历史记录" in text
+    assert "画像: {" not in text
+    assert not text.rstrip().endswith("{")
+
+
 def test_submit_log(client, db_session):
     # 发送一条记录
     response = client.post(

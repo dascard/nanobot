@@ -1,0 +1,14 @@
+def test_sql_analysis_tool_schema_guides_chat_history_queries():
+    from creatures.nanobot.prompts.skills.sql_analysis.tool import SQLAnalysisTool
+
+    tool = SQLAnalysisTool()
+    schema = tool.get_parameters_schema()
+    sql_desc = schema["properties"]["sql"]["description"]
+    combined = tool.description + "\n" + sql_desc
+
+    assert "chat_logs" in combined
+    assert "conversation_turns" in combined
+    assert "上一句" in combined
+    assert "memory_read" in combined
+    assert "ORDER BY id DESC LIMIT" in combined
+    assert "缺 LIMIT" in combined

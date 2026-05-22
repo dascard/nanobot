@@ -211,6 +211,12 @@ def build_runtime_tool_prompt(
             reason = disabled.get(name, "未指定")
             lines.append(f"  - {name}：{reason}")
 
+    if enabled.get("sql_analysis"):
+        lines.append(
+            "工具边界：查聊天记录、上一句、刚才说过什么、会话日志或数据库统计时使用 "
+            "sql_analysis；memory_read 只用于长期记忆，不用于检索 chat_logs/conversation_turns。"
+        )
+
     lines.append("规则：不要声称调用未出现在 tools schema 中的工具，也不要声称调用已禁用工具。")
     lines.append("如需回复，必须真实调用 reply(content)；不回复则调用 no_reply(reason)。")
     return "\n".join(lines)

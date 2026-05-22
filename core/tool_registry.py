@@ -40,7 +40,7 @@ TOOL_METADATA: dict[str, ToolDef] = {
     "sql_analysis": ToolDef(
         name="sql_analysis", label="数据库查询", category="data", risk_level="medium",
         private_default=True, group_default=True,
-        description="查询聊天记录数据库（只读SELECT）。",
+        description="查询聊天记录数据库（只读SELECT），包括上一句、历史发言、会话日志和统计。",
     ),
     "python_sandbox": ToolDef(
         name="python_sandbox", label="Python沙箱", category="data", risk_level="high",
@@ -84,7 +84,7 @@ TOOL_METADATA: dict[str, ToolDef] = {
     "memory_read": ToolDef(
         name="memory_read", label="记忆读取 (subagent)", category="system", risk_level="low",
         private_default=True, group_default=True,
-        description="读取长期记忆/上下文。注意：此工具为 subagent，运行时禁用支持有限。",
+        description="读取长期记忆/上下文，不用于查询 chat_logs 或 conversation_turns。注意：此工具为 subagent，运行时禁用支持有限。",
     ),
     "memory_write": ToolDef(
         name="memory_write", label="记忆写入 (subagent)", category="system", risk_level="low",

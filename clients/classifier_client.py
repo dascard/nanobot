@@ -945,14 +945,17 @@ PRIVATE_DECISION_PROMPT = """你是私聊消息路由分类器。你的任务是
 2. 纯传输内容默认 no_reply。
 3. 像文件/密钥/网址/日志/代码/长文本，且没有请求词或问句时选 no_reply。
 4. 用户明确要求"看看/解释/总结/分析/翻译/帮我/哪里错/怎么做"时选 reply_now。
-5. 不确定但像自然语言交流时选 reply_now。不确定但像数据传输时选 no_reply。
-6. complexity 必须是 1-10 的整数。
+5. 用户询问"上一句/刚才/之前/聊天记录/你记得吗/我说过什么"是明确对话意图，选 reply_now；需要查历史或数据库不等于 wait。
+6. wait 只能用于用户自己表示还要继续发，或当前句子明显半截；不要因为缺少已注入上下文而 wait。
+7. 不确定但像自然语言交流时选 reply_now。不确定但像数据传输时选 no_reply。
+8. complexity 必须是 1-10 的整数。
 
 输出示例：
 {"action":"no_reply","complexity":0,"reason":"用户仅发送网址，像传输内容"}
 {"action":"no_reply","complexity":0,"reason":"用户仅发送密钥，无对话请求"}
 {"action":"reply_now","complexity":5,"reason":"用户要求总结今日 AI 日报"}
 {"action":"reply_now","complexity":6,"reason":"用户要求分析报错日志"}
+{"action":"reply_now","complexity":4,"reason":"用户询问上一句，需要主流程查询历史"}
 {"action":"wait","complexity":0,"reason":"用户表示稍后继续发送内容"}"""
 
 

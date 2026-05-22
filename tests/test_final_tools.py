@@ -122,6 +122,21 @@ def test_runtime_preset_prompt_does_not_expand_enabled_tool_schema():
     assert "no_reply(reason)" in prompt
 
 
+def test_runtime_tool_prompt_disambiguates_sql_and_memory():
+    from core.runtime_tool_service import build_runtime_tool_prompt
+
+    prompt = build_runtime_tool_prompt(
+        enabled={"reply": True, "no_reply": True, "sql_analysis": True, "memory_read": True},
+        disabled={},
+        chat_type="private",
+    )
+
+    assert "聊天记录" in prompt
+    assert "sql_analysis" in prompt
+    assert "memory_read 只用于长期记忆" in prompt
+    assert "chat_logs/conversation_turns" in prompt
+
+
 def test_superuser_private_tool_defaults_are_more_open():
     from core.runtime_tool_service import resolve_effective_tools
 
