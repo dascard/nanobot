@@ -10,6 +10,8 @@ controller:
   temperature: 0.7
   max_retries: 0                 # Fail fast on proxy timeout/502 to trigger custom model routing fallback
   tool_format: native            # Re-enabling native function calling per user request
+  include_tools_in_prompt: false # 工具清单以 API tools schema 为准，避免 prompt 与硬裁剪不一致
+  include_hints_in_prompt: false # 不注入 KT 默认工具说明；reply/no_reply 契约由项目 prompt 控制
   max_messages: 50               # auto-compaction threshold
   ephemeral: false              # 桥接层已手动清理 conversation，KT 不需再清（会删掉 reply 工具输出）
   max_iterations: 12             # 硬兜底——正常靠 prompt 自控，此值仅防死循环

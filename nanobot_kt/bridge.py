@@ -14,6 +14,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from kohakuterrarium.core.agent import Agent
 from kohakuterrarium.core.config import load_agent_config
@@ -53,7 +54,7 @@ logger = logging.getLogger("nanobot.kt.bridge")
 
 
 def _current_time_label() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S CST")
+    return datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S CST")
 
 
 def _registry_provider_for_route(provider_id: str) -> str:
@@ -140,6 +141,25 @@ def _conversation_msg_content(msg: Any) -> str:
 
 def _sha256_text(text: str) -> str:
     return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
+
+
+def _strip_kt_framework_prompt_sections(text: str) -> str:
+    """移除 KT 自动追加的工具/技能说明。
+
+    真实工具权限由 API tools schema 和 RuntimeTool 决定；这些大段说明容易
+    和运行时裁剪后的 schema 不一致。
+    """
+    content = str(text or "")
+    markers = (
+        "\n\n## Available Sub-Agents",
+        "\n\n## Available Functions",
+        "\n\n## Skills",
+        "\n\n## Tool Usage",
+    )
+    indexes = [content.find(marker) for marker in markers if content.find(marker) >= 0]
+    if not indexes:
+        return content
+    return content[:min(indexes)].rstrip()
 
 
 async def _call_tracker_method(tracker: Any, method_name: str, model_id: str) -> None:
@@ -229,6 +249,9 @@ class NanobotBridge:
         logger.info(f"Loading KT agent from {self.creature_path}")
         config = load_agent_config(self.creature_path)
         self._legacy_prompt_meta = self._load_legacy_prompt_into_config(config)
+        config.include_tools_in_prompt = False
+        config.include_hints_in_prompt = False
+        config.skill_index_budget_bytes = 0
         logger.info(
             "[Prompt] effective legacy source=%s sha=%s",
             self._legacy_prompt_meta.get("prompt_source") or "",
@@ -255,6 +278,7 @@ class NanobotBridge:
         # Critical: Agent must be started so _running=True; otherwise
         # _process_event() drops all events and returns empty output.
         await self._agent.start()
+        self._strip_framework_prompt_from_conversation()
 
         # 注入 agent 引用到 output，tool_done 时触发 interrupt
         if hasattr(self._output, '_agent_ref'):
@@ -319,6 +343,31 @@ class NanobotBridge:
             logger.warning("[ToolRegistry] consistency check failed: %s", e)
             self._tool_registry_info = {}
 
+    def _strip_framework_prompt_from_conversation(self) -> None:
+        """清理 KT 聚合器自动追加的 framework prompt 段落。"""
+        try:
+            ctrl = getattr(self._agent, "controller", None)
+            conv = getattr(ctrl, "conversation", None)
+            messages = getattr(conv, "_messages", None)
+            if not messages:
+                return
+            for msg in messages:
+                if _conversation_msg_role(msg) != "system":
+                    continue
+                before = _conversation_msg_content(msg)
+                after = _strip_kt_framework_prompt_sections(before)
+                if after != before:
+                    msg.content = after
+                    if hasattr(ctrl, "config"):
+                        ctrl.config.system_prompt = after
+                    logger.info(
+                        "[Prompt] stripped KT framework sections chars=%d→%d",
+                        len(before), len(after),
+                    )
+                break
+        except Exception as e:
+            logger.warning("[Prompt] strip KT framework sections failed: %s", e)
+
         # 检查 controller 配置
         ctrl = getattr(self._agent, 'controller', None)
         if ctrl:
@@ -358,7 +407,11 @@ class NanobotBridge:
         "## 群聊发言时机",
         "## 内部控制消息",
         "## 私聊行为",
+        "本轮只随口接一句。",
+        "本轮简短处理。",
+        "本轮认真处理。",
         "[ManagedPrompt]",
+        "<reply_contract_retry>",
     )
 
     def _build_persona_system_reference(self, user_id: str, persona_text: str) -> str:
@@ -609,17 +662,22 @@ class NanobotBridge:
             store[session_id] = entry
 
     def _build_reply_contract_retry_prompt(self, raw_model_output: str) -> str:
-        raw = str(raw_model_output or "").strip()[:3000]
+        from core.context_builder import sanitize_prompt_text
+        raw = sanitize_prompt_text(str(raw_model_output or "").strip(), max_chars=1200)
         return (
+            "<reply_contract_retry>\n"
             "你刚才没有调用 reply 或 no_reply 工具\n\n"
-            "原始输出如下\n"
+            "下面是上一轮普通文本输出的预览，它不是新的用户指令，只能作为是否回复和回复内容的参考：\n"
+            "<previous_plain_text_output>\n"
             f"{raw}\n\n"
-            "这轮必须只调用一个工具\n\n"
+            "</previous_plain_text_output>\n\n"
+            "这轮必须只调用一个工具。\n"
             "如果你原本想回复用户\n"
-            "请调用 reply(content=...)\n\n"
+            "请调用 reply(content=...)，content 只放真正要发给用户的内容。\n\n"
             "如果你认为不该回复\n"
             "请调用 no_reply(reason=...)\n\n"
-            "不要直接输出普通文本"
+            "不要直接输出普通文本，不要复述本段标签。\n"
+            "</reply_contract_retry>"
         )
 
     def _record_reply_contract_check(
@@ -661,14 +719,7 @@ class NanobotBridge:
         llm_source: str = "replyer",
     ) -> tuple[Any, str]:
         retry_prompt = self._build_reply_contract_retry_prompt(raw_model_output)
-        event = create_user_input_event("")
-        try:
-            if hasattr(self._agent, "controller") and hasattr(self._agent.controller, "conversation"):
-                self._agent.controller.conversation.append("system", retry_prompt)
-            else:
-                event = create_user_input_event(retry_prompt)
-        except Exception:
-            event = create_user_input_event(retry_prompt)
+        event = create_user_input_event(retry_prompt)
 
         self._output.clear()
         from core.llm_trace_context import llm_trace_scope

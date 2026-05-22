@@ -160,11 +160,13 @@ def build_session_memory(
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.history_clear_at:
             cutoff = user.history_clear_at
-    group_age_cutoff = None
-    if is_group:
-        group_age_cutoff = datetime.now() - timedelta(minutes=GROUP_CONTEXT_MAX_AGE_MIN)
-        if cutoff is None or group_age_cutoff > cutoff:
-            cutoff = group_age_cutoff
+    age_cutoff = datetime.now() - timedelta(
+        minutes=GROUP_CONTEXT_MAX_AGE_MIN if is_group else PRIVATE_CONTEXT_MAX_AGE_MIN
+    )
+    if cutoff is None or age_cutoff > cutoff:
+        cutoff = age_cutoff
+    group_age_cutoff = age_cutoff if is_group else None
+    private_age_cutoff = age_cutoff if not is_group else None
 
     query = db.query(ConversationTurn).filter(
         ConversationTurn.session_id == session_id)
@@ -183,6 +185,7 @@ def build_session_memory(
         "profile_items_count": 0, "profile_memory_ids": [],
         "profile_preview": None,
         "old_group_turns_skipped": 0,
+        "old_private_turns_skipped": 0,
     }
     if group_age_cutoff is not None:
         skipped_query = db.query(ConversationTurn).filter(
@@ -196,6 +199,18 @@ def build_session_memory(
                     ConversationTurn.created_at > user.history_clear_at
                 )
         debug["old_group_turns_skipped"] = skipped_query.count()
+    if private_age_cutoff is not None:
+        skipped_query = db.query(ConversationTurn).filter(
+            ConversationTurn.session_id == session_id,
+            ConversationTurn.created_at <= private_age_cutoff,
+        )
+        if user_id:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user and user.history_clear_at:
+                skipped_query = skipped_query.filter(
+                    ConversationTurn.created_at > user.history_clear_at
+                )
+        debug["old_private_turns_skipped"] = skipped_query.count()
 
     # ── GroupProfile —— 不依赖 history，在 is_group 时提前构造 ──
     profile_header = ""

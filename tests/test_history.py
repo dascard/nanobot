@@ -136,8 +136,8 @@ def test_build_memory_token_cap_keeps_latest_rows(db_session):
     assert not any("旧消息" in c for c in contents)
 
 
-def test_build_memory_uses_latest_rows_not_time_window(db_session):
-    """Plan8: history_clear_at 之外，不再用 30 分钟窗口丢弃旧上下文。"""
+def test_build_memory_drops_old_private_conversation_turns(db_session):
+    """私聊上下文只保留近期工作记忆，避免十几天前的任务继续注入。"""
     from api.routes import _build_session_memory
     from datetime import timedelta
 
@@ -159,7 +159,8 @@ def test_build_memory_uses_latest_rows_not_time_window(db_session):
     header, messages, _debug = _build_session_memory(db_session, "s1")
     contents = [m["content"] for m in messages]
     assert "recent" in " ".join(contents)
-    assert "old message" in " ".join(contents)
+    assert "old message" not in " ".join(contents)
+    assert _debug["old_private_turns_skipped"] == 2
     assert "<conversation_context>" in header
 
 

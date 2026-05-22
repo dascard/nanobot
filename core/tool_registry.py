@@ -67,7 +67,7 @@ TOOL_METADATA: dict[str, ToolDef] = {
     "group_analysis": ToolDef(
         name="group_analysis", label="群聊分析", category="analysis", risk_level="medium",
         private_default=False, group_default=True,
-        description="分析目标群聊近期内容，默认最近24小时，提取话题/情绪/重点。",
+        description="分析目标群聊近期内容；可直接传群号、群名、session_id 或 stream_id，无需先查 SQL。",
     ),
 
     # ── 系统工具 ──

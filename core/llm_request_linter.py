@@ -118,7 +118,19 @@ def infer_message_sources(messages: list[dict[str, Any]]) -> list[dict[str, Any]
                 source = "runtime_tool"
             elif role == "system" and _detect_framework_markers(content):
                 source = "kt_framework_tools_doc"
-            elif role == "system" and "本轮简短处理" in content:
+            elif role == "system" and content.lstrip().startswith("## 交互定位"):
+                source = "base_system_prompt"
+            elif role == "system" and "<identity_context>" in content:
+                source = "identity_context"
+            elif role == "system" and "<persona_reference" in content:
+                source = "persona_reference"
+            elif role == "system" and "## 私聊行为" in content:
+                source = "private_behavior"
+            elif role == "system" and (
+                "本轮只随口接一句" in content
+                or "本轮简短处理" in content
+                or "本轮认真处理" in content
+            ):
                 source = "effort_constraint"
             elif role == "system" and "群聊行为" in content:
                 source = "group_rules"
@@ -134,12 +146,15 @@ def infer_message_sources(messages: list[dict[str, Any]]) -> list[dict[str, Any]
                 source = "group_memory_context"
             elif role == "system" and ("<runtime_context>" in content or "运行时上下文" in content):
                 source = "runtime_context"
+            elif role in {"system", "user"} and (
+                "<reply_contract_retry>" in content
+                or "你刚才没有调用 reply 或 no_reply 工具" in content
+            ):
+                source = "reply_contract_retry"
             elif role == "system":
                 source = "unknown_system"
             elif role == "user" and ("[Tool None completed]" in content or content.startswith("[Tool ")):
                 source = "internal_tool_completion"
-            elif role == "user" and "你刚才没有调用 reply 或 no_reply 工具" in content:
-                source = "reply_contract_retry"
             elif role == "user" and "系统生成的上下文提示，不是用户发言" in content:
                 source = "history_gap_marker"
             elif role == "tool":
@@ -305,13 +320,7 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
                 index=src["index"],
             )
         elif src["source"] == "reply_contract_retry":
-            _add_issue(
-                issues,
-                "P1",
-                "reply_retry_as_user",
-                "reply/no_reply 重试修正提示以 user role 注入。",
-                index=src["index"],
-            )
+            continue
         elif src["source"] == "history_gap_marker":
             _add_issue(
                 issues,

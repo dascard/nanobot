@@ -139,6 +139,40 @@ class TestNewsSearchTool:
 class TestNanobotBridge:
     """Test the NanobotBridge lifecycle manager."""
 
+    def test_remove_system_contexts_cleans_effort_and_retry_prompts(self):
+        from nanobot_kt.bridge import NanobotBridge
+
+        class Msg:
+            def __init__(self, role, content):
+                self.role = role
+                self.content = content
+
+        conv = MagicMock()
+        conv._messages = [
+            Msg("system", "base prompt"),
+            Msg("system", "本轮简短处理。先给判断"),
+            Msg("system", "本轮认真处理。可以使用工具"),
+            Msg("system", "<reply_contract_retry>\nretry\n</reply_contract_retry>"),
+            Msg("system", "<runtime_context>\nold\n</runtime_context>"),
+        ]
+
+        bridge = NanobotBridge.__new__(NanobotBridge)
+        bridge._remove_system_contexts(conv, NanobotBridge.DYNAMIC_SYSTEM_PREFIXES)
+
+        assert [m.content for m in conv._messages] == ["base prompt"]
+
+    def test_strip_kt_framework_prompt_sections_keeps_project_prompt_only(self):
+        from nanobot_kt.bridge import _strip_kt_framework_prompt_sections
+
+        prompt = (
+            "## 交互定位\n\n项目提示\n\n"
+            "## Available Functions\n\n- `reply`: 回复\n\n"
+            "## Skills\n\n- `test`: skill\n\n"
+            "## Tool Usage\n\nTools are called via API"
+        )
+
+        assert _strip_kt_framework_prompt_sections(prompt) == "## 交互定位\n\n项目提示"
+
     def test_get_bridge_singleton(self):
         # Reset module-level singleton between tests
         import nanobot_kt.bridge as bridge_mod
@@ -1319,7 +1353,7 @@ class TestReplyContract:
         process_calls = []
 
         async def fake_process(_event):
-            process_calls.append(1)
+            process_calls.append(getattr(_event, "content", ""))
             if len(process_calls) == 1:
                 bridge._output._buffer.append("我会直接回复，但没有调用工具")
             else:
@@ -1338,7 +1372,8 @@ class TestReplyContract:
 
         assert result == "重试后的回复"
         assert mock_agent._process_event.await_count == 2
-        assert any("你刚才没有调用 reply 或 no_reply 工具" in msg["content"] for msg in messages)
+        assert "你刚才没有调用 reply 或 no_reply 工具" in process_calls[1]
+        assert "<reply_contract_retry>" in process_calls[1]
         logs = db_session.query(ReplyContractCheckLog).order_by(ReplyContractCheckLog.attempt.asc()).all()
         assert [log.attempt for log in logs] == [0, 1]
         assert logs[0].result == "no_tool_call"

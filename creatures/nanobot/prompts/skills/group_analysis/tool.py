@@ -36,7 +36,7 @@ class GroupAnalysisTool(BaseTool):
     def description(self) -> str:
         return ("分析群聊消息并生成群日报。提取话题总结、活跃用户称号、金句和氛围。"
                 "当用户要求总结群聊、分析群消息、生成群日报、查看某群近期讨论时使用。"
-                "group_id 是被分析的群，可以直接传群号、group_前缀ID、session_id或群名；"
+                "group_id 是被分析的群，可以直接传群号、group_前缀ID、session_id、stream_id或群名；"
                 "用户说这个群/本群时才使用当前会话的 group_id。工具内部会自动解析群号/群名"
                 "并查询消息记录，回复仍发送回当前会话。不要为了查找群号而先调用 sql_analysis。")
 
@@ -48,7 +48,10 @@ class GroupAnalysisTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "group_id": {"type": "string", "description": "被分析群的群号、group_前缀ID、session_id或群名"},
+                "group_id": {
+                    "type": "string",
+                    "description": "被分析群的群号、group_前缀ID、session_id、stream_id或群名；只知道群名时也直接传群名，不要先调用 sql_analysis",
+                },
                 "instructions": {"type": "string", "description": "可选的分析指引"},
                 "window_hours": {
                     "type": "integer",

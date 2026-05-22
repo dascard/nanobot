@@ -25,7 +25,7 @@ def test_linter_extracts_runtime_tool_and_internal_message_issues():
             },
             {"role": "system", "content": "## Available Functions\n- `python_sandbox`: execute python"},
             {"role": "user", "content": "[Tool None completed]"},
-            {"role": "user", "content": "你刚才没有调用 reply 或 no_reply 工具\n这轮必须只调用一个工具"},
+            {"role": "user", "content": "<reply_contract_retry>\n你刚才没有调用 reply 或 no_reply 工具\n这轮必须只调用一个工具\n</reply_contract_retry>"},
         ],
         "tools": [
             {"type": "function", "function": {"name": "reply", "parameters": {}}},
@@ -44,12 +44,13 @@ def test_linter_extracts_runtime_tool_and_internal_message_issues():
     assert "runtime_tool_mismatch" in codes
     assert "kt_framework_tool_docs" in codes
     assert "internal_tool_message_as_user" in codes
-    assert "reply_retry_as_user" in codes
+    assert "reply_retry_as_user" not in codes
     assert result["severity_counts"]["P0"] >= 3
     assert result["message_sources"][1]["source"] == "history_context_header"
     assert result["message_sources"][2]["source"] == "conversation_context_header"
     assert result["message_sources"][3]["source"] == "group_recent_context"
     assert result["message_sources"][4]["source"] == "kt_framework_tools_doc"
+    assert result["message_sources"][6]["source"] == "reply_contract_retry"
 
 
 def test_record_request_persists_request_lint_fields(db_session):
@@ -118,3 +119,23 @@ def test_linter_accepts_schema_authoritative_runtime_tool():
     assert result["runtime_disabled_tools"] == ["python_sandbox"]
     codes = {issue["code"] for issue in result["issues"]}
     assert "runtime_tool_mismatch" not in codes
+
+
+def test_linter_classifies_runtime_context_sources():
+    from core.llm_request_linter import infer_message_sources
+
+    sources = infer_message_sources([
+        {"role": "system", "content": "## 交互定位\n\n含 <persona_reference> 的说明"},
+        {"role": "system", "content": "<identity_context>\n</identity_context>"},
+        {"role": "system", "content": "<persona_reference user_id=\"u\">\n</persona_reference>"},
+        {"role": "system", "content": "## 私聊行为\n\n规则"},
+        {"role": "system", "content": "本轮认真处理。可以使用工具"},
+    ])
+
+    assert [item["source"] for item in sources] == [
+        "base_system_prompt",
+        "identity_context",
+        "persona_reference",
+        "private_behavior",
+        "effort_constraint",
+    ]

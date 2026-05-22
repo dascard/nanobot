@@ -36,6 +36,89 @@ def test_resolve_analysis_window_hours_defaults_and_overrides():
     assert resolve_analysis_window_hours(None, "全部历史") is None
 
 
+def test_group_analysis_resolves_group_name_from_chatlog_session_name(db_session):
+    from core.database import ChatLog
+    from creatures.nanobot.prompts.skills.group_analysis.repository import GroupAnalysisRepository
+
+    db_session.add(ChatLog(
+        user_id="group_2468",
+        session_id="group_2468",
+        role="ambient",
+        content="[A]: hello",
+        sender_name="A",
+        session_name="项目讨论群",
+    ))
+    db_session.commit()
+
+    repo = GroupAnalysisRepository(db_session)
+    group = repo.resolve_group("项目讨论")
+
+    assert group is not None
+    assert group.group_id == "group_2468"
+    assert group.legacy_group_id == "2468"
+    assert group.name == "项目讨论群"
+    assert repo.get_group_candidates("项目讨论")[0]["id"] == "2468"
+
+
+def test_group_analysis_resolves_noisy_group_name_by_ordered_match(db_session):
+    from core.database import ChatLog
+    from creatures.nanobot.prompts.skills.group_analysis.repository import GroupAnalysisRepository
+
+    db_session.add(ChatLog(
+        user_id="group_984760873",
+        session_id="group_984760873",
+        role="ambient",
+        content="[A]: hello",
+        sender_name="A",
+        session_name="凡赛尔学院•图书馆",
+    ))
+    db_session.add(ChatLog(
+        user_id="group_971976533",
+        session_id="group_971976533",
+        role="ambient",
+        content="[B]: hello",
+        sender_name="B",
+        session_name="雪花谷私立高中•图书馆",
+    ))
+    db_session.commit()
+
+    repo = GroupAnalysisRepository(db_session)
+
+    assert repo.resolve_group("凡赛尔图书馆").group_id == "group_984760873"
+    assert repo.resolve_group("雪花谷图书馆").group_id == "group_971976533"
+    assert repo.resolve_group("图书馆") is None
+    assert {c["id"] for c in repo.get_group_candidates("图书馆")} == {"984760873", "971976533"}
+
+
+def test_group_analysis_prefers_exact_group_name_when_fuzzy_has_multiple(db_session):
+    from core.database import User
+    from creatures.nanobot.prompts.skills.group_analysis.repository import GroupAnalysisRepository
+
+    db_session.add(User(id="group_1001", name="AI"))
+    db_session.add(User(id="group_1002", name="AI 讨论群"))
+    db_session.commit()
+
+    group = GroupAnalysisRepository(db_session).resolve_group("AI")
+
+    assert group is not None
+    assert group.group_id == "group_1001"
+    assert group.name == "AI"
+
+
+def test_group_analysis_resolves_stream_id_from_chat_stream_config(db_session):
+    from core.database import ChatStreamConfig
+    from creatures.nanobot.prompts.skills.group_analysis.repository import GroupAnalysisRepository
+
+    db_session.add(ChatStreamConfig(chat_stream_id="qq:24680:group"))
+    db_session.commit()
+
+    group = GroupAnalysisRepository(db_session).resolve_group("qq:24680:group")
+
+    assert group is not None
+    assert group.group_id == "group_24680"
+    assert group.name == "24680"
+
+
 def test_compute_group_statistics_returns_summary():
     from creatures.nanobot.prompts.skills.group_analysis.preprocess import compute_group_statistics
 

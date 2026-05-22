@@ -16,75 +16,194 @@ class GroupAnalysisRepository:
         self.db = db
 
     def resolve_group(self, group_id: str) -> GroupRef | None:
-        """群号/群名解析。纯数字→group_xxx，group_前缀→直接查，其他→name LIKE。"""
-        from core.database import User
+        """群号/群名解析。
 
-        group_id = str(group_id or "").strip()
-        if not group_id:
+        支持纯群号、group_ session_id、qq:<id>:group stream_id、群名精确/模糊匹配。
+        群名匹配会合并 User.name、ChatLog.session_name 和运行时 session_name。
+        """
+        query = str(group_id or "").strip()
+        if not query:
             return None
 
-        if group_id.isdigit():
-            ngid = f"group_{group_id}"
-        elif group_id.startswith("group_"):
-            ngid = group_id
-        else:
-            matched = (
-                self.db.query(User)
-                .filter(
-                    User.id.like("group_%"),
-                    User.name.like(f"%{group_id}%"),
-                )
-                .all()
-            )
-            if len(matched) == 0:
-                return None
-            if len(matched) > 1:
-                # 多匹配 → 返回 None，交由上层展示候选列表
-                logger.info(
-                    "[group_analysis.repo] 群名 '%s' 匹配到 %d 个群: %s",
-                    group_id, len(matched),
-                    [(u.id, u.name) for u in matched],
-                )
-                return None
-            ngid = matched[0].id
+        direct_group_id = self._normalize_direct_group_id(query)
+        if direct_group_id:
+            return self._build_group_ref(direct_group_id)
 
+        candidates = self._find_group_candidates(query, limit=20)
+        if not candidates:
+            return None
+
+        exact = [
+            item for item in candidates
+            if str(item.get("name") or "").strip().lower() == query.lower()
+        ]
+        if len(exact) == 1:
+            return self._build_group_ref(str(exact[0]["group_id"]))
+        if len(candidates) == 1:
+            return self._build_group_ref(str(candidates[0]["group_id"]))
+
+        # 多匹配 → 返回 None，交由上层展示候选列表
+        logger.info(
+            "[group_analysis.repo] 群名 '%s' 匹配到 %d 个群: %s",
+            query, len(candidates),
+            [(item.get("group_id"), item.get("name")) for item in candidates],
+        )
+        return None
+
+    @staticmethod
+    def _normalize_direct_group_id(group_id: str) -> str:
+        raw = str(group_id or "").strip()
+        if raw.isdigit():
+            return f"group_{raw}"
+        if raw.startswith("group_"):
+            return raw
+        if raw.startswith("qq:") and raw.endswith(":group"):
+            return f"group_{raw.removeprefix('qq:').removesuffix(':group')}"
+        return ""
+
+    def _build_group_ref(self, group_id: str) -> GroupRef | None:
+        from core.database import ChatLog, ChatStreamConfig, User
+
+        ngid = str(group_id or "").strip()
+        if not ngid:
+            return None
         legacy_id = ngid.removeprefix("group_")
         user = self.db.query(User).filter(User.id == ngid).first()
-        # 不存在的 group_xxx → 查 ChatLog 确认是否存在
+        name = user.name if user else ""
+
+        latest_log = self.db.query(ChatLog).filter(
+            or_(ChatLog.session_id == ngid, ChatLog.session_id == legacy_id),
+        ).order_by(ChatLog.id.desc()).first()
+        if not name and latest_log:
+            name = latest_log.session_name or ""
+
+        if not name:
+            runtime_info = self._runtime_group_info(ngid)
+            name = str(runtime_info.get("session_name") or "")
+
         if not user:
-            from core.database import ChatLog
-            has_logs = self.db.query(ChatLog).filter(
-                or_(ChatLog.session_id == ngid, ChatLog.session_id == legacy_id),
+            stream_id = f"qq:{legacy_id}:group"
+            has_config = self.db.query(ChatStreamConfig).filter(
+                ChatStreamConfig.chat_stream_id == stream_id,
             ).first()
-            if not has_logs:
+            has_runtime = bool(self._runtime_group_info(ngid))
+            if not latest_log and not has_config and not has_runtime:
                 logger.info("[group_analysis.repo] 群 %s 无 User 记录且无 ChatLog", ngid)
                 return None
-            name = legacy_id
-        else:
-            name = user.name or legacy_id
 
         return GroupRef(
             group_id=ngid,
             legacy_group_id=legacy_id,
-            name=name,
+            name=name or legacy_id,
         )
 
     def get_group_candidates(self, group_id: str) -> list[dict]:
         """群名模糊匹配的候选列表——用于 resolve_group 返回 None 后展示选项。"""
-        from core.database import User
-
         group_id = str(group_id or "").strip()
         if not group_id:
             return []
-        matched = (
-            self.db.query(User)
-            .filter(User.id.like("group_%"), User.name.like(f"%{group_id}%"))
-            .limit(10).all()
-        )
         return [
-            {"id": u.id.removeprefix("group_"), "name": u.name or u.id}
-            for u in matched
+            {"id": item["group_id"].removeprefix("group_"), "name": item["name"]}
+            for item in self._find_group_candidates(group_id, limit=10)
         ]
+
+    @staticmethod
+    def _name_matches(name: str, query: str) -> bool:
+        name_norm = GroupAnalysisRepository._normalize_match_text(name)
+        query_norm = GroupAnalysisRepository._normalize_match_text(query)
+        if not name_norm or not query_norm:
+            return False
+        if query_norm in name_norm:
+            return True
+        if len(query_norm) < 3:
+            return False
+        pos = 0
+        for ch in query_norm:
+            idx = name_norm.find(ch, pos)
+            if idx < 0:
+                return False
+            pos = idx + 1
+        return True
+
+    @staticmethod
+    def _normalize_match_text(value: str) -> str:
+        text = str(value or "").strip().lower()
+        return "".join(ch for ch in text if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
+
+    @staticmethod
+    def _runtime_group_info(group_id: str) -> dict:
+        try:
+            from core.timing_runtime import get_group_runtime
+            snapshot = get_group_runtime().snapshot_states()
+            return snapshot.get(group_id) or {}
+        except Exception:
+            return {}
+
+    def _find_group_candidates(self, query: str, limit: int = 10) -> list[dict]:
+        from core.database import ChatLog, User
+
+        query = str(query or "").strip()
+        if not query:
+            return []
+        candidates: dict[str, dict] = {}
+
+        def add(group_id: str, name: str = "", source: str = "", recent_at=None):
+            gid = self._normalize_direct_group_id(group_id)
+            if not gid:
+                return
+            display_name = str(name or "").strip()
+            if not display_name and not self._name_matches(gid, query):
+                return
+            if display_name and not self._name_matches(display_name, query):
+                return
+            old = candidates.get(gid)
+            if old:
+                sources = set(old.get("sources") or [])
+                if source:
+                    sources.add(source)
+                old["sources"] = sorted(sources)
+                if display_name and not old.get("name"):
+                    old["name"] = display_name
+                if recent_at and (not old.get("_recent_at") or recent_at > old["_recent_at"]):
+                    old["_recent_at"] = recent_at
+                return
+            candidates[gid] = {
+                "group_id": gid,
+                "id": gid.removeprefix("group_"),
+                "name": display_name or gid,
+                "sources": [source] if source else [],
+                "_recent_at": recent_at,
+            }
+
+        # 群名常带学校/分隔符/后缀，不能只靠 SQL LIKE 精确包含 query；
+        # 先取有限候选，再用 _name_matches 做标准化和有序匹配。
+        for row in self.db.query(User).filter(
+            User.id.like("group_%"),
+        ).limit(1000).all():
+            add(row.id, row.name or "", "users", None)
+
+        for row in self.db.query(ChatLog).filter(
+            ChatLog.session_id.like("group_%"),
+            ChatLog.session_name != "",
+        ).order_by(ChatLog.id.desc()).limit(500).all():
+            add(row.session_id or "", row.session_name or "", "chat_logs", row.created_at)
+
+        try:
+            from core.timing_runtime import get_group_runtime
+            for gid, info in get_group_runtime().snapshot_states().items():
+                add(gid, str(info.get("session_name") or ""), "runtime", None)
+        except Exception:
+            pass
+
+        items = list(candidates.values())
+        items.sort(key=lambda item: (
+            0 if str(item.get("name") or "").strip().lower() == query.lower() else 1,
+            -(item.get("_recent_at").timestamp() if item.get("_recent_at") else 0),
+            item.get("name") or "",
+        ))
+        for item in items:
+            item.pop("_recent_at", None)
+        return items[:max(1, min(int(limit or 10), 50))]
 
     def fetch_group_logs(
         self,
