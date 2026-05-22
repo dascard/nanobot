@@ -3731,6 +3731,37 @@ class ToolOverrideBody(BaseModel):
     reason: str = ""
 
 
+_TEMP_TOOL_TARGET_EXACT = {
+    "admin", "default", "default_session", "local_test", "test",
+    "test_session", "test-user", "unknown",
+}
+_TEMP_TOOL_TARGET_PREFIXES = (
+    "fake", "local_", "mock", "pytest", "temp", "tmp", "test",
+)
+
+
+def _is_temp_tool_target_id(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return True
+    lowered = raw.lower()
+    if lowered.startswith("private_"):
+        return True
+    if lowered in _TEMP_TOOL_TARGET_EXACT:
+        return True
+    if lowered.endswith("_test") or "local_test" in lowered:
+        return True
+    return any(lowered.startswith(prefix) for prefix in _TEMP_TOOL_TARGET_PREFIXES)
+
+
+def _tool_target_label(name: str, target_id: str, fallback: str) -> str:
+    clean_name = str(name or "").strip()
+    clean_id = str(target_id or "").strip()
+    if clean_name:
+        return f"{clean_name} ({clean_id})" if clean_id else clean_name
+    return fallback or clean_id
+
+
 @router.get("/tools")
 async def list_tools(chat_type: str = "group", group_id: str = "",
                       user_id: str = "", tool_policy: str = "full",
@@ -3817,6 +3848,71 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             "registry_empty": bool(registry_available and len(kt_loaded) == 0),
             "bridge_count": bridge_count,
             "tool_policy": tool_policy}
+
+
+@router.get("/tools/targets")
+def list_tool_targets(scope_type: str = "group", search: str = "", limit: int = 50,
+                      db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """列出工具覆盖可选择的真实群聊/私聊目标。"""
+    scope = "user" if scope_type == "user" else "group"
+    search_text = str(search or "").strip().lower()
+    max_items = max(1, min(int(limit or 50), 100))
+    candidates: dict[str, dict] = {}
+
+    def add_candidate(target_id: str, name: str = "", source: str = "",
+                      recent_at=None) -> None:
+        raw_id = _raw_group_id(target_id) if scope == "group" else str(target_id or "").strip()
+        if _is_temp_tool_target_id(raw_id):
+            return
+        if scope == "group" and not raw_id:
+            return
+        if scope == "user" and (raw_id.startswith("group_") or raw_id.startswith("qq:")):
+            return
+        label = _tool_target_label(
+            name,
+            raw_id,
+            f"群聊 {raw_id}" if scope == "group" else f"用户 {raw_id}",
+        )
+        haystack = f"{raw_id} {name} {label}".lower()
+        if search_text and search_text not in haystack:
+            return
+        old = candidates.get(raw_id)
+        if old and old.get("recent_at"):
+            return
+        candidates[raw_id] = {
+            "id": raw_id,
+            "label": label,
+            "name": str(name or "").strip(),
+            "scope_type": scope,
+            "source": source,
+            "recent_at": _iso(recent_at),
+        }
+
+    for row in db.query(ChatLog).order_by(ChatLog.id.desc()).limit(1000).all():
+        if scope == "group":
+            sid = str(row.session_id or "")
+            if sid.startswith("group_"):
+                add_candidate(sid, row.session_name or "", "chat_logs", row.created_at)
+        else:
+            uid = str(row.user_id or "").strip()
+            if uid and not uid.startswith("group_"):
+                add_candidate(uid, row.sender_name or "", "chat_logs", row.created_at)
+
+    for user in db.query(User).all():
+        uid = str(user.id or "").strip()
+        if scope == "group":
+            if uid.startswith("group_"):
+                add_candidate(uid, user.name or "", "users", None)
+        else:
+            if uid and not uid.startswith("group_"):
+                add_candidate(uid, user.name or "", "users", None)
+
+    items = sorted(
+        candidates.values(),
+        key=lambda item: (item.get("recent_at") or "", item["label"]),
+        reverse=True,
+    )[:max_items]
+    return {"scope_type": scope, "items": items}
 
 
 @router.put("/tools/{tool_name}")

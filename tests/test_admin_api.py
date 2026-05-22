@@ -72,6 +72,21 @@ class TestAuth:
         assert client.get("/api/v1/admin/stickers").status_code == 503
 
 
+class TestWebUIStatic:
+    def test_spa_route_returns_webui_index(self, client):
+        r = client.get("/tools")
+
+        assert r.status_code == 200
+        assert "text/html" in r.headers["content-type"]
+        assert '<div id="root"></div>' in r.text
+
+    def test_missing_api_route_keeps_404(self, client):
+        r = client.get("/api/v1/admin/not-a-real-route")
+
+        assert r.status_code == 404
+        assert r.headers["content-type"].startswith("application/json")
+
+
 class TestStickerCRUD:
     def test_create_active(self, client, auth_header):
         r = client.post("/api/v1/admin/stickers", json={
@@ -559,6 +574,45 @@ class TestToolAdmin:
             headers=auth_header,
         ))
         assert "ai_daily" in effective["enabled"]
+
+    def test_tool_targets_list_real_groups_and_users(self, client, auth_header):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(User(id="group_2002", name="真实群"))
+            db.add(User(id="group_test", name="测试群"))
+            db.add(User(id="0000000000", name="雀"))
+            db.add(User(id="local_test", name="本地测试"))
+            db.add(User(id="private_0000000000", name="临时私聊 session"))
+            db.add(User(id="admin", name="管理测试"))
+            db.add(ChatLog(
+                user_id="30001", session_id="group_3003",
+                role="ambient", content="hello", sender_name="A",
+                session_name="日志群", created_at=now,
+            ))
+            db.add(ChatLog(
+                user_id="test-user", session_id="private_test-user",
+                role="user", content="test", sender_name="测试用户",
+                created_at=now,
+            ))
+            db.commit()
+
+        groups = _ok(client.get(
+            "/api/v1/admin/tools/targets",
+            params={"scope_type": "group"},
+            headers=auth_header,
+        ))
+        group_ids = {item["id"] for item in groups["items"]}
+        assert {"2002", "3003"} <= group_ids
+        assert "test" not in group_ids
+        assert all(not item["id"].startswith("group_") for item in groups["items"])
+
+        users = _ok(client.get(
+            "/api/v1/admin/tools/targets",
+            params={"scope_type": "user", "search": "雀"},
+            headers=auth_header,
+        ))
+        assert [item["id"] for item in users["items"]] == ["0000000000"]
+        assert users["items"][0]["label"] == "雀 (0000000000)"
 
 
 class TestModelRoutes:

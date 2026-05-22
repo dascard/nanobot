@@ -3708,7 +3708,14 @@ function ToolsPage() {
     { key: 'overrides', label: '指定覆盖' },
     { key: 'audit', label: '修改记录' },
   ]
+  const templates = [
+    { key: 'private_default', label: '普通私聊', chatType: 'private', help: '普通私聊的基础工具模板' },
+    { key: 'private_superuser_default', label: '私聊 superuser', chatType: 'private_superuser', help: 'superuser 私聊的基础工具模板' },
+    { key: 'group_default', label: '群聊', chatType: 'group', help: '群聊的基础工具模板' },
+    { key: 'limited_default', label: '轻量预设', chatType: 'group', help: '运行时自动降档时使用的轻量工具集合' },
+  ]
   const [tab, setTab] = useState('defaults')
+  const [templateKey, setTemplateKey] = useState('group_default')
   const [tools, setTools] = useState([])
   const [regInfo, setRegInfo] = useState(null)
   const [regAvail, setRegAvail] = useState(false)
@@ -3716,13 +3723,17 @@ function ToolsPage() {
   const [bridgeCt, setBridgeCt] = useState(0)
   const [overrideScope, setOverrideScope] = useState('group')
   const [targetId, setTargetId] = useState('')
+  const [targetSearch, setTargetSearch] = useState('')
+  const [targetOptions, setTargetOptions] = useState([])
+  const [targetPickerOpen, setTargetPickerOpen] = useState(false)
   const [auditLogs, setAuditLogs] = useState([])
   const [expandAudit, setExpandAudit] = useState(null)
+  const activeTemplate = templates.find(t => t.key === templateKey) || templates[0]
   const load = useCallback(() => {
     const isUserOverride = tab === 'overrides' && overrideScope === 'user'
     api.get('/tools', {
       params: {
-        chat_type: isUserOverride ? 'private' : 'group',
+        chat_type: tab === 'defaults' ? activeTemplate.chatType : isUserOverride ? 'private' : 'group',
         group_id: tab === 'overrides' && overrideScope === 'group' ? targetId : '',
         user_id: isUserOverride ? targetId : '',
       },
@@ -3733,9 +3744,16 @@ function ToolsPage() {
       setRegEmpty(r.data.registry_empty)
       setBridgeCt(r.data.bridge_count || 0)
     })
-  }, [tab, overrideScope, targetId])
+  }, [tab, overrideScope, targetId, activeTemplate.chatType])
+  const loadTargets = useCallback(() => {
+    if (tab !== 'overrides') return
+    api.get('/tools/targets', {
+      params: { scope_type: overrideScope, search: targetSearch, limit: 50 },
+    }).then(r => setTargetOptions(r.data.items || []))
+  }, [tab, overrideScope, targetSearch])
   const loadAudit = useCallback(() => api.get('/audit-logs', { params: { target_type: 'tool', limit: 50 } }).then(r => setAuditLogs(r.data.items || [])), [])
   useEffect(() => { if (tab === 'audit') loadAudit(); else load() }, [tab, load, loadAudit])
+  useEffect(() => { loadTargets() }, [loadTargets])
 
   const toggleDefault = (t, field) => {
     const val = !t[field]
@@ -3761,6 +3779,17 @@ function ToolsPage() {
     if (!scope) return
     api.delete(`/tools/${t.name}/override`, { params: scope }).then(load)
   }
+  const selectTarget = (target) => {
+    setTargetId(target.id)
+    setTargetSearch(target.label)
+    setTargetPickerOpen(false)
+  }
+  const onTargetInput = (value) => {
+    setTargetSearch(value)
+    const match = targetOptions.find(item => item.id === value || item.label === value)
+    setTargetId(match ? match.id : '')
+    setTargetPickerOpen(true)
+  }
 
   return (
     <div>
@@ -3771,23 +3800,57 @@ function ToolsPage() {
           <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{t.label}</button>
         ))}
       </div>
+      {tab === 'defaults' && (
+        <div className="mb-4 flex flex-wrap items-end gap-3">
+          <label htmlFor="tool-template-select" className="text-xs text-slate-500">
+            当前模板
+            <select id="tool-template-select" value={templateKey} onChange={e => setTemplateKey(e.target.value)}
+              className="mt-1 block min-w-[160px] rounded-lg bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200">
+              {templates.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
+            </select>
+          </label>
+          <span className="pb-1.5 text-xs text-slate-500">{activeTemplate.help}</span>
+        </div>
+      )}
       {tab === 'overrides' && (
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <label htmlFor="tool-override-scope" className="text-xs text-slate-500">
             覆盖对象
-            <select id="tool-override-scope" value={overrideScope} onChange={e => { setOverrideScope(e.target.value); setTargetId('') }}
+            <select id="tool-override-scope" value={overrideScope} onChange={e => { setOverrideScope(e.target.value); setTargetId(''); setTargetSearch('') }}
               className="mt-1 block min-w-[120px] rounded-lg bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200">
               <option value="group">指定群聊</option>
               <option value="user">指定私聊</option>
             </select>
           </label>
-          <label htmlFor="tool-override-target" className="text-xs text-slate-500">
-            {overrideScope === 'group' ? '群聊 group_id' : '私聊 user_id'}
-            <input id="tool-override-target" value={targetId} onChange={e => setTargetId(e.target.value)}
-              placeholder={overrideScope === 'group' ? 'qq:123:group 或 123' : '用户 ID'}
-              className="mt-1 block w-56 rounded-lg bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200" />
-          </label>
-          <span className="pb-1.5 text-xs text-slate-500">覆盖只在填入目标后生效；实际可用工具仍会经过运行时自动降档和强制规则裁剪。</span>
+          <div className="relative">
+            <label htmlFor="tool-override-target" className="text-xs text-slate-500">
+              {overrideScope === 'group' ? '搜索群聊' : '搜索私聊用户'}
+              <input id="tool-override-target" value={targetSearch}
+                onFocus={() => setTargetPickerOpen(true)}
+                onBlur={() => setTimeout(() => setTargetPickerOpen(false), 120)}
+                onChange={e => onTargetInput(e.target.value)}
+                placeholder={overrideScope === 'group' ? '输入群名或群号' : '输入昵称或用户 ID'}
+                className="mt-1 block w-72 rounded-lg bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200" />
+            </label>
+            {targetPickerOpen && (
+              <div className="absolute z-20 mt-1 w-72 max-h-64 overflow-auto rounded-lg border border-slate-700 bg-slate-950 shadow-xl">
+                {targetOptions.length > 0 ? targetOptions.map(item => (
+                  <button key={item.id} type="button" onMouseDown={e => e.preventDefault()} onClick={() => selectTarget(item)}
+                    className="block w-full px-3 py-2 text-left text-xs hover:bg-slate-800">
+                    <div className="text-slate-200">{item.label}</div>
+                    <div className="mt-0.5 flex gap-2 text-[11px] text-slate-500">
+                      <span>{item.scope_type}</span>
+                      <span>{item.source}</span>
+                      {item.recent_at && <span>{item.recent_at.slice(5, 16)}</span>}
+                    </div>
+                  </button>
+                )) : (
+                  <div className="px-3 py-3 text-xs text-slate-500">没有匹配的真实会话</div>
+                )}
+              </div>
+            )}
+          </div>
+          <span className="pb-1.5 text-xs text-slate-500">{targetId ? `当前目标：${targetId}` : '请选择一个已记录的真实目标；覆盖不会对手填未知 ID 生效。'}</span>
         </div>
       )}
       {tab !== 'audit' && <div className="mb-4 flex gap-4 text-xs text-slate-400">
@@ -3812,10 +3875,7 @@ function ToolsPage() {
         <table className="w-full text-sm">
           <thead><tr className="text-left text-slate-500 border-b border-slate-800">
             <th className="py-2 px-2">工具</th><th className="py-2 px-2">类别</th><th className="py-2 px-2">风险</th>
-            {tab === 'defaults' && <th className="py-2 px-2">普通私聊</th>}
-            {tab === 'defaults' && <th className="py-2 px-2">私聊 superuser</th>}
-            {tab === 'defaults' && <th className="py-2 px-2">群聊</th>}
-            {tab === 'defaults' && <th className="py-2 px-2">轻量预设</th>}
+            {tab === 'defaults' && <th className="py-2 px-2">{activeTemplate.label}</th>}
             {tab === 'overrides' && <th className="py-2 px-2">配置状态</th>}
             <th className="py-2 px-2">说明</th>
           </tr></thead>
@@ -3840,39 +3900,13 @@ function ToolsPage() {
                   </td>
                   {tab === 'defaults' && (
                     <td className="py-2 px-2">
-                      <button onClick={() => !t.force_enabled && toggleDefault(t, 'private_default')}
-                        disabled={t.force_enabled}
-                        className={`px-2 py-1 rounded text-xs ${t.private_default ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${t.force_enabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                        {t.private_default ? 'ON' : 'OFF'}
+                      <button onClick={() => !t.force_enabled && !(templateKey === 'group_default' && t.force_disabled_group) && toggleDefault(t, templateKey)}
+                        disabled={t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)}
+                        title={templateKey === 'limited_default' ? '运行时自动降档会使用这套轻量工具预设' : activeTemplate.help}
+                        className={`px-2 py-1 rounded text-xs ${t[templateKey] ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${(t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)) ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                        {t[templateKey] ? 'ON' : 'OFF'}
                       </button>
-                    </td>
-                  )}
-                  {tab === 'defaults' && (
-                    <td className="py-2 px-2">
-                      <button onClick={() => !t.force_enabled && toggleDefault(t, 'private_superuser_default')}
-                        disabled={t.force_enabled}
-                        className={`px-2 py-1 rounded text-xs ${t.private_superuser_default ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${t.force_enabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                        {t.private_superuser_default ? 'ON' : 'OFF'}
-                      </button>
-                    </td>
-                  )}
-                  {tab === 'defaults' && (
-                    <td className="py-2 px-2">
-                      <button onClick={() => !t.force_enabled && !t.force_disabled_group && toggleDefault(t, 'group_default')}
-                        disabled={t.force_enabled || t.force_disabled_group}
-                        className={`px-2 py-1 rounded text-xs ${t.group_default ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${(t.force_enabled || t.force_disabled_group) ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                        {t.group_default ? 'ON' : 'OFF'}
-                      </button>
-                    </td>
-                  )}
-                  {tab === 'defaults' && (
-                    <td className="py-2 px-2">
-                      <button onClick={() => !t.force_enabled && toggleDefault(t, 'limited_default')}
-                        disabled={t.force_enabled}
-                        title="运行时自动降档会使用这套轻量工具预设"
-                        className={`px-2 py-1 rounded text-xs ${t.limited_default ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${t.force_enabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
-                        {t.limited_default ? 'ON' : 'OFF'}
-                      </button>
+                      {templateKey === 'group_default' && t.force_disabled_group && <span className="ml-2 text-xs text-slate-500">群聊强制禁用</span>}
                     </td>
                   )}
                   {tab === 'overrides' && (

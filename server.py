@@ -422,7 +422,28 @@ from api.admin_routes import router as admin_router
 app.include_router(admin_router)
 
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pathlib import Path as _Path
+
+
+class SPAStaticFiles(StaticFiles):
+    """为 WebUI 的前端路由提供 index.html 回退，同时保留 API 404。"""
+
+    async def get_response(self, path, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404 or self._should_keep_not_found(path):
+                raise
+            return await super().get_response("index.html", scope)
+
+    @staticmethod
+    def _should_keep_not_found(path: str) -> bool:
+        if path.startswith(("api/", "docs", "redoc", "openapi.json")):
+            return True
+        return bool(_Path(path).suffix)
+
+
 _webui_dist = _Path(__file__).parent / "webui" / "dist"
 if _webui_dist.exists():
-    app.mount("/", StaticFiles(directory=str(_webui_dist), html=True), name="webui")
+    app.mount("/", SPAStaticFiles(directory=str(_webui_dist), html=True), name="webui")
