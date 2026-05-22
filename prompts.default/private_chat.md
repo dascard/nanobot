@@ -7,7 +7,7 @@ required_vars:
 optional_vars:
   - history_context
   - persona_text
-  - tool_policy
+  - runtime_tool_prompt
   - sender_name
   - session_id
 ---
@@ -22,8 +22,8 @@ optional_vars:
 统一上下文:
 {{ history_context }}
 
-工具策略:
-{{ tool_policy }}
+运行时工具说明:
+{{ runtime_tool_prompt }}
 
 本轮用户输入:
 {{ user_input }}

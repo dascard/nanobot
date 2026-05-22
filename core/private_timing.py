@@ -1,4 +1,4 @@
-"""私聊三态分类 Gate——先判断对话意图，再决定 effort + tool_policy。"""
+"""私聊三态分类 Gate——先判断对话意图，再决定 effort + runtime_preset。"""
 
 import logging
 import re
@@ -90,7 +90,7 @@ def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]
         return "casual", "none", "personal_probe"
     if any(w in t for w in _MISSING_MATERIAL_WORDS) and not _looks_task_request(t):
         if _has_inline_material(t):
-            return "short", "limited", "specific_task"
+            return "short", "lightweight", "specific_task"
         return "casual", "none", "missing_material"
     if any(w in t for w in _TOO_BROAD_WORDS):
         return "casual", "none", "too_broad"
@@ -99,8 +99,8 @@ def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]
             if is_superuser:
                 return "serious", "full", "daily_request"
             return "casual", "none", "daily_request_casual"
-        return "short", "limited", "specific_task"
-    return "short", "limited", "general_query"
+        return "short", "lightweight", "specific_task"
+    return "short", "lightweight", "general_query"
 
 
 @dataclass
@@ -111,12 +111,12 @@ class PrivateDecision:
     raw_label: str = ""
     complexity: int = 0
     effort: str = "short"       # "ignore" | "casual" | "short" | "serious"
-    tool_policy: str = "limited"  # "none" | "limited" | "full"
+    runtime_preset: str = "lightweight"  # "none" | "lightweight" | "full"
 
 
 @dataclass
 class PrivateTimingGate:
-    """先判对话意图，再决定 effort + tool_policy。"""
+    """先判对话意图，再决定 effort + runtime_preset。"""
 
     classifier: object | None = None
     stats: dict = field(default_factory=lambda: {"no_reply": 0, "wait": 0, "reply_now": 0, "total": 0})
@@ -142,17 +142,17 @@ class PrivateTimingGate:
             return _log_d("no_reply", "transport_only", 0.95, "rule_transport", "ignore", "none", user_id)
         if has_files and not text:
             self.stats["reply_now"] += 1
-            return _log_d("reply_now", "image_only", 0.95, "rule_image_only", "short", "limited", user_id, complexity=3)
+            return _log_d("reply_now", "image_only", 0.95, "rule_image_only", "short", "lightweight", user_id, complexity=3)
 
-        effort, tool_policy, intent = _infer_effort(text, is_superuser)
+        effort, runtime_preset, intent = _infer_effort(text, is_superuser)
 
         # casual 直接规则返回
         if effort == "casual":
             self.stats["reply_now"] += 1
             d = PrivateDecision(action="reply_now", reason=intent, confidence=1.0,
-                                raw_label=intent, complexity=2, effort=effort, tool_policy=tool_policy)
+                                raw_label=intent, complexity=2, effort=effort, runtime_preset=runtime_preset)
             logger.info("[PrivateDecision] fast_path user=%s effort=%s tool=%s intent=%s",
-                        user_id, effort, tool_policy, intent)
+                        user_id, effort, runtime_preset, intent)
             return d
 
         # Qwen 分类（仅 short/serious）
@@ -169,9 +169,9 @@ class PrivateTimingGate:
             self.stats[action] += 1
             d = PrivateDecision(action=action, reason=result.get("reason", ""),
                                 confidence=1.0, raw_label=result.get("raw", ""),
-                                complexity=complexity, effort=effort, tool_policy=tool_policy)
+                                complexity=complexity, effort=effort, runtime_preset=runtime_preset)
             logger.info("[PrivateDecision] result user=%s action=%s effort=%s tool=%s complexity=%s",
-                        user_id, action, effort, tool_policy, complexity)
+                        user_id, action, effort, runtime_preset, complexity)
             return d
         except asyncio.TimeoutError:
             logger.warning("[PrivateDecision] timeout user=%s", user_id)
@@ -182,16 +182,16 @@ class PrivateTimingGate:
             self.stats["no_reply"] += 1
             return _log_d("no_reply", "fallback transport", 0.6, "fallback_transport", "ignore", "none", user_id)
         self.stats["reply_now"] += 1
-        return _log_d("reply_now", "fallback default", 0.5, "fallback", effort, tool_policy, user_id)
+        return _log_d("reply_now", "fallback default", 0.5, "fallback", effort, runtime_preset, user_id)
 
 
 def _log_d(action: str, reason: str, confidence: float, raw: str,
-           effort: str, tool_policy: str, user_id: str,
+           effort: str, runtime_preset: str, user_id: str,
            complexity: int = 0) -> PrivateDecision:
     d = PrivateDecision(action, reason, confidence, raw,
-                        complexity=complexity, effort=effort, tool_policy=tool_policy)
+                        complexity=complexity, effort=effort, runtime_preset=runtime_preset)
     logger.info("[PrivateDecision] rule user=%s action=%s effort=%s tool=%s conf=%.2f reason=%s",
-                user_id, action, effort, tool_policy, confidence, reason[:80])
+                user_id, action, effort, runtime_preset, confidence, reason[:80])
     return d
 
 

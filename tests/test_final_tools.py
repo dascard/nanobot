@@ -106,10 +106,10 @@ def test_new_api_client_build_payload_uses_final_tools_scope():
     assert [tool["function"]["name"] for tool in payload["tools"]] == ["reply"]
 
 
-def test_tool_policy_prompt_does_not_expand_enabled_tool_schema():
-    from core.tool_policy_service import build_tool_policy_prompt
+def test_runtime_preset_prompt_does_not_expand_enabled_tool_schema():
+    from core.runtime_tool_service import build_runtime_tool_prompt
 
-    prompt = build_tool_policy_prompt(
+    prompt = build_runtime_tool_prompt(
         enabled={"reply": True, "news_search": True, "bash": False},
         disabled={"bash": "群聊强制禁用"},
         chat_type="group",
@@ -123,10 +123,10 @@ def test_tool_policy_prompt_does_not_expand_enabled_tool_schema():
 
 
 def test_superuser_private_tool_defaults_are_more_open():
-    from core.tool_policy_service import resolve_effective_tools
+    from core.runtime_tool_service import resolve_effective_tools
 
-    private_enabled, _ = resolve_effective_tools(chat_type="private", tool_policy="full")
-    superuser_enabled, _ = resolve_effective_tools(chat_type="private_superuser", tool_policy="full")
+    private_enabled, _ = resolve_effective_tools(chat_type="private", runtime_preset="full")
+    superuser_enabled, _ = resolve_effective_tools(chat_type="private_superuser", runtime_preset="full")
 
     assert private_enabled["group_analysis"] is False
     assert superuser_enabled["group_analysis"] is True

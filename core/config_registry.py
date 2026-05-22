@@ -399,8 +399,8 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=3, value_type="int",
         category="model", description="NewAPI最大重试", min_value=0, max_value=10,
     ),
-    "tool.limited_set": SettingDef(
-        key="tool.limited_set", env_name="",
+    "tool.lightweight_set": SettingDef(
+        key="tool.lightweight_set", env_name="",
         default='["reply","no_reply","image_summary","python_sandbox","sticker_search"]',
         value_type="str",
         category="tool", description="自动降档轻量预设允许的工具列表（JSON数组）",

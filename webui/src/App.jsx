@@ -2219,7 +2219,6 @@ function EffectivePromptPreviewPage() {
     prompt_key: '',
     mode: 'shadow',
     user_input: '你好',
-    tool_policy: 'full',
   })
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -2269,9 +2268,6 @@ function EffectivePromptPreviewPage() {
           <label className="text-xs text-slate-500">prompt_key
             <input value={form.prompt_key} onChange={e => update('prompt_key', e.target.value)} placeholder={form.chat_type === 'group' ? 'group_chat' : 'private_chat'} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
           </label>
-          <label className="text-xs text-slate-500">tool_policy
-            <input value={form.tool_policy} onChange={e => update('tool_policy', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
-          </label>
         </div>
         <label className="block text-xs text-slate-500 mt-3">user_input
           <textarea value={form.user_input} onChange={e => update('user_input', e.target.value)} className="mt-1 w-full h-24 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 resize-none" />
@@ -2285,7 +2281,7 @@ function EffectivePromptPreviewPage() {
         <div className="flex gap-2">
           <span className="text-xs text-blue-400 mt-0.5">ℹ</span>
           <div className="text-xs text-slate-500">
-            这是预览构造结果（根据 session_id 读取历史+画像+tool policy 模拟构造），<strong>不是从真实模型调用链路抓取的最终 payload</strong>。
+            这是预览构造结果（根据 session_id 读取历史、画像和运行时工具说明模拟构造），<strong>不是从真实模型调用链路抓取的最终 payload</strong>。
             真实发送的 request 请以 <NavLink to="/llm-api-logs" className="text-blue-400 underline">LLM API 日志</NavLink> 中的 request_json 为准。
           </div>
         </div>
@@ -2316,7 +2312,7 @@ function EffectivePromptPreviewPage() {
               <RawJsonAccordion label="runtime_context" text={result.runtime_context || ''} defaultOpen />
               <RawJsonAccordion label="persona_reference" text={result.persona_reference || ''} />
               <RawJsonAccordion label="conversation_context" text={result.history_context || ''} />
-              <RawJsonAccordion label="tool_policy" text={result.tool_policy || ''} />
+              <RawJsonAccordion label="运行时工具说明" text={result.runtime_tool_prompt || ''} />
             </div>
           </Card>
           <Card className="p-4">
@@ -2505,8 +2501,8 @@ function LLMApiLogViewer({ log }) {
   const lintCounts = requestLint.severity_counts || {}
   const messageSources = safeJsonParse(log.message_sources_json, [])
   const actualSentTools = safeJsonParse(log.actual_sent_tools_json, requestLint.actual_sent_tools || [])
-  const policyEnabledTools = safeJsonParse(log.policy_enabled_tools_json, requestLint.policy_enabled_tools || [])
-  const policyDisabledTools = safeJsonParse(log.policy_disabled_tools_json, requestLint.policy_disabled_tools || [])
+  const runtimeEnabledTools = safeJsonParse(log.runtime_enabled_tools_json, requestLint.runtime_enabled_tools || [])
+  const runtimeDisabledTools = safeJsonParse(log.runtime_disabled_tools_json, requestLint.runtime_disabled_tools || [])
   const frameworkInjectedTools = safeJsonParse(log.framework_injected_tools_json, requestLint.framework_injected_tools || [])
   const messageSourceByIndex = new Map(messageSources.map(src => [src.index, src]))
   const isIncomplete = (log.status === 'created') && (log.latency_ms === 0 || !log.latency_ms)
@@ -2594,12 +2590,12 @@ function LLMApiLogViewer({ log }) {
               <div className="flex flex-wrap gap-1">{actualSentTools.length ? actualSentTools.map(name => <Badge key={name} tone="blue">{name}</Badge>) : <span className="text-xs text-slate-600">无</span>}</div>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
-              <div className="text-[10px] text-slate-600 mb-1">Policy Enabled</div>
-              <div className="flex flex-wrap gap-1">{policyEnabledTools.length ? policyEnabledTools.map(name => <Badge key={name} tone="emerald">{name}</Badge>) : <span className="text-xs text-slate-600">无</span>}</div>
+              <div className="text-[10px] text-slate-600 mb-1">Runtime Enabled</div>
+              <div className="flex flex-wrap gap-1">{runtimeEnabledTools.length ? runtimeEnabledTools.map(name => <Badge key={name} tone="emerald">{name}</Badge>) : <span className="text-xs text-slate-600">无</span>}</div>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
-              <div className="text-[10px] text-slate-600 mb-1">Policy Disabled</div>
-              <div className="flex flex-wrap gap-1">{policyDisabledTools.length ? policyDisabledTools.map(name => <Badge key={name} tone="amber">{name}</Badge>) : <span className="text-xs text-slate-600">无</span>}</div>
+              <div className="text-[10px] text-slate-600 mb-1">Runtime Disabled</div>
+              <div className="flex flex-wrap gap-1">{runtimeDisabledTools.length ? runtimeDisabledTools.map(name => <Badge key={name} tone="amber">{name}</Badge>) : <span className="text-xs text-slate-600">无</span>}</div>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-950 p-2">
               <div className="text-[10px] text-slate-600 mb-1">Framework Docs</div>
@@ -3712,7 +3708,7 @@ function ToolsPage() {
     { key: 'private_default', label: '普通私聊', chatType: 'private', help: '普通私聊的基础工具模板' },
     { key: 'private_superuser_default', label: '私聊 superuser', chatType: 'private_superuser', help: 'superuser 私聊的基础工具模板' },
     { key: 'group_default', label: '群聊', chatType: 'group', help: '群聊的基础工具模板' },
-    { key: 'limited_default', label: '轻量预设', chatType: 'group', help: '运行时自动降档时使用的轻量工具集合' },
+    { key: 'lightweight_default', label: '轻量预设', chatType: 'group', help: '运行时自动降档时使用的轻量工具集合' },
   ]
   const [tab, setTab] = useState('defaults')
   const [templateKey, setTemplateKey] = useState('group_default')
@@ -3905,7 +3901,7 @@ function ToolsPage() {
                     <td className="py-2 px-2">
                       <button onClick={() => !t.force_enabled && !(templateKey === 'group_default' && t.force_disabled_group) && toggleDefault(t, templateKey)}
                         disabled={t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)}
-                        title={templateKey === 'limited_default' ? '运行时自动降档会使用这套轻量工具预设' : activeTemplate.help}
+                        title={templateKey === 'lightweight_default' ? '运行时自动降档会使用这套轻量工具预设' : activeTemplate.help}
                         className={`px-2 py-1 rounded text-xs ${t[templateKey] ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-600/30 text-slate-500'} ${(t.force_enabled || (templateKey === 'group_default' && t.force_disabled_group)) ? 'opacity-50 cursor-not-allowed' : ''}`}>
                         {t[templateKey] ? 'ON' : 'OFF'}
                       </button>

@@ -355,8 +355,8 @@ class LLMRequestTracer:
                     }],
                     "message_sources": [],
                     "actual_sent_tools": [],
-                    "policy_enabled_tools": [],
-                    "policy_disabled_tools": [],
+                    "runtime_enabled_tools": [],
+                    "runtime_disabled_tools": [],
                     "framework_injected_tools": [],
                 }
 
@@ -379,8 +379,8 @@ class LLMRequestTracer:
                     message_sources_json=_json_dumps(lint_result.get("message_sources") or [], max_chars=0),
                     request_lint_json=_json_dumps(lint_result, max_chars=0),
                     actual_sent_tools_json=_json_dumps(lint_result.get("actual_sent_tools") or [], max_chars=0),
-                    policy_enabled_tools_json=_json_dumps(lint_result.get("policy_enabled_tools") or [], max_chars=0),
-                    policy_disabled_tools_json=_json_dumps(lint_result.get("policy_disabled_tools") or [], max_chars=0),
+                    runtime_enabled_tools_json=_json_dumps(lint_result.get("runtime_enabled_tools") or [], max_chars=0),
+                    runtime_disabled_tools_json=_json_dumps(lint_result.get("runtime_disabled_tools") or [], max_chars=0),
                     framework_injected_tools_json=_json_dumps(lint_result.get("framework_injected_tools") or [], max_chars=0),
                     created_at=datetime.now(),
                 )

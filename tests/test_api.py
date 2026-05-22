@@ -17,7 +17,7 @@ def _fast_private_reply(monkeypatch):
                 "unit_test",
                 complexity=5,
                 effort="short",
-                tool_policy="limited",
+                runtime_preset="lightweight",
             )
 
     class FastGuardrail:

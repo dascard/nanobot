@@ -52,17 +52,17 @@ def extract_actual_sent_tools(request: dict[str, Any]) -> list[str]:
     return [name for name in names if name]
 
 
-def _extract_policy_tools(messages: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+def _extract_runtime_tool_notes(messages: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
     enabled: list[str] = []
     disabled: list[str] = []
     section = ""
-    in_policy = False
+    in_runtime_tool = False
 
     for msg in messages:
         content = _as_text(msg.get("content") if isinstance(msg, dict) else "")
-        if "[ToolPolicy]" not in content:
+        if "[RuntimeTool]" not in content:
             continue
-        in_policy = True
+        in_runtime_tool = True
         for line in content.splitlines():
             if "可调用工具" in line:
                 section = "enabled"
@@ -74,7 +74,7 @@ def _extract_policy_tools(messages: list[dict[str, Any]]) -> tuple[list[str], li
                 section = ""
                 continue
             match = _TOOL_LINE_RE.match(line)
-            if not match or not in_policy:
+            if not match or not in_runtime_tool:
                 continue
             name = match.group(1)
             if section == "enabled" and name not in enabled:
@@ -84,10 +84,10 @@ def _extract_policy_tools(messages: list[dict[str, Any]]) -> tuple[list[str], li
     return enabled, disabled
 
 
-def _has_schema_authoritative_tool_policy(messages: list[dict[str, Any]]) -> bool:
+def _has_schema_authoritative_runtime_tool(messages: list[dict[str, Any]]) -> bool:
     for msg in messages:
         content = _as_text(msg.get("content") if isinstance(msg, dict) else "")
-        if "[ToolPolicy]" not in content:
+        if "[RuntimeTool]" not in content:
             continue
         if "tools schema 为准" in content or "tool schema 为准" in content:
             return True
@@ -114,8 +114,8 @@ def infer_message_sources(messages: list[dict[str, Any]]) -> list[dict[str, Any]
 
         source = explicit_source
         if not source:
-            if role == "system" and "[ToolPolicy]" in content:
-                source = "tool_policy"
+            if role == "system" and "[RuntimeTool]" in content:
+                source = "runtime_tool"
             elif role == "system" and _detect_framework_markers(content):
                 source = "kt_framework_tools_doc"
             elif role == "system" and "本轮简短处理" in content:
@@ -188,9 +188,9 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
     raw_messages = payload.get("messages") or []
     messages = [msg for msg in raw_messages if isinstance(msg, dict)] if isinstance(raw_messages, list) else []
     actual_sent_tools = extract_actual_sent_tools(payload)
-    policy_enabled, policy_disabled = _extract_policy_tools(messages)
-    if not policy_enabled and _has_schema_authoritative_tool_policy(messages):
-        policy_enabled = list(actual_sent_tools)
+    runtime_enabled, runtime_disabled = _extract_runtime_tool_notes(messages)
+    if not runtime_enabled and _has_schema_authoritative_runtime_tool(messages):
+        runtime_enabled = list(actual_sent_tools)
     message_sources = infer_message_sources(messages)
     issues: list[dict[str, Any]] = []
 
@@ -236,8 +236,8 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
         )
 
     sent_set = set(actual_sent_tools)
-    enabled_set = set(policy_enabled)
-    disabled_set = set(policy_disabled)
+    enabled_set = set(runtime_enabled)
+    disabled_set = set(runtime_disabled)
     if enabled_set:
         extra = sorted(sent_set - enabled_set)
         missing = sorted(enabled_set - sent_set)
@@ -245,8 +245,8 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
             _add_issue(
                 issues,
                 "P0",
-                "tool_policy_mismatch",
-                "ToolPolicy 可调用工具与实际发送 tools 不一致。",
+                "runtime_tool_mismatch",
+                "RuntimeTool 可调用工具与实际发送 tools 不一致。",
                 extra_sent=extra,
                 missing_sent=missing,
             )
@@ -275,21 +275,21 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
                 markers=markers,
             )
 
-    non_policy_prompt = "\n".join(
+    non_runtime_prompt = "\n".join(
         _as_text(msg.get("content"))
         for msg in messages
-        if "[ToolPolicy]" not in _as_text(msg.get("content"))
+        if "[RuntimeTool]" not in _as_text(msg.get("content"))
     )
     disabled_mentions = [
-        name for name in policy_disabled
-        if re.search(rf"(`{re.escape(name)}`|\b{re.escape(name)}\b)", non_policy_prompt)
+        name for name in runtime_disabled
+        if re.search(rf"(`{re.escape(name)}`|\b{re.escape(name)}\b)", non_runtime_prompt)
     ]
     if disabled_mentions:
         _add_issue(
             issues,
             "P0",
             "disabled_tool_mentioned",
-            "已禁用工具仍出现在非 ToolPolicy prompt 文本中。",
+            "已禁用工具仍出现在非 RuntimeTool prompt 文本中。",
             tools=disabled_mentions,
         )
 
@@ -332,7 +332,7 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
         "issues": issues,
         "message_sources": message_sources,
         "actual_sent_tools": actual_sent_tools,
-        "policy_enabled_tools": policy_enabled,
-        "policy_disabled_tools": policy_disabled,
+        "runtime_enabled_tools": runtime_enabled,
+        "runtime_disabled_tools": runtime_disabled,
         "framework_injected_tools": sorted(framework_markers),
     }

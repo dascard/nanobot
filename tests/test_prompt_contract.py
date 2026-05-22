@@ -79,7 +79,7 @@ def test_contains_tool_discipline(prompt_text):
     assert "不需要回复" in prompt_text
 
 
-def test_contains_sticker_tool_policy(prompt_text):
+def test_contains_sticker_runtime_tool_guidance(prompt_text):
     from scripts.build_nanobot_prompt import build_prompt
     text = build_prompt(chat_type="group")
     assert "表情包" in text

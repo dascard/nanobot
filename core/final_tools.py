@@ -48,17 +48,17 @@ def resolve_final_tools(
     chat_type: str = "group",
     group_id: str = "",
     user_id: str = "",
-    tool_policy: str = "full",
+    runtime_preset: str = "full",
     db: Any = None,
 ) -> FinalToolSet:
-    """把 ToolPolicy 结果转成真实请求出口使用的最终工具集。"""
-    from core.tool_policy_service import resolve_effective_tools
+    """把 RuntimeTool 结果转成真实请求出口使用的最终工具集。"""
+    from core.runtime_tool_service import resolve_effective_tools
 
     enabled, disabled = resolve_effective_tools(
         chat_type=chat_type,
         group_id=group_id,
         user_id=user_id,
-        tool_policy=tool_policy,
+        runtime_preset=runtime_preset,
         db=db,
     )
     allowed = {name for name, is_enabled in enabled.items() if is_enabled}

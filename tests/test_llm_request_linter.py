@@ -1,7 +1,7 @@
 import json
 
 
-def test_linter_extracts_tools_policy_and_internal_message_issues():
+def test_linter_extracts_runtime_tool_and_internal_message_issues():
     from core.llm_request_linter import lint_llm_request
 
     request = {
@@ -9,7 +9,7 @@ def test_linter_extracts_tools_policy_and_internal_message_issues():
         "messages": [
             {
                 "role": "system",
-                "content": "[ToolPolicy]\n本轮可调用工具（1个）：\n  - reply：回复\n已禁用工具（1个）：\n  - python_sandbox：测试禁用\n规则：只调用可调用工具。",
+                "content": "[RuntimeTool]\n本轮可调用工具（1个）：\n  - reply：回复\n已禁用工具（1个）：\n  - python_sandbox：测试禁用\n规则：只调用可调用工具。",
             },
             {
                 "role": "system",
@@ -36,12 +36,12 @@ def test_linter_extracts_tools_policy_and_internal_message_issues():
     result = lint_llm_request(request)
 
     assert result["actual_sent_tools"] == ["reply", "python_sandbox"]
-    assert result["policy_enabled_tools"] == ["reply"]
-    assert result["policy_disabled_tools"] == ["python_sandbox"]
+    assert result["runtime_enabled_tools"] == ["reply"]
+    assert result["runtime_disabled_tools"] == ["python_sandbox"]
     assert result["framework_injected_tools"] == ["available_functions"]
     codes = {issue["code"] for issue in result["issues"]}
     assert "disabled_tool_sent" in codes
-    assert "tool_policy_mismatch" in codes
+    assert "runtime_tool_mismatch" in codes
     assert "kt_framework_tool_docs" in codes
     assert "internal_tool_message_as_user" in codes
     assert "reply_retry_as_user" in codes
@@ -68,7 +68,7 @@ def test_record_request_persists_request_lint_fields(db_session):
             "messages": [
                 {
                     "role": "system",
-                    "content": "[ToolPolicy]\n本轮可调用工具（1个）：\n  - reply：回复",
+                    "content": "[RuntimeTool]\n本轮可调用工具（1个）：\n  - reply：回复",
                 },
                 {"role": "user", "content": "你好"},
             ],
@@ -78,16 +78,16 @@ def test_record_request_persists_request_lint_fields(db_session):
 
     row = db_session.query(LLMApiRequestLog).filter_by(id=log_id).one()
     assert json.loads(row.actual_sent_tools_json) == ["reply"]
-    assert json.loads(row.policy_enabled_tools_json) == ["reply"]
-    assert json.loads(row.policy_disabled_tools_json) == []
+    assert json.loads(row.runtime_enabled_tools_json) == ["reply"]
+    assert json.loads(row.runtime_disabled_tools_json) == []
     lint = json.loads(row.request_lint_json)
     assert lint["actual_sent_tools"] == ["reply"]
-    assert lint["policy_enabled_tools"] == ["reply"]
+    assert lint["runtime_enabled_tools"] == ["reply"]
     sources = json.loads(row.message_sources_json)
-    assert sources[0]["source"] == "tool_policy"
+    assert sources[0]["source"] == "runtime_tool"
 
 
-def test_linter_accepts_schema_authoritative_tool_policy():
+def test_linter_accepts_schema_authoritative_runtime_tool():
     from core.llm_request_linter import lint_llm_request
 
     request = {
@@ -96,7 +96,7 @@ def test_linter_accepts_schema_authoritative_tool_policy():
             {
                 "role": "system",
                 "content": (
-                    "[ToolPolicy]\n"
+                    "[RuntimeTool]\n"
                     "本轮真实可调用工具以 API tools schema 为准，本段只做说明和审计。\n"
                     "已禁用工具（1个）：\n"
                     "  - python_sandbox：群聊强制禁用\n"
@@ -114,7 +114,7 @@ def test_linter_accepts_schema_authoritative_tool_policy():
     result = lint_llm_request(request)
 
     assert result["actual_sent_tools"] == ["reply"]
-    assert result["policy_enabled_tools"] == ["reply"]
-    assert result["policy_disabled_tools"] == ["python_sandbox"]
+    assert result["runtime_enabled_tools"] == ["reply"]
+    assert result["runtime_disabled_tools"] == ["python_sandbox"]
     codes = {issue["code"] for issue in result["issues"]}
-    assert "tool_policy_mismatch" not in codes
+    assert "runtime_tool_mismatch" not in codes

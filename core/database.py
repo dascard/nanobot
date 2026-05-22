@@ -378,9 +378,9 @@ class ToolOverride(Base):
     )
 
 
-class ToolPolicyDecision(Base):
-    """每轮工具策略决策记录——供 WebUI 排查'为什么某工具不可用'。"""
-    __tablename__ = "tool_policy_decisions"
+class RuntimeToolDecision(Base):
+    """每轮运行时工具决策记录——供 WebUI 排查'为什么某工具不可用'。"""
+    __tablename__ = "runtime_tool_decisions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(String, index=True)
@@ -388,7 +388,7 @@ class ToolPolicyDecision(Base):
     chat_type = Column(String, default="group")  # "group" | "private"
     group_id = Column(String, default="")
     user_id = Column(String, default="")
-    tool_policy = Column(String, default="full")  # "none" | "limited" | "full"
+    runtime_preset = Column(String, default="full")  # "none" | "lightweight" | "full"
     enabled_tools_json = Column(Text, default="[]")
     disabled_tools_json = Column(Text, default="[]")
     disabled_reasons_json = Column(Text, default="{}")
@@ -510,8 +510,8 @@ class LLMApiRequestLog(Base):
     message_sources_json = Column(Text, default="[]")
     request_lint_json = Column(Text, default="{}")
     actual_sent_tools_json = Column(Text, default="[]")
-    policy_enabled_tools_json = Column(Text, default="[]")
-    policy_disabled_tools_json = Column(Text, default="[]")
+    runtime_enabled_tools_json = Column(Text, default="[]")
+    runtime_disabled_tools_json = Column(Text, default="[]")
     framework_injected_tools_json = Column(Text, default="[]")
     created_at = Column(DateTime, default=datetime.now, index=True)
 
@@ -1007,8 +1007,8 @@ def init_db():
                 "message_sources_json": "TEXT DEFAULT '[]'",
                 "request_lint_json": "TEXT DEFAULT '{}'",
                 "actual_sent_tools_json": "TEXT DEFAULT '[]'",
-                "policy_enabled_tools_json": "TEXT DEFAULT '[]'",
-                "policy_disabled_tools_json": "TEXT DEFAULT '[]'",
+                "runtime_enabled_tools_json": "TEXT DEFAULT '[]'",
+                "runtime_disabled_tools_json": "TEXT DEFAULT '[]'",
                 "framework_injected_tools_json": "TEXT DEFAULT '[]'",
             }
             for col_name, col_type in llm_add.items():

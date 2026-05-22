@@ -1,13 +1,13 @@
-"""工具策略服务——resolve_effective_tools + build_tool_policy_prompt + 审计记录。"""
+"""运行时工具服务——解析最终工具集、生成说明并记录决策。"""
 
 import json
 import logging
 
 from core.tool_registry import TOOL_METADATA, get_tool_def
 
-logger = logging.getLogger("nanobot.tool_policy")
+logger = logging.getLogger("nanobot.runtime_tools")
 
-_DEFAULT_LIMITED_SET = {
+_DEFAULT_LIGHTWEIGHT_SET = {
     "reply", "no_reply", "image_summary", "python_sandbox", "sticker_search",
 }
 
@@ -42,7 +42,7 @@ def _metadata_default(tool_name: str, chat_type: str) -> bool:
 
 
 def resolve_tool_default(tool_name: str, chat_type: str = "group", db=None) -> bool:
-    """读取某个默认模板下的工具启用状态，不包含指定覆盖和 tool_policy。"""
+    """读取某个默认模板下的工具启用状态，不包含指定覆盖和运行时预设。"""
     normalized = normalize_tool_chat_type(chat_type)
     default = _metadata_default(tool_name, normalized)
     if db is None:
@@ -60,7 +60,17 @@ def resolve_tool_default(tool_name: str, chat_type: str = "group", db=None) -> b
     return default
 
 
-def _parse_limited_set(raw: object) -> set[str] | None:
+def normalize_runtime_preset(value: str = "full") -> str:
+    """把旧值和外部输入归一成运行时预设。"""
+    normalized = str(value or "full").strip().lower()
+    if normalized in {"none", "off", "disabled"}:
+        return "none"
+    if normalized in {"lightweight", "light", "lite"}:
+        return "lightweight"
+    return "full"
+
+
+def _parse_lightweight_set(raw: object) -> set[str] | None:
     if raw and isinstance(raw, str):
         try:
             parsed = json.loads(raw)
@@ -71,39 +81,39 @@ def _parse_limited_set(raw: object) -> set[str] | None:
     return None
 
 
-def _load_limited_set(db=None) -> set[str]:
+def _load_lightweight_set(db=None) -> set[str]:
     if db is not None:
         try:
             from core.database import SystemSetting
             row = db.query(SystemSetting).filter(
-                SystemSetting.key == "tool.limited_set"
+                SystemSetting.key == "tool.lightweight_set"
             ).first()
-            parsed = _parse_limited_set(row.value if row else None)
+            parsed = _parse_lightweight_set(row.value if row else None)
             if parsed is not None:
                 return parsed
-            return _DEFAULT_LIMITED_SET
+            return _DEFAULT_LIGHTWEIGHT_SET
         except Exception:
             pass
     from core.settings_service import settings
-    parsed = _parse_limited_set(settings.get("tool.limited_set"))
+    parsed = _parse_lightweight_set(settings.get("tool.lightweight_set"))
     if parsed is not None:
         return parsed
-    return _DEFAULT_LIMITED_SET
+    return _DEFAULT_LIGHTWEIGHT_SET
 
 
-def resolve_limited_default(tool_name: str, db=None) -> bool:
+def resolve_lightweight_default(tool_name: str, db=None) -> bool:
     """读取自动降档轻量预设中的工具启用状态。"""
     td = get_tool_def(tool_name)
     if td and td.force_enabled:
         return True
-    return tool_name in _load_limited_set(db=db)
+    return tool_name in _load_lightweight_set(db=db)
 
 
 def resolve_effective_tools(
     chat_type: str = "group",
     group_id: str = "",
     user_id: str = "",
-    tool_policy: str = "full",
+    runtime_preset: str = "full",
     db=None,
 ) -> tuple[dict[str, bool], dict[str, str]]:
     """解析实际生效的工具启用/禁用。
@@ -111,13 +121,14 @@ def resolve_effective_tools(
     合并顺序（后面覆盖前面）：
     1. TOOL_METADATA 默认值 (private_default/group_default)
     2. force_enabled / force_disabled_group 初始硬约束
-    3. tool_policy 运行时预设 (none/limited/full)
-    4. ToolOverride 表 (scope_type=chat_type/group/user)，显式覆盖可放开 limited 预设
+    3. 运行时预设 (none/lightweight/full)
+    4. ToolOverride 表 (scope_type=chat_type/group/user)，显式覆盖可放开轻量预设
     5. force_enabled / force_disabled_group 硬约束最终兜底
 
     返回 (enabled: {tool_name: bool}, disabled_reasons: {tool_name: reason})
     """
     chat_type = normalize_tool_chat_type(chat_type)
+    runtime_preset = normalize_runtime_preset(runtime_preset)
     enabled: dict[str, bool] = {}
     disabled: dict[str, str] = {}
 
@@ -131,23 +142,23 @@ def resolve_effective_tools(
             enabled[name] = False
             disabled[name] = "群聊强制禁用"
 
-    if tool_policy == "none":
+    if runtime_preset == "none":
         for name in list(enabled.keys()):
             td = get_tool_def(name)
             if not (td and td.force_enabled):
                 enabled[name] = False
-                disabled[name] = "tool_policy=none"
-    elif tool_policy == "limited":
-        limited = _load_limited_set(db=db)
+                disabled[name] = "运行时预设=none"
+    elif runtime_preset == "lightweight":
+        lightweight = _load_lightweight_set(db=db)
         for name in list(enabled.keys()):
             td = get_tool_def(name)
             if td and td.force_enabled:
                 continue
-            if name not in limited:
+            if name not in lightweight:
                 enabled[name] = False
-                disabled[name] = "tool_policy=limited"
+                disabled[name] = "运行时轻量预设"
 
-    if db is not None and tool_policy != "none":
+    if db is not None and runtime_preset != "none":
         try:
             from core.database import ToolOverride
             rows = db.query(ToolOverride).filter(
@@ -182,15 +193,15 @@ def resolve_effective_tools(
     return enabled, disabled
 
 
-def build_tool_policy_prompt(
+def build_runtime_tool_prompt(
     enabled: dict[str, bool],
     disabled: dict[str, str],
     chat_type: str = "group",
 ) -> str:
-    """生成动态 [ToolPolicy] 系统消息。"""
+    """生成动态 [RuntimeTool] 系统消息。"""
     inactive = [n for n, v in enabled.items() if not v]
 
-    lines = ["[ToolPolicy]"]
+    lines = ["[RuntimeTool]"]
     scope = "本群" if chat_type == "group" else "本轮"
     lines.append(f"{scope}真实可调用工具以 API tools schema 为准，本段只做说明和审计。")
 
@@ -205,29 +216,29 @@ def build_tool_policy_prompt(
     return "\n".join(lines)
 
 
-def record_tool_policy_decision(
+def record_runtime_tool_decision(
     session_id: str = "",
     message_id: str = "",
     chat_type: str = "group",
     group_id: str = "",
     user_id: str = "",
-    tool_policy: str = "full",
+    runtime_preset: str = "full",
     enabled: dict | None = None,
     disabled: dict | None = None,
     effective_tools: list | None = None,
 ):
-    """写入 ToolPolicyDecision 记录——供 WebUI 排查工具可用性。"""
+    """写入 RuntimeToolDecision 记录——供 WebUI 排查工具可用性。"""
     try:
-        from core.database import SessionLocal, ToolPolicyDecision
+        from core.database import SessionLocal, RuntimeToolDecision
         db = SessionLocal()
         try:
-            db.add(ToolPolicyDecision(
+            db.add(RuntimeToolDecision(
                 session_id=session_id,
                 message_id=message_id,
                 chat_type=chat_type,
                 group_id=group_id,
                 user_id=user_id,
-                tool_policy=tool_policy,
+                runtime_preset=runtime_preset,
                 enabled_tools_json=json.dumps(
                     sorted([k for k, v in (enabled or {}).items() if v]),
                     ensure_ascii=False),
@@ -243,13 +254,13 @@ def record_tool_policy_decision(
             if _random.randint(1, 50) == 1:
                 from datetime import datetime as _dt, timedelta as _td
                 cutoff = _dt.now() - _td(days=30)
-                deleted = db.query(ToolPolicyDecision).filter(
-                    ToolPolicyDecision.created_at < cutoff
+                deleted = db.query(RuntimeToolDecision).filter(
+                    RuntimeToolDecision.created_at < cutoff
                 ).delete()
                 if deleted:
-                    logger.info("Cleaned %d old tool_policy_decisions", deleted)
+                    logger.info("Cleaned %d old runtime_preset_decisions", deleted)
             db.commit()
         finally:
             db.close()
     except Exception as e:
-        logger.warning("Failed to record tool_policy_decision: %s", e)
+        logger.warning("Failed to record runtime_preset_decision: %s", e)

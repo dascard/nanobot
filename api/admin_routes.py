@@ -254,7 +254,7 @@ class EffectivePromptPreviewRequest(BaseModel):
     prompt_key: str = ""
     mode: Literal["legacy", "shadow", "managed"] = "shadow"
     user_input: str = ""
-    tool_policy: str = "full"
+    runtime_preset: str = "full"
 
 
 class PromptRollbackRequest(BaseModel):
@@ -1606,8 +1606,8 @@ def execute_readonly_query(body: DbQuery, db: Session = Depends(get_db), _auth=D
         if word in q_upper:
             raise HTTPException(400, f"Forbidden: {word}")
     try:
-        limited = f"SELECT * FROM ({q}) LIMIT 500"
-        result = db.execute(text(limited))
+        query_with_limit = f"SELECT * FROM ({q}) LIMIT 500"
+        result = db.execute(text(query_with_limit))
         columns = list(result.keys()) if result.returns_rows else []
         rows = [dict(zip(columns, [str(v) if v is not None else None for v in row]))
                 for row in result.fetchall()] if result.returns_rows else []
@@ -1736,7 +1736,7 @@ def preview_effective_prompt(
     from core.context_builder import build_chat_context
     from core.database import Persona
     from core.identity import build_identity_vars
-    from core.tool_policy_service import build_tool_policy_prompt, resolve_effective_tools
+    from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
     from nanobot_kt.bridge import NanobotBridge, _load_prompt_fragment
 
     is_group = body.chat_type == "group"
@@ -1811,15 +1811,16 @@ def preview_effective_prompt(
         if private_behavior:
             messages.append({"role": "system", "content": private_behavior})
 
+    runtime_preset = (body.runtime_preset or "full").strip() or "full"
     enabled, disabled = resolve_effective_tools(
         chat_type=body.chat_type,
         group_id=group_id,
         user_id=user_id,
-        tool_policy=body.tool_policy,
+        runtime_preset=runtime_preset,
         db=db,
     )
-    tool_policy_prompt = build_tool_policy_prompt(enabled, disabled, body.chat_type)
-    messages.append({"role": "system", "content": tool_policy_prompt})
+    runtime_tool_prompt = build_runtime_tool_prompt(enabled, disabled, body.chat_type)
+    messages.append({"role": "system", "content": runtime_tool_prompt})
 
     prompt_manager_render = None
     prompt_source = legacy["prompt_source"]
@@ -1830,7 +1831,7 @@ def preview_effective_prompt(
         "user_input": body.user_input,
         "history_context": bridge._history_context_text(history_header, history_messages),
         "persona_text": persona_text or "无已存储画像",
-        "tool_policy": tool_policy_prompt,
+        "runtime_tool_prompt": runtime_tool_prompt,
         "sender_name": body.sender_name,
         "session_id": session_id,
         **identity_vars,
@@ -1877,7 +1878,8 @@ def preview_effective_prompt(
         "history_context": bridge._history_context_text(history_header, history_messages),
         "history_debug": history_debug,
         "group_recent_context": "",
-        "tool_policy": tool_policy_prompt,
+        "runtime_preset": runtime_preset,
+        "runtime_tool_prompt": runtime_tool_prompt,
         "tools": tools,
         "disabled_tools": disabled,
         "prompt_manager_render": prompt_manager_render,
@@ -3721,7 +3723,7 @@ class ToolUpdateBody(BaseModel):
     private_default: Optional[bool] = None
     private_superuser_default: Optional[bool] = None
     group_default: Optional[bool] = None
-    limited_default: Optional[bool] = None
+    lightweight_default: Optional[bool] = None
 
 
 class ToolOverrideBody(BaseModel):
@@ -3764,9 +3766,9 @@ def _tool_target_label(name: str, target_id: str, fallback: str) -> str:
 
 @router.get("/tools")
 async def list_tools(chat_type: str = "group", group_id: str = "",
-                      user_id: str = "", tool_policy: str = "full",
+                      user_id: str = "", runtime_preset: str = "full",
                       db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    """列出所有工具配置状态，并可预览指定 tool_policy 下的运行时可用性。"""
+    """列出所有工具配置状态，并可预览指定运行时预设下的可用性。"""
     # registry probe: 无 child bridge 时自动创建一个用于探测
     try:
         from server import app as _app
@@ -3777,21 +3779,23 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
         logger.warning("[Tools] registry probe failed: %s", e, exc_info=True)
 
     from core.tool_registry import TOOL_METADATA
-    from core.tool_policy_service import (
+    from core.runtime_tool_service import (
         normalize_tool_chat_type,
         resolve_effective_tools,
-        resolve_limited_default,
+        resolve_lightweight_default,
         resolve_tool_default,
+        normalize_runtime_preset,
     )
 
+    runtime_preset = normalize_runtime_preset(runtime_preset)
     chat_type = normalize_tool_chat_type(chat_type)
     configured_enabled, configured_disabled = resolve_effective_tools(
         chat_type=chat_type, group_id=group_id, user_id=user_id,
-        tool_policy="full", db=db,
+        runtime_preset="full", db=db,
     )
-    policy_enabled, policy_disabled = resolve_effective_tools(
+    runtime_enabled, runtime_disabled = resolve_effective_tools(
         chat_type=chat_type, group_id=group_id, user_id=user_id,
-        tool_policy=tool_policy, db=db,
+        runtime_preset=runtime_preset, db=db,
     )
     # 从 bridge 获取 KT registry 实际加载的工具列表
     registry_info: dict = {}
@@ -3843,17 +3847,17 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             "private_default": resolve_tool_default(name, "private", db=db),
             "private_superuser_default": resolve_tool_default(name, "private_superuser", db=db),
             "group_default": resolve_tool_default(name, "group", db=db),
-            "limited_default": resolve_limited_default(name, db=db),
+            "lightweight_default": resolve_lightweight_default(name, db=db),
             "force_enabled": td.force_enabled,
             "force_disabled_group": td.force_disabled_group,
             "description": td.description,
             "configured_enabled": configured_enabled.get(name, False),
             "configured_disabled_reason": configured_disabled.get(name, ""),
-            "policy_effective": policy_enabled.get(name, False),
-            "policy_disabled_reason": policy_disabled.get(name, ""),
+            "runtime_effective": runtime_enabled.get(name, False),
+            "runtime_disabled_reason": runtime_disabled.get(name, ""),
             "override_present": name in override_state,
             "override_enabled": override_state.get(name) if name in override_state else None,
-            # 兼容旧前端字段：工具管理页的 effective 表示配置启用状态，不混入 limited/none 策略。
+            # 兼容旧前端字段：工具管理页的 effective 表示配置启用状态，不混入 lightweight/none 策略。
             "effective": configured_enabled.get(name, False),
             "disabled_reason": configured_disabled.get(name, ""),
             "registered": registered,
@@ -3869,7 +3873,7 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             "registry_available": registry_available,
             "registry_empty": bool(registry_available and len(kt_loaded) == 0),
             "bridge_count": bridge_count,
-            "tool_policy": tool_policy}
+            "runtime_preset": runtime_preset}
 
 
 @router.get("/tools/targets")
@@ -3964,33 +3968,33 @@ def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
             db.add(row)
         else:
             row.value = "1" if val else "0"
-    if body.limited_default is not None and not td.force_enabled:
-        key = "tool.limited_set"
+    if body.lightweight_default is not None and not td.force_enabled:
+        key = "tool.lightweight_set"
         row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
         try:
-            raw_limited_set = row.value if row and row.value else ""
-            if raw_limited_set:
-                parsed_limited_set = json.loads(raw_limited_set)
-                if not isinstance(parsed_limited_set, list):
-                    raise TypeError("tool.limited_set must be a list")
-                limited_set = {str(x) for x in parsed_limited_set if str(x).strip()}
+            raw_lightweight_set = row.value if row and row.value else ""
+            if raw_lightweight_set:
+                parsed_lightweight_set = json.loads(raw_lightweight_set)
+                if not isinstance(parsed_lightweight_set, list):
+                    raise TypeError("tool.lightweight_set must be a list")
+                lightweight_set = {str(x) for x in parsed_lightweight_set if str(x).strip()}
             else:
-                from core.tool_policy_service import _DEFAULT_LIMITED_SET
-                limited_set = set(_DEFAULT_LIMITED_SET)
+                from core.runtime_tool_service import _DEFAULT_LIGHTWEIGHT_SET
+                lightweight_set = set(_DEFAULT_LIGHTWEIGHT_SET)
         except (json.JSONDecodeError, TypeError):
-            from core.tool_policy_service import _DEFAULT_LIMITED_SET
-            limited_set = set(_DEFAULT_LIMITED_SET)
-        if body.limited_default:
-            limited_set.add(tool_name)
+            from core.runtime_tool_service import _DEFAULT_LIGHTWEIGHT_SET
+            lightweight_set = set(_DEFAULT_LIGHTWEIGHT_SET)
+        if body.lightweight_default:
+            lightweight_set.add(tool_name)
         else:
-            limited_set.discard(tool_name)
-        value = json.dumps(sorted(limited_set), ensure_ascii=False)
+            lightweight_set.discard(tool_name)
+        value = json.dumps(sorted(lightweight_set), ensure_ascii=False)
         if not row:
             row = SystemSetting(key=key, value=value, description="自动降档轻量工具预设")
             db.add(row)
         else:
             row.value = value
-        updates["limited_default"] = bool(body.limited_default)
+        updates["lightweight_default"] = bool(body.lightweight_default)
     db.commit()
     settings.invalidate()
     if updates:
@@ -4062,18 +4066,23 @@ def delete_tool_override(tool_name: str, request: Request, scope_type: str = "",
 
 @router.get("/tools/effective")
 def get_effective_tools(chat_type: str = "group", group_id: str = "", user_id: str = "",
-                         tool_policy: str = "full",
+                         runtime_preset: str = "full",
                          db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """查看给定上下文的实际生效工具列表。"""
-    from core.tool_policy_service import resolve_effective_tools, build_tool_policy_prompt
+    from core.runtime_tool_service import (
+        build_runtime_tool_prompt,
+        normalize_runtime_preset,
+        resolve_effective_tools,
+    )
+    runtime_preset = normalize_runtime_preset(runtime_preset)
     enabled, disabled = resolve_effective_tools(
         chat_type=chat_type, group_id=group_id, user_id=user_id,
-        tool_policy=tool_policy, db=db,
+        runtime_preset=runtime_preset, db=db,
     )
-    prompt = build_tool_policy_prompt(enabled, disabled, chat_type)
+    prompt = build_runtime_tool_prompt(enabled, disabled, chat_type)
     return {
         "chat_type": chat_type, "group_id": group_id, "user_id": user_id,
-        "tool_policy": tool_policy,
+        "runtime_preset": runtime_preset,
         "enabled": {k: v for k, v in enabled.items() if v},
         "disabled": {k: v for k, v in disabled.items()},
         "prompt": prompt,
@@ -4081,14 +4090,14 @@ def get_effective_tools(chat_type: str = "group", group_id: str = "", user_id: s
 
 
 @router.get("/tools/decisions")
-def list_tool_policy_decisions(session_id: str = "", limit: int = 50,
-                                db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    """查询每轮工具策略决策记录。"""
-    from core.database import ToolPolicyDecision
+def list_runtime_preset_decisions(session_id: str = "", limit: int = 50,
+                               db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+    """查询每轮运行时工具预设决策记录。"""
+    from core.database import RuntimeToolDecision
     import json as _json
-    q = db.query(ToolPolicyDecision).order_by(ToolPolicyDecision.id.desc())
+    q = db.query(RuntimeToolDecision).order_by(RuntimeToolDecision.id.desc())
     if session_id:
-        q = q.filter(ToolPolicyDecision.session_id == session_id)
+        q = q.filter(RuntimeToolDecision.session_id == session_id)
     rows = q.limit(min(limit, 200)).all()
     items = []
     for r in rows:
@@ -4099,7 +4108,7 @@ def list_tool_policy_decisions(session_id: str = "", limit: int = 50,
         items.append({
             "id": r.id, "session_id": r.session_id, "message_id": r.message_id,
             "chat_type": r.chat_type, "group_id": r.group_id, "user_id": r.user_id,
-            "tool_policy": r.tool_policy,
+            "runtime_preset": r.runtime_preset,
             "effective_tools": _json.loads(r.effective_tools_json or "[]") if isinstance(r.effective_tools_json or "", str) else [],
             "disabled_reasons": reasons,
             "created_at": r.created_at.isoformat() if r.created_at else "",

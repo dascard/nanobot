@@ -344,7 +344,7 @@ class NanobotBridge:
         "[PersonaContext]",
         "[CurrentTimeContext]",
         "[GroupRestriction]",
-        "[ToolPolicy]",
+        "[RuntimeTool]",
         "<group_recent_context>",
         "<group_memory_context",
         "[GroupProfileContext]",
@@ -724,7 +724,7 @@ class NanobotBridge:
         return None
 
     def _restore_saved_tools(self):
-        """恢复被 tool_policy 移除的工具——必须在所有 return 路径调用。"""
+        """恢复被 runtime_preset 移除的工具——必须在所有 return 路径调用。"""
         if not getattr(self, '_tool_cleanup_needed', False):
             return
         saved = getattr(self, '_saved_tools', {})
@@ -999,22 +999,22 @@ class NanobotBridge:
                     if text:
                         self._agent.controller.conversation.append("system", text)
                         logger.info("[NanobotBridge] PrivateBehavior injected chars=%d", len(text))
-            # --- Dynamic tool policy enforcement ---
+            # --- Dynamic runtime preset enforcement ---
             effort_constraint = str(meta.get("effort_constraint", "")).strip()
-            tool_policy = str(meta.get("tool_policy", "full")).strip()
+            runtime_preset = str(meta.get("runtime_preset", "full")).strip()
             chat_type = "group" if is_group else "private"
-            policy_chat_type = "private_superuser" if (not is_group and meta.get("is_superuser")) else chat_type
+            runtime_chat_type = "private_superuser" if (not is_group and meta.get("is_superuser")) else chat_type
             group_id = str(meta.get("group_id", session_id or "")).strip()
             user_id = str(meta.get("user_id", session_id or "")).strip()
 
             from core.final_tools import resolve_final_tools, set_current_final_tools
-            from core.tool_policy_service import build_tool_policy_prompt
+            from core.runtime_tool_service import build_runtime_tool_prompt
             from core.database import SessionLocal
             db = SessionLocal()
             try:
                 final_tool_set = resolve_final_tools(
-                    chat_type=policy_chat_type, group_id=group_id, user_id=user_id,
-                    tool_policy=tool_policy, db=db,
+                    chat_type=runtime_chat_type, group_id=group_id, user_id=user_id,
+                    runtime_preset=runtime_preset, db=db,
                 )
             finally:
                 db.close()
@@ -1023,12 +1023,12 @@ class NanobotBridge:
             disabled = dict(final_tool_set.disabled or {})
 
             _saved_tools: dict[str, bool] = {}
-            policy_prompt = build_tool_policy_prompt(enabled, disabled, chat_type)
+            runtime_tool_prompt = build_runtime_tool_prompt(enabled, disabled, chat_type)
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
                 conv = self._agent.controller.conversation
                 if effort_constraint:
                     conv.append("system", effort_constraint)
-                conv.append("system", policy_prompt)
+                conv.append("system", runtime_tool_prompt)
 
             if hasattr(self._agent, 'registry') and hasattr(self._agent.registry, '_tools'):
                 reg = self._agent.registry
@@ -1040,19 +1040,19 @@ class NanobotBridge:
             self._saved_tools = _saved_tools
             self._tool_cleanup_needed = bool(_saved_tools)
             effective_tools = list(self._agent.registry._tools.keys()) if hasattr(self._agent, 'registry') else []
-            logger.info("[Bridge] tool_policy=%s chat=%s effective=%s saved=%d",
-                        tool_policy, policy_chat_type, effective_tools, len(_saved_tools))
-            meta["_tool_policy"] = tool_policy
+            logger.info("[Bridge] runtime_preset=%s chat=%s effective=%s saved=%d",
+                        runtime_preset, runtime_chat_type, effective_tools, len(_saved_tools))
+            meta["_runtime_preset"] = runtime_preset
             meta["_disabled_tools"] = {k: v for k, v in disabled.items()}
 
-            from core.tool_policy_service import record_tool_policy_decision
-            record_tool_policy_decision(
+            from core.runtime_tool_service import record_runtime_tool_decision
+            record_runtime_tool_decision(
                 session_id=session_id,
                 message_id=meta.get("message_id", ""),
-                chat_type=policy_chat_type,
+                chat_type=runtime_chat_type,
                 group_id=group_id,
                 user_id=user_id,
-                tool_policy=tool_policy,
+                runtime_preset=runtime_preset,
                 enabled=enabled,
                 disabled=disabled,
                 effective_tools=effective_tools,
@@ -1066,7 +1066,7 @@ class NanobotBridge:
                     "user_input": query,
                     "history_context": self._history_context_text(history_header, history_messages),
                     "persona_text": persona_text or "无已存储画像",
-                    "tool_policy": policy_prompt,
+                    "runtime_tool_prompt": runtime_tool_prompt,
                     "sender_name": sender_name,
                     "session_id": session_id,
                     **identity_vars,

@@ -484,28 +484,28 @@ class TestModelCatalog:
 
 
 class TestToolAdmin:
-    def test_tools_separate_config_enabled_from_policy_preview(self, client, auth_header):
+    def test_tools_separate_config_enabled_from_runtime_preview(self, client, auth_header):
         r = client.get(
             "/api/v1/admin/tools",
-            params={"chat_type": "group", "tool_policy": "limited"},
+            params={"chat_type": "group", "runtime_preset": "lightweight"},
             headers=auth_header,
         )
 
         data = _ok(r)
         tools = {item["name"]: item for item in data["tools"]}
 
-        assert data["tool_policy"] == "limited"
+        assert data["runtime_preset"] == "lightweight"
         assert tools["ai_daily"]["configured_enabled"] is True
         assert tools["ai_daily"]["effective"] is True
-        assert tools["ai_daily"]["policy_effective"] is False
-        assert tools["ai_daily"]["policy_disabled_reason"] == "tool_policy=limited"
+        assert tools["ai_daily"]["runtime_effective"] is False
+        assert tools["ai_daily"]["runtime_disabled_reason"] == "运行时轻量预设"
         assert tools["reply"]["configured_enabled"] is True
-        assert tools["reply"]["policy_effective"] is True
+        assert tools["reply"]["runtime_effective"] is True
 
     def test_tools_have_separate_superuser_private_default_template(self, client, auth_header):
         r = client.get(
             "/api/v1/admin/tools",
-            params={"chat_type": "private_superuser", "tool_policy": "full"},
+            params={"chat_type": "private_superuser", "runtime_preset": "full"},
             headers=auth_header,
         )
 
@@ -524,7 +524,7 @@ class TestToolAdmin:
 
         r3 = client.get(
             "/api/v1/admin/tools",
-            params={"chat_type": "private_superuser", "tool_policy": "full"},
+            params={"chat_type": "private_superuser", "runtime_preset": "full"},
             headers=auth_header,
         )
         tools_after = {item["name"]: item for item in _ok(r3)["tools"]}
@@ -543,50 +543,50 @@ class TestToolAdmin:
             for item in audit["items"]
         )
 
-    def test_tools_limited_profile_is_configurable_preset(self, client, auth_header):
+    def test_tools_lightweight_profile_is_configurable_preset(self, client, auth_header):
         r = client.get(
             "/api/v1/admin/tools",
             params={"chat_type": "group"},
             headers=auth_header,
         )
         tools = {item["name"]: item for item in _ok(r)["tools"]}
-        assert tools["ai_daily"]["limited_default"] is False
-        assert tools["reply"]["limited_default"] is True
+        assert tools["ai_daily"]["lightweight_default"] is False
+        assert tools["reply"]["lightweight_default"] is True
 
         _ok(client.put(
             "/api/v1/admin/tools/ai_daily",
-            json={"limited_default": True},
+            json={"lightweight_default": True},
             headers=auth_header,
         ))
 
         r2 = client.get(
             "/api/v1/admin/tools",
-            params={"chat_type": "group", "tool_policy": "limited"},
+            params={"chat_type": "group", "runtime_preset": "lightweight"},
             headers=auth_header,
         )
         tools_after = {item["name"]: item for item in _ok(r2)["tools"]}
-        assert tools_after["ai_daily"]["limited_default"] is True
-        assert tools_after["ai_daily"]["policy_effective"] is True
+        assert tools_after["ai_daily"]["lightweight_default"] is True
+        assert tools_after["ai_daily"]["runtime_effective"] is True
 
         effective = _ok(client.get(
             "/api/v1/admin/tools/effective",
-            params={"chat_type": "group", "tool_policy": "limited"},
+            params={"chat_type": "group", "runtime_preset": "lightweight"},
             headers=auth_header,
         ))
         assert "ai_daily" in effective["enabled"]
 
-    def test_user_override_can_enable_tool_under_limited_policy(self, client, auth_header):
+    def test_user_override_can_enable_tool_under_lightweight_preset(self, client, auth_header):
         before = _ok(client.get(
             "/api/v1/admin/tools/effective",
             params={
                 "chat_type": "private",
                 "user_id": "0000000000",
-                "tool_policy": "limited",
+                "runtime_preset": "lightweight",
             },
             headers=auth_header,
         ))
         assert "ai_daily" not in before["enabled"]
-        assert before["disabled"]["ai_daily"] == "tool_policy=limited"
+        assert before["disabled"]["ai_daily"] == "运行时轻量预设"
 
         _ok(client.put(
             "/api/v1/admin/tools/ai_daily/override",
@@ -603,24 +603,24 @@ class TestToolAdmin:
             params={
                 "chat_type": "private",
                 "user_id": "0000000000",
-                "tool_policy": "limited",
+                "runtime_preset": "lightweight",
             },
             headers=auth_header,
         ))
         assert "ai_daily" in after["enabled"]
         assert "ai_daily" not in after["disabled"]
 
-        none_policy = _ok(client.get(
+        none_preset = _ok(client.get(
             "/api/v1/admin/tools/effective",
             params={
                 "chat_type": "private",
                 "user_id": "0000000000",
-                "tool_policy": "none",
+                "runtime_preset": "none",
             },
             headers=auth_header,
         ))
-        assert "ai_daily" not in none_policy["enabled"]
-        assert none_policy["disabled"]["ai_daily"] == "tool_policy=none"
+        assert "ai_daily" not in none_preset["enabled"]
+        assert none_preset["disabled"]["ai_daily"] == "运行时预设=none"
 
     def test_tools_report_explicit_override_state(self, client, auth_header):
         _ok(client.put(

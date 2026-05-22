@@ -22,7 +22,7 @@ MAX_PHRASE_LEN = 8            # 短词最多 CJK 字符数
 
 # 绝对不能学习为群表达/黑话的系统词和工具名
 BAD_LEARN_TERMS: set[str] = {
-    "tool_error", "reply", "no_reply", "ToolPolicy", "AvailableFunctions",
+    "tool_error", "reply", "no_reply", "RuntimeTool", "AvailableFunctions",
     "memory_read", "memory_write", "sql_analysis", "group_analysis",
     "python_sandbox", "image_summary", "sticker_search", "ai_daily", "news_search",
     "news_daily", "Traceback", "Exception", "HTTPError",
@@ -43,7 +43,7 @@ _INTERNAL_CONTENT_MARKERS = (
     "request_json",
     "AgentRun",
     "PromptRender",
-    "ToolPolicy",
+    "RuntimeTool",
     "Available Functions",
     "Available Sub-Agents",
     "Background Execution",

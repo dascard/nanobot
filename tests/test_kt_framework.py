@@ -1118,7 +1118,7 @@ class TestNanobotBridge:
                 "发个表情",
                 user_id="group_123",
                 session_id="group_123",
-                metadata={"is_group": True, "group_id": "123", "tool_policy": "limited"},
+                metadata={"is_group": True, "group_id": "123", "runtime_preset": "lightweight"},
             )
 
         assert asyncio.run(_run()) == "ok"

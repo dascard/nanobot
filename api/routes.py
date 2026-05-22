@@ -2315,11 +2315,11 @@ async def proxy_chat(
             "action": _private_decision.action,
             "complexity": _private_decision.complexity,
             "effort": _private_decision.effort,
-            "tool_policy": _private_decision.tool_policy,
+            "runtime_preset": _private_decision.runtime_preset,
             "reason": _private_decision.reason,
         } if _private_decision else None,
         "effort_constraint": _constraint or "",
-        "tool_policy": _private_decision.tool_policy if _private_decision else "full",
+        "runtime_preset": _private_decision.runtime_preset if _private_decision else "full",
     }
 
     async def _do_chat():
