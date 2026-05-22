@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_at_bot_continue",
+  "suite": "timing_gate",
+  "description": "@bot 明确请求，进入主回复链路",
+  "input": {
+    "action": "continue",
+    "trigger_reason": "at_bot",
+    "context": "<timing_context>\n群: 测试群\n触发原因: at_bot\nbot别名: nanobot\n[msg_id]2\n[时间]21:01:01\n[用户名]A\n[发言内容]@nanobot 这个报错怎么修\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "continue",
+    "should_reply": true
+  },
+  "tags": ["directed", "at_bot", "continue"]
+}

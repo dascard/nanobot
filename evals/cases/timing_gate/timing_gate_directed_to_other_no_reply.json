@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_directed_to_other_no_reply",
+  "suite": "timing_gate",
+  "description": "消息明显是问另一个群友，不应插话",
+  "input": {
+    "action": "no_reply",
+    "trigger_reason": "ambient",
+    "context": "<timing_context>\n触发原因: ambient\n[msg_id]11\n[时间]21:10:01\n[用户名]A\n[发言内容]@小明 你刚才那个链接再发一下\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "no_reply",
+    "should_reply": false
+  },
+  "tags": ["ambient", "directed_to_other", "no_reply"]
+}

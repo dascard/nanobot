@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_open_question_not_directed_no_reply",
+  "suite": "timing_gate",
+  "description": "群友向群里开放提问，未点名 bot，默认不抢答",
+  "input": {
+    "action": "no_reply",
+    "trigger_reason": "ambient",
+    "context": "<timing_context>\n触发原因: ambient\n[msg_id]9\n[时间]21:08:01\n[用户名]A\n[发言内容]这个报错有人懂吗？\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "no_reply",
+    "should_reply": false
+  },
+  "tags": ["ambient", "open_question", "no_reply"]
+}

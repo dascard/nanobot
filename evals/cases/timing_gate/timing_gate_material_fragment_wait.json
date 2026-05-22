@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_material_fragment_wait",
+  "suite": "timing_gate",
+  "description": "连续贴材料中的半句话，等待下一段",
+  "input": {
+    "action": "wait",
+    "trigger_reason": "ambient",
+    "context": "<timing_context>\n触发原因: ambient\n<timing_recent_context>\n[时间]21:06:00 [用户名]A [发言]我贴一下报错\n</timing_recent_context>\n[msg_id]7\n[时间]21:06:02\n[用户名]A\n[发言内容]还有下面这一段\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "wait",
+    "should_reply": false
+  },
+  "tags": ["ambient", "continuous_input", "wait"]
+}

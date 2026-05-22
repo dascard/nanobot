@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_cooldown_laughter_no_reply",
+  "suite": "timing_gate",
+  "description": "bot 刚发言后群友接梗笑，不应继续追话",
+  "input": {
+    "action": "no_reply",
+    "trigger_reason": "ambient",
+    "context": "<timing_context>\nbot上次发言: 12秒前\n触发原因: ambient\n[msg_id]8\n[时间]21:07:01\n[用户名]A\n[发言内容]哈哈哈哈哈\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "no_reply",
+    "should_reply": false
+  },
+  "tags": ["ambient", "cooldown", "no_reply"]
+}

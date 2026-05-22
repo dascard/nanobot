@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_ambient_smalltalk_no_reply",
+  "suite": "timing_gate",
+  "description": "普通群友闲聊，bot 未被点名，默认不插话",
+  "input": {
+    "action": "no_reply",
+    "trigger_reason": "ambient",
+    "context": "<timing_context>\n群: 测试群\n触发原因: ambient\n[msg_id]1\n[时间]21:00:01\n[用户名]A\n[发言内容]今天好热啊\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "no_reply",
+    "should_reply": false
+  },
+  "tags": ["ambient", "smalltalk", "no_reply"]
+}

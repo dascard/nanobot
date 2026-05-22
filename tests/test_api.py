@@ -845,6 +845,73 @@ def test_deprecated_log_ambient_still_works(client, db_session):
     logs = db_session.query(ChatLog).filter_by(role="ambient").all()
     assert any("[D]: 还在用旧接口" in l.content for l in logs)
 
+
+def test_persist_group_bridge_reply_uses_runtime_bot_name(db_session):
+    from api.routes import _persist_group_bridge_reply
+    from core.database import ConversationTurn
+
+    _persist_group_bridge_reply(
+        db_session,
+        group_user_id="group_123",
+        sender_name="雀",
+        session_name="测试群",
+        query="hello",
+        answer="你好",
+        bot_name="测试Bot",
+    )
+
+    assistant_log = db_session.query(ChatLog).filter_by(role="assistant").one()
+    assistant_turn = db_session.query(ConversationTurn).filter_by(role="assistant").one()
+    turn_meta = json.loads(assistant_turn.meta_json or "{}")
+    assert assistant_log.sender_name == "测试Bot"
+    assert turn_meta["bot_name"] == "测试Bot"
+
+
+def test_find_recent_duplicate_group_reply_detects_long_repeat(db_session):
+    from api.routes import _find_recent_duplicate_group_reply
+
+    previous = (
+        "首先这两家都不是上市公司，你说的股票大概率是一级市场份额。"
+        "这种流动性极差，信息也不透明，我不建议随便接盘。"
+        "建议看融资估值、产品落地和自己的风险承受能力。"
+    )
+    repeated = (
+        "首先，这两家都不是上市公司。你说的“股票”大概率是一级市场份额，"
+        "这种流动性极差，信息也不透明，我不建议随便接盘。"
+        "建议看融资估值、产品落地和自己的风险承受能力。"
+    )
+    db_session.add(ChatLog(
+        user_id="group_123",
+        session_id="group_123",
+        role="assistant",
+        content=previous,
+        sender_name="测试Bot",
+        processed=1,
+    ))
+    db_session.commit()
+
+    match = _find_recent_duplicate_group_reply(db_session, "group_123", repeated)
+
+    assert match is not None
+    assert match["similarity"] >= 0.9
+
+
+def test_find_recent_duplicate_group_reply_ignores_short_repeat(db_session):
+    from api.routes import _find_recent_duplicate_group_reply
+
+    db_session.add(ChatLog(
+        user_id="group_123",
+        session_id="group_123",
+        role="assistant",
+        content="好",
+        sender_name="测试Bot",
+        processed=1,
+    ))
+    db_session.commit()
+
+    assert _find_recent_duplicate_group_reply(db_session, "group_123", "好") is None
+
+
 # ═══════════════════════════════════════════
 # Task 1A: 入站结构化消息测试
 # ═══════════════════════════════════════════
@@ -919,6 +986,94 @@ class TestGroupMessageStructured:
         assert meta.get("message_type") == "group_message"
         assert meta["directed"]["at_bot"] is True
         assert meta["directed"]["directed_to_other"] is False
+        assert meta["sender"]["is_bot"] is False
+
+    def test_current_bot_sender_archived_but_skips_timing(self, client, db_session, monkeypatch):
+        class FailGroupRuntime:
+            async def process_message(self, *args, **kwargs):
+                raise AssertionError("bot sender should not enter TimingGate")
+
+        monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FailGroupRuntime())
+
+        resp = client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "999888",
+            "sender_name": "nanobot",
+            "message": "刚才那条回复",
+            "self_id": "999888",
+            "bot_id": "999888",
+            "bot_name": "Nanobot",
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["action"] == "no_reply"
+        assert data["hard_rule"] == "bot_sender_no_timing"
+        assert data["reason"] == "bot_sender:current_bot"
+        meta = self._meta(db_session)
+        assert meta["sender"]["is_bot"] is True
+        assert meta["sender"]["bot_sender_kind"] == "current_bot"
+        assert meta["timing_gate"]["hard_rule"] == "bot_sender_no_timing"
+
+    def test_explicit_other_bot_sender_archived_but_skips_timing(self, client, db_session, monkeypatch):
+        class FailGroupRuntime:
+            async def process_message(self, *args, **kwargs):
+                raise AssertionError("other bot sender should not enter TimingGate")
+
+        monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FailGroupRuntime())
+
+        resp = client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "alice-bot",
+            "sender_name": "[BOT]Alice",
+            "message": "我正在思考如何回复你 (Agent模式)...",
+            "self_id": "999888",
+            "bot_id": "999888",
+            "bot_name": "Nanobot",
+            "sender_is_bot": True,
+        })
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["action"] == "no_reply"
+        assert data["hard_rule"] == "bot_sender_no_timing"
+        assert data["reason"] == "bot_sender:explicit_bot"
+        meta = self._meta(db_session)
+        assert meta["sender"]["is_bot"] is True
+        assert meta["sender"]["bot_sender_kind"] == "explicit_bot"
+
+    def test_bot_like_name_without_explicit_marker_still_enters_timing(self, client, db_session, monkeypatch):
+        calls = []
+
+        class FakeGroupRuntime:
+            async def process_message(self, *args, **kwargs):
+                calls.append((args, kwargs))
+                return {
+                    "action": "no_reply",
+                    "reason": "unit_test_bot_like_name",
+                    "generation": 0,
+                }
+
+            def note_bot_replied(self, *args, **kwargs):
+                raise AssertionError("no reply should be sent in this test")
+
+        monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FakeGroupRuntime())
+
+        resp = client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "alice-bot",
+            "sender_name": "[BOT]Alice",
+            "message": "我正在思考如何回复你 (Agent模式)...",
+            "self_id": "999888",
+            "bot_id": "999888",
+            "bot_name": "Nanobot",
+        })
+
+        assert resp.status_code == 200
+        assert calls
+        meta = self._meta(db_session)
+        assert meta["sender"]["is_bot"] is False
+        assert meta["sender"]["bot_sender_kind"] == ""
 
     def test_old_payload_still_works(self, client, db_session):
         """旧payload只传message/files/client_meta仍可进入TimingGate"""

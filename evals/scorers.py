@@ -18,6 +18,13 @@ def score_case(case: EvalCase, output: EvalOutput) -> dict:
         if actual != expected:
             errors.append(f"should_reply mismatch: expected={expected} actual={actual}")
 
+    # timing_action
+    if "timing_action" in exp:
+        actual = str(output.timing_action or "")
+        expected = str(exp["timing_action"] or "")
+        if actual != expected:
+            errors.append(f"timing_action mismatch: expected={expected} actual={actual}")
+
     # forbidden_tools
     for tool in exp.get("forbidden_tools", []):
         if tool in output.tool_calls:

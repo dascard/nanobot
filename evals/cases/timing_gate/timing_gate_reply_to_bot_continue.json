@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_reply_to_bot_continue",
+  "suite": "timing_gate",
+  "description": "用户回复 bot 的上一条消息，继续交给主流程",
+  "input": {
+    "action": "continue",
+    "trigger_reason": "reply_to_bot",
+    "context": "<timing_context>\n注意:这条消息是回复bot的,说明用户在跟bot对话\n触发原因: reply_to_bot\n[msg_id]3\n[时间]21:02:01\n[用户名]A\n[发言内容]那这个参数应该填多少\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "continue",
+    "should_reply": true
+  },
+  "tags": ["reply_to_bot", "directed", "continue"]
+}

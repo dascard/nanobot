@@ -455,6 +455,7 @@ def _persist_group_bridge_reply(
     session_name: str,
     query: str,
     answer: str,
+    bot_name: str = "nanobot",
     message_id: str | None = None,
     source_message_ids: list[str] | None = None,
     reply_meta: dict | None = None,
@@ -473,7 +474,7 @@ def _persist_group_bridge_reply(
         session_id=group_user_id,
         role="assistant",
         content=answer,
-        sender_name="nanobot",
+        sender_name=(bot_name or "nanobot"),
         session_name=session_name or "",
         processed=1,
         meta_json=json.dumps(meta, ensure_ascii=False),
@@ -491,9 +492,58 @@ def _persist_group_bridge_reply(
         session_id=group_user_id,
         role="assistant",
         content=answer,
-        meta_json=json.dumps({"kind": "chat"}, ensure_ascii=False),
+        meta_json=json.dumps({"kind": "chat", "bot_name": (bot_name or "nanobot")}, ensure_ascii=False),
     ))
     db.commit()
+
+
+def _normalize_reply_for_duplicate(text: str) -> str:
+    """归一化回复文本，用于检测模型复读；只用于长回复保护。"""
+    import re
+
+    return re.sub(r"[\s，。！？!?,.、:：;；\"'“”‘’`~～（）()【】\[\]{}<>《》\-—_]+", "", text or "").lower()
+
+
+def _find_recent_duplicate_group_reply(
+    db: Session,
+    group_user_id: str,
+    answer: str,
+    *,
+    min_chars: int = 60,
+    threshold: float = 0.9,
+    window_seconds: int = 300,
+) -> dict | None:
+    """查找同群近期高度相似的 bot 回复，防止模型复读同一长答案。"""
+    from difflib import SequenceMatcher
+
+    normalized = _normalize_reply_for_duplicate(answer)
+    if len(normalized) < min_chars:
+        return None
+
+    cutoff = datetime.now() - timedelta(seconds=window_seconds)
+    rows = (
+        db.query(ChatLog)
+        .filter(
+            ChatLog.session_id == group_user_id,
+            ChatLog.role == "assistant",
+            ChatLog.created_at >= cutoff,
+        )
+        .order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
+        .limit(5)
+        .all()
+    )
+    for row in rows:
+        prev = _normalize_reply_for_duplicate(row.content or "")
+        if len(prev) < min_chars:
+            continue
+        similarity = SequenceMatcher(None, normalized, prev).ratio()
+        if similarity >= threshold:
+            return {
+                "previous_log_id": row.id,
+                "similarity": round(similarity, 4),
+                "previous_created_at": row.created_at.isoformat() if row.created_at else "",
+            }
+    return None
 
 
 def _log_group_no_reply(db: Session, user_id: str, query: str, agent_result: str, message_id: str = ""):
@@ -769,6 +819,7 @@ class GroupMessageRequest(BaseModel):
     self_id: str = ""
     bot_id: str = ""
     bot_name: str = ""
+    sender_is_bot: bool = False
     mentions: list[dict] = Field(default_factory=list)
     reply_to: dict | None = None
     reply_to_message_id: str | None = None
@@ -938,15 +989,40 @@ def _derive_group_direction(
     return d
 
 
+def _detect_group_bot_sender(req: GroupMessageRequest) -> str:
+    """识别群消息是否来自机器人；只接受结构化显式信号，不用昵称猜。"""
+    sender_id = str(req.sender_id or "").strip()
+    self_id = str(req.self_id or "").strip()
+    bot_id = str(req.bot_id or "").strip()
+    if sender_id and sender_id in {self_id, bot_id}:
+        return "current_bot"
+
+    if bool(req.sender_is_bot):
+        return "explicit_bot"
+
+    meta = req.client_meta if isinstance(req.client_meta, dict) else {}
+    if meta.get("sender_is_bot") or meta.get("is_bot") or meta.get("sender_type") == "bot":
+        return "client_meta"
+
+    return ""
+
+
 def _build_group_message_meta(req: GroupMessageRequest, registered_stickers: list[dict]) -> dict:
     """构建 ChatLog.meta_json 标准结构。"""
     segments = _normalize_onebot_segments(req)
     mentions = _normalize_group_mentions(req, segments)
     reply_to = _normalize_group_reply_to(req, segments)
     directed = _derive_group_direction(req, mentions, reply_to)
+    bot_sender_kind = _detect_group_bot_sender(req)
     return {
         "message_type": "group_message",
         "raw_message": str(req.raw_message or "")[:2000],
+        "sender": {
+            "id": str(req.sender_id or "")[:40],
+            "name": str(req.sender_name or "")[:80],
+            "is_bot": bool(bot_sender_kind),
+            "bot_sender_kind": bot_sender_kind,
+        },
         "segments": segments,
         "mentions": mentions,
         "reply_to": reply_to,
@@ -1308,6 +1384,23 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     db.refresh(ambient_log)
     logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
 
+    # 显式机器人发言只归档进历史，不进入 TimingGate，避免 bot 回显或明确 bot 消息触发循环回复。
+    # 不能用昵称前缀判断机器人身份；昵称可能撞，必须依赖 sender_is_bot/client_meta/self_id/bot_id。
+    bot_sender_kind = str(meta.get("sender", {}).get("bot_sender_kind") or "")
+    if bot_sender_kind:
+        result = {
+            "action": "no_reply",
+            "reason": f"bot_sender:{bot_sender_kind}",
+            "generation": 0,
+            "hard_rule": "bot_sender_no_timing",
+        }
+        _annotate_group_timing_event(
+            db, ambient_log, result,
+            trigger_reason="bot_sender",
+            latency_ms=0,
+        )
+        return result
+
     # 2.5 检查用户屏蔽规则——命中后只写 ChatLog，不进入 TimingGate
     if _check_user_blocked(db, req.sender_id, target_type="group", group_id=req.group_id):
         logger.info("[GroupMsg] blocked group=%s sender=%s", req.group_id, req.sender_id)
@@ -1458,6 +1551,16 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                 answer = reply if isinstance(reply, str) else str(reply or "")
                 reply_meta = _pop_bridge_reply_meta(bridge, group_user_id)
                 if answer.strip():
+                    duplicate = _find_recent_duplicate_group_reply(db, group_user_id, answer)
+                    if duplicate:
+                        agent_result = "duplicate_reply_suppressed"
+                        _log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
+                        return {
+                            "action": "no_reply",
+                            "reason": agent_result,
+                            "duplicate_reply": duplicate,
+                            "generation": result.get("generation", 0),
+                        }
                     _persist_group_bridge_reply(
                         db,
                         group_user_id=group_user_id,
@@ -1465,6 +1568,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                         session_name=req.session_name or "",
                         query=chat_query,
                         answer=answer,
+                        bot_name=ambient_meta.get("bot", {}).get("bot_name", "") or "nanobot",
                         message_id=req.message_id,
                         source_message_ids=source_message_ids,
                         reply_meta=reply_meta,
@@ -1810,6 +1914,21 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                 result["reply_meta"] = reply_meta_timer
                 result["group_id"] = req.group_id
                 if answer.strip():
+                    duplicate = _find_recent_duplicate_group_reply(db, group_user_id, answer)
+                    if duplicate:
+                        agent_result = "duplicate_reply_suppressed"
+                        _log_group_no_reply(db, group_user_id, chat_query, agent_result, "")
+                        result["action"] = "no_reply"
+                        result["reason"] = agent_result
+                        result["duplicate_reply"] = duplicate
+                        result["reply"] = ""
+                        logger.info(
+                            "[TimingGate.timer] duplicate reply suppressed group=%s prev=%s sim=%s",
+                            req.group_id,
+                            duplicate.get("previous_log_id"),
+                            duplicate.get("similarity"),
+                        )
+                        return result
                     _persist_group_bridge_reply(
                         db,
                         group_user_id=group_user_id,
@@ -1817,6 +1936,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                         session_name="",
                         query=chat_query,
                         answer=answer,
+                        bot_name=timer_bot_name or "nanobot",
                         source_message_ids=source_message_ids,
                         reply_meta=reply_meta_timer,
                     )

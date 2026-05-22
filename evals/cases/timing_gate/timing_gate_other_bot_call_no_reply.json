@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_other_bot_call_no_reply",
+  "suite": "timing_gate",
+  "description": "用户在叫另一个 bot 或群友，不应误触发当前 bot",
+  "input": {
+    "action": "no_reply",
+    "trigger_reason": "ambient",
+    "context": "<timing_context>\nbot别名: nanobot\n触发原因: ambient\n[msg_id]14\n[时间]21:13:01\n[用户名]A\n[发言内容]小爱同学 帮我放首歌\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "no_reply",
+    "should_reply": false
+  },
+  "tags": ["ambient", "directed_to_other", "other_bot", "no_reply"]
+}

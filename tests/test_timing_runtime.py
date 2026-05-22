@@ -574,6 +574,19 @@ class TestGroupPendingMessageDirected:
         assert d["mentions"] == []
         assert d.get("directed", {}).get("directed_to_other") != True
 
+    def test_directed_to_other_is_derived_from_direction_payload(self):
+        from core.group_runtime.runtime import GroupPendingMessage
+
+        msg = GroupPendingMessage(
+            sender_id="111", sender_name="小明", message="@3605196653 你看",
+            is_at_bot=False,
+            is_reply_to_bot=False,
+            directed={"at_others": True, "directed_to_other": True},
+            mentions=[{"user_id": "3605196653", "nickname": "3605196653"}],
+        )
+
+        assert msg.is_directed_to_other is True
+
 
 class TestShouldSuppressDirected:
     """should_suppress_directed_to_other hard rule"""
@@ -688,6 +701,45 @@ class TestProcessMessageDirected:
         assert result["hard_rule"] == "directed_to_other_no_bot_target"
         assert "source_message_ids" in result
         assert result["pending_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_process_message_directed_to_other_with_other_bot_thinking_bypasses_gate(self, monkeypatch):
+        from core.group_runtime.runtime import GroupRuntime
+
+        runtime = GroupRuntime()
+
+        async def fail_gate(*_args, **_kwargs):
+            raise AssertionError("directed_to_other hard rule should bypass TimingGate")
+
+        monkeypatch.setattr(runtime, "_call_gate", fail_gate)
+
+        result = await runtime.process_message(
+            "group_123",
+            {
+                "sender_id": "111",
+                "sender_name": "奶蛙生活艺术家",
+                "message": "@3605196653 我现在有20股minimax，请你结合行QQ，判断我要不要增持minimax的股还是接盘智谱",
+                "message_id": "486560924",
+                "directed": {"at_others": True, "directed_to_other": True},
+                "mentions": [{"user_id": "3605196653", "nickname": "3605196653"}],
+            },
+            trigger_reason="ambient",
+            recent_context=(
+                "[msg_id]486560924\n"
+                "[时间]21:01:48\n"
+                "[用户名]奶蛙生活艺术家\n"
+                "[发言内容]@3605196653 我现在有20股minimax，请你结合行QQ，判断我要不要增持minimax的股还是接盘智谱\n\n"
+                "[msg_id]1167874690\n"
+                "[时间]21:01:49\n"
+                "[用户名][BOT]Alice\n"
+                "[发言内容]我正在思考如何回复你 (Agent模式)..."
+            ),
+            talk_value=1.0,
+        )
+
+        assert result["action"] == "no_reply"
+        assert result["hard_rule"] == "directed_to_other_no_bot_target"
+        assert result["source_message_ids"] == ["486560924"]
 
     @pytest.mark.asyncio
     async def test_process_message_at_bot_not_suppressed(self):

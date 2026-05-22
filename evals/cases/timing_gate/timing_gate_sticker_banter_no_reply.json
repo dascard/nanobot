@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_sticker_banter_no_reply",
+  "suite": "timing_gate",
+  "description": "斗图或纯表情场景，不主动插话",
+  "input": {
+    "action": "no_reply",
+    "trigger_reason": "ambient",
+    "context": "<timing_context>\n触发原因: ambient\n<timing_recent_context>\n[时间]21:11:00 [用户名]A [发言][图片:1张]\n[时间]21:11:02 [用户名]B [发言]草\n</timing_recent_context>\n[msg_id]12\n[时间]21:11:03\n[用户名]C\n[发言内容][表情包]\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "no_reply",
+    "should_reply": false
+  },
+  "tags": ["ambient", "sticker", "no_reply"]
+}

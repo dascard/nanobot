@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_direct_incomplete_wait",
+  "suite": "timing_gate",
+  "description": "用户明确叫 bot 但像是还要继续贴材料，先 wait",
+  "input": {
+    "action": "wait",
+    "trigger_reason": "bot_name_mentioned",
+    "context": "<timing_context>\nbot别名: nanobot\n触发原因: bot_name_mentioned\n[msg_id]6\n[时间]21:05:01\n[用户名]A\n[发言内容]nanobot 等下，我把日志贴完\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "wait",
+    "should_reply": false
+  },
+  "tags": ["directed", "continuous_input", "wait"]
+}

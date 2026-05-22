@@ -68,6 +68,10 @@ class GroupPendingMessage:
             self.mentions = []
         if self.directed is None:
             self.directed = {}
+        if self.directed.get("directed_to_other") and not (
+            self.is_at_bot or self.is_reply_to_bot
+        ):
+            self.is_directed_to_other = True
 
     def to_dict(self) -> dict:
         return {

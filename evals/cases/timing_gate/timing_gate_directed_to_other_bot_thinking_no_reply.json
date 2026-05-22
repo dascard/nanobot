@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_directed_to_other_bot_thinking_no_reply",
+  "suite": "timing_gate",
+  "description": "用户明确 @ 其他账号，且另一个 bot 正在思考时，当前 bot 不应误认为自己被提问",
+  "input": {
+    "action": "no_reply",
+    "trigger_reason": "ambient",
+    "context": "<timing_context>\n群: 第二团体（河蟹群）\n触发原因: ambient\n[指向性] @其他人: 3605196653\n[msg_id]486560924\n[时间]21:01:48\n[用户名]奶蛙生活艺术家\n[发言内容]@3605196653 我现在有20股minimax，请你结合行QQ，判断我要不要增持minimax的股还是接盘智谱\n\n[msg_id]1167874690\n[时间]21:01:49\n[用户名][BOT]Alice\n[发言内容]我正在思考如何回复你 (Agent模式)...\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "no_reply",
+    "should_reply": false
+  },
+  "tags": ["ambient", "directed_to_other", "other_bot", "no_reply"]
+}

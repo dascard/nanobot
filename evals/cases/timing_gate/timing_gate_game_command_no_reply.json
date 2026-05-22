@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_game_command_no_reply",
+  "suite": "timing_gate",
+  "description": "群游戏或签到类命令不是给 bot 的业务请求，不插话",
+  "input": {
+    "action": "no_reply",
+    "trigger_reason": "direct_call",
+    "context": "<timing_context>\n触发原因: direct_call\n[msg_id]13\n[时间]21:12:01\n[用户名]A\n[发言内容]/签到\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "no_reply",
+    "should_reply": false
+  },
+  "tags": ["ambient", "game_command", "no_reply"]
+}

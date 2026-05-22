@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_bot_name_request_continue",
+  "suite": "timing_gate",
+  "description": "用户点名 bot 并要求做事",
+  "input": {
+    "action": "continue",
+    "trigger_reason": "bot_name_mentioned",
+    "context": "<timing_context>\nbot别名: nanobot\n触发原因: bot_name_mentioned\n[msg_id]4\n[时间]21:03:01\n[用户名]A\n[发言内容]nanobot 帮我总结一下刚才的讨论\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "continue",
+    "should_reply": true
+  },
+  "tags": ["directed", "bot_name_mentioned", "continue"]
+}

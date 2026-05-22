@@ -1,0 +1,15 @@
+{
+  "id": "timing_gate_direct_command_continue",
+  "suite": "timing_gate",
+  "description": "命令式调用交给主流程处理",
+  "input": {
+    "action": "continue",
+    "trigger_reason": "direct_call",
+    "context": "<timing_context>\n触发原因: direct_call\n[msg_id]5\n[时间]21:04:01\n[用户名]A\n[发言内容]/总结最近24小时\n</timing_context>"
+  },
+  "expected": {
+    "timing_action": "continue",
+    "should_reply": true
+  },
+  "tags": ["directed", "direct_call", "continue"]
+}
