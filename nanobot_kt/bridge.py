@@ -351,6 +351,7 @@ class NanobotBridge:
         "[ExpressionContext]",
         "[JargonContext]",
         "<history_context>",
+        "<conversation_context>",
         "## 群聊行为",
         "## 群聊上下文使用规则",
         "## 当前回复目标",
@@ -968,12 +969,6 @@ class NanobotBridge:
                         if text:
                             conv.append("system", text)
 
-                    group_recent_context = str(meta.get("group_recent_context") or "").strip()
-                    if group_recent_context:
-                        conv.append("system", group_recent_context)
-                        logger.info("[NanobotBridge] GroupRecentContext injected chars=%d",
-                                    len(group_recent_context))
-
                     # 注入群表达/黑话（GroupProfile 已移至 ContextBuilder history_header 统一注入）
                     try:
                         from core.group_runtime.ids import normalize_group_session_id, normalize_group_stream_id
@@ -1070,7 +1065,6 @@ class NanobotBridge:
                     "user_input": query,
                     "history_context": self._history_context_text(history_header, history_messages),
                     "persona_text": persona_text or "无已存储画像",
-                    "group_recent_context": str(meta.get("group_recent_context") or ""),
                     "tool_policy": policy_prompt,
                     "sender_name": sender_name,
                     "session_id": session_id,

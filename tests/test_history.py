@@ -160,7 +160,109 @@ def test_build_memory_uses_latest_rows_not_time_window(db_session):
     contents = [m["content"] for m in messages]
     assert "recent" in " ".join(contents)
     assert "old message" in " ".join(contents)
-    assert "最近若干条" in header
+    assert "<conversation_context>" in header
+
+
+def test_build_group_memory_drops_old_conversation_turns(db_session):
+    """群聊 ConversationTurn 旧记录不再长期注入。"""
+    from api.routes import _build_session_memory
+
+    old_time = datetime.now() - timedelta(hours=2)
+    recent_time = datetime.now() - timedelta(minutes=2)
+    for role, content, ct in [
+        ("user", "旧群聊请求", old_time),
+        ("assistant", "旧群聊回复", old_time),
+        ("user", "当前群聊问题", recent_time),
+    ]:
+        db_session.add(ConversationTurn(
+            user_id="group_1",
+            session_id="group_1",
+            role=role,
+            content=content,
+            created_at=ct,
+        ))
+    db_session.commit()
+
+    header, messages, debug = _build_session_memory(
+        db_session,
+        "group_1",
+        user_id="group_1",
+        is_group=True,
+        group_id="1",
+    )
+    joined = " ".join(m["content"] for m in messages)
+
+    assert "当前群聊问题" in joined
+    assert "旧群聊请求" not in joined
+    assert debug["old_group_turns_skipped"] == 2
+    assert "<conversation_context>" in header
+
+
+def test_build_chat_context_group_uses_unified_chatlog_messages(db_session):
+    """群聊上下文应统一成 role messages，不再生成独立 group_recent_context 块。"""
+    from core.context_builder import build_chat_context
+
+    now = datetime.now()
+    db_session.add(ChatLog(
+        user_id="group_1",
+        session_id="group_1",
+        role="ambient",
+        sender_name="A",
+        content="[A]: 这个方案有点绕",
+        message_id="m1",
+        processed=1,
+        created_at=now - timedelta(minutes=3),
+    ))
+    db_session.add(ChatLog(
+        user_id="group_1",
+        session_id="group_1",
+        role="assistant",
+        sender_name="nanobot",
+        content="可以先把入口收敛掉",
+        message_id="m2",
+        processed=1,
+        created_at=now - timedelta(minutes=2),
+    ))
+    db_session.add(ChatLog(
+        user_id="group_1",
+        session_id="group_1",
+        role="ambient",
+        sender_name="B",
+        content="[B]: 当前这条会作为 user_input",
+        message_id="m3",
+        processed=1,
+        created_at=now - timedelta(minutes=1),
+    ))
+    db_session.add(ConversationTurn(
+        user_id="group_1",
+        session_id="group_1",
+        role="user",
+        content="旧 ConversationTurn 不应和 ChatLog 群现场重复注入",
+        created_at=now - timedelta(minutes=2),
+    ))
+    db_session.commit()
+
+    header, messages, debug = build_chat_context(
+        db_session,
+        "group_1",
+        user_id="group_1",
+        is_group=True,
+        group_id="1",
+        exclude_message_ids=["m3"],
+    )
+
+    joined = "\n".join(m["content"] for m in messages)
+    assert header.startswith("<conversation_context>")
+    assert "<group_recent_context>" not in header
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert "[msg_id]m1" in joined
+    assert "[用户名]A" in joined
+    assert "[发言内容]这个方案有点绕" in joined
+    assert "可以先把入口收敛掉" in joined
+    assert "当前这条会作为 user_input" not in joined
+    assert "旧 ConversationTurn" not in joined
+    assert debug["context_source"] == "chatlog"
+    assert debug["group_recent_messages"] == 2
 
 
 def test_build_memory_returns_struct_dicts(db_session):

@@ -117,17 +117,11 @@ def build_tool_policy_prompt(
     chat_type: str = "group",
 ) -> str:
     """生成动态 [ToolPolicy] 系统消息。"""
-    active = [n for n, v in enabled.items() if v]
     inactive = [n for n, v in enabled.items() if not v]
 
     lines = ["[ToolPolicy]"]
-    prefix = "本群可调用工具" if chat_type == "group" else "本轮可调用工具"
-    lines.append(f"{prefix}（{len(active)}个）：")
-
-    for name in sorted(active):
-        td = get_tool_def(name)
-        label = td.label if td else name
-        lines.append(f"  - {name}：{label}")
+    scope = "本群" if chat_type == "group" else "本轮"
+    lines.append(f"{scope}真实可调用工具以 API tools schema 为准，本段只做说明和审计。")
 
     if inactive:
         lines.append(f"已禁用工具（{len(inactive)}个）：")
@@ -135,8 +129,8 @@ def build_tool_policy_prompt(
             reason = disabled.get(name, "未指定")
             lines.append(f"  - {name}：{reason}")
 
-    lines.append("规则：只调用「可调用工具」列表中的工具。不要声称调用已禁用的工具。")
-    lines.append("如需回复，必须真实调用 reply(content)。")
+    lines.append("规则：不要声称调用未出现在 tools schema 中的工具，也不要声称调用已禁用工具。")
+    lines.append("如需回复，必须真实调用 reply(content)；不回复则调用 no_reply(reason)。")
     return "\n".join(lines)
 
 

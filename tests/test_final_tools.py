@@ -104,3 +104,19 @@ def test_new_api_client_build_payload_uses_final_tools_scope():
         )
 
     assert [tool["function"]["name"] for tool in payload["tools"]] == ["reply"]
+
+
+def test_tool_policy_prompt_does_not_expand_enabled_tool_schema():
+    from core.tool_policy_service import build_tool_policy_prompt
+
+    prompt = build_tool_policy_prompt(
+        enabled={"reply": True, "news_search": True, "bash": False},
+        disabled={"bash": "群聊强制禁用"},
+        chat_type="group",
+    )
+
+    assert "真实可调用工具以 API tools schema 为准" in prompt
+    assert "reply：" not in prompt
+    assert "news_search：" not in prompt
+    assert "bash：群聊强制禁用" in prompt
+    assert "no_reply(reason)" in prompt

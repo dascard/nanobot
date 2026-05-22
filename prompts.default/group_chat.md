@@ -7,7 +7,6 @@ required_vars:
 optional_vars:
   - history_context
   - persona_text
-  - group_recent_context
   - tool_policy
   - sender_name
   - session_id
@@ -20,11 +19,8 @@ optional_vars:
 用户画像:
 {{ persona_text }}
 
-最近上下文:
+统一上下文:
 {{ history_context }}
-
-群聊近期背景:
-{{ group_recent_context }}
 
 工具策略:
 {{ tool_policy }}

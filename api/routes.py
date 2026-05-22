@@ -67,8 +67,8 @@ from core.context_builder import (
     sanitize_prompt_text as _sanitize_prompt_text,
     estimate_tokens as _estimate_tokens,
     relative_time_label as _relative_time_label,
+    build_chat_context as _build_chat_context,
     build_session_memory as _build_session_memory,
-    build_group_recent_context as _build_group_recent_context,
     format_group_planner_message as _format_group_planner_message,
     MAX_GROUP_CONTEXT_ROWS,
     MAX_PRIVATE_CONTEXT_ROWS,
@@ -333,6 +333,13 @@ def _resolve_push_target_id(req: ChatProxyRequest, is_group: bool) -> str:
     if session_id.startswith("group_"):
         return session_id[len("group_"):]
     return session_id or req.user_id
+
+
+def _extract_group_id_from_chat_request(req: ChatProxyRequest) -> str:
+    session_id = str(req.session_id or "").strip()
+    if session_id.startswith("group_"):
+        return session_id[len("group_"):]
+    return session_id or str(req.user_id or "").strip()
 
 
 def _is_guardrail_superuser(user_id: str) -> bool:
@@ -1409,12 +1416,10 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                         message_id=req.message_id or "",
                     )
                     source_message_ids = [req.message_id] if req.message_id else []
-                memory_header, history_messages, _ctx_debug = _build_session_memory(
+                memory_header, history_messages, _ctx_debug = _build_chat_context(
                     db, group_user_id, user_id=group_user_id,
                     is_group=True, group_id=req.group_id,
-                )
-                group_recent_context = _build_group_recent_context(
-                    db, group_user_id, exclude_message_ids=source_message_ids,
+                    exclude_message_ids=source_message_ids,
                 )
                 from core.identity import build_identity_vars
                 sender_id = str(getattr(req, "sender_id", "") or getattr(req, "user_id", "") or "")
@@ -1436,7 +1441,6 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     "session_name": req.session_name or "",
                     "trigger_reason": reason,
                     "timing_decision": "continue",
-                    "group_recent_context": group_recent_context,
                     "source_message_ids": source_message_ids,
                     "context_debug": _ctx_debug,
                     "self_id": ambient_meta.get("bot", {}).get("self_id", ""),
@@ -1756,12 +1760,10 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     str(x) for x in (result.get("source_message_ids") or [])
                     if str(x).strip()
                 ]
-                memory_header, history_messages, _ctx_debug = _build_session_memory(
+                memory_header, history_messages, _ctx_debug = _build_chat_context(
                     db, group_user_id, user_id=group_user_id, is_group=True,
                     group_id=req.group_id,
-                )
-                group_recent_context = _build_group_recent_context(
-                    db, group_user_id, exclude_message_ids=source_message_ids,
+                    exclude_message_ids=source_message_ids,
                 )
                 # 从 runtime state 取回调时保留的 bot identity
                 timer_state = runtime._states.get(_normalize_group_session_id(req.group_id))
@@ -1784,7 +1786,6 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     "sender_id": timer_sender_id,
                     "trigger_reason": req.trigger_reason or "timer",
                     "timing_decision": "continue",
-                    "group_recent_context": group_recent_context,
                     "source_message_ids": source_message_ids,
                     "context_debug": _ctx_debug,
                     "self_id": timer_bot_id,
@@ -2064,12 +2065,13 @@ async def proxy_chat(
     is_group = not str(req.session_id).startswith("private_")
 
     # 3. 构建会话记忆上下文 (时间窗口 + clear 标记感知)
-    memory_header, history_messages, _ctx_debug = _build_session_memory(
+    memory_header, history_messages, _ctx_debug = _build_chat_context(
         db,
         req.session_id,
         user_id=req.user_id,
         max_per_msg=MAX_MEMORY_PER_MSG_CHARS,
         is_group=is_group,
+        group_id=_extract_group_id_from_chat_request(req) if is_group else "",
         max_total=MAX_MEMORY_TOTAL_CHARS,
     )
 

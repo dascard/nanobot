@@ -84,6 +84,16 @@ def _extract_policy_tools(messages: list[dict[str, Any]]) -> tuple[list[str], li
     return enabled, disabled
 
 
+def _has_schema_authoritative_tool_policy(messages: list[dict[str, Any]]) -> bool:
+    for msg in messages:
+        content = _as_text(msg.get("content") if isinstance(msg, dict) else "")
+        if "[ToolPolicy]" not in content:
+            continue
+        if "tools schema 为准" in content or "tool schema 为准" in content:
+            return True
+    return False
+
+
 def _detect_framework_markers(text: str) -> list[str]:
     return [key for key, marker in _FRAMEWORK_MARKERS.items() if marker in text]
 
@@ -114,6 +124,14 @@ def infer_message_sources(messages: list[dict[str, Any]]) -> list[dict[str, Any]
                 source = "group_rules"
             elif role == "system" and "群聊上下文使用规则" in content:
                 source = "group_context_rules"
+            elif role == "system" and "<conversation_context>" in content:
+                source = "conversation_context_header"
+            elif role == "system" and "<history_context>" in content:
+                source = "history_context_header"
+            elif role == "system" and "<group_recent_context>" in content:
+                source = "group_recent_context"
+            elif role == "system" and "<group_memory_context" in content:
+                source = "group_memory_context"
             elif role == "system" and ("<runtime_context>" in content or "运行时上下文" in content):
                 source = "runtime_context"
             elif role == "system":
@@ -171,6 +189,8 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
     messages = [msg for msg in raw_messages if isinstance(msg, dict)] if isinstance(raw_messages, list) else []
     actual_sent_tools = extract_actual_sent_tools(payload)
     policy_enabled, policy_disabled = _extract_policy_tools(messages)
+    if not policy_enabled and _has_schema_authoritative_tool_policy(messages):
+        policy_enabled = list(actual_sent_tools)
     message_sources = infer_message_sources(messages)
     issues: list[dict[str, Any]] = []
 

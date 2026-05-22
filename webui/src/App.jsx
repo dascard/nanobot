@@ -2315,7 +2315,7 @@ function EffectivePromptPreviewPage() {
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
               <RawJsonAccordion label="runtime_context" text={result.runtime_context || ''} defaultOpen />
               <RawJsonAccordion label="persona_reference" text={result.persona_reference || ''} />
-              <RawJsonAccordion label="history_context" text={result.history_context || ''} />
+              <RawJsonAccordion label="conversation_context" text={result.history_context || ''} />
               <RawJsonAccordion label="tool_policy" text={result.tool_policy || ''} />
             </div>
           </Card>
@@ -2365,18 +2365,20 @@ function CopyButton({ text, label = '复制', className = '' }) {
 }
 
 // ── Message 折叠框 ──
-function MessageAccordion({ message, index }) {
+function MessageAccordion({ message, index, source }) {
   const content = message.content
   const isArray = Array.isArray(content)
   const charCount = isArray ? JSON.stringify(content).length : (typeof content === 'string' ? content.length : 0)
   const tokenEst = Math.round(charCount * (isArray ? 0.4 : 0.35))
   const hasToolCalls = message.tool_calls?.length > 0
+  const sourceName = source?.source || ''
 
   return (
     <details className="border border-slate-700/50 rounded-lg group">
       <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-xs flex items-center gap-2">
         <span className="text-slate-400 font-mono w-6">[{index}]</span>
         <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${message.role === 'system' ? 'bg-purple-500/15 text-purple-300' : message.role === 'user' ? 'bg-blue-500/15 text-blue-300' : message.role === 'assistant' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-500/15 text-slate-400'}`}>{message.role}</span>
+        {sourceName && <span className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] font-mono text-slate-400">{sourceName}</span>}
         <span className="text-slate-500">· {charCount} chars · ~{tokenEst} tokens</span>
         {hasToolCalls && <span className="text-amber-400 text-[10px]">· tool_calls: {message.tool_calls.map(t => t.function?.name || '?').join(', ')}</span>}
       </summary>
@@ -2506,6 +2508,7 @@ function LLMApiLogViewer({ log }) {
   const policyEnabledTools = safeJsonParse(log.policy_enabled_tools_json, requestLint.policy_enabled_tools || [])
   const policyDisabledTools = safeJsonParse(log.policy_disabled_tools_json, requestLint.policy_disabled_tools || [])
   const frameworkInjectedTools = safeJsonParse(log.framework_injected_tools_json, requestLint.framework_injected_tools || [])
+  const messageSourceByIndex = new Map(messageSources.map(src => [src.index, src]))
   const isIncomplete = (log.status === 'created') && (log.latency_ms === 0 || !log.latency_ms)
   const statusTone = log.status === 'success' ? 'emerald' : log.status === 'stream_success' ? 'blue' : log.status === 'error' || log.status === 'failed' || log.status === 'stream_error' ? 'red' : log.status === 'stream_created' ? 'blue' : 'slate'
   const issueTone = (severity) => severity === 'P0' ? 'red' : severity === 'P1' ? 'amber' : 'slate'
@@ -2627,7 +2630,7 @@ function LLMApiLogViewer({ log }) {
           <h3 className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">Messages ({request.messages.length})</h3>
           <div className="space-y-1">
             {request.messages.map((msg, i) => (
-              <MessageAccordion key={i} message={msg} index={i} />
+              <MessageAccordion key={i} message={msg} index={i} source={messageSourceByIndex.get(i)} />
             ))}
           </div>
         </section>

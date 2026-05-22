@@ -1733,7 +1733,7 @@ def preview_effective_prompt(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    from core.context_builder import build_group_recent_context, build_session_memory
+    from core.context_builder import build_chat_context
     from core.database import Persona
     from core.identity import build_identity_vars
     from core.tool_policy_service import build_tool_policy_prompt, resolve_effective_tools
@@ -1757,14 +1757,13 @@ def preview_effective_prompt(
         if persona and persona.persona_json:
             persona_text = persona.persona_json
 
-    history_header, history_messages, history_debug = build_session_memory(
+    history_header, history_messages, history_debug = build_chat_context(
         db,
         session_id,
         user_id=user_id,
         is_group=is_group,
         group_id=group_id,
     )
-    group_recent_context = build_group_recent_context(db, session_id) if is_group and session_id else ""
     identity_vars = build_identity_vars(sender_id=user_id, bot_name="", bot_aliases=[])
     meta = {
         "chat_type": body.chat_type,
@@ -1772,7 +1771,6 @@ def preview_effective_prompt(
         "session_id": session_id,
         "user_id": user_id,
         "group_id": group_id,
-        "group_recent_context": group_recent_context,
     }
     runtime_context = bridge._build_runtime_context(
         user_id=user_id,
@@ -1808,8 +1806,6 @@ def preview_effective_prompt(
             text_part = _load_prompt_fragment(frag)
             if text_part:
                 messages.append({"role": "system", "content": text_part})
-        if group_recent_context:
-            messages.append({"role": "system", "content": group_recent_context})
     else:
         private_behavior = _load_prompt_fragment("26_private_behavior.md")
         if private_behavior:
@@ -1834,7 +1830,6 @@ def preview_effective_prompt(
         "user_input": body.user_input,
         "history_context": bridge._history_context_text(history_header, history_messages),
         "persona_text": persona_text or "无已存储画像",
-        "group_recent_context": group_recent_context,
         "tool_policy": tool_policy_prompt,
         "sender_name": body.sender_name,
         "session_id": session_id,
@@ -1881,7 +1876,7 @@ def preview_effective_prompt(
         "persona_reference": persona_reference,
         "history_context": bridge._history_context_text(history_header, history_messages),
         "history_debug": history_debug,
-        "group_recent_context": group_recent_context,
+        "group_recent_context": "",
         "tool_policy": tool_policy_prompt,
         "tools": tools,
         "disabled_tools": disabled,

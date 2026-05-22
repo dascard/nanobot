@@ -19,7 +19,7 @@ optional_vars:
 用户画像:
 {{ persona_text }}
 
-历史上下文:
+统一上下文:
 {{ history_context }}
 
 工具策略:

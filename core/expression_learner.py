@@ -51,6 +51,7 @@ _INTERNAL_CONTENT_MARKERS = (
     "<runtime_context>",
     "<user_input>",
     "<history_context>",
+    "<conversation_context>",
     "<persona_reference>",
     "[CQ:image,file=http://127.0.0.1",
 )

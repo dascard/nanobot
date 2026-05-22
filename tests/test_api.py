@@ -125,8 +125,9 @@ def test_proxy_chat_passes_history_header_to_bridge(client, db_session, monkeypa
 
     assert response.status_code == 200
     _, kwargs = mock_bridge.handle_message.await_args
-    assert "最近若干条对话历史" in kwargs["metadata"]["history_header"]
-    assert "token 预算裁剪" in kwargs["metadata"]["history_header"]
+    assert "<conversation_context>" in kwargs["metadata"]["history_header"]
+    assert "已裁剪的私聊上下文" in kwargs["metadata"]["history_header"]
+    assert "下面紧随的 user/assistant role messages" in kwargs["metadata"]["history_header"]
     assert len(kwargs["metadata"]["history_messages"]) == 2
 
 
@@ -666,7 +667,8 @@ async def test_group_message_at_bot_enters_timing(db_session, monkeypatch):
     assert "[用户名]B" in called_query
     assert "[发言内容]你是？" in called_query
     _, kwargs = mock_bridge.handle_message.await_args
-    assert "group_recent_context" in kwargs["metadata"]
+    assert "group_recent_context" not in kwargs["metadata"]
+    assert kwargs["metadata"]["context_debug"]["context_source"] == "chatlog"
 
     assistant_logs = db_session.query(ChatLog).filter_by(user_id="group_456", role="assistant").all()
     assert len(assistant_logs) == 1
