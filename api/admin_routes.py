@@ -276,6 +276,46 @@ def list_prompt_v2_variables(
     }
 
 
+@router.get("/prompt-v2/templates")
+def list_prompt_v2_templates(_auth=Depends(verify_admin)):
+    from core.prompt_v2.template_store import list_templates
+
+    return list_templates()
+
+
+@router.get("/prompt-v2/templates/{template_key}")
+def get_prompt_v2_template(template_key: str, _auth=Depends(verify_admin)):
+    from core.prompt_v2.template_store import get_template
+
+    try:
+        return get_template(template_key)
+    except FileNotFoundError:
+        raise HTTPException(404, "V2 模板不存在")
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/prompt-v2/templates/{template_key}")
+def save_prompt_v2_template(
+    template_key: str,
+    body: PromptSaveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.prompt_v2.template_store import save_template
+    from core.prompt_v2.variables import PromptVariableError
+
+    try:
+        result = save_template(template_key, body.content)
+    except PromptVariableError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    _audit_request(db, request, "save_prompt_v2_template", "prompt_v2", template_key, result)
+    return result
+
+
 # ── Helpers ──
 
 def _safe_json(raw):

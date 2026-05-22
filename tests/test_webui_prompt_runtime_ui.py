@@ -18,3 +18,13 @@ def test_prompt_preview_defaults_to_v2_and_prompt_path_redirects():
     assert "engine: 'v2'" in source
     assert '<Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />' in source
     assert '<Route path="/prompt-legacy" element={<PromptPage />} />' in source
+
+
+def test_prompt_runtime_v2_page_exposes_template_editor():
+    source = APP_JS.read_text(encoding="utf-8")
+
+    assert "V2 模板编辑" in source
+    assert "api.get('/prompt-v2/templates')" in source
+    assert "api.put(`/prompt-v2/templates/${encodeURIComponent(v2SelectedTemplate)}`" in source
+    assert "保存 V2 模板" in source
+    assert "运行时模板目录" in source

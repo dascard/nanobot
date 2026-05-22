@@ -2226,6 +2226,13 @@ function EffectivePromptPreviewPage() {
   const [loading, setLoading] = useState(false)
   const [v2VariableTemplate, setV2VariableTemplate] = useState('identity_context')
   const [v2Variables, setV2Variables] = useState([])
+  const [v2Templates, setV2Templates] = useState([])
+  const [v2SelectedTemplate, setV2SelectedTemplate] = useState('')
+  const [v2TemplateDetail, setV2TemplateDetail] = useState(null)
+  const [v2TemplateContent, setV2TemplateContent] = useState('')
+  const [v2TemplateToast, setV2TemplateToast] = useState('')
+  const [v2TemplateDefaultDir, setV2TemplateDefaultDir] = useState('')
+  const [v2TemplateRuntimeDir, setV2TemplateRuntimeDir] = useState('')
   const update = (key, value) => setForm(prev => ({ ...prev, [key]: value }))
   const run = () => {
     setLoading(true)
@@ -2234,10 +2241,30 @@ function EffectivePromptPreviewPage() {
       .catch(e => alert(e.response?.data?.detail || '预览失败'))
       .finally(() => setLoading(false))
   }
+  const loadV2Templates = useCallback(() => {
+    api.get('/prompt-v2/templates').then(r => {
+      const list = r.data.items || []
+      setV2Templates(list)
+      setV2TemplateDefaultDir(r.data.default_dir || '')
+      setV2TemplateRuntimeDir(r.data.runtime_dir || '')
+      setV2SelectedTemplate(prev => prev || (list.find(x => x.template_key === 'identity_context')?.template_key || list[0]?.template_key || ''))
+    }).catch(() => setV2Templates([]))
+  }, [])
   useEffect(() => {
     const id = setTimeout(run, 0)
     return () => clearTimeout(id)
   }, [])
+  useEffect(() => {
+    if (form.engine === 'v2') loadV2Templates()
+  }, [form.engine, loadV2Templates])
+  useEffect(() => {
+    if (form.engine !== 'v2' || !v2SelectedTemplate) return
+    api.get(`/prompt-v2/templates/${encodeURIComponent(v2SelectedTemplate)}`).then(r => {
+      setV2TemplateDetail(r.data)
+      setV2TemplateContent(r.data.content || '')
+      setV2VariableTemplate(v2SelectedTemplate)
+    }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
+  }, [form.engine, v2SelectedTemplate])
   useEffect(() => {
     if (form.engine !== 'v2') {
       setV2Variables([])
@@ -2247,6 +2274,19 @@ function EffectivePromptPreviewPage() {
       .then(r => setV2Variables(r.data.items || []))
       .catch(() => setV2Variables([]))
   }, [form.engine, v2VariableTemplate])
+  useEffect(() => {
+    if (!v2TemplateToast) return
+    const t = setTimeout(() => setV2TemplateToast(''), 2500)
+    return () => clearTimeout(t)
+  }, [v2TemplateToast])
+  const saveV2Template = () => {
+    if (!v2SelectedTemplate) return
+    api.put(`/prompt-v2/templates/${encodeURIComponent(v2SelectedTemplate)}`, { content: v2TemplateContent }).then(r => {
+      setV2TemplateToast(`已保存 ${r.data.after_hash?.slice(0, 12) || ''}`)
+      loadV2Templates()
+      run()
+    }).catch(e => alert(e.response?.data?.detail || '保存 V2 模板失败'))
+  }
   return (
     <div>
       <div className="flex items-start justify-between gap-4 mb-4">
@@ -2314,24 +2354,49 @@ function EffectivePromptPreviewPage() {
           </label>
         </div>
         {form.engine === 'v2' && (
-          <div className="mt-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3">
-            <div className="flex flex-col md:flex-row md:items-center gap-3 mb-3">
-              <div>
-                <div className="text-xs font-medium text-emerald-300">V2 模板变量</div>
-                <div className="text-[11px] text-slate-500">仅展示当前 section 白名单变量；未列出的变量保存/渲染会被拒绝。</div>
+          <div className="mt-3 grid grid-cols-1 xl:grid-cols-12 gap-3">
+            <div className="xl:col-span-8 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 min-w-0">
+              {v2TemplateToast && <div className="mb-2 px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-300">{v2TemplateToast}</div>}
+              <div className="flex flex-col md:flex-row md:items-center gap-3 mb-3">
+                <div>
+                  <div className="text-xs font-medium text-emerald-300">V2 模板编辑</div>
+                  <div className="text-[11px] text-slate-500">
+                    默认模板目录 <span className="font-mono text-slate-400">{v2TemplateDefaultDir || '-'}</span> ·
+                    运行时模板目录 <span className="font-mono text-slate-400">{v2TemplateRuntimeDir || '-'}</span>
+                  </div>
+                </div>
+                <select value={v2SelectedTemplate} onChange={e => setV2SelectedTemplate(e.target.value)} className="md:ml-auto bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                  {v2Templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
+                </select>
+                <button onClick={saveV2Template} disabled={!v2SelectedTemplate} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-xs font-medium">保存 V2 模板</button>
               </div>
-              <select value={v2VariableTemplate} onChange={e => setV2VariableTemplate(e.target.value)} className="md:ml-auto bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                <option value="identity_context">identity_context</option>
-              </select>
+              <div className="flex flex-wrap gap-2 mb-2">
+                <Badge tone={v2TemplateDetail?.source === 'runtime' ? 'emerald' : 'slate'}>{v2TemplateDetail?.source || 'default'}</Badge>
+                <Badge tone="blue">{v2TemplateDetail?.sha256?.slice(0, 12) || '-'}</Badge>
+                <span className="text-xs text-slate-600 truncate">{v2TemplateDetail?.active_path || ''}</span>
+              </div>
+              <textarea value={v2TemplateContent} onChange={e => setV2TemplateContent(e.target.value)}
+                className="w-full h-64 p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-slate-300 leading-relaxed resize-y focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
             </div>
-            <div className="flex flex-wrap gap-2">
-              {v2Variables.map(v => (
-                <span key={v.name} title={`${v.description || ''}${v.example ? ` · 示例: ${v.example}` : ''}`} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs">
-                  <code className="text-emerald-300">{`{{ ${v.name} }}`}</code>
-                  <span className="text-slate-500">{v.description}</span>
-                </span>
-              ))}
-              {!v2Variables.length && <span className="text-xs text-slate-600">暂无可插入变量</span>}
+            <div className="xl:col-span-4 rounded-xl border border-slate-800 bg-slate-950/60 p-3 min-w-0">
+              <div className="flex flex-col md:flex-row md:items-center gap-2 mb-3">
+                <div>
+                  <div className="text-xs font-medium text-slate-300">可插入变量</div>
+                  <div className="text-[11px] text-slate-600">未列出的变量保存时会被拒绝</div>
+                </div>
+                <select value={v2VariableTemplate} onChange={e => setV2VariableTemplate(e.target.value)} className="md:ml-auto bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                  {v2Templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {v2Variables.map(v => (
+                  <span key={v.name} title={`${v.description || ''}${v.example ? ` · 示例: ${v.example}` : ''}`} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs">
+                    <code className="text-emerald-300">{`{{ ${v.name} }}`}</code>
+                    <span className="text-slate-500">{v.description}</span>
+                  </span>
+                ))}
+                {!v2Variables.length && <span className="text-xs text-slate-600">当前模板暂无可插入变量</span>}
+              </div>
             </div>
           </div>
         )}

@@ -20,7 +20,15 @@ def _repo_root() -> Path:
 
 
 def default_template_dir() -> Path:
-    return Path(os.environ.get("NANOBOT_PROMPT_V2_DIR") or (_repo_root() / "prompts.v2.default"))
+    return Path(
+        os.environ.get("NANOBOT_PROMPT_V2_DIR")
+        or os.environ.get("NANOBOT_PROMPT_V2_DEFAULT_DIR")
+        or (_repo_root() / "prompts.v2.default")
+    )
+
+
+def runtime_template_dir() -> Path:
+    return Path(os.environ.get("NANOBOT_PROMPT_V2_RUNTIME_DIR") or (_repo_root() / "data" / "prompts_v2"))
 
 
 def _safe_prompt_key(prompt_key: str) -> str:
@@ -85,8 +93,11 @@ def _split_frontmatter(raw: str) -> tuple[dict[str, Any], str]:
 
 def load_template(prompt_key: str, *, template_dir: str | Path | None = None) -> PromptV2Template:
     key = _safe_prompt_key(prompt_key)
-    base = Path(template_dir) if template_dir else default_template_dir()
-    path = base / f"{key}.md"
+    if template_dir:
+        path = Path(template_dir) / f"{key}.md"
+    else:
+        runtime_path = runtime_template_dir() / f"{key}.md"
+        path = runtime_path if runtime_path.exists() else default_template_dir() / f"{key}.md"
     raw = path.read_text(encoding="utf-8")
     frontmatter, body = _split_frontmatter(raw)
     return PromptV2Template(
