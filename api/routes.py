@@ -1198,6 +1198,32 @@ def _pop_bridge_reply_meta(bridge: Any, session_id: str) -> dict | None:
     return meta if isinstance(meta, dict) else None
 
 
+def _derive_group_agent_result(bridge: Any, session_id: str, reply_meta: dict | None = None) -> str:
+    """从 reply_meta/bridge store 推导群聊空回复原因。
+
+    `pop_last_reply_meta()` 会把 bridge 内部标记弹出；优先用已弹出的
+    `reply_meta`，避免 no_reply 被误记为 no_tool_call。
+    """
+    meta = reply_meta or {}
+    agent_result = str(meta.get("_agent_result") or "")
+    if meta.get("_no_reply") or agent_result == "no_reply_tool":
+        return "no_reply_tool"
+    if agent_result in ("fake_tool_call_claim", "structured_buffer_reply", "structured_buffer_no_reply"):
+        return agent_result
+
+    if hasattr(bridge, "is_no_reply_session") and bridge.is_no_reply_session(session_id):
+        return "no_reply_tool"
+    if hasattr(bridge, "is_fake_tool_call_claim") and bridge.is_fake_tool_call_claim(session_id):
+        return "fake_tool_call_claim"
+    if hasattr(bridge, "is_no_tool_call") and bridge.is_no_tool_call(session_id):
+        store = bridge._reply_meta_store() if hasattr(bridge, "_reply_meta_store") else {}
+        stored_result = store.get(session_id, {}).get("_agent_result", "")
+        if stored_result in ("structured_buffer_reply", "structured_buffer_no_reply"):
+            return stored_result
+        return "no_tool_call"
+    return "no_tool_call"
+
+
 def _derive_group_trigger_reason(req: GroupMessageRequest) -> str:
     """推断群消息触发来源；是否发言统一交给 TimingGate 判断。"""
     text = (req.message or "").strip()
@@ -1442,18 +1468,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
                     runtime.note_bot_replied(req.group_id)
                 else:
                     # 空回复：记录 agent_result 到 ChatLog 供调试
-                    agent_result = "no_tool_call"
-                    if hasattr(bridge, "is_no_reply_session") and bridge.is_no_reply_session(group_user_id):
-                        agent_result = "no_reply_tool"
-                    elif hasattr(bridge, "is_fake_tool_call_claim") and bridge.is_fake_tool_call_claim(group_user_id):
-                        agent_result = "fake_tool_call_claim"
-                    elif hasattr(bridge, "is_no_tool_call") and bridge.is_no_tool_call(group_user_id):
-                        store = bridge._reply_meta_store() if hasattr(bridge, '_reply_meta_store') else {}
-                        ag = store.get(group_user_id, {}).get("_agent_result", "")
-                        if ag in ("structured_buffer_reply", "structured_buffer_no_reply"):
-                            agent_result = ag
-                        else:
-                            agent_result = "no_tool_call"
+                    agent_result = _derive_group_agent_result(bridge, group_user_id, reply_meta)
                     _log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
                 return {
                     "action": "continue",
@@ -1806,18 +1821,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     )
                     runtime.note_bot_replied(req.group_id)
                 else:
-                    agent_result = "no_tool_call"
-                    if hasattr(bridge, "is_no_reply_session") and bridge.is_no_reply_session(group_user_id):
-                        agent_result = "no_reply_tool"
-                    elif hasattr(bridge, "is_fake_tool_call_claim") and bridge.is_fake_tool_call_claim(group_user_id):
-                        agent_result = "fake_tool_call_claim"
-                    elif hasattr(bridge, "is_no_tool_call") and bridge.is_no_tool_call(group_user_id):
-                        store = bridge._reply_meta_store() if hasattr(bridge, '_reply_meta_store') else {}
-                        ag = store.get(group_user_id, {}).get("_agent_result", "")
-                        if ag in ("structured_buffer_reply", "structured_buffer_no_reply"):
-                            agent_result = ag
-                        else:
-                            agent_result = "no_tool_call"
+                    agent_result = _derive_group_agent_result(bridge, group_user_id, reply_meta_timer)
                     _log_group_no_reply(db, group_user_id, chat_query, agent_result, "")
                 logger.info("[TimingGate.timer] reply group=%s len=%d", req.group_id, len(answer))
             except Exception as e:

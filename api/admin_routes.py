@@ -4372,6 +4372,8 @@ async def reply_eval_run(
             totals["passed"] += 1 if passed else 0
             row = ReplyEvalResult(
                 run_id=run.id,
+                agent_run_id=str(outcome.get("run_id") or ""),
+                trace_id=str(outcome.get("trace_id") or ""),
                 case_id=case.case_id,
                 variant=body.variant,
                 expected_action=expected_action,
@@ -4387,6 +4389,8 @@ async def reply_eval_run(
             passed = False
             row = ReplyEvalResult(
                 run_id=run.id,
+                agent_run_id="",
+                trace_id="",
                 case_id=case.case_id,
                 variant=body.variant,
                 expected_action=case.expected_action or "any",

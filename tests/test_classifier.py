@@ -59,10 +59,13 @@ class TestGuardrailFormatValidation:
 
     def test_think_block_stripped(self):
         """<think> blocks are stripped by _call_qwen; classify gets clean text."""
-        from clients.classifier_client import Guardrail
+        from clients.classifier_client import Guardrail, strip_think_blocks
         g = Guardrail()
-        mock = _mock_qwen_response("<think>\n\n</think>\n\n是,5")
-        with _patch_qwen_opener(mock):
+        assert strip_think_blocks("<think>\n\n</think>\n\n是,5") == "是,5"
+        with (
+            patch.object(Guardrail, "_detect_injection", return_value=False),
+            patch("clients.classifier_client.call_model_route", return_value="是,5"),
+        ):
             r = g.classify("test")
         assert r["status"] == "reply"
         assert r["complexity"] == 5

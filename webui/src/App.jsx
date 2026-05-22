@@ -144,7 +144,7 @@ function Layout({ children, onLogout }) {
 
 // ── Shared ──
 function Card({ children, className = '' }) {
-  return <div className={`bg-slate-900/60 backdrop-blur-sm border border-slate-800 rounded-xl ${className}`}>{children}</div>
+  return <div className={`bg-slate-900/60 backdrop-blur-sm border border-slate-800 rounded-lg ${className}`}>{children}</div>
 }
 function Modal({ children, onClose, wide }) {
   return (
@@ -208,12 +208,52 @@ function MiniStat({ label, value, tone = 'slate', onClick }) {
     blue: 'text-blue-300',
     slate: 'text-white',
   }[tone] || 'text-white'
+  const title = typeof value === 'string' || typeof value === 'number' ? String(value) : ''
   return (
-    <Card className={`p-4 min-h-[92px] ${onClick ? 'cursor-pointer hover:bg-slate-800/60' : ''}`} onClick={onClick}>
-      <div className="text-xs text-slate-500 mb-2">{label}</div>
-      <div className={`text-2xl font-semibold tracking-tight ${color}`}>{value ?? '...'}</div>
+    <Card className={`p-3 min-h-[72px] transition-colors ${onClick ? 'cursor-pointer hover:bg-slate-800/60' : ''}`} onClick={onClick}>
+      <div className="text-[11px] text-slate-500 mb-1 truncate">{label}</div>
+      <div className={`text-lg font-semibold leading-tight ${color} truncate`} title={title}>{value ?? '...'}</div>
     </Card>
   )
+}
+
+function InfoGrid({ items = [], columns = 'md:grid-cols-4' }) {
+  return (
+    <div className={`grid grid-cols-1 ${columns} gap-2`}>
+      {items.filter(Boolean).map(item => (
+        <div key={item.label} className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 min-w-0">
+          <div className="text-[11px] text-slate-600 mb-0.5 truncate">{item.label}</div>
+          <div className={`text-xs font-medium truncate ${item.className || 'text-slate-300'}`} title={typeof item.value === 'string' || typeof item.value === 'number' ? String(item.value) : ''}>
+            {item.value ?? '-'}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ActionButton({ children, tone = 'slate', className = '', ...props }) {
+  const tones = {
+    emerald: 'bg-emerald-600 hover:bg-emerald-500 text-white disabled:bg-emerald-900/40',
+    red: 'bg-red-700/70 hover:bg-red-700 text-red-50 disabled:bg-red-950/40',
+    amber: 'bg-amber-700/50 hover:bg-amber-700 text-amber-100 disabled:bg-amber-950/40',
+    blue: 'bg-blue-700/70 hover:bg-blue-700 text-blue-50 disabled:bg-blue-950/40',
+    slate: 'bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:bg-slate-900',
+  }
+  return (
+    <button
+      {...props}
+      className={`inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 ${tones[tone] || tones.slate} ${className}`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function formatRate(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return `${(n * 100).toFixed(1)}%`
 }
 
 function JsonBlock({ value, className = '' }) {
@@ -2036,7 +2076,10 @@ function ManagedPromptsPage() {
     }).finally(() => setLoading(false))
   }, [selected])
 
-  useEffect(() => { loadList() }, [loadList])
+  useEffect(() => {
+    const id = setTimeout(loadList, 0)
+    return () => clearTimeout(id)
+  }, [loadList])
   useEffect(() => {
     if (!selected) return
     api.get(`/prompts/${encodeURIComponent(selected)}`).then(r => {
@@ -2188,7 +2231,10 @@ function EffectivePromptPreviewPage() {
       .catch(e => alert(e.response?.data?.detail || '预览失败'))
       .finally(() => setLoading(false))
   }
-  useEffect(() => { run() }, [])
+  useEffect(() => {
+    const id = setTimeout(run, 0)
+    return () => clearTimeout(id)
+  }, [])
   return (
     <div>
       <h1 className="text-2xl font-bold mb-1">有效 Prompt 预览</h1>
@@ -2291,15 +2337,6 @@ function safeJsonParse(value, fallback = null) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
-function prettyJson(value) {
-  if (typeof value === 'string') {
-    const parsed = safeJsonParse(value, null)
-    if (parsed !== null) return JSON.stringify(parsed, null, 2)
-    return value
-  }
-  return JSON.stringify(value, null, 2)
-}
-
 function formatBytes(n) {
   if (!n || n < 1024) return `${n || 0}B`
   if (n < 1048576) return `${(n / 1024).toFixed(1)}KB`
@@ -2348,7 +2385,7 @@ function MessageAccordion({ message, index }) {
         {hasToolCalls && (
           <div className="mt-3 space-y-2">
             {message.tool_calls.map((tc, j) => {
-              let argsText = ''
+              let argsText
               try { argsText = JSON.stringify(JSON.parse(tc.function?.arguments || '{}'), null, 2) } catch { argsText = tc.function?.arguments || '{}' }
               return (
                 <details key={j} className="border border-amber-500/20 rounded">
@@ -2485,20 +2522,23 @@ function LLMApiLogViewer({ log }) {
       {/* 基础信息 */}
       <section>
         <h3 className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">基础信息</h3>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <MiniStat label="id" value={log.id || '-'} />
-          <MiniStat label="source" value={log.source || '-'} />
-          <MiniStat label="provider" value={log.provider || '-'} />
-          <MiniStat label="model" value={log.model || '-'} />
-          <MiniStat label="status" value={log.status || '-'} tone={statusTone} />
-          <MiniStat label="response_status" value={log.response_status || 0} />
-          <MiniStat label="latency" value={log.latency_ms ? `${log.latency_ms}ms` : '-'} />
-          <MiniStat label="run_id" value={log.run_id ? log.run_id.slice(0, 16) : '未绑定 run'} tone={log.run_id ? 'slate' : 'amber'} />
-          <MiniStat label="trace_id" value={log.trace_id ? log.trace_id.slice(0, 16) : '-'} />
-          <MiniStat label="created_at" value={(log.created_at || '').replace('T', ' ').slice(0, 19)} />
-          <MiniStat label="finished_at" value={log.finished_at ? log.finished_at.replace('T', ' ').slice(0, 19) : '-'} />
-          <MiniStat label="URL" value={(log.url || '-').slice(0, 40)} />
-        </div>
+        <InfoGrid
+          columns="md:grid-cols-4 xl:grid-cols-6"
+          items={[
+            { label: 'id', value: log.id || '-' },
+            { label: 'source', value: log.source || '-', className: 'text-emerald-300' },
+            { label: 'provider', value: log.provider || '-' },
+            { label: 'model', value: log.model || '-' },
+            { label: 'status', value: log.status || '-', className: statusTone === 'emerald' ? 'text-emerald-300' : statusTone === 'blue' ? 'text-blue-300' : statusTone === 'red' ? 'text-red-300' : 'text-slate-300' },
+            { label: 'response_status', value: log.response_status || 0 },
+            { label: 'latency', value: log.latency_ms ? `${log.latency_ms}ms` : '-' },
+            { label: 'run_id', value: log.run_id ? log.run_id.slice(0, 16) : '未绑定 run', className: log.run_id ? 'text-slate-300' : 'text-amber-300' },
+            { label: 'trace_id', value: log.trace_id ? log.trace_id.slice(0, 16) : '-' },
+            { label: 'created_at', value: (log.created_at || '').replace('T', ' ').slice(0, 19) },
+            { label: 'finished_at', value: log.finished_at ? log.finished_at.replace('T', ' ').slice(0, 19) : '-' },
+            { label: 'URL', value: (log.url || '-').slice(0, 40) },
+          ]}
+        />
         {!log.run_id && <div className="mt-1 text-[10px] text-slate-600">可能是 classifier / background / direct HTTP 调用</div>}
         {log.error && <div className="mt-2 p-2 bg-red-500/10 border border-red-500/20 rounded text-xs text-red-300">{log.error}</div>}
       </section>
@@ -2627,7 +2667,7 @@ function LLMApiLogViewer({ log }) {
                     </div>
                   )}
                   {msg.tool_calls?.map((tc, j) => {
-                    let argsText = ''
+                    let argsText
                     try { argsText = JSON.stringify(JSON.parse(tc.function?.arguments || '{}'), null, 2) } catch { argsText = tc.function?.arguments || '{}' }
                     return (
                       <details key={j} className="border border-amber-500/20 rounded mb-1">
@@ -2881,7 +2921,7 @@ function AgentRunDetailPage() {
   return (
     <div>
       <NavLink to="/agent-runs" className="text-xs text-slate-500 hover:text-slate-300 mb-4 inline-block">← 运行追踪</NavLink>
-      <h1 className="text-2xl font-bold mb-4">运行详情</h1>
+      <h1 className="text-xl font-semibold mb-4">运行详情</h1>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <MiniStat label="run_id" value={r.run_id || ''} />
         <MiniStat label="status" value={r.status || ''} tone={r.status === 'success' ? 'emerald' : r.status === 'error' ? 'red' : 'slate'} />
@@ -2909,7 +2949,7 @@ function AgentRunDetailPage() {
       {r.output_preview && <Card className="p-4 mb-4"><h3 className="text-sm font-medium text-slate-400 mb-2">输出摘要</h3><pre className="text-xs text-slate-300 whitespace-pre-wrap">{r.output_preview}</pre></Card>}
 
       {/* Tool Calls */}
-      <h2 className="text-lg font-bold mt-6 mb-3">工具调用 ({detail.tool_calls?.length || 0})</h2>
+      <h2 className="text-sm font-medium text-slate-300 mt-6 mb-3">工具调用 ({detail.tool_calls?.length || 0})</h2>
       {detail.tool_calls?.length > 0 && (
         <Card>
           <table className="w-full text-sm">
@@ -2943,7 +2983,7 @@ function AgentRunDetailPage() {
       {/* Prompt Render Logs */}
       {detail.prompt_render_logs?.length > 0 && (
         <>
-          <h2 className="text-lg font-bold mt-6 mb-3">Prompt 渲染日志</h2>
+          <h2 className="text-sm font-medium text-slate-300 mt-6 mb-3">Prompt 渲染日志</h2>
           <Card>
             <table className="w-full text-sm">
               <thead><tr className="text-left text-slate-500 border-b border-slate-800">
@@ -2969,7 +3009,7 @@ function AgentRunDetailPage() {
       {/* Reply Contract Checks */}
       {detail.reply_contract_check_logs?.length > 0 && (
         <>
-          <h2 className="text-lg font-bold mt-6 mb-3">Reply 调用检查</h2>
+          <h2 className="text-sm font-medium text-slate-300 mt-6 mb-3">Reply 调用检查</h2>
           <Card>
             <div className="divide-y divide-slate-800">
               {detail.reply_contract_check_logs.map(log => (
@@ -2990,7 +3030,7 @@ function AgentRunDetailPage() {
       )}
 
       {/* LLM API Requests */}
-      <h2 className="text-lg font-bold mt-6 mb-3">API 请求</h2>
+      <h2 className="text-sm font-medium text-slate-300 mt-6 mb-3">API 请求</h2>
       <LLMApiRequestLogsBlock logs={detail.llm_api_request_logs || []} />
     </div>
   )
@@ -3100,8 +3140,8 @@ function LLMApiLogsPage() {
   const avgLatency = stats ? (stats.avg_latency_ms || 0) : (pageStats.latencyCount ? Math.round(pageStats.latencyTotal / pageStats.latencyCount) : 0)
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-1">LLM API 日志</h1>
-      <p className="text-slate-500 text-sm mb-4">发往模型网关的完整请求记录</p>
+      <h1 className="text-xl font-semibold mb-1">LLM API 日志</h1>
+      <p className="text-slate-500 text-xs mb-4">发往模型网关的完整请求记录</p>
       <div className="flex gap-2 mb-4 flex-wrap">
         <input value={runFilter} onChange={e => { setRunFilter(e.target.value); setPage(1) }}
           placeholder="run_id" className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm outline-none focus:border-emerald-500 w-40" />
@@ -3225,16 +3265,16 @@ function ModelsPage() {
           </button>
         ))}
       </div>
-      {tab === 'catalog' && <ModelCatalogTab routes={status.routes || {}} providers={status.providers || []} />}
+      {tab === 'catalog' && <ModelCatalogTab providers={status.providers || []} />}
       {tab === 'routes' && <RoutesTab routes={status.routes || {}} providers={status.providers || []} testResult={testResult} onTest={handleTest} onSaved={load} />}
-      {tab === 'providers' && <ProvidersTab providers={status.providers || []} onSaved={load} />}
+      {tab === 'providers' && <ProvidersTab providers={status.providers || []} />}
       {tab === 'local' && <LocalComponentsTab components={status.local_components || {}} localResult={localResult} onAction={handleLocal} />}
     </div>
   )
 }
 
 // ── Tab 1: 模型列表 ──
-function ModelCatalogTab({ routes, providers }) {
+function ModelCatalogTab({ providers }) {
   const [catalog, setCatalog] = useState([])
   const [routeRefs, setRouteRefs] = useState([])
   const [catProvider, setCatProvider] = useState('')
@@ -3248,7 +3288,10 @@ function ModelCatalogTab({ routes, providers }) {
     if (catQ) params.q = catQ
     api.get('/models/catalog', { params }).then(r => setCatalog(r.data.catalog || [])).catch(() => {}).finally(() => setCatLoading(false))
   }
-  useEffect(() => { loadCatalog() }, [catProvider, catQ])
+  useEffect(() => {
+    const id = setTimeout(loadCatalog, 0)
+    return () => clearTimeout(id)
+  }, [catProvider, catQ])
   useEffect(() => { api.get('/models/route-references').then(r => setRouteRefs(r.data.route_references || [])).catch(() => {}) }, [])
   const doRefresh = () => {
     setRefreshResult({ loading: true })
@@ -3432,8 +3475,18 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
     const params = { limit: modelSearch ? 50 : 200 }
     if (f.provider_id) params.provider = f.provider_id
     if (modelSearch) params.q = modelSearch
-    setCatalogLoading(true)
-    api.get('/models/catalog', { params }).then(r => setCatalog(r.data.catalog || [])).catch(() => {}).finally(() => setCatalogLoading(false))
+    let cancelled = false
+    const id = setTimeout(() => {
+      setCatalogLoading(true)
+      api.get('/models/catalog', { params })
+        .then(r => { if (!cancelled) setCatalog(r.data.catalog || []) })
+        .catch(() => {})
+        .finally(() => { if (!cancelled) setCatalogLoading(false) })
+    }, 0)
+    return () => {
+      cancelled = true
+      clearTimeout(id)
+    }
   }, [f.provider_id, modelSearch])
   const providerModels = catalog.slice(0, 100)
   const hasCurrentModel = f.model && providerModels.some(m => m.model === f.model)
@@ -3533,7 +3586,7 @@ function RouteEditModalV2({ route, providers, onClose, onSaved }) {
 }
 
 // ── Tab 3: 供应商 ──
-function ProvidersTab({ providers, onSaved }) {
+function ProvidersTab({ providers }) {
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState(null)
   const doSync = () => {
@@ -3700,10 +3753,8 @@ function ToolsPage() {
               const isForced = tab === 'group' && t.force_disabled_group
               const isLocked = t.force_enabled
               const isSubagent = t.is_subagent
-              const registered = t.registered
               const tone = isLocked ? 'emerald' : t.effective ? 'emerald' : 'slate'
               const label = isForced ? '强制禁用' : isLocked ? '强制启用' : t.effective ? '启用' : t.disabled_reason || '禁用'
-              const regLabel = isSubagent ? 'subagent' : registered === false ? '未注册' : registered === true ? '已注册' : ''
               return (
                 <tr key={t.name} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                   <td className="py-2 px-2 font-mono text-slate-200">
@@ -3947,6 +3998,135 @@ function AuditPage() {
 }
 
 // ── Reply Test / Eval ──
+function replyEvalTone(value) {
+  if (value === true || value === 1 || value === 'reply' || value === 'ok' || value === 'retry_success') return 'emerald'
+  if (value === 'no_reply' || value === false || value === 0) return 'slate'
+  if (value === 'error' || value === 'no_tool_call' || value === 'fake_tool_call_claim' || value === 'suppressed') return 'red'
+  if (value === 'prompt_only' || value === 'code_retry' || value === 'baseline') return 'blue'
+  return 'slate'
+}
+
+function splitCsv(text) {
+  return String(text || '').split(',').map(x => x.trim()).filter(Boolean)
+}
+
+function caseToDraft(c = {}) {
+  return {
+    case_id: c.case_id || '',
+    title: c.title || '',
+    chat_type: c.chat_type || 'group',
+    input_text: c.input_text || '',
+    expected_action: c.expected_action || 'any',
+    tagsText: (c.tags || []).join(', '),
+    expectedKeywordsText: (c.expected_keywords || []).join(', '),
+    forbiddenKeywordsText: (c.forbidden_keywords || []).join(', '),
+    contextText: JSON.stringify(c.context || {}, null, 2),
+    enabled: c.enabled ?? 1,
+  }
+}
+
+function draftToPayload(draft) {
+  const context = (() => {
+    try {
+      return JSON.parse(draft.contextText || '{}')
+    } catch {
+      throw new Error('context JSON 格式错误')
+    }
+  })()
+  return {
+    case_id: draft.case_id,
+    title: draft.title,
+    chat_type: draft.chat_type || 'group',
+    input_text: draft.input_text,
+    context,
+    expected_action: draft.expected_action || 'any',
+    expected_keywords: splitCsv(draft.expectedKeywordsText),
+    forbidden_keywords: splitCsv(draft.forbiddenKeywordsText),
+    tags: splitCsv(draft.tagsText),
+    enabled: draft.enabled ? 1 : 0,
+  }
+}
+
+function ReplyAttemptCard({ title, attempt }) {
+  if (!attempt) return null
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-3">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="text-xs font-medium text-slate-300">{title}</div>
+        <Badge tone={replyEvalTone(attempt.result)}>{attempt.result || '-'}</Badge>
+      </div>
+      <div className="flex flex-wrap gap-1 mb-2">
+        <Badge tone={attempt.called_reply ? 'emerald' : 'slate'}>reply {attempt.called_reply ? 'yes' : 'no'}</Badge>
+        <Badge tone={attempt.called_no_reply ? 'emerald' : 'slate'}>no_reply {attempt.called_no_reply ? 'yes' : 'no'}</Badge>
+        <Badge tone={attempt.structured_fallback ? 'blue' : 'slate'}>fallback {attempt.structured_fallback ? 'yes' : 'no'}</Badge>
+      </div>
+      <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-900 p-2 text-[11px] text-slate-400">{attempt.raw_output || '-'}</pre>
+    </div>
+  )
+}
+
+function ReplyEvalMetricsTable({ metrics = {} }) {
+  const rows = [
+    ['reply_call_rate', 'reply/no_reply 调用率'],
+    ['valid_action_rate', '有效动作率'],
+    ['expected_action_accuracy', '预期动作准确率'],
+    ['retry_used_rate', '重试使用率'],
+    ['retry_success_rate', '重试成功率'],
+    ['no_tool_call_rate', '无工具调用率'],
+    ['fake_tool_claim_rate', '假工具声明率'],
+    ['empty_output_rate', '空输出率'],
+  ]
+  return (
+    <table className="w-full text-xs">
+      <tbody>
+        {rows.map(([key, label]) => (
+          <tr key={key} className="border-b border-slate-800/60 last:border-0">
+            <td className="py-1.5 pr-3 text-slate-500">{label}</td>
+            <td className="py-1.5 text-right font-mono text-slate-200">{formatRate(metrics[key])}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function ReplyEvalResultsTable({ results = [] }) {
+  if (!results.length) return <div className="py-8 text-center text-xs text-slate-600">暂无逐条结果</div>
+  return (
+    <div className="max-h-96 overflow-auto">
+      <table className="w-full text-xs">
+        <thead className="sticky top-0 bg-slate-900">
+          <tr className="text-left text-slate-500 border-b border-slate-800">
+            <th className="py-2 px-2">case</th>
+            <th className="py-2 px-2">预期</th>
+            <th className="py-2 px-2">实际</th>
+            <th className="py-2 px-2">合约</th>
+            <th className="py-2 px-2">retry</th>
+            <th className="py-2 px-2">结果</th>
+            <th className="py-2 px-2">追溯</th>
+          </tr>
+        </thead>
+        <tbody>
+          {results.map(r => (
+            <tr key={r.id || r.case_id} className="border-b border-slate-800/50 align-top">
+              <td className="py-2 px-2 font-mono text-slate-400 max-w-44 truncate" title={r.case_id}>{r.case_id}</td>
+              <td className="py-2 px-2"><Badge>{r.expected_action || '-'}</Badge></td>
+              <td className="py-2 px-2"><Badge tone={replyEvalTone(r.actual_action)}>{r.actual_action || '-'}</Badge></td>
+              <td className="py-2 px-2">{r.called_reply_or_no_reply ? <Badge tone="emerald">ok</Badge> : <Badge tone="red">miss</Badge>}</td>
+              <td className="py-2 px-2">{r.retry_used ? <Badge tone="amber">used</Badge> : <span className="text-slate-600">-</span>}</td>
+              <td className="py-2 px-2">{r.passed ? <Badge tone="emerald">pass</Badge> : <Badge tone="red">fail</Badge>}</td>
+              <td className="py-2 px-2">
+                {r.agent_run_id ? <NavLink to={`/agent-runs/${r.agent_run_id}`} className="text-blue-300 hover:text-blue-200">AgentRun</NavLink> : <span className="text-slate-600">-</span>}
+                {r.trace_id && <div className="font-mono text-[10px] text-slate-600 truncate max-w-36" title={r.trace_id}>{r.trace_id.slice(0, 16)}</div>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function ReplyEvalPage() {
   const [form, setForm] = useState({
     chat_type: 'group',
@@ -3956,15 +4136,19 @@ function ReplyEvalPage() {
     message: '你在吗',
     variant: 'code_retry',
     enable_reply_contract_retry: true,
-    dry_run: true,
   })
   const [testResult, setTestResult] = useState(null)
   const [cases, setCases] = useState([])
   const [preview, setPreview] = useState([])
+  const [previewSelected, setPreviewSelected] = useState(new Set())
+  const [selectedCases, setSelectedCases] = useState(new Set())
   const [runs, setRuns] = useState([])
   const [runResult, setRunResult] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [newCase, setNewCase] = useState({ case_id: '', title: '', input_text: '', expected_action: 'any', tags: '' })
+  const [evalVariant, setEvalVariant] = useState('code_retry')
+  const [evalLimit, setEvalLimit] = useState(50)
+  const [newCase, setNewCase] = useState(caseToDraft({}))
+  const [editingCase, setEditingCase] = useState(null)
 
   const loadCases = useCallback(() => {
     api.get('/reply-eval/cases').then(r => setCases(r.data.items || [])).catch(() => setCases([]))
@@ -3975,99 +4159,220 @@ function ReplyEvalPage() {
   useEffect(() => { loadCases(); loadRuns() }, [loadCases, loadRuns])
 
   const setField = (key, value) => setForm(v => ({ ...v, [key]: value }))
-  const runDryTest = () => {
+  const runManualTest = (realSend = false) => {
+    if (realSend && !confirm('确认执行真实发送/运行？这不是 dry-run，可能写入真实 session 状态。')) return
     setLoading(true)
-    api.post('/reply-test/run', form)
+    api.post('/reply-test/run', { ...form, dry_run: !realSend })
       .then(r => setTestResult(r.data))
+      .catch(e => alert(e.response?.data?.detail || e.message))
       .finally(() => setLoading(false))
   }
   const createCase = () => {
-    api.post('/reply-eval/cases', {
-      case_id: newCase.case_id,
-      title: newCase.title,
-      chat_type: 'group',
-      input_text: newCase.input_text,
-      expected_action: newCase.expected_action,
-      tags: newCase.tags.split(',').map(x => x.trim()).filter(Boolean),
-    }).then(() => { setNewCase({ case_id: '', title: '', input_text: '', expected_action: 'any', tags: '' }); loadCases() })
+    let payload
+    try { payload = draftToPayload(newCase) } catch (e) { alert(e.message); return }
+    api.post('/reply-eval/cases', payload)
+      .then(() => { setNewCase(caseToDraft({})); loadCases() })
+      .catch(e => alert(e.response?.data?.detail || e.message))
   }
   const generatePreview = () => {
-    api.post('/reply-eval/generate-preview', {}).then(r => setPreview(r.data.items || []))
+    api.post('/reply-eval/generate-preview', {}).then(r => {
+      const items = r.data.items || []
+      setPreview(items)
+      setPreviewSelected(new Set(items.map(x => x.case_id)))
+    })
   }
   const savePreview = () => {
-    api.post('/reply-eval/save-generated', { items: preview }).then(() => { setPreview([]); loadCases() })
+    const items = preview.filter(item => previewSelected.has(item.case_id))
+    if (!items.length) {
+      alert('请先选择要保存的预览用例')
+      return
+    }
+    api.post('/reply-eval/save-generated', { items }).then(() => { setPreview([]); setPreviewSelected(new Set()); loadCases() })
   }
-  const runEval = (variant) => {
+  const runEval = (variant = evalVariant) => {
     setLoading(true)
-    api.post('/reply-eval/run', { variant, limit: 50 })
+    api.post('/reply-eval/run', {
+      variant,
+      limit: Number(evalLimit) || 50,
+      case_ids: Array.from(selectedCases),
+    })
       .then(r => { setRunResult(r.data); loadRuns() })
+      .catch(e => alert(e.response?.data?.detail || e.message))
+      .finally(() => setLoading(false))
+  }
+  const loadRunDetail = (id) => {
+    setLoading(true)
+    api.get(`/reply-eval/runs/${encodeURIComponent(id)}`)
+      .then(r => setRunResult(r.data))
+      .catch(e => alert(e.response?.data?.detail || e.message))
       .finally(() => setLoading(false))
   }
   const delCase = (caseId) => {
+    if (!confirm(`确认删除 ${caseId}?`)) return
     api.delete(`/reply-eval/cases/${encodeURIComponent(caseId)}`).then(loadCases)
+  }
+  const saveCaseEdit = () => {
+    let payload
+    try { payload = draftToPayload(editingCase) } catch (e) { alert(e.message); return }
+    api.put(`/reply-eval/cases/${encodeURIComponent(editingCase.case_id)}`, payload)
+      .then(() => { setEditingCase(null); loadCases() })
+      .catch(e => alert(e.response?.data?.detail || e.message))
+  }
+  const updatePreviewItem = (caseId, patch) => {
+    setPreview(prev => prev.map(item => item.case_id === caseId ? { ...item, ...patch } : item))
+  }
+  const togglePreviewSelected = (caseId, checked) => {
+    setPreviewSelected(prev => {
+      const next = new Set(prev)
+      checked ? next.add(caseId) : next.delete(caseId)
+      return next
+    })
+  }
+  const toggleCaseSelected = (caseId, checked) => {
+    setSelectedCases(prev => {
+      const next = new Set(prev)
+      checked ? next.add(caseId) : next.delete(caseId)
+      return next
+    })
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold mb-1">Reply 测试</h1>
-          <p className="text-sm text-slate-500">手动 dry-run、测试集管理与 reply/no_reply 评估</p>
+          <h1 className="text-xl font-semibold mb-1">Reply 测试</h1>
+          <p className="text-xs text-slate-500">单条合约检查、测试集管理与 reply/no_reply A/B 评估</p>
         </div>
-        <button onClick={() => { loadCases(); loadRuns() }} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">刷新</button>
+        <ActionButton onClick={() => { loadCases(); loadRuns() }}>刷新</ActionButton>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1.1fr)_minmax(480px,0.9fr)] gap-4">
         <Card className="p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">单条 dry-run</h2>
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <select value={form.chat_type} onChange={e => setField('chat_type', e.target.value)} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm">
-              <option value="group">group</option>
-              <option value="private">private</option>
-            </select>
-            <select value={form.variant} onChange={e => setField('variant', e.target.value)} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm">
-              <option value="baseline">baseline</option>
-              <option value="prompt_only">prompt_only</option>
-              <option value="code_retry">code_retry</option>
-            </select>
-            <input value={form.session_id} onChange={e => setField('session_id', e.target.value)} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" placeholder="session_id" />
-            <input value={form.sender_id} onChange={e => setField('sender_id', e.target.value)} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" placeholder="sender_id" />
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h2 className="text-sm font-medium text-slate-300">单条调用测试</h2>
+              <p className="text-[11px] text-slate-600">dry-run 不写真实发送状态；真实发送入口单独确认</p>
+            </div>
+            <Badge tone={form.enable_reply_contract_retry ? 'emerald' : 'slate'}>retry {form.enable_reply_contract_retry ? 'on' : 'off'}</Badge>
           </div>
-          <textarea value={form.message} onChange={e => setField('message', e.target.value)} className="w-full h-24 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm mb-3" />
-          <div className="flex items-center gap-4 mb-3 text-sm text-slate-400">
-            <label className="flex items-center gap-2"><input type="checkbox" checked={form.enable_reply_contract_retry} onChange={e => setField('enable_reply_contract_retry', e.target.checked)} /> retry</label>
-            <label className="flex items-center gap-2"><input type="checkbox" checked={form.dry_run} onChange={e => setField('dry_run', e.target.checked)} /> dry-run</label>
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-2 mb-3">
+            <label className="text-[11px] text-slate-500">chat_type
+              <select value={form.chat_type} onChange={e => setField('chat_type', e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs">
+                <option value="group">group</option>
+                <option value="private">private</option>
+              </select>
+            </label>
+            <label className="text-[11px] text-slate-500">variant
+              <select value={form.variant} onChange={e => setField('variant', e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs">
+                <option value="baseline">baseline</option>
+                <option value="prompt_only">prompt_only</option>
+                <option value="code_retry">code_retry</option>
+              </select>
+            </label>
+            <label className="text-[11px] text-slate-500">session_id
+              <input value={form.session_id} onChange={e => setField('session_id', e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs" />
+            </label>
+            <label className="text-[11px] text-slate-500">sender_id
+              <input value={form.sender_id} onChange={e => setField('sender_id', e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs" />
+            </label>
+            <label className="text-[11px] text-slate-500">sender_name
+              <input value={form.sender_name} onChange={e => setField('sender_name', e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs" />
+            </label>
+            <label className="text-[11px] text-slate-500">character_name
+              <input value={form.character_name || ''} onChange={e => setField('character_name', e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs" />
+            </label>
+            <label className="flex items-center gap-2 text-xs text-slate-400 self-end">
+              <input type="checkbox" checked={form.enable_reply_contract_retry} onChange={e => setField('enable_reply_contract_retry', e.target.checked)} className="accent-emerald-500" />
+              启用合约重试
+            </label>
           </div>
-          <button onClick={runDryTest} disabled={loading} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-sm">运行</button>
+          <label className="block text-[11px] text-slate-500 mb-3">message
+            <textarea value={form.message} onChange={e => setField('message', e.target.value)} className="mt-1 w-full h-24 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs resize-none" />
+          </label>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+            <label className="text-[11px] text-slate-500">recent_context
+              <textarea value={form.recent_context || ''} onChange={e => setField('recent_context', e.target.value)} className="mt-1 w-full h-20 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs resize-none" />
+            </label>
+            <label className="text-[11px] text-slate-500">persona_text
+              <textarea value={form.persona_text || ''} onChange={e => setField('persona_text', e.target.value)} className="mt-1 w-full h-20 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs resize-none" />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <ActionButton tone="emerald" onClick={() => runManualTest(false)} disabled={loading}>运行 dry-run</ActionButton>
+            <ActionButton tone="red" onClick={() => runManualTest(true)} disabled={loading}>真实发送</ActionButton>
+            <span className="text-[11px] text-slate-600">真实发送会使用非 dry-run metadata；执行前会二次确认。</span>
+          </div>
           {testResult && (
             <div className="mt-4 space-y-3">
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
                 <MiniStat label="final" value={testResult.final?.action || '-'} tone={testResult.final?.action === 'reply' ? 'emerald' : 'slate'} />
                 <MiniStat label="retry" value={testResult.metrics?.retry_used ? 'used' : 'no'} tone={testResult.metrics?.retry_used ? 'amber' : 'slate'} />
+                <MiniStat label="contract" value={testResult.metrics?.reply_contract_ok ? 'ok' : 'miss'} tone={testResult.metrics?.reply_contract_ok ? 'emerald' : 'red'} />
                 <MiniStat label="LLM logs" value={(testResult.llm_api_request_logs || []).length} tone="blue" />
+                <MiniStat label="run_id" value={(testResult.run_id || '').slice(0, 12) || '-'} />
               </div>
-              <JsonBlock value={testResult} className="max-h-96" />
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+                <ReplyAttemptCard title="first_attempt" attempt={testResult.first_attempt} />
+                <ReplyAttemptCard title="retry_attempt" attempt={testResult.retry_attempt} />
+              </div>
+              {testResult.final?.content && <JsonBlock value={testResult.final.content} className="max-h-40" />}
+              <details className="rounded-lg border border-slate-800">
+                <summary className="cursor-pointer px-3 py-2 text-xs text-slate-400 hover:bg-slate-800/40">完整结果 JSON</summary>
+                <JsonBlock value={testResult} className="m-2 max-h-96" />
+              </details>
+              {(testResult.llm_api_request_logs || []).length > 0 && <LLMApiRequestLogsBlock logs={testResult.llm_api_request_logs} />}
             </div>
           )}
         </Card>
 
         <Card className="p-4">
-          <h2 className="text-sm font-medium text-slate-300 mb-3">A/B 评估</h2>
-          <div className="flex flex-wrap gap-2 mb-4">
-            {['baseline', 'prompt_only', 'code_retry'].map(v => (
-              <button key={v} onClick={() => runEval(v)} disabled={loading || !cases.length} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-lg text-sm">{v}</button>
-            ))}
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h2 className="text-sm font-medium text-slate-300">A/B 评估</h2>
+              <p className="text-[11px] text-slate-600">选择用例后只跑选中项；未选择时跑全部启用项</p>
+            </div>
+            <Badge tone="blue">{selectedCases.size ? `${selectedCases.size} selected` : 'all enabled'}</Badge>
           </div>
-          {runResult && <JsonBlock value={runResult} className="max-h-96 mb-4" />}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+            <label className="text-[11px] text-slate-500">variant
+              <select value={evalVariant} onChange={e => setEvalVariant(e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs">
+                <option value="baseline">baseline</option>
+                <option value="prompt_only">prompt_only</option>
+                <option value="code_retry">code_retry</option>
+              </select>
+            </label>
+            <label className="text-[11px] text-slate-500">limit
+              <input type="number" min="1" max="200" value={evalLimit} onChange={e => setEvalLimit(e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs" />
+            </label>
+            <div className="self-end flex gap-2 md:col-span-2">
+              <ActionButton tone="emerald" onClick={() => runEval(evalVariant)} disabled={loading || !cases.length}>运行评估</ActionButton>
+              <ActionButton onClick={() => setSelectedCases(new Set())}>清空选择</ActionButton>
+            </div>
+          </div>
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[11px] text-amber-200 mb-3">
+            prompt_only 当前作为独立 variant 记录；是否切换实验 Prompt 需以后端 PromptManager 配置为准。
+          </div>
+          {runResult && (
+            <div className="grid grid-cols-1 xl:grid-cols-[220px_1fr] gap-3 mb-4">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Badge tone={replyEvalTone(runResult.variant)}>{runResult.variant}</Badge>
+                  <Badge tone={runResult.failed ? 'red' : 'emerald'}>{runResult.passed || 0}/{runResult.total || 0}</Badge>
+                </div>
+                <ReplyEvalMetricsTable metrics={runResult.metrics || {}} />
+              </div>
+              <ReplyEvalResultsTable results={runResult.results || []} />
+            </div>
+          )}
           <h3 className="text-xs text-slate-500 mb-2">最近评估</h3>
-          <div className="space-y-2 max-h-64 overflow-auto">
+          <div className="space-y-1 max-h-64 overflow-auto">
             {runs.map(r => (
-              <div key={r.id} className="flex items-center gap-2 rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-sm">
+              <button key={r.id} onClick={() => loadRunDetail(r.id)} className="w-full flex items-center gap-2 rounded-lg bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-left hover:bg-slate-800/60 transition-colors">
                 <Badge tone="blue">{r.variant}</Badge>
                 <span className="text-slate-300">total {r.total}</span>
-                <span className="text-emerald-300">pass {r.metrics?.expected_action_accuracy ?? 0}</span>
+                <span className="text-emerald-300">acc {formatRate(r.metrics?.expected_action_accuracy)}</span>
                 <span className="text-slate-500 text-xs ml-auto">{r.created_at}</span>
-              </div>
+              </button>
             ))}
           </div>
         </Card>
@@ -4077,31 +4382,91 @@ function ReplyEvalPage() {
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-medium text-slate-300">测试集</h2>
           <div className="flex gap-2">
-            <button onClick={generatePreview} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">生成预览</button>
-            {preview.length > 0 && <button onClick={savePreview} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm">保存预览</button>}
+            <ActionButton onClick={generatePreview}>生成预览</ActionButton>
+            {preview.length > 0 && <ActionButton tone="emerald" onClick={savePreview}>保存选中 {previewSelected.size}</ActionButton>}
           </div>
         </div>
-        {preview.length > 0 && <JsonBlock value={preview.slice(0, 8)} className="max-h-72 mb-4" />}
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-2 mb-4">
-          <input value={newCase.case_id} onChange={e => setNewCase(v => ({ ...v, case_id: e.target.value }))} placeholder="case_id" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" />
-          <input value={newCase.title} onChange={e => setNewCase(v => ({ ...v, title: e.target.value }))} placeholder="标题" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" />
-          <input value={newCase.input_text} onChange={e => setNewCase(v => ({ ...v, input_text: e.target.value }))} placeholder="输入" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm" />
-          <select value={newCase.expected_action} onChange={e => setNewCase(v => ({ ...v, expected_action: e.target.value }))} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm">
+        {preview.length > 0 && (
+          <div className="mb-4 rounded-lg border border-slate-800 overflow-hidden">
+            <div className="flex items-center justify-between bg-slate-950/70 px-3 py-2 text-xs text-slate-400">
+              <span>生成预览 {preview.length} 条</span>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={preview.length > 0 && previewSelected.size === preview.length} onChange={e => setPreviewSelected(e.target.checked ? new Set(preview.map(x => x.case_id)) : new Set())} className="accent-emerald-500" />
+                全选
+              </label>
+            </div>
+            <div className="max-h-96 overflow-auto">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-slate-900 text-slate-500">
+                  <tr className="border-b border-slate-800"><th className="py-2 px-2 w-8"></th><th className="py-2 px-2">标题</th><th className="py-2 px-2">输入</th><th className="py-2 px-2">预期</th><th className="py-2 px-2">tags</th></tr>
+                </thead>
+                <tbody>
+                  {preview.map(item => (
+                    <tr key={item.case_id} className="border-b border-slate-800/50 align-top">
+                      <td className="py-2 px-2"><input type="checkbox" checked={previewSelected.has(item.case_id)} onChange={e => togglePreviewSelected(item.case_id, e.target.checked)} className="accent-emerald-500" /></td>
+                      <td className="py-2 px-2"><input value={item.title || ''} onChange={e => updatePreviewItem(item.case_id, { title: e.target.value })} className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs" /></td>
+                      <td className="py-2 px-2"><textarea value={item.input_text || ''} onChange={e => updatePreviewItem(item.case_id, { input_text: e.target.value })} className="w-full h-12 bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs resize-none" /></td>
+                      <td className="py-2 px-2">
+                        <select value={item.expected_action || 'any'} onChange={e => updatePreviewItem(item.case_id, { expected_action: e.target.value })} className="bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs">
+                          <option value="any">any</option><option value="reply">reply</option><option value="no_reply">no_reply</option>
+                        </select>
+                      </td>
+                      <td className="py-2 px-2"><input value={(item.tags || []).join(', ')} onChange={e => updatePreviewItem(item.case_id, { tags: splitCsv(e.target.value) })} className="w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-xs" /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-2 mb-4">
+          <input value={newCase.case_id} onChange={e => setNewCase(v => ({ ...v, case_id: e.target.value }))} placeholder="case_id" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs" />
+          <input value={newCase.title} onChange={e => setNewCase(v => ({ ...v, title: e.target.value }))} placeholder="标题" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs" />
+          <input value={newCase.input_text} onChange={e => setNewCase(v => ({ ...v, input_text: e.target.value }))} placeholder="输入" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs md:col-span-2" />
+          <select value={newCase.expected_action} onChange={e => setNewCase(v => ({ ...v, expected_action: e.target.value }))} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs">
             <option value="any">any</option><option value="reply">reply</option><option value="no_reply">no_reply</option>
           </select>
-          <button onClick={createCase} disabled={!newCase.input_text} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 rounded-lg text-sm">新增</button>
+          <ActionButton tone="emerald" onClick={createCase} disabled={!newCase.input_text}>新增</ActionButton>
         </div>
+        {editingCase && (
+          <div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-medium text-blue-200">编辑 {editingCase.case_id}</h3>
+              <ActionButton onClick={() => setEditingCase(null)}>关闭</ActionButton>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
+              <input value={editingCase.title} onChange={e => setEditingCase(v => ({ ...v, title: e.target.value }))} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs" />
+              <select value={editingCase.chat_type} onChange={e => setEditingCase(v => ({ ...v, chat_type: e.target.value }))} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs">
+                <option value="group">group</option><option value="private">private</option>
+              </select>
+              <select value={editingCase.expected_action} onChange={e => setEditingCase(v => ({ ...v, expected_action: e.target.value }))} className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs">
+                <option value="any">any</option><option value="reply">reply</option><option value="no_reply">no_reply</option>
+              </select>
+              <input value={editingCase.tagsText} onChange={e => setEditingCase(v => ({ ...v, tagsText: e.target.value }))} placeholder="tags" className="bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs" />
+              <label className="flex items-center gap-2 text-xs text-slate-400"><input type="checkbox" checked={Boolean(editingCase.enabled)} onChange={e => setEditingCase(v => ({ ...v, enabled: e.target.checked ? 1 : 0 }))} className="accent-emerald-500" /> enabled</label>
+              <ActionButton tone="emerald" onClick={saveCaseEdit}>保存</ActionButton>
+              <textarea value={editingCase.input_text} onChange={e => setEditingCase(v => ({ ...v, input_text: e.target.value }))} className="md:col-span-3 h-20 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs resize-none" />
+              <textarea value={editingCase.contextText} onChange={e => setEditingCase(v => ({ ...v, contextText: e.target.value }))} className="md:col-span-3 h-20 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono resize-none" />
+            </div>
+          </div>
+        )}
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-3">case_id</th><th className="py-2 px-3">标题</th><th className="py-2 px-3">输入</th><th className="py-2 px-3">预期</th><th className="py-2 px-3">tags</th><th className="py-2 px-3"></th></tr></thead>
+          <table className="w-full text-xs">
+            <thead><tr className="text-left text-slate-500 border-b border-slate-800"><th className="py-2 px-3 w-8"><input type="checkbox" checked={cases.length > 0 && selectedCases.size === cases.length} onChange={e => setSelectedCases(e.target.checked ? new Set(cases.map(c => c.case_id)) : new Set())} className="accent-emerald-500" /></th><th className="py-2 px-3">case_id</th><th className="py-2 px-3">标题</th><th className="py-2 px-3">输入</th><th className="py-2 px-3">预期</th><th className="py-2 px-3">tags</th><th className="py-2 px-3">操作</th></tr></thead>
             <tbody>{cases.map(c => (
               <tr key={c.case_id} className="border-b border-slate-800/50">
+                <td className="py-2 px-3"><input type="checkbox" checked={selectedCases.has(c.case_id)} onChange={e => toggleCaseSelected(c.case_id, e.target.checked)} className="accent-emerald-500" /></td>
                 <td className="py-2 px-3 text-xs text-slate-500">{c.case_id}</td>
                 <td className="py-2 px-3">{c.title}</td>
                 <td className="py-2 px-3 max-w-md truncate">{c.input_text}</td>
-                <td className="py-2 px-3"><Badge>{c.expected_action}</Badge></td>
+                <td className="py-2 px-3"><Badge tone={replyEvalTone(c.expected_action)}>{c.expected_action}</Badge></td>
                 <td className="py-2 px-3 text-xs text-slate-500">{(c.tags || []).join(', ')}</td>
-                <td className="py-2 px-3 text-right"><button onClick={() => delCase(c.case_id)} className="text-xs text-red-300 hover:text-red-200">删除</button></td>
+                <td className="py-2 px-3 text-right">
+                  <div className="flex justify-end gap-2">
+                    <button onClick={() => setEditingCase(caseToDraft(c))} className="text-xs text-blue-300 hover:text-blue-200">编辑</button>
+                    <button onClick={() => delCase(c.case_id)} className="text-xs text-red-300 hover:text-red-200">删除</button>
+                  </div>
+                </td>
               </tr>
             ))}</tbody>
           </table>

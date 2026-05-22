@@ -94,6 +94,28 @@ def test_reply_test_run_returns_attempts_final_and_llm_logs(client, auth_header,
     assert json.loads(data["llm_api_request_logs"][0]["response_json"])["choices"][0]["message"]["content"] == "在，怎么了"
 
 
+def test_group_agent_result_uses_popped_no_reply_meta():
+    from api.routes import _derive_group_agent_result
+
+    class FakeBridge:
+        def is_no_reply_session(self, _session_id):
+            return False
+
+        def is_fake_tool_call_claim(self, _session_id):
+            return False
+
+        def is_no_tool_call(self, _session_id):
+            return False
+
+    result = _derive_group_agent_result(
+        FakeBridge(),
+        "group_1",
+        {"_no_reply": True, "_agent_result": "no_reply_tool"},
+    )
+
+    assert result == "no_reply_tool"
+
+
 def test_reply_eval_case_crud_preview_and_run(client, auth_header, monkeypatch):
     _install_fake_reply_bridge(monkeypatch, reply_text="可以")
 
@@ -146,6 +168,8 @@ def test_reply_eval_case_crud_preview_and_run(client, auth_header, monkeypatch):
     assert run_data["variant"] == "code_retry"
     assert run_data["total"] == 1
     assert run_data["passed"] == 1
+    assert run_data["results"][0]["agent_run_id"]
+    assert run_data["results"][0]["trace_id"]
     assert run_data["metrics"]["expected_action_accuracy"] == 1.0
     assert run_data["metrics"]["retry_success_rate"] == 1.0
 

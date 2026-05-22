@@ -304,8 +304,9 @@ async def lifespan(app: FastAPI):
     learner_thread = None
     learner_stop_event = None
 
+    testing = os.environ.get("NANOBOT_TESTING") == "1"
     from config import DAILY_DIGEST_ENABLED
-    if DAILY_DIGEST_ENABLED:
+    if DAILY_DIGEST_ENABLED and not testing:
         from core.daily_digest import daily_digest_scheduler
         digest_stop_event = threading.Event()
         digest_thread = threading.Thread(
@@ -317,56 +318,66 @@ async def lifespan(app: FastAPI):
         digest_thread.start()
         logger.info("Daily digest scheduler initialized.")
 
-    # Scheduled task runner (push notifications to QQ)
-    from core.daily_digest import scheduled_task_runner
-    task_stop_event = threading.Event()
-    task_thread = threading.Thread(
-        target=scheduled_task_runner,
-        args=(task_stop_event,),
-        daemon=True,
-        name="scheduled-task-runner",
-    )
-    task_thread.start()
-    logger.info("Scheduled task runner initialized.")
+    task_stop_event = None
+    task_thread = None
+    eval_sample_stop = None
+    eval_sample_thread = None
 
-    # Pre-load sentinel model at startup (not lazily on first classify)
-    try:
-        from clients.classifier_client import Guardrail
-        Guardrail._load_sentinel()
-    except Exception as e:
-        logger.warning(f"Sentinel pre-load failed (will retry on first classify): {e}")
+    if not testing:
+        # Scheduled task runner (push notifications to QQ)
+        from core.daily_digest import scheduled_task_runner
+        task_stop_event = threading.Event()
+        task_thread = threading.Thread(
+            target=scheduled_task_runner,
+            args=(task_stop_event,),
+            daemon=True,
+            name="scheduled-task-runner",
+        )
+        task_thread.start()
+        logger.info("Scheduled task runner initialized.")
 
-    # ── 群聊表达/黑话自动学习 ──
-    from core.expression_learner import expression_learner_scheduler
-    learner_stop_event = threading.Event()
-    learner_thread = threading.Thread(
-        target=expression_learner_scheduler,
-        args=(learner_stop_event,),
-        daemon=True,
-        name="expression-learner",
-    )
-    learner_thread.start()
+        # Pre-load sentinel model at startup (not lazily on first classify)
+        try:
+            from clients.classifier_client import Guardrail
+            Guardrail._load_sentinel()
+        except Exception as e:
+            logger.warning(f"Sentinel pre-load failed (will retry on first classify): {e}")
 
-    # ── Eval 自动采样 ──
-    from core.eval_sampling.scheduler import eval_sampling_scheduler
-    eval_sample_stop = threading.Event()
-    eval_sample_thread = threading.Thread(
-        target=eval_sampling_scheduler,
-        args=(eval_sample_stop,),
-        daemon=True,
-        name="eval-sampling-scheduler",
-    )
-    eval_sample_thread.start()
-    logger.info("Eval sampling scheduler initialized.")
+        # ── 群聊表达/黑话自动学习 ──
+        from core.expression_learner import expression_learner_scheduler
+        learner_stop_event = threading.Event()
+        learner_thread = threading.Thread(
+            target=expression_learner_scheduler,
+            args=(learner_stop_event,),
+            daemon=True,
+            name="expression-learner",
+        )
+        learner_thread.start()
 
-    # ── 启动网络连通性检测 ──
-    _startup_network_check(logger)
+        # ── Eval 自动采样 ──
+        from core.eval_sampling.scheduler import eval_sampling_scheduler
+        eval_sample_stop = threading.Event()
+        eval_sample_thread = threading.Thread(
+            target=eval_sampling_scheduler,
+            args=(eval_sample_stop,),
+            daemon=True,
+            name="eval-sampling-scheduler",
+        )
+        eval_sample_thread.start()
+        logger.info("Eval sampling scheduler initialized.")
 
-    # Initialize KT Framework bridge (replaces old manual controller)
-    from nanobot_kt.bridge import init_bridge, shutdown_bridge
-    bridge = await init_bridge()
-    app.state.bridge = bridge
-    logger.info("KT Agent initialized via bridge.")
+        # ── 启动网络连通性检测 ──
+        _startup_network_check(logger)
+
+        # Initialize KT Framework bridge (replaces old manual controller)
+        from nanobot_kt.bridge import init_bridge
+        bridge = await init_bridge()
+        app.state.bridge = bridge
+        logger.info("KT Agent initialized via bridge.")
+    else:
+        logger.info("NANOBOT_TESTING=1: skipped schedulers, network check and KT bridge init.")
+        app.state.bridge = None
+
     # Also init legacy controller for endpoints that still use SQLiteMemory
     from api.routes import init_legacy_memory
     init_legacy_memory()
@@ -380,9 +391,17 @@ async def lifespan(app: FastAPI):
         learner_stop_event.set()
     if learner_thread is not None:
         learner_thread.join(timeout=5)
-    eval_sample_stop.set()
-    eval_sample_thread.join(timeout=5)
-    await shutdown_bridge()
+    if task_stop_event is not None:
+        task_stop_event.set()
+    if task_thread is not None:
+        task_thread.join(timeout=5)
+    if eval_sample_stop is not None:
+        eval_sample_stop.set()
+    if eval_sample_thread is not None:
+        eval_sample_thread.join(timeout=5)
+    if not testing:
+        from nanobot_kt.bridge import shutdown_bridge
+        await shutdown_bridge()
     app.state.bridge = None
 
 

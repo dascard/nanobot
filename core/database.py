@@ -575,6 +575,8 @@ class ReplyEvalResult(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(Integer, index=True)
+    agent_run_id = Column(String, index=True, default="")
+    trace_id = Column(String, index=True, default="")
     case_id = Column(String, index=True)
     variant = Column(String, default="")
     expected_action = Column(String, default="")
@@ -1048,6 +1050,28 @@ def init_db():
                 conn.commit()
     except Exception as e:
         print(f"  ⚠ reply_contract_check_logs migration skipped: {e}")
+
+    # ── reply_eval_results 热迁移：补 AgentRun/trace 追溯字段 ──
+    try:
+        inspector = inspect(engine)
+        if "reply_eval_results" in inspector.get_table_names():
+            rer_columns = [col["name"] for col in inspector.get_columns("reply_eval_results")]
+            rer_add = {
+                "agent_run_id": "TEXT DEFAULT ''",
+                "trace_id": "TEXT DEFAULT ''",
+            }
+            for col_name, col_type in rer_add.items():
+                if col_name not in rer_columns:
+                    print(f"  → Migrating: Adding missing column [{col_name}] to reply_eval_results...")
+                    with engine.connect() as conn:
+                        conn.execute(text(f"ALTER TABLE reply_eval_results ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+            with engine.connect() as conn:
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reply_eval_results_agent_run_id ON reply_eval_results(agent_run_id)"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reply_eval_results_trace_id ON reply_eval_results(trace_id)"))
+                conn.commit()
+    except Exception as e:
+        print(f"  ⚠ reply_eval_results migration skipped: {e}")
 
 def get_db():
     db = SessionLocal()

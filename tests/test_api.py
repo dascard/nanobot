@@ -3,6 +3,33 @@ from core.database import ChatLog
 from fastapi import BackgroundTasks
 import json
 
+
+def _fast_private_reply(monkeypatch):
+    """让私聊 /chat 测试只验证路由逻辑，不等待真实私聊 gate/缓冲窗口。"""
+    from core.private_timing import PrivateDecision
+
+    class FastPrivateGate:
+        async def classify(self, *args, **kwargs):
+            return PrivateDecision(
+                "reply_now",
+                "unit_test",
+                1.0,
+                "unit_test",
+                complexity=5,
+                effort="short",
+                tool_policy="limited",
+            )
+
+    class FastGuardrail:
+        def classify(self, *args, **kwargs):
+            return {"status": "reply", "complexity": 5}
+
+    monkeypatch.setattr("core.private_timing.get_private_gate", lambda: FastPrivateGate())
+    monkeypatch.setattr("api.routes.get_guardrail", lambda: FastGuardrail())
+    monkeypatch.setattr("api.routes.PRIVATE_BUFFER_WINDOW_SECONDS", 0.0)
+    monkeypatch.setattr("api.routes.PRIVATE_BUFFER_WINDOW_WITH_FILES_SECONDS", 0.0)
+
+
 def test_health_check(client):
     response = client.get("/api/v1/health")
     assert response.status_code == 200
@@ -72,10 +99,12 @@ def test_proxy_chat(client, db_session):
         assert kwargs["metadata"]["chat_type"] == "group"
 
 
-def test_proxy_chat_passes_history_header_to_bridge(client, db_session):
+def test_proxy_chat_passes_history_header_to_bridge(client, db_session, monkeypatch):
     from unittest.mock import patch
     from unittest.mock import AsyncMock
     from core.database import ConversationTurn
+
+    _fast_private_reply(monkeypatch)
 
     db_session.add_all(
         [
@@ -144,6 +173,8 @@ def test_superuser_bypasses_injection_guardrail(client, db_session, monkeypatch)
     from unittest.mock import AsyncMock
     from unittest.mock import patch
 
+    _fast_private_reply(monkeypatch)
+
     class DummyGuardrail:
         def __init__(self):
             self.calls = []
@@ -186,6 +217,8 @@ def test_superuser_image_only_message_bypasses_injection_guardrail(client, monke
     from unittest.mock import AsyncMock
     from unittest.mock import patch
 
+    _fast_private_reply(monkeypatch)
+
     class DummyGuardrail:
         def __init__(self):
             self.calls = []
@@ -227,6 +260,8 @@ def test_image_only_message_uses_multimodal_prompt_placeholder(client, db_sessio
     from unittest.mock import patch
     from core.database import ConversationTurn
 
+    _fast_private_reply(monkeypatch)
+
     class DummyGuardrail:
         def classify(self, message, allow_injection_passthrough=False):
             return {"status": "reply", "complexity": 3}
@@ -234,7 +269,6 @@ def test_image_only_message_uses_multimodal_prompt_placeholder(client, db_sessio
     mock_bridge = AsyncMock()
     mock_bridge.handle_message = AsyncMock(return_value="图片回复")
 
-    monkeypatch.setattr("api.routes.PRIVATE_BUFFER_WINDOW_SECONDS", 0.0)
     monkeypatch.setattr("api.routes.get_guardrail", lambda: DummyGuardrail())
 
     with patch("api.routes.get_bridge", return_value=mock_bridge):
@@ -815,6 +849,23 @@ def test_deprecated_log_ambient_still_works(client, db_session):
 
 class TestGroupMessageStructured:
     """任务1A: 结构化 segments/mentions/reply_to/directed 测试"""
+
+    @pytest.fixture(autouse=True)
+    def _stub_group_runtime(self, monkeypatch):
+        """这些用例只验证入站结构化归档，避免误入真实 TimingGate/bridge。"""
+
+        class FakeGroupRuntime:
+            async def process_message(self, *args, **kwargs):
+                return {
+                    "action": "no_reply",
+                    "reason": "unit_test_structured_message",
+                    "generation": 0,
+                }
+
+            def note_bot_replied(self, *args, **kwargs):
+                raise AssertionError("structured message meta tests must not call bridge reply path")
+
+        monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FakeGroupRuntime())
 
     def test_new_payload_fields_accepted(self, client, db_session):
         """segments/raw_message/self_id/bot_id等新字段被接受"""

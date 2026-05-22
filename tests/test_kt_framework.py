@@ -1552,6 +1552,49 @@ class TestNoteBotRepliedBridge:
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
+    def test_group_dry_run_skips_note(self, mock_note, MockAgent, mock_load):
+        from nanobot_kt.bridge import NanobotBridge
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_conv = MagicMock()
+        mock_conv.get_messages.return_value = [
+            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "dry-run 回复"}}'},
+        ]
+        mock_conv.find_last_user_index.return_value = -1
+        mock_controller = MagicMock()
+        mock_controller.conversation = mock_conv
+        mock_controller.llm = MagicMock(config=MagicMock(model="test-model"))
+        mock_controller.max_attempts = 1
+        mock_agent.controller = mock_controller
+
+        async def fake_process(_event):
+            bridge._output._buffer.append("dry-run 回复")
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "你好", user_id="u1", session_id="group_123",
+                metadata={"is_group": True, "dry_run": True},
+            )
+
+        result = asyncio.run(_run())
+        assert result == "dry-run 回复"
+        mock_note.assert_not_called()
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    @patch("core.timing_runtime.GroupRuntime.note_bot_replied")
     def test_empty_response_skips_note(self, mock_note, MockAgent, mock_load):
         from nanobot_kt.bridge import NanobotBridge
 
