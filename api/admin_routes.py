@@ -18,7 +18,7 @@ from core.database import (
     get_db,
     StickerMemory, ChatStreamConfig, UserBlockRule, ContentBlockRule,
     SystemSetting, AdminAuditLog,
-    ChatLog, User,
+    ChatLog, ConversationTurn, User,
     AgentRun, ToolCall, PromptRenderLog,
 )
 from core.prompts import PromptRenderError, get_prompt_manager
@@ -3902,36 +3902,76 @@ def list_tool_targets(scope_type: str = "group", search: str = "", limit: int = 
         haystack = f"{raw_id} {name} {label}".lower()
         if search_text and search_text not in haystack:
             return
+        clean_name = str(name or "").strip()
         old = candidates.get(raw_id)
-        if old and old.get("recent_at"):
+        if old:
+            sources = set(old.get("_sources") or [])
+            if source:
+                sources.add(source)
+            old["_sources"] = sorted(sources)
+            old["source"] = "+".join(old["_sources"])
+            if clean_name and not old.get("name"):
+                old["name"] = clean_name
+                old["label"] = _tool_target_label(
+                    clean_name,
+                    raw_id,
+                    f"群聊 {raw_id}" if scope == "group" else f"用户 {raw_id}",
+                )
+            if recent_at and (not old.get("_recent_at") or recent_at > old["_recent_at"]):
+                old["_recent_at"] = recent_at
+                old["recent_at"] = _iso(recent_at)
             return
         candidates[raw_id] = {
             "id": raw_id,
             "label": label,
-            "name": str(name or "").strip(),
+            "name": clean_name,
             "scope_type": scope,
             "source": source,
             "recent_at": _iso(recent_at),
+            "_recent_at": recent_at,
+            "_sources": [source] if source else [],
         }
 
-    for row in db.query(ChatLog).order_by(ChatLog.id.desc()).limit(1000).all():
-        if scope == "group":
-            sid = str(row.session_id or "")
-            if sid.startswith("group_"):
-                add_candidate(sid, row.session_name or "", "chat_logs", row.created_at)
-        else:
+    if scope == "group":
+        for user in db.query(User).filter(User.id.like("group_%")).all():
+            add_candidate(user.id, user.name or "", "users", None)
+        for cfg in db.query(ChatStreamConfig).all():
+            add_candidate(cfg.chat_stream_id, "", "chat_stream_config", None)
+        for sid, info in _runtime_snapshot().items():
+            add_candidate(sid, str(info.get("session_name") or ""), "runtime", None)
+        for row in db.query(ChatLog).filter(
+            ChatLog.session_id.like("group_%")
+        ).order_by(ChatLog.id.desc()).limit(5000).all():
+            add_candidate(row.session_id or "", row.session_name or "", "chat_logs", row.created_at)
+    else:
+        for user in db.query(User).all():
+            uid = str(user.id or "").strip()
+            if uid and not uid.startswith("group_"):
+                add_candidate(uid, user.name or "", "users", None)
+        for row in db.query(ChatLog).filter(
+            ~ChatLog.session_id.like("group_%")
+        ).order_by(ChatLog.id.desc()).limit(5000).all():
             uid = str(row.user_id or "").strip()
-            if uid and not uid.startswith("group_"):
-                add_candidate(uid, row.sender_name or "", "chat_logs", row.created_at)
+            sid = str(row.session_id or "").strip()
+            if not uid or uid.startswith("group_"):
+                continue
+            if sid and not (sid == uid or sid.startswith("private_")):
+                continue
+            add_candidate(uid, row.sender_name or "", "chat_logs", row.created_at)
+        for row in db.query(ConversationTurn).filter(
+            ~ConversationTurn.session_id.like("group_%")
+        ).order_by(ConversationTurn.id.desc()).limit(5000).all():
+            uid = str(row.user_id or "").strip()
+            sid = str(row.session_id or "").strip()
+            if not uid or uid.startswith("group_"):
+                continue
+            if sid and not (sid == uid or sid.startswith("private_")):
+                continue
+            add_candidate(uid, "", "conversation_turns", row.created_at)
 
-    for user in db.query(User).all():
-        uid = str(user.id or "").strip()
-        if scope == "group":
-            if uid.startswith("group_"):
-                add_candidate(uid, user.name or "", "users", None)
-        else:
-            if uid and not uid.startswith("group_"):
-                add_candidate(uid, user.name or "", "users", None)
+    for item in candidates.values():
+        item.pop("_recent_at", None)
+        item.pop("_sources", None)
 
     items = sorted(
         candidates.values(),

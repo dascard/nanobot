@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, ChatLog, ChatStreamConfig, StickerMemory, User, get_db
+from core.database import Base, ChatLog, ChatStreamConfig, ConversationTurn, StickerMemory, User, get_db
 from server import app
 
 
@@ -653,10 +653,15 @@ class TestToolAdmin:
             db.add(User(id="local_test", name="本地测试"))
             db.add(User(id="private_0000000000", name="临时私聊 session"))
             db.add(User(id="admin", name="管理测试"))
+            db.add(ChatStreamConfig(chat_stream_id="qq:4004:group"))
             db.add(ChatLog(
                 user_id="30001", session_id="group_3003",
                 role="ambient", content="hello", sender_name="A",
                 session_name="日志群", created_at=now,
+            ))
+            db.add(ConversationTurn(
+                user_id="8888", session_id="private_8888",
+                role="user", content="hi", created_at=now,
             ))
             db.add(ChatLog(
                 user_id="test-user", session_id="private_test-user",
@@ -671,7 +676,7 @@ class TestToolAdmin:
             headers=auth_header,
         ))
         group_ids = {item["id"] for item in groups["items"]}
-        assert {"2002", "3003"} <= group_ids
+        assert {"2002", "3003", "4004"} <= group_ids
         assert "test" not in group_ids
         assert all(not item["id"].startswith("group_") for item in groups["items"])
 
@@ -682,6 +687,15 @@ class TestToolAdmin:
         ))
         assert [item["id"] for item in users["items"]] == ["0000000000"]
         assert users["items"][0]["label"] == "雀 (0000000000)"
+
+        all_users = _ok(client.get(
+            "/api/v1/admin/tools/targets",
+            params={"scope_type": "user"},
+            headers=auth_header,
+        ))
+        user_ids = {item["id"] for item in all_users["items"]}
+        assert "8888" in user_ids
+        assert "30001" not in user_ids
 
 
 class TestModelRoutes:
