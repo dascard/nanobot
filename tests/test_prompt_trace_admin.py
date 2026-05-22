@@ -217,6 +217,12 @@ optional_vars:
     assert len(effective_json["prompt_sha256"]) == 64
     assert "LEGACY_RUNTIME_MARKER" in effective_json["request_json"]["messages"][0]["content"]
     assert "更新 EFFECTIVE_PROMPT_MARKER" in json.dumps(effective_json["request_json"], ensure_ascii=False)
+    tool_schemas = effective_json["tool_schemas"]
+    tool_schema_by_name = {item["function"]["name"]: item["function"] for item in tool_schemas}
+    assert "group_analysis" in tool_schema_by_name
+    assert "python_sandbox" in tool_schema_by_name
+    assert "简单聊天记录查询" in tool_schema_by_name["python_sandbox"]["description"]
+    assert effective_json["request_json"]["tools"] == tool_schemas
 
     run = RunTracer.start_run(
         trace_id="trace-admin",

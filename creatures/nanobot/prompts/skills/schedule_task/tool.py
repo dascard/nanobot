@@ -13,6 +13,8 @@ logger = logging.getLogger("nanobot.tool.schedule_task")
 class ScheduleTaskTool(BaseTool):
     """Manage timed push notification tasks for QQ."""
 
+    needs_context = True
+
     @property
     def tool_name(self) -> str:
         return "schedule_task"
@@ -23,6 +25,8 @@ class ScheduleTaskTool(BaseTool):
             "管理定时推送任务。支持创建、查看、修改、启停、立即执行和删除。"
             "用户说'每天X点推送Y'时创建，'看看定时任务'时列出，"
             "'停掉XX任务'时禁用，'现在执行XX任务'时立即运行。"
+            "cron 按 Asia/Shanghai 解释，格式为'分 时 日 月 周'。"
+            "创建任务时如果用户没有明确目标会话，可使用当前 runtime_context 对应的私聊或群聊。"
         )
 
     @property
@@ -40,10 +44,23 @@ class ScheduleTaskTool(BaseTool):
                 },
                 "task_id": {"type": "integer", "description": "任务ID（update/toggle/delete 必填）"},
                 "name": {"type": "string", "description": "任务名（create/update）"},
-                "cron_expr": {"type": "string", "description": "cron 表达式（create/update）"},
-                "target_type": {"type": "string", "description": "推送类型: private 或 group"},
-                "target_id": {"type": "string", "description": "QQ号 或 群号"},
-                "prompt_template": {"type": "string", "description": "LLM 生成内容的提示模板"},
+                "cron_expr": {
+                    "type": "string",
+                    "description": "cron 表达式（create/update），Asia/Shanghai 时区，格式'分 时 日 月 周'，如每天9点为 0 9 * * *",
+                },
+                "target_type": {
+                    "type": "string",
+                    "description": "推送类型: private 或 group；创建时留空则尝试使用当前会话类型",
+                    "enum": ["private", "group"],
+                },
+                "target_id": {
+                    "type": "string",
+                    "description": "QQ号或群号；创建时留空则尝试使用当前 runtime_context 的 user_id/group_id",
+                },
+                "prompt_template": {
+                    "type": "string",
+                    "description": "LLM 生成推送内容的提示模板，不是直接发送的固定文本",
+                },
             },
             "required": ["action"],
         }
@@ -132,8 +149,25 @@ class ScheduleTaskTool(BaseTool):
                 # create
                 name = str(args.get("name", "")).strip()
                 cron = str(args.get("cron_expr", "")).strip()
-                ttype = str(args.get("target_type", "private")).strip()
+                metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
+                context = kwargs.get("context")
+                session = getattr(context, "session", None) if context is not None else None
+                session_extra = getattr(session, "extra", {}) if session is not None else {}
+                runtime_meta = {}
+                if isinstance(session_extra, dict):
+                    runtime_meta = session_extra.get("nanobot_runtime_context") or {}
+                if isinstance(runtime_meta, dict):
+                    metadata = {**runtime_meta, **metadata}
+                meta_is_group = bool(metadata.get("is_group") or metadata.get("chat_type") == "group")
+                default_ttype = "group" if meta_is_group else "private"
+                default_tid = str(
+                    metadata.get("group_id") if meta_is_group else metadata.get("user_id")
+                    or ""
+                ).strip()
+                ttype = str(args.get("target_type") or default_ttype).strip()
                 tid = str(args.get("target_id", "")).strip()
+                if not tid:
+                    tid = default_tid
                 prompt = str(args.get("prompt_template", "")).strip()
                 if not all([name, cron, tid, prompt]):
                     return ToolResult(error="create 需要 name, cron_expr, target_id, prompt_template")

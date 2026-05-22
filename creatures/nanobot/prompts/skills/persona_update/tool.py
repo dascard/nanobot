@@ -24,8 +24,8 @@ class PersonaUpdateTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "更新用户画像。根据最近的对话记录重新分析用户行为偏好并更新画像 JSON。"
-            "当用户说 '更新我的画像' 'update my persona' 或对话中出现值得记录的新信息时使用。"
+            "按用户明确要求更新画像。仅当用户直接说“更新我的画像”“记住这点”“纠正/删除我的偏好”等画像维护请求时使用。"
+            "普通聊天里出现的新信息不要主动调用本工具，后台画像进化链路会异步处理；也不要用它查询聊天记录。"
         )
 
     @property
@@ -42,7 +42,7 @@ class PersonaUpdateTool(BaseTool):
                 },
                 "instructions": {
                     "type": "string",
-                    "description": "可选的更新指引。留空则全面更新",
+                    "description": "可选的画像维护指引，例如要记住、纠正或删除的具体偏好；留空则按最近日志全面更新",
                 },
             },
             "required": ["user_id"],

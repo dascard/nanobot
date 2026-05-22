@@ -1737,6 +1737,7 @@ def preview_effective_prompt(
     from core.database import Persona
     from core.identity import build_identity_vars
     from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
+    from core.tool_schema_preview import build_effective_tool_schemas
     from nanobot_kt.bridge import NanobotBridge, _load_prompt_fragment
 
     is_group = body.chat_type == "group"
@@ -1820,6 +1821,7 @@ def preview_effective_prompt(
         db=db,
     )
     runtime_tool_prompt = build_runtime_tool_prompt(enabled, disabled, body.chat_type)
+    tool_schemas = build_effective_tool_schemas(enabled)
     messages.append({"role": "system", "content": runtime_tool_prompt})
 
     prompt_manager_render = None
@@ -1859,7 +1861,7 @@ def preview_effective_prompt(
     messages.append({"role": "user", "content": body.user_input})
     recent_run_id, recent_logs = _recent_prompt_preview_logs(db, body)
     tools = [{"name": name, "enabled": bool(enabled.get(name, True))} for name in sorted(enabled.keys())]
-    request_json = {"messages": messages, "tools": tools}
+    request_json = {"messages": messages, "tools": tool_schemas}
     return {
         "chat_type": body.chat_type,
         "session_id": session_id,
@@ -1881,6 +1883,8 @@ def preview_effective_prompt(
         "runtime_preset": runtime_preset,
         "runtime_tool_prompt": runtime_tool_prompt,
         "tools": tools,
+        "tool_schemas": tool_schemas,
+        "effective_tool_schemas": tool_schemas,
         "disabled_tools": disabled,
         "prompt_manager_render": prompt_manager_render,
         "messages": messages,
@@ -4114,18 +4118,21 @@ def get_effective_tools(chat_type: str = "group", group_id: str = "", user_id: s
         normalize_runtime_preset,
         resolve_effective_tools,
     )
+    from core.tool_schema_preview import build_effective_tool_schemas
     runtime_preset = normalize_runtime_preset(runtime_preset)
     enabled, disabled = resolve_effective_tools(
         chat_type=chat_type, group_id=group_id, user_id=user_id,
         runtime_preset=runtime_preset, db=db,
     )
     prompt = build_runtime_tool_prompt(enabled, disabled, chat_type)
+    tool_schemas = build_effective_tool_schemas(enabled)
     return {
         "chat_type": chat_type, "group_id": group_id, "user_id": user_id,
         "runtime_preset": runtime_preset,
         "enabled": {k: v for k, v in enabled.items() if v},
         "disabled": {k: v for k, v in disabled.items()},
         "prompt": prompt,
+        "tool_schemas": tool_schemas,
     }
 
 

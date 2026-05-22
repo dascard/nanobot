@@ -1095,6 +1095,20 @@ class NanobotBridge:
                         runtime_preset, runtime_chat_type, effective_tools, len(_saved_tools))
             meta["_runtime_preset"] = runtime_preset
             meta["_disabled_tools"] = {k: v for k, v in disabled.items()}
+            try:
+                executor_session = getattr(getattr(self._agent, "executor", None), "_session", None)
+                if executor_session is not None and hasattr(executor_session, "extra"):
+                    executor_session.extra["nanobot_runtime_context"] = {
+                        "chat_type": chat_type,
+                        "runtime_chat_type": runtime_chat_type,
+                        "is_group": is_group,
+                        "session_id": session_id,
+                        "group_id": group_id,
+                        "user_id": user_id,
+                        "sender_name": sender_name,
+                    }
+            except Exception as e:
+                logger.debug("[Bridge] failed to expose runtime context to tools: %s", e)
 
             from core.runtime_tool_service import record_runtime_tool_decision
             record_runtime_tool_decision(

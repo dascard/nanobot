@@ -10,13 +10,12 @@ allowed-tools: [schedule_task]
 
 ## 参数说明
 - `name`: 任务名称
-- `cron_expr`: cron 表达式 "分 时 日 月 周"
-- `target_type`: "private"（私聊）或 "group"（群聊）
-- `target_id`: QQ号或群号。当前用户的 QQ 号见系统提示中的 `user=` 标记
+- `cron_expr`: cron 表达式 "分 时 日 月 周"，按 Asia/Shanghai 时区解释
+- `target_type`: "private"（私聊）或 "group"（群聊）。用户没指定时使用当前会话类型
+- `target_id`: QQ号或群号。用户没指定时使用当前 `<runtime_context>` 的 user_id/group_id
 - `prompt_template`: 提示词，LLM 据此生成推送内容（这是给 LLM 看的模板，不是最终推送文本）
 
 ## cron 示例
 - 每天9点: `0 9 * * *`
 - 每天18点: `0 18 * * *`
 - 每周一8点: `0 8 * * 1`
-

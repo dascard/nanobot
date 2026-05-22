@@ -146,3 +146,21 @@ def test_superuser_private_tool_defaults_are_more_open():
     assert private_enabled["group_analysis"] is False
     assert superuser_enabled["group_analysis"] is True
     assert superuser_enabled["bash"] is True
+
+
+def test_effective_tool_schema_preview_uses_real_descriptions():
+    from core.tool_schema_preview import build_effective_tool_schemas
+
+    schemas = build_effective_tool_schemas({
+        "persona_update": True,
+        "python_sandbox": True,
+        "schedule_task": True,
+        "memory_read": True,
+    })
+    by_name = {item["function"]["name"]: item["function"] for item in schemas}
+
+    assert "普通聊天里出现的新信息不要主动调用" in by_name["persona_update"]["description"]
+    assert "简单聊天记录查询" in by_name["python_sandbox"]["description"]
+    assert "Asia/Shanghai" in by_name["schedule_task"]["description"]
+    assert by_name["schedule_task"]["parameters"]["properties"]["target_type"]["enum"] == ["private", "group"]
+    assert by_name["memory_read"]["parameters"]["properties"]["run_in_background"]

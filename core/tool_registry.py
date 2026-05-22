@@ -45,7 +45,7 @@ TOOL_METADATA: dict[str, ToolDef] = {
     "python_sandbox": ToolDef(
         name="python_sandbox", label="Python沙箱", category="data", risk_level="high",
         private_default=True, group_default=True,
-        description="执行Python代码进行数据处理/计算。",
+        description="执行复杂数据处理/计算；简单聊天记录查询、上一句、表结构检查优先用 sql_analysis。",
     ),
     "ai_daily": ToolDef(
         name="ai_daily", label="AI日报", category="data", risk_level="low",
@@ -74,12 +74,12 @@ TOOL_METADATA: dict[str, ToolDef] = {
     "persona_update": ToolDef(
         name="persona_update", label="画像更新", category="system", risk_level="medium",
         private_default=True, group_default=True,
-        description="更新用户画像/偏好/行为记录。",
+        description="用户明确要求记住、纠正、删除或重建画像时使用；普通聊天新信息由后台画像进化处理。",
     ),
     "schedule_task": ToolDef(
         name="schedule_task", label="定时任务", category="system", risk_level="medium",
         private_default=True, group_default=True,
-        description="创建/管理定时推送任务。",
+        description="创建/管理定时推送任务；cron 使用 Asia/Shanghai，未指定目标时尝试当前会话。",
     ),
     "memory_read": ToolDef(
         name="memory_read", label="记忆读取 (subagent)", category="system", risk_level="low",

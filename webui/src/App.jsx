@@ -2315,6 +2315,7 @@ function EffectivePromptPreviewPage() {
               <RawJsonAccordion label="运行时工具说明" text={result.runtime_tool_prompt || ''} />
             </div>
           </Card>
+          <ToolSchemaPreview schemas={result.tool_schemas || result.effective_tool_schemas || []} disabledTools={result.disabled_tools || {}} />
           <Card className="p-4">
             <h2 className="text-sm font-medium text-slate-300 mb-3">完整 request_json</h2>
             <JsonBlock value={result.request_json} className="max-h-[700px]" />
@@ -2323,6 +2324,48 @@ function EffectivePromptPreviewPage() {
         </div>
       )}
     </div>
+  )
+}
+
+function ToolSchemaPreview({ schemas = [], disabledTools = {} }) {
+  if (!schemas.length && !Object.keys(disabledTools || {}).length) return null
+  const enabledNames = schemas.map(s => s.function?.name || s.name).filter(Boolean)
+  return (
+    <Card className="p-4">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h2 className="text-sm font-medium text-slate-300">实际 tools schema</h2>
+        <div className="text-xs text-slate-500">启用 {enabledNames.length} 个 · request_json.tools 同步使用这里的结构</div>
+      </div>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
+        {schemas.map((schema, i) => {
+          const fn = schema.function || {}
+          const required = fn.parameters?.required || []
+          const propNames = Object.keys(fn.parameters?.properties || {})
+          return (
+            <details key={`${fn.name || i}`} className="border border-slate-700/50 rounded-lg">
+              <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-xs flex items-center gap-2 min-w-0">
+                <span className="font-mono text-emerald-300 truncate">{fn.name || schema.name}</span>
+                {schema.source && <span className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-slate-500">{schema.source}</span>}
+                {schema.risk_level && <span className="text-slate-600">{schema.risk_level}</span>}
+                <span className="ml-auto text-slate-600">{propNames.length} params</span>
+              </summary>
+              <div className="p-3 border-t border-slate-700/50 space-y-2">
+                <p className="text-xs leading-relaxed text-slate-400">{fn.description || '-'}</p>
+                <div className="flex flex-wrap gap-1">
+                  {propNames.map(name => (
+                    <span key={name} className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${required.includes(name) ? 'bg-amber-500/15 text-amber-300' : 'bg-slate-800 text-slate-500'}`}>{name}</span>
+                  ))}
+                </div>
+                <JsonBlock value={schema} className="max-h-72" />
+              </div>
+            </details>
+          )
+        })}
+      </div>
+      {Object.keys(disabledTools || {}).length > 0 && (
+        <RawJsonAccordion label="禁用工具原因" text={JSON.stringify(disabledTools, null, 2)} />
+      )}
+    </Card>
   )
 }
 

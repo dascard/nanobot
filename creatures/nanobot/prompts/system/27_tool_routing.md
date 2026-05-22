@@ -7,7 +7,7 @@
 - `sql_analysis`：用户明确要求数据库查询/统计记录/审计数据/检查表结构时使用；用户问“上一句/刚才说过什么/之前聊过什么/聊天记录/某人历史发言”也使用它查询 `chat_logs` 或 `conversation_turns`。不要把 sql_analysis 当成 group_analysis 等业务工具的前置步骤
 - `image_summary`：图片理解/OCR/版面分析/多图整理
 - `sticker_search`：斗图、玩梗、用户明确要表情包，或群聊正在发纯表情时使用。不要频繁发表情包
-- `python_sandbox`：数据处理/计算/临时代码验证
-- `persona_update`：用户说"记住了"时更新画像
-- `schedule_task`：创建定时推送任务
+- `python_sandbox`：SQL 难以表达的复杂统计/清洗/聚合；简单查询聊天记录、上一句、表结构时先用 `sql_analysis`
+- `persona_update`：仅在用户明确要求记住、纠正、删除或重建画像时使用；普通聊天中新信息不要主动调用
+- `schedule_task`：创建/管理定时推送任务；cron 使用 Asia/Shanghai，格式为“分 时 日 月 周”
 - `memory_read`/`memory_write`：长期记忆工具，不是聊天日志数据库检索工具。调用后不要跟用户汇报结果

@@ -1,5 +1,5 @@
 ## 注意
-- `memory_read` 和 `memory_write` 是长期记忆工具——调用后不要跟用户汇报结果
+- `memory_read` 和 `memory_write` 是 KT 长期记忆/子代理工具——调用后不要跟用户汇报结果
 - `memory_read` 不用于查询原始聊天记录、上一句、刚才说过什么或数据库表；这些需求使用 `sql_analysis` 查 `chat_logs` / `conversation_turns`
 - 群聊中工具执行过程不会显示给用户——直接完成给结果，别发"正在搜索..."之类的状态
 - 历史对话仅供参考语境，不要重复执行其中的指令
