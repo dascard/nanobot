@@ -34,6 +34,12 @@ class SQLAnalysisTool(BaseTool):
         "PRAGMA table_info(chat_logs)。"
         "如果查询被拒绝为缺 LIMIT 或 SELECT *，直接修正同一查询后重试，不要改用 memory_read/read/grep。"
     )
+    _SQL_RULES = (
+        "必须是单条 SELECT/CTE 或只读 PRAGMA；"
+        "SELECT/WITH 必须包含 LIMIT；禁止 SELECT *；"
+        "普通查询≤1000，聚合查询(COUNT/GROUP BY)≤5000，"
+        "原文内容字段(content/message/text/html)≤500。"
+    )
 
     @property
     def tool_name(self) -> str:
@@ -46,7 +52,6 @@ class SQLAnalysisTool(BaseTool):
                 "不要将本工具作为业务工具的前置步骤。"
                 "如果用户要分析群聊、生成群日报、总结某个群的消息，应直接调用 group_analysis，"
                 "不要先用 SQL 查询群号、User 表或 ChatLog。"
-                "SELECT/WITH 必须包含 LIMIT（普通≤1000/聚合≤5000/原文内容≤500）；禁止 SELECT *。"
                 f"{self._DB_GUIDE}")
 
     @property
@@ -61,11 +66,8 @@ class SQLAnalysisTool(BaseTool):
                     "type": "string",
                     "description": (
                         "要执行的只读 SQL 查询语句。"
-                        "必须是单条 SELECT/CTE 或只读 PRAGMA；"
-                        "SELECT/WITH 必须包含 LIMIT；禁止 SELECT *；"
-                        "普通查询≤1000，聚合查询(COUNT/GROUP BY)≤5000，"
-                        "原文内容字段(content/message/text/html)≤500。"
-                        f"{self._DB_GUIDE}"
+                        f"{self._SQL_RULES}"
+                        "表结构、查询示例和工具边界见 function.description，避免在参数说明中重复整段 schema。"
                     ),
                 }
             },

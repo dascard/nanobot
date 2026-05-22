@@ -12,3 +12,5 @@ def test_sql_analysis_tool_schema_guides_chat_history_queries():
     assert "memory_read" in combined
     assert "ORDER BY id DESC LIMIT" in combined
     assert "缺 LIMIT" in combined
+    assert sql_desc.count("chat_logs 原始消息档案") == 0
+    assert tool.description.count("chat_logs 原始消息档案") == 1
