@@ -2073,6 +2073,7 @@ def list_llm_api_logs(
     limit: int = Query(50, ge=1, le=200),
     page: int = Query(1, ge=1),
     offset: int | None = Query(None, ge=0),
+    include_payload: bool = False,
     run_id: str = "",
     trace_id: str = "",
     source: str = "",
@@ -2112,14 +2113,53 @@ def list_llm_api_logs(
         (LLMApiRequestLog.run_id.is_(None)) | (LLMApiRequestLog.run_id == "")
     ).count()
     row_offset = offset if offset is not None else (page - 1) * limit
-    rows = (
-        q.order_by(LLMApiRequestLog.created_at.desc())
-        .offset(row_offset)
-        .limit(limit)
-        .all()
-    )
+    if include_payload:
+        rows = (
+            q.order_by(LLMApiRequestLog.created_at.desc())
+            .offset(row_offset)
+            .limit(limit)
+            .all()
+        )
+        items = [row_to_dict(row) for row in rows]
+    else:
+        rows = (
+            q.with_entities(
+                LLMApiRequestLog.id,
+                LLMApiRequestLog.trace_id,
+                LLMApiRequestLog.run_id,
+                LLMApiRequestLog.source,
+                LLMApiRequestLog.provider,
+                LLMApiRequestLog.model,
+                LLMApiRequestLog.url,
+                LLMApiRequestLog.method,
+                LLMApiRequestLog.request_preview,
+                LLMApiRequestLog.response_preview,
+                LLMApiRequestLog.response_status,
+                LLMApiRequestLog.status,
+                LLMApiRequestLog.error,
+                LLMApiRequestLog.latency_ms,
+                LLMApiRequestLog.created_at,
+                LLMApiRequestLog.finished_at,
+            )
+            .order_by(LLMApiRequestLog.created_at.desc())
+            .offset(row_offset)
+            .limit(limit)
+            .all()
+        )
+        items = []
+        for row in rows:
+            item = dict(row._mapping)
+            for key in ("created_at", "finished_at"):
+                value = item.get(key)
+                if isinstance(value, datetime):
+                    item[key] = value.isoformat()
+            item["request_preview"] = str(item.get("request_preview") or "")[:240]
+            item["response_preview"] = str(item.get("response_preview") or "")[:240]
+            item["error"] = str(item.get("error") or "")[:240]
+            item["summary_only"] = True
+            items.append(item)
     return {
-        "items": [row_to_dict(row) for row in rows],
+        "items": items,
         "total": total,
         "page": page,
         "limit": limit,

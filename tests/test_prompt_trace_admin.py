@@ -295,6 +295,15 @@ optional_vars:
     assert llm_logs_resp.json()["stats"]["total"] == 1
     assert llm_logs_resp.json()["stats"]["success"] == 1
     assert llm_logs_resp.json()["stats"]["avg_latency_ms"] == 7
+    llm_list_item = llm_logs_resp.json()["items"][0]
+    assert llm_list_item["summary_only"] is True
+    assert "request_json" not in llm_list_item
+    assert "response_json" not in llm_list_item
+
+    llm_detail_resp = client.get(f"/api/v1/admin/llm-api-logs/{llm_log_id}", headers=auth_header)
+    assert llm_detail_resp.status_code == 200, llm_detail_resp.text
+    assert json.loads(llm_detail_resp.json()["request_json"])["messages"][0]["content"] == "输入"
+    assert json.loads(llm_detail_resp.json()["response_json"])["choices"][0]["message"]["content"] == "输出"
 
     tools_resp = client.get("/api/v1/admin/tool-calls", headers=auth_header)
     assert tools_resp.status_code == 200, tools_resp.text

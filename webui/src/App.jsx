@@ -3110,6 +3110,9 @@ function LLMApiLogsPage() {
   const [modelFilter, setModelFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [openId, setOpenId] = useState(null)
+  const [detailsById, setDetailsById] = useState({})
+  const [loadingDetailId, setLoadingDetailId] = useState(null)
+  const [detailErrors, setDetailErrors] = useState({})
   const limit = 30
   const load = useCallback(() => {
     const params = { page, limit }
@@ -3121,6 +3124,23 @@ function LLMApiLogsPage() {
     api.get('/llm-api-logs', { params }).then(r => { setItems(r.data.items || []); setTotal(r.data.total || 0); setStats(r.data.stats || null) }).catch(() => {})
   }, [page, runFilter, traceFilter, sourceFilter, modelFilter, statusFilter])
   useEffect(() => { load() }, [load])
+  const openLog = (logId) => {
+    if (openId === logId) {
+      setOpenId(null)
+      return
+    }
+    setOpenId(logId)
+    if (detailsById[logId]) return
+    setLoadingDetailId(logId)
+    setDetailErrors(prev => ({ ...prev, [logId]: '' }))
+    api.get(`/llm-api-logs/${logId}`).then(r => {
+      setDetailsById(prev => ({ ...prev, [logId]: r.data }))
+    }).catch(e => {
+      setDetailErrors(prev => ({ ...prev, [logId]: e?.response?.data?.detail || e.message || '加载失败' }))
+    }).finally(() => {
+      setLoadingDetailId(current => current === logId ? null : current)
+    })
+  }
   const totalPages = Math.max(1, Math.ceil(total / limit))
   const pageStats = stats || items.reduce((acc, item) => {
     const status = item.status || 'created'
@@ -3181,25 +3201,42 @@ function LLMApiLogsPage() {
             {items.map(ll => {
               const isIncomplete = (ll.status === 'created') && (ll.latency_ms === 0 || !ll.latency_ms)
               const statusTone = ll.status === 'success' ? 'emerald' : ll.status === 'stream_success' ? 'blue' : ll.status === 'error' || ll.status === 'failed' || ll.status === 'stream_error' ? 'red' : ll.status === 'stream_created' ? 'blue' : 'slate'
-              const request = safeJsonParse(ll.request_json, {})
+              const detail = detailsById[ll.id]
+              const request = detail ? safeJsonParse(detail.request_json, {}) : {}
               const messagesCount = request.messages?.length || 0
               const toolsCount = request.tools?.length || 0
+              const previewText = String(ll.request_preview || ll.response_preview || ll.error || '').replace(/\s+/g, ' ').slice(0, 90)
               return (
               <React.Fragment key={ll.id}>
                 <tr className="border-b border-slate-800/50 cursor-pointer hover:bg-slate-800/30"
-                  onClick={() => setOpenId(openId === ll.id ? null : ll.id)}>
+                  onClick={() => openLog(ll.id)}>
                   <td className="py-2 px-3"><span className={`px-1.5 py-0.5 rounded text-xs ${statusTone === 'emerald' ? 'bg-emerald-500/10 text-emerald-300' : statusTone === 'blue' ? 'bg-blue-500/10 text-blue-300' : statusTone === 'red' ? 'bg-red-500/10 text-red-300' : 'bg-slate-500/10 text-slate-400'}`}>{ll.status || '-'}</span></td>
                   <td className="py-2 px-3 text-slate-200">{ll.source || '-'}</td>
                   <td className="py-2 px-3 text-slate-400 max-w-40 truncate">{ll.model || '-'}</td>
                   <td className="py-2 px-3 text-xs text-slate-500 max-w-32 truncate font-mono">{ll.run_id ? ll.run_id.slice(0, 16) : <span className="text-amber-500">未绑定</span>}</td>
                   <td className="py-2 px-3 text-slate-400">{isIncomplete ? <span className="text-amber-500 text-xs" title="未完成或未回写响应">-</span> : `${ll.latency_ms || 0}ms`}</td>
                   <td className="py-2 px-3 text-xs text-slate-500">{String(ll.created_at || '').replace('T', ' ').slice(0, 19)}</td>
-                  <td className="py-2 px-3 text-xs text-slate-500">{messagesCount > 0 && `${messagesCount} msgs`}{messagesCount > 0 && toolsCount > 0 && ' · '}{toolsCount > 0 && `${toolsCount} tools`}{ll.error && <span className="text-red-400 ml-1">· error</span>}</td>
+                  <td className="py-2 px-3 text-xs text-slate-500 max-w-[340px] truncate">
+                    {messagesCount > 0 && `${messagesCount} msgs`}{messagesCount > 0 && toolsCount > 0 && ' · '}{toolsCount > 0 && `${toolsCount} tools`}
+                    {!messagesCount && previewText}
+                    {ll.summary_only && !detail && <span className="text-slate-600 ml-1">· 点开加载详情</span>}
+                    {ll.error && <span className="text-red-400 ml-1">· error</span>}
+                  </td>
                 </tr>
                 {openId === ll.id && (
                 <tr className="border-b border-slate-800/50 bg-slate-900/50">
                   <td colSpan={7} className="p-4">
-                    <LLMApiLogViewer log={ll} />
+                    {loadingDetailId === ll.id && (
+                      <div className="py-8 text-center text-sm text-slate-500">
+                        正在加载完整 request_json / response_json...
+                      </div>
+                    )}
+                    {detailErrors[ll.id] && (
+                      <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-300">
+                        {detailErrors[ll.id]}
+                      </div>
+                    )}
+                    {detail && <LLMApiLogViewer log={detail} />}
                   </td>
                 </tr>
                 )}
