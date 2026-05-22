@@ -1,9 +1,11 @@
 """LLM 调用层——不碰数据库。"""
 
 import asyncio
+from collections import Counter, defaultdict
 import inspect
 import json
 import logging
+import re
 
 logger = logging.getLogger("nanobot.tool.group_analysis.analyzer")
 
@@ -135,6 +137,125 @@ _FALLBACKS = {
     "quality": {"title": "暂无锐评", "subtitle": "", "dimensions": [], "summary": ""},
 }
 
+_TOPIC_RULES = (
+    ("AI与技术讨论", ("ai", "模型", "api", "benchmark", "token", "价格", "代码", "agent", "llm")),
+    ("图片表情互动", ("[图片", "[表情", "cq:image", "笑死", "好笑", "斗图")),
+    ("日常闲聊", ("今天", "感觉", "有没有", "怎么", "什么", "喜欢", "群里")),
+)
+
+
+def _clean_content(text: str, limit: int = 90) -> str:
+    content = re.sub(r"\s+", " ", str(text or "")).strip()
+    return content[:limit]
+
+
+def _fallback_topics(payload: dict) -> dict:
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    messages = list(payload.get("messages") or [])
+    for msg in messages:
+        content = str(msg.get("content") or "")
+        lowered = content.lower()
+        matched = False
+        for topic, keywords in _TOPIC_RULES:
+            if any(k in lowered or k in content for k in keywords):
+                buckets[topic].append(msg)
+                matched = True
+                break
+        if not matched:
+            buckets["其他现场讨论"].append(msg)
+
+    topics = []
+    for topic, rows in sorted(buckets.items(), key=lambda x: len(x[1]), reverse=True)[:5]:
+        contributors = []
+        for row in rows:
+            uid = str(row.get("user_id") or "?")
+            if uid not in contributors:
+                contributors.append(uid)
+        sample = next((_clean_content(row.get("content", "")) for row in rows if row.get("content")), "")
+        topics.append({
+            "topic": topic,
+            "contributors": contributors[:5],
+            "detail": f"相关消息 {len(rows)} 条；代表发言：{sample}" if sample else f"相关消息 {len(rows)} 条。",
+        })
+    return {"topics": topics}
+
+
+def _fallback_titles(payload: dict) -> dict:
+    stats = payload.get("user_stats") or {}
+    if not stats:
+        counts = Counter(str(m.get("user_id") or "?") for m in payload.get("messages", []))
+        stats = {uid: {"count": count, "avg_chars": 0, "night_ratio": 0, "reply_ratio": 0}
+                 for uid, count in counts.items()}
+    users = []
+    for uid, item in sorted(stats.items(), key=lambda x: x[1].get("count", 0), reverse=True)[:8]:
+        count = int(item.get("count") or 0)
+        avg_chars = float(item.get("avg_chars") or 0)
+        night_ratio = float(item.get("night_ratio") or 0)
+        if night_ratio >= 0.4:
+            title = "夜聊担当"
+        elif avg_chars >= 40:
+            title = "长文选手"
+        elif count >= 5:
+            title = "高频发言"
+        else:
+            title = "活跃群友"
+        users.append({
+            "user_id": uid,
+            "title": title,
+            "mbti": "",
+            "reason": f"最近窗口内发言 {count} 条，平均 {avg_chars:.1f} 字。",
+        })
+    return {"users": users}
+
+
+def _fallback_quotes(payload: dict) -> dict:
+    candidates = []
+    for msg in payload.get("messages", []):
+        content = _clean_content(msg.get("content", ""), limit=80)
+        if not content or "[图片" in content or "cq:image" in content.lower():
+            continue
+        score = len(content)
+        if any(mark in content for mark in ("笑死", "？", "！", "草", "离谱", "反转")):
+            score += 20
+        candidates.append((score, msg, content))
+    quotes = [
+        {"user_id": str(msg.get("user_id") or "?"), "content": content}
+        for _score, msg, content in sorted(candidates, key=lambda x: x[0], reverse=True)[:3]
+    ]
+    return {"quotes": quotes}
+
+
+def _fallback_quality(payload: dict) -> dict:
+    stats = payload.get("group_stats") or {}
+    message_count = int(stats.get("message_count") or len(payload.get("messages") or []))
+    participant_count = int(stats.get("participant_count") or 0)
+    avg_len = float(stats.get("average_message_length") or 0)
+    density = max(20, min(95, int(avg_len * 3 + min(message_count, 80) * 0.5)))
+    participation = max(20, min(95, participant_count * 12))
+    rhythm = max(20, min(90, int(min(message_count, 120) / 120 * 90)))
+    return {
+        "title": "基于规则速评",
+        "subtitle": "模型不可用，已启用本地降级分析",
+        "dimensions": [
+            {"name": "信息密度", "percentage": density, "comment": "按平均字数和消息量估算。"},
+            {"name": "参与广度", "percentage": participation, "comment": "按参与人数估算。"},
+            {"name": "聊天节奏", "percentage": rhythm, "comment": "按窗口内消息量估算。"},
+        ],
+        "summary": f"最近窗口内共有 {message_count} 条可分析消息，{participant_count} 位成员参与；这是本地规则降级结果，仅用于兜底展示。",
+    }
+
+
+def _fallback_for_branch(branch: str, payload: dict) -> dict:
+    if branch == "topics":
+        return _fallback_topics(payload)
+    if branch == "titles":
+        return _fallback_titles(payload)
+    if branch == "quotes":
+        return _fallback_quotes(payload)
+    if branch == "quality":
+        return _fallback_quality(payload)
+    return _FALLBACKS[branch]
+
 
 def _with_instructions(prompt: str, instructions: str) -> str:
     """将用户分析指引注入 prompt——只能影响关注重点，不能覆盖系统规则。"""
@@ -148,13 +269,13 @@ def _with_instructions(prompt: str, instructions: str) -> str:
     )
 
 
-def _parse_result(raw, branch: str) -> dict:
+def _parse_result(raw, branch: str, payload: dict | None = None) -> dict:
     from core.legacy_adapter import EvolutionUtils
     d = EvolutionUtils.json_repair(raw)
     if isinstance(d, dict) and not d.get("parse_error"):
         return d
     logger.warning("[group_analysis.llm] branch=%s parse_failed fallback=true raw=%.200s", branch, str(raw))
-    return _FALLBACKS[branch]
+    return _fallback_for_branch(branch, payload or {})
 
 
 async def _call_llm_branch(
@@ -233,8 +354,8 @@ async def analyze_group(payload: dict, instructions: str = "") -> dict:
         raw = results[i]
         if isinstance(raw, Exception):
             logger.warning("[group_analysis.llm] branch=%s FAILED fallback=true err=%s", branch, raw)
-            parsed[branch] = _FALLBACKS[branch]
+            parsed[branch] = _fallback_for_branch(branch, payload)
         else:
-            parsed[branch] = _parse_result(raw, branch)
+            parsed[branch] = _parse_result(raw, branch, payload)
 
     return parsed

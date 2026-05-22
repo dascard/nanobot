@@ -50,6 +50,13 @@ class GroupAnalysisTool(BaseTool):
             "properties": {
                 "group_id": {"type": "string", "description": "被分析群的群号、group_前缀ID、session_id或群名"},
                 "instructions": {"type": "string", "description": "可选的分析指引"},
+                "window_hours": {
+                    "type": "integer",
+                    "description": "可选分析时间窗口，默认24小时；传0表示不限制历史范围",
+                    "default": 24,
+                    "minimum": 0,
+                    "maximum": 720,
+                },
             },
             "required": ["group_id"],
         }
@@ -63,8 +70,8 @@ class GroupAnalysisTool(BaseTool):
         try:
             from core.database import SessionLocal
             from .repository import GroupAnalysisRepository
-            from .preprocess import parse_instruction_window_hours
-            from .preprocess import dedupe_group_logs, build_analysis_payload
+            from .preprocess import resolve_analysis_window_hours
+            from .preprocess import filter_analyzable_logs, dedupe_group_logs, build_analysis_payload
             from .analyzer import analyze_group
             from .render import format_scrapbook_html, format_error_html
             from . import cache
@@ -94,7 +101,7 @@ class GroupAnalysisTool(BaseTool):
                         )
                     )
 
-                window_hours = parse_instruction_window_hours(instructions)
+                window_hours = resolve_analysis_window_hours(args.get("window_hours"), instructions)
                 batch = repo.fetch_group_logs(
                     group,
                     window_hours=window_hours,
@@ -110,7 +117,8 @@ class GroupAnalysisTool(BaseTool):
                     logger.info("[group_analysis] cache_hit=true group=%s", group.group_id)
                     return build_reply_tool_result(cached)
 
-                logs = dedupe_group_logs(batch.logs)
+                eligible_logs = filter_analyzable_logs(batch.logs)
+                logs = dedupe_group_logs(eligible_logs)
                 if not logs:
                     return build_reply_tool_result(
                         format_error_html("消息不足", f"群 {group.name} 暂无消息记录。")
@@ -121,6 +129,9 @@ class GroupAnalysisTool(BaseTool):
                     logs,
                     prompt_budget=GROUP_ANALYSIS_PROMPT_CHAR_BUDGET,
                     style_budget=GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET,
+                )
+                payload["group_stats"]["analysis_window"] = (
+                    "全部历史" if window_hours is None else f"最近{window_hours}小时"
                 )
                 preprocess_ms = round((time.monotonic() - preprocess_t0) * 1000)
 
@@ -168,7 +179,7 @@ class GroupAnalysisTool(BaseTool):
                     "msg_chars=%d style_chars=%d "
                     "preprocess_ms=%d llm_ms=%d render_ms=%d total_ms=%d cache_hit=false",
                     group.group_id, window_hours or 0,
-                    batch.raw_count, len(logs), len(payload["messages"]),
+                    batch.raw_count, len(eligible_logs), len(payload["messages"]),
                     len(payload["msg_text"]), len(payload["style_msg_text"]),
                     preprocess_ms, llm_ms, render_ms, total_ms,
                 )

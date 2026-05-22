@@ -103,7 +103,7 @@ class GroupAnalysisRepository:
                 ChatLog.session_id == group.group_id,
                 ChatLog.session_id == group.legacy_group_id,
             )
-        )
+        ).filter(ChatLog.role.in_(("ambient", "user", "assistant")))
 
         if window_hours and window_hours > 0:
             cutoff = datetime.now() - timedelta(hours=window_hours)
@@ -132,6 +132,7 @@ class GroupAnalysisRepository:
                 message_id=getattr(r, "message_id", "") or "",
                 source_message_ids_json=getattr(r, "source_message_ids_json", "") or "",
                 session_id=getattr(r, "session_id", "") or "",
+                meta_json=getattr(r, "meta_json", "") or "{}",
             )
             for r in rows
         ]

@@ -276,7 +276,7 @@ def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
         if not candidates:
             raise FallbackNeeded("quality has no candidates after enrich+quota")
 
-        fallback_d = build_digest_deterministic(candidates, query, "quality")
+        fallback_d = build_digest_deterministic(candidates, query, "quality_fallback")
         cards = build_light_evidence_cards(candidates)
 
         if not cards:
@@ -302,7 +302,7 @@ class NewsDailyTool(BaseTool):
 
     @property
     def tool_name(self) -> str:
-        return "news_search"
+        return "ai_daily"
 
     @property
     def description(self) -> str:

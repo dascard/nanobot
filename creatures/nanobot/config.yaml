@@ -28,6 +28,10 @@ tools:
     type: package
     module: nanobot_kt.tools.python_sandbox
     class: PythonSandboxTool
+  - name: ai_daily
+    type: package
+    module: nanobot_kt.tools.ai_daily
+    class: AiDailyTool
   - name: news_search
     type: package
     module: nanobot_kt.tools.news_search

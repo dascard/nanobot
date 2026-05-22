@@ -30,7 +30,7 @@ def _is_game_command(text: str) -> bool:
 
 
 def clean_message(content: str) -> str | None:
-    text = content.strip()
+    text = _strip_sender_prefix(content).strip()
     if not text or len(text) <= 2:
         return None
     if re.match(r"^\s*(?:<@!?\d+>|@\S+)?\s*/\S+", text):
@@ -54,6 +54,8 @@ def parse_instruction_window_hours(instructions: str) -> int | None:
     text = str(instructions or "").strip()
     if not text:
         return None
+    if re.search(r"(全部|全量|所有|不限|不限制|完整历史|全部历史)", text):
+        return 0
     m = re.search(r"最近\s*(\d+)\s*小时", text)
     if m:
         return max(1, int(m.group(1)))
@@ -61,6 +63,100 @@ def parse_instruction_window_hours(instructions: str) -> int | None:
     if m:
         return max(1, int(m.group(1))) * 24
     return None
+
+
+def resolve_analysis_window_hours(
+    window_hours: Any = None,
+    instructions: str = "",
+    *,
+    default_hours: int = 24,
+    max_hours: int = 24 * 30,
+) -> int | None:
+    """解析最终分析窗口；None 表示不加时间过滤。"""
+    parsed = parse_instruction_window_hours(instructions)
+    if parsed is not None:
+        return None if parsed <= 0 else min(parsed, max_hours)
+
+    if window_hours is None or str(window_hours).strip() == "":
+        return default_hours
+    try:
+        value = int(float(str(window_hours).strip()))
+    except (TypeError, ValueError):
+        return default_hours
+    if value <= 0:
+        return None
+    return min(value, max_hours)
+
+
+# ── 可分析日志过滤 ──
+
+_HTML_ARTIFACT_MARKERS = (
+    "<!doctype html",
+    "<html",
+    "<article",
+    "<style",
+    "group-analysis-report",
+    "news-brief",
+    "nanobot_reply_output",
+)
+
+_INTERNAL_TEXT_PREFIXES = (
+    "[NO_SEND]",
+    "[系统内部错误]",
+    "[工具错误]",
+    "Traceback",
+)
+
+
+def _safe_meta(raw: Any) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _meta_blocks_analysis(meta: dict) -> bool:
+    if meta.get("no_send") or meta.get("internal") or meta.get("control") or meta.get("no_context"):
+        return True
+    moderation = meta.get("moderation")
+    if isinstance(moderation, dict) and moderation.get("no_context"):
+        return True
+    kind = str(meta.get("kind") or "").strip()
+    if kind in {"artifact_summary", "tool_result", "internal", "control"}:
+        return True
+    return False
+
+
+def is_analyzable_log(log: Any) -> bool:
+    """判断 ChatLog 是否可作为群聊分析语料。"""
+    role = str(getattr(log, "role", "") or "").strip()
+    if role not in {"ambient", "user", "assistant"}:
+        return False
+
+    meta = _safe_meta(getattr(log, "meta_json", "") or "")
+    if _meta_blocks_analysis(meta):
+        return False
+
+    content = str(getattr(log, "content", "") or "").strip()
+    if not content:
+        return False
+    lowered = content[:2000].lower()
+    if any(marker in lowered for marker in _HTML_ARTIFACT_MARKERS):
+        return False
+    if any(content.startswith(prefix) for prefix in _INTERNAL_TEXT_PREFIXES):
+        return False
+    return True
+
+
+def filter_analyzable_logs(logs: list[Any]) -> list[Any]:
+    """过滤内部记录、HTML 报告和非聊天角色，保留真实群聊语料。"""
+    return [log for log in logs if is_analyzable_log(log)]
 
 
 # ── 去重 ──

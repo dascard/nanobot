@@ -109,6 +109,8 @@ def format_scrapbook_html(
         ("总字数", group_stats.get("total_characters", 0)),
         ("表情统计", group_stats.get("emoji_count", 0)),
     ]
+    if group_stats.get("analysis_window"):
+        cards.append(("分析范围", group_stats.get("analysis_window")))
     stamps_html = "".join(
         f'<div class="stamp"><div class="stamp-num">{escape_html(v)}</div><div class="stamp-label">{escape_html(k)}</div></div>'
         for k, v in cards)

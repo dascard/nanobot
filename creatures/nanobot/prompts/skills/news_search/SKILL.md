@@ -1,12 +1,12 @@
 ---
-name: news_search
-description: 搜索 AI/科技领域最新资讯并提取正文摘要
-allowed-tools: [news_search]
+name: ai_daily
+description: 聚合 AI/科技领域可信来源并生成可直接发送的日报/简报
+allowed-tools: [ai_daily, news_search]
 ---
 
-# 新闻搜索与提取
+# AI 日报与资讯聚合
 
-搜索互联网上有关 AI、机器学习或常规科技的前沿资讯，并获取相应文章摘要内容。
+聚合固定 AI/科技可信来源，筛选近期资讯，并生成可直接发送的 HTML 日报或简报。`news_search` 是兼容旧名，新请求优先调用 `ai_daily`。
 
 ## 何时使用
 - 当用户询问最新的 AI 模型、最近的科技大事
@@ -14,7 +14,10 @@ allowed-tools: [news_search]
 - 当 nanobot 的内建知识库不足以回答当前时刻发生的问题
 
 ## 行为
-该工具将通过搜索引擎查询关键词，并利用 URL 解析工具自动读取前几个相关网页的正文内容。
+该工具会抓取已配置的官方源、媒体源和中文策展源，按时效、相关性和来源配额选择候选，再生成结构化日报。
 
 ## 参数
-- `query` (字符串): 搜索的关键词短语。尽量提取核心词汇使用。
+- `query` (字符串): 日报主题或自然语言请求。
+- `max_results` (整数): 候选资讯数量，默认 8。
+- `freshness` (字符串): today/latest/week/custom。
+- `target_date` (字符串): 用户明确指定日期时填写 YYYY-MM-DD。

@@ -2,11 +2,12 @@
 
 from ..schema import NewsItem
 
-GROUP_PRIORITY = ["core_provider", "core_platform", "ai_media", "research", "curated", "community"]
+GROUP_PRIORITY = ["core_provider", "curated", "core_platform", "ai_media", "research", "community"]
 QUALITY_QUOTAS = {
     "core_provider": 4, "core_platform": 2, "ai_media": 3,
     "research": 1, "curated": 2, "community": 0,
 }
+MAX_ITEMS_PER_SOURCE = 2
 
 
 def _item_group(item: NewsItem) -> str:
@@ -32,8 +33,20 @@ def select_items_by_quota(items: list[NewsItem], max_items: int = 10) -> list[Ne
         buckets.setdefault(group, []).append(item)
 
     result = []
+    source_counts: dict[str, int] = {}
     for group in GROUP_PRIORITY:
         limit = quotas.get(group, 2)
-        result.extend(buckets.get(group, [])[:limit])
+        added = 0
+        for item in buckets.get(group, []):
+            source_name = item.source_name or "unknown"
+            if source_counts.get(source_name, 0) >= MAX_ITEMS_PER_SOURCE:
+                continue
+            result.append(item)
+            source_counts[source_name] = source_counts.get(source_name, 0) + 1
+            added += 1
+            if added >= limit or len(result) >= max_items:
+                break
+        if len(result) >= max_items:
+            break
 
     return result[:max_items]

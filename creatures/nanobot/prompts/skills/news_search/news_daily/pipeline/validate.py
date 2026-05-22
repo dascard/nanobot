@@ -41,7 +41,7 @@ def safe_quality_digest(llm_digest: dict, fallback: dict, cards: list[dict]) -> 
         if k in llm_digest and llm_digest[k]:
             digest[k] = llm_digest[k]
 
-    digest["mode"] = "quality"
+    digest["mode"] = "quality" if llm_digest.get("_quality_source") == "llm" else fallback.get("mode", "quality_fallback")
     digest = fix_source_ids(digest, valid_ids)
     return digest
 

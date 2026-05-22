@@ -23,6 +23,7 @@ class RawChatLog:
     message_id: str = ""
     source_message_ids_json: str = ""
     session_id: str = ""
+    meta_json: str = "{}"
 
 
 @dataclass

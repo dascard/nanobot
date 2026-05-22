@@ -63,6 +63,15 @@ body{font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
 .detail-src{font-size:.72rem;color:#999;margin-top:6px}
 .missing{font-size:.8rem;color:#999;padding:12px 16px;margin-bottom:24px;
   border-left:3px solid #ddd;background:#f8f8f6;border-radius:0 8px 8px 0}
+.source-index{background:var(--card);border:1px solid var(--border);
+  border-radius:12px;padding:16px;margin-bottom:24px;box-shadow:var(--shadow)}
+.source-index .section-title{font-size:.85rem;font-weight:700;color:var(--sub);
+  text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.source-table{width:100%;border-collapse:collapse;font-size:.78rem}
+.source-table th,.source-table td{padding:7px 6px;border-bottom:1px solid #f0eee8;
+  text-align:left;vertical-align:top}
+.source-table th{color:#8a5a2b;font-weight:700;background:#fff8e1}
+.source-table a{color:#8a4b00;text-decoration:none;word-break:break-all}
 .closing{font-size:.88rem;color:var(--sub);text-align:center;
   padding:16px 0;border-top:1px solid var(--border);margin-top:8px}
 .footer{text-align:center;font-size:.7rem;color:#ccc;margin-top:20px}
@@ -198,6 +207,24 @@ def render_html(digest: dict) -> str:
             html += f'<div>⚠ {_e(m)}</div>'
         html += '\n  </div>'
 
+    # 来源索引
+    sources = digest.get("sources", [])
+    if sources:
+        html += '\n  <div class="source-index"><div class="section-title">🔗 来源索引</div>'
+        html += '\n    <table class="source-table"><thead><tr><th>#</th><th>来源</th><th>标题</th><th>时间</th></tr></thead><tbody>'
+        for src in sources[:12]:
+            sid = src.get("source_id", "")
+            url = src.get("url", "")
+            title = src.get("title", "")
+            source_name = src.get("source_name", "") or src.get("domain", "")
+            published_at = src.get("published_at", "")
+            title_html = f'<a href="{_attr(url)}" target="_blank" rel="noopener noreferrer">{_e(title)}</a>' if url else _e(title)
+            html += (
+                f'\n      <tr><td>{_e(sid)}</td><td>{_e(source_name)}</td>'
+                f'<td>{title_html}</td><td>{_e(published_at)}</td></tr>'
+            )
+        html += '\n    </tbody></table>\n  </div>'
+
     # 结尾
     closing = digest.get("closing", "")
     if closing:
@@ -236,6 +263,10 @@ def _src_date(ids, sources):
 def _e(text: str) -> str:
     """HTML 转义。"""
     return str(text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _attr(text: str) -> str:
+    return _e(text).replace("'", "&#x27;")
 
 
 def _format_source_ids(ids: list[int]) -> str:

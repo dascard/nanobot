@@ -46,14 +46,16 @@ class BufferedOutput(BaseOutputModule):
     _TOOL_HINTS: dict[str, str] = {
         "sql_analysis": "正在查询数据库...",
         "python_sandbox": "正在执行数据分析...",
+        "ai_daily": "正在生成 AI 日报...",
         "news_search": "正在搜索资讯...",
+        "group_analysis": "正在生成群聊日报...",
         "image_summary": "正在生成图片摘要...",
         "persona_update": "正在更新画像...",
         "memory_read": "正在读取记忆...",
         "memory_write": "正在写入记忆...",
     }
 
-    _INTERRUPT_TOOLS = {"news_search", "group_analysis", "reply", "no_reply"}
+    _INTERRUPT_TOOLS = {"ai_daily", "news_search", "group_analysis", "reply", "no_reply"}
 
     def __init__(self, **kwargs: Any):
         super().__init__()

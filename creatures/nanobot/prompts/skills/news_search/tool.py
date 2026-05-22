@@ -1719,16 +1719,16 @@ def search_and_extract_news(
             
     return report
 
-class NewsSearchTool(BaseTool):
-    """Search for AI/tech news and extract article summaries."""
+class AiDailyTool(BaseTool):
+    """Generate an AI/tech daily digest from curated sources."""
 
     @property
     def tool_name(self) -> str:
-        return "news_search"
+        return "ai_daily"
 
     @property
     def description(self) -> str:
-        return "搜索 AI/科技领域最新资讯并提取正文摘要"
+        return "聚合 AI/科技领域可信来源，生成可直接发送的 AI 日报或资讯简报 HTML。"
 
     @property
     def execution_mode(self) -> ExecutionMode:
@@ -1740,12 +1740,22 @@ class NewsSearchTool(BaseTool):
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "搜索关键词或自然语言查询",
+                    "description": "日报主题或自然语言请求；今天/最新类请求必须基于 runtime_context.current_time，不要自行编造年份。",
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": "返回的最大结果数量（默认 3）",
-                    "default": 3,
+                    "description": "候选新闻数量（默认 8）；日报/最新资讯类请求会至少使用 8 条候选。",
+                    "default": 8,
+                },
+                "freshness": {
+                    "type": "string",
+                    "description": "时效范围：today/latest/week/custom。今天、最新、日报、早报优先使用 today 或 latest。",
+                    "enum": ["today", "latest", "week", "custom"],
+                    "default": "latest",
+                },
+                "target_date": {
+                    "type": "string",
+                    "description": "目标日期，YYYY-MM-DD；仅用户明确指定日期时填写。",
                 },
                 "no_cache": {"type": "boolean", "description": "跳过缓存强制重新检索", "default": False},
                 "refresh": {"type": "boolean", "description": "强制刷新", "default": False},
@@ -1757,9 +1767,12 @@ class NewsSearchTool(BaseTool):
         query = args.get("query", "")
         if not query.strip():
             return ToolResult(error="Missing 'query' argument")
-        max_results = int(args.get("max_results", 3) or 3)
+        max_results = int(args.get("max_results", 8) or 8)
+        freshness = str(args.get("freshness") or "").strip().lower()
         # 日报/新闻类请求强制至少8条候选
-        if any(k in query for k in ("日报", "今日", "AI 新闻", "AI新闻", "最新资讯")):
+        if freshness in {"today", "latest"} or any(
+            k in query for k in ("日报", "早报", "简报", "每日", "今日", "今天", "新闻", "资讯", "AI 新闻", "AI新闻", "最新新闻", "最新资讯")
+        ):
             max_results = max(max_results, 8)
         no_cache = bool(args.get("no_cache") or args.get("refresh"))
 
@@ -1800,3 +1813,15 @@ class NewsSearchTool(BaseTool):
                 "missing_info": [str(result)[:200]]})
         _store_cached_news_result(cache_key, result)
         return build_reply_tool_result(result)
+
+
+class NewsSearchTool(AiDailyTool):
+    """Compatibility alias for the former news_search tool name."""
+
+    @property
+    def tool_name(self) -> str:
+        return "news_search"
+
+    @property
+    def description(self) -> str:
+        return "兼容旧名：等同于 ai_daily，聚合 AI/科技可信来源并生成日报 HTML；新提示词应优先使用 ai_daily。"

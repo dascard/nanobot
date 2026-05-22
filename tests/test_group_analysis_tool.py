@@ -12,6 +12,8 @@ def test_clean_message_filters_commands_and_noise():
     assert clean_message("  ++==  ") is None
     assert clean_message("https://example.com") is None
     assert clean_message("正常聊天内容") == "正常聊天内容"
+    assert clean_message("[A]: 签到") is None
+    assert clean_message("[A]: 正常聊天内容") == "正常聊天内容"
 
 
 def test_parse_instruction_window_hours():
@@ -20,7 +22,18 @@ def test_parse_instruction_window_hours():
     assert parse_instruction_window_hours("最近2小时") == 2
     assert parse_instruction_window_hours("只看最近6小时") == 6
     assert parse_instruction_window_hours("最近1天") == 24
+    assert parse_instruction_window_hours("看全部历史") == 0
     assert parse_instruction_window_hours("随便看看") is None
+
+
+def test_resolve_analysis_window_hours_defaults_and_overrides():
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import resolve_analysis_window_hours
+
+    assert resolve_analysis_window_hours(None, "") == 24
+    assert resolve_analysis_window_hours("6", "") == 6
+    assert resolve_analysis_window_hours(0, "") is None
+    assert resolve_analysis_window_hours("6", "最近2小时") == 2
+    assert resolve_analysis_window_hours(None, "全部历史") is None
 
 
 def test_compute_group_statistics_returns_summary():
@@ -140,6 +153,30 @@ def test_build_message_prompt_text_keeps_large_group_context():
     assert "原始可分析消息总数: 2200" in text
     assert "第2199条消息" in text
     assert len(text) <= 12000
+
+
+def test_group_analysis_filters_internal_and_artifact_logs():
+    from core.database import ChatLog
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import filter_analyzable_logs
+
+    logs = [
+        ChatLog(role="ambient", content="[A]: 今天聊 AI", sender_name="A"),
+        ChatLog(role="assistant", content="可以，这个思路能跑", sender_name="nanobot"),
+        ChatLog(role="system", content="[NO_SEND] agent_result=no_tool_call",
+                meta_json='{"no_send": true}'),
+        ChatLog(role="assistant", content='<!DOCTYPE html><html><body class="group-analysis-report">旧日报</body></html>'),
+        ChatLog(role="assistant", content='<article class="news-brief">AI 日报</article>'),
+        ChatLog(role="ambient", content="[B]: 被屏蔽内容", sender_name="B",
+                meta_json='{"moderation": {"no_context": true}}'),
+        ChatLog(role="tool", content="工具输出"),
+    ]
+
+    filtered = filter_analyzable_logs(logs)
+
+    assert [log.content for log in filtered] == [
+        "[A]: 今天聊 AI",
+        "可以，这个思路能跑",
+    ]
 
 
 
@@ -319,3 +356,126 @@ def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
     assert "话题总结" in html
     assert "聊天质量锐评" in html
     assert "INTP" in html
+
+
+def test_group_analysis_tool_filters_artifacts_before_llm(monkeypatch):
+    import core.database as database
+    import clients.new_api_client as new_api_client
+    from core.database import ChatLog, User
+    from creatures.nanobot.prompts.skills.group_analysis.tool import GroupAnalysisTool
+
+    now = datetime.now()
+    logs = [
+        ChatLog(user_id="group_123", session_id="group_123", sender_name="A", role="ambient",
+                content="今天聊 AI", created_at=now - timedelta(minutes=30)),
+        ChatLog(user_id="group_123", session_id="group_123", sender_name="B", role="ambient",
+                content="价格确实降了", created_at=now - timedelta(minutes=20)),
+        ChatLog(user_id="group_123", session_id="group_123", sender_name="C", role="ambient",
+                content="benchmark 也反转了", created_at=now - timedelta(minutes=10)),
+        ChatLog(user_id="group_123", session_id="group_123", sender_name="nanobot", role="assistant",
+                content='<!DOCTYPE html><html><body class="group-analysis-report">旧日报</body></html>',
+                created_at=now - timedelta(minutes=5)),
+        ChatLog(user_id="group_123", session_id="group_123", role="system",
+                content="[NO_SEND] agent_result=no_tool_call", meta_json='{"no_send": true}',
+                created_at=now - timedelta(minutes=4)),
+    ]
+    user = User(id="group_123", name="测试群")
+    prompts = []
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class FakeQuery:
+        def __init__(self, dataset):
+            self.dataset = dataset
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def limit(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return list(self.dataset) if isinstance(self.dataset, list) else []
+
+        def first(self):
+            if isinstance(self.dataset, list):
+                return self.dataset[0] if self.dataset else None
+            return self.dataset
+
+    class FakeSession:
+        def query(self, model):
+            model_name = getattr(model, "__name__", "")
+            if model_name == "ChatLog":
+                return FakeQuery(logs)
+            if model_name == "User":
+                return FakeQuery(user)
+            return FakeQuery(None)
+
+        def close(self):
+            return None
+
+    async def fake_call(_client, _system_prompt, prompt, max_retries=2):
+        prompts.append(prompt)
+        assert "旧日报" not in prompt
+        assert "[NO_SEND]" not in prompt
+        assert "今天聊 AI" in prompt
+        if "核心讨论话题" in prompt:
+            return '{"topics":[{"topic":"AI 模型","contributors":["A","B"],"detail":"大家在讨论价格。"}]}'
+        if "用户发言统计" in prompt:
+            return '{"users":[{"user_id":"A","title":"观察员","mbti":"","reason":"持续参与讨论"}]}'
+        if "聊天质量" in prompt:
+            return '{"title":"质量在线","subtitle":"","dimensions":[],"summary":"讨论集中。"}'
+        return '{"quotes":[{"user_id":"B","content":"价格确实降了"}]}'
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(new_api_client, "NewAPIClient", DummyClient)
+    monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.analyzer._call_llm_with_retry", fake_call)
+
+    tool = GroupAnalysisTool()
+    result = asyncio.run(tool.execute({"group_id": "123", "window_hours": 24}))
+
+    assert result.success
+    assert prompts
+
+
+def test_group_analysis_uses_deterministic_fallback_when_llm_fails(monkeypatch):
+    import clients.new_api_client as new_api_client
+    from creatures.nanobot.prompts.skills.group_analysis.analyzer import analyze_group
+    from creatures.nanobot.prompts.skills.group_analysis.preprocess import build_analysis_payload
+    from creatures.nanobot.prompts.skills.group_analysis.schemas import RawChatLog
+
+    now = datetime.now()
+    logs = [
+        RawChatLog(id=1, role="ambient", user_id="u1", sender_name="A",
+                   content="今天 AI 模型价格又降了，benchmark 也反转了", created_at=now),
+        RawChatLog(id=2, role="ambient", user_id="u2", sender_name="B",
+                   content="这张图太好笑了 [图片:1张]", created_at=now),
+        RawChatLog(id=3, role="ambient", user_id="u1", sender_name="A",
+                   content="我觉得这个 API 方案可以继续压成本", created_at=now),
+        RawChatLog(id=4, role="ambient", user_id="u3", sender_name="C",
+                   content="笑死，今天群里信息量有点大", created_at=now),
+    ]
+    payload = build_analysis_payload(logs)
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    async def fail_call(*args, **kwargs):
+        raise RuntimeError("LLM down")
+
+    monkeypatch.setattr(new_api_client, "NewAPIClient", DummyClient)
+    monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.analyzer._call_llm_with_retry", fail_call)
+
+    result = asyncio.run(analyze_group(payload, ""))
+
+    assert result["topics"]["topics"]
+    assert result["titles"]["users"]
+    assert result["quotes"]["quotes"]
+    assert result["quality"]["dimensions"]
+    assert "降级" in result["quality"]["subtitle"]

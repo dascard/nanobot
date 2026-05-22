@@ -3,6 +3,7 @@
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
+from urllib.parse import urlparse
 from urllib.request import urlopen, build_opener, ProxyHandler, Request
 import os as _os
 
@@ -16,6 +17,7 @@ _opener = build_opener(ProxyHandler({"http": _proxy_url, "https": _proxy_url})) 
 DETAIL_FETCH_GROUPS = {"core_provider", "core_platform", "ai_media", "curated"}
 DETAIL_FETCH_MAX_PER_RUN = 12
 DETAIL_TEXT_MAX_CHARS = 1200
+DETAIL_SKIP_DOMAINS = {"openai.com", "qbitai.com"}
 
 
 def _clean_text(text: str) -> str:
@@ -65,6 +67,24 @@ def _fetch_detail(url: str, timeout: int = 8) -> str:
         return ""
 
 
+def _should_skip_detail_fetch(item: NewsItem) -> bool:
+    domain = (item.domain or "").lower().lstrip("www.")
+    url = (item.url or "").lower()
+    try:
+        url_domain = (urlparse(url).netloc or "").lower().lstrip("www.")
+    except Exception:
+        url_domain = ""
+    if (
+        domain in DETAIL_SKIP_DOMAINS
+        or url_domain in DETAIL_SKIP_DOMAINS
+        or "openai.com/index/" in url
+    ) and (item.summary or item.content_excerpt):
+        return True
+    if len(item.summary or "") >= 180 or len(item.content_excerpt or "") >= 300:
+        return True
+    return False
+
+
 def enrich_items(items: list[NewsItem], max_fetch: int = 12) -> list[NewsItem]:
     """对高优先级候选并发抓详情页。"""
     # 策展/聚合源无独立文章页，跳过详情抓取
@@ -73,6 +93,7 @@ def enrich_items(items: list[NewsItem], max_fetch: int = 12) -> list[NewsItem]:
         if getattr(item, 'source_group', '') in DETAIL_FETCH_GROUPS
         and "juya" not in (item.source_name or "").lower()
         and not item.url.endswith('.xml')
+        and not _should_skip_detail_fetch(item)
     ][:max_fetch]
 
     if not eligible:

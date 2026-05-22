@@ -1,10 +1,21 @@
 """S 级官方源 + A 级媒体源 Provider。"""
 
 import logging
+from typing import Any
 from .rss import RSSProvider
-from .htmllist import HtmlListProvider
-from .htmllist import HtmlListProvider
-from ..schema import NewsItem, SourceConfig
+from ..schema import SourceConfig
+from .curated import JuyaProvider
+from .adapters import (
+    AnthropicNewsProvider,
+    CohereBlogProvider,
+    DeepSeekUpdatesProvider,
+    KimiBlogProvider,
+    MetaAIBlogProvider,
+    MistralNewsProvider,
+    QwenArticleApiProvider,
+    XAINewsProvider,
+    SourceSpecificHtmlProvider,
+)
 
 logger = logging.getLogger("nanobot.news_daily.official")
 
@@ -73,11 +84,11 @@ DEFAULT_SOURCES: list[SourceConfig] = [
                  trust=0.94, weight=1.0, group="core_provider", enabled=True,
                  category_hint=["Mistral", "模型"]),
     SourceConfig(name="deepseek_news", type="html_list",
-                 url="https://api-docs.deepseek.com/news/",
+                 url="https://api-docs.deepseek.com/updates",
                  trust=0.92, weight=1.0, group="core_provider", enabled=True,
                  category_hint=["DeepSeek", "模型", "API"]),
-    SourceConfig(name="qwen_blog", type="html_list",
-                 url="https://qwen.ai/blog",
+    SourceConfig(name="qwen_blog", type="api_json",
+                 url="https://qwen.ai/api/page_config?code=news.news-list",
                  trust=0.92, weight=1.0, group="core_provider", enabled=True,
                  category_hint=["Qwen", "模型"]),
     SourceConfig(name="kimi_blog", type="html_list",
@@ -96,11 +107,34 @@ DEFAULT_SOURCES: list[SourceConfig] = [
                  url="https://ai.meta.com/blog/",
                  trust=0.90, weight=1.0, group="core_provider", enabled=True,
                  category_hint=["Meta", "Llama"]),
-    SourceConfig(name="google_deepmind_news", type="html_list",
-                 url="https://deepmind.google/blog/",
+    SourceConfig(name="google_deepmind_news", type="rss",
+                 url="https://deepmind.google/blog/rss.xml",
                  trust=0.94, weight=1.0, group="core_provider", enabled=True,
                  category_hint=["Gemini", "DeepMind"]),
 ]
+
+
+SOURCE_ADAPTERS = {
+    "anthropic_news": AnthropicNewsProvider,
+    "mistral_news": MistralNewsProvider,
+    "deepseek_news": DeepSeekUpdatesProvider,
+    "qwen_blog": QwenArticleApiProvider,
+    "kimi_blog": KimiBlogProvider,
+    "xai_news": XAINewsProvider,
+    "cohere_blog": CohereBlogProvider,
+    "meta_ai_blog": MetaAIBlogProvider,
+}
+
+
+def create_provider_for_source(cfg: SourceConfig):
+    if cfg.name == "juya_ai_daily":
+        return JuyaProvider()
+    cls = SOURCE_ADAPTERS.get(cfg.name)
+    if cls is not None:
+        return cls(url=cfg.url, source_name=cfg.name, trust=cfg.trust)
+    if cfg.type == "html_list":
+        return SourceSpecificHtmlProvider(url=cfg.url, source_name=cfg.name, trust=cfg.trust)
+    return RSSProvider(url=cfg.url, source_name=cfg.name, trust=cfg.trust)
 
 
 SOURCE_TIER_WEIGHT = {
@@ -125,13 +159,10 @@ class SourceRegistry:
     """管理所有 RSS 源，支持按 mode 筛选。"""
 
     def __init__(self):
-        self.sources: list[tuple[SourceConfig, RSSProvider]] = []
+        self.sources: list[tuple[SourceConfig, Any]] = []
         for cfg in DEFAULT_SOURCES:
             if cfg.enabled:
-                if cfg.type == "html_list":
-                    prov = HtmlListProvider(url=cfg.url, source_name=cfg.name, trust=cfg.trust)
-                else:
-                    prov = RSSProvider(url=cfg.url, source_name=cfg.name, trust=cfg.trust)
+                prov = create_provider_for_source(cfg)
                 self.sources.append((cfg, prov))
         logger.info("[registry] %d sources loaded", len(self.sources))
 

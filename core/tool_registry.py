@@ -47,10 +47,15 @@ TOOL_METADATA: dict[str, ToolDef] = {
         private_default=True, group_default=True,
         description="执行Python代码进行数据处理/计算。",
     ),
-    "news_search": ToolDef(
-        name="news_search", label="资讯搜索", category="data", risk_level="low",
+    "ai_daily": ToolDef(
+        name="ai_daily", label="AI日报", category="data", risk_level="low",
         private_default=True, group_default=True,
-        description="搜索最新新闻资讯，生成日报/简报。",
+        description="聚合 AI/科技可信来源，生成日报/简报。",
+    ),
+    "news_search": ToolDef(
+        name="news_search", label="资讯搜索(兼容)", category="data", risk_level="low",
+        private_default=True, group_default=True,
+        description="兼容旧名，等同于 ai_daily；新提示词优先使用 ai_daily。",
     ),
 
     # ── 分析工具 ──
@@ -62,7 +67,7 @@ TOOL_METADATA: dict[str, ToolDef] = {
     "group_analysis": ToolDef(
         name="group_analysis", label="群聊分析", category="analysis", risk_level="medium",
         private_default=False, group_default=True,
-        description="分析群聊内容，提取话题/情绪/重点。",
+        description="分析目标群聊近期内容，默认最近24小时，提取话题/情绪/重点。",
     ),
 
     # ── 系统工具 ──
