@@ -87,9 +87,9 @@ const NAV = [
   { to: '/timing-gate', label: 'TimingGate' },
   { to: '/stickers', label: '表情包' },
   { to: '/stickers/duplicates', label: '去重工作台' },
-  { to: '/prompt', label: '旧版 Prompt 构建' },
-  { to: '/prompts', label: 'PromptManager 模板' },
-  { to: '/prompt-preview', label: '有效 Prompt 预览' },
+  { to: '/prompt-preview', label: 'Prompt Runtime V2' },
+  { to: '/prompts', label: 'V1 模板 / 对比' },
+  { to: '/prompt-legacy', label: 'Legacy 回滚' },
   { to: '/agent-runs', label: '运行追踪' },
   { to: '/llm-api-logs', label: 'LLM API 日志' },
   { to: '/models', label: '模型' },
@@ -1888,8 +1888,8 @@ function PromptPage() {
         <div className="flex gap-3">
           <span className="text-xs text-amber-400 mt-0.5">⚠</span>
           <div>
-            <p className="text-sm text-amber-300 mb-1">这是旧版 prompt.md 片段构建系统。</p>
-            <p className="text-xs text-slate-500">默认片段目录由 Git 管理。WebUI 保存只写入运行时片段目录。重新构建输出到运行时 prompt.md。Git 更新不会覆盖运行时片段。</p>
+            <p className="text-sm text-amber-300 mb-1">Legacy prompt.md 回滚入口。</p>
+            <p className="text-xs text-slate-500">此页面只用于 v1 紧急回滚和迁移对比；V2 真实请求与有效预览请使用 Prompt Runtime V2。默认片段目录由 Git 管理，WebUI 保存只写入运行时片段目录。</p>
             {(defaultDir || runtimeDir || outputPath) && <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-2 text-[10px] text-slate-600">
               {defaultDir && <span>默认片段: <span className="text-slate-500 font-mono">{defaultDir}</span></span>}
               {runtimeDir && <span>运行时片段: <span className="text-slate-500 font-mono">{runtimeDir}</span></span>}
@@ -1901,8 +1901,8 @@ function PromptPage() {
       </Card>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">
-          <h1 className="text-2xl font-bold">旧版 Prompt 构建</h1>
-          <Badge tone="amber">Legacy</Badge>
+          <h1 className="text-2xl font-bold">Legacy Prompt 回滚</h1>
+          <Badge tone="amber">v1 rollback only</Badge>
           <div className="flex gap-1 bg-slate-900 rounded-lg p-0.5">
             <button onClick={() => setTab('fragments')}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'fragments' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>编辑片段</button>
@@ -1913,9 +1913,10 @@ function PromptPage() {
           </div>
         </div>
         <div className="flex gap-2">
+          <NavLink to="/prompt-preview" className="px-3 py-2 bg-emerald-700/70 hover:bg-emerald-700 rounded-xl text-sm">查看 V2 预览</NavLink>
           <button onClick={initRuntime} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">初始化缺失片段</button>
           <button onClick={rebuild} disabled={building}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium transition-colors">
+            className="px-4 py-2 bg-amber-700/70 hover:bg-amber-700 disabled:opacity-50 rounded-xl text-sm font-medium transition-colors">
             {building ? '构建中...' : '重新构建运行时 prompt.md'}
           </button>
         </div>
@@ -2128,15 +2129,15 @@ function ManagedPromptsPage() {
         <div className="flex gap-3">
           <span className="text-xs text-emerald-400 mt-0.5">ℹ</span>
           <div>
-            <p className="text-sm text-emerald-300 mb-1">这是新版 PromptManager 模板系统。</p>
-            <p className="text-xs text-slate-500">默认模板目录：<span className="text-slate-400 font-mono">{defaultDir || 'prompts.default'}</span> · 运行时模板目录：<span className="text-slate-400 font-mono">{promptDir || 'data/prompts'}</span> · WebUI 保存写入运行时模板，Git 更新只影响默认模板，不应覆盖运行时模板。</p>
+            <p className="text-sm text-emerald-300 mb-1">V1 PromptManager 模板和对比工具。</p>
+            <p className="text-xs text-slate-500">V2 主链路使用独立 `core/prompt_v2` compiler；这里保留用于 v1 回滚、迁移整理和离线对比。默认模板目录：<span className="text-slate-400 font-mono">{defaultDir || 'prompts.default'}</span> · 运行时模板目录：<span className="text-slate-400 font-mono">{promptDir || 'data/prompts'}</span>。</p>
           </div>
         </div>
       </Card>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold mb-1">PromptManager 模板</h1>
-          <p className="text-slate-500 text-sm">Markdown frontmatter 模板、变量预览、备份与回滚</p>
+          <h1 className="text-2xl font-bold mb-1">V1 模板 / 对比</h1>
+          <p className="text-slate-500 text-sm">PromptManager Markdown 模板、变量预览、备份与回滚；不作为 V2 主回复编排入口</p>
           {(promptDir || defaultDir) && <div className="flex gap-4 mt-1 text-[10px] text-slate-600">
             {defaultDir && <span>默认模板: <span className="text-slate-500 font-mono">{defaultDir}</span></span>}
             {promptDir && <span>运行目录: <span className="text-slate-500 font-mono">{promptDir}</span></span>}
@@ -2211,7 +2212,7 @@ function ManagedPromptsPage() {
 
 function EffectivePromptPreviewPage() {
   const [form, setForm] = useState({
-    engine: 'v1',
+    engine: 'v2',
     chat_type: 'private',
     session_id: '',
     user_id: '',
@@ -2248,14 +2249,32 @@ function EffectivePromptPreviewPage() {
   }, [form.engine, v2VariableTemplate])
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-1">有效 Prompt 预览</h1>
-      <p className="text-slate-500 text-sm mb-4">按 chat/session 还原本轮实际发给模型的 messages、上下文和 Prompt 来源</p>
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+            <h1 className="text-2xl font-bold">Prompt Runtime V2</h1>
+            <Badge tone="emerald">primary</Badge>
+          </div>
+          <p className="text-slate-500 text-sm">按 chat/session 调用真实 compiler，还原本轮实际发给模型的 messages、tools schema、section hash 和审计信息</p>
+        </div>
+        <NavLink to="/prompt-legacy" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs text-slate-300">
+          Legacy 回滚
+        </NavLink>
+      </div>
+      <Card className="p-4 mb-4 border-emerald-500/20 bg-emerald-500/5">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <MiniStat label="线上模式" value="v1 / v2" tone="emerald" />
+          <MiniStat label="当前页面默认" value="v2" tone="emerald" />
+          <MiniStat label="shadow / managed" value="仅 v1 对比" tone="amber" />
+          <MiniStat label="当前输入" value="只作为 user event" />
+        </div>
+      </Card>
       <Card className="p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <label className="text-xs text-slate-500">engine
             <select value={form.engine} onChange={e => update('engine', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200">
-              <option value="v1">v1</option>
-              <option value="v2">v2</option>
+              <option value="v2">v2 - 当前运行时</option>
+              <option value="v1">v1 - 回滚/对比</option>
             </select>
           </label>
           <label className="text-xs text-slate-500">chat_type
@@ -2264,13 +2283,20 @@ function EffectivePromptPreviewPage() {
               <option value="group">group</option>
             </select>
           </label>
-          <label className="text-xs text-slate-500">mode
-            <select value={form.mode} onChange={e => update('mode', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200">
-              <option value="shadow">shadow</option>
-              <option value="managed">managed</option>
-              <option value="legacy">legacy</option>
-            </select>
-          </label>
+          {form.engine === 'v1' ? (
+            <label className="text-xs text-slate-500">v1 mode
+              <select value={form.mode} onChange={e => update('mode', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200">
+                <option value="shadow">shadow</option>
+                <option value="managed">managed</option>
+                <option value="legacy">legacy</option>
+              </select>
+            </label>
+          ) : (
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
+              <div className="text-xs text-slate-500">v2 mode</div>
+              <div className="text-sm text-emerald-300 mt-1">无 shadow / managed</div>
+            </div>
+          )}
           <label className="text-xs text-slate-500">session_id
             <input value={form.session_id} onChange={e => update('session_id', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
           </label>
@@ -5051,7 +5077,8 @@ export default function App() {
           <Route path="/evals" element={<EvalsPage />} />
           <Route path="/db" element={<DbPage />} />
           <Route path="/logs" element={<LogsPage />} />
-          <Route path="/prompt" element={<PromptPage />} />
+          <Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />
+          <Route path="/prompt-legacy" element={<PromptPage />} />
           <Route path="/prompts" element={<ManagedPromptsPage />} />
           <Route path="/prompt-preview" element={<EffectivePromptPreviewPage />} />
           <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />
