@@ -61,19 +61,43 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "当前节点" in source
     assert "节点模板切换" in source
     assert "当前节点使用的模板" in source
+    assert "const [isLargeTemplateEditorOpen, setIsLargeTemplateEditorOpen]" in source
+    assert "打开大窗编辑" in source
+    assert "大窗编辑模板" in source
+    assert "data-testid=\"prompt-large-template-editor\"" in source
+    assert "关闭大窗" in source
     assert "工具模板" in source
+    assert "任务模板" in source
+    assert "资源树" in source
+    assert "运行时覆盖" in source
+    assert "新建模板" in source
+    assert "重置覆盖" in source
+    assert "删除运行时覆盖" in source
+    assert "chat/main" in source
+    assert "tools/custom_tool/usage" in source
     assert "按工具拆分" in source
-    assert "当前工具使用的模板" in source
-    assert "当前工具使用的模板</div>" in source
+    assert "工具提示词正文" in source
+    assert "任务提示词正文" in source
+    assert "真实工具 Schema" in source
+    assert "任务模板来源" in source
+    assert "schemaJson" in source
+    assert "schemaName" in source
+    assert "selectedToolTemplate?.description || '从左侧工具列表选择模板后，在右侧编辑正文。'" not in source
     assert "onChange={e => setSelectedToolTemplateKey(e.target.value)}" not in source
     assert "promptV2TemplateKind" in source
     assert "promptV2ToolName" in source
+    assert "promptV2Path" in source
+    assert "templateTree" in source
+    assert "selectedTaskTemplateKey" in source
     assert "selectedToolTemplateKey" in source
     assert ">runtime_key<" not in source
     assert "运行时数据" in source
     assert "api.get('/prompt-v2/templates')" in source
     assert "api.get('/prompt-v2/flow')" in source
-    assert "api.put(`/prompt-v2/templates/${encodeURIComponent(activeTemplateKey)}`" in source
+    assert "api.put(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`" in source
+    assert "api.post('/prompt-v2/templates'" in source
+    assert "api.delete(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`" in source
+    assert "api.post(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}/reset`" in source
     assert "api.put('/prompt-v2/flow'" in source
     assert "保存 V2 模板" in source
     assert "保存编排图" in source

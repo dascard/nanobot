@@ -27,11 +27,11 @@ RUNTIME_NODE_KEYS = {
 DEFAULT_FLOW: dict[str, Any] = {
     "version": 1,
     "nodes": [
-        {"id": "base_contract", "type": "template", "label": "system: V2 base contract", "template_key": "chat_main"},
-        {"id": "group_policy", "type": "template", "label": "system: group policy", "template_key": "chat_branch_group", "chat_types": ["group"]},
-        {"id": "private_policy", "type": "template", "label": "system: private policy", "template_key": "chat_branch_private", "chat_types": ["private"]},
+        {"id": "base_contract", "type": "template", "label": "system: V2 base contract", "template_key": "chat/main"},
+        {"id": "group_policy", "type": "template", "label": "system: group policy", "template_key": "chat/branch_group", "chat_types": ["group"]},
+        {"id": "private_policy", "type": "template", "label": "system: private policy", "template_key": "chat/branch_private", "chat_types": ["private"]},
         {"id": "runtime_context", "type": "runtime", "label": "system: runtime_context", "runtime_key": "runtime_context"},
-        {"id": "identity_context", "type": "template", "label": "system: identity_context", "template_key": "identity_context"},
+        {"id": "identity_context", "type": "template", "label": "system: identity_context", "template_key": "chat/identity_context"},
         {"id": "persona_reference", "type": "runtime", "label": "system: persona_reference", "runtime_key": "persona_reference"},
         {"id": "conversation_context_header", "type": "runtime", "label": "system: conversation_context_header", "runtime_key": "conversation_context_header"},
         {"id": "history_messages", "type": "runtime", "label": "history: messages", "runtime_key": "history_messages"},
@@ -66,11 +66,11 @@ class PromptFlow:
 
 
 def default_flow_path() -> Path:
-    return default_template_dir() / "chat_flow.json"
+    return default_template_dir() / "chat" / "flow.json"
 
 
 def runtime_flow_path() -> Path:
-    return runtime_template_dir() / "chat_flow.json"
+    return runtime_template_dir() / "chat" / "flow.json"
 
 
 def _read_json(path: Path) -> dict[str, Any]:

@@ -1887,7 +1887,7 @@ function PromptPage() {
         <div className="flex gap-3">
           <span className="text-xs text-amber-400 mt-0.5">⚠</span>
           <div>
-            <p className="text-sm text-amber-300 mb-1">Legacy prompt.md 回滚入口。</p>
+            <p className="text-sm text-amber-300 mb-1">Legacy prompt.md 片段（v1 回滚）。</p>
             <p className="text-xs text-slate-500">此页面只用于 v1 紧急回滚和迁移对比；V2 真实请求与有效预览请使用 Prompt Runtime V2。默认片段目录由 Git 管理，WebUI 保存只写入运行时片段目录。</p>
             {(defaultDir || runtimeDir || outputPath) && <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-2 text-[10px] text-slate-600">
               {defaultDir && <span>默认片段: <span className="text-slate-500 font-mono">{defaultDir}</span></span>}
@@ -1900,7 +1900,7 @@ function PromptPage() {
       </Card>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">
-          <h1 className="text-2xl font-bold">Legacy Prompt 回滚</h1>
+          <h1 className="text-2xl font-bold">Legacy prompt.md 片段（v1 回滚）</h1>
           <Badge tone="amber">v1 rollback only</Badge>
           <div className="flex gap-1 bg-slate-900 rounded-lg p-0.5">
             <button onClick={() => setTab('fragments')}
@@ -2128,14 +2128,14 @@ function ManagedPromptsPage() {
         <div className="flex gap-3">
           <span className="text-xs text-emerald-400 mt-0.5">ℹ</span>
           <div>
-            <p className="text-sm text-emerald-300 mb-1">V1 PromptManager 模板和对比工具。</p>
+            <p className="text-sm text-emerald-300 mb-1">旧 PromptManager 模板（v1/迁移）。</p>
             <p className="text-xs text-slate-500">V2 主链路使用独立 `core/prompt_v2` compiler；这里保留用于 v1 回滚、迁移整理和离线对比。默认模板目录：<span className="text-slate-400 font-mono">{defaultDir || 'prompts.default'}</span> · 运行时模板目录：<span className="text-slate-400 font-mono">{promptDir || 'data/prompts'}</span>。</p>
           </div>
         </div>
       </Card>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold mb-1">V1 模板 / 对比</h1>
+          <h1 className="text-2xl font-bold mb-1">旧 PromptManager 模板（v1/迁移）</h1>
           <p className="text-slate-500 text-sm">PromptManager Markdown 模板、变量预览、备份与回滚；不作为 V2 主回复编排入口</p>
           {(promptDir || defaultDir) && <div className="flex gap-4 mt-1 text-[10px] text-slate-600">
             {defaultDir && <span>默认模板: <span className="text-slate-500 font-mono">{defaultDir}</span></span>}
@@ -2205,6 +2205,7 @@ function ManagedPromptsPage() {
           </Card>
         </div>
       </div>
+
     </div>
   )
 }
@@ -2237,22 +2238,42 @@ const PROMPT_V2_TOOL_TEMPLATE_LABELS = {
   timing_gate: { tool: 'timing_gate', title: '发言时机判断模板' },
 }
 
+function promptV2Path(templateKey) {
+  return String(templateKey || '').split('/').map(encodeURIComponent).join('/')
+}
+
 function promptV2TemplateKind(item) {
   if (item?.kind) return item.kind
   const key = item?.template_key || ''
-  if (key.startsWith('chat_') || key === 'identity_context') return 'chat'
+  if (key.startsWith('chat/') || key.startsWith('chat_') || key === 'identity_context') return 'chat'
+  if (key.startsWith('tasks/')) return 'task'
   return 'tool'
 }
 
 function promptV2ToolName(item) {
   if (item?.tool_name) return item.tool_name
   const key = item?.template_key || ''
+  const parts = key.split('/')
+  if (parts[0] === 'tools' && parts[1]) return parts[1]
+  if (parts[0] === 'tasks' && parts[1]) return PROMPT_V2_TOOL_TEMPLATE_LABELS[parts[1]]?.tool || parts[1]
   return PROMPT_V2_TOOL_TEMPLATE_LABELS[key]?.tool || key
+}
+
+function promptV2TemplatePart(item) {
+  const key = item?.template_key || ''
+  const parts = key.split('/')
+  return parts[parts.length - 1] || key
 }
 
 function promptV2TemplateTitle(item) {
   const key = item?.template_key || ''
-  return PROMPT_V2_TOOL_TEMPLATE_LABELS[key]?.title || item?.name || key
+  const parts = key.split('/')
+  const labelKey = parts[0] === 'tools' || parts[0] === 'tasks' ? parts[1] : key
+  const title = item?.name || PROMPT_V2_TOOL_TEMPLATE_LABELS[labelKey]?.title || key
+  const part = promptV2TemplatePart(item)
+  if (parts[0] === 'tools' && part && part !== 'usage') return `${title} / ${part}`
+  if (parts[0] === 'tasks') return `${title} / ${part}`
+  return title
 }
 
 function runtimeNodeLabel(key) {
@@ -2634,7 +2655,8 @@ function PromptFlowCanvas({
 function PromptV2TemplatesPage() {
   const [chatType, setChatType] = useState('group')
   const [templates, setTemplates] = useState([])
-  const [selected, setSelected] = useState('chat_main')
+  const [templateTree, setTemplateTree] = useState({ chat: [], tools: {}, tasks: [] })
+  const [selected, setSelected] = useState('chat/main')
   const [selectedNodeId, setSelectedNodeId] = useState('')
   const [detail, setDetail] = useState(null)
   const [content, setContent] = useState('')
@@ -2646,31 +2668,44 @@ function PromptV2TemplatesPage() {
   const [runtimeDir, setRuntimeDir] = useState('')
   const [templateWorkspace, setTemplateWorkspace] = useState('chat')
   const [selectedToolTemplateKey, setSelectedToolTemplateKey] = useState('')
+  const [selectedTaskTemplateKey, setSelectedTaskTemplateKey] = useState('')
+  const [newTemplateKey, setNewTemplateKey] = useState('tools/custom_tool/usage')
   const [runtimeToAdd, setRuntimeToAdd] = useState('runtime_context')
   const [canvasViewport, setCanvasViewport] = useState({ x: 24, y: 24, zoom: 1 })
   const [selectedEdgeKey, setSelectedEdgeKey] = useState('')
+  const [isLargeTemplateEditorOpen, setIsLargeTemplateEditorOpen] = useState(false)
   const [toast, setToast] = useState('')
   const nodeIdSeq = useRef(0)
   const chatTemplates = templates.filter(item => promptV2TemplateKind(item) === 'chat')
   const toolTemplates = templates.filter(item => promptV2TemplateKind(item) === 'tool')
+  const taskTemplates = templates.filter(item => promptV2TemplateKind(item) === 'task')
   const orderedNodes = orderedFlowNodes(flow, chatType)
   const allNodes = flow?.nodes || []
   const selectedNode = allNodes.find(node => node.id === selectedNodeId) || orderedNodes[0] || allNodes[0] || null
   const selectedTemplateKey = selectedNode?.type === 'template' ? (selectedNode.template_key || selected) : ''
-  const activeTemplateKey = templateWorkspace === 'tools' ? selectedToolTemplateKey : selectedTemplateKey
+  const activeTemplateKey = templateWorkspace === 'tools' ? selectedToolTemplateKey : templateWorkspace === 'tasks' ? selectedTaskTemplateKey : selectedTemplateKey
   const selectedToolTemplate = toolTemplates.find(item => item.template_key === selectedToolTemplateKey) || toolTemplates[0] || null
+  const selectedTaskTemplate = taskTemplates.find(item => item.template_key === selectedTaskTemplateKey) || taskTemplates[0] || null
+  const selectedResourceTemplate = templateWorkspace === 'tasks' ? selectedTaskTemplate : selectedToolTemplate
+  const activeToolSchema = templateWorkspace === 'tools' ? (detail?.tool_schema || selectedToolTemplate?.tool_schema || null) : null
+  const schemaJson = activeToolSchema ? JSON.stringify(activeToolSchema, null, 2) : ''
+  const schemaName = activeToolSchema?.function?.name || promptV2ToolName(selectedToolTemplate) || '-'
+  const schemaDescription = activeToolSchema?.function?.description || selectedToolTemplate?.description || ''
   const selectedEdge = (flow.edges || []).find((edge, idx) => promptFlowEdgeKey(edge, idx) === selectedEdgeKey) || null
 
   const loadTemplates = useCallback(() => {
     api.get('/prompt-v2/templates').then(r => {
       const list = r.data.items || []
       setTemplates(list)
+      setTemplateTree(r.data.tree || { chat: [], tools: {}, tasks: [] })
       setDefaultDir(r.data.default_dir || '')
       setRuntimeDir(r.data.runtime_dir || '')
       const chatKeys = list.filter(item => promptV2TemplateKind(item) === 'chat').map(item => item.template_key)
       const toolKeys = list.filter(item => promptV2TemplateKind(item) === 'tool').map(item => item.template_key)
-      setSelected(prev => chatKeys.includes(prev) ? prev : (chatKeys.includes('chat_main') ? 'chat_main' : chatKeys[0] || ''))
+      const taskKeys = list.filter(item => promptV2TemplateKind(item) === 'task').map(item => item.template_key)
+      setSelected(prev => chatKeys.includes(prev) ? prev : (chatKeys.includes('chat/main') ? 'chat/main' : chatKeys[0] || ''))
       setSelectedToolTemplateKey(prev => toolKeys.includes(prev) ? prev : (toolKeys[0] || ''))
+      setSelectedTaskTemplateKey(prev => taskKeys.includes(prev) ? prev : (taskKeys[0] || ''))
     }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
   }, [])
 
@@ -2692,7 +2727,7 @@ function PromptV2TemplatesPage() {
 
   useEffect(() => {
     if (!activeTemplateKey) return
-    api.get(`/prompt-v2/templates/${encodeURIComponent(activeTemplateKey)}`).then(r => {
+    api.get(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`).then(r => {
       setDetail(r.data)
       setContent(r.data.content || '')
     }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
@@ -2706,10 +2741,48 @@ function PromptV2TemplatesPage() {
 
   const save = () => {
     if (!activeTemplateKey) return
-    api.put(`/prompt-v2/templates/${encodeURIComponent(activeTemplateKey)}`, { content }).then(r => {
+    api.put(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`, { content }).then(r => {
       setToast(`已保存 ${activeTemplateKey} · ${r.data.after_hash?.slice(0, 12) || ''}`)
       loadTemplates()
     }).catch(e => alert(e.response?.data?.detail || '保存 V2 模板失败'))
+  }
+
+  const createRuntimeTemplate = () => {
+    const key = newTemplateKey.trim()
+    if (!key) return
+    const parts = key.split('/')
+    const kind = parts[0] === 'chat' ? 'chat' : parts[0] === 'tasks' ? 'task' : 'tool'
+    const toolName = parts[0] === 'tools' ? parts[1] || '' : ''
+    api.post('/prompt-v2/templates', {
+      template_key: key,
+      kind,
+      tool_name: toolName,
+      name: key,
+      content: '',
+    }).then(() => {
+      setToast(`已新建运行时模板 ${key}`)
+      setTemplateWorkspace(kind === 'chat' ? 'chat' : kind === 'task' ? 'tasks' : 'tools')
+      if (kind === 'chat') setSelected(key)
+      if (kind === 'task') setSelectedTaskTemplateKey(key)
+      if (kind === 'tool') setSelectedToolTemplateKey(key)
+      loadTemplates()
+    }).catch(e => alert(e.response?.data?.detail || '新建 V2 模板失败'))
+  }
+
+  const deleteRuntimeOverride = () => {
+    if (!activeTemplateKey) return
+    api.delete(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`).then(() => {
+      setToast(`已删除运行时覆盖 ${activeTemplateKey}`)
+      loadTemplates()
+    }).catch(e => alert(e.response?.data?.detail || '删除运行时覆盖失败'))
+  }
+
+  const resetRuntimeOverride = () => {
+    if (!activeTemplateKey) return
+    api.post(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}/reset`).then(() => {
+      setToast(`已重置覆盖 ${activeTemplateKey}`)
+      loadTemplates()
+    }).catch(e => alert(e.response?.data?.detail || '重置覆盖失败'))
   }
 
   const saveFlow = () => {
@@ -2763,8 +2836,8 @@ function PromptV2TemplatesPage() {
 
   const addTemplateNode = () => {
     const key = (
-      chatTemplates.find(item => item.template_key === 'identity_context')?.template_key
-      || chatTemplates.find(item => item.template_key === 'chat_main')?.template_key
+      chatTemplates.find(item => item.template_key === 'chat/identity_context')?.template_key
+      || chatTemplates.find(item => item.template_key === 'chat/main')?.template_key
       || chatTemplates[0]?.template_key
     )
     if (!key) return
@@ -2877,7 +2950,7 @@ function PromptV2TemplatesPage() {
         <div className="space-y-3 min-w-0">
           <Card className="p-3">
             <div className="text-xs font-medium text-slate-300 mb-2">模板工作区</div>
-            <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-950 p-1">
+            <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-950 p-1">
               <button onClick={() => setTemplateWorkspace('chat')}
                 className={`rounded-md px-2 py-1.5 text-xs ${templateWorkspace === 'chat' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
                 聊天编排
@@ -2885,6 +2958,80 @@ function PromptV2TemplatesPage() {
               <button onClick={() => setTemplateWorkspace('tools')}
                 className={`rounded-md px-2 py-1.5 text-xs ${templateWorkspace === 'tools' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
                 工具模板
+              </button>
+              <button onClick={() => setTemplateWorkspace('tasks')}
+                className={`rounded-md px-2 py-1.5 text-xs ${templateWorkspace === 'tasks' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                任务模板
+              </button>
+            </div>
+          </Card>
+
+          <Card className="p-3">
+            <div className="text-xs font-medium text-slate-300 mb-1">资源树</div>
+            <div className="text-[11px] text-slate-600 mb-2">聊天编排、工具模板、任务模板共用同一套目录化索引</div>
+            <div className="space-y-2 max-h-[420px] overflow-auto prompt-flow-scrollbar">
+              {templateWorkspace === 'chat' && (
+                <div>
+                  <div className="mb-1 text-[11px] text-slate-500">chat</div>
+                  <div className="space-y-1">
+                    {(templateTree.chat || chatTemplates).map(item => (
+                      <button key={item.template_key} onClick={() => selectedNode?.type === 'template' ? updateSelectedTemplate(item.template_key) : setSelected(item.template_key)}
+                        className={`w-full text-left rounded-lg border px-2 py-2 text-xs ${selectedTemplateKey === item.template_key || selected === item.template_key ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200' : 'border-slate-800 hover:bg-slate-800 text-slate-300'}`}>
+                        <div className="font-medium truncate">{item.name || item.template_key}</div>
+                        <div className="mt-1 font-mono text-[10px] text-slate-500 truncate">{item.template_key}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {templateWorkspace === 'tools' && Object.entries(templateTree.tools || {}).map(([toolName, items]) => (
+                <div key={toolName}>
+                  <div className="mb-1 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <span className="font-mono">{toolName}</span>
+                    <span>{items.length}</span>
+                  </div>
+                  <div className="space-y-1">
+                    {items.map(item => (
+                      <button key={item.template_key} onClick={() => setSelectedToolTemplateKey(item.template_key)}
+                        className={`w-full text-left rounded-lg border px-2 py-2 text-xs ${selectedToolTemplateKey === item.template_key ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200' : 'border-slate-800 hover:bg-slate-800 text-slate-300'}`}>
+                        <div className="font-medium truncate">{promptV2TemplatePart(item)}</div>
+                        <div className="mt-1 font-mono text-[10px] text-slate-500 truncate">{item.template_key}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {templateWorkspace === 'tasks' && (
+                <div>
+                  <div className="mb-1 text-[11px] text-slate-500">tasks</div>
+                  <div className="space-y-1">
+                    {(templateTree.tasks || taskTemplates).map(item => (
+                      <button key={item.template_key} onClick={() => setSelectedTaskTemplateKey(item.template_key)}
+                        className={`w-full text-left rounded-lg border px-2 py-2 text-xs ${selectedTaskTemplateKey === item.template_key ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200' : 'border-slate-800 hover:bg-slate-800 text-slate-300'}`}>
+                        <div className="font-medium truncate">{item.name || item.template_key}</div>
+                        <div className="mt-1 font-mono text-[10px] text-slate-500 truncate">{item.template_key}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+
+          <Card className="p-3 space-y-2">
+            <div className="text-xs font-medium text-slate-300">运行时覆盖</div>
+            <input value={newTemplateKey} onChange={e => setNewTemplateKey(e.target.value)}
+              placeholder="tools/custom_tool/usage"
+              className="w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200 outline-none focus:border-emerald-500" />
+            <button onClick={createRuntimeTemplate} className="w-full rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">新建模板</button>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={resetRuntimeOverride} disabled={!activeTemplateKey}
+                className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-500/20 disabled:opacity-40">
+                重置覆盖
+              </button>
+              <button onClick={deleteRuntimeOverride} disabled={!activeTemplateKey}
+                className="rounded-lg bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20 disabled:opacity-40">
+                删除运行时覆盖
               </button>
             </div>
           </Card>
@@ -2928,22 +3075,7 @@ function PromptV2TemplatesPage() {
             </div>
           </Card>
             </>
-          ) : (
-            <Card className="p-3">
-              <div className="text-xs font-medium text-slate-300 mb-1">工具模板</div>
-              <div className="text-[11px] text-slate-600 mb-2">按工具拆分，一个工具对应一个可维护模板</div>
-              <div className="space-y-1 max-h-[560px] overflow-auto prompt-flow-scrollbar">
-                {toolTemplates.map(item => (
-                  <button key={item.template_key} onClick={() => setSelectedToolTemplateKey(item.template_key)}
-                    className={`w-full text-left rounded-lg border px-2 py-2 text-xs ${selectedToolTemplateKey === item.template_key ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200' : 'border-slate-800 hover:bg-slate-800 text-slate-300'}`}>
-                    <div className="font-medium truncate">{promptV2TemplateTitle(item)}</div>
-                    <div className="mt-1 text-[11px] text-slate-500 truncate">工具: {promptV2ToolName(item)}</div>
-                  </button>
-                ))}
-                {!toolTemplates.length && <div className="py-6 text-center text-xs text-slate-600">暂无工具模板</div>}
-              </div>
-            </Card>
-          )}
+          ) : null}
         </div>
 
         <div className="min-w-0">
@@ -2963,20 +3095,33 @@ function PromptV2TemplatesPage() {
               onSelectEdge={selectEdge}
             />
           ) : (
-            <Card className="p-5 min-h-[680px]">
+            <Card className="p-4 min-h-[680px] flex flex-col">
               <div className="flex items-start justify-between gap-4 mb-4">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-100">工具模板</h2>
-                  <p className="text-sm text-slate-500">工具模板不混进聊天主流程画布。每个工具独立维护自己的约束、输出格式和使用边界。</p>
+                <div className="min-w-0">
+                  <div className="text-xs text-slate-500 mb-1">{templateWorkspace === 'tools' ? '工具提示词正文' : '任务提示词正文'}</div>
+                  <h2 className="text-lg font-semibold text-emerald-300 truncate">{promptV2TemplateTitle(selectedResourceTemplate) || '未选择模板'}</h2>
+                  <div className="mt-1 text-xs text-slate-500 truncate">
+                    {templateWorkspace === 'tools' ? (
+                      <>
+                        工具: <span className="font-mono text-slate-400">{promptV2ToolName(selectedToolTemplate) || '-'}</span>
+                        <span className="mx-2 text-slate-700">/</span>
+                        schema: <span className="font-mono text-slate-400">{schemaName}</span>
+                      </>
+                    ) : (
+                      <>模板: <span className="font-mono text-slate-400">{selectedTaskTemplateKey || '-'}</span></>
+                    )}
+                  </div>
                 </div>
-                <Badge tone="blue">按工具拆分</Badge>
+                <div className="flex shrink-0 gap-2">
+                  <Badge tone={detail?.source === 'runtime' ? 'emerald' : 'slate'}>{detail?.source || 'default'}</Badge>
+                  <Badge tone="blue">{detail?.sha256?.slice(0, 12) || '-'}</Badge>
+                </div>
               </div>
-              <div className="rounded-lg border border-slate-800 bg-slate-950 p-5">
-                <div className="text-xs text-slate-500 mb-1">当前工具使用的模板</div>
-                <div className="text-lg font-semibold text-emerald-300">{promptV2TemplateTitle(selectedToolTemplate) || '-'}</div>
-                <div className="mt-1 text-sm text-slate-500">工具: {promptV2ToolName(selectedToolTemplate) || '-'}</div>
-                <p className="mt-4 text-sm text-slate-500">{selectedToolTemplate?.description || '从左侧工具列表选择模板后，在右侧编辑正文。'}</p>
+              <div className="mb-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-[11px] text-slate-500 truncate">
+                {activeTemplateKey ? detail?.active_path || '' : '从左侧选择一个工具模板'}
               </div>
+              <textarea value={content} onChange={e => setContent(e.target.value)}
+                className="flex-1 min-h-[560px] w-full rounded-lg border border-slate-800 bg-slate-950 p-4 font-mono text-sm leading-relaxed text-slate-300 outline-none resize-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
             </Card>
           )}
         </div>
@@ -3042,38 +3187,75 @@ function PromptV2TemplatesPage() {
               </>
             ) : (
               <>
-                <div className="text-xs text-slate-500 mb-1">当前工具使用的模板</div>
-                <h2 className="text-sm font-medium text-emerald-300 truncate">{promptV2TemplateTitle(selectedToolTemplate) || '未选择工具模板'}</h2>
-                <div className="mt-1 text-[11px] text-slate-600">工具: {promptV2ToolName(selectedToolTemplate) || '-'}</div>
-                <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-[11px] text-slate-500">
-                  从左侧工具列表选择要编辑的工具模板。
+                <div className="text-xs text-slate-500 mb-1">{templateWorkspace === 'tools' ? '工具元信息' : '任务元信息'}</div>
+                <h2 className="text-sm font-medium text-emerald-300 truncate">{promptV2TemplateTitle(selectedResourceTemplate) || '未选择模板'}</h2>
+                <div className="mt-1 text-[11px] text-slate-600">模板: {activeTemplateKey || '-'}</div>
+                {templateWorkspace === 'tools' && <div className="mt-1 text-[11px] text-slate-600">工具: {promptV2ToolName(selectedToolTemplate) || '-'}</div>}
+                {templateWorkspace === 'tools' && <div className="mt-1 text-[11px] text-slate-600">类别: {activeToolSchema?.category || '-'}</div>}
+                {templateWorkspace === 'tools' && <div className="mt-1 text-[11px] text-slate-600">风险: {activeToolSchema?.risk_level || '-'}</div>}
+                <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-[11px] text-slate-500 leading-relaxed">
+                  {templateWorkspace === 'tools' ? (schemaDescription || '当前模板没有匹配到真实工具 schema。') : (detail?.description || '任务模板用于离线/二次 LLM 调用，不直接暴露为 API tools schema。')}
                 </div>
               </>
             )}
           </Card>
 
-          <Card className="p-4">
-            <div className="flex items-center justify-between gap-2 mb-3">
-              <div className="min-w-0">
-                <div className="text-xs font-medium text-slate-300">模板内容</div>
-                <div className="text-[11px] text-slate-600 truncate">{activeTemplateKey ? detail?.active_path || '' : '当前节点不是模板文件'}</div>
+          {templateWorkspace === 'chat' ? (
+            <Card className="p-4">
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-slate-300">模板内容</div>
+                  <div className="text-[11px] text-slate-600 truncate">{activeTemplateKey ? detail?.active_path || '' : '当前节点不是模板文件'}</div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {selectedNode?.type !== 'runtime' && activeTemplateKey && (
+                    <button onClick={() => setIsLargeTemplateEditorOpen(true)}
+                      className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">
+                      打开大窗编辑
+                    </button>
+                  )}
+                  <Badge tone={detail?.source === 'runtime' ? 'emerald' : 'slate'}>{detail?.source || 'default'}</Badge>
+                  <Badge tone="blue">{detail?.sha256?.slice(0, 12) || '-'}</Badge>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <Badge tone={detail?.source === 'runtime' ? 'emerald' : 'slate'}>{detail?.source || 'default'}</Badge>
-                <Badge tone="blue">{detail?.sha256?.slice(0, 12) || '-'}</Badge>
+              {selectedNode?.type === 'runtime' ? (
+                <div className="min-h-[340px] rounded-lg bg-slate-950 border border-slate-800 p-4">
+                  <div className="text-xs text-slate-500 mb-2">运行时注入节点</div>
+                  <div className="text-lg text-slate-200 mb-1">{runtimeNodeLabel(selectedNode.runtime_key)}</div>
+                  <div className="text-sm text-slate-500">这个节点由 compiler 注入真实运行数据，不在模板文件中编辑。</div>
+                </div>
+              ) : (
+                <textarea value={content} onChange={e => setContent(e.target.value)}
+                  className="w-full min-h-[340px] p-4 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-300 leading-relaxed resize-y focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
+              )}
+            </Card>
+          ) : templateWorkspace === 'tools' ? (
+            <Card className="p-4">
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div>
+                  <div className="text-xs font-medium text-slate-300">真实工具 Schema</div>
+                  <div className="text-[11px] text-slate-600">以本轮 API tools schema 为准</div>
+                </div>
+                <Badge tone={activeToolSchema?.source === 'package' ? 'emerald' : 'amber'}>{activeToolSchema?.source || 'missing'}</Badge>
               </div>
-            </div>
-            {templateWorkspace === 'chat' && selectedNode?.type === 'runtime' ? (
-              <div className="min-h-[340px] rounded-lg bg-slate-950 border border-slate-800 p-4">
-                <div className="text-xs text-slate-500 mb-2">运行时注入节点</div>
-                <div className="text-lg text-slate-200 mb-1">{runtimeNodeLabel(selectedNode.runtime_key)}</div>
-                <div className="text-sm text-slate-500">这个节点由 compiler 注入真实运行数据，不在模板文件中编辑。</div>
+              {schemaJson ? (
+                <pre className="max-h-[520px] overflow-auto prompt-flow-scrollbar whitespace-pre-wrap break-words rounded-lg border border-slate-800 bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-300">{schemaJson}</pre>
+              ) : (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+                  没有找到该工具的真实 schema。请检查模板 frontmatter 的 tool_name 是否和工具注册名一致。
+                </div>
+              )}
+            </Card>
+          ) : (
+            <Card className="p-4">
+              <div className="text-xs font-medium text-slate-300 mb-3">任务模板来源</div>
+              <div className="space-y-2 text-[11px] text-slate-500">
+                <div>默认路径: <span className="font-mono text-slate-400">{detail?.default_path || '-'}</span></div>
+                <div>运行时路径: <span className="font-mono text-slate-400">{detail?.runtime_path || '-'}</span></div>
+                <div>生效来源: <span className="font-mono text-slate-400">{detail?.source || '-'}</span></div>
               </div>
-            ) : (
-              <textarea value={content} onChange={e => setContent(e.target.value)}
-                className="w-full min-h-[340px] p-4 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-300 leading-relaxed resize-y focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
-            )}
-          </Card>
+            </Card>
+          )}
 
           <Card className="p-4">
             <div className="text-xs font-medium text-slate-300 mb-2">全局可插入变量白名单</div>
@@ -3089,6 +3271,37 @@ function PromptV2TemplatesPage() {
           </Card>
         </div>
       </div>
+
+      {isLargeTemplateEditorOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-6 backdrop-blur-sm">
+          <div data-testid="prompt-large-template-editor" className="flex h-[86vh] w-full max-w-6xl flex-col rounded-xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/50">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
+              <div className="min-w-0">
+                <div className="text-xs text-slate-500">大窗编辑模板</div>
+                <h2 className="mt-1 truncate text-lg font-semibold text-emerald-300">{detail?.name || activeTemplateKey || '模板内容'}</h2>
+                <div className="mt-1 truncate text-[11px] text-slate-600">{detail?.active_path || ''}</div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Badge tone={detail?.source === 'runtime' ? 'emerald' : 'slate'}>{detail?.source || 'default'}</Badge>
+                <Badge tone="blue">{detail?.sha256?.slice(0, 12) || '-'}</Badge>
+                <button onClick={save} disabled={!activeTemplateKey}
+                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50">
+                  保存 V2 模板
+                </button>
+                <button onClick={() => setIsLargeTemplateEditorOpen(false)}
+                  className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">
+                  关闭大窗
+                </button>
+              </div>
+            </div>
+            <textarea value={content} onChange={e => setContent(e.target.value)}
+              className="m-5 flex-1 resize-none rounded-lg border border-slate-800 bg-slate-950 p-5 font-mono text-sm leading-relaxed text-slate-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+            <div className="border-t border-slate-800 px-5 py-3 text-[11px] text-slate-600">
+              这里编辑的是同一份模板正文；关闭大窗后右侧小编辑框会保持同步。
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -101,15 +101,26 @@ def _metadata_fallback_schema(name: str) -> dict[str, Any]:
     }
 
 
+def build_tool_schema(name: str) -> dict[str, Any]:
+    """按工具名构造单个 OpenAI-compatible schema，供管理端展示。"""
+    tool_name = str(name or "").strip()
+    schema = _package_tool_schema(tool_name) or _builtin_tool_schema(tool_name) or _metadata_fallback_schema(tool_name)
+    try:
+        from core.prompt_v2.tool_templates import overlay_tool_schema_description
+        schema = overlay_tool_schema_description(schema)
+    except Exception:
+        pass
+    if tool_name in TOOL_METADATA:
+        td = TOOL_METADATA[tool_name]
+        schema["category"] = td.category
+        schema["risk_level"] = td.risk_level
+        schema["label"] = td.label
+    return schema
+
+
 def build_effective_tool_schemas(enabled: dict[str, bool]) -> list[dict[str, Any]]:
     """按当前启用工具构造预览 schema；memory subagent 保持元数据兜底。"""
     schemas: list[dict[str, Any]] = []
     for name in sorted(n for n, ok in (enabled or {}).items() if ok):
-        schema = _package_tool_schema(name) or _builtin_tool_schema(name) or _metadata_fallback_schema(name)
-        if name in TOOL_METADATA:
-            td = TOOL_METADATA[name]
-            schema["category"] = td.category
-            schema["risk_level"] = td.risk_level
-            schema["label"] = td.label
-        schemas.append(schema)
+        schemas.append(build_tool_schema(name))
     return schemas

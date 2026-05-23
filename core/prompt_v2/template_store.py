@@ -8,120 +8,166 @@ from core.prompt_v2.template_loader import (
     default_template_dir,
     load_template,
     runtime_template_dir,
+    split_frontmatter_text,
+)
+from core.prompt_v2.template_registry import (
+    classify_template,
+    first_existing_template_path,
+    list_template_keys,
+    resolve_template_key,
+    template_path_for,
 )
 from core.prompt_v2.variables import list_variables, validate_scoped_template
 
 
-def _safe_template_key(template_key: str) -> str:
-    key = str(template_key or "").removesuffix(".md").strip()
-    if not key:
-        raise ValueError("template_key 不能为空")
-    if not all(ch.isalnum() or ch in {"_", "-", "."} for ch in key):
-        raise ValueError("template_key 包含非法字符")
-    return key
-
-
-def _body_from(path: Path) -> str:
-    if not path.exists():
+def _read_body(path: Path | None) -> str:
+    if not path or not path.exists():
         return ""
-    return load_template(path.stem, template_dir=path.parent).body
+    _frontmatter, body = split_frontmatter_text(path.read_text(encoding="utf-8"))
+    return body.strip()
 
 
-def _load_optional_template(path: Path):
-    if not path.exists():
-        return None
-    return load_template(path.stem, template_dir=path.parent)
+def _read_frontmatter(path: Path | None) -> dict[str, Any]:
+    if not path or not path.exists():
+        return {}
+    frontmatter, _body = split_frontmatter_text(path.read_text(encoding="utf-8"))
+    return frontmatter
 
 
-def _template_kind(key: str, frontmatter: dict[str, Any]) -> str:
-    raw = str(frontmatter.get("kind") or "").strip()
-    if raw:
-        return raw
-    if key.startswith("chat_") or key in {"identity_context"}:
-        return "chat"
-    return "tool"
-
-
-def _tool_name(key: str, frontmatter: dict[str, Any], kind: str) -> str:
-    raw = str(frontmatter.get("tool_name") or "").strip()
-    if raw:
-        return raw
-    if kind != "tool":
-        return ""
-    if key == "reply_contract_retry":
-        return "reply"
-    return key
+def _frontmatter_text(values: dict[str, Any]) -> str:
+    lines = ["---"]
+    for key in ("name", "version", "kind", "tool_name", "description"):
+        value = values.get(key)
+        if value is None or value == "":
+            continue
+        lines.append(f"{key}: {value}")
+    lines.append("---")
+    return "\n".join(lines) + "\n"
 
 
 def _template_record(key: str) -> dict[str, Any]:
-    default_path = default_template_dir() / f"{key}.md"
-    runtime_path = runtime_template_dir() / f"{key}.md"
-    default_template = _load_optional_template(default_path)
-    runtime_template = _load_optional_template(runtime_path)
-    template = runtime_template or default_template
-    if template is None:
-        raise FileNotFoundError(key)
-    active_path = runtime_path if runtime_template else default_path
-    content = template.body
+    canonical = resolve_template_key(key)
+    default_path = first_existing_template_path(canonical, runtime=False)
+    runtime_path = first_existing_template_path(canonical, runtime=True)
+    template = load_template(canonical)
     frontmatter = {
-        **(default_template.frontmatter if default_template else {}),
-        **(runtime_template.frontmatter if runtime_template else {}),
+        **_read_frontmatter(default_path),
+        **_read_frontmatter(runtime_path),
     }
-    kind = _template_kind(key, frontmatter)
+    classified = classify_template(canonical, frontmatter)
+    tool_schema = None
+    if classified.kind == "tool" and classified.tool_name:
+        try:
+            from core.tool_schema_preview import build_tool_schema
+
+            tool_schema = build_tool_schema(classified.tool_name)
+        except Exception:
+            tool_schema = None
     return {
-        "template_key": key,
-        "name": str(frontmatter.get("name") or key),
+        "template_key": canonical,
+        "name": str(frontmatter.get("name") or classified.display_name or canonical),
         "description": str(frontmatter.get("description") or ""),
         "version": frontmatter.get("version", ""),
-        "kind": kind,
-        "tool_name": _tool_name(key, frontmatter, kind),
-        "source": "runtime" if runtime_path.exists() else "default",
-        "active_path": str(active_path),
-        "runtime_path": str(runtime_path),
-        "default_path": str(default_path),
-        "sha256": sha256_text(content),
-        "size": len(content.encode("utf-8")),
-        "variables": list_variables(key),
+        "kind": classified.kind,
+        "category": classified.category,
+        "tool_name": classified.tool_name,
+        "tool_schema": tool_schema,
+        "source": "runtime" if runtime_path else "default",
+        "active_path": str(runtime_path or default_path or template.path),
+        "runtime_path": str(runtime_path or template_path_for(canonical, runtime=True)),
+        "default_path": str(default_path or template_path_for(canonical, runtime=False)),
+        "sha256": sha256_text(template.body),
+        "size": len(template.body.encode("utf-8")),
+        "variables": list_variables(canonical),
+        "frontmatter": frontmatter,
     }
+
+
+def _build_tree(items: list[dict[str, Any]]) -> dict[str, Any]:
+    tree: dict[str, Any] = {"chat": [], "tools": {}, "tasks": []}
+    for item in items:
+        key = str(item.get("template_key") or "")
+        category = str(item.get("category") or "")
+        if category == "tools":
+            parts = key.split("/")
+            tool_name = parts[1] if len(parts) > 1 else str(item.get("tool_name") or "")
+            tree["tools"].setdefault(tool_name, []).append(item)
+        elif category == "tasks":
+            tree["tasks"].append(item)
+        else:
+            tree["chat"].append(item)
+    for key in list(tree["tools"]):
+        tree["tools"][key] = sorted(tree["tools"][key], key=lambda item: item["template_key"])
+    tree["chat"] = sorted(tree["chat"], key=lambda item: item["template_key"])
+    tree["tasks"] = sorted(tree["tasks"], key=lambda item: item["template_key"])
+    return tree
 
 
 def list_templates() -> dict[str, Any]:
-    default_dir = default_template_dir()
-    runtime_dir = runtime_template_dir()
-    keys = {
-        path.stem
-        for base in (default_dir, runtime_dir)
-        if base.exists()
-        for path in base.glob("*.md")
-    }
+    items = [_template_record(key) for key in list_template_keys()]
+    items = sorted(items, key=lambda item: item["template_key"])
     return {
-        "items": [_template_record(key) for key in sorted(keys)],
-        "default_dir": str(default_dir),
-        "runtime_dir": str(runtime_dir),
+        "items": items,
+        "tree": _build_tree(items),
+        "default_dir": str(default_template_dir()),
+        "runtime_dir": str(runtime_template_dir()),
     }
 
 
 def get_template(template_key: str) -> dict[str, Any]:
-    key = _safe_template_key(template_key)
+    key = resolve_template_key(template_key)
     record = _template_record(key)
-    default_path = Path(record["default_path"])
-    runtime_path = Path(record["runtime_path"])
+    default_path = first_existing_template_path(key, runtime=False)
+    runtime_path = first_existing_template_path(key, runtime=True)
     return {
         **record,
-        "content": _body_from(runtime_path if runtime_path.exists() else default_path),
-        "default_content": _body_from(default_path),
-        "runtime_content": _body_from(runtime_path),
+        "content": _read_body(runtime_path or default_path),
+        "default_content": _read_body(default_path),
+        "runtime_content": _read_body(runtime_path),
+    }
+
+
+def create_template(
+    template_key: str,
+    *,
+    content: str,
+    name: str = "",
+    kind: str = "tool",
+    tool_name: str = "",
+    description: str = "",
+) -> dict[str, Any]:
+    key = resolve_template_key(template_key)
+    text = str(content or "")
+    validate_scoped_template(key, text)
+    path = template_path_for(key, runtime=True)
+    if path.exists():
+        raise ValueError("运行时模板已存在")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frontmatter = {
+        "name": name or key,
+        "version": 1,
+        "kind": kind,
+        "tool_name": tool_name,
+        "description": description,
+    }
+    normalized = text.rstrip() + "\n"
+    path.write_text(_frontmatter_text(frontmatter) + normalized, encoding="utf-8")
+    return {
+        "saved": True,
+        "created": True,
+        "template_key": key,
+        "runtime_path": str(path),
+        "after_hash": sha256_text(normalized.rstrip("\n")),
     }
 
 
 def save_template(template_key: str, content: str) -> dict[str, Any]:
-    key = _safe_template_key(template_key)
+    key = resolve_template_key(template_key)
     text = str(content or "")
     validate_scoped_template(key, text)
-    runtime_dir = runtime_template_dir()
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    path = runtime_dir / f"{key}.md"
-    before = _body_from(path) if path.exists() else ""
+    path = template_path_for(key, runtime=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    before = _read_body(path)
     normalized = text.rstrip() + "\n"
     path.write_text(normalized, encoding="utf-8")
     return {
@@ -131,3 +177,22 @@ def save_template(template_key: str, content: str) -> dict[str, Any]:
         "before_hash": sha256_text(before),
         "after_hash": sha256_text(normalized.rstrip("\n")),
     }
+
+
+def delete_runtime_template(template_key: str) -> dict[str, Any]:
+    key = resolve_template_key(template_key)
+    path = template_path_for(key, runtime=True)
+    existed = path.exists()
+    if existed:
+        path.unlink()
+    return {
+        "deleted": existed,
+        "template_key": key,
+        "runtime_path": str(path),
+    }
+
+
+def reset_template(template_key: str) -> dict[str, Any]:
+    result = delete_runtime_template(template_key)
+    result["reset"] = True
+    return result

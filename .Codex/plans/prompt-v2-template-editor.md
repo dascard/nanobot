@@ -52,6 +52,7 @@
 - [x] 在侧栏展示当前高亮路径的拓扑顺序。
 - [x] 将运行时节点字段显示为中文概念，不在表单里展示 `runtime_key`。
 - [x] 展示全局可插入变量白名单和运行时目录。
+- [x] 在编排页模板内容区增加大窗编辑浮层，长提示词可在中央大编辑器中维护。
 - [x] 保存模板并刷新预览。
 - [x] 保存编排图并刷新预览。
 
@@ -70,6 +71,12 @@
 - [x] 工具模板用左侧工具列表作为唯一选择入口，每个工具编辑自己的模板。
 - [x] 聊天编排添加模板节点时只使用聊天模板。
 - [x] 默认工具模板覆盖 reply/no_reply/sql/python/news/image/persona/schedule/group/sticker 等实际运行工具。
+- [x] 工具模板主区域改为提示词正文编辑器，避免大面积只读展示卡片。
+- [x] 模板列表和详情返回真实工具 schema，右侧展示 description 与参数结构。
+- [x] 补全 `group_analysis` 模板，使其覆盖真实工具参数、分析链路和 HTML 日报输出约束。
+- [x] 主模型请求的 `runtime_tool_prompt` 和实际 `tools[].function.description` 叠加 V2 工具模板内容。
+- [x] `group_analysis` 内部 system/topics/titles/quotes/quality LLM prompt 改为从 V2 工具模板渲染。
+- [x] `news_search` / `ai_daily` / `image_summary` 内部 LLM system/user prompt 改为从 V2 工具模板渲染。
 
 ### 任务 3.5：收口默认模板
 

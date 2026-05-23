@@ -130,6 +130,18 @@ def _build_multimodal_content(files: list[str], focus: str) -> list[Any] | str:
     ]
     if focus:
         prompt_lines.append(f"- 额外关注点：{focus}")
+    prompt_text = "\n".join(prompt_lines)
+    try:
+        from core.prompt_v2.tool_templates import render_tool_execution_template
+
+        prompt_text = render_tool_execution_template(
+            "tools/image_summary/user",
+            {"image_count": str(len(files)), "focus": focus},
+            fallback=prompt_text,
+            expected_tool_name="image_summary",
+        )
+    except Exception:
+        pass
 
     image_parts = prepare_image_parts(
         files,
@@ -137,7 +149,7 @@ def _build_multimodal_content(files: list[str], focus: str) -> list[Any] | str:
         source_name_prefix="image_summary",
         detail="low",
     )
-    content = make_multimodal_content("\n".join(prompt_lines), images=image_parts)
+    content = make_multimodal_content(prompt_text, images=image_parts)
     if isinstance(content, list):
         return content_parts_to_dicts(content)
     return content
@@ -220,7 +232,7 @@ class ImageSummaryTool(BaseTool):
 
     @staticmethod
     def _system_prompt() -> str:
-        return (
+        fallback = (
             "你是本地 Qwen 视觉摘要模型。"
             "请根据输入图片输出严格 JSON，禁止 Markdown、禁止代码块、禁止额外解释。"
             "如果图片不清晰，请在 uncertainties 中说明，不要猜测。"
@@ -234,6 +246,17 @@ class ImageSummaryTool(BaseTool):
             "\"confidence\": \"high|medium|low\""
             "}"
         )
+        try:
+            from core.prompt_v2.tool_templates import render_tool_execution_template
+
+            return render_tool_execution_template(
+                "tools/image_summary/system",
+                {},
+                fallback=fallback,
+                expected_tool_name="image_summary",
+            )
+        except Exception:
+            return fallback
 
     def _build_payload(self, files: list[str], focus: str, route: dict) -> dict[str, Any]:
         payload: dict[str, Any] = {

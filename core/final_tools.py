@@ -100,6 +100,12 @@ def filter_payload_tools(
     allowed = set(final_tools.allowed or set())
     kept = [tool for tool in tools if tool_name(tool) in allowed]
     if kept:
+        try:
+            from core.prompt_v2.tool_templates import overlay_tool_schema_description
+            kept = [overlay_tool_schema_description(tool) for tool in kept]
+        except Exception:
+            kept = [dict(tool) if isinstance(tool, dict) else tool for tool in kept]
+    if kept:
         filtered["tools"] = kept
     else:
         filtered.pop("tools", None)

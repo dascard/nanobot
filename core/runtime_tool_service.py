@@ -217,6 +217,15 @@ def build_runtime_tool_prompt(
             "sql_analysis；memory_read 只用于长期记忆，不用于检索 chat_logs/conversation_turns。"
         )
 
+    try:
+        from core.prompt_v2.tool_templates import format_enabled_tool_templates
+        tool_templates = format_enabled_tool_templates(enabled)
+        if tool_templates:
+            lines.append("以下工具规则来自 Prompt Runtime V2 工具模板，和 WebUI 工具模板编辑页同源：")
+            lines.append(tool_templates)
+    except Exception as exc:
+        logger.warning("Failed to render Prompt V2 tool templates: %s", exc)
+
     lines.append("规则：不要声称调用未出现在 tools schema 中的工具，也不要声称调用已禁用工具。")
     lines.append("如需回复，必须真实调用 reply(content)；不回复则调用 no_reply(reason)。")
     return "\n".join(lines)

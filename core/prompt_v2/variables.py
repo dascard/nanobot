@@ -39,6 +39,16 @@ _GLOBAL_VARIABLES: tuple[VariableDef, ...] = (
     VariableDef("bot_aliases", "global", "机器人别名列表", "小七\\nbot"),
     VariableDef("current_time", "global", "当前北京时间", "2026-05-23 10:30:00 CST"),
     VariableDef("timezone", "global", "当前时区", "Asia/Shanghai"),
+    VariableDef("messages_text", "global", "工具运行时注入的消息文本", "[12:00] [10001]: 示例消息"),
+    VariableDef("style_messages_text", "global", "工具运行时注入的风格参考消息文本", "[12:00] [10001]: 示例消息"),
+    VariableDef("users_text", "global", "工具运行时注入的用户统计文本", "10001 | 5 | 24.0 | 0.10 | 0.20"),
+    VariableDef("instructions", "global", "工具运行时注入的用户分析指引", "只看最近 2 小时"),
+    VariableDef("evidence_cards", "global", "工具运行时注入的证据卡片文本", "### 来源 #1\n标题: 示例"),
+    VariableDef("candidate_cards", "global", "工具运行时注入的候选卡片文本", "### 来源 #1\n标题: 示例"),
+    VariableDef("mode_hint", "global", "工具运行时注入的模式说明", "生成 2-3 条 highlights"),
+    VariableDef("card_count", "global", "工具运行时注入的卡片数量", "8"),
+    VariableDef("image_count", "global", "工具运行时注入的图片数量", "2"),
+    VariableDef("focus", "global", "工具运行时注入的图片摘要重点", "OCR"),
 )
 
 

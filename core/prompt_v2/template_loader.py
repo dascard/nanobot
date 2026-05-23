@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from core.prompt_v2.template_registry import (
+    default_template_dir,
+    first_existing_template_path,
+    resolve_template_key,
+    runtime_template_dir,
+    template_path_for,
+)
 
 
 @dataclass(frozen=True)
@@ -15,29 +22,8 @@ class PromptV2Template:
     raw: str
 
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[2]
-
-
-def default_template_dir() -> Path:
-    return Path(
-        os.environ.get("NANOBOT_PROMPT_V2_DIR")
-        or os.environ.get("NANOBOT_PROMPT_V2_DEFAULT_DIR")
-        or (_repo_root() / "prompts.v2.default")
-    )
-
-
-def runtime_template_dir() -> Path:
-    return Path(os.environ.get("NANOBOT_PROMPT_V2_RUNTIME_DIR") or (_repo_root() / "data" / "prompts_v2"))
-
-
 def _safe_prompt_key(prompt_key: str) -> str:
-    key = str(prompt_key or "").removesuffix(".md").strip()
-    if not key:
-        raise ValueError("prompt_key 不能为空")
-    if not all(ch.isalnum() or ch in {"_", "-", "."} for ch in key):
-        raise ValueError("prompt_key 包含非法字符")
-    return key
+    return resolve_template_key(prompt_key)
 
 
 def _parse_scalar(raw: str) -> Any:
@@ -91,15 +77,26 @@ def _split_frontmatter(raw: str) -> tuple[dict[str, Any], str]:
     return meta, body
 
 
+def split_frontmatter_text(raw: str) -> tuple[dict[str, Any], str]:
+    return _split_frontmatter(raw)
+
+
 def load_template(prompt_key: str, *, template_dir: str | Path | None = None) -> PromptV2Template:
     key = _safe_prompt_key(prompt_key)
     if template_dir:
         path = Path(template_dir) / f"{key}.md"
+        raw = path.read_text(encoding="utf-8")
+        frontmatter, body = _split_frontmatter(raw)
     else:
-        runtime_path = runtime_template_dir() / f"{key}.md"
-        path = runtime_path if runtime_path.exists() else default_template_dir() / f"{key}.md"
-    raw = path.read_text(encoding="utf-8")
-    frontmatter, body = _split_frontmatter(raw)
+        runtime_path = first_existing_template_path(key, runtime=True)
+        default_path = first_existing_template_path(key, runtime=False)
+        path = runtime_path or default_path or template_path_for(key, runtime=False)
+        raw = path.read_text(encoding="utf-8")
+        frontmatter, body = _split_frontmatter(raw)
+        if runtime_path and default_path:
+            default_raw = default_path.read_text(encoding="utf-8")
+            default_frontmatter, _default_body = _split_frontmatter(default_raw)
+            frontmatter = {**default_frontmatter, **frontmatter}
     return PromptV2Template(
         prompt_key=key,
         path=path,

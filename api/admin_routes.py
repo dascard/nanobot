@@ -240,6 +240,15 @@ class PromptSaveRequest(BaseModel):
     content: str
 
 
+class PromptV2TemplateCreateRequest(BaseModel):
+    template_key: str
+    content: str
+    name: str = ""
+    kind: str = "tool"
+    tool_name: str = ""
+    description: str = ""
+
+
 class PromptV2FlowSaveRequest(BaseModel):
     flow: dict = Field(default_factory=dict)
 
@@ -287,7 +296,34 @@ def list_prompt_v2_templates(_auth=Depends(verify_admin)):
     return list_templates()
 
 
-@router.get("/prompt-v2/templates/{template_key}")
+@router.post("/prompt-v2/templates")
+def create_prompt_v2_template(
+    body: PromptV2TemplateCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.prompt_v2.template_store import create_template
+    from core.prompt_v2.variables import PromptVariableError
+
+    try:
+        result = create_template(
+            body.template_key,
+            content=body.content,
+            name=body.name,
+            kind=body.kind,
+            tool_name=body.tool_name,
+            description=body.description,
+        )
+    except PromptVariableError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    _audit_request(db, request, "create_prompt_v2_template", "prompt_v2", result["template_key"], result)
+    return result
+
+
+@router.get("/prompt-v2/templates/{template_key:path}")
 def get_prompt_v2_template(template_key: str, _auth=Depends(verify_admin)):
     from core.prompt_v2.template_store import get_template
 
@@ -299,7 +335,7 @@ def get_prompt_v2_template(template_key: str, _auth=Depends(verify_admin)):
         raise HTTPException(400, str(e))
 
 
-@router.put("/prompt-v2/templates/{template_key}")
+@router.put("/prompt-v2/templates/{template_key:path}")
 def save_prompt_v2_template(
     template_key: str,
     body: PromptSaveRequest,
@@ -317,6 +353,40 @@ def save_prompt_v2_template(
     except Exception as e:
         raise HTTPException(400, str(e))
     _audit_request(db, request, "save_prompt_v2_template", "prompt_v2", template_key, result)
+    return result
+
+
+@router.delete("/prompt-v2/templates/{template_key:path}")
+def delete_prompt_v2_template(
+    template_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.prompt_v2.template_store import delete_runtime_template
+
+    try:
+        result = delete_runtime_template(template_key)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    _audit_request(db, request, "delete_prompt_v2_template", "prompt_v2", result["template_key"], result)
+    return result
+
+
+@router.post("/prompt-v2/templates/{template_key:path}/reset")
+def reset_prompt_v2_template(
+    template_key: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.prompt_v2.template_store import reset_template
+
+    try:
+        result = reset_template(template_key)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    _audit_request(db, request, "reset_prompt_v2_template", "prompt_v2", result["template_key"], result)
     return result
 
 

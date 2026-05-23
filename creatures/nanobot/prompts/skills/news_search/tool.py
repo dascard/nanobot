@@ -1538,7 +1538,7 @@ def search_and_extract_news_v2(
     from .evidence import (
         build_evidence_pipeline, validate_digest, safe_digest, FALLBACK_DIGEST,
     )
-    from .prompts import SYSTEM_PROMPT, build_evidence_prompt
+    from .prompts import build_evidence_prompt, get_system_prompt
     from .render import render_html
     from core.legacy_adapter import EvolutionUtils
 
@@ -1591,7 +1591,7 @@ def search_and_extract_news_v2(
         cards_json.append(d)
 
     prompt = build_evidence_prompt(cards_json, mode)
-    raw = _call_llm_simple(SYSTEM_PROMPT, prompt, temperature=0.1)
+    raw = _call_llm_simple(get_system_prompt(), prompt, temperature=0.1)
 
     # 4. JSON 解析
     digest = EvolutionUtils.json_repair(raw)

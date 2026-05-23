@@ -42,6 +42,17 @@ QUALITY_SYSTEM_PROMPT = """你是 AI/科技日报编辑。只能基于给定的�
 }"""
 
 
+def get_quality_system_prompt() -> str:
+    from core.prompt_v2.tool_templates import render_tool_execution_template
+
+    return render_tool_execution_template(
+        "tools/ai_daily/quality_system",
+        {},
+        fallback=QUALITY_SYSTEM_PROMPT,
+        expected_tool_name="ai_daily",
+    )
+
+
 def build_quality_prompt(cards: list[dict]) -> str:
     card_texts = []
     for c in cards:
@@ -67,7 +78,7 @@ def build_quality_prompt(cards: list[dict]) -> str:
         parts.append("---")
         card_texts.append("\n".join(parts))
 
-    return f"""## 候选新闻卡片 ({len(cards)} 条)
+    fallback = f"""## 候选新闻卡片 ({len(cards)} 条)
 
 {chr(10).join(card_texts)}
 
@@ -77,6 +88,17 @@ def build_quality_prompt(cards: list[dict]) -> str:
 每条 detail 必须有 known（已知信息2-3点）、unknown（缺失信息0-2点）、impact（一句话影响）。
 details 的 source_labels 使用卡片中的 "来源名（组）" 格式。
 只输出 JSON，第一个字符必须是 {{，最后一个必须是 }}。"""
+    from core.prompt_v2.tool_templates import render_tool_execution_template
+
+    return render_tool_execution_template(
+        "tools/ai_daily/quality_user",
+        {
+            "candidate_cards": chr(10).join(card_texts),
+            "card_count": str(len(cards)),
+        },
+        fallback=fallback,
+        expected_tool_name="ai_daily",
+    )
 
 
 def _extract_json(raw: str) -> str:
@@ -103,7 +125,7 @@ def summarize_quality(cards: list[dict], fallback: dict) -> dict:
             with llm_trace_scope(source="news_daily.summarize_quality"):
                 resp = await client.chat_completion(
                     messages=[
-                        {"role": "system", "content": QUALITY_SYSTEM_PROMPT},
+                        {"role": "system", "content": get_quality_system_prompt()},
                         {"role": "user", "content": prompt},
                     ],
                     model_tier="fast", temperature=0.1,

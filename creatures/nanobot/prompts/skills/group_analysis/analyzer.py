@@ -11,6 +11,8 @@ logger = logging.getLogger("nanobot.tool.group_analysis.analyzer")
 
 # ── Prompt 模板 ──
 
+GROUP_ANALYSIS_SYSTEM_PROMPT = "你是群聊分析助手。只输出JSON，不要markdown或额外说明。"
+
 TOPIC_PROMPT = """分析以下群聊记录，提取核心讨论话题。
 
 ## 消息格式: [HH:MM] [user_id]: 内容
@@ -99,13 +101,6 @@ async def _call_llm_with_retry(
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt},
         ]
-        if prompt_key:
-            try:
-                from core.prompt_runtime import render_model_messages
-
-                messages = render_model_messages(prompt_key, prompt_vars or {}, messages)
-            except Exception:
-                pass
         from core.llm_trace_context import llm_trace_scope
         with llm_trace_scope(source="group_analysis"):
             resp = await client.chat_completion(
@@ -269,6 +264,17 @@ def _with_instructions(prompt: str, instructions: str) -> str:
     )
 
 
+def _render_v2_tool_prompt(template_key: str, values: dict, fallback: str) -> str:
+    from core.prompt_v2.tool_templates import render_tool_execution_template
+
+    return render_tool_execution_template(
+        template_key,
+        values,
+        fallback=fallback,
+        expected_tool_name="group_analysis",
+    )
+
+
 def _parse_result(raw, branch: str, payload: dict | None = None) -> dict:
     from core.legacy_adapter import EvolutionUtils
     d = EvolutionUtils.json_repair(raw)
@@ -311,21 +317,47 @@ async def analyze_group(payload: dict, instructions: str = "") -> dict:
     users_text = payload["users_text"]
 
     client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=180)
-    SYS = "你是群聊分析助手。只输出JSON，不要markdown或额外说明。"
+    SYS = _render_v2_tool_prompt("tools/group_analysis/system", {}, GROUP_ANALYSIS_SYSTEM_PROMPT)
+
+    topic_prompt = _render_v2_tool_prompt(
+        "tools/group_analysis/topics",
+        {"messages_text": msg_text, "instructions": instructions},
+        _with_instructions(TOPIC_PROMPT.format(messages_text=msg_text), instructions),
+    )
+    title_prompt = _render_v2_tool_prompt(
+        "tools/group_analysis/titles",
+        {
+            "users_text": users_text,
+            "messages_text": style_msg_text,
+            "style_messages_text": style_msg_text,
+            "instructions": instructions,
+        },
+        _with_instructions(
+            USER_TITLE_PROMPT.format(users_text=users_text, messages_text=style_msg_text),
+            instructions,
+        ),
+    )
+    quote_prompt = _render_v2_tool_prompt(
+        "tools/group_analysis/quotes",
+        {"messages_text": msg_text, "instructions": instructions},
+        _with_instructions(GOLDEN_QUOTE_PROMPT.format(messages_text=msg_text), instructions),
+    )
+    quality_prompt = _render_v2_tool_prompt(
+        "tools/group_analysis/quality",
+        {"messages_text": msg_text, "instructions": instructions},
+        _with_instructions(CHAT_QUALITY_PROMPT.format(messages_text=msg_text), instructions),
+    )
 
     results = await asyncio.gather(
         _call_llm_branch(
             client, SYS,
-            _with_instructions(TOPIC_PROMPT.format(messages_text=msg_text), instructions),
+            topic_prompt,
             prompt_key="group_analysis_topics",
             prompt_vars={"messages_text": msg_text, "instructions": instructions},
         ),
         _call_llm_branch(
             client, SYS,
-            _with_instructions(
-                USER_TITLE_PROMPT.format(users_text=users_text, messages_text=style_msg_text),
-                instructions,
-            ),
+            title_prompt,
             prompt_key="group_analysis_titles",
             prompt_vars={
                 "users_text": users_text,
@@ -335,13 +367,13 @@ async def analyze_group(payload: dict, instructions: str = "") -> dict:
         ),
         _call_llm_branch(
             client, SYS,
-            _with_instructions(GOLDEN_QUOTE_PROMPT.format(messages_text=msg_text), instructions),
+            quote_prompt,
             prompt_key="group_analysis_quotes",
             prompt_vars={"messages_text": msg_text, "instructions": instructions},
         ),
         _call_llm_branch(
             client, SYS,
-            _with_instructions(CHAT_QUALITY_PROMPT.format(messages_text=msg_text), instructions),
+            quality_prompt,
             prompt_key="group_analysis_quality",
             prompt_vars={"messages_text": msg_text, "instructions": instructions},
         ),

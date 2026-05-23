@@ -58,6 +58,17 @@ SYSTEM_PROMPT = """你是 AI/科技新闻编辑，不是营销文案作者。
 }"""
 
 
+def get_system_prompt() -> str:
+    from core.prompt_v2.tool_templates import render_tool_execution_template
+
+    return render_tool_execution_template(
+        "tools/news_search/digest_system",
+        {},
+        fallback=SYSTEM_PROMPT,
+        expected_tool_name="news_search",
+    )
+
+
 def build_evidence_prompt(cards_json: list[dict], mode: str = "fast") -> str:
     """构造 LLM 输入——只发 Evidence Cards，不发原始网页。"""
     card_texts = []
@@ -82,10 +93,22 @@ def build_evidence_prompt(cards_json: list[dict], mode: str = "fast") -> str:
         "deep": "生成全面分析，包含所有字段。",
     }.get(mode, "生成 2-3 条 highlights。")
 
-    return f"""## 证据卡片
+    fallback = f"""## 证据卡片
 
 {chr(10).join(card_texts)}
 
 ## 要求
 {mode_hint}
 只输出 JSON，不要 Markdown，不要代码块标记。"""
+    from core.prompt_v2.tool_templates import render_tool_execution_template
+
+    return render_tool_execution_template(
+        "tools/news_search/digest_user",
+        {
+            "evidence_cards": chr(10).join(card_texts),
+            "mode_hint": mode_hint,
+            "card_count": str(len(cards_json)),
+        },
+        fallback=fallback,
+        expected_tool_name="news_search",
+    )

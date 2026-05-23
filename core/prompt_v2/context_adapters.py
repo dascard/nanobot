@@ -104,7 +104,7 @@ def build_identity_context(request) -> str:
         "</identity_context>"
     )
     try:
-        template = load_template("identity_context").body
+        template = load_template("chat/identity_context").body
     except FileNotFoundError:
         template = fallback
     return render_scoped_template("identity_context", template, build_template_values(request)).strip()
