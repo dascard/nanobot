@@ -7,8 +7,10 @@ APP_JS = Path("webui/src/App.jsx")
 def test_prompt_runtime_v2_is_primary_prompt_nav_entry():
     source = APP_JS.read_text(encoding="utf-8")
 
-    assert "{ to: '/prompt-preview', label: 'Prompt Runtime V2' }" in source
-    assert "{ to: '/prompt-legacy', label: 'Legacy 回滚' }" in source
+    assert "{ to: '/prompt-preview', label: 'V2 运行预览' }" in source
+    assert "{ to: '/prompt-v2-templates', label: 'V2 模板' }" in source
+    assert "{ to: '/prompts', label: 'V1 模板 / 对比' }" not in source
+    assert "{ to: '/prompt-legacy', label: 'Legacy 回滚' }" not in source
     assert "{ to: '/prompt', label: '旧版 Prompt 构建' }" not in source
 
 
@@ -18,13 +20,26 @@ def test_prompt_preview_defaults_to_v2_and_prompt_path_redirects():
     assert "engine: 'v2'" in source
     assert '<Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />' in source
     assert '<Route path="/prompt-legacy" element={<PromptPage />} />' in source
+    assert '<Route path="/prompt-v2-templates" element={<PromptV2TemplatesPage />} />' in source
 
 
 def test_prompt_runtime_v2_page_exposes_template_editor():
     source = APP_JS.read_text(encoding="utf-8")
+    preview_source = source.split("function EffectivePromptPreviewPage()")[1]
 
-    assert "V2 模板编辑" in source
+    assert "function PromptV2TemplatesPage()" in source
+    assert "Prompt V2 模板" in source
+    assert "图形编排" in source
+    assert "全局可插入变量白名单" in source
+    assert "node.label || node.id" in source
+    assert "添加节点" in source
+    assert "删除节点" in source
+    assert "连接到" in source
     assert "api.get('/prompt-v2/templates')" in source
-    assert "api.put(`/prompt-v2/templates/${encodeURIComponent(v2SelectedTemplate)}`" in source
+    assert "api.get('/prompt-v2/flow')" in source
+    assert "api.put(`/prompt-v2/templates/${encodeURIComponent(selected)}`" in source
+    assert "api.put('/prompt-v2/flow'" in source
     assert "保存 V2 模板" in source
+    assert "保存编排图" in source
     assert "运行时模板目录" in source
+    assert "V2 模板编辑" not in preview_source

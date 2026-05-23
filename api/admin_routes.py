@@ -240,6 +240,10 @@ class PromptSaveRequest(BaseModel):
     content: str
 
 
+class PromptV2FlowSaveRequest(BaseModel):
+    flow: dict = Field(default_factory=dict)
+
+
 class PromptPreviewRequest(BaseModel):
     variables: dict = Field(default_factory=dict)
     mode: str = "preview"
@@ -313,6 +317,39 @@ def save_prompt_v2_template(
     except Exception as e:
         raise HTTPException(400, str(e))
     _audit_request(db, request, "save_prompt_v2_template", "prompt_v2", template_key, result)
+    return result
+
+
+@router.get("/prompt-v2/flow")
+def get_prompt_v2_flow(_auth=Depends(verify_admin)):
+    from core.prompt_v2.flow import default_flow_path, load_flow, runtime_flow_path
+
+    flow = load_flow()
+    return {
+        "flow": flow.flow,
+        "source": flow.source,
+        "path": str(flow.path),
+        "default_path": str(default_flow_path()),
+        "runtime_path": str(runtime_flow_path()),
+    }
+
+
+@router.put("/prompt-v2/flow")
+def save_prompt_v2_flow(
+    body: PromptV2FlowSaveRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.prompt_v2.flow import PromptFlowError, save_flow
+
+    try:
+        result = save_flow(body.flow)
+    except PromptFlowError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    _audit_request(db, request, "save_prompt_v2_flow", "prompt_v2_flow", "chat_flow", result)
     return result
 
 

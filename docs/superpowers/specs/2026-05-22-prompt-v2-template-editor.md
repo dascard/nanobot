@@ -2,41 +2,52 @@
 
 ## 目标
 
-在 WebUI 的 `Prompt Runtime V2` 页面直接编辑 V2 规则模板，保存后真实
-compiler 优先读取运行时模板，预览和线上请求保持同一套组装逻辑。
+在 WebUI 的 `Prompt V2 模板` 页面编辑 V2 规则模板和编排图。保存后真实
+compiler 优先读取运行时模板与运行时编排图，预览和线上请求保持同一套组装逻辑。
 
 ## 范围
 
 - V2 模板列表来自默认目录 `prompts.v2.default` 和运行时目录 `data/prompts_v2`。
+- 编排图来自 `prompts.v2.default/chat_flow.json`，运行时覆盖写入 `data/prompts_v2/chat_flow.json`。
 - WebUI 保存只写入运行时目录，不覆盖 Git 管理的默认模板。
-- compiler 读取模板时优先使用运行时目录，缺失时回落到默认目录。
-- 当前只对已声明的 section 变量做白名单渲染和校验。
+- compiler 读取模板和编排图时优先使用运行时目录，缺失时回落到默认目录。
+- 变量是全局白名单，任意模板节点都只能使用同一批允许变量。
 - 当前用户输入、历史、画像、工具说明仍由 compiler 注入，不允许通过模板变量伪造。
+- 默认模板收口为公共主模板 `chat_main.md` 加 `chat_branch_group.md`、`chat_branch_private.md` 两个分支模板，不再保留重复的大段 group/private 主模板。
 
 ## 交互
 
-`Prompt Runtime V2` 页面新增 `V2 模板编辑` 区域：
+`Prompt V2 模板` 页面展示可编辑的 PromptPlan 编排图：
 
-- 选择模板。
+- 选择群聊或私聊视图。
+- 从后端加载 `chat_flow.json`，按连接关系拓扑排序节点。
+- 自由添加模板节点或运行时注入节点。
+- 删除节点时同时删除相关连接。
+- 通过"连接到"修改节点出边。
+- 点击模板节点后在右侧编辑对应模板正文。
 - 编辑模板正文。
 - 查看当前模板来源、hash、文件路径。
-- 查看可插入变量。
-- 点击保存写入运行时模板目录。
+- 查看全局可插入变量白名单。
+- 点击保存模板写入运行时模板目录。
+- 点击保存编排图写入运行时 `chat_flow.json`。
 
-保存后重新加载模板列表，并触发现有 effective-preview 重新生成。
+运行预览页只负责构造 effective-preview，不承担模板编辑职责。
 
 ## 后端接口
 
 - `GET /api/v1/admin/prompt-v2/templates`
 - `GET /api/v1/admin/prompt-v2/templates/{template_key}`
 - `PUT /api/v1/admin/prompt-v2/templates/{template_key}`
+- `GET /api/v1/admin/prompt-v2/flow`
+- `PUT /api/v1/admin/prompt-v2/flow`
 
 保存接口复用 `PromptSaveRequest`，并记录 `save_prompt_v2_template`
-审计日志。
+审计日志。编排图保存记录 `save_prompt_v2_flow` 审计日志。
 
 ## 验收
 
-- WebUI 页面有 V2 模板编辑器和保存按钮。
-- 保存 `identity_context` 时支持 `{{ character_name }}` 等白名单变量。
+- WebUI 页面有 V2 编排图、模板编辑器、节点增删、连接修改和保存按钮。
+- 保存 `identity_context` 时支持 `{{ character_name }}` 等全局白名单变量。
 - 保存未声明变量时返回 400。
-- 保存 `chat_private` 后，`/prompt/effective-preview` 的 V2 plan 使用运行时模板。
+- 保存编排图后，`/prompt/effective-preview` 的 V2 plan 使用运行时 `chat_flow.json`。
+- 群聊和私聊差异通过分支节点接入，不再维护两份大段重复主模板。

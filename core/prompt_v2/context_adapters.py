@@ -20,12 +20,44 @@ def ensure_user_input_block(user_input: Any) -> Any:
     return f"<user_input>\n{text}\n</user_input>"
 
 
-def build_runtime_context(request) -> str:
+def _current_time_text(current_time: str | None = None) -> str:
+    return current_time or datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S CST")
+
+
+def _request_group_id(request) -> str:
     chat_type = request.normalized_chat_type
     group_id = str(request.group_id or "").strip()
     session_id = str(request.session_id or "").strip()
     if not group_id and chat_type == "group" and session_id.startswith("group_"):
         group_id = session_id[len("group_"):]
+    return group_id
+
+
+def build_template_values(request, *, current_time: str | None = None) -> dict[str, Any]:
+    identity_vars = build_identity_vars(
+        sender_id=request.sender_id or request.user_id,
+        bot_name=request.bot_name,
+        bot_aliases=request.bot_aliases,
+    )
+    aliases = [str(x).strip() for x in (request.bot_aliases or []) if str(x).strip()]
+    return {
+        **identity_vars,
+        "chat_type": request.normalized_chat_type,
+        "session_id": str(request.session_id or "").strip(),
+        "group_id": _request_group_id(request),
+        "user_id": str(request.user_id or "").strip(),
+        "sender_name": str(request.sender_name or "").strip(),
+        "bot_name": str(request.bot_name or "").strip(),
+        "bot_aliases": "\n".join(aliases),
+        "current_time": _current_time_text(current_time),
+        "timezone": "Asia/Shanghai",
+    }
+
+
+def build_runtime_context(request, *, current_time: str | None = None) -> str:
+    chat_type = request.normalized_chat_type
+    group_id = _request_group_id(request)
+    session_id = str(request.session_id or "").strip()
 
     lines = ["<runtime_context>", f"chat_type: {chat_type}"]
     for key, value in [
@@ -53,18 +85,13 @@ def build_runtime_context(request) -> str:
     aliases = [str(x).strip() for x in (request.bot_aliases or []) if str(x).strip()]
     if aliases:
         lines.append(f"bot_aliases: {', '.join(aliases[:10])}")
-    lines.append(datetime.now(ZoneInfo("Asia/Shanghai")).strftime("current_time: %Y-%m-%d %H:%M:%S CST"))
+    lines.append(f"current_time: {_current_time_text(current_time)}")
     lines.append("timezone: Asia/Shanghai")
     lines.append("</runtime_context>")
     return "\n".join(lines)
 
 
 def build_identity_context(request) -> str:
-    identity_vars = build_identity_vars(
-        sender_id=request.sender_id or request.user_id,
-        bot_name=request.bot_name,
-        bot_aliases=request.bot_aliases,
-    )
     fallback = (
         "<identity_context>\n"
         "你叫 {{ character_name }}\n\n"
@@ -80,7 +107,7 @@ def build_identity_context(request) -> str:
         template = load_template("identity_context").body
     except FileNotFoundError:
         template = fallback
-    return render_scoped_template("identity_context", template, identity_vars).strip()
+    return render_scoped_template("identity_context", template, build_template_values(request)).strip()
 
 
 def build_persona_reference(user_id: str, persona_text: str) -> str:

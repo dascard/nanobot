@@ -87,9 +87,8 @@ const NAV = [
   { to: '/timing-gate', label: 'TimingGate' },
   { to: '/stickers', label: '表情包' },
   { to: '/stickers/duplicates', label: '去重工作台' },
-  { to: '/prompt-preview', label: 'Prompt Runtime V2' },
-  { to: '/prompts', label: 'V1 模板 / 对比' },
-  { to: '/prompt-legacy', label: 'Legacy 回滚' },
+  { to: '/prompt-preview', label: 'V2 运行预览' },
+  { to: '/prompt-v2-templates', label: 'V2 模板' },
   { to: '/agent-runs', label: '运行追踪' },
   { to: '/llm-api-logs', label: 'LLM API 日志' },
   { to: '/models', label: '模型' },
@@ -2210,6 +2209,342 @@ function ManagedPromptsPage() {
   )
 }
 
+const PROMPT_V2_RUNTIME_NODES = [
+  { key: 'runtime_context', label: 'system: runtime_context' },
+  { key: 'persona_reference', label: 'system: persona_reference' },
+  { key: 'conversation_context_header', label: 'system: conversation_context_header' },
+  { key: 'history_messages', label: 'history: messages' },
+  { key: 'group_context', label: 'system: group profile / expression / jargon' },
+  { key: 'effort_constraint', label: 'system: effort_constraint' },
+  { key: 'runtime_tool_prompt', label: 'system: runtime_tool_prompt' },
+  { key: 'current_user_event', label: 'user: current_user_input' },
+]
+
+function flowAppliesToChat(item, chatType) {
+  const types = item?.chat_types
+  if (!Array.isArray(types) || !types.length) return true
+  return types.includes(chatType)
+}
+
+function orderedFlowNodes(flow, chatType) {
+  const nodes = (flow?.nodes || []).filter(node => flowAppliesToChat(node, chatType))
+  const ids = new Set(nodes.map(node => node.id))
+  const index = new Map(nodes.map((node, i) => [node.id, i]))
+  const edges = (flow?.edges || []).filter(edge =>
+    flowAppliesToChat(edge, chatType) && ids.has(edge.from) && ids.has(edge.to)
+  )
+  const incoming = new Map(nodes.map(node => [node.id, new Set()]))
+  const outgoing = new Map(nodes.map(node => [node.id, new Set()]))
+  edges.forEach(edge => {
+    incoming.get(edge.to)?.add(edge.from)
+    outgoing.get(edge.from)?.add(edge.to)
+  })
+  const ready = [...incoming.entries()]
+    .filter(([, from]) => from.size === 0)
+    .map(([id]) => id)
+    .sort((a, b) => (index.get(a) || 0) - (index.get(b) || 0))
+  const result = []
+  while (ready.length) {
+    const id = ready.shift()
+    if (result.includes(id)) continue
+    result.push(id)
+    ;[...(outgoing.get(id) || [])]
+      .sort((a, b) => (index.get(a) || 0) - (index.get(b) || 0))
+      .forEach(target => {
+        incoming.get(target)?.delete(id)
+        if ((incoming.get(target)?.size || 0) === 0) ready.push(target)
+      })
+    ready.sort((a, b) => (index.get(a) || 0) - (index.get(b) || 0))
+  }
+  nodes.forEach(node => {
+    if (!result.includes(node.id)) result.push(node.id)
+  })
+  const byId = new Map(nodes.map(node => [node.id, node]))
+  return result.map(id => byId.get(id)).filter(Boolean)
+}
+
+function connectedTargetForNode(flow, nodeId, chatType) {
+  const edge = (flow?.edges || []).find(item => item.from === nodeId && flowAppliesToChat(item, chatType))
+  return edge?.to || ''
+}
+
+function PromptV2TemplatesPage() {
+  const [chatType, setChatType] = useState('group')
+  const [templates, setTemplates] = useState([])
+  const [selected, setSelected] = useState('chat_main')
+  const [selectedNodeId, setSelectedNodeId] = useState('')
+  const [detail, setDetail] = useState(null)
+  const [content, setContent] = useState('')
+  const [variables, setVariables] = useState([])
+  const [flow, setFlow] = useState({ version: 1, nodes: [], edges: [] })
+  const [flowSource, setFlowSource] = useState('')
+  const [flowPath, setFlowPath] = useState('')
+  const [defaultDir, setDefaultDir] = useState('')
+  const [runtimeDir, setRuntimeDir] = useState('')
+  const [templateToAdd, setTemplateToAdd] = useState('')
+  const [runtimeToAdd, setRuntimeToAdd] = useState('runtime_context')
+  const [toast, setToast] = useState('')
+  const orderedNodes = orderedFlowNodes(flow, chatType)
+  const selectedNode = orderedNodes.find(node => node.id === selectedNodeId) || orderedNodes[0] || null
+
+  const loadTemplates = useCallback(() => {
+    api.get('/prompt-v2/templates').then(r => {
+      const list = r.data.items || []
+      setTemplates(list)
+      setDefaultDir(r.data.default_dir || '')
+      setRuntimeDir(r.data.runtime_dir || '')
+      const keys = list.map(item => item.template_key)
+      setTemplateToAdd(prev => prev || keys[0] || '')
+      setSelected(prev => keys.includes(prev) ? prev : (keys.includes('chat_main') ? 'chat_main' : keys[0] || ''))
+    }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
+  }, [])
+
+  const loadFlow = useCallback(() => {
+    api.get('/prompt-v2/flow').then(r => {
+      setFlow(r.data.flow || { version: 1, nodes: [], edges: [] })
+      setFlowSource(r.data.source || '')
+      setFlowPath(r.data.path || '')
+    }).catch(e => alert(e.response?.data?.detail || '加载 V2 编排图失败'))
+  }, [])
+
+  useEffect(() => {
+    loadTemplates()
+    loadFlow()
+    api.get('/prompt-v2/variables')
+      .then(r => setVariables(r.data.items || []))
+      .catch(() => setVariables([]))
+  }, [loadTemplates, loadFlow])
+
+  useEffect(() => {
+    if (!selected) return
+    api.get(`/prompt-v2/templates/${encodeURIComponent(selected)}`).then(r => {
+      setDetail(r.data)
+      setContent(r.data.content || '')
+    }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
+  }, [selected])
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(''), 2500)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  const save = () => {
+    if (!selected) return
+    api.put(`/prompt-v2/templates/${encodeURIComponent(selected)}`, { content }).then(r => {
+      setToast(`已保存 ${selected} · ${r.data.after_hash?.slice(0, 12) || ''}`)
+      loadTemplates()
+    }).catch(e => alert(e.response?.data?.detail || '保存 V2 模板失败'))
+  }
+
+  const saveFlow = () => {
+    api.put('/prompt-v2/flow', { flow }).then(r => {
+      setToast(`已保存编排图 · ${r.data.runtime_path || ''}`)
+      loadFlow()
+    }).catch(e => alert(e.response?.data?.detail || '保存 V2 编排图失败'))
+  }
+
+  const updateNode = (nodeId, patch) => {
+    setFlow(prev => ({
+      ...prev,
+      nodes: (prev.nodes || []).map(node => node.id === nodeId ? { ...node, ...patch } : node),
+    }))
+    if (patch.template_key) setSelected(patch.template_key)
+  }
+
+  const addNodeAfterSelection = node => {
+    const anchorId = selectedNode?.id || orderedNodes[orderedNodes.length - 1]?.id || ''
+    setFlow(prev => {
+      const nextNodes = [...(prev.nodes || []), node]
+      const nextEdges = [...(prev.edges || [])]
+      if (anchorId && anchorId !== node.id) {
+        nextEdges.push({ from: anchorId, to: node.id, chat_types: [chatType] })
+      }
+      return { ...prev, nodes: nextNodes, edges: nextEdges }
+    })
+    setSelectedNodeId(node.id)
+    if (node.type === 'template') setSelected(node.template_key)
+  }
+
+  const addTemplateNode = () => {
+    const key = templateToAdd || templates[0]?.template_key
+    if (!key) return
+    const id = `${key}_${Date.now().toString(36)}`
+    addNodeAfterSelection({
+      id,
+      type: 'template',
+      label: `system: ${key}`,
+      template_key: key,
+      chat_types: [chatType],
+    })
+  }
+
+  const addRuntimeNode = () => {
+    const option = PROMPT_V2_RUNTIME_NODES.find(item => item.key === runtimeToAdd) || PROMPT_V2_RUNTIME_NODES[0]
+    if (!option) return
+    const id = `${option.key}_${Date.now().toString(36)}`
+    addNodeAfterSelection({
+      id,
+      type: 'runtime',
+      label: option.label,
+      runtime_key: option.key,
+      chat_types: [chatType],
+    })
+  }
+
+  const deleteNode = nodeId => {
+    setFlow(prev => ({
+      ...prev,
+      nodes: (prev.nodes || []).filter(node => node.id !== nodeId),
+      edges: (prev.edges || []).filter(edge => edge.from !== nodeId && edge.to !== nodeId),
+    }))
+    setSelectedNodeId('')
+  }
+
+  const connectNode = (fromId, toId) => {
+    setFlow(prev => ({
+      ...prev,
+      edges: [
+        ...(prev.edges || []).filter(edge => !(edge.from === fromId && flowAppliesToChat(edge, chatType))),
+        ...(toId ? [{ from: fromId, to: toId, chat_types: [chatType] }] : []),
+      ],
+    }))
+  }
+
+  return (
+    <div>
+      {toast && <div className="mb-3 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-lg text-sm text-emerald-400">{toast}</div>}
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h1 className="text-2xl font-bold mb-1">Prompt V2 模板</h1>
+          <p className="text-slate-500 text-sm">模板是节点内容，编排图决定真实 PromptPlan 顺序；变量是全局白名单，当前输入仍只作为 user event 注入一次</p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[10px] text-slate-600">
+            <span>默认模板目录: <span className="font-mono text-slate-500">{defaultDir || '-'}</span></span>
+            <span>运行时模板目录: <span className="font-mono text-slate-500">{runtimeDir || '-'}</span></span>
+            <span>编排图: <span className="font-mono text-slate-500">{flowPath || '-'}</span></span>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <NavLink to="/prompt-preview" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-300">运行预览</NavLink>
+          <button onClick={saveFlow} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium">保存编排图</button>
+          <button onClick={save} disabled={!selected} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-xs font-medium">保存 V2 模板</button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
+        <div className="xl:col-span-5 space-y-3 min-w-0">
+          <Card className="p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-xs font-medium text-slate-300">图形编排</div>
+                <div className="text-[11px] text-slate-600">source: {flowSource || '-'} · 当前视图会按连接关系拓扑排序</div>
+              </div>
+              <select value={chatType} onChange={e => setChatType(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                <option value="group">群聊</option>
+                <option value="private">私聊</option>
+              </select>
+            </div>
+          </Card>
+          <Card className="p-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div className="flex gap-2">
+                <select value={templateToAdd} onChange={e => setTemplateToAdd(e.target.value)} className="min-w-0 flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                  {templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
+                </select>
+                <button onClick={addTemplateNode} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加节点</button>
+              </div>
+              <div className="flex gap-2">
+                <select value={runtimeToAdd} onChange={e => setRuntimeToAdd(e.target.value)} className="min-w-0 flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                  {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.key}</option>)}
+                </select>
+                <button onClick={addRuntimeNode} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加运行时</button>
+              </div>
+            </div>
+          </Card>
+          <div className="space-y-2">
+            {orderedNodes.map((node, idx) => {
+              const editable = node.type === 'template'
+              const active = selectedNode?.id === node.id
+              const target = connectedTargetForNode(flow, node.id, chatType)
+              return (
+                <div key={`${node.id}-${idx}`} className={`rounded-lg border px-3 py-2 transition-colors ${active ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-slate-800 bg-slate-900/50'}`}>
+                  <button onClick={() => {
+                    setSelectedNodeId(node.id)
+                    if (editable) setSelected(node.template_key || '')
+                  }} className="w-full text-left">
+                    <div className="flex items-start gap-3">
+                      <span className="mt-0.5 w-5 h-5 rounded bg-slate-950 border border-slate-800 text-[11px] text-slate-500 inline-flex items-center justify-center">{idx + 1}</span>
+                      <div className="min-w-0 flex-1">
+                        <div className={active ? 'text-emerald-300 text-sm font-medium truncate' : 'text-slate-300 text-sm truncate'}>{node.label || node.id}</div>
+                        <div className="text-[11px] text-slate-600 truncate">{editable ? `${node.template_key}.md` : node.runtime_key}</div>
+                      </div>
+                      {editable ? <Badge tone={active ? 'emerald' : 'slate'}>模板</Badge> : <Badge tone="blue">注入</Badge>}
+                    </div>
+                  </button>
+                  <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                    <div className="min-w-0 flex-1">
+                      <label className="text-[10px] text-slate-600">连接到</label>
+                      <select value={target} onChange={e => connectNode(node.id, e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-300">
+                        <option value="">不连接</option>
+                        {orderedNodes.filter(item => item.id !== node.id).map(item => <option key={item.id} value={item.id}>{item.label || item.id}</option>)}
+                      </select>
+                    </div>
+                    <button onClick={() => deleteNode(node.id)} className="self-end px-2 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-[11px] text-red-300">删除节点</button>
+                  </div>
+                </div>
+              )
+            })}
+            {!orderedNodes.length && <div className="py-10 text-center text-sm text-slate-600">当前 chat_type 没有可用节点</div>}
+          </div>
+        </div>
+
+        <div className="xl:col-span-7 min-w-0">
+          <Card className="p-4">
+            <div className="flex flex-col md:flex-row md:items-center gap-3 mb-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-medium text-emerald-300">{selectedNode?.label || selected || '未选择节点'}</h2>
+                <div className="text-[11px] text-slate-600 truncate">{detail?.active_path || ''}</div>
+              </div>
+              <div className="md:ml-auto flex items-center gap-2">
+                <Badge tone={detail?.source === 'runtime' ? 'emerald' : 'slate'}>{detail?.source || 'default'}</Badge>
+                <Badge tone="blue">{detail?.sha256?.slice(0, 12) || '-'}</Badge>
+                <select value={selected} onChange={e => {
+                  setSelected(e.target.value)
+                  if (selectedNode?.type === 'template') updateNode(selectedNode.id, { template_key: e.target.value, label: `system: ${e.target.value}` })
+                }} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                  {templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
+                </select>
+              </div>
+            </div>
+            {selectedNode?.type === 'runtime' ? (
+              <div className="min-h-[520px] rounded-lg bg-slate-950 border border-slate-800 p-4">
+                <div className="text-xs text-slate-500 mb-2">运行时注入节点</div>
+                <div className="text-lg text-slate-200 mb-1">{selectedNode.runtime_key}</div>
+                <div className="text-sm text-slate-500">这个节点由 compiler 注入真实运行数据，不在模板文件中编辑。</div>
+              </div>
+            ) : (
+              <textarea value={content} onChange={e => setContent(e.target.value)}
+                className="w-full min-h-[520px] p-4 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-300 leading-relaxed resize-y focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
+            )}
+          </Card>
+          <Card className="p-4 mt-4">
+            <div className="text-xs font-medium text-slate-300 mb-2">全局可插入变量白名单</div>
+            <div className="flex flex-wrap gap-2">
+              {variables.map(v => (
+                <span key={v.name} title={`${v.description || ''}${v.example ? ` · 示例: ${v.example}` : ''}`} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs">
+                  <code className="text-emerald-300">{`{{ ${v.name} }}`}</code>
+                  <span className="text-slate-500">{v.description}</span>
+                </span>
+              ))}
+              {!variables.length && <span className="text-xs text-slate-600">没有开放变量</span>}
+            </div>
+          </Card>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function EffectivePromptPreviewPage() {
   const [form, setForm] = useState({
     engine: 'v2',
@@ -2224,15 +2559,6 @@ function EffectivePromptPreviewPage() {
   })
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [v2VariableTemplate, setV2VariableTemplate] = useState('identity_context')
-  const [v2Variables, setV2Variables] = useState([])
-  const [v2Templates, setV2Templates] = useState([])
-  const [v2SelectedTemplate, setV2SelectedTemplate] = useState('')
-  const [v2TemplateDetail, setV2TemplateDetail] = useState(null)
-  const [v2TemplateContent, setV2TemplateContent] = useState('')
-  const [v2TemplateToast, setV2TemplateToast] = useState('')
-  const [v2TemplateDefaultDir, setV2TemplateDefaultDir] = useState('')
-  const [v2TemplateRuntimeDir, setV2TemplateRuntimeDir] = useState('')
   const update = (key, value) => setForm(prev => ({ ...prev, [key]: value }))
   const run = () => {
     setLoading(true)
@@ -2241,52 +2567,10 @@ function EffectivePromptPreviewPage() {
       .catch(e => alert(e.response?.data?.detail || '预览失败'))
       .finally(() => setLoading(false))
   }
-  const loadV2Templates = useCallback(() => {
-    api.get('/prompt-v2/templates').then(r => {
-      const list = r.data.items || []
-      setV2Templates(list)
-      setV2TemplateDefaultDir(r.data.default_dir || '')
-      setV2TemplateRuntimeDir(r.data.runtime_dir || '')
-      setV2SelectedTemplate(prev => prev || (list.find(x => x.template_key === 'identity_context')?.template_key || list[0]?.template_key || ''))
-    }).catch(() => setV2Templates([]))
-  }, [])
   useEffect(() => {
     const id = setTimeout(run, 0)
     return () => clearTimeout(id)
   }, [])
-  useEffect(() => {
-    if (form.engine === 'v2') loadV2Templates()
-  }, [form.engine, loadV2Templates])
-  useEffect(() => {
-    if (form.engine !== 'v2' || !v2SelectedTemplate) return
-    api.get(`/prompt-v2/templates/${encodeURIComponent(v2SelectedTemplate)}`).then(r => {
-      setV2TemplateDetail(r.data)
-      setV2TemplateContent(r.data.content || '')
-      setV2VariableTemplate(v2SelectedTemplate)
-    }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
-  }, [form.engine, v2SelectedTemplate])
-  useEffect(() => {
-    if (form.engine !== 'v2') {
-      setV2Variables([])
-      return
-    }
-    api.get('/prompt-v2/variables', { params: { template: v2VariableTemplate } })
-      .then(r => setV2Variables(r.data.items || []))
-      .catch(() => setV2Variables([]))
-  }, [form.engine, v2VariableTemplate])
-  useEffect(() => {
-    if (!v2TemplateToast) return
-    const t = setTimeout(() => setV2TemplateToast(''), 2500)
-    return () => clearTimeout(t)
-  }, [v2TemplateToast])
-  const saveV2Template = () => {
-    if (!v2SelectedTemplate) return
-    api.put(`/prompt-v2/templates/${encodeURIComponent(v2SelectedTemplate)}`, { content: v2TemplateContent }).then(r => {
-      setV2TemplateToast(`已保存 ${r.data.after_hash?.slice(0, 12) || ''}`)
-      loadV2Templates()
-      run()
-    }).catch(e => alert(e.response?.data?.detail || '保存 V2 模板失败'))
-  }
   return (
     <div>
       <div className="flex items-start justify-between gap-4 mb-4">
@@ -2297,8 +2581,8 @@ function EffectivePromptPreviewPage() {
           </div>
           <p className="text-slate-500 text-sm">按 chat/session 调用真实 compiler，还原本轮实际发给模型的 messages、tools schema、section hash 和审计信息</p>
         </div>
-        <NavLink to="/prompt-legacy" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs text-slate-300">
-          Legacy 回滚
+        <NavLink to="/prompt-v2-templates" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-300">
+          V2 模板
         </NavLink>
       </div>
       <Card className="p-4 mb-4 border-emerald-500/20 bg-emerald-500/5">
@@ -2353,53 +2637,6 @@ function EffectivePromptPreviewPage() {
             <input value={form.prompt_key} onChange={e => update('prompt_key', e.target.value)} placeholder={form.chat_type === 'group' ? 'group_chat' : 'private_chat'} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200" />
           </label>
         </div>
-        {form.engine === 'v2' && (
-          <div className="mt-3 grid grid-cols-1 xl:grid-cols-12 gap-3">
-            <div className="xl:col-span-8 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 min-w-0">
-              {v2TemplateToast && <div className="mb-2 px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-xs text-emerald-300">{v2TemplateToast}</div>}
-              <div className="flex flex-col md:flex-row md:items-center gap-3 mb-3">
-                <div>
-                  <div className="text-xs font-medium text-emerald-300">V2 模板编辑</div>
-                  <div className="text-[11px] text-slate-500">
-                    默认模板目录 <span className="font-mono text-slate-400">{v2TemplateDefaultDir || '-'}</span> ·
-                    运行时模板目录 <span className="font-mono text-slate-400">{v2TemplateRuntimeDir || '-'}</span>
-                  </div>
-                </div>
-                <select value={v2SelectedTemplate} onChange={e => setV2SelectedTemplate(e.target.value)} className="md:ml-auto bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                  {v2Templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
-                </select>
-                <button onClick={saveV2Template} disabled={!v2SelectedTemplate} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-xs font-medium">保存 V2 模板</button>
-              </div>
-              <div className="flex flex-wrap gap-2 mb-2">
-                <Badge tone={v2TemplateDetail?.source === 'runtime' ? 'emerald' : 'slate'}>{v2TemplateDetail?.source || 'default'}</Badge>
-                <Badge tone="blue">{v2TemplateDetail?.sha256?.slice(0, 12) || '-'}</Badge>
-                <span className="text-xs text-slate-600 truncate">{v2TemplateDetail?.active_path || ''}</span>
-              </div>
-              <textarea value={v2TemplateContent} onChange={e => setV2TemplateContent(e.target.value)}
-                className="w-full h-64 p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs font-mono text-slate-300 leading-relaxed resize-y focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
-            </div>
-            <div className="xl:col-span-4 rounded-xl border border-slate-800 bg-slate-950/60 p-3 min-w-0">
-              <div className="flex flex-col md:flex-row md:items-center gap-2 mb-3">
-                <div>
-                  <div className="text-xs font-medium text-slate-300">可插入变量</div>
-                  <div className="text-[11px] text-slate-600">未列出的变量保存时会被拒绝</div>
-                </div>
-                <select value={v2VariableTemplate} onChange={e => setV2VariableTemplate(e.target.value)} className="md:ml-auto bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                  {v2Templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
-                </select>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {v2Variables.map(v => (
-                  <span key={v.name} title={`${v.description || ''}${v.example ? ` · 示例: ${v.example}` : ''}`} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs">
-                    <code className="text-emerald-300">{`{{ ${v.name} }}`}</code>
-                    <span className="text-slate-500">{v.description}</span>
-                  </span>
-                ))}
-                {!v2Variables.length && <span className="text-xs text-slate-600">当前模板暂无可插入变量</span>}
-              </div>
-            </div>
-          </div>
-        )}
         <label className="block text-xs text-slate-500 mt-3">user_input
           <textarea value={form.user_input} onChange={e => update('user_input', e.target.value)} className="mt-1 w-full h-24 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 resize-none" />
         </label>
@@ -5146,6 +5383,7 @@ export default function App() {
           <Route path="/prompt-legacy" element={<PromptPage />} />
           <Route path="/prompts" element={<ManagedPromptsPage />} />
           <Route path="/prompt-preview" element={<EffectivePromptPreviewPage />} />
+          <Route path="/prompt-v2-templates" element={<PromptV2TemplatesPage />} />
           <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />
           <Route path="/agent-runs" element={<AgentRunsPage />} />
           <Route path="/llm-api-logs" element={<LLMApiLogsPage />} />

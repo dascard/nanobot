@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from core.prompt_v2.template_loader import default_template_dir, runtime_template_dir
+
+
+class PromptFlowError(ValueError):
+    """V2 图形编排配置校验失败。"""
+
+
+RUNTIME_NODE_KEYS = {
+    "runtime_context",
+    "persona_reference",
+    "conversation_context_header",
+    "history_messages",
+    "group_context",
+    "effort_constraint",
+    "runtime_tool_prompt",
+    "current_user_event",
+}
+
+
+DEFAULT_FLOW: dict[str, Any] = {
+    "version": 1,
+    "nodes": [
+        {"id": "base_contract", "type": "template", "label": "system: V2 base contract", "template_key": "chat_main"},
+        {"id": "group_policy", "type": "template", "label": "system: group policy", "template_key": "chat_branch_group", "chat_types": ["group"]},
+        {"id": "private_policy", "type": "template", "label": "system: private policy", "template_key": "chat_branch_private", "chat_types": ["private"]},
+        {"id": "runtime_context", "type": "runtime", "label": "system: runtime_context", "runtime_key": "runtime_context"},
+        {"id": "identity_context", "type": "template", "label": "system: identity_context", "template_key": "identity_context"},
+        {"id": "persona_reference", "type": "runtime", "label": "system: persona_reference", "runtime_key": "persona_reference"},
+        {"id": "conversation_context_header", "type": "runtime", "label": "system: conversation_context_header", "runtime_key": "conversation_context_header"},
+        {"id": "history_messages", "type": "runtime", "label": "history: messages", "runtime_key": "history_messages"},
+        {"id": "group_context", "type": "runtime", "label": "system: group profile / expression / jargon", "runtime_key": "group_context", "chat_types": ["group"]},
+        {"id": "effort_constraint", "type": "runtime", "label": "system: effort_constraint", "runtime_key": "effort_constraint", "optional": True},
+        {"id": "runtime_tool_prompt", "type": "runtime", "label": "system: runtime_tool_prompt", "runtime_key": "runtime_tool_prompt"},
+        {"id": "current_user_event", "type": "runtime", "label": "user: current_user_input", "runtime_key": "current_user_event"},
+    ],
+    "edges": [
+        {"from": "base_contract", "to": "group_policy", "chat_types": ["group"]},
+        {"from": "base_contract", "to": "private_policy", "chat_types": ["private"]},
+        {"from": "group_policy", "to": "runtime_context", "chat_types": ["group"]},
+        {"from": "private_policy", "to": "runtime_context", "chat_types": ["private"]},
+        {"from": "runtime_context", "to": "identity_context"},
+        {"from": "identity_context", "to": "persona_reference"},
+        {"from": "persona_reference", "to": "conversation_context_header"},
+        {"from": "conversation_context_header", "to": "history_messages"},
+        {"from": "history_messages", "to": "group_context", "chat_types": ["group"]},
+        {"from": "history_messages", "to": "effort_constraint", "chat_types": ["private"]},
+        {"from": "group_context", "to": "effort_constraint", "chat_types": ["group"]},
+        {"from": "effort_constraint", "to": "runtime_tool_prompt"},
+        {"from": "runtime_tool_prompt", "to": "current_user_event"},
+    ],
+}
+
+
+@dataclass(frozen=True)
+class PromptFlow:
+    flow: dict[str, Any]
+    path: Path
+    source: str
+
+
+def default_flow_path() -> Path:
+    return default_template_dir() / "chat_flow.json"
+
+
+def runtime_flow_path() -> Path:
+    return runtime_template_dir() / "chat_flow.json"
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _applies(item: dict[str, Any], chat_type: str) -> bool:
+    chat_types = item.get("chat_types")
+    if not chat_types:
+        return True
+    return chat_type in {str(value) for value in chat_types}
+
+
+def _node_index(nodes: list[dict[str, Any]]) -> dict[str, int]:
+    return {str(node.get("id")): idx for idx, node in enumerate(nodes)}
+
+
+def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
+    nodes = list(flow.get("nodes") or [])
+    edges = list(flow.get("edges") or [])
+    if not nodes:
+        raise PromptFlowError("flow.nodes 不能为空")
+
+    ids: set[str] = set()
+    normalized_nodes: list[dict[str, Any]] = []
+    for raw in nodes:
+        node = dict(raw or {})
+        node_id = str(node.get("id") or "").strip()
+        node_type = str(node.get("type") or "").strip()
+        if not node_id:
+            raise PromptFlowError("node.id 不能为空")
+        if not all(ch.isalnum() or ch in {"_", "-"} for ch in node_id):
+            raise PromptFlowError(f"node.id 非法: {node_id}")
+        if node_id in ids:
+            raise PromptFlowError(f"node.id 重复: {node_id}")
+        if node_type not in {"template", "runtime"}:
+            raise PromptFlowError(f"node.type 不支持: {node_type}")
+        if node_type == "template" and not str(node.get("template_key") or "").strip():
+            raise PromptFlowError(f"template node 缺少 template_key: {node_id}")
+        if node_type == "runtime" and str(node.get("runtime_key") or "") not in RUNTIME_NODE_KEYS:
+            raise PromptFlowError(f"runtime_key 不支持: {node.get('runtime_key')}")
+        ids.add(node_id)
+        normalized_nodes.append(node)
+
+    normalized_edges: list[dict[str, Any]] = []
+    for raw in edges:
+        edge = dict(raw or {})
+        start = str(edge.get("from") or "").strip()
+        end = str(edge.get("to") or "").strip()
+        if start not in ids or end not in ids:
+            raise PromptFlowError(f"edge 引用了不存在的节点: {start} -> {end}")
+        normalized_edges.append(edge)
+
+    return {"version": int(flow.get("version") or 1), "nodes": normalized_nodes, "edges": normalized_edges}
+
+
+def load_flow() -> PromptFlow:
+    runtime = runtime_flow_path()
+    default = default_flow_path()
+    if runtime.exists():
+        return PromptFlow(validate_flow(_read_json(runtime)), runtime, "runtime")
+    if default.exists():
+        return PromptFlow(validate_flow(_read_json(default)), default, "default")
+    return PromptFlow(validate_flow(DEFAULT_FLOW), default, "built-in")
+
+
+def save_flow(flow: dict[str, Any]) -> dict[str, Any]:
+    normalized = validate_flow(flow)
+    path = runtime_flow_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"saved": True, "runtime_path": str(path), "flow": normalized}
+
+
+def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str) -> list[dict[str, Any]]:
+    all_nodes = [dict(node) for node in flow.get("nodes") or [] if _applies(dict(node), chat_type)]
+    node_ids = {str(node.get("id")) for node in all_nodes}
+    order_index = _node_index(all_nodes)
+    edges = [
+        dict(edge)
+        for edge in flow.get("edges") or []
+        if _applies(dict(edge), chat_type)
+        and str(edge.get("from")) in node_ids
+        and str(edge.get("to")) in node_ids
+    ]
+    incoming: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    outgoing: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    for edge in edges:
+        start = str(edge.get("from"))
+        end = str(edge.get("to"))
+        incoming[end].add(start)
+        outgoing[start].add(end)
+
+    ready = sorted([node_id for node_id, sources in incoming.items() if not sources], key=lambda x: order_index.get(x, 0))
+    result_ids: list[str] = []
+    while ready:
+        node_id = ready.pop(0)
+        if node_id in result_ids:
+            continue
+        result_ids.append(node_id)
+        for target in sorted(outgoing[node_id], key=lambda x: order_index.get(x, 0)):
+            incoming[target].discard(node_id)
+            if not incoming[target]:
+                ready.append(target)
+        ready.sort(key=lambda x: order_index.get(x, 0))
+
+    remaining = [node_id for node_id in node_ids if node_id not in result_ids]
+    if remaining:
+        result_ids.extend(sorted(remaining, key=lambda x: order_index.get(x, 0)))
+    by_id = {str(node.get("id")): node for node in all_nodes}
+    return [by_id[node_id] for node_id in result_ids]

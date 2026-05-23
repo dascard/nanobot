@@ -224,10 +224,14 @@ def test_prompt_v2_templates_are_isolated_from_prompt_manager_and_legacy_runtime
     assert "PromptManager" not in source
     assert "prompt_assembler" not in source
 
-    group = load_template("chat_group").body
-    private = load_template("chat_private").body
+    main = load_template("chat_main").body
+    group = load_template("chat_branch_group").body
+    private = load_template("chat_branch_private").body
+    assert "{{ user_input }}" not in main
     assert "{{ user_input }}" not in group
     assert "{{ user_input }}" not in private
+    assert "## 群聊行为" not in main
+    assert "## 私聊行为" not in main
     assert "## 群聊行为" in group
     assert "## 私聊行为" not in group
     assert "## 私聊行为" in private

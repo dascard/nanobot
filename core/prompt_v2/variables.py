@@ -23,16 +23,23 @@ class VariableDef:
 _VARIABLE_PATTERN = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
 
 
-_VARIABLES: dict[str, tuple[VariableDef, ...]] = {
-    "identity_context": (
-        VariableDef("character_name", "identity_context", "当前角色名", "七濑"),
-        VariableDef("name_hint", "identity_context", "用户可能用来称呼机器人的主名称", "七濑"),
-        VariableDef("alias_names", "identity_context", "用户可能用来称呼机器人的别名列表", "小七\\nbot"),
-        VariableDef("sender_id", "identity_context", "当前发送者 ID", "0000000000"),
-        VariableDef("super_user_id", "identity_context", "超级用户 ID 列表", "0000000000"),
-        VariableDef("is_super_user", "identity_context", "当前发送者是否超级用户", "true"),
-    ),
-}
+_GLOBAL_VARIABLES: tuple[VariableDef, ...] = (
+    VariableDef("character_name", "global", "当前角色名", "七濑"),
+    VariableDef("name_hint", "global", "用户可能用来称呼机器人的主名称", "七濑"),
+    VariableDef("alias_names", "global", "用户可能用来称呼机器人的别名列表", "小七\\nbot"),
+    VariableDef("sender_id", "global", "当前发送者 ID", "0000000000"),
+    VariableDef("super_user_id", "global", "超级用户 ID 列表", "0000000000"),
+    VariableDef("is_super_user", "global", "当前发送者是否超级用户", "true"),
+    VariableDef("chat_type", "global", "当前会话类型", "group"),
+    VariableDef("session_id", "global", "当前会话 ID", "group_1001"),
+    VariableDef("group_id", "global", "当前群号，私聊为空", "1001"),
+    VariableDef("user_id", "global", "当前用户 ID", "0000000000"),
+    VariableDef("sender_name", "global", "当前发送者名称", "张三"),
+    VariableDef("bot_name", "global", "机器人当前名称", "七濑"),
+    VariableDef("bot_aliases", "global", "机器人别名列表", "小七\\nbot"),
+    VariableDef("current_time", "global", "当前北京时间", "2026-05-23 10:30:00 CST"),
+    VariableDef("timezone", "global", "当前时区", "Asia/Shanghai"),
+)
 
 
 def normalize_scope(scope: str) -> str:
@@ -40,17 +47,11 @@ def normalize_scope(scope: str) -> str:
 
 
 def list_variables(scope: str = "") -> list[dict[str, str]]:
-    scope = normalize_scope(scope)
-    if scope:
-        return [item.to_dict() for item in _VARIABLES.get(scope, ())]
-    result: list[dict[str, str]] = []
-    for items in _VARIABLES.values():
-        result.extend(item.to_dict() for item in items)
-    return result
+    return [item.to_dict() for item in _GLOBAL_VARIABLES]
 
 
 def allowed_variable_names(scope: str) -> set[str]:
-    return {item.name for item in _VARIABLES.get(normalize_scope(scope), ())}
+    return {item.name for item in _GLOBAL_VARIABLES}
 
 
 def referenced_variable_names(template_text: str) -> set[str]:
