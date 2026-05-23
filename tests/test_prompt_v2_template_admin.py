@@ -8,6 +8,9 @@ from core.database import Base, get_db
 from server import app
 
 
+PROMPT_V2_DEFAULT_DIR = Path("prompts.v2.default")
+
+
 def _auth_header() -> dict[str, str]:
     return {"Authorization": "Bearer test-token"}
 
@@ -188,3 +191,28 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         assert preview.json()["debug"]["flow_source"] == "runtime"
     finally:
         app.dependency_overrides.clear()
+
+
+def test_default_prompt_v2_tool_templates_cover_runtime_tools():
+    tool_names: set[str] = set()
+    for path in PROMPT_V2_DEFAULT_DIR.glob("*.md"):
+        raw = path.read_text(encoding="utf-8")
+        if "\nkind: tool\n" not in raw:
+            continue
+        for line in raw.splitlines():
+            if line.startswith("tool_name:"):
+                tool_names.add(line.split(":", 1)[1].strip())
+
+    assert {
+        "reply",
+        "no_reply",
+        "sql_analysis",
+        "python_sandbox",
+        "ai_daily",
+        "news_search",
+        "image_summary",
+        "persona_update",
+        "schedule_task",
+        "group_analysis",
+        "sticker_search",
+    }.issubset(tool_names)

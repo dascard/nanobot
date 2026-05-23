@@ -1,7 +1,7 @@
 ---
 name: 记忆抽取 V2
 version: 1
-kind: tool
+kind: task
 tool_name: memory_extract
 description: V2 记忆抽取模板占位。
 ---

@@ -2221,9 +2221,19 @@ const PROMPT_V2_RUNTIME_NODES = [
 ]
 
 const PROMPT_V2_TOOL_TEMPLATE_LABELS = {
-  reply_contract_retry: { tool: 'reply / no_reply', title: '回复合约重试模板' },
+  reply: { tool: 'reply', title: '最终回复工具模板' },
+  no_reply: { tool: 'no_reply', title: '不回复工具模板' },
   sql_analysis: { tool: 'sql_analysis', title: 'SQL 分析工具模板' },
-  memory_extract: { tool: 'memory_extract', title: '记忆抽取工具模板' },
+  python_sandbox: { tool: 'python_sandbox', title: 'Python 数据分析工具模板' },
+  ai_daily: { tool: 'ai_daily', title: 'AI 日报工具模板' },
+  news_search: { tool: 'news_search', title: '资讯搜索工具模板' },
+  image_summary: { tool: 'image_summary', title: '图片摘要工具模板' },
+  persona_update: { tool: 'persona_update', title: '画像更新工具模板' },
+  schedule_task: { tool: 'schedule_task', title: '定时任务工具模板' },
+  group_analysis: { tool: 'group_analysis', title: '群聊日报工具模板' },
+  sticker_search: { tool: 'sticker_search', title: '表情包搜索工具模板' },
+  reply_contract_retry: { tool: 'reply / no_reply', title: '回复合约重试模板' },
+  memory_extract: { tool: 'memory_extract', title: '记忆抽取任务模板' },
   timing_gate: { tool: 'timing_gate', title: '发言时机判断模板' },
 }
 
@@ -2296,6 +2306,10 @@ function orderedFlowNodes(flow, chatType) {
   return result.map(id => byId.get(id)).filter(Boolean)
 }
 
+function promptFlowEdgeKey(edge, index = 0) {
+  return `${edge?.from || ''}->${edge?.to || ''}:${(edge?.chat_types || []).join(',')}:${index}`
+}
+
 const FLOW_NODE_WIDTH = 220
 const FLOW_NODE_HEIGHT = 96
 const PROMPT_V2_DEFAULT_NODE_POSITIONS = {
@@ -2336,6 +2350,8 @@ function PromptFlowCanvas({
   onMoveNode,
   onDeleteNode,
   onConnectNode,
+  selectedEdgeKey,
+  onSelectEdge,
 }) {
   const canvasRef = useRef(null)
   const dragRef = useRef(null)
@@ -2458,10 +2474,11 @@ function PromptFlowCanvas({
       return
     }
     if (panRef.current) {
+      const pan = panRef.current
       onViewportChange(prev => ({
         ...prev,
-        x: Math.round(panRef.current.originX + event.clientX - panRef.current.startX),
-        y: Math.round(panRef.current.originY + event.clientY - panRef.current.startY),
+        x: Math.round(pan.originX + event.clientX - pan.startX),
+        y: Math.round(pan.originY + event.clientY - pan.startY),
       }))
     }
   }
@@ -2506,7 +2523,7 @@ function PromptFlowCanvas({
           transformOrigin: '0 0',
         }}
       >
-        <svg data-testid="prompt-flow-edge-layer" width="3220" height="760" className="absolute inset-0 pointer-events-none">
+        <svg data-testid="prompt-flow-edge-layer" width="3220" height="760" className="absolute inset-0">
           <defs>
             <marker id="prompt-flow-arrow-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#34d399" />
@@ -2519,6 +2536,8 @@ function PromptFlowCanvas({
             const from = nodeById.get(edge.from)
             const to = nodeById.get(edge.to)
             const active = flowAppliesToChat(edge, chatType) && activeNodeIds.has(edge.from) && activeNodeIds.has(edge.to)
+            const edgeKey = promptFlowEdgeKey(edge, idx)
+            const selected = selectedEdgeKey === edgeKey
             const x1 = from.pos.x + FLOW_NODE_WIDTH
             const y1 = from.pos.y + FLOW_NODE_HEIGHT / 2
             const x2 = to.pos.x
@@ -2526,16 +2545,26 @@ function PromptFlowCanvas({
             const mid = Math.max(70, Math.abs(x2 - x1) / 2)
             const path = `M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`
             return (
-              <path
-                key={`${edge.from}-${edge.to}-${idx}`}
-                d={path}
-                fill="none"
-                stroke={active ? '#34d399' : '#475569'}
-                strokeWidth={active ? 2.5 : 1.5}
-                strokeDasharray={active ? '0' : '5 6'}
-                markerEnd={active ? 'url(#prompt-flow-arrow-active)' : 'url(#prompt-flow-arrow-muted)'}
-                opacity={active ? 0.95 : 0.45}
-              />
+              <g key={edgeKey}>
+                <path
+                  d={path}
+                  fill="none"
+                  stroke={selected ? '#f59e0b' : active ? '#34d399' : '#475569'}
+                  strokeWidth={selected ? 3.5 : active ? 2.5 : 1.5}
+                  strokeDasharray={active ? '0' : '5 6'}
+                  markerEnd={active ? 'url(#prompt-flow-arrow-active)' : 'url(#prompt-flow-arrow-muted)'}
+                  opacity={selected ? 1 : active ? 0.95 : 0.45}
+                  style={{ pointerEvents: 'none' }}
+                />
+                <path
+                  d={path}
+                  fill="none"
+                  stroke="transparent"
+                  strokeWidth="18"
+                  style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                  onMouseDown={event => { event.stopPropagation(); onSelectEdge(edge, idx) }}
+                />
+              </g>
             )
           })}
           {connectionDraft && (
@@ -2616,10 +2645,10 @@ function PromptV2TemplatesPage() {
   const [defaultDir, setDefaultDir] = useState('')
   const [runtimeDir, setRuntimeDir] = useState('')
   const [templateWorkspace, setTemplateWorkspace] = useState('chat')
-  const [templateToAdd, setTemplateToAdd] = useState('')
   const [selectedToolTemplateKey, setSelectedToolTemplateKey] = useState('')
   const [runtimeToAdd, setRuntimeToAdd] = useState('runtime_context')
   const [canvasViewport, setCanvasViewport] = useState({ x: 24, y: 24, zoom: 1 })
+  const [selectedEdgeKey, setSelectedEdgeKey] = useState('')
   const [toast, setToast] = useState('')
   const nodeIdSeq = useRef(0)
   const chatTemplates = templates.filter(item => promptV2TemplateKind(item) === 'chat')
@@ -2630,6 +2659,7 @@ function PromptV2TemplatesPage() {
   const selectedTemplateKey = selectedNode?.type === 'template' ? (selectedNode.template_key || selected) : ''
   const activeTemplateKey = templateWorkspace === 'tools' ? selectedToolTemplateKey : selectedTemplateKey
   const selectedToolTemplate = toolTemplates.find(item => item.template_key === selectedToolTemplateKey) || toolTemplates[0] || null
+  const selectedEdge = (flow.edges || []).find((edge, idx) => promptFlowEdgeKey(edge, idx) === selectedEdgeKey) || null
 
   const loadTemplates = useCallback(() => {
     api.get('/prompt-v2/templates').then(r => {
@@ -2639,7 +2669,6 @@ function PromptV2TemplatesPage() {
       setRuntimeDir(r.data.runtime_dir || '')
       const chatKeys = list.filter(item => promptV2TemplateKind(item) === 'chat').map(item => item.template_key)
       const toolKeys = list.filter(item => promptV2TemplateKind(item) === 'tool').map(item => item.template_key)
-      setTemplateToAdd(prev => chatKeys.includes(prev) ? prev : (chatKeys[0] || ''))
       setSelected(prev => chatKeys.includes(prev) ? prev : (chatKeys.includes('chat_main') ? 'chat_main' : chatKeys[0] || ''))
       setSelectedToolTemplateKey(prev => toolKeys.includes(prev) ? prev : (toolKeys[0] || ''))
     }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
@@ -2709,11 +2738,13 @@ function PromptV2TemplatesPage() {
       return { ...prev, nodes: nextNodes, edges: nextEdges }
     })
     setSelectedNodeId(node.id)
+    setSelectedEdgeKey('')
     if (node.type === 'template') setSelected(node.template_key)
   }
 
   const selectNode = node => {
     setSelectedNodeId(node.id)
+    setSelectedEdgeKey('')
     if (node.type === 'template') setSelected(node.template_key || '')
   }
 
@@ -2731,7 +2762,11 @@ function PromptV2TemplatesPage() {
   }
 
   const addTemplateNode = () => {
-    const key = templateToAdd || chatTemplates[0]?.template_key
+    const key = (
+      chatTemplates.find(item => item.template_key === 'identity_context')?.template_key
+      || chatTemplates.find(item => item.template_key === 'chat_main')?.template_key
+      || chatTemplates[0]?.template_key
+    )
     if (!key) return
     const template = chatTemplates.find(item => item.template_key === key)
     const id = createNodeId(key)
@@ -2764,6 +2799,7 @@ function PromptV2TemplatesPage() {
       edges: (prev.edges || []).filter(edge => edge.from !== nodeId && edge.to !== nodeId),
     }))
     setSelectedNodeId('')
+    setSelectedEdgeKey('')
   }
 
   const connectNode = (fromId, toId) => {
@@ -2774,6 +2810,19 @@ function PromptV2TemplatesPage() {
         ...(toId ? [{ from: fromId, to: toId, chat_types: [chatType] }] : []),
       ],
     }))
+    setSelectedEdgeKey('')
+  }
+
+  const selectEdge = (edge, idx) => {
+    setSelectedEdgeKey(promptFlowEdgeKey(edge, idx))
+  }
+
+  const deleteEdge = edgeKey => {
+    setFlow(prev => ({
+      ...prev,
+      edges: (prev.edges || []).filter((edge, idx) => promptFlowEdgeKey(edge, idx) !== edgeKey),
+    }))
+    setSelectedEdgeKey('')
   }
 
   const autoLayoutFlow = () => {
@@ -2855,10 +2904,8 @@ function PromptV2TemplatesPage() {
           <Card className="p-3 space-y-3">
             <div>
               <div className="text-xs font-medium text-slate-300 mb-2">添加模板节点</div>
-              <select value={templateToAdd} onChange={e => setTemplateToAdd(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                {chatTemplates.map(t => <option key={t.template_key} value={t.template_key}>{t.name || t.template_key}</option>)}
-              </select>
-              <button onClick={addTemplateNode} className="mt-2 w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加节点</button>
+              <div className="mb-2 text-[11px] text-slate-600">添加节点后在右侧选择模板；新节点会接到当前选中节点后面。</div>
+              <button onClick={addTemplateNode} className="w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加模板节点</button>
             </div>
             <div>
               <div className="text-xs font-medium text-slate-300 mb-2">添加运行时节点</div>
@@ -2912,6 +2959,8 @@ function PromptV2TemplatesPage() {
               onMoveNode={moveNode}
               onDeleteNode={deleteNode}
               onConnectNode={connectNode}
+              selectedEdgeKey={selectedEdgeKey}
+              onSelectEdge={selectEdge}
             />
           ) : (
             <Card className="p-5 min-h-[680px]">
@@ -2922,20 +2971,11 @@ function PromptV2TemplatesPage() {
                 </div>
                 <Badge tone="blue">按工具拆分</Badge>
               </div>
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-                {toolTemplates.map(item => (
-                  <button key={item.template_key} onClick={() => setSelectedToolTemplateKey(item.template_key)}
-                    className={`text-left rounded-lg border p-4 transition-colors ${selectedToolTemplateKey === item.template_key ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-700'}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-sm font-medium text-slate-100 truncate">{promptV2TemplateTitle(item)}</div>
-                        <div className="mt-1 text-xs text-slate-500 truncate">工具: {promptV2ToolName(item)}</div>
-                      </div>
-                      <Badge tone={item.source === 'runtime' ? 'emerald' : 'slate'}>{item.source || 'default'}</Badge>
-                    </div>
-                    <p className="mt-3 line-clamp-2 text-xs text-slate-500">{item.description || '独立工具提示词模板'}</p>
-                  </button>
-                ))}
+              <div className="rounded-lg border border-slate-800 bg-slate-950 p-5">
+                <div className="text-xs text-slate-500 mb-1">当前工具使用的模板</div>
+                <div className="text-lg font-semibold text-emerald-300">{promptV2TemplateTitle(selectedToolTemplate) || '-'}</div>
+                <div className="mt-1 text-sm text-slate-500">工具: {promptV2ToolName(selectedToolTemplate) || '-'}</div>
+                <p className="mt-4 text-sm text-slate-500">{selectedToolTemplate?.description || '从左侧工具列表选择模板后，在右侧编辑正文。'}</p>
               </div>
             </Card>
           )}
@@ -2945,6 +2985,16 @@ function PromptV2TemplatesPage() {
           <Card className="p-4">
             {templateWorkspace === 'chat' ? (
               <>
+                {selectedEdge && (
+                  <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+                    <div className="text-xs text-amber-300 mb-1">当前连线</div>
+                    <div className="text-xs text-slate-300 break-all">{selectedEdge.from} → {selectedEdge.to}</div>
+                    <button onClick={() => deleteEdge(selectedEdgeKey)}
+                      className="mt-3 w-full rounded-lg bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20">
+                      删除连线
+                    </button>
+                  </div>
+                )}
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div className="min-w-0">
                     <div className="text-xs text-slate-500 mb-1">当前节点</div>
@@ -2995,10 +3045,9 @@ function PromptV2TemplatesPage() {
                 <div className="text-xs text-slate-500 mb-1">当前工具使用的模板</div>
                 <h2 className="text-sm font-medium text-emerald-300 truncate">{promptV2TemplateTitle(selectedToolTemplate) || '未选择工具模板'}</h2>
                 <div className="mt-1 text-[11px] text-slate-600">工具: {promptV2ToolName(selectedToolTemplate) || '-'}</div>
-                <select value={selectedToolTemplateKey || ''} onChange={e => setSelectedToolTemplateKey(e.target.value)}
-                  className="mt-3 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                  {toolTemplates.map(item => <option key={item.template_key} value={item.template_key}>{promptV2ToolName(item)} · {promptV2TemplateTitle(item)}</option>)}
-                </select>
+                <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-[11px] text-slate-500">
+                  从左侧工具列表选择要编辑的工具模板。
+                </div>
               </>
             )}
           </Card>

@@ -1,7 +1,7 @@
 ---
 name: 回复合约重试 V2
 version: 1
-kind: tool
+kind: task
 tool_name: reply
 description: V2 reply/no_reply 合约重试模板。
 ---

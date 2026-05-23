@@ -1,7 +1,7 @@
 ---
 name: 发言时机 V2
 version: 1
-kind: tool
+kind: task
 tool_name: timing_gate
 description: V2 发言时机规则占位模板。
 ---

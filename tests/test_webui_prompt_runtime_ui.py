@@ -38,8 +38,13 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "const [canvasViewport, setCanvasViewport]" in source
     assert "handleCanvasWheel" in source
     assert "startPanCanvas" in source
+    assert "const pan = panRef.current" in source
+    assert "panRef.current.originX" not in source
     assert "startConnection" in source
     assert "completeConnection" in source
+    assert "selectedEdgeKey" in source
+    assert "deleteEdge" in source
+    assert "删除连线" in source
     assert "连接端口" in source
     assert "onMouseDown={e => startDragNode" in source
     assert "开始连线" not in source
@@ -50,6 +55,8 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "全局可插入变量白名单" in source
     assert "node.label || node.id" in source
     assert "添加节点" in source
+    assert "添加节点后在右侧选择模板" in source
+    assert "templateToAdd" not in source
     assert "删除节点" in source
     assert "当前节点" in source
     assert "节点模板切换" in source
@@ -57,6 +64,8 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "工具模板" in source
     assert "按工具拆分" in source
     assert "当前工具使用的模板" in source
+    assert "当前工具使用的模板</div>" in source
+    assert "onChange={e => setSelectedToolTemplateKey(e.target.value)}" not in source
     assert "promptV2TemplateKind" in source
     assert "promptV2ToolName" in source
     assert "selectedToolTemplateKey" in source
