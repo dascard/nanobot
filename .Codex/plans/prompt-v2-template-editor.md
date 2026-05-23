@@ -5,7 +5,7 @@
 **架构：** 后端新增 V2 模板存储层、编排图存储层和管理接口。模板默认从
 `prompts.v2.default` 读取，运行时覆盖写入 `data/prompts_v2`；编排图默认从
 `prompts.v2.default/chat_flow.json` 读取，运行时覆盖写入 `data/prompts_v2/chat_flow.json`。
-前端在 `Prompt V2 模板` 页面内提供 canvas 节点画布、节点拖拽、连接修改、模板选择、编辑、全局变量展示和保存。
+前端在 `Prompt V2 模板` 页面内提供聊天编排 canvas、节点拖拽、端口拖拽连线、画布缩放/平移、聊天模板选择、工具模板独立工作区、全局变量展示和保存。
 
 **技术栈：** FastAPI、React、Vite、pytest。
 
@@ -44,12 +44,29 @@
 - [x] 在 `Prompt V2 模板` 页面加载编排图。
 - [x] 支持选择模板并加载正文。
 - [x] 支持在 canvas 中渲染 SVG 连线和可拖拽节点。
+- [x] 支持滚轮缩放、空白区域拖动画布、缩放重置。
 - [x] 支持添加和删除模板节点、运行时节点。
-- [x] 支持在 canvas 中修改节点连接关系。
+- [x] 支持从节点右侧端口拖线到目标左侧端口来修改连接关系。
 - [x] 在侧栏展示当前高亮路径的拓扑顺序。
+- [x] 将运行时节点字段显示为中文概念，不在表单里展示 `runtime_key`。
 - [x] 展示全局可插入变量白名单和运行时目录。
 - [x] 保存模板并刷新预览。
 - [x] 保存编排图并刷新预览。
+
+### 任务 3.1：拆分工具模板工作区
+
+**文件：**
+- 修改：`core/prompt_v2/template_store.py`
+- 修改：`prompts.v2.default/*.md`
+- 修改：`webui/src/App.jsx`
+- 修改：`tests/test_prompt_v2_template_admin.py`
+- 修改：`tests/test_webui_prompt_runtime_ui.py`
+
+- [x] 模板列表返回 `kind` 和 `tool_name`。
+- [x] 默认工具模板 frontmatter 标记所属工具。
+- [x] WebUI 增加 `工具模板` 工作区。
+- [x] 工具模板按工具卡片展示，每个工具编辑自己的模板。
+- [x] 聊天编排添加模板节点时只使用聊天模板。
 
 ### 任务 3.5：收口默认模板
 

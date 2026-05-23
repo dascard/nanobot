@@ -27,17 +27,54 @@ def _body_from(path: Path) -> str:
     return load_template(path.stem, template_dir=path.parent).body
 
 
+def _load_optional_template(path: Path):
+    if not path.exists():
+        return None
+    return load_template(path.stem, template_dir=path.parent)
+
+
+def _template_kind(key: str, frontmatter: dict[str, Any]) -> str:
+    raw = str(frontmatter.get("kind") or "").strip()
+    if raw:
+        return raw
+    if key.startswith("chat_") or key in {"identity_context"}:
+        return "chat"
+    return "tool"
+
+
+def _tool_name(key: str, frontmatter: dict[str, Any], kind: str) -> str:
+    raw = str(frontmatter.get("tool_name") or "").strip()
+    if raw:
+        return raw
+    if kind != "tool":
+        return ""
+    if key == "reply_contract_retry":
+        return "reply"
+    return key
+
+
 def _template_record(key: str) -> dict[str, Any]:
     default_path = default_template_dir() / f"{key}.md"
     runtime_path = runtime_template_dir() / f"{key}.md"
-    active_path = runtime_path if runtime_path.exists() else default_path
-    template = load_template(key, template_dir=active_path.parent)
+    default_template = _load_optional_template(default_path)
+    runtime_template = _load_optional_template(runtime_path)
+    template = runtime_template or default_template
+    if template is None:
+        raise FileNotFoundError(key)
+    active_path = runtime_path if runtime_template else default_path
     content = template.body
+    frontmatter = {
+        **(default_template.frontmatter if default_template else {}),
+        **(runtime_template.frontmatter if runtime_template else {}),
+    }
+    kind = _template_kind(key, frontmatter)
     return {
         "template_key": key,
-        "name": str(template.frontmatter.get("name") or key),
-        "description": str(template.frontmatter.get("description") or ""),
-        "version": template.frontmatter.get("version", ""),
+        "name": str(frontmatter.get("name") or key),
+        "description": str(frontmatter.get("description") or ""),
+        "version": frontmatter.get("version", ""),
+        "kind": kind,
+        "tool_name": _tool_name(key, frontmatter, kind),
         "source": "runtime" if runtime_path.exists() else "default",
         "active_path": str(active_path),
         "runtime_path": str(runtime_path),

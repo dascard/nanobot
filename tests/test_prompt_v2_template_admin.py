@@ -19,6 +19,13 @@ def _write_template(path: Path, name: str, body: str) -> None:
     )
 
 
+def _write_tool_template(path: Path, name: str, tool_name: str, body: str) -> None:
+    path.write_text(
+        f"---\nname: {name}\nversion: 1\nkind: tool\ntool_name: {tool_name}\n---\n{body}\n",
+        encoding="utf-8",
+    )
+
+
 def _write_flow(path: Path) -> None:
     path.write_text(
         """{
@@ -48,6 +55,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
     _write_template(default_dir / "chat_main.md", "主回复 V2", "默认主规则 {{ chat_type }}")
     _write_template(default_dir / "chat_branch_private.md", "私聊回复 V2", "默认私聊行为")
     _write_template(default_dir / "identity_context.md", "身份上下文", "你叫 {{ character_name }}")
+    _write_tool_template(default_dir / "sql_analysis.md", "SQL 分析工具", "sql_analysis", "只读查询")
     _write_flow(default_dir / "chat_flow.json")
     monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
     monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
@@ -79,8 +87,12 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             "chat_branch_private",
             "chat_main",
             "identity_context",
+            "sql_analysis",
         ]
         assert data["items"][0]["source"] == "default"
+        sql_record = next(item for item in data["items"] if item["template_key"] == "sql_analysis")
+        assert sql_record["kind"] == "tool"
+        assert sql_record["tool_name"] == "sql_analysis"
 
         detail = client.get("/api/v1/admin/prompt-v2/templates/identity_context", headers=_auth_header())
         assert detail.status_code == 200, detail.text

@@ -1,6 +1,7 @@
 ---
 name: 私聊分支规则 V2
 version: 1
+kind: chat
 description: Prompt Runtime V2 私聊差异规则；由编排图在 private chat_type 下接入。
 ---
 ## 私聊行为

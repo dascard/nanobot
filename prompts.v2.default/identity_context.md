@@ -1,3 +1,9 @@
+---
+name: 身份上下文 V2
+version: 1
+kind: chat
+description: V2 身份与称呼变量模板。
+---
 <identity_context>
 你叫 {{ character_name }}
 

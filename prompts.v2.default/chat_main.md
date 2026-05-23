@@ -1,6 +1,7 @@
 ---
 name: 主回复公共规则 V2
 version: 1
+kind: chat
 description: Prompt Runtime V2 主回复公共规则；群聊和私聊差异通过编排图分支模板注入。
 ---
 ## 交互定位

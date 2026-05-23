@@ -32,18 +32,39 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "Prompt V2 模板" in source
     assert "Canvas 编排" in source
     assert "data-testid=\"prompt-flow-canvas\"" in source
+    assert "data-testid=\"prompt-flow-viewport\"" in source
     assert "data-testid=\"prompt-flow-edge-layer\"" in source
+    assert "prompt-flow-scrollbar" in source
+    assert "const [canvasViewport, setCanvasViewport]" in source
+    assert "handleCanvasWheel" in source
+    assert "startPanCanvas" in source
+    assert "startConnection" in source
+    assert "completeConnection" in source
+    assert "连接端口" in source
     assert "onMouseDown={e => startDragNode" in source
-    assert "开始连线" in source
-    assert "连到这里" in source
+    assert "开始连线" not in source
+    assert "连到这里" not in source
+    assert "缩小" in source
+    assert "放大" in source
+    assert "重置视图" in source
     assert "全局可插入变量白名单" in source
     assert "node.label || node.id" in source
     assert "添加节点" in source
     assert "删除节点" in source
     assert "当前节点" in source
+    assert "节点模板切换" in source
+    assert "当前节点使用的模板" in source
+    assert "工具模板" in source
+    assert "按工具拆分" in source
+    assert "当前工具使用的模板" in source
+    assert "promptV2TemplateKind" in source
+    assert "promptV2ToolName" in source
+    assert "selectedToolTemplateKey" in source
+    assert ">runtime_key<" not in source
+    assert "运行时数据" in source
     assert "api.get('/prompt-v2/templates')" in source
     assert "api.get('/prompt-v2/flow')" in source
-    assert "api.put(`/prompt-v2/templates/${encodeURIComponent(selectedTemplateKey)}`" in source
+    assert "api.put(`/prompt-v2/templates/${encodeURIComponent(activeTemplateKey)}`" in source
     assert "api.put('/prompt-v2/flow'" in source
     assert "保存 V2 模板" in source
     assert "保存编排图" in source

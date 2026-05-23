@@ -2210,15 +2210,48 @@ function ManagedPromptsPage() {
 }
 
 const PROMPT_V2_RUNTIME_NODES = [
-  { key: 'runtime_context', label: 'system: runtime_context' },
-  { key: 'persona_reference', label: 'system: persona_reference' },
-  { key: 'conversation_context_header', label: 'system: conversation_context_header' },
-  { key: 'history_messages', label: 'history: messages' },
-  { key: 'group_context', label: 'system: group profile / expression / jargon' },
-  { key: 'effort_constraint', label: 'system: effort_constraint' },
-  { key: 'runtime_tool_prompt', label: 'system: runtime_tool_prompt' },
-  { key: 'current_user_event', label: 'user: current_user_input' },
+  { key: 'runtime_context', label: '运行上下文', role: 'system' },
+  { key: 'persona_reference', label: '用户画像参考', role: 'system' },
+  { key: 'conversation_context_header', label: '会话上下文头', role: 'system' },
+  { key: 'history_messages', label: '历史消息', role: 'history' },
+  { key: 'group_context', label: '群画像 / 表情 / 黑话', role: 'system' },
+  { key: 'effort_constraint', label: '回复长度约束', role: 'system' },
+  { key: 'runtime_tool_prompt', label: '工具运行说明', role: 'system' },
+  { key: 'current_user_event', label: '当前用户输入', role: 'user' },
 ]
+
+const PROMPT_V2_TOOL_TEMPLATE_LABELS = {
+  reply_contract_retry: { tool: 'reply / no_reply', title: '回复合约重试模板' },
+  sql_analysis: { tool: 'sql_analysis', title: 'SQL 分析工具模板' },
+  memory_extract: { tool: 'memory_extract', title: '记忆抽取工具模板' },
+  timing_gate: { tool: 'timing_gate', title: '发言时机判断模板' },
+}
+
+function promptV2TemplateKind(item) {
+  if (item?.kind) return item.kind
+  const key = item?.template_key || ''
+  if (key.startsWith('chat_') || key === 'identity_context') return 'chat'
+  return 'tool'
+}
+
+function promptV2ToolName(item) {
+  if (item?.tool_name) return item.tool_name
+  const key = item?.template_key || ''
+  return PROMPT_V2_TOOL_TEMPLATE_LABELS[key]?.tool || key
+}
+
+function promptV2TemplateTitle(item) {
+  const key = item?.template_key || ''
+  return PROMPT_V2_TOOL_TEMPLATE_LABELS[key]?.title || item?.name || key
+}
+
+function runtimeNodeLabel(key) {
+  return PROMPT_V2_RUNTIME_NODES.find(item => item.key === key)?.label || key
+}
+
+function runtimeNodeRole(key) {
+  return PROMPT_V2_RUNTIME_NODES.find(item => item.key === key)?.role || 'system'
+}
 
 function flowAppliesToChat(item, chatType) {
   const types = item?.chat_types
@@ -2296,64 +2329,184 @@ function PromptFlowCanvas({
   flow,
   chatType,
   selectedNodeId,
-  connectingFrom,
+  viewport,
+  onViewportChange,
+  onResetViewport,
   onSelectNode,
   onMoveNode,
   onDeleteNode,
-  onStartConnect,
   onConnectNode,
-  onCancelConnect,
 }) {
   const canvasRef = useRef(null)
   const dragRef = useRef(null)
+  const panRef = useRef(null)
+  const connectionRef = useRef(null)
+  const [connectionDraft, setConnectionDraft] = useState(null)
   const nodes = flow?.nodes || []
   const nodeById = new Map(nodes.map((node, idx) => [node.id, { node, idx, pos: nodeCanvasPosition(node, idx) }]))
   const activeNodeIds = new Set(nodes.filter(node => flowAppliesToChat(node, chatType)).map(node => node.id))
   const edges = (flow?.edges || []).filter(edge => nodeById.has(edge.from) && nodeById.has(edge.to))
+  const zoom = Math.min(1.8, Math.max(0.45, Number(viewport?.zoom) || 1))
+  const viewX = Number(viewport?.x) || 0
+  const viewY = Number(viewport?.y) || 0
 
-  const startDragNode = (event, node) => {
-    if (event.button !== 0) return
+  const worldFromClient = event => {
     const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const idx = nodes.findIndex(item => item.id === node.id)
-    const pos = nodeCanvasPosition(node, idx)
-    dragRef.current = {
-      nodeId: node.id,
-      offsetX: event.clientX - rect.left + canvasRef.current.scrollLeft - pos.x,
-      offsetY: event.clientY - rect.top + canvasRef.current.scrollTop - pos.y,
+    if (!rect) return { x: 0, y: 0 }
+    return {
+      x: (event.clientX - rect.left - viewX) / zoom,
+      y: (event.clientY - rect.top - viewY) / zoom,
     }
   }
 
-  const handleMouseMove = event => {
-    if (!dragRef.current || !canvasRef.current) return
-    const rect = canvasRef.current.getBoundingClientRect()
-    const x = event.clientX - rect.left + canvasRef.current.scrollLeft - dragRef.current.offsetX
-    const y = event.clientY - rect.top + canvasRef.current.scrollTop - dragRef.current.offsetY
-    onMoveNode(dragRef.current.nodeId, {
-      x: Math.max(20, Math.round(x)),
-      y: Math.max(20, Math.round(y)),
+  const nodePortPosition = (node, idx, side) => {
+    const pos = nodeCanvasPosition(node, idx)
+    return {
+      x: pos.x + (side === 'out' ? FLOW_NODE_WIDTH : 0),
+      y: pos.y + FLOW_NODE_HEIGHT / 2,
+    }
+  }
+
+  const startDragNode = (event, node) => {
+    if (event.button !== 0) return
+    if (event.target?.closest?.('[data-flow-port="true"], [data-flow-control="true"]')) return
+    event.preventDefault()
+    const idx = nodes.findIndex(item => item.id === node.id)
+    const pos = nodeCanvasPosition(node, idx)
+    const point = worldFromClient(event)
+    dragRef.current = {
+      nodeId: node.id,
+      offsetX: point.x - pos.x,
+      offsetY: point.y - pos.y,
+    }
+  }
+
+  const startConnection = (event, node) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    const idx = nodes.findIndex(item => item.id === node.id)
+    const from = nodePortPosition(node, idx, 'out')
+    const draft = { fromNodeId: node.id, from, to: from }
+    connectionRef.current = draft
+    setConnectionDraft(draft)
+  }
+
+  const completeConnection = (event, targetNodeId) => {
+    if (!connectionRef.current) return
+    event.preventDefault()
+    event.stopPropagation()
+    const fromNodeId = connectionRef.current.fromNodeId
+    if (fromNodeId && fromNodeId !== targetNodeId) {
+      onConnectNode(fromNodeId, targetNodeId)
+    }
+    connectionRef.current = null
+    setConnectionDraft(null)
+  }
+
+  const startPanCanvas = event => {
+    if (event.button !== 0 && event.button !== 1) return
+    if (event.target?.closest?.('[data-flow-node="true"], [data-flow-control="true"], [data-flow-port="true"]')) return
+    event.preventDefault()
+    panRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: viewX,
+      originY: viewY,
+    }
+  }
+
+  const handleCanvasWheel = event => {
+    event.preventDefault()
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const factor = event.deltaY > 0 ? 0.9 : 1.1
+    const nextZoom = Math.min(1.8, Math.max(0.45, zoom * factor))
+    const pointerX = event.clientX - rect.left
+    const pointerY = event.clientY - rect.top
+    const worldX = (pointerX - viewX) / zoom
+    const worldY = (pointerY - viewY) / zoom
+    onViewportChange(prev => ({
+      ...prev,
+      zoom: nextZoom,
+      x: Math.round(pointerX - worldX * nextZoom),
+      y: Math.round(pointerY - worldY * nextZoom),
+    }))
+  }
+
+  const changeZoom = factor => {
+    onViewportChange(prev => {
+      const current = Math.min(1.8, Math.max(0.45, Number(prev.zoom) || 1))
+      return { ...prev, zoom: Math.min(1.8, Math.max(0.45, current * factor)) }
     })
   }
 
-  const stopDragNode = () => {
+  const handleMouseMove = event => {
+    if (connectionRef.current) {
+      const point = worldFromClient(event)
+      const next = { ...connectionRef.current, to: point }
+      connectionRef.current = next
+      setConnectionDraft(next)
+      return
+    }
+    if (dragRef.current) {
+      const point = worldFromClient(event)
+      onMoveNode(dragRef.current.nodeId, {
+        x: Math.max(20, Math.round(point.x - dragRef.current.offsetX)),
+        y: Math.max(20, Math.round(point.y - dragRef.current.offsetY)),
+      })
+      return
+    }
+    if (panRef.current) {
+      onViewportChange(prev => ({
+        ...prev,
+        x: Math.round(panRef.current.originX + event.clientX - panRef.current.startX),
+        y: Math.round(panRef.current.originY + event.clientY - panRef.current.startY),
+      }))
+    }
+  }
+
+  const stopInteractions = () => {
     dragRef.current = null
+    panRef.current = null
+    connectionRef.current = null
+    setConnectionDraft(null)
   }
 
   return (
     <div
       ref={canvasRef}
       data-testid="prompt-flow-canvas"
+      onWheel={handleCanvasWheel}
+      onMouseDown={startPanCanvas}
       onMouseMove={handleMouseMove}
-      onMouseUp={stopDragNode}
-      onMouseLeave={stopDragNode}
-      className="relative h-[680px] overflow-auto rounded-lg border border-slate-800 bg-slate-950"
+      onMouseUp={stopInteractions}
+      onMouseLeave={stopInteractions}
+      className="prompt-flow-scrollbar relative h-[680px] overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
       style={{
         backgroundImage: 'radial-gradient(circle, rgba(148, 163, 184, 0.16) 1px, transparent 1px)',
-        backgroundSize: '28px 28px',
+        backgroundSize: `${28 * zoom}px ${28 * zoom}px`,
+        backgroundPosition: `${viewX}px ${viewY}px`,
       }}
     >
-      <div className="relative min-w-[3220px] min-h-[760px]">
-        <svg data-testid="prompt-flow-edge-layer" className="absolute inset-0 w-full h-full pointer-events-none">
+      <div className="absolute right-3 top-3 z-20 flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-950/90 p-1" data-flow-control="true">
+        <button title="缩小" onClick={() => changeZoom(0.9)} className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-200">缩小</button>
+        <span className="min-w-12 text-center text-[11px] text-slate-400">{Math.round(zoom * 100)}%</span>
+        <button title="放大" onClick={() => changeZoom(1.1)} className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-200">放大</button>
+        <button title="重置视图" onClick={onResetViewport} className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs text-slate-200">重置视图</button>
+      </div>
+
+      <div
+        data-testid="prompt-flow-viewport"
+        className="absolute left-0 top-0"
+        style={{
+          width: 3220,
+          height: 760,
+          transform: `translate(${viewX}px, ${viewY}px) scale(${zoom})`,
+          transformOrigin: '0 0',
+        }}
+      >
+        <svg data-testid="prompt-flow-edge-layer" width="3220" height="760" className="absolute inset-0 pointer-events-none">
           <defs>
             <marker id="prompt-flow-arrow-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#34d399" />
@@ -2385,41 +2538,56 @@ function PromptFlowCanvas({
               />
             )
           })}
+          {connectionDraft && (
+            <path
+              d={`M ${connectionDraft.from.x} ${connectionDraft.from.y} C ${connectionDraft.from.x + 100} ${connectionDraft.from.y}, ${connectionDraft.to.x - 100} ${connectionDraft.to.y}, ${connectionDraft.to.x} ${connectionDraft.to.y}`}
+              fill="none"
+              stroke="#f59e0b"
+              strokeWidth="2"
+              strokeDasharray="6 5"
+              opacity="0.95"
+            />
+          )}
         </svg>
 
         {nodes.map((node, idx) => {
           const pos = nodeCanvasPosition(node, idx)
           const active = activeNodeIds.has(node.id)
           const selected = selectedNodeId === node.id
-          const connectTarget = connectingFrom && connectingFrom !== node.id
+          const runtimeLabel = runtimeNodeLabel(node.runtime_key)
+          const runtimeRole = runtimeNodeRole(node.runtime_key)
           return (
             <div
               key={node.id}
+              data-flow-node="true"
               className={`absolute rounded-lg border bg-slate-900/95 ${selected ? 'border-emerald-400 ring-1 ring-emerald-500/40' : active ? 'border-slate-700' : 'border-slate-800 opacity-50'} cursor-default`}
               style={{ left: pos.x, top: pos.y, width: FLOW_NODE_WIDTH, height: FLOW_NODE_HEIGHT }}
               onMouseDown={e => startDragNode(e, node)}
               onClick={() => onSelectNode(node)}
             >
+              <button
+                title="连接端口：拖到这里完成连线"
+                data-flow-port="true"
+                onMouseUp={e => completeConnection(e, node.id)}
+                onMouseDown={e => e.stopPropagation()}
+                className="absolute -left-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-slate-500 bg-slate-950 hover:border-emerald-300 hover:bg-emerald-500/20"
+              />
+              <button
+                title="连接端口：从这里拖出连线"
+                data-flow-port="true"
+                onMouseDown={e => startConnection(e, node)}
+                className="absolute -right-2 top-1/2 h-4 w-4 -translate-y-1/2 rounded-full border border-slate-500 bg-slate-950 hover:border-amber-300 hover:bg-amber-500/20"
+              />
               <div className="flex h-full flex-col p-3">
                 <div className="flex items-start gap-2 min-w-0">
                   <span className={`mt-0.5 h-2.5 w-2.5 rounded-full ${node.type === 'template' ? 'bg-emerald-400' : 'bg-blue-400'}`} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-xs font-medium text-slate-100">{node.label || node.id}</div>
-                    <div className="mt-1 truncate text-[10px] text-slate-500">{node.type === 'template' ? node.template_key : node.runtime_key}</div>
+                    <div className="mt-1 truncate text-[10px] text-slate-500">{node.type === 'template' ? node.template_key : `${runtimeRole}: ${runtimeLabel}`}</div>
                   </div>
                   <Badge tone={node.type === 'template' ? 'emerald' : 'blue'}>{node.chat_types?.[0] || 'all'}</Badge>
                 </div>
                 <div className="mt-auto flex items-center gap-1">
-                  <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onStartConnect(node.id) }}
-                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-300">
-                    开始连线
-                  </button>
-                  {connectTarget && (
-                    <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onConnectNode(connectingFrom, node.id) }}
-                      className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-[10px] text-white">
-                      连到这里
-                    </button>
-                  )}
                   <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDeleteNode(node.id) }}
                     className="ml-auto px-2 py-1 rounded bg-red-500/10 hover:bg-red-500/20 text-[10px] text-red-300">
                     删除节点
@@ -2429,11 +2597,6 @@ function PromptFlowCanvas({
             </div>
           )
         })}
-        {connectingFrom && (
-          <button onClick={onCancelConnect} className="absolute left-4 top-4 rounded bg-amber-500/15 border border-amber-500/30 px-3 py-1.5 text-xs text-amber-200">
-            正在从 {connectingFrom} 连线，点击目标节点的"连到这里"
-          </button>
-        )}
       </div>
     </div>
   )
@@ -2452,14 +2615,21 @@ function PromptV2TemplatesPage() {
   const [flowPath, setFlowPath] = useState('')
   const [defaultDir, setDefaultDir] = useState('')
   const [runtimeDir, setRuntimeDir] = useState('')
+  const [templateWorkspace, setTemplateWorkspace] = useState('chat')
   const [templateToAdd, setTemplateToAdd] = useState('')
+  const [selectedToolTemplateKey, setSelectedToolTemplateKey] = useState('')
   const [runtimeToAdd, setRuntimeToAdd] = useState('runtime_context')
-  const [connectingFrom, setConnectingFrom] = useState('')
+  const [canvasViewport, setCanvasViewport] = useState({ x: 24, y: 24, zoom: 1 })
   const [toast, setToast] = useState('')
+  const nodeIdSeq = useRef(0)
+  const chatTemplates = templates.filter(item => promptV2TemplateKind(item) === 'chat')
+  const toolTemplates = templates.filter(item => promptV2TemplateKind(item) === 'tool')
   const orderedNodes = orderedFlowNodes(flow, chatType)
   const allNodes = flow?.nodes || []
   const selectedNode = allNodes.find(node => node.id === selectedNodeId) || orderedNodes[0] || allNodes[0] || null
   const selectedTemplateKey = selectedNode?.type === 'template' ? (selectedNode.template_key || selected) : ''
+  const activeTemplateKey = templateWorkspace === 'tools' ? selectedToolTemplateKey : selectedTemplateKey
+  const selectedToolTemplate = toolTemplates.find(item => item.template_key === selectedToolTemplateKey) || toolTemplates[0] || null
 
   const loadTemplates = useCallback(() => {
     api.get('/prompt-v2/templates').then(r => {
@@ -2467,9 +2637,11 @@ function PromptV2TemplatesPage() {
       setTemplates(list)
       setDefaultDir(r.data.default_dir || '')
       setRuntimeDir(r.data.runtime_dir || '')
-      const keys = list.map(item => item.template_key)
-      setTemplateToAdd(prev => prev || keys[0] || '')
-      setSelected(prev => keys.includes(prev) ? prev : (keys.includes('chat_main') ? 'chat_main' : keys[0] || ''))
+      const chatKeys = list.filter(item => promptV2TemplateKind(item) === 'chat').map(item => item.template_key)
+      const toolKeys = list.filter(item => promptV2TemplateKind(item) === 'tool').map(item => item.template_key)
+      setTemplateToAdd(prev => chatKeys.includes(prev) ? prev : (chatKeys[0] || ''))
+      setSelected(prev => chatKeys.includes(prev) ? prev : (chatKeys.includes('chat_main') ? 'chat_main' : chatKeys[0] || ''))
+      setSelectedToolTemplateKey(prev => toolKeys.includes(prev) ? prev : (toolKeys[0] || ''))
     }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
   }, [])
 
@@ -2490,12 +2662,12 @@ function PromptV2TemplatesPage() {
   }, [loadTemplates, loadFlow])
 
   useEffect(() => {
-    if (!selectedTemplateKey) return
-    api.get(`/prompt-v2/templates/${encodeURIComponent(selectedTemplateKey)}`).then(r => {
+    if (!activeTemplateKey) return
+    api.get(`/prompt-v2/templates/${encodeURIComponent(activeTemplateKey)}`).then(r => {
       setDetail(r.data)
       setContent(r.data.content || '')
     }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
-  }, [selectedTemplateKey])
+  }, [activeTemplateKey])
 
   useEffect(() => {
     if (!toast) return
@@ -2504,9 +2676,9 @@ function PromptV2TemplatesPage() {
   }, [toast])
 
   const save = () => {
-    if (!selectedTemplateKey) return
-    api.put(`/prompt-v2/templates/${encodeURIComponent(selectedTemplateKey)}`, { content }).then(r => {
-      setToast(`已保存 ${selectedTemplateKey} · ${r.data.after_hash?.slice(0, 12) || ''}`)
+    if (!activeTemplateKey) return
+    api.put(`/prompt-v2/templates/${encodeURIComponent(activeTemplateKey)}`, { content }).then(r => {
+      setToast(`已保存 ${activeTemplateKey} · ${r.data.after_hash?.slice(0, 12) || ''}`)
       loadTemplates()
     }).catch(e => alert(e.response?.data?.detail || '保存 V2 模板失败'))
   }
@@ -2549,14 +2721,24 @@ function PromptV2TemplatesPage() {
     updateNode(nodeId, { position })
   }
 
+  const createNodeId = prefix => {
+    const existing = new Set((flow.nodes || []).map(node => node.id))
+    while (true) {
+      nodeIdSeq.current += 1
+      const id = `${prefix}_${nodeIdSeq.current}`
+      if (!existing.has(id)) return id
+    }
+  }
+
   const addTemplateNode = () => {
-    const key = templateToAdd || templates[0]?.template_key
+    const key = templateToAdd || chatTemplates[0]?.template_key
     if (!key) return
-    const id = `${key}_${Date.now().toString(36)}`
+    const template = chatTemplates.find(item => item.template_key === key)
+    const id = createNodeId(key)
     addNodeAfterSelection({
       id,
       type: 'template',
-      label: `system: ${key}`,
+      label: `模板: ${template?.name || key}`,
       template_key: key,
       chat_types: [chatType],
     })
@@ -2565,7 +2747,7 @@ function PromptV2TemplatesPage() {
   const addRuntimeNode = () => {
     const option = PROMPT_V2_RUNTIME_NODES.find(item => item.key === runtimeToAdd) || PROMPT_V2_RUNTIME_NODES[0]
     if (!option) return
-    const id = `${option.key}_${Date.now().toString(36)}`
+    const id = createNodeId(option.key)
     addNodeAfterSelection({
       id,
       type: 'runtime',
@@ -2592,7 +2774,6 @@ function PromptV2TemplatesPage() {
         ...(toId ? [{ from: fromId, to: toId, chat_types: [chatType] }] : []),
       ],
     }))
-    setConnectingFrom('')
   }
 
   const autoLayoutFlow = () => {
@@ -2612,14 +2793,15 @@ function PromptV2TemplatesPage() {
 
   const updateSelectedTemplate = value => {
     if (!selectedNode || selectedNode.type !== 'template') return
+    const template = templates.find(item => item.template_key === value)
     setSelected(value)
-    updateNode(selectedNode.id, { template_key: value, label: `system: ${value}` })
+    updateNode(selectedNode.id, { template_key: value, label: `模板: ${template?.name || value}` })
   }
 
   const updateSelectedRuntime = value => {
     if (!selectedNode || selectedNode.type !== 'runtime') return
     const option = PROMPT_V2_RUNTIME_NODES.find(item => item.key === value)
-    updateNode(selectedNode.id, { runtime_key: value, label: option?.label || `system: ${value}` })
+    updateNode(selectedNode.id, { runtime_key: value, label: option?.label || value })
   }
 
   return (
@@ -2628,7 +2810,7 @@ function PromptV2TemplatesPage() {
       <div className="flex items-start justify-between gap-4 mb-4">
         <div>
           <h1 className="text-2xl font-bold mb-1">Prompt V2 模板</h1>
-          <p className="text-slate-500 text-sm">模板是节点内容，编排图决定真实 PromptPlan 顺序；变量是全局白名单，当前输入仍只作为 user event 注入一次</p>
+          <p className="text-slate-500 text-sm">聊天主流程用画布编排；工具提示词按工具拆分成独立模板。变量是全局白名单，当前输入仍只作为 user event 注入一次</p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[10px] text-slate-600">
             <span>默认模板目录: <span className="font-mono text-slate-500">{defaultDir || '-'}</span></span>
             <span>运行时模板目录: <span className="font-mono text-slate-500">{runtimeDir || '-'}</span></span>
@@ -2637,13 +2819,29 @@ function PromptV2TemplatesPage() {
         </div>
         <div className="flex gap-2">
           <NavLink to="/prompt-preview" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-300">运行预览</NavLink>
-          <button onClick={saveFlow} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium">保存编排图</button>
-          <button onClick={save} disabled={!selectedTemplateKey} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-xs font-medium">保存 V2 模板</button>
+          <button onClick={saveFlow} disabled={templateWorkspace !== 'chat'} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 rounded-lg text-xs font-medium">保存编排图</button>
+          <button onClick={save} disabled={!activeTemplateKey} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-xs font-medium">保存 V2 模板</button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 2xl:grid-cols-[260px_minmax(0,1fr)_420px] gap-4">
         <div className="space-y-3 min-w-0">
+          <Card className="p-3">
+            <div className="text-xs font-medium text-slate-300 mb-2">模板工作区</div>
+            <div className="grid grid-cols-2 gap-1 rounded-lg bg-slate-950 p-1">
+              <button onClick={() => setTemplateWorkspace('chat')}
+                className={`rounded-md px-2 py-1.5 text-xs ${templateWorkspace === 'chat' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                聊天编排
+              </button>
+              <button onClick={() => setTemplateWorkspace('tools')}
+                className={`rounded-md px-2 py-1.5 text-xs ${templateWorkspace === 'tools' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                工具模板
+              </button>
+            </div>
+          </Card>
+
+          {templateWorkspace === 'chat' ? (
+            <>
           <Card className="p-3">
             <div className="text-xs font-medium text-slate-300 mb-2">Canvas 编排</div>
             <select value={chatType} onChange={e => setChatType(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
@@ -2658,14 +2856,14 @@ function PromptV2TemplatesPage() {
             <div>
               <div className="text-xs font-medium text-slate-300 mb-2">添加模板节点</div>
               <select value={templateToAdd} onChange={e => setTemplateToAdd(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                {templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
+                {chatTemplates.map(t => <option key={t.template_key} value={t.template_key}>{t.name || t.template_key}</option>)}
               </select>
               <button onClick={addTemplateNode} className="mt-2 w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加节点</button>
             </div>
             <div>
               <div className="text-xs font-medium text-slate-300 mb-2">添加运行时节点</div>
               <select value={runtimeToAdd} onChange={e => setRuntimeToAdd(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.key}</option>)}
+                {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
               </select>
               <button onClick={addRuntimeNode} className="mt-2 w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加运行时</button>
             </div>
@@ -2682,66 +2880,126 @@ function PromptV2TemplatesPage() {
               ))}
             </div>
           </Card>
+            </>
+          ) : (
+            <Card className="p-3">
+              <div className="text-xs font-medium text-slate-300 mb-1">工具模板</div>
+              <div className="text-[11px] text-slate-600 mb-2">按工具拆分，一个工具对应一个可维护模板</div>
+              <div className="space-y-1 max-h-[560px] overflow-auto prompt-flow-scrollbar">
+                {toolTemplates.map(item => (
+                  <button key={item.template_key} onClick={() => setSelectedToolTemplateKey(item.template_key)}
+                    className={`w-full text-left rounded-lg border px-2 py-2 text-xs ${selectedToolTemplateKey === item.template_key ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200' : 'border-slate-800 hover:bg-slate-800 text-slate-300'}`}>
+                    <div className="font-medium truncate">{promptV2TemplateTitle(item)}</div>
+                    <div className="mt-1 text-[11px] text-slate-500 truncate">工具: {promptV2ToolName(item)}</div>
+                  </button>
+                ))}
+                {!toolTemplates.length && <div className="py-6 text-center text-xs text-slate-600">暂无工具模板</div>}
+              </div>
+            </Card>
+          )}
         </div>
 
         <div className="min-w-0">
-          <PromptFlowCanvas
-            flow={flow}
-            chatType={chatType}
-            selectedNodeId={selectedNode?.id || ''}
-            connectingFrom={connectingFrom}
-            onSelectNode={selectNode}
-            onMoveNode={moveNode}
-            onDeleteNode={deleteNode}
-            onStartConnect={setConnectingFrom}
-            onConnectNode={connectNode}
-            onCancelConnect={() => setConnectingFrom('')}
-          />
+          {templateWorkspace === 'chat' ? (
+            <PromptFlowCanvas
+              flow={flow}
+              chatType={chatType}
+              selectedNodeId={selectedNode?.id || ''}
+              viewport={canvasViewport}
+              onViewportChange={setCanvasViewport}
+              onResetViewport={() => setCanvasViewport({ x: 24, y: 24, zoom: 1 })}
+              onSelectNode={selectNode}
+              onMoveNode={moveNode}
+              onDeleteNode={deleteNode}
+              onConnectNode={connectNode}
+            />
+          ) : (
+            <Card className="p-5 min-h-[680px]">
+              <div className="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-100">工具模板</h2>
+                  <p className="text-sm text-slate-500">工具模板不混进聊天主流程画布。每个工具独立维护自己的约束、输出格式和使用边界。</p>
+                </div>
+                <Badge tone="blue">按工具拆分</Badge>
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                {toolTemplates.map(item => (
+                  <button key={item.template_key} onClick={() => setSelectedToolTemplateKey(item.template_key)}
+                    className={`text-left rounded-lg border p-4 transition-colors ${selectedToolTemplateKey === item.template_key ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-slate-800 bg-slate-950 hover:border-slate-700'}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-slate-100 truncate">{promptV2TemplateTitle(item)}</div>
+                        <div className="mt-1 text-xs text-slate-500 truncate">工具: {promptV2ToolName(item)}</div>
+                      </div>
+                      <Badge tone={item.source === 'runtime' ? 'emerald' : 'slate'}>{item.source || 'default'}</Badge>
+                    </div>
+                    <p className="mt-3 line-clamp-2 text-xs text-slate-500">{item.description || '独立工具提示词模板'}</p>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          )}
         </div>
 
         <div className="min-w-0 space-y-4">
           <Card className="p-4">
-            <div className="flex items-start justify-between gap-3 mb-3">
-              <div className="min-w-0">
-                <div className="text-xs text-slate-500 mb-1">当前节点</div>
-                <h2 className="text-sm font-medium text-emerald-300 truncate">{selectedNode?.label || '未选择节点'}</h2>
-                <div className="text-[11px] text-slate-600 truncate">{selectedNode?.id || '-'}</div>
-              </div>
-              {selectedNode && <Badge tone={selectedNode.type === 'template' ? 'emerald' : 'blue'}>{selectedNode.type}</Badge>}
-            </div>
+            {templateWorkspace === 'chat' ? (
+              <>
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="min-w-0">
+                    <div className="text-xs text-slate-500 mb-1">当前节点</div>
+                    <h2 className="text-sm font-medium text-emerald-300 truncate">{selectedNode?.label || '未选择节点'}</h2>
+                    <div className="text-[11px] text-slate-600 truncate">节点编号: {selectedNode?.id || '-'}</div>
+                  </div>
+                  {selectedNode && <Badge tone={selectedNode.type === 'template' ? 'emerald' : 'blue'}>{selectedNode.type === 'template' ? '模板' : '运行时数据'}</Badge>}
+                </div>
 
-            {selectedNode ? (
-              <div className="space-y-3">
-                <label className="block text-xs text-slate-500">节点名称
-                  <input value={selectedNode.label || ''} onChange={e => updateNode(selectedNode.id, { label: e.target.value })}
-                    className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200" />
-                </label>
-                <label className="block text-xs text-slate-500">作用范围
-                  <select value={selectedNode.chat_types?.[0] || 'all'} onChange={e => updateSelectedScope(e.target.value)}
-                    className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                    <option value="all">全局</option>
-                    <option value="group">仅群聊</option>
-                    <option value="private">仅私聊</option>
-                  </select>
-                </label>
-                {selectedNode.type === 'template' ? (
-                  <label className="block text-xs text-slate-500">节点模板
-                    <select value={selectedTemplateKey || ''} onChange={e => updateSelectedTemplate(e.target.value)}
-                      className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                      {templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
-                    </select>
-                  </label>
+                {selectedNode ? (
+                  <div className="space-y-3">
+                    <label className="block text-xs text-slate-500">节点名称
+                      <input value={selectedNode.label || ''} onChange={e => updateNode(selectedNode.id, { label: e.target.value })}
+                        className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200" />
+                    </label>
+                    <label className="block text-xs text-slate-500">作用范围
+                      <select value={selectedNode.chat_types?.[0] || 'all'} onChange={e => updateSelectedScope(e.target.value)}
+                        className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                        <option value="all">全局</option>
+                        <option value="group">仅群聊</option>
+                        <option value="private">仅私聊</option>
+                      </select>
+                    </label>
+                    {selectedNode.type === 'template' ? (
+                      <label className="block text-xs text-slate-500">节点模板切换
+                        <select value={selectedTemplateKey || ''} onChange={e => updateSelectedTemplate(e.target.value)}
+                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                          {chatTemplates.map(t => <option key={t.template_key} value={t.template_key}>{t.name || t.template_key}</option>)}
+                        </select>
+                        <span className="mt-1 block text-[11px] text-slate-600">当前节点使用的模板: {selectedTemplateKey || '-'}</span>
+                      </label>
+                    ) : (
+                      <label className="block text-xs text-slate-500">运行时数据
+                        <select value={selectedNode.runtime_key || ''} onChange={e => updateSelectedRuntime(e.target.value)}
+                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                          {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
+                        </select>
+                        <span className="mt-1 block text-[11px] text-slate-600">由 compiler 注入真实上下文，不直接写在模板文件里。</span>
+                      </label>
+                    )}
+                  </div>
                 ) : (
-                  <label className="block text-xs text-slate-500">runtime_key
-                    <select value={selectedNode.runtime_key || ''} onChange={e => updateSelectedRuntime(e.target.value)}
-                      className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                      {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.key}</option>)}
-                    </select>
-                  </label>
+                  <div className="text-sm text-slate-600">点击画布节点开始编辑。</div>
                 )}
-              </div>
+              </>
             ) : (
-              <div className="text-sm text-slate-600">点击画布节点开始编辑。</div>
+              <>
+                <div className="text-xs text-slate-500 mb-1">当前工具使用的模板</div>
+                <h2 className="text-sm font-medium text-emerald-300 truncate">{promptV2TemplateTitle(selectedToolTemplate) || '未选择工具模板'}</h2>
+                <div className="mt-1 text-[11px] text-slate-600">工具: {promptV2ToolName(selectedToolTemplate) || '-'}</div>
+                <select value={selectedToolTemplateKey || ''} onChange={e => setSelectedToolTemplateKey(e.target.value)}
+                  className="mt-3 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                  {toolTemplates.map(item => <option key={item.template_key} value={item.template_key}>{promptV2ToolName(item)} · {promptV2TemplateTitle(item)}</option>)}
+                </select>
+              </>
             )}
           </Card>
 
@@ -2749,17 +3007,17 @@ function PromptV2TemplatesPage() {
             <div className="flex items-center justify-between gap-2 mb-3">
               <div className="min-w-0">
                 <div className="text-xs font-medium text-slate-300">模板内容</div>
-                <div className="text-[11px] text-slate-600 truncate">{detail?.active_path || ''}</div>
+                <div className="text-[11px] text-slate-600 truncate">{activeTemplateKey ? detail?.active_path || '' : '当前节点不是模板文件'}</div>
               </div>
               <div className="flex gap-2">
                 <Badge tone={detail?.source === 'runtime' ? 'emerald' : 'slate'}>{detail?.source || 'default'}</Badge>
                 <Badge tone="blue">{detail?.sha256?.slice(0, 12) || '-'}</Badge>
               </div>
             </div>
-            {selectedNode?.type === 'runtime' ? (
+            {templateWorkspace === 'chat' && selectedNode?.type === 'runtime' ? (
               <div className="min-h-[340px] rounded-lg bg-slate-950 border border-slate-800 p-4">
                 <div className="text-xs text-slate-500 mb-2">运行时注入节点</div>
-                <div className="text-lg text-slate-200 mb-1">{selectedNode.runtime_key}</div>
+                <div className="text-lg text-slate-200 mb-1">{runtimeNodeLabel(selectedNode.runtime_key)}</div>
                 <div className="text-sm text-slate-500">这个节点由 compiler 注入真实运行数据，不在模板文件中编辑。</div>
               </div>
             ) : (
