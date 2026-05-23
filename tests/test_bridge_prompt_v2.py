@@ -205,8 +205,8 @@ async def test_bridge_engine_v2_fails_fast_when_prompt_audit_fails(monkeypatch, 
         },
     )
 
-    assert "[系统内部错误]" in result
-    assert "Prompt Runtime V2 审计失败" in result
+    assert result == ""
+    assert bridge.pop_last_reply_meta("group_1002")["_agent_result"] == "prompt_v2_audit_failed"
     assert seen_events == []
 
 

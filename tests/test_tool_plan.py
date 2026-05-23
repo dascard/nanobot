@@ -77,6 +77,64 @@ def test_tool_plan_rejects_disabled_tool_execution():
     assert "测试禁用" in str(exc.value)
 
 
+def test_record_runtime_tool_decision_can_use_injected_db(monkeypatch, db_session):
+    from core import database
+    from core.database import RuntimeToolDecision
+    from core.runtime_tool_service import record_runtime_tool_decision
+
+    monkeypatch.setattr(
+        database,
+        "SessionLocal",
+        lambda: (_ for _ in ()).throw(AssertionError("must use injected db")),
+    )
+
+    record_runtime_tool_decision(
+        session_id="s1",
+        message_id="m1",
+        chat_type="group",
+        group_id="g1",
+        user_id="u1",
+        runtime_preset="lightweight",
+        enabled={"reply": True, "python_sandbox": False},
+        disabled={"python_sandbox": "运行时轻量预设"},
+        effective_tools=["reply"],
+        db=db_session,
+    )
+    db_session.commit()
+
+    row = db_session.query(RuntimeToolDecision).filter_by(session_id="s1").one()
+    assert row.runtime_preset == "lightweight"
+    assert row.effective_tools_json == '["reply"]'
+
+
+def test_record_runtime_tool_decision_ignores_missing_observability_table():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from core.runtime_tool_service import record_runtime_tool_decision
+
+    engine = create_engine("sqlite:///:memory:")
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    try:
+        result = record_runtime_tool_decision(
+            session_id="s-missing-table",
+            message_id="m1",
+            chat_type="group",
+            group_id="g1",
+            user_id="u1",
+            runtime_preset="full",
+            enabled={"reply": True},
+            disabled={},
+            effective_tools=["reply"],
+            db=session,
+        )
+    finally:
+        session.close()
+
+    assert result is False
+
+
 @pytest.mark.asyncio
 async def test_tool_plan_guard_rejects_disabled_dispatch():
     from types import SimpleNamespace

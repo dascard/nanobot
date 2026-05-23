@@ -179,6 +179,18 @@ def test_group_agent_result_uses_popped_no_reply_meta():
     assert result == "no_reply_tool"
 
 
+def test_group_agent_result_preserves_prompt_v2_audit_failure():
+    from api.routes import _derive_group_agent_result
+
+    result = _derive_group_agent_result(
+        object(),
+        "group_1",
+        {"_agent_result": "prompt_v2_audit_failed"},
+    )
+
+    assert result == "prompt_v2_audit_failed"
+
+
 def test_reply_eval_case_crud_preview_and_run(client, auth_header, monkeypatch):
     _install_fake_reply_bridge(monkeypatch, reply_text="可以")
 

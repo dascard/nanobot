@@ -1,6 +1,16 @@
 from sqlalchemy import create_engine, inspect, text
 
 
+def test_sqlite_path_from_database_url_respects_configured_database_path(tmp_path):
+    from core.database import sqlite_path_from_database_url
+
+    db_path = tmp_path / "custom" / "nanobot.db"
+
+    assert sqlite_path_from_database_url(f"sqlite:///{db_path}") == str(db_path)
+    assert sqlite_path_from_database_url("sqlite:///:memory:") is None
+    assert sqlite_path_from_database_url("postgresql://example/db") is None
+
+
 def test_schema_migrations_records_applied_versions():
     from core.schema_migrations import MIGRATIONS, run_schema_migrations
 

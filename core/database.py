@@ -12,6 +12,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
 )
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from config import DATABASE_URL
@@ -25,6 +26,20 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+
+
+def sqlite_path_from_database_url(database_url: str) -> str | None:
+    """从 SQLite DATABASE_URL 解析真实文件路径；非文件型 SQLite 返回 None。"""
+    try:
+        url = make_url(database_url)
+    except Exception:
+        return None
+    if not url.drivername.startswith("sqlite"):
+        return None
+    database = url.database
+    if not database or database == ":memory:":
+        return None
+    return os.path.abspath(database)
 
 
 class User(Base):
@@ -663,13 +678,17 @@ class StickerDuplicateCandidate(Base):
 
 
 def init_db():
-    os.makedirs(DB_DIR, exist_ok=True)
+    db_path = sqlite_path_from_database_url(DATABASE_URL)
+    if db_path:
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    else:
+        os.makedirs(DB_DIR, exist_ok=True)
 
     Base.metadata.create_all(bind=engine)
 
     from core.schema_migrations import run_schema_migrations
 
-    run_schema_migrations(engine, db_path=DB_PATH)
+    run_schema_migrations(engine, db_path=db_path)
 
 def get_db():
     db = SessionLocal()

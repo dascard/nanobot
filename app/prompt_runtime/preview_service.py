@@ -43,8 +43,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     from core.database import Persona
     from core.prompt_v2 import compiler as prompt_compiler
     from core.prompt_v2.schema import PromptCompileRequest
-    from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
-    from core.tool_schema_preview import build_effective_tool_schemas
+    from core.tool_plan import build_tool_plan
 
     chat_type = _strip(getattr(body, "chat_type", "")) or "private"
     is_group = chat_type == "group"
@@ -68,15 +67,17 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         group_id=group_id,
     )
     runtime_preset = _strip(getattr(body, "runtime_preset", "")) or "full"
-    enabled, disabled = resolve_effective_tools(
+    tool_plan = build_tool_plan(
         chat_type=chat_type,
         group_id=group_id,
         user_id=user_id,
         runtime_preset=runtime_preset,
         db=db,
     )
-    runtime_tool_prompt = build_runtime_tool_prompt(enabled, disabled, chat_type)
-    configured_tool_schemas = build_effective_tool_schemas(enabled)
+    enabled = dict(tool_plan.enabled)
+    disabled = dict(tool_plan.disabled)
+    runtime_tool_prompt = tool_plan.runtime_tool_prompt
+    configured_tool_schemas = list(tool_plan.sent_tool_schemas)
 
     v2_prompt_key = _strip(getattr(body, "prompt_key", ""))
     if v2_prompt_key in {"", "group_chat", "private_chat"}:
@@ -123,6 +124,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         "history_debug": history_debug,
         "runtime_preset": runtime_preset,
         "runtime_tool_prompt": runtime_tool_prompt,
+        "tool_plan_sha256": tool_plan.sha256,
         "tools": tools,
         "tool_schemas": plan.tool_schemas,
         "effective_tool_schemas": plan.tool_schemas,

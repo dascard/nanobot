@@ -6,13 +6,15 @@ from typing import Callable
 
 from sqlalchemy.orm import Session
 
-from core.database import SessionLocal
-
 
 class UnitOfWork:
     """统一管理一次业务操作中的数据库 session 生命周期。"""
 
-    def __init__(self, session_factory: Callable[[], Session] = SessionLocal):
+    def __init__(self, session_factory: Callable[[], Session] | None = None):
+        if session_factory is None:
+            from core import database
+
+            session_factory = database.SessionLocal
         self._session_factory = session_factory
         self.db: Session | None = None
 

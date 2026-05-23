@@ -959,6 +959,7 @@ class NanobotBridge:
 
             from core.final_tools import set_current_final_tools
             from core.tool_plan import build_tool_plan, set_current_tool_plan
+            from core.runtime_tool_service import record_runtime_tool_decision
             from core.uow import UnitOfWork
 
             with UnitOfWork() as uow:
@@ -966,6 +967,24 @@ class NanobotBridge:
                     chat_type=runtime_chat_type, group_id=group_id, user_id=user_id,
                     runtime_preset=runtime_preset, db=uow.db,
                 )
+                decision_recorded = record_runtime_tool_decision(
+                    session_id=session_id,
+                    message_id=meta.get("message_id", ""),
+                    chat_type=runtime_chat_type,
+                    group_id=group_id,
+                    user_id=user_id,
+                    runtime_preset=runtime_preset,
+                    enabled=tool_plan.enabled,
+                    disabled=tool_plan.disabled,
+                    effective_tools=sorted(tool_plan.executable_tool_names),
+                    db=uow.db,
+                )
+                if decision_recorded:
+                    try:
+                        uow.commit()
+                    except Exception as e:
+                        uow.rollback()
+                        logger.warning("[Bridge] failed to commit runtime tool decision: %s", e)
             final_tools_token = set_current_final_tools(tool_plan)
             tool_plan_token = set_current_tool_plan(tool_plan)
             enabled = dict(tool_plan.enabled or {})
@@ -991,18 +1010,6 @@ class NanobotBridge:
             except Exception as e:
                 logger.debug("[Bridge] failed to expose runtime context to tools: %s", e)
 
-            from core.runtime_tool_service import record_runtime_tool_decision
-            record_runtime_tool_decision(
-                session_id=session_id,
-                message_id=meta.get("message_id", ""),
-                chat_type=runtime_chat_type,
-                group_id=group_id,
-                user_id=user_id,
-                runtime_preset=runtime_preset,
-                enabled=enabled,
-                disabled=disabled,
-                effective_tools=effective_tools,
-            )
             # ---------------------------------------------
 
             from nanobot_kt.prompt_runtime import (
@@ -1069,9 +1076,10 @@ class NanobotBridge:
             except PromptRuntimeAuditFailure as e:
                 logger.error("[PromptV2] live audit failed: %s", e)
                 run_meta.update(e.meta_update)
+                self._log_agent_result(session_id, "prompt_v2_audit_failed")
                 self._restore_saved_tools()
                 _finish_agent_trace("error", error=str(e))
-                return f"[系统内部错误] {e}"
+                return ""
             run_meta.update(prompt_build.meta_update)
             self._last_prompt_render_meta = {
                 "prompt_source": prompt_build.prompt_source,

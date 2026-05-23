@@ -241,13 +241,14 @@ def record_runtime_tool_decision(
     enabled: dict | None = None,
     disabled: dict | None = None,
     effective_tools: list | None = None,
-):
+    db=None,
+) -> bool:
     """写入 RuntimeToolDecision 记录——供 WebUI 排查工具可用性。"""
     try:
-        from core.database import SessionLocal, RuntimeToolDecision
-        db = SessionLocal()
-        try:
-            db.add(RuntimeToolDecision(
+        from core.database import RuntimeToolDecision
+
+        def _write(session) -> None:
+            session.add(RuntimeToolDecision(
                 session_id=session_id,
                 message_id=message_id,
                 chat_type=chat_type,
@@ -269,13 +270,38 @@ def record_runtime_tool_decision(
             if _random.randint(1, 50) == 1:
                 from datetime import datetime as _dt, timedelta as _td
                 cutoff = _dt.now() - _td(days=30)
-                deleted = db.query(RuntimeToolDecision).filter(
+                deleted = session.query(RuntimeToolDecision).filter(
                     RuntimeToolDecision.created_at < cutoff
                 ).delete()
                 if deleted:
                     logger.info("Cleaned %d old runtime_preset_decisions", deleted)
-            db.commit()
+
+        if db is not None:
+            try:
+                _write(db)
+                db.flush()
+                return True
+            except Exception as e:
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
+                logger.warning("Failed to record runtime_preset_decision: %s", e)
+                return False
+
+        from core import database
+
+        session = database.SessionLocal()
+        try:
+            _write(session)
+            session.commit()
+            return True
+        except Exception as e:
+            session.rollback()
+            logger.warning("Failed to record runtime_preset_decision: %s", e)
+            return False
         finally:
-            db.close()
+            session.close()
     except Exception as e:
         logger.warning("Failed to record runtime_preset_decision: %s", e)
+        return False

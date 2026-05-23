@@ -707,6 +707,49 @@ async def test_group_message_at_bot_enters_timing(db_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_group_message_prompt_v2_audit_failure_is_no_send(db_session, monkeypatch):
+    from api.routes import GroupMessageRequest, group_message
+
+    class FakeBridge:
+        async def handle_message(self, *args, **kwargs):
+            return ""
+
+        def pop_last_reply_meta(self, session_id):
+            return {"_agent_result": "prompt_v2_audit_failed"}
+
+    class FakeRuntime:
+        async def process_message(self, *args, **kwargs):
+            return {"action": "continue", "generation": 1, "reason": "audit failure path"}
+
+        def note_bot_replied(self, *args, **kwargs):
+            raise AssertionError("audit failure must not mark bot as replied")
+
+    monkeypatch.setattr("api.routes.get_bridge", lambda: FakeBridge())
+    monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FakeRuntime())
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="audit-g",
+            sender_id="u-audit",
+            sender_name="审计用户",
+            message="触发审计失败",
+            session_name="审计群",
+            is_at_bot=True,
+            message_id="m-audit-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "continue"
+    assert data["reply"] == ""
+    system_logs = db_session.query(ChatLog).filter_by(user_id="group_audit-g", role="system").all()
+    assert any("[NO_SEND] agent_result=prompt_v2_audit_failed" in row.content for row in system_logs)
+    assistant_logs = db_session.query(ChatLog).filter_by(user_id="group_audit-g", role="assistant").all()
+    assert assistant_logs == []
+
+
+@pytest.mark.asyncio
 async def test_group_message_wait_returns_generation(db_session, monkeypatch):
     """timing 返回 wait 时返回 delay + generation。"""
     from api.routes import GroupMessageRequest, group_message

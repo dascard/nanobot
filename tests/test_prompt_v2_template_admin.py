@@ -290,6 +290,7 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
     assert data["messages"] == plan_messages
     assert data["request_json"]["tools"] == plan_tool_schemas
     assert data["tool_schemas"] == plan_tool_schemas
+    assert len(data["tool_plan_sha256"]) == 64
     assert data["warnings"] == ["preview warning"]
 
 

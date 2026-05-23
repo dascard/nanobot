@@ -1396,7 +1396,12 @@ def _derive_group_agent_result(bridge: Any, session_id: str, reply_meta: dict | 
     agent_result = str(meta.get("_agent_result") or "")
     if meta.get("_no_reply") or agent_result == "no_reply_tool":
         return "no_reply_tool"
-    if agent_result in ("fake_tool_call_claim", "structured_buffer_reply", "structured_buffer_no_reply"):
+    if agent_result in (
+        "fake_tool_call_claim",
+        "structured_buffer_reply",
+        "structured_buffer_no_reply",
+        "prompt_v2_audit_failed",
+    ):
         return agent_result
 
     if hasattr(bridge, "is_no_reply_session") and bridge.is_no_reply_session(session_id):
@@ -2275,13 +2280,20 @@ async def proxy_chat(
                 yield f"data: {json.dumps({'status': 'error', 'message': result_holder['error']}, ensure_ascii=False)}\n\n"
             else:
                 answer = result_holder.get("answer", "")
-                await _finalize_private_buffer(req.user_id, answer)
-                pending = _persist_chat_turn(db, persist_req, answer, guardrail_status)
-                persisted = True
-                if pending >= EVOLUTION_THRESHOLD:
-                    logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
-                    background_tasks.add_task(evolution_task, req.user_id)
-                yield f"data: {json.dumps({'status': 'done', 'answer': answer}, ensure_ascii=False)}\n\n"
+                private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
+                if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
+                    await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
+                    _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
+                    persisted = True
+                    yield f"data: {json.dumps({'status': 'error', 'message': '系统暂时不可用，请稍后再试'}, ensure_ascii=False)}\n\n"
+                else:
+                    await _finalize_private_buffer(req.user_id, answer)
+                    pending = _persist_chat_turn(db, persist_req, answer, guardrail_status)
+                    persisted = True
+                    if pending >= EVOLUTION_THRESHOLD:
+                        logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
+                        background_tasks.add_task(evolution_task, req.user_id)
+                    yield f"data: {json.dumps({'status': 'done', 'answer': answer}, ensure_ascii=False)}\n\n"
         finally:
             if not persisted:
                 if runner_task.done():
@@ -2340,6 +2352,16 @@ async def proxy_chat(
         except Exception as pe:
             logger.error(f"[/chat] Persist failed on KT error path: {pe}")
         raise HTTPException(status_code=502, detail=f"KT Error: {str(e)}")
+
+    private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
+    if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
+        logger.error("[/chat] Prompt V2 audit failed: user=%s session=%s", req.user_id, req.session_id)
+        try:
+            await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
+            _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
+        except Exception as pe:
+            logger.error(f"[/chat] Persist failed on prompt audit error path: {pe}")
+        raise HTTPException(status_code=500, detail="系统暂时不可用，请稍后再试")
 
     logger.info(f"[/chat] Bridge returned: answer_len={len(answer)}, answer_stripped_empty={not answer.strip()}")
     if answer:

@@ -52,6 +52,30 @@ def test_unit_of_work_rolls_back_on_exception(tmp_path):
         db.close()
 
 
+def test_unit_of_work_default_session_factory_is_late_bound(monkeypatch):
+    from core import database
+    from core.uow import UnitOfWork
+
+    calls = []
+
+    class FakeSession:
+        def commit(self):
+            calls.append("commit")
+
+        def rollback(self):
+            calls.append("rollback")
+
+        def close(self):
+            calls.append("close")
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: FakeSession())
+
+    with UnitOfWork() as uow:
+        assert isinstance(uow.db, FakeSession)
+
+    assert calls == ["close"]
+
+
 def test_new_service_modules_do_not_import_sessionlocal():
     roots = [Path("app")]
     roots.extend(Path("api/services").glob("*.py") if Path("api/services").exists() else [])
