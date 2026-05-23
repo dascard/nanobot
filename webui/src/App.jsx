@@ -2263,9 +2263,180 @@ function orderedFlowNodes(flow, chatType) {
   return result.map(id => byId.get(id)).filter(Boolean)
 }
 
-function connectedTargetForNode(flow, nodeId, chatType) {
-  const edge = (flow?.edges || []).find(item => item.from === nodeId && flowAppliesToChat(item, chatType))
-  return edge?.to || ''
+const FLOW_NODE_WIDTH = 220
+const FLOW_NODE_HEIGHT = 96
+const PROMPT_V2_DEFAULT_NODE_POSITIONS = {
+  base_contract: { x: 80, y: 220 },
+  group_policy: { x: 360, y: 80 },
+  private_policy: { x: 360, y: 360 },
+  runtime_context: { x: 660, y: 220 },
+  identity_context: { x: 940, y: 220 },
+  persona_reference: { x: 1220, y: 220 },
+  conversation_context_header: { x: 1500, y: 220 },
+  history_messages: { x: 1780, y: 220 },
+  group_context: { x: 2060, y: 80 },
+  effort_constraint: { x: 2340, y: 220 },
+  runtime_tool_prompt: { x: 2620, y: 220 },
+  current_user_event: { x: 2900, y: 220 },
+}
+
+function nodeCanvasPosition(node, index = 0) {
+  const raw = node?.position || PROMPT_V2_DEFAULT_NODE_POSITIONS[node?.id] || {}
+  const fallbackX = 80 + (index % 5) * 280
+  const fallbackY = 120 + Math.floor(index / 5) * 180
+  const x = Number(raw.x)
+  const y = Number(raw.y)
+  return {
+    x: Number.isFinite(x) ? x : fallbackX,
+    y: Number.isFinite(y) ? y : fallbackY,
+  }
+}
+
+function PromptFlowCanvas({
+  flow,
+  chatType,
+  selectedNodeId,
+  connectingFrom,
+  onSelectNode,
+  onMoveNode,
+  onDeleteNode,
+  onStartConnect,
+  onConnectNode,
+  onCancelConnect,
+}) {
+  const canvasRef = useRef(null)
+  const dragRef = useRef(null)
+  const nodes = flow?.nodes || []
+  const nodeById = new Map(nodes.map((node, idx) => [node.id, { node, idx, pos: nodeCanvasPosition(node, idx) }]))
+  const activeNodeIds = new Set(nodes.filter(node => flowAppliesToChat(node, chatType)).map(node => node.id))
+  const edges = (flow?.edges || []).filter(edge => nodeById.has(edge.from) && nodeById.has(edge.to))
+
+  const startDragNode = (event, node) => {
+    if (event.button !== 0) return
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const idx = nodes.findIndex(item => item.id === node.id)
+    const pos = nodeCanvasPosition(node, idx)
+    dragRef.current = {
+      nodeId: node.id,
+      offsetX: event.clientX - rect.left + canvasRef.current.scrollLeft - pos.x,
+      offsetY: event.clientY - rect.top + canvasRef.current.scrollTop - pos.y,
+    }
+  }
+
+  const handleMouseMove = event => {
+    if (!dragRef.current || !canvasRef.current) return
+    const rect = canvasRef.current.getBoundingClientRect()
+    const x = event.clientX - rect.left + canvasRef.current.scrollLeft - dragRef.current.offsetX
+    const y = event.clientY - rect.top + canvasRef.current.scrollTop - dragRef.current.offsetY
+    onMoveNode(dragRef.current.nodeId, {
+      x: Math.max(20, Math.round(x)),
+      y: Math.max(20, Math.round(y)),
+    })
+  }
+
+  const stopDragNode = () => {
+    dragRef.current = null
+  }
+
+  return (
+    <div
+      ref={canvasRef}
+      data-testid="prompt-flow-canvas"
+      onMouseMove={handleMouseMove}
+      onMouseUp={stopDragNode}
+      onMouseLeave={stopDragNode}
+      className="relative h-[680px] overflow-auto rounded-lg border border-slate-800 bg-slate-950"
+      style={{
+        backgroundImage: 'radial-gradient(circle, rgba(148, 163, 184, 0.16) 1px, transparent 1px)',
+        backgroundSize: '28px 28px',
+      }}
+    >
+      <div className="relative min-w-[3220px] min-h-[760px]">
+        <svg data-testid="prompt-flow-edge-layer" className="absolute inset-0 w-full h-full pointer-events-none">
+          <defs>
+            <marker id="prompt-flow-arrow-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#34d399" />
+            </marker>
+            <marker id="prompt-flow-arrow-muted" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569" />
+            </marker>
+          </defs>
+          {edges.map((edge, idx) => {
+            const from = nodeById.get(edge.from)
+            const to = nodeById.get(edge.to)
+            const active = flowAppliesToChat(edge, chatType) && activeNodeIds.has(edge.from) && activeNodeIds.has(edge.to)
+            const x1 = from.pos.x + FLOW_NODE_WIDTH
+            const y1 = from.pos.y + FLOW_NODE_HEIGHT / 2
+            const x2 = to.pos.x
+            const y2 = to.pos.y + FLOW_NODE_HEIGHT / 2
+            const mid = Math.max(70, Math.abs(x2 - x1) / 2)
+            const path = `M ${x1} ${y1} C ${x1 + mid} ${y1}, ${x2 - mid} ${y2}, ${x2} ${y2}`
+            return (
+              <path
+                key={`${edge.from}-${edge.to}-${idx}`}
+                d={path}
+                fill="none"
+                stroke={active ? '#34d399' : '#475569'}
+                strokeWidth={active ? 2.5 : 1.5}
+                strokeDasharray={active ? '0' : '5 6'}
+                markerEnd={active ? 'url(#prompt-flow-arrow-active)' : 'url(#prompt-flow-arrow-muted)'}
+                opacity={active ? 0.95 : 0.45}
+              />
+            )
+          })}
+        </svg>
+
+        {nodes.map((node, idx) => {
+          const pos = nodeCanvasPosition(node, idx)
+          const active = activeNodeIds.has(node.id)
+          const selected = selectedNodeId === node.id
+          const connectTarget = connectingFrom && connectingFrom !== node.id
+          return (
+            <div
+              key={node.id}
+              className={`absolute rounded-lg border bg-slate-900/95 ${selected ? 'border-emerald-400 ring-1 ring-emerald-500/40' : active ? 'border-slate-700' : 'border-slate-800 opacity-50'} cursor-default`}
+              style={{ left: pos.x, top: pos.y, width: FLOW_NODE_WIDTH, height: FLOW_NODE_HEIGHT }}
+              onMouseDown={e => startDragNode(e, node)}
+              onClick={() => onSelectNode(node)}
+            >
+              <div className="flex h-full flex-col p-3">
+                <div className="flex items-start gap-2 min-w-0">
+                  <span className={`mt-0.5 h-2.5 w-2.5 rounded-full ${node.type === 'template' ? 'bg-emerald-400' : 'bg-blue-400'}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-medium text-slate-100">{node.label || node.id}</div>
+                    <div className="mt-1 truncate text-[10px] text-slate-500">{node.type === 'template' ? node.template_key : node.runtime_key}</div>
+                  </div>
+                  <Badge tone={node.type === 'template' ? 'emerald' : 'blue'}>{node.chat_types?.[0] || 'all'}</Badge>
+                </div>
+                <div className="mt-auto flex items-center gap-1">
+                  <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onStartConnect(node.id) }}
+                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-300">
+                    开始连线
+                  </button>
+                  {connectTarget && (
+                    <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onConnectNode(connectingFrom, node.id) }}
+                      className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-[10px] text-white">
+                      连到这里
+                    </button>
+                  )}
+                  <button onMouseDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); onDeleteNode(node.id) }}
+                    className="ml-auto px-2 py-1 rounded bg-red-500/10 hover:bg-red-500/20 text-[10px] text-red-300">
+                    删除节点
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+        {connectingFrom && (
+          <button onClick={onCancelConnect} className="absolute left-4 top-4 rounded bg-amber-500/15 border border-amber-500/30 px-3 py-1.5 text-xs text-amber-200">
+            正在从 {connectingFrom} 连线，点击目标节点的"连到这里"
+          </button>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function PromptV2TemplatesPage() {
@@ -2283,9 +2454,12 @@ function PromptV2TemplatesPage() {
   const [runtimeDir, setRuntimeDir] = useState('')
   const [templateToAdd, setTemplateToAdd] = useState('')
   const [runtimeToAdd, setRuntimeToAdd] = useState('runtime_context')
+  const [connectingFrom, setConnectingFrom] = useState('')
   const [toast, setToast] = useState('')
   const orderedNodes = orderedFlowNodes(flow, chatType)
-  const selectedNode = orderedNodes.find(node => node.id === selectedNodeId) || orderedNodes[0] || null
+  const allNodes = flow?.nodes || []
+  const selectedNode = allNodes.find(node => node.id === selectedNodeId) || orderedNodes[0] || allNodes[0] || null
+  const selectedTemplateKey = selectedNode?.type === 'template' ? (selectedNode.template_key || selected) : ''
 
   const loadTemplates = useCallback(() => {
     api.get('/prompt-v2/templates').then(r => {
@@ -2316,12 +2490,12 @@ function PromptV2TemplatesPage() {
   }, [loadTemplates, loadFlow])
 
   useEffect(() => {
-    if (!selected) return
-    api.get(`/prompt-v2/templates/${encodeURIComponent(selected)}`).then(r => {
+    if (!selectedTemplateKey) return
+    api.get(`/prompt-v2/templates/${encodeURIComponent(selectedTemplateKey)}`).then(r => {
       setDetail(r.data)
       setContent(r.data.content || '')
     }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
-  }, [selected])
+  }, [selectedTemplateKey])
 
   useEffect(() => {
     if (!toast) return
@@ -2330,9 +2504,9 @@ function PromptV2TemplatesPage() {
   }, [toast])
 
   const save = () => {
-    if (!selected) return
-    api.put(`/prompt-v2/templates/${encodeURIComponent(selected)}`, { content }).then(r => {
-      setToast(`已保存 ${selected} · ${r.data.after_hash?.slice(0, 12) || ''}`)
+    if (!selectedTemplateKey) return
+    api.put(`/prompt-v2/templates/${encodeURIComponent(selectedTemplateKey)}`, { content }).then(r => {
+      setToast(`已保存 ${selectedTemplateKey} · ${r.data.after_hash?.slice(0, 12) || ''}`)
       loadTemplates()
     }).catch(e => alert(e.response?.data?.detail || '保存 V2 模板失败'))
   }
@@ -2364,6 +2538,15 @@ function PromptV2TemplatesPage() {
     })
     setSelectedNodeId(node.id)
     if (node.type === 'template') setSelected(node.template_key)
+  }
+
+  const selectNode = node => {
+    setSelectedNodeId(node.id)
+    if (node.type === 'template') setSelected(node.template_key || '')
+  }
+
+  const moveNode = (nodeId, position) => {
+    updateNode(nodeId, { position })
   }
 
   const addTemplateNode = () => {
@@ -2409,6 +2592,34 @@ function PromptV2TemplatesPage() {
         ...(toId ? [{ from: fromId, to: toId, chat_types: [chatType] }] : []),
       ],
     }))
+    setConnectingFrom('')
+  }
+
+  const autoLayoutFlow = () => {
+    setFlow(prev => ({
+      ...prev,
+      nodes: (prev.nodes || []).map((node, idx) => ({
+        ...node,
+        position: nodeCanvasPosition({ ...node, position: undefined }, idx),
+      })),
+    }))
+  }
+
+  const updateSelectedScope = value => {
+    if (!selectedNode) return
+    updateNode(selectedNode.id, { chat_types: value === 'all' ? undefined : [value] })
+  }
+
+  const updateSelectedTemplate = value => {
+    if (!selectedNode || selectedNode.type !== 'template') return
+    setSelected(value)
+    updateNode(selectedNode.id, { template_key: value, label: `system: ${value}` })
+  }
+
+  const updateSelectedRuntime = value => {
+    if (!selectedNode || selectedNode.type !== 'runtime') return
+    const option = PROMPT_V2_RUNTIME_NODES.find(item => item.key === value)
+    updateNode(selectedNode.id, { runtime_key: value, label: option?.label || `system: ${value}` })
   }
 
   return (
@@ -2427,109 +2638,139 @@ function PromptV2TemplatesPage() {
         <div className="flex gap-2">
           <NavLink to="/prompt-preview" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-300">运行预览</NavLink>
           <button onClick={saveFlow} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium">保存编排图</button>
-          <button onClick={save} disabled={!selected} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-xs font-medium">保存 V2 模板</button>
+          <button onClick={save} disabled={!selectedTemplateKey} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-xs font-medium">保存 V2 模板</button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-        <div className="xl:col-span-5 space-y-3 min-w-0">
+      <div className="grid grid-cols-1 2xl:grid-cols-[260px_minmax(0,1fr)_420px] gap-4">
+        <div className="space-y-3 min-w-0">
           <Card className="p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-medium text-slate-300">图形编排</div>
-                <div className="text-[11px] text-slate-600">source: {flowSource || '-'} · 当前视图会按连接关系拓扑排序</div>
-              </div>
-              <select value={chatType} onChange={e => setChatType(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                <option value="group">群聊</option>
-                <option value="private">私聊</option>
+            <div className="text-xs font-medium text-slate-300 mb-2">Canvas 编排</div>
+            <select value={chatType} onChange={e => setChatType(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+              <option value="group">高亮群聊路径</option>
+              <option value="private">高亮私聊路径</option>
+            </select>
+            <div className="mt-2 text-[11px] text-slate-600">source: {flowSource || '-'} · 灰色节点不参与当前路径</div>
+            <button onClick={autoLayoutFlow} className="mt-3 w-full px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200">自动布局</button>
+          </Card>
+
+          <Card className="p-3 space-y-3">
+            <div>
+              <div className="text-xs font-medium text-slate-300 mb-2">添加模板节点</div>
+              <select value={templateToAdd} onChange={e => setTemplateToAdd(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                {templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
               </select>
+              <button onClick={addTemplateNode} className="mt-2 w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加节点</button>
+            </div>
+            <div>
+              <div className="text-xs font-medium text-slate-300 mb-2">添加运行时节点</div>
+              <select value={runtimeToAdd} onChange={e => setRuntimeToAdd(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.key}</option>)}
+              </select>
+              <button onClick={addRuntimeNode} className="mt-2 w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加运行时</button>
             </div>
           </Card>
+
           <Card className="p-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              <div className="flex gap-2">
-                <select value={templateToAdd} onChange={e => setTemplateToAdd(e.target.value)} className="min-w-0 flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                  {templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
-                </select>
-                <button onClick={addTemplateNode} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加节点</button>
-              </div>
-              <div className="flex gap-2">
-                <select value={runtimeToAdd} onChange={e => setRuntimeToAdd(e.target.value)} className="min-w-0 flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                  {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.key}</option>)}
-                </select>
-                <button onClick={addRuntimeNode} className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加运行时</button>
-              </div>
+            <div className="text-xs font-medium text-slate-300 mb-2">当前路径顺序</div>
+            <div className="space-y-1 max-h-72 overflow-auto">
+              {orderedNodes.map((node, idx) => (
+                <button key={node.id} onClick={() => selectNode(node)}
+                  className={`w-full text-left rounded px-2 py-1.5 text-xs ${selectedNode?.id === node.id ? 'bg-emerald-500/15 text-emerald-300' : 'hover:bg-slate-800 text-slate-400'}`}>
+                  <span className="text-slate-600 mr-2">{idx + 1}</span>{node.label || node.id}
+                </button>
+              ))}
             </div>
           </Card>
-          <div className="space-y-2">
-            {orderedNodes.map((node, idx) => {
-              const editable = node.type === 'template'
-              const active = selectedNode?.id === node.id
-              const target = connectedTargetForNode(flow, node.id, chatType)
-              return (
-                <div key={`${node.id}-${idx}`} className={`rounded-lg border px-3 py-2 transition-colors ${active ? 'border-emerald-500/40 bg-emerald-500/10' : 'border-slate-800 bg-slate-900/50'}`}>
-                  <button onClick={() => {
-                    setSelectedNodeId(node.id)
-                    if (editable) setSelected(node.template_key || '')
-                  }} className="w-full text-left">
-                    <div className="flex items-start gap-3">
-                      <span className="mt-0.5 w-5 h-5 rounded bg-slate-950 border border-slate-800 text-[11px] text-slate-500 inline-flex items-center justify-center">{idx + 1}</span>
-                      <div className="min-w-0 flex-1">
-                        <div className={active ? 'text-emerald-300 text-sm font-medium truncate' : 'text-slate-300 text-sm truncate'}>{node.label || node.id}</div>
-                        <div className="text-[11px] text-slate-600 truncate">{editable ? `${node.template_key}.md` : node.runtime_key}</div>
-                      </div>
-                      {editable ? <Badge tone={active ? 'emerald' : 'slate'}>模板</Badge> : <Badge tone="blue">注入</Badge>}
-                    </div>
-                  </button>
-                  <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
-                    <div className="min-w-0 flex-1">
-                      <label className="text-[10px] text-slate-600">连接到</label>
-                      <select value={target} onChange={e => connectNode(node.id, e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[11px] text-slate-300">
-                        <option value="">不连接</option>
-                        {orderedNodes.filter(item => item.id !== node.id).map(item => <option key={item.id} value={item.id}>{item.label || item.id}</option>)}
-                      </select>
-                    </div>
-                    <button onClick={() => deleteNode(node.id)} className="self-end px-2 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded text-[11px] text-red-300">删除节点</button>
-                  </div>
-                </div>
-              )
-            })}
-            {!orderedNodes.length && <div className="py-10 text-center text-sm text-slate-600">当前 chat_type 没有可用节点</div>}
-          </div>
         </div>
 
-        <div className="xl:col-span-7 min-w-0">
+        <div className="min-w-0">
+          <PromptFlowCanvas
+            flow={flow}
+            chatType={chatType}
+            selectedNodeId={selectedNode?.id || ''}
+            connectingFrom={connectingFrom}
+            onSelectNode={selectNode}
+            onMoveNode={moveNode}
+            onDeleteNode={deleteNode}
+            onStartConnect={setConnectingFrom}
+            onConnectNode={connectNode}
+            onCancelConnect={() => setConnectingFrom('')}
+          />
+        </div>
+
+        <div className="min-w-0 space-y-4">
           <Card className="p-4">
-            <div className="flex flex-col md:flex-row md:items-center gap-3 mb-3">
+            <div className="flex items-start justify-between gap-3 mb-3">
               <div className="min-w-0">
-                <h2 className="text-sm font-medium text-emerald-300">{selectedNode?.label || selected || '未选择节点'}</h2>
+                <div className="text-xs text-slate-500 mb-1">当前节点</div>
+                <h2 className="text-sm font-medium text-emerald-300 truncate">{selectedNode?.label || '未选择节点'}</h2>
+                <div className="text-[11px] text-slate-600 truncate">{selectedNode?.id || '-'}</div>
+              </div>
+              {selectedNode && <Badge tone={selectedNode.type === 'template' ? 'emerald' : 'blue'}>{selectedNode.type}</Badge>}
+            </div>
+
+            {selectedNode ? (
+              <div className="space-y-3">
+                <label className="block text-xs text-slate-500">节点名称
+                  <input value={selectedNode.label || ''} onChange={e => updateNode(selectedNode.id, { label: e.target.value })}
+                    className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200" />
+                </label>
+                <label className="block text-xs text-slate-500">作用范围
+                  <select value={selectedNode.chat_types?.[0] || 'all'} onChange={e => updateSelectedScope(e.target.value)}
+                    className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                    <option value="all">全局</option>
+                    <option value="group">仅群聊</option>
+                    <option value="private">仅私聊</option>
+                  </select>
+                </label>
+                {selectedNode.type === 'template' ? (
+                  <label className="block text-xs text-slate-500">节点模板
+                    <select value={selectedTemplateKey || ''} onChange={e => updateSelectedTemplate(e.target.value)}
+                      className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                      {templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
+                    </select>
+                  </label>
+                ) : (
+                  <label className="block text-xs text-slate-500">runtime_key
+                    <select value={selectedNode.runtime_key || ''} onChange={e => updateSelectedRuntime(e.target.value)}
+                      className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                      {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.key}</option>)}
+                    </select>
+                  </label>
+                )}
+              </div>
+            ) : (
+              <div className="text-sm text-slate-600">点击画布节点开始编辑。</div>
+            )}
+          </Card>
+
+          <Card className="p-4">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-slate-300">模板内容</div>
                 <div className="text-[11px] text-slate-600 truncate">{detail?.active_path || ''}</div>
               </div>
-              <div className="md:ml-auto flex items-center gap-2">
+              <div className="flex gap-2">
                 <Badge tone={detail?.source === 'runtime' ? 'emerald' : 'slate'}>{detail?.source || 'default'}</Badge>
                 <Badge tone="blue">{detail?.sha256?.slice(0, 12) || '-'}</Badge>
-                <select value={selected} onChange={e => {
-                  setSelected(e.target.value)
-                  if (selectedNode?.type === 'template') updateNode(selectedNode.id, { template_key: e.target.value, label: `system: ${e.target.value}` })
-                }} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                  {templates.map(t => <option key={t.template_key} value={t.template_key}>{t.template_key}</option>)}
-                </select>
               </div>
             </div>
             {selectedNode?.type === 'runtime' ? (
-              <div className="min-h-[520px] rounded-lg bg-slate-950 border border-slate-800 p-4">
+              <div className="min-h-[340px] rounded-lg bg-slate-950 border border-slate-800 p-4">
                 <div className="text-xs text-slate-500 mb-2">运行时注入节点</div>
                 <div className="text-lg text-slate-200 mb-1">{selectedNode.runtime_key}</div>
                 <div className="text-sm text-slate-500">这个节点由 compiler 注入真实运行数据，不在模板文件中编辑。</div>
               </div>
             ) : (
               <textarea value={content} onChange={e => setContent(e.target.value)}
-                className="w-full min-h-[520px] p-4 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-300 leading-relaxed resize-y focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
+                className="w-full min-h-[340px] p-4 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-300 leading-relaxed resize-y focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
             )}
           </Card>
-          <Card className="p-4 mt-4">
+
+          <Card className="p-4">
             <div className="text-xs font-medium text-slate-300 mb-2">全局可插入变量白名单</div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 max-h-48 overflow-auto">
               {variables.map(v => (
                 <span key={v.name} title={`${v.description || ''}${v.example ? ` · 示例: ${v.example}` : ''}`} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs">
                   <code className="text-emerald-300">{`{{ ${v.name} }}`}</code>

@@ -28,16 +28,22 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     preview_source = source.split("function EffectivePromptPreviewPage()")[1]
 
     assert "function PromptV2TemplatesPage()" in source
+    assert "function PromptFlowCanvas(" in source
     assert "Prompt V2 模板" in source
-    assert "图形编排" in source
+    assert "Canvas 编排" in source
+    assert "data-testid=\"prompt-flow-canvas\"" in source
+    assert "data-testid=\"prompt-flow-edge-layer\"" in source
+    assert "onMouseDown={e => startDragNode" in source
+    assert "开始连线" in source
+    assert "连到这里" in source
     assert "全局可插入变量白名单" in source
     assert "node.label || node.id" in source
     assert "添加节点" in source
     assert "删除节点" in source
-    assert "连接到" in source
+    assert "当前节点" in source
     assert "api.get('/prompt-v2/templates')" in source
     assert "api.get('/prompt-v2/flow')" in source
-    assert "api.put(`/prompt-v2/templates/${encodeURIComponent(selected)}`" in source
+    assert "api.put(`/prompt-v2/templates/${encodeURIComponent(selectedTemplateKey)}`" in source
     assert "api.put('/prompt-v2/flow'" in source
     assert "保存 V2 模板" in source
     assert "保存编排图" in source
