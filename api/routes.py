@@ -2273,6 +2273,78 @@ async def proxy_chat(
         runner_task = asyncio.create_task(runner())
         heartbeat_interval = 5
 
+        async def _persist_stream_result_after_runner_done(
+            *,
+            push: bool,
+            persist_db: Session | None = None,
+        ) -> None:
+            try:
+                await runner_task
+                final_answer = EMPTY_ASSISTANT_PLACEHOLDER
+                assistant_meta = None
+                assistant_processed = None
+                should_push = False
+
+                if "error" in result_holder:
+                    err_msg = str(result_holder.get("error") or "unknown")
+                    logger.error(
+                        f"[/chat] Stream-aborted runner failed: "
+                        f"user={req.user_id}, session={req.session_id}, error={err_msg}"
+                    )
+                else:
+                    private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
+                    if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
+                        assistant_meta = _private_prompt_audit_failure_meta()
+                        assistant_processed = 1
+                    else:
+                        answer = str(result_holder.get("answer") or "")
+                        if answer.strip():
+                            final_answer = answer
+                            should_push = push
+
+                await _finalize_private_buffer(req.user_id, final_answer)
+
+                def _write(db_for_write: Session) -> None:
+                    _persist_chat_turn(
+                        db_for_write,
+                        persist_req,
+                        final_answer,
+                        guardrail_status,
+                        assistant_meta=assistant_meta,
+                        assistant_processed=assistant_processed,
+                    )
+
+                if persist_db is not None:
+                    _write(persist_db)
+                else:
+                    from core.uow import UnitOfWork
+
+                    with UnitOfWork() as uow:
+                        if uow.db is None:
+                            raise RuntimeError("UnitOfWork session is not open")
+                        _write(uow.db)
+
+                if should_push:
+                    from core.daily_digest import push_to_qq
+
+                    ok = await push_to_qq(
+                        "private" if not bridge_meta.get("is_group") else "group",
+                        _resolve_push_target_id(req, bool(bridge_meta.get("is_group"))),
+                        final_answer,
+                    )
+                    if ok:
+                        logger.info(
+                            f"[/chat] Stream-aborted result pushed: "
+                            f"user={req.user_id}, len={len(final_answer)}"
+                        )
+                    else:
+                        logger.error(
+                            f"[/chat] Stream-aborted result push failed: "
+                            f"user={req.user_id}, session={req.session_id}, len={len(final_answer)}"
+                        )
+            except Exception as e:
+                logger.error(f"[/chat] Background finish failed: {e}")
+
         try:
             while True:
                 if done.is_set() and stream_queue.empty():
@@ -2330,65 +2402,14 @@ async def proxy_chat(
         finally:
             if not persisted:
                 if runner_task.done():
-                    try:
-                        await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-                        _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
-                    except Exception as pe:
-                        logger.error(f"[/chat] Stream fallback persist failed: {pe}")
+                    await _persist_stream_result_after_runner_done(push=False, persist_db=db)
                 else:
                     # 客户端断连但 runner 还在跑 → 后台继续，完成后 push 结果
-                    async def _finish_and_push():
-                        try:
-                            await runner_task
-                            if "error" in result_holder:
-                                err_msg = str(result_holder.get("error") or "unknown")
-                                logger.error(
-                                    f"[/chat] Stream-aborted runner failed: "
-                                    f"user={req.user_id}, session={req.session_id}, error={err_msg}"
-                                )
-                                await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-                                _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
-                                return
-
-                            private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
-                            if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
-                                await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-                                _persist_chat_turn(
-                                    db,
-                                    persist_req,
-                                    EMPTY_ASSISTANT_PLACEHOLDER,
-                                    guardrail_status,
-                                    assistant_meta=_private_prompt_audit_failure_meta(),
-                                    assistant_processed=1,
-                                )
-                                return
-
-                            answer = str(result_holder.get("answer") or "")
-                            if answer and answer.strip():
-                                await _finalize_private_buffer(req.user_id, answer)
-                                _persist_chat_turn(db, persist_req, answer, guardrail_status)
-                                from core.daily_digest import push_to_qq
-                                ok = await push_to_qq(
-                                    "private" if not bridge_meta.get("is_group") else "group",
-                                    _resolve_push_target_id(req, bool(bridge_meta.get("is_group"))),
-                                    answer,
-                                )
-                                if ok:
-                                    logger.info(
-                                        f"[/chat] Stream-aborted result pushed: "
-                                        f"user={req.user_id}, len={len(answer)}"
-                                    )
-                                else:
-                                    logger.error(
-                                        f"[/chat] Stream-aborted result push failed: "
-                                        f"user={req.user_id}, session={req.session_id}, len={len(answer)}"
-                                    )
-                            else:
-                                await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-                                _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
-                        except Exception as e:
-                            logger.error(f"[/chat] Background finish failed: {e}")
-                    background_tasks.add_task(_finish_and_push)
+                    background_tasks.add_task(
+                        _persist_stream_result_after_runner_done,
+                        push=True,
+                        persist_db=None,
+                    )
                     await _finalize_private_buffer(req.user_id)
                     logger.warning(
                         f"[/chat] Stream aborted, running in background: "
