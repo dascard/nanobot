@@ -61,6 +61,9 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "completeConnection" in source
     assert "selectedEdgeKey" in source
     assert "deleteEdge" in source
+    assert "updateEdgeScope" in source
+    assert "连线作用范围" in source
+    assert "filter(edge => !(edge.from === fromId" not in source
     assert "activeEdgeKeys.has(edgeKey)" in source
     assert "selectedPath.nodeIds" in source
     assert "删除连线" in source

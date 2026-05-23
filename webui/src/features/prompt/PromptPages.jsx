@@ -529,6 +529,18 @@ function flowAppliesToChat(item, chatType) {
   return types.includes(chatType)
 }
 
+function flowScopeValue(item) {
+  const types = item?.chat_types
+  if (!Array.isArray(types) || !types.length) return 'all'
+  if (types.includes('group') && !types.includes('private')) return 'group'
+  if (types.includes('private') && !types.includes('group')) return 'private'
+  return 'all'
+}
+
+function flowScopePatch(value) {
+  return value === 'all' ? undefined : [value]
+}
+
 function orderedFlowNodes(flow, chatType) {
   return selectedPromptFlowPath(flow, chatType).nodes
 }
@@ -959,6 +971,7 @@ function PromptFlowMobileList({
               <div key={edgeKey} className={`rounded-lg border px-3 py-2 text-xs ${selectedEdgeKey === edgeKey ? 'border-amber-500/50 bg-amber-500/10' : 'border-slate-800 bg-slate-950'}`}>
                 <button type="button" onClick={() => onSelectEdge(edge, idx)} className="flex w-full items-center gap-2 text-left">
                   <span className={active ? 'text-emerald-300' : 'text-slate-500'}>{active ? '当前路径' : '其他路径'}</span>
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">{flowScopeValue(edge)}</span>
                   <span className="min-w-0 flex-1 truncate font-mono text-slate-400">{edge.from} → {edge.to}</span>
                 </button>
                 {selectedEdgeKey === edgeKey && (
@@ -1013,7 +1026,8 @@ export function PromptV2TemplatesPage() {
   const schemaJson = activeToolSchema ? JSON.stringify(activeToolSchema, null, 2) : ''
   const schemaName = activeToolSchema?.function?.name || promptV2ToolName(selectedToolTemplate) || '-'
   const schemaDescription = activeToolSchema?.function?.description || selectedToolTemplate?.description || ''
-  const selectedEdge = (flow.edges || []).find((edge, idx) => promptFlowEdgeKey(edge, idx) === selectedEdgeKey) || null
+  const selectedEdgeIndex = (flow.edges || []).findIndex((edge, idx) => promptFlowEdgeKey(edge, idx) === selectedEdgeKey)
+  const selectedEdge = selectedEdgeIndex >= 0 ? (flow.edges || [])[selectedEdgeIndex] : null
 
   const loadTemplates = useCallback(() => {
     api.get('/prompt-v2/templates').then(r => {
@@ -1198,13 +1212,20 @@ export function PromptV2TemplatesPage() {
   }
 
   const connectNode = (fromId, toId) => {
-    setFlow(prev => ({
-      ...prev,
-      edges: [
-        ...(prev.edges || []).filter(edge => !(edge.from === fromId && flowAppliesToChat(edge, chatType))),
-        ...(toId ? [{ from: fromId, to: toId, chat_types: [chatType] }] : []),
-      ],
-    }))
+    if (!toId) return
+    setFlow(prev => {
+      const nextEdge = { from: fromId, to: toId, chat_types: [chatType] }
+      const duplicate = (prev.edges || []).some(edge =>
+        edge.from === nextEdge.from
+        && edge.to === nextEdge.to
+        && flowScopeValue(edge) === flowScopeValue(nextEdge)
+      )
+      if (duplicate) return prev
+      return {
+        ...prev,
+        edges: [...(prev.edges || []), nextEdge],
+      }
+    })
     setSelectedEdgeKey('')
   }
 
@@ -1220,6 +1241,17 @@ export function PromptV2TemplatesPage() {
     setSelectedEdgeKey('')
   }
 
+  const updateEdgeScope = value => {
+    if (!selectedEdge || selectedEdgeIndex < 0) return
+    const nextEdge = { ...selectedEdge, chat_types: flowScopePatch(value) }
+    if (!nextEdge.chat_types) delete nextEdge.chat_types
+    setFlow(prev => ({
+      ...prev,
+      edges: (prev.edges || []).map((edge, idx) => idx === selectedEdgeIndex ? nextEdge : edge),
+    }))
+    setSelectedEdgeKey(promptFlowEdgeKey(nextEdge, selectedEdgeIndex))
+  }
+
   const autoLayoutFlow = () => {
     setFlow(prev => ({
       ...prev,
@@ -1232,7 +1264,7 @@ export function PromptV2TemplatesPage() {
 
   const updateSelectedScope = value => {
     if (!selectedNode) return
-    updateNode(selectedNode.id, { chat_types: value === 'all' ? undefined : [value] })
+    updateNode(selectedNode.id, { chat_types: flowScopePatch(value) })
   }
 
   const updateSelectedTemplate = value => {
@@ -1478,6 +1510,14 @@ export function PromptV2TemplatesPage() {
                   <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
                     <div className="text-xs text-amber-300 mb-1">当前连线</div>
                     <div className="text-xs text-slate-300 break-all">{selectedEdge.from} → {selectedEdge.to}</div>
+                    <label className="mt-3 block text-xs text-slate-500">连线作用范围
+                      <select value={flowScopeValue(selectedEdge)} onChange={e => updateEdgeScope(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 text-xs text-slate-200">
+                        <option value="all">全局</option>
+                        <option value="group">仅群聊</option>
+                        <option value="private">仅私聊</option>
+                      </select>
+                    </label>
                     <button onClick={() => deleteEdge(selectedEdgeKey)}
                       className="mt-3 w-full rounded-lg bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20">
                       删除连线
