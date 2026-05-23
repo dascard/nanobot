@@ -135,6 +135,43 @@ def test_record_runtime_tool_decision_ignores_missing_observability_table():
     assert result is False
 
 
+def test_record_runtime_tool_decision_does_not_rollback_injected_db(monkeypatch):
+    from core.runtime_tool_service import record_runtime_tool_decision
+    import random
+
+    class FakeDb:
+        def __init__(self):
+            self.rollback_called = False
+
+        def add(self, _row):
+            pass
+
+        def flush(self):
+            raise RuntimeError("observability table unavailable")
+
+        def rollback(self):
+            self.rollback_called = True
+
+    fake_db = FakeDb()
+    monkeypatch.setattr(random, "randint", lambda _a, _b: 2)
+
+    result = record_runtime_tool_decision(
+        session_id="s-no-rollback",
+        message_id="m1",
+        chat_type="group",
+        group_id="g1",
+        user_id="u1",
+        runtime_preset="full",
+        enabled={"reply": True},
+        disabled={},
+        effective_tools=["reply"],
+        db=fake_db,
+    )
+
+    assert result is False
+    assert fake_db.rollback_called is False
+
+
 @pytest.mark.asyncio
 async def test_tool_plan_guard_rejects_disabled_dispatch():
     from types import SimpleNamespace

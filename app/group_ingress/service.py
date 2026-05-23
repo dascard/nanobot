@@ -8,6 +8,7 @@ import time as _time
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.group_ingress import helpers as h
 from core.database import ChatLog, User
 from core.moderation import check_message_moderation_db
 
@@ -26,17 +27,17 @@ class GroupIngressResult:
 class GroupIngressService:
     """处理 /group/message 的业务流程。"""
 
-    def __init__(self, *, db: Any, background_tasks: Any = None):
+    def __init__(self, *, db: Any, background_tasks: Any = None, bridge_provider: Any = None):
         self.db = db
         self.background_tasks = background_tasks
+        self.bridge_provider = bridge_provider
 
     async def handle(self, req: Any) -> dict:
-        from api import routes as r
         from core.timing_runtime import get_group_runtime
 
         db = self.db
-        group_user_id = r._normalize_group_session_id(req.group_id)
-        message_text = r._build_group_message_text(req)
+        group_user_id = h.normalize_group_session_id(req.group_id)
+        message_text = h.build_group_message_text(req)
 
         logger.info("[GroupMsg] recv group=%s sender=%s len=%d at=%s reply=%s",
                     req.group_id, req.sender_name, len(message_text or ""),
@@ -52,7 +53,7 @@ class GroupIngressService:
                 logger.info("[GroupMsg] duplicate ignored group=%s message_id=%s", group_user_id, req.message_id)
                 return {"action": "no_reply", "reason": "duplicate_message"}
 
-        registered_stickers = r._register_group_stickers_from_message(
+        registered_stickers = h.register_group_stickers_from_message(
             db,
             req,
             background_tasks=self.background_tasks,
@@ -71,7 +72,7 @@ class GroupIngressService:
         )
 
         formatted = f"[{req.sender_name}]: {message_text}" if message_text else ""
-        meta = r._build_group_message_meta(req, registered_stickers)
+        meta = h.build_group_message_meta(req, registered_stickers)
         if registered_stickers:
             meta["registered_sticker_ids"] = [item["id"] for item in registered_stickers]
         ambient_log = ChatLog(
@@ -94,16 +95,16 @@ class GroupIngressService:
                 "generation": 0,
                 "hard_rule": "bot_sender_no_timing",
             }
-            r._annotate_group_timing_event(
+            h.annotate_group_timing_event(
                 db, ambient_log, result,
                 trigger_reason="bot_sender",
                 latency_ms=0,
             )
             return result
 
-        if r._check_user_blocked(db, req.sender_id, target_type="group", group_id=req.group_id):
+        if h.check_user_blocked(db, req.sender_id, target_type="group", group_id=req.group_id):
             logger.info("[GroupMsg] blocked group=%s sender=%s", req.group_id, req.sender_id)
-            r._annotate_group_timing_event(
+            h.annotate_group_timing_event(
                 db, ambient_log,
                 {"action": "no_reply", "reason": "user_blocked", "generation": 0},
                 trigger_reason="user_blocked",
@@ -134,7 +135,7 @@ class GroupIngressService:
             if mod_result["no_reply"]:
                 logger.info("[GroupMsg] content-blocked group=%s pattern=%s",
                             req.group_id, mod_result["pattern"])
-                r._annotate_group_timing_event(
+                h.annotate_group_timing_event(
                     db, ambient_log,
                     {"action": "no_reply", "reason": "content_blocked", "generation": 0},
                     trigger_reason="content_blocked",
@@ -142,7 +143,7 @@ class GroupIngressService:
                 )
                 return {"action": "no_reply", "reason": "content_blocked"}
 
-        reason = r._derive_group_trigger_reason(req)
+        reason = h.derive_group_trigger_reason(req)
         logger.info("[GroupMsg] trigger=%s enter_timing=true", reason)
 
         runtime = get_group_runtime()
@@ -171,11 +172,11 @@ class GroupIngressService:
                 bot_aliases=list(req.bot_aliases or []),
                 trigger_reason=reason,
                 recent_context=recent_ctx,
-                talk_value=r._get_group_talk_value(group_user_id),
+                talk_value=h.get_group_talk_value(group_user_id),
             )
             elapsed_ms = int((_time.time() - t0) * 1000)
             action = result.get("action", "no_reply")
-            r._annotate_group_timing_event(
+            h.annotate_group_timing_event(
                 db, ambient_log, result,
                 trigger_reason=reason,
                 latency_ms=elapsed_ms,
@@ -222,24 +223,27 @@ class GroupIngressService:
         ambient_meta: dict,
         runtime: Any,
     ) -> dict:
-        from api import routes as r
-
         db = self.db
         try:
-            bridge = r.get_bridge()
+            if self.bridge_provider is None:
+                from nanobot_kt.bridge import get_bridge
+
+                bridge = get_bridge()
+            else:
+                bridge = self.bridge_provider()
             source_message_ids = [
                 str(x) for x in (result.get("source_message_ids") or [])
                 if str(x).strip()
             ]
             chat_query = str(result.get("pending_text") or "").strip()
             if not chat_query:
-                chat_query = r._format_group_planner_message(
+                chat_query = h.format_group_planner_message(
                     sender_name=req.sender_name,
                     content=message_text,
                     message_id=req.message_id or "",
                 )
                 source_message_ids = [req.message_id] if req.message_id else []
-            memory_header, history_messages, ctx_debug = r._build_chat_context(
+            memory_header, history_messages, ctx_debug = h.build_chat_context(
                 db, group_user_id, user_id=group_user_id,
                 is_group=True, group_id=req.group_id,
                 exclude_message_ids=source_message_ids,
@@ -280,19 +284,19 @@ class GroupIngressService:
                 metadata=bridge_meta,
             )
             answer = reply if isinstance(reply, str) else str(reply or "")
-            reply_meta = r._pop_bridge_reply_meta(bridge, group_user_id)
+            reply_meta = h.pop_bridge_reply_meta(bridge, group_user_id)
             if answer.strip():
-                duplicate = r._find_recent_duplicate_group_reply(db, group_user_id, answer)
+                duplicate = h.find_recent_duplicate_group_reply(db, group_user_id, answer)
                 if duplicate:
                     agent_result = "duplicate_reply_suppressed"
-                    r._log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
+                    h.log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
                     return {
                         "action": "no_reply",
                         "reason": agent_result,
                         "duplicate_reply": duplicate,
                         "generation": result.get("generation", 0),
                     }
-                r._persist_group_bridge_reply(
+                h.persist_group_bridge_reply(
                     db,
                     group_user_id=group_user_id,
                     sender_name=req.sender_name,
@@ -306,11 +310,23 @@ class GroupIngressService:
                 )
                 runtime.note_bot_replied(req.group_id)
             else:
-                agent_result = r._derive_group_agent_result(bridge, group_user_id, reply_meta)
-                r._log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
+                agent_result = h.derive_group_agent_result(bridge, group_user_id, reply_meta)
+                h.log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
+                if agent_result == "prompt_v2_audit_failed":
+                    return {
+                        "action": "no_reply",
+                        "reply": "",
+                        "reply_meta": reply_meta,
+                        "generation": result.get("generation", 0),
+                        "reason": agent_result,
+                        "diagnostics": {
+                            "timing_action": result.get("action", "continue"),
+                            "agent_result": agent_result,
+                        },
+                    }
             return {
                 "action": "continue",
-                "reply": r._sanitize_prompt_text(answer, max_chars=4000),
+                "reply": h.sanitize_prompt_text(answer, max_chars=4000),
                 "reply_meta": reply_meta,
                 "generation": result.get("generation", 0),
                 "reason": str(result.get("reason", ""))[:120],

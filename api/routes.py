@@ -470,11 +470,29 @@ async def _finalize_private_buffer(
             _private_buffers.pop(user_id, None)
 
 
-def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrail_status: str | None = None) -> int:
+def _private_prompt_audit_failure_meta() -> dict:
+    return {
+        "kind": "empty_reply",
+        "no_context": True,
+        "no_send": True,
+        "agent_result": "prompt_v2_audit_failed",
+    }
+
+
+def _persist_chat_turn(
+    db: Session,
+    req: ChatProxyRequest,
+    answer: str,
+    guardrail_status: str | None = None,
+    *,
+    assistant_meta: dict | None = None,
+    assistant_processed: int | None = None,
+) -> int:
     """Persist a chat turn to both ChatLog (evolution) and ConversationTurn (context)."""
     is_injection = guardrail_status == "injection"
     is_silent = guardrail_status == "silent"
     processed_val = -1 if is_injection else 0
+    assistant_processed_val = processed_val if assistant_processed is None else int(assistant_processed)
     archive_user_content = _build_chatlog_user_content(req.query, req.files)
     context_user_content = _build_conversation_user_content(req.query, req.files)
 
@@ -522,7 +540,8 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
         content=answer,
         sender_name="nanobot",
         session_name=req.session_name or "",
-        processed=processed_val,
+        processed=assistant_processed_val,
+        meta_json=json.dumps(assistant_meta or {}, ensure_ascii=False),
     ))
     # ConversationTurn — 精简上下文，专用于历史注入
     # HTML 报告只存摘要，避免污染下轮上下文；ChatLog 保留完整原文。
@@ -538,13 +557,16 @@ def _persist_chat_turn(db: Session, req: ChatProxyRequest, answer: str, guardrai
             turn_answer = answer[:2000] + "\n...[截断]"
     user_meta = _safe_meta(meta)
     user_meta["kind"] = "chat"
+    assistant_turn_meta = {"kind": turn_answer_kind}
+    if assistant_meta:
+        assistant_turn_meta.update(assistant_meta)
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
                             role="user", content=context_display_content,
                             source_message_ids_json=source_ids_json,
                             meta_json=json.dumps(user_meta, ensure_ascii=False)))
     db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
                             role="assistant", content=turn_answer,
-                            meta_json=json.dumps({"kind": turn_answer_kind}, ensure_ascii=False)))
+                            meta_json=json.dumps(assistant_turn_meta, ensure_ascii=False)))
     db.commit()
     from core.evolution import _evolution_running
     if req.user_id in _evolution_running:
@@ -1439,7 +1461,11 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     """统一群聊入口：route 只做依赖注入，业务流程在 GroupIngressService。"""
     from app.group_ingress.service import GroupIngressService
 
-    service = GroupIngressService(db=db, background_tasks=background_tasks)
+    service = GroupIngressService(
+        db=db,
+        background_tasks=background_tasks,
+        bridge_provider=get_bridge,
+    )
     return await service.handle(req)
 
 
@@ -2283,7 +2309,14 @@ async def proxy_chat(
                 private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
                 if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
                     await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-                    _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
+                    _persist_chat_turn(
+                        db,
+                        persist_req,
+                        EMPTY_ASSISTANT_PLACEHOLDER,
+                        guardrail_status,
+                        assistant_meta=_private_prompt_audit_failure_meta(),
+                        assistant_processed=1,
+                    )
                     persisted = True
                     yield f"data: {json.dumps({'status': 'error', 'message': '系统暂时不可用，请稍后再试'}, ensure_ascii=False)}\n\n"
                 else:
@@ -2306,7 +2339,31 @@ async def proxy_chat(
                     # 客户端断连但 runner 还在跑 → 后台继续，完成后 push 结果
                     async def _finish_and_push():
                         try:
-                            answer = await runner_task
+                            await runner_task
+                            if "error" in result_holder:
+                                err_msg = str(result_holder.get("error") or "unknown")
+                                logger.error(
+                                    f"[/chat] Stream-aborted runner failed: "
+                                    f"user={req.user_id}, session={req.session_id}, error={err_msg}"
+                                )
+                                await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
+                                _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
+                                return
+
+                            private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
+                            if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
+                                await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
+                                _persist_chat_turn(
+                                    db,
+                                    persist_req,
+                                    EMPTY_ASSISTANT_PLACEHOLDER,
+                                    guardrail_status,
+                                    assistant_meta=_private_prompt_audit_failure_meta(),
+                                    assistant_processed=1,
+                                )
+                                return
+
+                            answer = str(result_holder.get("answer") or "")
                             if answer and answer.strip():
                                 await _finalize_private_buffer(req.user_id, answer)
                                 _persist_chat_turn(db, persist_req, answer, guardrail_status)
@@ -2358,7 +2415,14 @@ async def proxy_chat(
         logger.error("[/chat] Prompt V2 audit failed: user=%s session=%s", req.user_id, req.session_id)
         try:
             await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-            _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
+            _persist_chat_turn(
+                db,
+                persist_req,
+                EMPTY_ASSISTANT_PLACEHOLDER,
+                guardrail_status,
+                assistant_meta=_private_prompt_audit_failure_meta(),
+                assistant_processed=1,
+            )
         except Exception as pe:
             logger.error(f"[/chat] Persist failed on prompt audit error path: {pe}")
         raise HTTPException(status_code=500, detail="系统暂时不可用，请稍后再试")

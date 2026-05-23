@@ -282,10 +282,6 @@ def record_runtime_tool_decision(
                 db.flush()
                 return True
             except Exception as e:
-                try:
-                    db.rollback()
-                except Exception:
-                    pass
                 logger.warning("Failed to record runtime_preset_decision: %s", e)
                 return False
 

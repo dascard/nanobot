@@ -330,6 +330,169 @@ def test_image_only_message_uses_multimodal_prompt_placeholder(client, db_sessio
     assert user_turn.content == "[图片附件 1 张]"
 
 
+def test_private_prompt_v2_audit_failure_is_not_context_chat(client, db_session, monkeypatch):
+    from core.context_builder import build_chat_context
+    from core.database import ConversationTurn
+
+    _fast_private_reply(monkeypatch)
+
+    class FakeBridge:
+        async def handle_message(self, *args, **kwargs):
+            return ""
+
+        def pop_last_reply_meta(self, session_id):
+            return {"_agent_result": "prompt_v2_audit_failed"}
+
+    monkeypatch.setattr("api.routes.get_bridge", lambda: FakeBridge())
+
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "user_id": "u-audit-private",
+            "session_id": "private_u-audit-private",
+            "query": "触发审计失败",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "系统暂时不可用，请稍后再试"
+
+    assistant_turn = (
+        db_session.query(ConversationTurn)
+        .filter_by(user_id="u-audit-private", role="assistant")
+        .one()
+    )
+    assistant_meta = json.loads(assistant_turn.meta_json or "{}")
+    assert assistant_meta["kind"] == "empty_reply"
+    assert assistant_meta["no_context"] is True
+    assert assistant_meta["agent_result"] == "prompt_v2_audit_failed"
+
+    _, history_messages, debug = build_chat_context(
+        db_session,
+        "private_u-audit-private",
+        user_id="u-audit-private",
+        is_group=False,
+    )
+    assert all("（无回复内容）" not in item["content"] for item in history_messages)
+    assert debug["skipped_no_context"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_stream_disconnect_background_push_uses_result_holder(db_session, monkeypatch):
+    import asyncio
+    from api.routes import ChatProxyRequest, proxy_chat, _private_buffers
+
+    _private_buffers.clear()
+    _fast_private_reply(monkeypatch)
+
+    release = asyncio.Event()
+    pushed = []
+
+    class FakeBridge:
+        async def handle_message(self, *args, stream_queue=None, **kwargs):
+            await stream_queue.put({"status": "progress", "message": "thinking"})
+            await release.wait()
+            return "断连后的真实回复"
+
+        def pop_last_reply_meta(self, session_id):
+            return {}
+
+    async def fake_push(target_type, target_id, content):
+        pushed.append((target_type, target_id, content))
+        return True
+
+    monkeypatch.setattr("api.routes.get_bridge", lambda: FakeBridge())
+    monkeypatch.setattr("core.daily_digest.push_to_qq", fake_push)
+
+    background_tasks = BackgroundTasks()
+    response = await proxy_chat(
+        ChatProxyRequest(
+            user_id="u-stream-abort",
+            session_id="private_u-stream-abort",
+            query="流式断连",
+            stream=True,
+        ),
+        background_tasks,
+        db_session,
+        None,
+    )
+
+    iterator = response.body_iterator
+    first_event = await asyncio.wait_for(iterator.__anext__(), timeout=1)
+    assert "thinking" in first_event
+
+    await iterator.aclose()
+    release.set()
+    await asyncio.wait_for(background_tasks(), timeout=1)
+
+    assert pushed == [("private", "u-stream-abort", "断连后的真实回复")]
+    assistant_log = db_session.query(ChatLog).filter_by(
+        user_id="u-stream-abort",
+        role="assistant",
+    ).one()
+    assert assistant_log.content == "断连后的真实回复"
+
+
+@pytest.mark.asyncio
+async def test_stream_disconnect_prompt_v2_audit_failure_is_no_send(db_session, monkeypatch):
+    import asyncio
+    from api.routes import ChatProxyRequest, proxy_chat, _private_buffers
+    from core.database import ConversationTurn
+
+    _private_buffers.clear()
+    _fast_private_reply(monkeypatch)
+
+    release = asyncio.Event()
+    pushed = []
+
+    class FakeBridge:
+        async def handle_message(self, *args, stream_queue=None, **kwargs):
+            await stream_queue.put({"status": "progress", "message": "thinking"})
+            await release.wait()
+            return ""
+
+        def pop_last_reply_meta(self, session_id):
+            return {"_agent_result": "prompt_v2_audit_failed"}
+
+    async def fake_push(target_type, target_id, content):
+        pushed.append((target_type, target_id, content))
+        return True
+
+    monkeypatch.setattr("api.routes.get_bridge", lambda: FakeBridge())
+    monkeypatch.setattr("core.daily_digest.push_to_qq", fake_push)
+
+    background_tasks = BackgroundTasks()
+    response = await proxy_chat(
+        ChatProxyRequest(
+            user_id="u-stream-audit",
+            session_id="private_u-stream-audit",
+            query="流式审计失败",
+            stream=True,
+        ),
+        background_tasks,
+        db_session,
+        None,
+    )
+
+    iterator = response.body_iterator
+    first_event = await asyncio.wait_for(iterator.__anext__(), timeout=1)
+    assert "thinking" in first_event
+
+    await iterator.aclose()
+    release.set()
+    await asyncio.wait_for(background_tasks(), timeout=1)
+
+    assert pushed == []
+    assistant_turn = db_session.query(ConversationTurn).filter_by(
+        user_id="u-stream-audit",
+        role="assistant",
+    ).one()
+    assistant_meta = json.loads(assistant_turn.meta_json or "{}")
+    assert assistant_meta["kind"] == "empty_reply"
+    assert assistant_meta["no_context"] is True
+    assert assistant_meta["agent_result"] == "prompt_v2_audit_failed"
+
+
 @pytest.mark.asyncio
 async def test_private_buffer_silent_releases_waiters(db_session, monkeypatch):
     import asyncio
@@ -741,12 +904,22 @@ async def test_group_message_prompt_v2_audit_failure_is_no_send(db_session, monk
         None,
     )
 
-    assert data["action"] == "continue"
-    assert data["reply"] == ""
+    assert data["action"] == "no_reply"
+    assert data["reason"] == "prompt_v2_audit_failed"
+    assert data["diagnostics"]["timing_action"] == "continue"
+    assert data["diagnostics"]["agent_result"] == "prompt_v2_audit_failed"
     system_logs = db_session.query(ChatLog).filter_by(user_id="group_audit-g", role="system").all()
     assert any("[NO_SEND] agent_result=prompt_v2_audit_failed" in row.content for row in system_logs)
     assistant_logs = db_session.query(ChatLog).filter_by(user_id="group_audit-g", role="assistant").all()
     assert assistant_logs == []
+
+
+def test_group_ingress_service_does_not_import_api_routes():
+    from pathlib import Path
+
+    source = Path("app/group_ingress/service.py").read_text(encoding="utf-8")
+
+    assert "from api import routes" not in source
 
 
 @pytest.mark.asyncio
