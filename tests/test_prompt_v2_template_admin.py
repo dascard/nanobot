@@ -294,6 +294,49 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
     assert data["warnings"] == ["preview warning"]
 
 
+def test_effective_preview_v2_returns_400_for_invalid_flow(tmp_path, monkeypatch):
+    from core.prompt_v2.flow import PromptFlowError
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'preview_error.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    async def fail_compile(*_args, **_kwargs):
+        raise PromptFlowError("flow 在 private 下存在环: a -> b")
+
+    monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fail_compile)
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/admin/prompt/effective-preview",
+            json={
+                "engine": "v2",
+                "chat_type": "private",
+                "user_id": "u1",
+                "user_input": "你好",
+            },
+            headers=_auth_header(),
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "flow 在 private 下存在环" in response.text
+
+
 def test_prompt_v2_template_admin_crud_runtime_overrides(tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     default_dir = tmp_path / "defaults"

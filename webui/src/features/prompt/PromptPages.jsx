@@ -553,28 +553,35 @@ function selectedPromptFlowPath(flow, chatType) {
     .map((edge, edgeIndex) => ({ edge, edgeIndex }))
     .filter(({ edge }) => ids.has(edge.from) && ids.has(edge.to))
   const edges = allEdges.filter(({ edge }) => flowAppliesToChat(edge, chatType))
-  const incomingAll = new Map(nodes.map(node => [node.id, new Set()]))
-  const incoming = new Map(nodes.map(node => [node.id, new Set()]))
-  const outgoing = new Map(nodes.map(node => [node.id, []]))
+  const allIncident = new Map(nodes.map(node => [node.id, false]))
+  const activeIncident = new Map(nodes.map(node => [node.id, false]))
   allEdges.forEach(({ edge }) => {
-    incomingAll.get(edge.to)?.add(edge.from)
+    allIncident.set(edge.from, true)
+    allIncident.set(edge.to, true)
   })
+  edges.forEach(({ edge }) => {
+    activeIncident.set(edge.from, true)
+    activeIncident.set(edge.to, true)
+  })
+  const relevantNodes = nodes.filter(node => activeIncident.get(node.id) || !allIncident.get(node.id))
+  const relevantIds = new Set(relevantNodes.map(node => node.id))
+  const incoming = new Map(relevantNodes.map(node => [node.id, new Set()]))
+  const outgoing = new Map(relevantNodes.map(node => [node.id, []]))
   edges.forEach(({ edge, edgeIndex }) => {
+    if (!relevantIds.has(edge.from) || !relevantIds.has(edge.to)) return
     incoming.get(edge.to)?.add(edge.from)
     outgoing.get(edge.from)?.push({ edge, edgeIndex })
   })
-  const ready = [...incomingAll.entries()]
+  const ready = [...incoming.entries()]
     .filter(([, from]) => from.size === 0)
     .map(([id]) => id)
     .sort((a, b) => (index.get(a) || 0) - (index.get(b) || 0))
+  const entryNodeIds = [...ready]
   const result = []
   const edgeKeys = []
-  const seen = new Set()
-  let hasCycle = false
-  const entryNodeId = ready.length === 1 ? ready[0] : ''
-  let currentId = entryNodeId
-  while (currentId && !seen.has(currentId)) {
-    seen.add(currentId)
+  while (ready.length) {
+    const currentId = ready.shift()
+    if (!currentId || result.includes(currentId)) continue
     result.push(currentId)
     const choices = [...(outgoing.get(currentId) || [])]
       .sort((a, b) => {
@@ -582,23 +589,23 @@ function selectedPromptFlowPath(flow, chatType) {
         const bi = index.get(b.edge.to) ?? 0
         return ai === bi ? a.edgeIndex - b.edgeIndex : ai - bi
       })
-    const next = choices[0]
-    if (!next) break
-    edgeKeys.push(promptFlowEdgeKey(next.edge, next.edgeIndex))
-    if (seen.has(next.edge.to)) {
-      hasCycle = true
-      break
-    }
-    currentId = next.edge.to
+    choices.forEach(next => {
+      edgeKeys.push(promptFlowEdgeKey(next.edge, next.edgeIndex))
+      const targetIncoming = incoming.get(next.edge.to)
+      targetIncoming?.delete(currentId)
+      if (targetIncoming?.size === 0 && !result.includes(next.edge.to) && !ready.includes(next.edge.to)) {
+        ready.push(next.edge.to)
+      }
+    })
+    ready.sort((a, b) => (index.get(a) || 0) - (index.get(b) || 0))
   }
+  const hasCycle = result.length !== relevantNodes.length
   const byId = new Map(nodes.map(node => [node.id, node]))
   return {
-    entryNodeId,
-    entryCandidateIds: ready,
-    ambiguousEntryIds: ready.length > 1 ? ready : [],
-    missingNodeIds: nodes
-      .map(node => node.id)
-      .filter(id => !result.includes(id) && ((incoming.get(id)?.size || 0) > 0 || (incomingAll.get(id)?.size || 0) === 0)),
+    entryNodeId: entryNodeIds[0] || '',
+    entryNodeIds,
+    entryCandidateIds: entryNodeIds,
+    missingNodeIds: relevantNodes.map(node => node.id).filter(id => !result.includes(id)),
     hasCycle,
     nodeIds: result,
     edgeKeys,
@@ -667,13 +674,12 @@ function PromptFlowCanvas({
   const zoom = Math.min(1.8, Math.max(0.45, Number(viewport?.zoom) || 1))
   const viewX = Number(viewport?.x) || 0
   const viewY = Number(viewport?.y) || 0
-  const entryStatus = selectedPath.ambiguousEntryIds.length
-    ? `多个入口：${selectedPath.ambiguousEntryIds.join(', ')}`
-    : selectedPath.hasCycle
-      ? '当前路径存在环'
-      : selectedPath.missingNodeIds.length
-        ? `未接入路径：${selectedPath.missingNodeIds.join(', ')}`
-        : ''
+  const entryStatus = selectedPath.hasCycle
+    ? `存在环或无法排序：${selectedPath.missingNodeIds.join(', ')}`
+    : selectedPath.missingNodeIds.length
+      ? `未排序节点：${selectedPath.missingNodeIds.join(', ')}`
+      : ''
+  const entryLabel = selectedPath.entryNodeIds.length ? selectedPath.entryNodeIds.join(', ') : '未确定'
 
   const worldFromClient = event => {
     const rect = canvasRef.current?.getBoundingClientRect()
@@ -823,9 +829,9 @@ function PromptFlowCanvas({
       }}
     >
       <div className="absolute left-3 top-3 z-20 flex max-w-[calc(100%-17rem)] flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/90 px-2.5 py-1.5 text-[11px]" data-flow-control="true">
-        <span className="text-slate-500">当前入口</span>
-        <span className={selectedPath.entryNodeId ? 'font-mono text-emerald-300' : 'text-red-300'}>
-          {selectedPath.entryNodeId || '未确定'}
+        <span className="text-slate-500">拓扑入口</span>
+        <span className={selectedPath.entryNodeIds.length ? 'font-mono text-emerald-300' : 'text-red-300'}>
+          {entryLabel}
         </span>
         {entryStatus && <span className="text-amber-300">{entryStatus}</span>}
       </div>
@@ -937,7 +943,7 @@ function PromptFlowCanvas({
                     <div className="truncate text-xs font-medium text-slate-100">{node.label || node.id}</div>
                     <div className="mt-1 truncate text-[10px] text-slate-500">{node.type === 'template' ? node.template_key : `${runtimeRole}: ${runtimeLabel}`}</div>
                   </div>
-                  {node.id === selectedPath.entryNodeId && <Badge tone="amber">入口</Badge>}
+                  {selectedPath.entryNodeIds.includes(node.id) && <Badge tone="amber">入口</Badge>}
                   <Badge tone={node.type === 'template' ? 'emerald' : 'blue'}>{node.chat_types?.[0] || 'all'}</Badge>
                 </div>
                 <div className="mt-auto flex items-center gap-1">
@@ -969,11 +975,12 @@ function PromptFlowMobileList({
   const selectedPath = selectedPromptFlowPath(flow, chatType)
   const orderedNodes = selectedPath.nodes
   const edges = (flow?.edges || []).filter(edge => nodeById.has(edge.from) && nodeById.has(edge.to))
-  const entryStatus = selectedPath.ambiguousEntryIds.length
-    ? `多个入口：${selectedPath.ambiguousEntryIds.join(', ')}`
+  const entryStatus = selectedPath.hasCycle
+    ? `存在环或无法排序：${selectedPath.missingNodeIds.join(', ')}`
     : selectedPath.missingNodeIds.length
-      ? `未接入路径：${selectedPath.missingNodeIds.join(', ')}`
+      ? `未排序节点：${selectedPath.missingNodeIds.join(', ')}`
       : ''
+  const entryLabel = selectedPath.entryNodeIds.length ? selectedPath.entryNodeIds.join(', ') : '未确定'
   return (
     <Card data-testid="prompt-flow-mobile-list" className="p-3 lg:hidden">
       <SectionHeader
@@ -981,8 +988,8 @@ function PromptFlowMobileList({
         description="小屏使用节点和连线列表维护编排；桌面端可使用 canvas 拖拽。"
       />
       <div className="mb-3 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs">
-        <span className="text-slate-500">当前入口：</span>
-        <span className={selectedPath.entryNodeId ? 'font-mono text-emerald-300' : 'text-red-300'}>{selectedPath.entryNodeId || '未确定'}</span>
+        <span className="text-slate-500">拓扑入口：</span>
+        <span className={selectedPath.entryNodeIds.length ? 'font-mono text-emerald-300' : 'text-red-300'}>{entryLabel}</span>
         {entryStatus && <div className="mt-1 text-amber-300">{entryStatus}</div>}
       </div>
       <div className="space-y-2">
@@ -996,7 +1003,7 @@ function PromptFlowMobileList({
             <div className="flex items-center gap-2">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-slate-800 font-mono text-[10px] text-slate-400">{idx + 1}</span>
               <span className="min-w-0 flex-1 truncate">{node.label || node.id}</span>
-              {node.id === selectedPath.entryNodeId && <Badge tone="amber">入口</Badge>}
+              {selectedPath.entryNodeIds.includes(node.id) && <Badge tone="amber">入口</Badge>}
               <Badge tone={node.type === 'template' ? 'emerald' : 'blue'}>{node.type === 'template' ? '模板' : '运行时'}</Badge>
             </div>
             <div className="mt-1 truncate pl-7 font-mono text-[10px] text-slate-500">

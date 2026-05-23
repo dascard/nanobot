@@ -37,9 +37,9 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "function PromptFlowCanvas(" in source
     assert "function selectedPromptFlowPath(" in source
     assert "entryNodeId" in source
-    assert "ambiguousEntryIds" in source
-    assert "当前入口" in source
-    assert "多个入口" in source
+    assert "entryNodeIds" in source
+    assert "拓扑入口" in source
+    assert "多个入口" not in source
     assert "Prompt V2 模板" in source
     assert "Canvas 编排" in source
     assert "data-testid=\"prompt-flow-canvas\"" in source

@@ -42,8 +42,10 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     from core.context_builder import build_chat_context
     from core.database import Persona
     from core.prompt_v2 import compiler as prompt_compiler
+    from core.prompt_v2.flow import PromptFlowError
     from core.prompt_v2.schema import PromptCompileRequest
     from core.tool_plan import build_tool_plan
+    from fastapi import HTTPException
 
     chat_type = _strip(getattr(body, "chat_type", "")) or "private"
     is_group = chat_type == "group"
@@ -83,24 +85,27 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     if v2_prompt_key in {"", "group_chat", "private_chat"}:
         v2_prompt_key = "chat_group" if is_group else "chat_private"
 
-    plan = await prompt_compiler.compile_prompt_plan(
-        PromptCompileRequest(
-            chat_type=chat_type,
-            prompt_key=v2_prompt_key,
-            session_id=session_id,
-            user_id=user_id,
-            group_id=group_id,
-            sender_name=str(getattr(body, "sender_name", "") or ""),
-            sender_id=user_id,
-            user_input=str(getattr(body, "user_input", "") or ""),
-            persona_text=persona_text or "无已存储画像",
-            history_header=history_header,
-            history_messages=history_messages,
-            runtime_tool_prompt=runtime_tool_prompt,
-            tool_schemas=configured_tool_schemas,
-            debug={"history_debug": history_debug},
+    try:
+        plan = await prompt_compiler.compile_prompt_plan(
+            PromptCompileRequest(
+                chat_type=chat_type,
+                prompt_key=v2_prompt_key,
+                session_id=session_id,
+                user_id=user_id,
+                group_id=group_id,
+                sender_name=str(getattr(body, "sender_name", "") or ""),
+                sender_id=user_id,
+                user_input=str(getattr(body, "user_input", "") or ""),
+                persona_text=persona_text or "无已存储画像",
+                history_header=history_header,
+                history_messages=history_messages,
+                runtime_tool_prompt=runtime_tool_prompt,
+                tool_schemas=configured_tool_schemas,
+                debug={"history_debug": history_debug},
+            )
         )
-    )
+    except PromptFlowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     recent_run_id, recent_logs = _recent_prompt_preview_logs(db, body)
     tools = [
         {"name": name, "enabled": bool(enabled.get(name, True))}

@@ -56,8 +56,8 @@ def test_prompt_v2_flow_rejects_ambiguous_outgoing_branch_condition():
         validate_flow(flow)
 
 
-def test_prompt_v2_flow_rejects_multiple_entry_nodes_for_chat_type():
-    from core.prompt_v2.flow import PromptFlowError, ordered_nodes_for_chat
+def test_prompt_v2_flow_orders_multiple_entry_nodes_by_topology():
+    from core.prompt_v2.flow import ordered_nodes_for_chat
 
     flow = {
         "version": 1,
@@ -71,8 +71,36 @@ def test_prompt_v2_flow_rejects_multiple_entry_nodes_for_chat_type():
         ],
     }
 
-    with pytest.raises(PromptFlowError, match="多个入口节点"):
-        ordered_nodes_for_chat(flow, "private")
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
+        "identity",
+        "base",
+        "tail",
+    ]
+
+
+def test_prompt_v2_flow_ignores_nodes_only_used_by_inactive_conditions():
+    from core.prompt_v2.flow import ordered_nodes_for_chat
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "base", "type": "template", "template_key": "chat/main"},
+            {"id": "inactive_group_branch", "type": "template", "template_key": "chat/branch_group"},
+            {"id": "runtime_context", "type": "runtime", "runtime_key": "runtime_context"},
+            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+        ],
+        "edges": [
+            {"from": "base", "to": "inactive_group_branch", "chat_types": ["group"]},
+            {"from": "inactive_group_branch", "to": "runtime_context", "chat_types": ["private"]},
+            {"from": "runtime_context", "to": "tail"},
+        ],
+    }
+
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
+        "inactive_group_branch",
+        "runtime_context",
+        "tail",
+    ]
 
 
 def test_prompt_v2_flow_entry_is_derived_from_in_degree_not_node_order():
