@@ -194,25 +194,37 @@ def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str) -> list[dict[st
     all_nodes = [dict(node) for node in flow.get("nodes") or [] if _applies(dict(node), chat_type)]
     node_ids = {str(node.get("id")) for node in all_nodes}
     order_index = _node_index(all_nodes)
-    edges = [
+    all_edges = [
         dict(edge)
         for edge in flow.get("edges") or []
-        if _applies(dict(edge), chat_type)
-        and str(edge.get("from")) in node_ids
+        if str(edge.get("from")) in node_ids
         and str(edge.get("to")) in node_ids
     ]
+    edges = [
+        dict(edge)
+        for edge in all_edges
+        if _applies(dict(edge), chat_type)
+    ]
+    incoming_all: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
     incoming: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
     outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
+    for edge in all_edges:
+        incoming_all[str(edge.get("to"))].add(str(edge.get("from")))
     for edge in edges:
         start = str(edge.get("from"))
         end = str(edge.get("to"))
         incoming[end].add(start)
         outgoing[start].append(end)
 
-    ready = sorted([node_id for node_id, sources in incoming.items() if not sources], key=lambda x: order_index.get(x, 0))
+    ready = sorted([node_id for node_id, sources in incoming_all.items() if not sources], key=lambda x: order_index.get(x, 0))
+    if not ready:
+        raise PromptFlowError(f"flow 在 {chat_type} 下没有入口节点")
+    if len(ready) > 1:
+        raise PromptFlowError(f"flow 在 {chat_type} 下存在多个入口节点: {', '.join(ready)}")
+
     result_ids: list[str] = []
     seen: set[str] = set()
-    node_id = ready[0] if ready else (all_nodes[0].get("id") if all_nodes else "")
+    node_id = ready[0]
     while node_id and str(node_id) not in seen:
         node_id = str(node_id)
         seen.add(node_id)
@@ -220,6 +232,18 @@ def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str) -> list[dict[st
             break
         result_ids.append(node_id)
         targets = sorted(outgoing.get(node_id) or [], key=lambda x: order_index.get(x, 0))
+        if targets and str(targets[0]) in seen:
+            raise PromptFlowError(f"flow 在 {chat_type} 下存在环: {node_id} -> {targets[0]}")
         node_id = targets[0] if targets else ""
+    missing = sorted(
+        [
+            node_id
+            for node_id in node_ids - set(result_ids)
+            if incoming.get(node_id) or not incoming_all.get(node_id)
+        ],
+        key=lambda x: order_index.get(x, 0),
+    )
+    if missing:
+        raise PromptFlowError(f"flow 在 {chat_type} 下存在未连接到入口路径的节点: {', '.join(missing)}")
     by_id = {str(node.get("id")): node for node in all_nodes}
     return [by_id[node_id] for node_id in result_ids]

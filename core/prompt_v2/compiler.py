@@ -166,6 +166,8 @@ async def compile_prompt_plan(
         "flow_path": str(flow_state.path),
         "flow_source": flow_state.source,
         "flow_node_count": len(ordered_nodes),
+        "flow_entry_node_id": str(ordered_nodes[0].get("id") or "") if ordered_nodes else "",
+        "flow_node_ids": [str(node.get("id") or "") for node in ordered_nodes],
         "history_message_count": len(history_messages),
         "has_group_context": bool(group_context),
         "tool_schema_count": len(request.tool_schemas or []),

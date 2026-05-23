@@ -10,7 +10,7 @@ def _write_tool_template(base: Path, key: str, tool_name: str, body: str) -> Non
     )
 
 
-def test_runtime_tool_prompt_includes_enabled_v2_tool_templates(tmp_path, monkeypatch):
+def test_runtime_tool_prompt_lists_v2_tool_template_refs_without_body(tmp_path, monkeypatch):
     default_dir = tmp_path / "defaults"
     runtime_dir = tmp_path / "runtime"
     _write_tool_template(default_dir, "tools/sql_analysis/usage", "sql_analysis", "V2 SQL TEMPLATE MARKER")
@@ -26,8 +26,9 @@ def test_runtime_tool_prompt_includes_enabled_v2_tool_templates(tmp_path, monkey
         chat_type="private",
     )
 
-    assert "[ToolTemplate:sql_analysis]" in prompt
-    assert "V2 SQL TEMPLATE MARKER" in prompt
+    assert "[V2ToolTemplateRef:sql_analysis]" in prompt
+    assert "工具模板正文已写入 tools schema description" in prompt
+    assert "V2 SQL TEMPLATE MARKER" not in prompt
     assert "DISABLED TEMPLATE MARKER" not in prompt
     assert "python_sandbox：测试禁用" in prompt
 

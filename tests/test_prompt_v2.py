@@ -56,6 +56,44 @@ def test_prompt_v2_flow_rejects_ambiguous_outgoing_branch_condition():
         validate_flow(flow)
 
 
+def test_prompt_v2_flow_rejects_multiple_entry_nodes_for_chat_type():
+    from core.prompt_v2.flow import PromptFlowError, ordered_nodes_for_chat
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "identity", "type": "template", "template_key": "chat/identity_context"},
+            {"id": "base", "type": "template", "template_key": "chat/main"},
+            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+        ],
+        "edges": [
+            {"from": "base", "to": "tail"},
+        ],
+    }
+
+    with pytest.raises(PromptFlowError, match="多个入口节点"):
+        ordered_nodes_for_chat(flow, "private")
+
+
+def test_prompt_v2_flow_entry_is_derived_from_in_degree_not_node_order():
+    from core.prompt_v2.flow import ordered_nodes_for_chat
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "identity", "type": "template", "template_key": "chat/identity_context"},
+            {"id": "base", "type": "template", "template_key": "chat/main"},
+            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+        ],
+        "edges": [
+            {"from": "base", "to": "identity"},
+            {"from": "identity", "to": "tail"},
+        ],
+    }
+
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == ["base", "identity", "tail"]
+
+
 @pytest.mark.asyncio
 async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections():
     from core.prompt_v2.compiler import compile_prompt_plan
