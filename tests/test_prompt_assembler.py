@@ -1,6 +1,14 @@
 import json
 
 
+def test_prompt_assembler_is_marked_v1_fallback_only():
+    import core.prompt_assembler as prompt_assembler
+
+    assert prompt_assembler.IS_V1_FALLBACK_ONLY is True
+    assert "deprecated" in prompt_assembler.DEPRECATED_REASON.lower()
+    assert "V1 rollback" in prompt_assembler.DEPRECATED_REASON
+
+
 def _write_template(prompt_dir, name: str, body: str) -> None:
     prompt_dir.mkdir(parents=True, exist_ok=True)
     (prompt_dir / name).write_text(body, encoding="utf-8")

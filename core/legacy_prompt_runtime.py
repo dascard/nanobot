@@ -1,7 +1,7 @@
 """Deprecated: 旧版 Prompt 片段的运行时分离管理。
 
-仅作为 PromptAssembler legacy rollback mode 保留；新主回复编排请使用
-`core.prompt_assembler.PromptAssembler` 和 `prompts.default/*.md`。
+仅作为 PromptAssembler V1 rollback mode 保留；新主回复编排必须使用
+`core.prompt_v2.compile_prompt_plan`。
 
 Git 管理默认片段：prompts.legacy.default/fragments/
 WebUI 写入运行时片段：data/prompt_fragments/
@@ -19,6 +19,12 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+IS_ROLLBACK_ONLY = True
+ROLLBACK_ONLY_REASON = (
+    "legacy_prompt_runtime is rollback-only for V1 fallback. "
+    "New prompt behavior must use core.prompt_v2.compile_prompt_plan."
+)
 
 _LEGACY_FRAGMENT_NAME_RE = re.compile(r"[A-Za-z0-9_.-]+\.md")
 

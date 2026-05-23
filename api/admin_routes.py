@@ -28,6 +28,12 @@ from config import NANOBOT_ADMIN_TOKEN
 logger = logging.getLogger("nanobot.admin")
 router = APIRouter(prefix="/api/v1/admin")
 
+from api.admin.prompt_v2_routes import router as prompt_v2_router
+from api.admin.system_routes import router as system_router
+
+router.include_router(system_router)
+router.include_router(prompt_v2_router)
+
 # ── Auth ──
 
 def verify_admin(authorization: str = Header(default="")) -> str:
@@ -68,89 +74,6 @@ def _audit_request(db: Session, request: Request, action: str,
     """写审计日志——自动从 request 提取客户端 IP。"""
     return _audit(db, action, target_type, target_id, detail,
                   ip_address=_client_ip(request))
-
-# ── Auth check endpoint ──
-
-@router.get("/me")
-def admin_me(_auth=Depends(verify_admin)):
-    return {"ok": True, "user": "admin"}
-
-
-_VERSION_CACHE: dict | None = None
-
-
-@router.get("/version")
-def admin_version(_auth=Depends(verify_admin)):
-    global _VERSION_CACHE
-    if _VERSION_CACHE is not None:
-        return _VERSION_CACHE
-
-    # 优先读环境变量（Docker build-arg 注入），无则 git fallback
-    commit = os.environ.get("NANOBOT_GIT_COMMIT") or ""
-    branch = os.environ.get("NANOBOT_GIT_BRANCH") or ""
-    commit_date = os.environ.get("NANOBOT_GIT_COMMIT_DATE") or ""
-    dirty_raw = os.environ.get("NANOBOT_GIT_DIRTY") or ""
-
-    if not commit or not branch:
-        import subprocess
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-        def _git(args: list[str]) -> str | None:
-            try:
-                return subprocess.check_output(
-                    ["git", *args],
-                    cwd=base,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                    timeout=3,
-                ).strip()
-            except Exception:
-                return None
-
-        commit = commit or _git(["rev-parse", "--short", "HEAD"]) or "unknown"
-        branch = branch or _git(["rev-parse", "--abbrev-ref", "HEAD"]) or ""
-        commit_date = commit_date or _git(["log", "-1", "--format=%ci", "--date=iso-strict"]) or ""
-
-        if not dirty_raw:
-            status = _git([
-                "status",
-                "--porcelain",
-                "--untracked-files=no",
-                "--",
-                ".",
-                ":(exclude)data",
-                ":(exclude).claude",
-                ":(exclude)sentinel/model.safetensors",
-                ":(exclude).env",
-                ":(exclude).vscode",
-                ":(exclude).idea",
-                ":(exclude)webui/node_modules",
-            ])
-            if status is None:
-                dirty_raw = "null"
-            elif status:
-                dirty_raw = "true"
-            else:
-                dirty_raw = "false"
-
-    # 解析 dirty 状态：null=未知, true=有改动, false=干净
-    if dirty_raw == "true":
-        dirty = True
-    elif dirty_raw == "false":
-        dirty = False
-    else:
-        dirty = None
-
-    _VERSION_CACHE = {
-        "commit": commit or "unknown",
-        "full_commit": os.environ.get("NANOBOT_GIT_FULL_COMMIT", "") or "",
-        "branch": branch or "",
-        "commit_date": commit_date or "",
-        "dirty": dirty,
-        "display": f"{commit}{'-dirty' if dirty and commit != 'unknown' else ''}",
-    }
-    return _VERSION_CACHE
-
 
 # ── Models ──
 
@@ -240,19 +163,6 @@ class PromptSaveRequest(BaseModel):
     content: str
 
 
-class PromptV2TemplateCreateRequest(BaseModel):
-    template_key: str
-    content: str
-    name: str = ""
-    kind: str = "tool"
-    tool_name: str = ""
-    description: str = ""
-
-
-class PromptV2FlowSaveRequest(BaseModel):
-    flow: dict = Field(default_factory=dict)
-
-
 class PromptPreviewRequest(BaseModel):
     variables: dict = Field(default_factory=dict)
     mode: str = "preview"
@@ -273,154 +183,6 @@ class EffectivePromptPreviewRequest(BaseModel):
 
 class PromptRollbackRequest(BaseModel):
     backup_name: str
-
-
-@router.get("/prompt-v2/variables")
-def list_prompt_v2_variables(
-    template: str = Query(""),
-    _auth=Depends(verify_admin),
-):
-    from core.prompt_v2.variables import list_variables
-
-    template_key = str(template or "").removesuffix(".md").strip()
-    return {
-        "template": template_key,
-        "items": list_variables(template_key),
-    }
-
-
-@router.get("/prompt-v2/templates")
-def list_prompt_v2_templates(_auth=Depends(verify_admin)):
-    from core.prompt_v2.template_store import list_templates
-
-    return list_templates()
-
-
-@router.post("/prompt-v2/templates")
-def create_prompt_v2_template(
-    body: PromptV2TemplateCreateRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
-):
-    from core.prompt_v2.template_store import create_template
-    from core.prompt_v2.variables import PromptVariableError
-
-    try:
-        result = create_template(
-            body.template_key,
-            content=body.content,
-            name=body.name,
-            kind=body.kind,
-            tool_name=body.tool_name,
-            description=body.description,
-        )
-    except PromptVariableError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(400, str(e))
-    _audit_request(db, request, "create_prompt_v2_template", "prompt_v2", result["template_key"], result)
-    return result
-
-
-@router.get("/prompt-v2/templates/{template_key:path}")
-def get_prompt_v2_template(template_key: str, _auth=Depends(verify_admin)):
-    from core.prompt_v2.template_store import get_template
-
-    try:
-        return get_template(template_key)
-    except FileNotFoundError:
-        raise HTTPException(404, "V2 模板不存在")
-    except Exception as e:
-        raise HTTPException(400, str(e))
-
-
-@router.put("/prompt-v2/templates/{template_key:path}")
-def save_prompt_v2_template(
-    template_key: str,
-    body: PromptSaveRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
-):
-    from core.prompt_v2.template_store import save_template
-    from core.prompt_v2.variables import PromptVariableError
-
-    try:
-        result = save_template(template_key, body.content)
-    except PromptVariableError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(400, str(e))
-    _audit_request(db, request, "save_prompt_v2_template", "prompt_v2", template_key, result)
-    return result
-
-
-@router.delete("/prompt-v2/templates/{template_key:path}")
-def delete_prompt_v2_template(
-    template_key: str,
-    request: Request,
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
-):
-    from core.prompt_v2.template_store import delete_runtime_template
-
-    try:
-        result = delete_runtime_template(template_key)
-    except Exception as e:
-        raise HTTPException(400, str(e))
-    _audit_request(db, request, "delete_prompt_v2_template", "prompt_v2", result["template_key"], result)
-    return result
-
-
-@router.post("/prompt-v2/templates/{template_key:path}/reset")
-def reset_prompt_v2_template(
-    template_key: str,
-    request: Request,
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
-):
-    from core.prompt_v2.template_store import reset_template
-
-    try:
-        result = reset_template(template_key)
-    except Exception as e:
-        raise HTTPException(400, str(e))
-    _audit_request(db, request, "reset_prompt_v2_template", "prompt_v2", result["template_key"], result)
-    return result
-
-
-@router.get("/prompt-v2/flow")
-def get_prompt_v2_flow(_auth=Depends(verify_admin)):
-    from core.prompt_v2.flow import default_flow_path, load_flow, runtime_flow_path
-
-    flow = load_flow()
-    return {
-        "flow": flow.flow,
-        "source": flow.source,
-        "path": str(flow.path),
-        "default_path": str(default_flow_path()),
-        "runtime_path": str(runtime_flow_path()),
-    }
-
-
-@router.put("/prompt-v2/flow")
-def save_prompt_v2_flow(
-    body: PromptV2FlowSaveRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
-):
-    from core.prompt_v2.flow import PromptFlowError, save_flow
-
-    try:
-        result = save_flow(body.flow)
-    except PromptFlowError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:
-        raise HTTPException(400, str(e))
-    _audit_request(db, request, "save_prompt_v2_flow", "prompt_v2_flow", "chat_flow", result)
-    return result
 
 
 # ── Helpers ──
@@ -1895,9 +1657,13 @@ async def preview_effective_prompt(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
+    if body.engine == "v2":
+        from app.prompt_runtime.preview_service import preview_effective_prompt_v2
+
+        return await preview_effective_prompt_v2(body, db)
+
     from core.database import Persona
     from core.context_builder import build_chat_context
-    from core.prompt_assembler import PromptAssembler, PromptBuildContext
     from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
     from core.tool_schema_preview import build_effective_tool_schemas
 
@@ -1931,63 +1697,7 @@ async def preview_effective_prompt(
     runtime_tool_prompt = build_runtime_tool_prompt(enabled, disabled, body.chat_type)
     tool_schemas = build_effective_tool_schemas(enabled)
 
-    if body.engine == "v2":
-        from core.prompt_v2.preview import build_preview_plan
-        from core.prompt_v2.schema import PromptCompileRequest
-
-        v2_prompt_key = body.prompt_key.strip()
-        if v2_prompt_key in {"", "group_chat", "private_chat"}:
-            v2_prompt_key = "chat_group" if is_group else "chat_private"
-        plan = await build_preview_plan(
-            PromptCompileRequest(
-                chat_type=body.chat_type,
-                prompt_key=v2_prompt_key,
-                session_id=session_id,
-                user_id=user_id,
-                group_id=group_id,
-                sender_name=body.sender_name,
-                sender_id=user_id,
-                user_input=body.user_input,
-                persona_text=persona_text or "无已存储画像",
-                history_header=history_header,
-                history_messages=history_messages,
-                runtime_tool_prompt=runtime_tool_prompt,
-                tool_schemas=tool_schemas,
-                debug={"history_debug": history_debug},
-            )
-        )
-        recent_run_id, recent_logs = _recent_prompt_preview_logs(db, body)
-        tools = [{"name": name, "enabled": bool(enabled.get(name, True))} for name in sorted(enabled.keys())]
-        return {
-            "engine": "v2",
-            "chat_type": body.chat_type,
-            "session_id": session_id,
-            "user_id": user_id,
-            "group_id": group_id,
-            "prompt_key": plan.prompt_key,
-            "prompt_mode": "v2",
-            "prompt_source": "Prompt Runtime V2",
-            "prompt_runtime_path": plan.debug.get("template_path", ""),
-            "prompt_default_path": plan.debug.get("template_path", ""),
-            "prompt_sha256": plan.prompt_sha256,
-            "section_hashes": plan.section_hashes,
-            "warnings": plan.warnings,
-            "debug": plan.debug,
-            "history_debug": history_debug,
-            "runtime_preset": runtime_preset,
-            "runtime_tool_prompt": runtime_tool_prompt,
-            "tools": tools,
-            "tool_schemas": tool_schemas,
-            "effective_tool_schemas": tool_schemas,
-            "disabled_tools": disabled,
-            "messages": plan.messages,
-            "request_json": plan.request_json,
-            "prompt_plan": plan.to_dict(),
-            "compiled_prompt": plan.to_dict(),
-            "prompt_build": plan.to_dict(),
-            "recent_agent_run_id": recent_run_id,
-            "recent_llm_api_logs": recent_logs,
-        }
+    from core.prompt_assembler import PromptAssembler, PromptBuildContext
 
     prompt_build = PromptAssembler().build(
         PromptBuildContext(
@@ -5134,7 +4844,3 @@ def eval_get_run(
         raise HTTPException(404, "run not found")
     return {"run": run_dict, "results": results}
 
-
-@router.get("/health")
-def health():
-    return {"ok": True, "time": datetime.now().isoformat()}

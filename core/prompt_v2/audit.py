@@ -10,6 +10,13 @@ class PromptAuditResult:
     issues: list[str]
 
 
+class PromptAuditError(RuntimeError):
+    def __init__(self, issues: list[str], plan=None):
+        self.issues = list(issues or [])
+        self.plan = plan
+        super().__init__("; ".join(self.issues) or "Prompt V2 audit failed")
+
+
 def _content_text(value: Any) -> str:
     if isinstance(value, str):
         return value

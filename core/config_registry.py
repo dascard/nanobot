@@ -32,6 +32,13 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="INFO", value_type="str",
         category="system", description="日志级别",
     ),
+    "cors.origins": SettingDef(
+        key="cors.origins", env_name="NANOBOT_CORS_ORIGINS",
+        default="*", value_type="str",
+        category="system",
+        description="CORS 允许来源，支持 * 或逗号分隔 URL",
+        restart_required=True,
+    ),
     "classifier.timeout": SettingDef(
         key="classifier.timeout", env_name="CLASSIFIER_TIMEOUT",
         default=15.0, value_type="float",
@@ -84,6 +91,14 @@ SETTING_DEFS: dict[str, SettingDef] = {
         key="prompt_runtime.engine", env_name="NANOBOT_PROMPT_ENGINE",
         default="v1", value_type="str",
         category="prompt", description="提示词运行引擎: v1/v2",
+    ),
+    "prompt_runtime.v2_audit_failure_policy": SettingDef(
+        key="prompt_runtime.v2_audit_failure_policy",
+        env_name="NANOBOT_PROMPT_V2_AUDIT_FAILURE_POLICY",
+        default="fail_fast",
+        value_type="str",
+        category="prompt",
+        description="Prompt Runtime V2 live audit 失败策略: fail_fast/fallback_v1",
     ),
     "model.smart": SettingDef(
         key="model.smart", env_name="LLM_MODEL_SMART",

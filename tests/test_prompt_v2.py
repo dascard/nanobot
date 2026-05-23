@@ -174,6 +174,32 @@ def test_prompt_v2_audit_reports_duplicate_required_sections():
 
 
 @pytest.mark.asyncio
+async def test_prompt_v2_strict_audit_raises_instead_of_returning_warning(monkeypatch):
+    import core.prompt_v2.compiler as compiler
+    from core.prompt_v2.audit import PromptAuditError, PromptAuditResult
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    monkeypatch.setattr(
+        compiler,
+        "audit_prompt_plan",
+        lambda _plan: PromptAuditResult(ok=False, issues=["audit broken"]),
+    )
+
+    preview_plan = await compiler.compile_prompt_plan(
+        PromptCompileRequest(chat_type="group", user_input="你好"),
+    )
+    assert "audit broken" in preview_plan.warnings
+
+    with pytest.raises(PromptAuditError) as exc:
+        await compiler.compile_prompt_plan(
+            PromptCompileRequest(chat_type="group", user_input="你好"),
+            strict_audit=True,
+        )
+
+    assert "audit broken" in str(exc.value)
+
+
+@pytest.mark.asyncio
 async def test_prompt_v2_identity_context_renders_whitelisted_variables():
     from core.prompt_v2.compiler import compile_prompt_plan
     from core.prompt_v2.schema import PromptCompileRequest

@@ -17,26 +17,26 @@ class FinalToolSet:
     enabled: dict[str, bool] = field(default_factory=dict)
 
 
-_CURRENT_FINAL_TOOLS: ContextVar[FinalToolSet | None] = ContextVar(
+_CURRENT_FINAL_TOOLS: ContextVar[Any | None] = ContextVar(
     "nanobot_final_tools",
     default=None,
 )
 
 
-def get_current_final_tools() -> FinalToolSet | None:
+def get_current_final_tools() -> Any | None:
     return _CURRENT_FINAL_TOOLS.get()
 
 
-def set_current_final_tools(final_tools: FinalToolSet | None) -> Token[FinalToolSet | None]:
+def set_current_final_tools(final_tools: Any | None) -> Token[Any | None]:
     return _CURRENT_FINAL_TOOLS.set(final_tools)
 
 
-def reset_current_final_tools(token: Token[FinalToolSet | None]) -> None:
+def reset_current_final_tools(token: Token[Any | None]) -> None:
     _CURRENT_FINAL_TOOLS.reset(token)
 
 
 @contextmanager
-def final_tools_scope(final_tools: FinalToolSet | None) -> Iterator[None]:
+def final_tools_scope(final_tools: Any | None) -> Iterator[None]:
     token = set_current_final_tools(final_tools)
     try:
         yield
@@ -84,7 +84,7 @@ def tool_name(tool: Any) -> str:
 
 def filter_payload_tools(
     payload: dict[str, Any],
-    final_tools: FinalToolSet | None = None,
+    final_tools: Any | None = None,
 ) -> dict[str, Any]:
     """按 final tools 硬裁剪 OpenAI-compatible payload.tools。"""
     if final_tools is None:
@@ -97,7 +97,10 @@ def filter_payload_tools(
     if not isinstance(tools, list):
         return filtered
 
-    allowed = set(final_tools.allowed or set())
+    if hasattr(final_tools, "sent_tool_names"):
+        allowed = set(final_tools.sent_tool_names or set())
+    else:
+        allowed = set(getattr(final_tools, "allowed", set()) or set())
     kept = [tool for tool in tools if tool_name(tool) in allowed]
     if kept:
         try:

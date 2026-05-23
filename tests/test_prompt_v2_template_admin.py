@@ -216,6 +216,83 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         app.dependency_overrides.clear()
 
 
+def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
+    from core.prompt_v2.schema import PromptPlan
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'preview.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    async def fail_preview_wrapper(*_args, **_kwargs):
+        raise AssertionError("V2 effective preview must not call build_preview_plan wrapper")
+
+    captured = []
+    plan_tool_schemas = [{"type": "function", "function": {"name": "from_plan"}}]
+    plan_messages = [
+        {"role": "system", "content": "COMPILED_BY_REAL_V2_SERVICE"},
+        {"role": "user", "content": "<user_input>\n你好\n</user_input>"},
+    ]
+
+    async def fake_compile(request, *, strict_audit=False):
+        captured.append((request, strict_audit))
+        return PromptPlan(
+            engine="v2",
+            chat_type="private",
+            prompt_key="chat_private",
+            messages=plan_messages,
+            tool_schemas=plan_tool_schemas,
+            section_hashes={"base_contract": "a" * 64},
+            prompt_sha256="b" * 64,
+            token_estimate=12,
+            warnings=["preview warning"],
+            debug={"template_path": "/tmp/v2.md"},
+        )
+
+    def fail_assembler(*_args, **_kwargs):
+        raise AssertionError("V2 effective preview must not call PromptAssembler")
+
+    monkeypatch.setattr("core.prompt_v2.preview.build_preview_plan", fail_preview_wrapper)
+    monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile)
+    monkeypatch.setattr("core.prompt_assembler.PromptAssembler.build", fail_assembler)
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/admin/prompt/effective-preview",
+            json={
+                "engine": "v2",
+                "chat_type": "private",
+                "user_id": "u1",
+                "user_input": "你好",
+            },
+            headers=_auth_header(),
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert captured
+    assert captured[0][1] is False
+    assert data["request_json"]["messages"] == plan_messages
+    assert data["messages"] == plan_messages
+    assert data["request_json"]["tools"] == plan_tool_schemas
+    assert data["tool_schemas"] == plan_tool_schemas
+    assert data["warnings"] == ["preview warning"]
+
+
 def test_prompt_v2_template_admin_crud_runtime_overrides(tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     default_dir = tmp_path / "defaults"

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.prompt_v2.audit import audit_prompt_plan
+from core.prompt_v2.audit import PromptAuditError, audit_prompt_plan
 from core.prompt_v2.context_adapters import (
     build_persona_reference,
     build_runtime_context,
@@ -47,7 +47,11 @@ def _extract_marked_sections(text: str, start: str, end: str) -> tuple[list[str]
     return sections, rest
 
 
-async def compile_prompt_plan(request: PromptCompileRequest | dict[str, Any]) -> PromptPlan:
+async def compile_prompt_plan(
+    request: PromptCompileRequest | dict[str, Any],
+    *,
+    strict_audit: bool = False,
+) -> PromptPlan:
     if isinstance(request, dict):
         request = PromptCompileRequest(**request)
 
@@ -182,6 +186,8 @@ async def compile_prompt_plan(request: PromptCompileRequest | dict[str, Any]) ->
     audit = audit_prompt_plan(plan)
     if audit.ok:
         return plan
+    if strict_audit:
+        raise PromptAuditError(audit.issues, plan=plan)
     return PromptPlan(
         engine=plan.engine,
         chat_type=plan.chat_type,

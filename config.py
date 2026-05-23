@@ -51,6 +51,19 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./data/nanobot.db")
 LOG_DIR = os.environ.get("LOG_DIR", "./data")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
+
+def parse_cors_origins(raw: str) -> list[str]:
+    """解析 CORS origins 配置，支持 * 或逗号分隔 URL。"""
+    value = str(raw or "").strip()
+    if not value or value == "*":
+        return ["*"]
+    origins = [item.strip() for item in value.replace("，", ",").split(",")]
+    return [origin for origin in origins if origin] or ["*"]
+
+
+def get_cors_origins() -> list[str]:
+    return parse_cors_origins(os.environ.get("NANOBOT_CORS_ORIGINS", "*"))
+
 # ── 厂商 API (OpenAI 兼容) ──
 LLM_PROVIDER = os.environ.get(
     "LLM_PROVIDER", "new-api"
