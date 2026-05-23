@@ -3,6 +3,7 @@ from pathlib import Path
 
 APP_JS = Path("webui/src/App.jsx")
 PROMPT_JS = Path("webui/src/features/prompt/PromptPages.jsx")
+CSS = Path("webui/src/index.css")
 
 
 def read_prompt_sources() -> str:
@@ -40,8 +41,18 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "data-testid=\"prompt-flow-viewport\"" in source
     assert "data-testid=\"prompt-flow-edge-layer\"" in source
     assert "prompt-flow-scrollbar" in source
+    assert "data-testid=\"prompt-v2-workbench\"" in source
+    assert "data-testid=\"prompt-v2-left-rail\"" in source
+    assert "data-testid=\"prompt-v2-canvas-column\"" in source
+    assert "data-testid=\"prompt-v2-side-panel\"" in source
+    assert "xl:h-[calc(100vh-170px)]" in source
+    assert "prompt-v2-canvas" in source
+    assert "min-h-[720px]" in source
     assert "const [canvasViewport, setCanvasViewport]" in source
     assert "handleCanvasWheel" in source
+    assert "addEventListener('wheel', handleCanvasWheel, { passive: false })" in source
+    assert "event.stopPropagation()" in source
+    assert "onWheel={handleCanvasWheel}" not in source
     assert "startPanCanvas" in source
     assert "const pan = panRef.current" in source
     assert "panRef.current.originX" not in source
@@ -108,3 +119,14 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "保存编排图" in source
     assert "运行时模板目录" in source
     assert "V2 模板编辑" not in preview_source
+
+
+def test_prompt_v2_workbench_uses_contained_custom_scrollbars():
+    css = CSS.read_text(encoding="utf-8")
+
+    assert ".prompt-flow-scrollbar" in css
+    assert "scrollbar-gutter: stable;" in css
+    assert "scrollbar-width: thin;" in css
+    assert ".prompt-v2-canvas" in css
+    assert "overscroll-behavior: contain;" in css
+    assert "touch-action: none;" in css

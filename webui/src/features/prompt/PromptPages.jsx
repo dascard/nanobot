@@ -692,8 +692,9 @@ function PromptFlowCanvas({
     }
   }
 
-  const handleCanvasWheel = event => {
+  const handleCanvasWheel = useCallback(event => {
     event.preventDefault()
+    event.stopPropagation()
     const rect = canvasRef.current?.getBoundingClientRect()
     if (!rect) return
     const factor = event.deltaY > 0 ? 0.9 : 1.1
@@ -708,7 +709,14 @@ function PromptFlowCanvas({
       x: Math.round(pointerX - worldX * nextZoom),
       y: Math.round(pointerY - worldY * nextZoom),
     }))
-  }
+  }, [onViewportChange, viewX, viewY, zoom])
+
+  useEffect(() => {
+    const node = canvasRef.current
+    if (!node) return undefined
+    node.addEventListener('wheel', handleCanvasWheel, { passive: false })
+    return () => node.removeEventListener('wheel', handleCanvasWheel)
+  }, [handleCanvasWheel])
 
   const changeZoom = factor => {
     onViewportChange(prev => {
@@ -754,12 +762,11 @@ function PromptFlowCanvas({
     <div
       ref={canvasRef}
       data-testid="prompt-flow-canvas"
-      onWheel={handleCanvasWheel}
       onMouseDown={startPanCanvas}
       onMouseMove={handleMouseMove}
       onMouseUp={stopInteractions}
       onMouseLeave={stopInteractions}
-      className="prompt-flow-scrollbar relative h-[680px] overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
+      className="prompt-flow-scrollbar prompt-v2-canvas relative h-full min-h-[720px] overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
       style={{
         backgroundImage: 'radial-gradient(circle, rgba(148, 163, 184, 0.16) 1px, transparent 1px)',
         backgroundSize: `${28 * zoom}px ${28 * zoom}px`,
@@ -1230,12 +1237,12 @@ export function PromptV2TemplatesPage() {
   }
 
   return (
-    <div>
+    <div className="prompt-v2-page">
       {toast && <div className="mb-3 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-lg text-sm text-emerald-400">{toast}</div>}
-      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold mb-1">Prompt V2 模板</h1>
-          <p className="text-slate-500 text-sm">聊天主流程用画布编排；工具提示词按工具拆分成独立模板。变量是全局白名单，当前输入仍只作为 user event 注入一次</p>
+      <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold mb-1 text-slate-50">Prompt V2 模板</h1>
+          <p className="max-w-5xl text-slate-500 text-xs leading-5">聊天主流程用画布编排；工具提示词按工具拆分成独立模板。变量是全局白名单，当前输入仍只作为 user event 注入一次</p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[10px] text-slate-600">
             <span>默认模板目录: <span className="font-mono text-slate-500">{defaultDir || '-'}</span></span>
             <span>运行时模板目录: <span className="font-mono text-slate-500">{runtimeDir || '-'}</span></span>
@@ -1249,8 +1256,8 @@ export function PromptV2TemplatesPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[260px_minmax(0,1fr)_420px]">
-        <div className="space-y-3 min-w-0">
+      <div data-testid="prompt-v2-workbench" className="grid grid-cols-1 gap-3 xl:h-[calc(100vh-170px)] xl:min-h-[760px] xl:grid-cols-[200px_minmax(0,1fr)_320px] xl:items-stretch 2xl:grid-cols-[224px_minmax(0,1fr)_360px]">
+        <div data-testid="prompt-v2-left-rail" className="min-w-0 space-y-3 xl:h-full xl:overflow-y-auto xl:pr-1 prompt-flow-scrollbar">
           <Card className="p-3">
             <div className="text-xs font-medium text-slate-300 mb-2">模板工作区</div>
             <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-950 p-1">
@@ -1271,8 +1278,8 @@ export function PromptV2TemplatesPage() {
 
           <Card className="p-3">
             <div className="text-xs font-medium text-slate-300 mb-1">资源树</div>
-            <div className="text-[11px] text-slate-600 mb-2">聊天编排、工具模板、任务模板共用同一套目录化索引</div>
-            <div className="space-y-2 max-h-[420px] overflow-auto prompt-flow-scrollbar">
+            <div className="text-[11px] text-slate-600 mb-2">按工作区筛选模板，减少左侧噪音。</div>
+            <div className="space-y-2 max-h-[360px] overflow-auto prompt-flow-scrollbar xl:max-h-[calc(100vh-390px)]">
               {templateWorkspace === 'chat' && (
                 <div>
                   <div className="mb-1 text-[11px] text-slate-500">chat</div>
@@ -1321,22 +1328,26 @@ export function PromptV2TemplatesPage() {
             </div>
           </Card>
 
-          <Card className="p-3 space-y-2">
-            <div className="text-xs font-medium text-slate-300">运行时覆盖</div>
-            <input aria-label="新建模板路径" value={newTemplateKey} onChange={e => setNewTemplateKey(e.target.value)}
-              placeholder="tools/custom_tool/usage"
-              className="w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200 outline-none focus:border-emerald-500" />
-            <button onClick={createRuntimeTemplate} className="w-full rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">新建模板</button>
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={resetRuntimeOverride} disabled={!activeTemplateKey}
-                className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-500/20 disabled:opacity-40">
-                重置覆盖
-              </button>
-              <button onClick={deleteRuntimeOverride} disabled={!activeTemplateKey}
-                className="rounded-lg bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20 disabled:opacity-40">
-                删除运行时覆盖
-              </button>
-            </div>
+          <Card className="overflow-hidden">
+            <details>
+              <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800/40">运行时覆盖</summary>
+              <div className="space-y-2 border-t border-slate-800 p-3">
+                <input aria-label="新建模板路径" value={newTemplateKey} onChange={e => setNewTemplateKey(e.target.value)}
+                  placeholder="tools/custom_tool/usage"
+                  className="w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200 outline-none focus:border-emerald-500" />
+                <button onClick={createRuntimeTemplate} className="w-full rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">新建模板</button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={resetRuntimeOverride} disabled={!activeTemplateKey}
+                    className="rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 hover:bg-amber-500/20 disabled:opacity-40">
+                    重置覆盖
+                  </button>
+                  <button onClick={deleteRuntimeOverride} disabled={!activeTemplateKey}
+                    className="rounded-lg bg-red-500/10 px-3 py-1.5 text-xs text-red-300 hover:bg-red-500/20 disabled:opacity-40">
+                    删除覆盖
+                  </button>
+                </div>
+              </div>
+            </details>
           </Card>
 
           {templateWorkspace === 'chat' ? (
@@ -1351,40 +1362,45 @@ export function PromptV2TemplatesPage() {
             <button onClick={autoLayoutFlow} className="mt-3 w-full px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200">自动布局</button>
           </Card>
 
-          <Card className="p-3 space-y-3">
-            <div>
-              <div className="text-xs font-medium text-slate-300 mb-2">添加模板节点</div>
-              <div className="mb-2 text-[11px] text-slate-600">添加节点后在右侧选择模板；新节点会接到当前选中节点后面。</div>
-              <button onClick={addTemplateNode} className="w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加模板节点</button>
-            </div>
-            <div>
-              <div className="text-xs font-medium text-slate-300 mb-2">添加运行时节点</div>
-              <select value={runtimeToAdd} onChange={e => setRuntimeToAdd(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
-                {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
-              </select>
-              <button onClick={addRuntimeNode} className="mt-2 w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加运行时</button>
-            </div>
+          <Card className="overflow-hidden">
+            <details>
+              <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800/40">添加节点</summary>
+              <div className="space-y-3 border-t border-slate-800 p-3">
+                <div>
+                  <div className="mb-2 text-[11px] text-slate-600">添加节点后在右侧选择模板；新节点会接到当前选中节点后面。</div>
+                  <button onClick={addTemplateNode} className="w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加模板节点</button>
+                </div>
+                <div>
+                  <select value={runtimeToAdd} onChange={e => setRuntimeToAdd(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-200">
+                    {PROMPT_V2_RUNTIME_NODES.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
+                  </select>
+                  <button onClick={addRuntimeNode} className="mt-2 w-full px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-200">添加运行时</button>
+                </div>
+              </div>
+            </details>
           </Card>
 
-          <Card className="p-3">
-            <div className="text-xs font-medium text-slate-300 mb-2">当前路径顺序</div>
-            <div className="space-y-1 max-h-72 overflow-auto">
-              {orderedNodes.map((node, idx) => (
-                <button key={node.id} onClick={() => selectNode(node)}
-                  className={`w-full text-left rounded px-2 py-1.5 text-xs ${selectedNode?.id === node.id ? 'bg-emerald-500/15 text-emerald-300' : 'hover:bg-slate-800 text-slate-400'}`}>
-                  <span className="text-slate-600 mr-2">{idx + 1}</span>{node.label || node.id}
-                </button>
-              ))}
-            </div>
+          <Card className="overflow-hidden">
+            <details>
+              <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800/40">当前路径顺序</summary>
+              <div className="space-y-1 max-h-56 overflow-auto border-t border-slate-800 p-3 prompt-flow-scrollbar">
+                {orderedNodes.map((node, idx) => (
+                  <button key={node.id} onClick={() => selectNode(node)}
+                    className={`w-full text-left rounded px-2 py-1.5 text-xs ${selectedNode?.id === node.id ? 'bg-emerald-500/15 text-emerald-300' : 'hover:bg-slate-800 text-slate-400'}`}>
+                    <span className="text-slate-600 mr-2">{idx + 1}</span>{node.label || node.id}
+                  </button>
+                ))}
+              </div>
+            </details>
           </Card>
             </>
           ) : null}
         </div>
 
-        <div className="min-w-0">
+        <div data-testid="prompt-v2-canvas-column" className="min-w-0 xl:h-full">
           {templateWorkspace === 'chat' ? (
             <>
-              <div className="hidden lg:block">
+              <div className="hidden lg:block h-full">
                 <PromptFlowCanvas
                   flow={flow}
                   chatType={chatType}
@@ -1411,7 +1427,7 @@ export function PromptV2TemplatesPage() {
               />
             </>
           ) : (
-            <Card className="p-4 min-h-[680px] flex flex-col">
+            <Card className="p-4 min-h-[680px] xl:h-full flex flex-col">
               <div className="flex items-start justify-between gap-4 mb-4">
                 <div className="min-w-0">
                   <div className="text-xs text-slate-500 mb-1">{templateWorkspace === 'tools' ? '工具提示词正文' : '任务提示词正文'}</div>
@@ -1437,12 +1453,12 @@ export function PromptV2TemplatesPage() {
                 {activeTemplateKey ? detail?.active_path || '' : '从左侧选择一个工具模板'}
               </div>
               <textarea aria-label="模板正文" value={content} onChange={e => setContent(e.target.value)}
-                className="flex-1 min-h-[560px] w-full rounded-lg border border-slate-800 bg-slate-950 p-4 font-mono text-sm leading-relaxed text-slate-300 outline-none resize-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+                className="prompt-flow-scrollbar flex-1 min-h-[560px] w-full rounded-lg border border-slate-800 bg-slate-950 p-4 font-mono text-sm leading-relaxed text-slate-300 outline-none resize-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
             </Card>
           )}
         </div>
 
-        <div className="min-w-0 space-y-4">
+        <div data-testid="prompt-v2-side-panel" className="min-w-0 space-y-3 xl:h-full xl:overflow-y-auto xl:pr-1 prompt-flow-scrollbar">
           <Card className="p-4">
             {templateWorkspace === 'chat' ? (
               <>
@@ -1542,7 +1558,7 @@ export function PromptV2TemplatesPage() {
                 </div>
               ) : (
                 <textarea aria-label="当前节点模板内容" value={content} onChange={e => setContent(e.target.value)}
-                  className="w-full min-h-[340px] p-4 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-300 leading-relaxed resize-y focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
+                  className="prompt-flow-scrollbar w-full min-h-[420px] xl:min-h-[520px] p-4 rounded-lg bg-slate-950 border border-slate-800 text-sm font-mono text-slate-300 leading-relaxed resize-y focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
               )}
             </Card>
           ) : templateWorkspace === 'tools' ? (
@@ -1575,7 +1591,7 @@ export function PromptV2TemplatesPage() {
 
           <Card className="p-4">
             <div className="text-xs font-medium text-slate-300 mb-2">全局可插入变量白名单</div>
-            <div className="flex flex-wrap gap-2 max-h-48 overflow-auto">
+            <div className="flex flex-wrap gap-2 max-h-48 overflow-auto prompt-flow-scrollbar">
               {variables.map(v => (
                 <span key={v.name} title={`${v.description || ''}${v.example ? ` · 示例: ${v.example}` : ''}`} className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1 text-xs">
                   <code className="text-emerald-300">{`{{ ${v.name} }}`}</code>
@@ -1611,7 +1627,7 @@ export function PromptV2TemplatesPage() {
               </div>
             </div>
             <textarea aria-label="大窗模板内容" value={content} onChange={e => setContent(e.target.value)}
-              className="m-5 flex-1 resize-none rounded-lg border border-slate-800 bg-slate-950 p-5 font-mono text-sm leading-relaxed text-slate-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
+              className="prompt-flow-scrollbar m-5 flex-1 resize-none rounded-lg border border-slate-800 bg-slate-950 p-5 font-mono text-sm leading-relaxed text-slate-200 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500" />
             <div className="border-t border-slate-800 px-5 py-3 text-[11px] text-slate-600">
               这里编辑的是同一份模板正文；关闭大窗后右侧小编辑框会保持同步。
             </div>

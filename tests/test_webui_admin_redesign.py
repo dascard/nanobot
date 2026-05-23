@@ -90,3 +90,16 @@ def test_shared_ui_components_support_dense_admin_shell():
     assert "export function IconButton(" in ui_source
     assert "rounded-lg" in ui_source
     assert "@media (prefers-reduced-motion: reduce)" in css_source
+
+
+def test_webui_scrollbars_use_global_dark_admin_theme():
+    css_source = CSS.read_text(encoding="utf-8")
+
+    assert "--scrollbar-track: #0f172a;" in css_source
+    assert "--scrollbar-thumb: #475569;" in css_source
+    assert "scrollbar-gutter: stable;" in css_source
+    assert "*::-webkit-scrollbar" in css_source
+    assert "*::-webkit-scrollbar-track" in css_source
+    assert "*::-webkit-scrollbar-thumb" in css_source
+    assert "*::-webkit-scrollbar-thumb:hover" in css_source
+    assert "var(--scrollbar-thumb-hover)" in css_source
