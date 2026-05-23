@@ -2,17 +2,73 @@ import { useEffect, useState } from 'react'
 
 import { api } from '../api'
 
-export function Card({ children, className = '' }) {
-  return <div className={`bg-slate-900/60 backdrop-blur-sm border border-slate-800 rounded-lg ${className}`}>{children}</div>
+export function Card({ children, className = '', ...props }) {
+  return <div {...props} className={`rounded-lg border border-slate-800 bg-slate-900 ${className}`}>{children}</div>
 }
 
 export function Modal({ children, onClose, wide }) {
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in" onClick={onClose}>
-      <div className={`bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl max-h-[85vh] overflow-auto ${wide ? 'w-[32rem]' : 'w-96'}`} onClick={e => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm animate-in fade-in" onClick={onClose}>
+      <div className={`max-h-[88vh] overflow-auto rounded-lg border border-slate-700 bg-slate-900 shadow-2xl ${wide ? 'w-[min(96vw,42rem)]' : 'w-[min(96vw,28rem)]'}`} onClick={e => e.stopPropagation()}>
         {children}
       </div>
     </div>
+  )
+}
+
+export function PageHeader({ title, description, actions, meta }) {
+  return (
+    <div className="mb-4 flex flex-col gap-3 border-b border-slate-800 pb-4 md:flex-row md:items-start md:justify-between">
+      <div className="min-w-0">
+        <h1 className="text-lg font-semibold leading-7 text-slate-50 md:text-xl">{title}</h1>
+        {description && <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-400">{description}</p>}
+        {meta && <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">{meta}</div>}
+      </div>
+      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  )
+}
+
+export function Toolbar({ children, className = '' }) {
+  return <div className={`mb-4 flex flex-wrap items-end gap-2 rounded-lg border border-slate-800 bg-slate-900 p-3 ${className}`}>{children}</div>
+}
+
+export function SectionHeader({ title, description, actions }) {
+  return (
+    <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+      <div className="min-w-0">
+        <h2 className="text-sm font-medium text-slate-200">{title}</h2>
+        {description && <p className="mt-1 text-[11px] leading-4 text-slate-500">{description}</p>}
+      </div>
+      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
+    </div>
+  )
+}
+
+export function Field({ id, label, children, className = '', hint }) {
+  return (
+    <div className={`min-w-0 ${className}`}>
+      <label htmlFor={id} className="block text-[11px] font-medium text-slate-400">
+        {label}
+      </label>
+      <div className="mt-1">{children}</div>
+      {hint && <div className="mt-1 text-[11px] font-normal text-slate-500">{hint}</div>}
+    </div>
+  )
+}
+
+export function IconButton({ label, icon: Icon, className = '', size = 'sm', ...props }) {
+  const sizes = size === 'xs' ? 'h-7 w-7' : 'h-8 w-8'
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      {...props}
+      className={`inline-flex ${sizes} shrink-0 cursor-pointer items-center justify-center rounded-lg border border-slate-700 bg-slate-800 text-slate-300 transition-colors hover:border-slate-600 hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+    >
+      {Icon ? <Icon className={size === 'xs' ? 'h-3.5 w-3.5' : 'h-4 w-4'} aria-hidden="true" /> : null}
+    </button>
   )
 }
 
@@ -57,7 +113,7 @@ export function MiniStat({ label, value, tone = 'slate', onClick }) {
   const title = typeof value === 'string' || typeof value === 'number' ? String(value) : ''
   return (
     <Card className={`p-3 min-h-[72px] transition-colors ${onClick ? 'cursor-pointer hover:bg-slate-800/60' : ''}`} onClick={onClick}>
-      <div className="text-[11px] text-slate-500 mb-1 truncate">{label}</div>
+      <div className="text-[11px] text-slate-400 mb-1 truncate">{label}</div>
       <div className={`text-lg font-semibold leading-tight ${color} truncate`} title={title}>{value ?? '...'}</div>
     </Card>
   )
@@ -67,8 +123,8 @@ export function InfoGrid({ items = [], columns = 'md:grid-cols-4' }) {
   return (
     <div className={`grid grid-cols-1 ${columns} gap-2`}>
       {items.filter(Boolean).map(item => (
-        <div key={item.label} className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 min-w-0">
-          <div className="text-[11px] text-slate-600 mb-0.5 truncate">{item.label}</div>
+        <div key={item.label} className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 min-w-0">
+          <div className="text-[11px] text-slate-500 mb-0.5 truncate">{item.label}</div>
           <div className={`text-xs font-medium truncate ${item.className || 'text-slate-300'}`} title={typeof item.value === 'string' || typeof item.value === 'number' ? String(item.value) : ''}>
             {item.value ?? '-'}
           </div>
@@ -98,7 +154,7 @@ export function ActionButton({ children, tone = 'slate', className = '', ...prop
 
 export function JsonBlock({ value, className = '' }) {
   const text = typeof value === 'string' ? value : JSON.stringify(value || {}, null, 2)
-  return <pre className={`rounded-xl bg-slate-950 border border-slate-800 p-3 text-xs leading-relaxed text-slate-300 overflow-auto whitespace-pre-wrap ${className}`}>{text || '-'}</pre>
+  return <pre className={`rounded-lg bg-slate-950 border border-slate-800 p-3 text-xs leading-relaxed text-slate-300 overflow-auto whitespace-pre-wrap ${className}`}>{text || '-'}</pre>
 }
 
 export function AuthImage({ url, alt, className, onClick }) {

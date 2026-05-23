@@ -2,6 +2,11 @@ from pathlib import Path
 
 
 APP_JS = Path("webui/src/App.jsx")
+PROMPT_JS = Path("webui/src/features/prompt/PromptPages.jsx")
+
+
+def read_prompt_sources() -> str:
+    return APP_JS.read_text(encoding="utf-8") + "\n" + PROMPT_JS.read_text(encoding="utf-8")
 
 
 def test_prompt_runtime_v2_is_primary_prompt_nav_entry():
@@ -15,7 +20,7 @@ def test_prompt_runtime_v2_is_primary_prompt_nav_entry():
 
 
 def test_prompt_preview_defaults_to_v2_and_prompt_path_redirects():
-    source = APP_JS.read_text(encoding="utf-8")
+    source = read_prompt_sources()
 
     assert "engine: 'v2'" in source
     assert '<Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />' in source
@@ -24,10 +29,10 @@ def test_prompt_preview_defaults_to_v2_and_prompt_path_redirects():
 
 
 def test_prompt_runtime_v2_page_exposes_template_editor():
-    source = APP_JS.read_text(encoding="utf-8")
-    preview_source = source.split("function EffectivePromptPreviewPage()")[1]
+    source = PROMPT_JS.read_text(encoding="utf-8")
+    preview_source = source.split("export function EffectivePromptPreviewPage()")[1]
 
-    assert "function PromptV2TemplatesPage()" in source
+    assert "export function PromptV2TemplatesPage()" in source
     assert "function PromptFlowCanvas(" in source
     assert "Prompt V2 模板" in source
     assert "Canvas 编排" in source

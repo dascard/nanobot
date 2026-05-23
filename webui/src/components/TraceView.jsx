@@ -1,12 +1,7 @@
 import { useState } from 'react'
 
 import { Badge, Card, InfoGrid, MiniStat } from './ui'
-
-export function safeJsonParse(value, fallback = null) {
-  if (!value) return fallback
-  if (typeof value === 'object') return value
-  try { return JSON.parse(value) } catch { return fallback }
-}
+import { safeJsonParse } from './traceUtils'
 
 function formatBytes(n) {
   if (!n || n < 1024) return `${n || 0}B`
