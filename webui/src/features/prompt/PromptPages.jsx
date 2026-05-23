@@ -530,40 +530,50 @@ function flowAppliesToChat(item, chatType) {
 }
 
 function orderedFlowNodes(flow, chatType) {
+  return selectedPromptFlowPath(flow, chatType).nodes
+}
+
+function selectedPromptFlowPath(flow, chatType) {
   const nodes = (flow?.nodes || []).filter(node => flowAppliesToChat(node, chatType))
   const ids = new Set(nodes.map(node => node.id))
   const index = new Map(nodes.map((node, i) => [node.id, i]))
-  const edges = (flow?.edges || []).filter(edge =>
-    flowAppliesToChat(edge, chatType) && ids.has(edge.from) && ids.has(edge.to)
-  )
+  const edges = (flow?.edges || [])
+    .map((edge, edgeIndex) => ({ edge, edgeIndex }))
+    .filter(({ edge }) => flowAppliesToChat(edge, chatType) && ids.has(edge.from) && ids.has(edge.to))
   const incoming = new Map(nodes.map(node => [node.id, new Set()]))
-  const outgoing = new Map(nodes.map(node => [node.id, new Set()]))
-  edges.forEach(edge => {
+  const outgoing = new Map(nodes.map(node => [node.id, []]))
+  edges.forEach(({ edge, edgeIndex }) => {
     incoming.get(edge.to)?.add(edge.from)
-    outgoing.get(edge.from)?.add(edge.to)
+    outgoing.get(edge.from)?.push({ edge, edgeIndex })
   })
   const ready = [...incoming.entries()]
     .filter(([, from]) => from.size === 0)
     .map(([id]) => id)
     .sort((a, b) => (index.get(a) || 0) - (index.get(b) || 0))
   const result = []
-  while (ready.length) {
-    const id = ready.shift()
-    if (result.includes(id)) continue
-    result.push(id)
-    ;[...(outgoing.get(id) || [])]
-      .sort((a, b) => (index.get(a) || 0) - (index.get(b) || 0))
-      .forEach(target => {
-        incoming.get(target)?.delete(id)
-        if ((incoming.get(target)?.size || 0) === 0) ready.push(target)
+  const edgeKeys = []
+  const seen = new Set()
+  let currentId = ready[0] || nodes[0]?.id || ''
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId)
+    result.push(currentId)
+    const choices = [...(outgoing.get(currentId) || [])]
+      .sort((a, b) => {
+        const ai = index.get(a.edge.to) ?? 0
+        const bi = index.get(b.edge.to) ?? 0
+        return ai === bi ? a.edgeIndex - b.edgeIndex : ai - bi
       })
-    ready.sort((a, b) => (index.get(a) || 0) - (index.get(b) || 0))
+    const next = choices[0]
+    if (!next) break
+    edgeKeys.push(promptFlowEdgeKey(next.edge, next.edgeIndex))
+    currentId = next.edge.to
   }
-  nodes.forEach(node => {
-    if (!result.includes(node.id)) result.push(node.id)
-  })
   const byId = new Map(nodes.map(node => [node.id, node]))
-  return result.map(id => byId.get(id)).filter(Boolean)
+  return {
+    nodeIds: result,
+    edgeKeys,
+    nodes: result.map(id => byId.get(id)).filter(Boolean),
+  }
 }
 
 function promptFlowEdgeKey(edge, index = 0) {
@@ -620,7 +630,9 @@ function PromptFlowCanvas({
   const [connectionDraft, setConnectionDraft] = useState(null)
   const nodes = flow?.nodes || []
   const nodeById = new Map(nodes.map((node, idx) => [node.id, { node, idx, pos: nodeCanvasPosition(node, idx) }]))
-  const activeNodeIds = new Set(nodes.filter(node => flowAppliesToChat(node, chatType)).map(node => node.id))
+  const selectedPath = selectedPromptFlowPath(flow, chatType)
+  const activeNodeIds = new Set(selectedPath.nodeIds)
+  const activeEdgeKeys = new Set(selectedPath.edgeKeys)
   const edges = (flow?.edges || []).filter(edge => nodeById.has(edge.from) && nodeById.has(edge.to))
   const zoom = Math.min(1.8, Math.max(0.45, Number(viewport?.zoom) || 1))
   const viewX = Number(viewport?.x) || 0
@@ -802,8 +814,8 @@ function PromptFlowCanvas({
           {edges.map((edge, idx) => {
             const from = nodeById.get(edge.from)
             const to = nodeById.get(edge.to)
-            const active = flowAppliesToChat(edge, chatType) && activeNodeIds.has(edge.from) && activeNodeIds.has(edge.to)
             const edgeKey = promptFlowEdgeKey(edge, idx)
+            const active = activeEdgeKeys.has(edgeKey)
             const selected = selectedEdgeKey === edgeKey
             const x1 = from.pos.x + FLOW_NODE_WIDTH
             const y1 = from.pos.y + FLOW_NODE_HEIGHT / 2

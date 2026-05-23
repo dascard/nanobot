@@ -5,6 +5,57 @@ import json
 import pytest
 
 
+def test_prompt_v2_flow_selects_single_conditional_path_by_edge_condition():
+    from core.prompt_v2.flow import ordered_nodes_for_chat
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "base", "type": "template", "template_key": "chat/main"},
+            {"id": "private_branch", "type": "template", "template_key": "chat/branch_private"},
+            {"id": "group_branch", "type": "template", "template_key": "chat/branch_group"},
+            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+        ],
+        "edges": [
+            {"from": "base", "to": "private_branch", "chat_types": ["private"]},
+            {"from": "base", "to": "group_branch", "chat_types": ["group"]},
+            {"from": "private_branch", "to": "tail", "chat_types": ["private"]},
+            {"from": "group_branch", "to": "tail", "chat_types": ["group"]},
+        ],
+    }
+
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
+        "base",
+        "private_branch",
+        "tail",
+    ]
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "group")] == [
+        "base",
+        "group_branch",
+        "tail",
+    ]
+
+
+def test_prompt_v2_flow_rejects_ambiguous_outgoing_branch_condition():
+    from core.prompt_v2.flow import PromptFlowError, validate_flow
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "base", "type": "template", "template_key": "chat/main"},
+            {"id": "a", "type": "template", "template_key": "chat/branch_private"},
+            {"id": "b", "type": "template", "template_key": "chat/identity_context"},
+        ],
+        "edges": [
+            {"from": "base", "to": "a", "chat_types": ["private"]},
+            {"from": "base", "to": "b", "chat_types": ["private"]},
+        ],
+    }
+
+    with pytest.raises(PromptFlowError, match="同一条件只能有一条出边"):
+        validate_flow(flow)
+
+
 @pytest.mark.asyncio
 async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections():
     from core.prompt_v2.compiler import compile_prompt_plan

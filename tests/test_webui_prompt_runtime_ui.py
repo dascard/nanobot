@@ -35,6 +35,7 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
 
     assert "export function PromptV2TemplatesPage()" in source
     assert "function PromptFlowCanvas(" in source
+    assert "function selectedPromptFlowPath(" in source
     assert "Prompt V2 模板" in source
     assert "Canvas 编排" in source
     assert "data-testid=\"prompt-flow-canvas\"" in source
@@ -60,6 +61,8 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "completeConnection" in source
     assert "selectedEdgeKey" in source
     assert "deleteEdge" in source
+    assert "activeEdgeKeys.has(edgeKey)" in source
+    assert "selectedPath.nodeIds" in source
     assert "删除连线" in source
     assert "连接端口" in source
     assert "onMouseDown={e => startDragNode" in source

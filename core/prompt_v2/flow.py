@@ -23,6 +23,8 @@ RUNTIME_NODE_KEYS = {
     "current_user_event",
 }
 
+CHAT_TYPES = {"group", "private"}
+
 
 DEFAULT_FLOW: dict[str, Any] = {
     "version": 1,
@@ -81,7 +83,25 @@ def _applies(item: dict[str, Any], chat_type: str) -> bool:
     chat_types = item.get("chat_types")
     if not chat_types:
         return True
-    return chat_type in {str(value) for value in chat_types}
+    return chat_type in {str(value).strip().lower() for value in chat_types}
+
+
+def _normalize_chat_types(item: dict[str, Any], *, label: str) -> list[str]:
+    raw = item.get("chat_types")
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    values = [str(value).strip().lower() for value in raw if str(value).strip()]
+    invalid = sorted(set(values) - CHAT_TYPES)
+    if invalid:
+        raise PromptFlowError(f"{label}.chat_types 不支持: {', '.join(invalid)}")
+    return sorted(set(values), key=values.index)
+
+
+def _condition_chat_types(item: dict[str, Any]) -> set[str]:
+    chat_types = _normalize_chat_types(item, label="edge")
+    return set(chat_types or CHAT_TYPES)
 
 
 def _node_index(nodes: list[dict[str, Any]]) -> dict[str, int]:
@@ -112,16 +132,37 @@ def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
             raise PromptFlowError(f"template node 缺少 template_key: {node_id}")
         if node_type == "runtime" and str(node.get("runtime_key") or "") not in RUNTIME_NODE_KEYS:
             raise PromptFlowError(f"runtime_key 不支持: {node.get('runtime_key')}")
+        chat_types = _normalize_chat_types(node, label=f"node {node_id}")
+        if chat_types:
+            node["chat_types"] = chat_types
         ids.add(node_id)
         normalized_nodes.append(node)
 
     normalized_edges: list[dict[str, Any]] = []
+    node_conditions = {str(node.get("id")): _condition_chat_types(node) for node in normalized_nodes}
+    outgoing_conditions: dict[tuple[str, str], str] = {}
     for raw in edges:
         edge = dict(raw or {})
         start = str(edge.get("from") or "").strip()
         end = str(edge.get("to") or "").strip()
         if start not in ids or end not in ids:
             raise PromptFlowError(f"edge 引用了不存在的节点: {start} -> {end}")
+        chat_types = _normalize_chat_types(edge, label=f"edge {start}->{end}")
+        if chat_types:
+            edge["chat_types"] = chat_types
+        active_chat_types = (
+            _condition_chat_types(edge)
+            & node_conditions.get(start, set())
+            & node_conditions.get(end, set())
+        )
+        for chat_type in active_chat_types:
+            key = (start, chat_type)
+            previous = outgoing_conditions.get(key)
+            if previous:
+                raise PromptFlowError(
+                    f"node {start} 在 {chat_type} 同一条件只能有一条出边: {previous}, {end}"
+                )
+            outgoing_conditions[key] = end
         normalized_edges.append(edge)
 
     return {"version": int(flow.get("version") or 1), "nodes": normalized_nodes, "edges": normalized_edges}
@@ -146,6 +187,10 @@ def save_flow(flow: dict[str, Any]) -> dict[str, Any]:
 
 
 def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str) -> list[dict[str, Any]]:
+    flow = validate_flow(flow)
+    chat_type = str(chat_type or "").strip().lower()
+    if chat_type not in CHAT_TYPES:
+        chat_type = "private"
     all_nodes = [dict(node) for node in flow.get("nodes") or [] if _applies(dict(node), chat_type)]
     node_ids = {str(node.get("id")) for node in all_nodes}
     order_index = _node_index(all_nodes)
@@ -157,28 +202,24 @@ def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str) -> list[dict[st
         and str(edge.get("to")) in node_ids
     ]
     incoming: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
-    outgoing: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    outgoing: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
     for edge in edges:
         start = str(edge.get("from"))
         end = str(edge.get("to"))
         incoming[end].add(start)
-        outgoing[start].add(end)
+        outgoing[start].append(end)
 
     ready = sorted([node_id for node_id, sources in incoming.items() if not sources], key=lambda x: order_index.get(x, 0))
     result_ids: list[str] = []
-    while ready:
-        node_id = ready.pop(0)
+    seen: set[str] = set()
+    node_id = ready[0] if ready else (all_nodes[0].get("id") if all_nodes else "")
+    while node_id and str(node_id) not in seen:
+        node_id = str(node_id)
+        seen.add(node_id)
         if node_id in result_ids:
-            continue
+            break
         result_ids.append(node_id)
-        for target in sorted(outgoing[node_id], key=lambda x: order_index.get(x, 0)):
-            incoming[target].discard(node_id)
-            if not incoming[target]:
-                ready.append(target)
-        ready.sort(key=lambda x: order_index.get(x, 0))
-
-    remaining = [node_id for node_id in node_ids if node_id not in result_ids]
-    if remaining:
-        result_ids.extend(sorted(remaining, key=lambda x: order_index.get(x, 0)))
+        targets = sorted(outgoing.get(node_id) or [], key=lambda x: order_index.get(x, 0))
+        node_id = targets[0] if targets else ""
     by_id = {str(node.get("id")): node for node in all_nodes}
     return [by_id[node_id] for node_id in result_ids]
