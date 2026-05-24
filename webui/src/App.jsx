@@ -1721,6 +1721,7 @@ function MemoryPage() {
   const [instructions, setInstructions] = useState('')
   const [lastExtractResult, setLastExtractResult] = useState(null)
   const [expandedEvidence, setExpandedEvidence] = useState(null)
+  const memoryLoadKeyRef = useRef('')
 
   const loadOverview = useCallback(() => {
     setOverviewLoading(true)
@@ -1730,16 +1731,44 @@ function MemoryPage() {
   }, [])
 
   const load = useCallback((targetGroupId = groupId) => {
-    if (!targetGroupId) return
+    const target = String(targetGroupId || '').trim()
+    if (!target) return Promise.resolve()
     setLoading(true)
     const params = memType ? { memory_type: memType } : {}
-    return api.get(`/group-memories/${encodeURIComponent(targetGroupId)}/items`, { params })
-      .then(r => setMemories(r.data.memories || [])).finally(() => setLoading(false))
+    const loadKey = `${target}|${memType || ''}`
+    memoryLoadKeyRef.current = loadKey
+    return api.get(`/group-memories/${encodeURIComponent(target)}/items`, { params })
+      .then(r => setMemories(r.data.memories || []))
+      .catch(e => {
+        if (memoryLoadKeyRef.current === loadKey) memoryLoadKeyRef.current = ''
+        throw e
+      })
+      .finally(() => setLoading(false))
   }, [groupId, memType])
 
   useEffect(() => {
     loadOverview()
   }, [loadOverview])
+
+  const exactOverviewGroup = overview.find(item => {
+    const q = groupId.trim()
+    return q && (item.group_id === q || item.raw_group_id === q || item.stream_id === q)
+  })
+
+  useEffect(() => {
+    if (!exactOverviewGroup || extracting) return
+    const loadKey = `${exactOverviewGroup.group_id}|${memType || ''}`
+    if (memoryLoadKeyRef.current === loadKey) return
+    load(exactOverviewGroup.group_id)
+  }, [exactOverviewGroup, extracting, load, memType])
+
+  const handleGroupIdChange = value => {
+    setGroupId(value)
+    setExpandedEvidence(null)
+    setLastExtractResult(null)
+    setMemories([])
+    memoryLoadKeyRef.current = ''
+  }
 
   const selectGroup = item => {
     setGroupId(item.group_id)
@@ -1812,7 +1841,7 @@ function MemoryPage() {
           <div className="border-b border-slate-800 p-3">
             <label className="block text-[11px] font-medium text-slate-400">
               搜索或输入 group_id
-              <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="group_123456 / 群名"
+              <input value={groupId} onChange={e => handleGroupIdChange(e.target.value)} placeholder="group_123456 / 群名"
                 className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
             </label>
           </div>
@@ -1820,7 +1849,7 @@ function MemoryPage() {
             {overviewLoading ? <Spinner /> : filteredOverview.length === 0 ? (
               <div className="px-4 py-10 text-center text-xs text-slate-600">没有匹配的群</div>
             ) : filteredOverview.map(item => {
-              const selected = item.group_id === groupId
+              const selected = item.group_id === groupId || item === exactOverviewGroup
               return (
                 <button key={item.group_id} onClick={() => selectGroup(item)}
                   className={`w-full border-b border-slate-800/70 px-3 py-3 text-left transition-colors ${selected ? 'bg-emerald-500/10' : 'hover:bg-slate-800/50'}`}>
@@ -1849,7 +1878,7 @@ function MemoryPage() {
             <div className="grid gap-3 lg:grid-cols-[1fr_140px_140px_auto]">
               <label className="block text-[11px] font-medium text-slate-400">
                 当前群
-                <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="group_id"
+                <input value={groupId} onChange={e => handleGroupIdChange(e.target.value)} placeholder="group_id"
                   className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
               </label>
               <label className="block text-[11px] font-medium text-slate-400">
