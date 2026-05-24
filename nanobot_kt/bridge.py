@@ -918,7 +918,7 @@ class NanobotBridge:
 
                 identity_vars = build_identity_vars(
                     sender_id=meta.get("sender_id") or meta.get("user_id") or user_id,
-                    bot_name=str(meta.get("bot_name") or ""),
+                    bot_name=str(meta.get("bot_name") or meta.get("character_name") or ""),
                     bot_aliases=meta.get("bot_aliases", []),
                 )
                 conv = self._agent.controller.conversation
@@ -1054,7 +1054,7 @@ class NanobotBridge:
                         source_message_ids=source_message_ids,
                         self_id=str(meta.get("self_id") or ""),
                         bot_id=str(meta.get("bot_id") or ""),
-                        bot_name=str(meta.get("bot_name") or ""),
+                        bot_name=str(meta.get("bot_name") or meta.get("character_name") or ""),
                         bot_aliases=list(meta.get("bot_aliases") or []),
                         user_input=query,
                         persona_text=persona_text or "无已存储画像",

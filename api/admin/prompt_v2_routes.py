@@ -45,10 +45,10 @@ def list_prompt_v2_variables(
 
 
 @router.get("/prompt-v2/templates")
-def list_prompt_v2_templates(_auth=Depends(verify_admin)):
+def list_prompt_v2_templates(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     from core.prompt_v2.template_store import list_templates
 
-    return list_templates()
+    return list_templates(db=db)
 
 
 @router.post("/prompt-v2/templates")
@@ -79,11 +79,11 @@ def create_prompt_v2_template(
 
 
 @router.get("/prompt-v2/templates/{template_key:path}")
-def get_prompt_v2_template(template_key: str, _auth=Depends(verify_admin)):
+def get_prompt_v2_template(template_key: str, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     from core.prompt_v2.template_store import get_template
 
     try:
-        return get_template(template_key)
+        return get_template(template_key, db=db)
     except FileNotFoundError:
         raise HTTPException(404, "V2 模板不存在")
     except Exception as e:

@@ -7,15 +7,23 @@
   --scrollbar-thumb-hover: #64748b;
 }
 html {
+  height: 100%;
+  overflow: hidden;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
 body {
+  height: 100%;
   margin: 0;
+  overflow: hidden;
   background: #020617;
   color: #e2e8f0;
   font-family: "Fira Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+#root {
+  height: 100%;
+  overflow: hidden;
 }
 * {
   scrollbar-width: thin;
@@ -50,6 +58,15 @@ pre,
 .prompt-flow-scrollbar {
   scrollbar-gutter: stable;
   overscroll-behavior: contain;
+}
+.app-shell,
+.app-sidebar,
+.app-content,
+.app-main-scroll {
+  overscroll-behavior: contain;
+}
+.app-main-scroll {
+  scrollbar-gutter: stable;
 }
 .prompt-v2-canvas {
   overscroll-behavior: contain;

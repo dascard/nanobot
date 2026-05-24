@@ -154,6 +154,89 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
 
 
 @pytest.mark.asyncio
+async def test_bridge_engine_v2_uses_character_name_as_bot_name(monkeypatch, db_session):
+    from core import database
+    from core.prompt_v2.schema import PromptCompileRequest, PromptPlan
+    from core.settings_service import settings
+    from nanobot_kt.bridge import NanobotBridge
+
+    settings.set_session_factory(database.SessionLocal)
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    bridge.creature_path = "creatures/nanobot"
+    bridge._output = _FakeOutput()
+    bridge._session_locks = {}
+    bridge._legacy_prompt_meta = {}
+    bridge._last_prompt_render_meta = {}
+    bridge._agent = SimpleNamespace(
+        controller=SimpleNamespace(conversation=_FakeConversation()),
+        registry=SimpleNamespace(_tools={"reply": object(), "no_reply": object()}),
+        _process_event=AsyncMock(return_value="ok"),
+        executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
+    )
+
+    captured_requests = []
+
+    async def fake_compile(request, *, strict_audit=False):
+        assert isinstance(request, PromptCompileRequest)
+        captured_requests.append(request)
+        return PromptPlan(
+            engine="v2",
+            chat_type="private",
+            prompt_key="chat_private",
+            messages=[
+                {"role": "system", "content": "V2_SYSTEM_ONLY"},
+                {"role": "user", "content": "<user_input>\nPLAN_USER\n</user_input>"},
+            ],
+            tool_schemas=[],
+            section_hashes={"base_contract": "a" * 64},
+            prompt_sha256="b" * 64,
+            token_estimate=10,
+            warnings=[],
+            debug={"template_path": "/tmp/chat_private.md"},
+        )
+
+    monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile)
+    monkeypatch.setattr("clients.classifier_client.resolve_model_route", lambda _route: {
+        "provider_id": "newapi",
+        "base_url": "http://127.0.0.1:1/v1",
+        "api_key": "test",
+        "timeout": 1,
+    })
+    monkeypatch.setattr("clients.classifier_client.ensure_model_route_enabled", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("nanobot_kt.bridge.registry.get_models_by_provider", lambda _provider: [{"id": "fake"}])
+    monkeypatch.setattr("core.tool_plan.build_effective_tool_schemas", lambda _enabled: [
+        {"type": "function", "function": {"name": "reply"}},
+    ])
+
+    fake_client = MagicMock()
+    fake_client.sync_models_to_registry = AsyncMock()
+    fake_client.estimate_complexity = MagicMock(return_value=3)
+    fake_client.get_ordered_candidates = MagicMock(return_value=[
+        {"id": "fake-model", "intelligence": 8, "cost_input_1m": 0.0, "context_window": 128000}
+    ])
+    monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient", lambda *args, **kwargs: fake_client)
+
+    await bridge.handle_message(
+        "原始当前",
+        user_id="u1",
+        session_id="u1",
+        sender_name="雀",
+        metadata={
+            "prompt_runtime_engine_override": "v2",
+            "chat_type": "private",
+            "character_name": "七濑",
+            "runtime_preset": "none",
+            "reply_model": "fake-model",
+            "enable_reply_contract_retry": False,
+        },
+    )
+
+    assert captured_requests
+    assert captured_requests[0].bot_name == "七濑"
+
+
+@pytest.mark.asyncio
 async def test_bridge_engine_v2_fails_fast_when_prompt_audit_fails(monkeypatch, db_session):
     from core import database
     from core.prompt_v2.audit import PromptAuditError

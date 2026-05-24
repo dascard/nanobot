@@ -39,7 +39,7 @@ def build_template_values(request, *, current_time: str | None = None) -> dict[s
         bot_name=request.bot_name,
         bot_aliases=request.bot_aliases,
     )
-    aliases = [str(x).strip() for x in (request.bot_aliases or []) if str(x).strip()]
+    aliases_text = str(identity_vars.get("alias_names") or "").strip()
     return {
         **identity_vars,
         "chat_type": request.normalized_chat_type,
@@ -47,8 +47,8 @@ def build_template_values(request, *, current_time: str | None = None) -> dict[s
         "group_id": _request_group_id(request),
         "user_id": str(request.user_id or "").strip(),
         "sender_name": str(request.sender_name or "").strip(),
-        "bot_name": str(request.bot_name or "").strip(),
-        "bot_aliases": "\n".join(aliases),
+        "bot_name": identity_vars.get("character_name", ""),
+        "bot_aliases": aliases_text,
         "current_time": _current_time_text(current_time),
         "timezone": "Asia/Shanghai",
     }

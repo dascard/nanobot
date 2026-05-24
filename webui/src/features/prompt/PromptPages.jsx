@@ -1061,6 +1061,14 @@ export function PromptV2TemplatesPage() {
   const [canvasViewport, setCanvasViewport] = useState({ x: 24, y: 24, zoom: 1 })
   const [selectedEdgeKey, setSelectedEdgeKey] = useState('')
   const [isLargeTemplateEditorOpen, setIsLargeTemplateEditorOpen] = useState(false)
+  const [identitySettings, setIdentitySettings] = useState({
+    'bot.character_name': '',
+    'bot.alias_names': '',
+    'bot.super_user_ids': '',
+  })
+  const [toolSchemaConfig, setToolSchemaConfig] = useState(null)
+  const [schemaEditText, setSchemaEditText] = useState('')
+  const [schemaError, setSchemaError] = useState('')
   const [toast, setToast] = useState('')
   const nodeIdSeq = useRef(0)
   const chatTemplates = templates.filter(item => promptV2TemplateKind(item) === 'chat')
@@ -1074,7 +1082,8 @@ export function PromptV2TemplatesPage() {
   const selectedToolTemplate = toolTemplates.find(item => item.template_key === selectedToolTemplateKey) || toolTemplates[0] || null
   const selectedTaskTemplate = taskTemplates.find(item => item.template_key === selectedTaskTemplateKey) || taskTemplates[0] || null
   const selectedResourceTemplate = templateWorkspace === 'tasks' ? selectedTaskTemplate : selectedToolTemplate
-  const activeToolSchema = templateWorkspace === 'tools' ? (detail?.tool_schema || selectedToolTemplate?.tool_schema || null) : null
+  const schemaToolName = promptV2ToolName(selectedToolTemplate) || ''
+  const activeToolSchema = templateWorkspace === 'tools' ? (toolSchemaConfig?.tool_schema || detail?.tool_schema || selectedToolTemplate?.tool_schema || null) : null
   const schemaJson = activeToolSchema ? JSON.stringify(activeToolSchema, null, 2) : ''
   const schemaName = activeToolSchema?.function?.name || promptV2ToolName(selectedToolTemplate) || '-'
   const schemaDescription = activeToolSchema?.function?.description || selectedToolTemplate?.description || ''
@@ -1105,13 +1114,53 @@ export function PromptV2TemplatesPage() {
     }).catch(e => alert(e.response?.data?.detail || '加载 V2 编排图失败'))
   }, [])
 
+  const loadIdentitySettings = useCallback(() => {
+    api.get('/settings').then(r => {
+      const next = {
+        'bot.character_name': '',
+        'bot.alias_names': '',
+        'bot.super_user_ids': '',
+      }
+      for (const item of r.data.settings || []) {
+        if (Object.prototype.hasOwnProperty.call(next, item.key)) next[item.key] = String(item.value ?? '')
+      }
+      setIdentitySettings(next)
+    }).catch(() => {})
+  }, [])
+
+  const saveIdentitySetting = (key, value) => {
+    api.put(`/settings/${encodeURIComponent(key)}`, { value }).then(() => {
+      setToast(`已保存 ${key}`)
+      loadIdentitySettings()
+    }).catch(e => alert(e.response?.data?.detail || '保存身份变量失败'))
+  }
+
   useEffect(() => {
     loadTemplates()
     loadFlow()
+    loadIdentitySettings()
     api.get('/prompt-v2/variables')
       .then(r => setVariables(r.data.items || []))
       .catch(() => setVariables([]))
-  }, [loadTemplates, loadFlow])
+  }, [loadTemplates, loadFlow, loadIdentitySettings])
+
+  const loadToolSchemaConfig = useCallback((toolName) => {
+    if (!toolName) return
+    api.get(`/tools/${encodeURIComponent(toolName)}/schema`).then(r => {
+      setToolSchemaConfig(r.data)
+      setSchemaEditText(JSON.stringify(r.data.editable_schema || r.data.tool_schema || {}, null, 2))
+      setSchemaError('')
+    }).catch(e => {
+      setToolSchemaConfig(null)
+      setSchemaEditText('')
+      setSchemaError(e.response?.data?.detail || '加载工具 schema 失败')
+    })
+  }, [])
+
+  useEffect(() => {
+    if (templateWorkspace !== 'tools' || !schemaToolName) return
+    loadToolSchemaConfig(schemaToolName)
+  }, [templateWorkspace, schemaToolName, loadToolSchemaConfig])
 
   useEffect(() => {
     if (!activeTemplateKey) return
@@ -1178,6 +1227,35 @@ export function PromptV2TemplatesPage() {
       setToast(`已保存编排图 · ${r.data.runtime_path || ''}`)
       loadFlow()
     }).catch(e => alert(e.response?.data?.detail || '保存 V2 编排图失败'))
+  }
+
+  const saveToolSchema = () => {
+    if (!schemaToolName) return
+    let parsed
+    try {
+      parsed = JSON.parse(schemaEditText || '{}')
+    } catch (e) {
+      setSchemaError(`JSON 格式错误: ${e.message}`)
+      return
+    }
+    api.put(`/tools/${encodeURIComponent(schemaToolName)}/schema`, { schema: parsed }).then(r => {
+      setToolSchemaConfig(r.data)
+      setSchemaEditText(JSON.stringify(r.data.editable_schema || r.data.tool_schema || {}, null, 2))
+      setSchemaError('')
+      setToast(`已保存 ${schemaToolName} schema`)
+      loadTemplates()
+    }).catch(e => setSchemaError(e.response?.data?.detail || '保存工具 schema 失败'))
+  }
+
+  const resetToolSchema = () => {
+    if (!schemaToolName) return
+    api.delete(`/tools/${encodeURIComponent(schemaToolName)}/schema`).then(r => {
+      setToolSchemaConfig(r.data)
+      setSchemaEditText(JSON.stringify(r.data.editable_schema || r.data.tool_schema || {}, null, 2))
+      setSchemaError('')
+      setToast(`已重置 ${schemaToolName} schema`)
+      loadTemplates()
+    }).catch(e => setSchemaError(e.response?.data?.detail || '重置工具 schema 失败'))
   }
 
   const updateNode = (nodeId, patch) => {
@@ -1669,13 +1747,36 @@ export function PromptV2TemplatesPage() {
             <Card className="p-4">
               <div className="flex items-center justify-between gap-2 mb-3">
                 <div>
-                  <div className="text-xs font-medium text-slate-300">真实工具 Schema</div>
-                  <div className="text-[11px] text-slate-600">以本轮 API tools schema 为准</div>
+                  <div className="text-xs font-medium text-slate-300">工具 Schema JSON</div>
+                  <div className="text-[11px] text-slate-600">真实工具 Schema · {schemaToolName || '-'}</div>
                 </div>
-                <Badge tone={activeToolSchema?.source === 'package' ? 'emerald' : 'amber'}>{activeToolSchema?.source || 'missing'}</Badge>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge tone={toolSchemaConfig?.override_present ? 'emerald' : activeToolSchema?.source === 'package' ? 'blue' : 'amber'}>
+                    {toolSchemaConfig?.override_present ? 'override' : activeToolSchema?.source || 'missing'}
+                  </Badge>
+                  <button onClick={resetToolSchema} disabled={!schemaToolName || !toolSchemaConfig?.override_present}
+                    className="rounded-lg bg-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-700 disabled:opacity-40">
+                    重置
+                  </button>
+                  <button onClick={saveToolSchema} disabled={!schemaToolName}
+                    className="rounded-lg bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-40">
+                    保存
+                  </button>
+                </div>
               </div>
-              {schemaJson ? (
-                <pre className="max-h-[520px] overflow-auto prompt-flow-scrollbar whitespace-pre-wrap break-words rounded-lg border border-slate-800 bg-slate-950 p-3 text-[11px] leading-relaxed text-slate-300">{schemaJson}</pre>
+              {schemaError && <div className="mb-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{schemaError}</div>}
+              {schemaToolName ? (
+                <div className="space-y-3">
+                  <textarea aria-label="工具 Schema JSON" value={schemaEditText}
+                    onChange={e => setSchemaEditText(e.target.value)}
+                    className="prompt-flow-scrollbar h-[430px] w-full resize-none rounded-lg border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] leading-relaxed text-slate-300 outline-none focus:border-emerald-500" />
+                  {schemaJson && (
+                    <details className="rounded-lg border border-slate-800 bg-slate-950">
+                      <summary className="cursor-pointer px-3 py-2 text-xs text-slate-400 hover:bg-slate-800/50">生效预览</summary>
+                      <pre className="max-h-72 overflow-auto prompt-flow-scrollbar whitespace-pre-wrap break-words border-t border-slate-800 p-3 text-[11px] leading-relaxed text-slate-300">{schemaJson}</pre>
+                    </details>
+                  )}
+                </div>
               ) : (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
                   没有找到该工具的真实 schema。请检查模板 frontmatter 的 tool_name 是否和工具注册名一致。
@@ -1692,6 +1793,30 @@ export function PromptV2TemplatesPage() {
               </div>
             </Card>
           )}
+
+          <Card className="p-4">
+            <div className="text-xs font-medium text-slate-300 mb-3">身份变量配置</div>
+            <div className="space-y-3">
+              <label className="block text-xs text-slate-500">character_name / name_hint
+                <input value={identitySettings['bot.character_name'] || ''}
+                  onChange={e => setIdentitySettings(prev => ({ ...prev, 'bot.character_name': e.target.value }))}
+                  onBlur={e => saveIdentitySetting('bot.character_name', e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 text-xs text-slate-200 outline-none focus:border-emerald-500" />
+              </label>
+              <label className="block text-xs text-slate-500">alias_names / bot_aliases
+                <textarea value={identitySettings['bot.alias_names'] || ''}
+                  onChange={e => setIdentitySettings(prev => ({ ...prev, 'bot.alias_names': e.target.value }))}
+                  onBlur={e => saveIdentitySetting('bot.alias_names', e.target.value)}
+                  className="prompt-flow-scrollbar mt-1 h-20 w-full resize-none rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200 outline-none focus:border-emerald-500" />
+              </label>
+              <label className="block text-xs text-slate-500">super_user_id
+                <input value={identitySettings['bot.super_user_ids'] || ''}
+                  onChange={e => setIdentitySettings(prev => ({ ...prev, 'bot.super_user_ids': e.target.value }))}
+                  onBlur={e => saveIdentitySetting('bot.super_user_ids', e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200 outline-none focus:border-emerald-500" />
+              </label>
+            </div>
+          </Card>
 
           <Card className="p-4">
             <div className="text-xs font-medium text-slate-300 mb-2">全局可插入变量白名单</div>

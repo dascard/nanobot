@@ -45,7 +45,7 @@ def _frontmatter_text(values: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _template_record(key: str) -> dict[str, Any]:
+def _template_record(key: str, *, db=None) -> dict[str, Any]:
     canonical = resolve_template_key(key)
     default_path = first_existing_template_path(canonical, runtime=False)
     runtime_path = first_existing_template_path(canonical, runtime=True)
@@ -60,7 +60,7 @@ def _template_record(key: str) -> dict[str, Any]:
         try:
             from core.tool_schema_preview import build_tool_schema
 
-            tool_schema = build_tool_schema(classified.tool_name)
+            tool_schema = build_tool_schema(classified.tool_name, db=db)
         except Exception:
             tool_schema = None
     return {
@@ -103,8 +103,8 @@ def _build_tree(items: list[dict[str, Any]]) -> dict[str, Any]:
     return tree
 
 
-def list_templates() -> dict[str, Any]:
-    items = [_template_record(key) for key in list_template_keys()]
+def list_templates(*, db=None) -> dict[str, Any]:
+    items = [_template_record(key, db=db) for key in list_template_keys()]
     items = sorted(items, key=lambda item: item["template_key"])
     return {
         "items": items,
@@ -114,9 +114,9 @@ def list_templates() -> dict[str, Any]:
     }
 
 
-def get_template(template_key: str) -> dict[str, Any]:
+def get_template(template_key: str, *, db=None) -> dict[str, Any]:
     key = resolve_template_key(template_key)
-    record = _template_record(key)
+    record = _template_record(key, db=db)
     default_path = first_existing_template_path(key, runtime=False)
     runtime_path = first_existing_template_path(key, runtime=True)
     return {

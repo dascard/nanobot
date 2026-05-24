@@ -1695,7 +1695,7 @@ async def preview_effective_prompt(
         db=db,
     )
     runtime_tool_prompt = build_runtime_tool_prompt(enabled, disabled, body.chat_type)
-    tool_schemas = build_effective_tool_schemas(enabled)
+    tool_schemas = build_effective_tool_schemas(enabled, db=db)
 
     from core.prompt_assembler import PromptAssembler, PromptBuildContext
 
@@ -3604,6 +3604,10 @@ class ToolOverrideBody(BaseModel):
     reason: str = ""
 
 
+class ToolSchemaOverrideBody(BaseModel):
+    tool_schema: dict = Field(default_factory=dict, alias="schema")
+
+
 _TEMP_TOOL_TARGET_EXACT = {
     "admin", "default", "default_session", "local_test", "test",
     "test_session", "test-user", "unknown",
@@ -3852,6 +3856,51 @@ def list_tool_targets(scope_type: str = "group", search: str = "", limit: int = 
     return {"scope_type": scope, "items": items}
 
 
+@router.get("/tools/{tool_name}/schema")
+def get_tool_schema_override(tool_name: str, db: Session = Depends(get_db),
+                             _auth=Depends(verify_admin)):
+    from core.tool_schema_preview import build_tool_schema_config
+
+    try:
+        return build_tool_schema_config(db, tool_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.put("/tools/{tool_name}/schema")
+def save_tool_schema_override_api(tool_name: str, body: ToolSchemaOverrideBody,
+                                  request: Request, db: Session = Depends(get_db),
+                                  _auth=Depends(verify_admin)):
+    from core.tool_schema_preview import build_tool_schema_config, save_tool_schema_override
+
+    try:
+        save_tool_schema_override(db, tool_name, body.tool_schema)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    result = build_tool_schema_config(db, tool_name)
+    _audit(db, "tool_schema_override", "tool", tool_name, {"schema": result["editable_schema"]},
+           ip_address=_client_ip(request))
+    return result
+
+
+@router.delete("/tools/{tool_name}/schema")
+def delete_tool_schema_override_api(tool_name: str, request: Request,
+                                    db: Session = Depends(get_db),
+                                    _auth=Depends(verify_admin)):
+    from core.tool_schema_preview import build_tool_schema_config, delete_tool_schema_override
+
+    try:
+        deleted = delete_tool_schema_override(db, tool_name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if deleted:
+        db.commit()
+        _audit(db, "tool_schema_override_delete", "tool", tool_name,
+               ip_address=_client_ip(request))
+    return build_tool_schema_config(db, tool_name)
+
+
 @router.put("/tools/{tool_name}")
 def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
                           request: Request, db: Session = Depends(get_db),
@@ -3992,7 +4041,7 @@ def get_effective_tools(chat_type: str = "group", group_id: str = "", user_id: s
         runtime_preset=runtime_preset, db=db,
     )
     prompt = build_runtime_tool_prompt(enabled, disabled, chat_type)
-    tool_schemas = build_effective_tool_schemas(enabled)
+    tool_schemas = build_effective_tool_schemas(enabled, db=db)
     return {
         "chat_type": chat_type, "group_id": group_id, "user_id": user_id,
         "runtime_preset": runtime_preset,
@@ -4843,4 +4892,3 @@ def eval_get_run(
     if not run_dict:
         raise HTTPException(404, "run not found")
     return {"run": run_dict, "results": results}
-

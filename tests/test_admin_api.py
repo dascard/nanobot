@@ -575,6 +575,45 @@ class TestToolAdmin:
         ))
         assert "ai_daily" in effective["enabled"]
 
+    def test_tool_schema_override_updates_effective_tools(self, client, auth_header):
+        schema = {
+            "type": "function",
+            "function": {
+                "name": "reply",
+                "description": "Web 可配置 reply schema",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string"},
+                        "tone": {"type": "string", "enum": ["plain", "warm"]},
+                    },
+                    "required": ["content"],
+                },
+            },
+        }
+
+        saved = client.put(
+            "/api/v1/admin/tools/reply/schema",
+            json={"schema": schema},
+            headers=auth_header,
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["override_present"] is True
+
+        effective = client.get(
+            "/api/v1/admin/tools/effective",
+            params={"chat_type": "private", "runtime_preset": "full"},
+            headers=auth_header,
+        )
+        assert effective.status_code == 200, effective.text
+        schemas = effective.json()["tool_schemas"]
+        reply_schema = next(item for item in schemas if item["function"]["name"] == "reply")
+        assert "tone" in reply_schema["function"]["parameters"]["properties"]
+        assert reply_schema["source"] == "runtime_override"
+
+        reset = client.delete("/api/v1/admin/tools/reply/schema", headers=auth_header)
+        assert reset.status_code == 200, reset.text
+
     def test_user_override_can_enable_tool_under_lightweight_preset(self, client, auth_header):
         before = _ok(client.get(
             "/api/v1/admin/tools/effective",

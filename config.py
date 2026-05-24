@@ -44,6 +44,18 @@ SUPER_USER_IDS = _parse_id_set(
     or os.environ.get("ADMIN_USER_ID", "")
 )
 
+# ── Bot 身份变量 ──
+NANOBOT_CHARACTER_NAME = (
+    os.environ.get("NANOBOT_CHARACTER_NAME")
+    or os.environ.get("BOT_NAME")
+    or "nanobot"
+).strip()
+NANOBOT_BOT_ALIASES = _parse_id_set(
+    os.environ.get("NANOBOT_BOT_ALIASES")
+    or os.environ.get("BOT_ALIASES")
+    or NANOBOT_CHARACTER_NAME
+)
+
 # ── 数据库 ──
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./data/nanobot.db")
 

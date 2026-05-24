@@ -191,8 +191,8 @@ const NAV = NAV_SECTIONS.flatMap(section => section.items)
 
 function NavContent({ version, onLogout, onNavigate }) {
   return (
-    <div className="flex min-h-full flex-col">
-      <div className="mb-4 px-2">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="shrink-0 px-2 pb-4">
         <div className="flex items-center gap-2">
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/15 text-sm font-bold text-indigo-200">N</div>
           <span className="text-sm font-semibold tracking-wide text-white">Nanobot</span>
@@ -201,7 +201,7 @@ function NavContent({ version, onLogout, onNavigate }) {
           {version?.display ? `版本 ${version.display}` : '版本 unknown'}
         </div>
       </div>
-      <div className="space-y-4">
+      <div className="prompt-flow-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
         {NAV_SECTIONS.map(section => (
           <div key={section.title}>
             <div className="mb-1 px-2 text-[11px] font-medium uppercase tracking-wide text-slate-500">{section.title}</div>
@@ -222,7 +222,7 @@ function NavContent({ version, onLogout, onNavigate }) {
         ))}
       </div>
       <button onClick={onLogout}
-        className="mt-6 rounded-lg px-3 py-2 text-left text-sm text-slate-500 transition-colors hover:bg-red-500/10 hover:text-red-300">
+        className="mt-4 shrink-0 rounded-lg px-3 py-2 text-left text-sm text-slate-500 transition-colors hover:bg-red-500/10 hover:text-red-300">
         退出
       </button>
     </div>
@@ -237,12 +237,12 @@ function Layout({ children, onLogout }) {
     api.get('/version').then(r => setVersion(r.data)).catch(() => setVersion(null))
   }, [])
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-200 md:flex">
-      <aside className="hidden md:flex md:w-64 md:shrink-0 md:flex-col md:border-r md:border-slate-800 md:bg-slate-900 md:p-4">
+    <div className="app-shell h-[100dvh] overflow-hidden bg-slate-950 text-slate-200 md:flex md:h-screen md:overflow-hidden">
+      <aside className="app-sidebar hidden md:flex md:h-screen md:w-64 md:shrink-0 md:flex-col md:overflow-hidden md:border-r md:border-slate-800 md:bg-slate-900 md:p-4">
         <NavContent version={version} onLogout={onLogout} />
       </aside>
 
-      <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-800 bg-slate-950/95 px-4 backdrop-blur md:hidden">
+      <div className="app-mobile-header sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950/95 px-4 backdrop-blur md:hidden">
         <button type="button" aria-label="打开导航" onClick={() => setNavOpen(true)}
           className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-200">
           <Menu className="h-4 w-4" aria-hidden="true" />
@@ -254,7 +254,7 @@ function Layout({ children, onLogout }) {
       {navOpen && (
         <div className="fixed inset-0 z-40 md:hidden">
           <button type="button" aria-label="关闭导航遮罩" className="absolute inset-0 bg-black/60" onClick={() => setNavOpen(false)} />
-          <nav aria-label={`主导航，共 ${NAV.length} 项`} className="relative h-full w-[min(82vw,20rem)] overflow-y-auto border-r border-slate-800 bg-slate-900 p-4 shadow-2xl shadow-black">
+          <nav aria-label={`主导航，共 ${NAV.length} 项`} className="relative flex h-full w-[min(82vw,20rem)] flex-col overflow-hidden border-r border-slate-800 bg-slate-900 p-4 shadow-2xl shadow-black">
             <div className="mb-4 flex items-center justify-between">
               <span className="text-sm font-semibold text-white">导航</span>
               <IconButton label="关闭导航" icon={X} onClick={() => setNavOpen(false)} />
@@ -264,9 +264,11 @@ function Layout({ children, onLogout }) {
         </div>
       )}
 
-      <main className="min-w-0 flex-1 px-4 py-4 md:px-6 md:py-6">
-        <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
-      </main>
+      <div className="app-content min-h-0 min-w-0 flex-1 overflow-hidden">
+        <main id="main-content" className="app-main-scroll h-[calc(100dvh-3.5rem)] min-w-0 overflow-y-auto overflow-x-hidden px-4 py-4 md:h-screen md:overflow-y-auto md:px-6 md:py-6">
+          <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
+        </main>
+      </div>
     </div>
   )
 }
@@ -1497,8 +1499,16 @@ function SettingsPage() {
                 ) : (
                   <input type={s.value_type === 'int' || s.value_type === 'float' ? 'number' : 'text'}
                     defaultValue={s.value} step={s.value_type === 'float' ? '0.1' : '1'} min={s.min_value} max={s.max_value} disabled={s.readonly}
-                    className={`w-28 p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-center ${s.readonly ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    onBlur={e => { const v = e.target.value.trim(); if (!v || v === String(s.value)) return; const p = s.value_type === 'float' ? parseFloat(v) : parseInt(v); if (Number.isNaN(p)) { e.target.value = s.value; return } update(s.key, p) }} />
+                    className={`${s.value_type === 'str' ? 'w-64 text-left' : 'w-28 text-center'} p-2 rounded-xl bg-slate-900 border border-slate-700 text-sm ${s.readonly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    onBlur={e => {
+                      const v = e.target.value.trim()
+                      if (v === String(s.value ?? '')) return
+                      if (s.value_type === 'str') { update(s.key, v); return }
+                      if (!v) return
+                      const p = s.value_type === 'float' ? parseFloat(v) : parseInt(v)
+                      if (Number.isNaN(p)) { e.target.value = s.value; return }
+                      update(s.key, p)
+                    }} />
                 )}
                 {s.dangerous && <span className="text-red-500 text-xs">危险</span>}
                 {s.restart_required && <span className="text-amber-500 text-xs">需重启</span>}

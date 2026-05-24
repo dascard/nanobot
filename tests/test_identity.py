@@ -23,3 +23,41 @@ def test_build_identity_vars():
     assert vars_["name_hint"] == "testbot"
     assert "bot" in vars_["alias_names"]
     assert "机器人" in vars_["alias_names"]
+
+
+def test_build_identity_vars_has_non_empty_defaults(monkeypatch):
+    monkeypatch.setattr("core.identity.NANOBOT_CHARACTER_NAME", "nanobot")
+    monkeypatch.setattr("core.identity.NANOBOT_BOT_ALIASES", {"nanobot"})
+    monkeypatch.setattr("core.identity.SUPER_USER_IDS", set())
+
+    vars_ = build_identity_vars()
+
+    assert vars_["sender_id"] == "未提供"
+    assert vars_["character_name"] == "nanobot"
+    assert vars_["name_hint"] == "nanobot"
+    assert vars_["alias_names"] == "nanobot"
+    assert vars_["super_user_id"] == "未配置"
+
+
+def test_build_identity_vars_reads_web_configured_identity(monkeypatch):
+    configured = {
+        "bot.character_name": "七濑",
+        "bot.alias_names": "小七\nnanobot",
+        "bot.super_user_ids": "42,99",
+    }
+    monkeypatch.setattr(
+        "core.settings_service.settings.get_str",
+        lambda key, default="": configured.get(key, default),
+    )
+    monkeypatch.setattr("core.identity.NANOBOT_CHARACTER_NAME", "fallback")
+    monkeypatch.setattr("core.identity.NANOBOT_BOT_ALIASES", {"fallback"})
+    monkeypatch.setattr("core.identity.SUPER_USER_IDS", set())
+
+    vars_ = build_identity_vars(sender_id="42")
+
+    assert vars_["character_name"] == "七濑"
+    assert vars_["name_hint"] == "七濑"
+    assert vars_["alias_names"] == "小七\nnanobot"
+    assert vars_["super_user_id"] == "42,99"
+    assert vars_["is_super_user"] == "true"
+    assert is_super_user_id("99")

@@ -79,6 +79,11 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "放大" in source
     assert "重置视图" in source
     assert "全局可插入变量白名单" in source
+    assert "身份变量配置" in source
+    assert "bot.character_name" in source
+    assert "bot.alias_names" in source
+    assert "bot.super_user_ids" in source
+    assert "api.put(`/settings/${encodeURIComponent(key)}`" in source
     assert "node.label || node.id" in source
     assert "添加节点" in source
     assert "添加节点后在右侧选择模板" in source
@@ -105,6 +110,11 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "工具提示词正文" in source
     assert "任务提示词正文" in source
     assert "真实工具 Schema" in source
+    assert "工具 Schema JSON" in source
+    assert "schemaEditText" in source
+    assert "api.get(`/tools/${encodeURIComponent(toolName)}/schema`" in source
+    assert "api.put(`/tools/${encodeURIComponent(schemaToolName)}/schema`" in source
+    assert "api.delete(`/tools/${encodeURIComponent(schemaToolName)}/schema`" in source
     assert "任务模板来源" in source
     assert "schemaJson" in source
     assert "schemaName" in source

@@ -38,6 +38,22 @@ def test_app_js_imports_split_feature_pages():
     assert "from './features/evals/EvalsPage'" in source
 
 
+def test_app_shell_has_fixed_navigation_and_isolated_scroll_regions():
+    source = APP_JS.read_text(encoding="utf-8")
+    css = Path("webui/src/index.css").read_text(encoding="utf-8")
+
+    assert "app-shell" in source
+    assert "app-sidebar" in source
+    assert "app-main-scroll" in source
+    assert "md:h-screen" in source
+    assert "md:overflow-hidden" in source
+    assert "md:overflow-y-auto" in source
+    assert "#root" in css
+    assert "overflow: hidden;" in css
+    assert ".app-main-scroll" in css
+    assert "overscroll-behavior: contain;" in css
+
+
 def test_feature_files_export_pages():
     for component, path in FEATURES.items():
       source = path.read_text(encoding="utf-8")

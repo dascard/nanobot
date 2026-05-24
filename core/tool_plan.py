@@ -7,6 +7,7 @@ ToolPlan 是运行时工具事实源：prompt、API tools schema、执行前校�
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -35,6 +36,22 @@ def _tool_name(tool: Any) -> str:
 def _stable_sha256(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _build_effective_tool_schemas(enabled: dict[str, bool], db: Any = None) -> list[dict[str, Any]]:
+    if db is None:
+        return build_effective_tool_schemas(enabled)
+    try:
+        signature = inspect.signature(build_effective_tool_schemas)
+        accepts_db = "db" in signature.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in signature.parameters.values()
+        )
+    except (TypeError, ValueError):
+        accepts_db = True
+    if accepts_db:
+        return build_effective_tool_schemas(enabled, db=db)
+    return build_effective_tool_schemas(enabled)
 
 
 @dataclass(frozen=True)
@@ -79,11 +96,15 @@ class ToolPlan:
         disabled: dict[str, str] | None = None,
         chat_type: str = "group",
         tool_schemas: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+        db: Any = None,
     ) -> "ToolPlan":
         enabled_map = {str(k): bool(v) for k, v in (enabled or {}).items()}
         disabled_map = {str(k): str(v) for k, v in (disabled or {}).items()}
         sent_names = frozenset(sorted(k for k, ok in enabled_map.items() if ok))
-        schemas = list(tool_schemas) if tool_schemas is not None else build_effective_tool_schemas(enabled_map)
+        if tool_schemas is not None:
+            schemas = list(tool_schemas)
+        else:
+            schemas = _build_effective_tool_schemas(enabled_map, db=db)
         sent_schemas = tuple(
             dict(tool)
             for tool in schemas
@@ -129,6 +150,7 @@ def build_tool_plan(
         enabled=enabled,
         disabled=disabled,
         chat_type=chat_type,
+        db=db,
     )
 
 
