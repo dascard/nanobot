@@ -390,6 +390,36 @@ def test_ai_daily_tool_wraps_html_as_reply_output():
     assert payload[REPLY_MARKER]["send_mode"] == "normal"
 
 
+@pytest.mark.asyncio
+async def test_reply_tool_preserves_plain_text_without_channel_normalization(monkeypatch):
+    from core import text_style
+    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER, ReplyTool
+
+    monkeypatch.setattr(text_style, "normalize_chat_reply_style", lambda _text: "被通道层改写了")
+
+    result = await ReplyTool()._execute({"content": "先看日志，别急。"})
+    payload = json.loads(result.output)
+
+    assert payload[REPLY_MARKER]["content"] == "先看日志，别急。"
+
+
+@pytest.mark.asyncio
+async def test_reply_tool_preserves_html_without_text_style_normalization():
+    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER, ReplyTool
+
+    html = (
+        '<!DOCTYPE html><html><head><style>'
+        ':root{--bg:#fff}.card{font-size:14px;color:#123;}'
+        '</style></head><body class="news-brief">AI 日报：保持样式。</body></html>'
+    )
+
+    result = await ReplyTool()._execute({"content": html})
+    payload = json.loads(result.output)
+
+    assert payload[REPLY_MARKER]["content"] == html
+    assert ":root{--bg:#fff}" in payload[REPLY_MARKER]["content"]
+
+
 def test_web_search_preserves_partial_results_when_later_variant_fails(monkeypatch):
     monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
     monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])

@@ -3,8 +3,23 @@
 import re
 
 
+def _looks_like_html(text: str) -> bool:
+    s = str(text or "").lstrip().lower()
+    if s.startswith(("<!doctype", "<html", "<article", "<body")):
+        return True
+    return (
+        "<style" in s
+        and "</style>" in s
+        and ("news-brief" in s or "group-analysis-report" in s)
+    )
+
+
 def normalize_chat_reply_style(text: str) -> str:
     if not text:
+        return text
+
+    # HTML 报告会被 QQbot 截图渲染，CSS/标签标点不能按聊天文本清理。
+    if _looks_like_html(text):
         return text
 
     # 不处理代码块

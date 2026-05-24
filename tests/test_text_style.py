@@ -34,3 +34,12 @@ def test_skip_url():
 def test_skip_json():
     text = '{"key": "value"}'
     assert normalize_chat_reply_style(text) == text
+
+
+def test_skip_html_document():
+    html = (
+        '<!DOCTYPE html><html><head><style>'
+        ':root{--bg:#fff}.card{font-size:14px;color:#123;}'
+        '</style></head><body class="news-brief">AI 日报：保持样式。</body></html>'
+    )
+    assert normalize_chat_reply_style(html) == html

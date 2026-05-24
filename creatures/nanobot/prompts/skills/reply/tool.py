@@ -1,7 +1,6 @@
 """Reply tool——Planner 通过此工具生成用户可见回复，而非直接输出文本。"""
 
 import json
-import logging
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
@@ -88,11 +87,6 @@ class ReplyTool(BaseTool):
             record_sticker_uses_in_content(content)
         except Exception:
             pass
-        try:
-            from core.text_style import normalize_chat_reply_style
-            content = normalize_chat_reply_style(content)
-        except Exception as e:
-            logging.getLogger("nanobot.reply").warning("[ReplyStyle] normalize failed: %s", e)
         return build_reply_tool_result(
             content,
             reply_to_message_id=args.get("reply_to_message_id"),
