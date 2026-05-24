@@ -297,6 +297,41 @@ class TestProcessCandidatesWithMockEmbedder:
         assert stats["reject_reasons"]["invalid_evidence_log_ids"] == 1
         assert db_session.query(PersonaFact).count() == 0
 
+    def test_batch_duplicate_candidates_merge_into_one_fact(self, state_machine, db_session, monkeypatch):
+        import numpy as np
+
+        def mock_embed(text: str) -> np.ndarray:
+            vec = np.zeros(768, dtype=np.float32)
+            vec[0] = 1.0
+            return vec
+
+        monkeypatch.setattr("core.persona_preprocess.embed_text", mock_embed)
+        log = ChatLog(
+            user_id="test_user_01",
+            session_id="private_test_user_01",
+            role="user",
+            content="以后回答先给结论",
+        )
+        db_session.add(log)
+        db_session.commit()
+        candidate = {
+            "text": "用户偏好回答先给结论",
+            "memory_type": "stable_preference",
+            "should_store": True,
+            "should_inject": True,
+            "confidence_hint": "high",
+            "evidence_log_ids": [log.id],
+            "evidence_quote": "以后回答先给结论",
+        }
+
+        stats = state_machine.process_candidates([candidate, dict(candidate)])
+
+        assert stats["created"] == 1
+        assert stats["merged"] == 1
+        facts = db_session.query(PersonaFact).filter(PersonaFact.user_id == "test_user_01").all()
+        assert len(facts) == 1
+        assert facts[0].evidence_count == 2
+
     def test_merge_duplicate_mock(self, state_machine, db_session, monkeypatch):
         import numpy as np
 

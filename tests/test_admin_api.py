@@ -596,6 +596,70 @@ class TestPersonaAdmin:
         )
         assert dup.status_code == 409
 
+    def test_persona_update_fact_rejects_duplicate_when_memory_type_changes(self, client, auth_header):
+        from core.persona_preprocess import content_hash
+
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add_all([
+                PersonaFact(
+                    user_id="u-persona",
+                    content="用户偏好先给结论",
+                    memory_type="stable_preference",
+                    content_hash=content_hash("用户偏好先给结论"),
+                    confidence="确认",
+                    evidence_count=3,
+                    status="active",
+                    inject_policy="auto",
+                    first_seen=now,
+                    last_seen=now,
+                ),
+                PersonaFact(
+                    user_id="u-persona",
+                    content="用户偏好先给结论",
+                    memory_type="interaction_style",
+                    content_hash=content_hash("用户偏好先给结论"),
+                    confidence="确认",
+                    evidence_count=3,
+                    status="active",
+                    inject_policy="auto",
+                    first_seen=now,
+                    last_seen=now,
+                ),
+            ])
+            db.commit()
+
+        dup = client.patch(
+            "/api/v1/admin/persona/facts/2",
+            json={"memory_type": "stable_preference"},
+            headers=auth_header,
+        )
+        assert dup.status_code == 409
+
+    def test_persona_update_fact_rejects_unknown_memory_type(self, client, auth_header):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(PersonaFact(
+                user_id="u-persona",
+                content="用户偏好先给结论",
+                memory_type="stable_preference",
+                content_hash="known-type",
+                confidence="确认",
+                evidence_count=3,
+                status="active",
+                inject_policy="auto",
+                first_seen=now,
+                last_seen=now,
+            ))
+            db.commit()
+
+        r = client.patch(
+            "/api/v1/admin/persona/facts/1",
+            json={"memory_type": "temporary_task"},
+            headers=auth_header,
+        )
+        assert r.status_code == 422
+
     def test_overview_counts_recent_runtime_signals(self, client, auth_header):
         now = datetime.now()
         with next(app.dependency_overrides[get_db]()) as db:

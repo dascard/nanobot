@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 TYPE_LIMITS = {
     "stable_preference": 3,
     "interaction_style": 2,
-    "stable_background": 2,
+    "stable_background": 1,
     "long_term_project": 2,
 }
 TYPE_PRIOR = {
@@ -25,6 +25,19 @@ TYPE_PRIOR = {
 }
 DEFAULT_MAX_ITEMS = 6
 DEFAULT_MAX_CHARS = 900
+GLOBAL_REPLY_TERMS = {
+    "回复",
+    "回答",
+    "结论",
+    "步骤",
+    "简洁",
+    "详细",
+    "直接",
+    "解释",
+    "格式",
+    "语气",
+    "废话",
+}
 
 
 @dataclass
@@ -112,7 +125,7 @@ class PersonaRetrievalService:
             memory_type = str(getattr(row, "memory_type", "") or "stable_preference")
             relevance = _lexical_relevance(row.content, query_text)
             components = self._score_components(row, memory_type, relevance)
-            reason = self._skip_reason(row)
+            reason = self._skip_reason(row, memory_type, relevance)
             if reason:
                 components["skip_reason"] = reason
                 selection.score_components[str(row.id)] = components
@@ -165,15 +178,28 @@ class PersonaRetrievalService:
 
         return len(render_persona_context("", rows)) > int(max_chars)
 
-    def _skip_reason(self, row: Any) -> str:
+    def _skip_reason(self, row: Any, memory_type: str, relevance: float) -> str:
         status = str(getattr(row, "status", "") or "")
         policy = str(getattr(row, "inject_policy", "") or "")
         if policy == "never":
             return "inject_policy_never"
+        if memory_type not in TYPE_LIMITS:
+            return "unsupported_memory_type"
         if status != "active" or policy != "auto":
             return "not_active_auto"
         if str(getattr(row, "confidence", "") or "") == "归档":
             return "archived_confidence"
         if int(getattr(row, "evidence_count", 0) or 0) < 2:
             return "low_evidence"
+        if memory_type == "long_term_project" and relevance < 0.15:
+            return "low_project_relevance"
+        if memory_type in {"stable_preference", "interaction_style"}:
+            if relevance <= 0 and not self._is_global_reply_preference(row):
+                return "low_relevance"
         return ""
+
+    def _is_global_reply_preference(self, row: Any) -> bool:
+        if int(getattr(row, "evidence_count", 0) or 0) < 3:
+            return False
+        content = str(getattr(row, "content", "") or "")
+        return any(term in content for term in GLOBAL_REPLY_TERMS)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -64,7 +64,12 @@ class PersonaFactUpdateRequest(BaseModel):
     content: str | None = None
     status: str | None = Field(default=None, pattern="^(review|active|disabled|archived|rejected)$")
     inject_policy: str | None = Field(default=None, pattern="^(auto|manual_only|never)$")
-    memory_type: str | None = None
+    memory_type: Literal[
+        "stable_preference",
+        "interaction_style",
+        "stable_background",
+        "long_term_project",
+    ] | None = None
     confidence: str | None = Field(default=None, pattern="^(确认|可能|待确认|归档)$")
     disabled_reason: str | None = None
     rejected_reason: str | None = None
@@ -160,23 +165,35 @@ def persona_update_fact(
         raise HTTPException(status_code=404, detail="persona fact not found")
 
     updates: dict[str, Any] = {}
-    if body.content is not None:
-        new_content = body.content.strip()
+    target_content = row.content
+    target_memory_type = row.memory_type
+    target_hash = row.content_hash or content_hash(row.content or "")
+    if body.content is not None or body.memory_type is not None:
+        new_content = body.content.strip() if body.content is not None else str(row.content or "").strip()
         if not new_content:
             raise HTTPException(status_code=400, detail="content is empty")
+        new_memory_type = body.memory_type or row.memory_type
         new_hash = content_hash(new_content)
         duplicate = db.query(PersonaFact).filter(
             PersonaFact.id != row.id,
             PersonaFact.user_id == row.user_id,
-            PersonaFact.memory_type == row.memory_type,
+            PersonaFact.memory_type == new_memory_type,
             PersonaFact.content_hash == new_hash,
         ).first()
         if duplicate:
             raise HTTPException(status_code=409, detail="已有相同画像，可合并或归档")
-        row.content = new_content
-        row.content_hash = new_hash
-        updates["content"] = new_content
-    for field in ("status", "inject_policy", "memory_type", "confidence", "disabled_reason", "rejected_reason"):
+        target_content = new_content
+        target_memory_type = new_memory_type
+        target_hash = new_hash
+    if body.content is not None:
+        row.content = target_content
+        row.content_hash = target_hash
+        updates["content"] = target_content
+    if body.memory_type is not None:
+        row.memory_type = target_memory_type
+        row.content_hash = target_hash
+        updates["memory_type"] = target_memory_type
+    for field in ("status", "inject_policy", "confidence", "disabled_reason", "rejected_reason"):
         value = getattr(body, field)
         if value is not None:
             setattr(row, field, value)

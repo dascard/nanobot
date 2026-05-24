@@ -331,9 +331,22 @@ class PersonaStateMachine:
                 self._upsert_behavior(text, evidence, domain, vec, existing_behaviors, now)
                 stats["created"] += 1
             else:
+                hash_match = self._find_content_hash_match(existing_facts, memory_type, text)
+                if hash_match is not None:
+                    self._merge_fact(
+                        hash_match, text, evidence, vec, now,
+                        memory_type=memory_type,
+                        confidence_hint=confidence_hint,
+                        evidence_log_ids=evidence_ids,
+                        should_inject=bool(should_inject),
+                        candidate_meta=candidate_meta,
+                    )
+                    stats["merged"] += 1
+                    continue
+
                 matches = self._find_matches(vec, existing_facts)
                 if not matches:
-                    self._create_fact(
+                    new_fact = self._create_fact(
                         text, evidence, domain, vec, now,
                         memory_type=memory_type,
                         confidence_hint=confidence_hint,
@@ -342,6 +355,7 @@ class PersonaStateMachine:
                         inject_policy=inject_policy,
                         candidate_meta=candidate_meta,
                     )
+                    existing_facts.insert(0, new_fact)
                     stats["created"] += 1
                 elif len(matches) == 1:
                     self._merge_fact(
@@ -419,6 +433,34 @@ class PersonaStateMachine:
         valid = {int(row[0]) for row in rows}
         ordered = [item for item in ids if item in valid]
         return ordered, len(ordered) == len(ids)
+
+    def _find_content_hash_match(
+        self,
+        existing_facts: list[PersonaFact],
+        memory_type: str,
+        text: str,
+    ) -> PersonaFact | None:
+        target_hash = content_hash(text)
+        if not target_hash:
+            return None
+        for fact in existing_facts:
+            if (
+                str(getattr(fact, "memory_type", "") or "") == memory_type
+                and str(getattr(fact, "content_hash", "") or "") == target_hash
+            ):
+                return fact
+        row = (
+            self.db.query(PersonaFact)
+            .filter(
+                PersonaFact.user_id == self.user_id,
+                PersonaFact.memory_type == memory_type,
+                PersonaFact.content_hash == target_hash,
+            )
+            .first()
+        )
+        if row is not None and row not in existing_facts:
+            existing_facts.insert(0, row)
+        return row
 
     @staticmethod
     def _initial_governance(
@@ -539,7 +581,7 @@ class PersonaStateMachine:
         status: str = "review",
         inject_policy: str = "manual_only",
         candidate_meta: dict[str, Any] | None = None,
-    ):
+    ) -> PersonaFact:
         """无匹配 → 创建新 cluster。"""
         blob = _to_blob(vec)
         evidence_ids = list(evidence_log_ids or [])
@@ -568,6 +610,7 @@ class PersonaStateMachine:
         self.db.add(fact)
         self.db.flush()
         fact.cluster_id = fact.id
+        return fact
 
     # ── Behavior 写入（简化去重，不做 centroid 聚类）──
 
