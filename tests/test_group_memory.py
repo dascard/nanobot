@@ -34,12 +34,12 @@ class TestUpsert:
         db.close()
 
     def test_duplicate_updates_evidence(self):
-        upsert("g_dup", "topic", "测试话题", confidence_hint=0.60, evidence_log_ids=[1])
-        r = upsert("g_dup", "topic", "测试话题", confidence_hint=0.60, evidence_log_ids=[2])
+        upsert("g_dup", "topic", "测试话题", confidence_hint=0.70, evidence_log_ids=[1])
+        r = upsert("g_dup", "topic", "测试话题", confidence_hint=0.70, evidence_log_ids=[2])
         assert r == "updated"
         mems = query_active("g_dup", min_confidence=0.5)
         assert mems[0]["evidence_count"] == 2
-        assert mems[0]["confidence"] > 0.60
+        assert mems[0]["confidence"] > 0.70
 
     def test_invalid_type_skipped(self):
         r = upsert("g_test", "invalid_type", "xxx", confidence_hint=0.80)
@@ -76,8 +76,23 @@ class TestBuildProfile:
         assert profile["common_topics"] == []
 
     def test_profile_includes_relationships_in_context(self):
-        upsert("g_relationship", "relationship", "A 经常和 B 一起讨论模型部署", confidence_hint=0.85, evidence_log_ids=[1])
-        upsert("g_relationship", "relationship", "A 经常和 B 一起讨论模型部署", confidence_hint=0.85, evidence_log_ids=[2])
+        from core.database import GroupMemory, SessionLocal
+
+        db = SessionLocal()
+        db.add(GroupMemory(
+            group_id="group_g_relationship",
+            memory_type="relationship",
+            content="A 经常和 B 一起讨论模型部署",
+            content_hash="relationship-context",
+            confidence=0.85,
+            evidence_count=2,
+            evidence_log_ids_json="[1, 2]",
+            decay_score=1.0,
+            status="active",
+            inject_policy="auto",
+        ))
+        db.commit()
+        db.close()
         profile = build_profile("g_relationship")
         assert "A 经常和 B 一起讨论模型部署" in profile["relationships"]
 

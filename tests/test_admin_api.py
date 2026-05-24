@@ -357,6 +357,97 @@ class TestObservabilityAPI:
         assert data["ok"] is True
         assert data["stats"]["new"] == 1
 
+    def test_group_memory_injection_config_writes_canonical_stream_id(self, client, auth_header):
+        data = _ok(client.put(
+            "/api/v1/admin/group-memories/group_7788/injection-config",
+            json={"group_profile_mode": "on"},
+            headers=auth_header,
+        ))
+
+        assert data["group_profile_mode"] == "on"
+        assert data["chat_stream_id"] == "qq:7788:group"
+        with next(app.dependency_overrides[get_db]()) as db:
+            row = db.query(ChatStreamConfig).filter(
+                ChatStreamConfig.chat_stream_id == "qq:7788:group"
+            ).first()
+            assert row is not None
+            assert row.group_profile_mode == "on"
+
+    def test_group_memory_injection_preview_returns_selected_and_skipped(self, client, auth_header):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(ChatStreamConfig(chat_stream_id="qq:7788:group", group_profile_mode="on"))
+            db.add(GroupMemory(
+                group_id="group_7788",
+                memory_type="topic",
+                content="模型部署: 群里经常讨论本地模型部署",
+                content_hash="preview-topic",
+                confidence=0.8,
+                evidence_count=2,
+                evidence_log_ids_json="[1, 2]",
+                decay_score=1.0,
+                status="active",
+                inject_policy="auto",
+                last_seen=now,
+            ))
+            db.add(GroupMemory(
+                group_id="group_7788",
+                memory_type="relationship",
+                content="Alice 和 Bob 经常互相开玩笑",
+                content_hash="preview-manual",
+                confidence=0.9,
+                evidence_count=3,
+                evidence_log_ids_json="[3, 4, 5]",
+                decay_score=1.0,
+                status="active",
+                inject_policy="manual_only",
+                last_seen=now,
+            ))
+            db.commit()
+
+        data = _ok(client.post(
+            "/api/v1/admin/group-memories/7788/injection-preview",
+            json={"user_input": "本地模型部署怎么弄？"},
+            headers=auth_header,
+        ))
+
+        assert data["group_profile_mode"] == "on"
+        assert data["group_memory_ids"] == [1]
+        assert "<group_memory_context" in data["group_memory_context"]
+        assert data["group_memory_skipped"][0]["reason"] == "manual_only"
+
+    def test_group_memory_update_item_changes_status_policy_and_content(self, client, auth_header):
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(GroupMemory(
+                group_id="group_7788",
+                memory_type="topic",
+                content="旧内容",
+                content_hash="old-content",
+                confidence=0.8,
+                evidence_count=2,
+                evidence_log_ids_json="[1, 2]",
+                status="active",
+                inject_policy="auto",
+            ))
+            db.commit()
+
+        data = _ok(client.patch(
+            "/api/v1/admin/group-memories/items/1",
+            json={
+                "content": "新内容",
+                "status": "disabled",
+                "inject_policy": "never",
+                "disabled_reason": "人工确认污染",
+            },
+            headers=auth_header,
+        ))
+
+        memory = data["memory"]
+        assert memory["content"] == "新内容"
+        assert memory["status"] == "disabled"
+        assert memory["inject_policy"] == "never"
+        assert memory["disabled_reason"] == "人工确认污染"
+
     def test_overview_counts_recent_runtime_signals(self, client, auth_header):
         now = datetime.now()
         with next(app.dependency_overrides[get_db]()) as db:

@@ -64,11 +64,17 @@ async def compile_prompt_plan(
     history_header = str(request.history_header or "").strip()
     group_profile_sections: list[str] = []
     if chat_type == "group":
-        group_profile_sections, history_header = _extract_marked_sections(
+        legacy_sections, history_header = _extract_marked_sections(
             history_header,
             "[GroupProfileContext]",
             "[/GroupProfileContext]",
         )
+        memory_sections, history_header = _extract_marked_sections(
+            history_header,
+            "<group_memory_context",
+            "</group_memory_context>",
+        )
+        group_profile_sections = [*legacy_sections, *memory_sections]
     history_messages = request.normalized_history_messages()
     group_context = ""
     if chat_type == "group":

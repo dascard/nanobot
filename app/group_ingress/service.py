@@ -247,6 +247,7 @@ class GroupIngressService:
                 db, group_user_id, user_id=group_user_id,
                 is_group=True, group_id=req.group_id,
                 exclude_message_ids=source_message_ids,
+                current_user_input=chat_query,
             )
             from core.identity import build_identity_vars
             sender_id = str(getattr(req, "sender_id", "") or getattr(req, "user_id", "") or "")

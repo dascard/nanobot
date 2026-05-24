@@ -1721,6 +1721,9 @@ function MemoryPage() {
   const [instructions, setInstructions] = useState('')
   const [lastExtractResult, setLastExtractResult] = useState(null)
   const [expandedEvidence, setExpandedEvidence] = useState(null)
+  const [injectionPreview, setInjectionPreview] = useState(null)
+  const [injectionLoading, setInjectionLoading] = useState(false)
+  const [memoryUpdatingId, setMemoryUpdatingId] = useState(null)
   const memoryLoadKeyRef = useRef('')
 
   const loadOverview = useCallback(() => {
@@ -1766,6 +1769,7 @@ function MemoryPage() {
     setGroupId(value)
     setExpandedEvidence(null)
     setLastExtractResult(null)
+    setInjectionPreview(null)
     setMemories([])
     memoryLoadKeyRef.current = ''
   }
@@ -1774,7 +1778,61 @@ function MemoryPage() {
     setGroupId(item.group_id)
     setExpandedEvidence(null)
     setLastExtractResult(null)
+    setInjectionPreview(null)
     load(item.group_id)
+  }
+
+  const enableInjection = async () => {
+    if (!groupId || injectionLoading) return
+    setInjectionLoading(true)
+    try {
+      const r = await api.put(`/group-memories/${encodeURIComponent(groupId)}/injection-config`, {
+        group_profile_mode: 'on',
+      })
+      setInjectionPreview({ ...(injectionPreview || {}), group_profile_mode: r.data.group_profile_mode, chat_stream_id: r.data.chat_stream_id })
+      await loadOverview()
+    } catch (e) {
+      alert(e.response?.data?.detail || e.message)
+    } finally {
+      setInjectionLoading(false)
+    }
+  }
+
+  const previewInjection = async () => {
+    if (!groupId || injectionLoading) return
+    setInjectionLoading(true)
+    try {
+      const r = await api.post(`/group-memories/${encodeURIComponent(groupId)}/injection-preview`, {
+        user_input: instructions || '当前群聊消息',
+      })
+      setInjectionPreview(r.data)
+    } catch (e) {
+      alert(e.response?.data?.detail || e.message)
+    } finally {
+      setInjectionLoading(false)
+    }
+  }
+
+  const updateMemory = async (memoryId, patch) => {
+    if (!memoryId || memoryUpdatingId) return
+    setMemoryUpdatingId(memoryId)
+    try {
+      const r = await api.patch(`/group-memories/items/${memoryId}`, patch)
+      const updated = r.data.memory
+      setMemories(items => items.map(item => item.id === memoryId ? updated : item))
+      setInjectionPreview(null)
+      await loadOverview()
+    } catch (e) {
+      alert(e.response?.data?.detail || e.message)
+    } finally {
+      setMemoryUpdatingId(null)
+    }
+  }
+
+  const editMemoryContent = memory => {
+    const content = prompt('编辑群体记忆内容', memory.content || '')
+    if (content == null) return
+    updateMemory(memory.id, { content })
   }
 
   const runExtract = async () => {
@@ -1902,6 +1960,10 @@ function MemoryPage() {
               <div className="flex items-end gap-2">
                 <button onClick={() => load()} disabled={!groupId || loading}
                   className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50">查询</button>
+                <button onClick={enableInjection} disabled={!groupId || injectionLoading}
+                  className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50">一键开启注入</button>
+                <button onClick={previewInjection} disabled={!groupId || injectionLoading}
+                  className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50">模拟注入</button>
                 <button onClick={runExtract} disabled={!groupId || extracting}
                   className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50">
                   {extracting ? '提取中...' : '提取记忆'}
@@ -1923,6 +1985,31 @@ function MemoryPage() {
                 <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-300">可注入 {lastExtractResult.injectable_count}</div>
               </div>
             )}
+            {injectionPreview && (
+              <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={injectionPreview.group_profile_mode === 'on' ? 'emerald' : injectionPreview.group_profile_mode === 'preview' ? 'blue' : 'slate'}>
+                    注入 {injectionPreview.group_profile_mode || 'off'}
+                  </Badge>
+                  <span className="text-slate-400">selected {(injectionPreview.group_memory_ids || []).length}</span>
+                  <span className="text-slate-500">chars {injectionPreview.group_memory_context_chars || 0}</span>
+                  {injectionPreview.chat_stream_id && <span className="text-slate-500">{injectionPreview.chat_stream_id}</span>}
+                </div>
+                {Array.isArray(injectionPreview.group_memory_ids) && injectionPreview.group_memory_ids.length > 0 && (
+                  <div className="mt-2 text-slate-400">注入 ID: {injectionPreview.group_memory_ids.join(', ')}</div>
+                )}
+                {Array.isArray(injectionPreview.group_memory_skipped) && injectionPreview.group_memory_skipped.length > 0 && (
+                  <div className="mt-2 text-slate-500">
+                    跳过: {injectionPreview.group_memory_skipped.slice(0, 5).map(x => `${x.id}:${x.reason}`).join(' / ')}
+                  </div>
+                )}
+                {injectionPreview.group_memory_context && (
+                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded border border-slate-800 bg-slate-900 p-2 text-[11px] leading-4 text-slate-300">
+                    {injectionPreview.group_memory_context}
+                  </pre>
+                )}
+              </div>
+            )}
           </Card>
 
           <div className="flex items-center justify-between">
@@ -1937,7 +2024,7 @@ function MemoryPage() {
             <Card className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead><tr className="border-b border-slate-800 text-left text-slate-500">
-                  <th className="px-3 py-2">id</th><th className="px-3 py-2">类型</th><th className="px-3 py-2">内容</th><th className="px-3 py-2">confidence</th><th className="px-3 py-2">证据</th><th className="px-3 py-2">decay</th><th className="px-3 py-2">来源</th><th className="px-3 py-2">状态</th><th className="px-3 py-2">更新</th>
+                  <th className="px-3 py-2">id</th><th className="px-3 py-2">类型</th><th className="px-3 py-2">内容</th><th className="px-3 py-2">confidence</th><th className="px-3 py-2">证据</th><th className="px-3 py-2">decay</th><th className="px-3 py-2">来源</th><th className="px-3 py-2">策略</th><th className="px-3 py-2">状态</th><th className="px-3 py-2">更新</th><th className="px-3 py-2">操作</th>
                 </tr></thead>
                 <tbody>
                   {memories.map(m => (
@@ -1949,8 +2036,22 @@ function MemoryPage() {
                       <td className="px-3 py-2"><button onClick={() => setExpandedEvidence(expandedEvidence === m.id ? null : m.id)} className="text-xs text-slate-500 underline hover:text-emerald-400">{m.evidence_count}</button></td>
                       <td className="px-3 py-2">{Number(m.decay_score).toFixed(2)}</td>
                       <td className="px-3 py-2 text-slate-500">{m.source}</td>
+                      <td className="px-3 py-2"><Badge tone={m.inject_policy === 'auto' ? 'emerald' : m.inject_policy === 'manual_only' ? 'blue' : 'slate'}>{m.inject_policy || 'auto'}</Badge></td>
                       <td className="px-3 py-2">{m.status === 'active' ? <Badge tone="emerald">active</Badge> : m.status === 'archived' ? <Badge tone="slate">archived</Badge> : <Badge tone="amber">{m.status}</Badge>}</td>
                       <td className="px-3 py-2 text-xs text-slate-500">{m.updated_at}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          <button onClick={() => editMemoryContent(m)} disabled={memoryUpdatingId === m.id}
+                            className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800 disabled:opacity-50">编辑</button>
+                          {m.status === 'disabled' ? (
+                            <button onClick={() => updateMemory(m.id, { status: 'active', inject_policy: 'auto', disabled_reason: '' })} disabled={memoryUpdatingId === m.id}
+                              className="rounded border border-emerald-700 px-2 py-1 text-[11px] text-emerald-300 hover:bg-emerald-950 disabled:opacity-50">恢复</button>
+                          ) : (
+                            <button onClick={() => updateMemory(m.id, { status: 'disabled', inject_policy: 'never', disabled_reason: 'web_admin_disabled' })} disabled={memoryUpdatingId === m.id}
+                              className="rounded border border-red-800 px-2 py-1 text-[11px] text-red-300 hover:bg-red-950 disabled:opacity-50">禁用</button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -126,3 +126,18 @@ def test_memory_page_auto_loads_exact_group_input():
     assert "exactOverviewGroup" in memory_source
     assert "load(exactOverviewGroup.group_id)" in memory_source
     assert "item.raw_group_id === q" in memory_source
+
+
+def test_memory_page_exposes_injection_controls_and_preview():
+    source = read_app()
+    memory_source = source.split("function MemoryPage()")[1].split("// ── Audit ──")[0]
+
+    assert "enableInjection" in memory_source
+    assert "previewInjection" in memory_source
+    assert "group-memories/${encodeURIComponent(groupId)}/injection-config" in memory_source
+    assert "group-memories/${encodeURIComponent(groupId)}/injection-preview" in memory_source
+    assert "updateMemory" in memory_source
+    assert "api.patch(`/group-memories/items/${memoryId}`" in memory_source
+    assert "一键开启注入" in memory_source
+    assert "模拟注入" in memory_source
+    assert "禁用" in memory_source

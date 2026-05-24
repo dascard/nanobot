@@ -61,12 +61,14 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         if persona and persona.persona_json:
             persona_text = persona.persona_json
 
+    user_input = str(getattr(body, "user_input", "") or "")
     history_header, history_messages, history_debug = build_chat_context(
         db,
         session_id,
         user_id=user_id,
         is_group=is_group,
         group_id=group_id,
+        current_user_input=user_input,
     )
     runtime_preset = _strip(getattr(body, "runtime_preset", "")) or "full"
     tool_plan = build_tool_plan(
@@ -95,7 +97,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
                 group_id=group_id,
                 sender_name=str(getattr(body, "sender_name", "") or ""),
                 sender_id=user_id,
-                user_input=str(getattr(body, "user_input", "") or ""),
+                user_input=user_input,
                 persona_text=persona_text or "无已存储画像",
                 history_header=history_header,
                 history_messages=history_messages,
@@ -127,6 +129,12 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         "warnings": plan.warnings,
         "debug": plan.debug,
         "history_debug": history_debug,
+        "group_profile_mode": history_debug.get("group_profile_mode", "off"),
+        "group_memory_context": history_debug.get("group_memory_context", ""),
+        "group_memory_ids": history_debug.get("group_memory_ids", []),
+        "group_memory_skipped": history_debug.get("group_memory_skipped", []),
+        "group_memory_context_chars": history_debug.get("group_memory_context_chars", 0),
+        "score_components": history_debug.get("score_components", {}),
         "runtime_preset": runtime_preset,
         "runtime_tool_prompt": runtime_tool_prompt,
         "tool_plan_sha256": tool_plan.sha256,

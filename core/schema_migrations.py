@@ -172,6 +172,12 @@ def _group_memory_columns(conn: Any, engine: Any, db_path: str | None) -> None:
         "cluster_key": "TEXT",
         "updated_at": "TIMESTAMP",
         "source": "TEXT DEFAULT 'group_analysis'",
+        "inject_policy": "TEXT DEFAULT 'auto'",
+        "disabled_reason": "TEXT DEFAULT ''",
+        "rejected_reason": "TEXT DEFAULT ''",
+        "merged_into_id": "INTEGER",
+        "last_injected_at": "TIMESTAMP",
+        "injected_count": "INTEGER DEFAULT 0",
     })
 
     rows = conn.execute(text(

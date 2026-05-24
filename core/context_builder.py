@@ -317,8 +317,14 @@ def build_session_memory(
     return header, history_messages, debug
 
 
-def _build_profile_section(db, group_id: str) -> tuple[str, dict]:
-    """读取 group_profile_mode，生成 GroupProfile 上下文并返回 debug 信息。
+def _build_profile_section(
+    db,
+    group_id: str,
+    *,
+    current_user_input: str = "",
+    recent_messages: list[dict] | None = None,
+) -> tuple[str, dict]:
+    """读取 group_profile_mode，生成群体记忆上下文并返回 debug 信息。
 
     返回 (profile_section_markdown, debug_fragment)。
     """
@@ -326,47 +332,31 @@ def _build_profile_section(db, group_id: str) -> tuple[str, dict]:
         "group_profile_mode": "off", "group_profile_injected": False,
         "profile_items_count": 0, "profile_memory_ids": [],
         "profile_preview": None,
+        "group_memory_injected": False,
+        "group_memory_ids": [],
+        "group_memory_skipped": [],
+        "group_memory_context_chars": 0,
     }
     try:
-        from core.database import ChatStreamConfig
-        from core.group_runtime.ids import normalize_group_session_id
+        from app.group_memory.injection_service import GroupMemoryInjectionService
 
-        norm = normalize_group_session_id(group_id)
-        cfg = db.query(ChatStreamConfig).filter(
-            ChatStreamConfig.chat_stream_id == norm
-        ).first()
-        mode = (cfg.group_profile_mode or "off") if cfg else "off"
-        debug["group_profile_mode"] = mode
-
-        if mode not in ("preview", "on"):
-            return "", debug
-
-        from core.group_memory import query_injectable, build_profile_from_memories
-
-        memories = query_injectable(group_id)
-        if not memories:
-            return "", debug
-
-        profile = build_profile_from_memories(memories)
-        debug["profile_memory_ids"] = [m["id"] for m in memories[:20]]
-        debug["profile_items_count"] = sum(
-            len(v) if isinstance(v, (list, dict)) else 1
-            for v in profile.values() if v
+        result = GroupMemoryInjectionService(db).build_context(
+            group_id=group_id,
+            current_user_input=current_user_input,
+            recent_messages=recent_messages or [],
         )
-        debug["profile_preview"] = _compact_profile(profile)
-
-        if mode == "on":
-            ctx = _render_profile_context(group_id, profile)
-            if ctx:
-                debug["group_profile_injected"] = True
-                logger.info("[ContextDebug] group=%s mode=%s items=%d ids=%s",
-                            group_id, mode, debug["profile_items_count"],
-                            debug["profile_memory_ids"][:10])
-                return ctx, debug
-        else:
-            logger.info("[ContextDebug] group=%s mode=%s items=%d preview=%s",
-                        group_id, mode, debug["profile_items_count"],
-                        "yes" if debug.get("profile_preview") else "no")
+        debug.update(result.debug)
+        debug["group_profile_injected"] = bool(result.debug.get("group_memory_injected"))
+        debug["profile_memory_ids"] = list(result.selected_ids)
+        debug["profile_items_count"] = len(result.selected_ids)
+        debug["profile_preview"] = {
+            "selected_ids": list(result.selected_ids),
+            "skipped_count": len(result.skipped),
+        } if result.selected_ids or result.skipped else None
+        if result.context:
+            logger.info("[ContextDebug] group=%s mode=%s ids=%s",
+                        group_id, debug["group_profile_mode"], result.selected_ids[:10])
+        return result.context, debug
     except Exception as e:
         logger.warning("[Context] GroupProfile build failed: %s", e)
 
@@ -602,6 +592,7 @@ def build_chat_context(
     is_group: bool = False,
     group_id: str = "",
     exclude_message_ids: list[str] | None = None,
+    current_user_input: str = "",
 ) -> tuple[str, list[dict], dict]:
     """构建真实回复链路使用的统一上下文。
 
@@ -621,6 +612,14 @@ def build_chat_context(
         debug["context_source"] = "conversation_turn"
         return header, messages, debug
 
+    messages, debug = build_group_recent_messages(
+        db,
+        session_id,
+        limit=MAX_GROUP_RECENT_ROWS,
+        max_per_msg=max_per_msg,
+        max_total=max_total,
+        exclude_message_ids=exclude_message_ids,
+    )
     profile_header = ""
     profile_debug: dict = {
         "group_profile_mode": "off",
@@ -630,16 +629,12 @@ def build_chat_context(
         "profile_preview": None,
     }
     if group_id:
-        profile_header, profile_debug = _build_profile_section(db, group_id)
-
-    messages, debug = build_group_recent_messages(
-        db,
-        session_id,
-        limit=MAX_GROUP_RECENT_ROWS,
-        max_per_msg=max_per_msg,
-        max_total=max_total,
-        exclude_message_ids=exclude_message_ids,
-    )
+        profile_header, profile_debug = _build_profile_section(
+            db,
+            group_id,
+            current_user_input=current_user_input,
+            recent_messages=messages,
+        )
     debug.update(profile_debug)
     header = "\n".join(
         x for x in [profile_header, _build_conversation_context_header(is_group=True)]

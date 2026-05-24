@@ -259,6 +259,37 @@ async def test_prompt_v2_moves_group_profile_header_after_history_messages():
     assert "[GroupProfileContext]" not in contents[header_idx]
 
 
+@pytest.mark.asyncio
+async def test_prompt_v2_moves_group_memory_context_after_history_messages():
+    from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    plan = await compile_prompt_plan(
+        PromptCompileRequest(
+            chat_type="group",
+            user_input="当前输入",
+            history_header=(
+                '<group_memory_context group_id="group_1001" selected_count="1">\n'
+                "- 群风格: 轻松\n"
+                "</group_memory_context>\n"
+                "<conversation_context>\n群聊历史说明\n</conversation_context>"
+            ),
+            history_messages=[{"role": "user", "content": "UNIQUE_HISTORY_MESSAGE"}],
+            runtime_tool_prompt="[RuntimeTool]\n必须 reply/no_reply",
+        )
+    )
+
+    contents = [str(m["content"]) for m in plan.messages]
+    header_idx = next(i for i, c in enumerate(contents) if "<conversation_context>" in c)
+    history_idx = next(i for i, c in enumerate(contents) if "UNIQUE_HISTORY_MESSAGE" in c)
+    memory_idx = next(i for i, c in enumerate(contents) if 'selected_count="1"' in c)
+
+    assert header_idx < history_idx < memory_idx
+    assert sum('selected_count="1"' in c for c in contents) == 1
+    assert "<group_memory_context" not in contents[header_idx]
+    assert "[GroupProfileContext]" not in contents[memory_idx]
+
+
 def test_prompt_v2_audit_reports_duplicate_required_sections():
     from core.prompt_v2.audit import audit_prompt_plan
     from core.prompt_v2.schema import PromptPlan

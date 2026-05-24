@@ -218,7 +218,13 @@ class GroupMemory(Base):
     last_seen = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
     decay_score = Column(Float, default=1.0)
-    status = Column(String, default="active")  # active/archived/review
+    status = Column(String, default="active")  # review/active/disabled/archived/rejected
+    inject_policy = Column(String, default="auto")  # auto/manual_only/never
+    disabled_reason = Column(Text, default="")
+    rejected_reason = Column(Text, default="")
+    merged_into_id = Column(Integer, nullable=True)
+    last_injected_at = Column(DateTime, nullable=True)
+    injected_count = Column(Integer, default=0)
     source = Column(String, default="group_analysis")  # group_analysis/slang_miner/manual/profile_feedback
     meta_json = Column(Text, default="{}")
     created_at = Column(DateTime, default=datetime.now)

@@ -17,6 +17,7 @@ logger = logging.getLogger("nanobot.group_memory")
 
 MEMORY_TYPES = {"topic", "slang", "relationship", "style", "event", "preference"}
 CONFIDENCE_FLOOR = 0.55
+MANUAL_REVIEW_TYPES = {"relationship", "event", "slang", "preference"}
 
 
 def _normalize_content(content: str) -> str:
@@ -39,6 +40,18 @@ def _cluster_key(content: str) -> str:
     words = content.strip().split()
     keywords = [w for w in words if w.lower() not in stopwords]
     return " ".join(keywords[:3]) if keywords else content.strip()[:20]
+
+
+def _default_status_and_policy(
+    memory_type: str,
+    confidence_hint: float,
+    evidence_log_ids: list[int] | None,
+) -> tuple[str, str]:
+    if memory_type in MANUAL_REVIEW_TYPES:
+        return "review", "manual_only"
+    if confidence_hint >= 0.65 and evidence_log_ids:
+        return "active", "auto"
+    return "review", "auto"
 
 
 def upsert(
@@ -89,6 +102,7 @@ def upsert(
             return "updated"
 
         ck = cluster_key or _cluster_key(content)
+        status, inject_policy = _default_status_and_policy(memory_type, confidence_hint, evidence_log_ids)
         entry = GroupMemory(
             group_id=group_id, memory_type=memory_type,
             content=content.strip(), content_hash=ch,
@@ -97,7 +111,8 @@ def upsert(
             confidence=confidence_hint, evidence_count=1,
             first_seen=datetime.now(), last_seen=datetime.now(),
             decay_score=1.0, source=source,
-            status="active" if confidence_hint >= CONFIDENCE_FLOOR else "review",
+            status=status,
+            inject_policy=inject_policy,
             meta_json=json.dumps(meta or {}, ensure_ascii=False),
         )
         db.add(entry)
@@ -280,6 +295,7 @@ def should_inject(memory: dict) -> bool:
     """
     if not (
         memory.get("status") == "active"
+        and memory.get("inject_policy", "auto") == "auto"
         and memory.get("confidence", 0) >= CONFIDENCE_FLOOR
         and memory.get("decay_score", 0) >= 0.3
         and bool(_safe_evidence_ids(memory.get("evidence_log_ids_json", "")))
@@ -301,6 +317,12 @@ def _row_to_dict(r: GroupMemory) -> dict:
         "last_seen": r.last_seen.strftime("%Y-%m-%d") if r.last_seen else "",
         "updated_at": r.updated_at.strftime("%Y-%m-%d %H:%M") if r.updated_at else "",
         "status": r.status,
+        "inject_policy": getattr(r, "inject_policy", "auto") or "auto",
+        "disabled_reason": getattr(r, "disabled_reason", "") or "",
+        "rejected_reason": getattr(r, "rejected_reason", "") or "",
+        "merged_into_id": getattr(r, "merged_into_id", None),
+        "last_injected_at": r.last_injected_at.strftime("%Y-%m-%d %H:%M") if getattr(r, "last_injected_at", None) else "",
+        "injected_count": getattr(r, "injected_count", 0) or 0,
         "source": r.source or "group_analysis",
         "meta_json": r.meta_json,
         "evidence_log_ids_json": r.evidence_log_ids_json,

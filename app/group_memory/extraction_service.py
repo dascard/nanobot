@@ -229,6 +229,7 @@ def build_group_memory_overview(db, *, limit: int = 300) -> list[dict]:
 def _memory_row_to_dict(row) -> dict:
     return {
         "status": row.status,
+        "inject_policy": getattr(row, "inject_policy", "auto") or "auto",
         "confidence": row.confidence,
         "decay_score": row.decay_score,
         "evidence_log_ids_json": row.evidence_log_ids_json,
