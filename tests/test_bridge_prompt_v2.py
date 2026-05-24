@@ -45,6 +45,7 @@ class _FakeOutput:
 @pytest.mark.asyncio
 async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event(monkeypatch, db_session):
     from core import database
+    from core.database import AgentRun
     from core.prompt_v2.schema import PromptCompileRequest, PromptPlan
     from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
@@ -93,7 +94,15 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
             prompt_sha256="b" * 64,
             token_estimate=10,
             warnings=[],
-            debug={"template_path": "/tmp/chat_group.md"},
+            debug={
+                "template_path": "/tmp/chat_group.md",
+                "context_debug": {
+                    "group_memory_injected": True,
+                    "group_memory_ids": [11, 12],
+                    "group_memory_context_chars": 620,
+                    "group_profile_mode": "on",
+                },
+            },
         )
 
     monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile)
@@ -151,6 +160,11 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     assert [m.content for m in conversation._messages] == ["V2_SYSTEM_ONLY"]
     assert seen_events
     assert seen_events[0].content == "<user_input>\nPLAN_USER\n</user_input>"
+    run = db_session.query(AgentRun).filter(AgentRun.session_id == "group_1001").first()
+    assert run is not None
+    assert '"group_memory_injected": true' in run.meta_json
+    assert '"group_memory_ids": [11, 12]' in run.meta_json
+    assert '"group_profile_mode": "on"' in run.meta_json
 
 
 @pytest.mark.asyncio

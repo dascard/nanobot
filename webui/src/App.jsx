@@ -1998,6 +1998,9 @@ function MemoryPage() {
                 {Array.isArray(injectionPreview.group_memory_ids) && injectionPreview.group_memory_ids.length > 0 && (
                   <div className="mt-2 text-slate-400">注入 ID: {injectionPreview.group_memory_ids.join(', ')}</div>
                 )}
+                {injectionPreview.group_profile_mode === 'preview' && (
+                  <div className="mt-2 text-blue-300">preview 模式只展示预览结果，不会真实注入 prompt。</div>
+                )}
                 {Array.isArray(injectionPreview.group_memory_skipped) && injectionPreview.group_memory_skipped.length > 0 && (
                   <div className="mt-2 text-slate-500">
                     跳过: {injectionPreview.group_memory_skipped.slice(0, 5).map(x => `${x.id}:${x.reason}`).join(' / ')}

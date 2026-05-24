@@ -48,3 +48,32 @@ def test_schema_migrations_records_applied_versions():
         rows = conn.execute(text("SELECT version FROM schema_migrations ORDER BY version")).fetchall()
 
     assert [row[0] for row in rows] == sorted(version for version, _, _ in MIGRATIONS)
+
+
+def test_group_memory_governance_columns_apply_when_old_group_memory_migration_already_recorded():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations ("
+            "version TEXT PRIMARY KEY, name TEXT, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO schema_migrations(version, name) "
+            "VALUES ('20260523_group_memory_columns', 'group memory columns')"
+        ))
+        conn.execute(text(
+            "CREATE TABLE group_memories ("
+            "id INTEGER PRIMARY KEY, "
+            "group_id TEXT, memory_type TEXT, content TEXT, content_hash TEXT, "
+            "confidence REAL, evidence_count INTEGER, evidence_log_ids_json TEXT, "
+            "decay_score REAL, status TEXT)"
+        ))
+
+    run_schema_migrations(engine)
+
+    columns = [col["name"] for col in inspect(engine).get_columns("group_memories")]
+    assert "inject_policy" in columns
+    assert "last_injected_at" in columns
+    assert "injected_count" in columns

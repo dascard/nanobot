@@ -33,6 +33,12 @@ _INTERNAL_KINDS = frozenset({
     "empty_reply",
 })
 
+GROUP_PROFILE_CONTEXT_DEPRECATED = True
+GROUP_PROFILE_CONTEXT_DEPRECATED_REASON = (
+    "build_group_profile_context 仅保留旧测试兼容；真实运行时群体记忆注入必须使用 "
+    "app.group_memory.injection_service.GroupMemoryInjectionService。"
+)
+
 
 def _cap_text(text: str, max_chars: int, label: str = "") -> str:
     if len(text) <= max_chars:
@@ -725,7 +731,7 @@ def _lookup_evidence_snippets(db, evidence_ids: list[int], max_per_item: int = 8
 
 
 def build_group_profile_context(group_id: str) -> str:
-    """从 GroupMemory 生成群聊长期记忆上下文——含证据摘要，减少幻覚。"""
+    """Deprecated: 旧测试兼容入口，真实运行时不得调用。"""
     try:
         from core.database import SessionLocal
         from core.group_memory import build_profile_with_evidence

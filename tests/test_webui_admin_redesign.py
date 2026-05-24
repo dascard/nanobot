@@ -140,4 +140,5 @@ def test_memory_page_exposes_injection_controls_and_preview():
     assert "api.patch(`/group-memories/items/${memoryId}`" in memory_source
     assert "一键开启注入" in memory_source
     assert "模拟注入" in memory_source
+    assert "preview 模式只展示预览结果，不会真实注入 prompt。" in memory_source
     assert "禁用" in memory_source

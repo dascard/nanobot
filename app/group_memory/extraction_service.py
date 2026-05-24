@@ -161,6 +161,8 @@ def build_group_memory_overview(db, *, limit: int = 300) -> list[dict]:
             "active_count": 0,
             "injectable_count": 0,
             "latest_memory_at": "",
+            "last_injected_at": "",
+            "recent_injected_ids": [],
             "group_profile_mode": "off",
         })
         return row
@@ -201,6 +203,11 @@ def build_group_memory_overview(db, *, limit: int = 300) -> list[dict]:
             row["active_count"] += 1
         if not row["latest_memory_at"]:
             row["latest_memory_at"] = _fmt_dt(memory.last_seen or memory.updated_at)
+        injected_at = _fmt_dt(getattr(memory, "last_injected_at", None))
+        if injected_at:
+            if not row["last_injected_at"] or injected_at > row["last_injected_at"]:
+                row["last_injected_at"] = injected_at
+            row["recent_injected_ids"].append(memory.id)
 
     from core.group_memory import should_inject
     for memory in memory_rows:
@@ -219,6 +226,8 @@ def build_group_memory_overview(db, *, limit: int = 300) -> list[dict]:
             ensure(group_id)["group_profile_mode"] = cfg.group_profile_mode or "off"
 
     items = list(groups.values())
+    for item in items:
+        item["recent_injected_ids"] = item["recent_injected_ids"][:10]
     items.sort(key=lambda item: (
         item["latest_log_at"] or item["latest_memory_at"] or "",
         item["memory_count"],

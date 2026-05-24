@@ -448,6 +448,43 @@ class TestObservabilityAPI:
         assert memory["inject_policy"] == "never"
         assert memory["disabled_reason"] == "人工确认污染"
 
+    def test_group_memory_update_item_duplicate_content_returns_409(self, client, auth_header):
+        from core.group_memory import _content_hash
+
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(GroupMemory(
+                group_id="group_7788",
+                memory_type="topic",
+                content="第一条",
+                content_hash=_content_hash("第一条"),
+                confidence=0.8,
+                evidence_count=2,
+                evidence_log_ids_json="[1, 2]",
+                status="active",
+                inject_policy="auto",
+            ))
+            db.add(GroupMemory(
+                group_id="group_7788",
+                memory_type="topic",
+                content="重复内容",
+                content_hash=_content_hash("重复内容"),
+                confidence=0.8,
+                evidence_count=2,
+                evidence_log_ids_json="[3, 4]",
+                status="active",
+                inject_policy="auto",
+            ))
+            db.commit()
+
+        r = client.patch(
+            "/api/v1/admin/group-memories/items/1",
+            json={"content": "重复内容"},
+            headers=auth_header,
+        )
+
+        assert r.status_code == 409
+        assert "已有相同记忆" in r.text
+
     def test_overview_counts_recent_runtime_signals(self, client, auth_header):
         now = datetime.now()
         with next(app.dependency_overrides[get_db]()) as db:

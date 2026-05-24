@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -22,7 +23,7 @@ class GroupMemoryInjectionResult:
     context: str = ""
     selected_ids: list[int] = field(default_factory=list)
     skipped: list[dict[str, Any]] = field(default_factory=list)
-    score_components: dict[str, dict[str, float]] = field(default_factory=dict)
+    score_components: dict[str, dict[str, Any]] = field(default_factory=dict)
     debug: dict[str, Any] = field(default_factory=dict)
 
 
@@ -91,6 +92,7 @@ class GroupMemoryInjectionService:
         })
         if mode == "on" and context:
             debug["group_memory_injected"] = True
+            self._record_injected(selection.selected)
             return GroupMemoryInjectionResult(
                 context=context,
                 selected_ids=selection.selected_ids,
@@ -105,3 +107,12 @@ class GroupMemoryInjectionService:
             score_components=selection.score_components,
             debug=debug,
         )
+
+    def _record_injected(self, memories: list[Any]) -> None:
+        if not memories:
+            return
+        now = datetime.now()
+        for row in memories:
+            row.last_injected_at = now
+            row.injected_count = int(row.injected_count or 0) + 1
+        self.db.flush()

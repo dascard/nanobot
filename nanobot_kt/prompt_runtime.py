@@ -202,6 +202,21 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         prompt_default_path=str(prompt_plan.debug.get("template_path", "")),
         prompt_sha256=prompt_plan.prompt_sha256,
     )
+    context_debug = dict(prompt_plan.debug.get("context_debug", {}) or {})
+    meta_update = {
+        "prompt_engine": "v2",
+        "group_memory": context_debug,
+    }
+    for key in (
+        "group_memory_injected",
+        "group_memory_ids",
+        "group_memory_skipped",
+        "group_memory_context_chars",
+        "group_profile_mode",
+    ):
+        if key in context_debug:
+            meta_update[key] = context_debug[key]
+
     return PromptRuntimeResult(
         prompt_key=prompt_plan.prompt_key,
         prompt_mode="v2",
@@ -211,8 +226,5 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         prompt_sha256=prompt_plan.prompt_sha256,
         pre_event_messages=prompt_plan.messages_without_current_user,
         event_content=prompt_plan.current_user_content,
-        meta_update={
-            "prompt_engine": "v2",
-            "group_memory": dict(prompt_plan.debug.get("context_debug", {}) or {}),
-        },
+        meta_update=meta_update,
     )

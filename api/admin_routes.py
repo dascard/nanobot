@@ -12,6 +12,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from core.database import (
@@ -824,15 +825,28 @@ def group_memory_update_item(
         content = str(body.content).strip()
         if not content:
             raise HTTPException(status_code=400, detail="content is empty")
+        content_hash = _content_hash(content)
+        duplicate = db.query(GroupMemory).filter(
+            GroupMemory.id != row.id,
+            GroupMemory.group_id == row.group_id,
+            GroupMemory.memory_type == row.memory_type,
+            GroupMemory.content_hash == content_hash,
+        ).first()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="已有相同记忆，可合并或归档")
         row.content = content
-        row.content_hash = _content_hash(content)
+        row.content_hash = content_hash
         updates["content"] = content
     for field in ("status", "inject_policy", "disabled_reason", "rejected_reason"):
         value = getattr(body, field)
         if value is not None:
             setattr(row, field, value)
             updates[field] = value
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="已有相同记忆，可合并或归档") from exc
     _audit_request(
         db,
         request,

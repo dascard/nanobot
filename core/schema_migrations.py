@@ -220,6 +220,20 @@ def _group_memory_columns(conn: Any, engine: Any, db_path: str | None) -> None:
     ])
 
 
+def _group_memory_governance_columns(conn: Any, engine: Any, db_path: str | None) -> None:
+    if "group_memories" not in _table_names(conn):
+        return
+
+    _add_missing_columns(conn, "group_memories", {
+        "inject_policy": "TEXT DEFAULT 'auto'",
+        "disabled_reason": "TEXT DEFAULT ''",
+        "rejected_reason": "TEXT DEFAULT ''",
+        "merged_into_id": "INTEGER",
+        "last_injected_at": "TIMESTAMP",
+        "injected_count": "INTEGER DEFAULT 0",
+    })
+
+
 def _chat_stream_config_group_profile_mode(conn: Any, engine: Any, db_path: str | None) -> None:
     cfg_columns = _columns(conn, "chat_stream_configs")
     if not cfg_columns or "group_profile_mode" in cfg_columns:
@@ -349,6 +363,7 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_chat_log_metadata_columns", "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
     ("20260523_group_memory_columns", "group memory columns", _group_memory_columns),
+    ("20260524_group_memory_governance_columns", "group memory governance columns", _group_memory_governance_columns),
     ("20260523_chat_stream_config_group_profile_mode", "chat stream group profile mode", _chat_stream_config_group_profile_mode),
     ("20260523_chat_log_session_message_index", "chat log session/message index", _chat_log_session_message_index),
     ("20260523_user_profile_columns", "user profile columns", _user_profile_columns),

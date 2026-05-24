@@ -42,7 +42,7 @@ STRICT_MIN_RELEVANCE = 0.18
 class GroupMemorySelection:
     selected: list[Any] = field(default_factory=list)
     skipped: list[dict[str, Any]] = field(default_factory=list)
-    score_components: dict[str, dict[str, float]] = field(default_factory=dict)
+    score_components: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def selected_ids(self) -> list[int]:
@@ -126,56 +126,71 @@ class GroupMemoryRetrievalService:
         candidates: list[tuple[float, Any]] = []
         selection = GroupMemorySelection()
         type_counts: dict[str, int] = {}
-        char_total = 0
 
         for row in rows:
-            reason = self._skip_reason(row)
-            if reason:
-                selection.skipped.append({"id": row.id, "reason": reason})
-                continue
             memory_type = str(row.memory_type or "")
             relevance = _lexical_relevance(row.content, query_text)
+            components = self._score_components(row, memory_type, relevance)
+            reason = self._skip_reason(row)
+            if reason:
+                components["skip_reason"] = reason
+                selection.score_components[str(row.id)] = components
+                selection.skipped.append({"id": row.id, "reason": reason})
+                continue
             min_relevance = STRICT_MIN_RELEVANCE if memory_type in STRICT_RELEVANCE_TYPES else DEFAULT_MIN_RELEVANCE
             if relevance < min_relevance and memory_type != "style":
+                components["skip_reason"] = "low_relevance"
+                selection.score_components[str(row.id)] = components
                 selection.skipped.append({"id": row.id, "reason": "low_relevance"})
                 continue
-            components = {
-                "confidence": max(0.0, min(1.0, float(row.confidence or 0))),
-                "decay": max(0.0, min(1.0, float(row.decay_score or 0))),
-                "evidence": _evidence_weight(int(row.evidence_count or 0)),
-                "recency": _recency_weight(row.last_seen),
-                "relevance": relevance,
-                "type_prior": TYPE_PRIOR.get(memory_type, 0.35),
-            }
-            final = (
-                components["confidence"] * 0.30
-                + components["decay"] * 0.15
-                + components["evidence"] * 0.15
-                + components["recency"] * 0.10
-                + components["relevance"] * 0.25
-                + components["type_prior"] * 0.05
-            )
-            components["final"] = round(final, 6)
             selection.score_components[str(row.id)] = components
-            candidates.append((final, row))
+            candidates.append((components["final"], row))
 
         for _, row in sorted(candidates, key=lambda item: item[0], reverse=True):
             memory_type = str(row.memory_type or "")
             if len(selection.selected) >= max_items:
+                selection.score_components[str(row.id)]["skip_reason"] = "max_items"
                 selection.skipped.append({"id": row.id, "reason": "max_items"})
                 continue
             if type_counts.get(memory_type, 0) >= TYPE_LIMITS.get(memory_type, 2):
+                selection.score_components[str(row.id)]["skip_reason"] = "type_limit"
                 selection.skipped.append({"id": row.id, "reason": "type_limit"})
                 continue
-            next_chars = len(str(row.content or ""))
-            if selection.selected and char_total + next_chars > max_chars:
+            if self._would_exceed_render_budget(norm, selection.selected + [row], max_chars):
+                selection.score_components[str(row.id)]["skip_reason"] = "over_budget"
                 selection.skipped.append({"id": row.id, "reason": "over_budget"})
                 continue
             selection.selected.append(row)
             type_counts[memory_type] = type_counts.get(memory_type, 0) + 1
-            char_total += next_chars
 
         return selection
+
+    def _score_components(self, row: Any, memory_type: str, relevance: float) -> dict[str, float]:
+        components = {
+            "confidence": max(0.0, min(1.0, float(getattr(row, "confidence", 0) or 0))),
+            "decay": max(0.0, min(1.0, float(getattr(row, "decay_score", 0) or 0))),
+            "evidence": _evidence_weight(int(getattr(row, "evidence_count", 0) or 0)),
+            "recency": _recency_weight(getattr(row, "last_seen", None)),
+            "relevance": relevance,
+            "type_prior": TYPE_PRIOR.get(memory_type, 0.35),
+        }
+        final = (
+            components["confidence"] * 0.30
+            + components["decay"] * 0.15
+            + components["evidence"] * 0.15
+            + components["recency"] * 0.10
+            + components["relevance"] * 0.25
+            + components["type_prior"] * 0.05
+        )
+        components["final"] = round(final, 6)
+        return components
+
+    def _would_exceed_render_budget(self, group_id: str, rows: list[Any], max_chars: int) -> bool:
+        from app.group_memory.renderer import render_group_memory_context
+
+        if int(max_chars or 0) <= 0:
+            return False
+        return len(render_group_memory_context(group_id, rows)) > int(max_chars)
 
     def _skip_reason(self, row: Any) -> str:
         if str(getattr(row, "status", "") or "") != "active":

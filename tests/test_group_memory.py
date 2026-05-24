@@ -33,6 +33,23 @@ class TestUpsert:
         assert row.status == "review"
         db.close()
 
+    def test_preference_requires_stronger_evidence_for_auto_injection(self):
+        from core.database import SessionLocal, GroupMemory
+
+        upsert("g_pref", "preference", "群里希望回答直接一点", confidence_hint=0.74, evidence_log_ids=[1, 2])
+        upsert("g_pref", "preference", "群里偏好先给结论", confidence_hint=0.80, evidence_log_ids=[3, 4])
+
+        db = SessionLocal()
+        rows = {
+            row.content: row
+            for row in db.query(GroupMemory).filter(GroupMemory.group_id == "group_g_pref").all()
+        }
+        assert rows["群里希望回答直接一点"].status == "review"
+        assert rows["群里希望回答直接一点"].inject_policy == "auto"
+        assert rows["群里偏好先给结论"].status == "active"
+        assert rows["群里偏好先给结论"].inject_policy == "auto"
+        db.close()
+
     def test_duplicate_updates_evidence(self):
         upsert("g_dup", "topic", "测试话题", confidence_hint=0.70, evidence_log_ids=[1])
         r = upsert("g_dup", "topic", "测试话题", confidence_hint=0.70, evidence_log_ids=[2])
@@ -76,7 +93,10 @@ class TestBuildProfile:
         assert profile["common_topics"] == []
 
     def test_profile_includes_relationships_in_context(self):
+        from core.context_builder import GROUP_PROFILE_CONTEXT_DEPRECATED
         from core.database import GroupMemory, SessionLocal
+
+        assert GROUP_PROFILE_CONTEXT_DEPRECATED is True
 
         db = SessionLocal()
         db.add(GroupMemory(

@@ -38,6 +38,10 @@ def test_group_memory_injection_uses_stream_config_for_group_id(db_session):
     assert "项目开发与UI设计" in result.context
     assert result.debug["group_memory_context_chars"] == len(result.context)
 
+    memory = db_session.query(GroupMemory).filter(GroupMemory.content_hash == "gm-inject-topic").first()
+    assert memory.injected_count == 1
+    assert memory.last_injected_at is not None
+
 
 def test_group_memory_injection_preview_mode_reports_without_context(db_session):
     from app.group_memory.injection_service import GroupMemoryInjectionService
@@ -132,3 +136,40 @@ def test_group_memory_retrieval_skips_manual_policy_and_low_relevance(db_session
     assert skipped[2] == "manual_only"
     assert skipped[3] == "low_relevance"
     assert result.score_components["1"]["final"] > 0
+    assert result.score_components["2"]["skip_reason"] == "manual_only"
+    assert result.score_components["3"]["skip_reason"] == "low_relevance"
+    assert result.score_components["3"]["relevance"] == 0.0
+
+
+def test_group_memory_retrieval_budget_includes_rendering_overhead(db_session):
+    from app.group_memory.retrieval_service import GroupMemoryRetrievalService
+    from app.group_memory.renderer import render_group_memory_context
+    from core.database import GroupMemory
+
+    for idx in range(1, 6):
+        db_session.add(GroupMemory(
+            group_id="group_1097666427",
+            memory_type="topic",
+            content=f"模型部署记忆{idx}: 这个群经常讨论本地模型部署和量化参数",
+            content_hash=f"gm-budget-{idx}",
+            confidence=0.88,
+            evidence_count=3,
+            evidence_log_ids_json="[1, 2, 3]",
+            decay_score=1.0,
+            status="active",
+            inject_policy="auto",
+            last_seen=datetime.now(),
+        ))
+    db_session.commit()
+
+    result = GroupMemoryRetrievalService(db_session).select(
+        group_id="1097666427",
+        current_user_input="本地模型部署和量化参数怎么调？",
+        recent_messages=[],
+        max_items=10,
+        max_chars=260,
+    )
+    context = render_group_memory_context("group_1097666427", result.selected)
+
+    assert len(context) <= 360
+    assert any(item["reason"] == "over_budget" for item in result.skipped)

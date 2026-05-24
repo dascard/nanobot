@@ -17,7 +17,7 @@ logger = logging.getLogger("nanobot.group_memory")
 
 MEMORY_TYPES = {"topic", "slang", "relationship", "style", "event", "preference"}
 CONFIDENCE_FLOOR = 0.55
-MANUAL_REVIEW_TYPES = {"relationship", "event", "slang", "preference"}
+MANUAL_REVIEW_TYPES = {"relationship", "event", "slang"}
 
 
 def _normalize_content(content: str) -> str:
@@ -49,6 +49,10 @@ def _default_status_and_policy(
 ) -> tuple[str, str]:
     if memory_type in MANUAL_REVIEW_TYPES:
         return "review", "manual_only"
+    if memory_type == "preference" and confidence_hint >= 0.75 and len(evidence_log_ids or []) >= 2:
+        return "active", "auto"
+    if memory_type == "preference":
+        return "review", "auto"
     if confidence_hint >= 0.65 and evidence_log_ids:
         return "active", "auto"
     return "review", "auto"
