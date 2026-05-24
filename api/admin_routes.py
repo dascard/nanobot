@@ -181,6 +181,11 @@ class EffectivePromptPreviewRequest(BaseModel):
     runtime_preset: str = "full"
 
 
+class GroupMemoryExtractRequest(BaseModel):
+    window_hours: int = Field(default=24, ge=0, le=720)
+    instructions: str = ""
+
+
 class PromptRollbackRequest(BaseModel):
     backup_name: str
 
@@ -670,6 +675,52 @@ def group_memories_list(
             for r in rows
         ]
     }
+
+
+@router.get("/group-memories/overview")
+def group_memories_overview(
+    limit: int = 300,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """群体记忆覆盖概览——列出有群聊日志或已有记忆的群。"""
+    from app.group_memory.extraction_service import build_group_memory_overview
+
+    items = build_group_memory_overview(db, limit=limit)
+    return {"total": len(items), "items": items}
+
+
+@router.post("/groups/{group_id:path}/memories/extract")
+async def group_memories_extract(
+    group_id: str,
+    body: GroupMemoryExtractRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """手动触发群体记忆提取。"""
+    from app.group_memory import extraction_service
+
+    try:
+        result = await extraction_service.extract_group_memories(
+            db,
+            group_id,
+            window_hours=body.window_hours,
+            instructions=body.instructions,
+        )
+    except extraction_service.GroupMemoryGroupNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except extraction_service.GroupMemoryInsufficientData as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    _audit_request(
+        db,
+        request,
+        "extract_group_memory",
+        "group_memory",
+        group_id,
+        result.to_dict(),
+    )
+    return result.to_dict()
 
 
 @router.get("/timing-gate/events")

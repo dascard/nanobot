@@ -164,7 +164,7 @@ def query_injectable(group_id: str, *, limit: int = 50) -> list[dict]:
     """查询可注入的 GroupMemory——与 build_profile 口径一致。"""
     group_id = _norm_group(group_id)
     return [
-        m for m in query_active(group_id, min_confidence=0.7, limit=limit)
+        m for m in query_active(group_id, min_confidence=CONFIDENCE_FLOOR, limit=limit)
         if should_inject(m)
     ]
 
@@ -204,7 +204,7 @@ def build_profile_with_evidence(group_id: str, db) -> tuple[dict, dict[str, list
     """
     from core.database import ChatLog
 
-    all_mem = [m for m in query_active(group_id, min_confidence=0.7) if should_inject(m)]
+    all_mem = [m for m in query_active(group_id, min_confidence=CONFIDENCE_FLOOR) if should_inject(m)]
     by_type: dict[str, list[dict]] = {}
     for m in all_mem:
         by_type.setdefault(m["memory_type"], []).append(m)
@@ -274,20 +274,19 @@ def _safe_meta(raw: str) -> dict:
 def should_inject(memory: dict) -> bool:
     """判断一条记忆是否应注入 GroupProfile。
 
-    基础 gate：active + high confidence + 有证据 + decay 未过期。
-    类型化门槛：event ≥1 evidence，其他 ≥2 evidence。
+    基础 gate：active + 达到写入 floor + 有证据 + decay 未过期。
+    group_analysis 一次分析会把同一窗口的多条 source_log_ids 作为证据写入，
+    因此不能再要求同一候选重复出现两次才允许注入。
     """
     if not (
         memory.get("status") == "active"
-        and memory.get("confidence", 0) >= 0.7
+        and memory.get("confidence", 0) >= CONFIDENCE_FLOOR
         and memory.get("decay_score", 0) >= 0.3
         and bool(_safe_evidence_ids(memory.get("evidence_log_ids_json", "")))
     ):
         return False
 
-    t = memory.get("memory_type", "")
-    min_evidence = 1 if t == "event" else 2
-    return memory.get("evidence_count", 0) >= min_evidence
+    return memory.get("evidence_count", 0) >= 1
 
 
 def _row_to_dict(r: GroupMemory) -> dict:

@@ -14,12 +14,14 @@ def extract_and_persist(group_id: str, analysis: dict, *,
     from core.group_memory import upsert
 
     stats = {"new": 0, "updated": 0, "skipped": 0}
-    meta = source_meta or {}
+    meta = dict(source_meta or {})
     evidence_ids = meta.pop("source_log_ids", []) if meta else []
+    source = str(meta.get("source") or "group_analysis")
 
     def _u(mtype, content, hint):
         return upsert(group_id, mtype, content, confidence_hint=hint,
-                      meta=meta, evidence_log_ids=evidence_ids)
+                      meta=meta, evidence_log_ids=evidence_ids,
+                      source=source)
 
     # topics → memory_type=topic
     for t in analysis.get("topics", {}).get("topics", [])[:5]:

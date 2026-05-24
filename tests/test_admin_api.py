@@ -251,6 +251,65 @@ class TestPrivateBlockFlow:
 
 
 class TestObservabilityAPI:
+    def test_group_memory_overview_includes_groups_without_memories(self, client, auth_header):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(ChatLog(
+                user_id="group_7788", session_id="group_7788",
+                role="ambient", content="[A]: 群里在聊模型部署",
+                sender_name="A", session_name="记忆测试群",
+                created_at=now,
+            ))
+            db.commit()
+
+        data = _ok(client.get("/api/v1/admin/group-memories/overview", headers=auth_header))
+
+        row = next(item for item in data["items"] if item["group_id"] == "group_7788")
+        assert row["session_name"] == "记忆测试群"
+        assert row["log_count"] == 1
+        assert row["memory_count"] == 0
+        assert row["injectable_count"] == 0
+
+    def test_group_memory_extract_endpoint_returns_service_stats(self, client, auth_header, monkeypatch):
+        class FakeResult:
+            def to_dict(self):
+                return {
+                    "ok": True,
+                    "group_id": "group_7788",
+                    "group_name": "记忆测试群",
+                    "window_hours": 24,
+                    "raw_count": 3,
+                    "eligible_count": 3,
+                    "deduped_count": 3,
+                    "message_count": 3,
+                    "source_log_count": 3,
+                    "stats": {"new": 1, "updated": 0, "skipped": 0},
+                    "memory_count": 1,
+                    "active_count": 1,
+                    "injectable_count": 1,
+                }
+
+        async def fake_extract(db, group_id, *, window_hours=24, instructions=""):
+            assert group_id == "group_7788"
+            assert window_hours == 24
+            assert instructions == "只提取稳定事实"
+            return FakeResult()
+
+        monkeypatch.setattr(
+            "app.group_memory.extraction_service.extract_group_memories",
+            fake_extract,
+        )
+
+        data = _ok(client.post(
+            "/api/v1/admin/groups/group_7788/memories/extract",
+            json={"window_hours": 24, "instructions": "只提取稳定事实"},
+            headers=auth_header,
+        ))
+
+        assert data["ok"] is True
+        assert data["stats"]["new"] == 1
+        assert data["injectable_count"] == 1
+
     def test_overview_counts_recent_runtime_signals(self, client, auth_header):
         now = datetime.now()
         with next(app.dependency_overrides[get_db]()) as db:

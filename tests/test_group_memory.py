@@ -1,7 +1,7 @@
 """GroupMemory 表 + 逻辑测试。"""
 import pytest
 from core.database import init_db
-from core.group_memory import upsert, query_active, build_profile, apply_decay
+from core.group_memory import upsert, query_active, query_injectable, build_profile, apply_decay
 from core.context_builder import build_group_profile_context, build_group_recent_context
 
 
@@ -47,6 +47,19 @@ class TestUpsert:
 
 
 class TestBuildProfile:
+    def test_single_group_analysis_topic_with_evidence_is_injectable(self):
+        upsert(
+            "g_single_pass",
+            "topic",
+            "稳定话题: 群里经常讨论本地模型部署",
+            confidence_hint=0.65,
+            evidence_log_ids=[1, 2, 3],
+        )
+
+        memories = query_injectable("g_single_pass")
+
+        assert any(m["content"].startswith("稳定话题") for m in memories)
+
     def test_only_active_high_confidence(self):
         # topic needs ≥2 evidence, call twice
         upsert("g_profile", "topic", "高置信话题", confidence_hint=0.85, evidence_log_ids=[1])

@@ -1712,68 +1712,220 @@ function LogsPage() {
 function MemoryPage() {
   const [groupId, setGroupId] = useState('')
   const [memType, setMemType] = useState('')
+  const [overview, setOverview] = useState([])
   const [memories, setMemories] = useState([])
+  const [overviewLoading, setOverviewLoading] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [extracting, setExtracting] = useState(false)
+  const [windowHours, setWindowHours] = useState(24)
+  const [instructions, setInstructions] = useState('')
+  const [lastExtractResult, setLastExtractResult] = useState(null)
   const [expandedEvidence, setExpandedEvidence] = useState(null)
 
-  const load = () => {
-    if (!groupId) return
+  const loadOverview = useCallback(() => {
+    setOverviewLoading(true)
+    return api.get('/group-memories/overview')
+      .then(r => setOverview(r.data.items || []))
+      .finally(() => setOverviewLoading(false))
+  }, [])
+
+  const load = useCallback((targetGroupId = groupId) => {
+    if (!targetGroupId) return
     setLoading(true)
-    api.get(`/admin/groups/${encodeURIComponent(groupId)}/memories${memType ? `?memory_type=${memType}` : ''}`)
+    const params = memType ? { memory_type: memType } : {}
+    return api.get(`/groups/${encodeURIComponent(targetGroupId)}/memories`, { params })
       .then(r => setMemories(r.data.memories || [])).finally(() => setLoading(false))
+  }, [groupId, memType])
+
+  useEffect(() => {
+    loadOverview()
+  }, [loadOverview])
+
+  const selectGroup = item => {
+    setGroupId(item.group_id)
+    setExpandedEvidence(null)
+    setLastExtractResult(null)
+    load(item.group_id)
   }
 
+  const runExtract = async () => {
+    if (!groupId || extracting) return
+    setExtracting(true)
+    setLastExtractResult(null)
+    try {
+      const r = await api.post(`/groups/${encodeURIComponent(groupId)}/memories/extract`, {
+        window_hours: Number(windowHours),
+        instructions,
+      })
+      setLastExtractResult(r.data)
+      await Promise.all([loadOverview(), load(groupId)])
+    } catch (e) {
+      alert(e.response?.data?.detail || e.message)
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  const stats = {
+    groups: overview.length,
+    withMemory: overview.filter(x => Number(x.memory_count || 0) > 0).length,
+    injectable: overview.reduce((sum, x) => sum + Number(x.injectable_count || 0), 0),
+    empty: overview.filter(x => Number(x.memory_count || 0) === 0).length,
+  }
+  const filteredOverview = overview.filter(item => {
+    const q = groupId.trim().toLowerCase()
+    if (!q) return true
+    return String(item.group_id || '').toLowerCase().includes(q) ||
+      String(item.session_name || '').toLowerCase().includes(q) ||
+      String(item.raw_group_id || '').toLowerCase().includes(q)
+  })
+
   return (
-    <div>
-      <div className="flex items-start justify-between mb-4">
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold">群体记忆</h1>
-          <p className="text-slate-500 text-sm">按群查看 GroupMemory：话题/黑话/风格/关系/事件/偏好</p>
+          <h1 className="text-xl font-semibold text-white">群体记忆</h1>
+          <p className="mt-1 text-xs text-slate-500">查看群聊记忆覆盖，手动触发稳定事实提取。</p>
+        </div>
+        <button onClick={loadOverview}
+          className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50"
+          disabled={overviewLoading}>
+          <RefreshCw className={`h-3.5 w-3.5 ${overviewLoading ? 'animate-spin' : ''}`} />
+          刷新概览
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <MiniStat label="已发现群" value={stats.groups} />
+        <MiniStat label="已有记忆" value={stats.withMemory} tone="blue" />
+        <MiniStat label="可注入项" value={stats.injectable} tone="emerald" />
+        <MiniStat label="待提取群" value={stats.empty} tone="amber" />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+        <Card className="min-h-[520px] overflow-hidden">
+          <div className="border-b border-slate-800 p-3">
+            <label className="block text-[11px] font-medium text-slate-400">
+              搜索或输入 group_id
+              <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="group_123456 / 群名"
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
+            </label>
+          </div>
+          <div className="max-h-[620px] overflow-y-auto">
+            {overviewLoading ? <Spinner /> : filteredOverview.length === 0 ? (
+              <div className="px-4 py-10 text-center text-xs text-slate-600">没有匹配的群</div>
+            ) : filteredOverview.map(item => {
+              const selected = item.group_id === groupId
+              return (
+                <button key={item.group_id} onClick={() => selectGroup(item)}
+                  className={`w-full border-b border-slate-800/70 px-3 py-3 text-left transition-colors ${selected ? 'bg-emerald-500/10' : 'hover:bg-slate-800/50'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-slate-100">{item.session_name || item.group_id}</div>
+                      <div className="mt-0.5 text-[11px] text-slate-500">{item.group_id}</div>
+                    </div>
+                    <Badge tone={Number(item.injectable_count || 0) > 0 ? 'emerald' : Number(item.memory_count || 0) > 0 ? 'blue' : 'amber'}>
+                      {item.memory_count || 0}
+                    </Badge>
+                  </div>
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-slate-500">
+                    <span>日志 {item.log_count || 0}</span>
+                    <span>注入 {item.injectable_count || 0}</span>
+                    <span>{item.group_profile_mode || 'off'}</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </Card>
+
+        <div className="min-w-0 space-y-4">
+          <Card className="p-3">
+            <div className="grid gap-3 lg:grid-cols-[1fr_140px_140px_auto]">
+              <label className="block text-[11px] font-medium text-slate-400">
+                当前群
+                <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="group_id"
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
+              </label>
+              <label className="block text-[11px] font-medium text-slate-400">
+                类型
+                <select value={memType} onChange={e => setMemType(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500">
+                  <option value="">全部类型</option>
+                  {['topic', 'slang', 'style', 'relationship', 'event', 'preference'].map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+              <label className="block text-[11px] font-medium text-slate-400">
+                提取窗口
+                <select value={windowHours} onChange={e => setWindowHours(Number(e.target.value))}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500">
+                  <option value={24}>24 小时</option>
+                  <option value={168}>7 天</option>
+                  <option value={720}>30 天</option>
+                  <option value={0}>全部历史</option>
+                </select>
+              </label>
+              <div className="flex items-end gap-2">
+                <button onClick={() => load()} disabled={!groupId || loading}
+                  className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50">查询</button>
+                <button onClick={runExtract} disabled={!groupId || extracting}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50">
+                  {extracting ? '提取中...' : '提取记忆'}
+                </button>
+              </div>
+            </div>
+            <label className="mt-3 block text-[11px] font-medium text-slate-400">
+              提取指引
+              <input value={instructions} onChange={e => setInstructions(e.target.value)}
+                placeholder="可选，例如：只提取稳定事实，忽略临时玩笑"
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
+            </label>
+            {lastExtractResult && (
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-5">
+                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-400">原始 {lastExtractResult.raw_count}</div>
+                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-400">清洗 {lastExtractResult.deduped_count}</div>
+                <div className="rounded-lg bg-slate-950 px-3 py-2 text-emerald-300">新增 {lastExtractResult.stats?.new || 0}</div>
+                <div className="rounded-lg bg-slate-950 px-3 py-2 text-blue-300">更新 {lastExtractResult.stats?.updated || 0}</div>
+                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-300">可注入 {lastExtractResult.injectable_count}</div>
+              </div>
+            )}
+          </Card>
+
+          {loading ? <Spinner /> : memories.length === 0 ? <div className="rounded-lg border border-slate-800 py-16 text-center text-sm text-slate-600">{groupId ? '暂无记忆' : '从左侧选择群或输入 group_id'}</div> : (
+            <Card className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="border-b border-slate-800 text-left text-slate-500">
+                  <th className="px-3 py-2">id</th><th className="px-3 py-2">类型</th><th className="px-3 py-2">内容</th><th className="px-3 py-2">confidence</th><th className="px-3 py-2">证据</th><th className="px-3 py-2">decay</th><th className="px-3 py-2">来源</th><th className="px-3 py-2">状态</th><th className="px-3 py-2">更新</th>
+                </tr></thead>
+                <tbody>
+                  {memories.map(m => (
+                    <tr key={m.id} className="border-b border-slate-800/50 align-top">
+                      <td className="px-3 py-2 text-slate-500">{m.id}</td>
+                      <td className="px-3 py-2"><Badge>{m.memory_type}</Badge></td>
+                      <td className="max-w-[520px] px-3 py-2 text-slate-200">{m.content}</td>
+                      <td className="px-3 py-2">{Number(m.confidence).toFixed(2)}</td>
+                      <td className="px-3 py-2"><button onClick={() => setExpandedEvidence(expandedEvidence === m.id ? null : m.id)} className="text-xs text-slate-500 underline hover:text-emerald-400">{m.evidence_count}</button></td>
+                      <td className="px-3 py-2">{Number(m.decay_score).toFixed(2)}</td>
+                      <td className="px-3 py-2 text-slate-500">{m.source}</td>
+                      <td className="px-3 py-2">{m.status === 'active' ? <Badge tone="emerald">active</Badge> : m.status === 'archived' ? <Badge tone="slate">archived</Badge> : <Badge tone="amber">{m.status}</Badge>}</td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{m.updated_at}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
+          {expandedEvidence && (() => {
+            const m = memories.find(x => x.id === expandedEvidence)
+            return m ? (
+              <Card className="p-3">
+                <div className="mb-2 text-xs text-slate-500">证据日志 ID 列表</div>
+                <JsonBlock value={m.evidence_log_ids_json} className="max-h-48" />
+              </Card>
+            ) : null
+          })()}
         </div>
       </div>
-      <div className="flex items-center gap-3 mb-4">
-        <input value={groupId} onChange={e => setGroupId(e.target.value)} placeholder="group_id"
-          className="w-48 p-2 rounded-lg bg-slate-950 border border-slate-700 text-sm" />
-        <select value={memType} onChange={e => setMemType(e.target.value)}
-          className="p-2 rounded-lg bg-slate-950 border border-slate-700 text-sm">
-          <option value="">全部类型</option>
-          {['topic', 'slang', 'style', 'relationship', 'event', 'preference'].map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-        <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">查询</button>
-      </div>
-      {loading ? <Spinner /> : memories.length === 0 ? <div className="text-sm text-slate-600 py-10 text-center">{groupId ? '暂无记忆' : '输入群号后查询'}</div> : (
-        <Card className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-              <th className="py-2 px-3">id</th><th className="py-2 px-3">类型</th><th className="py-2 px-3">内容</th><th className="py-2 px-3">confidence</th><th className="py-2 px-3">证据</th><th className="py-2 px-3">decay</th><th className="py-2 px-3">来源</th><th className="py-2 px-3">状态</th><th className="py-2 px-3">更新</th>
-            </tr></thead>
-            <tbody>
-              {memories.map(m => (
-                <tr key={m.id} className="border-b border-slate-800/50">
-                  <td className="py-2 px-3 text-slate-500">{m.id}</td>
-                  <td className="py-2 px-3"><Badge>{m.memory_type}</Badge></td>
-                  <td className="py-2 px-3 max-w-[400px] truncate">{m.content}</td>
-                  <td className="py-2 px-3">{Number(m.confidence).toFixed(2)}</td>
-                  <td className="py-2 px-3"><button onClick={() => setExpandedEvidence(expandedEvidence === m.id ? null : m.id)} className="text-xs underline text-slate-500 hover:text-emerald-400">{m.evidence_count}</button></td>
-                  <td className="py-2 px-3">{Number(m.decay_score).toFixed(2)}</td>
-                  <td className="py-2 px-3 text-slate-500">{m.source}</td>
-                  <td className="py-2 px-3">{m.status === 'active' ? <Badge tone="emerald">active</Badge> : m.status === 'archived' ? <Badge tone="slate">archived</Badge> : <Badge tone="amber">{m.status}</Badge>}</td>
-                  <td className="py-2 px-3 text-slate-500 text-xs">{m.updated_at}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
-      {expandedEvidence && (() => {
-        const m = memories.find(x => x.id === expandedEvidence)
-        return m ? (
-          <Card className="p-3 mt-3">
-            <div className="text-xs text-slate-500 mb-2">证据日志 ID: {m.id}</div>
-            <JsonBlock value={m.evidence_log_ids_json} className="max-h-48" />
-          </Card>
-        ) : null
-      })()}
     </div>
   )
 }
