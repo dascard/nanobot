@@ -1733,7 +1733,7 @@ function MemoryPage() {
     if (!targetGroupId) return
     setLoading(true)
     const params = memType ? { memory_type: memType } : {}
-    return api.get(`/groups/${encodeURIComponent(targetGroupId)}/memories`, { params })
+    return api.get(`/group-memories/${encodeURIComponent(targetGroupId)}/items`, { params })
       .then(r => setMemories(r.data.memories || [])).finally(() => setLoading(false))
   }, [groupId, memType])
 
@@ -1753,12 +1753,17 @@ function MemoryPage() {
     setExtracting(true)
     setLastExtractResult(null)
     try {
-      const r = await api.post(`/groups/${encodeURIComponent(groupId)}/memories/extract`, {
+      const r = await api.post(`/group-memories/${encodeURIComponent(groupId)}/extract`, {
         window_hours: Number(windowHours),
         instructions,
       })
       setLastExtractResult(r.data)
-      await Promise.all([loadOverview(), load(groupId)])
+      if (Array.isArray(r.data.memories)) {
+        setMemories(r.data.memories)
+      }
+      const resultGroupId = r.data.group_id || groupId
+      setGroupId(resultGroupId)
+      await Promise.all([loadOverview(), load(resultGroupId)])
     } catch (e) {
       alert(e.response?.data?.detail || e.message)
     } finally {
@@ -1891,7 +1896,15 @@ function MemoryPage() {
             )}
           </Card>
 
-          {loading ? <Spinner /> : memories.length === 0 ? <div className="rounded-lg border border-slate-800 py-16 text-center text-sm text-slate-600">{groupId ? '暂无记忆' : '从左侧选择群或输入 group_id'}</div> : (
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-medium text-slate-200">记忆列表</h2>
+              <p className="mt-1 text-[11px] text-slate-500">当前筛选结果 {memories.length} 条</p>
+            </div>
+            {lastExtractResult && <Badge tone="emerald">本次可注入 {lastExtractResult.injectable_count}</Badge>}
+          </div>
+
+          {loading ? <Spinner /> : memories.length === 0 ? <div className="rounded-lg border border-slate-800 py-16 text-center text-sm text-slate-600">{groupId ? '暂无记忆；提取后会显示在这里，也可以点查询刷新' : '从左侧选择群或输入 group_id'}</div> : (
             <Card className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead><tr className="border-b border-slate-800 text-left text-slate-500">

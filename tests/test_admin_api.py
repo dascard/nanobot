@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, ChatLog, ChatStreamConfig, ConversationTurn, StickerMemory, User, get_db
+from core.database import Base, ChatLog, ChatStreamConfig, ConversationTurn, GroupMemory, StickerMemory, User, get_db
 from server import app
 
 
@@ -270,6 +270,30 @@ class TestObservabilityAPI:
         assert row["memory_count"] == 0
         assert row["injectable_count"] == 0
 
+    def test_group_memory_items_endpoint_returns_memories_without_group_route_shadow(self, client, auth_header):
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(GroupMemory(
+                group_id="group_7788",
+                memory_type="topic",
+                content="模型部署: 群里经常讨论本地模型部署",
+                content_hash="hash-test",
+                confidence=0.65,
+                evidence_count=1,
+                evidence_log_ids_json="[1, 2]",
+                status="active",
+                source="manual_group_memory_extract",
+            ))
+            db.commit()
+
+        data = _ok(client.get(
+            "/api/v1/admin/group-memories/group_7788/items",
+            headers=auth_header,
+        ))
+
+        assert len(data["memories"]) == 1
+        assert data["memories"][0]["content"].startswith("模型部署")
+        assert data["memories"][0]["source"] == "manual_group_memory_extract"
+
     def test_group_memory_extract_endpoint_returns_service_stats(self, client, auth_header, monkeypatch):
         class FakeResult:
             def to_dict(self):
@@ -309,6 +333,29 @@ class TestObservabilityAPI:
         assert data["ok"] is True
         assert data["stats"]["new"] == 1
         assert data["injectable_count"] == 1
+
+    def test_group_memory_extract_alias_avoids_group_detail_shadow(self, client, auth_header, monkeypatch):
+        class FakeResult:
+            def to_dict(self):
+                return {"ok": True, "group_id": "group_7788", "stats": {"new": 1}}
+
+        async def fake_extract(db, group_id, *, window_hours=24, instructions=""):
+            assert group_id == "group_7788"
+            return FakeResult()
+
+        monkeypatch.setattr(
+            "app.group_memory.extraction_service.extract_group_memories",
+            fake_extract,
+        )
+
+        data = _ok(client.post(
+            "/api/v1/admin/group-memories/group_7788/extract",
+            json={"window_hours": 24, "instructions": ""},
+            headers=auth_header,
+        ))
+
+        assert data["ok"] is True
+        assert data["stats"]["new"] == 1
 
     def test_overview_counts_recent_runtime_signals(self, client, auth_header):
         now = datetime.now()

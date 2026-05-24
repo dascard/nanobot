@@ -649,6 +649,26 @@ def group_memories_list(
     _auth=Depends(verify_admin),
 ):
     """查询某群的 GroupMemory 列表——用于 WebUI 群体记忆页。"""
+    return _group_memories_payload(db, group_id, memory_type)
+
+
+def _group_memory_row_dict(r) -> dict:
+    return {
+        "id": r.id, "group_id": r.group_id,
+        "memory_type": r.memory_type, "content": r.content,
+        "content_hash": r.content_hash or "",
+        "cluster_key": r.cluster_key or "",
+        "confidence": r.confidence, "evidence_count": r.evidence_count,
+        "decay_score": r.decay_score,
+        "first_seen": r.first_seen.strftime("%Y-%m-%d") if r.first_seen else "",
+        "last_seen": r.last_seen.strftime("%Y-%m-%d") if r.last_seen else "",
+        "updated_at": r.updated_at.strftime("%Y-%m-%d %H:%M") if r.updated_at else "",
+        "status": r.status, "source": r.source or "group_analysis",
+        "evidence_log_ids_json": r.evidence_log_ids_json,
+    }
+
+
+def _group_memories_payload(db: Session, group_id: str, memory_type: str = "") -> dict:
     from core.database import GroupMemory
     from core.group_runtime.ids import normalize_group_session_id
 
@@ -657,24 +677,7 @@ def group_memories_list(
     if memory_type:
         q = q.filter(GroupMemory.memory_type == memory_type)
     rows = q.order_by(GroupMemory.confidence.desc(), GroupMemory.last_seen.desc()).limit(100).all()
-    return {
-        "memories": [
-            {
-                "id": r.id, "group_id": r.group_id,
-                "memory_type": r.memory_type, "content": r.content,
-                "content_hash": r.content_hash or "",
-                "cluster_key": r.cluster_key or "",
-                "confidence": r.confidence, "evidence_count": r.evidence_count,
-                "decay_score": r.decay_score,
-                "first_seen": r.first_seen.strftime("%Y-%m-%d") if r.first_seen else "",
-                "last_seen": r.last_seen.strftime("%Y-%m-%d") if r.last_seen else "",
-                "updated_at": r.updated_at.strftime("%Y-%m-%d %H:%M") if r.updated_at else "",
-                "status": r.status, "source": r.source or "group_analysis",
-                "evidence_log_ids_json": r.evidence_log_ids_json,
-            }
-            for r in rows
-        ]
-    }
+    return {"group_id": norm, "total": len(rows), "memories": [_group_memory_row_dict(r) for r in rows]}
 
 
 @router.get("/group-memories/overview")
@@ -690,15 +693,35 @@ def group_memories_overview(
     return {"total": len(items), "items": items}
 
 
-@router.post("/groups/{group_id:path}/memories/extract")
-async def group_memories_extract(
+@router.get("/group-memories/{group_id:path}/items")
+def group_memory_items(
+    group_id: str,
+    memory_type: str = "",
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """群体记忆专用列表接口，避免 /groups/{group_id:path} 路由吞掉子路径。"""
+    return _group_memories_payload(db, group_id, memory_type)
+
+
+@router.post("/group-memories/{group_id:path}/extract")
+async def group_memory_extract_alias(
     group_id: str,
     body: GroupMemoryExtractRequest,
     request: Request,
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    """手动触发群体记忆提取。"""
+    """群体记忆专用提取接口，避免 /groups/{group_id:path} 路由吞掉子路径。"""
+    return await _extract_group_memories_response(group_id, body, request, db)
+
+
+async def _extract_group_memories_response(
+    group_id: str,
+    body: GroupMemoryExtractRequest,
+    request: Request,
+    db: Session,
+) -> dict:
     from app.group_memory import extraction_service
 
     try:
@@ -720,7 +743,21 @@ async def group_memories_extract(
         group_id,
         result.to_dict(),
     )
-    return result.to_dict()
+    payload = result.to_dict()
+    payload.update(_group_memories_payload(db, payload.get("group_id") or group_id))
+    return payload
+
+
+@router.post("/groups/{group_id:path}/memories/extract")
+async def group_memories_extract(
+    group_id: str,
+    body: GroupMemoryExtractRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """手动触发群体记忆提取。"""
+    return await _extract_group_memories_response(group_id, body, request, db)
 
 
 @router.get("/timing-gate/events")

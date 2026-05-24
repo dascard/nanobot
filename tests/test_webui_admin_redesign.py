@@ -110,7 +110,9 @@ def test_memory_page_exposes_group_overview_and_manual_extract():
     memory_source = source.split("function MemoryPage()")[1].split("// ── Audit ──")[0]
 
     assert "api.get('/group-memories/overview'" in memory_source
-    assert "api.post(`/groups/${encodeURIComponent(groupId)}/memories/extract`" in memory_source
+    assert "api.get(`/group-memories/${encodeURIComponent(targetGroupId)}/items`" in memory_source
+    assert "api.post(`/group-memories/${encodeURIComponent(groupId)}/extract`" in memory_source
     assert "提取记忆" in memory_source
+    assert "记忆列表" in memory_source
     assert "windowHours" in memory_source
     assert "injectable_count" in memory_source
