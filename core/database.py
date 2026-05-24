@@ -169,10 +169,20 @@ class PersonaFact(Base):
     cluster_id = Column(Integer, index=True, nullable=True)
     evidence_count = Column(Integer, default=1)
     source_log_ids = Column(Text, default="[]")  # JSON array of log IDs
+    evidence_log_ids_json = Column(Text, default="[]")  # 真实 ChatLog.id 列表；旧 source_log_ids 不可信
     first_seen = Column(DateTime, nullable=True)
     last_seen = Column(DateTime, nullable=True)
     confidence = Column(String, default="可能")  # 确认/可能/待确认/归档
     fact_type = Column(String, default="preference")  # preference | behavior | trait
+    memory_type = Column(String, default="stable_preference")  # stable_preference/interaction_style/...
+    status = Column(String, default="review")  # review/active/disabled/archived/rejected
+    inject_policy = Column(String, default="manual_only")  # auto/manual_only/never
+    content_hash = Column(String, default="")
+    disabled_reason = Column(Text, default="")
+    rejected_reason = Column(Text, default="")
+    candidate_meta_json = Column(Text, default="{}")
+    last_injected_at = Column(DateTime, nullable=True)
+    injected_count = Column(Integer, default=0)
     derived_from = Column(Text, default="[]")  # JSON array of behavior IDs
     contradicted_by = Column(Text, default="[]")  # JSON array of conflicting fact IDs
     created_at = Column(DateTime, default=datetime.now)

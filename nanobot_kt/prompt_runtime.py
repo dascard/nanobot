@@ -224,12 +224,30 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
             meta_update["group_memory_recorded_count"] = recorded_count
         except Exception as exc:
             logger.warning("[PromptRuntime] failed to record group memory injection: %s", exc)
+    if context_debug.get("persona_injected") and context_debug.get("persona_fact_ids"):
+        try:
+            from app.persona.injection_service import record_persona_injected
+            from core.uow import UnitOfWork
+
+            with UnitOfWork() as uow:
+                recorded_count = record_persona_injected(
+                    uow.db,
+                    list(context_debug.get("persona_fact_ids") or []),
+                )
+                uow.commit()
+            meta_update["persona_recorded_count"] = recorded_count
+        except Exception as exc:
+            logger.warning("[PromptRuntime] failed to record persona injection: %s", exc)
     for key in (
         "group_memory_injected",
         "group_memory_ids",
         "group_memory_skipped",
         "group_memory_context_chars",
         "group_profile_mode",
+        "persona_injected",
+        "persona_fact_ids",
+        "persona_skipped",
+        "persona_context_chars",
     ):
         if key in context_debug:
             meta_update[key] = context_debug[key]

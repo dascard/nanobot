@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, ChatLog, ChatStreamConfig, ConversationTurn, GroupMemory, StickerMemory, User, get_db
+from core.database import Base, ChatLog, ChatStreamConfig, ConversationTurn, GroupMemory, PersonaFact, StickerMemory, User, get_db
 from server import app
 
 
@@ -488,6 +488,113 @@ class TestObservabilityAPI:
 
         assert r.status_code == 409
         assert "已有相同记忆" in r.text
+
+
+class TestPersonaAdmin:
+    def test_persona_users_facts_and_injection_preview(self, client, auth_header):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(User(id="u-persona", name="画像用户"))
+            db.add(PersonaFact(
+                user_id="u-persona",
+                content="用户偏好先给结论，再给必要步骤",
+                domain_primary="协作方式",
+                confidence="确认",
+                fact_type="preference",
+                memory_type="stable_preference",
+                status="active",
+                inject_policy="auto",
+                content_hash="persona-hash-1",
+                evidence_count=3,
+                evidence_log_ids_json="[1, 2, 3]",
+                first_seen=now,
+                last_seen=now,
+            ))
+            db.add(PersonaFact(
+                user_id="u-persona",
+                content="用户当前在临时调试脚本",
+                domain_primary="临时任务",
+                confidence="可能",
+                fact_type="preference",
+                memory_type="stable_preference",
+                status="review",
+                inject_policy="manual_only",
+                content_hash="persona-hash-2",
+                evidence_count=1,
+                evidence_log_ids_json="[4]",
+                first_seen=now,
+                last_seen=now,
+            ))
+            db.commit()
+
+        users = _ok(client.get("/api/v1/admin/persona/users?q=u-persona", headers=auth_header))
+        assert users["items"][0]["user_id"] == "u-persona"
+        assert users["items"][0]["injectable_count"] == 1
+
+        facts = _ok(client.get("/api/v1/admin/persona/users/u-persona/facts", headers=auth_header))
+        assert facts["total"] == 2
+        assert facts["items"][0]["memory_type"] == "stable_preference"
+
+        preview = _ok(client.post(
+            "/api/v1/admin/persona/users/u-persona/injection-preview",
+            json={"user_input": "请先给结论"},
+            headers=auth_header,
+        ))
+        assert preview["persona_fact_ids"] == [1]
+        assert "<persona_profile" in preview["persona_context"]
+        assert preview["persona_skipped"][0]["reason"] == "not_active_auto"
+        with next(app.dependency_overrides[get_db]()) as db:
+            row = db.query(PersonaFact).filter(PersonaFact.id == 1).one()
+            assert row.injected_count == 0
+            assert row.last_injected_at is None
+
+    def test_persona_update_fact_rejects_duplicate_content(self, client, auth_header):
+        from core.persona_preprocess import content_hash
+
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add_all([
+                PersonaFact(
+                    user_id="u-persona",
+                    content="用户偏好短回复",
+                    memory_type="stable_preference",
+                    content_hash=content_hash("用户偏好短回复"),
+                    confidence="确认",
+                    evidence_count=3,
+                    status="active",
+                    inject_policy="auto",
+                    first_seen=now,
+                    last_seen=now,
+                ),
+                PersonaFact(
+                    user_id="u-persona",
+                    content="用户偏好详细回复",
+                    memory_type="stable_preference",
+                    content_hash=content_hash("用户偏好详细回复"),
+                    confidence="确认",
+                    evidence_count=3,
+                    status="active",
+                    inject_policy="auto",
+                    first_seen=now,
+                    last_seen=now,
+                ),
+            ])
+            db.commit()
+
+        ok = _ok(client.patch(
+            "/api/v1/admin/persona/facts/1",
+            json={"status": "disabled", "inject_policy": "never", "disabled_reason": "测试禁用"},
+            headers=auth_header,
+        ))
+        assert ok["fact"]["status"] == "disabled"
+        assert ok["fact"]["inject_policy"] == "never"
+
+        dup = client.patch(
+            "/api/v1/admin/persona/facts/2",
+            json={"content": "用户偏好短回复"},
+            headers=auth_header,
+        )
+        assert dup.status_code == 409
 
     def test_overview_counts_recent_runtime_signals(self, client, auth_header):
         now = datetime.now()

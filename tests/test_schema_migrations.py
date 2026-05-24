@@ -77,3 +77,49 @@ def test_group_memory_governance_columns_apply_when_old_group_memory_migration_a
     assert "inject_policy" in columns
     assert "last_injected_at" in columns
     assert "injected_count" in columns
+
+
+def test_persona_fact_governance_columns_are_added_to_existing_table():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE persona_facts ("
+            "id INTEGER PRIMARY KEY, user_id TEXT, domain_primary TEXT, content TEXT, "
+            "evidence_count INTEGER, source_log_ids TEXT, confidence TEXT, fact_type TEXT, "
+            "first_seen TIMESTAMP, last_seen TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO persona_facts "
+            "(id, user_id, domain_primary, content, evidence_count, source_log_ids, confidence, fact_type) "
+            "VALUES "
+            "(1, 'u1', 'general', '用户喜欢简洁回复', 3, '[\"用户说喜欢简洁\"]', '确认', 'preference'), "
+            "(2, 'u1', 'general', '用户偶尔问天气', 1, '[\"文本证据\"]', '可能', 'preference')"
+        ))
+
+    run_schema_migrations(engine)
+
+    columns = [col["name"] for col in inspect(engine).get_columns("persona_facts")]
+    assert "status" in columns
+    assert "inject_policy" in columns
+    assert "memory_type" in columns
+    assert "content_hash" in columns
+    assert "evidence_log_ids_json" in columns
+    assert "candidate_meta_json" in columns
+    assert "last_injected_at" in columns
+    assert "injected_count" in columns
+
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT id, status, inject_policy, memory_type, content_hash, evidence_log_ids_json "
+            "FROM persona_facts ORDER BY id"
+        )).fetchall()
+
+    assert rows[0].status == "active"
+    assert rows[0].inject_policy == "auto"
+    assert rows[0].memory_type == "stable_preference"
+    assert rows[0].content_hash
+    assert rows[0].evidence_log_ids_json == "[]"
+    assert rows[1].status == "review"
+    assert rows[1].inject_policy == "manual_only"

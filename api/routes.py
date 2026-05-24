@@ -2195,6 +2195,20 @@ async def proxy_chat(
 
     # 4b. 组装 enriched query — 使用缓冲合并后的查询
     safe_user_input = _build_multimodal_user_input_text(final_query, final_files, max_chars=MAX_QUERY_CHARS)
+    if not is_group:
+        try:
+            from app.persona.injection_service import PersonaInjectionService
+
+            persona_result = PersonaInjectionService(db).build_context(
+                user_id=req.user_id,
+                current_user_input=safe_user_input,
+                recent_messages=history_messages,
+            )
+            _ctx_debug.update(persona_result.debug)
+            if persona_result.context:
+                persona_text = persona_result.context
+        except Exception as exc:
+            logger.warning("[/chat] persona injection context failed user=%s: %s", req.user_id, exc)
     if not (_classifier_ran and guardrail_status == "injection"):
         chat_type = "private" if str(req.session_id).startswith("private_") else "group"
         enriched_query = (

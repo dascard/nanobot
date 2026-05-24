@@ -87,7 +87,7 @@ class PersonaUpdateTool(BaseTool):
                     return ToolResult(output="没有找到该用户的对话日志", exit_code=0)
 
                 log_dicts = [
-                    {"role": log.role, "content": log.content, "session_id": log.session_id or "",
+                    {"id": log.id, "role": log.role, "content": log.content, "session_id": log.session_id or "",
                      "created_at": str(log.created_at) if log.created_at else ""}
                     for log in logs
                 ]
@@ -144,15 +144,13 @@ class PersonaUpdateTool(BaseTool):
                     from core.persona_preprocess import (
                         PersonaStateMachine, build_candidate_extraction_prompt,
                         CANDIDATE_EXTRACTION_SYSTEM_PROMPT, filter_user_messages,
+                        format_candidate_logs,
                     )
                     user_log_dicts = filter_user_messages(log_dicts)
                     if not user_log_dicts:
                         return ToolResult(output="没有找到该用户的对话消息", exit_code=0)
 
-                    logs_text = "\n".join(
-                        f"[{m.get('created_at', '')}] user: {m.get('content', '')}"
-                        for m in user_log_dicts[-30:]
-                    )
+                    logs_text = format_candidate_logs(user_log_dicts[-30:])
                     extraction_prompt = build_candidate_extraction_prompt(
                         existing_persona, logs_text
                     )

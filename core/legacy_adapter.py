@@ -23,6 +23,7 @@ from core.persona_preprocess import (
     PersonaStateMachine,
     build_candidate_extraction_prompt,
     filter_user_messages,
+    format_candidate_logs,
 )
 
 
@@ -608,10 +609,7 @@ class NanobotKTController:
 
         # 3a. 过滤用户消息 + 构建 prompt
         user_msgs = filter_user_messages(logs)
-        logs_text = "\n".join(
-            f"[{log.get('created_at', '')}] user: {log.get('content', '')}"
-            for log in user_msgs
-        )
+        logs_text = format_candidate_logs(user_msgs)
         if not logs_text.strip():
             logger.info(f"  [KT Local StateMachine] No user messages, skipping persona update")
             self.memory.mark_logs_processed([log["id"] for log in logs])

@@ -70,6 +70,22 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         group_id=group_id,
         current_user_input=user_input,
     )
+    persona_debug: dict[str, Any] = {}
+    if user_id:
+        try:
+            from app.persona.injection_service import PersonaInjectionService
+
+            persona_result = PersonaInjectionService(db).build_context(
+                user_id=user_id,
+                current_user_input=user_input,
+                recent_messages=history_messages,
+            )
+            persona_debug = dict(persona_result.debug or {})
+            if persona_result.context:
+                persona_text = persona_result.context
+        except Exception as exc:
+            persona_debug = {"persona_error": str(exc)}
+    context_debug = {**history_debug, **persona_debug}
     runtime_preset = _strip(getattr(body, "runtime_preset", "")) or "full"
     tool_plan = build_tool_plan(
         chat_type=chat_type,
@@ -103,7 +119,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
                 history_messages=history_messages,
                 runtime_tool_prompt=runtime_tool_prompt,
                 tool_schemas=configured_tool_schemas,
-                debug={"history_debug": history_debug},
+                debug={"history_debug": history_debug, "context_debug": context_debug},
             )
         )
     except PromptFlowError as exc:
@@ -129,6 +145,12 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         "warnings": plan.warnings,
         "debug": plan.debug,
         "history_debug": history_debug,
+        "context_debug": context_debug,
+        "persona_context": persona_debug.get("persona_context", ""),
+        "persona_fact_ids": persona_debug.get("persona_fact_ids", []),
+        "persona_skipped": persona_debug.get("persona_skipped", []),
+        "persona_context_chars": persona_debug.get("persona_context_chars", 0),
+        "persona_score_components": persona_debug.get("score_components", {}),
         "group_profile_mode": history_debug.get("group_profile_mode", "off"),
         "group_memory_context": history_debug.get("group_memory_context", ""),
         "group_memory_ids": history_debug.get("group_memory_ids", []),

@@ -30,10 +30,12 @@ logger = logging.getLogger("nanobot.admin")
 router = APIRouter(prefix="/api/v1/admin")
 
 from api.admin.prompt_v2_routes import router as prompt_v2_router
+from api.admin.persona_routes import router as persona_router
 from api.admin.system_routes import router as system_router
 
 router.include_router(system_router)
 router.include_router(prompt_v2_router)
+router.include_router(persona_router)
 
 # ── Auth ──
 

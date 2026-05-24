@@ -22,7 +22,7 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 warnings.filterwarnings("ignore", message=".*CUDA initialization.*")
 from sqlalchemy.orm import Session
 
-from core.database import SessionLocal, PersonaFact, PersonaBehavior
+from core.database import SessionLocal, ChatLog, PersonaFact, PersonaBehavior
 
 logger = logging.getLogger("nanobot.persona")
 
@@ -32,6 +32,25 @@ CONTRADICTION_THRESHOLD = 0.25  # 低于此值视为潜在矛盾（语义反向�
 MAX_FACTS_PER_USER = 100        # 每人最多保留画像条数
 CANONICAL_MIN_LENGTH_RATIO = 0.7  # canonical 保留信息密度比
 
+STORABLE_MEMORY_TYPES = {
+    "stable_preference",
+    "interaction_style",
+    "stable_background",
+    "long_term_project",
+}
+REJECT_MEMORY_TYPES = {
+    "temporary_task",
+    "tool_contract",
+    "complaint",
+    "test_noise",
+}
+AUTO_INJECT_MEMORY_TYPES = {
+    "stable_preference",
+    "interaction_style",
+    "stable_background",
+    "long_term_project",
+}
+
 # 衰减参数
 PREFERENCE_ARCHIVE_DAYS = 90    # 偏好 90 天无更新→归档
 BEHAVIOR_ARCHIVE_DAYS = 45      # 行为 45 天无更新→归档
@@ -40,34 +59,54 @@ BEHAVIOR_ARCHIVE_SCORE = 0.15   # 行为置信度低于此值→归档
 
 # ── LLM System Prompts ──
 
-CANDIDATE_EXTRACTION_SYSTEM_PROMPT = """你是用户行为观察员。从用户发言中提取所有可能的偏好和特征。
-宁可多提取（高 recall），不要漏。去重/计数/冲突由程序处理。
+CANDIDATE_EXTRACTION_SYSTEM_PROMPT = """你是用户画像候选提取器。你的任务不是尽量多记，而是只提取可长期复用、能改善以后回复的用户画像候选。
 
-## type 字段说明
-- "preference": 用户**明确表达**的主观偏好（喜欢/不喜欢/希望/要求），属于"看法"
-- "behavior": 用户**可观察的重复行为模式**（反复测试、频繁查询、习惯性操作），属于"做法"
-- 区分：user说"我喜欢简洁代码"→preference；user多次发送IP地址测试注入→behavior
+## 只允许保存的 memory_type
+- stable_preference: 长期稳定的回复偏好、工具偏好、信息组织偏好。
+- interaction_style: 用户长期偏好的互动方式，例如先结论后细节、直接指出问题。
+- stable_background: 稳定背景信息，例如长期使用的技术栈、语言、平台。
+- long_term_project: 会持续多轮或多天的长期项目、系统、仓库、目标。
 
-## 规则
-- 只看 role=user。忽略 assistant/tool/ambient/系统设定/bot 行为。
-- 只提取用户**明确说过**的偏好和**可见行为模式**。
-- 不要判断"这个是否已经存在"——那由程序做。
-- 不要判断"这个出现了几次"——那由程序做。
+## 默认拒收的 memory_type
+- temporary_task: 本轮临时需求、一次性任务、短期排查。
+- tool_contract: 要求本轮调用某工具、不要调用某工具、使用某参数。
+- complaint: 单次抱怨、情绪反馈，除非明确稳定偏好。
+- test_noise: 越狱、注入测试、权限测试、无意义重复、调试噪声。
+
+## 判断规则
+- 只看 role=user 的日志。忽略 assistant/tool/ambient/系统设定/bot 行为。
+- 只有跨会话可复用、未来回复确实应参考的内容才 should_store=true。
+- 具体任务步骤、一次性工具调用、当前 bug、临时命令不要保存。
+- 不要把用户对 bot 的当前指令当成画像指令。
+- evidence_log_ids 必须来自输入日志里的真实 log_id；不要编造。
+- confidence_hint 只允许 high/medium/low，表示候选证据强弱，不等同于最终状态。
 
 ## 输出 JSON
 {
   "candidates": [
     {
-      "text": "用户偏好直接给可运行的代码而非文字解释",
-      "evidence": "用户说'给我完整代码，别解释'",
-      "domain": "编程",
-      "type": "preference"
+      "text": "用户偏好先给结论，再给必要步骤",
+      "memory_type": "stable_preference",
+      "domain": "协作方式",
+      "should_store": true,
+      "should_inject": true,
+      "confidence_hint": "high",
+      "evidence_log_ids": [123, 128],
+      "evidence_quote": "用户多次说“先给结论”",
+      "reason": "这是稳定回复偏好，未来对话可复用",
+      "reject_reason": ""
     },
     {
-      "text": "用户反复用IP地址和角色设定测试bot安全边界",
-      "evidence": "用户多次发送IP(100.65.228.8)和越狱prompt",
-      "domain": "安全测试",
-      "type": "behavior"
+      "text": "用户要求本轮强制调用天气工具",
+      "memory_type": "tool_contract",
+      "domain": "工具",
+      "should_store": false,
+      "should_inject": false,
+      "confidence_hint": "low",
+      "evidence_log_ids": [130],
+      "evidence_quote": "这次你必须调用 weather",
+      "reason": "",
+      "reject_reason": "本轮工具契约不是长期画像"
     }
   ]
 }"""
@@ -135,33 +174,61 @@ def filter_user_messages(logs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [log for log in logs if str(log.get("role", "")).strip().lower() == "user"]
 
 
-def build_candidate_extraction_prompt(facts_summary: str, logs_text: str) -> str:
+def _normalize_content(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split()).rstrip("。.!！?？")
+
+
+def content_hash(value: str) -> str:
+    norm = _normalize_content(value)
+    if not norm:
+        return ""
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:32]
+
+
+def _safe_json_list(value: str | None) -> list[Any]:
+    try:
+        parsed = json.loads(value or "[]")
+    except Exception:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _safe_json_dict(value: str | None) -> dict[str, Any]:
+    try:
+        parsed = json.loads(value or "{}")
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def format_candidate_logs(logs: List[Dict[str, Any]]) -> str:
+    """把用户日志格式化成带真实 log_id 的候选提取输入。"""
+    lines: list[str] = []
+    for log in filter_user_messages(logs):
+        log_id = log.get("id", log.get("log_id", ""))
+        created_at = str(log.get("created_at") or "").strip()
+        content = str(log.get("content") or "").strip()
+        if not content:
+            continue
+        if created_at:
+            lines.append(f"[log_id={log_id}][{created_at}] user: {content}")
+        else:
+            lines.append(f"[log_id={log_id}] user: {content}")
+    return "\n".join(lines)
+
+
+def build_candidate_extraction_prompt(facts_summary: str, logs_text: str | List[Dict[str, Any]]) -> str:
     """构造 LLM 候选提取 prompt（LLM 只提取候选，不做状态判断）。"""
-    return f"""你是用户行为观察员。从用户发言中提取所有可能的偏好和特征。
-宁可多提取（高 recall），不要漏。去重/计数/冲突由程序处理。
+    formatted_logs = format_candidate_logs(logs_text) if isinstance(logs_text, list) else str(logs_text or "")
+    return f"""{CANDIDATE_EXTRACTION_SYSTEM_PROMPT}
 
-## 规则
-- 只看 role=user。忽略 assistant/tool/ambient/系统设定/bot 行为。
-- 只提取用户**明确说过**的偏好和**可见行为模式**。
-- 不要判断"这个是否已经存在"——那由程序做。
-- 不要判断"这个出现了几次"——那由程序做。
-
-## 已有画像（仅供参考）
+## 已有画像（仅供参考，不要照抄）
 {facts_summary}
 
 ## 新日志
-{logs_text}
+{formatted_logs}
 
-## 输出 JSON
-{{
-  "candidates": [
-    {{
-      "text": "用户偏好直接给可运行的代码而非文字解释",
-      "evidence": "用户说'给我完整代码，别解释'",
-      "domain": "编程"
-    }}
-  ]
-}}"""
+只输出 JSON，不要输出解释。"""
 
 
 # ── 状态机核心 ──
@@ -175,18 +242,23 @@ class PersonaStateMachine:
 
     # ── 公共入口 ──
 
-    def process_candidates(self, candidates: List[Dict[str, str]]) -> Dict[str, Any]:
+    def process_candidates(self, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
         """处理 LLM 提取的候选列表。
 
-        preference → persona_facts 表（cluster + centroid 去重）
-        behavior  → persona_behaviors 表（embedding 去重 + frequency）
+        新画像候选 → persona_facts 表（治理字段 + cluster 去重）
+        旧 behavior 候选 → persona_behaviors 表（兼容旧链路）
 
-        返回: {"created": int, "merged": int, "conflicts": int}
+        返回: {"created": int, "merged": int, "conflicts": int, "rejected": int, "reject_reasons": dict}
         """
+        stats: dict[str, Any] = {
+            "created": 0,
+            "merged": 0,
+            "conflicts": 0,
+            "rejected": 0,
+            "reject_reasons": {},
+        }
         if not candidates:
-            return {"created": 0, "merged": 0, "conflicts": 0}
-
-        stats = {"created": 0, "merged": 0, "conflicts": 0}
+            return stats
         now = datetime.now()
 
         # 一次性预取所有现有 facts（避免 N+1）
@@ -208,6 +280,25 @@ class PersonaStateMachine:
         for c in candidates:
             text = (c.get("text") or "").strip()
             if not text:
+                self._reject(stats, "empty_text")
+                continue
+
+            memory_type = self._memory_type(c)
+            should_store = c.get("should_store", True)
+            if isinstance(should_store, str):
+                should_store = should_store.strip().lower() not in {"false", "0", "no", "否"}
+            if should_store is False or memory_type in REJECT_MEMORY_TYPES:
+                self._reject(stats, str(c.get("reject_reason") or memory_type or "not_storable"))
+                continue
+
+            if memory_type not in STORABLE_MEMORY_TYPES:
+                self._reject(stats, "unsupported_memory_type")
+                continue
+
+            evidence_ids_raw = c.get("evidence_log_ids") or c.get("source_log_ids") or []
+            evidence_ids, evidence_ids_valid = self._validate_evidence_log_ids(evidence_ids_raw)
+            if evidence_ids_raw and not evidence_ids_valid:
+                self._reject(stats, "invalid_evidence_log_ids")
                 continue
 
             try:
@@ -217,22 +308,60 @@ class PersonaStateMachine:
                 continue
 
             domain = c.get("domain", "general")
-            evidence = c.get("evidence", "")
+            evidence = c.get("evidence_quote") or c.get("evidence", "")
+            confidence_hint = str(c.get("confidence_hint") or "medium").strip().lower()
+            should_inject = c.get("should_inject", False)
+            if isinstance(should_inject, str):
+                should_inject = should_inject.strip().lower() not in {"false", "0", "no", "否"}
+            status, inject_policy = self._initial_governance(
+                memory_type=memory_type,
+                confidence_hint=confidence_hint,
+                should_inject=bool(should_inject),
+                evidence_ids=evidence_ids,
+            )
+            candidate_meta = {
+                "confidence_hint": confidence_hint,
+                "evidence_quote": evidence,
+                "reason": c.get("reason", ""),
+                "reject_reason": c.get("reject_reason", ""),
+            }
             ctype = c.get("type", "preference")
 
-            if ctype == "behavior":
+            if not c.get("memory_type") and ctype == "behavior":
                 self._upsert_behavior(text, evidence, domain, vec, existing_behaviors, now)
                 stats["created"] += 1
             else:
                 matches = self._find_matches(vec, existing_facts)
                 if not matches:
-                    self._create_fact(text, evidence, domain, vec, now)
+                    self._create_fact(
+                        text, evidence, domain, vec, now,
+                        memory_type=memory_type,
+                        confidence_hint=confidence_hint,
+                        evidence_log_ids=evidence_ids,
+                        status=status,
+                        inject_policy=inject_policy,
+                        candidate_meta=candidate_meta,
+                    )
                     stats["created"] += 1
                 elif len(matches) == 1:
-                    self._merge_fact(matches[0][0], text, evidence, vec, now)
+                    self._merge_fact(
+                        matches[0][0], text, evidence, vec, now,
+                        memory_type=memory_type,
+                        confidence_hint=confidence_hint,
+                        evidence_log_ids=evidence_ids,
+                        should_inject=bool(should_inject),
+                        candidate_meta=candidate_meta,
+                    )
                     stats["merged"] += 1
                 else:
-                    self._resolve_conflicts(matches, text, evidence, domain, vec, now)
+                    self._resolve_conflicts(
+                        matches, text, evidence, domain, vec, now,
+                        memory_type=memory_type,
+                        confidence_hint=confidence_hint,
+                        evidence_log_ids=evidence_ids,
+                        should_inject=bool(should_inject),
+                        candidate_meta=candidate_meta,
+                    )
                     stats["conflicts"] += 1
 
         self._apply_decay(now)
@@ -245,18 +374,92 @@ class PersonaStateMachine:
         )
         return stats
 
+    @staticmethod
+    def _reject(stats: dict[str, Any], reason: str) -> None:
+        stats["rejected"] += 1
+        reasons = stats.setdefault("reject_reasons", {})
+        reasons[reason] = int(reasons.get(reason, 0)) + 1
+
+    @staticmethod
+    def _memory_type(candidate: dict[str, Any]) -> str:
+        value = str(candidate.get("memory_type") or "").strip()
+        if value:
+            return value
+        legacy_type = str(candidate.get("type") or "preference").strip()
+        if legacy_type == "behavior":
+            return "interaction_style"
+        if legacy_type == "trait":
+            return "stable_background"
+        return "stable_preference"
+
+    def _validate_evidence_log_ids(self, value: Any) -> tuple[list[int], bool]:
+        if value in (None, "", []):
+            return [], True
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except Exception:
+                return [], False
+        if not isinstance(value, list):
+            return [], False
+
+        ids: list[int] = []
+        for item in value:
+            try:
+                ids.append(int(item))
+            except (TypeError, ValueError):
+                return [], False
+        if not ids:
+            return [], True
+        rows = (
+            self.db.query(ChatLog.id)
+            .filter(ChatLog.id.in_(ids), ChatLog.user_id == self.user_id, ChatLog.role == "user")
+            .all()
+        )
+        valid = {int(row[0]) for row in rows}
+        ordered = [item for item in ids if item in valid]
+        return ordered, len(ordered) == len(ids)
+
+    @staticmethod
+    def _initial_governance(
+        *,
+        memory_type: str,
+        confidence_hint: str,
+        should_inject: bool,
+        evidence_ids: list[int],
+    ) -> tuple[str, str]:
+        if memory_type not in AUTO_INJECT_MEMORY_TYPES or not should_inject:
+            return "review", "manual_only"
+        if confidence_hint == "high" and evidence_ids:
+            return "active", "auto"
+        if confidence_hint == "medium" and len(evidence_ids) >= 3:
+            return "active", "auto"
+        return "review", "manual_only"
+
     def build_summary(self) -> str:
         """将当前已确认的画像压缩为注入用 JSON 字符串。"""
-        facts = (
+        rows = (
             self.db.query(PersonaFact)
             .filter(
                 PersonaFact.user_id == self.user_id,
-                PersonaFact.confidence.in_(["确认", "可能"]),
             )
             .order_by(PersonaFact.evidence_count.desc())
-            .limit(30)
+            .limit(MAX_FACTS_PER_USER)
             .all()
         )
+        facts = []
+        for row in rows:
+            status = str(getattr(row, "status", "") or "")
+            inject_policy = str(getattr(row, "inject_policy", "") or "")
+            if status in {"disabled", "rejected", "archived"} or row.confidence == "归档":
+                continue
+            is_new_active = status == "active" and inject_policy == "auto"
+            is_legacy_confirmed = row.confidence == "确认"
+            is_legacy_supported = row.confidence == "可能" and int(row.evidence_count or 0) >= 3
+            if is_new_active or is_legacy_confirmed or is_legacy_supported:
+                facts.append(row)
+            if len(facts) >= 30:
+                break
 
         if not facts:
             return "{}"
@@ -268,7 +471,7 @@ class PersonaStateMachine:
                 "domain": f.domain_primary,
                 "confidence": f.confidence,
                 "evidence": f.evidence_count,
-                "type": f.fact_type,
+                "type": getattr(f, "memory_type", "") or f.fact_type,
             })
 
         return json.dumps({"facts": items, "count": len(items)}, ensure_ascii=False)
@@ -312,9 +515,36 @@ class PersonaStateMachine:
 
     # ── 创建 ──
 
-    def _create_fact(self, text: str, evidence: str, domain: str, vec: np.ndarray, now: datetime):
+    @staticmethod
+    def _fact_type_from_memory_type(memory_type: str) -> str:
+        if memory_type == "interaction_style":
+            return "behavior"
+        if memory_type == "stable_background":
+            return "trait"
+        if memory_type == "long_term_project":
+            return "project"
+        return "preference"
+
+    def _create_fact(
+        self,
+        text: str,
+        evidence: str,
+        domain: str,
+        vec: np.ndarray,
+        now: datetime,
+        *,
+        memory_type: str = "stable_preference",
+        confidence_hint: str = "medium",
+        evidence_log_ids: list[int] | None = None,
+        status: str = "review",
+        inject_policy: str = "manual_only",
+        candidate_meta: dict[str, Any] | None = None,
+    ):
         """无匹配 → 创建新 cluster。"""
         blob = _to_blob(vec)
+        evidence_ids = list(evidence_log_ids or [])
+        meta = dict(candidate_meta or {})
+        meta.setdefault("confidence_hint", confidence_hint)
         fact = PersonaFact(
             user_id=self.user_id,
             domain_primary=domain,
@@ -324,10 +554,16 @@ class PersonaStateMachine:
             cluster_id=None,
             evidence_count=1,
             source_log_ids=json.dumps([evidence] if evidence else [], ensure_ascii=False),
+            evidence_log_ids_json=json.dumps(evidence_ids, ensure_ascii=False),
             first_seen=now,
             last_seen=now,
             confidence="可能",
-            fact_type="preference",
+            fact_type=self._fact_type_from_memory_type(memory_type),
+            memory_type=memory_type,
+            status=status,
+            inject_policy=inject_policy,
+            content_hash=content_hash(text),
+            candidate_meta_json=json.dumps(meta, ensure_ascii=False),
         )
         self.db.add(fact)
         self.db.flush()
@@ -369,11 +605,27 @@ class PersonaStateMachine:
 
     # ── 合并 ──
 
-    def _merge_fact(self, fact: PersonaFact, text: str, evidence: str, vec: np.ndarray, now: datetime):
+    def _merge_fact(
+        self,
+        fact: PersonaFact,
+        text: str,
+        evidence: str,
+        vec: np.ndarray,
+        now: datetime,
+        *,
+        memory_type: str = "stable_preference",
+        confidence_hint: str = "medium",
+        evidence_log_ids: list[int] | None = None,
+        should_inject: bool = False,
+        candidate_meta: dict[str, Any] | None = None,
+    ):
         """单匹配 → 合并到已有 cluster。"""
         fact.content = self._canonicalize(fact.content, text)
         fact.evidence_count += 1
         fact.last_seen = now
+        fact.content_hash = content_hash(fact.content)
+        if not getattr(fact, "memory_type", None):
+            fact.memory_type = memory_type
 
         sources = json.loads(fact.source_log_ids or "[]")
         if evidence and evidence not in sources:
@@ -382,20 +634,46 @@ class PersonaStateMachine:
                 sources = sources[-20:]
             fact.source_log_ids = json.dumps(sources, ensure_ascii=False)
 
+        evidence_ids = list(evidence_log_ids or [])
+        if evidence_ids:
+            existing_ids = _safe_json_list(getattr(fact, "evidence_log_ids_json", "[]"))
+            merged_ids = list(dict.fromkeys([*existing_ids, *evidence_ids]))
+            fact.evidence_log_ids_json = json.dumps(merged_ids[-50:], ensure_ascii=False)
+
         fact.embedding = _to_blob(vec)
         score = compute_confidence(fact.evidence_count, 0)
         fact.confidence = confidence_label(score)
+        if should_inject and memory_type in AUTO_INJECT_MEMORY_TYPES:
+            if confidence_hint == "high" or fact.evidence_count >= 3:
+                fact.status = "active"
+                fact.inject_policy = "auto"
+        meta = _safe_json_dict(getattr(fact, "candidate_meta_json", "{}"))
+        if candidate_meta:
+            meta.update({k: v for k, v in candidate_meta.items() if v not in (None, "")})
+            fact.candidate_meta_json = json.dumps(meta, ensure_ascii=False)
         self._update_centroid(fact.cluster_id)
 
     # ── 冲突解决 ──
 
     def _resolve_conflicts(self, matches: List[Tuple[PersonaFact, float]],
                            text: str, evidence: str, domain: str,
-                           vec: np.ndarray, now: datetime):
+                           vec: np.ndarray, now: datetime, *,
+                           memory_type: str = "stable_preference",
+                           confidence_hint: str = "medium",
+                           evidence_log_ids: list[int] | None = None,
+                           should_inject: bool = False,
+                           candidate_meta: dict[str, Any] | None = None):
         """多匹配 → 取 evidence_count 最高的 cluster 合并，其余标记为 contradicted。"""
         matches.sort(key=lambda m: m[0].evidence_count, reverse=True)
         primary = matches[0][0]
-        self._merge_fact(primary, text, evidence, vec, now)
+        self._merge_fact(
+            primary, text, evidence, vec, now,
+            memory_type=memory_type,
+            confidence_hint=confidence_hint,
+            evidence_log_ids=evidence_log_ids or [],
+            should_inject=should_inject,
+            candidate_meta=candidate_meta or {},
+        )
 
         for other, _ in matches[1:]:
             contradicted = json.loads(other.contradicted_by or "[]")

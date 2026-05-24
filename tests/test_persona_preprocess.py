@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, PersonaFact
+from core.database import Base, ChatLog, PersonaFact
 from core.persona_preprocess import (
     PersonaStateMachine,
     build_candidate_extraction_prompt,
@@ -15,6 +15,7 @@ from core.persona_preprocess import (
     confidence_label,
     cosine_similarity,
     filter_user_messages,
+    format_candidate_logs,
     _from_blob,
     _to_blob,
 )
@@ -164,7 +165,10 @@ class TestProcessCandidatesCreate:
 
     def test_empty_candidates(self, state_machine):
         stats = state_machine.process_candidates([])
-        assert stats == {"created": 0, "merged": 0, "conflicts": 0}
+        assert stats["created"] == 0
+        assert stats["merged"] == 0
+        assert stats["conflicts"] == 0
+        assert stats["rejected"] == 0
 
     def test_skip_empty_text(self, state_machine):
         candidates = [{"text": "", "domain": "编程"}]
@@ -199,6 +203,99 @@ class TestProcessCandidatesWithMockEmbedder:
         ).all()
         assert len(facts) == 2
         assert facts[0].cluster_id != facts[1].cluster_id
+
+    def test_store_governed_fact_with_real_evidence_ids(self, state_machine, db_session, monkeypatch):
+        import numpy as np
+
+        def mock_embed(text: str) -> np.ndarray:
+            vec = np.zeros(768, dtype=np.float32)
+            vec[0] = 1.0
+            return vec
+
+        monkeypatch.setattr("core.persona_preprocess.embed_text", mock_embed)
+        log = ChatLog(
+            user_id="test_user_01",
+            session_id="private_test_user_01",
+            role="user",
+            content="以后直接先给结论，再给必要步骤",
+        )
+        db_session.add(log)
+        db_session.commit()
+
+        stats = state_machine.process_candidates([{
+            "text": "用户偏好先给结论，再给必要步骤",
+            "domain": "协作方式",
+            "memory_type": "stable_preference",
+            "should_store": True,
+            "should_inject": True,
+            "confidence_hint": "high",
+            "evidence_log_ids": [log.id],
+            "evidence_quote": "以后直接先给结论",
+            "reason": "稳定回复偏好",
+        }])
+
+        assert stats["created"] == 1
+        fact = db_session.query(PersonaFact).filter(PersonaFact.user_id == "test_user_01").one()
+        assert fact.memory_type == "stable_preference"
+        assert fact.status == "active"
+        assert fact.inject_policy == "auto"
+        assert fact.content_hash
+        assert json.loads(fact.evidence_log_ids_json) == [log.id]
+        meta = json.loads(fact.candidate_meta_json)
+        assert meta["confidence_hint"] == "high"
+        assert "以后直接先给结论" in meta["evidence_quote"]
+
+    def test_rejects_noise_and_tool_contract_candidates(self, state_machine, db_session, monkeypatch):
+        def fail_embed(_: str):
+            raise AssertionError("rejected candidates must not be embedded")
+
+        monkeypatch.setattr("core.persona_preprocess.embed_text", fail_embed)
+
+        stats = state_machine.process_candidates([
+            {
+                "text": "用户让 bot 本轮必须调用 weather 工具",
+                "memory_type": "tool_contract",
+                "should_store": False,
+                "reject_reason": "工具调用契约是本轮任务，不是长期画像",
+            },
+            {
+                "text": "用户发送越狱测试文本",
+                "memory_type": "test_noise",
+                "should_store": False,
+                "reject_reason": "测试噪声",
+            },
+        ])
+
+        assert stats["created"] == 0
+        assert stats["rejected"] == 2
+        assert db_session.query(PersonaFact).count() == 0
+
+    def test_rejects_evidence_ids_from_other_user(self, state_machine, db_session, monkeypatch):
+        def fail_embed(_: str):
+            raise AssertionError("invalid evidence candidates must not be embedded")
+
+        monkeypatch.setattr("core.persona_preprocess.embed_text", fail_embed)
+        log = ChatLog(
+            user_id="other_user",
+            session_id="private_other_user",
+            role="user",
+            content="我喜欢图表",
+        )
+        db_session.add(log)
+        db_session.commit()
+
+        stats = state_machine.process_candidates([{
+            "text": "用户喜欢图表",
+            "memory_type": "stable_preference",
+            "should_store": True,
+            "evidence_log_ids": [log.id],
+            "evidence_quote": "我喜欢图表",
+        }])
+
+        assert stats["created"] == 0
+        assert stats["rejected"] == 1
+        assert stats["reject_reasons"]["invalid_evidence_log_ids"] == 1
+        assert db_session.query(PersonaFact).count() == 0
 
     def test_merge_duplicate_mock(self, state_machine, db_session, monkeypatch):
         import numpy as np
@@ -355,6 +452,9 @@ class TestBuildSummary:
             PersonaFact(user_id="test_user_01", content="历史兴趣", confidence="可能",
                         evidence_count=1, fact_type="preference",
                         first_seen=now, last_seen=now),
+            PersonaFact(user_id="test_user_01", content="喜欢命令行", confidence="可能",
+                        evidence_count=3, fact_type="preference",
+                        first_seen=now, last_seen=now),
         ]
         db_session.add_all(facts)
         db_session.commit()
@@ -363,6 +463,7 @@ class TestBuildSummary:
         data = json.loads(summary)
         assert data["count"] == 2
         assert data["facts"][0]["content"] == "喜欢简洁"
+        assert {x["content"] for x in data["facts"]} == {"喜欢简洁", "喜欢命令行"}
 
     def test_archived_excluded(self, state_machine, db_session):
         now = datetime.now()
@@ -383,12 +484,29 @@ class TestBuildSummary:
 
 
 class TestBuildPrompt:
-    def test_includes_facts_and_logs(self):
+    def test_includes_facts_logs_and_strict_schema(self):
+        logs_text = format_candidate_logs([
+            {
+                "id": 123,
+                "role": "user",
+                "created_at": "2026-05-24 12:00",
+                "content": "给我代码别废话",
+            }
+        ])
         prompt = build_candidate_extraction_prompt(
             facts_summary="喜欢简洁代码",
-            logs_text="user: 给我代码别废话\nuser: 这个怎么用",
+            logs_text=logs_text,
         )
         assert "喜欢简洁代码" in prompt
         assert "给我代码别废话" in prompt
-        assert "去重/计数/冲突由程序处理" in prompt
+        assert "[log_id=123]" in prompt
+        assert "memory_type" in prompt
+        assert "should_store" in prompt
+        assert "should_inject" in prompt
+        assert "confidence_hint" in prompt
+        assert "evidence_log_ids" in prompt
+        assert "reject_reason" in prompt
+        assert "temporary_task" in prompt
+        assert "tool_contract" in prompt
+        assert "test_noise" in prompt
         assert '"candidates"' in prompt

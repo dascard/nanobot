@@ -142,3 +142,20 @@ def test_memory_page_exposes_injection_controls_and_preview():
     assert "模拟注入" in memory_source
     assert "preview 模式只展示预览结果，不会真实注入 prompt。" in memory_source
     assert "禁用" in memory_source
+
+
+def test_persona_page_exposes_governance_and_injection_preview():
+    source = read_app()
+
+    assert "{ to: '/persona', label: '用户画像'" in source
+    assert '<Route path="/persona" element={<PersonaPage />}' in source
+    persona_source = source.split("function PersonaPage()")[1].split("// ── Audit ──")[0]
+
+    assert "api.get('/persona/users'" in persona_source
+    assert "api.get(`/persona/users/${encodeURIComponent(target)}/facts`" in persona_source
+    assert "api.patch(`/persona/facts/${factId}`" in persona_source
+    assert "api.post(`/persona/users/${encodeURIComponent(userId)}/injection-preview`" in persona_source
+    assert "画像列表" in persona_source
+    assert "模拟注入" in persona_source
+    assert "inject_policy" in persona_source
+    assert "禁用" in persona_source

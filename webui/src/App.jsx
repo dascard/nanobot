@@ -172,6 +172,7 @@ const NAV_SECTIONS = [
     items: [
       { to: '/groups', label: '群聊运行', icon: Users },
       { to: '/memory', label: '群体记忆', icon: Brain },
+      { to: '/persona', label: '用户画像', icon: Users },
       { to: '/stickers', label: '表情包', icon: Tags },
       { to: '/stickers/duplicates', label: '去重工作台', icon: Search },
       { to: '/db', label: '数据库', icon: Database },
@@ -2076,6 +2077,251 @@ function MemoryPage() {
   )
 }
 
+// ── Persona ──
+function PersonaPage() {
+  const [users, setUsers] = useState([])
+  const [userId, setUserId] = useState('')
+  const [facts, setFacts] = useState([])
+  const [status, setStatus] = useState('')
+  const [memoryType, setMemoryType] = useState('')
+  const [userInput, setUserInput] = useState('请按我的偏好回答')
+  const [preview, setPreview] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [extracting, setExtracting] = useState(false)
+  const [extractResult, setExtractResult] = useState(null)
+
+  const loadUsers = useCallback(async () => {
+    const r = await api.get('/persona/users', { params: { q: userId, limit: 120 } })
+    setUsers(r.data.items || [])
+  }, [userId])
+
+  const loadFacts = useCallback(async (target = userId) => {
+    if (!target) return
+    setLoading(true)
+    try {
+      const r = await api.get(`/persona/users/${encodeURIComponent(target)}/facts`, {
+        params: { status, memory_type: memoryType },
+      })
+      setFacts(r.data.items || [])
+      setUserId(target)
+    } finally {
+      setLoading(false)
+    }
+  }, [userId, status, memoryType])
+
+  useEffect(() => { loadUsers().catch(() => {}) }, [loadUsers])
+
+  const updateFact = async (factId, patch) => {
+    try {
+      const r = await api.patch(`/persona/facts/${factId}`, patch)
+      const updated = r.data.fact
+      setFacts(items => items.map(item => item.id === factId ? updated : item))
+      setPreview(null)
+      await loadUsers()
+    } catch (e) {
+      alert(e.response?.data?.detail || e.message)
+    }
+  }
+
+  const editFactContent = fact => {
+    const content = prompt('编辑用户画像内容', fact.content || '')
+    if (content == null) return
+    updateFact(fact.id, { content })
+  }
+
+  const previewInjection = async () => {
+    if (!userId) return
+    const r = await api.post(`/persona/users/${encodeURIComponent(userId)}/injection-preview`, {
+      user_input: userInput,
+      max_items: 6,
+      max_chars: 900,
+    })
+    setPreview(r.data)
+  }
+
+  const extractPersona = async () => {
+    if (!userId || extracting) return
+    setExtracting(true)
+    setExtractResult(null)
+    try {
+      const r = await api.post(`/persona/users/${encodeURIComponent(userId)}/extract`, {
+        window_hours: 168,
+        limit: 80,
+      })
+      setExtractResult(r.data)
+      await Promise.all([loadUsers(), loadFacts(userId)])
+    } catch (e) {
+      alert(e.response?.data?.detail || e.message)
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  const stats = {
+    users: users.length,
+    facts: facts.length,
+    injectable: facts.filter(x => x.status === 'active' && x.inject_policy === 'auto').length,
+    review: facts.filter(x => x.status === 'review').length,
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-white">用户画像</h1>
+          <p className="mt-1 text-xs text-slate-500">治理长期用户偏好，预览本轮会注入哪些画像。</p>
+        </div>
+        <button onClick={loadUsers}
+          className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">
+          <RefreshCw className="h-3.5 w-3.5" />
+          刷新用户
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <MiniStat label="用户数" value={stats.users} />
+        <MiniStat label="画像项" value={stats.facts} tone="blue" />
+        <MiniStat label="可注入" value={stats.injectable} tone="emerald" />
+        <MiniStat label="待审核" value={stats.review} tone="amber" />
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)]">
+        <Card className="min-h-[520px] overflow-hidden">
+          <div className="border-b border-slate-800 p-3">
+            <label className="block text-[11px] font-medium text-slate-400">
+              搜索或输入 user_id
+              <input value={userId} onChange={e => setUserId(e.target.value)} placeholder="用户 ID"
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
+            </label>
+          </div>
+          <div className="max-h-[620px] overflow-y-auto">
+            {users.length === 0 ? (
+              <div className="px-4 py-10 text-center text-xs text-slate-600">暂无用户画像</div>
+            ) : users.map(item => (
+              <button key={item.user_id} onClick={() => loadFacts(item.user_id)}
+                className={`w-full border-b border-slate-800/70 px-3 py-3 text-left transition-colors ${item.user_id === userId ? 'bg-emerald-500/10' : 'hover:bg-slate-800/50'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-slate-100">{item.name || item.user_id}</div>
+                    <div className="mt-0.5 text-[11px] text-slate-500">{item.user_id}</div>
+                  </div>
+                  <Badge tone={Number(item.injectable_count || 0) > 0 ? 'emerald' : Number(item.fact_count || 0) > 0 ? 'blue' : 'slate'}>
+                    {item.fact_count || 0}
+                  </Badge>
+                </div>
+                <div className="mt-2 text-[11px] text-slate-500">可注入 {item.injectable_count || 0}</div>
+              </button>
+            ))}
+          </div>
+        </Card>
+
+        <div className="min-w-0 space-y-4">
+          <Card className="p-3">
+            <div className="grid gap-3 lg:grid-cols-[1fr_140px_170px_auto]">
+              <label className="block text-[11px] font-medium text-slate-400">
+                当前用户
+                <input value={userId} onChange={e => setUserId(e.target.value)} placeholder="user_id"
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
+              </label>
+              <label className="block text-[11px] font-medium text-slate-400">
+                状态
+                <select value={status} onChange={e => setStatus(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500">
+                  <option value="">全部状态</option>
+                  {['review', 'active', 'disabled', 'archived', 'rejected'].map(x => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </label>
+              <label className="block text-[11px] font-medium text-slate-400">
+                类型
+                <select value={memoryType} onChange={e => setMemoryType(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500">
+                  <option value="">全部类型</option>
+                  {['stable_preference', 'interaction_style', 'stable_background', 'long_term_project'].map(x => <option key={x} value={x}>{x}</option>)}
+                </select>
+              </label>
+              <div className="flex items-end gap-2">
+                <button onClick={() => loadFacts()} disabled={!userId || loading}
+                  className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50">查询</button>
+                <button onClick={extractPersona} disabled={!userId || extracting}
+                  className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50">{extracting ? '提取中...' : '提取画像'}</button>
+                <button onClick={previewInjection} disabled={!userId}
+                  className="rounded-lg bg-blue-700 px-3 py-2 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50">模拟注入</button>
+              </div>
+            </div>
+            <label className="mt-3 block text-[11px] font-medium text-slate-400">
+              模拟输入
+              <input value={userInput} onChange={e => setUserInput(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
+            </label>
+            {extractResult && (
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-400">原始 {extractResult.raw_count}</div>
+                <div className="rounded-lg bg-slate-950 px-3 py-2 text-slate-400">候选 {extractResult.candidate_count}</div>
+                <div className="rounded-lg bg-slate-950 px-3 py-2 text-emerald-300">新增 {extractResult.stats?.created || 0}</div>
+                <div className="rounded-lg bg-slate-950 px-3 py-2 text-amber-300">拒收 {extractResult.stats?.rejected || 0}</div>
+              </div>
+            )}
+            {preview && (
+              <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge tone={preview.persona_fact_ids?.length ? 'emerald' : 'slate'}>selected {(preview.persona_fact_ids || []).length}</Badge>
+                  <span className="text-slate-500">chars {preview.persona_context_chars || 0}</span>
+                </div>
+                {Array.isArray(preview.persona_skipped) && preview.persona_skipped.length > 0 && (
+                  <div className="mt-2 text-slate-500">
+                    跳过: {preview.persona_skipped.slice(0, 5).map(x => `${x.id}:${x.reason}`).join(' / ')}
+                  </div>
+                )}
+                {preview.persona_context && (
+                  <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap rounded border border-slate-800 bg-slate-900 p-2 text-[11px] leading-4 text-slate-300">
+                    {preview.persona_context}
+                  </pre>
+                )}
+              </div>
+            )}
+          </Card>
+
+          <div>
+            <h2 className="text-sm font-medium text-slate-200">画像列表</h2>
+            <p className="mt-1 text-[11px] text-slate-500">当前筛选结果 {facts.length} 条</p>
+          </div>
+          {loading ? <Spinner /> : facts.length === 0 ? (
+            <div className="rounded-lg border border-slate-800 py-16 text-center text-sm text-slate-600">{userId ? '暂无画像；可先提取或调整筛选' : '从左侧选择用户或输入 user_id'}</div>
+          ) : (
+            <Card className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="border-b border-slate-800 text-left text-slate-500">
+                  <th className="px-3 py-2">id</th><th className="px-3 py-2">类型</th><th className="px-3 py-2">内容</th><th className="px-3 py-2">证据</th><th className="px-3 py-2">inject_policy</th><th className="px-3 py-2">状态</th><th className="px-3 py-2">注入</th><th className="px-3 py-2">操作</th>
+                </tr></thead>
+                <tbody>
+                  {facts.map(f => (
+                    <tr key={f.id} className="border-b border-slate-800/50 align-top">
+                      <td className="px-3 py-2 text-slate-500">{f.id}</td>
+                      <td className="px-3 py-2"><Badge>{f.memory_type}</Badge></td>
+                      <td className="max-w-[560px] px-3 py-2 text-slate-200">{f.content}</td>
+                      <td className="px-3 py-2 text-slate-400">{f.evidence_count}</td>
+                      <td className="px-3 py-2"><Badge tone={f.inject_policy === 'auto' ? 'emerald' : f.inject_policy === 'manual_only' ? 'blue' : 'slate'}>{f.inject_policy}</Badge></td>
+                      <td className="px-3 py-2"><Badge tone={f.status === 'active' ? 'emerald' : f.status === 'review' ? 'amber' : 'slate'}>{f.status}</Badge></td>
+                      <td className="px-3 py-2 text-xs text-slate-500">{f.injected_count || 0}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1">
+                          <button onClick={() => editFactContent(f)} className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800">编辑</button>
+                          <button onClick={() => updateFact(f.id, { status: 'active', inject_policy: 'auto' })} className="rounded border border-emerald-700 px-2 py-1 text-[11px] text-emerald-300 hover:bg-emerald-950">启用</button>
+                          <button onClick={() => updateFact(f.id, { status: 'disabled', inject_policy: 'never', disabled_reason: 'web_admin_disabled' })} className="rounded border border-red-800 px-2 py-1 text-[11px] text-red-300 hover:bg-red-950">禁用</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Audit ──
 function AuditPage() {
   const [data, setData] = useState({ items: [], total: 0 })
@@ -2150,6 +2396,7 @@ export default function App() {
           <Route path="/configs" element={<ConfigsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/persona" element={<PersonaPage />} />
           <Route path="/reply-eval" element={<ReplyEvalPage />} />
           <Route path="/evals" element={<EvalsPage />} />
           <Route path="/db" element={<DbPage />} />

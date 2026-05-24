@@ -265,6 +265,72 @@ def _user_profile_columns(conn: Any, engine: Any, db_path: str | None) -> None:
     })
 
 
+def _persona_fact_governance_columns(conn: Any, engine: Any, db_path: str | None) -> None:
+    if "persona_facts" not in _table_names(conn):
+        return
+
+    existing_before = _columns(conn, "persona_facts")
+    _add_missing_columns(conn, "persona_facts", {
+        "status": "TEXT DEFAULT 'review'",
+        "inject_policy": "TEXT DEFAULT 'manual_only'",
+        "memory_type": "TEXT DEFAULT 'stable_preference'",
+        "content_hash": "TEXT DEFAULT ''",
+        "disabled_reason": "TEXT DEFAULT ''",
+        "rejected_reason": "TEXT DEFAULT ''",
+        "evidence_log_ids_json": "TEXT DEFAULT '[]'",
+        "candidate_meta_json": "TEXT DEFAULT '{}'",
+        "last_injected_at": "TIMESTAMP",
+        "injected_count": "INTEGER DEFAULT 0",
+    })
+
+    rows = conn.execute(text(
+        "SELECT id, content, fact_type, confidence, evidence_count "
+        "FROM persona_facts"
+    )).fetchall()
+    for row in rows:
+        norm = re.sub(r"\s+", " ", (row.content or "").strip().lower()).rstrip("。.!！?？")
+        content_hash = hashlib.sha256(norm.encode("utf-8")).hexdigest()[:32] if norm else ""
+        fact_type = str(row.fact_type or "").strip().lower()
+        memory_type = {
+            "preference": "stable_preference",
+            "behavior": "interaction_style",
+            "trait": "stable_background",
+        }.get(fact_type, "stable_preference")
+        confidence = str(row.confidence or "")
+        evidence_count = int(row.evidence_count or 0)
+        if confidence == "确认" or (confidence == "可能" and evidence_count >= 3):
+            status = "active"
+            inject_policy = "auto"
+        else:
+            status = "review"
+            inject_policy = "manual_only"
+        status_expr = ":s" if "status" not in existing_before else (
+            "CASE WHEN status IS NULL OR status = '' THEN :s ELSE status END"
+        )
+        inject_expr = ":p" if "inject_policy" not in existing_before else (
+            "CASE WHEN inject_policy IS NULL OR inject_policy = '' THEN :p ELSE inject_policy END"
+        )
+        memory_expr = ":m" if "memory_type" not in existing_before else (
+            "CASE WHEN memory_type IS NULL OR memory_type = '' THEN :m ELSE memory_type END"
+        )
+        conn.execute(text(
+            "UPDATE persona_facts SET "
+            "content_hash = CASE WHEN content_hash IS NULL OR content_hash = '' THEN :h ELSE content_hash END, "
+            f"memory_type = {memory_expr}, "
+            f"status = {status_expr}, "
+            f"inject_policy = {inject_expr}, "
+            "evidence_log_ids_json = CASE WHEN evidence_log_ids_json IS NULL OR evidence_log_ids_json = '' THEN '[]' ELSE evidence_log_ids_json END, "
+            "candidate_meta_json = CASE WHEN candidate_meta_json IS NULL OR candidate_meta_json = '' THEN '{}' ELSE candidate_meta_json END "
+            "WHERE id = :id"
+        ), {
+            "h": content_hash,
+            "m": memory_type,
+            "s": status,
+            "p": inject_policy,
+            "id": row.id,
+        })
+
+
 def _expression_jargon_unique_indexes(conn: Any, engine: Any, db_path: str | None) -> None:
     tables = _table_names(conn)
     if "expression_memories" in tables:
@@ -367,6 +433,7 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_chat_stream_config_group_profile_mode", "chat stream group profile mode", _chat_stream_config_group_profile_mode),
     ("20260523_chat_log_session_message_index", "chat log session/message index", _chat_log_session_message_index),
     ("20260523_user_profile_columns", "user profile columns", _user_profile_columns),
+    ("20260524_persona_fact_governance_columns", "persona fact governance columns", _persona_fact_governance_columns),
     ("20260523_expression_jargon_unique_indexes", "expression and jargon unique indexes", _expression_jargon_unique_indexes),
     ("20260523_agent_prompt_trace_columns", "agent/prompt trace columns", _agent_prompt_trace_columns),
     ("20260523_llm_request_log_columns", "llm api request log columns", _llm_request_log_columns),
