@@ -928,6 +928,94 @@ async def test_group_message_at_bot_enters_timing(db_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_group_message_returns_full_html_reply_without_truncation(db_session, monkeypatch):
+    """群聊 HTML 报告必须完整返回给 QQbot；截断在 style/head 内会导致白图。"""
+    from unittest.mock import AsyncMock
+    from api.routes import GroupMessageRequest, group_message
+
+    long_css = ".x{color:#111;}" * 360
+    body = '<body class="news-brief"><div class="container"><h1>AI 日报正文</h1></div></body>'
+    html = f'<!DOCTYPE html><html lang="zh-CN"><head><style>{long_css}</style></head>{body}</html>'
+    assert len(html) > 4000
+
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(return_value=html)
+    monkeypatch.setattr("api.routes.get_bridge", lambda: mock_bridge)
+
+    async def fake_process(*args, **kwargs):
+        return {"action": "continue", "generation": 1, "reason": "user requested ai daily"}
+
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="daily-html",
+            sender_id="u-daily",
+            sender_name="日报用户",
+            message="来一份 AI 日报",
+            session_name="日报群",
+            is_at_bot=True,
+            message_id="m-daily-html-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "continue"
+    assert data["reply"] == html
+    assert data["reply"].endswith("</html>")
+    assert "AI 日报正文" in data["reply"]
+
+
+@pytest.mark.asyncio
+async def test_group_timer_returns_full_html_reply_without_truncation(db_session, monkeypatch):
+    from unittest.mock import AsyncMock
+    from api.routes import GroupTimingTimerRequest, group_timing_timer
+
+    long_css = ".x{color:#111;}" * 360
+    html = (
+        '<!DOCTYPE html><html lang="zh-CN"><head>'
+        f"<style>{long_css}</style></head>"
+        '<body class="news-brief"><div class="container">timer 日报正文</div></body></html>'
+    )
+    assert len(html) > 4000
+
+    class FakeRuntime:
+        _states = {}
+
+        async def handle_timer_fired(self, *args, **kwargs):
+            return {
+                "action": "continue",
+                "generation": 9,
+                "pending_text": "timer AI 日报",
+                "source_message_ids": [],
+            }
+
+        def note_bot_replied(self, *args, **kwargs):
+            return None
+
+    class FakeBridge:
+        handle_message = AsyncMock(return_value=html)
+
+        def pop_last_reply_meta(self, session_id):
+            return {}
+
+    monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FakeRuntime())
+    monkeypatch.setattr("api.routes.get_bridge", lambda: FakeBridge())
+
+    data = await group_timing_timer(
+        GroupTimingTimerRequest(group_id="timer-html", generation=9),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "continue"
+    assert data["reply"] == html
+    assert data["reply"].endswith("</html>")
+    assert "timer 日报正文" in data["reply"]
+
+
+@pytest.mark.asyncio
 async def test_group_message_prompt_v2_audit_failure_is_no_send(db_session, monkeypatch):
     from api.routes import GroupMessageRequest, group_message
 

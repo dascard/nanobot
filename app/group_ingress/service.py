@@ -326,7 +326,7 @@ class GroupIngressService:
                     }
             return {
                 "action": "continue",
-                "reply": h.sanitize_prompt_text(answer, max_chars=4000),
+                "reply": h.format_group_reply_for_transport(answer, max_chars=4000),
                 "reply_meta": reply_meta,
                 "generation": result.get("generation", 0),
                 "reason": str(result.get("reason", ""))[:120],

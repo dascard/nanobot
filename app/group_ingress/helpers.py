@@ -46,6 +46,19 @@ def short_text(text: str, limit: int = 400) -> str:
     return value if len(value) <= limit else value[:limit] + "...[截断]"
 
 
+def is_html_reply(text: str) -> bool:
+    value = str(text or "").lstrip().lower()
+    return value.startswith(("<!doctype", "<html", "<article"))
+
+
+def format_group_reply_for_transport(text: str, *, max_chars: int = 4000) -> str:
+    """返回给 QQbot 的群聊回复。HTML 需要完整文档，不能按文本截断。"""
+    value = str(text or "")
+    if is_html_reply(value):
+        return value
+    return sanitize_prompt_text(value, max_chars=max_chars)
+
+
 def normalize_files(files: list[str] | None) -> list[str]:
     return [file for file in (files or []) if isinstance(file, str) and file.strip()]
 

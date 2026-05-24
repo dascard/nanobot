@@ -1741,7 +1741,9 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                 timer_state = runtime._states.get(_normalize_group_session_id(req.group_id))
                 timer_bot_id = (timer_state.bot_id if timer_state else "") or ""
                 timer_bot_name = (timer_state.bot_name if timer_state else "") or ""
-                timer_bot_aliases = list(timer_state.bot_aliases if timer_state else []) or list(req.bot_aliases or [])
+                timer_bot_aliases = list(timer_state.bot_aliases if timer_state else []) or list(
+                    getattr(req, "bot_aliases", []) or []
+                )
 
                 from core.identity import build_identity_vars
                 timer_sender_id = str(getattr(req, "sender_id", "") or getattr(req, "user_id", "") or "")
@@ -1777,7 +1779,8 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                     metadata=bridge_meta,
                 )
                 answer = reply if isinstance(reply, str) else str(reply or "")
-                result["reply"] = _sanitize_prompt_text(answer, max_chars=4000)
+                from app.group_ingress.helpers import format_group_reply_for_transport
+                result["reply"] = format_group_reply_for_transport(answer, max_chars=4000)
                 reply_meta_timer = _pop_bridge_reply_meta(bridge, group_user_id)
                 result["reply_meta"] = reply_meta_timer
                 result["group_id"] = req.group_id
