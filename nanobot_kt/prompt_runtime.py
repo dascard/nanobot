@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger("nanobot.prompt_runtime")
 
 
 @dataclass(frozen=True)
@@ -207,6 +210,20 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         "prompt_engine": "v2",
         "group_memory": context_debug,
     }
+    if context_debug.get("group_memory_injected") and context_debug.get("group_memory_ids"):
+        try:
+            from app.group_memory.injection_service import record_group_memory_injected
+            from core.uow import UnitOfWork
+
+            with UnitOfWork() as uow:
+                recorded_count = record_group_memory_injected(
+                    uow.db,
+                    list(context_debug.get("group_memory_ids") or []),
+                )
+                uow.commit()
+            meta_update["group_memory_recorded_count"] = recorded_count
+        except Exception as exc:
+            logger.warning("[PromptRuntime] failed to record group memory injection: %s", exc)
     for key in (
         "group_memory_injected",
         "group_memory_ids",

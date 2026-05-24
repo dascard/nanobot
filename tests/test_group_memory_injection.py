@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def test_group_memory_injection_uses_stream_config_for_group_id(db_session):
@@ -39,6 +39,38 @@ def test_group_memory_injection_uses_stream_config_for_group_id(db_session):
     assert result.debug["group_memory_context_chars"] == len(result.context)
 
     memory = db_session.query(GroupMemory).filter(GroupMemory.content_hash == "gm-inject-topic").first()
+    assert memory.injected_count == 0
+    assert memory.last_injected_at is None
+
+
+def test_group_memory_record_injected_updates_stats_explicitly(db_session):
+    from app.group_memory.injection_service import GroupMemoryInjectionService
+    from core.database import GroupMemory
+
+    db_session.add(GroupMemory(
+        group_id="group_1097666427",
+        memory_type="topic",
+        content="模型部署: 群里经常讨论本地模型部署",
+        content_hash="gm-record-topic",
+        confidence=0.86,
+        evidence_count=2,
+        evidence_log_ids_json="[1, 2]",
+        decay_score=1.0,
+        status="active",
+        inject_policy="auto",
+        last_seen=datetime.now(),
+    ))
+    db_session.commit()
+
+    memory = db_session.query(GroupMemory).filter(GroupMemory.content_hash == "gm-record-topic").first()
+    assert memory.injected_count == 0
+    assert memory.last_injected_at is None
+
+    updated = GroupMemoryInjectionService(db_session).record_injected([memory.id])
+    db_session.commit()
+    db_session.refresh(memory)
+
+    assert updated == 1
     assert memory.injected_count == 1
     assert memory.last_injected_at is not None
 
@@ -171,5 +203,48 @@ def test_group_memory_retrieval_budget_includes_rendering_overhead(db_session):
     )
     context = render_group_memory_context("group_1097666427", result.selected)
 
-    assert len(context) <= 360
+    assert len(context) <= 260
     assert any(item["reason"] == "over_budget" for item in result.skipped)
+
+
+def test_group_memory_overview_recent_injected_ids_sort_by_injected_at(db_session):
+    from app.group_memory.extraction_service import build_group_memory_overview
+    from core.database import GroupMemory
+
+    now = datetime.now()
+    db_session.add(GroupMemory(
+        group_id="group_1097666427",
+        memory_type="topic",
+        content="较新的 last_seen 但更早注入",
+        content_hash="gm-overview-older-inject",
+        confidence=0.86,
+        evidence_count=2,
+        evidence_log_ids_json="[1, 2]",
+        decay_score=1.0,
+        status="active",
+        inject_policy="auto",
+        last_seen=now,
+        last_injected_at=now - timedelta(hours=2),
+        injected_count=1,
+    ))
+    db_session.add(GroupMemory(
+        group_id="group_1097666427",
+        memory_type="topic",
+        content="较旧的 last_seen 但刚注入",
+        content_hash="gm-overview-newer-inject",
+        confidence=0.86,
+        evidence_count=2,
+        evidence_log_ids_json="[3, 4]",
+        decay_score=1.0,
+        status="active",
+        inject_policy="auto",
+        last_seen=now - timedelta(days=7),
+        last_injected_at=now,
+        injected_count=1,
+    ))
+    db_session.commit()
+
+    overview = build_group_memory_overview(db_session)
+    item = next(row for row in overview if row["group_id"] == "group_1097666427")
+
+    assert item["recent_injected_ids"] == [2, 1]

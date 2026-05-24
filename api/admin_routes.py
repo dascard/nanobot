@@ -815,7 +815,7 @@ def group_memory_update_item(
 ):
     """编辑群体记忆治理字段。"""
     from core.database import GroupMemory
-    from core.group_memory import _content_hash
+    from core.group_memory import _cluster_key, _content_hash
 
     row = db.query(GroupMemory).filter(GroupMemory.id == memory_id).first()
     if not row:
@@ -836,6 +836,7 @@ def group_memory_update_item(
             raise HTTPException(status_code=409, detail="已有相同记忆，可合并或归档")
         row.content = content
         row.content_hash = content_hash
+        row.cluster_key = _cluster_key(content)
         updates["content"] = content
     for field in ("status", "inject_policy", "disabled_reason", "rejected_reason"):
         value = getattr(body, field)

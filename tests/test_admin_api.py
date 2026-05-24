@@ -417,12 +417,15 @@ class TestObservabilityAPI:
         assert data["group_memory_skipped"][0]["reason"] == "manual_only"
 
     def test_group_memory_update_item_changes_status_policy_and_content(self, client, auth_header):
+        from core.group_memory import _cluster_key
+
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(GroupMemory(
                 group_id="group_7788",
                 memory_type="topic",
                 content="旧内容",
                 content_hash="old-content",
+                cluster_key="旧内容",
                 confidence=0.8,
                 evidence_count=2,
                 evidence_log_ids_json="[1, 2]",
@@ -447,6 +450,7 @@ class TestObservabilityAPI:
         assert memory["status"] == "disabled"
         assert memory["inject_policy"] == "never"
         assert memory["disabled_reason"] == "人工确认污染"
+        assert memory["cluster_key"] == _cluster_key("新内容")
 
     def test_group_memory_update_item_duplicate_content_returns_409(self, client, auth_header):
         from core.group_memory import _content_hash

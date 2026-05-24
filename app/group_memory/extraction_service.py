@@ -163,6 +163,7 @@ def build_group_memory_overview(db, *, limit: int = 300) -> list[dict]:
             "latest_memory_at": "",
             "last_injected_at": "",
             "recent_injected_ids": [],
+            "_recent_injected_pairs": [],
             "group_profile_mode": "off",
         })
         return row
@@ -207,7 +208,7 @@ def build_group_memory_overview(db, *, limit: int = 300) -> list[dict]:
         if injected_at:
             if not row["last_injected_at"] or injected_at > row["last_injected_at"]:
                 row["last_injected_at"] = injected_at
-            row["recent_injected_ids"].append(memory.id)
+            row["_recent_injected_pairs"].append((memory.last_injected_at, memory.id))
 
     from core.group_memory import should_inject
     for memory in memory_rows:
@@ -227,7 +228,8 @@ def build_group_memory_overview(db, *, limit: int = 300) -> list[dict]:
 
     items = list(groups.values())
     for item in items:
-        item["recent_injected_ids"] = item["recent_injected_ids"][:10]
+        pairs = sorted(item.pop("_recent_injected_pairs", []), key=lambda pair: pair[0], reverse=True)
+        item["recent_injected_ids"] = [memory_id for _, memory_id in pairs[:10]]
     items.sort(key=lambda item: (
         item["latest_log_at"] or item["latest_memory_at"] or "",
         item["memory_count"],

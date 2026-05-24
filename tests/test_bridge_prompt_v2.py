@@ -45,12 +45,39 @@ class _FakeOutput:
 @pytest.mark.asyncio
 async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event(monkeypatch, db_session):
     from core import database
-    from core.database import AgentRun
+    from core.database import AgentRun, GroupMemory
     from core.prompt_v2.schema import PromptCompileRequest, PromptPlan
     from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
 
     settings.set_session_factory(database.SessionLocal)
+    db_session.add(GroupMemory(
+        id=11,
+        group_id="group_1001",
+        memory_type="topic",
+        content="群里经常讨论 UI 层次",
+        content_hash="bridge-success-memory-11",
+        confidence=0.9,
+        evidence_count=2,
+        evidence_log_ids_json="[1, 2]",
+        decay_score=1.0,
+        status="active",
+        inject_policy="auto",
+    ))
+    db_session.add(GroupMemory(
+        id=12,
+        group_id="group_1001",
+        memory_type="style",
+        content="群里喜欢直接指出问题",
+        content_hash="bridge-success-memory-12",
+        confidence=0.9,
+        evidence_count=2,
+        evidence_log_ids_json="[3, 4]",
+        decay_score=1.0,
+        status="active",
+        inject_policy="auto",
+    ))
+    db_session.commit()
 
     bridge = NanobotBridge.__new__(NanobotBridge)
     bridge.creature_path = "creatures/nanobot"
@@ -165,6 +192,14 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     assert '"group_memory_injected": true' in run.meta_json
     assert '"group_memory_ids": [11, 12]' in run.meta_json
     assert '"group_profile_mode": "on"' in run.meta_json
+    db_session.expire_all()
+    refreshed = {
+        row.id: row
+        for row in db_session.query(GroupMemory).filter(GroupMemory.id.in_([11, 12])).all()
+    }
+    assert refreshed[11].injected_count == 1
+    assert refreshed[12].injected_count == 1
+    assert refreshed[11].last_injected_at is not None
 
 
 @pytest.mark.asyncio
@@ -253,11 +288,26 @@ async def test_bridge_engine_v2_uses_character_name_as_bot_name(monkeypatch, db_
 @pytest.mark.asyncio
 async def test_bridge_engine_v2_fails_fast_when_prompt_audit_fails(monkeypatch, db_session):
     from core import database
+    from core.database import GroupMemory
     from core.prompt_v2.audit import PromptAuditError
     from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
 
     settings.set_session_factory(database.SessionLocal)
+    db_session.add(GroupMemory(
+        id=21,
+        group_id="group_1002",
+        memory_type="topic",
+        content="audit failure should not count this",
+        content_hash="bridge-audit-fail-memory-21",
+        confidence=0.9,
+        evidence_count=2,
+        evidence_log_ids_json="[1, 2]",
+        decay_score=1.0,
+        status="active",
+        inject_policy="auto",
+    ))
+    db_session.commit()
 
     bridge = NanobotBridge.__new__(NanobotBridge)
     bridge.creature_path = "creatures/nanobot"
@@ -299,12 +349,21 @@ async def test_bridge_engine_v2_fails_fast_when_prompt_audit_fails(monkeypatch, 
             "group_id": "1002",
             "runtime_preset": "none",
             "enable_reply_contract_retry": False,
+            "context_debug": {
+                "group_memory_injected": True,
+                "group_memory_ids": [21],
+                "group_memory_context_chars": 120,
+                "group_profile_mode": "on",
+            },
         },
     )
 
     assert result == ""
     assert bridge.pop_last_reply_meta("group_1002")["_agent_result"] == "prompt_v2_audit_failed"
     assert seen_events == []
+    memory = db_session.query(GroupMemory).filter(GroupMemory.id == 21).first()
+    assert memory.injected_count == 0
+    assert memory.last_injected_at is None
 
 
 @pytest.mark.asyncio

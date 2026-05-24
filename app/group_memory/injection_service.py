@@ -48,6 +48,7 @@ class GroupMemoryInjectionService:
         recent_messages: list[dict[str, Any]] | None = None,
         max_items: int = 10,
         max_chars: int = 1200,
+        record_injection: bool = False,
     ) -> GroupMemoryInjectionResult:
         from core.database import ChatStreamConfig
 
@@ -92,7 +93,8 @@ class GroupMemoryInjectionService:
         })
         if mode == "on" and context:
             debug["group_memory_injected"] = True
-            self._record_injected(selection.selected)
+            if record_injection:
+                self.record_injected(selection.selected_ids)
             return GroupMemoryInjectionResult(
                 context=context,
                 selected_ids=selection.selected_ids,
@@ -108,11 +110,27 @@ class GroupMemoryInjectionService:
             debug=debug,
         )
 
-    def _record_injected(self, memories: list[Any]) -> None:
-        if not memories:
-            return
-        now = datetime.now()
-        for row in memories:
-            row.last_injected_at = now
-            row.injected_count = int(row.injected_count or 0) + 1
-        self.db.flush()
+    def record_injected(self, selected_ids: list[int]) -> int:
+        return record_group_memory_injected(self.db, selected_ids)
+
+
+def record_group_memory_injected(db: Session, selected_ids: list[int]) -> int:
+    ids: list[int] = []
+    for item in selected_ids or []:
+        try:
+            value = int(item)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            ids.append(value)
+    if not ids:
+        return 0
+    from core.database import GroupMemory
+
+    now = datetime.now()
+    rows = db.query(GroupMemory).filter(GroupMemory.id.in_(ids)).all()
+    for row in rows:
+        row.last_injected_at = now
+        row.injected_count = int(row.injected_count or 0) + 1
+    db.flush()
+    return len(rows)
