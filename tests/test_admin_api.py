@@ -548,6 +548,36 @@ class TestPersonaAdmin:
             assert row.injected_count == 0
             assert row.last_injected_at is None
 
+    def test_persona_extract_returns_502_when_llm_content_is_empty(self, client, auth_header, monkeypatch):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(User(id="u-persona", name="画像用户"))
+            db.add(ChatLog(
+                user_id="u-persona",
+                session_id="private_u-persona",
+                role="user",
+                content="以后回答先给结论",
+                created_at=now,
+            ))
+            db.commit()
+
+        async def fake_chat_completion(self, **kwargs):
+            return {"choices": [{"message": {"content": None}}]}
+
+        monkeypatch.setattr(
+            "clients.new_api_client.NewAPIClient.chat_completion",
+            fake_chat_completion,
+        )
+
+        r = client.post(
+            "/api/v1/admin/persona/users/u-persona/extract",
+            json={"window_hours": 168, "limit": 10},
+            headers=auth_header,
+        )
+
+        assert r.status_code == 502
+        assert "空内容" in r.text
+
     def test_persona_update_fact_rejects_duplicate_content(self, client, auth_header):
         from core.persona_preprocess import content_hash
 

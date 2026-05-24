@@ -33,6 +33,19 @@ def _safe_json(value: str | None, fallback: Any) -> Any:
     return parsed
 
 
+def _extract_llm_message_content(resp: dict[str, Any]) -> Any:
+    choices = resp.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return None
+    return message.get("content")
+
+
 def _fact_dict(row: PersonaFact) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -287,8 +300,10 @@ async def persona_extract_user(
     )
     if not isinstance(resp, dict) or "choices" not in resp:
         raise HTTPException(status_code=502, detail=str(resp.get("error", resp))[:300] if isinstance(resp, dict) else "LLM failed")
-    raw = resp["choices"][0]["message"]["content"]
+    raw = _extract_llm_message_content(resp)
     parsed = EvolutionUtils.json_repair(raw)
+    if not isinstance(parsed, dict) or parsed.get("parse_error"):
+        raise HTTPException(status_code=502, detail="画像提取 LLM 返回空内容或非 JSON")
     candidates = parsed.get("candidates", []) if isinstance(parsed, dict) else []
     stats = sm.process_candidates(candidates)
     persona_summary = sm.build_summary()

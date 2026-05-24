@@ -105,6 +105,12 @@ class TestEvolutionUtils:
         result = EvolutionUtils.json_repair("this is not json at all")
         assert result.get("parse_error") is True
 
+    def test_none_returns_error(self):
+        from core.legacy_adapter import EvolutionUtils
+        result = EvolutionUtils.json_repair(None)
+        assert result.get("parse_error") is True
+        assert result.get("raw") == ""
+
 
 class TestCircuitBreaker:
     """BUG-07: 验证 circuit breaker failures 重置"""

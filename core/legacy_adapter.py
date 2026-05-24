@@ -673,9 +673,13 @@ class EvolutionUtils:
     """封装历史工作流迁移来的 Python 容错逻辑。"""
     
     @staticmethod
-    def json_repair(raw: str) -> Dict[str, Any]:
+    def json_repair(raw: Any) -> Dict[str, Any]:
         """JSON 格式容错修补逻辑。"""
-        raw = raw.strip()
+        if raw is None:
+            return {"parse_error": True, "raw": ""}
+        raw = str(raw).strip()
+        if not raw:
+            return {"parse_error": True, "raw": ""}
         # 1. 直接解析
         try: return json.loads(raw)
         except (json.JSONDecodeError, ValueError): pass
