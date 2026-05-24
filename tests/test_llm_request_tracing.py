@@ -409,7 +409,7 @@ def test_new_api_payload_applies_enable_thinking_policy():
     assert disabled_payload["thinking"] == {"type": "disabled"}
 
 
-def test_news_search_simple_llm_sets_news_search_source(monkeypatch):
+def test_ai_daily_simple_llm_sets_ai_daily_source(monkeypatch):
     from core.llm_trace_context import get_llm_trace_vars
     from creatures.nanobot.prompts.skills.news_search import tool as news_tool
 
@@ -428,7 +428,7 @@ def test_news_search_simple_llm_sets_news_search_source(monkeypatch):
 
     assert json.loads(raw)["ok"] is True
     assert seen
-    assert seen[0][2] == "news_search"
+    assert seen[0][2] == "ai_daily"
 
 
 def test_news_daily_quality_sets_dedicated_source(monkeypatch):

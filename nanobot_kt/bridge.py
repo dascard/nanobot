@@ -83,6 +83,19 @@ def _extract_html_document(content: str) -> str:
     return ""
 
 
+def _extract_reply_contract_text(content: str) -> str:
+    text = str(content or "")
+    if "NANOBOT_REPLY_OUTPUT" not in text:
+        return ""
+    try:
+        from nanobot_kt.reply_contract import extract_reply_tool_output
+
+        result = extract_reply_tool_output([{"role": "tool", "content": text}])
+        return result.reply_text or ""
+    except Exception:
+        return ""
+
+
 def _message_content_to_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -754,8 +767,11 @@ class NanobotBridge:
                     continue  # 只看 tool 消息——assistant 可能引用 marker 但非 HTML 输出
                 content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
                 text = _message_content_to_text(content)
-                if text and any(marker in text for marker in marker_classes):
-                    html_doc = _extract_html_document(text)
+                reply_text = _extract_reply_contract_text(text)
+                for candidate in (reply_text, text):
+                    if not candidate or not any(marker in candidate for marker in marker_classes):
+                        continue
+                    html_doc = _extract_html_document(candidate)
                     if html_doc:
                         return html_doc
         except Exception as e:

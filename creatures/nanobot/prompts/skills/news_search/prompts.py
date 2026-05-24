@@ -62,10 +62,10 @@ def get_system_prompt() -> str:
     from core.prompt_v2.tool_templates import render_tool_execution_template
 
     return render_tool_execution_template(
-        "tools/news_search/digest_system",
+        "tools/ai_daily/digest_system",
         {},
         fallback=SYSTEM_PROMPT,
-        expected_tool_name="news_search",
+        expected_tool_name="ai_daily",
     )
 
 
@@ -103,12 +103,12 @@ def build_evidence_prompt(cards_json: list[dict], mode: str = "fast") -> str:
     from core.prompt_v2.tool_templates import render_tool_execution_template
 
     return render_tool_execution_template(
-        "tools/news_search/digest_user",
+        "tools/ai_daily/digest_user",
         {
             "evidence_cards": chr(10).join(card_texts),
             "mode_hint": mode_hint,
             "card_count": str(len(cards_json)),
         },
         fallback=fallback,
-        expected_tool_name="news_search",
+        expected_tool_name="ai_daily",
     )

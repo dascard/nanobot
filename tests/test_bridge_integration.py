@@ -115,12 +115,29 @@ class TestHtmlPassthrough:
         assert "group-analysis-report" in result
 
     @pytest.mark.asyncio
-    async def test_news_search_html_extracted(self):
+    async def test_ai_daily_raw_html_extracted(self):
         b = await _start_bridge()
         html = '<article class="news-brief"><h1>AI News</h1></article>'
-        _set_conversation(b, [_fake_tool_msg("news_search", html)])
+        _set_conversation(b, [_fake_tool_msg("ai_daily", html)])
         result = b._extract_last_rich_tool_output(("news-brief",))
         assert "news-brief" in result
+
+    @pytest.mark.asyncio
+    async def test_ai_daily_reply_wrapped_html_extracted_cleanly(self):
+        from creatures.nanobot.prompts.skills.reply.tool import build_reply_output
+
+        b = await _start_bridge()
+        html = (
+            '<!DOCTYPE html><html lang="zh-CN">'
+            '<body class="news-brief"><div class="container">AI 日报</div></body>'
+            "</html>"
+        )
+        _set_conversation(b, [_fake_tool_msg("ai_daily", build_reply_output(html))])
+
+        result = b._extract_last_rich_tool_output(("news-brief",))
+
+        assert result == html
+        assert '\\"' not in result
 
     @pytest.mark.asyncio
     async def test_no_html_returns_empty(self):
@@ -151,7 +168,7 @@ class TestNoLeak:
         b = await _start_bridge()
         _set_conversation(b, [
             _fake_assistant_msg("这里是 news-brief 的纯文本讨论"),
-            _fake_tool_msg("news_search", '<article class="news-brief"><h1>日报</h1></article>'),
+            _fake_tool_msg("ai_daily", '<article class="news-brief"><h1>日报</h1></article>'),
         ])
         result = b._extract_last_rich_tool_output(("news-brief",))
         assert "news-brief" in result

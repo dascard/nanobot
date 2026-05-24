@@ -76,7 +76,7 @@ def _build_scheduled_task_query(task: ScheduledTask, now: datetime | None = None
         f"推送目标：{task.target_type}/{task.target_id}\n\n"
         "执行规则：\n"
         "- 必须完成下面的任务模板，不要改写为闲聊。\n"
-        "- 如果任务涉及今天、最新、新闻、资讯、日报、早报，必须先调用 ai_daily 获取实时来源；news_search 仅作兼容旧名；禁止只凭模型内置知识生成。\n"
+        "- 如果任务涉及今天、最新、新闻、资讯、日报、早报，必须先调用 ai_daily 获取实时来源；禁止只凭模型内置知识生成。\n"
         "- 如果任务涉及群聊总结、群日报、分析某个群，必须调用 group_analysis 获取真实聊天记录。\n"
         "- 如果任务涉及数据库、历史记录或统计查询，优先调用 sql_analysis。\n"
         "- 工具返回 HTML 报告时，直接保留 HTML，不要改写成 Markdown。\n\n"

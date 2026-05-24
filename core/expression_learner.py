@@ -24,7 +24,7 @@ MAX_PHRASE_LEN = 8            # 短词最多 CJK 字符数
 BAD_LEARN_TERMS: set[str] = {
     "tool_error", "reply", "no_reply", "RuntimeTool", "AvailableFunctions",
     "memory_read", "memory_write", "sql_analysis", "group_analysis",
-    "python_sandbox", "image_summary", "sticker_search", "ai_daily", "news_search",
+    "python_sandbox", "image_summary", "sticker_search", "ai_daily",
     "news_daily", "Traceback", "Exception", "HTTPError",
     "request_json", "response_json", "skill", "subagent",
     "AgentRun", "PromptRender", "conversation",

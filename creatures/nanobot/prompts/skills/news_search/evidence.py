@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
-logger = logging.getLogger("nanobot.news_search.evidence")
+logger = logging.getLogger("nanobot.ai_daily.evidence")
 
 # ── 数据结构 ──
 

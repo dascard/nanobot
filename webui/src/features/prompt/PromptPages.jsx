@@ -466,7 +466,6 @@ const PROMPT_V2_TOOL_TEMPLATE_LABELS = {
   sql_analysis: { tool: 'sql_analysis', title: 'SQL 分析工具模板' },
   python_sandbox: { tool: 'python_sandbox', title: 'Python 数据分析工具模板' },
   ai_daily: { tool: 'ai_daily', title: 'AI 日报工具模板' },
-  news_search: { tool: 'news_search', title: '资讯搜索工具模板' },
   image_summary: { tool: 'image_summary', title: '图片摘要工具模板' },
   persona_update: { tool: 'persona_update', title: '画像更新工具模板' },
   schedule_task: { tool: 'schedule_task', title: '定时任务工具模板' },

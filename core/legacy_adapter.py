@@ -410,7 +410,7 @@ class NanobotKTController:
         self.local_tools: Dict[str, Any] = {
             "stats": self.data_analyst.perform_sql_audit,
             "vibe": self._get_vibe_tool,
-            "news_scout": search_and_extract_news,
+            "ai_daily": search_and_extract_news,
         }
         
         # 定义原生 Tool 定义 (OpenAI 格式) — 对齐 KT Registry 模式
@@ -446,8 +446,8 @@ class NanobotKTController:
             {
                 "type": "function",
                 "function": {
-                    "name": "search_news",
-                    "description": "搜索 AI/科技领域最新资讯并提取正文摘要",
+                    "name": "run_ai_daily",
+                    "description": "聚合 AI/科技可信来源并生成日报或资讯简报",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -479,7 +479,7 @@ class NanobotKTController:
                 if cmd == "vibe":
                     result = handler(tool_args, session_id)
                 # Run sync handlers in thread to avoid blocking event loop
-                elif cmd == "news_scout":
+                elif cmd == "ai_daily":
                     result = await asyncio.to_thread(handler, tool_args)
                 else:
                     result = handler(tool_args)
@@ -500,7 +500,7 @@ class NanobotKTController:
                 result = self.sandbox.run_query(args.get("sql", ""))
             elif func_name == "run_python_analysis":
                 result = self.sandbox.execute_python_analysis(args.get("code", ""))
-            elif func_name == "search_news":
+            elif func_name == "run_ai_daily":
                 result = search_and_extract_news(args.get("query", ""))
             else:
                 result = f"Unknown tool: {func_name}"

@@ -115,20 +115,20 @@ class TestPythonSandboxTool:
         assert "42" in result.output
 
 
-class TestNewsSearchTool:
-    """Test the NewsSearchTool BaseTool adapter."""
+class TestAiDailyTool:
+    """Test the AiDailyTool BaseTool adapter."""
 
     def test_tool_metadata(self):
-        from creatures.nanobot.prompts.skills.news_search.tool import NewsSearchTool
-        tool = NewsSearchTool()
-        assert tool.tool_name == "news_search"
+        from creatures.nanobot.prompts.skills.news_search.tool import AiDailyTool
+        tool = AiDailyTool()
+        assert tool.tool_name == "ai_daily"
 
     @patch("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline")
     def test_execute_success(self, mock_daily):
-        from creatures.nanobot.prompts.skills.news_search.tool import NewsSearchTool
+        from creatures.nanobot.prompts.skills.news_search.tool import AiDailyTool
         mock_daily.return_value = "<article>AI news: GPT-5 released</article>"
 
-        tool = NewsSearchTool()
+        tool = AiDailyTool()
         result = asyncio.run(tool.execute({"query": "AI news"}))
         assert result.success
         assert "GPT-5" in result.output
@@ -932,8 +932,9 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_prefers_news_tool_html_over_plaintext_rewrite(self, MockAgent, mock_load):
+    def test_handle_message_prefers_ai_daily_wrapped_html_over_plaintext_rewrite(self, MockAgent, mock_load):
         from nanobot_kt.bridge import NanobotBridge
+        from creatures.nanobot.prompts.skills.reply.tool import build_reply_output
 
         mock_config = MagicMock()
         mock_config.name = "test"
@@ -944,8 +945,9 @@ class TestNanobotBridge:
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
         mock_conv._messages = []
+        html = '<article class="news-brief"><h1>HTML资讯卡片</h1></article>'
         tool_messages = [
-            {"role": "tool", "content": "[news_search]\n<article class=\"news-brief\"><h1>HTML资讯卡片</h1></article>"},
+            {"role": "tool", "content": build_reply_output(html)},
             {"role": "assistant", "content": "我给你整理了几条新闻"},
         ]
         mock_conv.to_messages.return_value = tool_messages
@@ -967,6 +969,7 @@ class TestNanobotBridge:
         result = asyncio.run(_run())
 
         assert result.startswith("<article")
+        assert '\\"' not in result
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")

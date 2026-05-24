@@ -205,7 +205,7 @@ class TestAgenticToolLoop:
                 "tool_calls": [{
                     "id": "call_123",
                     "function": {
-                        "name": "search_news",
+                        "name": "run_ai_daily",
                         "arguments": json.dumps({"query": "AI news"})
                     }
                 }]
@@ -230,9 +230,9 @@ class TestAgenticToolLoop:
         """LLM calls tools multiple rounds before final answer."""
         controller, mock_provider, _ = self._make_controller()
 
-        # Round 1: search_news
+        # Round 1: run_ai_daily
         r1 = {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "c1", "function": {"name": "search_news", "arguments": json.dumps({"query": "GPT-5"})}}
+            {"id": "c1", "function": {"name": "run_ai_daily", "arguments": json.dumps({"query": "GPT-5"})}}
         ]}}]}
         # Round 2: run_sql_analysis
         r2 = {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
@@ -258,7 +258,7 @@ class TestAgenticToolLoop:
 
         # Every round returns a tool call
         infinite_tool_resp = {"choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
-            {"id": "cx", "function": {"name": "search_news", "arguments": json.dumps({"query": "test"})}}
+            {"id": "cx", "function": {"name": "run_ai_daily", "arguments": json.dumps({"query": "test"})}}
         ]}}]}
 
         mock_provider.invoke = AsyncMock(return_value=infinite_tool_resp)

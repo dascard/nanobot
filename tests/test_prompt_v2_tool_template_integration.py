@@ -169,15 +169,15 @@ def test_tool_execution_template_runtime_body_keeps_default_frontmatter(tmp_path
     assert rendered == "RUNTIME TOPIC 消息正文"
 
 
-def test_news_and_image_internal_prompts_use_v2_templates(tmp_path, monkeypatch):
+def test_ai_daily_digest_and_image_internal_prompts_use_v2_templates(tmp_path, monkeypatch):
     default_dir = tmp_path / "defaults"
     runtime_dir = tmp_path / "runtime"
-    _write_tool_template(default_dir, "tools/news_search/digest_system", "news_search", "V2 NEWS SYSTEM")
+    _write_tool_template(default_dir, "tools/ai_daily/digest_system", "ai_daily", "V2 DAILY DIGEST SYSTEM")
     _write_tool_template(
         default_dir,
-        "tools/news_search/digest_user",
-        "news_search",
-        "V2 NEWS USER\n{{ evidence_cards }}\n{{ mode_hint }}",
+        "tools/ai_daily/digest_user",
+        "ai_daily",
+        "V2 DAILY DIGEST USER\n{{ evidence_cards }}\n{{ mode_hint }}",
     )
     _write_tool_template(default_dir, "tools/image_summary/system", "image_summary", "V2 IMAGE SYSTEM")
     _write_tool_template(
@@ -192,7 +192,7 @@ def test_news_and_image_internal_prompts_use_v2_templates(tmp_path, monkeypatch)
     from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool, _build_multimodal_content
     from creatures.nanobot.prompts.skills.news_search.prompts import build_evidence_prompt, get_system_prompt
 
-    assert get_system_prompt() == "V2 NEWS SYSTEM"
+    assert get_system_prompt() == "V2 DAILY DIGEST SYSTEM"
     news_prompt = build_evidence_prompt(
         [
             {
@@ -204,7 +204,7 @@ def test_news_and_image_internal_prompts_use_v2_templates(tmp_path, monkeypatch)
         ],
         mode="fast",
     )
-    assert "V2 NEWS USER" in news_prompt
+    assert "V2 DAILY DIGEST USER" in news_prompt
     assert "测试新闻" in news_prompt
     assert "生成 2-3 条 highlights" in news_prompt
 

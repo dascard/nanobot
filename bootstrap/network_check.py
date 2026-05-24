@@ -95,4 +95,4 @@ def run_startup_network_check(logger: Logger) -> None:
     for name, status in targets.items():
         logger.info("  %s: %s", name, status)
     if fail:
-        logger.warning("[NetworkCheck] %d backends unreachable - news_search may be slow", fail)
+        logger.warning("[NetworkCheck] %d backends unreachable - ai_daily may be slow", fail)

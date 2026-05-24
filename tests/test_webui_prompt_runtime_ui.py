@@ -115,6 +115,7 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "api.get(`/tools/${encodeURIComponent(toolName)}/schema`" in source
     assert "api.put(`/tools/${encodeURIComponent(schemaToolName)}/schema`" in source
     assert "api.delete(`/tools/${encodeURIComponent(schemaToolName)}/schema`" in source
+    assert "news_search: { tool: 'news_search'" not in source
     assert "任务模板来源" in source
     assert "schemaJson" in source
     assert "schemaName" in source

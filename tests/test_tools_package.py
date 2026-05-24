@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from creatures.nanobot.prompts.skills.news_search import tool as news_tool
 from creatures.nanobot.prompts.skills.news_search.tool import (
-    NewsSearchTool,
+    AiDailyTool,
     WebTools,
     search_and_extract_news,
     _parse_news_layout_payload,
@@ -271,7 +271,7 @@ def test_juya_rss_preserves_pubdate_for_freshness_filter():
     assert results[0]["date"].startswith("2026-05-01T")
 
 
-def test_news_search_tool_reuses_equivalent_daily_query_cache(monkeypatch):
+def test_ai_daily_tool_reuses_equivalent_daily_query_cache(monkeypatch):
     calls = {"count": 0}
 
     def fake_daily(query, mode="quality", limit=8):
@@ -281,7 +281,7 @@ def test_news_search_tool_reuses_equivalent_daily_query_cache(monkeypatch):
     monkeypatch.setattr(news_tool, "_run_news_daily_pipeline", fake_daily)
     news_tool._NEWS_SEARCH_CACHE.clear()
 
-    tool = news_tool.NewsSearchTool()
+    tool = news_tool.AiDailyTool()
     q = "2026年5月1日 人工智能 新闻"
     first = asyncio.run(tool.execute({"query": q, "max_results": 5}))
     second = asyncio.run(tool.execute({"query": q, "max_results": 5}))
@@ -376,13 +376,13 @@ def test_combined_news_tool_returns_unavailable_html_when_search_backends_fail()
         assert "不要继续重试" in final_report or "搜索源" in final_report
 
 
-def test_news_search_tool_wraps_html_as_reply_output():
+def test_ai_daily_tool_wraps_html_as_reply_output():
     from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
 
     html = '<!DOCTYPE html><html><body><article class="news-brief">AI 资讯</article></body></html>'
 
     with patch("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline", return_value=html):
-        result = asyncio.run(NewsSearchTool().execute({"query": "今天 AI 新闻"}))
+        result = asyncio.run(AiDailyTool().execute({"query": "今天 AI 新闻"}))
 
     assert result.success
     payload = json.loads(result.output)

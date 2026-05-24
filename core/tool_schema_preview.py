@@ -21,7 +21,6 @@ PACKAGE_TOOL_CLASSES = {
     "sql_analysis": ("nanobot_kt.tools.sql_analysis", "SQLAnalysisTool"),
     "python_sandbox": ("nanobot_kt.tools.python_sandbox", "PythonSandboxTool"),
     "ai_daily": ("nanobot_kt.tools.ai_daily", "AiDailyTool"),
-    "news_search": ("nanobot_kt.tools.news_search", "NewsSearchTool"),
     "image_summary": ("nanobot_kt.tools.image_summary", "ImageSummaryTool"),
     "persona_update": ("nanobot_kt.tools.persona_update", "PersonaUpdateTool"),
     "schedule_task": ("nanobot_kt.tools.schedule_task", "ScheduleTaskTool"),
@@ -162,7 +161,7 @@ def save_tool_schema_override(db, name: str, schema: dict[str, Any]) -> dict[str
     """保存工具 schema 覆盖。调用方负责 commit。"""
     if db is None:
         raise ValueError("db required")
-    tool_name = str(name or "").strip()
+    tool_name = _ensure_known_tool(name)
     normalized = _validate_tool_schema(tool_name, schema)
     from core.database import SystemSetting
 
@@ -181,9 +180,7 @@ def save_tool_schema_override(db, name: str, schema: dict[str, Any]) -> dict[str
 def delete_tool_schema_override(db, name: str) -> bool:
     if db is None:
         raise ValueError("db required")
-    tool_name = str(name or "").strip()
-    if not tool_name:
-        raise ValueError("tool_name required")
+    tool_name = _ensure_known_tool(name)
     from core.database import SystemSetting
 
     row = db.query(SystemSetting).filter(SystemSetting.key == _tool_schema_override_key(tool_name)).first()
@@ -208,9 +205,18 @@ def _base_tool_schema(name: str) -> dict[str, Any]:
     return _package_tool_schema(tool_name) or _builtin_tool_schema(tool_name) or _metadata_fallback_schema(tool_name)
 
 
+def _ensure_known_tool(name: str) -> str:
+    tool_name = str(name or "").strip()
+    if not tool_name:
+        raise ValueError("tool_name required")
+    if tool_name not in TOOL_METADATA:
+        raise ValueError(f"unknown tool: {tool_name}")
+    return tool_name
+
+
 def build_tool_schema(name: str, *, db=None, include_template_overlay: bool = True) -> dict[str, Any]:
     """按工具名构造单个 OpenAI-compatible schema，供运行时和管理端展示。"""
-    tool_name = str(name or "").strip()
+    tool_name = _ensure_known_tool(name)
     override = load_tool_schema_override(db, tool_name)
     schema = override or _base_tool_schema(tool_name)
     if override:
@@ -227,9 +233,7 @@ def build_tool_schema(name: str, *, db=None, include_template_overlay: bool = Tr
 
 def build_tool_schema_config(db, name: str) -> dict[str, Any]:
     """返回 WebUI schema 编辑所需的默认、覆盖、可编辑和生效 schema。"""
-    tool_name = str(name or "").strip()
-    if not tool_name:
-        raise ValueError("tool_name required")
+    tool_name = _ensure_known_tool(name)
     override = load_tool_schema_override(db, tool_name)
     default_schema = _add_tool_metadata(_base_tool_schema(tool_name), tool_name)
     editable_schema = _add_tool_metadata(override or default_schema, tool_name)
@@ -248,5 +252,8 @@ def build_effective_tool_schemas(enabled: dict[str, bool], *, db=None) -> list[d
     """按当前启用工具构造预览 schema；memory subagent 保持元数据兜底。"""
     schemas: list[dict[str, Any]] = []
     for name in sorted(n for n, ok in (enabled or {}).items() if ok):
+        if name not in TOOL_METADATA:
+            logger.warning("Skip unknown runtime tool schema: %s", name)
+            continue
         schemas.append(build_tool_schema(name, db=db))
     return schemas

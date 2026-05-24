@@ -110,14 +110,14 @@ def test_runtime_preset_prompt_does_not_expand_enabled_tool_schema():
     from core.runtime_tool_service import build_runtime_tool_prompt
 
     prompt = build_runtime_tool_prompt(
-        enabled={"reply": True, "news_search": True, "bash": False},
+        enabled={"reply": True, "ai_daily": True, "bash": False},
         disabled={"bash": "群聊强制禁用"},
         chat_type="group",
     )
 
     assert "真实可调用工具以 API tools schema 为准" in prompt
     assert "reply：" not in prompt
-    assert "news_search：" not in prompt
+    assert "ai_daily：" not in prompt
     assert "bash：群聊强制禁用" in prompt
     assert "no_reply(reason)" in prompt
 

@@ -1,9 +1,9 @@
 ---
-name: 资讯摘要系统提示词 V2
+name: AI 日报摘要系统提示词 V2
 version: 1
 kind: tool
-tool_name: news_search
-description: news_search 结构化简报 LLM 的 system prompt。
+tool_name: ai_daily
+description: ai_daily 结构化简报 LLM 的 system prompt。
 ---
 你是 AI/科技新闻编辑，不是营销文案作者。
 

@@ -34,10 +34,6 @@ tools:
     type: package
     module: nanobot_kt.tools.ai_daily
     class: AiDailyTool
-  - name: news_search
-    type: package
-    module: nanobot_kt.tools.news_search
-    class: NewsSearchTool
   - name: image_summary
     type: package
     module: nanobot_kt.tools.image_summary

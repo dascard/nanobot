@@ -24,7 +24,7 @@ import trafilatura
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
 
-logger = logging.getLogger("nanobot.news_search")
+logger = logging.getLogger("nanobot.ai_daily")
 
 # ── 代理感知 ──
 _proxy_url = _os.environ.get("http_proxy") or _os.environ.get("HTTP_PROXY") or ""
@@ -587,7 +587,7 @@ def _summarize_news_layout(
                 max_retries=1,
             )
             from core.llm_trace_context import llm_trace_scope
-            with llm_trace_scope(source="news_search"):
+            with llm_trace_scope(source="ai_daily"):
                 return await client.chat_completion(
                     messages=messages,
                     temperature=0.1,
@@ -951,7 +951,7 @@ def _model_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_r
         async def _ask() -> Dict[str, Any]:
             client = NewAPIClient(api_key=NEW_API_KEY, max_retries=1)
             from core.llm_trace_context import llm_trace_scope
-            with llm_trace_scope(source="news_search"):
+            with llm_trace_scope(source="ai_daily"):
                 return await client.chat_completion(messages=messages, temperature=0.0, model_tier="fast")
 
         resp = __import__("asyncio").run(_ask())
@@ -1007,12 +1007,12 @@ def _persist_news_artifacts(
             db.add(
                 ChatLog(
                     user_id=user_id or "news_tool",
-                    session_id=session_id or "news_search",
-                    sender_name="news_search_tool",
-                    session_name="news_search",
+                    session_id=session_id or "ai_daily",
+                    sender_name="ai_daily_tool",
+                    session_name="ai_daily",
                     role="tool",
                     content=(
-                        f"[news_search]\nnews_meta_json={json.dumps(tags, ensure_ascii=False)}\n"
+                        f"[ai_daily]\nnews_meta_json={json.dumps(tags, ensure_ascii=False)}\n"
                         f"query={query}\n"
                         f"alerts={len(alerts)}\n\n{report_text[:6000]}"
                     ),
@@ -1628,7 +1628,7 @@ def _call_llm_simple(system: str, prompt: str, temperature: float = 0.1, max_tok
         async def _call():
             client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
             from core.llm_trace_context import llm_trace_scope
-            with llm_trace_scope(source="news_search"):
+            with llm_trace_scope(source="ai_daily"):
                 resp = await client.chat_completion(
                     messages=[{"role": "system", "content": system},
                               {"role": "user", "content": prompt}],
@@ -1784,7 +1784,7 @@ class AiDailyTool(BaseTool):
         if not session_id and isinstance(metadata, dict):
             session_id = str(metadata.get("session_id") or "")
 
-        logger.info("[news_search] query=%r max=%d no_cache=%s",
+        logger.info("[ai_daily] query=%r max=%d no_cache=%s",
                     query[:80], max_results, no_cache)
 
         cache_key = _news_search_cache_key(query, max_results, mode="quality",
@@ -1792,7 +1792,7 @@ class AiDailyTool(BaseTool):
         if not no_cache:
             cached = _get_cached_news_result(cache_key)
             if cached is not None:
-                logger.info("[news_search] cache HIT")
+                logger.info("[ai_daily] cache HIT")
                 return build_reply_tool_result(cached)
 
         # KT runs tools concurrently; run blocking code in thread
@@ -1802,26 +1802,14 @@ class AiDailyTool(BaseTool):
         )
         # 强制HTML输出——永不为空/不裸文本
         if not result or not str(result).strip():
-            logger.error("[news_search] empty output query=%r", query)
+            logger.error("[ai_daily] empty output query=%r", query)
             result = render_html({**FALLBACK_DIGEST, "title": "暂无可用资讯",
                 "verdict": "本轮没有生成有效输出，已触发兜底。",
                 "missing_info": ["工具返回为空"]})
         elif "<html" not in str(result).lower() and "<article" not in str(result).lower():
-            logger.warning("[news_search] non-html output query=%r len=%d", query, len(str(result)))
+            logger.warning("[ai_daily] non-html output query=%r len=%d", query, len(str(result)))
             result = render_html({**FALLBACK_DIGEST, "title": "资讯结果不完整",
                 "verdict": "本轮生成结果非标准HTML，已转换兜底。",
                 "missing_info": [str(result)[:200]]})
         _store_cached_news_result(cache_key, result)
         return build_reply_tool_result(result)
-
-
-class NewsSearchTool(AiDailyTool):
-    """Compatibility alias for the former news_search tool name."""
-
-    @property
-    def tool_name(self) -> str:
-        return "news_search"
-
-    @property
-    def description(self) -> str:
-        return "兼容旧名：等同于 ai_daily，聚合 AI/科技可信来源并生成日报 HTML；新提示词应优先使用 ai_daily。"

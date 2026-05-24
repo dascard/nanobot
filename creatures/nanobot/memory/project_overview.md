@@ -21,7 +21,7 @@ Nanobot is an AI chatbot backend powered by the KohakuTerrarium agent framework.
 
 - `sql_analysis` — Execute SQL queries against the nanobot database
 - `python_sandbox` — Execute Python analysis scripts in a security-restricted sandbox
-- `news_search` — Search for recent news articles
+- `ai_daily` — Build AI/tech daily digests from trusted sources
 
 ## Sub-Agents Available
 

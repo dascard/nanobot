@@ -2692,10 +2692,14 @@ def recall_memory(
             }
         )
 
-    # Also recall news tool artifacts from SQL tool logs, as a unified memory lane.
+    # Also recall AI daily artifacts from SQL tool logs.
     news_hits = (
         db.query(ChatLog)
-        .filter(ChatLog.role == "tool", ChatLog.content.like("%[news_search]%"), ChatLog.content.like(f"%{keyword}%"))
+        .filter(
+            ChatLog.role == "tool",
+            ChatLog.content.like("%[ai_daily]%"),
+            ChatLog.content.like(f"%{keyword}%"),
+        )
         .order_by(ChatLog.id.desc())
         .limit(max(1, min(limit, 100)))
         .all()

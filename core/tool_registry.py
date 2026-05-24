@@ -52,11 +52,6 @@ TOOL_METADATA: dict[str, ToolDef] = {
         private_default=True, group_default=True,
         description="聚合 AI/科技可信来源，生成日报/简报。",
     ),
-    "news_search": ToolDef(
-        name="news_search", label="资讯搜索(兼容)", category="data", risk_level="low",
-        private_default=True, group_default=True,
-        description="兼容旧名，等同于 ai_daily；新提示词优先使用 ai_daily。",
-    ),
 
     # ── 分析工具 ──
     "image_summary": ToolDef(

@@ -64,19 +64,19 @@ class TestToolDispatch:
         # Mock 依赖
         mock_provider = MagicMock()
         mock_memory = MagicMock()
-        
+
         controller = NanobotKTController(provider=mock_provider, memory=mock_memory)
-        
-        # 替换 news_scout 工具为一个记录器
+
+        # 替换 ai_daily 工具为一个记录器
         called_args = []
         def mock_tool(query):
             called_args.append(query)
             return "mock result"
-        controller.local_tools["news_scout"] = mock_tool
-        
+        controller.local_tools["ai_daily"] = mock_tool
+
         import asyncio
-        asyncio.run(controller._execute_local_tool("/news_scout latest AI models", "user", "session"))
-        
+        asyncio.run(controller._execute_local_tool("/ai_daily latest AI models", "user", "session"))
+
         assert len(called_args) == 1
         assert called_args[0] == "latest AI models"  # 前缀应被剥离
 

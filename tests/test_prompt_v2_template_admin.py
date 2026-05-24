@@ -434,13 +434,13 @@ def test_default_prompt_v2_tool_templates_cover_runtime_tools():
         "sql_analysis",
         "python_sandbox",
         "ai_daily",
-        "news_search",
         "image_summary",
         "persona_update",
         "schedule_task",
         "group_analysis",
         "sticker_search",
     }.issubset(tool_names)
+    assert "news_search" not in tool_names
 
 
 def test_group_analysis_template_describes_real_pipeline():

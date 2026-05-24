@@ -20,8 +20,10 @@ def _news_item(title, source_name, group="core_provider", url=None, summary="摘
     )
 
 
-def test_ai_daily_is_primary_tool_name_and_news_search_is_legacy_alias(monkeypatch):
-    from creatures.nanobot.prompts.skills.news_search.tool import AiDailyTool, NewsSearchTool
+def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
+    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+    from creatures.nanobot.prompts.skills.news_search.tool import AiDailyTool
+    from core.tool_registry import TOOL_METADATA
 
     calls = []
 
@@ -32,12 +34,11 @@ def test_ai_daily_is_primary_tool_name_and_news_search_is_legacy_alias(monkeypat
     monkeypatch.setattr("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline", fake_daily)
 
     ai_daily = AiDailyTool()
-    legacy = NewsSearchTool()
 
     assert ai_daily.tool_name == "ai_daily"
-    assert legacy.tool_name == "news_search"
     assert "AI" in ai_daily.description
-    assert "兼容" in legacy.description
+    assert "news_search" not in TOOL_METADATA
+    assert not hasattr(news_tool, "NewsSearchTool")
 
     schema = ai_daily.get_parameters_schema()
     assert schema["properties"]["max_results"]["default"] == 8
@@ -55,7 +56,8 @@ def test_ai_daily_is_registered_in_kt_config():
     assert "name: ai_daily" in config_text
     assert "module: nanobot_kt.tools.ai_daily" in config_text
     assert "class: AiDailyTool" in config_text
-    assert "name: news_search" in config_text
+    assert "name: news_search" not in config_text
+    assert "nanobot_kt.tools.news_search" not in config_text
 
 
 def test_source_registry_uses_source_specific_adapters():

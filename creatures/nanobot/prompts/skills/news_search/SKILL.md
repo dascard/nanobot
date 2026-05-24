@@ -1,12 +1,12 @@
 ---
 name: ai_daily
 description: 聚合 AI/科技领域可信来源并生成可直接发送的日报/简报
-allowed-tools: [ai_daily, news_search]
+allowed-tools: [ai_daily]
 ---
 
 # AI 日报与资讯聚合
 
-聚合固定 AI/科技可信来源，筛选近期资讯，并生成可直接发送的 HTML 日报或简报。`news_search` 是兼容旧名，新请求优先调用 `ai_daily`。
+聚合固定 AI/科技可信来源，筛选近期资讯，并生成可直接发送的 HTML 日报或简报。新请求统一调用 `ai_daily`。
 
 ## 何时使用
 - 当用户询问最新的 AI 模型、最近的科技大事

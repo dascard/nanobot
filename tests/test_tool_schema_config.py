@@ -51,3 +51,20 @@ def test_tool_schema_override_rejects_name_mismatch(db_session):
         save_tool_schema_override(db_session, "reply", schema)
 
     assert "function.name" in str(exc.value)
+
+
+def test_news_search_is_not_exposed_as_tool_schema():
+    import pytest
+
+    from core.runtime_tool_service import resolve_effective_tools
+    from core.tool_schema_preview import build_effective_tool_schemas, build_tool_schema_config
+
+    enabled, _disabled = resolve_effective_tools(chat_type="private", runtime_preset="full")
+    assert "ai_daily" in enabled
+    assert "news_search" not in enabled
+
+    schemas = build_effective_tool_schemas({"ai_daily": True, "news_search": True})
+    names = [schema["function"]["name"] for schema in schemas]
+    assert names == ["ai_daily"]
+    with pytest.raises(ValueError):
+        build_tool_schema_config(None, "news_search")

@@ -55,7 +55,7 @@ def test_build_scheduled_task_query_requires_tools_for_fresh_info():
 
     assert "当前时间（北京时间）：2026-05-02 08:00:00" in query
     assert "必须先调用 ai_daily" in query
-    assert "news_search 仅作兼容旧名" in query
+    assert "news_search" not in query
     assert "调用 group_analysis" in query
     assert "保留 HTML" in query
     assert "给我今天的AI日报" in query
@@ -98,7 +98,7 @@ def test_generate_task_message_uses_kt_agent(monkeypatch):
     assert calls["sender_name"] == "定时任务"
     assert calls["metadata"]["raw_query"] == "给我今天的AI日报"
     assert "必须先调用 ai_daily" in calls["query"]
-    assert "news_search 仅作兼容旧名" in calls["query"]
+    assert "news_search" not in calls["query"]
 
 
 def test_generate_task_message_uses_group_session_for_group_target(monkeypatch):
