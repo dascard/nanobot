@@ -34,6 +34,10 @@ tools:
     type: package
     module: nanobot_kt.tools.ai_daily
     class: AiDailyTool
+  - name: memory_query
+    type: package
+    module: nanobot_kt.tools.memory_query
+    class: MemoryQueryTool
   - name: image_summary
     type: package
     module: nanobot_kt.tools.image_summary

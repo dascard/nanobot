@@ -21,6 +21,7 @@ PACKAGE_TOOL_CLASSES = {
     "sql_analysis": ("nanobot_kt.tools.sql_analysis", "SQLAnalysisTool"),
     "python_sandbox": ("nanobot_kt.tools.python_sandbox", "PythonSandboxTool"),
     "ai_daily": ("nanobot_kt.tools.ai_daily", "AiDailyTool"),
+    "memory_query": ("nanobot_kt.tools.memory_query", "MemoryQueryTool"),
     "image_summary": ("nanobot_kt.tools.image_summary", "ImageSummaryTool"),
     "persona_update": ("nanobot_kt.tools.persona_update", "PersonaUpdateTool"),
     "schedule_task": ("nanobot_kt.tools.schedule_task", "ScheduleTaskTool"),

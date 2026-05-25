@@ -52,6 +52,11 @@ TOOL_METADATA: dict[str, ToolDef] = {
         private_default=True, group_default=True,
         description="聚合 AI/科技可信来源，生成日报/简报。",
     ),
+    "memory_query": ToolDef(
+        name="memory_query", label="摘要记忆查询", category="data", risk_level="low",
+        private_default=True, group_default=True,
+        description="查询结构化每日摘要和召回卡片；不返回原始 ChatLog 全文。",
+    ),
 
     # ── 分析工具 ──
     "image_summary": ToolDef(

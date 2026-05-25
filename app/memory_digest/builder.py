@@ -1,0 +1,300 @@
+"""MemoryDigest v2 结构化摘要构建器。"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from typing import Any, Iterable
+
+from core.database import ChatLog
+
+from .quality import build_quality
+from .renderer import render_digest_levels
+
+
+@dataclass(frozen=True)
+class MemoryDigestBuildResult:
+    status: str
+    meta: dict[str, Any]
+    level_contents: dict[int, str]
+
+
+_HTML_SIGNATURES = ("<!doctype", "<html", "<article", "<div class=", "```html")
+_SKIP_ROLES = {"tool", "model", "system", "function"}
+_COMMAND_WORDS = {
+    "签到",
+    "打卡",
+    "钓鱼",
+    "千连钓鱼",
+    "万连钓鱼",
+    "抽卡",
+    "十连抽卡",
+    "千连抽卡",
+    "万连抽卡",
+    "宠物",
+    "宠物系统",
+}
+_STOPWORDS = {
+    "这个",
+    "那个",
+    "今天",
+    "一下",
+    "可以",
+    "不是",
+    "就是",
+    "感觉",
+    "群里",
+    "讨论",
+    "效果",
+}
+
+
+def _safe_meta(meta_json: str | None) -> dict[str, Any]:
+    try:
+        data = json.loads(meta_json or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _is_html_blob(content: str) -> bool:
+    c = (content or "").strip().lower()
+    return any(c.startswith(sig) for sig in _HTML_SIGNATURES)
+
+
+def _html_label(content: str) -> str:
+    c = (content or "").lower()
+    if "news-brief" in c or "日报" in c or "daily" in c:
+        return f"[AI日报 {len(content)} chars]"
+    if "group_analysis" in c or "群聊分析" in c:
+        return f"[群聊分析报告 {len(content)} chars]"
+    m = re.search(r"<title>(.*?)</title>", c, re.IGNORECASE)
+    if m:
+        return f"[HTML报告: {m.group(1)[:40]} {len(content)} chars]"
+    return f"[HTML内容 {len(content)} chars]"
+
+
+def _normalize_short(content: str) -> str:
+    return re.sub(r"\s+", "", str(content or "")).strip().lower()
+
+
+def _content_tokens(text: str) -> list[str]:
+    tokens = re.findall(r"[A-Za-z][A-Za-z0-9_.+-]*|[\u4e00-\u9fff]{2,}", text or "")
+    cleaned = []
+    for token in tokens:
+        value = token.strip()
+        if not value:
+            continue
+        if value.lower() in _STOPWORDS or value in _STOPWORDS:
+            continue
+        cleaned.append(value)
+    return cleaned
+
+
+class MemoryDigestBuilder:
+    """从 ChatLog 构造 schema_version=2 的三层摘要。
+
+    第一版采用确定性结构化摘要，避免 LLM JSON 失败时写入 active 脏摘要。
+    """
+
+    def __init__(self, *, max_details: int = 10):
+        self.max_details = max(3, int(max_details))
+
+    def build(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        digest_date: str,
+        logs: Iterable[ChatLog],
+    ) -> MemoryDigestBuildResult:
+        log_rows = list(logs)
+        filtered_by_reason: Counter[str] = Counter()
+        excluded_noise: list[dict[str, Any]] = []
+        valid: list[dict[str, Any]] = []
+        seen_short: set[str] = set()
+
+        for log in log_rows:
+            reason = self._skip_reason(log, seen_short)
+            if reason:
+                filtered_by_reason[reason] += 1
+                excluded_noise.append({
+                    "log_id": getattr(log, "id", None),
+                    "reason": reason,
+                })
+                continue
+            valid.append(self._format_valid_log(log))
+
+        source_stats = {
+            "raw_log_count": len(log_rows),
+            "valid_log_count": len(valid),
+            "filtered_count": len(log_rows) - len(valid),
+            "noise_ratio": round((len(log_rows) - len(valid)) / max(1, len(log_rows)), 4),
+            "filtered_by_reason": dict(filtered_by_reason),
+        }
+
+        base_meta: dict[str, Any] = {
+            "schema_version": 2,
+            "digest_date": digest_date,
+            "session_id": session_id,
+            "user_id": user_id,
+            "source_stats": source_stats,
+            "excluded_noise": excluded_noise[:80],
+        }
+
+        if not valid:
+            meta = {
+                **base_meta,
+                "status": "skipped",
+                "preview": {"brief": "", "keywords": [], "participants": []},
+                "long_summary": {
+                    "topic_flow": "",
+                    "important_details": [],
+                    "conclusions": [],
+                    "open_loops": [],
+                },
+                "recall_cards": [],
+                "quality": build_quality(
+                    score=0,
+                    issues=["no_valid_logs"],
+                    should_inject_preview=False,
+                ),
+            }
+            return MemoryDigestBuildResult(
+                status="skipped",
+                meta=meta,
+                level_contents={0: "", 1: "", 2: ""},
+            )
+
+        keywords = self._rank_keywords(valid)
+        participants = self._participants(valid)
+        details = [row["content"] for row in valid[: self.max_details] if row["content"]]
+        topic_label = "、".join(keywords[:4]) if keywords else "当天聊天内容"
+        topic_flow = f"当天主要围绕 {topic_label} 展开，包含 {len(valid)} 条有效消息。"
+        brief = f"群聊讨论了 {topic_label}。" if keywords else "群聊产生了一组可召回摘要。"
+        evidence_ids = [row["log_id"] for row in valid if row.get("log_id")][:8]
+        card_text = self._build_card_text(topic_label, details)
+        recall_cards = [{
+            "card_id": "card_1",
+            "type": "episode_topic",
+            "text": card_text,
+            "keywords": keywords[:8],
+            "importance": min(0.95, 0.55 + min(0.35, len(valid) * 0.03)),
+            "evidence_log_ids": evidence_ids,
+        }]
+        meta = {
+            **base_meta,
+            "status": "active",
+            "preview": {
+                "brief": brief,
+                "keywords": keywords[:12],
+                "participants": participants[:12],
+            },
+            "long_summary": {
+                "topic_flow": topic_flow,
+                "important_details": details,
+                "conclusions": [],
+                "open_loops": [],
+            },
+            "recall_cards": recall_cards,
+            "quality": build_quality(
+                score=0.72 if len(valid) < 3 else 0.82,
+                issues=[],
+                should_inject_preview=True,
+            ),
+        }
+        return MemoryDigestBuildResult(
+            status="active",
+            meta=meta,
+            level_contents=render_digest_levels(meta),
+        )
+
+    def _skip_reason(self, log: ChatLog, seen_short: set[str]) -> str | None:
+        role = str(getattr(log, "role", "") or "").strip()
+        if role in _SKIP_ROLES:
+            return "role"
+
+        meta = _safe_meta(getattr(log, "meta_json", "") or "")
+        if any(bool(meta.get(flag)) for flag in ("no_context", "internal", "no_learn")):
+            return "meta_flag"
+
+        content = str(getattr(log, "content", "") or "").strip()
+        if not content:
+            return "empty"
+        normalized = _normalize_short(content)
+        if self._is_image_placeholder(normalized):
+            return "image_placeholder"
+        if self._is_bot_command(normalized):
+            return "bot_command"
+        if len(normalized) <= 16:
+            if normalized in seen_short:
+                return "duplicate_short"
+            seen_short.add(normalized)
+        return None
+
+    @staticmethod
+    def _is_image_placeholder(normalized: str) -> bool:
+        if re.fullmatch(r"\[图片[:：]\d+张\]", normalized):
+            return True
+        if re.fullmatch(r"\[image(:placeholder)?\]", normalized):
+            return True
+        if re.fullmatch(r"\[cq:image,[^\]]+\]", normalized):
+            return True
+        return False
+
+    @staticmethod
+    def _is_bot_command(normalized: str) -> bool:
+        if normalized in _COMMAND_WORDS:
+            return True
+        return bool(re.fullmatch(r"(十|百|千|万|\d+)?连?(钓鱼|抽卡)", normalized))
+
+    @staticmethod
+    def _format_valid_log(log: ChatLog) -> dict[str, Any]:
+        role = str(getattr(log, "role", "") or "unknown").strip()
+        sender = str(getattr(log, "sender_name", "") or "").strip()
+        content = str(getattr(log, "content", "") or "").strip()
+        if role == "assistant" and _is_html_blob(content):
+            content = _html_label(content)
+        content = re.sub(r"\s+", " ", content)
+        if len(content) > 500:
+            content = content[:500] + "..."
+        ts = getattr(log, "created_at", None)
+        time_label = ts.strftime("%H:%M") if ts else "--:--"
+        return {
+            "log_id": getattr(log, "id", None),
+            "time": time_label,
+            "role": role,
+            "sender": sender or role,
+            "content": content,
+            "line": f"[log_id={getattr(log, 'id', '')}][{time_label}] {sender or role}: {content}",
+        }
+
+    @staticmethod
+    def _rank_keywords(valid: list[dict[str, Any]]) -> list[str]:
+        counts: Counter[str] = Counter()
+        original_case: dict[str, str] = {}
+        for row in valid:
+            for token in _content_tokens(row.get("content") or ""):
+                key = token.lower() if re.fullmatch(r"[A-Za-z0-9_.+-]+", token) else token
+                counts[key] += 1
+                original_case.setdefault(key, token)
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        return [original_case[key] for key, _ in ranked[:16]]
+
+    @staticmethod
+    def _participants(valid: list[dict[str, Any]]) -> list[str]:
+        seen: dict[str, None] = {}
+        for row in valid:
+            name = str(row.get("sender") or "").strip()
+            if name and name not in seen:
+                seen[name] = None
+        return list(seen.keys())
+
+    @staticmethod
+    def _build_card_text(topic_label: str, details: list[str]) -> str:
+        first = details[0] if details else ""
+        if first:
+            return f"群里讨论了 {topic_label}；代表消息：{first[:160]}"
+        return f"群里讨论了 {topic_label}。"

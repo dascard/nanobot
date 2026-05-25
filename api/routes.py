@@ -28,6 +28,7 @@ from core.moderation import check_message_moderation_db
 from nanobot_kt.bridge import get_bridge
 from core.compaction import run_autocompact_circuit_breaker
 from core.daily_digest import generate_daily_digest_for_date
+from app.memory_digest.retrieval_service import MemoryDigestRetrievalService
 from clients.model_registry import registry
 from clients.new_api_client import NewAPIClient
 from clients.classifier_client import get_guardrail, get_timing_gate
@@ -2524,44 +2525,20 @@ def get_memory_digests(
     level: int = -1,
     limit: int = 50,
     include_content: bool = False,
+    include_legacy: bool = True,
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),
 ):
     """按条件查询每日记忆摘要（支持渐进式披露层级）。"""
-    query = db.query(MemoryDigest)
-    if user_id:
-        query = query.filter(MemoryDigest.user_id == user_id)
-    if session_id:
-        query = query.filter(MemoryDigest.session_id == session_id)
-    if digest_date:
-        query = query.filter(MemoryDigest.digest_date == digest_date)
-    if level >= 0:
-        query = query.filter(MemoryDigest.level == level)
-
-    rows = query.order_by(MemoryDigest.id.desc()).limit(max(1, min(limit, 500))).all()
-
-    items = []
-    for r in rows:
-        try:
-            meta = json.loads(r.meta_json or "{}")
-        except Exception:
-            meta = {}
-
-        item = {
-            "id": r.id,
-            "user_id": r.user_id,
-            "session_id": r.session_id,
-            "digest_date": r.digest_date,
-            "level": r.level,
-            "parent_id": r.parent_id,
-            "source_start_log_id": r.source_start_log_id,
-            "source_end_log_id": r.source_end_log_id,
-            "meta": meta,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        if include_content:
-            item["content"] = r.content
-        items.append(item)
+    items = MemoryDigestRetrievalService(db).list_digests(
+        user_id=user_id,
+        session_id=session_id,
+        digest_date=digest_date,
+        level=level if level >= 0 else None,
+        limit=limit,
+        include_content=include_content,
+        include_legacy=include_legacy,
+    )
 
     return {
         "status": "ok",
@@ -2639,6 +2616,7 @@ def recall_memory(
     limit: int = 20,
     reveal_to_level: int = 2,
     include_content: bool = False,
+    include_legacy: bool = False,
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),
 ):
@@ -2649,65 +2627,16 @@ def recall_memory(
     if not keyword.strip():
         raise HTTPException(status_code=400, detail="keyword is required")
 
-    reveal_to_level = max(0, min(2, reveal_to_level))
-    query = db.query(MemoryDigest).filter(MemoryDigest.level == 2)
-    if user_id:
-        query = query.filter(MemoryDigest.user_id == user_id)
-    if session_id:
-        query = query.filter(MemoryDigest.session_id == session_id)
-    if digest_date:
-        query = query.filter(MemoryDigest.digest_date == digest_date)
-
-    # First-pass: compact digest hit.
-    hits = (
-        query.filter(MemoryDigest.content.like(f"%{keyword}%"))
-        .order_by(MemoryDigest.id.desc())
-        .limit(max(1, min(limit, 200)))
-        .all()
+    results = MemoryDigestRetrievalService(db).recall(
+        keyword=keyword,
+        user_id=user_id,
+        session_id=session_id,
+        digest_date=digest_date,
+        limit=limit,
+        reveal_to_level=reveal_to_level,
+        include_content=include_content,
+        include_legacy=include_legacy,
     )
-
-    # Fallback: allow metadata hit if compact content has no direct match.
-    if not hits:
-        hits = (
-            query.filter(MemoryDigest.meta_json.like(f"%{keyword}%"))
-            .order_by(MemoryDigest.id.desc())
-            .limit(max(1, min(limit, 200)))
-            .all()
-        )
-
-    results = []
-    for item in hits:
-        meta = _safe_meta(item.meta_json)
-        confidence = _calc_recall_confidence(keyword, item.content or "", meta)
-        chain = _build_expand_chain(db, item, reveal_to_level=reveal_to_level)
-
-        expanded = []
-        for d in sorted(chain, key=lambda x: x.level, reverse=True):
-            node = {
-                "id": d.id,
-                "level": d.level,
-                "parent_id": d.parent_id,
-                "created_at": d.created_at.isoformat() if d.created_at else None,
-            }
-            if include_content:
-                node["content"] = d.content
-            expanded.append(node)
-
-        results.append(
-            {
-                "digest_id": item.id,
-                "user_id": item.user_id,
-                "session_id": item.session_id,
-                "digest_date": item.digest_date,
-                "confidence": confidence,
-                "source_range": {
-                    "start_log_id": item.source_start_log_id,
-                    "end_log_id": item.source_end_log_id,
-                },
-                "meta": meta,
-                "revealed_chain": expanded,
-            }
-        )
 
     # Also recall AI daily artifacts from SQL tool logs.
     news_hits = (

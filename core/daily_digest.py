@@ -16,8 +16,9 @@ from typing import List
 import aiohttp
 from sqlalchemy import and_
 
+from app.memory_digest.builder import MemoryDigestBuilder
+from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
 from config import DAILY_DIGEST_HOUR
-from core.compaction import run_autocompact_circuit_breaker
 from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
 
 logger = logging.getLogger("nanobot.daily_digest")
@@ -168,14 +169,6 @@ def _html_label(content: str) -> str:
     return f"[HTML内容 {len(content)} chars]"
 
 
-def _build_progressive_layers(lines: List[str]) -> tuple[str, str, str]:
-    # Layered compaction inspired by progressive disclosure memory pattern.
-    level0 = run_autocompact_circuit_breaker(lines, max_length=9000)
-    level1 = run_autocompact_circuit_breaker(level0.splitlines(), max_length=3500)
-    level2 = run_autocompact_circuit_breaker(level1.splitlines(), max_length=1500)
-    return level0, level1, level2
-
-
 def _extract_structured_tags(logs: List[ChatLog]) -> dict:
     raw_text = "\n".join([(x.content or "") for x in logs]).lower()
 
@@ -208,8 +201,8 @@ def _extract_structured_tags(logs: List[ChatLog]) -> dict:
 
 
 def _already_digested(db, session_id: str, digest_date: str) -> bool:
-    exists = (
-        db.query(MemoryDigest.id)
+    rows = (
+        db.query(MemoryDigest)
         .filter(
             and_(
                 MemoryDigest.session_id == session_id,
@@ -217,9 +210,13 @@ def _already_digested(db, session_id: str, digest_date: str) -> bool:
                 MemoryDigest.level == 2,
             )
         )
-        .first()
+        .all()
     )
-    return exists is not None
+    for row in rows:
+        status = digest_status(safe_digest_meta(row.meta_json))
+        if status in {"active", "skipped"}:
+            return True
+    return False
 
 
 def generate_daily_digest_for_date(target_date: str, user_id: str | None = None) -> int:
@@ -252,19 +249,17 @@ def generate_daily_digest_for_date(target_date: str, user_id: str | None = None)
             if _already_digested(db, session_id, target_date):
                 continue
 
-            lines = [l for x in logs if (l := _format_log_line(x)) is not None]
-            level0, level1, level2 = _build_progressive_layers(lines)
+            result = MemoryDigestBuilder().build(
+                user_id=logs[0].user_id or "",
+                session_id=session_id,
+                digest_date=target_date,
+                logs=logs,
+            )
 
             start_id = logs[0].id
             end_id = logs[-1].id
             uid = logs[0].user_id or ""
-            tags = _extract_structured_tags(logs)
-            meta = {
-                "source_log_count": len(logs),
-                "source_date": target_date,
-                "session_id": session_id,
-                "tags": tags,
-            }
+            meta = dict(result.meta)
 
             d0 = MemoryDigest(
                 user_id=uid,
@@ -272,7 +267,7 @@ def generate_daily_digest_for_date(target_date: str, user_id: str | None = None)
                 digest_date=target_date,
                 level=0,
                 parent_id=None,
-                content=level0,
+                content=result.level_contents.get(0, ""),
                 meta_json=json.dumps(meta, ensure_ascii=False),
                 source_start_log_id=start_id,
                 source_end_log_id=end_id,
@@ -286,7 +281,7 @@ def generate_daily_digest_for_date(target_date: str, user_id: str | None = None)
                 digest_date=target_date,
                 level=1,
                 parent_id=d0.id,
-                content=level1,
+                content=result.level_contents.get(1, ""),
                 meta_json=json.dumps(meta, ensure_ascii=False),
                 source_start_log_id=start_id,
                 source_end_log_id=end_id,
@@ -300,13 +295,14 @@ def generate_daily_digest_for_date(target_date: str, user_id: str | None = None)
                 digest_date=target_date,
                 level=2,
                 parent_id=d1.id,
-                content=level2,
+                content=result.level_contents.get(2, ""),
                 meta_json=json.dumps(meta, ensure_ascii=False),
                 source_start_log_id=start_id,
                 source_end_log_id=end_id,
             )
             db.add(d2)
-            created += 1
+            if result.status == "active":
+                created += 1
 
         db.commit()
         if created > 0:
