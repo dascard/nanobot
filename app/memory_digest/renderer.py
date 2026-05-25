@@ -14,7 +14,7 @@ def render_recall_card(card: dict[str, Any]) -> str:
     keywords = [str(x).strip() for x in _as_list(card.get("keywords")) if str(x).strip()]
     prefix = " / ".join(keywords[:4]) if keywords else str(card.get("type") or "memory")
     text = str(card.get("text") or "").strip()
-    return f"[card] {prefix}：{text}".strip()
+    return f"[card] {prefix}：{text}".strip()[:120]
 
 
 def render_digest_levels(meta: dict[str, Any]) -> dict[int, str]:
@@ -26,7 +26,8 @@ def render_digest_levels(meta: dict[str, Any]) -> dict[int, str]:
     long_summary = meta.get("long_summary") if isinstance(meta.get("long_summary"), dict) else {}
     cards = [x for x in _as_list(meta.get("recall_cards")) if isinstance(x, dict)]
 
-    level2 = "\n".join(render_recall_card(card) for card in cards if render_recall_card(card))
+    card_lines = [render_recall_card(card) for card in cards]
+    level2 = "\n".join(line for line in card_lines if line)
 
     preview_lines: list[str] = []
     brief = str(preview.get("brief") or "").strip()

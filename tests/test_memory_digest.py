@@ -90,6 +90,29 @@ def test_memory_digest_builder_generates_schema_v2_cards_and_filters_noise():
     assert "[System: Older context truncated" not in result.level_contents[0]
 
 
+def test_memory_digest_recall_cards_stay_compact():
+    from app.memory_digest.builder import MemoryDigestBuilder
+
+    result = MemoryDigestBuilder().build(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[
+            _log(
+                id=1,
+                content=(
+                    "KohakuVQ Discrete AR 图像生成 codebook usage reconstruction quality "
+                    "这个话题聊得很细，还比较了训练成本、推理速度和不同模型结构"
+                ),
+            ),
+            _log(id=2, sender_name="乙", content="还提到了 token budget 和工程实现方式"),
+        ],
+    )
+
+    assert all(len(card["text"]) <= 80 for card in result.meta["recall_cards"])
+    assert all(len(line) <= 120 for line in result.level_contents[2].splitlines() if line)
+
+
 def test_memory_digest_builder_skips_when_only_noise():
     from app.memory_digest.builder import MemoryDigestBuilder
 
@@ -109,6 +132,14 @@ def test_memory_digest_builder_skips_when_only_noise():
     assert result.status == "skipped"
     assert result.meta["quality"]["should_inject_preview"] is False
     assert result.level_contents[2] == ""
+
+
+def test_memory_digest_quality_requires_threshold_and_clean_issues():
+    from app.memory_digest.quality import build_quality
+
+    assert build_quality(score=0.69, issues=[], should_inject_preview=True)["should_inject_preview"] is False
+    assert build_quality(score=0.9, issues=["json_parse_failed"], should_inject_preview=True)["should_inject_preview"] is False
+    assert build_quality(score=0.7, issues=[], should_inject_preview=True)["should_inject_preview"] is True
 
 
 def test_generate_daily_digest_writes_v2_recall_card_rows(db_session, monkeypatch):
@@ -132,6 +163,32 @@ def test_generate_daily_digest_writes_v2_recall_card_rows(db_session, monkeypatc
     assert meta["recall_cards"][0]["evidence_log_ids"]
 
 
+def test_generate_daily_digest_force_can_replace_skipped_digest(db_session, monkeypatch):
+    from core import daily_digest
+
+    db_session.add_all([
+        _log(id=1, content="签到"),
+        _log(id=2, sender_name="乙", content="[图片:1张]"),
+    ])
+    db_session.commit()
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+
+    assert daily_digest.generate_daily_digest_for_date("2026-05-22") == 0
+    skipped = db_session.query(MemoryDigest).filter_by(session_id="group_42", level=2).one()
+    assert json.loads(skipped.meta_json)["status"] == "skipped"
+
+    db_session.add(_log(id=3, content="KohakuVQ 后续补充了有效讨论"))
+    db_session.commit()
+
+    assert daily_digest.generate_daily_digest_for_date("2026-05-22") == 0
+    assert daily_digest.generate_daily_digest_for_date("2026-05-22", force=True) == 1
+
+    rows = db_session.query(MemoryDigest).filter_by(session_id="group_42", level=2).all()
+    statuses = [json.loads(row.meta_json)["status"] for row in rows]
+    assert statuses.count("active") == 1
+    assert "archived" in statuses
+
+
 def test_memory_recall_excludes_legacy_by_default(client, db_session):
     legacy = MemoryDigest(
         user_id="group_42",
@@ -151,6 +208,27 @@ def test_memory_recall_excludes_legacy_by_default(client, db_session):
     data = r.json()
     assert data["digest_hits"] == 1
     assert data["items"][0]["digest_id"] == active.id
+
+
+def test_memory_digest_retrieval_supports_date_range(db_session):
+    from app.memory_digest.retrieval_service import MemoryDigestRetrievalService
+
+    _add_digest(db_session, digest_id=41)
+    older = _add_digest(db_session, digest_id=42)
+    older.digest_date = "2026-05-20"
+    newer = _add_digest(db_session, digest_id=43)
+    newer.digest_date = "2026-05-24"
+    db_session.commit()
+
+    rows = MemoryDigestRetrievalService(db_session).list_digests(
+        session_id="group_42",
+        date_start="2026-05-21",
+        date_end="2026-05-23",
+        level=2,
+        include_legacy=False,
+    )
+
+    assert [row["id"] for row in rows] == [41]
 
 
 def test_memory_query_tool_search_and_expand(db_session, monkeypatch):
@@ -176,6 +254,34 @@ def test_memory_query_tool_search_and_expand(db_session, monkeypatch):
     assert search_result.exit_code == 0
     assert "digest_id=31" in search_result.output
     assert "KohakuVQ" in search_result.output
+    assert search_result.metadata["structured_content"]["mode"] == "search"
+    assert search_result.metadata["structured_content"]["items"][0]["digest_id"] == 31
     assert expand_result.exit_code == 0
     assert "topic_flow" in expand_result.output
+    assert expand_result.metadata["structured_content"]["mode"] == "expand"
     assert "source logs" not in expand_result.output.lower()
+
+
+def test_memory_query_tool_time_accepts_date_range(db_session, monkeypatch):
+    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from core import database
+
+    _add_digest(db_session, digest_id=51)
+    older = _add_digest(db_session, digest_id=52)
+    older.digest_date = "2026-05-20"
+    db_session.commit()
+    monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
+
+    tool = MemoryQueryTool()
+    result = asyncio.run(tool._execute({
+        "mode": "time",
+        "session_id": "group_42",
+        "date_start": "2026-05-21",
+        "date_end": "2026-05-23",
+        "limit": 10,
+    }))
+
+    assert result.exit_code == 0
+    assert "digest_id=51" in result.output
+    assert "digest_id=52" not in result.output
+    assert result.metadata["structured_content"]["date_start"] == "2026-05-21"

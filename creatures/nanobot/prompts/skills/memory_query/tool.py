@@ -58,6 +58,14 @@ class MemoryQueryTool(BaseTool):
                     "type": "string",
                     "description": "指定 YYYY-MM-DD 日期。",
                 },
+                "date_start": {
+                    "type": "string",
+                    "description": "范围开始日期，YYYY-MM-DD。",
+                },
+                "date_end": {
+                    "type": "string",
+                    "description": "范围结束日期，YYYY-MM-DD。",
+                },
                 "limit": {
                     "type": "integer",
                     "description": "返回条数，默认 5，最大 10。",
@@ -110,18 +118,34 @@ class MemoryQueryTool(BaseTool):
         query = str(args.get("query") or "").strip()
         if not query:
             return ToolResult(error="search mode requires query")
+        date_start = str(args.get("date_start") or "").strip()
+        date_end = str(args.get("date_end") or "").strip()
         results = service.recall(
             keyword=query,
             user_id=str(args.get("user_id") or "").strip(),
             session_id=str(args.get("session_id") or "").strip(),
             digest_date=str(args.get("digest_date") or "").strip(),
+            date_start=date_start,
+            date_end=date_end,
             limit=limit,
             reveal_to_level=0 if include_detail else 2,
             include_content=include_detail,
             include_legacy=include_legacy,
         )
         if not results:
-            return ToolResult(output=f"未找到与 {query} 相关的摘要。", exit_code=0)
+            return ToolResult(
+                output=f"未找到与 {query} 相关的摘要。",
+                exit_code=0,
+                metadata={
+                    "structured_content": {
+                        "mode": "search",
+                        "query": query,
+                        "date_start": date_start,
+                        "date_end": date_end,
+                        "items": [],
+                    }
+                },
+            )
         lines = [f"memory_query search: query={query} count={len(results)}"]
         for item in results:
             meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
@@ -135,7 +159,19 @@ class MemoryQueryTool(BaseTool):
                 f"- digest_id={item.get('digest_id')} date={item.get('digest_date')} "
                 f"session={item.get('session_id')} confidence={item.get('confidence')}: {brief[:260]}"
             )
-        return ToolResult(output="\n".join(lines), exit_code=0)
+        return ToolResult(
+            output="\n".join(lines),
+            exit_code=0,
+            metadata={
+                "structured_content": {
+                    "mode": "search",
+                    "query": query,
+                    "date_start": date_start,
+                    "date_end": date_end,
+                    "items": results,
+                }
+            },
+        )
 
     def _time(
         self,
@@ -149,13 +185,26 @@ class MemoryQueryTool(BaseTool):
             user_id=str(args.get("user_id") or "").strip(),
             session_id=str(args.get("session_id") or "").strip(),
             digest_date=str(args.get("digest_date") or "").strip(),
+            date_start=str(args.get("date_start") or "").strip(),
+            date_end=str(args.get("date_end") or "").strip(),
             level=2,
             limit=limit,
             include_content=include_detail,
             include_legacy=include_legacy,
         )
         if not rows:
-            return ToolResult(output="未找到符合条件的摘要。", exit_code=0)
+            return ToolResult(
+                output="未找到符合条件的摘要。",
+                exit_code=0,
+                metadata={
+                    "structured_content": {
+                        "mode": "time",
+                        "date_start": str(args.get("date_start") or "").strip(),
+                        "date_end": str(args.get("date_end") or "").strip(),
+                        "items": [],
+                    }
+                },
+            )
         lines = [f"memory_query time: count={len(rows)}"]
         for row in rows:
             meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
@@ -165,7 +214,18 @@ class MemoryQueryTool(BaseTool):
                 f"session={row.get('session_id')} status={row.get('status')}: "
                 f"{str(preview.get('brief') or row.get('content') or '')[:260]}"
             )
-        return ToolResult(output="\n".join(lines), exit_code=0)
+        return ToolResult(
+            output="\n".join(lines),
+            exit_code=0,
+            metadata={
+                "structured_content": {
+                    "mode": "time",
+                    "date_start": str(args.get("date_start") or "").strip(),
+                    "date_end": str(args.get("date_end") or "").strip(),
+                    "items": rows,
+                }
+            },
+        )
 
     def _expand(
         self,
@@ -183,7 +243,17 @@ class MemoryQueryTool(BaseTool):
             include_legacy=include_legacy,
         )
         if not item:
-            return ToolResult(output=f"未找到可展开的摘要 digest_id={digest_id}。", exit_code=0)
+            return ToolResult(
+                output=f"未找到可展开的摘要 digest_id={digest_id}。",
+                exit_code=0,
+                metadata={
+                    "structured_content": {
+                        "mode": "expand",
+                        "digest_id": int(digest_id),
+                        "item": None,
+                    }
+                },
+            )
         lines = [
             f"memory_query expand: digest_id={item.get('digest_id')} date={item.get('digest_date')} session={item.get('session_id')}",
             "preview:",
@@ -196,7 +266,17 @@ class MemoryQueryTool(BaseTool):
         if include_detail:
             lines.append("detail_chain:")
             lines.append(str(item.get("chain") or []))
-        return ToolResult(output="\n".join(lines), exit_code=0)
+        return ToolResult(
+            output="\n".join(lines),
+            exit_code=0,
+            metadata={
+                "structured_content": {
+                    "mode": "expand",
+                    "digest_id": int(digest_id),
+                    "item": item,
+                }
+            },
+        )
 
     def _aggregate(
         self,
@@ -209,13 +289,26 @@ class MemoryQueryTool(BaseTool):
             user_id=str(args.get("user_id") or "").strip(),
             session_id=str(args.get("session_id") or "").strip(),
             digest_date=str(args.get("digest_date") or "").strip(),
+            date_start=str(args.get("date_start") or "").strip(),
+            date_end=str(args.get("date_end") or "").strip(),
             level=2,
             limit=limit,
             include_content=False,
             include_legacy=include_legacy,
         )
         if not rows:
-            return ToolResult(output="没有可聚合的摘要。", exit_code=0)
+            return ToolResult(
+                output="没有可聚合的摘要。",
+                exit_code=0,
+                metadata={
+                    "structured_content": {
+                        "mode": "aggregate",
+                        "date_start": str(args.get("date_start") or "").strip(),
+                        "date_end": str(args.get("date_end") or "").strip(),
+                        "items": [],
+                    }
+                },
+            )
         lines = [f"memory_query aggregate: count={len(rows)}"]
         for row in rows:
             meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
@@ -225,4 +318,15 @@ class MemoryQueryTool(BaseTool):
                 f"- {row.get('digest_date')} digest_id={row.get('id')}: "
                 f"{str(preview.get('brief') or '')[:180]} keywords={keywords[:8]}"
             )
-        return ToolResult(output="\n".join(lines), exit_code=0)
+        return ToolResult(
+            output="\n".join(lines),
+            exit_code=0,
+            metadata={
+                "structured_content": {
+                    "mode": "aggregate",
+                    "date_start": str(args.get("date_start") or "").strip(),
+                    "date_end": str(args.get("date_end") or "").strip(),
+                    "items": rows,
+                }
+            },
+        )

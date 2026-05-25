@@ -229,6 +229,7 @@ class EvolutionTriggerRequest(BaseModel):
 class MemoryDigestRunRequest(BaseModel):
     target_date: Optional[str] = None  # YYYY-MM-DD
     user_id: Optional[str] = None
+    force: bool = False
 
 
 class ModelSyncRequest(BaseModel):
@@ -2522,6 +2523,8 @@ def get_memory_digests(
     user_id: str = "",
     session_id: str = "",
     digest_date: str = "",
+    date_start: str = "",
+    date_end: str = "",
     level: int = -1,
     limit: int = 50,
     include_content: bool = False,
@@ -2534,6 +2537,8 @@ def get_memory_digests(
         user_id=user_id,
         session_id=session_id,
         digest_date=digest_date,
+        date_start=date_start,
+        date_end=date_end,
         level=level if level >= 0 else None,
         limit=limit,
         include_content=include_content,
@@ -2559,10 +2564,15 @@ def run_memory_digests(
     if not target_date:
         target_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    created = generate_daily_digest_for_date(target_date=target_date, user_id=req.user_id)
+    created = generate_daily_digest_for_date(
+        target_date=target_date,
+        user_id=req.user_id,
+        force=req.force,
+    )
     return {
         "status": "ok",
         "target_date": target_date,
+        "force": req.force,
         "created_sessions": created,
     }
 
@@ -2613,6 +2623,8 @@ def recall_memory(
     user_id: str = "",
     session_id: str = "",
     digest_date: str = "",
+    date_start: str = "",
+    date_end: str = "",
     limit: int = 20,
     reveal_to_level: int = 2,
     include_content: bool = False,
@@ -2632,6 +2644,8 @@ def recall_memory(
         user_id=user_id,
         session_id=session_id,
         digest_date=digest_date,
+        date_start=date_start,
+        date_end=date_end,
         limit=limit,
         reveal_to_level=reveal_to_level,
         include_content=include_content,

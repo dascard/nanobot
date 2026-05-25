@@ -219,7 +219,29 @@ def _already_digested(db, session_id: str, digest_date: str) -> bool:
     return False
 
 
-def generate_daily_digest_for_date(target_date: str, user_id: str | None = None) -> int:
+def _archive_existing_digests(db, session_id: str, digest_date: str) -> None:
+    rows = (
+        db.query(MemoryDigest)
+        .filter(
+            and_(
+                MemoryDigest.session_id == session_id,
+                MemoryDigest.digest_date == digest_date,
+            )
+        )
+        .all()
+    )
+    for row in rows:
+        meta = safe_digest_meta(row.meta_json)
+        meta["status"] = "archived"
+        row.meta_json = json.dumps(meta, ensure_ascii=False)
+
+
+def generate_daily_digest_for_date(
+    target_date: str,
+    user_id: str | None = None,
+    *,
+    force: bool = False,
+) -> int:
     """
     Summarize one day of chat logs into 3 progressive layers.
 
@@ -246,7 +268,7 @@ def generate_daily_digest_for_date(target_date: str, user_id: str | None = None)
         for session_id, logs in by_session.items():
             if not logs:
                 continue
-            if _already_digested(db, session_id, target_date):
+            if not force and _already_digested(db, session_id, target_date):
                 continue
 
             result = MemoryDigestBuilder().build(
@@ -260,6 +282,8 @@ def generate_daily_digest_for_date(target_date: str, user_id: str | None = None)
             end_id = logs[-1].id
             uid = logs[0].user_id or ""
             meta = dict(result.meta)
+            if force:
+                _archive_existing_digests(db, session_id, target_date)
 
             d0 = MemoryDigest(
                 user_id=uid,

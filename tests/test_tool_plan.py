@@ -35,6 +35,30 @@ def test_tool_plan_builds_prompt_schemas_and_stable_hash(monkeypatch):
     assert plan.sha256 == same_plan.sha256
 
 
+def test_tool_plan_exposes_memory_query_by_default_and_can_disable(db_session):
+    from core.database import ToolOverride
+    from core.tool_plan import build_tool_plan
+
+    plan = build_tool_plan(chat_type="private", runtime_preset="full", db=db_session)
+    assert "memory_query" in plan.sent_tool_names
+    assert any(schema["function"]["name"] == "memory_query" for schema in plan.sent_tool_schemas)
+    assert "memory_query" in plan.runtime_tool_prompt
+
+    db_session.add(ToolOverride(
+        tool_name="memory_query",
+        scope_type="chat_type",
+        scope_id="private",
+        enabled=0,
+        reason="测试禁用",
+    ))
+    db_session.commit()
+
+    disabled_plan = build_tool_plan(chat_type="private", runtime_preset="full", db=db_session)
+    assert "memory_query" not in disabled_plan.sent_tool_names
+    assert all(schema["function"]["name"] != "memory_query" for schema in disabled_plan.sent_tool_schemas)
+    assert "memory_query：测试禁用" in disabled_plan.runtime_tool_prompt
+
+
 def test_filter_payload_tools_accepts_tool_plan(monkeypatch):
     from core.final_tools import filter_payload_tools
     from core.tool_plan import ToolPlan

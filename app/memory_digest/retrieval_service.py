@@ -50,6 +50,8 @@ class MemoryDigestRetrievalService:
         user_id: str = "",
         session_id: str = "",
         digest_date: str = "",
+        date_start: str = "",
+        date_end: str = "",
         level: int | None = None,
         limit: int = 50,
         include_content: bool = False,
@@ -62,6 +64,10 @@ class MemoryDigestRetrievalService:
             query = query.filter(MemoryDigest.session_id == session_id)
         if digest_date:
             query = query.filter(MemoryDigest.digest_date == digest_date)
+        if date_start:
+            query = query.filter(MemoryDigest.digest_date >= date_start)
+        if date_end:
+            query = query.filter(MemoryDigest.digest_date <= date_end)
         if level is not None and level >= 0:
             query = query.filter(MemoryDigest.level == level)
 
@@ -79,6 +85,8 @@ class MemoryDigestRetrievalService:
         user_id: str = "",
         session_id: str = "",
         digest_date: str = "",
+        date_start: str = "",
+        date_end: str = "",
         limit: int = 20,
         reveal_to_level: int = 2,
         include_content: bool = False,
@@ -95,6 +103,10 @@ class MemoryDigestRetrievalService:
             base = base.filter(MemoryDigest.session_id == session_id)
         if digest_date:
             base = base.filter(MemoryDigest.digest_date == digest_date)
+        if date_start:
+            base = base.filter(MemoryDigest.digest_date >= date_start)
+        if date_end:
+            base = base.filter(MemoryDigest.digest_date <= date_end)
 
         rows = (
             base.filter(or_(MemoryDigest.content.like(f"%{key}%"), MemoryDigest.meta_json.like(f"%{key}%")))

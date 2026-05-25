@@ -296,5 +296,5 @@ class MemoryDigestBuilder:
     def _build_card_text(topic_label: str, details: list[str]) -> str:
         first = details[0] if details else ""
         if first:
-            return f"群里讨论了 {topic_label}；代表消息：{first[:160]}"
-        return f"群里讨论了 {topic_label}。"
+            return f"群里讨论了 {topic_label}；代表消息：{first[:60]}"[:80]
+        return f"群里讨论了 {topic_label}。"[:80]

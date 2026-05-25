@@ -14,5 +14,9 @@ def build_quality(
     return {
         "score": normalized_score,
         "issues": list(issues or []),
-        "should_inject_preview": bool(should_inject_preview and normalized_score > 0),
+        "should_inject_preview": bool(
+            should_inject_preview
+            and normalized_score >= 0.7
+            and not list(issues or [])
+        ),
     }
