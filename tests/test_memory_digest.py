@@ -231,6 +231,60 @@ def test_memory_digest_retrieval_supports_date_range(db_session):
     assert [row["id"] for row in rows] == [41]
 
 
+def test_memory_digest_list_filters_legacy_after_fetching_enough_rows(db_session):
+    from app.memory_digest.retrieval_service import MemoryDigestRetrievalService
+
+    active = _add_digest(db_session, digest_id=60)
+    for digest_id in range(61, 68):
+        _add_digest(db_session, digest_id=digest_id, schema_version=1, status="legacy")
+
+    rows = MemoryDigestRetrievalService(db_session).list_digests(
+        session_id="group_42",
+        level=2,
+        limit=2,
+        include_legacy=False,
+    )
+
+    assert [row["id"] for row in rows] == [active.id]
+
+
+def test_memory_digest_recall_filters_legacy_after_fetching_enough_rows(db_session):
+    from app.memory_digest.retrieval_service import MemoryDigestRetrievalService
+
+    active = _add_digest(db_session, digest_id=70, content="[card] KohakuVQ active digest")
+    for digest_id in range(71, 78):
+        _add_digest(
+            db_session,
+            digest_id=digest_id,
+            schema_version=1,
+            status="legacy",
+            content="[card] KohakuVQ legacy digest",
+        )
+
+    rows = MemoryDigestRetrievalService(db_session).recall(
+        keyword="KohakuVQ",
+        session_id="group_42",
+        limit=1,
+        include_legacy=False,
+    )
+
+    assert [row["digest_id"] for row in rows] == [active.id]
+
+
+def test_digest_status_respects_explicit_archived_for_legacy_meta():
+    from app.memory_digest.retrieval_service import digest_status
+
+    assert digest_status({"status": "archived"}) == "archived"
+    assert digest_status({"schema_version": 1, "status": "archived"}) == "archived"
+
+
+def test_memory_recall_rejects_invalid_date_filters(client):
+    r = client.get("/api/v1/memory/recall?keyword=KohakuVQ&date_start=2026-5-2")
+
+    assert r.status_code == 400
+    assert "date_start" in r.json()["detail"]
+
+
 def test_memory_query_tool_search_and_expand(db_session, monkeypatch):
     from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
     from core import database
@@ -285,3 +339,16 @@ def test_memory_query_tool_time_accepts_date_range(db_session, monkeypatch):
     assert "digest_id=51" in result.output
     assert "digest_id=52" not in result.output
     assert result.metadata["structured_content"]["date_start"] == "2026-05-21"
+
+
+def test_memory_query_tool_rejects_invalid_date_range(monkeypatch):
+    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+
+    tool = MemoryQueryTool()
+    result = asyncio.run(tool._execute({
+        "mode": "time",
+        "date_start": "2026-5-2",
+    }))
+
+    assert result.error
+    assert "date_start" in result.error

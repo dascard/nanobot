@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from core.database import MemoryDigest
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_FILTER_FETCH_FACTOR = 10
+_MAX_FILTER_SCAN = 2000
 
 
 def safe_digest_meta(meta_json: str | None) -> dict[str, Any]:
@@ -20,9 +25,19 @@ def safe_digest_meta(meta_json: str | None) -> dict[str, Any]:
 
 
 def digest_status(meta: dict[str, Any]) -> str:
+    explicit = str(meta.get("status") or "").strip()
+    if explicit in {"archived", "failed", "skipped"}:
+        return explicit
     if int(meta.get("schema_version") or 0) != 2:
         return "legacy"
-    return str(meta.get("status") or "active").strip() or "active"
+    return explicit or "active"
+
+
+def validate_digest_date(value: str, field_name: str) -> str:
+    date_value = str(value or "").strip()
+    if date_value and not _DATE_RE.fullmatch(date_value):
+        raise ValueError(f"{field_name} must be YYYY-MM-DD")
+    return date_value
 
 
 def _is_legacy(meta: dict[str, Any]) -> bool:
@@ -57,6 +72,10 @@ class MemoryDigestRetrievalService:
         include_content: bool = False,
         include_legacy: bool = True,
     ) -> list[dict[str, Any]]:
+        digest_date = validate_digest_date(digest_date, "digest_date")
+        date_start = validate_digest_date(date_start, "date_start")
+        date_end = validate_digest_date(date_end, "date_end")
+        target_limit = max(1, min(int(limit), 500))
         query = self.db.query(MemoryDigest)
         if user_id:
             query = query.filter(MemoryDigest.user_id == user_id)
@@ -71,12 +90,25 @@ class MemoryDigestRetrievalService:
         if level is not None and level >= 0:
             query = query.filter(MemoryDigest.level == level)
 
-        rows = query.order_by(MemoryDigest.id.desc()).limit(max(1, min(int(limit), 500))).all()
-        return [
-            self.serialize(row, include_content=include_content)
-            for row in rows
-            if include_legacy or not _is_legacy(safe_digest_meta(row.meta_json))
-        ]
+        ordered = query.order_by(MemoryDigest.id.desc())
+        if include_legacy:
+            rows = ordered.limit(target_limit).all()
+            return [self.serialize(row, include_content=include_content) for row in rows]
+
+        results: list[dict[str, Any]] = []
+        offset = 0
+        batch_size = min(max(target_limit * _FILTER_FETCH_FACTOR, 50), 500)
+        while len(results) < target_limit and offset < _MAX_FILTER_SCAN:
+            rows = ordered.offset(offset).limit(batch_size).all()
+            if not rows:
+                break
+            for row in rows:
+                if not _is_legacy(safe_digest_meta(row.meta_json)):
+                    results.append(self.serialize(row, include_content=include_content))
+                    if len(results) >= target_limit:
+                        break
+            offset += len(rows)
+        return results
 
     def recall(
         self,
@@ -95,6 +127,10 @@ class MemoryDigestRetrievalService:
         key = str(keyword or "").strip()
         if not key:
             return []
+        digest_date = validate_digest_date(digest_date, "digest_date")
+        date_start = validate_digest_date(date_start, "date_start")
+        date_end = validate_digest_date(date_end, "date_end")
+        target_limit = max(1, min(int(limit), 200))
         reveal_to_level = max(0, min(2, int(reveal_to_level)))
         base = self.db.query(MemoryDigest).filter(MemoryDigest.level == 2)
         if user_id:
@@ -108,39 +144,44 @@ class MemoryDigestRetrievalService:
         if date_end:
             base = base.filter(MemoryDigest.digest_date <= date_end)
 
-        rows = (
+        ordered = (
             base.filter(or_(MemoryDigest.content.like(f"%{key}%"), MemoryDigest.meta_json.like(f"%{key}%")))
             .order_by(MemoryDigest.id.desc())
-            .limit(max(1, min(int(limit) * 3, 300)))
-            .all()
         )
         results: list[dict[str, Any]] = []
-        for row in rows:
-            meta = safe_digest_meta(row.meta_json)
-            if not include_legacy and _is_legacy(meta):
-                continue
-            if digest_status(meta) not in {"active", "legacy"}:
-                continue
-            chain = self.expand_chain(row, reveal_to_level=reveal_to_level)
-            expanded = [
-                self.serialize(node, include_content=include_content)
-                for node in sorted(chain, key=lambda item: item.level, reverse=True)
-            ]
-            results.append({
-                "digest_id": row.id,
-                "user_id": row.user_id,
-                "session_id": row.session_id,
-                "digest_date": row.digest_date,
-                "confidence": calc_recall_confidence(key, row.content or "", meta),
-                "source_range": {
-                    "start_log_id": row.source_start_log_id,
-                    "end_log_id": row.source_end_log_id,
-                },
-                "meta": meta,
-                "revealed_chain": expanded,
-            })
-            if len(results) >= max(1, min(int(limit), 200)):
+        offset = 0
+        batch_size = min(max(target_limit * _FILTER_FETCH_FACTOR, 50), 500)
+        while len(results) < target_limit and offset < _MAX_FILTER_SCAN:
+            rows = ordered.offset(offset).limit(batch_size).all()
+            if not rows:
                 break
+            for row in rows:
+                meta = safe_digest_meta(row.meta_json)
+                if not include_legacy and _is_legacy(meta):
+                    continue
+                if digest_status(meta) not in {"active", "legacy"}:
+                    continue
+                chain = self.expand_chain(row, reveal_to_level=reveal_to_level)
+                expanded = [
+                    self.serialize(node, include_content=include_content)
+                    for node in sorted(chain, key=lambda item: item.level, reverse=True)
+                ]
+                results.append({
+                    "digest_id": row.id,
+                    "user_id": row.user_id,
+                    "session_id": row.session_id,
+                    "digest_date": row.digest_date,
+                    "confidence": calc_recall_confidence(key, row.content or "", meta),
+                    "source_range": {
+                        "start_log_id": row.source_start_log_id,
+                        "end_log_id": row.source_end_log_id,
+                    },
+                    "meta": meta,
+                    "revealed_chain": expanded,
+                })
+                if len(results) >= target_limit:
+                    break
+            offset += len(rows)
         return results
 
     def expand_digest(

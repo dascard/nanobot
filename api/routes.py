@@ -28,7 +28,7 @@ from core.moderation import check_message_moderation_db
 from nanobot_kt.bridge import get_bridge
 from core.compaction import run_autocompact_circuit_breaker
 from core.daily_digest import generate_daily_digest_for_date
-from app.memory_digest.retrieval_service import MemoryDigestRetrievalService
+from app.memory_digest.retrieval_service import MemoryDigestRetrievalService, validate_digest_date
 from clients.model_registry import registry
 from clients.new_api_client import NewAPIClient
 from clients.classifier_client import get_guardrail, get_timing_gate
@@ -242,6 +242,22 @@ def _safe_meta(meta_json: str) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _validate_memory_digest_date_filters(
+    *,
+    digest_date: str = "",
+    date_start: str = "",
+    date_end: str = "",
+) -> tuple[str, str, str]:
+    try:
+        return (
+            validate_digest_date(digest_date, "digest_date"),
+            validate_digest_date(date_start, "date_start"),
+            validate_digest_date(date_end, "date_end"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 def _short_text(text: str, limit: int = 400) -> str:
@@ -614,7 +630,11 @@ def _persist_group_bridge_reply(
         role="user",
         content=_sanitize_prompt_text(query, MAX_MEMORY_PER_MSG_CHARS),
         source_message_ids_json=source_ids_json,
-        meta_json=json.dumps({"kind": "chat", "source": "group_message"}, ensure_ascii=False),
+        meta_json=json.dumps({
+            "kind": "chat",
+            "source": "group_message",
+            "sender_name": sender_name or "",
+        }, ensure_ascii=False),
     ))
     db.add(ConversationTurn(
         user_id=group_user_id,
@@ -725,9 +745,23 @@ def mark_clear(
             ConversationTurn.user_id == user_id,
             ConversationTurn.created_at <= now,
         ).delete()
+        try:
+            from app.session_memory.rolling_summary import archive_active_summaries_for_user
+
+            archived = archive_active_summaries_for_user(db, user_id)
+        except Exception:
+            archived = 0
         db.commit()
-        logger.info(f"[/mark-clear] Clear marker set for user={user_id}, deleted {deleted} ConversationTurn rows")
-        return {"status": "success", "message": "已标记清除点", "deleted_context_rows": deleted}
+        logger.info(
+            f"[/mark-clear] Clear marker set for user={user_id}, "
+            f"deleted {deleted} ConversationTurn rows, archived {archived} rolling summaries"
+        )
+        return {
+            "status": "success",
+            "message": "已标记清除点",
+            "deleted_context_rows": deleted,
+            "archived_rolling_summaries": archived,
+        }
     except Exception as e:
         logger.error(f"[/mark-clear] Failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1998,6 +2032,7 @@ async def proxy_chat(
         is_group=is_group,
         group_id=_extract_group_id_from_chat_request(req) if is_group else "",
         max_total=MAX_MEMORY_TOTAL_CHARS,
+        current_user_input=req.query,
     )
 
     # 4a. 私聊三态分类：先分类再路由
@@ -2533,6 +2568,11 @@ def get_memory_digests(
     _auth=Depends(verify_token),
 ):
     """按条件查询每日记忆摘要（支持渐进式披露层级）。"""
+    digest_date, date_start, date_end = _validate_memory_digest_date_filters(
+        digest_date=digest_date,
+        date_start=date_start,
+        date_end=date_end,
+    )
     items = MemoryDigestRetrievalService(db).list_digests(
         user_id=user_id,
         session_id=session_id,
@@ -2638,6 +2678,11 @@ def recall_memory(
     """
     if not keyword.strip():
         raise HTTPException(status_code=400, detail="keyword is required")
+    digest_date, date_start, date_end = _validate_memory_digest_date_filters(
+        digest_date=digest_date,
+        date_start=date_start,
+        date_end=date_end,
+    )
 
     results = MemoryDigestRetrievalService(db).recall(
         keyword=keyword,

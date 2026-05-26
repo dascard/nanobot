@@ -55,7 +55,10 @@ TOOL_METADATA: dict[str, ToolDef] = {
     "memory_query": ToolDef(
         name="memory_query", label="摘要记忆查询", category="data", risk_level="low",
         private_default=True, group_default=True,
-        description="查询结构化每日摘要和召回卡片；不返回原始 ChatLog 全文。",
+        description=(
+            "查询已生成的结构化摘要和召回卡片；不返回原始 ChatLog 全文。"
+            "当前短期窗口或未摘要消息必须用 sql_analysis 查询原始日志，不要用本工具判断刚才发生的事。"
+        ),
     ),
 
     # ── 分析工具 ──

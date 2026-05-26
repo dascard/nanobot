@@ -6,7 +6,7 @@ from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
-from app.memory_digest.retrieval_service import MemoryDigestRetrievalService
+from app.memory_digest.retrieval_service import MemoryDigestRetrievalService, validate_digest_date
 from core.uow import UnitOfWork
 
 
@@ -20,9 +20,10 @@ class MemoryQueryTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "查询长期聊天摘要和召回卡片。"
+            "查询已生成的长期/中期聊天摘要和召回卡片。"
             "只返回结构化摘要、预览和展开摘要，不返回原始 ChatLog 全文。"
-            "当用户问过去讨论过什么、某天聊过什么、或需要从摘要继续展开时使用。"
+            "它只覆盖已经被摘要过的历史；当前短期窗口或未摘要消息必须用 sql_analysis 查询原始日志。"
+            "当用户问较早之前讨论过什么、某天聊过什么、或需要从摘要继续展开时使用。"
         )
 
     @property
@@ -89,6 +90,10 @@ class MemoryQueryTool(BaseTool):
         limit = max(1, min(int(args.get("limit") or 5), 10))
         include_detail = bool(args.get("include_detail", False))
         include_legacy = bool(args.get("include_legacy", False))
+        try:
+            self._validate_date_args(args)
+        except ValueError as exc:
+            return ToolResult(error=str(exc))
 
         try:
             with UnitOfWork() as uow:
@@ -106,6 +111,12 @@ class MemoryQueryTool(BaseTool):
                 return ToolResult(error=f"Unsupported mode: {mode}")
         except Exception as exc:
             return ToolResult(error=f"memory_query failed: {exc}")
+
+    @staticmethod
+    def _validate_date_args(args: dict[str, Any]) -> None:
+        validate_digest_date(str(args.get("digest_date") or "").strip(), "digest_date")
+        validate_digest_date(str(args.get("date_start") or "").strip(), "date_start")
+        validate_digest_date(str(args.get("date_end") or "").strip(), "date_end")
 
     def _search(
         self,

@@ -168,7 +168,22 @@ def test_openai_sdk_tracer_records_stream_request(monkeypatch):
         staticmethod(lambda **kwargs: finished.append(kwargs)),
     )
 
-    create = AsyncMock(return_value=iter([{"choices": [{"delta": {"content": "流式"}}]}]))
+    class _AsyncStream:
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._chunks:
+                raise StopAsyncIteration
+            return self._chunks.pop(0)
+
+    create = AsyncMock(return_value=_AsyncStream([
+        {"choices": [{"delta": {"content": "流"}}]},
+        {"choices": [{"delta": {"content": "式"}}]},
+    ]))
     llm = SimpleNamespace(
         _client=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
         _api_key="reply-key",
@@ -182,13 +197,17 @@ def test_openai_sdk_tracer_records_stream_request(monkeypatch):
         provider="newapi",
         base_url="http://stream-provider.test/v1",
     )
-    with llm_trace_scope(trace_id="trace-s", run_id="run-s", source="replyer"):
-        result = asyncio.run(llm._client.chat.completions.create(
-            model="stream-model",
-            messages=[{"role": "user", "content": "流式"}],
-            stream=True,
-            temperature=0.1,
-        ))
+    async def _run():
+        with llm_trace_scope(trace_id="trace-s", run_id="run-s", source="replyer"):
+            result = await llm._client.chat.completions.create(
+                model="stream-model",
+                messages=[{"role": "user", "content": "流式"}],
+                stream=True,
+                temperature=0.1,
+            )
+            return [chunk async for chunk in result]
+
+    chunks = asyncio.run(_run())
 
     assert recorded
     row = recorded[0]
@@ -198,10 +217,13 @@ def test_openai_sdk_tracer_records_stream_request(monkeypatch):
     assert row["request"]["stream"] is True
     assert row["request"]["model"] == "stream-model"
     assert row["request"]["messages"][0]["content"] == "流式"
-    assert list(result)
+    assert chunks
     assert finished
     assert finished[0]["log_id"] == 789
-    assert finished[0]["status"] == "stream_created"
+    assert finished[0]["status"] == "stream_success"
+    assert finished[0]["response_status"] == 200
+    assert finished[0]["response"]["content"] == "流式"
+    assert "repr" not in finished[0]["response"]
 
 
 def test_compaction_direct_http_records_request(monkeypatch):

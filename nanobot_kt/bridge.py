@@ -1726,17 +1726,72 @@ class NanobotBridge:
                                     )
                                     return ""
                                 else:
-                                    self._record_reply_contract_check(
-                                        trace_id=trace_id,
-                                        run_id=run_handle.run_id,
-                                        session_id=session_id,
-                                        attempt=1,
-                                        raw_output=retry_buffer_text or retry_response_text,
-                                        has_reply_tool=False,
-                                        has_no_reply_tool=False,
-                                        has_structured_fallback=False,
-                                        result="suppressed",
+                                    from nanobot_kt.reply_contract import detect_no_tool_call_result
+
+                                    retry_marker_reply_text = _extract_reply_contract_text(
+                                        retry_buffer_text or retry_response_text
                                     )
+                                    if retry_marker_reply_text:
+                                        from core.reply_postprocess import strip_chat_end_punct
+
+                                        response = strip_chat_end_punct(retry_marker_reply_text)
+                                        reply_source = "retry_marker_json_repair"
+                                        self._record_reply_contract_check(
+                                            trace_id=trace_id,
+                                            run_id=run_handle.run_id,
+                                            session_id=session_id,
+                                            attempt=1,
+                                            raw_output=retry_buffer_text or retry_response_text,
+                                            has_reply_tool=False,
+                                            has_no_reply_tool=False,
+                                            has_structured_fallback=False,
+                                            result="retry_marker_json_repair",
+                                        )
+                                        self._log_agent_result(session_id, "retry_marker_json_repair")
+                                        retry_succeeded = True
+                                    else:
+                                        retry_agent_result = detect_no_tool_call_result(
+                                            retry_buffer_text or retry_response_text
+                                        )
+                                        plain_text_repair_allowed = (
+                                            retry_agent_result == "no_tool_call"
+                                            and bool(retry_response_text)
+                                            and "[系统内部错误]" not in retry_response_text
+                                            and "[工具错误]" not in retry_response_text
+                                            and "<reply_contract_retry>" not in retry_response_text
+                                            and "NANOBOT_REPLY_OUTPUT" not in retry_response_text
+                                            and not retry_response_text.lstrip().startswith(("<", "{", "["))
+                                        )
+                                        if plain_text_repair_allowed:
+                                            from core.reply_postprocess import strip_chat_end_punct
+
+                                            response = strip_chat_end_punct(retry_response_text)
+                                            reply_source = "retry_plain_text_repair"
+                                            self._record_reply_contract_check(
+                                                trace_id=trace_id,
+                                                run_id=run_handle.run_id,
+                                                session_id=session_id,
+                                                attempt=1,
+                                                raw_output=retry_buffer_text or retry_response_text,
+                                                has_reply_tool=False,
+                                                has_no_reply_tool=False,
+                                                has_structured_fallback=False,
+                                                result="retry_plain_text_repair",
+                                            )
+                                            self._log_agent_result(session_id, "retry_plain_text_repair")
+                                            retry_succeeded = True
+                                        else:
+                                            self._record_reply_contract_check(
+                                                trace_id=trace_id,
+                                                run_id=run_handle.run_id,
+                                                session_id=session_id,
+                                                attempt=1,
+                                                raw_output=retry_buffer_text or retry_response_text,
+                                                has_reply_tool=False,
+                                                has_no_reply_tool=False,
+                                                has_structured_fallback=False,
+                                                result="suppressed",
+                                            )
                         except Exception as e:
                             logger.error("[Reply] contract retry failed session=%s: %s", session_id, e, exc_info=True)
                             self._record_reply_contract_check(

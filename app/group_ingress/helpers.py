@@ -598,7 +598,11 @@ def persist_group_bridge_reply(
         role="user",
         content=sanitize_prompt_text(query, 300),
         source_message_ids_json=source_ids_json,
-        meta_json=json.dumps({"kind": "chat", "source": "group_message"}, ensure_ascii=False),
+        meta_json=json.dumps({
+            "kind": "chat",
+            "source": "group_message",
+            "sender_name": sender_name or "",
+        }, ensure_ascii=False),
     ))
     db.add(ConversationTurn(
         user_id=group_user_id,

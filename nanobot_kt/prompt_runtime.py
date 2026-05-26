@@ -248,6 +248,16 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         "persona_fact_ids",
         "persona_skipped",
         "persona_context_chars",
+        "rolling_summary_enabled",
+        "rolling_summary_injected",
+        "rolling_summary_id",
+        "rolling_summary_covered_until_turn_id",
+        "rolling_summary_source_turn_count",
+        "rolling_summary_pending_turn_ids",
+        "rolling_summary_raw_start_turn_id",
+        "rolling_summary_recent_raw_turn_ids",
+        "rolling_summary_skipped_reason",
+        "rolling_summary_error",
     ):
         if key in context_debug:
             meta_update[key] = context_debug[key]

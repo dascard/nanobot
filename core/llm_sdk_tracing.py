@@ -42,6 +42,109 @@ def _safe_sdk_response(result: Any) -> Any:
     return {"repr": repr(result)[:4000]}
 
 
+def _stream_content_delta(chunk: Any) -> str:
+    payload = _safe_sdk_response(chunk)
+    if not isinstance(payload, dict):
+        return ""
+    parts: list[str] = []
+    for choice in payload.get("choices") or []:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if isinstance(delta, dict) and delta.get("content"):
+            parts.append(str(delta.get("content") or ""))
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict) and message.get("content"):
+            parts.append(str(message.get("content") or ""))
+    if payload.get("content"):
+        parts.append(str(payload.get("content") or ""))
+    return "".join(parts)
+
+
+class _TracedStreamProxy:
+    """延迟到流式响应消费完成后记录聚合响应。"""
+
+    def __init__(self, stream: Any, *, log_id: int, started: float) -> None:
+        self._stream = stream
+        self._log_id = log_id
+        self._started = started
+        self._finished = False
+        self._content_parts: list[str] = []
+        self._chunks_sample: list[Any] = []
+        self._async_iter: Any = None
+        self._sync_iter: Any = None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._stream, name)
+
+    def _record_chunk(self, chunk: Any) -> None:
+        payload = _safe_sdk_response(chunk)
+        if len(self._chunks_sample) >= 20:
+            self._chunks_sample.pop(0)
+        self._chunks_sample.append(payload)
+        delta = _stream_content_delta(chunk)
+        if delta:
+            self._content_parts.append(delta)
+
+    def _finish(self, *, status: str, response_status: int = 200, error: str = "") -> None:
+        if self._finished:
+            return
+        self._finished = True
+        try:
+            from core.tracing import LLMRequestTracer
+
+            LLMRequestTracer.finish_request(
+                log_id=self._log_id,
+                response={
+                    "content": "".join(self._content_parts),
+                    "chunks_sample": list(self._chunks_sample),
+                },
+                response_status=response_status,
+                status=status,
+                error=error,
+                latency_ms=int((time.time() - self._started) * 1000),
+            )
+        except Exception as exc:
+            logger.debug("OpenAI SDK stream finish tracing skipped: %s", exc)
+
+    def __aiter__(self) -> "_TracedStreamProxy":
+        self._async_iter = self._stream.__aiter__()
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._async_iter is None:
+            self._async_iter = self._stream.__aiter__()
+        try:
+            chunk = await self._async_iter.__anext__()
+        except StopAsyncIteration:
+            self._finish(status="stream_success", response_status=200)
+            raise
+        except Exception as exc:
+            self._finish(status="stream_error", response_status=0, error=str(exc))
+            raise
+        self._record_chunk(chunk)
+        return chunk
+
+    def __iter__(self) -> "_TracedStreamProxy":
+        self._sync_iter = iter(self._stream)
+        return self
+
+    def __next__(self) -> Any:
+        if self._sync_iter is None:
+            self._sync_iter = iter(self._stream)
+        try:
+            chunk = next(self._sync_iter)
+        except StopIteration:
+            self._finish(status="stream_success", response_status=200)
+            raise
+        except Exception as exc:
+            self._finish(status="stream_error", response_status=0, error=str(exc))
+            raise
+        self._record_chunk(chunk)
+        return chunk
+
+
 def install_openai_chat_completion_tracer(
     llm: Any,
     *,
@@ -114,13 +217,7 @@ def install_openai_chat_completion_tracer(
                     from core.tracing import LLMRequestTracer
 
                     if request_payload.get("stream"):
-                        LLMRequestTracer.finish_request(
-                            log_id=log_id,
-                            response={"stream": True, "repr": repr(result)[:1000]},
-                            response_status=0,
-                            status="stream_created",
-                            latency_ms=int((time.time() - started) * 1000),
-                        )
+                        return _TracedStreamProxy(result, log_id=log_id, started=started)
                     else:
                         LLMRequestTracer.finish_request(
                             log_id=log_id,

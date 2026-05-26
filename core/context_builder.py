@@ -13,6 +13,8 @@ logger = logging.getLogger("nanobot.context_builder")
 MAX_GROUP_CONTEXT_ROWS = 10
 MAX_PRIVATE_CONTEXT_ROWS = 32
 MAX_GROUP_RECENT_ROWS = 12
+MAX_MID_TERM_CONTEXT_ROWS = 8
+MAX_MID_TERM_CONTEXT_CHARS = 1200
 
 # 长用户消息阈值——超过此长度的历史消息会被摘要化
 LONG_USER_MESSAGE_CHARS = 2000
@@ -68,6 +70,8 @@ def sanitize_prompt_text(text: str, max_chars: int = 0) -> str:
         "</history_context>": "(/HISTORY_CONTEXT_TAG)",
         "<conversation_context>": "(CONVERSATION_CONTEXT_TAG)",
         "</conversation_context>": "(/CONVERSATION_CONTEXT_TAG)",
+        "<rolling_session_summary": "(ROLLING_SESSION_SUMMARY_TAG",
+        "</rolling_session_summary>": "(/ROLLING_SESSION_SUMMARY_TAG)",
         "<group_memory_context": "(GROUP_MEMORY_CONTEXT_TAG",
         "</group_memory_context>": "(/GROUP_MEMORY_CONTEXT_TAG)",
         "<group_recent_context>": "(GROUP_RECENT_CONTEXT_TAG)",
@@ -142,184 +146,281 @@ def _build_conversation_context_header(*, is_group: bool) -> str:
     )
 
 
+def _join_context_headers(*parts: str) -> str:
+    return "\n".join(part for part in (str(x or "").strip() for x in parts) if part)
+
+
+def _build_mid_term_context_summary(
+    db,
+    *,
+    session_id: str,
+    cutoff: datetime | None,
+    user_id: str = "",
+    is_group: bool = False,
+) -> tuple[str, dict]:
+    """把短期窗口外的旧 ConversationTurn 渲染成运行时中期摘要。
+
+    这是上下文压缩层，不是 memory_digest，也不是长期记忆。只用于恢复当前会话
+    脉络，并且仍受 history_clear_at / no_context / 内部 kind 过滤。
+    """
+    debug = {
+        "mid_term_context_injected": False,
+        "mid_term_context_source": "",
+        "mid_term_context_turn_ids": [],
+        "mid_term_context_chars": 0,
+    }
+    if cutoff is None:
+        return "", debug
+
+    try:
+        from core.database import ConversationTurn, User
+
+        query = db.query(ConversationTurn).filter(
+            ConversationTurn.session_id == session_id,
+            ConversationTurn.created_at <= cutoff,
+        )
+        if user_id:
+            user = db.query(User).filter(User.id == user_id).first()
+            if user and user.history_clear_at:
+                query = query.filter(ConversationTurn.created_at > user.history_clear_at)
+        rows = (
+            query.order_by(ConversationTurn.created_at.desc(), ConversationTurn.id.desc())
+            .limit(MAX_MID_TERM_CONTEXT_ROWS)
+            .all()
+        )
+    except Exception as exc:
+        logger.warning("[Context] mid-term context query failed: %s", exc)
+        return "", debug
+
+    selected = []
+    for row in reversed(rows):
+        meta = _safe_meta(getattr(row, "meta_json", "{}"))
+        if meta.get("moderation", {}).get("no_context") or meta.get("no_context"):
+            continue
+        if meta.get("kind", "chat") in _INTERNAL_KINDS:
+            continue
+        content = sanitize_prompt_text(getattr(row, "content", "") or "", 260)
+        if not content.strip():
+            continue
+        selected.append((row, content))
+    if not selected:
+        return "", debug
+
+    start_dt = selected[0][0].created_at
+    end_dt = selected[-1][0].created_at
+    scope = "群聊" if is_group else "私聊"
+    lines = [
+        (
+            f'<mid_term_context_summary session_id="{escape(str(session_id or ""), quote=True)}" '
+            f'source="conversation_turn" selected_count="{len(selected)}">'
+        ),
+        (
+            f"这是短期窗口被裁切出的{scope}上下文摘要，用于恢复当前会话脉络；"
+            "这不是长期记忆，不代表稳定事实，也不能覆盖当前用户输入。"
+        ),
+    ]
+    if start_dt and end_dt:
+        lines.append(
+            f"时间范围: {start_dt.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+    total = 0
+    turn_ids: list[int] = []
+    for row, content in selected:
+        role = "用户" if row.role == "user" else "助手"
+        ts = row.created_at.strftime("%H:%M:%S") if row.created_at else ""
+        line = f"- [{ts}] {role}: {escape(content, quote=False)}"
+        if total + len(line) > MAX_MID_TERM_CONTEXT_CHARS:
+            break
+        lines.append(line)
+        total += len(line)
+        turn_ids.append(int(row.id))
+    if not turn_ids:
+        return "", debug
+    lines.append("</mid_term_context_summary>")
+    context = "\n".join(lines)
+    debug.update({
+        "mid_term_context_injected": True,
+        "mid_term_context_source": "conversation_turn",
+        "mid_term_context_turn_ids": turn_ids,
+        "mid_term_context_chars": len(context),
+    })
+    return context, debug
+
+
 def build_session_memory(
     db, session_id: str, user_id: str = "",
     max_per_msg: int = 300, max_total: int = 4000,
     is_group: bool = False, group_id: str = "",
+    current_user_input: str = "",
 ) -> tuple[str, list[dict], dict]:
-    """从 ConversationTurn 构建结构化历史消息。
+    """从 ConversationTurn 构建 rolling summary + recent raw window。"""
+    from app.session_memory.renderer import render_rolling_summary_context
+    from app.session_memory.rolling_summary import (
+        get_active_summary,
+        maybe_rollup_session_summary,
+    )
+    from app.session_memory.windowing import (
+        load_context_eligible_turns,
+        raw_window_limits,
+        select_latest_raw_window,
+        select_pending_for_summary,
+    )
+    from core.database import User
 
-    返回 (header_text, messages_list, debug_info)。
-
-    debug_info 包含 group_profile_mode/profile_injected/profile_items_count 等。
-      1. history_clear_at 过滤
-      2. 倒序取最新 MAX_ROWS 行
-      3. 倒序从新到旧累计 token → 超限停止
-      4. 选中行 reverse 正序
-      5. normalize: 丢弃开头连续 assistant
-    """
-    from core.database import User, ConversationTurn
-
-    max_rows = MAX_GROUP_CONTEXT_ROWS if is_group else MAX_PRIVATE_CONTEXT_ROWS
-    cutoff = None
+    chat_type = "group" if is_group else "private"
+    history_clear_at = None
     if user_id:
         user = db.query(User).filter(User.id == user_id).first()
         if user and user.history_clear_at:
-            cutoff = user.history_clear_at
-    age_cutoff = datetime.now() - timedelta(
-        minutes=GROUP_CONTEXT_MAX_AGE_MIN if is_group else PRIVATE_CONTEXT_MAX_AGE_MIN
-    )
-    if cutoff is None or age_cutoff > cutoff:
-        cutoff = age_cutoff
-    group_age_cutoff = age_cutoff if is_group else None
-    private_age_cutoff = age_cutoff if not is_group else None
-
-    query = db.query(ConversationTurn).filter(
-        ConversationTurn.session_id == session_id)
-    if cutoff is not None:
-        query = query.filter(ConversationTurn.created_at > cutoff)
-    turns = (
-        query.order_by(ConversationTurn.created_at.desc(),
-                       ConversationTurn.id.desc())
-        .limit(max_rows * 2)  # 多取一些，因为 no_context 会过滤
-        .all()
-    )
+            history_clear_at = user.history_clear_at
 
     debug: dict = {
-        "history_turns": 0, "history_chars": 0,
-        "group_profile_mode": "off", "group_profile_injected": False,
-        "profile_items_count": 0, "profile_memory_ids": [],
+        "history_turns": 0,
+        "history_chars": 0,
+        "group_profile_mode": "off",
+        "group_profile_injected": False,
+        "profile_items_count": 0,
+        "profile_memory_ids": [],
         "profile_preview": None,
         "old_group_turns_skipped": 0,
         "old_private_turns_skipped": 0,
+        "mid_term_context_injected": False,
+        "mid_term_context_source": "deprecated",
+        "mid_term_context_turn_ids": [],
+        "mid_term_context_chars": 0,
+        "rolling_summary_enabled": True,
+        "rolling_summary_injected": False,
+        "rolling_summary_id": 0,
+        "rolling_summary_covered_until_turn_id": 0,
+        "rolling_summary_source_turn_count": 0,
+        "rolling_summary_pending_turn_ids": [],
+        "rolling_summary_raw_start_turn_id": 0,
+        "rolling_summary_recent_raw_turn_ids": [],
+        "rolling_summary_skipped_reason": "",
+        "rolling_summary_error": "",
+        "rolling_summary_eligible_skipped": [],
     }
-    if group_age_cutoff is not None:
-        skipped_query = db.query(ConversationTurn).filter(
-            ConversationTurn.session_id == session_id,
-            ConversationTurn.created_at <= group_age_cutoff,
-        )
-        if user_id:
-            user = db.query(User).filter(User.id == user_id).first()
-            if user and user.history_clear_at:
-                skipped_query = skipped_query.filter(
-                    ConversationTurn.created_at > user.history_clear_at
-                )
-        debug["old_group_turns_skipped"] = skipped_query.count()
-    if private_age_cutoff is not None:
-        skipped_query = db.query(ConversationTurn).filter(
-            ConversationTurn.session_id == session_id,
-            ConversationTurn.created_at <= private_age_cutoff,
-        )
-        if user_id:
-            user = db.query(User).filter(User.id == user_id).first()
-            if user and user.history_clear_at:
-                skipped_query = skipped_query.filter(
-                    ConversationTurn.created_at > user.history_clear_at
-                )
-        debug["old_private_turns_skipped"] = skipped_query.count()
 
-    # ── GroupProfile —— 不依赖 history，在 is_group 时提前构造 ──
     profile_header = ""
     if is_group and group_id:
         profile_header, profile_debug = _build_profile_section(db, group_id)
         debug.update(profile_debug)
 
-    if not turns:
-        return profile_header, [], debug
+    active_summary = get_active_summary(
+        db,
+        session_id,
+        after_clear_at=history_clear_at,
+    )
+    last_covered_id = int(active_summary.covered_until_turn_id or 0) if active_summary else 0
+    eligible, eligible_debug = load_context_eligible_turns(
+        db,
+        session_id=session_id,
+        user_id=user_id,
+        after_clear_at=history_clear_at,
+        after_turn_id=last_covered_id,
+    )
+    debug["rolling_summary_eligible_skipped"] = eligible_debug.get("skipped", [])
 
-    selected_desc: list[dict] = []
-    total_tokens = 0
-    skipped_no_context = 0
-    for t in turns:
-        meta = _safe_meta(t.meta_json)
-        # 过滤 no_context 标记的消息
-        if meta.get("moderation", {}).get("no_context"):
-            skipped_no_context += 1
-            continue
-        # 过滤内部消息 kind——不应出现在模型上下文中
-        if meta.get("kind", "chat") in _INTERNAL_KINDS:
-            skipped_no_context += 1
-            continue
-        content = t.content.strip()
-        if not content:
-            continue
-        content = sanitize_prompt_text(content, max_per_msg)
-        if not content:
-            continue
-        # 长 prompt-like 用户消息摘要化——角色卡/代码等不应全文注入
-        if t.role == "user" and len(content) > LONG_USER_MESSAGE_CHARS:
-            preview = content[:200].rstrip()
-            content = (
-                f"[长消息摘要] 用户发送了约 {len(content)} 字符的长消息，"
-                f"开头为: {preview}...[截断]"
+    max_turns, max_tokens = raw_window_limits(chat_type, max_total=max_total)
+    recent_window, raw_debug = select_latest_raw_window(
+        eligible,
+        chat_type=chat_type,
+        max_turns=max_turns,
+        max_tokens=max_tokens,
+        max_per_msg=max_per_msg,
+    )
+    raw_start_id = int(raw_debug.get("raw_window_start_turn_id") or 0)
+    pending = select_pending_for_summary(
+        eligible,
+        last_covered_id=last_covered_id,
+        raw_window_start_turn_id=raw_start_id,
+    )
+    debug["rolling_summary_pending_turn_ids"] = [int(turn.id) for turn in pending]
+    debug["rolling_summary_raw_start_turn_id"] = raw_start_id
+    debug["rolling_summary_recent_raw_turn_ids"] = list(raw_debug.get("raw_window_turn_ids") or [])
+
+    if pending:
+        try:
+            rollup_result = maybe_rollup_session_summary(
+                db,
+                session_id=session_id,
+                user_id=user_id,
+                chat_type=chat_type,
+                active_summary=active_summary,
+                pending_turns=pending,
+                recent_raw_turn_ids=raw_debug.get("raw_window_turn_ids") or [],
+                raw_window_start_turn_id=raw_start_id,
+                current_user_input=current_user_input,
             )
-        kind = meta.get("kind", "chat")
-        # casual_template 最多保留 1 条，避免短句污染历史
-        if kind == "casual_template" and t.role == "assistant":
-            casual_count = sum(1 for d in selected_desc if d.get("role") == "assistant"
-                               and _safe_meta(d.get("meta_json", "{}")).get("kind") == "casual_template")
-            if casual_count >= 1:
-                continue
-        if kind == "artifact_summary":
-            token_cost = min(50, estimate_tokens(content))
-        else:
-            token_cost = max(len(content), estimate_tokens(content))
-        if selected_desc and total_tokens + token_cost > max_total:
-            break
-        total_tokens += token_cost
+            if rollup_result.summary is not None:
+                active_summary = rollup_result.summary
+            debug["rolling_summary_skipped_reason"] = rollup_result.skipped_reason
+            debug["rolling_summary_error"] = rollup_result.error
+        except Exception as exc:
+            logger.warning("[Context] rolling summary rollup failed: %s", exc)
+            debug["rolling_summary_error"] = str(exc)
 
-        time_label = relative_time_label(t.created_at) if t.created_at else ""
-        display = f"{time_label} {content}".strip() if time_label else content
-        selected_desc.append({
-            "role": t.role, "content": display, "meta_json": t.meta_json,
-            "_created_at": t.created_at,
-        })
+    summary_header = render_rolling_summary_context(active_summary)
+    if active_summary is not None and summary_header:
+        debug["rolling_summary_injected"] = True
+        debug["rolling_summary_id"] = int(active_summary.id or 0)
+        debug["rolling_summary_covered_until_turn_id"] = int(active_summary.covered_until_turn_id or 0)
+        debug["rolling_summary_source_turn_count"] = int(active_summary.source_turn_count or 0)
 
-    history_messages = list(reversed(selected_desc))
-    if not history_messages:
+    skipped_no_context = len(debug["rolling_summary_eligible_skipped"])
+    if not recent_window:
         debug["skipped_no_context"] = skipped_no_context
-        return profile_header, [], debug
+        return _join_context_headers(profile_header, summary_header), [], debug
 
-    # gap detection: 相邻消息间隔 > CONTEXT_BREAK_ON_GAP_MIN 时插入话题中断标记
     gap_breaks = 0
-    messages_with_gaps: list[dict] = []
+    history_messages: list[dict] = []
     prev_dt: datetime | None = None
-    for i, msg in enumerate(history_messages):
-        cur_dt = msg.get("_created_at")
+    for item in recent_window:
+        cur_dt = item.get("created_at")
         if prev_dt is not None and cur_dt is not None:
             gap_min = (cur_dt - prev_dt).total_seconds() / 60
             if gap_min > CONTEXT_BREAK_ON_GAP_MIN:
-                messages_with_gaps.append({
+                history_messages.append({
                     "role": "system",
                     "content": f"[话题断裂标记] 距离上一条消息间隔约{int(gap_min)}分钟，此前后的内容不应视为同一话题",
                     "meta_json": '{"kind":"context_gap_marker"}',
                 })
                 gap_breaks += 1
-        messages_with_gaps.append(msg)
+        time_label = relative_time_label(cur_dt) if cur_dt else ""
+        display = f"{time_label} {item['content']}".strip() if time_label else item["content"]
+        history_messages.append({
+            "role": item["role"],
+            "content": display,
+            "meta_json": item.get("meta_json", "{}"),
+            "_created_at": cur_dt,
+            "turn_id": item.get("turn_id"),
+        })
         if cur_dt is not None:
             prev_dt = cur_dt
-
-    history_messages = messages_with_gaps
 
     while history_messages and history_messages[0]["role"] == "assistant":
         history_messages.pop(0)
     if not history_messages:
         debug["skipped_no_context"] = skipped_no_context
         debug["gap_breaks"] = gap_breaks
-        return profile_header, [], debug
+        return _join_context_headers(profile_header, summary_header), [], debug
 
     debug["history_turns"] = len(history_messages)
     debug["history_chars"] = sum(len(m.get("content", "")) for m in history_messages)
     debug["skipped_no_context"] = skipped_no_context
     debug["gap_breaks"] = gap_breaks
 
-    logger.info("[Context] session=%s type=%s rows=%d→%d tokens~%d max=%d",
-                session_id, "group" if is_group else "private",
-                len(turns), len(history_messages), total_tokens, max_rows)
+    logger.info(
+        "[Context] session=%s type=%s eligible=%d raw=%d tokens~%d",
+        session_id,
+        chat_type,
+        len(eligible),
+        len(history_messages),
+        raw_debug.get("raw_window_tokens", 0),
+    )
 
     history_header = _build_conversation_context_header(is_group=is_group)
-
-    header = "\n".join(x for x in [profile_header, history_header] if x)
+    header = _join_context_headers(profile_header, summary_header, history_header)
     return header, history_messages, debug
 
 
@@ -614,6 +715,7 @@ def build_chat_context(
             max_per_msg=max_per_msg,
             max_total=max_total,
             is_group=False,
+            current_user_input=current_user_input,
         )
         debug["context_source"] = "conversation_turn"
         return header, messages, debug
@@ -642,12 +744,50 @@ def build_chat_context(
             recent_messages=messages,
         )
     debug.update(profile_debug)
+    summary_header = ""
+    try:
+        from app.session_memory.renderer import render_rolling_summary_context
+        from app.session_memory.rolling_summary import get_active_summary
+        from core.database import User
+
+        user = db.query(User).filter(User.id == user_id).first() if user_id else None
+        active_summary = get_active_summary(
+            db,
+            session_id,
+            after_clear_at=user.history_clear_at if user else None,
+        )
+        summary_header = render_rolling_summary_context(active_summary)
+        debug.update({
+            "rolling_summary_enabled": True,
+            "rolling_summary_injected": bool(summary_header),
+            "rolling_summary_id": int(getattr(active_summary, "id", 0) or 0) if summary_header else 0,
+            "rolling_summary_covered_until_turn_id": (
+                int(getattr(active_summary, "covered_until_turn_id", 0) or 0)
+                if summary_header else 0
+            ),
+            "rolling_summary_source_turn_count": (
+                int(getattr(active_summary, "source_turn_count", 0) or 0)
+                if summary_header else 0
+            ),
+            "rolling_summary_pending_turn_ids": [],
+            "rolling_summary_raw_start_turn_id": 0,
+            "rolling_summary_recent_raw_turn_ids": [],
+            "rolling_summary_skipped_reason": "",
+            "rolling_summary_error": "",
+        })
+    except Exception as exc:
+        logger.warning("[Context] group rolling summary render failed: %s", exc)
+        debug.update({
+            "rolling_summary_enabled": True,
+            "rolling_summary_injected": False,
+            "rolling_summary_error": str(exc),
+        })
     header = "\n".join(
-        x for x in [profile_header, _build_conversation_context_header(is_group=True)]
+        x for x in [profile_header, summary_header, _build_conversation_context_header(is_group=True)]
         if x
     )
     if not messages:
-        return profile_header, [], debug
+        return _join_context_headers(profile_header, summary_header), [], debug
     return header, messages, debug
 
 

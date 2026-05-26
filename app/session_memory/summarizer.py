@@ -1,0 +1,105 @@
+"""Rolling summary 生成器。
+
+第一版提供确定性摘要，避免在同步 prompt 构建链路里依赖外部 LLM。
+后续可以在同一接口后面接入异步 LLM 预计算。
+"""
+
+from __future__ import annotations
+
+from typing import Any, Sequence
+
+from core.database import ConversationTurn, RollingSessionSummary
+from app.session_memory.windowing import estimate_tokens, safe_meta
+
+
+def _format_turn_line(turn: ConversationTurn, *, max_chars: int = 220) -> str:
+    from core.context_builder import sanitize_prompt_text
+
+    meta = safe_meta(turn.meta_json)
+    sender = str(meta.get("sender_name") or meta.get("sender_id") or "").strip()
+    ts = turn.created_at.strftime("%Y-%m-%d %H:%M:%S") if turn.created_at else ""
+    content = sanitize_prompt_text(turn.content or "", max_chars=max_chars).strip()
+    prefix = f"[turn_id={turn.id}][{ts}][{turn.role}]"
+    if sender:
+        prefix += f"[{sender}]"
+    return f"{prefix} {content}".strip()
+
+
+def build_rolling_summary_payload(
+    *,
+    previous_summary: RollingSessionSummary | None,
+    pending_turns: Sequence[ConversationTurn],
+) -> dict[str, Any]:
+    previous_text = str(getattr(previous_summary, "summary_text", "") or "").strip()
+    lines = [_format_turn_line(turn) for turn in pending_turns]
+    user_lines = [_format_turn_line(turn, max_chars=160) for turn in pending_turns if turn.role == "user"]
+    assistant_lines = [
+        _format_turn_line(turn, max_chars=160)
+        for turn in pending_turns
+        if turn.role == "assistant"
+    ]
+    source_text = "\n".join(lines)
+    summary_parts: list[str] = []
+    if previous_text:
+        summary_parts.append("此前摘要：\n" + previous_text)
+    if source_text:
+        summary_parts.append("本次滚动新增上下文：\n" + source_text)
+    summary = "\n\n".join(summary_parts).strip()
+
+    open_threads = []
+    if user_lines:
+        open_threads.append(user_lines[-1])
+    decisions = assistant_lines[-2:]
+    keywords = _extract_keywords(source_text)
+
+    return {
+        "summary": summary,
+        "open_threads": open_threads,
+        "decisions": decisions,
+        "important_user_requests": user_lines[-4:],
+        "artifacts": [],
+        "warnings": [],
+        "keywords": keywords,
+        "quality": {
+            "score": 0.72 if pending_turns else 0.0,
+            "issues": [],
+            "source_token_estimate": sum(estimate_tokens(turn.content or "") for turn in pending_turns),
+        },
+    }
+
+
+def render_summary_text(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    summary = str(payload.get("summary") or "").strip()
+    if summary:
+        parts.append(summary)
+    for title, key in [
+        ("未解决/延续事项", "open_threads"),
+        ("已确认结论", "decisions"),
+        ("重要用户请求", "important_user_requests"),
+        ("关键词", "keywords"),
+    ]:
+        values = payload.get(key)
+        if not isinstance(values, list) or not values:
+            continue
+        lines = [str(item).strip() for item in values if str(item).strip()]
+        if lines:
+            parts.append(f"{title}:\n" + "\n".join(f"- {line}" for line in lines))
+    return "\n\n".join(parts).strip()
+
+
+def _extract_keywords(text: str) -> list[str]:
+    import re
+
+    candidates = re.findall(r"[A-Za-z][A-Za-z0-9_+-]{2,}|[\u4e00-\u9fff]{2,8}", text)
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in candidates:
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+        if len(result) >= 8:
+            break
+    return result

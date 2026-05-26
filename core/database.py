@@ -109,6 +109,43 @@ class ConversationTurn(Base):
     meta_json = Column(Text, default="{}")
 
 
+class RollingSessionSummary(Base):
+    """当前 session 的滚动上下文摘要。
+
+    只覆盖已被 recent raw ConversationTurn window 挤出的旧上下文，不承载
+    daily digest、persona 或 group memory 语义。
+    """
+
+    __tablename__ = "rolling_session_summaries"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id = Column(String, index=True, nullable=False)
+    user_id = Column(String, index=True, default="")
+    chat_type = Column(String, index=True, default="private")
+
+    status = Column(String, index=True, default="active")
+    summary_text = Column(Text, default="")
+    summary_json = Column(Text, default="{}")
+
+    covered_from_turn_id = Column(Integer, default=0)
+    covered_until_turn_id = Column(Integer, index=True, default=0)
+    source_turn_ids_json = Column(Text, default="[]")
+    source_turn_count = Column(Integer, default=0)
+    source_token_estimate = Column(Integer, default=0)
+    source_char_count = Column(Integer, default=0)
+
+    raw_window_start_turn_id = Column(Integer, default=0)
+    quality_score = Column(Float, default=0.0)
+    issues_json = Column(Text, default="[]")
+
+    model = Column(String, default="")
+    prompt_sha256 = Column(String, default="")
+    meta_json = Column(Text, default="{}")
+
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class MemoryDigest(Base):
     __tablename__ = "memory_digests"
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)

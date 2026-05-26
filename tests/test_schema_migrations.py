@@ -39,6 +39,10 @@ def test_schema_migrations_records_applied_versions():
     assert "schema_migrations" in inspector.get_table_names()
     assert "chat_type" in [col["name"] for col in inspector.get_columns("agent_runs")]
     assert "response_json" in [col["name"] for col in inspector.get_columns("llm_api_request_logs")]
+    assert "rolling_session_summaries" in inspector.get_table_names()
+    rss_columns = [col["name"] for col in inspector.get_columns("rolling_session_summaries")]
+    assert "covered_until_turn_id" in rss_columns
+    assert "raw_window_start_turn_id" in rss_columns
     group_memory_columns = [col["name"] for col in inspector.get_columns("group_memories")]
     assert "inject_policy" in group_memory_columns
     assert "last_injected_at" in group_memory_columns

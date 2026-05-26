@@ -68,3 +68,18 @@ def test_news_search_is_not_exposed_as_tool_schema():
     assert names == ["ai_daily"]
     with pytest.raises(ValueError):
         build_tool_schema_config(None, "news_search")
+
+
+def test_memory_query_description_declares_unsummarized_window_boundary():
+    from core.tool_registry import get_tool_def
+    from core.tool_schema_preview import build_tool_schema
+
+    tool_def = get_tool_def("memory_query")
+    assert tool_def is not None
+    assert "未摘要" in tool_def.description
+    assert "sql_analysis" in tool_def.description
+
+    schema = build_tool_schema("memory_query")
+    description = schema["function"]["description"]
+    assert "未摘要" in description
+    assert "sql_analysis" in description

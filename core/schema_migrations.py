@@ -425,6 +425,39 @@ def _reply_eval_trace_columns(conn: Any, engine: Any, db_path: str | None) -> No
         ])
 
 
+def _rolling_session_summaries(conn: Any, engine: Any, db_path: str | None) -> None:
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS rolling_session_summaries ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "session_id TEXT NOT NULL, "
+        "user_id TEXT DEFAULT '', "
+        "chat_type TEXT DEFAULT 'private', "
+        "status TEXT DEFAULT 'active', "
+        "summary_text TEXT DEFAULT '', "
+        "summary_json TEXT DEFAULT '{}', "
+        "covered_from_turn_id INTEGER DEFAULT 0, "
+        "covered_until_turn_id INTEGER DEFAULT 0, "
+        "source_turn_ids_json TEXT DEFAULT '[]', "
+        "source_turn_count INTEGER DEFAULT 0, "
+        "source_token_estimate INTEGER DEFAULT 0, "
+        "source_char_count INTEGER DEFAULT 0, "
+        "raw_window_start_turn_id INTEGER DEFAULT 0, "
+        "quality_score REAL DEFAULT 0.0, "
+        "issues_json TEXT DEFAULT '[]', "
+        "model TEXT DEFAULT '', "
+        "prompt_sha256 TEXT DEFAULT '', "
+        "meta_json TEXT DEFAULT '{}', "
+        "created_at DATETIME, "
+        "updated_at DATETIME"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_rss_session_status ON rolling_session_summaries(session_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_rss_session_covered ON rolling_session_summaries(session_id, covered_until_turn_id)",
+        "CREATE INDEX IF NOT EXISTS idx_rss_user_session ON rolling_session_summaries(user_id, session_id)",
+    ])
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_chat_log_metadata_columns", "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -439,6 +472,7 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_llm_request_log_columns", "llm api request log columns", _llm_request_log_columns),
     ("20260523_reply_contract_check_logs", "reply contract check log columns", _reply_contract_check_logs),
     ("20260523_reply_eval_trace_columns", "reply eval trace columns", _reply_eval_trace_columns),
+    ("20260525_rolling_session_summaries", "rolling session summaries", _rolling_session_summaries),
 ]
 
 
