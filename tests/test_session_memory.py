@@ -621,7 +621,7 @@ def test_session_summary_worker_quality_gate_keeps_fallback(db_session):
     assert fallback.status == "active"
 
 
-def test_get_best_session_summary_prefers_llm_over_newer_fallback(db_session):
+def test_get_best_session_summary_prefers_fallback_when_it_covers_more_turns(db_session):
     from app.session_memory.rolling_summary import get_best_session_summary
 
     llm = RollingSessionSummary(
@@ -639,10 +639,41 @@ def test_get_best_session_summary_prefers_llm_over_newer_fallback(db_session):
         chat_type="private",
         status="active",
         summary_kind="deterministic_fallback",
-        summary_text="较新的 fallback",
-        covered_until_turn_id=12,
+        summary_text="覆盖更远的 fallback",
+        covered_until_turn_id=20,
     )
     db_session.add_all([llm, fallback])
+    db_session.commit()
+
+    best = get_best_session_summary(db_session, "s1")
+
+    assert best is not None
+    assert best.id == fallback.id
+    assert best.summary_kind == "deterministic_fallback"
+
+
+def test_get_best_session_summary_prefers_llm_when_coverage_is_current(db_session):
+    from app.session_memory.rolling_summary import get_best_session_summary
+
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 摘录",
+        covered_until_turn_id=20,
+    )
+    llm = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="LLM 高质量摘要",
+        covered_until_turn_id=20,
+    )
+    db_session.add_all([fallback, llm])
     db_session.commit()
 
     best = get_best_session_summary(db_session, "s1")
@@ -708,3 +739,65 @@ def test_admin_enqueue_llm_summary_job_from_active_fallback(db_session):
     assert response["created"] is True
     assert response["job"]["status"] == "pending"
     assert response["job"]["fallback_summary_id"] == fallback.id
+
+
+def test_claim_summary_job_is_atomic_status_guard(db_session):
+    from app.session_memory.jobs import claim_summary_job
+
+    job = SessionSummaryJob(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        covered_from_turn_id=1,
+        covered_until_turn_id=3,
+        source_turn_ids_json="[1,2,3]",
+        status="pending",
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    first = claim_summary_job(db_session, job.id, owner="worker-a")
+    second = claim_summary_job(db_session, job.id, owner="worker-b")
+
+    assert first is not None
+    assert first.status == "running"
+    assert first.locked_by == "worker-a"
+    assert second is None
+
+
+def test_process_running_job_owned_by_other_worker_is_skipped(db_session):
+    from app.session_memory.llm_summarizer import process_session_summary_job
+
+    job = SessionSummaryJob(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        covered_from_turn_id=1,
+        covered_until_turn_id=3,
+        source_turn_ids_json="[1,2,3]",
+        status="running",
+        locked_by="worker-a",
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    processed = process_session_summary_job(
+        db_session,
+        job,
+        summarizer=lambda _messages: '{"summary":"不应处理","quality":{"score":0.9,"issues":[]}}',
+        owner="worker-b",
+    )
+
+    db_session.refresh(job)
+    assert processed is False
+    assert job.status == "running"
+    assert job.locked_by == "worker-a"
+
+
+def test_docker_compose_declares_independent_session_summary_worker():
+    from pathlib import Path
+
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "session-summary-worker:" in compose
+    assert "python -m workers.session_summary_worker --loop" in compose

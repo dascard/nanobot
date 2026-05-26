@@ -20,6 +20,26 @@ services:
       - ./sentinel:/app/sentinel
     restart: unless-stopped
 
+  session-summary-worker:
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
+        GIT_FULL_COMMIT: ${GIT_FULL_COMMIT:-}
+        GIT_COMMIT_DATE: ${GIT_COMMIT_DATE:-}
+        GIT_DIRTY: ${GIT_DIRTY:-null}
+    container_name: nanobot-session-summary-worker
+    command: python -m workers.session_summary_worker --loop --interval 10
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./sentinel:/app/sentinel
+    depends_on:
+      - nanobot-server
+    restart: unless-stopped
+
 # ── 如需与 Dify 同网段通信，取消下方注释 ──
 # networks:
 #   default:

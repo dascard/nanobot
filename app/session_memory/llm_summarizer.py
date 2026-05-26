@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.session_memory import config
 from app.session_memory.jobs import (
+    claim_summary_job,
     fetch_pending_summary_jobs,
     mark_summary_job_done,
     mark_summary_job_failed,
@@ -169,7 +170,11 @@ async def default_llm_summary_summarizer_async(messages: list[dict[str, str]]) -
 
 
 def default_llm_summary_summarizer(messages: list[dict[str, str]]) -> str:
-    return asyncio.run(default_llm_summary_summarizer_async(messages))
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(default_llm_summary_summarizer_async(messages))
+    raise RuntimeError("default_llm_summary_summarizer must run in a sync worker process")
 
 
 def _call_summarizer(
@@ -339,7 +344,17 @@ def process_session_summary_job(
     owner: str = "session-summary-worker",
 ) -> bool:
     summarizer = summarizer or default_llm_summary_summarizer
-    mark_summary_job_running(db, job, owner=owner)
+    if job.status == "pending":
+        claimed = claim_summary_job(db, int(job.id or 0), owner=owner)
+        if claimed is None:
+            return False
+        job = claimed
+    elif job.status != "running":
+        return False
+    elif job.locked_by and job.locked_by != owner:
+        return False
+    else:
+        mark_summary_job_running(db, job, owner=owner)
     try:
         source_turns = _load_source_turns(db, job)
         if not source_turns:
@@ -386,10 +401,13 @@ def run_session_summary_worker_once(
     jobs = fetch_pending_summary_jobs(db, limit=limit)
     stats = {"processed": 0, "done": 0, "failed": 0}
     for job in jobs:
+        claimed = claim_summary_job(db, int(job.id or 0), owner=owner)
+        if claimed is None:
+            continue
         stats["processed"] += 1
         ok = process_session_summary_job(
             db,
-            job,
+            claimed,
             summarizer=summarizer,
             owner=owner,
         )

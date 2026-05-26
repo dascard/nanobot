@@ -109,6 +109,16 @@ WebUI 管理接口使用 `NANOBOT_ADMIN_TOKEN` 登录。
 docker compose up -d --build
 ```
 
+`docker-compose.yml` 会同时启动独立的 `session-summary-worker`：
+
+```bash
+python -m workers.session_summary_worker --loop --interval 10
+```
+
+它负责消费 `session_summary_jobs`，异步生成高质量 LLM session summary。
+不要把这个 worker 塞进 FastAPI Web 进程；单机部署用 compose 服务，非 Docker
+部署用 systemd/supervisor 以同一命令常驻运行。
+
 如果服务器部署需要先更新代码和子模块：
 
 ```bash

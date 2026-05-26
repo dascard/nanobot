@@ -159,6 +159,43 @@ def mark_summary_job_running(
     return job
 
 
+def claim_summary_job(
+    db: Session,
+    job_id: int,
+    *,
+    owner: str,
+    now: datetime | None = None,
+) -> SessionSummaryJob | None:
+    """原子抢占 pending job。
+
+    多 worker 并发时，只有第一个满足 `status='pending'` 的 UPDATE 会成功。
+    """
+    now = now or datetime.now()
+    affected = (
+        db.query(SessionSummaryJob)
+        .filter(
+            SessionSummaryJob.id == int(job_id),
+            SessionSummaryJob.status == "pending",
+            or_(
+                SessionSummaryJob.next_retry_at.is_(None),
+                SessionSummaryJob.next_retry_at <= now,
+            ),
+        )
+        .update({
+            "status": "running",
+            "locked_by": owner or "session-summary-worker",
+            "locked_at": now,
+            "error": "",
+            "updated_at": now,
+        }, synchronize_session=False)
+    )
+    db.flush()
+    if not affected:
+        return None
+    db.expire_all()
+    return db.get(SessionSummaryJob, int(job_id))
+
+
 def mark_summary_job_done(
     db: Session,
     job: SessionSummaryJob,

@@ -89,12 +89,31 @@ def get_best_session_summary(
     if not valid:
         return None
 
-    for row in valid:
-        if (row.summary_kind or "") in {"llm_episode", "llm_summary"}:
-            return row
-    for row in valid:
-        if (row.summary_kind or "") == "deterministic_fallback":
-            return row
+    llm_rows = [
+        row for row in valid
+        if (row.summary_kind or "") in {"llm_episode", "llm_summary"}
+    ]
+    fallback_rows = [
+        row for row in valid
+        if (row.summary_kind or "") == "deterministic_fallback"
+    ]
+    best_llm = max(
+        llm_rows,
+        key=lambda row: (int(row.covered_until_turn_id or 0), int(row.id or 0)),
+        default=None,
+    )
+    best_fallback = max(
+        fallback_rows,
+        key=lambda row: (int(row.covered_until_turn_id or 0), int(row.id or 0)),
+        default=None,
+    )
+    if best_llm and (
+        best_fallback is None
+        or int(best_llm.covered_until_turn_id or 0) >= int(best_fallback.covered_until_turn_id or 0)
+    ):
+        return best_llm
+    if best_fallback:
+        return best_fallback
     return valid[0]
 
 
