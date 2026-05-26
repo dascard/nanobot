@@ -147,13 +147,19 @@ def test_source_prior_does_not_bypass_relevance_gate(db_session):
     assert skipped[irrelevant.id] == "low_reranker"
 
 
-def test_group_memory_preview_does_not_record_injection(db_session):
+def test_group_memory_preview_does_not_record_injection(db_session, monkeypatch):
     from app.group_memory.injection_service import GroupMemoryInjectionService
     from core.database import ChatStreamConfig
+    import core.semantic.provider_factory as provider_factory
 
     db_session.add(ChatStreamConfig(chat_stream_id="qq:1097666427:group", group_profile_mode="preview"))
     memory = _memory(db_session, content_hash="gm-preview-rag")
     db_session.commit()
+    monkeypatch.setattr(
+        provider_factory,
+        "get_reranker_provider",
+        lambda: FixedGroupReranker({f"group_memory:{memory.id}:memory": 0.92}),
+    )
 
     result = GroupMemoryInjectionService(db_session).build_context(
         group_id="1097666427",
@@ -167,6 +173,33 @@ def test_group_memory_preview_does_not_record_injection(db_session):
     assert result.selected_ids == [memory.id]
     assert memory.injected_count == 0
     assert memory.last_injected_at is None
+
+
+def test_group_memory_injection_blocks_when_reranker_required_unavailable(db_session, monkeypatch):
+    from app.group_memory.injection_service import GroupMemoryInjectionService
+    from core.database import ChatStreamConfig
+    import core.semantic.provider_factory as provider_factory
+
+    monkeypatch.setenv("RAG_ALLOW_DEGRADED", "0")
+    monkeypatch.setenv("RAG_RERANKER_ENABLED", "1")
+    monkeypatch.setenv("RAG_RERANKER_URL", "")
+    monkeypatch.delenv("RAG_LOCAL_RERANKER_MODEL", raising=False)
+    provider_factory.get_reranker_provider.cache_clear()
+    db_session.add(ChatStreamConfig(chat_stream_id="qq:1097666427:group", group_profile_mode="on"))
+    _memory(db_session, content_hash="gm-strict-reranker")
+    db_session.commit()
+
+    result = GroupMemoryInjectionService(db_session).build_context(
+        group_id="1097666427",
+        current_user_input="本地模型部署量化参数怎么调？",
+        recent_messages=[],
+    )
+
+    assert result.context == ""
+    assert result.selected_ids == []
+    assert result.debug["degraded_blocked"] is True
+    assert result.debug["blocked_reason"] == "reranker_unavailable"
+    assert result.debug["group_memory_skipped"] == [{"reason": "reranker_unavailable"}]
 
 
 def test_group_memory_injection_uses_factory_reranker_provider(db_session, monkeypatch):
@@ -204,9 +237,11 @@ def test_group_memory_rag_timeout_marks_fallback(db_session, monkeypatch):
     from app.group_memory.injection_service import GroupMemoryInjectionService
     from app.group_memory.retrieval_service import GroupMemorySelection
     from core.database import ChatStreamConfig
+    import core.semantic.provider_factory as provider_factory
 
     db_session.add(ChatStreamConfig(chat_stream_id="qq:1097666427:group", group_profile_mode="on"))
     db_session.commit()
+    monkeypatch.setattr(provider_factory, "get_reranker_provider", lambda: FixedGroupReranker({}))
 
     def slow_select(self, **_kwargs):
         time.sleep(0.01)

@@ -169,6 +169,42 @@ def test_rag_debug_run_persists_sanitized_payload(client, db_session, monkeypatc
     assert "[truncated]" in serialized
 
 
+def test_rag_debug_payload_sanitizer_redacts_sensitive_fields():
+    import json
+
+    from api.admin.rag_routes import _sanitize_debug_payload
+
+    payload = {
+        "headers": {
+            "Authorization": "Bearer SECRET_TOKEN",
+            "Cookie": "session=SECRET_COOKIE",
+        },
+        "filters": {
+            "user_id": "user-secret",
+            "group_id": "group-secret",
+            "url": "https://example.com/debug?token=SECRET_URL_TOKEN&ok=1",
+        },
+        "messages": [
+            {"no_context": True, "content": "私聊敏感内容"},
+            {"role": "internal", "text": "内部敏感内容"},
+        ],
+        "content": "公开内容" * 200,
+    }
+
+    sanitized = _sanitize_debug_payload(payload)
+    serialized = json.dumps(sanitized, ensure_ascii=False)
+
+    assert sanitized["headers"]["Authorization"] == "[redacted]"
+    assert sanitized["headers"]["Cookie"] == "[redacted]"
+    assert sanitized["filters"]["user_id"] == "[redacted:id]"
+    assert sanitized["filters"]["group_id"] == "[redacted:id]"
+    assert "SECRET_URL_TOKEN" not in serialized
+    assert sanitized["messages"][0]["content"] == "[redacted:no_context]"
+    assert sanitized["messages"][1]["text"] == "[redacted:no_context]"
+    assert "私聊敏感内容" not in serialized
+    assert "[truncated]" in sanitized["content"]
+
+
 def test_rag_debug_query_runs_sticker_search(client, db_session, monkeypatch):
     import json
 
@@ -285,6 +321,8 @@ def test_rag_debug_group_memory_uses_retrieval_service_not_stub(client, db_sessi
     assert response.status_code == 200
     payload = response.json()["response"]
     assert payload["score_breakdown"]["fallback_reason"] != "rag_debug_stub"
+    assert payload["score_breakdown"]["recall_mode"] == "sql_gate_reranker"
+    assert payload["score_breakdown"]["fts_embedding_trace_available"] is False
     assert payload["stages"]["merged_candidates"][0]["candidate_id"] == f"group_memory:{row.id}:memory"
     assert payload["stages"]["final_candidates"][0]["id"] == row.id
 

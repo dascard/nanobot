@@ -108,6 +108,7 @@ class GroupMemoryInjectionService:
         if runtime.enabled and runtime.reranker_enabled and reranker_provider is None and not runtime.allow_degraded:
             debug["group_memory_skipped"].append({"reason": "reranker_unavailable"})
             debug["degraded_blocked"] = True
+            debug["blocked_reason"] = "reranker_unavailable"
             return GroupMemoryInjectionResult(debug=debug)
         selection = GroupMemoryRetrievalService(
             self.db,

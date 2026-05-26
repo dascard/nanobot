@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from typing import Any
@@ -33,8 +34,66 @@ def _safe_json_loads(raw: str | None, fallback: Any) -> Any:
         return fallback
 
 
+_SENSITIVE_KEY_PARTS = {
+    "authorization",
+    "api_key",
+    "apikey",
+    "access_token",
+    "refresh_token",
+    "token",
+    "cookie",
+    "set_cookie",
+    "set-cookie",
+    "password",
+    "passwd",
+    "secret",
+}
+_IDENTITY_KEYS = {
+    "user_id",
+    "group_id",
+    "session_id",
+    "chat_stream_id",
+    "sender_id",
+    "receiver_id",
+    "qq",
+    "openid",
+}
+_CONTENT_KEYS = {"content", "text", "context", "prompt", "message", "messages", "query"}
+_URL_SECRET_RE = re.compile(
+    r"(?i)([?&](?:token|access_token|refresh_token|api_key|key|secret|signature|auth)=)([^&#]+)"
+)
+
+
+def _normalized_key(key: Any) -> str:
+    return str(key or "").strip().lower().replace("-", "_")
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    normalized = _normalized_key(key)
+    return any(part in normalized for part in _SENSITIVE_KEY_PARTS)
+
+
+def _is_identity_key(key: Any) -> bool:
+    return _normalized_key(key) in _IDENTITY_KEYS
+
+
+def _is_content_key(key: Any) -> bool:
+    return _normalized_key(key) in _CONTENT_KEYS
+
+
+def _is_no_context_payload(value: dict[str, Any]) -> bool:
+    visibility = str(value.get("visibility") or value.get("context_policy") or "").strip().lower()
+    role = str(value.get("role") or value.get("source") or "").strip().lower()
+    return bool(value.get("no_context")) or visibility in {"no_context", "internal"} or role == "internal"
+
+
+def _redact_url_secrets(value: str) -> str:
+    return _URL_SECRET_RE.sub(lambda match: f"{match.group(1)}[redacted]", value)
+
+
 def _sanitize_debug_payload(value: Any, *, max_text_chars: int = 500, max_list_items: int = 50) -> Any:
     if isinstance(value, str):
+        value = _redact_url_secrets(value)
         if len(value) <= max_text_chars:
             return value
         return value[:max_text_chars] + f"...[truncated] {len(value) - max_text_chars} chars"
@@ -47,10 +106,26 @@ def _sanitize_debug_payload(value: Any, *, max_text_chars: int = 500, max_list_i
             items.append({"truncated_items": len(value) - max_list_items})
         return items
     if isinstance(value, dict):
-        return {
-            str(key): _sanitize_debug_payload(item, max_text_chars=max_text_chars, max_list_items=max_list_items)
-            for key, item in value.items()
-        }
+        no_context = _is_no_context_payload(value)
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _is_sensitive_key(key):
+                sanitized[key_text] = "[redacted]"
+                continue
+            if _is_identity_key(key):
+                sanitized[key_text] = "[redacted:id]"
+                continue
+            if no_context and _is_content_key(key):
+                sanitized[key_text] = "[redacted:no_context]"
+                continue
+            child_max = min(max_text_chars, 240) if _is_content_key(key) else max_text_chars
+            sanitized[key_text] = _sanitize_debug_payload(
+                item,
+                max_text_chars=child_max,
+                max_list_items=max_list_items,
+            )
+        return sanitized
     return value
 
 
@@ -196,6 +271,7 @@ def _build_group_memory_debug_response(
             },
             "fts_hits": [],
             "embedding_hits": [],
+            "recall_note": "group_memory 当前使用 SQL gate + reranker，不走 semantic_index FTS/embedding 召回。",
             "merged_candidates": merged,
             "reranker_input_pairs": [
                 {
@@ -213,6 +289,8 @@ def _build_group_memory_debug_response(
         "score_breakdown": {
             "degraded": reranker_provider is None,
             "fallback_reason": "reranker_unavailable" if reranker_provider is None else "",
+            "recall_mode": "sql_gate_reranker",
+            "fts_embedding_trace_available": False,
             "source_weights": {"group_memory": 1.0},
             "latency_ms": latency_ms,
             "merged_candidates": len(merged),
