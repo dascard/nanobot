@@ -20,6 +20,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["NANOBOT_API_TOKEN"] = "" # 测试环境禁用 API Token
 os.environ["NEW_API_KEY"] = "test-key-for-ci"  # Prevent KT init crash
 os.environ["NANOBOT_TESTING"] = "1"  # 测试环境跳过生产启动副作用
+os.environ.setdefault("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
 
 from core.database import Base, get_db
 from core import database
@@ -38,6 +39,24 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_
 def _drop_test_virtual_tables():
     with test_engine.begin() as conn:
         conn.execute(text("DROP TABLE IF EXISTS semantic_index_fts"))
+
+
+@pytest.fixture(autouse=True)
+def isolate_semantic_provider_factory_cache():
+    """避免测试之间复用真实本地模型 provider，导致 CI 下载大模型。"""
+    try:
+        from core.semantic.provider_factory import get_reranker_provider
+
+        get_reranker_provider.cache_clear()
+    except Exception:
+        pass
+    yield
+    try:
+        from core.semantic.provider_factory import get_reranker_provider
+
+        get_reranker_provider.cache_clear()
+    except Exception:
+        pass
 
 # 暴力替换数据库引擎，确保连未做依赖注入的写库（如 evolution）也会打到这里
 database.engine = test_engine

@@ -440,7 +440,7 @@ function LocalComponentsTab({ components, localResult, onAction }) {
             </div>
             {localResult[key] && !localResult[key].loading && (
               <div className={`mt-2 p-2 rounded-lg text-xs ${localResult[key].ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>
-                {localResult[key].ok ? `✅ ${localResult[key].latency_ms}ms${localResult[key].dim ? ' | dim=' + localResult[key].dim : ''}` : `❌ ${localResult[key].error || ''}`}
+                {localResult[key].ok ? `✅ ${localResult[key].latency_ms}ms${localResult[key].dim ? ' | dim=' + localResult[key].dim : ''}${localResult[key].best_score !== undefined ? ' | score=' + localResult[key].best_score : ''}` : `❌ ${localResult[key].error || ''}`}
               </div>
             )}
           </Card>

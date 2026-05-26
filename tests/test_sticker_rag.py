@@ -226,6 +226,7 @@ def test_sticker_search_blocks_when_reranker_required_unavailable(db_session, mo
     monkeypatch.setenv("RAG_ALLOW_DEGRADED", "0")
     monkeypatch.setenv("RAG_RERANKER_ENABLED", "1")
     monkeypatch.setenv("RAG_RERANKER_URL", "")
+    monkeypatch.setenv("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
 
     get_reranker_provider.cache_clear()
     with pytest.raises(RagDegradedBlockedError) as exc_info:

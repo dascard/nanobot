@@ -1330,6 +1330,14 @@ class TestModelHealthCheck:
 
 
 class TestModelRouteV2:
+    def test_models_status_includes_local_rag_reranker_component(self, client, auth_header):
+        r = client.get("/api/v1/admin/models/status", headers=auth_header)
+
+        assert r.status_code == 200, r.text
+        local_components = r.json()["local_components"]
+        assert "rag_reranker" in local_components
+        assert local_components["rag_reranker"]["loader"] == "sentence-transformers CrossEncoder"
+
     def test_reply_route_params_update_and_read_back(self, client, auth_header, monkeypatch):
         from core.settings_service import settings
 
@@ -1404,6 +1412,35 @@ class TestModelRouteV2:
         assert user_content[0]["type"] == "text"
         assert user_content[1]["type"] == "image_url"
         assert user_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+    def test_local_rag_reranker_test_uses_local_provider(self, client, auth_header, monkeypatch):
+        from core.semantic.reranker import RerankResult
+
+        class FakeRerankerProvider:
+            model_name = "bge-reranker-v2-m3"
+
+            def rerank(self, query, candidates, *, top_k=None):
+                return [
+                    RerankResult(
+                        candidate_id=candidates[0].candidate_id,
+                        raw_score=0.9,
+                        score=0.9,
+                        model=self.model_name,
+                        score_mode="identity",
+                    )
+                ]
+
+        monkeypatch.setattr("core.semantic.provider_factory.get_reranker_provider", lambda: FakeRerankerProvider())
+
+        r = client.post("/api/v1/admin/models/local/rag_reranker/test", headers=auth_header)
+
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["ok"] is True
+        assert data["component"] == "rag_reranker"
+        assert data["model"] == "bge-reranker-v2-m3"
+        assert data["best_candidate_id"] == "test:1"
+        assert data["best_score"] == 0.9
 
     def test_available_override_does_not_reuse_route_api_key(self, client, auth_header, monkeypatch):
         captured = {}

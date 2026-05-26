@@ -2554,6 +2554,16 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     except Exception as e:
         nli_error = str(e)[:200]
         nli_load_state = "unavailable"
+    try:
+        from core.semantic.provider_factory import describe_reranker_provider_config
+        rag_reranker = describe_reranker_provider_config()
+    except Exception as e:
+        rag_reranker = {
+            "configured": False,
+            "load_state": "unavailable",
+            "model": "BAAI/bge-reranker-v2-m3",
+            "error": str(e)[:200],
+        }
 
     sentinel_configured = True
     sentinel_load_state = "not_loaded"
@@ -2589,6 +2599,18 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
                 "trigger": "首次矛盾检测 / 点击「测试 NLI」",
                 "note": "按需懒加载；失败时降级为 cosine 检测",
             },
+            "rag_reranker": {
+                "model": rag_reranker.get("model") or "BAAI/bge-reranker-v2-m3",
+                "loader": rag_reranker.get("loader") or "sentence-transformers CrossEncoder",
+                "configured": bool(rag_reranker.get("configured")),
+                "load_state": rag_reranker.get("load_state") or "not_loaded",
+                "error": "" if rag_reranker.get("configured") else "本地 reranker 模型目录不存在或未配置",
+                "role": "Memory / Sticker / Knowledge / GroupAnalysis RAG 候选重排",
+                "trigger": "首次 RAG 查询 / 点击「测试 reranker」",
+                "note": "本地模型组件，不走 new-api；默认 BAAI/bge-reranker-v2-m3，首次加载会自动下载缓存",
+                "path_exists": rag_reranker.get("path_exists"),
+                "source": rag_reranker.get("source"),
+            },
             "sentinel": {
                 "model": "prompt-injection-sentinel",
                 "loader": "transformers pipeline",
@@ -2600,7 +2622,7 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
             },
         },
         "unsupported": {
-            "rerank": {"implemented": False, "note": "当前仓库没有 rerank pipeline"},
+            "rerank": {"implemented": True, "note": "通过本地 rag_reranker 组件接入 RAG rerank pipeline"},
         },
     }
 
@@ -3326,7 +3348,7 @@ def _test_nli_contradiction(a: str, b: str) -> dict:
 
 @router.post("/models/local/{component}/test")
 async def test_local_component(component: str, _auth=Depends(verify_admin)):
-    """测试本地语义组件。component: persona_embed | nli"""
+    """测试本地语义组件。component: persona_embed | nli | rag_reranker"""
     import time
     t0 = time.time()
     if component == "persona_embed":
@@ -3362,6 +3384,57 @@ async def test_local_component(component: str, _auth=Depends(verify_admin)):
                 "load_state": "failed", "error": str(e)[:500],
                 "hint": "检查 HuggingFace 连接、磁盘缓存、transformers 安装",
             }
+    elif component == "rag_reranker":
+        try:
+            from core.semantic.provider_factory import get_reranker_provider
+            from core.semantic.reranker import SemanticCandidate
+
+            provider = get_reranker_provider()
+            if provider is None:
+                return {
+                    "ok": False,
+                    "component": component,
+                    "load_state": "unavailable",
+                    "error": "本地 reranker 模型未配置或模型目录不存在",
+                    "hint": "默认会自动下载 BAAI/bge-reranker-v2-m3；也可设置 RAG_LOCAL_RERANKER_MODEL 指向本地目录",
+                }
+            results = provider.rerank(
+                "端口冲突怎么解决",
+                [
+                    SemanticCandidate(
+                        candidate_id="test:1",
+                        source_type="debug",
+                        title="端口冲突",
+                        text="8000 端口被占用时，使用 lsof 或 netstat 找到占用进程。",
+                    ),
+                    SemanticCandidate(
+                        candidate_id="test:2",
+                        source_type="debug",
+                        title="无关内容",
+                        text="今天的天气很好。",
+                    ),
+                ],
+                top_k=2,
+            )
+            best = results[0] if results else None
+            return {
+                "ok": True,
+                "component": component,
+                "model": getattr(provider, "model_name", ""),
+                "load_state": "loaded",
+                "best_candidate_id": best.candidate_id if best else "",
+                "best_score": best.score if best else None,
+                "raw_score": best.raw_score if best else None,
+                "latency_ms": int((time.time() - t0) * 1000),
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "component": component,
+                "load_state": "failed",
+                "error": str(e)[:500],
+                "hint": "检查本地 reranker 模型目录和 sentence-transformers 安装",
+            }
     else:
         raise HTTPException(404, f"unknown component: {component}")
 
@@ -3393,6 +3466,11 @@ async def warmup_local_component(component: str, _auth=Depends(verify_admin)):
                 "fallback": "cosine" if not available else None,
                 "latency_ms": int((time.time() - t0) * 1000),
             }
+        except Exception as e:
+            return {"ok": False, "component": component, "error": str(e)[:500]}
+    elif component == "rag_reranker":
+        try:
+            return await test_local_component(component, _auth)
         except Exception as e:
             return {"ok": False, "component": component, "error": str(e)[:500]}
     else:

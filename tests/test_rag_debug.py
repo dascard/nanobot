@@ -206,6 +206,91 @@ def test_rag_debug_payload_sanitizer_redacts_sensitive_fields():
     assert "[truncated]" in sanitized["content"]
 
 
+def test_rag_debug_status_reports_empty_index_and_reranker_route(client, db_session, monkeypatch):
+    import json
+
+    from core.database import MemoryDigest
+    import core.semantic.provider_factory as provider_factory
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setenv("RAG_RERANKER_ENABLED", "1")
+    monkeypatch.delenv("RAG_LOCAL_RERANKER_MODEL", raising=False)
+    values = {
+        "rag.reranker.model_path": "BAAI/bge-reranker-v2-m3",
+        "rag.reranker.score_mode": "sigmoid",
+        "rag.reranker.max_text_chars": 1200,
+    }
+    monkeypatch.setattr(
+        "core.settings_service.settings.get",
+        lambda key, default=None: values.get(key, default),
+    )
+    provider_factory.get_reranker_provider.cache_clear()
+
+    digest = MemoryDigest(
+        user_id="u1",
+        session_id="s1",
+        digest_date="2026-05-26",
+        level=2,
+        content="RAG Debug 端口冲突",
+        meta_json=json.dumps({
+            "recall_cards": [
+                {"title": "端口", "text": "RAG Debug 端口冲突排查"},
+            ],
+        }, ensure_ascii=False),
+    )
+    db_session.add(digest)
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/admin/rag/debug/status",
+        headers=_auth_header(),
+        params={"source_type": "memory"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["index"]["indexed_items"] == 0
+    assert data["index"]["buildable_chunks"] == 1
+    assert data["index"]["needs_build"] is True
+    assert data["reranker"]["configured"] is True
+    assert data["reranker"]["source"] == "local_model"
+    assert data["reranker"]["model"] == "BAAI/bge-reranker-v2-m3"
+
+
+def test_rag_debug_build_index_from_existing_data(client, db_session, monkeypatch):
+    import json
+
+    from core.database import MemoryDigest, SemanticIndexItem
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    digest = MemoryDigest(
+        user_id="u1",
+        session_id="s1",
+        digest_date="2026-05-26",
+        level=2,
+        content="RAG Debug 端口冲突",
+        meta_json=json.dumps({
+            "recall_cards": [
+                {"title": "端口", "text": "RAG Debug 端口冲突排查"},
+            ],
+        }, ensure_ascii=False),
+    )
+    db_session.add(digest)
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/admin/rag/debug/build-index",
+        headers=_auth_header(),
+        json={"source_type": "memory"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["result"]["indexed_chunks"] == 1
+    assert data["index"]["indexed_items"] == 1
+    assert db_session.query(SemanticIndexItem).count() == 1
+
+
 def test_rag_debug_query_runs_sticker_search(client, db_session, monkeypatch):
     import json
 

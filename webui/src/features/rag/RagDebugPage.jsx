@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, Search } from 'lucide-react'
+import { Database, RefreshCw, Search } from 'lucide-react'
 
 import { api } from '../../api'
 import { Badge, Card, IconButton, JsonBlock, MiniStat, Spinner } from '../../components/ui'
@@ -75,6 +75,10 @@ export function RagDebugPage() {
   const [runs, setRuns] = useState([])
   const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState(null)
+  const [statusLoading, setStatusLoading] = useState(false)
+  const [buildLoading, setBuildLoading] = useState(false)
+  const [buildResult, setBuildResult] = useState(null)
 
   const loadRuns = () => {
     api.get('/rag/debug/runs', { params: { limit: 20 } })
@@ -82,7 +86,19 @@ export function RagDebugPage() {
       .catch(() => setRuns([]))
   }
 
+  const loadStatus = () => {
+    setStatusLoading(true)
+    api.get('/rag/debug/status', { params: { source_type: sourceType } })
+      .then(r => setStatus(r.data))
+      .catch(() => setStatus(null))
+      .finally(() => setStatusLoading(false))
+  }
+
   useEffect(() => { loadRuns() }, [])
+  useEffect(() => {
+    setBuildResult(null)
+    loadStatus()
+  }, [sourceType])
 
   const runDebug = () => {
     setLoading(true)
@@ -90,13 +106,27 @@ export function RagDebugPage() {
       .then(r => {
         setResult(r.data)
         loadRuns()
+        loadStatus()
       })
       .catch(e => alert(e.response?.data?.detail || e.message))
       .finally(() => setLoading(false))
   }
 
+  const buildIndex = () => {
+    setBuildLoading(true)
+    api.post('/rag/debug/build-index', { source_type: sourceType, limit_per_source: 500 })
+      .then(r => {
+        setBuildResult(r.data.result || {})
+        setStatus({ source_type: sourceType, index: r.data.index, reranker: status?.reranker || {} })
+      })
+      .catch(e => alert(e.response?.data?.detail || e.message))
+      .finally(() => setBuildLoading(false))
+  }
+
   const response = result?.response || {}
   const stages = response.stages || {}
+  const indexStatus = status?.index || {}
+  const rerankerStatus = status?.reranker || {}
 
   return (
     <div className="space-y-4">
@@ -131,6 +161,40 @@ export function RagDebugPage() {
             className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50">
             <Search className="h-4 w-4" aria-hidden="true" />
             {loading ? '运行中' : '运行'}
+          </button>
+        </div>
+      </Card>
+
+      <Card className="p-3">
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-center">
+          <div>
+            <div className="mb-1 flex items-center gap-2">
+              <h2 className="text-sm font-medium text-slate-200">Reranker</h2>
+              <Badge tone={rerankerStatus.configured ? 'emerald' : 'amber'}>
+                {rerankerStatus.configured ? 'configured' : 'missing'}
+              </Badge>
+            </div>
+            <div className="text-xs text-slate-500">
+              {rerankerStatus.source || 'none'} · {rerankerStatus.model || '未指定'}
+            </div>
+            {rerankerStatus.url && <div className="mt-1 truncate font-mono text-[11px] text-slate-600">{rerankerStatus.url}</div>}
+          </div>
+          <div>
+            <div className="mb-1 flex items-center gap-2">
+              <h2 className="text-sm font-medium text-slate-200">Index</h2>
+              <Badge tone={indexStatus.indexed_items > 0 ? 'emerald' : (indexStatus.buildable_chunks > 0 ? 'amber' : 'slate')}>
+                {statusLoading ? 'loading' : `${indexStatus.indexed_items || 0} items`}
+              </Badge>
+            </div>
+            <div className="text-xs text-slate-500">
+              可构建 {indexStatus.buildable_chunks || 0} chunks · 来源 {indexStatus.source_types?.join(', ') || sourceType}
+            </div>
+            {buildResult && <div className="mt-1 text-[11px] text-emerald-400">已写入 {buildResult.indexed_chunks || 0} chunks</div>}
+          </div>
+          <button onClick={buildIndex} disabled={buildLoading || statusLoading || !indexStatus.buildable_chunks}
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-slate-700 px-3 text-xs font-medium text-slate-100 hover:bg-slate-600 disabled:opacity-50">
+            <Database className="h-4 w-4" aria-hidden="true" />
+            {buildLoading ? '构建中' : (indexStatus.indexed_items > 0 ? '刷新索引' : '构建索引')}
           </button>
         </div>
       </Card>

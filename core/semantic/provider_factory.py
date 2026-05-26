@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from core.semantic.reranker import HttpRerankerProvider, LocalCrossEncoderRerankerProvider
@@ -64,6 +65,139 @@ def get_embedding_provider() -> Any | None:
     raise RuntimeError(f"Unsupported RAG_EMBEDDING_PROVIDER: {provider}")
 
 
+DEFAULT_LOCAL_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+
+
+def _setting_text(key: str, default: str) -> str:
+    from core.settings_service import settings
+
+    value = settings.get(key, default)
+    return str(value if value is not None else default).strip()
+
+
+def _setting_int(key: str, default: int) -> int:
+    raw = _setting_text(key, str(default))
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _path_like(value: str) -> bool:
+    text = str(value or "").strip()
+    return bool(
+        text.startswith((".", "/", "~"))
+        or "\\" in text
+        or (len(text) >= 3 and text[1] == ":" and text[2] in {"\\", "/"})
+    )
+
+
+def _local_model_available(model_name: str) -> bool:
+    if not model_name:
+        return False
+    if _path_like(model_name):
+        return Path(model_name).expanduser().exists()
+    return True
+
+
+def get_local_reranker_model_config() -> dict[str, Any]:
+    model_name = os.environ.get("RAG_LOCAL_RERANKER_MODEL", "").strip() or _setting_text(
+        "rag.reranker.model_path",
+        DEFAULT_LOCAL_RERANKER_MODEL,
+    )
+    score_mode = os.environ.get("RAG_RERANKER_SCORE_MODE", "").strip() or _setting_text(
+        "rag.reranker.score_mode",
+        "sigmoid",
+    ) or "sigmoid"
+    max_text_chars = int(
+        os.environ.get("RAG_RERANKER_MAX_TEXT_CHARS", "").strip()
+        or _setting_int("rag.reranker.max_text_chars", 1200)
+    )
+    path_exists = Path(model_name).expanduser().exists() if _path_like(model_name) else None
+    configured = bool(model_name) and _local_model_available(model_name)
+    return {
+        "model": model_name,
+        "model_path": model_name,
+        "configured": configured,
+        "path_like": _path_like(model_name),
+        "path_exists": path_exists,
+        "score_mode": score_mode,
+        "max_text_chars": max_text_chars,
+    }
+
+
+def _get_local_reranker_provider() -> LocalCrossEncoderRerankerProvider | None:
+    cfg = get_local_reranker_model_config()
+    if not cfg["configured"]:
+        return None
+    return LocalCrossEncoderRerankerProvider(
+        model_name=str(cfg["model"]),
+        score_mode=str(cfg["score_mode"]),
+        max_text_chars=int(cfg["max_text_chars"]),
+    )
+
+
+def describe_reranker_provider_config() -> dict[str, Any]:
+    """返回 reranker 配置状态，不发起网络请求。"""
+    if not _bool_env("RAG_RERANKER_ENABLED", True):
+        return {
+            "enabled": False,
+            "configured": False,
+            "source": "disabled",
+            "model": "",
+            "url": "",
+            "provider_id": "",
+            "provider_enabled": False,
+        }
+    url = os.environ.get("RAG_RERANKER_URL", "").strip()
+    if url:
+        return {
+            "enabled": True,
+            "configured": True,
+            "source": "env_http",
+            "model": os.environ.get("RAG_RERANKER_MODEL", "http-reranker").strip() or "http-reranker",
+            "url": url,
+            "provider_id": "",
+            "provider_enabled": True,
+            "score_mode": os.environ.get("RAG_RERANKER_SCORE_MODE", "sigmoid").strip() or "sigmoid",
+            "payload_format": "nanobot",
+        }
+    local = get_local_reranker_model_config()
+    if local["configured"]:
+        return {
+            "enabled": True,
+            "configured": True,
+            "source": "local_model",
+            "provider_id": "local",
+            "provider_enabled": True,
+            "model": local["model"],
+            "model_path": local["model_path"],
+            "path_exists": local["path_exists"],
+            "url": "",
+            "loader": "sentence-transformers CrossEncoder",
+            "load_state": "not_loaded",
+            "score_mode": local["score_mode"],
+            "max_text_chars": local["max_text_chars"],
+        }
+
+    local_model = os.environ.get("RAG_LOCAL_RERANKER_MODEL", "").strip()
+    return {
+        "enabled": True,
+        "configured": False,
+        "source": "missing_local_model",
+        "model": local_model or local["model"],
+        "model_path": local_model or local["model_path"],
+        "path_exists": local["path_exists"],
+        "url": "",
+        "provider_id": "local",
+        "provider_enabled": False,
+        "loader": "sentence-transformers CrossEncoder",
+        "load_state": "unavailable",
+        "score_mode": local["score_mode"],
+        "max_text_chars": local["max_text_chars"],
+    }
+
+
 @lru_cache(maxsize=1)
 def get_reranker_provider() -> Any | None:
     if not _bool_env("RAG_RERANKER_ENABLED", True):
@@ -80,13 +214,9 @@ def get_reranker_provider() -> Any | None:
             score_mode=score_mode,
             max_text_chars=max_text_chars,
         )
-    local_model = os.environ.get("RAG_LOCAL_RERANKER_MODEL", "").strip()
-    if local_model:
-        return LocalCrossEncoderRerankerProvider(
-            model_name=local_model,
-            score_mode=score_mode,
-            max_text_chars=max_text_chars,
-        )
+    local_provider = _get_local_reranker_provider()
+    if local_provider is not None:
+        return local_provider
     return None
 
 

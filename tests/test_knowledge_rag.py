@@ -270,6 +270,7 @@ def test_knowledge_query_tool_blocks_when_reranker_required_unavailable(db_sessi
     monkeypatch.setenv("RAG_ALLOW_DEGRADED", "0")
     monkeypatch.setenv("RAG_RERANKER_ENABLED", "1")
     monkeypatch.setenv("RAG_RERANKER_URL", "")
+    monkeypatch.setenv("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
     monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
 
     get_reranker_provider.cache_clear()

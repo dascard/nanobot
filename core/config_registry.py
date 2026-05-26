@@ -257,6 +257,21 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=256, value_type="int",
         category="model", min_value=10, max_value=2000,
     ),
+    "rag.reranker.model_path": SettingDef(
+        key="rag.reranker.model_path", env_name="RAG_LOCAL_RERANKER_MODEL",
+        default="BAAI/bge-reranker-v2-m3", value_type="str",
+        category="model", description="本地 RAG reranker 模型目录或 HuggingFace 模型名",
+    ),
+    "rag.reranker.score_mode": SettingDef(
+        key="rag.reranker.score_mode", env_name="RAG_RERANKER_SCORE_MODE",
+        default="sigmoid", value_type="str",
+        category="model", description="本地 RAG reranker 分数归一化: sigmoid/identity/minmax",
+    ),
+    "rag.reranker.max_text_chars": SettingDef(
+        key="rag.reranker.max_text_chars", env_name="RAG_RERANKER_MAX_TEXT_CHARS",
+        default=1200, value_type="int",
+        category="model", description="发送给本地 reranker 的单候选文本最大字符数", min_value=100, max_value=20000,
+    ),
     # ── Provider 供应商配置 ──
     "model.providers.newapi.base_url": SettingDef(
         key="model.providers.newapi.base_url", env_name="NEW_API_BASE_URL",

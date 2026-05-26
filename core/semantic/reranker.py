@@ -154,12 +154,14 @@ class HttpRerankerProvider(RerankerProvider):
         model_name: str = "http-reranker",
         score_mode: str = "sigmoid",
         max_text_chars: int = 1200,
+        payload_format: str = "nanobot",
     ):
         self.url = url
         self.timeout_ms = int(timeout_ms)
         self.model_name = model_name
         self.score_mode = score_mode
         self.max_text_chars = int(max_text_chars)
+        self.payload_format = payload_format or "nanobot"
 
     def rerank(
         self,
@@ -169,29 +171,44 @@ class HttpRerankerProvider(RerankerProvider):
         top_k: int | None = None,
     ) -> list[RerankResult]:
         limited = candidates[:top_k] if top_k else list(candidates)
-        payload = {
-            "query": query,
-            "candidates": [
-                {
-                    "id": candidate.candidate_id,
-                    "text": build_reranker_text(candidate)[: self.max_text_chars],
-                    "source_type": candidate.source_type,
-                }
-                for candidate in limited
-            ],
-            "top_k": top_k,
-        }
+        texts = [build_reranker_text(candidate)[: self.max_text_chars] for candidate in limited]
+        if self.payload_format == "openai_rerank":
+            payload = {
+                "model": self.model_name,
+                "query": query,
+                "documents": texts,
+                "top_n": top_k or len(texts),
+            }
+        else:
+            payload = {
+                "model": self.model_name,
+                "query": query,
+                "candidates": [
+                    {
+                        "id": candidate.candidate_id,
+                        "text": text,
+                        "source_type": candidate.source_type,
+                    }
+                    for candidate, text in zip(limited, texts)
+                ],
+                "top_k": top_k,
+            }
         response = httpx.post(self.url, json=payload, timeout=self.timeout_ms / 1000)
         response.raise_for_status()
         data = response.json()
         rows = data.get("results") if isinstance(data, dict) else data
         results: list[RerankResult] = []
         for row in rows or []:
-            raw = row.get("raw_score", row.get("score"))
+            raw = row.get("raw_score", row.get("relevance_score", row.get("score")))
             normalized = row.get("normalized_score")
+            candidate_id = str(row.get("candidate_id") or row.get("id") or "")
+            if not candidate_id and row.get("index") is not None:
+                index = int(row.get("index"))
+                if 0 <= index < len(limited):
+                    candidate_id = limited[index].candidate_id
             score = float(normalized) if normalized is not None else normalize_reranker_score(raw, mode=self.score_mode)
             results.append(RerankResult(
-                candidate_id=str(row.get("candidate_id") or row.get("id") or ""),
+                candidate_id=candidate_id,
                 raw_score=None if raw is None else float(raw),
                 score=score,
                 model=str(row.get("model") or data.get("model") or self.model_name),

@@ -27,6 +27,12 @@ class RagDebugQueryRequest(BaseModel):
     filters: dict[str, Any] = Field(default_factory=dict)
 
 
+class RagDebugBuildIndexRequest(BaseModel):
+    source_type: str = Field(default="all")
+    limit_per_source: int = Field(default=500, ge=1, le=5000)
+    index_version: str = Field(default="")
+
+
 def _safe_json_loads(raw: str | None, fallback: Any) -> Any:
     try:
         return json.loads(raw or "")
@@ -585,6 +591,57 @@ def run_rag_debug_query(
         "run_id": run.id,
         "trace_id": trace_id,
         "response": response_json,
+    }
+
+
+@router.get("/debug/status")
+def get_rag_debug_status(
+    source_type: str = Query(default="all"),
+    limit_per_source: int = Query(default=500, ge=1, le=5000),
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.semantic.backfill import preview_semantic_index_backfill
+    from core.semantic.provider_factory import describe_reranker_provider_config
+
+    ensure_semantic_schema(db.bind)
+    return {
+        "source_type": source_type,
+        "index": preview_semantic_index_backfill(
+            db,
+            source_type=source_type,
+            limit_per_source=limit_per_source,
+        ),
+        "reranker": describe_reranker_provider_config(),
+    }
+
+
+@router.post("/debug/build-index")
+def build_rag_debug_index(
+    body: RagDebugBuildIndexRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.semantic.backfill import (
+        build_semantic_index_from_existing_data,
+        preview_semantic_index_backfill,
+    )
+
+    ensure_semantic_schema(db.bind)
+    result = build_semantic_index_from_existing_data(
+        db,
+        source_type=body.source_type,
+        limit_per_source=body.limit_per_source,
+        index_version=body.index_version,
+    )
+    return {
+        "ok": True,
+        "result": result,
+        "index": preview_semantic_index_backfill(
+            db,
+            source_type=body.source_type,
+            limit_per_source=body.limit_per_source,
+        ),
     }
 
 

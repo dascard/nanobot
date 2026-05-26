@@ -183,7 +183,7 @@ def test_group_memory_injection_blocks_when_reranker_required_unavailable(db_ses
     monkeypatch.setenv("RAG_ALLOW_DEGRADED", "0")
     monkeypatch.setenv("RAG_RERANKER_ENABLED", "1")
     monkeypatch.setenv("RAG_RERANKER_URL", "")
-    monkeypatch.delenv("RAG_LOCAL_RERANKER_MODEL", raising=False)
+    monkeypatch.setenv("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
     provider_factory.get_reranker_provider.cache_clear()
     db_session.add(ChatStreamConfig(chat_stream_id="qq:1097666427:group", group_profile_mode="on"))
     _memory(db_session, content_hash="gm-strict-reranker")
