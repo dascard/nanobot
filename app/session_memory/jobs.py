@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Sequence
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.session_memory import config
@@ -117,5 +118,83 @@ def retry_session_summary_job(db: Session, job_id: int) -> SessionSummaryJob:
     job.locked_by = ""
     job.locked_at = None
     job.updated_at = datetime.now()
+    db.flush()
+    return job
+
+
+def fetch_pending_summary_jobs(
+    db: Session,
+    *,
+    limit: int | None = None,
+    now: datetime | None = None,
+) -> list[SessionSummaryJob]:
+    now = now or datetime.now()
+    return (
+        db.query(SessionSummaryJob)
+        .filter(
+            SessionSummaryJob.status == "pending",
+            or_(
+                SessionSummaryJob.next_retry_at.is_(None),
+                SessionSummaryJob.next_retry_at <= now,
+            ),
+        )
+        .order_by(SessionSummaryJob.id.asc())
+        .limit(max(1, int(limit or config.SESSION_SUMMARY_JOB_BATCH_SIZE)))
+        .all()
+    )
+
+
+def mark_summary_job_running(
+    db: Session,
+    job: SessionSummaryJob,
+    *,
+    owner: str,
+) -> SessionSummaryJob:
+    job.status = "running"
+    job.locked_by = owner or "session-summary-worker"
+    job.locked_at = datetime.now()
+    job.error = ""
+    job.updated_at = datetime.now()
+    db.flush()
+    return job
+
+
+def mark_summary_job_done(
+    db: Session,
+    job: SessionSummaryJob,
+    *,
+    result_summary_id: int,
+) -> SessionSummaryJob:
+    job.status = "done"
+    job.result_summary_id = int(result_summary_id or 0)
+    job.error = ""
+    job.next_retry_at = None
+    job.locked_by = ""
+    job.locked_at = None
+    job.updated_at = datetime.now()
+    db.flush()
+    return job
+
+
+def mark_summary_job_failed(
+    db: Session,
+    job: SessionSummaryJob,
+    *,
+    error: str,
+    retry_delay_sec: int | None = None,
+) -> SessionSummaryJob:
+    job.retry_count = int(job.retry_count or 0) + 1
+    job.error = str(error or "summary_job_failed")[:4000]
+    job.locked_by = ""
+    job.locked_at = None
+    job.updated_at = datetime.now()
+    max_retry = max(0, int(job.max_retry or config.SESSION_SUMMARY_MAX_RETRY))
+    if job.retry_count < max_retry:
+        job.status = "pending"
+        delay = int(retry_delay_sec if retry_delay_sec is not None else config.SESSION_SUMMARY_RETRY_DELAY_SEC)
+        job.next_retry_at = datetime.now() + timedelta(seconds=max(1, delay))
+    else:
+        job.status = "failed"
+        job.next_retry_at = None
     db.flush()
     return job

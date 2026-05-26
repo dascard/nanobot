@@ -453,3 +453,169 @@ def test_rollup_dry_run_does_not_enqueue_llm_summary_job(db_session):
     assert result.summary is None
     assert result.summary_job_id == 0
     assert db_session.query(SessionSummaryJob).count() == 0
+
+
+def test_session_summary_worker_promotes_llm_summary_and_archives_fallback(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    turns = [_turn(db_session, content=f"用户继续讨论会话摘要质量 {i}") for i in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 摘录",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+        source_turn_count=len(turns),
+        quality_score=0.72,
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, created = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    assert created is True
+
+    payload = {
+        "summary": "用户正在持续完善滚动会话摘要，重点是异步 LLM 摘要、审计和 fallback 边界。",
+        "open_threads": ["继续补齐 worker 与管理入口"],
+        "decisions": ["LLM 摘要异步生成，审计通过后优先注入"],
+        "important_user_requests": ["一次性做完并分批次提交"],
+        "resolved_items": [],
+        "artifacts": [],
+        "participants": [],
+        "keywords": ["rolling summary", "worker"],
+        "quality": {"score": 0.86, "issues": []},
+    }
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=lambda _messages: json.dumps(payload, ensure_ascii=False),
+        owner="test-worker",
+    )
+
+    db_session.refresh(job)
+    db_session.refresh(fallback)
+    assert result["processed"] == 1
+    assert result["done"] == 1
+    assert job.status == "done"
+    assert job.result_summary_id
+    assert fallback.status == "archived"
+
+    llm_summary = db_session.get(RollingSessionSummary, job.result_summary_id)
+    assert llm_summary is not None
+    assert llm_summary.status == "active"
+    assert llm_summary.summary_kind == "llm_episode"
+    assert llm_summary.supersedes_summary_id == fallback.id
+    assert llm_summary.llm_status == "success"
+    assert llm_summary.quality_score == 0.86
+    assert "异步 LLM 摘要" in llm_summary.summary_text
+
+
+def test_session_summary_worker_non_json_retries_without_replacing_fallback(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    turns = [_turn(db_session, content=f"待总结失败用例 {i}") for i in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+        max_retry=2,
+    )
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=lambda _messages: "不是 JSON",
+        owner="test-worker",
+    )
+
+    db_session.refresh(job)
+    db_session.refresh(fallback)
+    assert result["failed"] == 1
+    assert job.status == "pending"
+    assert job.retry_count == 1
+    assert job.next_retry_at is not None
+    assert "json_parse_failed" in job.error
+    assert job.result_summary_id is None
+    assert fallback.status == "active"
+    assert (
+        db_session.query(RollingSessionSummary)
+        .filter(RollingSessionSummary.summary_kind == "llm_episode")
+        .count()
+        == 0
+    )
+
+
+def test_session_summary_worker_quality_gate_keeps_fallback(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    turns = [_turn(db_session, content=f"低质量摘要用例 {i}") for i in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+        max_retry=1,
+    )
+    payload = {
+        "summary": "过短",
+        "quality": {"score": 0.4, "issues": []},
+    }
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=lambda _messages: json.dumps(payload, ensure_ascii=False),
+        owner="test-worker",
+    )
+
+    db_session.refresh(job)
+    db_session.refresh(fallback)
+    assert result["failed"] == 1
+    assert job.status == "failed"
+    assert "quality_score_below_threshold" in job.error
+    assert fallback.status == "active"
