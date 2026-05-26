@@ -619,3 +619,92 @@ def test_session_summary_worker_quality_gate_keeps_fallback(db_session):
     assert job.status == "failed"
     assert "quality_score_below_threshold" in job.error
     assert fallback.status == "active"
+
+
+def test_get_best_session_summary_prefers_llm_over_newer_fallback(db_session):
+    from app.session_memory.rolling_summary import get_best_session_summary
+
+    llm = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="LLM 高质量摘要",
+        covered_until_turn_id=12,
+    )
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="较新的 fallback",
+        covered_until_turn_id=12,
+    )
+    db_session.add_all([llm, fallback])
+    db_session.commit()
+
+    best = get_best_session_summary(db_session, "s1")
+
+    assert best is not None
+    assert best.id == llm.id
+    assert best.summary_kind == "llm_episode"
+
+
+def test_build_session_memory_injects_best_llm_summary(db_session):
+    from core.context_builder import build_session_memory
+
+    llm = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="LLM 摘要应该进入 prompt",
+        covered_until_turn_id=10,
+    )
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 不应该进入 prompt",
+        covered_until_turn_id=10,
+    )
+    db_session.add_all([llm, fallback])
+    db_session.commit()
+
+    header, _messages, debug = build_session_memory(db_session, "s1", user_id="u1")
+
+    assert "LLM 摘要应该进入 prompt" in header
+    assert "fallback 不应该进入 prompt" not in header
+    assert 'summary_kind="llm_episode"' in header
+    assert debug["rolling_summary_id"] == llm.id
+    assert debug["rolling_summary_kind"] == "llm_episode"
+
+
+def test_admin_enqueue_llm_summary_job_from_active_fallback(db_session):
+    from api.admin.session_memory_routes import enqueue_llm_summary
+
+    turns = [_turn(db_session, content=f"管理端 enqueue {i}") for i in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+
+    response = enqueue_llm_summary("s1", db_session)
+
+    assert response["created"] is True
+    assert response["job"]["status"] == "pending"
+    assert response["job"]["fallback_summary_id"] == fallback.id

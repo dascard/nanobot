@@ -156,7 +156,7 @@ def build_session_memory(
     """从 ConversationTurn 构建 rolling summary + recent raw window。"""
     from app.session_memory.renderer import render_rolling_summary_context
     from app.session_memory.rolling_summary import (
-        get_active_summary,
+        get_best_session_summary,
         maybe_rollup_session_summary,
     )
     from app.session_memory.windowing import (
@@ -208,7 +208,7 @@ def build_session_memory(
         profile_header, profile_debug = _build_profile_section(db, group_id)
         debug.update(profile_debug)
 
-    active_summary = get_active_summary(
+    active_summary = get_best_session_summary(
         db,
         session_id,
         after_clear_at=history_clear_at,
@@ -652,7 +652,7 @@ def build_chat_context(
     summary_header = ""
     try:
         from app.session_memory.renderer import render_rolling_summary_context
-        from app.session_memory.rolling_summary import get_active_summary, maybe_rollup_session_summary
+        from app.session_memory.rolling_summary import get_best_session_summary, maybe_rollup_session_summary
         from app.session_memory.windowing import (
             load_latest_raw_window,
             load_pending_for_summary_turns,
@@ -662,7 +662,7 @@ def build_chat_context(
 
         user = db.query(User).filter(User.id == user_id).first() if user_id else None
         history_clear_at = user.history_clear_at if user and user.history_clear_at else None
-        active_summary = get_active_summary(
+        active_summary = get_best_session_summary(
             db,
             session_id,
             after_clear_at=history_clear_at,

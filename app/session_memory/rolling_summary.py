@@ -54,6 +54,50 @@ def get_active_summary(
     return row
 
 
+def get_best_session_summary(
+    db: Session,
+    session_id: str,
+    *,
+    after_clear_at: datetime | None = None,
+) -> RollingSessionSummary | None:
+    """返回运行时应注入的最佳 active summary。
+
+    LLM 摘要质量更高，优先级高于 deterministic fallback；fallback 只作为
+    LLM 摘要缺失或失败时的同步兜底。
+    """
+    rows = (
+        db.query(RollingSessionSummary)
+        .filter(
+            RollingSessionSummary.session_id == session_id,
+            RollingSessionSummary.status == "active",
+        )
+        .order_by(RollingSessionSummary.id.desc())
+        .all()
+    )
+    if not rows:
+        return None
+
+    valid: list[RollingSessionSummary] = []
+    for row in rows:
+        if after_clear_at and row.updated_at and row.updated_at <= after_clear_at:
+            row.status = "archived"
+            row.updated_at = datetime.now()
+            continue
+        valid.append(row)
+    if len(valid) != len(rows):
+        db.flush()
+    if not valid:
+        return None
+
+    for row in valid:
+        if (row.summary_kind or "") in {"llm_episode", "llm_summary"}:
+            return row
+    for row in valid:
+        if (row.summary_kind or "") == "deterministic_fallback":
+            return row
+    return valid[0]
+
+
 def archive_active_summaries_for_session(db: Session, session_id: str) -> int:
     rows = (
         db.query(RollingSessionSummary)

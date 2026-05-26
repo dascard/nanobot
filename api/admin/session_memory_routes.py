@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from api.admin.common import verify_admin
 from app.session_memory.rolling_summary import (
     archive_active_summaries_for_session,
     get_active_summary,
+    get_best_session_summary,
     maybe_rollup_session_summary,
 )
 from app.session_memory.windowing import (
@@ -19,7 +20,8 @@ from app.session_memory.windowing import (
     load_pending_for_summary_turns,
     raw_window_limits,
 )
-from core.database import RollingSessionSummary, User, get_db
+from app.session_memory.jobs import enqueue_session_summary_job, retry_session_summary_job
+from core.database import ConversationTurn, RollingSessionSummary, SessionSummaryJob, User, get_db
 
 router = APIRouter()
 
@@ -30,6 +32,11 @@ class RollingSummaryRunRequest(BaseModel):
     force: bool = False
     dry_run: bool = False
     current_user_input: str = ""
+
+
+class RollingSummaryEnqueueRequest(BaseModel):
+    user_id: str = ""
+    chat_type: Literal["private", "group"] = "private"
 
 
 def _summary_to_dict(row: RollingSessionSummary | None) -> dict:
@@ -68,6 +75,59 @@ def _summary_to_dict(row: RollingSessionSummary | None) -> dict:
     }
 
 
+def _job_to_dict(row: SessionSummaryJob | None) -> dict:
+    if row is None:
+        return {}
+    return {
+        "id": row.id,
+        "session_id": row.session_id,
+        "user_id": row.user_id,
+        "chat_type": row.chat_type,
+        "covered_from_turn_id": row.covered_from_turn_id,
+        "covered_until_turn_id": row.covered_until_turn_id,
+        "source_turn_ids_json": row.source_turn_ids_json,
+        "previous_summary_id": row.previous_summary_id,
+        "fallback_summary_id": row.fallback_summary_id,
+        "result_summary_id": row.result_summary_id,
+        "status": row.status,
+        "retry_count": row.retry_count,
+        "max_retry": row.max_retry,
+        "next_retry_at": row.next_retry_at.isoformat() if row.next_retry_at else "",
+        "locked_by": row.locked_by,
+        "locked_at": row.locked_at.isoformat() if row.locked_at else "",
+        "error": row.error,
+        "stable_hash": row.stable_hash,
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+        "updated_at": row.updated_at.isoformat() if row.updated_at else "",
+    }
+
+
+def _load_turns_by_ids(db: Session, turn_ids: list[int]) -> list[ConversationTurn]:
+    if not turn_ids:
+        return []
+    rows = db.query(ConversationTurn).filter(ConversationTurn.id.in_(turn_ids)).all()
+    by_id = {int(row.id): row for row in rows}
+    return [by_id[turn_id] for turn_id in turn_ids if turn_id in by_id]
+
+
+def _turn_ids_from_summary(row: RollingSessionSummary) -> list[int]:
+    import json
+
+    try:
+        raw = json.loads(row.source_turn_ids_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    result: list[int] = []
+    for item in raw:
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
 def _build_rollup_inputs(
     db: Session,
     *,
@@ -77,7 +137,7 @@ def _build_rollup_inputs(
 ):
     user = db.query(User).filter(User.id == user_id).first() if user_id else None
     history_clear_at = user.history_clear_at if user else None
-    active_summary = get_active_summary(db, session_id, after_clear_at=history_clear_at)
+    active_summary = get_best_session_summary(db, session_id, after_clear_at=history_clear_at)
     last_covered_id = int(active_summary.covered_until_turn_id or 0) if active_summary else 0
     max_turns, max_tokens = raw_window_limits(chat_type)
     raw_window, raw_debug = load_latest_raw_window(
@@ -113,7 +173,7 @@ def get_rolling_summary(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    active = get_active_summary(db, session_id)
+    active = get_best_session_summary(db, session_id)
     rows = (
         db.query(RollingSessionSummary)
         .filter(RollingSessionSummary.session_id == session_id)
@@ -121,10 +181,18 @@ def get_rolling_summary(
         .limit(20)
         .all()
     )
+    jobs = (
+        db.query(SessionSummaryJob)
+        .filter(SessionSummaryJob.session_id == session_id)
+        .order_by(SessionSummaryJob.id.desc())
+        .limit(20)
+        .all()
+    )
     return {
         "session_id": session_id,
         "active_summary": _summary_to_dict(active),
         "items": [_summary_to_dict(row) for row in rows],
+        "jobs": [_job_to_dict(row) for row in jobs],
     }
 
 
@@ -184,3 +252,70 @@ def archive_rolling_summary(
     archived = archive_active_summaries_for_session(db, session_id)
     db.commit()
     return {"session_id": session_id, "archived": archived}
+
+
+@router.post("/session-memory/{session_id}/rolling-summary/enqueue-llm")
+def enqueue_llm_summary(
+    session_id: str,
+    db: Session = Depends(get_db),
+    body: RollingSummaryEnqueueRequest | None = None,
+    _auth=Depends(verify_admin),
+):
+    body = body or RollingSummaryEnqueueRequest()
+    fallback = (
+        db.query(RollingSessionSummary)
+        .filter(
+            RollingSessionSummary.session_id == session_id,
+            RollingSessionSummary.status == "active",
+            RollingSessionSummary.summary_kind == "deterministic_fallback",
+        )
+        .order_by(RollingSessionSummary.id.desc())
+        .first()
+    )
+    if fallback is None:
+        raise HTTPException(status_code=404, detail="active deterministic fallback summary not found")
+    turn_ids = _turn_ids_from_summary(fallback)
+    turns = _load_turns_by_ids(db, turn_ids)
+    if not turns:
+        raise HTTPException(status_code=409, detail="fallback summary source turns are missing")
+
+    previous = (
+        db.query(RollingSessionSummary)
+        .filter(
+            RollingSessionSummary.session_id == session_id,
+            RollingSessionSummary.status == "active",
+            RollingSessionSummary.summary_kind.in_(("llm_episode", "llm_summary")),
+            RollingSessionSummary.id != fallback.id,
+        )
+        .order_by(RollingSessionSummary.id.desc())
+        .first()
+    )
+    job, created = enqueue_session_summary_job(
+        db,
+        session_id=session_id,
+        user_id=body.user_id or fallback.user_id or "",
+        chat_type=body.chat_type or fallback.chat_type or "private",
+        pending_turns=turns,
+        previous_summary=previous,
+        fallback_summary=fallback,
+    )
+    db.commit()
+    return {
+        "session_id": session_id,
+        "created": created,
+        "job": _job_to_dict(job),
+    }
+
+
+@router.post("/session-memory/jobs/{job_id}/retry")
+def retry_llm_summary_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    try:
+        job = retry_session_summary_job(db, job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    db.commit()
+    return {"job": _job_to_dict(job)}
