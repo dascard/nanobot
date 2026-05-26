@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from core.group_runtime.ids import normalize_group_session_id
+from core.semantic.reranker import SemanticCandidate
 
 
 TYPE_LIMITS = {
@@ -65,6 +66,14 @@ def _safe_evidence_ids(raw: str) -> list[int]:
     return result
 
 
+def _safe_meta(raw: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(raw or "{}")
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
 def _tokens(text: str) -> set[str]:
     raw = str(text or "").lower()
     words = set(re.findall(r"[a-z0-9_]{2,}", raw))
@@ -98,8 +107,18 @@ def _evidence_weight(count: int) -> float:
 
 
 class GroupMemoryRetrievalService:
-    def __init__(self, db: Session):
+    def __init__(
+        self,
+        db: Session,
+        *,
+        reranker_provider: Any = None,
+        min_reranker: float = 0.55,
+        max_sql_candidates: int = 2000,
+    ):
         self.db = db
+        self.reranker_provider = reranker_provider
+        self.min_reranker = float(min_reranker)
+        self.max_sql_candidates = int(max_sql_candidates)
 
     def select(
         self,
@@ -119,9 +138,10 @@ class GroupMemoryRetrievalService:
             self.db.query(GroupMemory)
             .filter(GroupMemory.group_id == norm)
             .order_by(GroupMemory.confidence.desc(), GroupMemory.last_seen.desc(), GroupMemory.id.asc())
-            .limit(100)
+            .limit(max(1, self.max_sql_candidates))
             .all()
         )
+        reranker_scores = self._reranker_scores(query_text, rows)
 
         candidates: list[tuple[float, Any]] = []
         selection = GroupMemorySelection()
@@ -137,8 +157,17 @@ class GroupMemoryRetrievalService:
                 selection.score_components[str(row.id)] = components
                 selection.skipped.append({"id": row.id, "reason": reason})
                 continue
+            if self.reranker_provider is not None:
+                reranker = reranker_scores.get(int(row.id), 0.0)
+                components["reranker"] = reranker
+                if reranker < self.min_reranker:
+                    components["skip_reason"] = "low_reranker"
+                    selection.score_components[str(row.id)] = components
+                    selection.skipped.append({"id": row.id, "reason": "low_reranker"})
+                    continue
+                components["final"] = round(components["final"] * 0.65 + reranker * 0.35, 6)
             min_relevance = STRICT_MIN_RELEVANCE if memory_type in STRICT_RELEVANCE_TYPES else DEFAULT_MIN_RELEVANCE
-            if relevance < min_relevance and memory_type != "style":
+            if self.reranker_provider is None and relevance < min_relevance and memory_type != "style":
                 components["skip_reason"] = "low_relevance"
                 selection.score_components[str(row.id)] = components
                 selection.skipped.append({"id": row.id, "reason": "low_relevance"})
@@ -164,6 +193,33 @@ class GroupMemoryRetrievalService:
             type_counts[memory_type] = type_counts.get(memory_type, 0) + 1
 
         return selection
+
+    def _reranker_scores(self, query_text: str, rows: list[Any]) -> dict[int, float]:
+        if self.reranker_provider is None or not rows:
+            return {}
+        candidates = [
+            SemanticCandidate(
+                candidate_id=f"group_memory:{row.id}:memory",
+                source_type="group_memory",
+                title=f"群体记忆：{row.memory_type}",
+                text=row.content or "",
+                metadata={
+                    "memory_type": row.memory_type,
+                    "evidence_short_summary": _safe_meta(getattr(row, "meta_json", "")).get("evidence_short_summary", ""),
+                },
+            )
+            for row in rows
+        ]
+        try:
+            results = self.reranker_provider.rerank(query_text, candidates, top_k=50)
+        except Exception:
+            return {}
+        scores: dict[int, float] = {}
+        for result in results:
+            parts = str(result.candidate_id).split(":")
+            if len(parts) >= 2 and parts[1].isdigit():
+                scores[int(parts[1])] = float(result.score or 0.0)
+        return scores
 
     def _score_components(self, row: Any, memory_type: str, relevance: float) -> dict[str, float]:
         components = {

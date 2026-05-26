@@ -31,12 +31,14 @@ router = APIRouter(prefix="/api/v1/admin")
 
 from api.admin.prompt_v2_routes import router as prompt_v2_router
 from api.admin.persona_routes import router as persona_router
+from api.admin.rag_routes import router as rag_router
 from api.admin.session_memory_routes import router as session_memory_router
 from api.admin.system_routes import router as system_router
 
 router.include_router(system_router)
 router.include_router(prompt_v2_router)
 router.include_router(persona_router)
+router.include_router(rag_router)
 router.include_router(session_memory_router)
 
 # ── Auth ──

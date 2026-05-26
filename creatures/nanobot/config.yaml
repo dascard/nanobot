@@ -38,6 +38,10 @@ tools:
     type: package
     module: nanobot_kt.tools.memory_query
     class: MemoryQueryTool
+  - name: knowledge_query
+    type: package
+    module: nanobot_kt.tools.knowledge_query
+    class: KnowledgeQueryTool
   - name: image_summary
     type: package
     module: nanobot_kt.tools.image_summary

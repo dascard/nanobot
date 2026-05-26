@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 
 
 def pytest_configure(config):
@@ -34,6 +34,11 @@ test_engine = create_engine(
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
+
+def _drop_test_virtual_tables():
+    with test_engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS semantic_index_fts"))
+
 # 暴力替换数据库引擎，确保连未做依赖注入的写库（如 evolution）也会打到这里
 database.engine = test_engine
 database.SessionLocal = TestingSessionLocal
@@ -41,6 +46,7 @@ database.SessionLocal = TestingSessionLocal
 @pytest.fixture(scope="function")
 def db_session():
     """提供一个干净的内存数据库 session"""
+    _drop_test_virtual_tables()
     Base.metadata.create_all(bind=test_engine)
     session = TestingSessionLocal()
     try:
@@ -48,6 +54,7 @@ def db_session():
     finally:
         session.close()
         Base.metadata.drop_all(bind=test_engine)
+        _drop_test_virtual_tables()
 
 @pytest.fixture(scope="function")
 def client(db_session):

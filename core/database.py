@@ -408,6 +408,74 @@ class StickerMemory(Base):
     )
 
 
+class KnowledgeSource(Base):
+    """外部知识来源。"""
+
+    __tablename__ = "knowledge_sources"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_key = Column(String, unique=True, index=True, nullable=False)
+    name = Column(String, default="")
+    source_type = Column(String, default="manual")
+    domain = Column(String, index=True, default="")
+    base_url = Column(Text, default="")
+    status = Column(String, index=True, default="active")
+    trust_level = Column(String, index=True, default="medium")
+    meta_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class KnowledgeDocument(Base):
+    """知识库文档，支持手工文件、URL 元数据和 ai_daily 摘要。"""
+
+    __tablename__ = "knowledge_documents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_id = Column(Integer, index=True, nullable=True)
+    document_kind = Column(String, index=True, default="manual_file")
+    title = Column(Text, default="")
+    url = Column(Text, default="")
+    domain = Column(String, index=True, default="")
+    author = Column(String, default="")
+    published_at = Column(String, index=True, default="")
+    summary = Column(Text, default="")
+    status = Column(String, index=True, default="active")
+    trust_level = Column(String, index=True, default="medium")
+    created_by = Column(String, default="")
+    updated_by = Column(String, default="")
+    disabled_reason = Column(Text, default="")
+    disabled_by = Column(String, default="")
+    disabled_at = Column(DateTime, nullable=True)
+    latest_seen = Column(DateTime, nullable=True)
+    meta_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class KnowledgeChunk(Base):
+    """知识库文档的可检索 chunk。"""
+
+    __tablename__ = "knowledge_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(Integer, index=True, nullable=False)
+    chunk_id = Column(String, index=True, nullable=False)
+    order_index = Column(Integer, default=0)
+    title = Column(Text, default="")
+    text = Column(Text, default="")
+    citation_json = Column(Text, default="{}")
+    status = Column(String, index=True, default="active")
+    trust_level = Column(String, index=True, default="medium")
+    meta_json = Column(Text, default="{}")
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("document_id", "chunk_id", name="uq_knowledge_doc_chunk"),
+    )
+
+
 class ChatStreamConfig(Base):
     """群聊/私聊流配置——talk_value、表达开关等。"""
     __tablename__ = "chat_stream_configs"
@@ -772,6 +840,94 @@ class StickerDuplicateCandidate(Base):
     status = Column(String, default="pending")  # pending/confirmed/ignored
     created_at = Column(DateTime, default=datetime.now)
     __table_args__ = (UniqueConstraint("sticker_a_id", "sticker_b_id"),)
+
+
+class SemanticIndexItem(Base):
+    """统一语义索引条目。"""
+
+    __tablename__ = "semantic_index_items"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    source_type = Column(String, index=True, nullable=False, default="")
+    source_id = Column(String, index=True, nullable=False, default="")
+    source_sub_id = Column(String, index=True, nullable=False, default="")
+    document_id = Column(String, index=True, default="")
+    chunk_id = Column(String, index=True, default="")
+    user_id = Column(String, index=True, default="")
+    session_id = Column(String, index=True, default="")
+    group_id = Column(String, index=True, default="")
+    chat_stream_id = Column(String, index=True, default="")
+    visibility = Column(String, index=True, default="recall")
+    status = Column(String, index=True, default="active")
+    title = Column(Text, default="")
+    text = Column(Text, default="")
+    lexical_text = Column(Text, default="")
+    embedding_text = Column(Text, default="")
+    text_hash = Column(String, index=True, default="")
+    source_hash = Column(String, index=True, default="")
+    source_updated_at = Column(DateTime, nullable=True)
+    embedding = Column(LargeBinary, nullable=True)
+    embedding_dim = Column(Integer, default=0)
+    embedding_model = Column(String, default="")
+    embedding_status = Column(String, index=True, default="pending")
+    index_version = Column(String, index=True, default="")
+    quality_score = Column(Float, default=0.0)
+    trust_level = Column(String, index=True, default="medium")
+    source_prior = Column(Float, default=0.5)
+    meta_json = Column(Text, default="{}")
+    indexed_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    deleted_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_type",
+            "source_id",
+            "source_sub_id",
+            "index_version",
+            name="uq_semantic_source_sub_version",
+        ),
+    )
+
+
+class SemanticIndexJob(Base):
+    """语义索引异步任务。"""
+
+    __tablename__ = "semantic_index_jobs"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    source_type = Column(String, index=True, nullable=False, default="")
+    source_id = Column(String, index=True, nullable=False, default="")
+    source_sub_id = Column(String, index=True, default="")
+    job_type = Column(String, index=True, default="upsert")
+    index_version = Column(String, index=True, default="")
+    status = Column(String, index=True, default="pending")
+    retry_count = Column(Integer, default=0)
+    max_retry = Column(Integer, default=3)
+    next_retry_at = Column(DateTime, nullable=True)
+    locked_by = Column(String, default="")
+    locked_at = Column(DateTime, nullable=True)
+    error = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class RagDebugRun(Base):
+    """RAG 调试运行记录。"""
+
+    __tablename__ = "rag_debug_runs"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    trace_id = Column(String, index=True, default="")
+    source_type = Column(String, index=True, default="")
+    query = Column(Text, default="")
+    request_json = Column(Text, default="{}")
+    response_json = Column(Text, default="{}")
+    degraded = Column(Integer, index=True, default=0)
+    fallback_reason = Column(Text, default="")
+    latency_ms = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.now, index=True)
 
 
 def init_db():

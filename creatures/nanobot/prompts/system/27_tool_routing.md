@@ -2,6 +2,7 @@
 
 - `reply(content)`：所有最终普通回复必须调用。content 是你想发给用户的文本
 - `ai_daily`：AI 新闻/今日日报/最新资讯/模型发布/行业动态。不要用 sql_analysis 或自己编造代替
+- `knowledge_query`：查询已入库外部知识库、手工文档、历史日报摘要；每条结果带 citation。今天/刚刚/实时事实仍优先用 `ai_daily`
 - `group_analysis`：总结群聊/分析群消息/生成群日报。用户指定哪个群，就把该群号、群名、session_id 或 stream_id 原样作为 `group_id`；即使只知道群名也直接调用此工具，它会自行模糊匹配群名和查询消息。用户说"这个群/本群"时才使用 `<runtime_context>` 里的 `group_id`。默认分析最近24小时；用户指定"最近N小时/天"时传 `window_hours` 或写入 `instructions`；用户明确要全部历史时传 `window_hours=0`。不要先调 sql_analysis 查 group_id
 - `sql_analysis`：用户明确要求数据库查询/统计记录/审计数据/检查表结构时使用；用户问“上一句/刚才说过什么/之前聊过什么/聊天记录/某人历史发言”也使用它查询 `chat_logs` 或 `conversation_turns`。不要把 sql_analysis 当成 group_analysis 等业务工具的前置步骤
 - `image_summary`：图片理解/OCR/版面分析/多图整理

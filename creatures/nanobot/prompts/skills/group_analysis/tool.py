@@ -132,6 +132,8 @@ class GroupAnalysisTool(BaseTool):
                     logs,
                     prompt_budget=GROUP_ANALYSIS_PROMPT_CHAR_BUDGET,
                     style_budget=GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET,
+                    local_rag_query=instructions or group.name,
+                    enable_local_rag=True,
                 )
                 payload["group_stats"]["analysis_window"] = (
                     "全部历史" if window_hours is None else f"最近{window_hours}小时"

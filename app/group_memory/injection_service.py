@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -16,6 +19,10 @@ from core.group_runtime.ids import (
 
 from app.group_memory.renderer import render_group_memory_context
 from app.group_memory.retrieval_service import GroupMemoryRetrievalService
+
+
+GROUP_MEMORY_RAG_CACHE: dict[str, tuple[datetime, GroupMemoryInjectionResult]] = {}
+GROUP_MEMORY_RAG_CACHE_TTL_SECONDS = 120
 
 
 @dataclass
@@ -49,6 +56,7 @@ class GroupMemoryInjectionService:
         max_items: int = 10,
         max_chars: int = 1200,
         record_injection: bool = False,
+        rag_timeout_ms: int = 1200,
     ) -> GroupMemoryInjectionResult:
         from core.database import ChatStreamConfig
 
@@ -72,10 +80,27 @@ class GroupMemoryInjectionService:
             "group_memory_context": "",
             "score_components": {},
             "group_memory_config_ids": cfg_ids,
+            "cache_hit": False,
+            "cache_key": "",
+            "latency_ms": 0,
+            "timeout_fallback": False,
         }
         if mode not in {"preview", "on"}:
             return GroupMemoryInjectionResult(debug=debug)
+        if not str(current_user_input or "").strip() and not (recent_messages or []):
+            debug["group_memory_skipped"].append({"reason": "empty_query_context"})
+            return GroupMemoryInjectionResult(debug=debug)
 
+        cache_key = _cache_key(session_id, current_user_input, recent_messages or [])
+        debug["cache_key"] = cache_key
+        if not record_injection:
+            cached = GROUP_MEMORY_RAG_CACHE.get(cache_key)
+            if cached and cached[0] > datetime.now():
+                cached_result = cached[1]
+                cached_result.debug["cache_hit"] = True
+                return cached_result
+
+        started = time.perf_counter()
         selection = GroupMemoryRetrievalService(self.db).select(
             group_id=session_id,
             current_user_input=current_user_input,
@@ -83,6 +108,16 @@ class GroupMemoryInjectionService:
             max_items=max_items,
             max_chars=max_chars,
         )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        debug["latency_ms"] = latency_ms
+        if latency_ms > int(rag_timeout_ms):
+            debug["timeout_fallback"] = True
+            return GroupMemoryInjectionResult(
+                selected_ids=selection.selected_ids,
+                skipped=selection.skipped,
+                score_components=selection.score_components,
+                debug=debug,
+            )
         context = render_group_memory_context(session_id, selection.selected)
         debug.update({
             "group_memory_ids": selection.selected_ids,
@@ -95,20 +130,32 @@ class GroupMemoryInjectionService:
             debug["group_memory_injected"] = True
             if record_injection:
                 self.record_injected(selection.selected_ids)
-            return GroupMemoryInjectionResult(
+            result = GroupMemoryInjectionResult(
                 context=context,
                 selected_ids=selection.selected_ids,
                 skipped=selection.skipped,
                 score_components=selection.score_components,
                 debug=debug,
             )
-        return GroupMemoryInjectionResult(
+            if not record_injection:
+                GROUP_MEMORY_RAG_CACHE[cache_key] = (
+                    datetime.now() + timedelta(seconds=GROUP_MEMORY_RAG_CACHE_TTL_SECONDS),
+                    result,
+                )
+            return result
+        result = GroupMemoryInjectionResult(
             context="",
             selected_ids=selection.selected_ids,
             skipped=selection.skipped,
             score_components=selection.score_components,
             debug=debug,
         )
+        if not record_injection:
+            GROUP_MEMORY_RAG_CACHE[cache_key] = (
+                datetime.now() + timedelta(seconds=GROUP_MEMORY_RAG_CACHE_TTL_SECONDS),
+                result,
+            )
+        return result
 
     def record_injected(self, selected_ids: list[int]) -> int:
         return record_group_memory_injected(self.db, selected_ids)
@@ -134,3 +181,23 @@ def record_group_memory_injected(db: Session, selected_ids: list[int]) -> int:
         row.injected_count = int(row.injected_count or 0) + 1
     db.flush()
     return len(rows)
+
+
+def _cache_key(
+    group_id: str,
+    current_user_input: str,
+    recent_messages: list[dict[str, Any]],
+) -> str:
+    payload = {
+        "group_id": group_id,
+        "current_user_input": current_user_input or "",
+        "recent_messages": [
+            {
+                "sender": str(item.get("sender_name") or item.get("user_id") or ""),
+                "content": str(item.get("content") or ""),
+            }
+            for item in recent_messages[-10:]
+        ],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]

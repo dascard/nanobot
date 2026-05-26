@@ -56,6 +56,10 @@ def _dumps_list(values: Any) -> str:
     return json.dumps(_json_list(values), ensure_ascii=False)
 
 
+def _has_explicit_text_payload(description: str = "", tags: Any = None, emotions: Any = None) -> bool:
+    return bool(str(description or "").strip() or _json_list(tags) or _json_list(emotions))
+
+
 def normalize_sticker_stream_id(group_id: str = "", chat_stream_id: str = "") -> str:
     if chat_stream_id:
         value = str(chat_stream_id).strip()
@@ -134,6 +138,31 @@ def _canonical_row_send_code(row: StickerMemory) -> str:
     return build_sticker_send_code(row.file_ref or "", row.send_code or "")
 
 
+def sticker_has_text_index_payload(row: StickerMemory) -> bool:
+    meta = {}
+    try:
+        meta = json.loads(row.meta_json or "{}")
+    except Exception:
+        meta = {}
+    return bool(
+        str(row.description or "").strip()
+        or _loads_list(row.tags_json)
+        or _loads_list(row.emotions_json)
+        or str(meta.get("qwen_summary") or "").strip()
+    )
+
+
+def is_sticker_replyable(row: StickerMemory) -> bool:
+    code = _canonical_row_send_code(row)
+    match = CQ_IMAGE_PATTERN.fullmatch(code)
+    if match:
+        ref = normalize_sticker_file_ref(_cq_unescape(match.group(1).strip()))
+        return bool(ref)
+    if str(code or "").startswith("[CQ:image,"):
+        return False
+    return bool(str(code or "").strip())
+
+
 def _public_sticker_image_url(row: StickerMemory) -> str:
     base_url = str(os.environ.get("NANOBOT_PUBLIC_BASE_URL") or "").strip().rstrip("/")
     if (
@@ -209,6 +238,7 @@ def register_sticker(
         .first()
     )
     if row is None:
+        has_text_payload = _has_explicit_text_payload(description, tags, emotions)
         row = StickerMemory(
             chat_stream_id=stream_id,
             sticker_hash=stable_hash,
@@ -223,6 +253,8 @@ def register_sticker(
             source_count=1,
             first_seen=now,
             last_seen=now,
+            describe_status="ok" if has_text_payload else "pending",
+            described_at=now if has_text_payload else None,
             meta_json=json.dumps(meta or {}, ensure_ascii=False),
         )
         db.add(row)
@@ -249,6 +281,9 @@ def register_sticker(
             row.tags_json = _dumps_list(tags)
         if emotions is not None:
             row.emotions_json = _dumps_list(emotions)
+        if _has_explicit_text_payload(description, tags, emotions):
+            row.describe_status = "ok"
+            row.described_at = now
         if source_type:
             row.source_type = str(source_type).strip()
         if status:
@@ -306,20 +341,51 @@ def search_stickers(
     group_id: str = "",
     limit: int = 5,
     include_global: bool = True,
+    embedding_provider: Any = None,
+    reranker_provider: Any = None,
+    min_reranker: float = 0.45,
 ) -> list[dict[str, Any]]:
     """全局表情包搜索——不再按群隔离，所有群共享 active sticker pool。"""
-    rows = (
-        db.query(StickerMemory)
-        .filter(
-            StickerMemory.status == ACTIVE_STATUS,
-            StickerMemory.dedupe_status != "duplicate",
-            StickerMemory.duplicate_of_id.is_(None),
+    try:
+        from core.sticker_rag import StickerRagService
+
+        rag_service = StickerRagService(
+            db,
+            embedding_provider=embedding_provider,
+            reranker_provider=reranker_provider,
+            min_reranker=min_reranker,
         )
-        .all()
+        if rag_service.has_index():
+            return rag_service.query(
+                query,
+                group_id=group_id,
+                chat_stream_id=chat_stream_id,
+                include_global=include_global,
+                limit=limit,
+            )
+    except Exception as e:
+        logger.warning("[StickerMemory] sticker RAG search failed, fallback to lexical: %s", e)
+
+    scope_ids: set[str] = set()
+    if chat_stream_id or group_id:
+        stream_id = normalize_sticker_stream_id(group_id=group_id, chat_stream_id=chat_stream_id)
+        scope_ids.add(stream_id)
+        if include_global:
+            scope_ids.add(GLOBAL_STICKER_STREAM_ID)
+    query_obj = db.query(StickerMemory).filter(
+        StickerMemory.status == ACTIVE_STATUS,
+        StickerMemory.dedupe_status != "duplicate",
+        StickerMemory.duplicate_of_id.is_(None),
+        StickerMemory.describe_status == "ok",
     )
+    if scope_ids:
+        query_obj = query_obj.filter(StickerMemory.chat_stream_id.in_(sorted(scope_ids)))
+    rows = query_obj.all()
     scored = []
     q = str(query or "").strip()
     for row in rows:
+        if not sticker_has_text_index_payload(row) or not is_sticker_replyable(row):
+            continue
         score = _score_row(row, q, "")
         if q and score <= 0:
             continue
@@ -332,7 +398,19 @@ def search_stickers(
         ),
         reverse=True,
     )
-    return [sticker_to_dict(row) | {"score": score} for score, row in scored[: max(1, limit)]]
+    return [
+        sticker_to_dict(row) | {
+            "score": score,
+            "score_breakdown": {
+                "lexical": 1.0 if score > 0 else 0.0,
+                "semantic": None,
+                "reranker": None,
+                "usage": min(1.0, max(0.0, float(row.usage_count or 0) / 20.0)),
+                "final": float(score),
+            },
+        }
+        for score, row in scored[: max(1, limit)]
+    ]
 
 
 def record_sticker_use(db: Session, sticker_id: int) -> dict[str, Any]:

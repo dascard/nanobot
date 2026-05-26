@@ -1,0 +1,236 @@
+import json
+from datetime import datetime
+
+from core.database import StickerMemory
+from core.semantic.adapters import chunk_from_sticker
+from core.semantic.indexer import upsert_semantic_chunks
+
+
+class IdentityRerankerProvider:
+    def __init__(self, scores):
+        self.scores = scores
+
+    def rerank(self, query, candidates, *, top_k=None):
+        from core.semantic.reranker import RerankResult
+
+        limited = candidates[:top_k] if top_k else candidates
+        return sorted(
+            [
+                RerankResult(
+                    candidate_id=candidate.candidate_id,
+                    raw_score=self.scores.get(candidate.candidate_id, 0.0),
+                    score=self.scores.get(candidate.candidate_id, 0.0),
+                    model="identity-reranker",
+                    score_mode="identity",
+                )
+                for candidate in limited
+            ],
+            key=lambda item: item.score or 0.0,
+            reverse=True,
+        )
+
+
+def _add_sticker(
+    db_session,
+    sticker_hash,
+    *,
+    description,
+    tags=None,
+    emotions=None,
+    file_ref=None,
+    send_code="",
+    status="active",
+    dedupe_status="unique",
+    duplicate_of_id=None,
+    describe_status="ok",
+    usage_count=0,
+    chat_stream_id="qq:123:group",
+    meta=None,
+):
+    row = StickerMemory(
+        chat_stream_id=chat_stream_id,
+        sticker_hash=sticker_hash,
+        file_ref=file_ref if file_ref is not None else f"https://example.com/{sticker_hash}.png",
+        send_code=send_code,
+        name=sticker_hash,
+        description=description,
+        tags_json=json.dumps(tags or [], ensure_ascii=False),
+        emotions_json=json.dumps(emotions or [], ensure_ascii=False),
+        status=status,
+        dedupe_status=dedupe_status,
+        duplicate_of_id=duplicate_of_id,
+        describe_status=describe_status,
+        usage_count=usage_count,
+        last_seen=datetime(2026, 5, 26, 12, 0, 0),
+        meta_json=json.dumps(meta or {}, ensure_ascii=False),
+    )
+    db_session.add(row)
+    db_session.commit()
+    db_session.refresh(row)
+    return row
+
+
+def _index_stickers(db_session, rows):
+    chunks = [chunk for row in rows if (chunk := chunk_from_sticker(row)) is not None]
+    if chunks:
+        upsert_semantic_chunks(db_session, chunks, index_version="fake:v1:sticker")
+    return chunks
+
+
+def test_sticker_rag_uses_text_tags_not_image_embedding(db_session):
+    from core.sticker_memory import search_stickers
+
+    path_only_match = _add_sticker(
+        db_session,
+        "path-only-angry",
+        file_ref="https://example.com/生气拍桌.png",
+        description="猫猫疑惑看着屏幕",
+        tags=["疑惑"],
+        emotions=["confused"],
+    )
+    text_match = _add_sticker(
+        db_session,
+        "text-angry",
+        file_ref="https://example.com/neutral.png",
+        description="小人非常生气正在拍桌",
+        tags=["生气", "拍桌"],
+        emotions=["angry"],
+    )
+    _index_stickers(db_session, [path_only_match, text_match])
+
+    results = search_stickers(db_session, "生气", group_id="123", limit=5)
+
+    assert [item["id"] for item in results] == [text_match.id]
+    assert "生气拍桌.png" not in json.dumps(results, ensure_ascii=False)
+
+
+def test_sticker_rag_returns_reply_token(db_session):
+    from core.sticker_memory import search_stickers
+
+    sticker = _add_sticker(
+        db_session,
+        "reply-token",
+        description="适合表达震惊的猫猫表情",
+        tags=["震惊", "猫"],
+        emotions=["surprised"],
+    )
+    _index_stickers(db_session, [sticker])
+
+    results = search_stickers(db_session, "震惊", group_id="123", limit=3)
+
+    assert results[0]["reply_token"] == f"[sticker:{sticker.id}]"
+    assert results[0]["send_code"] == "[CQ:image,file=https://example.com/reply-token.png]"
+    assert results[0]["score_breakdown"]["lexical"] > 0
+
+
+def test_duplicate_or_inactive_sticker_is_filtered(db_session):
+    from core.sticker_memory import search_stickers
+
+    active = _add_sticker(
+        db_session,
+        "active-sticker",
+        description="拍桌催更",
+        tags=["拍桌"],
+        emotions=["angry"],
+    )
+    duplicate = _add_sticker(
+        db_session,
+        "duplicate-sticker",
+        description="拍桌催更",
+        tags=["拍桌"],
+        dedupe_status="duplicate",
+    )
+    disabled = _add_sticker(
+        db_session,
+        "disabled-sticker",
+        description="拍桌催更",
+        tags=["拍桌"],
+        status="disabled",
+    )
+    _index_stickers(db_session, [active, duplicate, disabled])
+
+    results = search_stickers(db_session, "拍桌", group_id="123", limit=5)
+
+    assert [item["id"] for item in results] == [active.id]
+
+
+def test_sticker_search_uses_reranker_before_usage_boost(db_session):
+    from core.sticker_memory import search_stickers
+
+    popular_low_relevance = _add_sticker(
+        db_session,
+        "popular-low",
+        description="拍桌催更",
+        tags=["拍桌"],
+        usage_count=999,
+    )
+    exact_high_relevance = _add_sticker(
+        db_session,
+        "exact-high",
+        description="拍桌表示非常生气",
+        tags=["拍桌", "生气"],
+        usage_count=0,
+    )
+    _index_stickers(db_session, [popular_low_relevance, exact_high_relevance])
+
+    reranker = IdentityRerankerProvider({
+        f"sticker:{popular_low_relevance.id}:sticker": 0.1,
+        f"sticker:{exact_high_relevance.id}:sticker": 0.9,
+    })
+    results = search_stickers(
+        db_session,
+        "拍桌生气",
+        group_id="123",
+        limit=5,
+        reranker_provider=reranker,
+    )
+
+    assert [item["id"] for item in results] == [exact_high_relevance.id]
+    assert results[0]["score_breakdown"]["reranker"] == 0.9
+
+
+def test_undescribed_sticker_is_not_text_rag_candidate(db_session):
+    from core.sticker_memory import search_stickers
+
+    pending = _add_sticker(
+        db_session,
+        "pending-describe",
+        description="震惊猫猫",
+        tags=["震惊"],
+        describe_status="pending",
+    )
+    active = _add_sticker(
+        db_session,
+        "described",
+        description="震惊猫猫",
+        tags=["震惊"],
+    )
+    _index_stickers(db_session, [pending, active])
+
+    results = search_stickers(db_session, "震惊", group_id="123", limit=5)
+
+    assert [item["id"] for item in results] == [active.id]
+
+
+def test_sticker_rag_filters_unreplyable_sticker(db_session):
+    from core.sticker_memory import search_stickers
+
+    unreplyable = _add_sticker(
+        db_session,
+        "unreplyable",
+        file_ref="",
+        send_code="",
+        description="震惊猫猫",
+        tags=["震惊"],
+    )
+    replyable = _add_sticker(
+        db_session,
+        "replyable",
+        description="震惊猫猫",
+        tags=["震惊"],
+    )
+    _index_stickers(db_session, [unreplyable, replyable])
+
+    results = search_stickers(db_session, "震惊", group_id="123", limit=5)
+
+    assert [item["id"] for item in results] == [replyable.id]

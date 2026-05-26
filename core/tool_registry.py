@@ -60,6 +60,14 @@ TOOL_METADATA: dict[str, ToolDef] = {
             "当前短期窗口或未摘要消息必须用 sql_analysis 查询原始日志，不要用本工具判断刚才发生的事。"
         ),
     ),
+    "knowledge_query": ToolDef(
+        name="knowledge_query", label="外部知识库查询", category="data", risk_level="low",
+        private_default=True, group_default=True,
+        description=(
+            "查询已入库的外部知识库，只返回带 citation 的结果。"
+            "今天、刚刚、实时资讯仍优先用 ai_daily。"
+        ),
+    ),
 
     # ── 分析工具 ──
     "image_summary": ToolDef(

@@ -42,8 +42,8 @@ class MemoryQueryTool(BaseTool):
                 },
                 "source": {
                     "type": "string",
-                    "enum": ["digest", "session_summary"],
-                    "description": "digest=跨天/中期摘要；session_summary=当前 session rolling summary。默认 digest。",
+                    "enum": ["digest", "session_summary", "all"],
+                    "description": "digest=跨天/中期摘要；session_summary=当前 session rolling summary；all=两类摘要统一 RAG 搜索。默认 digest。",
                 },
                 "query": {
                     "type": "string",
@@ -121,6 +121,10 @@ class MemoryQueryTool(BaseTool):
                     if mode == "aggregate":
                         return self._session_aggregate(service, args, limit, include_legacy)
                     return ToolResult(error=f"Unsupported mode: {mode}")
+                if source == "all":
+                    if mode == "search":
+                        return self._rag_search(uow.db, args, limit)
+                    return ToolResult(error="source=all currently supports search mode only")
                 if source != "digest":
                     return ToolResult(error=f"Unsupported source: {source}")
 
@@ -136,6 +140,40 @@ class MemoryQueryTool(BaseTool):
                 return ToolResult(error=f"Unsupported mode: {mode}")
         except Exception as exc:
             return ToolResult(error=f"memory_query failed: {exc}")
+
+    def _rag_search(self, db, args: dict[str, Any], limit: int) -> ToolResult:
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return ToolResult(error="search mode requires query")
+        from core.memory_rag import MemoryRagService
+
+        result = MemoryRagService(db).query(
+            query,
+            source="all",
+            user_id=str(args.get("user_id") or "").strip(),
+            session_id=str(args.get("session_id") or "").strip(),
+            limit=limit,
+        )
+        items = result.get("items") or []
+        if not items:
+            return ToolResult(
+                output=f"未找到与 {query} 相关的摘要。",
+                exit_code=0,
+                metadata={"structured_content": {"mode": "search", "source": "all", **result}},
+            )
+        lines = [f"memory_query rag search: query={query} count={len(items)} degraded={result.get('degraded')}"]
+        for item in items:
+            best = (item.get("matched_cards") or [{}])[0]
+            identifier = item.get("digest_id") or item.get("summary_id") or item.get("source_id")
+            lines.append(
+                f"- source={item.get('source')} id={identifier} score={float(item.get('parent_score') or 0):.3f}: "
+                f"{str(best.get('text') or '')[:260]}"
+            )
+        return ToolResult(
+            output="\n".join(lines),
+            exit_code=0,
+            metadata={"structured_content": {"mode": "search", "source": "all", **result}},
+        )
 
     @staticmethod
     def _validate_date_args(args: dict[str, Any]) -> None:

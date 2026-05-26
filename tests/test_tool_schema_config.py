@@ -84,4 +84,4 @@ def test_memory_query_description_declares_unsummarized_window_boundary():
     assert "未摘要" in description
     assert "sql_analysis" in description
     props = schema["function"]["parameters"]["properties"]
-    assert props["source"]["enum"] == ["digest", "session_summary"]
+    assert props["source"]["enum"] == ["digest", "session_summary", "all"]

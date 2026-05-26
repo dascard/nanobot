@@ -523,6 +523,171 @@ def _session_summary_jobs(conn: Any, engine: Any, db_path: str | None) -> None:
     ])
 
 
+def _semantic_rag_tables(conn: Any, engine: Any, db_path: str | None) -> None:
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS semantic_index_items ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "source_type TEXT NOT NULL DEFAULT '', "
+        "source_id TEXT NOT NULL DEFAULT '', "
+        "source_sub_id TEXT NOT NULL DEFAULT '', "
+        "document_id TEXT DEFAULT '', "
+        "chunk_id TEXT DEFAULT '', "
+        "user_id TEXT DEFAULT '', "
+        "session_id TEXT DEFAULT '', "
+        "group_id TEXT DEFAULT '', "
+        "chat_stream_id TEXT DEFAULT '', "
+        "visibility TEXT DEFAULT 'recall', "
+        "status TEXT DEFAULT 'active', "
+        "title TEXT DEFAULT '', "
+        "text TEXT DEFAULT '', "
+        "lexical_text TEXT DEFAULT '', "
+        "embedding_text TEXT DEFAULT '', "
+        "text_hash TEXT DEFAULT '', "
+        "source_hash TEXT DEFAULT '', "
+        "source_updated_at DATETIME, "
+        "embedding BLOB, "
+        "embedding_dim INTEGER DEFAULT 0, "
+        "embedding_model TEXT DEFAULT '', "
+        "embedding_status TEXT DEFAULT 'pending', "
+        "index_version TEXT DEFAULT '', "
+        "quality_score REAL DEFAULT 0.0, "
+        "trust_level TEXT DEFAULT 'medium', "
+        "source_prior REAL DEFAULT 0.5, "
+        "meta_json TEXT DEFAULT '{}', "
+        "indexed_at DATETIME, "
+        "updated_at DATETIME, "
+        "deleted_at DATETIME, "
+        "UNIQUE(source_type, source_id, source_sub_id, index_version)"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS semantic_index_jobs ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "source_type TEXT NOT NULL DEFAULT '', "
+        "source_id TEXT NOT NULL DEFAULT '', "
+        "source_sub_id TEXT DEFAULT '', "
+        "job_type TEXT DEFAULT 'upsert', "
+        "index_version TEXT DEFAULT '', "
+        "status TEXT DEFAULT 'pending', "
+        "retry_count INTEGER DEFAULT 0, "
+        "max_retry INTEGER DEFAULT 3, "
+        "next_retry_at DATETIME, "
+        "locked_by TEXT DEFAULT '', "
+        "locked_at DATETIME, "
+        "error TEXT DEFAULT '', "
+        "created_at DATETIME, "
+        "updated_at DATETIME, "
+        "finished_at DATETIME"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS rag_debug_runs ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "trace_id TEXT DEFAULT '', "
+        "source_type TEXT DEFAULT '', "
+        "query TEXT DEFAULT '', "
+        "request_json TEXT DEFAULT '{}', "
+        "response_json TEXT DEFAULT '{}', "
+        "degraded INTEGER DEFAULT 0, "
+        "fallback_reason TEXT DEFAULT '', "
+        "latency_ms INTEGER DEFAULT 0, "
+        "created_at DATETIME"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS semantic_index_fts USING fts5("
+        "title, "
+        "text, "
+        "lexical_text, "
+        "source_type UNINDEXED, "
+        "source_id UNINDEXED, "
+        "source_sub_id UNINDEXED, "
+        "tokenize = 'trigram'"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_semantic_item_source ON semantic_index_items(source_type, source_id)",
+        "CREATE INDEX IF NOT EXISTS idx_semantic_item_status_visibility ON semantic_index_items(status, visibility)",
+        "CREATE INDEX IF NOT EXISTS idx_semantic_item_embedding_status ON semantic_index_items(embedding_status)",
+        "CREATE INDEX IF NOT EXISTS idx_semantic_job_status_retry ON semantic_index_jobs(status, next_retry_at)",
+        "CREATE INDEX IF NOT EXISTS idx_rag_debug_trace ON rag_debug_runs(trace_id)",
+        "CREATE INDEX IF NOT EXISTS idx_rag_debug_source_created ON rag_debug_runs(source_type, created_at)",
+    ])
+
+
+def _knowledge_library_tables(conn: Any, engine: Any, db_path: str | None) -> None:
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS knowledge_sources ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "source_key TEXT NOT NULL UNIQUE, "
+        "name TEXT DEFAULT '', "
+        "source_type TEXT DEFAULT 'manual', "
+        "domain TEXT DEFAULT '', "
+        "base_url TEXT DEFAULT '', "
+        "status TEXT DEFAULT 'active', "
+        "trust_level TEXT DEFAULT 'medium', "
+        "meta_json TEXT DEFAULT '{}', "
+        "created_at DATETIME, "
+        "updated_at DATETIME"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS knowledge_documents ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "source_id INTEGER, "
+        "document_kind TEXT DEFAULT 'manual_file', "
+        "title TEXT DEFAULT '', "
+        "url TEXT DEFAULT '', "
+        "domain TEXT DEFAULT '', "
+        "author TEXT DEFAULT '', "
+        "published_at TEXT DEFAULT '', "
+        "summary TEXT DEFAULT '', "
+        "status TEXT DEFAULT 'active', "
+        "trust_level TEXT DEFAULT 'medium', "
+        "created_by TEXT DEFAULT '', "
+        "updated_by TEXT DEFAULT '', "
+        "disabled_reason TEXT DEFAULT '', "
+        "disabled_by TEXT DEFAULT '', "
+        "disabled_at DATETIME, "
+        "latest_seen DATETIME, "
+        "meta_json TEXT DEFAULT '{}', "
+        "created_at DATETIME, "
+        "updated_at DATETIME"
+        ")"
+    ))
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS knowledge_chunks ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "document_id INTEGER NOT NULL, "
+        "chunk_id TEXT NOT NULL, "
+        "order_index INTEGER DEFAULT 0, "
+        "title TEXT DEFAULT '', "
+        "text TEXT DEFAULT '', "
+        "citation_json TEXT DEFAULT '{}', "
+        "status TEXT DEFAULT 'active', "
+        "trust_level TEXT DEFAULT 'medium', "
+        "meta_json TEXT DEFAULT '{}', "
+        "created_at DATETIME, "
+        "updated_at DATETIME, "
+        "UNIQUE(document_id, chunk_id)"
+        ")"
+    ))
+    _add_missing_columns(conn, "knowledge_documents", {
+        "created_by": "TEXT DEFAULT ''",
+        "updated_by": "TEXT DEFAULT ''",
+        "disabled_reason": "TEXT DEFAULT ''",
+        "disabled_by": "TEXT DEFAULT ''",
+        "disabled_at": "DATETIME",
+    })
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_sources_status ON knowledge_sources(status)",
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_documents_status ON knowledge_documents(status)",
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_documents_trust_date ON knowledge_documents(trust_level, published_at)",
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_doc ON knowledge_chunks(document_id, order_index)",
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_status ON knowledge_chunks(status)",
+    ])
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_chat_log_metadata_columns", "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -540,6 +705,8 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260525_rolling_session_summaries", "rolling session summaries", _rolling_session_summaries),
     ("20260526_session_summary_llm_columns", "session summary llm columns", _session_summary_llm_columns),
     ("20260526_session_summary_jobs", "session summary jobs", _session_summary_jobs),
+    ("20260526_semantic_rag_tables", "semantic rag tables", _semantic_rag_tables),
+    ("20260526_knowledge_library_tables", "knowledge library tables", _knowledge_library_tables),
 ]
 
 

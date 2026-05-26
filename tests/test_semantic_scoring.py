@@ -1,0 +1,134 @@
+import math
+
+
+def test_weighted_score_renormalizes_none_components():
+    from core.semantic.scoring import weighted_score
+
+    score = weighted_score(
+        {"reranker": 0.8, "semantic": None},
+        {"reranker": 0.7, "semantic": 0.3},
+    )
+
+    assert score == 0.8
+
+
+def test_zero_score_does_not_renormalize_weight():
+    from core.semantic.scoring import weighted_score
+
+    score = weighted_score(
+        {"reranker": 0.8, "semantic": 0.0},
+        {"reranker": 0.7, "semantic": 0.3},
+    )
+
+    assert score == 0.56
+
+
+def test_sqlite_bm25_smaller_is_better():
+    from core.semantic.scoring import normalize_sqlite_bm25
+
+    assert normalize_sqlite_bm25(1.0, best=1.0, worst=5.0) == 1.0
+    assert normalize_sqlite_bm25(5.0, best=1.0, worst=5.0) == 0.0
+    assert normalize_sqlite_bm25(3.0, best=1.0, worst=5.0) == 0.5
+
+
+def test_fts5_unavailable_marks_degraded():
+    from core.semantic.fts import fts5_status
+
+    class BrokenConnection:
+        def execute(self, *_args, **_kwargs):
+            raise RuntimeError("no fts5")
+
+    status = fts5_status(BrokenConnection())
+
+    assert status["fts_unavailable"] is True
+    assert status["degraded"] is True
+    assert status["fallback_reason"] == "fts_unavailable"
+
+
+def test_fts5_query_escapes_special_characters():
+    from core.semantic.fts import build_fts5_match_query
+
+    query = build_fts5_match_query('foo OR bar a:b near(test) "quote"')
+
+    assert '"foo"' in query
+    assert '"bar"' in query
+    assert "a:b" not in query
+    assert "near(test)" not in query
+
+
+def test_fts5_query_empty_for_short_cjk_query():
+    from core.semantic.fts import build_fts5_match_query
+
+    assert build_fts5_match_query("图") == ""
+
+
+def test_reranker_score_is_normalized():
+    from core.semantic.reranker import normalize_reranker_score
+
+    assert normalize_reranker_score(0.0, mode="sigmoid") == 0.5
+    assert normalize_reranker_score(3.0, mode="minmax", best=5.0, worst=1.0) == 0.5
+    assert normalize_reranker_score(2.0, mode="identity") == 1.0
+    assert normalize_reranker_score(-1.0, mode="identity") == 0.0
+
+
+def test_reranker_none_triggers_degraded_mode():
+    from core.semantic.scoring import passes_relevance_gate
+
+    assert passes_relevance_gate({"reranker": None, "semantic": 0.9}, degraded=False) is False
+    assert passes_relevance_gate({"reranker": 0.3, "semantic": 0.9}, degraded=False) is False
+    assert passes_relevance_gate({"reranker": None, "semantic": 0.9}, degraded=True) is True
+
+
+def test_source_weights_are_normalized_over_enabled_sources():
+    from core.semantic.scoring import normalize_source_weights
+
+    weights = normalize_source_weights(
+        {"digest": 2.0, "summary": 1.0, "knowledge": 10.0},
+        {"digest", "summary"},
+    )
+
+    assert set(weights) == {"digest", "summary"}
+    assert math.isclose(sum(weights.values()), 1.0)
+    assert weights["digest"] > weights["summary"]
+
+
+def test_source_quota_when_sources_more_than_total_k():
+    from core.semantic.scoring import allocate_source_quotas
+
+    quotas = allocate_source_quotas(
+        3,
+        {"a": 5.0, "b": 4.0, "c": 3.0, "d": 2.0, "e": 1.0},
+        min_per_source=3,
+    )
+
+    assert sum(quotas.values()) == 3
+    assert quotas == {"a": 1, "b": 1, "c": 1, "d": 0, "e": 0}
+
+
+def test_source_quota_sum_never_exceeds_total_k():
+    from core.semantic.scoring import allocate_source_quotas
+
+    for total_k in range(0, 8):
+        quotas = allocate_source_quotas(
+            total_k,
+            {"digest": 0.5, "summary": 0.3, "knowledge": 0.2},
+            min_per_source=3,
+        )
+        assert sum(quotas.values()) <= total_k
+
+
+def test_fake_semantic_providers_are_deterministic():
+    from tests.fakes.semantic import FakeEmbeddingProvider, FakeRerankerProvider
+    from core.semantic.reranker import SemanticCandidate
+
+    embedding = FakeEmbeddingProvider(dim=4).embed(["端口冲突"])[0]
+    assert len(embedding) == 4
+    assert embedding == FakeEmbeddingProvider(dim=4).embed(["端口冲突"])[0]
+
+    candidates = [
+        SemanticCandidate(candidate_id="a", source_type="memory", text="端口冲突解决方式"),
+        SemanticCandidate(candidate_id="b", source_type="memory", text="天气"),
+    ]
+    results = FakeRerankerProvider({"a": 2.0, "b": -2.0}).rerank("端口冲突", candidates)
+    assert [item.candidate_id for item in results] == ["a", "b"]
+    assert results[0].score > results[1].score

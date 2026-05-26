@@ -1719,6 +1719,22 @@ def search_and_extract_news(
             
     return report
 
+
+def _build_ai_daily_tool_result(html_result: str, query: str) -> ToolResult:
+    result = build_reply_tool_result(html_result)
+    try:
+        from core.ai_daily_ingest import best_effort_ingest_ai_daily_result
+
+        result.metadata["ai_daily_ingest"] = best_effort_ingest_ai_daily_result(
+            html_result,
+            query=query,
+        )
+    except Exception as exc:
+        logger.warning("[ai_daily] ingest metadata failed: %s", exc)
+        result.metadata["ai_daily_ingest"] = {"created": 0, "updated": 0, "warnings": [str(exc)]}
+    return result
+
+
 class AiDailyTool(BaseTool):
     """Generate an AI/tech daily digest from curated sources."""
 
@@ -1793,7 +1809,7 @@ class AiDailyTool(BaseTool):
             cached = _get_cached_news_result(cache_key)
             if cached is not None:
                 logger.info("[ai_daily] cache HIT")
-                return build_reply_tool_result(cached)
+                return _build_ai_daily_tool_result(cached, query)
 
         # KT runs tools concurrently; run blocking code in thread
         import asyncio
@@ -1812,4 +1828,4 @@ class AiDailyTool(BaseTool):
                 "verdict": "本轮生成结果非标准HTML，已转换兜底。",
                 "missing_info": [str(result)[:200]]})
         _store_cached_news_result(cache_key, result)
-        return build_reply_tool_result(result)
+        return _build_ai_daily_tool_result(result, query)

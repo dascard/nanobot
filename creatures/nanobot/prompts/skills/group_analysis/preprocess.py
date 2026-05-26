@@ -272,6 +272,7 @@ def build_clean_messages(logs: list[Any]) -> list[dict]:
         )
         hour = created_at.hour if created_at else 12
         messages.append({
+            "log_id": getattr(log, "id", 0) if hasattr(log, "id") else log.get("id", 0),
             "user_id": str(sender),
             "content": c,
             "time": created_at.strftime("%H:%M") if created_at else "??:??",
@@ -400,13 +401,42 @@ def build_analysis_payload(
     *,
     prompt_budget: int = 60000,
     style_budget: int = 24000,
+    local_rag_query: str = "",
+    enable_local_rag: bool = False,
+    embedding_provider: Any = None,
+    reranker_provider: Any = None,
 ) -> dict:
     """从 raw logs 一次性产出 analyzer 所需全部数据。"""
     messages = build_clean_messages(logs)
     group_stats = compute_group_statistics(messages)
     user_stats = compute_user_stats(messages)
-    msg_text = build_message_prompt_text(messages, prompt_budget)
-    style_msg_text = build_message_prompt_text(messages, style_budget)
+    prompt_messages = messages
+    local_rag = {
+        "stats_logs": {
+            "total_messages": len(messages),
+            "bundle_count": 0,
+            "lexical_candidates": 0,
+            "temporary_embedding_scored": 0,
+            "reranker_candidates": 0,
+            "selected_bundles": 0,
+            "selected_messages": len(messages),
+        },
+        "prompt_logs": {"hit_bundles": [], "selected_bundles": [], "selected_message_ids": []},
+    }
+    if enable_local_rag and local_rag_query and messages:
+        from .local_rag import select_group_analysis_context
+
+        local_rag = select_group_analysis_context(
+            messages,
+            query=local_rag_query,
+            budget_chars=prompt_budget,
+            embedding_provider=embedding_provider,
+            reranker_provider=reranker_provider,
+        )
+        prompt_messages = local_rag.get("messages") or messages
+
+    msg_text = build_message_prompt_text(prompt_messages, prompt_budget)
+    style_msg_text = build_message_prompt_text(prompt_messages, style_budget)
 
     top = sorted(user_stats.items(), key=lambda x: x[1]["count"], reverse=True)[:10]
     users_text = "\n".join(
@@ -425,4 +455,5 @@ def build_analysis_payload(
         "style_msg_text": style_msg_text,
         "users_text": users_text,
         "source_log_ids": source_log_ids,
+        "local_rag": local_rag,
     }
