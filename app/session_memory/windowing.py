@@ -11,6 +11,11 @@ from sqlalchemy.orm import Session
 from app.session_memory import config
 from core.database import ConversationTurn
 
+RAW_WINDOW_CANDIDATE_MIN_LIMIT = 200
+RAW_WINDOW_CANDIDATE_MULTIPLIER = 8
+RAW_WINDOW_CANDIDATE_HARD_LIMIT = 2000
+PENDING_FOR_SUMMARY_HARD_LIMIT = 5000
+
 INTERNAL_KINDS = frozenset({
     "context_gap_marker",
     "tool_internal",
@@ -89,6 +94,136 @@ def load_context_eligible_turns(
         "eligible_count": len(eligible),
         "skipped": skipped,
         "after_turn_id": int(after_turn_id or 0),
+    }
+
+
+def _base_context_turn_query(
+    db: Session,
+    *,
+    session_id: str,
+    after_clear_at=None,
+    after_turn_id: int = 0,
+):
+    query = db.query(ConversationTurn).filter(
+        ConversationTurn.session_id == session_id,
+        ConversationTurn.id > int(after_turn_id or 0),
+    )
+    if after_clear_at is not None:
+        query = query.filter(ConversationTurn.created_at > after_clear_at)
+    return query
+
+
+def load_latest_raw_window(
+    db: Session,
+    *,
+    session_id: str,
+    chat_type: str,
+    max_turns: int,
+    max_tokens: int,
+    max_per_msg: int = 300,
+    after_clear_at=None,
+    after_turn_id: int = 0,
+    hard_limit: int = RAW_WINDOW_CANDIDATE_HARD_LIMIT,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """从最新 ConversationTurn 向前加载 raw window 候选。
+
+    不先按 id.asc() 截断，避免大 session 只拿到最早一批 turn。
+    """
+    normalized_max_turns = max(1, int(max_turns))
+    normalized_hard_limit = max(normalized_max_turns, int(hard_limit or RAW_WINDOW_CANDIDATE_HARD_LIMIT))
+    batch_size = max(
+        RAW_WINDOW_CANDIDATE_MIN_LIMIT,
+        normalized_max_turns * RAW_WINDOW_CANDIDATE_MULTIPLIER,
+    )
+    query = _base_context_turn_query(
+        db,
+        session_id=session_id,
+        after_clear_at=after_clear_at,
+        after_turn_id=after_turn_id,
+    )
+    eligible_desc: list[ConversationTurn] = []
+    skipped: list[dict[str, Any]] = []
+    loaded = 0
+    offset = 0
+
+    while loaded < normalized_hard_limit:
+        rows = (
+            query.order_by(ConversationTurn.id.desc())
+            .offset(offset)
+            .limit(min(batch_size, normalized_hard_limit - loaded))
+            .all()
+        )
+        if not rows:
+            break
+        loaded += len(rows)
+        offset += len(rows)
+        for turn in rows:
+            ok, reason = is_context_eligible_turn(turn)
+            if ok:
+                eligible_desc.append(turn)
+            else:
+                skipped.append({"turn_id": int(turn.id), "reason": reason})
+        if len(eligible_desc) >= normalized_max_turns:
+            break
+
+    eligible_asc = sorted(eligible_desc, key=lambda row: int(row.id or 0))
+    recent_window, raw_debug = select_latest_raw_window(
+        eligible_asc,
+        chat_type=chat_type,
+        max_turns=max_turns,
+        max_tokens=max_tokens,
+        max_per_msg=max_per_msg,
+    )
+    raw_debug.update({
+        "raw_candidates_loaded": loaded,
+        "raw_candidates_eligible": len(eligible_desc),
+        "raw_candidate_hard_limit": normalized_hard_limit,
+        "raw_window_skipped": skipped,
+        "after_turn_id": int(after_turn_id or 0),
+    })
+    return recent_window, raw_debug
+
+
+def load_pending_for_summary_turns(
+    db: Session,
+    *,
+    session_id: str,
+    last_covered_id: int,
+    raw_window_start_turn_id: int,
+    after_clear_at=None,
+    hard_limit: int = PENDING_FOR_SUMMARY_HARD_LIMIT,
+) -> tuple[list[ConversationTurn], dict[str, Any]]:
+    if raw_window_start_turn_id <= 0:
+        return [], {"pending_loaded": 0, "pending_skipped": [], "pending_truncated": False}
+
+    normalized_hard_limit = max(1, int(hard_limit or PENDING_FOR_SUMMARY_HARD_LIMIT))
+    rows = (
+        _base_context_turn_query(
+            db,
+            session_id=session_id,
+            after_clear_at=after_clear_at,
+            after_turn_id=last_covered_id,
+        )
+        .filter(ConversationTurn.id < int(raw_window_start_turn_id))
+        .order_by(ConversationTurn.id.asc())
+        .limit(normalized_hard_limit)
+        .all()
+    )
+    pending: list[ConversationTurn] = []
+    skipped: list[dict[str, Any]] = []
+    for turn in rows:
+        ok, reason = is_context_eligible_turn(turn)
+        if ok:
+            pending.append(turn)
+        else:
+            skipped.append({"turn_id": int(turn.id), "reason": reason})
+    return pending, {
+        "pending_loaded": len(rows),
+        "pending_count": len(pending),
+        "pending_skipped": skipped,
+        "pending_truncated": len(rows) >= normalized_hard_limit,
+        "last_covered_id": int(last_covered_id or 0),
+        "raw_window_start_turn_id": int(raw_window_start_turn_id or 0),
     }
 
 

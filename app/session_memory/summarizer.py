@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from core.database import ConversationTurn, RollingSessionSummary
+from app.session_memory import config
 from app.session_memory.windowing import estimate_tokens, safe_meta
 
 
@@ -25,26 +26,72 @@ def _format_turn_line(turn: ConversationTurn, *, max_chars: int = 220) -> str:
     return f"{prefix} {content}".strip()
 
 
+def _truncate_text(text: str, max_chars: int, *, suffix: str = "\n...[摘要截断]") -> str:
+    if len(text) <= max_chars:
+        return text
+    cap = max(0, max_chars - len(suffix))
+    return text[:cap].rstrip() + suffix
+
+
+def _compact_previous_and_pending(
+    *,
+    previous_text: str,
+    pending_turns: Sequence[ConversationTurn],
+    max_chars: int,
+) -> str:
+    previous = _truncate_text(previous_text.strip(), 600, suffix="\n...[旧摘要截断]")
+    user_lines = [
+        _format_turn_line(turn, max_chars=90)
+        for turn in pending_turns
+        if turn.role == "user"
+    ][-6:]
+    assistant_lines = [
+        _format_turn_line(turn, max_chars=90)
+        for turn in pending_turns
+        if turn.role == "assistant"
+    ][-4:]
+
+    parts: list[str] = []
+    if previous:
+        parts.append("此前摘要:\n" + previous)
+    if user_lines:
+        parts.append("新增用户请求/发言要点:\n" + "\n".join(f"- {line}" for line in user_lines))
+    if assistant_lines:
+        parts.append("新增助手结论:\n" + "\n".join(f"- {line}" for line in assistant_lines))
+
+    summary = "\n\n".join(parts).strip()
+    if len(summary) <= max_chars:
+        return summary
+
+    # 如果仍超长，优先保留新增要点，进一步压缩旧摘要。
+    parts = []
+    if previous:
+        parts.append("此前摘要:\n" + _truncate_text(previous_text.strip(), 300, suffix="\n...[旧摘要截断]"))
+    if user_lines:
+        parts.append("新增用户请求/发言要点:\n" + "\n".join(f"- {line}" for line in user_lines))
+    if assistant_lines:
+        parts.append("新增助手结论:\n" + "\n".join(f"- {line}" for line in assistant_lines))
+    return _truncate_text("\n\n".join(parts).strip(), max_chars)
+
+
 def build_rolling_summary_payload(
     *,
     previous_summary: RollingSessionSummary | None,
     pending_turns: Sequence[ConversationTurn],
 ) -> dict[str, Any]:
     previous_text = str(getattr(previous_summary, "summary_text", "") or "").strip()
-    lines = [_format_turn_line(turn) for turn in pending_turns]
     user_lines = [_format_turn_line(turn, max_chars=160) for turn in pending_turns if turn.role == "user"]
     assistant_lines = [
         _format_turn_line(turn, max_chars=160)
         for turn in pending_turns
         if turn.role == "assistant"
     ]
-    source_text = "\n".join(lines)
-    summary_parts: list[str] = []
-    if previous_text:
-        summary_parts.append("此前摘要：\n" + previous_text)
-    if source_text:
-        summary_parts.append("本次滚动新增上下文：\n" + source_text)
-    summary = "\n\n".join(summary_parts).strip()
+    source_text = "\n".join(user_lines[-6:] + assistant_lines[-4:])
+    summary = _compact_previous_and_pending(
+        previous_text=previous_text,
+        pending_turns=pending_turns,
+        max_chars=config.ROLLING_SUMMARY_MAX_CHARS,
+    )
 
     open_threads = []
     if user_lines:

@@ -127,9 +127,7 @@ def save_new_active_summary(
 ) -> RollingSessionSummary:
     if not pending_turns:
         raise ValueError("pending_turns is required")
-    if old_summary is not None:
-        old_summary.status = "archived"
-        old_summary.updated_at = datetime.now()
+    archive_active_summaries_for_session(db, session_id)
 
     summary_text = render_summary_text(summary_json)
     source_turn_ids = [int(turn.id) for turn in pending_turns]

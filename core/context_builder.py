@@ -13,9 +13,6 @@ logger = logging.getLogger("nanobot.context_builder")
 MAX_GROUP_CONTEXT_ROWS = 10
 MAX_PRIVATE_CONTEXT_ROWS = 32
 MAX_GROUP_RECENT_ROWS = 12
-MAX_MID_TERM_CONTEXT_ROWS = 8
-MAX_MID_TERM_CONTEXT_CHARS = 1200
-
 # 长用户消息阈值——超过此长度的历史消息会被摘要化
 LONG_USER_MESSAGE_CHARS = 2000
 
@@ -150,103 +147,6 @@ def _join_context_headers(*parts: str) -> str:
     return "\n".join(part for part in (str(x or "").strip() for x in parts) if part)
 
 
-def _build_mid_term_context_summary(
-    db,
-    *,
-    session_id: str,
-    cutoff: datetime | None,
-    user_id: str = "",
-    is_group: bool = False,
-) -> tuple[str, dict]:
-    """把短期窗口外的旧 ConversationTurn 渲染成运行时中期摘要。
-
-    这是上下文压缩层，不是 memory_digest，也不是长期记忆。只用于恢复当前会话
-    脉络，并且仍受 history_clear_at / no_context / 内部 kind 过滤。
-    """
-    debug = {
-        "mid_term_context_injected": False,
-        "mid_term_context_source": "",
-        "mid_term_context_turn_ids": [],
-        "mid_term_context_chars": 0,
-    }
-    if cutoff is None:
-        return "", debug
-
-    try:
-        from core.database import ConversationTurn, User
-
-        query = db.query(ConversationTurn).filter(
-            ConversationTurn.session_id == session_id,
-            ConversationTurn.created_at <= cutoff,
-        )
-        if user_id:
-            user = db.query(User).filter(User.id == user_id).first()
-            if user and user.history_clear_at:
-                query = query.filter(ConversationTurn.created_at > user.history_clear_at)
-        rows = (
-            query.order_by(ConversationTurn.created_at.desc(), ConversationTurn.id.desc())
-            .limit(MAX_MID_TERM_CONTEXT_ROWS)
-            .all()
-        )
-    except Exception as exc:
-        logger.warning("[Context] mid-term context query failed: %s", exc)
-        return "", debug
-
-    selected = []
-    for row in reversed(rows):
-        meta = _safe_meta(getattr(row, "meta_json", "{}"))
-        if meta.get("moderation", {}).get("no_context") or meta.get("no_context"):
-            continue
-        if meta.get("kind", "chat") in _INTERNAL_KINDS:
-            continue
-        content = sanitize_prompt_text(getattr(row, "content", "") or "", 260)
-        if not content.strip():
-            continue
-        selected.append((row, content))
-    if not selected:
-        return "", debug
-
-    start_dt = selected[0][0].created_at
-    end_dt = selected[-1][0].created_at
-    scope = "群聊" if is_group else "私聊"
-    lines = [
-        (
-            f'<mid_term_context_summary session_id="{escape(str(session_id or ""), quote=True)}" '
-            f'source="conversation_turn" selected_count="{len(selected)}">'
-        ),
-        (
-            f"这是短期窗口被裁切出的{scope}上下文摘要，用于恢复当前会话脉络；"
-            "这不是长期记忆，不代表稳定事实，也不能覆盖当前用户输入。"
-        ),
-    ]
-    if start_dt and end_dt:
-        lines.append(
-            f"时间范围: {start_dt.strftime('%Y-%m-%d %H:%M:%S')} ~ {end_dt.strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-    total = 0
-    turn_ids: list[int] = []
-    for row, content in selected:
-        role = "用户" if row.role == "user" else "助手"
-        ts = row.created_at.strftime("%H:%M:%S") if row.created_at else ""
-        line = f"- [{ts}] {role}: {escape(content, quote=False)}"
-        if total + len(line) > MAX_MID_TERM_CONTEXT_CHARS:
-            break
-        lines.append(line)
-        total += len(line)
-        turn_ids.append(int(row.id))
-    if not turn_ids:
-        return "", debug
-    lines.append("</mid_term_context_summary>")
-    context = "\n".join(lines)
-    debug.update({
-        "mid_term_context_injected": True,
-        "mid_term_context_source": "conversation_turn",
-        "mid_term_context_turn_ids": turn_ids,
-        "mid_term_context_chars": len(context),
-    })
-    return context, debug
-
-
 def build_session_memory(
     db, session_id: str, user_id: str = "",
     max_per_msg: int = 300, max_total: int = 4000,
@@ -260,10 +160,9 @@ def build_session_memory(
         maybe_rollup_session_summary,
     )
     from app.session_memory.windowing import (
-        load_context_eligible_turns,
+        load_latest_raw_window,
+        load_pending_for_summary_turns,
         raw_window_limits,
-        select_latest_raw_window,
-        select_pending_for_summary,
     )
     from core.database import User
 
@@ -312,29 +211,29 @@ def build_session_memory(
         after_clear_at=history_clear_at,
     )
     last_covered_id = int(active_summary.covered_until_turn_id or 0) if active_summary else 0
-    eligible, eligible_debug = load_context_eligible_turns(
-        db,
-        session_id=session_id,
-        user_id=user_id,
-        after_clear_at=history_clear_at,
-        after_turn_id=last_covered_id,
-    )
-    debug["rolling_summary_eligible_skipped"] = eligible_debug.get("skipped", [])
 
     max_turns, max_tokens = raw_window_limits(chat_type, max_total=max_total)
-    recent_window, raw_debug = select_latest_raw_window(
-        eligible,
+    recent_window, raw_debug = load_latest_raw_window(
+        db,
+        session_id=session_id,
         chat_type=chat_type,
         max_turns=max_turns,
         max_tokens=max_tokens,
         max_per_msg=max_per_msg,
+        after_clear_at=history_clear_at,
+        after_turn_id=last_covered_id,
     )
+    debug["rolling_summary_eligible_skipped"] = list(raw_debug.get("raw_window_skipped") or [])
     raw_start_id = int(raw_debug.get("raw_window_start_turn_id") or 0)
-    pending = select_pending_for_summary(
-        eligible,
+    pending, pending_debug = load_pending_for_summary_turns(
+        db,
+        session_id=session_id,
         last_covered_id=last_covered_id,
         raw_window_start_turn_id=raw_start_id,
+        after_clear_at=history_clear_at,
     )
+    debug["rolling_summary_eligible_skipped"].extend(pending_debug.get("pending_skipped") or [])
+    debug["rolling_summary_pending_truncated"] = bool(pending_debug.get("pending_truncated"))
     debug["rolling_summary_pending_turn_ids"] = [int(turn.id) for turn in pending]
     debug["rolling_summary_raw_start_turn_id"] = raw_start_id
     debug["rolling_summary_recent_raw_turn_ids"] = list(raw_debug.get("raw_window_turn_ids") or [])
@@ -414,7 +313,7 @@ def build_session_memory(
         "[Context] session=%s type=%s eligible=%d raw=%d tokens~%d",
         session_id,
         chat_type,
-        len(eligible),
+        int(raw_debug.get("raw_candidates_eligible", 0)),
         len(history_messages),
         raw_debug.get("raw_window_tokens", 0),
     )
@@ -747,15 +646,61 @@ def build_chat_context(
     summary_header = ""
     try:
         from app.session_memory.renderer import render_rolling_summary_context
-        from app.session_memory.rolling_summary import get_active_summary
+        from app.session_memory.rolling_summary import get_active_summary, maybe_rollup_session_summary
+        from app.session_memory.windowing import (
+            load_latest_raw_window,
+            load_pending_for_summary_turns,
+            raw_window_limits,
+        )
         from core.database import User
 
         user = db.query(User).filter(User.id == user_id).first() if user_id else None
+        history_clear_at = user.history_clear_at if user and user.history_clear_at else None
         active_summary = get_active_summary(
             db,
             session_id,
-            after_clear_at=user.history_clear_at if user else None,
+            after_clear_at=history_clear_at,
         )
+        last_covered_id = int(active_summary.covered_until_turn_id or 0) if active_summary else 0
+        max_turns, max_tokens = raw_window_limits("group", max_total=max_total)
+        rolling_raw_window, raw_debug = load_latest_raw_window(
+            db,
+            session_id=session_id,
+            chat_type="group",
+            max_turns=max_turns,
+            max_tokens=max_tokens,
+            max_per_msg=max_per_msg,
+            after_clear_at=history_clear_at,
+            after_turn_id=last_covered_id,
+        )
+        raw_start_id = int(raw_debug.get("raw_window_start_turn_id") or 0)
+        pending, pending_debug = load_pending_for_summary_turns(
+            db,
+            session_id=session_id,
+            last_covered_id=last_covered_id,
+            raw_window_start_turn_id=raw_start_id,
+            after_clear_at=history_clear_at,
+        )
+        if pending:
+            rollup_result = maybe_rollup_session_summary(
+                db,
+                session_id=session_id,
+                user_id=user_id,
+                chat_type="group",
+                active_summary=active_summary,
+                pending_turns=pending,
+                recent_raw_turn_ids=raw_debug.get("raw_window_turn_ids") or [],
+                raw_window_start_turn_id=raw_start_id,
+                current_user_input=current_user_input,
+            )
+            if rollup_result.summary is not None:
+                active_summary = rollup_result.summary
+            skipped_reason = rollup_result.skipped_reason
+            rollup_error = rollup_result.error
+        else:
+            skipped_reason = "empty_pending"
+            rollup_error = ""
+
         summary_header = render_rolling_summary_context(active_summary)
         debug.update({
             "rolling_summary_enabled": True,
@@ -769,11 +714,17 @@ def build_chat_context(
                 int(getattr(active_summary, "source_turn_count", 0) or 0)
                 if summary_header else 0
             ),
-            "rolling_summary_pending_turn_ids": [],
-            "rolling_summary_raw_start_turn_id": 0,
-            "rolling_summary_recent_raw_turn_ids": [],
-            "rolling_summary_skipped_reason": "",
-            "rolling_summary_error": "",
+            "rolling_summary_pending_turn_ids": [int(turn.id) for turn in pending],
+            "rolling_summary_raw_start_turn_id": raw_start_id,
+            "rolling_summary_recent_raw_turn_ids": list(raw_debug.get("raw_window_turn_ids") or []),
+            "rolling_summary_skipped_reason": skipped_reason,
+            "rolling_summary_error": rollup_error,
+            "rolling_summary_eligible_skipped": (
+                list(raw_debug.get("raw_window_skipped") or [])
+                + list(pending_debug.get("pending_skipped") or [])
+            ),
+            "rolling_summary_pending_truncated": bool(pending_debug.get("pending_truncated")),
+            "rolling_summary_raw_window_count": len(rolling_raw_window),
         })
     except Exception as exc:
         logger.warning("[Context] group rolling summary render failed: %s", exc)
