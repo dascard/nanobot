@@ -7,6 +7,7 @@ from typing import Any
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
 from app.memory_digest.retrieval_service import MemoryDigestRetrievalService, validate_digest_date
+from app.session_memory.retrieval_service import SessionSummaryRetrievalService
 from core.uow import UnitOfWork
 
 
@@ -39,6 +40,11 @@ class MemoryQueryTool(BaseTool):
                     "enum": ["search", "time", "expand", "aggregate"],
                     "description": "search=关键词检索；time=按时间列出；expand=按 digest_id 展开；aggregate=聚合预览。",
                 },
+                "source": {
+                    "type": "string",
+                    "enum": ["digest", "session_summary"],
+                    "description": "digest=跨天/中期摘要；session_summary=当前 session rolling summary。默认 digest。",
+                },
                 "query": {
                     "type": "string",
                     "description": "关键词。search 模式必填。",
@@ -54,6 +60,10 @@ class MemoryQueryTool(BaseTool):
                 "digest_id": {
                     "type": "integer",
                     "description": "expand 模式要展开的摘要 ID。",
+                },
+                "summary_id": {
+                    "type": "integer",
+                    "description": "source=session_summary 时 expand 要展开的 rolling summary ID。",
                 },
                 "digest_date": {
                     "type": "string",
@@ -87,6 +97,7 @@ class MemoryQueryTool(BaseTool):
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         mode = str(args.get("mode") or "search").strip()
+        source = str(args.get("source") or "digest").strip() or "digest"
         limit = max(1, min(int(args.get("limit") or 5), 10))
         include_detail = bool(args.get("include_detail", False))
         include_legacy = bool(args.get("include_legacy", False))
@@ -99,6 +110,20 @@ class MemoryQueryTool(BaseTool):
             with UnitOfWork() as uow:
                 if uow.db is None:
                     return ToolResult(error="database session is unavailable")
+                if source == "session_summary":
+                    service = SessionSummaryRetrievalService(uow.db)
+                    if mode == "search":
+                        return self._session_search(service, args, limit, include_detail, include_legacy)
+                    if mode == "time":
+                        return self._session_time(service, args, limit, include_detail, include_legacy)
+                    if mode == "expand":
+                        return self._session_expand(service, args, include_legacy)
+                    if mode == "aggregate":
+                        return self._session_aggregate(service, args, limit, include_legacy)
+                    return ToolResult(error=f"Unsupported mode: {mode}")
+                if source != "digest":
+                    return ToolResult(error=f"Unsupported source: {source}")
+
                 service = MemoryDigestRetrievalService(uow.db)
                 if mode == "search":
                     return self._search(service, args, limit, include_detail, include_legacy)
@@ -337,6 +362,201 @@ class MemoryQueryTool(BaseTool):
                     "mode": "aggregate",
                     "date_start": str(args.get("date_start") or "").strip(),
                     "date_end": str(args.get("date_end") or "").strip(),
+                    "items": rows,
+                }
+            },
+        )
+
+    def _session_search(
+        self,
+        service: SessionSummaryRetrievalService,
+        args: dict[str, Any],
+        limit: int,
+        include_detail: bool,
+        include_archived: bool,
+    ) -> ToolResult:
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return ToolResult(error="search mode requires query")
+        rows = service.search(
+            keyword=query,
+            user_id=str(args.get("user_id") or "").strip(),
+            session_id=str(args.get("session_id") or "").strip(),
+            date_start=str(args.get("date_start") or "").strip(),
+            date_end=str(args.get("date_end") or "").strip(),
+            limit=limit,
+            include_content=include_detail,
+            include_archived=include_archived,
+        )
+        if not rows:
+            return ToolResult(
+                output=f"未找到与 {query} 相关的 session summary。",
+                exit_code=0,
+                metadata={
+                    "structured_content": {
+                        "mode": "search",
+                        "source": "session_summary",
+                        "query": query,
+                        "items": [],
+                    }
+                },
+            )
+        lines = [f"memory_query session_summary search: query={query} count={len(rows)}"]
+        for row in rows:
+            preview = str(row.get("summary_text") or row.get("preview") or "").strip()
+            lines.append(
+                f"- summary_id={row.get('summary_id')} kind={row.get('summary_kind')} "
+                f"session={row.get('session_id')} covered_until={row.get('covered_until_turn_id')}: "
+                f"{preview[:260]}"
+            )
+        return ToolResult(
+            output="\n".join(lines),
+            exit_code=0,
+            metadata={
+                "structured_content": {
+                    "mode": "search",
+                    "source": "session_summary",
+                    "query": query,
+                    "items": rows,
+                }
+            },
+        )
+
+    def _session_time(
+        self,
+        service: SessionSummaryRetrievalService,
+        args: dict[str, Any],
+        limit: int,
+        include_detail: bool,
+        include_archived: bool,
+    ) -> ToolResult:
+        rows = service.list_summaries(
+            user_id=str(args.get("user_id") or "").strip(),
+            session_id=str(args.get("session_id") or "").strip(),
+            date_start=str(args.get("date_start") or "").strip(),
+            date_end=str(args.get("date_end") or "").strip(),
+            limit=limit,
+            include_content=include_detail,
+            include_archived=include_archived,
+        )
+        if not rows:
+            return ToolResult(
+                output="未找到符合条件的 session summary。",
+                exit_code=0,
+                metadata={
+                    "structured_content": {
+                        "mode": "time",
+                        "source": "session_summary",
+                        "items": [],
+                    }
+                },
+            )
+        lines = [f"memory_query session_summary time: count={len(rows)}"]
+        for row in rows:
+            preview = str(row.get("summary_text") or row.get("preview") or "").strip()
+            lines.append(
+                f"- summary_id={row.get('summary_id')} kind={row.get('summary_kind')} "
+                f"session={row.get('session_id')} status={row.get('status')}: {preview[:240]}"
+            )
+        return ToolResult(
+            output="\n".join(lines),
+            exit_code=0,
+            metadata={
+                "structured_content": {
+                    "mode": "time",
+                    "source": "session_summary",
+                    "items": rows,
+                }
+            },
+        )
+
+    def _session_expand(
+        self,
+        service: SessionSummaryRetrievalService,
+        args: dict[str, Any],
+        include_archived: bool,
+    ) -> ToolResult:
+        summary_id = args.get("summary_id", args.get("digest_id"))
+        if summary_id is None:
+            return ToolResult(error="expand mode requires summary_id")
+        item = service.expand_summary(
+            summary_id=int(summary_id),
+            include_archived=include_archived,
+        )
+        if not item:
+            return ToolResult(
+                output=f"未找到可展开的 session summary summary_id={summary_id}。",
+                exit_code=0,
+                metadata={
+                    "structured_content": {
+                        "mode": "expand",
+                        "source": "session_summary",
+                        "summary_id": int(summary_id),
+                        "item": None,
+                    }
+                },
+            )
+        lines = [
+            f"memory_query session_summary expand: summary_id={item.get('summary_id')} "
+            f"kind={item.get('summary_kind')} session={item.get('session_id')}",
+            f"covered_turns={item.get('covered_from_turn_id')}..{item.get('covered_until_turn_id')}",
+            "summary:",
+            str(item.get("summary_text") or ""),
+        ]
+        return ToolResult(
+            output="\n".join(lines),
+            exit_code=0,
+            metadata={
+                "structured_content": {
+                    "mode": "expand",
+                    "source": "session_summary",
+                    "summary_id": int(summary_id),
+                    "item": item,
+                }
+            },
+        )
+
+    def _session_aggregate(
+        self,
+        service: SessionSummaryRetrievalService,
+        args: dict[str, Any],
+        limit: int,
+        include_archived: bool,
+    ) -> ToolResult:
+        rows = service.list_summaries(
+            user_id=str(args.get("user_id") or "").strip(),
+            session_id=str(args.get("session_id") or "").strip(),
+            date_start=str(args.get("date_start") or "").strip(),
+            date_end=str(args.get("date_end") or "").strip(),
+            limit=limit,
+            include_content=False,
+            include_archived=include_archived,
+        )
+        if not rows:
+            return ToolResult(
+                output="没有可聚合的 session summary。",
+                exit_code=0,
+                metadata={
+                    "structured_content": {
+                        "mode": "aggregate",
+                        "source": "session_summary",
+                        "items": [],
+                    }
+                },
+            )
+        lines = [f"memory_query session_summary aggregate: count={len(rows)}"]
+        for row in rows:
+            lines.append(
+                f"- summary_id={row.get('summary_id')} kind={row.get('summary_kind')} "
+                f"covered_until={row.get('covered_until_turn_id')}: {str(row.get('preview') or '')[:180]}"
+            )
+        return ToolResult(
+            output="\n".join(lines),
+            exit_code=0,
+            metadata={
+                "structured_content": {
+                    "mode": "aggregate",
+                    "source": "session_summary",
                     "items": rows,
                 }
             },

@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import datetime
 
-from core.database import ChatLog, MemoryDigest
+from core.database import ChatLog, MemoryDigest, RollingSessionSummary
 
 
 def _log(**kwargs):
@@ -352,3 +352,52 @@ def test_memory_query_tool_rejects_invalid_date_range(monkeypatch):
 
     assert result.error
     assert "date_start" in result.error
+
+
+def test_memory_query_tool_session_summary_search_and_expand(db_session, monkeypatch):
+    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+    from core import database
+
+    row = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="用户持续讨论 rolling session summary 的异步 worker 和审计边界。",
+        summary_json=json.dumps({
+            "summary": "用户持续讨论 rolling session summary 的异步 worker 和审计边界。",
+            "keywords": ["rolling summary", "worker"],
+            "quality": {"score": 0.86, "issues": []},
+        }, ensure_ascii=False),
+        covered_from_turn_id=11,
+        covered_until_turn_id=20,
+        source_turn_count=10,
+        quality_score=0.86,
+        created_at=datetime(2026, 5, 26, 12, 0, 0),
+    )
+    db_session.add(row)
+    db_session.commit()
+    monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
+
+    tool = MemoryQueryTool()
+    search_result = asyncio.run(tool._execute({
+        "source": "session_summary",
+        "mode": "search",
+        "query": "worker",
+        "session_id": "s1",
+        "limit": 5,
+    }))
+    expand_result = asyncio.run(tool._execute({
+        "source": "session_summary",
+        "mode": "expand",
+        "summary_id": row.id,
+    }))
+
+    assert search_result.exit_code == 0
+    assert f"summary_id={row.id}" in search_result.output
+    assert search_result.metadata["structured_content"]["source"] == "session_summary"
+    assert search_result.metadata["structured_content"]["items"][0]["summary_kind"] == "llm_episode"
+    assert expand_result.exit_code == 0
+    assert "covered_turns=11..20" in expand_result.output
+    assert "原始 ChatLog" not in expand_result.output
