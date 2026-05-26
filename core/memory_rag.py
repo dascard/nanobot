@@ -11,9 +11,10 @@ from sqlalchemy.orm import Session
 from core.database import SemanticIndexItem
 from core.semantic.reranker import SemanticCandidate
 from core.semantic.retriever import (
-    fts_rowids_for_query,
+    fts_recall_hits,
     lexical_overlap_score,
     load_recall_rows,
+    load_recall_rows_by_ids,
     semantic_score_for_row,
 )
 from core.semantic.scoring import passes_relevance_gate, weighted_score
@@ -99,7 +100,15 @@ class MemoryRagService:
         limit: int = 5,
     ) -> dict[str, Any]:
         source_types = _source_types(source)
-        rowids = fts_rowids_for_query(self.db, query)
+        fts_hits = fts_recall_hits(
+            self.db,
+            query,
+            source_types=source_types,
+            user_id=user_id,
+            session_id=session_id,
+            limit=200,
+        )
+        lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
         rows = load_recall_rows(
             self.db,
             source_types=source_types,
@@ -107,14 +116,22 @@ class MemoryRagService:
             session_id=session_id,
             limit=400,
         )
+        rows_by_id = {int(row.id): row for row in rows}
+        missing_fts_ids = [hit.item_id for hit in fts_hits if hit.item_id not in rows_by_id]
+        rows_by_id.update(load_recall_rows_by_ids(self.db, missing_fts_ids))
+        fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
+        recent_rows = [row for row in rows if int(row.id) not in {int(item.id) for item in fts_ordered}]
+        rows = fts_ordered + recent_rows
         query_vector = _query_vector(query, self.embedding_provider)
         candidates: list[_Candidate] = []
-        fts_hits = 0
+        fts_candidate_count = 0
         semantic_hits = 0
         for row in rows:
-            lexical = 1.0 if row.id in rowids else lexical_overlap_score(query, row.lexical_text or row.text or "")
+            lexical = lexical_by_id.get(int(row.id))
+            if lexical is None:
+                lexical = lexical_overlap_score(query, row.lexical_text or row.text or "")
             if lexical > 0:
-                fts_hits += 1
+                fts_candidate_count += 1
             semantic = semantic_score_for_row(
                 row,
                 query_vector=query_vector,
@@ -163,7 +180,8 @@ class MemoryRagService:
             "degraded": degraded,
             "fallback_reason": fallback_reason,
             "stats": {
-                "fts_candidates": fts_hits,
+                "fts_candidates": len(fts_hits),
+                "lexical_candidates": fts_candidate_count,
                 "embedding_candidates": semantic_hits,
                 "merged_candidates": len(candidates),
                 "reranker_candidates": len(candidates[:50]) if self.reranker_provider else 0,

@@ -11,9 +11,10 @@ from sqlalchemy.orm import Session
 from core.database import KnowledgeChunk, KnowledgeDocument, SemanticIndexItem
 from core.semantic.reranker import SemanticCandidate
 from core.semantic.retriever import (
-    fts_rowids_for_query,
+    fts_recall_hits,
     lexical_overlap_score,
     load_recall_rows,
+    load_recall_rows_by_ids,
     semantic_score_for_row,
 )
 from core.semantic.scoring import passes_relevance_gate, weighted_score
@@ -107,11 +108,24 @@ class KnowledgeRagService:
         *,
         limit: int = 5,
         min_trust_level: str = "low",
+        source_type: str = "",
+        domain: str = "",
+        date_start: str = "",
+        date_end: str = "",
         published_after: str = "",
         published_before: str = "",
     ) -> dict[str, Any]:
-        rowids = fts_rowids_for_query(self.db, query)
+        published_after = str(published_after or date_start or "")
+        published_before = str(published_before or date_end or "")
+        fts_hits = fts_recall_hits(self.db, query, source_types={"knowledge"}, limit=300)
+        lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
         rows = load_recall_rows(self.db, source_types={"knowledge"}, limit=600)
+        rows_by_id = {int(row.id): row for row in rows}
+        missing_fts_ids = [hit.item_id for hit in fts_hits if hit.item_id not in rows_by_id]
+        rows_by_id.update(load_recall_rows_by_ids(self.db, missing_fts_ids))
+        fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
+        fts_ids = {int(row.id) for row in fts_ordered}
+        rows = fts_ordered + [row for row in rows if int(row.id) not in fts_ids]
         documents = self._load_documents(rows)
         query_vector = _query_vector(query, self.embedding_provider)
         candidates: list[_KnowledgeCandidate] = []
@@ -127,10 +141,21 @@ class KnowledgeRagService:
             if document is not None and str(document.status or "active") != "active":
                 skipped_filter += 1
                 continue
-            if not self._passes_filters(row, citation, document, min_trust_level, published_after, published_before):
+            if not self._passes_filters(
+                row,
+                citation,
+                document,
+                min_trust_level,
+                published_after,
+                published_before,
+                source_type,
+                domain,
+            ):
                 skipped_filter += 1
                 continue
-            lexical = 1.0 if row.id in rowids else lexical_overlap_score(query, row.lexical_text or row.text or "")
+            lexical = lexical_by_id.get(int(row.id))
+            if lexical is None:
+                lexical = lexical_overlap_score(query, row.lexical_text or row.text or "")
             semantic = semantic_score_for_row(
                 row,
                 query_vector=query_vector,
@@ -165,7 +190,7 @@ class KnowledgeRagService:
             "degraded": degraded,
             "fallback_reason": "reranker_unavailable" if degraded else "",
             "stats": {
-                "fts_candidates": len(rowids),
+                "fts_candidates": len(fts_hits),
                 "merged_candidates": len(candidates),
                 "reranker_candidates": len(candidates[:100]) if self.reranker_provider else 0,
                 "final_items": len(items),
@@ -213,7 +238,10 @@ class KnowledgeRagService:
         min_trust_level: str,
         published_after: str,
         published_before: str,
+        source_type: str,
+        domain: str,
     ) -> bool:
+        meta = _safe_json(row.meta_json)
         trust = _trust_level(
             (document.trust_level if document is not None else "")
             or citation.get("trust_level")
@@ -221,6 +249,26 @@ class KnowledgeRagService:
         )
         if not _passes_trust(trust, min_trust_level):
             return False
+        wanted_source_type = str(source_type or "").strip()
+        if wanted_source_type:
+            actual_source_type = str(
+                (document.document_kind if document is not None else "")
+                or citation.get("document_kind")
+                or meta.get("document_kind")
+                or ""
+            ).strip()
+            if actual_source_type != wanted_source_type:
+                return False
+        wanted_domain = str(domain or "").strip()
+        if wanted_domain:
+            actual_domain = str(
+                (document.domain if document is not None else "")
+                or citation.get("domain")
+                or meta.get("domain")
+                or ""
+            ).strip()
+            if actual_domain != wanted_domain:
+                return False
         published_at = str(
             (document.published_at if document is not None else "")
             or citation.get("published_at")

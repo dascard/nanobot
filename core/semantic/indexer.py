@@ -70,9 +70,11 @@ def upsert_semantic_chunks(
     index_version: str,
     embedding_model: str = "",
     embeddings: dict[str, bytes] | None = None,
+    embedding_enabled: bool | None = None,
 ) -> list[SemanticIndexItem]:
     ensure_semantic_schema(db.bind)
     rows: list[SemanticIndexItem] = []
+    embedding_enabled = bool(embedding_model) if embedding_enabled is None else bool(embedding_enabled)
     embeddings = embeddings or {}
     for chunk in chunks:
         row = (
@@ -110,7 +112,10 @@ def upsert_semantic_chunks(
         row.source_hash = source_hash_for_chunk(chunk)
         row.embedding = embeddings.get(chunk.source_sub_id)
         row.embedding_model = embedding_model
-        row.embedding_status = "ok" if row.embedding else "pending"
+        if row.embedding:
+            row.embedding_status = "ok"
+        else:
+            row.embedding_status = "pending" if embedding_enabled else "disabled"
         row.quality_score = float(chunk.quality_score or 0.0)
         row.trust_level = chunk.trust_level
         row.source_prior = float(chunk.source_prior or 0.0)

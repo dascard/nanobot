@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import text
@@ -13,7 +14,15 @@ from sqlalchemy.orm import Session
 from core.database import SemanticIndexItem
 from core.semantic.fts import build_fts5_match_query
 from core.semantic.scoring import normalize_semantic_cosine
+from core.semantic.scoring import normalize_sqlite_bm25
 from core.semantic.schema import ensure_semantic_schema
+
+
+@dataclass(frozen=True)
+class FtsRecallHit:
+    item_id: int
+    bm25_raw: float
+    lexical_score: float
 
 
 def parse_embedding(value: bytes | None) -> list[float] | None:
@@ -73,6 +82,21 @@ def load_recall_rows(
     return query.order_by(SemanticIndexItem.id.desc()).limit(max(1, int(limit))).all()
 
 
+def load_recall_rows_by_ids(db: Session, item_ids: list[int]) -> dict[int, SemanticIndexItem]:
+    ids = [int(item_id) for item_id in item_ids if int(item_id) > 0]
+    if not ids:
+        return {}
+    ensure_semantic_schema(db.bind)
+    rows = (
+        db.query(SemanticIndexItem)
+        .filter(SemanticIndexItem.id.in_(ids))
+        .filter(SemanticIndexItem.status == "active")
+        .filter(SemanticIndexItem.visibility == "recall")
+        .all()
+    )
+    return {int(row.id): row for row in rows}
+
+
 def fts_rowids_for_query(db: Session, query: str) -> set[int]:
     match_query = build_fts5_match_query(query)
     if not match_query:
@@ -85,6 +109,72 @@ def fts_rowids_for_query(db: Session, query: str) -> set[int]:
     except Exception:
         return set()
     return {int(row[0]) for row in rows}
+
+
+def fts_recall_hits(
+    db: Session,
+    query: str,
+    *,
+    source_types: set[str],
+    user_id: str = "",
+    session_id: str = "",
+    limit: int = 200,
+) -> list[FtsRecallHit]:
+    match_query = build_fts5_match_query(query)
+    if not match_query:
+        return []
+    ensure_semantic_schema(db.bind)
+    params: dict[str, Any] = {
+        "match_query": match_query,
+        "limit": max(1, int(limit)),
+    }
+    clauses = [
+        "semantic_index_fts MATCH :match_query",
+        "i.status = 'active'",
+        "i.visibility = 'recall'",
+    ]
+    if source_types:
+        placeholders: list[str] = []
+        for index, source_type in enumerate(sorted(source_types)):
+            key = f"source_type_{index}"
+            params[key] = source_type
+            placeholders.append(f":{key}")
+        clauses.append(f"i.source_type IN ({', '.join(placeholders)})")
+    if user_id:
+        params["user_id"] = user_id
+        clauses.append("i.user_id = :user_id")
+    if session_id:
+        params["session_id"] = session_id
+        clauses.append("i.session_id = :session_id")
+    sql = (
+        "SELECT semantic_index_fts.rowid AS item_id, "
+        "bm25(semantic_index_fts) AS bm25_raw "
+        "FROM semantic_index_fts "
+        "JOIN semantic_index_items AS i ON i.id = semantic_index_fts.rowid "
+        f"WHERE {' AND '.join(clauses)} "
+        "ORDER BY bm25_raw ASC "
+        "LIMIT :limit"
+    )
+    try:
+        rows = db.execute(text(sql), params).fetchall()
+    except Exception:
+        return []
+    if not rows:
+        return []
+    raw_scores = [float(row.bm25_raw) for row in rows]
+    best = min(raw_scores)
+    worst = max(raw_scores)
+    return [
+        FtsRecallHit(
+            item_id=int(row.item_id),
+            bm25_raw=float(row.bm25_raw),
+            lexical_score=max(
+                0.10,
+                normalize_sqlite_bm25(float(row.bm25_raw), best=best, worst=worst) or 0.0,
+            ),
+        )
+        for row in rows
+    ]
 
 
 def semantic_score_for_row(

@@ -110,6 +110,14 @@ class MemoryQueryTool(BaseTool):
             with UnitOfWork() as uow:
                 if uow.db is None:
                     return ToolResult(error="database session is unavailable")
+                if mode == "search" and source in {"digest", "session_summary", "all"}:
+                    from core.semantic.provider_factory import get_rag_runtime_config
+
+                    runtime = get_rag_runtime_config("memory")
+                    if runtime.enabled and (source == "all" or self._has_rag_index(uow.db, source)):
+                        return self._rag_search(uow.db, args, limit, source=source)
+                    if source == "all":
+                        return ToolResult(error="source=all requires MEMORY_RAG_ENABLED=1")
                 if source == "session_summary":
                     service = SessionSummaryRetrievalService(uow.db)
                     if mode == "search":
@@ -122,8 +130,6 @@ class MemoryQueryTool(BaseTool):
                         return self._session_aggregate(service, args, limit, include_legacy)
                     return ToolResult(error=f"Unsupported mode: {mode}")
                 if source == "all":
-                    if mode == "search":
-                        return self._rag_search(uow.db, args, limit)
                     return ToolResult(error="source=all currently supports search mode only")
                 if source != "digest":
                     return ToolResult(error=f"Unsupported source: {source}")
@@ -141,27 +147,44 @@ class MemoryQueryTool(BaseTool):
         except Exception as exc:
             return ToolResult(error=f"memory_query failed: {exc}")
 
-    def _rag_search(self, db, args: dict[str, Any], limit: int) -> ToolResult:
+    def _rag_search(self, db, args: dict[str, Any], limit: int, *, source: str) -> ToolResult:
         query = str(args.get("query") or "").strip()
         if not query:
             return ToolResult(error="search mode requires query")
         from core.memory_rag import MemoryRagService
+        from core.semantic.provider_factory import (
+            degraded_error,
+            get_embedding_provider,
+            get_rag_runtime_config,
+            get_reranker_provider,
+        )
 
-        result = MemoryRagService(db).query(
+        runtime = get_rag_runtime_config("memory")
+        result = MemoryRagService(
+            db,
+            embedding_provider=get_embedding_provider(),
+            reranker_provider=get_reranker_provider(),
+            allow_degraded=runtime.allow_degraded,
+        ).query(
             query,
-            source="all",
+            source=source,
             user_id=str(args.get("user_id") or "").strip(),
             session_id=str(args.get("session_id") or "").strip(),
             limit=limit,
         )
+        if result.get("degraded") and not runtime.allow_degraded:
+            return ToolResult(error=degraded_error("memory", str(result.get("fallback_reason") or "")))
         items = result.get("items") or []
         if not items:
             return ToolResult(
                 output=f"未找到与 {query} 相关的摘要。",
                 exit_code=0,
-                metadata={"structured_content": {"mode": "search", "source": "all", **result}},
+                metadata={"structured_content": {"mode": "search", "source": source, **result}},
             )
-        lines = [f"memory_query rag search: query={query} count={len(items)} degraded={result.get('degraded')}"]
+        lines = [
+            f"memory_query rag search: source={source} query={query} "
+            f"count={len(items)} degraded={result.get('degraded')}"
+        ]
         for item in items:
             best = (item.get("matched_cards") or [{}])[0]
             identifier = item.get("digest_id") or item.get("summary_id") or item.get("source_id")
@@ -172,7 +195,22 @@ class MemoryQueryTool(BaseTool):
         return ToolResult(
             output="\n".join(lines),
             exit_code=0,
-            metadata={"structured_content": {"mode": "search", "source": "all", **result}},
+            metadata={"structured_content": {"mode": "search", "source": source, **result}},
+        )
+
+    @staticmethod
+    def _has_rag_index(db, source: str) -> bool:
+        from core.database import SemanticIndexItem
+
+        source_types = {"memory_digest"} if source == "digest" else {"session_summary"}
+        return (
+            db.query(SemanticIndexItem.id)
+            .filter(SemanticIndexItem.source_type.in_(sorted(source_types)))
+            .filter(SemanticIndexItem.status == "active")
+            .filter(SemanticIndexItem.visibility == "recall")
+            .limit(1)
+            .first()
+            is not None
         )
 
     @staticmethod

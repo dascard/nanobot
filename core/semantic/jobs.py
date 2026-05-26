@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from core.database import SemanticIndexJob
@@ -41,8 +42,9 @@ def enqueue_index_job(
 def claim_next_job(db: Session, *, worker_id: str) -> SemanticIndexJob | None:
     ensure_semantic_schema(db.bind)
     now = datetime.now()
-    job = (
+    candidate = (
         db.query(SemanticIndexJob)
+        .with_entities(SemanticIndexJob.id)
         .filter(SemanticIndexJob.status == "pending")
         .filter(
             (SemanticIndexJob.next_retry_at.is_(None))
@@ -51,13 +53,25 @@ def claim_next_job(db: Session, *, worker_id: str) -> SemanticIndexJob | None:
         .order_by(SemanticIndexJob.id.asc())
         .first()
     )
-    if job is None:
+    if candidate is None:
         return None
-    job.status = "running"
-    job.locked_by = worker_id
-    job.locked_at = now
-    job.updated_at = now
+    job_id = int(candidate[0])
+    result = db.execute(
+        update(SemanticIndexJob)
+        .where(SemanticIndexJob.id == job_id)
+        .where(SemanticIndexJob.status == "pending")
+        .values(
+            status="running",
+            locked_by=worker_id,
+            locked_at=now,
+            updated_at=now,
+        )
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        return None
     db.commit()
+    job = db.query(SemanticIndexJob).filter(SemanticIndexJob.id == job_id).one()
     db.refresh(job)
     return job
 

@@ -128,12 +128,35 @@ class GroupAnalysisTool(BaseTool):
                     )
 
                 preprocess_t0 = time.monotonic()
+                from .local_rag import should_use_group_analysis_local_rag
+                from core.semantic.provider_factory import (
+                    get_embedding_provider,
+                    get_rag_runtime_config,
+                    get_reranker_provider,
+                )
+
+                rag_runtime = get_rag_runtime_config("group_analysis")
+                enable_local_rag = rag_runtime.enabled and should_use_group_analysis_local_rag(instructions)
+                local_rag_reranker = (
+                    get_reranker_provider()
+                    if enable_local_rag and rag_runtime.reranker_enabled
+                    else None
+                )
+                if (
+                    enable_local_rag
+                    and rag_runtime.reranker_enabled
+                    and local_rag_reranker is None
+                    and not rag_runtime.allow_degraded
+                ):
+                    enable_local_rag = False
                 payload = build_analysis_payload(
                     logs,
                     prompt_budget=GROUP_ANALYSIS_PROMPT_CHAR_BUDGET,
                     style_budget=GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET,
-                    local_rag_query=instructions or group.name,
-                    enable_local_rag=True,
+                    local_rag_query=instructions if enable_local_rag else "",
+                    enable_local_rag=enable_local_rag,
+                    embedding_provider=get_embedding_provider() if enable_local_rag else None,
+                    reranker_provider=local_rag_reranker if enable_local_rag else None,
                 )
                 payload["group_stats"]["analysis_window"] = (
                     "全部历史" if window_hours is None else f"最近{window_hours}小时"

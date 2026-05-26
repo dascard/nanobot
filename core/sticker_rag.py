@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 from core.database import SemanticIndexItem, StickerMemory
 from core.semantic.reranker import SemanticCandidate
 from core.semantic.retriever import (
-    fts_rowids_for_query,
+    fts_recall_hits,
     lexical_overlap_score,
     load_recall_rows,
+    load_recall_rows_by_ids,
     semantic_score_for_row,
 )
 from core.semantic.scoring import passes_relevance_gate, weighted_score
@@ -111,12 +112,19 @@ class StickerRagService:
         include_global: bool = True,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        rowids = fts_rowids_for_query(self.db, query)
+        fts_hits = fts_recall_hits(self.db, query, source_types={"sticker"}, limit=200)
+        lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
         index_rows = load_recall_rows(
             self.db,
             source_types={"sticker"},
             limit=400,
         )
+        rows_by_id = {int(row.id): row for row in index_rows}
+        missing_fts_ids = [hit.item_id for hit in fts_hits if hit.item_id not in rows_by_id]
+        rows_by_id.update(load_recall_rows_by_ids(self.db, missing_fts_ids))
+        fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
+        fts_ids = {int(row.id) for row in fts_ordered}
+        index_rows = fts_ordered + [row for row in index_rows if int(row.id) not in fts_ids]
         sticker_ids = [
             sticker_id
             for row in index_rows
@@ -147,7 +155,9 @@ class StickerRagService:
             sticker = stickers.get(sticker_id)
             if sticker is None or not self._passes_hard_gate(sticker, scope):
                 continue
-            lexical = 1.0 if row.id in rowids else lexical_overlap_score(query, row.lexical_text or row.text or "")
+            lexical = lexical_by_id.get(int(row.id))
+            if lexical is None:
+                lexical = lexical_overlap_score(query, row.lexical_text or row.text or "")
             semantic = semantic_score_for_row(
                 row,
                 query_vector=query_vector,

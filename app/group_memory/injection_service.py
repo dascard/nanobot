@@ -101,7 +101,18 @@ class GroupMemoryInjectionService:
                 return cached_result
 
         started = time.perf_counter()
-        selection = GroupMemoryRetrievalService(self.db).select(
+        from core.semantic.provider_factory import get_rag_runtime_config, get_reranker_provider
+
+        runtime = get_rag_runtime_config("group_memory")
+        reranker_provider = get_reranker_provider() if runtime.enabled and runtime.reranker_enabled else None
+        if runtime.enabled and runtime.reranker_enabled and reranker_provider is None and not runtime.allow_degraded:
+            debug["group_memory_skipped"].append({"reason": "reranker_unavailable"})
+            debug["degraded_blocked"] = True
+            return GroupMemoryInjectionResult(debug=debug)
+        selection = GroupMemoryRetrievalService(
+            self.db,
+            reranker_provider=reranker_provider,
+        ).select(
             group_id=session_id,
             current_user_input=current_user_input,
             recent_messages=recent_messages or [],

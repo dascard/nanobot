@@ -61,6 +61,49 @@ def test_embedding_failure_marks_done_with_warning(db_session):
     assert db_session.execute(text("SELECT COUNT(*) FROM semantic_index_fts")).scalar() == 1
 
 
+def test_embedding_bytes_are_json_parseable(db_session):
+    from core.semantic.retriever import parse_embedding
+    from workers.semantic_index_worker import _embedding_bytes_by_sub_id
+
+    class FloatLike:
+        def __init__(self, value):
+            self.value = value
+
+        def __float__(self):
+            return float(self.value)
+
+        def __repr__(self):
+            return f"np.float32({self.value})"
+
+    class NumpyLikeEmbeddingProvider:
+        def embed(self, _texts):
+            return [[FloatLike(0.25), FloatLike(0.75)]]
+
+    embeddings, error = _embedding_bytes_by_sub_id([_chunk()], NumpyLikeEmbeddingProvider())
+
+    assert error == ""
+    assert parse_embedding(embeddings["card:0"]) == [0.25, 0.75]
+
+
+def test_run_once_claims_and_processes_next_job(db_session):
+    from core.semantic.jobs import enqueue_index_job
+    from workers.semantic_index_worker import run_once
+
+    ensure_semantic_schema(db_session.bind)
+    enqueue_index_job(db_session, source_type="memory_digest", source_id="11", index_version="fake:v1:v1")
+
+    processed = run_once(
+        db=db_session,
+        worker_id="worker-a",
+        chunk_loader=lambda _job: [_chunk()],
+    )
+
+    assert processed is True
+    job = db_session.query(SemanticIndexJob).one()
+    assert job.status == "done"
+    assert db_session.query(SemanticIndexItem).count() == 1
+
+
 def test_deleted_source_marks_index_deleted(db_session):
     from core.semantic.indexer import upsert_semantic_chunks
     from core.semantic.jobs import claim_next_job, enqueue_index_job

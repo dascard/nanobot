@@ -1,4 +1,5 @@
 import json
+import asyncio
 
 from core.database import ChatLog, MemoryDigest, RollingSessionSummary
 from core.semantic.adapters import (
@@ -188,9 +189,109 @@ def test_memory_query_merges_multiple_cards_from_same_digest(db_session):
     assert len(result["items"][0]["matched_cards"]) == 2
 
 
+def test_memory_rag_uses_fts_recall_before_recent_row_limit(db_session):
+    from core.memory_rag import MemoryRagService
+    from core.semantic.adapters import SemanticChunk
+    from core.semantic.indexer import upsert_semantic_chunks
+
+    chunks = [
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="old",
+            source_sub_id="card:0",
+            title="旧相关摘要",
+            text="KohakuVQ 端口冲突排查",
+            lexical_text="KohakuVQ 端口冲突排查",
+            embedding_text="KohakuVQ 端口冲突排查",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        )
+    ]
+    chunks.extend(
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id=f"noise-{idx}",
+            source_sub_id="card:0",
+            title=f"噪声 {idx}",
+            text="午饭 咖啡 天气",
+            lexical_text="午饭 咖啡 天气",
+            embedding_text="午饭 咖啡 天气",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        )
+        for idx in range(405)
+    )
+    upsert_semantic_chunks(db_session, chunks, index_version="fake:v1:v1")
+
+    result = MemoryRagService(db_session).query(
+        "KohakuVQ",
+        source="digest",
+        user_id="u1",
+        session_id="s1",
+        limit=3,
+    )
+
+    assert result["items"][0]["source_id"] == "old"
+
+
 def test_memory_query_tool_schema_supports_all_source():
     from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
 
     schema = MemoryQueryTool().get_parameters_schema()
 
     assert "all" in schema["properties"]["source"]["enum"]
+
+
+def test_memory_query_tool_search_routes_all_sources_through_memory_rag(db_session, monkeypatch):
+    from core import database
+    import core.memory_rag as memory_rag
+    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+
+    calls = []
+
+    class FakeMemoryRagService:
+        def __init__(self, db, **kwargs):
+            self.db = db
+            self.kwargs = kwargs
+
+        def query(self, query, *, source, user_id="", session_id="", limit=5):
+            calls.append({
+                "query": query,
+                "source": source,
+                "user_id": user_id,
+                "session_id": session_id,
+                "limit": limit,
+                "has_reranker_kwarg": "reranker_provider" in self.kwargs,
+            })
+            return {
+                "query": query,
+                "source": source,
+                "degraded": False,
+                "stats": {"final_items": 1},
+                "items": [{
+                    "source": source,
+                    "source_id": "fake-1",
+                    "digest_id": 301 if source == "digest" else None,
+                    "summary_id": 401 if source == "session_summary" else None,
+                    "parent_score": 0.91,
+                    "matched_cards": [{"text": f"{source} 命中内容"}],
+                }],
+            }
+
+    monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(memory_rag, "MemoryRagService", FakeMemoryRagService)
+    monkeypatch.setattr(MemoryQueryTool, "_has_rag_index", staticmethod(lambda _db, _source: True))
+
+    tool = MemoryQueryTool()
+    for source in ("digest", "session_summary", "all"):
+        result = asyncio.run(tool._execute({
+            "source": source,
+            "mode": "search",
+            "query": "端口",
+            "user_id": "u1",
+            "session_id": "s1",
+            "limit": 3,
+        }))
+        assert result.exit_code == 0
+        assert f"{source} 命中内容" in result.output
+
+    assert [call["source"] for call in calls] == ["digest", "session_summary", "all"]
+    assert all(call["has_reranker_kwarg"] for call in calls)

@@ -22,6 +22,14 @@ class IdentityRerankerProvider:
         )
 
 
+def test_knowledge_orm_classes_are_importable():
+    from core.database import KnowledgeChunk, KnowledgeDocument, KnowledgeSource
+
+    assert KnowledgeSource.__tablename__ == "knowledge_sources"
+    assert KnowledgeDocument.__tablename__ == "knowledge_documents"
+    assert KnowledgeChunk.__tablename__ == "knowledge_chunks"
+
+
 def _manual_doc(db_session, filename, content, **kwargs):
     from core.knowledge_library import create_manual_document
 
@@ -192,6 +200,43 @@ def test_knowledge_result_without_citation_is_dropped(db_session):
     assert result["stats"]["skipped_no_citation"] == 1
 
 
+def test_knowledge_query_filters_by_source_type_domain_and_date(db_session):
+    from core.knowledge_rag import KnowledgeRagService
+
+    ai_doc = _manual_doc(
+        db_session,
+        "ai.md",
+        "# RAG\nRAG 每日摘要内容。",
+        title="AI 日报",
+        published_at="2026-05-25",
+    )
+    ai_doc.document_kind = "ai_daily"
+    ai_doc.domain = "ai.example.com"
+    manual_doc = _manual_doc(
+        db_session,
+        "manual.md",
+        "# RAG\nRAG 手工文档内容。",
+        title="手工文档",
+        published_at="2026-05-20",
+    )
+    manual_doc.document_kind = "manual_markdown"
+    manual_doc.domain = "docs.example.com"
+    db_session.commit()
+    _index_doc(db_session, ai_doc)
+    _index_doc(db_session, manual_doc)
+
+    result = KnowledgeRagService(db_session).query(
+        "RAG",
+        source_type="ai_daily",
+        domain="ai.example.com",
+        date_start="2026-05-24",
+        date_end="2026-05-26",
+        limit=5,
+    )
+
+    assert [item["document_id"] for item in result["items"]] == [ai_doc.id]
+
+
 def test_knowledge_query_tool_schema_declares_citation_boundary():
     from creatures.nanobot.prompts.skills.knowledge_query.tool import KnowledgeQueryTool
 
@@ -199,4 +244,8 @@ def test_knowledge_query_tool_schema_declares_citation_boundary():
 
     assert schema["properties"]["mode"]["enum"] == ["search", "expand"]
     assert "min_trust_level" in schema["properties"]
+    assert "source_type" in schema["properties"]
+    assert "domain" in schema["properties"]
+    assert "date_start" in schema["properties"]
+    assert "date_end" in schema["properties"]
     assert "citation" in KnowledgeQueryTool().description

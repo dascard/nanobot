@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.semantic.reranker import SemanticCandidate
-from core.semantic.retriever import lexical_overlap_score
-from core.semantic.scoring import weighted_score
+from core.semantic.retriever import cosine_similarity, lexical_overlap_score
+from core.semantic.scoring import normalize_semantic_cosine, weighted_score
 
 
 @dataclass
@@ -55,17 +55,66 @@ def build_temporary_bundles(
     return bundles
 
 
+def should_use_group_analysis_local_rag(instructions: str) -> bool:
+    text = str(instructions or "").strip()
+    if not text:
+        return False
+    compact = "".join(text.split())
+    generic_phrases = {
+        "生成群日报",
+        "群日报",
+        "日报",
+        "总结",
+        "看看今天群里聊了什么",
+        "看看群里聊了什么",
+        "今天聊了什么",
+        "最近聊了什么",
+        "全部历史",
+    }
+    if compact in generic_phrases:
+        return False
+    thematic_markers = (
+        "重点",
+        "主题",
+        "关于",
+        "围绕",
+        "只看",
+        "筛选",
+        "检索",
+        "搜索",
+        "专题",
+        "分析",
+    )
+    if any(marker in compact for marker in thematic_markers) and len(compact) >= 8:
+        return True
+    return len(compact) >= 12 and compact not in generic_phrases
+
+
+def _as_float_vector(vector: Any) -> list[float] | None:
+    try:
+        return [float(item) for item in vector]
+    except Exception:
+        return None
+
+
 def _apply_embedding_scores(query: str, bundles: list[MessageBundle], embedding_provider: Any) -> int:
-    if embedding_provider is None or not bundles:
+    if embedding_provider is None or not bundles or not str(query or "").strip():
         return 0
     try:
+        query_vector = _as_float_vector(embedding_provider.embed([query])[0])
+        if query_vector is None:
+            return 0
         vectors = embedding_provider.embed([bundle.text for bundle in bundles])
     except Exception:
         return 0
+    scored = 0
     for bundle, vector in zip(bundles, vectors):
-        # group_analysis 这里只做临时 scoring；provider 结果可用即记为弱相关信号。
-        bundle.semantic = 1.0 if vector is not None else None
-    return len(bundles)
+        bundle_vector = _as_float_vector(vector)
+        cosine = cosine_similarity(query_vector, bundle_vector)
+        bundle.semantic = normalize_semantic_cosine(cosine, floor=0.25)
+        if bundle.semantic is not None:
+            scored += 1
+    return scored
 
 
 def _apply_reranker(query: str, bundles: list[MessageBundle], reranker_provider: Any, top_k: int) -> int:

@@ -132,6 +132,26 @@ MODEL_COOLDOWN_MAX_SECONDS = int(os.environ.get("MODEL_COOLDOWN_MAX_SECONDS", "1
 DAILY_DIGEST_ENABLED = os.environ.get("DAILY_DIGEST_ENABLED", "1") == "1"
 DAILY_DIGEST_HOUR = int(os.environ.get("DAILY_DIGEST_HOUR", "4"))
 
+# ── 统一 RAG / 语义索引 ──
+NANOBOT_TESTING = os.environ.get("NANOBOT_TESTING", "0") == "1"
+SEMANTIC_INDEX_ENABLED = os.environ.get("SEMANTIC_INDEX_ENABLED", "1") == "1"
+RAG_RERANKER_ENABLED = os.environ.get("RAG_RERANKER_ENABLED", "1") == "1"
+RAG_ALLOW_DEGRADED = os.environ.get(
+    "RAG_ALLOW_DEGRADED",
+    "1" if NANOBOT_TESTING else "0",
+) == "1"
+MEMORY_RAG_ENABLED = os.environ.get("MEMORY_RAG_ENABLED", "1") == "1"
+GROUP_MEMORY_RAG_ENABLED = os.environ.get("GROUP_MEMORY_RAG_ENABLED", "1") == "1"
+STICKER_RAG_ENABLED = os.environ.get("STICKER_RAG_ENABLED", "1") == "1"
+KNOWLEDGE_RAG_ENABLED = os.environ.get("KNOWLEDGE_RAG_ENABLED", "1") == "1"
+GROUP_ANALYSIS_RAG_ENABLED = os.environ.get("GROUP_ANALYSIS_RAG_ENABLED", "1") == "1"
+RAG_RERANKER_URL = os.environ.get("RAG_RERANKER_URL", "")
+RAG_RERANKER_MODEL = os.environ.get("RAG_RERANKER_MODEL", "http-reranker")
+RAG_RERANKER_TIMEOUT_MS = int(os.environ.get("RAG_RERANKER_TIMEOUT_MS", "3000"))
+RAG_RERANKER_SCORE_MODE = os.environ.get("RAG_RERANKER_SCORE_MODE", "sigmoid")
+RAG_RERANKER_MAX_TEXT_CHARS = int(os.environ.get("RAG_RERANKER_MAX_TEXT_CHARS", "1200"))
+RAG_EMBEDDING_PROVIDER = os.environ.get("RAG_EMBEDDING_PROVIDER", "").strip()
+
 # ── 私聊分类器 ──
 CLASSIFIER_API_URL = os.environ.get("CLASSIFIER_API_URL", "http://172.17.0.1:9999/v1")
 SENTINEL_MODEL_PATH = os.environ.get("SENTINEL_MODEL_PATH", "./models/sentinel")

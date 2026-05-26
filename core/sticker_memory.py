@@ -348,14 +348,25 @@ def search_stickers(
     """全局表情包搜索——不再按群隔离，所有群共享 active sticker pool。"""
     try:
         from core.sticker_rag import StickerRagService
+        from core.semantic.provider_factory import (
+            get_embedding_provider,
+            get_rag_runtime_config,
+            get_reranker_provider,
+        )
 
+        runtime = get_rag_runtime_config("sticker")
         rag_service = StickerRagService(
             db,
-            embedding_provider=embedding_provider,
-            reranker_provider=reranker_provider,
+            embedding_provider=embedding_provider if embedding_provider is not None else get_embedding_provider(),
+            reranker_provider=reranker_provider if reranker_provider is not None else (
+                get_reranker_provider() if runtime.reranker_enabled else None
+            ),
             min_reranker=min_reranker,
         )
-        if rag_service.has_index():
+        if runtime.enabled and rag_service.has_index():
+            if runtime.reranker_enabled and rag_service.reranker_provider is None and not runtime.allow_degraded:
+                logger.warning("[StickerMemory] sticker RAG disabled: reranker unavailable and degraded is not allowed")
+                return []
             return rag_service.query(
                 query,
                 group_id=group_id,

@@ -169,6 +169,34 @@ def test_group_memory_preview_does_not_record_injection(db_session):
     assert memory.last_injected_at is None
 
 
+def test_group_memory_injection_uses_factory_reranker_provider(db_session, monkeypatch):
+    from app.group_memory.injection_service import GroupMemoryInjectionService
+    from core.database import ChatStreamConfig
+    import core.semantic.provider_factory as provider_factory
+
+    db_session.add(ChatStreamConfig(chat_stream_id="qq:1097666427:group", group_profile_mode="on"))
+    memory = _memory(
+        db_session,
+        content="低词面相关但 reranker 确认可注入的群体记忆",
+        content_hash="gm-factory-reranker",
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        provider_factory,
+        "get_reranker_provider",
+        lambda: FixedGroupReranker({f"group_memory:{memory.id}:memory": 0.92}),
+    )
+
+    result = GroupMemoryInjectionService(db_session).build_context(
+        group_id="1097666427",
+        current_user_input="需要上下文",
+        recent_messages=[],
+    )
+
+    assert result.selected_ids == [memory.id]
+    assert result.score_components[str(memory.id)]["reranker"] == 0.92
+
+
 def test_group_memory_rag_timeout_marks_fallback(db_session, monkeypatch):
     import time
 

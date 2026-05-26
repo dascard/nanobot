@@ -10,6 +10,18 @@ class CountingEmbeddingProvider:
         return [[1.0, 0.0] for _ in texts]
 
 
+class DirectionalEmbeddingProvider:
+    def embed(self, texts):
+        vectors = []
+        for text in texts:
+            value = str(text)
+            if "目标主题" in value or "专题查询" in value:
+                vectors.append([1.0, 0.0])
+            else:
+                vectors.append([0.0, 1.0])
+        return vectors
+
+
 class IdentityRerankerProvider:
     def __init__(self, scores):
         self.scores = scores
@@ -151,8 +163,44 @@ def test_group_analysis_limits_embedding_to_lexical_top_candidates():
         embedding_provider=embedding,
     )
 
-    assert embedding.calls == 300
+    assert embedding.calls == 301
     assert result["stats_logs"]["temporary_embedding_scored"] == 300
+
+
+def test_group_analysis_temporary_embedding_uses_query_cosine_score():
+    from creatures.nanobot.prompts.skills.group_analysis.local_rag import select_group_analysis_context
+
+    messages = _messages(6, keyword_every=1)
+    messages[0]["content"] = "目标主题 RAG 方案"
+    messages[3]["content"] = "普通 RAG 闲聊"
+
+    result = select_group_analysis_context(
+        messages,
+        query="专题查询 RAG",
+        bundle_size=3,
+        lexical_top_k=10,
+        reranker_top_k=2,
+        neighbor_radius=0,
+        embedding_provider=DirectionalEmbeddingProvider(),
+    )
+    hits = {item["bundle_id"]: item for item in result["prompt_logs"]["hit_bundles"]}
+
+    assert hits["bundle:0"]["semantic"] > hits["bundle:1"]["semantic"]
+
+
+def test_group_analysis_non_thematic_daily_does_not_enable_rag():
+    from creatures.nanobot.prompts.skills.group_analysis.local_rag import should_use_group_analysis_local_rag
+
+    assert should_use_group_analysis_local_rag("") is False
+    assert should_use_group_analysis_local_rag("生成群日报") is False
+    assert should_use_group_analysis_local_rag("看看今天群里聊了什么") is False
+
+
+def test_group_analysis_thematic_instruction_enables_rag():
+    from creatures.nanobot.prompts.skills.group_analysis.local_rag import should_use_group_analysis_local_rag
+
+    assert should_use_group_analysis_local_rag("重点分析 RAG 检索和 reranker 的讨论") is True
+    assert should_use_group_analysis_local_rag("只看关于端口冲突的部分") is True
 
 
 def test_group_analysis_budget_preserves_high_score_groups():

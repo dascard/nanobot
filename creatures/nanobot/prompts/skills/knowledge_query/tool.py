@@ -60,6 +60,22 @@ class KnowledgeQueryTool(BaseTool):
                     "enum": ["low", "medium", "high"],
                     "description": "最低 trust_level，默认 low。",
                 },
+                "source_type": {
+                    "type": "string",
+                    "description": "按知识来源类型过滤，如 ai_daily、manual_markdown、manual_file。",
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "按资料域名过滤，如 openai.com。",
+                },
+                "date_start": {
+                    "type": "string",
+                    "description": "资料发布时间开始日期，YYYY-MM-DD；等价于 published_after。",
+                },
+                "date_end": {
+                    "type": "string",
+                    "description": "资料发布时间结束日期，YYYY-MM-DD；等价于 published_before。",
+                },
                 "published_after": {
                     "type": "string",
                     "description": "仅返回此日期之后的资料，YYYY-MM-DD。",
@@ -80,17 +96,29 @@ class KnowledgeQueryTool(BaseTool):
                 if uow.db is None:
                     return ToolResult(error="database session is unavailable")
                 from core.knowledge_rag import KnowledgeRagService
+                from core.semantic.provider_factory import (
+                    get_embedding_provider,
+                    get_rag_runtime_config,
+                    get_reranker_provider,
+                )
 
-                service = KnowledgeRagService(uow.db)
+                runtime = get_rag_runtime_config("knowledge")
+                if mode == "search" and not runtime.enabled:
+                    return ToolResult(error="knowledge RAG is disabled")
+                service = KnowledgeRagService(
+                    uow.db,
+                    embedding_provider=get_embedding_provider(),
+                    reranker_provider=get_reranker_provider() if runtime.reranker_enabled else None,
+                )
                 if mode == "search":
-                    return self._search(service, args, limit)
+                    return self._search(service, args, limit, allow_degraded=runtime.allow_degraded)
                 if mode == "expand":
                     return self._expand(service, args)
                 return ToolResult(error=f"Unsupported mode: {mode}")
         except Exception as exc:
             return ToolResult(error=f"knowledge_query failed: {exc}")
 
-    def _search(self, service, args: dict[str, Any], limit: int) -> ToolResult:
+    def _search(self, service, args: dict[str, Any], limit: int, *, allow_degraded: bool = True) -> ToolResult:
         query = str(args.get("query") or "").strip()
         if not query:
             return ToolResult(error="search mode requires query")
@@ -98,9 +126,17 @@ class KnowledgeQueryTool(BaseTool):
             query,
             limit=limit,
             min_trust_level=str(args.get("min_trust_level") or "low"),
+            source_type=str(args.get("source_type") or ""),
+            domain=str(args.get("domain") or ""),
+            date_start=str(args.get("date_start") or ""),
+            date_end=str(args.get("date_end") or ""),
             published_after=str(args.get("published_after") or ""),
             published_before=str(args.get("published_before") or ""),
         )
+        if result.get("degraded") and not allow_degraded:
+            from core.semantic.provider_factory import degraded_error
+
+            return ToolResult(error=degraded_error("knowledge", str(result.get("fallback_reason") or "")))
         items = result.get("items") or []
         if not items:
             return ToolResult(
