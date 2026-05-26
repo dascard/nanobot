@@ -98,6 +98,7 @@ class MemoryRagService:
         user_id: str = "",
         session_id: str = "",
         limit: int = 5,
+        include_debug: bool = False,
     ) -> dict[str, Any]:
         source_types = _source_types(source)
         fts_hits = fts_recall_hits(
@@ -109,6 +110,7 @@ class MemoryRagService:
             limit=200,
         )
         lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
+        bm25_by_id = {hit.item_id: hit.bm25_raw for hit in fts_hits}
         rows = load_recall_rows(
             self.db,
             source_types=source_types,
@@ -122,6 +124,32 @@ class MemoryRagService:
         fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
         recent_rows = [row for row in rows if int(row.id) not in {int(item.id) for item in fts_ordered}]
         rows = fts_ordered + recent_rows
+        debug_stages: dict[str, Any] | None = None
+        if include_debug:
+            debug_stages = {
+                "sql_filters": {
+                    "source_types": sorted(source_types),
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "status": "active",
+                    "visibility": "recall",
+                },
+                "fts_hits": [
+                    {
+                        "item_id": hit.item_id,
+                        "bm25_raw": hit.bm25_raw,
+                        "lexical_score": hit.lexical_score,
+                        "candidate_id": self._row_candidate_id(rows_by_id.get(hit.item_id)),
+                    }
+                    for hit in fts_hits
+                    if hit.item_id in rows_by_id
+                ],
+                "embedding_hits": [],
+                "merged_candidates": [],
+                "reranker_input_pairs": [],
+                "final_candidates": [],
+                "relevance_gate": [],
+            }
         query_vector = _query_vector(query, self.embedding_provider)
         candidates: list[_Candidate] = []
         fts_candidate_count = 0
@@ -144,6 +172,16 @@ class MemoryRagService:
 
         candidates.sort(key=lambda item: self._pre_score(item), reverse=True)
         candidates = candidates[:80]
+        if debug_stages is not None:
+            debug_stages["embedding_hits"] = [
+                self._debug_candidate(item, bm25_by_id=bm25_by_id)
+                for item in candidates
+                if item.semantic is not None and item.semantic > 0
+            ]
+            debug_stages["merged_candidates"] = [
+                self._debug_candidate(item, bm25_by_id=bm25_by_id)
+                for item in candidates
+            ]
         degraded = self.reranker_provider is None
         fallback_reason = "reranker_unavailable" if degraded else ""
 
@@ -158,6 +196,18 @@ class MemoryRagService:
                 )
                 for item in candidates
             ]
+            if debug_stages is not None:
+                debug_stages["reranker_input_pairs"] = [
+                    {
+                        "candidate_id": candidate.candidate_id,
+                        "source_type": candidate.source_type,
+                        "query": query,
+                        "title": candidate.title,
+                        "text": candidate.text,
+                        "metadata": candidate.metadata,
+                    }
+                    for candidate in rerank_inputs
+                ]
             reranked = self.reranker_provider.rerank(query, rerank_inputs, top_k=50)
             scores = {item.candidate_id: item for item in reranked}
             for item in candidates:
@@ -166,15 +216,38 @@ class MemoryRagService:
                     item.reranker = score.score
                     item.raw_reranker = score.raw_score
 
-        gated = [
-            item for item in candidates
-            if passes_relevance_gate(
+        gated: list[_Candidate] = []
+        gate_debug: list[dict[str, Any]] = []
+        for item in candidates:
+            passed = passes_relevance_gate(
                 {"reranker": item.reranker, "semantic": item.semantic, "lexical": item.lexical},
                 degraded=degraded,
             )
-        ]
+            if passed:
+                gated.append(item)
+            if debug_stages is not None:
+                gate_debug.append({
+                    "candidate_id": item.candidate_id,
+                    "passed": passed,
+                    "degraded": degraded,
+                    "components": {
+                        "reranker": item.reranker,
+                        "semantic": item.semantic,
+                        "lexical": item.lexical,
+                    },
+                })
         parent_items = self._group_by_parent(gated, limit=limit)
-        return {
+        if debug_stages is not None:
+            debug_stages["merged_candidates"] = [
+                self._debug_candidate(item, bm25_by_id=bm25_by_id)
+                for item in candidates
+            ]
+            debug_stages["final_candidates"] = [
+                self._debug_candidate(item, bm25_by_id=bm25_by_id)
+                for item in gated
+            ]
+            debug_stages["relevance_gate"] = gate_debug
+        result = {
             "query": query,
             "source": source,
             "degraded": degraded,
@@ -189,6 +262,15 @@ class MemoryRagService:
             },
             "items": parent_items,
         }
+        if debug_stages is not None:
+            result["debug_trace"] = debug_stages
+        return result
+
+    @staticmethod
+    def _row_candidate_id(row: SemanticIndexItem | None) -> str:
+        if row is None:
+            return ""
+        return f"{row.source_type}:{row.source_id}:{row.source_sub_id}"
 
     def _pre_score(self, item: _Candidate) -> float:
         return weighted_score(
@@ -231,6 +313,29 @@ class MemoryRagService:
                 "reranker": item.reranker,
                 "final": final,
             },
+        }
+
+    def _debug_candidate(self, item: _Candidate, *, bm25_by_id: dict[int, float]) -> dict[str, Any]:
+        card = self._card_dict(item)
+        return {
+            "candidate_id": item.candidate_id,
+            "item_id": item.row.id,
+            "source_type": item.row.source_type,
+            "source_id": item.row.source_id,
+            "source_sub_id": item.row.source_sub_id,
+            "title": item.row.title,
+            "text": item.row.text,
+            "bm25_raw": bm25_by_id.get(int(item.row.id)),
+            "lexical_score": item.lexical,
+            "semantic_score": item.semantic,
+            "reranker_score": item.reranker,
+            "raw_reranker": item.raw_reranker,
+            "final_score": card["final_score"],
+            "score_breakdown": card["score_breakdown"] | {
+                "raw_reranker": item.raw_reranker,
+                "bm25_raw": bm25_by_id.get(int(item.row.id)),
+            },
+            "skipped_reason": "",
         }
 
     def _group_by_parent(self, candidates: list[_Candidate], *, limit: int) -> list[dict[str, Any]]:

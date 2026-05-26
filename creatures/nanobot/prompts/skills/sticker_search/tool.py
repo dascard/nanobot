@@ -66,13 +66,31 @@ class StickerSearchTool(BaseTool):
 
         db = SessionLocal()
         try:
-            results = search_stickers(
-                db,
-                query,
-                group_id=group_id,
-                limit=max(1, min(limit, 8)),
-                include_global=include_global,
-            )
+            try:
+                results = search_stickers(
+                    db,
+                    query,
+                    group_id=group_id,
+                    limit=max(1, min(limit, 8)),
+                    include_global=include_global,
+                )
+            except Exception as exc:
+                from core.semantic.provider_factory import RagDegradedBlockedError
+
+                if isinstance(exc, RagDegradedBlockedError):
+                    return ToolResult(
+                        error=str(exc),
+                        metadata={
+                            "structured_content": {
+                                "query": query,
+                                "source": "sticker",
+                                "degraded": False,
+                                "blocked_reason": exc.fallback_reason,
+                                "results": [],
+                            }
+                        },
+                    )
+                raise
             payload = {
                 "query": query,
                 "count": len(results),

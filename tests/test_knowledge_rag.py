@@ -249,3 +249,36 @@ def test_knowledge_query_tool_schema_declares_citation_boundary():
     assert "date_start" in schema["properties"]
     assert "date_end" in schema["properties"]
     assert "citation" in KnowledgeQueryTool().description
+
+
+def test_knowledge_query_tool_blocks_when_reranker_required_unavailable(db_session, monkeypatch):
+    import asyncio
+
+    from core import database
+    from core.semantic.provider_factory import get_reranker_provider
+    from creatures.nanobot.prompts.skills.knowledge_query.tool import KnowledgeQueryTool
+
+    doc = _manual_doc(
+        db_session,
+        "blocked.md",
+        "# RAG\nRAG citation test",
+        title="阻断测试",
+        published_at="2026-05-26",
+    )
+    _index_doc(db_session, doc)
+
+    monkeypatch.setenv("RAG_ALLOW_DEGRADED", "0")
+    monkeypatch.setenv("RAG_RERANKER_ENABLED", "1")
+    monkeypatch.setenv("RAG_RERANKER_URL", "")
+    monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
+
+    get_reranker_provider.cache_clear()
+    result = asyncio.run(KnowledgeQueryTool()._execute({
+        "mode": "search",
+        "query": "RAG",
+        "limit": 3,
+    }))
+    get_reranker_provider.cache_clear()
+
+    assert result.error
+    assert "reranker_unavailable" in result.error

@@ -19,6 +19,13 @@ class RagRuntimeConfig:
     allow_degraded: bool = False
 
 
+class RagDegradedBlockedError(RuntimeError):
+    def __init__(self, source_type: str, fallback_reason: str = "reranker_unavailable"):
+        self.source_type = source_type
+        self.fallback_reason = fallback_reason or "reranker_unavailable"
+        super().__init__(degraded_error(source_type, self.fallback_reason))
+
+
 def _bool_env(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None:

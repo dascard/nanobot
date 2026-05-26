@@ -295,3 +295,36 @@ def test_memory_query_tool_search_routes_all_sources_through_memory_rag(db_sessi
 
     assert [call["source"] for call in calls] == ["digest", "session_summary", "all"]
     assert all(call["has_reranker_kwarg"] for call in calls)
+
+
+def test_memory_query_tool_blocks_when_reranker_required_unavailable(db_session, monkeypatch):
+    from core import database
+    from core.semantic.adapters import chunks_from_memory_digest
+    from core.semantic.indexer import upsert_semantic_chunks
+    from core.semantic.provider_factory import get_reranker_provider
+    from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
+
+    digest = _digest_row(501, cards=[
+        {"title": "端口", "text": "KohakuVQ 端口冲突。", "keywords": ["KohakuVQ", "端口"]},
+    ])
+    db_session.add(digest)
+    db_session.commit()
+    upsert_semantic_chunks(db_session, chunks_from_memory_digest(digest), index_version="fake:v1:v1")
+
+    monkeypatch.setenv("RAG_ALLOW_DEGRADED", "0")
+    monkeypatch.setenv("RAG_RERANKER_ENABLED", "1")
+    monkeypatch.setenv("RAG_RERANKER_URL", "")
+    monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
+
+    get_reranker_provider.cache_clear()
+    result = asyncio.run(MemoryQueryTool()._execute({
+        "source": "digest",
+        "mode": "search",
+        "query": "KohakuVQ",
+        "session_id": "s1",
+        "limit": 3,
+    }))
+    get_reranker_provider.cache_clear()
+
+    assert result.error
+    assert "reranker_unavailable" in result.error

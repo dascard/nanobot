@@ -349,6 +349,7 @@ def search_stickers(
     try:
         from core.sticker_rag import StickerRagService
         from core.semantic.provider_factory import (
+            RagDegradedBlockedError,
             get_embedding_provider,
             get_rag_runtime_config,
             get_reranker_provider,
@@ -365,8 +366,7 @@ def search_stickers(
         )
         if runtime.enabled and rag_service.has_index():
             if runtime.reranker_enabled and rag_service.reranker_provider is None and not runtime.allow_degraded:
-                logger.warning("[StickerMemory] sticker RAG disabled: reranker unavailable and degraded is not allowed")
-                return []
+                raise RagDegradedBlockedError("sticker", "reranker_unavailable")
             return rag_service.query(
                 query,
                 group_id=group_id,
@@ -374,6 +374,8 @@ def search_stickers(
                 include_global=include_global,
                 limit=limit,
             )
+    except RagDegradedBlockedError:
+        raise
     except Exception as e:
         logger.warning("[StickerMemory] sticker RAG search failed, fallback to lexical: %s", e)
 

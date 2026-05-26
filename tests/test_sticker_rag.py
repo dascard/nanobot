@@ -1,14 +1,17 @@
 import json
 from datetime import datetime
 
+import pytest
+
 from core.database import StickerMemory
 from core.semantic.adapters import chunk_from_sticker
 from core.semantic.indexer import upsert_semantic_chunks
 
 
 class IdentityRerankerProvider:
-    def __init__(self, scores):
+    def __init__(self, scores, *, default_score=0.9):
         self.scores = scores
+        self.default_score = float(default_score)
 
     def rerank(self, query, candidates, *, top_k=None):
         from core.semantic.reranker import RerankResult
@@ -18,8 +21,8 @@ class IdentityRerankerProvider:
             [
                 RerankResult(
                     candidate_id=candidate.candidate_id,
-                    raw_score=self.scores.get(candidate.candidate_id, 0.0),
-                    score=self.scores.get(candidate.candidate_id, 0.0),
+                    raw_score=self.scores.get(candidate.candidate_id, self.default_score),
+                    score=self.scores.get(candidate.candidate_id, self.default_score),
                     model="identity-reranker",
                     score_mode="identity",
                 )
@@ -98,7 +101,13 @@ def test_sticker_rag_uses_text_tags_not_image_embedding(db_session):
     )
     _index_stickers(db_session, [path_only_match, text_match])
 
-    results = search_stickers(db_session, "生气", group_id="123", limit=5)
+    results = search_stickers(
+        db_session,
+        "生气",
+        group_id="123",
+        limit=5,
+        reranker_provider=IdentityRerankerProvider({}),
+    )
 
     assert [item["id"] for item in results] == [text_match.id]
     assert "生气拍桌.png" not in json.dumps(results, ensure_ascii=False)
@@ -116,7 +125,13 @@ def test_sticker_rag_returns_reply_token(db_session):
     )
     _index_stickers(db_session, [sticker])
 
-    results = search_stickers(db_session, "震惊", group_id="123", limit=3)
+    results = search_stickers(
+        db_session,
+        "震惊",
+        group_id="123",
+        limit=3,
+        reranker_provider=IdentityRerankerProvider({}),
+    )
 
     assert results[0]["reply_token"] == f"[sticker:{sticker.id}]"
     assert results[0]["send_code"] == "[CQ:image,file=https://example.com/reply-token.png]"
@@ -149,7 +164,13 @@ def test_duplicate_or_inactive_sticker_is_filtered(db_session):
     )
     _index_stickers(db_session, [active, duplicate, disabled])
 
-    results = search_stickers(db_session, "拍桌", group_id="123", limit=5)
+    results = search_stickers(
+        db_session,
+        "拍桌",
+        group_id="123",
+        limit=5,
+        reranker_provider=IdentityRerankerProvider({}),
+    )
 
     assert [item["id"] for item in results] == [active.id]
 
@@ -189,6 +210,31 @@ def test_sticker_search_uses_reranker_before_usage_boost(db_session):
     assert results[0]["score_breakdown"]["reranker"] == 0.9
 
 
+def test_sticker_search_blocks_when_reranker_required_unavailable(db_session, monkeypatch):
+    from core.semantic.provider_factory import RagDegradedBlockedError, get_reranker_provider
+    from core.sticker_memory import search_stickers
+
+    sticker = _add_sticker(
+        db_session,
+        "blocked-sticker",
+        description="震惊猫猫",
+        tags=["震惊"],
+        emotions=["surprised"],
+    )
+    _index_stickers(db_session, [sticker])
+
+    monkeypatch.setenv("RAG_ALLOW_DEGRADED", "0")
+    monkeypatch.setenv("RAG_RERANKER_ENABLED", "1")
+    monkeypatch.setenv("RAG_RERANKER_URL", "")
+
+    get_reranker_provider.cache_clear()
+    with pytest.raises(RagDegradedBlockedError) as exc_info:
+        search_stickers(db_session, "震惊", group_id="123", limit=5)
+    get_reranker_provider.cache_clear()
+
+    assert exc_info.value.fallback_reason == "reranker_unavailable"
+
+
 def test_undescribed_sticker_is_not_text_rag_candidate(db_session):
     from core.sticker_memory import search_stickers
 
@@ -207,7 +253,13 @@ def test_undescribed_sticker_is_not_text_rag_candidate(db_session):
     )
     _index_stickers(db_session, [pending, active])
 
-    results = search_stickers(db_session, "震惊", group_id="123", limit=5)
+    results = search_stickers(
+        db_session,
+        "震惊",
+        group_id="123",
+        limit=5,
+        reranker_provider=IdentityRerankerProvider({}),
+    )
 
     assert [item["id"] for item in results] == [active.id]
 
@@ -231,6 +283,12 @@ def test_sticker_rag_filters_unreplyable_sticker(db_session):
     )
     _index_stickers(db_session, [unreplyable, replyable])
 
-    results = search_stickers(db_session, "震惊", group_id="123", limit=5)
+    results = search_stickers(
+        db_session,
+        "震惊",
+        group_id="123",
+        limit=5,
+        reranker_provider=IdentityRerankerProvider({}),
+    )
 
     assert [item["id"] for item in results] == [replyable.id]

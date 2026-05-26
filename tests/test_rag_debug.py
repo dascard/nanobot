@@ -3,6 +3,23 @@ from pathlib import Path
 from sqlalchemy import inspect, text
 
 
+class DebugRerankerProvider:
+    def rerank(self, query, candidates, *, top_k=None):
+        from core.semantic.reranker import RerankResult
+
+        limited = candidates[:top_k] if top_k else candidates
+        return [
+            RerankResult(
+                candidate_id=candidate.candidate_id,
+                raw_score=2.0,
+                score=0.88,
+                model="debug-reranker",
+                score_mode="identity",
+            )
+            for candidate in limited
+        ]
+
+
 def _auth_header():
     return {"Authorization": "Bearer test-token"}
 
@@ -47,6 +64,109 @@ def test_rag_debug_query_saves_run(client, monkeypatch):
     detail = client.get(f"/api/v1/admin/rag/debug/runs/{data['run_id']}", headers=_auth_header())
     assert detail.status_code == 200
     assert detail.json()["query"] == "端口冲突"
+
+
+def test_rag_debug_memory_uses_real_pipeline_trace(client, db_session, monkeypatch):
+    import json
+
+    from core.database import MemoryDigest
+    from core.semantic.adapters import chunks_from_memory_digest
+    from core.semantic.indexer import upsert_semantic_chunks
+    import core.semantic.provider_factory as provider_factory
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(provider_factory, "get_reranker_provider", lambda: DebugRerankerProvider())
+    digest = MemoryDigest(
+        id=701,
+        user_id="u1",
+        session_id="s1",
+        digest_date="2026-05-26",
+        level=2,
+        content="RAG Debug 端口冲突",
+        meta_json=json.dumps({
+            "schema_version": 2,
+            "status": "active",
+            "recall_cards": [
+                {"title": "端口", "text": "RAG Debug 端口冲突排查", "keywords": ["RAG", "端口"]},
+            ],
+        }, ensure_ascii=False),
+    )
+    db_session.add(digest)
+    db_session.commit()
+    upsert_semantic_chunks(db_session, chunks_from_memory_digest(digest), index_version="fake:v1:v1")
+
+    response = client.post(
+        "/api/v1/admin/rag/debug/query",
+        headers=_auth_header(),
+        json={
+            "source_type": "memory",
+            "query": "RAG Debug 端口",
+            "limit": 3,
+            "filters": {"user_id": "u1", "session_id": "s1", "source": "digest"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["response"]
+    stages = payload["stages"]
+    assert payload["score_breakdown"]["fallback_reason"] != "rag_debug_stub"
+    assert stages["fts_hits"][0]["bm25_raw"] is not None
+    assert stages["merged_candidates"][0]["candidate_id"] == "memory_digest:701:card:0"
+    assert stages["reranker_input_pairs"][0]["candidate_id"] == "memory_digest:701:card:0"
+    assert stages["final_candidates"][0]["score_breakdown"]["raw_reranker"] == 2.0
+
+
+def test_rag_debug_run_persists_sanitized_payload(client, db_session, monkeypatch):
+    import json
+
+    from core.database import MemoryDigest
+    from core.semantic.adapters import chunks_from_memory_digest
+    from core.semantic.indexer import upsert_semantic_chunks
+    import core.semantic.provider_factory as provider_factory
+
+    secret_tail = "SECRET_DEBUG_PAYLOAD_SHOULD_NOT_BE_STORED"
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(provider_factory, "get_reranker_provider", lambda: DebugRerankerProvider())
+    digest = MemoryDigest(
+        id=702,
+        user_id="u1",
+        session_id="s1",
+        digest_date="2026-05-26",
+        level=2,
+        content="RAG Debug 长文本",
+        meta_json=json.dumps({
+            "schema_version": 2,
+            "status": "active",
+            "recall_cards": [
+                {
+                    "title": "长文本",
+                    "text": "RAG Debug " + ("上下文" * 400) + secret_tail,
+                    "keywords": ["RAG", "Debug"],
+                },
+            ],
+        }, ensure_ascii=False),
+    )
+    db_session.add(digest)
+    db_session.commit()
+    upsert_semantic_chunks(db_session, chunks_from_memory_digest(digest), index_version="fake:v1:v1")
+
+    created = client.post(
+        "/api/v1/admin/rag/debug/query",
+        headers=_auth_header(),
+        json={
+            "source_type": "memory",
+            "query": "RAG Debug",
+            "limit": 3,
+            "filters": {"user_id": "u1", "session_id": "s1", "source": "digest"},
+        },
+    )
+    run_id = created.json()["run_id"]
+    detail = client.get(f"/api/v1/admin/rag/debug/runs/{run_id}", headers=_auth_header())
+    serialized = json.dumps(detail.json(), ensure_ascii=False)
+
+    assert detail.status_code == 200
+    assert secret_tail not in serialized
+    assert "[truncated]" in serialized
 
 
 def test_rag_debug_query_runs_sticker_search(client, db_session, monkeypatch):
@@ -128,6 +248,45 @@ def test_rag_debug_query_runs_knowledge_search_with_citation(client, db_session,
     assert candidate["source_type"] == "knowledge"
     assert candidate["citation"]["title"] == "Debug 知识"
     assert candidate["citation"]["trust_level"] == "medium"
+
+
+def test_rag_debug_group_memory_uses_retrieval_service_not_stub(client, db_session, monkeypatch):
+    from datetime import datetime
+
+    from core.database import GroupMemory
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    row = GroupMemory(
+        group_id="group_1097666427",
+        memory_type="topic",
+        content="群里经常讨论本地模型部署和 RAG reranker。",
+        content_hash="rag-debug-group-memory",
+        confidence=0.86,
+        evidence_count=3,
+        evidence_log_ids_json="[1, 2, 3]",
+        decay_score=1.0,
+        status="active",
+        inject_policy="auto",
+        last_seen=datetime.now(),
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/admin/rag/debug/query",
+        headers=_auth_header(),
+        json={
+            "source_type": "group_memory",
+            "query": "本地模型部署 RAG",
+            "filters": {"group_id": "1097666427", "current_user_input": "本地模型部署怎么做？"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["response"]
+    assert payload["score_breakdown"]["fallback_reason"] != "rag_debug_stub"
+    assert payload["stages"]["merged_candidates"][0]["candidate_id"] == f"group_memory:{row.id}:memory"
+    assert payload["stages"]["final_candidates"][0]["id"] == row.id
 
 
 def test_rag_debug_page_is_registered():

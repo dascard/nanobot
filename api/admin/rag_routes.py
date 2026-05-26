@@ -33,6 +33,27 @@ def _safe_json_loads(raw: str | None, fallback: Any) -> Any:
         return fallback
 
 
+def _sanitize_debug_payload(value: Any, *, max_text_chars: int = 500, max_list_items: int = 50) -> Any:
+    if isinstance(value, str):
+        if len(value) <= max_text_chars:
+            return value
+        return value[:max_text_chars] + f"...[truncated] {len(value) - max_text_chars} chars"
+    if isinstance(value, list):
+        items = [
+            _sanitize_debug_payload(item, max_text_chars=max_text_chars, max_list_items=max_list_items)
+            for item in value[:max_list_items]
+        ]
+        if len(value) > max_list_items:
+            items.append({"truncated_items": len(value) - max_list_items})
+        return items
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_debug_payload(item, max_text_chars=max_text_chars, max_list_items=max_list_items)
+            for key, item in value.items()
+        }
+    return value
+
+
 def _run_to_dict(row: RagDebugRun, *, include_payload: bool = False) -> dict[str, Any]:
     item = {
         "id": row.id,
@@ -48,6 +69,158 @@ def _run_to_dict(row: RagDebugRun, *, include_payload: bool = False) -> dict[str
         item["request"] = _safe_json_loads(row.request_json, {})
         item["response"] = _safe_json_loads(row.response_json, {})
     return item
+
+
+def _build_memory_debug_response(
+    body: RagDebugQueryRequest,
+    db: Session,
+    latency_ms: int,
+) -> dict[str, Any]:
+    from core.memory_rag import MemoryRagService
+    from core.semantic.provider_factory import (
+        get_embedding_provider,
+        get_rag_runtime_config,
+        get_reranker_provider,
+    )
+
+    filters = body.filters or {}
+    requested_source = str(filters.get("source") or "").strip()
+    if not requested_source:
+        if body.source_type == "memory_digest":
+            requested_source = "digest"
+        elif body.source_type == "session_summary":
+            requested_source = "session_summary"
+        else:
+            requested_source = "all"
+    runtime = get_rag_runtime_config("memory")
+    result = MemoryRagService(
+        db,
+        embedding_provider=get_embedding_provider(),
+        reranker_provider=get_reranker_provider() if runtime.reranker_enabled else None,
+        allow_degraded=runtime.allow_degraded,
+    ).query(
+        body.query,
+        source=requested_source,
+        user_id=str(filters.get("user_id") or ""),
+        session_id=str(filters.get("session_id") or ""),
+        limit=body.limit,
+        include_debug=True,
+    )
+    stages = result.get("debug_trace") or {}
+    stats = result.get("stats") or {}
+    return {
+        "query": body.query,
+        "source_type": "memory",
+        "source": requested_source,
+        "stages": stages,
+        "score_breakdown": {
+            "degraded": bool(result.get("degraded")),
+            "fallback_reason": result.get("fallback_reason") or "",
+            "source_weights": (
+                {"memory_digest": 0.5, "session_summary": 0.5}
+                if requested_source == "all" else {requested_source: 1.0}
+            ),
+            "latency_ms": latency_ms,
+            **stats,
+        },
+        "candidates": stages.get("final_candidates") or [],
+        "items": result.get("items") or [],
+    }
+
+
+def _group_memory_candidate_to_debug(row: Any, components: dict[str, Any], *, skipped_reason: str = "") -> dict[str, Any]:
+    return {
+        "candidate_id": f"group_memory:{row.id}:memory",
+        "id": row.id,
+        "source_type": "group_memory",
+        "title": f"群体记忆：{row.memory_type}",
+        "text": row.content or "",
+        "memory_type": row.memory_type,
+        "reranker_score": components.get("reranker"),
+        "final_score": components.get("final"),
+        "score_breakdown": components,
+        "skipped_reason": skipped_reason or components.get("skip_reason") or "",
+    }
+
+
+def _build_group_memory_debug_response(
+    body: RagDebugQueryRequest,
+    db: Session,
+    latency_ms: int,
+) -> dict[str, Any]:
+    from app.group_memory.retrieval_service import GroupMemoryRetrievalService
+    from core.database import GroupMemory
+    from core.semantic.provider_factory import get_rag_runtime_config, get_reranker_provider
+
+    filters = body.filters or {}
+    group_id = str(filters.get("group_id") or "")
+    current_user_input = str(filters.get("current_user_input") or body.query or "")
+    recent_messages = filters.get("recent_messages") if isinstance(filters.get("recent_messages"), list) else []
+    runtime = get_rag_runtime_config("group_memory")
+    reranker_provider = get_reranker_provider() if runtime.enabled and runtime.reranker_enabled else None
+    selection = GroupMemoryRetrievalService(
+        db,
+        reranker_provider=reranker_provider,
+    ).select(
+        group_id=group_id,
+        current_user_input=current_user_input,
+        recent_messages=recent_messages,
+        max_items=int(filters.get("max_items") or body.limit),
+        max_chars=int(filters.get("max_chars") or 1200),
+    )
+    candidate_ids = sorted({int(key) for key in selection.score_components if str(key).isdigit()})
+    rows = {
+        int(row.id): row
+        for row in db.query(GroupMemory).filter(GroupMemory.id.in_(candidate_ids)).all()
+    } if candidate_ids else {}
+    skipped = {int(item["id"]): str(item.get("reason") or "") for item in selection.skipped if item.get("id")}
+    merged = [
+        _group_memory_candidate_to_debug(
+            rows[row_id],
+            selection.score_components.get(str(row_id), {}),
+            skipped_reason=skipped.get(row_id, ""),
+        )
+        for row_id in candidate_ids
+        if row_id in rows
+    ]
+    final = [item for item in merged if int(item.get("id") or 0) in set(selection.selected_ids)]
+    return {
+        "query": body.query,
+        "source_type": "group_memory",
+        "stages": {
+            "sql_filters": {
+                "group_id": group_id,
+                "status": "active",
+                "inject_policy": "auto",
+                **{key: value for key, value in filters.items() if key not in {"recent_messages"}},
+            },
+            "fts_hits": [],
+            "embedding_hits": [],
+            "merged_candidates": merged,
+            "reranker_input_pairs": [
+                {
+                    "candidate_id": item["candidate_id"],
+                    "query": current_user_input,
+                    "text": item["text"],
+                    "source_type": "group_memory",
+                }
+                for item in merged
+            ] if reranker_provider is not None else [],
+            "final_candidates": final,
+            "skipped": selection.skipped,
+            "score_components": selection.score_components,
+        },
+        "score_breakdown": {
+            "degraded": reranker_provider is None,
+            "fallback_reason": "reranker_unavailable" if reranker_provider is None else "",
+            "source_weights": {"group_memory": 1.0},
+            "latency_ms": latency_ms,
+            "merged_candidates": len(merged),
+            "reranker_candidates": len(merged) if reranker_provider is not None else 0,
+            "final_items": len(final),
+        },
+        "candidates": final,
+    }
 
 
 def _build_stub_debug_response(body: RagDebugQueryRequest, latency_ms: int) -> dict[str, Any]:
@@ -280,7 +453,15 @@ def run_rag_debug_query(
     ensure_semantic_schema(db.bind)
     trace_id = uuid.uuid4().hex
     latency_ms = int((time.perf_counter() - started) * 1000)
-    if body.source_type == "sticker":
+    if body.source_type in {"memory", "memory_digest", "session_summary"}:
+        response_json = _build_memory_debug_response(body, db, latency_ms)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        response_json["score_breakdown"]["latency_ms"] = latency_ms
+    elif body.source_type == "group_memory":
+        response_json = _build_group_memory_debug_response(body, db, latency_ms)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        response_json["score_breakdown"]["latency_ms"] = latency_ms
+    elif body.source_type == "sticker":
         response_json = _build_sticker_debug_response(body, db, latency_ms)
         latency_ms = int((time.perf_counter() - started) * 1000)
         response_json["score_breakdown"]["latency_ms"] = latency_ms
@@ -295,13 +476,14 @@ def run_rag_debug_query(
     else:
         response_json = _build_stub_debug_response(body, latency_ms)
     score_breakdown = response_json.get("score_breakdown") or {}
-    request_json = body.model_dump_json() if hasattr(body, "model_dump_json") else body.json()
+    request_payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    request_json = json.dumps(_sanitize_debug_payload(request_payload), ensure_ascii=False)
     run = RagDebugRun(
         trace_id=trace_id,
         source_type=body.source_type,
         query=body.query,
         request_json=request_json,
-        response_json=json.dumps(response_json, ensure_ascii=False),
+        response_json=json.dumps(_sanitize_debug_payload(response_json), ensure_ascii=False),
         degraded=1 if score_breakdown.get("degraded") else 0,
         fallback_reason=str(score_breakdown.get("fallback_reason") or ""),
         latency_ms=latency_ms,
