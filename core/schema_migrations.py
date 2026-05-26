@@ -433,6 +433,7 @@ def _rolling_session_summaries(conn: Any, engine: Any, db_path: str | None) -> N
         "user_id TEXT DEFAULT '', "
         "chat_type TEXT DEFAULT 'private', "
         "status TEXT DEFAULT 'active', "
+        "summary_kind TEXT DEFAULT 'deterministic_fallback', "
         "summary_text TEXT DEFAULT '', "
         "summary_json TEXT DEFAULT '{}', "
         "covered_from_turn_id INTEGER DEFAULT 0, "
@@ -446,6 +447,14 @@ def _rolling_session_summaries(conn: Any, engine: Any, db_path: str | None) -> N
         "issues_json TEXT DEFAULT '[]', "
         "model TEXT DEFAULT '', "
         "prompt_sha256 TEXT DEFAULT '', "
+        "llm_status TEXT DEFAULT '', "
+        "llm_model TEXT DEFAULT '', "
+        "llm_request_log_id INTEGER, "
+        "llm_error TEXT DEFAULT '', "
+        "retry_count INTEGER DEFAULT 0, "
+        "next_retry_at DATETIME, "
+        "supersedes_summary_id INTEGER, "
+        "stable_hash TEXT DEFAULT '', "
         "meta_json TEXT DEFAULT '{}', "
         "created_at DATETIME, "
         "updated_at DATETIME"
@@ -455,6 +464,62 @@ def _rolling_session_summaries(conn: Any, engine: Any, db_path: str | None) -> N
         "CREATE INDEX IF NOT EXISTS idx_rss_session_status ON rolling_session_summaries(session_id, status)",
         "CREATE INDEX IF NOT EXISTS idx_rss_session_covered ON rolling_session_summaries(session_id, covered_until_turn_id)",
         "CREATE INDEX IF NOT EXISTS idx_rss_user_session ON rolling_session_summaries(user_id, session_id)",
+        "CREATE INDEX IF NOT EXISTS idx_rss_summary_kind ON rolling_session_summaries(summary_kind)",
+        "CREATE INDEX IF NOT EXISTS idx_rss_llm_status ON rolling_session_summaries(llm_status)",
+        "CREATE INDEX IF NOT EXISTS idx_rss_stable_hash ON rolling_session_summaries(stable_hash)",
+    ])
+
+
+def _session_summary_llm_columns(conn: Any, engine: Any, db_path: str | None) -> None:
+    _add_missing_columns(conn, "rolling_session_summaries", {
+        "summary_kind": "TEXT DEFAULT 'deterministic_fallback'",
+        "llm_status": "TEXT DEFAULT ''",
+        "llm_model": "TEXT DEFAULT ''",
+        "llm_request_log_id": "INTEGER",
+        "llm_error": "TEXT DEFAULT ''",
+        "retry_count": "INTEGER DEFAULT 0",
+        "next_retry_at": "DATETIME",
+        "supersedes_summary_id": "INTEGER",
+        "stable_hash": "TEXT DEFAULT ''",
+    })
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_rss_summary_kind ON rolling_session_summaries(summary_kind)",
+        "CREATE INDEX IF NOT EXISTS idx_rss_llm_status ON rolling_session_summaries(llm_status)",
+        "CREATE INDEX IF NOT EXISTS idx_rss_stable_hash ON rolling_session_summaries(stable_hash)",
+    ])
+
+
+def _session_summary_jobs(conn: Any, engine: Any, db_path: str | None) -> None:
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS session_summary_jobs ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "session_id TEXT NOT NULL, "
+        "user_id TEXT DEFAULT '', "
+        "chat_type TEXT DEFAULT 'private', "
+        "covered_from_turn_id INTEGER DEFAULT 0, "
+        "covered_until_turn_id INTEGER DEFAULT 0, "
+        "source_turn_ids_json TEXT DEFAULT '[]', "
+        "previous_summary_id INTEGER, "
+        "fallback_summary_id INTEGER, "
+        "result_summary_id INTEGER, "
+        "status TEXT DEFAULT 'pending', "
+        "retry_count INTEGER DEFAULT 0, "
+        "max_retry INTEGER DEFAULT 3, "
+        "next_retry_at DATETIME, "
+        "locked_by TEXT DEFAULT '', "
+        "locked_at DATETIME, "
+        "error TEXT DEFAULT '', "
+        "stable_hash TEXT DEFAULT '', "
+        "meta_json TEXT DEFAULT '{}', "
+        "created_at DATETIME, "
+        "updated_at DATETIME"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS idx_ssj_session_status ON session_summary_jobs(session_id, status)",
+        "CREATE INDEX IF NOT EXISTS idx_ssj_status_retry ON session_summary_jobs(status, next_retry_at)",
+        "CREATE INDEX IF NOT EXISTS idx_ssj_session_range ON session_summary_jobs(session_id, covered_from_turn_id, covered_until_turn_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ssj_stable_hash ON session_summary_jobs(stable_hash)",
     ])
 
 
@@ -473,6 +538,8 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_reply_contract_check_logs", "reply contract check log columns", _reply_contract_check_logs),
     ("20260523_reply_eval_trace_columns", "reply eval trace columns", _reply_eval_trace_columns),
     ("20260525_rolling_session_summaries", "rolling session summaries", _rolling_session_summaries),
+    ("20260526_session_summary_llm_columns", "session summary llm columns", _session_summary_llm_columns),
+    ("20260526_session_summary_jobs", "session summary jobs", _session_summary_jobs),
 ]
 
 

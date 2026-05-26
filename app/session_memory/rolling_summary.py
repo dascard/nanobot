@@ -26,6 +26,7 @@ class RollupResult:
     error: str = ""
     dry_run: bool = False
     threshold: dict[str, Any] = field(default_factory=dict)
+    summary_job_id: int = 0
 
 
 def get_active_summary(
@@ -136,11 +137,22 @@ def save_new_active_summary(
     issues = quality.get("issues")
     issues = issues if isinstance(issues, list) else []
 
+    summary_kind = "deterministic_fallback"
+    stable_hash = hashlib.sha256(
+        json.dumps({
+            "kind": summary_kind,
+            "session_id": session_id,
+            "source_turn_ids": source_turn_ids,
+            "summary": summary_json.get("summary", ""),
+        }, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
     row = RollingSessionSummary(
         session_id=session_id,
         user_id=user_id or "",
         chat_type=chat_type or "private",
         status="active",
+        summary_kind=summary_kind,
         summary_text=summary_text,
         summary_json=json.dumps(summary_json, ensure_ascii=False),
         covered_from_turn_id=source_turn_ids[0],
@@ -154,9 +166,11 @@ def save_new_active_summary(
         issues_json=json.dumps(issues, ensure_ascii=False),
         model=model or "",
         prompt_sha256=prompt_sha256 or "",
+        stable_hash=stable_hash,
         meta_json=json.dumps({
             "schema_version": 1,
             "created_by": "rolling_session_summary",
+            "summary_kind": summary_kind,
         }, ensure_ascii=False),
     )
     db.add(row)
@@ -235,4 +249,17 @@ def maybe_rollup_session_summary(
         model="deterministic",
         prompt_sha256=prompt_sha256,
     )
+    if config.SESSION_SUMMARY_LLM_ENABLED:
+        from app.session_memory.jobs import enqueue_session_summary_job
+
+        job, _created = enqueue_session_summary_job(
+            db,
+            session_id=session_id,
+            user_id=user_id,
+            chat_type=chat_type,
+            pending_turns=pending_turns,
+            previous_summary=active_summary,
+            fallback_summary=result.summary,
+        )
+        result.summary_job_id = int(job.id or 0)
     return result

@@ -192,6 +192,9 @@ def build_session_memory(
         "rolling_summary_id": 0,
         "rolling_summary_covered_until_turn_id": 0,
         "rolling_summary_source_turn_count": 0,
+        "rolling_summary_source": "conversation_turn",
+        "rolling_summary_scope": "conversation_turn",
+        "rolling_summary_kind": "",
         "rolling_summary_pending_turn_ids": [],
         "rolling_summary_raw_start_turn_id": 0,
         "rolling_summary_recent_raw_turn_ids": [],
@@ -265,6 +268,9 @@ def build_session_memory(
         debug["rolling_summary_id"] = int(active_summary.id or 0)
         debug["rolling_summary_covered_until_turn_id"] = int(active_summary.covered_until_turn_id or 0)
         debug["rolling_summary_source_turn_count"] = int(active_summary.source_turn_count or 0)
+        debug["rolling_summary_kind"] = str(
+            getattr(active_summary, "summary_kind", "") or "deterministic_fallback"
+        )
 
     skipped_no_context = len(debug["rolling_summary_eligible_skipped"])
     if not recent_window:
@@ -602,9 +608,9 @@ def build_chat_context(
 ) -> tuple[str, list[dict], dict]:
     """构建真实回复链路使用的统一上下文。
 
-    私聊继续使用 ConversationTurn；群聊使用 ChatLog 作为现场来源，输出同一种
-    user/assistant role message 列表，避免 `history_context` 与
-    `group_recent_context` 双轨注入。
+    私聊继续使用 ConversationTurn；群聊使用 ChatLog 作为现场 raw window 来源。
+    第一版群聊 rolling summary 仍基于 ConversationTurn，只覆盖 bot 参与过的
+    query/answer，不代表完整 ambient 群聊现场。
     """
     if not is_group:
         header, messages, debug = build_session_memory(
@@ -704,6 +710,12 @@ def build_chat_context(
         summary_header = render_rolling_summary_context(active_summary)
         debug.update({
             "rolling_summary_enabled": True,
+            "rolling_summary_source": "conversation_turn",
+            "rolling_summary_scope": "bot_participation",
+            "rolling_summary_kind": (
+                str(getattr(active_summary, "summary_kind", "") or "deterministic_fallback")
+                if summary_header else ""
+            ),
             "rolling_summary_injected": bool(summary_header),
             "rolling_summary_id": int(getattr(active_summary, "id", 0) or 0) if summary_header else 0,
             "rolling_summary_covered_until_turn_id": (

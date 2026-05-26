@@ -83,6 +83,54 @@ def test_group_memory_governance_columns_apply_when_old_group_memory_migration_a
     assert "injected_count" in columns
 
 
+def test_session_summary_llm_columns_apply_when_old_rolling_migration_already_recorded():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE schema_migrations ("
+            "version TEXT PRIMARY KEY, name TEXT, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        ))
+        conn.execute(text(
+            "INSERT INTO schema_migrations(version, name) "
+            "VALUES ('20260525_rolling_session_summaries', 'rolling session summaries')"
+        ))
+        conn.execute(text(
+            "CREATE TABLE rolling_session_summaries ("
+            "id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, user_id TEXT, chat_type TEXT, "
+            "status TEXT, summary_text TEXT, summary_json TEXT, covered_from_turn_id INTEGER, "
+            "covered_until_turn_id INTEGER, source_turn_ids_json TEXT, source_turn_count INTEGER, "
+            "source_token_estimate INTEGER, source_char_count INTEGER, raw_window_start_turn_id INTEGER, "
+            "quality_score REAL, issues_json TEXT, model TEXT, prompt_sha256 TEXT, meta_json TEXT, "
+            "created_at DATETIME, updated_at DATETIME)"
+        ))
+
+    run_schema_migrations(engine)
+
+    columns = [col["name"] for col in inspect(engine).get_columns("rolling_session_summaries")]
+    assert "summary_kind" in columns
+    assert "llm_status" in columns
+    assert "retry_count" in columns
+    assert "stable_hash" in columns
+
+
+def test_session_summary_jobs_table_is_created_by_migration():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    assert "session_summary_jobs" in inspector.get_table_names()
+    columns = [col["name"] for col in inspector.get_columns("session_summary_jobs")]
+    assert "session_id" in columns
+    assert "fallback_summary_id" in columns
+    assert "result_summary_id" in columns
+    assert "next_retry_at" in columns
+
+
 def test_persona_fact_governance_columns_are_added_to_existing_table():
     from core.schema_migrations import run_schema_migrations
 

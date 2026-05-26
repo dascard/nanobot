@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta
 
-from core.database import ChatLog, ConversationTurn, RollingSessionSummary, User
+from core.database import ChatLog, ConversationTurn, RollingSessionSummary, SessionSummaryJob, User
 
 
 def _turn(db, *, session_id="s1", user_id="u1", role="user", content="hello", meta=None, created_at=None):
@@ -99,6 +99,28 @@ def test_build_session_memory_large_session_uses_latest_raw_window(db_session):
     assert debug["rolling_summary_raw_start_turn_id"] == min(turn_ids)
 
 
+def test_admin_rollup_inputs_large_session_uses_latest_raw_window(db_session):
+    from api.admin.session_memory_routes import _build_rollup_inputs
+
+    for i in range(1000):
+        _turn(db_session, content=f"管理端历史消息 {i + 1}")
+    db_session.commit()
+
+    _active, pending, raw_window, raw_debug, _eligible_debug = _build_rollup_inputs(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+    )
+
+    turn_ids = [int(item["turn_id"]) for item in raw_window]
+    assert turn_ids
+    assert turn_ids[-1] == 1000
+    assert min(turn_ids) > 900
+    assert raw_debug["raw_window_start_turn_id"] == min(turn_ids)
+    assert all(turn.id < min(turn_ids) for turn in pending)
+
+
 def test_history_clear_at_archives_active_summary(db_session):
     from app.session_memory.rolling_summary import get_active_summary
 
@@ -154,6 +176,10 @@ def test_save_new_summary_archives_old_active(db_session):
     assert old.status == "archived"
     assert row.status == "active"
     assert row.covered_until_turn_id == turns[-1].id
+    assert row.summary_kind == "deterministic_fallback"
+    meta = json.loads(row.meta_json or "{}")
+    assert meta["summary_kind"] == "deterministic_fallback"
+    assert row.stable_hash
 
 
 def test_save_new_summary_archives_all_existing_active_rows(db_session):
@@ -292,6 +318,8 @@ def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session
     assert "<rolling_session_summary" in header
     assert messages
     assert debug["rolling_summary_injected"] is True
+    assert debug["rolling_summary_source"] == "conversation_turn"
+    assert debug["rolling_summary_scope"] == "bot_participation"
     assert debug["rolling_summary_pending_turn_ids"]
     assert debug["rolling_summary_recent_raw_turn_ids"][-1] == 24
 
@@ -308,3 +336,120 @@ def test_rollup_audit_rejects_current_user_input_leak(db_session):
 
     assert ok is False
     assert "summary_contains_current_user_input" in issues
+
+
+def test_enqueue_session_summary_job_is_idempotent_for_same_range(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        covered_from_turn_id=1,
+        covered_until_turn_id=3,
+    )
+    db_session.add(fallback)
+    turns = [_turn(db_session, content=f"待总结 {i}") for i in range(3)]
+    db_session.commit()
+
+    job1, created1 = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+    job2, created2 = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+    )
+
+    assert created1 is True
+    assert created2 is False
+    assert job1.id == job2.id
+    assert job1.status == "pending"
+    assert job1.fallback_summary_id == fallback.id
+    assert job1.covered_from_turn_id == turns[0].id
+    assert job1.covered_until_turn_id == turns[-1].id
+
+
+def test_failed_session_summary_job_can_be_retried(db_session):
+    from app.session_memory.jobs import retry_session_summary_job
+
+    job = SessionSummaryJob(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        covered_from_turn_id=1,
+        covered_until_turn_id=3,
+        source_turn_ids_json="[1,2,3]",
+        status="failed",
+        retry_count=1,
+        max_retry=3,
+        error="json_parse_failed",
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    retried = retry_session_summary_job(db_session, job.id)
+
+    assert retried.status == "pending"
+    assert retried.error == ""
+    assert retried.next_retry_at is None
+
+
+def test_rollup_success_enqueues_llm_summary_job(db_session):
+    from app.session_memory.rolling_summary import maybe_rollup_session_summary
+
+    turns = [_turn(db_session, content=("需要摘要 " + "甲" * 300)) for _ in range(6)]
+    db_session.commit()
+
+    result = maybe_rollup_session_summary(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        active_summary=None,
+        pending_turns=turns,
+        recent_raw_turn_ids=[],
+        raw_window_start_turn_id=turns[-1].id + 1,
+    )
+
+    assert result.summary is not None
+    assert result.summary_job_id > 0
+    job = db_session.get(SessionSummaryJob, result.summary_job_id)
+    assert job is not None
+    assert job.status == "pending"
+    assert job.fallback_summary_id == result.summary.id
+
+
+def test_rollup_dry_run_does_not_enqueue_llm_summary_job(db_session):
+    from app.session_memory.rolling_summary import maybe_rollup_session_summary
+
+    turns = [_turn(db_session, content=("dry run 摘要 " + "乙" * 300)) for _ in range(6)]
+    db_session.commit()
+
+    result = maybe_rollup_session_summary(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        active_summary=None,
+        pending_turns=turns,
+        recent_raw_turn_ids=[],
+        raw_window_start_turn_id=turns[-1].id + 1,
+        dry_run=True,
+    )
+
+    assert result.summary is None
+    assert result.summary_job_id == 0
+    assert db_session.query(SessionSummaryJob).count() == 0

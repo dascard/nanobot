@@ -124,6 +124,7 @@ class RollingSessionSummary(Base):
     chat_type = Column(String, index=True, default="private")
 
     status = Column(String, index=True, default="active")
+    summary_kind = Column(String, index=True, default="deterministic_fallback")
     summary_text = Column(Text, default="")
     summary_json = Column(Text, default="{}")
 
@@ -140,6 +141,49 @@ class RollingSessionSummary(Base):
 
     model = Column(String, default="")
     prompt_sha256 = Column(String, default="")
+    llm_status = Column(String, index=True, default="")
+    llm_model = Column(String, default="")
+    llm_request_log_id = Column(Integer, nullable=True)
+    llm_error = Column(Text, default="")
+    retry_count = Column(Integer, default=0)
+    next_retry_at = Column(DateTime, nullable=True)
+    supersedes_summary_id = Column(Integer, nullable=True)
+    stable_hash = Column(String, index=True, default="")
+    meta_json = Column(Text, default="{}")
+
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class SessionSummaryJob(Base):
+    """异步 LLM session summary 生成任务。
+
+    主请求只创建 pending job；后台 worker 后续消费并生成高质量 llm summary。
+    """
+
+    __tablename__ = "session_summary_jobs"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    session_id = Column(String, index=True, nullable=False)
+    user_id = Column(String, index=True, default="")
+    chat_type = Column(String, index=True, default="private")
+
+    covered_from_turn_id = Column(Integer, index=True, default=0)
+    covered_until_turn_id = Column(Integer, index=True, default=0)
+    source_turn_ids_json = Column(Text, default="[]")
+
+    previous_summary_id = Column(Integer, nullable=True)
+    fallback_summary_id = Column(Integer, nullable=True)
+    result_summary_id = Column(Integer, nullable=True)
+
+    status = Column(String, index=True, default="pending")
+    retry_count = Column(Integer, default=0)
+    max_retry = Column(Integer, default=3)
+    next_retry_at = Column(DateTime, nullable=True)
+    locked_by = Column(String, default="")
+    locked_at = Column(DateTime, nullable=True)
+    error = Column(Text, default="")
+    stable_hash = Column(String, index=True, default="")
     meta_json = Column(Text, default="{}")
 
     created_at = Column(DateTime, default=datetime.now, index=True)

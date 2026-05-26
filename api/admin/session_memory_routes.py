@@ -15,10 +15,9 @@ from app.session_memory.rolling_summary import (
     maybe_rollup_session_summary,
 )
 from app.session_memory.windowing import (
-    load_context_eligible_turns,
+    load_latest_raw_window,
+    load_pending_for_summary_turns,
     raw_window_limits,
-    select_latest_raw_window,
-    select_pending_for_summary,
 )
 from core.database import RollingSessionSummary, User, get_db
 
@@ -42,6 +41,7 @@ def _summary_to_dict(row: RollingSessionSummary | None) -> dict:
         "user_id": row.user_id,
         "chat_type": row.chat_type,
         "status": row.status,
+        "summary_kind": getattr(row, "summary_kind", "") or "deterministic_fallback",
         "summary_text": row.summary_text,
         "summary_json": row.summary_json,
         "covered_from_turn_id": row.covered_from_turn_id,
@@ -55,6 +55,14 @@ def _summary_to_dict(row: RollingSessionSummary | None) -> dict:
         "issues_json": row.issues_json,
         "model": row.model,
         "prompt_sha256": row.prompt_sha256,
+        "llm_status": getattr(row, "llm_status", "") or "",
+        "llm_model": getattr(row, "llm_model", "") or "",
+        "llm_request_log_id": getattr(row, "llm_request_log_id", None),
+        "llm_error": getattr(row, "llm_error", "") or "",
+        "retry_count": int(getattr(row, "retry_count", 0) or 0),
+        "next_retry_at": row.next_retry_at.isoformat() if getattr(row, "next_retry_at", None) else "",
+        "supersedes_summary_id": getattr(row, "supersedes_summary_id", None),
+        "stable_hash": getattr(row, "stable_hash", "") or "",
         "created_at": row.created_at.isoformat() if row.created_at else "",
         "updated_at": row.updated_at.isoformat() if row.updated_at else "",
     }
@@ -71,25 +79,31 @@ def _build_rollup_inputs(
     history_clear_at = user.history_clear_at if user else None
     active_summary = get_active_summary(db, session_id, after_clear_at=history_clear_at)
     last_covered_id = int(active_summary.covered_until_turn_id or 0) if active_summary else 0
-    eligible, eligible_debug = load_context_eligible_turns(
+    max_turns, max_tokens = raw_window_limits(chat_type)
+    raw_window, raw_debug = load_latest_raw_window(
         db,
         session_id=session_id,
-        user_id=user_id,
-        after_clear_at=history_clear_at,
-        after_turn_id=last_covered_id,
-    )
-    max_turns, max_tokens = raw_window_limits(chat_type)
-    raw_window, raw_debug = select_latest_raw_window(
-        eligible,
         chat_type=chat_type,
         max_turns=max_turns,
         max_tokens=max_tokens,
+        after_clear_at=history_clear_at,
+        after_turn_id=last_covered_id,
     )
-    pending = select_pending_for_summary(
-        eligible,
+    pending, pending_debug = load_pending_for_summary_turns(
+        db,
+        session_id=session_id,
         last_covered_id=last_covered_id,
         raw_window_start_turn_id=int(raw_debug.get("raw_window_start_turn_id") or 0),
+        after_clear_at=history_clear_at,
     )
+    eligible_debug = {
+        "skipped": (
+            list(raw_debug.get("raw_window_skipped") or [])
+            + list(pending_debug.get("pending_skipped") or [])
+        ),
+        "raw_window": raw_debug,
+        "pending": pending_debug,
+    }
     return active_summary, pending, raw_window, raw_debug, eligible_debug
 
 
@@ -147,6 +161,7 @@ def run_rolling_summary(
     return {
         "session_id": session_id,
         "active_summary_id": int(getattr(result.summary, "id", 0) or 0),
+        "summary_job_id": int(getattr(result, "summary_job_id", 0) or 0),
         "covered_until_turn_id": int(getattr(result.summary, "covered_until_turn_id", 0) or 0),
         "pending_turn_ids": result.pending_turn_ids,
         "recent_raw_turn_ids": result.recent_raw_turn_ids,

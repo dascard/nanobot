@@ -352,10 +352,12 @@ def test_build_chat_context_group_injects_active_rolling_summary(db_session):
     )
 
     assert "<rolling_session_summary" in header
+    assert 'summary_kind="deterministic_fallback"' in header
     assert "画布滚轮" in header
     assert header.index("<rolling_session_summary") < header.index("<conversation_context>")
     assert messages
     assert debug["rolling_summary_injected"] is True
+    assert debug["rolling_summary_kind"] == "deterministic_fallback"
     assert debug["rolling_summary_covered_until_turn_id"] == 8
 
 
