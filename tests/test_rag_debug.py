@@ -110,6 +110,7 @@ def test_rag_debug_memory_uses_real_pipeline_trace(client, db_session, monkeypat
     payload = response.json()["response"]
     stages = payload["stages"]
     assert payload["score_breakdown"]["fallback_reason"] != "rag_debug_stub"
+    assert payload["score_breakdown"]["source_weights_mode"] == "display_only_no_quota"
     assert stages["fts_hits"][0]["bm25_raw"] is not None
     assert stages["merged_candidates"][0]["candidate_id"] == "memory_digest:701:card:0"
     assert stages["reranker_input_pairs"][0]["candidate_id"] == "memory_digest:701:card:0"
@@ -211,8 +212,10 @@ def test_rag_debug_query_runs_sticker_search(client, db_session, monkeypatch):
     from core.database import StickerMemory
     from core.semantic.adapters import chunk_from_sticker
     from core.semantic.indexer import upsert_semantic_chunks
+    import core.semantic.provider_factory as provider_factory
 
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(provider_factory, "get_reranker_provider", lambda: DebugRerankerProvider())
     sticker = StickerMemory(
         chat_stream_id="qq:123:group",
         sticker_hash="debug-sticker",
@@ -238,7 +241,7 @@ def test_rag_debug_query_runs_sticker_search(client, db_session, monkeypatch):
         headers=_auth_header(),
         json={
             "source_type": "sticker",
-            "query": "震惊猫猫",
+            "query": "surprised",
             "limit": 3,
             "filters": {"group_id": "123"},
         },
@@ -246,9 +249,16 @@ def test_rag_debug_query_runs_sticker_search(client, db_session, monkeypatch):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["response"]["candidates"][0]["reply_token"] == f"[sticker:{sticker.id}]"
-    assert data["response"]["candidates"][0]["source_type"] == "sticker"
-    assert data["response"]["score_breakdown"]["fallback_reason"] == "reranker_unavailable"
+    payload = data["response"]
+    stages = payload["stages"]
+    assert payload["candidates"][0]["reply_token"] == f"[sticker:{sticker.id}]"
+    assert payload["candidates"][0]["source_type"] == "sticker"
+    assert payload["score_breakdown"]["fallback_reason"] == ""
+    assert stages["fts_hits"][0]["bm25_raw"] is not None
+    assert stages["hard_gate"][0]["replyable"] is True
+    assert stages["hard_gate"][0]["passed"] is True
+    assert stages["reranker_input_pairs"][0]["candidate_id"] == f"sticker:{sticker.id}:sticker"
+    assert stages["final_candidates"][0]["score_breakdown"]["raw_reranker"] == 2.0
 
 
 def test_rag_debug_query_runs_knowledge_search_with_citation(client, db_session, monkeypatch):
@@ -256,8 +266,10 @@ def test_rag_debug_query_runs_knowledge_search_with_citation(client, db_session,
     from core.knowledge_library import create_manual_document
     from core.semantic.adapters import chunk_from_knowledge_chunk
     from core.semantic.indexer import upsert_semantic_chunks
+    import core.semantic.provider_factory as provider_factory
 
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(provider_factory, "get_reranker_provider", lambda: DebugRerankerProvider())
     doc = create_manual_document(
         db_session,
         filename="debug.md",
@@ -280,10 +292,51 @@ def test_rag_debug_query_runs_knowledge_search_with_citation(client, db_session,
     )
 
     assert response.status_code == 200
-    candidate = response.json()["response"]["candidates"][0]
+    payload = response.json()["response"]
+    stages = payload["stages"]
+    candidate = payload["candidates"][0]
     assert candidate["source_type"] == "knowledge"
     assert candidate["citation"]["title"] == "Debug 知识"
     assert candidate["citation"]["trust_level"] == "medium"
+    assert stages["fts_hits"][0]["bm25_raw"] is not None
+    assert stages["reranker_input_pairs"][0]["candidate_id"] == candidate["candidate_id"]
+    assert stages["final_candidates"][0]["score_breakdown"]["raw_reranker"] == 2.0
+    assert "no_citation" in stages["skipped"]
+
+
+def test_rag_debug_group_analysis_exposes_bundle_trace(client, monkeypatch):
+    import core.semantic.provider_factory as provider_factory
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    monkeypatch.setattr(provider_factory, "get_reranker_provider", lambda: DebugRerankerProvider())
+    messages = [
+        {"log_id": 1, "time": "10:00", "user_id": "u1", "content": "本地模型部署需要检查显存"},
+        {"log_id": 2, "time": "10:01", "user_id": "u2", "content": "量化参数可以先试 q4_k_m"},
+        {"log_id": 3, "time": "10:02", "user_id": "u3", "content": "今天午饭吃什么"},
+    ]
+
+    response = client.post(
+        "/api/v1/admin/rag/debug/query",
+        headers=_auth_header(),
+        json={
+            "source_type": "group_analysis",
+            "query": "本地模型部署量化",
+            "filters": {
+                "messages": messages,
+                "bundle_size": 1,
+                "neighbor_radius": 1,
+                "reranker_top_k": 2,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["response"]
+    stages = payload["stages"]
+    assert stages["fts_hits"][0]["candidate_id"].startswith("bundle:")
+    assert stages["reranker_input_pairs"][0]["candidate_id"].startswith("bundle:")
+    assert stages["prompt_logs"]["neighbor_expansion"][0]["selected_indexes"]
+    assert stages["final_candidates"][0]["candidate_id"].startswith("bundle:")
 
 
 def test_rag_debug_group_memory_uses_retrieval_service_not_stub(client, db_session, monkeypatch):

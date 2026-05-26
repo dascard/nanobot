@@ -194,6 +194,17 @@ def select_group_analysis_context(
     )[: max(1, int(lexical_top_k or 300))]
     embedding_scored = _apply_embedding_scores(query_text, lexical_candidates, embedding_provider)
     lexical_candidates.sort(key=lambda item: item.score, reverse=True)
+    reranker_input_pairs = [
+        {
+            "candidate_id": bundle.bundle_id,
+            "source_type": "group_analysis",
+            "query": query_text,
+            "title": bundle.bundle_id,
+            "text": bundle.text,
+            "metadata": {"start": bundle.start, "end": bundle.end},
+        }
+        for bundle in lexical_candidates
+    ] if reranker_provider is not None else []
     reranker_candidates = _apply_reranker(query_text, lexical_candidates, reranker_provider, reranker_top_k)
 
     if reranker_provider is not None:
@@ -208,9 +219,16 @@ def select_group_analysis_context(
         ]
 
     selected_indexes: set[int] = set()
+    neighbor_expansion: list[dict[str, Any]] = []
     radius = max(0, int(neighbor_radius or 0))
     for bundle in ranked_hits:
-        for index in range(max(0, bundle.index - radius), min(len(bundles), bundle.index + radius + 1)):
+        indexes = list(range(max(0, bundle.index - radius), min(len(bundles), bundle.index + radius + 1)))
+        neighbor_expansion.append({
+            "bundle_id": bundle.bundle_id,
+            "source_index": bundle.index,
+            "selected_indexes": indexes,
+        })
+        for index in indexes:
             selected_indexes.add(index)
     selected_bundles = [bundle for bundle in bundles if bundle.index in selected_indexes]
     budget_indexes = _select_with_budget(selected_bundles, budget_chars=int(budget_chars or 0))
@@ -234,8 +252,11 @@ def select_group_analysis_context(
             "selected_messages": len(ordered_messages),
         },
         "prompt_logs": {
+            "lexical_candidates": [_bundle_debug(bundle) for bundle in lexical_candidates],
             "hit_bundles": [_bundle_debug(bundle) for bundle in ranked_hits],
             "selected_bundles": [_bundle_debug(bundle) for bundle in final_bundles],
+            "reranker_input_pairs": reranker_input_pairs,
+            "neighbor_expansion": neighbor_expansion,
             "selected_message_ids": [message.get("log_id") for message in ordered_messages],
         },
     }

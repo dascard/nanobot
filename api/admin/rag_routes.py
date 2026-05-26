@@ -195,6 +195,7 @@ def _build_memory_debug_response(
                 {"memory_digest": 0.5, "session_summary": 0.5}
                 if requested_source == "all" else {requested_source: 1.0}
             ),
+            "source_weights_mode": "display_only_no_quota",
             "latency_ms": latency_ms,
             **stats,
         },
@@ -347,53 +348,37 @@ def _build_sticker_debug_response(
     db: Session,
     latency_ms: int,
 ) -> dict[str, Any]:
-    from core.sticker_memory import search_stickers
+    from core.sticker_rag import StickerRagService
+    from core.semantic.provider_factory import get_embedding_provider, get_rag_runtime_config, get_reranker_provider
 
     filters = body.filters or {}
-    results = search_stickers(
+    runtime = get_rag_runtime_config("sticker")
+    result = StickerRagService(
         db,
+        embedding_provider=get_embedding_provider(),
+        reranker_provider=get_reranker_provider() if runtime.reranker_enabled else None,
+    ).query(
         body.query,
         group_id=str(filters.get("group_id") or ""),
         chat_stream_id=str(filters.get("chat_stream_id") or ""),
         include_global=bool(filters.get("include_global", True)),
         limit=body.limit,
+        include_debug=True,
     )
-    candidates = [_sticker_candidate_to_debug(item) for item in results]
-    reranked = [
-        item
-        for item in candidates
-        if item.get("score_breakdown", {}).get("reranker") is not None
-    ]
-    degraded = not reranked
+    stages = result.get("debug_trace") if isinstance(result, dict) else {}
+    candidates = stages.get("final_candidates") or []
+    stats = result.get("stats") if isinstance(result, dict) else {}
     score_breakdown = {
-        "degraded": degraded,
-        "fallback_reason": "reranker_unavailable" if degraded else "",
+        "degraded": bool(result.get("degraded")) if isinstance(result, dict) else True,
+        "fallback_reason": str(result.get("fallback_reason") or "") if isinstance(result, dict) else "rag_debug_unavailable",
         "source_weights": {"sticker": 1.0},
         "latency_ms": latency_ms,
-        "fts_candidates": len(candidates),
-        "embedding_candidates": 0,
-        "merged_candidates": len(candidates),
-        "reranker_candidates": len(reranked),
-        "final_items": len(candidates),
+        **stats,
     }
     return {
         "query": body.query,
         "source_type": "sticker",
-        "stages": {
-            "sql_filters": {
-                "status": "active",
-                "dedupe_status": "not_duplicate",
-                "duplicate_of_id": None,
-                "describe_status": "ok",
-                "replyable": True,
-                **filters,
-            },
-            "fts_hits": candidates,
-            "embedding_hits": [],
-            "merged_candidates": candidates,
-            "reranker_input_pairs": [],
-            "final_candidates": candidates,
-        },
+        "stages": stages,
         "score_breakdown": score_breakdown,
         "candidates": candidates,
     }
@@ -423,16 +408,28 @@ def _build_knowledge_debug_response(
     latency_ms: int,
 ) -> dict[str, Any]:
     from core.knowledge_rag import KnowledgeRagService
+    from core.semantic.provider_factory import get_embedding_provider, get_rag_runtime_config, get_reranker_provider
 
     filters = body.filters or {}
-    result = KnowledgeRagService(db).query(
+    runtime = get_rag_runtime_config("knowledge")
+    result = KnowledgeRagService(
+        db,
+        embedding_provider=get_embedding_provider(),
+        reranker_provider=get_reranker_provider() if runtime.reranker_enabled else None,
+    ).query(
         body.query,
         limit=body.limit,
         min_trust_level=str(filters.get("min_trust_level") or "low"),
+        source_type=str(filters.get("source_type") or ""),
+        domain=str(filters.get("domain") or ""),
+        date_start=str(filters.get("date_start") or ""),
+        date_end=str(filters.get("date_end") or ""),
         published_after=str(filters.get("published_after") or ""),
         published_before=str(filters.get("published_before") or ""),
+        include_debug=True,
     )
-    candidates = [_knowledge_candidate_to_debug(item) for item in result.get("items") or []]
+    stages = result.get("debug_trace") or {}
+    candidates = stages.get("final_candidates") or []
     stats = result.get("stats") or {}
     score_breakdown = {
         "degraded": bool(result.get("degraded")),
@@ -444,22 +441,7 @@ def _build_knowledge_debug_response(
     return {
         "query": body.query,
         "source_type": "knowledge",
-        "stages": {
-            "sql_filters": {
-                "status": "active",
-                "citation_required": True,
-                **filters,
-            },
-            "fts_hits": candidates,
-            "embedding_hits": [],
-            "merged_candidates": candidates,
-            "reranker_input_pairs": [],
-            "final_candidates": candidates,
-            "skipped": {
-                "no_citation": stats.get("skipped_no_citation", 0),
-                "filter": stats.get("skipped_filter", 0),
-            },
-        },
+        "stages": stages,
         "score_breakdown": score_breakdown,
         "candidates": candidates,
     }
@@ -470,9 +452,11 @@ def _build_group_analysis_debug_response(
     latency_ms: int,
 ) -> dict[str, Any]:
     from creatures.nanobot.prompts.skills.group_analysis.local_rag import select_group_analysis_context
+    from core.semantic.provider_factory import get_embedding_provider, get_rag_runtime_config, get_reranker_provider
 
     filters = body.filters or {}
     messages = filters.get("messages") if isinstance(filters.get("messages"), list) else []
+    runtime = get_rag_runtime_config("group_analysis")
     result = select_group_analysis_context(
         messages,
         query=body.query,
@@ -481,6 +465,8 @@ def _build_group_analysis_debug_response(
         reranker_top_k=int(filters.get("reranker_top_k") or 40),
         neighbor_radius=int(filters.get("neighbor_radius") or 1),
         budget_chars=int(filters.get("budget_chars") or 0),
+        embedding_provider=get_embedding_provider() if runtime.enabled else None,
+        reranker_provider=get_reranker_provider() if runtime.enabled and runtime.reranker_enabled else None,
     )
     stats = result.get("stats_logs") or {}
     prompt_logs = result.get("prompt_logs") or {}
@@ -497,6 +483,32 @@ def _build_group_analysis_debug_response(
         }
         for item in prompt_logs.get("hit_bundles") or []
     ]
+    lexical_candidates = [
+        {
+            "candidate_id": item.get("bundle_id"),
+            "source_type": "group_analysis",
+            "title": item.get("bundle_id"),
+            "text": item.get("text"),
+            "reranker_score": item.get("reranker"),
+            "final_score": item.get("score"),
+            "score_breakdown": item,
+            "skipped_reason": "",
+        }
+        for item in prompt_logs.get("lexical_candidates") or []
+    ]
+    final_candidates = [
+        {
+            "candidate_id": item.get("bundle_id"),
+            "source_type": "group_analysis",
+            "title": item.get("bundle_id"),
+            "text": item.get("text"),
+            "reranker_score": item.get("reranker"),
+            "final_score": item.get("score"),
+            "score_breakdown": item,
+            "skipped_reason": "",
+        }
+        for item in prompt_logs.get("selected_bundles") or []
+    ]
     return {
         "query": body.query,
         "source_type": "group_analysis",
@@ -504,20 +516,20 @@ def _build_group_analysis_debug_response(
             "sql_filters": {key: value for key, value in filters.items() if key != "messages"},
             "stats_logs": stats,
             "prompt_logs": prompt_logs,
-            "fts_hits": candidates,
+            "fts_hits": lexical_candidates,
             "embedding_hits": [],
             "merged_candidates": candidates,
-            "reranker_input_pairs": [],
-            "final_candidates": candidates,
+            "reranker_input_pairs": prompt_logs.get("reranker_input_pairs") or [],
+            "final_candidates": final_candidates,
         },
         "score_breakdown": {
-            "degraded": True,
-            "fallback_reason": "local_rag_debug_no_external_reranker",
+            "degraded": not bool(prompt_logs.get("reranker_input_pairs")),
+            "fallback_reason": "" if prompt_logs.get("reranker_input_pairs") else "local_rag_debug_no_external_reranker",
             "source_weights": {"group_analysis": 1.0},
             "latency_ms": latency_ms,
             **stats,
         },
-        "candidates": candidates,
+        "candidates": final_candidates,
     }
 
 
