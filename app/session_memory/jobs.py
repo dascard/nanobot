@@ -196,6 +196,53 @@ def claim_summary_job(
     return db.get(SessionSummaryJob, int(job_id))
 
 
+def recover_stale_running_jobs(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    timeout_sec: int | None = None,
+    limit: int | None = None,
+) -> int:
+    """回收长时间卡在 running 的 job。
+
+    worker 崩溃或进程被杀时，running job 不会被 `fetch_pending_summary_jobs`
+    再次取到。这里把超时 job 重新放回 pending；超过重试次数则标 failed。
+    """
+    now = now or datetime.now()
+    timeout = int(timeout_sec if timeout_sec is not None else config.SESSION_SUMMARY_RUNNING_TIMEOUT_SEC)
+    cutoff = now - timedelta(seconds=max(1, timeout))
+    query = (
+        db.query(SessionSummaryJob)
+        .filter(
+            SessionSummaryJob.status == "running",
+            or_(
+                SessionSummaryJob.locked_at.is_(None),
+                SessionSummaryJob.locked_at <= cutoff,
+            ),
+        )
+        .order_by(SessionSummaryJob.id.asc())
+    )
+    if limit is not None:
+        query = query.limit(max(1, int(limit)))
+    rows = query.all()
+    for job in rows:
+        job.retry_count = int(job.retry_count or 0) + 1
+        max_retry = max(0, int(job.max_retry or config.SESSION_SUMMARY_MAX_RETRY))
+        job.locked_by = ""
+        job.locked_at = None
+        job.updated_at = now
+        if job.retry_count >= max_retry:
+            job.status = "failed"
+            job.error = "running_timeout"
+            job.next_retry_at = None
+        else:
+            job.status = "pending"
+            job.error = "running_timeout_recovered"
+            job.next_retry_at = now
+    db.flush()
+    return len(rows)
+
+
 def mark_summary_job_done(
     db: Session,
     job: SessionSummaryJob,

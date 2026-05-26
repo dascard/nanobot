@@ -9,6 +9,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -20,7 +21,6 @@ from app.session_memory.jobs import (
     fetch_pending_summary_jobs,
     mark_summary_job_done,
     mark_summary_job_failed,
-    mark_summary_job_running,
 )
 from app.session_memory.rolling_summary import archive_active_summaries_for_session, audit_rolling_summary
 from app.session_memory.summarizer import render_summary_text
@@ -36,6 +36,12 @@ SESSION_SUMMARY_SYSTEM_PROMPT = """你是对话滚动摘要器。
 不要把系统契约、工具契约、重试指令当作用户偏好。
 输出严格 JSON，不要 Markdown，不要代码块。
 """
+
+
+@dataclass(frozen=True)
+class PreparedSessionSummaryJob:
+    job_id: int
+    messages: list[dict[str, str]]
 
 
 def _safe_json_loads(raw: str) -> dict[str, Any]:
@@ -336,6 +342,170 @@ def save_llm_session_summary(
     return row
 
 
+def prepare_claimed_session_summary_job(
+    db: Session,
+    job_id: int,
+    *,
+    owner: str = "session-summary-worker",
+) -> PreparedSessionSummaryJob | None:
+    job = db.get(SessionSummaryJob, int(job_id))
+    if job is None:
+        return None
+    if job.status != "running":
+        return None
+    if job.locked_by and job.locked_by != owner:
+        return None
+    source_turns = _load_source_turns(db, job)
+    if not source_turns:
+        raise ValueError("source_turns_empty")
+    previous = db.get(RollingSessionSummary, int(job.previous_summary_id or 0)) if job.previous_summary_id else None
+    messages = build_llm_summary_messages(
+        previous_summary=previous,
+        source_turns=source_turns,
+    )
+    return PreparedSessionSummaryJob(job_id=int(job.id or 0), messages=messages)
+
+
+def finalize_claimed_session_summary_job(
+    db: Session,
+    prepared: PreparedSessionSummaryJob,
+    *,
+    raw: Any,
+    owner: str = "session-summary-worker",
+) -> bool:
+    job = db.get(SessionSummaryJob, int(prepared.job_id))
+    if job is None:
+        return False
+    if job.status != "running":
+        return False
+    if job.locked_by and job.locked_by != owner:
+        return False
+    source_turns = _load_source_turns(db, job)
+    if not source_turns:
+        raise ValueError("source_turns_empty")
+    payload = parse_llm_summary_response(raw)
+    audit_ok, issues = audit_llm_session_summary(
+        payload=payload,
+        source_turns=source_turns,
+        job=job,
+    )
+    if not audit_ok:
+        raise ValueError(",".join(issues))
+
+    summary = save_llm_session_summary(
+        db,
+        job=job,
+        payload=payload,
+        source_turns=source_turns,
+        model="async_llm",
+    )
+    mark_summary_job_done(db, job, result_summary_id=int(summary.id or 0))
+    db.flush()
+    return True
+
+
+def fail_claimed_session_summary_job(
+    db: Session,
+    job_id: int,
+    *,
+    owner: str = "session-summary-worker",
+    error: str,
+) -> bool:
+    job = db.get(SessionSummaryJob, int(job_id))
+    if job is None:
+        return False
+    if job.status != "running":
+        return False
+    if job.locked_by and job.locked_by != owner:
+        return False
+    mark_summary_job_failed(db, job, error=error)
+    db.flush()
+    return True
+
+
+def _fail_claimed_job_with_factory(
+    session_factory: Callable[[], Session],
+    *,
+    job_id: int,
+    owner: str,
+    error: str,
+) -> bool:
+    db = session_factory()
+    try:
+        failed = fail_claimed_session_summary_job(db, job_id, owner=owner, error=error)
+        db.commit()
+        return failed
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def process_claimed_session_summary_job_short_transactions(
+    session_factory: Callable[[], Session],
+    *,
+    job_id: int,
+    summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
+    owner: str = "session-summary-worker",
+) -> bool:
+    """处理已抢占的 job，避免 LLM 调用期间持有写事务。"""
+    summarizer = summarizer or default_llm_summary_summarizer
+    db = session_factory()
+    try:
+        prepared = prepare_claimed_session_summary_job(db, int(job_id), owner=owner)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        _fail_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+            error=str(exc),
+        )
+        return False
+    finally:
+        db.close()
+
+    if prepared is None:
+        return False
+
+    try:
+        raw = _call_summarizer(summarizer, prepared.messages)
+    except Exception as exc:
+        logger.warning("session summary job failed before finalize: job_id=%s error=%s", job_id, exc)
+        _fail_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+            error=str(exc),
+        )
+        return False
+
+    db = session_factory()
+    try:
+        ok = finalize_claimed_session_summary_job(
+            db,
+            prepared,
+            raw=raw,
+            owner=owner,
+        )
+        db.commit()
+        return ok
+    except Exception as exc:
+        db.rollback()
+        logger.warning("session summary job failed: job_id=%s error=%s", job_id, exc)
+        _fail_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+            error=str(exc),
+        )
+        return False
+    finally:
+        db.close()
+
+
 def process_session_summary_job(
     db: Session,
     job: SessionSummaryJob,
@@ -353,40 +523,21 @@ def process_session_summary_job(
         return False
     elif job.locked_by and job.locked_by != owner:
         return False
-    else:
-        mark_summary_job_running(db, job, owner=owner)
     try:
-        source_turns = _load_source_turns(db, job)
-        if not source_turns:
-            raise ValueError("source_turns_empty")
-        previous = db.get(RollingSessionSummary, int(job.previous_summary_id or 0)) if job.previous_summary_id else None
-        messages = build_llm_summary_messages(
-            previous_summary=previous,
-            source_turns=source_turns,
-        )
-        raw = _call_summarizer(summarizer, messages)
-        payload = parse_llm_summary_response(raw)
-        audit_ok, issues = audit_llm_session_summary(
-            payload=payload,
-            source_turns=source_turns,
-            job=job,
-        )
-        if not audit_ok:
-            raise ValueError(",".join(issues))
-
-        summary = save_llm_session_summary(
+        prepared = prepare_claimed_session_summary_job(db, int(job.id or 0), owner=owner)
+        if prepared is None:
+            return False
+        raw = _call_summarizer(summarizer, prepared.messages)
+        ok = finalize_claimed_session_summary_job(
             db,
-            job=job,
-            payload=payload,
-            source_turns=source_turns,
-            model="async_llm",
+            prepared,
+            raw=raw,
+            owner=owner,
         )
-        mark_summary_job_done(db, job, result_summary_id=int(summary.id or 0))
-        db.flush()
-        return True
+        return ok
     except Exception as exc:
         logger.warning("session summary job failed: job_id=%s error=%s", getattr(job, "id", 0), exc)
-        mark_summary_job_failed(db, job, error=str(exc))
+        fail_claimed_session_summary_job(db, int(job.id or 0), owner=owner, error=str(exc))
         db.flush()
         return False
 

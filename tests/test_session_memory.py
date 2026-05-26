@@ -801,3 +801,121 @@ def test_docker_compose_declares_independent_session_summary_worker():
 
     assert "session-summary-worker:" in compose
     assert "python -m workers.session_summary_worker --loop" in compose
+
+
+def test_worker_run_once_commits_claim_before_summarizer(db_session, monkeypatch):
+    from core import database
+    from workers import session_summary_worker as worker
+    from app.session_memory.jobs import enqueue_session_summary_job
+
+    turns = [_turn(db_session, content=f"事务边界用例 {i}") for i in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+        max_retry=2,
+    )
+    db_session.commit()
+
+    commits: list[str] = []
+    real_session_factory = database.SessionLocal
+
+    class TrackingSession:
+        def __init__(self):
+            self._real = real_session_factory()
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def commit(self):
+            commits.append("commit")
+            return self._real.commit()
+
+    monkeypatch.setattr(worker, "SessionLocal", TrackingSession)
+
+    def summarizer(_messages):
+        assert commits, "claim must be committed before LLM summarizer is called"
+        fresh = real_session_factory()
+        try:
+            row = fresh.get(SessionSummaryJob, job.id)
+            assert row.status == "running"
+            assert row.locked_by == "worker-a"
+        finally:
+            fresh.close()
+        return json.dumps({
+            "summary": "事务边界测试摘要",
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False)
+
+    result = worker.run_once(owner="worker-a", limit=1, summarizer=summarizer)
+
+    assert result["done"] == 1
+
+
+def test_worker_run_once_recovers_stale_running_job(db_session, monkeypatch):
+    from core import database
+    from workers import session_summary_worker as worker
+
+    turns = [_turn(db_session, content=f"超时回收用例 {i}") for i in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    job = SessionSummaryJob(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+        fallback_summary_id=1,
+        status="running",
+        locked_by="dead-worker",
+        locked_at=datetime.now() - timedelta(hours=2),
+        retry_count=0,
+        max_retry=3,
+    )
+    db_session.add_all([fallback, job])
+    db_session.flush()
+    job.fallback_summary_id = fallback.id
+    db_session.commit()
+
+    monkeypatch.setattr(worker, "SessionLocal", database.SessionLocal)
+
+    result = worker.run_once(
+        owner="worker-a",
+        limit=1,
+        summarizer=lambda _messages: json.dumps({
+            "summary": "超时 running job 已重新处理",
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False),
+    )
+
+    db_session.refresh(job)
+    assert result["done"] == 1
+    assert job.status == "done"
+    assert job.retry_count == 1

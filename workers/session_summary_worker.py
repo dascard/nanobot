@@ -5,24 +5,63 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from collections.abc import Callable
+from typing import Any
 
-from app.session_memory.llm_summarizer import run_session_summary_worker_once
+from app.session_memory import config
+from app.session_memory.jobs import claim_summary_job, fetch_pending_summary_jobs, recover_stale_running_jobs
+from app.session_memory.llm_summarizer import process_claimed_session_summary_job_short_transactions
 from core.database import SessionLocal
 
 logger = logging.getLogger("nanobot.session_summary.worker")
 
 
-def run_once(*, owner: str = "session-summary-worker", limit: int | None = None) -> dict[str, int]:
+def _claim_next_job(*, owner: str, limit: int | None = None) -> tuple[int | None, int]:
     db = SessionLocal()
     try:
-        stats = run_session_summary_worker_once(db, owner=owner, limit=limit)
+        recovered = recover_stale_running_jobs(db, limit=limit)
+        jobs = fetch_pending_summary_jobs(db, limit=limit)
+        claimed_id: int | None = None
+        for job in jobs:
+            claimed = claim_summary_job(db, int(job.id or 0), owner=owner)
+            if claimed is not None:
+                claimed_id = int(claimed.id or 0)
+                break
         db.commit()
-        return stats
+        return claimed_id, recovered
     except Exception:
         db.rollback()
         raise
     finally:
         db.close()
+
+
+def run_once(
+    *,
+    owner: str = "session-summary-worker",
+    limit: int | None = None,
+    summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
+) -> dict[str, int]:
+    max_jobs = max(1, int(limit or config.SESSION_SUMMARY_JOB_BATCH_SIZE))
+    stats = {"processed": 0, "done": 0, "failed": 0, "recovered": 0}
+    while stats["processed"] < max_jobs:
+        job_id, recovered = _claim_next_job(owner=owner, limit=max_jobs)
+        stats["recovered"] += recovered
+        if not job_id:
+            break
+
+        stats["processed"] += 1
+        ok = process_claimed_session_summary_job_short_transactions(
+            SessionLocal,
+            job_id=job_id,
+            summarizer=summarizer,
+            owner=owner,
+        )
+        if ok:
+            stats["done"] += 1
+        else:
+            stats["failed"] += 1
+    return stats
 
 
 def run_forever(
