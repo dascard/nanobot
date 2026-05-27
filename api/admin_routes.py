@@ -2562,6 +2562,7 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
             "configured": False,
             "load_state": "unavailable",
             "model": "BAAI/bge-reranker-v2-m3",
+            "model_path": "./models/bge-reranker-v2-m3",
             "error": str(e)[:200],
         }
 
@@ -2601,13 +2602,16 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
             },
             "rag_reranker": {
                 "model": rag_reranker.get("model") or "BAAI/bge-reranker-v2-m3",
+                "model_path": rag_reranker.get("model_path") or "./models/bge-reranker-v2-m3",
+                "resolved_model_path": rag_reranker.get("resolved_model_path"),
+                "download_repo_id": rag_reranker.get("download_repo_id"),
                 "loader": rag_reranker.get("loader") or "sentence-transformers CrossEncoder",
                 "configured": bool(rag_reranker.get("configured")),
                 "load_state": rag_reranker.get("load_state") or "not_loaded",
                 "error": "" if rag_reranker.get("configured") else "本地 reranker 模型目录不存在或未配置",
                 "role": "Memory / Sticker / Knowledge / GroupAnalysis RAG 候选重排",
                 "trigger": "首次 RAG 查询 / 点击「测试 reranker」",
-                "note": "本地模型组件，不走 new-api；默认 BAAI/bge-reranker-v2-m3，首次加载会自动下载缓存",
+                "note": "本地模型组件，不走 new-api；默认下载 BAAI/bge-reranker-v2-m3 到 ./models/bge-reranker-v2-m3",
                 "path_exists": rag_reranker.get("path_exists"),
                 "source": rag_reranker.get("source"),
             },
@@ -3396,7 +3400,7 @@ async def test_local_component(component: str, _auth=Depends(verify_admin)):
                     "component": component,
                     "load_state": "unavailable",
                     "error": "本地 reranker 模型未配置或模型目录不存在",
-                    "hint": "默认会自动下载 BAAI/bge-reranker-v2-m3；也可设置 RAG_LOCAL_RERANKER_MODEL 指向本地目录",
+                    "hint": "默认会自动下载 BAAI/bge-reranker-v2-m3 到 ./models/bge-reranker-v2-m3",
                 }
             results = provider.rerank(
                 "端口冲突怎么解决",

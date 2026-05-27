@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -97,16 +98,31 @@ def build_reranker_text(candidate: SemanticCandidate) -> str:
 class LocalCrossEncoderRerankerProvider(RerankerProvider):
     def __init__(
         self,
-        model_name: str = "BAAI/bge-reranker-v2-m3",
+        model_name: str = "./models/bge-reranker-v2-m3",
         *,
         model: Any = None,
+        download_repo_id: str = "",
         score_mode: str = "sigmoid",
         max_text_chars: int = 1200,
     ):
         self.model_name = model_name
         self.model = model
+        self.download_repo_id = download_repo_id
         self.score_mode = score_mode
         self.max_text_chars = int(max_text_chars)
+        self._download_checked = False
+
+    def _ensure_downloaded(self) -> None:
+        if self._download_checked or not self.download_repo_id:
+            return
+        target_dir = Path(self.model_name).expanduser()
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            from huggingface_hub import snapshot_download
+        except Exception as exc:  # pragma: no cover - 依赖缺失只在集成环境验证
+            raise RuntimeError("huggingface_hub is required to download local reranker model") from exc
+        snapshot_download(repo_id=self.download_repo_id, local_dir=str(target_dir))
+        self._download_checked = True
 
     def _load_model(self) -> Any:
         if self.model is not None:
@@ -115,6 +131,7 @@ class LocalCrossEncoderRerankerProvider(RerankerProvider):
             from sentence_transformers import CrossEncoder
         except Exception as exc:  # pragma: no cover - 依赖缺失只在集成环境验证
             raise RuntimeError("sentence-transformers is required for LocalCrossEncoderRerankerProvider") from exc
+        self._ensure_downloaded()
         self.model = CrossEncoder(self.model_name)
         return self.model
 

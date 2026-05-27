@@ -259,8 +259,13 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
     "rag.reranker.model_path": SettingDef(
         key="rag.reranker.model_path", env_name="RAG_LOCAL_RERANKER_MODEL",
-        default="BAAI/bge-reranker-v2-m3", value_type="str",
-        category="model", description="本地 RAG reranker 模型目录或 HuggingFace 模型名",
+        default="./models/bge-reranker-v2-m3", value_type="str",
+        category="model", description="本地 RAG reranker 模型目录",
+    ),
+    "rag.reranker.hf_model": SettingDef(
+        key="rag.reranker.hf_model", env_name="RAG_RERANKER_HF_MODEL",
+        default="", value_type="str",
+        category="model", description="可选 HuggingFace 下载源；默认目录使用 BAAI/bge-reranker-v2-m3",
     ),
     "rag.reranker.score_mode": SettingDef(
         key="rag.reranker.score_mode", env_name="RAG_RERANKER_SCORE_MODE",

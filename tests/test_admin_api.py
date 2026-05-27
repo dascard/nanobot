@@ -1330,13 +1330,21 @@ class TestModelHealthCheck:
 
 
 class TestModelRouteV2:
-    def test_models_status_includes_local_rag_reranker_component(self, client, auth_header):
+    def test_models_status_includes_local_rag_reranker_component(self, client, auth_header, monkeypatch):
+        from core.settings_service import settings
+
+        monkeypatch.delenv("RAG_LOCAL_RERANKER_MODEL", raising=False)
+        monkeypatch.delenv("RAG_RERANKER_HF_MODEL", raising=False)
+        settings.invalidate()
+
         r = client.get("/api/v1/admin/models/status", headers=auth_header)
 
         assert r.status_code == 200, r.text
         local_components = r.json()["local_components"]
         assert "rag_reranker" in local_components
         assert local_components["rag_reranker"]["loader"] == "sentence-transformers CrossEncoder"
+        assert local_components["rag_reranker"]["model_path"] == "./models/bge-reranker-v2-m3"
+        assert local_components["rag_reranker"]["download_repo_id"] == "BAAI/bge-reranker-v2-m3"
 
     def test_reply_route_params_update_and_read_back(self, client, auth_header, monkeypatch):
         from core.settings_service import settings

@@ -147,7 +147,8 @@ KNOWLEDGE_RAG_ENABLED = os.environ.get("KNOWLEDGE_RAG_ENABLED", "1") == "1"
 GROUP_ANALYSIS_RAG_ENABLED = os.environ.get("GROUP_ANALYSIS_RAG_ENABLED", "1") == "1"
 RAG_RERANKER_URL = os.environ.get("RAG_RERANKER_URL", "")
 RAG_RERANKER_MODEL = os.environ.get("RAG_RERANKER_MODEL", "http-reranker")
-RAG_LOCAL_RERANKER_MODEL = os.environ.get("RAG_LOCAL_RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+RAG_LOCAL_RERANKER_MODEL = os.environ.get("RAG_LOCAL_RERANKER_MODEL", "./models/bge-reranker-v2-m3")
+RAG_RERANKER_HF_MODEL = os.environ.get("RAG_RERANKER_HF_MODEL", "")
 RAG_RERANKER_TIMEOUT_MS = int(os.environ.get("RAG_RERANKER_TIMEOUT_MS", "3000"))
 RAG_RERANKER_SCORE_MODE = os.environ.get("RAG_RERANKER_SCORE_MODE", "sigmoid")
 RAG_RERANKER_MAX_TEXT_CHARS = int(os.environ.get("RAG_RERANKER_MAX_TEXT_CHARS", "1200"))

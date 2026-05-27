@@ -71,6 +71,55 @@ def test_reranker_score_is_normalized():
     assert normalize_reranker_score(-1.0, mode="identity") == 0.0
 
 
+def test_local_cross_encoder_downloads_model_before_loading(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    from core.semantic.reranker import LocalCrossEncoderRerankerProvider, SemanticCandidate
+
+    model_dir = tmp_path / "models" / "bge-reranker-v2-m3"
+    calls = []
+
+    def fake_snapshot_download(*, repo_id, local_dir, **_kwargs):
+        calls.append((repo_id, local_dir))
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "config.json").write_text("{}", encoding="utf-8")
+        return local_dir
+
+    class FakeCrossEncoder:
+        loaded_model_name = ""
+
+        def __init__(self, model_name):
+            FakeCrossEncoder.loaded_model_name = model_name
+
+        def predict(self, pairs):
+            return [0.8 for _pair in pairs]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        types.SimpleNamespace(snapshot_download=fake_snapshot_download),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        types.SimpleNamespace(CrossEncoder=FakeCrossEncoder),
+    )
+
+    provider = LocalCrossEncoderRerankerProvider(
+        str(model_dir),
+        download_repo_id="BAAI/bge-reranker-v2-m3",
+    )
+    result = provider.rerank(
+        "端口冲突",
+        [SemanticCandidate(candidate_id="c1", source_type="memory", text="端口冲突处理")],
+    )
+
+    assert calls == [("BAAI/bge-reranker-v2-m3", str(model_dir))]
+    assert FakeCrossEncoder.loaded_model_name == str(model_dir)
+    assert result[0].candidate_id == "c1"
+
+
 def test_reranker_none_triggers_degraded_mode():
     from core.semantic.scoring import passes_relevance_gate
 

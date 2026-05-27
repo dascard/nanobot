@@ -216,7 +216,8 @@ def test_rag_debug_status_reports_empty_index_and_reranker_route(client, db_sess
     monkeypatch.setenv("RAG_RERANKER_ENABLED", "1")
     monkeypatch.delenv("RAG_LOCAL_RERANKER_MODEL", raising=False)
     values = {
-        "rag.reranker.model_path": "BAAI/bge-reranker-v2-m3",
+        "rag.reranker.model_path": "./models/bge-reranker-v2-m3",
+        "rag.reranker.hf_model": "",
         "rag.reranker.score_mode": "sigmoid",
         "rag.reranker.max_text_chars": 1200,
     }
@@ -255,6 +256,8 @@ def test_rag_debug_status_reports_empty_index_and_reranker_route(client, db_sess
     assert data["reranker"]["configured"] is True
     assert data["reranker"]["source"] == "local_model"
     assert data["reranker"]["model"] == "BAAI/bge-reranker-v2-m3"
+    assert data["reranker"]["model_path"] == "./models/bge-reranker-v2-m3"
+    assert data["reranker"]["download_repo_id"] == "BAAI/bge-reranker-v2-m3"
 
 
 def test_rag_debug_build_index_from_existing_data(client, db_session, monkeypatch):

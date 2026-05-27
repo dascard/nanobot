@@ -21,13 +21,14 @@
 ```python
 def test_provider_factory_builds_local_reranker_from_model_path(monkeypatch):
     values = {
-        "rag.reranker.model_path": "BAAI/bge-reranker-v2-m3",
+        "rag.reranker.model_path": "./models/bge-reranker-v2-m3",
         "rag.reranker.score_mode": "identity",
         "rag.reranker.max_text_chars": 256,
     }
     monkeypatch.setattr("core.settings_service.settings.get", lambda key, default=None: values.get(key, default))
     provider = provider_factory.get_reranker_provider()
-    assert provider.model_name == "BAAI/bge-reranker-v2-m3"
+    assert provider.model_name.endswith("models/bge-reranker-v2-m3")
+    assert provider.download_repo_id == "BAAI/bge-reranker-v2-m3"
 ```
 
 - [ ] **步骤 2：运行测试验证失败**

@@ -12,13 +12,15 @@
 
 1. 新增本地组件 `rag_reranker`。
    - 在 `/models/status` 的 `local_components` 中展示。
-   - 在 `config_registry` 中注册 `rag.reranker.model_path`、`score_mode`、`max_text_chars`。
+   - 在 `config_registry` 中注册 `rag.reranker.model_path`、`hf_model`、`score_mode`、`max_text_chars`。
    - 在 `/models/local/rag_reranker/test` 和 `/models/local/rag_reranker/warmup` 中测试/预热。
    - `get_reranker_provider()` 优先使用本地 `LocalCrossEncoderRerankerProvider`；只有显式设置 `RAG_RERANKER_URL` 时才使用旧 HTTP fallback。
 
 2. 本地模型加载方式。
-   - 默认模型为 `BAAI/bge-reranker-v2-m3`，首次加载时由 `sentence-transformers` 自动下载并缓存。
-   - 也可用 `RAG_LOCAL_RERANKER_MODEL` 或 `rag.reranker.model_path` 指向本地模型目录。
+   - 默认模型目录为 `./models/bge-reranker-v2-m3`。
+   - 默认下载源为 `BAAI/bge-reranker-v2-m3`，首次加载时下载到上述目录。
+   - 也可用 `RAG_LOCAL_RERANKER_MODEL` 或 `rag.reranker.model_path` 指向其他本地模型目录。
+   - 自定义目录需要显式设置 `RAG_RERANKER_HF_MODEL` 或 `rag.reranker.hf_model` 才会自动下载。
    - 加载器为 `sentence-transformers CrossEncoder`，与本地 BGE embedding 组件保持一致。
 
 3. 新增语义索引回填模块。
