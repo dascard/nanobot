@@ -33,6 +33,16 @@ FINAL_WEIGHTS = {
     "source_prior": 0.05,
     "recency": 0.02,
 }
+STICKER_QUERY_STOPWORDS = (
+    "表情包",
+    "表情",
+    "贴纸",
+    "图片",
+    "动图",
+    "sticker",
+    "emoji",
+)
+MAX_RERANK_INPUTS = 10
 
 
 @dataclass
@@ -79,6 +89,14 @@ def _safe_sticker_id(value: str) -> int | None:
         return None
 
 
+def _normalize_sticker_query(query: str) -> str:
+    normalized = str(query or "").strip()
+    for token in STICKER_QUERY_STOPWORDS:
+        normalized = normalized.replace(token, " ")
+    normalized = " ".join(normalized.split())
+    return normalized or str(query or "").strip()
+
+
 class StickerRagService:
     def __init__(
         self,
@@ -113,7 +131,8 @@ class StickerRagService:
         limit: int = 5,
         include_debug: bool = False,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        fts_hits = fts_recall_hits(self.db, query, source_types={"sticker"}, limit=200)
+        recall_query = _normalize_sticker_query(query)
+        fts_hits = fts_recall_hits(self.db, recall_query, source_types={"sticker"}, limit=200)
         lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
         bm25_by_id = {hit.item_id: hit.bm25_raw for hit in fts_hits}
         index_rows = load_recall_rows(
@@ -142,6 +161,8 @@ class StickerRagService:
                         "fts_candidates": len(fts_hits),
                         "merged_candidates": 0,
                         "reranker_candidates": 0,
+                        "reranker_input_limit": MAX_RERANK_INPUTS,
+                        "normalized_query": recall_query,
                         "final_items": 0,
                     },
                     "debug_trace": {
@@ -191,7 +212,7 @@ class StickerRagService:
                 "final_candidates": [],
                 "relevance_gate": [],
             }
-        query_vector = _query_vector(query, self.embedding_provider)
+        query_vector = _query_vector(recall_query, self.embedding_provider)
         candidates: list[_StickerCandidate] = []
         semantic_hits = 0
         for row in index_rows:
@@ -219,7 +240,7 @@ class StickerRagService:
                 continue
             lexical = lexical_by_id.get(int(row.id))
             if lexical is None:
-                lexical = lexical_overlap_score(query, row.lexical_text or row.text or "")
+                lexical = lexical_overlap_score(recall_query, row.lexical_text or row.text or "")
             semantic = semantic_score_for_row(
                 row,
                 query_vector=query_vector,
@@ -247,13 +268,14 @@ class StickerRagService:
                 self._debug_candidate(item, bm25_by_id=bm25_by_id)
                 for item in candidates
             ]
-        rerank_inputs = self._apply_reranker(query, candidates)
+        rerank_candidates = self._reranker_candidates(candidates, limit=limit)
+        rerank_inputs = self._apply_reranker(recall_query, rerank_candidates)
         if debug_stages is not None:
             debug_stages["reranker_input_pairs"] = [
                 {
                     "candidate_id": candidate.candidate_id,
                     "source_type": candidate.source_type,
-                    "query": query,
+                    "query": recall_query,
                     "title": candidate.title,
                     "text": candidate.text,
                     "metadata": candidate.metadata,
@@ -302,7 +324,9 @@ class StickerRagService:
                     "fts_candidates": len(fts_hits),
                     "embedding_candidates": semantic_hits,
                     "merged_candidates": len(candidates),
-                    "reranker_candidates": len(candidates[:50]) if self.reranker_provider else 0,
+                    "reranker_candidates": len(rerank_candidates),
+                    "reranker_input_limit": MAX_RERANK_INPUTS,
+                    "normalized_query": recall_query,
                     "final_items": len(items),
                 },
                 "debug_trace": debug_stages,
@@ -354,6 +378,12 @@ class StickerRagService:
             {"semantic": 0.60, "lexical": 0.40},
         )
 
+    def _reranker_candidates(self, candidates: list[_StickerCandidate], *, limit: int) -> list[_StickerCandidate]:
+        if self.reranker_provider is None:
+            return []
+        max_inputs = min(MAX_RERANK_INPUTS, max(int(limit) * 2, int(limit)))
+        return candidates[:max(1, max_inputs)]
+
     def _apply_reranker(self, query: str, candidates: list[_StickerCandidate]) -> list[SemanticCandidate]:
         if self.reranker_provider is None or not candidates:
             return []
@@ -371,7 +401,7 @@ class StickerRagService:
             )
             for item in candidates
         ]
-        reranked = self.reranker_provider.rerank(query, rerank_inputs, top_k=50)
+        reranked = self.reranker_provider.rerank(query, rerank_inputs, top_k=len(rerank_inputs))
         scores = {item.candidate_id: item for item in reranked}
         for item in candidates:
             score = scores.get(item.candidate_id)

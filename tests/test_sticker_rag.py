@@ -33,6 +33,18 @@ class IdentityRerankerProvider:
         )
 
 
+class CountingRerankerProvider(IdentityRerankerProvider):
+    def __init__(self, scores=None, *, default_score=0.9):
+        super().__init__(scores or {}, default_score=default_score)
+        self.batch_sizes = []
+        self.candidate_ids = []
+
+    def rerank(self, query, candidates, *, top_k=None):
+        self.batch_sizes.append(len(candidates))
+        self.candidate_ids.append([candidate.candidate_id for candidate in candidates])
+        return super().rerank(query, candidates, top_k=top_k)
+
+
 def _add_sticker(
     db_session,
     sticker_hash,
@@ -208,6 +220,71 @@ def test_sticker_search_uses_reranker_before_usage_boost(db_session):
 
     assert [item["id"] for item in results] == [exact_high_relevance.id]
     assert results[0]["score_breakdown"]["reranker"] == 0.9
+
+
+def test_sticker_search_does_not_rerank_generic_sticker_matches(db_session):
+    from core.sticker_memory import search_stickers
+
+    happy = [
+        _add_sticker(
+            db_session,
+            f"happy-{index}",
+            description=f"开心笑脸表情包 {index}",
+            tags=["开心", "笑脸"],
+            emotions=["happy"],
+        )
+        for index in range(3)
+    ]
+    generic = [
+        _add_sticker(
+            db_session,
+            f"generic-{index}",
+            description=f"普通表情包 {index}",
+            tags=["表情包"],
+            emotions=["neutral"],
+        )
+        for index in range(40)
+    ]
+    _index_stickers(db_session, happy + generic)
+    reranker = CountingRerankerProvider({})
+
+    results = search_stickers(
+        db_session,
+        "开心 表情包",
+        group_id="123",
+        limit=5,
+        reranker_provider=reranker,
+    )
+
+    assert reranker.batch_sizes == [3]
+    assert {item["id"] for item in results} == {item.id for item in happy}
+
+
+def test_sticker_search_caps_reranker_batch_size(db_session):
+    from core.sticker_memory import search_stickers
+
+    stickers = [
+        _add_sticker(
+            db_session,
+            f"angry-{index}",
+            description=f"生气拍桌表情包 {index}",
+            tags=["生气", "拍桌"],
+            emotions=["angry"],
+        )
+        for index in range(30)
+    ]
+    _index_stickers(db_session, stickers)
+    reranker = CountingRerankerProvider({})
+
+    search_stickers(
+        db_session,
+        "生气拍桌",
+        group_id="123",
+        limit=5,
+        reranker_provider=reranker,
+    )
+
+    assert reranker.batch_sizes == [10]
 
 
 def test_sticker_search_blocks_when_reranker_required_unavailable(db_session, monkeypatch):
