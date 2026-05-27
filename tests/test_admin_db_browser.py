@@ -47,6 +47,19 @@ def test_db_query_rejects_sensitive_and_sqlite_system_tables(client, monkeypatch
     assert sqlite_master.status_code == 400
 
 
+def test_db_query_rejects_non_whitelist_join_before_execution(client, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    response = client.post(
+        "/api/v1/admin/db/query",
+        headers=_auth_header(),
+        json={"query": "SELECT * FROM users JOIN eval_candidates ON 1 = 1"},
+    )
+
+    assert response.status_code == 400
+    assert "eval_candidates" in response.json()["detail"]
+
+
 def test_db_query_keyword_guard_does_not_reject_updated_at(client, monkeypatch, db_session):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     db_session.execute(
@@ -159,4 +172,3 @@ def test_llm_log_sensitive_columns_are_redacted_or_hidden(client, monkeypatch, d
     assert "request_json" not in payload["columns"]
     assert "response_json" not in payload["columns"]
     assert payload["rows"][0]["request_preview"] == "preview ok"
-

@@ -4,7 +4,6 @@ import json
 import logging
 import os
 import re
-import sqlite3
 import threading
 import uuid
 from datetime import datetime, timedelta
@@ -1922,41 +1921,28 @@ def _serialize_db_rows(table_name: str, columns: list[str], fetched_rows: list[A
     return rows, cell_meta
 
 
-def _sqlite_connection_from_session(db: Session):
-    raw = db.connection().connection
-    return getattr(raw, "driver_connection", raw)
+def _extract_query_table_names(query: str) -> list[str]:
+    """提取 SELECT 中 FROM/JOIN 后的表名，避免使用连接级 SQLite authorizer。"""
+    tables: list[str] = []
+    pattern = re.compile(
+        r"\b(?:FROM|JOIN)\s+(?:main\.)?(?:\"([A-Za-z_][A-Za-z0-9_]*)\"|([A-Za-z_][A-Za-z0-9_]*))",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(query):
+        name = (match.group(1) or match.group(2) or "").strip()
+        if name:
+            tables.append(name)
+    return tables
 
 
-def _install_readonly_authorizer(db: Session):
-    sqlite_conn = _sqlite_connection_from_session(db)
-    if not hasattr(sqlite_conn, "set_authorizer"):
-        return None
-
-    def authorizer(action_code, arg1, arg2, db_name, trigger_name):
-        if action_code == sqlite3.SQLITE_READ:
-            table = (arg1 or "").lower()
-            if table in BLOCKED_DB_TABLES or table.startswith("sqlite_") or table not in READONLY_TABLE_SET:
-                return sqlite3.SQLITE_DENY
-        write_actions = {
-            sqlite3.SQLITE_INSERT,
-            sqlite3.SQLITE_UPDATE,
-            sqlite3.SQLITE_DELETE,
-            sqlite3.SQLITE_DROP_TABLE,
-            sqlite3.SQLITE_DROP_INDEX,
-            sqlite3.SQLITE_ALTER_TABLE,
-            sqlite3.SQLITE_CREATE_TABLE,
-            sqlite3.SQLITE_CREATE_INDEX,
-            sqlite3.SQLITE_TRANSACTION,
-            sqlite3.SQLITE_ATTACH,
-            sqlite3.SQLITE_DETACH,
-            sqlite3.SQLITE_PRAGMA,
-        }
-        if action_code in write_actions:
-            return sqlite3.SQLITE_DENY
-        return sqlite3.SQLITE_OK
-
-    sqlite_conn.set_authorizer(authorizer)
-    return sqlite_conn
+def _validate_query_tables_allowed(query: str) -> None:
+    sqlite_table = re.search(r"\bsqlite_[A-Za-z0-9_]*\b", query, re.IGNORECASE)
+    if sqlite_table:
+        raise HTTPException(400, f"Forbidden table: {sqlite_table.group(0)}")
+    for table in _extract_query_table_names(query):
+        normalized = table.lower()
+        if normalized in BLOCKED_DB_TABLES or normalized.startswith("sqlite_") or table not in READONLY_TABLE_SET:
+            raise HTTPException(400, f"Forbidden table: {table}")
 
 
 def _validate_readonly_query(query: str) -> str:
@@ -1980,6 +1966,7 @@ def _validate_readonly_query(query: str) -> str:
     for table in BLOCKED_DB_TABLES:
         if re.search(rf"\b{re.escape(table)}\b", q_no_trailing_semicolon, re.IGNORECASE):
             raise HTTPException(400, f"Forbidden table: {table}")
+    _validate_query_tables_allowed(q_no_trailing_semicolon)
     return q_no_trailing_semicolon
 
 
@@ -2055,9 +2042,7 @@ def query_table(table_name: str, page: int = 1, limit: int = 50,
 @router.post("/db/query")
 def execute_readonly_query(body: DbQuery, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     q = _validate_readonly_query(body.query)
-    sqlite_conn = None
     try:
-        sqlite_conn = _install_readonly_authorizer(db)
         query_with_limit = f"SELECT * FROM ({q}) LIMIT 500"
         result = db.execute(text(query_with_limit))
         columns = list(result.keys()) if result.returns_rows else []
@@ -2068,9 +2053,6 @@ def execute_readonly_query(body: DbQuery, db: Session = Depends(get_db), _auth=D
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
-    finally:
-        if sqlite_conn is not None:
-            sqlite_conn.set_authorizer(None)
 
 
 # ═══════════════════════════════════════════
