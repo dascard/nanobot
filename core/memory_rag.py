@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +22,7 @@ from core.semantic.scoring import passes_relevance_gate, weighted_score
 
 
 RELEVANCE_WEIGHTS = {"reranker": 0.70, "semantic": 0.20, "lexical": 0.10}
+MIN_FALLBACK_RERANK_LEXICAL = 0.50
 FINAL_WEIGHTS = {
     "relevance": 0.75,
     "quality": 0.08,
@@ -37,6 +39,7 @@ class _Candidate:
     semantic: float | None
     reranker: float | None = None
     raw_reranker: float | None = None
+    reranker_skip_reason: str = ""
 
     @property
     def candidate_id(self) -> str:
@@ -185,7 +188,19 @@ class MemoryRagService:
         degraded = self.reranker_provider is None
         fallback_reason = "reranker_unavailable" if degraded else ""
 
-        if self.reranker_provider is not None and candidates:
+        reranker_latency_ms = 0
+        rerank_candidates: list[_Candidate] = []
+        if self.reranker_provider is not None:
+            for item in candidates:
+                item.reranker_skip_reason = self._reranker_skip_reason(item, bm25_by_id=bm25_by_id)
+                if not item.reranker_skip_reason:
+                    rerank_candidates.append(item)
+            if len(rerank_candidates) > 50:
+                for item in rerank_candidates[50:]:
+                    item.reranker_skip_reason = "reranker_budget"
+                rerank_candidates = rerank_candidates[:50]
+
+        if self.reranker_provider is not None and rerank_candidates:
             rerank_inputs = [
                 SemanticCandidate(
                     candidate_id=item.candidate_id,
@@ -194,7 +209,7 @@ class MemoryRagService:
                     text=item.row.embedding_text or item.row.text or "",
                     metadata=_safe_json(item.row.meta_json),
                 )
-                for item in candidates
+                for item in rerank_candidates
             ]
             if debug_stages is not None:
                 debug_stages["reranker_input_pairs"] = [
@@ -208,7 +223,11 @@ class MemoryRagService:
                     }
                     for candidate in rerank_inputs
                 ]
+            reranker_started = time.perf_counter()
             reranked = self.reranker_provider.rerank(query, rerank_inputs, top_k=50)
+            reranker_latency_ms = int((time.perf_counter() - reranker_started) * 1000)
+            if debug_stages is not None:
+                debug_stages.setdefault("timings", {})["reranker_latency_ms"] = reranker_latency_ms
             scores = {item.candidate_id: item for item in reranked}
             for item in candidates:
                 score = scores.get(item.candidate_id)
@@ -257,7 +276,8 @@ class MemoryRagService:
                 "lexical_candidates": fts_candidate_count,
                 "embedding_candidates": semantic_hits,
                 "merged_candidates": len(candidates),
-                "reranker_candidates": len(candidates[:50]) if self.reranker_provider else 0,
+                "reranker_candidates": len(rerank_candidates) if self.reranker_provider else 0,
+                "reranker_latency_ms": reranker_latency_ms,
                 "final_items": len(parent_items),
             },
             "items": parent_items,
@@ -293,6 +313,15 @@ class MemoryRagService:
             },
             FINAL_WEIGHTS,
         )
+
+    def _reranker_skip_reason(self, item: _Candidate, *, bm25_by_id: dict[int, float]) -> str:
+        if int(item.row.id) in bm25_by_id:
+            return ""
+        if item.semantic is not None and item.semantic >= 0.10:
+            return ""
+        if item.lexical is not None and item.lexical >= MIN_FALLBACK_RERANK_LEXICAL:
+            return ""
+        return "weak_lexical_fallback"
 
     def _card_dict(self, item: _Candidate) -> dict[str, Any]:
         final = self._final_score(item)
@@ -335,7 +364,7 @@ class MemoryRagService:
                 "raw_reranker": item.raw_reranker,
                 "bm25_raw": bm25_by_id.get(int(item.row.id)),
             },
-            "skipped_reason": "",
+            "skipped_reason": item.reranker_skip_reason,
         }
 
     def _group_by_parent(self, candidates: list[_Candidate], *, limit: int) -> list[dict[str, Any]]:

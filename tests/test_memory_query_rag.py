@@ -44,6 +44,16 @@ class FixedRerankerProvider:
         return sorted(results, key=lambda item: item.score or 0.0, reverse=True)
 
 
+class RecordingRerankerProvider(FixedRerankerProvider):
+    def __init__(self, scores):
+        super().__init__(scores)
+        self.seen_candidate_ids = []
+
+    def rerank(self, query, candidates, *, top_k=None):
+        self.seen_candidate_ids = [candidate.candidate_id for candidate in candidates]
+        return super().rerank(query, candidates, top_k=top_k)
+
+
 def _digest_row(digest_id, *, cards):
     return MemoryDigest(
         id=digest_id,
@@ -230,6 +240,102 @@ def test_memory_rag_uses_fts_recall_before_recent_row_limit(db_session):
     )
 
     assert result["items"][0]["source_id"] == "old"
+
+
+def test_memory_rag_does_not_rerank_generic_lexical_fallback(db_session):
+    from core.memory_rag import MemoryRagService
+    from core.semantic.adapters import SemanticChunk
+    from core.semantic.indexer import upsert_semantic_chunks
+
+    chunks = [
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="relevant",
+            source_sub_id="card:0",
+            title="端口冲突",
+            text="uvicorn 8000 端口冲突排查。",
+            lexical_text="uvicorn 8000 端口冲突排查。",
+            embedding_text="uvicorn 8000 端口冲突排查。",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        ),
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="generic",
+            source_sub_id="card:0",
+            title="泛化问法",
+            text="这个问题怎么解决，需要再看看。",
+            lexical_text="这个问题怎么解决，需要再看看。",
+            embedding_text="这个问题怎么解决，需要再看看。",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        ),
+    ]
+    upsert_semantic_chunks(db_session, chunks, index_version="fake:v1:v1")
+
+    reranker = RecordingRerankerProvider({
+        "memory_digest:relevant:card:0": 0.9,
+        "memory_digest:generic:card:0": 0.9,
+    })
+    result = MemoryRagService(db_session, reranker_provider=reranker).query(
+        "端口冲突怎么解决",
+        source="digest",
+        user_id="u1",
+        session_id="s1",
+        limit=5,
+        include_debug=True,
+    )
+
+    assert "memory_digest:relevant:card:0" in reranker.seen_candidate_ids
+    assert "memory_digest:generic:card:0" not in reranker.seen_candidate_ids
+    assert result["stats"]["reranker_candidates"] == 1
+
+
+def test_memory_rag_skips_low_overlap_fallback_before_rerank(db_session, monkeypatch):
+    from core.memory_rag import MemoryRagService
+    from core.semantic.adapters import SemanticChunk
+    from core.semantic.indexer import upsert_semantic_chunks
+
+    monkeypatch.setattr("core.memory_rag.fts_recall_hits", lambda *args, **kwargs: [])
+    chunks = [
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="strong",
+            source_sub_id="card:0",
+            title="端口冲突部署失败",
+            text="端口冲突导致部署失败。",
+            lexical_text="端口冲突导致部署失败。",
+            embedding_text="端口冲突导致部署失败。",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        ),
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="weak",
+            source_sub_id="card:0",
+            title="端口记录",
+            text="这里仅记录端口配置。",
+            lexical_text="这里仅记录端口配置。",
+            embedding_text="这里仅记录端口配置。",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        ),
+    ]
+    upsert_semantic_chunks(db_session, chunks, index_version="fake:v1:v1")
+
+    reranker = RecordingRerankerProvider({
+        "memory_digest:strong:card:0": 0.9,
+        "memory_digest:weak:card:0": 0.9,
+    })
+    result = MemoryRagService(db_session, reranker_provider=reranker).query(
+        "端口冲突部署失败",
+        source="digest",
+        user_id="u1",
+        session_id="s1",
+        limit=5,
+        include_debug=True,
+    )
+
+    assert "memory_digest:strong:card:0" in reranker.seen_candidate_ids
+    assert "memory_digest:weak:card:0" not in reranker.seen_candidate_ids
+    assert result["stats"]["merged_candidates"] == 2
+    assert result["stats"]["reranker_candidates"] == 1
 
 
 def test_memory_query_tool_schema_supports_all_source():

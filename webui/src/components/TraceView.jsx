@@ -9,6 +9,60 @@ function formatBytes(n) {
   return `${(n / 1048576).toFixed(1)}MB`
 }
 
+function formatMs(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return '-'
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 1 : 2)}s`
+  return `${Math.round(n)}ms`
+}
+
+function compactJson(value) {
+  if (value === undefined || value === null) return ''
+  if (typeof value === 'string') return value
+  try { return JSON.stringify(value) } catch { return String(value) }
+}
+
+const REASONING_KEYS = ['reasoning_content', 'reasoning', 'reasoning_text', 'thinking', 'thinking_content']
+
+function collectMessageText(message = {}, keys = REASONING_KEYS) {
+  return keys.map(key => compactJson(message?.[key])).filter(Boolean).join('')
+}
+
+function collectChoiceMessageText(response = {}, keys = REASONING_KEYS) {
+  const parts = []
+  for (const choice of response.choices || []) {
+    const msg = choice?.message || {}
+    const delta = choice?.delta || {}
+    const text = collectMessageText(msg, keys) || collectMessageText(delta, keys)
+    if (text) parts.push(text)
+  }
+  return parts.join('')
+}
+
+function extractUsage(response = {}) {
+  if (response.usage) return response.usage
+  for (let i = (response.chunks_sample || []).length - 1; i >= 0; i -= 1) {
+    const usage = response.chunks_sample[i]?.usage
+    if (usage) return usage
+  }
+  return null
+}
+
+function extractReasoningTrace(response = {}) {
+  const streamMetrics = response.stream_metrics || {}
+  const usage = extractUsage(response)
+  const usageDetails = usage?.completion_tokens_details || usage?.output_tokens_details || {}
+  const reasoningTokens = usageDetails.reasoning_tokens ?? usage?.reasoning_tokens
+  const reasoningText = compactJson(response.reasoning_content) || collectChoiceMessageText(response)
+  const hasMetrics = Object.keys(streamMetrics).length > 0
+  return {
+    has: Boolean(reasoningText || hasMetrics || reasoningTokens !== undefined),
+    reasoningText,
+    reasoningTokens,
+    streamMetrics,
+  }
+}
+
 function summarizeDataUrl(url = '') {
   if (!url || !url.startsWith('data:')) return null
   const match = url.match(/^data:([^;,]+)?(;base64)?,/)
@@ -172,6 +226,7 @@ export function LLMApiLogViewer({ log }) {
   const isIncomplete = (log.status === 'created') && (log.latency_ms === 0 || !log.latency_ms)
   const statusTone = log.status === 'success' ? 'emerald' : log.status === 'stream_success' ? 'blue' : log.status === 'error' || log.status === 'failed' || log.status === 'stream_error' ? 'red' : log.status === 'stream_created' ? 'blue' : 'slate'
   const issueTone = (severity) => severity === 'P0' ? 'red' : severity === 'P1' ? 'amber' : 'slate'
+  const reasoningTrace = extractReasoningTrace(response)
 
   return (
     <div className="space-y-4 text-sm">
@@ -213,6 +268,9 @@ export function LLMApiLogViewer({ log }) {
             {request.top_p !== undefined && <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">top_p: <span className="text-slate-400">{request.top_p}</span></span>}
             {request.max_tokens !== undefined && <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">max_tokens: <span className="text-slate-400">{request.max_tokens}</span></span>}
             {request.stream !== undefined && <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">stream: <span className="text-slate-400">{String(request.stream)}</span></span>}
+            {request.enable_thinking !== undefined && <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">enable_thinking: <span className="text-slate-400">{String(request.enable_thinking)}</span></span>}
+            {request.thinking !== undefined && <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">thinking: <span className="text-slate-400">{compactJson(request.thinking)}</span></span>}
+            {request.reasoning !== undefined && <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">reasoning: <span className="text-slate-400">{compactJson(request.reasoning)}</span></span>}
             <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">messages: <span className="text-slate-400">{request.messages?.length || 0}</span></span>
             <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">tools: <span className="text-slate-400">{request.tools?.length || 0}</span></span>
             {request.tool_choice && <span className="px-2 py-1 rounded-lg bg-slate-800 text-xs text-slate-300">tool_choice: <span className="text-slate-400">{typeof request.tool_choice === 'string' ? request.tool_choice : JSON.stringify(request.tool_choice)}</span></span>}
@@ -302,17 +360,61 @@ export function LLMApiLogViewer({ log }) {
         </section>
       )}
 
+      {reasoningTrace.has && (
+        <section>
+          <h3 className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">推理与流式指标</h3>
+          <InfoGrid
+            columns="md:grid-cols-4 xl:grid-cols-6"
+            items={[
+              { label: '请求总耗时', value: log.latency_ms ? formatMs(log.latency_ms) : '-' },
+              { label: '首 chunk', value: formatMs(reasoningTrace.streamMetrics.first_chunk_ms) },
+              { label: '首推理', value: formatMs(reasoningTrace.streamMetrics.first_reasoning_ms) },
+              { label: '首正文', value: formatMs(reasoningTrace.streamMetrics.first_content_ms) },
+              { label: '推理耗时', value: formatMs(reasoningTrace.streamMetrics.reasoning_elapsed_ms) },
+              { label: '推理 tokens', value: reasoningTrace.reasoningTokens ?? '-' },
+              { label: '推理字符', value: reasoningTrace.streamMetrics.reasoning_char_count ?? (reasoningTrace.reasoningText ? reasoningTrace.reasoningText.length : '-') },
+              { label: '正文字符', value: reasoningTrace.streamMetrics.content_char_count ?? '-' },
+              { label: 'chunk 数', value: reasoningTrace.streamMetrics.chunk_count ?? '-' },
+            ]}
+          />
+          {reasoningTrace.reasoningText && (
+            <details className="border border-slate-700/50 rounded-lg mt-2">
+              <summary className="py-2 px-3 cursor-pointer hover:bg-slate-800/30 text-xs text-slate-400">
+                reasoning_content ({reasoningTrace.reasoningText.length} chars)
+              </summary>
+              <div className="p-3 border-t border-slate-700/50">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] text-slate-600">模型推理内容</span>
+                  <CopyButton text={reasoningTrace.reasoningText} />
+                </div>
+                <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-[600px] overflow-auto">{reasoningTrace.reasoningText}</pre>
+              </div>
+            </details>
+          )}
+        </section>
+      )}
+
       {Object.keys(response).length > 0 && (
         <section>
           <h3 className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">Response</h3>
           <div className="space-y-2">
             {response.choices?.map((choice, i) => {
               const msg = choice.message || {}
+              const msgReasoning = collectMessageText(msg)
               return (
                 <div key={i} className="border border-slate-700/50 rounded-lg p-3">
                   <div className="flex gap-3 mb-2 text-xs">
                     <span className="text-slate-500">finish_reason: <span className="text-slate-300">{choice.finish_reason || '-'}</span></span>
                   </div>
+                  {msgReasoning && (
+                    <div className="mb-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] text-slate-600">message.reasoning_content · {msgReasoning.length} chars</span>
+                        <CopyButton text={msgReasoning} />
+                      </div>
+                      <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 rounded text-slate-300 max-h-[600px] overflow-auto">{msgReasoning}</pre>
+                    </div>
+                  )}
                   {msg.content && (
                     <div className="mb-2">
                       <div className="flex items-center justify-between mb-1">

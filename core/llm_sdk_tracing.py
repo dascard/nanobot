@@ -11,6 +11,8 @@ import logging
 import time
 from typing import Any
 
+from core.llm_stream_trace import LLMStreamTraceAccumulator
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,26 +44,6 @@ def _safe_sdk_response(result: Any) -> Any:
     return {"repr": repr(result)[:4000]}
 
 
-def _stream_content_delta(chunk: Any) -> str:
-    payload = _safe_sdk_response(chunk)
-    if not isinstance(payload, dict):
-        return ""
-    parts: list[str] = []
-    for choice in payload.get("choices") or []:
-        if not isinstance(choice, dict):
-            continue
-        delta = choice.get("delta")
-        if isinstance(delta, dict) and delta.get("content"):
-            parts.append(str(delta.get("content") or ""))
-            continue
-        message = choice.get("message")
-        if isinstance(message, dict) and message.get("content"):
-            parts.append(str(message.get("content") or ""))
-    if payload.get("content"):
-        parts.append(str(payload.get("content") or ""))
-    return "".join(parts)
-
-
 class _TracedStreamProxy:
     """延迟到流式响应消费完成后记录聚合响应。"""
 
@@ -70,8 +52,7 @@ class _TracedStreamProxy:
         self._log_id = log_id
         self._started = started
         self._finished = False
-        self._content_parts: list[str] = []
-        self._chunks_sample: list[Any] = []
+        self._accumulator = LLMStreamTraceAccumulator(started=started)
         self._async_iter: Any = None
         self._sync_iter: Any = None
 
@@ -80,12 +61,7 @@ class _TracedStreamProxy:
 
     def _record_chunk(self, chunk: Any) -> None:
         payload = _safe_sdk_response(chunk)
-        if len(self._chunks_sample) >= 20:
-            self._chunks_sample.pop(0)
-        self._chunks_sample.append(payload)
-        delta = _stream_content_delta(chunk)
-        if delta:
-            self._content_parts.append(delta)
+        self._accumulator.record_chunk(payload)
 
     def _finish(self, *, status: str, response_status: int = 200, error: str = "") -> None:
         if self._finished:
@@ -96,10 +72,7 @@ class _TracedStreamProxy:
 
             LLMRequestTracer.finish_request(
                 log_id=self._log_id,
-                response={
-                    "content": "".join(self._content_parts),
-                    "chunks_sample": list(self._chunks_sample),
-                },
+                response=self._accumulator.build_response(),
                 response_status=response_status,
                 status=status,
                 error=error,

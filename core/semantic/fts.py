@@ -11,6 +11,32 @@ from sqlalchemy import text
 ASCII_TOKEN_RE = re.compile(r"[A-Za-z0-9_]{3,64}")
 CJK_RE = re.compile(r"[\u3400-\u9fff]+")
 FTS_KEYWORDS = {"AND", "OR", "NOT", "NEAR"}
+CJK_QUERY_STOPWORDS = (
+    "怎么解决",
+    "如何解决",
+    "怎样解决",
+    "怎么处理",
+    "如何处理",
+    "怎么办",
+    "为什么",
+    "是不是",
+    "怎么",
+    "如何",
+    "怎样",
+    "解决",
+    "处理",
+    "问题",
+    "办法",
+    "方法",
+    "方式",
+    "可以",
+    "需要",
+    "应该",
+    "这个",
+    "那个",
+    "什么",
+    "一下",
+)
 
 
 def _execute(db: Any, statement: str) -> Any:
@@ -55,6 +81,13 @@ def _cjk_ngrams(text: str) -> list[str]:
     return tokens
 
 
+def strip_cjk_query_stopwords(text: str) -> str:
+    cleaned = str(text or "")
+    for token in CJK_QUERY_STOPWORDS:
+        cleaned = cleaned.replace(token, " ")
+    return cleaned
+
+
 def build_fts5_match_query(raw_query: str) -> str:
     cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", str(raw_query or ""))
     tokens: list[str] = []
@@ -65,7 +98,7 @@ def build_fts5_match_query(raw_query: str) -> str:
             continue
         tokens.append(token.lower())
 
-    tokens.extend(_cjk_ngrams(cleaned))
+    tokens.extend(_cjk_ngrams(strip_cjk_query_stopwords(cleaned)))
 
     deduped: list[str] = []
     seen: set[str] = set()

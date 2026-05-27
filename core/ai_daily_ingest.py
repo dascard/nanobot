@@ -92,6 +92,27 @@ def _normalized_item(item: dict[str, Any], query: str) -> dict[str, Any]:
     }
 
 
+def _item_to_dict(item: Any) -> dict[str, Any]:
+    if isinstance(item, dict):
+        return item
+    return {
+        "title": getattr(item, "title", ""),
+        "url": getattr(item, "url", "") or getattr(item, "href", ""),
+        "summary": (
+            getattr(item, "summary", "")
+            or getattr(item, "description", "")
+            or getattr(item, "snippet", "")
+            or getattr(item, "body", "")
+            or getattr(item, "content_excerpt", "")
+            or getattr(item, "detail_text", "")
+        ),
+        "source_name": getattr(item, "source_name", "") or getattr(item, "source", ""),
+        "published_at": getattr(item, "published_at", "") or getattr(item, "date", ""),
+        "author": getattr(item, "author", ""),
+        "trust_level": getattr(item, "trust_level", ""),
+    }
+
+
 def _find_existing_document(db: Session, normalized: dict[str, Any]) -> KnowledgeDocument | None:
     url = normalized.get("url") or ""
     if url:
@@ -122,6 +143,52 @@ def _find_existing_document(db: Session, normalized: dict[str, Any]) -> Knowledg
         if summary_key and meta.get("summary_source_date_hash") == summary_key:
             return row
     return None
+
+
+def filter_new_ai_daily_items(
+    db: Session,
+    items: list[Any],
+    *,
+    query: str = "",
+) -> tuple[list[Any], dict[str, Any]]:
+    kept: list[Any] = []
+    skipped_seen = 0
+    warnings: list[str] = []
+    for item in items or []:
+        normalized = _normalized_item(_item_to_dict(item), query)
+        if not normalized.get("title") and not normalized.get("summary"):
+            warnings.append("skip_empty_item")
+            continue
+        if _find_existing_document(db, normalized) is not None:
+            skipped_seen += 1
+            continue
+        kept.append(item)
+    return kept, {
+        "input": len(items or []),
+        "kept": len(kept),
+        "skipped_seen": skipped_seen,
+        "warnings": warnings,
+    }
+
+
+def best_effort_filter_new_ai_daily_items(
+    items: list[Any],
+    *,
+    query: str = "",
+) -> tuple[list[Any], dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        return filter_new_ai_daily_items(db, items, query=query)
+    except Exception as exc:
+        logger.warning("[ai_daily_ingest] history dedup failed: %s", exc)
+        return list(items or []), {
+            "input": len(items or []),
+            "kept": len(items or []),
+            "skipped_seen": 0,
+            "warnings": [str(exc)],
+        }
+    finally:
+        db.close()
 
 
 def _citation(document: KnowledgeDocument, chunk_id: str, source_name: str) -> dict[str, Any]:

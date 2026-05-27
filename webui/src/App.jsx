@@ -1527,14 +1527,86 @@ function SettingsPage() {
 }
 
 // ── 数据库浏览 ──
+function DbCell({ value, meta, tableName, column, onExpand }) {
+  const display = value === null || value === undefined ? '' : String(value)
+  const kind = meta?.kind || 'value'
+  const canExpand = Boolean(meta?.truncated)
+  const tone = kind === 'redacted' ? 'text-red-300' : kind === 'binary' ? 'text-amber-300' : 'text-slate-300'
+  if (canExpand) {
+    return (
+      <button
+        type="button"
+        title="展开预览"
+        onClick={() => onExpand({ tableName, column, value: display, meta })}
+        className={`block w-full max-w-[280px] truncate text-left underline decoration-dotted underline-offset-2 ${tone}`}
+      >
+        {display}
+      </button>
+    )
+  }
+  return <span title={display} className={`block max-w-[280px] truncate ${tone}`}>{display || '-'}</span>
+}
+
+function DbResultTable({ data, tableName, onExpand }) {
+  const columns = data?.columns || []
+  const rows = data?.rows || []
+  const cellMeta = data?.cell_meta || []
+  if (!columns.length) return null
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full table-fixed text-xs">
+        <thead>
+          <tr>
+            {columns.map(c => <th key={c} className="w-[180px] px-3 py-2 text-left font-medium text-slate-500">{c}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i} className="border-t border-slate-800/50 hover:bg-slate-800/30">
+              {columns.map(c => (
+                <td key={c} className="px-3 py-1.5 align-top">
+                  <DbCell value={r[c]} meta={cellMeta[i]?.[c]} tableName={tableName} column={c} onExpand={onExpand} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function DbPage() {
   const [tables, setTables] = useState([])
+  const [groups, setGroups] = useState([])
+  const [tableMeta, setTableMeta] = useState({})
+  const [tableSearch, setTableSearch] = useState('')
   const [sel, setSel] = useState('')
-  const [rows, setRows] = useState({ columns: [], rows: [], total: 0 })
+  const [rows, setRows] = useState({ columns: [], rows: [], total: 0, page: 1, limit: 50, has_next: false })
+  const [page, setPage] = useState(1)
+  const [limit, setLimit] = useState(50)
+  const [loadingTable, setLoadingTable] = useState(false)
+  const [expandedCell, setExpandedCell] = useState(null)
   const [sql, setSql] = useState('')
   const [sqlResult, setSqlResult] = useState(null)
-  useEffect(() => { api.get('/db/tables').then(r => setTables(r.data.tables)) }, [])
-  const queryTable = (t) => { setSel(t); api.get(`/db/tables/${t}`, { params: { limit: 50 } }).then(r => setRows(r.data)) }
+  useEffect(() => {
+    api.get('/db/tables').then(r => {
+      const nextTables = r.data.tables || []
+      setTables(nextTables)
+      setGroups(r.data.groups || [{ key: 'all', label: '全部表', tables: nextTables }])
+      setTableMeta(r.data.table_meta || {})
+    })
+  }, [])
+  const queryTable = (t, nextPage = 1, nextLimit = limit) => {
+    setSel(t)
+    setPage(nextPage)
+    setLimit(nextLimit)
+    setLoadingTable(true)
+    api.get(`/db/tables/${t}`, { params: { page: nextPage, limit: nextLimit } })
+      .then(r => setRows(r.data))
+      .catch(e => alert(e.response?.data?.detail || e.message))
+      .finally(() => setLoadingTable(false))
+  }
   const backupDb = async () => {
     try {
       const res = await api.get('/db/backup', { responseType: 'blob' })
@@ -1546,41 +1618,103 @@ function DbPage() {
       URL.revokeObjectURL(url)
     } catch (e) { alert(e.response?.data?.detail || e.message) }
   }
+  const normalizedSearch = tableSearch.trim().toLowerCase()
+  const filteredGroups = groups.map(g => ({
+    ...g,
+    tables: (g.tables || []).filter(t => {
+      const meta = tableMeta[t] || {}
+      return !normalizedSearch || t.toLowerCase().includes(normalizedSearch) || String(meta.description || '').toLowerCase().includes(normalizedSearch)
+    }),
+  })).filter(g => g.tables.length)
+  const selectedMeta = tableMeta[sel] || rows.table_meta || {}
+  const runSql = () => {
+    api.post('/db/query', { query: sql })
+      .then(r => setSqlResult(r.data))
+      .catch(e => alert(e.response?.data?.detail || e.message))
+  }
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div><h1 className="text-2xl font-bold">数据库浏览</h1><p className="text-slate-500 text-sm">只读数据浏览</p></div>
-        <button onClick={backupDb} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">下载备份</button>
+      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">数据库浏览</h1>
+          <p className="text-sm text-slate-500">只读白名单表浏览，敏感列按后端策略预览或脱敏。</p>
+        </div>
+        <button onClick={backupDb} className="inline-flex items-center justify-center rounded-lg bg-slate-700 px-3 py-1.5 text-xs hover:bg-slate-600">下载备份</button>
       </div>
-      <Card className="p-3 mb-4">
-        <div className="flex gap-1.5 flex-wrap">
-          {tables.map(t => <button key={t} onClick={() => queryTable(t)}
-            className={`px-3 py-1.5 rounded-lg text-xs transition-colors ${sel === t ? 'bg-emerald-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-400'}`}>{t}</button>)}
+      <Card className="mb-4 p-3">
+        <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div className="relative min-w-0 md:w-80">
+            <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
+            <input
+              value={tableSearch}
+              onChange={e => setTableSearch(e.target.value)}
+              placeholder="搜索表"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 py-2 pl-8 pr-3 text-sm outline-none focus:border-emerald-500"
+            />
+          </div>
+          <div className="text-xs text-slate-500">{tables.length} 张白名单表</div>
+        </div>
+        <div className="space-y-3">
+          {filteredGroups.map(group => (
+            <div key={group.key}>
+              <div className="mb-1 text-[11px] font-medium text-slate-500">{group.label}</div>
+              <div className="flex flex-wrap gap-1.5">
+                {group.tables.map(t => <button key={t} onClick={() => queryTable(t, 1, limit)}
+                  title={tableMeta[t]?.description || t}
+                  className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${sel === t ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{t}</button>)}
+              </div>
+            </div>
+          ))}
         </div>
       </Card>
-      {sel && rows.columns.length > 0 && (
-        <Card className="mb-4 overflow-x-auto">
-          <div className="p-3 border-b border-slate-800 text-sm text-slate-400">{sel} ({rows.total} rows)</div>
-          <table className="w-full text-xs">
-            <thead><tr>{rows.columns.map(c => <th key={c} className="px-3 py-2 text-left text-slate-500 font-medium whitespace-nowrap">{c}</th>)}</tr></thead>
-            <tbody>{rows.rows.map((r, i) => <tr key={i} className="border-t border-slate-800/50 hover:bg-slate-800/30">{rows.columns.map(c => <td key={c} className="px-3 py-1.5 max-w-[200px] truncate whitespace-nowrap">{r[c]}</td>)}</tr>)}</tbody>
-          </table>
+      {sel && (
+        <Card className="mb-4">
+          <div className="flex flex-col gap-3 border-b border-slate-800 p-3 md:flex-row md:items-center md:justify-between">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-slate-200">{sel}</div>
+              <div className="mt-0.5 text-xs text-slate-500">{selectedMeta.description || '只读数据表'} · {rows.total || 0} rows</div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <select value={limit} onChange={e => queryTable(sel, 1, Number(e.target.value))}
+                className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-300">
+                {[25, 50, 100, 200].map(n => <option key={n} value={n}>{n}/页</option>)}
+              </select>
+              <button onClick={() => queryTable(sel, Math.max(1, page - 1), limit)} disabled={page <= 1 || loadingTable}
+                className="rounded-lg bg-slate-800 px-3 py-1.5 text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-40">上一页</button>
+              <span className="min-w-14 text-center text-slate-500">第 {page} 页</span>
+              <button onClick={() => queryTable(sel, page + 1, limit)} disabled={!rows.has_next || loadingTable}
+                className="rounded-lg bg-slate-800 px-3 py-1.5 text-slate-300 transition-colors hover:bg-slate-700 disabled:opacity-40">下一页</button>
+            </div>
+          </div>
+          {loadingTable ? <Spinner /> : <DbResultTable data={rows} tableName={sel} onExpand={setExpandedCell} />}
         </Card>
       )}
       <Card className="p-4">
-        <h2 className="text-sm font-medium text-slate-400 mb-2">SQL 查询 (只读)</h2>
+        <h2 className="mb-1 text-sm font-medium text-slate-300">SQL 查询 (只读)</h2>
+        <p className="mb-2 text-xs text-slate-500">仅允许查询后端白名单表；结果会应用同一套脱敏、BLOB 占位和截断预览策略。</p>
         <textarea value={sql} onChange={e => setSql(e.target.value)} rows={3} placeholder="SELECT ..."
-          className="w-full p-3 rounded-xl bg-slate-900 border border-slate-700 font-mono text-sm mb-2" />
-        <button onClick={() => api.post('/db/query', { query: sql }).then(r => setSqlResult(r.data)).catch(e => alert(e.response?.data?.detail || e.message))}
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">运行</button>
+          className="mb-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 font-mono text-sm outline-none focus:border-emerald-500" />
+        <button onClick={runSql}
+          className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium hover:bg-emerald-500">运行</button>
         {sqlResult && (
-          <div className="mt-3 overflow-x-auto">
-            <div className="text-xs text-slate-500 mb-1">{sqlResult.row_count} rows</div>
-            <table className="w-full text-xs"><thead><tr>{sqlResult.columns.map(c => <th key={c} className="px-2 py-1 text-left text-slate-500">{c}</th>)}</tr></thead>
-              <tbody>{sqlResult.rows.map((r, i) => <tr key={i} className="border-t border-slate-800/50">{sqlResult.columns.map(c => <td key={c} className="px-2 py-0.5">{r[c]}</td>)}</tr>)}</tbody></table>
+          <div className="mt-3">
+            <div className="mb-1 text-xs text-slate-500">{sqlResult.row_count} rows</div>
+            <DbResultTable data={sqlResult} tableName="sql_query" onExpand={setExpandedCell} />
           </div>
         )}
       </Card>
+      {expandedCell && (
+        <Modal wide onClose={() => setExpandedCell(null)}>
+          <div className="flex items-start justify-between border-b border-slate-800 p-4">
+            <div>
+              <div className="text-sm font-medium text-slate-200">展开预览</div>
+              <div className="mt-1 text-xs text-slate-500">{expandedCell.tableName}.{expandedCell.column} · {expandedCell.meta?.full_length || 0} 字符</div>
+            </div>
+            <IconButton label="关闭" icon={X} size="xs" onClick={() => setExpandedCell(null)} />
+          </div>
+          <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words p-4 text-xs leading-relaxed text-slate-300">{expandedCell.value}</pre>
+        </Modal>
+      )}
     </div>
   )
 }

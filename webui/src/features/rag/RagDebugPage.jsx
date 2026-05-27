@@ -4,6 +4,13 @@ import { Database, RefreshCw, Search } from 'lucide-react'
 import { api } from '../../api'
 import { Badge, Card, IconButton, JsonBlock, MiniStat, Spinner } from '../../components/ui'
 
+function formatMs(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return '-'
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 1 : 2)}s`
+  return `${Math.round(n)}ms`
+}
+
 export function RagScoreBreakdown({ value }) {
   const data = value || {}
   return (
@@ -203,11 +210,14 @@ export function RagDebugPage() {
 
       {result && (
         <>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
             <MiniStat label="run_id" value={result.run_id} tone="blue" />
             <MiniStat label="degraded" value={response.score_breakdown?.degraded ? 'YES' : 'NO'} tone={response.score_breakdown?.degraded ? 'amber' : 'emerald'} />
-            <MiniStat label="latency" value={`${response.score_breakdown?.latency_ms || 0}ms`} />
-            <MiniStat label="candidates" value={(response.candidates || []).length} />
+            <MiniStat label="总耗时" value={formatMs(response.score_breakdown?.latency_ms)} />
+            <MiniStat label="reranker 耗时" value={formatMs(response.score_breakdown?.reranker_latency_ms)} />
+            <MiniStat label="merged" value={response.score_breakdown?.merged_candidates ?? '-'} />
+            <MiniStat label="reranker 输入" value={response.score_breakdown?.reranker_candidates ?? '-'} />
+            <MiniStat label="final" value={response.score_breakdown?.final_items ?? (response.candidates || []).length} />
           </div>
           <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
             <div className="space-y-4">

@@ -21,6 +21,7 @@ from config import (
 )
 from clients.model_registry import registry
 from core.final_tools import filter_payload_tools
+from core.llm_stream_trace import LLMStreamTraceAccumulator
 from core.llm_request_sanitizer import sanitize_payload_messages
 from core.model_route_options import apply_enable_thinking_to_payload
 
@@ -817,8 +818,7 @@ class NewAPIClient:
                         yield {"error": f"API Error {resp.status}", "detail": detail}
                         return
 
-                    text_parts: list[str] = []
-                    chunks_sample: list[dict[str, Any]] = []
+                    stream_trace = LLMStreamTraceAccumulator(started=started)
                     async for line in resp.content:
                         line_str = line.decode("utf-8").strip()
                         if not line_str or not line_str.startswith("data: "):
@@ -833,16 +833,7 @@ class NewAPIClient:
                                 self.last_usage = chunk["usage"]
                                 if tracker is not None:
                                     asyncio.create_task(tracker.record_success(target_model))
-                            if len(chunks_sample) >= 20:
-                                chunks_sample.pop(0)
-                            chunks_sample.append(chunk)
-                            try:
-                                delta = chunk.get("choices", [{}])[0].get("delta", {})
-                                content = delta.get("content") or ""
-                                if content:
-                                    text_parts.append(str(content))
-                            except Exception:
-                                pass
+                            stream_trace.record_chunk(chunk)
                             yield chunk
                         except json.JSONDecodeError:
                             continue
@@ -850,10 +841,7 @@ class NewAPIClient:
                         from core.tracing import LLMRequestTracer
                         LLMRequestTracer.finish_request(
                             log_id=log_id,
-                            response={
-                                "content": "".join(text_parts),
-                                "chunks_sample": chunks_sample,
-                            },
+                            response=stream_trace.build_response(),
                             response_status=resp.status,
                             status="stream_success",
                             latency_ms=int((time.time() - started) * 1000),

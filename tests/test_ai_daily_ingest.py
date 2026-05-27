@@ -121,3 +121,73 @@ def test_ai_daily_dedup_uses_summary_hash_with_source_and_date(db_session):
 
     assert db_session.query(KnowledgeDocument).filter_by(document_kind="ai_daily", status="active").count() == 2
     assert result["updated"] == 1
+
+
+def test_ai_daily_filters_items_already_ingested(db_session):
+    from core.ai_daily_ingest import filter_new_ai_daily_items, ingest_ai_daily_items
+
+    ingest_ai_daily_items(db_session, [{
+        "title": "已推送新闻",
+        "url": "https://example.com/seen",
+        "summary": "已推送摘要",
+        "source_name": "Example AI",
+        "published_at": "2026-05-26",
+    }], query="AI")
+
+    kept, stats = filter_new_ai_daily_items(db_session, [
+        {
+            "title": "已推送新闻",
+            "url": "https://example.com/seen",
+            "summary": "已推送摘要",
+            "source_name": "Example AI",
+            "published_at": "2026-05-26",
+        },
+        {
+            "title": "新新闻",
+            "url": "https://example.com/new",
+            "summary": "新摘要",
+            "source_name": "Example AI",
+            "published_at": "2026-05-27",
+        },
+    ], query="AI")
+
+    assert stats["skipped_seen"] == 1
+    assert [item["url"] for item in kept] == ["https://example.com/new"]
+
+
+def test_news_daily_pipeline_filters_seen_items_before_digest(monkeypatch):
+    from creatures.nanobot.prompts.skills.news_search.news_daily import tool as daily_tool
+    from creatures.nanobot.prompts.skills.news_search.news_daily.schema import NewsItem
+
+    captured = {}
+    seen = NewsItem(title="已推送新闻", url="https://example.com/seen", published_at="2026-05-26")
+    fresh = NewsItem(title="新新闻", url="https://example.com/new", published_at="2026-05-27")
+
+    monkeypatch.setattr(daily_tool, "_get_providers", lambda mode: [])
+    monkeypatch.setattr(daily_tool, "collect_sources", lambda providers, limit_per_source=8, timeout=10: [seen, fresh])
+    monkeypatch.setattr(daily_tool, "filter_recent", lambda items, hours=72: items)
+    monkeypatch.setattr(daily_tool, "dedup_items", lambda items: items)
+    monkeypatch.setattr(daily_tool, "rank_items", lambda items: items)
+    monkeypatch.setattr(
+        "core.ai_daily_ingest.best_effort_filter_new_ai_daily_items",
+        lambda items, query="": ([item for item in items if item.url.endswith("/new")], {"skipped_seen": 1}),
+    )
+
+    def fake_digest(items, query="", mode="fast"):
+        captured["urls"] = [item.url for item in items]
+        return {
+            "title": "AI 日报",
+            "subtitle": "",
+            "verdict": "ok",
+            "generated_at": "2026-05-27 08:00",
+            "mode": mode,
+            "highlights": [{"label": "新", "text": "新新闻", "source_ids": []}],
+            "sources": [],
+        }
+
+    monkeypatch.setattr(daily_tool, "build_digest_deterministic", fake_digest)
+
+    html = daily_tool.run_pipeline("今天 AI 新闻", mode="fast", limit=8)
+
+    assert "<html" in html
+    assert captured["urls"] == ["https://example.com/new"]

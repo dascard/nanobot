@@ -5,8 +5,11 @@ from sqlalchemy import inspect, text
 
 class DebugRerankerProvider:
     def rerank(self, query, candidates, *, top_k=None):
+        import time
+
         from core.semantic.reranker import RerankResult
 
+        time.sleep(0.002)
         limited = candidates[:top_k] if top_k else candidates
         return [
             RerankResult(
@@ -115,6 +118,7 @@ def test_rag_debug_memory_uses_real_pipeline_trace(client, db_session, monkeypat
     assert stages["merged_candidates"][0]["candidate_id"] == "memory_digest:701:card:0"
     assert stages["reranker_input_pairs"][0]["candidate_id"] == "memory_digest:701:card:0"
     assert stages["final_candidates"][0]["score_breakdown"]["raw_reranker"] == 2.0
+    assert payload["score_breakdown"]["reranker_latency_ms"] > 0
 
 
 def test_rag_debug_run_persists_sanitized_payload(client, db_session, monkeypatch):

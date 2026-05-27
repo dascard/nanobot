@@ -201,6 +201,26 @@ def _html_looks_usable(html: str) -> bool:
     return not any(m in html for m in bad)
 
 
+def _render_no_new_digest(query: str, mode: str, skipped_seen: int) -> str:
+    from datetime import datetime
+    from ..render import render_html
+
+    return render_html({
+        "title": "AI 日报暂无未推送新内容",
+        "subtitle": query[:30],
+        "verdict": f"已过滤此前推送过的 {skipped_seen} 条资讯，当前没有新的可推送条目。",
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "mode": mode,
+        "top_story": None,
+        "highlights": [],
+        "details": [],
+        "watchlist": [],
+        "missing_info": ["历史去重后无新条目"],
+        "closing": "可稍后刷新来源；已推送过的链接不会重复进入本次日报。",
+        "sources": [],
+    })
+
+
 def run_news_search_auto(query: str, limit: int = 8) -> str:
     """对外唯一入口：quality → daily fallback → fallback_digest。"""
     # 1. quality (LLM)
@@ -239,6 +259,17 @@ def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
     items = filter_recent(items, hours=72)
     items = dedup_items(items)
     items = rank_items(items)
+    try:
+        from core.ai_daily_ingest import best_effort_filter_new_ai_daily_items
+
+        items, history_dedup = best_effort_filter_new_ai_daily_items(items, query=query)
+        skipped_seen = int(history_dedup.get("skipped_seen") or 0)
+        if skipped_seen:
+            logger.info("[daily] history dedup skipped=%d kept=%d", skipped_seen, len(items))
+        if not items:
+            return _render_no_new_digest(query, mode, skipped_seen)
+    except Exception as e:
+        logger.warning("[daily] history dedup unavailable: %s", e)
 
     if mode == "daily":
         from datetime import datetime

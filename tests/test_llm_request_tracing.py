@@ -226,6 +226,74 @@ def test_openai_sdk_tracer_records_stream_request(monkeypatch):
     assert "repr" not in finished[0]["response"]
 
 
+def test_openai_sdk_tracer_records_stream_reasoning_metrics(monkeypatch):
+    from core.llm_trace_context import llm_trace_scope
+    from core.llm_sdk_tracing import install_openai_chat_completion_tracer
+
+    recorded = []
+    finished = []
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **kwargs: recorded.append(kwargs) or 790),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **kwargs: finished.append(kwargs)),
+    )
+
+    class _AsyncStream:
+        def __init__(self, chunks):
+            self._chunks = list(chunks)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if not self._chunks:
+                raise StopAsyncIteration
+            return self._chunks.pop(0)
+
+    create = AsyncMock(return_value=_AsyncStream([
+        {"choices": [{"delta": {"reasoning_content": "先想"}}]},
+        {"choices": [{"delta": {"reasoning_content": "一下"}}]},
+        {"choices": [{"delta": {"content": "答"}}]},
+    ]))
+    llm = SimpleNamespace(
+        _client=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
+        _api_key="reply-key",
+        _extra_headers={},
+        base_url="http://stream-provider.test/v1",
+        provider_name="newapi",
+    )
+
+    assert install_openai_chat_completion_tracer(
+        llm,
+        provider="newapi",
+        base_url="http://stream-provider.test/v1",
+    )
+
+    async def _run():
+        with llm_trace_scope(trace_id="trace-sr", run_id="run-sr", source="replyer"):
+            result = await llm._client.chat.completions.create(
+                model="stream-model",
+                messages=[{"role": "user", "content": "流式"}],
+                stream=True,
+                temperature=0.1,
+            )
+            return [chunk async for chunk in result]
+
+    chunks = asyncio.run(_run())
+
+    assert chunks
+    assert finished
+    response = finished[0]["response"]
+    assert response["content"] == "答"
+    assert response["reasoning_content"] == "先想一下"
+    assert response["stream_metrics"]["reasoning_char_count"] == 4
+    assert response["stream_metrics"]["content_char_count"] == 1
+    assert response["stream_metrics"]["reasoning_elapsed_ms"] >= 0
+
+
 def test_compaction_direct_http_records_request(monkeypatch):
     from core import compaction
     from core.llm_trace_context import llm_trace_scope
@@ -402,6 +470,84 @@ def test_new_api_chat_completion_stream_finishes_request_on_success(monkeypatch)
     assert finished[0]["response_status"] == 200
     assert finished[0]["status"] == "stream_success"
     assert finished[0]["response"]["content"] == "你好"
+
+
+def test_new_api_chat_completion_stream_records_reasoning_metrics(monkeypatch):
+    from clients.new_api_client import NewAPIClient
+
+    recorded = []
+    finished = []
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **kwargs: recorded.append(kwargs) or 988),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **kwargs: finished.append(kwargs)),
+    )
+    monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
+    monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
+    monkeypatch.setattr(NewAPIClient, "get_ordered_candidates", lambda self, **kwargs: [{"id": "model-stream", "intelligence": 7}])
+    monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
+
+    class _FakeContent:
+        def __init__(self):
+            self._lines = iter([
+                'data: {"choices":[{"delta":{"reasoning_content":"先想"}}]}\n\n'.encode("utf-8"),
+                'data: {"choices":[{"delta":{"reasoning_content":"一下"}}]}\n\n'.encode("utf-8"),
+                'data: {"choices":[{"delta":{"content":"答"}}]}\n\n'.encode("utf-8"),
+                b"data: [DONE]\n\n",
+            ])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._lines)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class _FakeResp:
+        status = 200
+        content = _FakeContent()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return "ok"
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResp()
+
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", lambda: _FakeSession())
+
+    async def collect():
+        client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
+        return [chunk async for chunk in client.chat_completion_stream([{"role": "user", "content": "流式"}])]
+
+    chunks = asyncio.run(collect())
+
+    assert len(chunks) == 3
+    assert recorded
+    assert finished
+    response = finished[0]["response"]
+    assert response["content"] == "答"
+    assert response["reasoning_content"] == "先想一下"
+    assert response["stream_metrics"]["reasoning_char_count"] == 4
+    assert response["stream_metrics"]["content_char_count"] == 1
+    assert response["stream_metrics"]["reasoning_elapsed_ms"] >= 0
 
 
 def test_new_api_payload_applies_enable_thinking_policy():

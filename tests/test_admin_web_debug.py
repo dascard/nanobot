@@ -26,6 +26,10 @@ def test_memory_debug_page_contains_reranker_columns():
     assert "reranker_score" in page_source
     assert "final_score" in page_source
     assert "Reranker Input" in page_source
+    assert "reranker_latency_ms" in page_source
+    assert "reranker 耗时" in page_source
+    assert "reranker 输入" in page_source
+    assert "merged_candidates" in page_source
 
 
 def test_knowledge_debug_page_requires_citation_columns():
@@ -34,6 +38,20 @@ def test_knowledge_debug_page_requires_citation_columns():
     assert "citation" in page_source
     assert "trust_level" in page_source
     assert "document_id" in page_source
+
+
+def test_db_page_contains_grouped_search_pagination_and_preview_ui():
+    page_source = Path("webui/src/App.jsx").read_text(encoding="utf-8")
+
+    assert "groups" in page_source
+    assert "tableSearch" in page_source
+    assert "page" in page_source
+    assert "limit" in page_source
+    assert "上一页" in page_source
+    assert "下一页" in page_source
+    assert "truncated" in page_source
+    assert "展开预览" in page_source
+    assert "展开完整内容" not in page_source
 
 
 def test_group_analysis_debug_page_contains_stats_and_prompt_logs(client, monkeypatch):

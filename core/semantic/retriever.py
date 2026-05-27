@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from core.database import SemanticIndexItem
 from core.semantic.fts import build_fts5_match_query
+from core.semantic.fts import strip_cjk_query_stopwords
 from core.semantic.scoring import normalize_semantic_cosine
 from core.semantic.scoring import normalize_sqlite_bm25
 from core.semantic.schema import ensure_semantic_schema
@@ -52,7 +53,7 @@ def lexical_overlap_score(query: str, text: str) -> float:
     query_text = str(query or "").lower()
     haystack = str(text or "").lower()
     ascii_tokens = set(re.findall(r"[a-z0-9_]{2,}", query_text))
-    cjk_tokens = set(re.findall(r"[\u3400-\u9fff]{2}", query_text))
+    cjk_tokens = set(re.findall(r"[\u3400-\u9fff]{2}", strip_cjk_query_stopwords(query_text)))
     tokens = ascii_tokens | cjk_tokens
     if not tokens:
         return 0.0
