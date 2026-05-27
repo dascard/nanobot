@@ -18,6 +18,8 @@ clients/data/*.json
 node_modules/
 workspace/*
 !workspace/README.md
+models/*
+!models/.gitkeep
 sentinel/model.safetensors
 cc2codex/
 creatures/nanobot/prompt_private.md
