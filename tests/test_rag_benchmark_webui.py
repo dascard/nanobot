@@ -23,6 +23,12 @@ def test_rag_benchmark_page_exposes_provider_modes_and_case_controls():
     assert "no_reranker_baseline" in source
     assert "runtime" in source
     assert "sample_before_run" in source
+    assert "include_manual" in source
+    assert "include_generated" in source
+    assert "source_types" in source
+    assert "case_types" in source
+    assert "include manual" in source
+    assert "include generated" in source
     assert "case_status" in source
     assert "result_status" in source
     assert "manual_dir_writable" in source

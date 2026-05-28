@@ -34,6 +34,7 @@ BENCHMARK_REPORT_DIR = Path("tmp/rag_benchmark/reports")
 BENCHMARK_CASE_BACKUP_DIR = Path("tmp/rag_benchmark/case_backups")
 BENCHMARK_CASE_TRASH_DIR = Path("tmp/rag_benchmark/case_trash")
 BENCHMARK_RUN_LOCK = Path("tmp/rag_benchmark/run.lock")
+RUN_LOCK_STALE_SECONDS = 600
 GENERATOR_VERSION = "rag_benchmark:v1"
 CASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$")
 
@@ -247,19 +248,75 @@ def _filtered_cases(
 @contextmanager
 def _run_lock():
     BENCHMARK_RUN_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(BENCHMARK_RUN_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
+    fd: int | None = None
+    for _attempt in range(2):
+        _clear_stale_run_lock()
+        try:
+            fd = os.open(BENCHMARK_RUN_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            break
+        except FileExistsError:
+            if _clear_stale_run_lock():
+                continue
+            raise HTTPException(409, "benchmark run already in progress")
+    if fd is None:
         raise HTTPException(409, "benchmark run already in progress")
     try:
-        os.write(fd, str(os.getpid()).encode("utf-8"))
+        os.write(fd, json.dumps({"pid": os.getpid(), "started_at": time.time()}).encode("utf-8"))
         os.close(fd)
+        fd = None
         yield
     finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             BENCHMARK_RUN_LOCK.unlink()
         except FileNotFoundError:
             pass
+
+
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _run_lock_is_stale(path: Path) -> bool:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return False
+    now = time.time()
+    try:
+        payload = json.loads(raw)
+        started_at = float(payload.get("started_at") or 0)
+        pid = int(payload.get("pid") or 0)
+        return (now - started_at) > RUN_LOCK_STALE_SECONDS and not _pid_exists(pid)
+    except Exception:
+        try:
+            return (now - path.stat().st_mtime) > RUN_LOCK_STALE_SECONDS
+        except FileNotFoundError:
+            return False
+
+
+def _clear_stale_run_lock() -> bool:
+    if not BENCHMARK_RUN_LOCK.exists() or not _run_lock_is_stale(BENCHMARK_RUN_LOCK):
+        return False
+    try:
+        BENCHMARK_RUN_LOCK.unlink()
+        return True
+    except FileNotFoundError:
+        return False
 
 
 def _summary_scores(scores: list[CaseScore]) -> dict[str, Any]:
@@ -343,7 +400,7 @@ def get_benchmark_case(case_id: str, _auth=Depends(verify_admin)):
     for case, origin, editable in _load_cases_with_origin():
         if case.id == case_id:
             data = case.model_dump()
-            data["query"] = _preview(case.query, 200)
+            data["query_preview"] = _preview(case.query, 200)
             return {"case": data, "origin": origin, "editable": editable}
     raise HTTPException(404, "benchmark case not found")
 
@@ -433,6 +490,7 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
             "ok": False,
             "metrics": {"overall": {"total_cases": 0}},
             "score_summary": {"total": 0, "passed": 0, "failed": 0},
+            "warnings": [],
             "failed_scores": [],
             "preflight": preflight,
             "stale_generated_cases": [],
@@ -501,11 +559,18 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                 if not score.ok
             ][:50]
             finished_at = datetime.now()
+            executed = len(scores) > 0
+            warnings = []
+            if not executed:
+                warnings.append("no_cases_executed")
+            if timeout_reached:
+                warnings.append("timeout_reached")
             return {
                 "run_id": str(report_paths["report_id"]),
-                "ok": all(score.ok for score in scores) and not timeout_reached,
+                "ok": executed and all(score.ok for score in scores) and not timeout_reached,
                 "metrics": metrics,
                 "score_summary": _summary_scores(scores) | {"timeout_reached": timeout_reached},
+                "warnings": warnings,
                 "failed_scores": failed,
                 "results": failed_results,
                 "preflight": preflight,

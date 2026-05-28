@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
@@ -209,6 +211,40 @@ def test_manual_case_save_update_and_delete_are_audited(client, db_session, tmp_
     assert trashed["meta"]["origin"] == "manual"
 
 
+def test_manual_case_detail_preserves_full_query_when_saved(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_path = tmp_path / "benchmark.db"
+    _engine, db = _file_db(db_path)
+    _seed_memory_case(db)
+    db.close()
+    _routes, manual, _generated, _reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+    long_query = "RAG benchmark 长查询 " + ("上下文" * 160)
+    (manual / "long_query_case.json").write_text(json.dumps({
+        "id": "long_query_case",
+        "suite": "rag_benchmark",
+        "source_type": "memory",
+        "case_type": "positive",
+        "query": long_query,
+        "expected": {"candidate_ids": ["memory_digest:42:digest:level2"]},
+        "meta": {"origin": "manual"},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    detail = client.get("/api/v1/admin/rag/benchmark/cases/long_query_case", headers=_auth_header())
+    assert detail.status_code == 200
+    case_payload = detail.json()["case"]
+    assert case_payload["query"] == long_query
+    assert case_payload["query_preview"] != long_query
+    saved = client.put(
+        "/api/v1/admin/rag/benchmark/cases/long_query_case",
+        headers=_auth_header(),
+        json={"case": case_payload},
+    )
+
+    assert saved.status_code == 200
+    persisted = json.loads((manual / "long_query_case.json").read_text(encoding="utf-8"))
+    assert persisted["query"] == long_query
+
+
 def test_benchmark_sample_marks_fingerprint_and_run_skips_stale_generated(client, tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     db_path = tmp_path / "benchmark.db"
@@ -256,6 +292,40 @@ def test_benchmark_sample_marks_fingerprint_and_run_skips_stale_generated(client
     data = run.json()
     assert data["stale_generated_cases"]
     assert data["metrics"]["overall"]["total_cases"] == 0
+    assert data["ok"] is False
+    assert "no_cases_executed" in data["warnings"]
+
+
+def test_benchmark_run_clears_stale_lock(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_path = tmp_path / "benchmark.db"
+    _engine, db = _file_db(db_path)
+    _seed_memory_case(db)
+    db.close()
+    routes, manual, _generated, _reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+    lock_path = tmp_path / "run.lock"
+    monkeypatch.setattr(routes, "BENCHMARK_RUN_LOCK", lock_path)
+    monkeypatch.setattr(routes, "RUN_LOCK_STALE_SECONDS", 1)
+    lock_path.write_text(json.dumps({"pid": 999999, "started_at": time.time() - 120}), encoding="utf-8")
+    (manual / "memory_case.json").write_text(json.dumps({
+        "id": "memory_case",
+        "suite": "rag_benchmark",
+        "source_type": "memory",
+        "case_type": "positive",
+        "query": "RAG benchmark readonly",
+        "expected": {"candidate_ids": ["memory_digest:42:digest:level2"], "hit_at": 5},
+        "meta": {"origin": "manual"},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    response = client.post(
+        "/api/v1/admin/rag/benchmark/run",
+        headers=_auth_header(),
+        json={"provider_mode": "deterministic", "include_generated": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert not lock_path.exists()
 
 
 def test_benchmark_rejects_unsafe_case_id(client, tmp_path, monkeypatch):

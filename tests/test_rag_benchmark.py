@@ -310,6 +310,46 @@ def test_memory_sampler_probes_retrievable_exact_query(tmp_path, monkeypatch):
     db.close()
 
 
+def test_memory_sampler_probe_uses_deterministic_provider(db_session, monkeypatch):
+    from evals.rag_benchmark import sample as sampler
+    from evals.rag_benchmark.schema import BenchmarkResult
+
+    row = SemanticIndexItem(
+        id=41,
+        source_type="memory_digest",
+        source_id="401",
+        source_sub_id="digest:level2",
+        status="active",
+        visibility="recall",
+        title="RAG",
+        text="RAG benchmark probe",
+        lexical_text="RAG benchmark probe",
+    )
+    seen = {}
+
+    def fake_run_case(db, case, **kwargs):
+        seen.update(kwargs)
+        return BenchmarkResult(
+            case_id=case.id,
+            source_type="memory",
+            candidate_ids=["memory_digest:401:digest:level2"],
+        )
+
+    monkeypatch.setattr("evals.rag_benchmark.adapters.run_case_with_adapter", fake_run_case)
+
+    rank = sampler._memory_probe_rank(
+        db_session,
+        query="RAG benchmark probe",
+        row=row,
+        candidate_id="memory_digest:401:digest:level2",
+    )
+
+    assert rank == 1
+    assert seen["provider_mode"] == "deterministic"
+    assert seen["readonly"] is True
+    assert "use_runtime_providers" not in seen
+
+
 def test_adapters_standardize_results_without_admin_debug_writes(db_session, monkeypatch):
     from evals.rag_benchmark.adapters import run_case_with_adapter
     from evals.rag_benchmark.schema import BenchmarkCase

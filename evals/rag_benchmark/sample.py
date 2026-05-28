@@ -145,7 +145,7 @@ def _memory_probe_rank(db: Session, *, query: str, row: SemanticIndexItem, candi
         expected={"candidate_ids": [candidate_id], "hit_at": 5},
     )
     try:
-        result = run_case_with_adapter(db, case, use_runtime_providers=False)
+        result = run_case_with_adapter(db, case, provider_mode="deterministic", readonly=True)
     except Exception:
         return None
     try:

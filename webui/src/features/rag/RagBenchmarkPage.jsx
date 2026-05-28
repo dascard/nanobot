@@ -16,6 +16,9 @@ const emptyCase = {
   meta: { origin: 'manual' },
 }
 
+const sourceTypes = ['memory', 'group_memory', 'sticker', 'knowledge']
+const caseTypes = ['positive', 'negative', 'constraint_only']
+
 function pct(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
@@ -119,6 +122,8 @@ export function RagBenchmarkPage() {
     sample_before_run: false,
     include_manual: true,
     include_generated: true,
+    source_types: [],
+    case_types: [],
     per_source: 5,
     max_cases: 100,
     timeout_seconds: 60,
@@ -206,7 +211,17 @@ export function RagBenchmarkPage() {
   const overall = metrics.overall || {}
   const failedScores = runResult?.failed_scores || latest?.failed_scores || []
   const staleCount = runResult?.stale_generated_cases?.length || 0
+  const runWarnings = runResult?.warnings || []
   const preflight = status?.preflight || runResult?.preflight || {}
+
+  const toggleRunArray = (key, value, checked) => {
+    setRunOptions(current => ({
+      ...current,
+      [key]: checked
+        ? Array.from(new Set([...(current[key] || []), value]))
+        : (current[key] || []).filter(item => item !== value),
+    }))
+  }
 
   const statusMeta = useMemo(() => [
     <span key="manual">manual: {status?.manual_dir_writable === false ? '不可写' : '可写'}</span>,
@@ -291,11 +306,48 @@ export function RagBenchmarkPage() {
             </ActionButton>
           </div>
         </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          <label className="flex min-h-9 items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 text-xs text-slate-300">
+            <input type="checkbox" checked={runOptions.include_manual}
+              onChange={e => setRunOptions({ ...runOptions, include_manual: e.target.checked })} />
+            include manual
+          </label>
+          <label className="flex min-h-9 items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 text-xs text-slate-300">
+            <input type="checkbox" checked={runOptions.include_generated}
+              onChange={e => setRunOptions({ ...runOptions, include_generated: e.target.checked })} />
+            include generated
+          </label>
+          <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+            <div className="mb-2 text-[11px] text-slate-500">source_types</div>
+            <div className="flex flex-wrap gap-2">
+              {sourceTypes.map(source => (
+                <label key={source} className="flex items-center gap-1.5">
+                  <input type="checkbox" checked={(runOptions.source_types || []).includes(source)}
+                    onChange={e => toggleRunArray('source_types', source, e.target.checked)} />
+                  {source}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300">
+            <div className="mb-2 text-[11px] text-slate-500">case_types</div>
+            <div className="flex flex-wrap gap-2">
+              {caseTypes.map(type => (
+                <label key={type} className="flex items-center gap-1.5">
+                  <input type="checkbox" checked={(runOptions.case_types || []).includes(type)}
+                    onChange={e => toggleRunArray('case_types', type, e.target.checked)} />
+                  {type}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
         {runOptions.provider_mode === 'runtime' && (
           <div className="mt-2 text-[11px] text-amber-300">runtime 会触发真实 provider，可能加载模型；timeout 是软超时，单个调用不保证强杀。</div>
         )}
         {preflight.ok === false && <div className="mt-2 text-xs text-red-300">preflight: {(preflight.errors || []).join(' / ')}</div>}
         {staleCount > 0 && <div className="mt-2 text-xs text-amber-300">stale generated cases: {staleCount}，请重新刷新 generated。</div>}
+        {runWarnings.length > 0 && <div className="mt-2 text-xs text-amber-300">benchmark warnings: {runWarnings.join(' / ')}</div>}
       </Card>
 
       <Card className="p-3">
