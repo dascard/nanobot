@@ -141,6 +141,40 @@ def test_benchmark_run_is_readonly_and_does_not_ensure_schema(client, tmp_path, 
     assert engine.connect().execute(text("SELECT COUNT(*) FROM schema_migrations")).scalar() == before_migrations
 
 
+def test_benchmark_run_returns_readable_case_results(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_path = tmp_path / "benchmark.db"
+    _engine, db = _file_db(db_path)
+    _seed_memory_case(db)
+    db.close()
+    _routes, manual, _generated, _reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+    (manual / "memory_case.json").write_text(json.dumps({
+        "id": "memory_case",
+        "suite": "rag_benchmark",
+        "source_type": "memory",
+        "case_type": "positive",
+        "query": "RAG benchmark readonly",
+        "expected": {"candidate_ids": ["memory_digest:42:digest:level2"], "hit_at": 5},
+        "meta": {"origin": "manual"},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    response = client.post(
+        "/api/v1/admin/rag/benchmark/run",
+        headers=_auth_header(),
+        json={"provider_mode": "deterministic", "include_generated": False},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["case_results"][0]["case_id"] == "memory_case"
+    assert data["case_results"][0]["query_preview"] == "RAG benchmark readonly"
+    assert data["case_results"][0]["ok"] is True
+    assert data["case_results"][0]["expected_candidate_ids"] == ["memory_digest:42:digest:level2"]
+    assert data["case_results"][0]["candidates"][0]["candidate_id"] == "memory_digest:42:digest:level2"
+    assert data["case_results"][0]["candidates"][0]["title"] == "RAG benchmark"
+    assert data["case_results"][0]["candidates"][0]["text_preview"] == "RAG benchmark readonly case"
+
+
 def test_benchmark_missing_fts_returns_preflight_error_without_creating_table(client, tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     db_path = tmp_path / "missing_fts.db"

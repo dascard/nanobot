@@ -41,11 +41,14 @@ class BenchmarkCandidate(BaseModel):
     source_type: str
     rank: int
     score: float | None = None
+    title: str = ""
+    text_preview: str = ""
     document_id: str | int | None = None
     chunk_id: str | None = None
     group_id: str = ""
     sendable: bool | None = None
     citation: bool | None = None
+    score_breakdown: dict[str, Any] = Field(default_factory=dict)
 
 
 class BenchmarkResult(BaseModel):

@@ -335,6 +335,56 @@ def _trim_result(result: BenchmarkResult, limit: int) -> dict[str, Any]:
     return data
 
 
+def _model_data(value: Any) -> dict[str, Any]:
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, dict):
+        return dict(value)
+    return {}
+
+
+def _case_result_payload(
+    case: BenchmarkCase | dict[str, Any],
+    result: BenchmarkResult | dict[str, Any],
+    score: CaseScore | dict[str, Any],
+    *,
+    candidate_limit: int,
+) -> dict[str, Any]:
+    case_data = _model_data(case)
+    result_data = _model_data(result)
+    score_data = _model_data(score)
+    expected = case_data.get("expected") if isinstance(case_data.get("expected"), dict) else {}
+    candidates = []
+    for candidate in (result_data.get("candidates") or [])[:candidate_limit]:
+        item = dict(candidate)
+        item["title"] = _preview(item.get("title") or "", 120)
+        item["text_preview"] = _preview(item.get("text_preview") or item.get("text") or "", 240)
+        candidates.append(item)
+    return {
+        "case_id": case_data.get("id") or score_data.get("case_id") or result_data.get("case_id"),
+        "source_type": case_data.get("source_type") or result_data.get("source_type"),
+        "case_type": case_data.get("case_type") or score_data.get("case_type"),
+        "query_preview": _preview(str(case_data.get("query") or ""), 300),
+        "ok": bool(score_data.get("ok")),
+        "errors": score_data.get("errors") or [],
+        "rank": score_data.get("rank"),
+        "hit_at": score_data.get("hit_at") or {},
+        "mrr": score_data.get("mrr") or 0,
+        "latency_ms": result_data.get("latency_ms") or score_data.get("latency_ms") or 0,
+        "degraded": bool(result_data.get("degraded") or score_data.get("degraded")),
+        "fallback_reason": result_data.get("fallback_reason") or "",
+        "merged_candidates_count": result_data.get("merged_candidates_count") or 0,
+        "reranker_candidates_count": (
+            result_data.get("reranker_candidates_count")
+            if result_data.get("reranker_candidates_count") is not None
+            else score_data.get("reranker_candidates") or 0
+        ),
+        "expected_candidate_ids": expected.get("candidate_ids") or [],
+        "candidate_ids": (result_data.get("candidate_ids") or [])[:candidate_limit],
+        "candidates": candidates,
+    }
+
+
 @router.get("/status")
 def benchmark_status(_auth=Depends(verify_admin)):
     db_path = get_benchmark_db_path()
@@ -492,6 +542,7 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
             "score_summary": {"total": 0, "passed": 0, "failed": 0},
             "warnings": [],
             "failed_scores": [],
+            "case_results": [],
             "preflight": preflight,
             "stale_generated_cases": [],
             "report_id": "",
@@ -558,6 +609,10 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                 for result, score in zip(results, scores)
                 if not score.ok
             ][:50]
+            case_results = [
+                _case_result_payload(case, result, score, candidate_limit=candidate_limit)
+                for case, result, score in zip(selected[:len(scores)], results, scores)
+            ]
             finished_at = datetime.now()
             executed = len(scores) > 0
             warnings = []
@@ -572,6 +627,7 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                 "score_summary": _summary_scores(scores) | {"timeout_reached": timeout_reached},
                 "warnings": warnings,
                 "failed_scores": failed,
+                "case_results": case_results,
                 "results": failed_results,
                 "preflight": preflight,
                 "stale_generated_cases": stale,
@@ -595,12 +651,18 @@ def latest_benchmark_report(_auth=Depends(verify_admin)):
     if not json_path.exists():
         return {"exists": False}
     payload = _readable_json(json_path)
+    cases = payload.get("cases") or []
+    results = payload.get("results") or []
     scores = payload.get("scores") or []
     markdown = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
     return {
         "exists": True,
         "metrics": payload.get("metrics") or {},
         "failed_scores": [score for score in scores if not score.get("ok")][:50],
+        "case_results": [
+            _case_result_payload(case, result, score, candidate_limit=10)
+            for case, result, score in zip(cases, results, scores)
+        ][:100],
         "markdown": markdown,
         "report_paths": {
             "json": _safe_rel_path(json_path),

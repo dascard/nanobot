@@ -36,6 +36,13 @@ def test_rag_benchmark_page_exposes_provider_modes_and_case_controls():
     assert "保存 Manual Case" in source
     assert "删除 Manual Case" in source
     assert "失败明细" in source
+    assert "查询内容" in source
+    assert "expected candidate ids" in source
+    assert "高级 JSON" in source
+    assert "指标说明" in source
+    assert "召回候选" in source
+    assert "caseResults" in source
+    assert "hit@1 表示 expected candidate 排在第 1 位的 positive case 比例" in source
 
 
 def test_rag_benchmark_markdown_report_is_plain_text():

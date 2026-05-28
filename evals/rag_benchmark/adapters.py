@@ -101,6 +101,11 @@ def _score(item: dict[str, Any]) -> float | None:
         return None
 
 
+def _preview(value: Any, limit: int = 240) -> str:
+    text = " ".join(str(value or "").split())
+    return text[:limit] + ("..." if len(text) > limit else "")
+
+
 def _candidates(items: list[dict[str, Any]], *, fallback_source_type: str) -> list[BenchmarkCandidate]:
     result: list[BenchmarkCandidate] = []
     for rank, item in enumerate(items, start=1):
@@ -115,11 +120,14 @@ def _candidates(items: list[dict[str, Any]], *, fallback_source_type: str) -> li
             source_type=str(item.get("source_type") or fallback_source_type),
             rank=rank,
             score=_score(item),
+            title=_preview(item.get("title") or "", 120),
+            text_preview=_preview(item.get("text") or item.get("description") or item.get("content") or ""),
             document_id=item.get("document_id"),
             chunk_id=str(item.get("chunk_id") or "") or None,
             group_id=str(item.get("group_id") or ""),
             sendable=True if (send_code or reply_token) else None,
             citation=bool(citation) if citation is not None else None,
+            score_breakdown=item.get("score_breakdown") if isinstance(item.get("score_breakdown"), dict) else {},
         ))
     return result
 
@@ -237,21 +245,24 @@ def _run_group_memory(db: Session, case: BenchmarkCase, *, provider_mode: str) -
         max_chars=int(case.filters.get("max_chars") or 1200),
     )
     latency_ms = int((time.perf_counter() - started) * 1000)
+    scored_ids = [int(key) for key in selection.score_components if str(key).isdigit()]
+    rows_by_id = {
+        int(row.id): row
+        for row in db.query(GroupMemory).filter(GroupMemory.id.in_(scored_ids)).all()
+    } if scored_ids else {}
     candidates = [
         BenchmarkCandidate(
             candidate_id=f"group_memory:{row.id}:memory",
             source_type="group_memory",
             rank=rank,
             score=(selection.score_components.get(str(row.id)) or {}).get("final"),
+            title=str(row.memory_type or ""),
+            text_preview=_preview(row.content),
             group_id=str(row.group_id or ""),
+            score_breakdown=selection.score_components.get(str(row.id)) or {},
         )
         for rank, row in enumerate(selection.selected, start=1)
     ]
-    scored_ids = [int(key) for key in selection.score_components if str(key).isdigit()]
-    rows_by_id = {
-        int(row.id): row
-        for row in db.query(GroupMemory).filter(GroupMemory.id.in_(scored_ids)).all()
-    } if scored_ids else {}
     return BenchmarkResult(
         case_id=case.id,
         source_type=case.source_type,
