@@ -754,6 +754,10 @@ class ReplyContractCheckLog(Base):
     has_reply_tool = Column(Integer, default=0)
     has_no_reply_tool = Column(Integer, default=0)
     has_structured_fallback = Column(Integer, default=0)
+    reply_tool_call_count = Column(Integer, default=0)
+    no_reply_tool_call_count = Column(Integer, default=0)
+    structured_fallback_count = Column(Integer, default=0)
+    total_final_action_count = Column(Integer, default=0)
     result = Column(String, index=True, default="")
     created_at = Column(DateTime, default=datetime.now, index=True)
 

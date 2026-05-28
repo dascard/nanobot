@@ -393,6 +393,14 @@ export function LLMApiLogViewer({ log }) {
           )}
         </section>
       )}
+      {!reasoningTrace.has && Object.keys(response).length > 0 && (
+        <section>
+          <h3 className="text-xs font-medium text-slate-500 mb-2 uppercase tracking-wider">推理与流式指标</h3>
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-xs text-slate-500">
+            本次未返回 reasoning_content
+          </div>
+        </section>
+      )}
 
       {Object.keys(response).length > 0 && (
         <section>

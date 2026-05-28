@@ -411,6 +411,15 @@ def _reply_contract_check_logs(conn: Any, engine: Any, db_path: str | None) -> N
         ])
 
 
+def _reply_contract_check_count_columns(conn: Any, engine: Any, db_path: str | None) -> None:
+    _add_missing_columns(conn, "reply_contract_check_logs", {
+        "reply_tool_call_count": "INTEGER DEFAULT 0",
+        "no_reply_tool_call_count": "INTEGER DEFAULT 0",
+        "structured_fallback_count": "INTEGER DEFAULT 0",
+        "total_final_action_count": "INTEGER DEFAULT 0",
+    })
+
+
 def _reply_eval_trace_columns(conn: Any, engine: Any, db_path: str | None) -> None:
     _add_missing_columns(conn, "reply_eval_results", {
         "agent_run_id": "TEXT DEFAULT ''",
@@ -701,6 +710,7 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_agent_prompt_trace_columns", "agent/prompt trace columns", _agent_prompt_trace_columns),
     ("20260523_llm_request_log_columns", "llm api request log columns", _llm_request_log_columns),
     ("20260523_reply_contract_check_logs", "reply contract check log columns", _reply_contract_check_logs),
+    ("20260528_reply_contract_check_count_columns", "reply contract check count columns", _reply_contract_check_count_columns),
     ("20260523_reply_eval_trace_columns", "reply eval trace columns", _reply_eval_trace_columns),
     ("20260525_rolling_session_summaries", "rolling session summaries", _rolling_session_summaries),
     ("20260526_session_summary_llm_columns", "session summary llm columns", _session_summary_llm_columns),

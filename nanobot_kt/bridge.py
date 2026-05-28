@@ -636,6 +636,24 @@ class NanobotBridge:
 
         return build_reply_contract_retry_prompt(raw_model_output)
 
+    def _count_final_action_tool_calls(self) -> dict[str, int]:
+        try:
+            from nanobot_kt.reply_contract import count_final_action_tool_calls
+
+            conv = self._agent.controller.conversation if self._agent else None
+            if conv is None:
+                return {}
+            if hasattr(conv, "get_messages"):
+                messages = conv.get_messages()
+            elif hasattr(conv, "to_messages"):
+                messages = conv.to_messages()
+            else:
+                messages = []
+            return count_final_action_tool_calls(messages)
+        except Exception as e:
+            logger.debug("[Reply] final action count failed: %s", e)
+            return {}
+
     def _record_reply_contract_check(
         self,
         *,
@@ -647,10 +665,33 @@ class NanobotBridge:
         has_reply_tool: bool,
         has_no_reply_tool: bool,
         has_structured_fallback: bool,
+        reply_tool_call_count: int | None = None,
+        no_reply_tool_call_count: int | None = None,
+        structured_fallback_count: int | None = None,
+        total_final_action_count: int | None = None,
         result: str,
     ) -> None:
         try:
             from core.tracing import ReplyContractTracer
+
+            real_counts = self._count_final_action_tool_calls()
+            real_total = int(real_counts.get("total_final_action_count", 0) or 0)
+            if real_total > 0:
+                reply_tool_call_count = (
+                    int(real_counts.get("reply_tool_call_count", 0) or 0)
+                    if reply_tool_call_count is None else reply_tool_call_count
+                )
+                no_reply_tool_call_count = (
+                    int(real_counts.get("no_reply_tool_call_count", 0) or 0)
+                    if no_reply_tool_call_count is None else no_reply_tool_call_count
+                )
+                structured_fallback_count = (
+                    int(real_counts.get("structured_fallback_count", 0) or 0)
+                    if structured_fallback_count is None else structured_fallback_count
+                )
+                total_final_action_count = (
+                    real_total if total_final_action_count is None else total_final_action_count
+                )
 
             ReplyContractTracer.record_check(
                 trace_id=trace_id,
@@ -661,6 +702,10 @@ class NanobotBridge:
                 has_reply_tool=has_reply_tool,
                 has_no_reply_tool=has_no_reply_tool,
                 has_structured_fallback=has_structured_fallback,
+                reply_tool_call_count=reply_tool_call_count,
+                no_reply_tool_call_count=no_reply_tool_call_count,
+                structured_fallback_count=structured_fallback_count,
+                total_final_action_count=total_final_action_count,
                 result=result,
             )
         except Exception as e:

@@ -15,6 +15,9 @@ export function AgentRunDetailPage() {
   }, [runId])
   if (!detail || !detail.run) return <Card className="p-12 text-center text-slate-500"><Spinner /></Card>
   const r = detail.run
+  const replyLogs = detail.reply_contract_check_logs || []
+  const prompt_miss_count = replyLogs.filter(log => Number(log.attempt || 0) === 0 && !log.has_reply_tool && !log.has_no_reply_tool && !log.has_structured_fallback).length
+  const total_final_action_count = replyLogs.reduce((sum, log) => sum + Number(log.total_final_action_count || 0), 0)
   return (
     <div>
       <NavLink to="/agent-runs" className="text-xs text-slate-500 hover:text-slate-300 mb-4 inline-block">← 运行追踪</NavLink>
@@ -109,6 +112,12 @@ export function AgentRunDetailPage() {
       {detail.reply_contract_check_logs?.length > 0 && (
         <>
           <h2 className="text-sm font-medium text-slate-300 mt-6 mb-3">Reply 调用检查</h2>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+            <MiniStat label="首轮失败" value={prompt_miss_count} tone={prompt_miss_count ? 'red' : 'emerald'} />
+            <MiniStat label="最终动作总数" value={total_final_action_count} tone={total_final_action_count === 1 ? 'emerald' : 'amber'} />
+            <MiniStat label="reply 次数" value={replyLogs.reduce((sum, log) => sum + Number(log.reply_tool_call_count || 0), 0)} />
+            <MiniStat label="no_reply 次数" value={replyLogs.reduce((sum, log) => sum + Number(log.no_reply_tool_call_count || 0), 0)} />
+          </div>
           <Card>
             <div className="divide-y divide-slate-800">
               {detail.reply_contract_check_logs.map(log => (
@@ -118,6 +127,7 @@ export function AgentRunDetailPage() {
                     <span className="text-slate-200 w-32">{log.result || '-'}</span>
                     <span className="text-slate-500 w-20">reply:{log.has_reply_tool || 0}</span>
                     <span className="text-slate-500 w-24">no_reply:{log.has_no_reply_tool || 0}</span>
+                    <span className="text-slate-500 w-24">count:{log.total_final_action_count || 0}</span>
                     <span className="text-slate-500 flex-1 truncate">{log.created_at || '-'}</span>
                   </summary>
                   <pre className="text-xs whitespace-pre-wrap break-all bg-slate-950 p-3 m-2 rounded text-slate-300 max-h-72 overflow-auto">{log.raw_output_preview || ''}</pre>

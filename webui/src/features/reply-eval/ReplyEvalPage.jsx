@@ -73,6 +73,8 @@ function ReplyAttemptCard({ title, attempt }) {
         <Badge tone={attempt.called_reply ? 'emerald' : 'slate'}>reply {attempt.called_reply ? 'yes' : 'no'}</Badge>
         <Badge tone={attempt.called_no_reply ? 'emerald' : 'slate'}>no_reply {attempt.called_no_reply ? 'yes' : 'no'}</Badge>
         <Badge tone={attempt.structured_fallback ? 'blue' : 'slate'}>fallback {attempt.structured_fallback ? 'yes' : 'no'}</Badge>
+        <Badge tone={Number(attempt.total_final_action_count || 0) === 1 ? 'emerald' : 'amber'}>total_final_action_count {attempt.total_final_action_count || 0}</Badge>
+        <Badge>reply_tool_call_count {attempt.reply_tool_call_count || 0}</Badge>
       </div>
       <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-all rounded bg-slate-900 p-2 text-[11px] text-slate-400">{attempt.raw_output || '-'}</pre>
     </div>

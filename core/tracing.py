@@ -440,6 +440,10 @@ class ReplyContractTracer:
         has_reply_tool: bool = False,
         has_no_reply_tool: bool = False,
         has_structured_fallback: bool = False,
+        reply_tool_call_count: int | None = None,
+        no_reply_tool_call_count: int | None = None,
+        structured_fallback_count: int | None = None,
+        total_final_action_count: int | None = None,
         result: str = "",
     ) -> None:
         try:
@@ -448,6 +452,15 @@ class ReplyContractTracer:
 
             db = _session()
             try:
+                reply_count = int(reply_tool_call_count if reply_tool_call_count is not None else (1 if has_reply_tool else 0))
+                no_reply_count = int(no_reply_tool_call_count if no_reply_tool_call_count is not None else (1 if has_no_reply_tool else 0))
+                fallback_count = int(structured_fallback_count if structured_fallback_count is not None else (1 if has_structured_fallback else 0))
+                total_count = int(
+                    total_final_action_count
+                    if total_final_action_count is not None
+                    else reply_count + no_reply_count + fallback_count
+                )
+
                 def operation() -> None:
                     db.add(ReplyContractCheckLog(
                         trace_id=str(trace_id or "")[:64],
@@ -458,6 +471,10 @@ class ReplyContractTracer:
                         has_reply_tool=1 if has_reply_tool else 0,
                         has_no_reply_tool=1 if has_no_reply_tool else 0,
                         has_structured_fallback=1 if has_structured_fallback else 0,
+                        reply_tool_call_count=reply_count,
+                        no_reply_tool_call_count=no_reply_count,
+                        structured_fallback_count=fallback_count,
+                        total_final_action_count=total_count,
                         result=str(result or "")[:64],
                         created_at=datetime.now(),
                     ))

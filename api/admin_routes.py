@@ -4021,9 +4021,46 @@ def _is_allowed_log_name(name: str) -> bool:
     return n == "nanobot.log" or n.startswith("nanobot.log.") or n.endswith(".log") or ".log." in n
 
 
+_LOG_START_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}\s+\[(?P<level>[A-Z]+)\]")
+
+
+def _log_level_of(line: str) -> str:
+    match = _LOG_START_RE.match(line or "")
+    return match.group("level") if match else ""
+
+
+def _group_log_level_events(lines: list[str], *, level: str, before: int, after: int) -> list[dict[str, Any]]:
+    target = str(level or "").upper()
+    events: list[dict[str, Any]] = []
+    idx = 0
+    while idx < len(lines):
+        line_level = _log_level_of(lines[idx])
+        if line_level != target:
+            idx += 1
+            continue
+        start = idx
+        end = idx + 1
+        while end < len(lines) and not _log_level_of(lines[end]):
+            end += 1
+        before_start = max(0, start - max(0, before))
+        after_end = min(len(lines), end + max(0, after))
+        events.append({
+            "level": target,
+            "line_start": start + 1,
+            "line_end": end,
+            "before_lines": [line.rstrip("\n") for line in lines[before_start:start]],
+            "event_lines": [line.rstrip("\n") for line in lines[start:end]],
+            "after_lines": [line.rstrip("\n") for line in lines[end:after_end]],
+        })
+        idx = end
+    return events
+
+
 @router.get("/logs/{name}")
-def read_log(name: str, lines: int = 200, level: str = "", q: str = "",
-             since_bytes: int = 0, _auth=Depends(verify_admin)):
+def read_log(name: str, lines: str = "200", level: str = "", q: str = "",
+             since_bytes: int = 0, group_errors: bool = False,
+             context_before: int = 5, context_after: int = 8,
+             _auth=Depends(verify_admin)):
     from collections import deque
 
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -4057,9 +4094,36 @@ def read_log(name: str, lines: int = 200, level: str = "", q: str = "",
         return {"name": fname, "content": content, "lines": content.count("\n"),
                 "raw_lines": len(content.splitlines()), "file_size": file_size, "tail": True}
 
-    max_lines = max(1, min(int(lines), 5000))
+    lines_text = str(lines or "200").strip().lower()
     with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
-        tail = deque(fh, maxlen=max_lines)
+        if lines_text == "all":
+            tail = list(fh)
+        else:
+            try:
+                requested_lines = int(lines_text)
+            except ValueError:
+                raise HTTPException(400, "lines must be an integer or all")
+            max_lines = max(1, min(requested_lines, 5000))
+            tail = list(deque(fh, maxlen=max_lines))
+    if group_errors and str(level or "").upper() == "ERROR":
+        events = _group_log_level_events(
+            tail,
+            level="ERROR",
+            before=max(0, min(int(context_before or 0), 50)),
+            after=max(0, min(int(context_after or 0), 50)),
+        )
+        content = "\n\n".join(
+            "\n".join(event["before_lines"] + event["event_lines"] + event["after_lines"])
+            for event in events
+        )
+        return {
+            "name": fname,
+            "lines": content.count("\n"),
+            "content": content,
+            "raw_lines": len(tail),
+            "file_size": file_size,
+            "events": events,
+        }
     content = "".join(tail)
     if level or q:
         filtered = []
@@ -4799,6 +4863,10 @@ def _reply_log_attempt(log) -> dict:
             "called_reply": False,
             "called_no_reply": False,
             "structured_fallback": False,
+            "reply_tool_call_count": 0,
+            "no_reply_tool_call_count": 0,
+            "structured_fallback_count": 0,
+            "total_final_action_count": 0,
             "result": "",
         }
     return {
@@ -4806,6 +4874,10 @@ def _reply_log_attempt(log) -> dict:
         "called_reply": bool(log.has_reply_tool),
         "called_no_reply": bool(log.has_no_reply_tool),
         "structured_fallback": bool(log.has_structured_fallback),
+        "reply_tool_call_count": int(getattr(log, "reply_tool_call_count", 0) or 0),
+        "no_reply_tool_call_count": int(getattr(log, "no_reply_tool_call_count", 0) or 0),
+        "structured_fallback_count": int(getattr(log, "structured_fallback_count", 0) or 0),
+        "total_final_action_count": int(getattr(log, "total_final_action_count", 0) or 0),
         "result": log.result or "",
     }
 
@@ -4909,6 +4981,12 @@ async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
         bool(log.has_reply_tool) or bool(log.has_no_reply_tool) or bool(log.has_structured_fallback)
         for log in reply_logs
     )
+    prompt_miss_count = sum(
+        1 for log in reply_logs
+        if int(log.attempt or 0) == 0
+        and not (bool(log.has_reply_tool) or bool(log.has_no_reply_tool) or bool(log.has_structured_fallback))
+    )
+    total_final_action_count = sum(int(getattr(log, "total_final_action_count", 0) or 0) for log in reply_logs)
     retry_used = retry_log is not None
     return {
         "ok": True,
@@ -4928,6 +5006,8 @@ async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
             "reply_contract_ok": bool(called_reply_or_no_reply),
             "retry_used": bool(retry_used),
             "retry_success": bool(retry_log and retry_log.result == "retry_success"),
+            "prompt_miss_count": int(prompt_miss_count),
+            "total_final_action_count": int(total_final_action_count),
         },
         "llm_api_request_logs": [row_to_dict(row) for row in llm_logs],
         "reply_contract_check_logs": [row_to_dict(row) for row in reply_logs],

@@ -1730,6 +1730,8 @@ function LogsPage() {
   const [lines, setLines] = useState(500)
   const [logLevel, setLogLevel] = useState('')
   const [searchQ, setSearchQ] = useState('')
+  const [errorContext, setErrorContext] = useState(false)
+  const [logEvents, setLogEvents] = useState([])
   const [follow, setFollow] = useState(false)
   const [fileSize, setFileSize] = useState(0)
   const preRef = useRef(null)
@@ -1737,15 +1739,21 @@ function LogsPage() {
   const refreshFiles = () => api.get('/logs').then(r => setFiles(r.data.files))
   useEffect(() => { refreshFiles() }, [])
 
-  const loadLog = (name, n = lines, lv = logLevel, q = searchQ) => {
+  const loadLog = (name, n = lines, lv = logLevel, q = searchQ, grouped = errorContext) => {
     setSel(name)
     setFollow(false)
     setFileSize(0)
     const params = { lines: n }
-    if (lv) params.level = lv
+    if (grouped) {
+      params.level = 'ERROR'
+      params.group_errors = true
+      params.context_before = 5
+      params.context_after = 8
+    } else if (lv) params.level = lv
     if (q) params.q = q
     api.get(`/logs/${encodeURIComponent(name)}`, { params }).then(r => {
       setContent(r.data.content)
+      setLogEvents(r.data.events || [])
       if (r.data.file_size) setFileSize(r.data.file_size)
     })
   }
@@ -1815,9 +1823,9 @@ function LogsPage() {
           <div className="flex-1 flex flex-col min-w-0">
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className="text-sm text-slate-400">行数:</span>
-              <select value={lines} onChange={e => { const n = Number(e.target.value); setLines(n); if (sel) loadLog(sel, n) }}
+              <select value={lines} onChange={e => { const n = e.target.value === 'all' ? 'all' : Number(e.target.value); setLines(n); if (sel) loadLog(sel, n) }}
                 className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
-                <option value="100">100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option>
+                <option value="100">100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option><option value="all">所有</option>
               </select>
               <select value={logLevel} onChange={e => { setLogLevel(e.target.value); if (sel) loadLog(sel, lines, e.target.value, searchQ) }}
                 className="p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs">
@@ -1827,6 +1835,8 @@ function LogsPage() {
               <input value={searchQ} onChange={e => setSearchQ(e.target.value)} onKeyDown={e => e.key === 'Enter' && sel && loadLog(sel, lines, logLevel, searchQ)}
                 placeholder="搜索..." className="w-40 p-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs" />
               {sel && <button onClick={() => loadLog(sel)} className="px-3 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>}
+              {sel && <button onClick={() => { const next = !errorContext; setErrorContext(next); loadLog(sel, lines, logLevel, searchQ, next) }}
+                className={`px-3 py-1 rounded-lg text-xs ${errorContext ? 'bg-red-600 text-white hover:bg-red-500' : 'bg-slate-700 hover:bg-slate-600'}`}>ERROR 上下文</button>}
               {sel && (
                 <button
                   onClick={() => follow ? setFollow(false) : startFollow(sel)}
@@ -1836,7 +1846,18 @@ function LogsPage() {
               )}
               {follow && <span className="text-xs text-emerald-400">实时 {formatSize(fileSize)}</span>}
             </div>
-            <pre ref={preRef} className="flex-1 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs leading-relaxed overflow-auto text-slate-300 font-mono whitespace-pre-wrap">{content || '点击左侧文件查看'}</pre>
+            {logEvents.length > 0 ? (
+              <div ref={preRef} className="flex-1 space-y-3 overflow-auto rounded-xl border border-slate-800 bg-slate-950 p-3">
+                {logEvents.map((event, idx) => (
+                  <details key={`${event.line_start}-${idx}`} open className="rounded-lg border border-red-500/20 bg-red-500/5">
+                    <summary className="cursor-pointer px-3 py-2 text-xs text-red-300">ERROR #{idx + 1} · lines {event.line_start}-{event.line_end}</summary>
+                    <pre className="whitespace-pre-wrap border-t border-red-500/10 p-3 text-xs leading-relaxed text-slate-300">{[...(event.before_lines || []), ...(event.event_lines || []), ...(event.after_lines || [])].join('\n')}</pre>
+                  </details>
+                ))}
+              </div>
+            ) : (
+              <pre ref={preRef} className="flex-1 p-4 rounded-xl bg-slate-950 border border-slate-800 text-xs leading-relaxed overflow-auto text-slate-300 font-mono whitespace-pre-wrap">{content || '点击左侧文件查看'}</pre>
+            )}
           </div>
         </div>
       ) : (
@@ -1847,8 +1868,140 @@ function LogsPage() {
 }
 
 
+function SessionSummaryBrowser({ mode }) {
+  const [sessions, setSessions] = useState([])
+  const [selectedSession, setSelectedSession] = useState('')
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [includeContent, setIncludeContent] = useState(false)
+  const [query, setQuery] = useState('')
+  const isRecent = mode === 'recent'
+
+  const loadSessions = useCallback(() => {
+    return api.get('/session-memory/sessions', { params: { session_limit: 100 } })
+      .then(r => {
+        const next = r.data.items || []
+        setSessions(next)
+        if (!selectedSession && next.length) setSelectedSession(next[0].session_id)
+      })
+      .catch(() => setSessions([]))
+  }, [selectedSession])
+
+  const loadDetail = useCallback((sessionId = selectedSession, full = includeContent) => {
+    if (!sessionId) return
+    setLoading(true)
+    const endpoint = isRecent
+      ? `/session-memory/sessions/${encodeURIComponent(sessionId)}/summaries`
+      : `/session-memory/sessions/${encodeURIComponent(sessionId)}/digests`
+    const params = isRecent
+      ? { summary_limit_per_session: 50, include_content: full }
+      : { digest_limit_per_session: 80, include_content: full }
+    api.get(endpoint, { params })
+      .then(r => setItems(r.data.items || []))
+      .catch(() => setItems([]))
+      .finally(() => setLoading(false))
+  }, [includeContent, isRecent, selectedSession])
+
+  useEffect(() => { loadSessions() }, [loadSessions])
+  useEffect(() => { loadDetail() }, [loadDetail])
+
+  const filtered = sessions.filter(s => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return true
+    return String(s.session_id || '').toLowerCase().includes(needle) ||
+      String(s.user_id || '').toLowerCase().includes(needle)
+  })
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
+      <Card className="min-h-[560px] overflow-hidden">
+        <div className="border-b border-slate-800 p-3">
+          <label className="block text-[11px] font-medium text-slate-400">
+            session_id
+            <input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索 session_id / user_id"
+              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 outline-none focus:border-emerald-500" />
+          </label>
+        </div>
+        <div className="max-h-[620px] overflow-y-auto">
+          {filtered.map(s => (
+            <button key={s.session_id} onClick={() => { setSelectedSession(s.session_id); loadDetail(s.session_id) }}
+              className={`w-full border-b border-slate-800/70 px-3 py-3 text-left transition-colors ${selectedSession === s.session_id ? 'bg-emerald-500/10' : 'hover:bg-slate-800/50'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-sm text-slate-100">{s.session_id}</div>
+                  <div className="mt-0.5 text-[11px] text-slate-500">{s.chat_type || '-'} · {s.user_id || '-'}</div>
+                </div>
+                <Badge tone={isRecent ? 'blue' : 'emerald'}>{isRecent ? s.summary_count : s.digest_count}</Badge>
+              </div>
+              <div className="mt-2 text-[11px] text-slate-500">
+                turn_start {s.oldest_turn_index || 0} · turn_end {s.latest_turn_index || 0}
+              </div>
+              <div className="mt-1 truncate text-[11px] text-slate-500">{s.active_summary_preview || '无 active summary'}</div>
+            </button>
+          ))}
+          {filtered.length === 0 && <div className="px-4 py-10 text-center text-xs text-slate-600">没有摘要 session</div>}
+        </div>
+      </Card>
+
+      <div className="min-w-0 space-y-3">
+        <Card className="p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="font-mono text-sm text-slate-200">{selectedSession || '未选择 session'}</div>
+              <div className="mt-1 text-xs text-slate-500">{isRecent ? '近期摘要 rolling_session_summaries' : '长期摘要 memory_digests'}</div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => { const next = !includeContent; setIncludeContent(next); loadDetail(selectedSession, next) }}
+                className={`rounded-lg px-3 py-2 text-xs ${includeContent ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'}`}>
+                {includeContent ? '隐藏全文' : '展开全文'}
+              </button>
+              <button onClick={() => loadDetail()} className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">刷新</button>
+            </div>
+          </div>
+        </Card>
+        {loading ? <Spinner /> : items.length === 0 ? (
+          <div className="rounded-lg border border-slate-800 py-16 text-center text-sm text-slate-600">当前 session 没有摘要</div>
+        ) : items.map(item => (
+          <Card key={isRecent ? item.summary_id : item.digest_id} className="p-4">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-2">
+                <Badge tone={isRecent ? 'blue' : 'emerald'}>{isRecent ? `summary ${item.summary_id}` : `digest ${item.digest_id}`}</Badge>
+                {isRecent ? <Badge>{item.summary_kind}</Badge> : <Badge>level {item.level}</Badge>}
+                {isRecent && <Badge tone={item.is_active ? 'emerald' : item.is_archived ? 'slate' : 'amber'}>{item.is_active ? 'active' : item.is_archived ? 'archived' : 'inactive'}</Badge>}
+                {!isRecent && <Badge>{item.status}</Badge>}
+              </div>
+              <div className="text-[11px] text-slate-500">{item.updated_at || item.created_at || '-'}</div>
+            </div>
+            {isRecent ? (
+              <div className="mb-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">turn_start {item.turn_start}</div>
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">turn_end {item.turn_end}</div>
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">quality {Number(item.quality_score || 0).toFixed(2)}</div>
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">llm {item.llm_status || '-'}</div>
+              </div>
+            ) : (
+              <div className="mb-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">digest_date {item.digest_date || '-'}</div>
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">source_start_log_id {item.source_start_log_id || '-'}</div>
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">source_end_log_id {item.source_end_log_id || '-'}</div>
+                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">parent {item.parent_id || '-'}</div>
+              </div>
+            )}
+            <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-300">{item.content || item.preview || '-'}</pre>
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">raw_json</summary>
+              <JsonBlock value={item.raw_json} className="mt-2 max-h-64" />
+            </details>
+          </Card>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ── Memory ──
 function MemoryPage() {
+  const [memoryTab, setMemoryTab] = useState('group')
   const [groupId, setGroupId] = useState('')
   const [memType, setMemType] = useState('')
   const [overview, setOverview] = useState([])
@@ -2016,7 +2169,7 @@ function MemoryPage() {
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
           <h1 className="text-xl font-semibold text-white">群体记忆</h1>
-          <p className="mt-1 text-xs text-slate-500">查看群聊记忆覆盖，手动触发稳定事实提取。</p>
+          <p className="mt-1 text-xs text-slate-500">查看群聊记忆覆盖，并按 session_id 浏览近期摘要与长期摘要。</p>
         </div>
         <button onClick={loadOverview}
           className="inline-flex items-center gap-2 rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700 disabled:opacity-50"
@@ -2026,6 +2179,21 @@ function MemoryPage() {
         </button>
       </div>
 
+      <div className="flex rounded-lg border border-slate-800 bg-slate-950 p-1">
+        {[
+          ['group', '群体记忆'],
+          ['recent', '近期摘要'],
+          ['long', '长期摘要'],
+        ].map(([key, label]) => (
+          <button key={key} onClick={() => setMemoryTab(key)}
+            className={`rounded-md px-3 py-1.5 text-xs transition-colors ${memoryTab === key ? 'bg-emerald-500/15 text-emerald-300' : 'text-slate-400 hover:bg-slate-800 hover:text-slate-100'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {memoryTab === 'group' ? (
+        <>
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         <MiniStat label="已发现群" value={stats.groups} />
         <MiniStat label="已有记忆" value={stats.withMemory} tone="blue" />
@@ -2211,6 +2379,10 @@ function MemoryPage() {
           })()}
         </div>
       </div>
+        </>
+      ) : (
+        <SessionSummaryBrowser mode={memoryTab} />
+      )}
     </div>
   )
 }

@@ -106,6 +106,39 @@ def extract_reply_tool_output(messages: list[Any]) -> ReplyToolExtraction:
     return ReplyToolExtraction()
 
 
+def count_final_action_tool_calls(messages: list[Any]) -> dict[str, int]:
+    """统计真实 final action marker；不统计普通文本里提到的 reply 字样。"""
+    marker = _reply_marker()
+    reply_count = 0
+    no_reply_count = 0
+    fallback_count = 0
+    for msg in messages or []:
+        if _message_role(msg) != "tool":
+            continue
+        try:
+            data = json.loads(_message_content(msg))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        payload = data.get(marker)
+        if isinstance(payload, dict):
+            if payload.get("no_reply"):
+                no_reply_count += 1
+            elif str(payload.get("content") or "").strip():
+                reply_count += 1
+            continue
+        action = str(data.get("action") or "").strip().lower()
+        if action in {"reply", "no_reply"}:
+            fallback_count += 1
+    return {
+        "reply_tool_call_count": reply_count,
+        "no_reply_tool_call_count": no_reply_count,
+        "structured_fallback_count": fallback_count,
+        "total_final_action_count": reply_count + no_reply_count + fallback_count,
+    }
+
+
 def parse_structured_final_action(buffer_text: str) -> dict[str, Any] | None:
     """解析严格 JSON reply/no_reply fallback。"""
     text = (buffer_text or "").strip()

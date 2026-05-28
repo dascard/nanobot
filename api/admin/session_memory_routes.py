@@ -21,6 +21,7 @@ from app.session_memory.windowing import (
     raw_window_limits,
 )
 from app.session_memory.jobs import enqueue_session_summary_job, retry_session_summary_job
+from app.session_memory.admin_browser import AdminSessionMemoryBrowser
 from core.database import ConversationTurn, RollingSessionSummary, SessionSummaryJob, User, get_db
 
 router = APIRouter()
@@ -165,6 +166,59 @@ def _build_rollup_inputs(
         "pending": pending_debug,
     }
     return active_summary, pending, raw_window, raw_debug, eligible_debug
+
+
+@router.get("/session-memory/sessions")
+def list_session_memory_sessions(
+    session_limit: int = 50,
+    cursor: str = "",
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    return AdminSessionMemoryBrowser(db).list_sessions(
+        session_limit=session_limit,
+        cursor=cursor,
+    )
+
+
+@router.get("/session-memory/sessions/{session_id}/summaries")
+def list_session_memory_summaries(
+    session_id: str,
+    summary_limit_per_session: int = 20,
+    include_content: bool = False,
+    include_archived: bool = True,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    return AdminSessionMemoryBrowser(db).list_summaries(
+        session_id,
+        summary_limit_per_session=summary_limit_per_session,
+        include_content=include_content,
+        include_archived=include_archived,
+    )
+
+
+@router.get("/session-memory/sessions/{session_id}/digests")
+def list_session_memory_digests(
+    session_id: str,
+    digest_limit_per_session: int = 50,
+    include_content: bool = False,
+    date_start: str = "",
+    date_end: str = "",
+    level: int = -1,
+    parent_id: int | None = None,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    return AdminSessionMemoryBrowser(db).list_digests(
+        session_id,
+        digest_limit_per_session=digest_limit_per_session,
+        include_content=include_content,
+        date_start=date_start,
+        date_end=date_end,
+        level=level,
+        parent_id=parent_id,
+    )
 
 
 @router.get("/session-memory/{session_id}/rolling-summary")
