@@ -49,6 +49,7 @@ import { ReplyEvalPage } from './features/reply-eval/ReplyEvalPage'
 import { ToolsPage } from './features/tools/ToolsPage'
 import { EvalsPage } from './features/evals/EvalsPage'
 import { RagDebugPage } from './features/rag/RagDebugPage'
+import { RagBenchmarkPage } from './features/rag/RagBenchmarkPage'
 
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null }; }
@@ -148,6 +149,7 @@ const NAV_SECTIONS = [
       { to: '/agent-runs', label: '运行追踪', icon: Activity },
       { to: '/llm-api-logs', label: 'LLM API 日志', icon: Network },
       { to: '/rag-debug', label: 'RAG Debug', icon: Search },
+      { to: '/rag-benchmark', label: 'RAG Benchmark', icon: BarChart3 },
       { to: '/reply-eval', label: 'Reply 测试', icon: ListChecks },
       { to: '/timing-gate', label: 'TimingGate', icon: Clock3 },
       { to: '/logs', label: '日志', icon: FileText },
@@ -2535,6 +2537,7 @@ export default function App() {
           <Route path="/persona" element={<PersonaPage />} />
           <Route path="/reply-eval" element={<ReplyEvalPage />} />
           <Route path="/rag-debug" element={<RagDebugPage />} />
+          <Route path="/rag-benchmark" element={<RagBenchmarkPage />} />
           <Route path="/evals" element={<EvalsPage />} />
           <Route path="/db" element={<DbPage />} />
           <Route path="/logs" element={<LogsPage />} />

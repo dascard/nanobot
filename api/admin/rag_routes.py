@@ -13,11 +13,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from api.admin.common import verify_admin
+from api.admin.rag_benchmark_routes import router as rag_benchmark_router
 from core.database import RagDebugRun, get_db
 from core.semantic.schema import ensure_semantic_schema
 
 
 router = APIRouter(prefix="/rag", tags=["admin-rag"])
+router.include_router(rag_benchmark_router)
 
 
 class RagDebugQueryRequest(BaseModel):

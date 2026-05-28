@@ -1,0 +1,21 @@
+{
+  "id": "sticker_manual_generic_constraint_001",
+  "suite": "rag_benchmark",
+  "source_type": "sticker",
+  "case_type": "constraint_only",
+  "query": "表情包",
+  "filters": {
+    "include_global": true
+  },
+  "expected": {
+    "candidate_ids": [],
+    "allow_empty": true,
+    "requires_sendable": true,
+    "max_reranker_candidates": 10
+  },
+  "meta": {
+    "origin": "manual_hard",
+    "sensitivity": "safe",
+    "notes": "泛词查询不应把大量候选送入 reranker。"
+  }
+}

@@ -68,8 +68,10 @@ def load_recall_rows(
     user_id: str = "",
     session_id: str = "",
     limit: int = 200,
+    ensure_schema: bool = True,
 ) -> list[SemanticIndexItem]:
-    ensure_semantic_schema(db.bind)
+    if ensure_schema:
+        ensure_semantic_schema(db.bind)
     query = (
         db.query(SemanticIndexItem)
         .filter(SemanticIndexItem.status == "active")
@@ -83,11 +85,17 @@ def load_recall_rows(
     return query.order_by(SemanticIndexItem.id.desc()).limit(max(1, int(limit))).all()
 
 
-def load_recall_rows_by_ids(db: Session, item_ids: list[int]) -> dict[int, SemanticIndexItem]:
+def load_recall_rows_by_ids(
+    db: Session,
+    item_ids: list[int],
+    *,
+    ensure_schema: bool = True,
+) -> dict[int, SemanticIndexItem]:
     ids = [int(item_id) for item_id in item_ids if int(item_id) > 0]
     if not ids:
         return {}
-    ensure_semantic_schema(db.bind)
+    if ensure_schema:
+        ensure_semantic_schema(db.bind)
     rows = (
         db.query(SemanticIndexItem)
         .filter(SemanticIndexItem.id.in_(ids))
@@ -120,11 +128,13 @@ def fts_recall_hits(
     user_id: str = "",
     session_id: str = "",
     limit: int = 200,
+    ensure_schema: bool = True,
 ) -> list[FtsRecallHit]:
     match_query = build_fts5_match_query(query)
     if not match_query:
         return []
-    ensure_semantic_schema(db.bind)
+    if ensure_schema:
+        ensure_semantic_schema(db.bind)
     params: dict[str, Any] = {
         "match_query": match_query,
         "limit": max(1, int(limit)),

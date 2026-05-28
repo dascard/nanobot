@@ -96,11 +96,13 @@ class KnowledgeRagService:
         embedding_provider: Any = None,
         reranker_provider: Any = None,
         min_reranker: float = 0.45,
+        readonly: bool = False,
     ):
         self.db = db
         self.embedding_provider = embedding_provider
         self.reranker_provider = reranker_provider
         self.min_reranker = float(min_reranker)
+        self.readonly = bool(readonly)
 
     def query(
         self,
@@ -118,13 +120,28 @@ class KnowledgeRagService:
     ) -> dict[str, Any]:
         published_after = str(published_after or date_start or "")
         published_before = str(published_before or date_end or "")
-        fts_hits = fts_recall_hits(self.db, query, source_types={"knowledge"}, limit=300)
+        fts_hits = fts_recall_hits(
+            self.db,
+            query,
+            source_types={"knowledge"},
+            limit=300,
+            ensure_schema=not self.readonly,
+        )
         lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
         bm25_by_id = {hit.item_id: hit.bm25_raw for hit in fts_hits}
-        rows = load_recall_rows(self.db, source_types={"knowledge"}, limit=600)
+        rows = load_recall_rows(
+            self.db,
+            source_types={"knowledge"},
+            limit=600,
+            ensure_schema=not self.readonly,
+        )
         rows_by_id = {int(row.id): row for row in rows}
         missing_fts_ids = [hit.item_id for hit in fts_hits if hit.item_id not in rows_by_id]
-        rows_by_id.update(load_recall_rows_by_ids(self.db, missing_fts_ids))
+        rows_by_id.update(load_recall_rows_by_ids(
+            self.db,
+            missing_fts_ids,
+            ensure_schema=not self.readonly,
+        ))
         fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
         fts_ids = {int(row.id) for row in fts_ordered}
         rows = fts_ordered + [row for row in rows if int(row.id) not in fts_ids]

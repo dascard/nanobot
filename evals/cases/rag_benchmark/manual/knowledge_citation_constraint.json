@@ -1,0 +1,21 @@
+{
+  "id": "knowledge_manual_citation_constraint_001",
+  "suite": "rag_benchmark",
+  "source_type": "knowledge",
+  "case_type": "constraint_only",
+  "query": "AI daily RAG benchmark",
+  "filters": {
+    "min_trust_level": "low"
+  },
+  "expected": {
+    "candidate_ids": [],
+    "allow_empty": true,
+    "requires_citation": true,
+    "expected_source_type": "knowledge"
+  },
+  "meta": {
+    "origin": "manual_hard",
+    "sensitivity": "safe",
+    "notes": "知识库返回项必须携带 citation。"
+  }
+}

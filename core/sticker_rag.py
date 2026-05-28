@@ -105,11 +105,13 @@ class StickerRagService:
         embedding_provider: Any = None,
         reranker_provider: Any = None,
         min_reranker: float = 0.45,
+        readonly: bool = False,
     ):
         self.db = db
         self.embedding_provider = embedding_provider
         self.reranker_provider = reranker_provider
         self.min_reranker = float(min_reranker)
+        self.readonly = bool(readonly)
 
     def has_index(self) -> bool:
         return (
@@ -132,17 +134,28 @@ class StickerRagService:
         include_debug: bool = False,
     ) -> list[dict[str, Any]] | dict[str, Any]:
         recall_query = _normalize_sticker_query(query)
-        fts_hits = fts_recall_hits(self.db, recall_query, source_types={"sticker"}, limit=200)
+        fts_hits = fts_recall_hits(
+            self.db,
+            recall_query,
+            source_types={"sticker"},
+            limit=200,
+            ensure_schema=not self.readonly,
+        )
         lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
         bm25_by_id = {hit.item_id: hit.bm25_raw for hit in fts_hits}
         index_rows = load_recall_rows(
             self.db,
             source_types={"sticker"},
             limit=400,
+            ensure_schema=not self.readonly,
         )
         rows_by_id = {int(row.id): row for row in index_rows}
         missing_fts_ids = [hit.item_id for hit in fts_hits if hit.item_id not in rows_by_id]
-        rows_by_id.update(load_recall_rows_by_ids(self.db, missing_fts_ids))
+        rows_by_id.update(load_recall_rows_by_ids(
+            self.db,
+            missing_fts_ids,
+            ensure_schema=not self.readonly,
+        ))
         fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
         fts_ids = {int(row.id) for row in fts_ordered}
         index_rows = fts_ordered + [row for row in index_rows if int(row.id) not in fts_ids]

@@ -25,3 +25,4 @@ cc2codex/
 creatures/nanobot/prompt_private.md
 evals/reports/*.json
 evals/cases/candidates/**/*.json
+tmp/rag_benchmark/

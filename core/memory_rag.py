@@ -87,11 +87,13 @@ class MemoryRagService:
         embedding_provider: Any = None,
         reranker_provider: Any = None,
         allow_degraded: bool = True,
+        readonly: bool = False,
     ):
         self.db = db
         self.embedding_provider = embedding_provider
         self.reranker_provider = reranker_provider
         self.allow_degraded = allow_degraded
+        self.readonly = bool(readonly)
 
     def query(
         self,
@@ -111,6 +113,7 @@ class MemoryRagService:
             user_id=user_id,
             session_id=session_id,
             limit=200,
+            ensure_schema=not self.readonly,
         )
         lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
         bm25_by_id = {hit.item_id: hit.bm25_raw for hit in fts_hits}
@@ -120,10 +123,15 @@ class MemoryRagService:
             user_id=user_id,
             session_id=session_id,
             limit=400,
+            ensure_schema=not self.readonly,
         )
         rows_by_id = {int(row.id): row for row in rows}
         missing_fts_ids = [hit.item_id for hit in fts_hits if hit.item_id not in rows_by_id]
-        rows_by_id.update(load_recall_rows_by_ids(self.db, missing_fts_ids))
+        rows_by_id.update(load_recall_rows_by_ids(
+            self.db,
+            missing_fts_ids,
+            ensure_schema=not self.readonly,
+        ))
         fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
         recent_rows = [row for row in rows if int(row.id) not in {int(item.id) for item in fts_ordered}]
         rows = fts_ordered + recent_rows

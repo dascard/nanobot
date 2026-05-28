@@ -1,0 +1,21 @@
+{
+  "id": "group_memory_manual_filter_constraint_001",
+  "suite": "rag_benchmark",
+  "source_type": "group_memory",
+  "case_type": "constraint_only",
+  "query": "RAG benchmark",
+  "filters": {
+    "group_id": "group_memory_test"
+  },
+  "expected": {
+    "candidate_ids": [],
+    "allow_empty": true,
+    "requires_group_id": true,
+    "expected_source_type": "group_memory"
+  },
+  "meta": {
+    "origin": "manual_hard",
+    "sensitivity": "safe",
+    "notes": "群体记忆结果必须遵守 group_id 过滤。"
+  }
+}
