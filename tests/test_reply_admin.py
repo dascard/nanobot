@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -291,3 +292,113 @@ def test_reply_eval_supports_v2_named_variants(client, auth_header, monkeypatch)
     assert data["metrics"]["fake_tool_claim_rate"] == 0.0
     assert captured[-1]["prompt_runtime_engine_override"] == "v2"
     assert captured[-1]["enable_reply_contract_retry"] is True
+
+
+def test_reply_eval_traffic_stats_aggregate_real_reply_contract_logs(client, auth_header, db_session):
+    from core.database import ReplyContractCheckLog
+
+    now = datetime.now()
+    db_session.add_all([
+        ReplyContractCheckLog(
+            trace_id="t1",
+            run_id="run-ok",
+            session_id="group_1",
+            attempt=0,
+            has_reply_tool=1,
+            reply_tool_call_count=1,
+            total_final_action_count=1,
+            result="reply",
+            created_at=now - timedelta(minutes=10),
+        ),
+        ReplyContractCheckLog(
+            trace_id="t2",
+            run_id="run-retry-ok",
+            session_id="group_2",
+            attempt=0,
+            raw_output_preview="首轮没有工具调用",
+            result="no_tool_call",
+            created_at=now - timedelta(minutes=9),
+        ),
+        ReplyContractCheckLog(
+            trace_id="t2",
+            run_id="run-retry-ok",
+            session_id="group_2",
+            attempt=1,
+            has_reply_tool=1,
+            reply_tool_call_count=1,
+            total_final_action_count=1,
+            result="retry_success",
+            created_at=now - timedelta(minutes=8),
+        ),
+        ReplyContractCheckLog(
+            trace_id="t3",
+            run_id="run-retry-fail",
+            session_id="private_1",
+            attempt=0,
+            raw_output_preview="首轮仍然是普通文本",
+            result="no_tool_call",
+            created_at=now - timedelta(minutes=7),
+        ),
+        ReplyContractCheckLog(
+            trace_id="t3",
+            run_id="run-retry-fail",
+            session_id="private_1",
+            attempt=1,
+            raw_output_preview="追加提示后仍没有工具",
+            result="no_tool_call",
+            created_at=now - timedelta(minutes=6),
+        ),
+        ReplyContractCheckLog(
+            trace_id="t4",
+            run_id="run-eval",
+            session_id="reply-eval-case",
+            attempt=0,
+            has_reply_tool=1,
+            reply_tool_call_count=1,
+            total_final_action_count=1,
+            result="reply",
+            created_at=now - timedelta(minutes=5),
+        ),
+        ReplyContractCheckLog(
+            trace_id="old",
+            run_id="run-old",
+            session_id="group_old",
+            attempt=0,
+            has_reply_tool=1,
+            reply_tool_call_count=1,
+            total_final_action_count=1,
+            result="reply",
+            created_at=now - timedelta(days=3),
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/admin/reply-eval/traffic",
+        headers=auth_header,
+        params={"hours": 24, "limit": 10},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["window_hours"] == 24
+    assert data["total_runs"] == 3
+    assert data["contract_ok_runs"] == 2
+    assert data["contract_ok_rate"] == 0.6667
+    assert data["first_attempt_ok_runs"] == 1
+    assert data["prompt_miss_count"] == 2
+    assert data["retry_used_runs"] == 2
+    assert data["retry_success_runs"] == 1
+    assert data["retry_failed_after_prompt_count"] == 1
+    assert data["total_final_action_count"] == 2
+    assert data["reply_tool_call_count"] == 2
+    breakdown = {item["session_id"]: item for item in data["session_breakdown"]}
+    assert breakdown["group_2"]["retry_success_runs"] == 1
+    assert any(item["run_id"] == "run-retry-fail" and item["attempt"] == 1 for item in data["recent_failures"])
+
+    include_test = client.get(
+        "/api/v1/admin/reply-eval/traffic",
+        headers=auth_header,
+        params={"hours": 24, "include_test_sessions": "true"},
+    )
+    assert include_test.json()["total_runs"] == 4

@@ -11,6 +11,12 @@ function formatRate(value) {
   return `${(n * 100).toFixed(1)}%`
 }
 
+function formatCount(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return String(n)
+}
+
 // ── Reply Test / Eval ──
 function replyEvalTone(value) {
   if (value === true || value === 1 || value === 'reply' || value === 'ok' || value === 'retry_success') return 'emerald'
@@ -143,6 +149,125 @@ function ReplyEvalResultsTable({ results = [] }) {
   )
 }
 
+function ReplyTrafficPanel({ traffic, hours, includeTest, loading, onHoursChange, onIncludeTestChange, onRefresh }) {
+  const sessionRows = traffic?.session_breakdown || []
+  const failures = traffic?.recent_failures || []
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+        <div>
+          <h2 className="text-sm font-medium text-slate-300">真实流量</h2>
+          <p className="text-[11px] text-slate-600">来自 /reply-eval/traffic 的 reply 合约日志；默认排除 reply-eval / smoke 测试 session</p>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="text-[11px] text-slate-500">窗口
+            <select value={hours} onChange={e => onHoursChange(Number(e.target.value))} className="ml-2 rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 text-xs text-slate-200">
+              <option value={1}>1h</option>
+              <option value={6}>6h</option>
+              <option value={24}>24h</option>
+              <option value={72}>72h</option>
+              <option value={168}>7d</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2 pb-1 text-xs text-slate-400">
+            <input type="checkbox" checked={includeTest} onChange={e => onIncludeTestChange(e.target.checked)} className="accent-emerald-500" />
+            包含测试 session
+          </label>
+          <ActionButton onClick={onRefresh} disabled={loading}>{loading ? '加载中' : '刷新真实流量'}</ActionButton>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
+        <MiniStat label="总运行数" value={formatCount(traffic?.total_runs)} tone="blue" />
+        <MiniStat label="合约成功率" value={formatRate(traffic?.contract_ok_rate)} tone={Number(traffic?.contract_ok_rate || 0) >= 0.9 ? 'emerald' : 'amber'} />
+        <MiniStat label="首次成功率" value={formatRate(traffic?.first_attempt_ok_rate)} tone="emerald" />
+        <MiniStat label="提示词补救次数" value={formatCount(traffic?.prompt_miss_count)} tone={Number(traffic?.prompt_miss_count || 0) ? 'amber' : 'slate'} />
+        <MiniStat label="补救成功率" value={formatRate(traffic?.retry_success_rate)} tone="blue" />
+        <MiniStat label="retry_failed_after_prompt_count" value={formatCount(traffic?.retry_failed_after_prompt_count)} tone={Number(traffic?.retry_failed_after_prompt_count || 0) ? 'red' : 'slate'} />
+        <MiniStat label="总工具调用" value={formatCount(traffic?.total_final_action_count)} />
+        <MiniStat label="reply 调用" value={formatCount(traffic?.reply_tool_call_count)} />
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div className="rounded-lg border border-slate-800 bg-slate-950/40">
+          <div className="border-b border-slate-800 px-3 py-2 text-xs text-slate-500">按 session 分布</div>
+          <div className="max-h-64 overflow-auto">
+            {sessionRows.length ? (
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-slate-950 text-slate-500">
+                  <tr className="border-b border-slate-800">
+                    <th className="px-3 py-2 text-left">session</th>
+                    <th className="px-2 py-2 text-right">runs</th>
+                    <th className="px-2 py-2 text-right">ok</th>
+                    <th className="px-2 py-2 text-right">miss</th>
+                    <th className="px-2 py-2 text-right">retry ok</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sessionRows.map(row => (
+                    <tr key={row.session_id} className="border-b border-slate-800/50 last:border-0">
+                      <td className="max-w-56 truncate px-3 py-2 font-mono text-slate-300" title={row.session_id}>{row.session_id || '-'}</td>
+                      <td className="px-2 py-2 text-right text-slate-400">{row.total_runs}</td>
+                      <td className="px-2 py-2 text-right text-emerald-300">{formatRate(row.contract_ok_rate)}</td>
+                      <td className="px-2 py-2 text-right text-amber-300">{row.prompt_miss_count}</td>
+                      <td className="px-2 py-2 text-right text-blue-300">{row.retry_success_runs}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="py-8 text-center text-xs text-slate-600">暂无真实流量</div>
+            )}
+          </div>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/40">
+          <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+            <span className="text-xs text-slate-500">最近失败/异常样本</span>
+            {traffic?.truncated && <Badge tone="amber">已截断</Badge>}
+          </div>
+          <div className="max-h-64 overflow-auto">
+            {failures.length ? (
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-slate-950 text-slate-500">
+                  <tr className="border-b border-slate-800">
+                    <th className="px-3 py-2 text-left">时间</th>
+                    <th className="px-2 py-2 text-left">session</th>
+                    <th className="px-2 py-2 text-left">run</th>
+                    <th className="px-2 py-2 text-right">attempt</th>
+                    <th className="px-2 py-2 text-left">result</th>
+                    <th className="px-2 py-2 text-left">输出预览</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {failures.map(item => (
+                    <tr key={item.id || `${item.run_id}:${item.attempt}`} className="border-b border-slate-800/50 align-top last:border-0">
+                      <td className="whitespace-nowrap px-3 py-2 text-slate-500">{String(item.created_at || '').replace('T', ' ').slice(5, 19) || '-'}</td>
+                      <td className="max-w-40 truncate px-2 py-2 font-mono text-slate-400" title={item.session_id}>{item.session_id || '-'}</td>
+                      <td className="max-w-40 truncate px-2 py-2 font-mono text-blue-300" title={item.run_id || item.trace_id}>
+                        {item.run_id ? <NavLink to={`/agent-runs/${item.run_id}`} className="hover:text-blue-200">{item.run_id}</NavLink> : (item.trace_id || '-')}
+                      </td>
+                      <td className="px-2 py-2 text-right text-slate-400">{item.attempt}</td>
+                      <td className="px-2 py-2"><Badge tone={replyEvalTone(item.result)}>{item.result || '-'}</Badge></td>
+                      <td className="max-w-sm px-2 py-2 text-slate-400">
+                        <div className="line-clamp-2 whitespace-pre-wrap break-all" title={item.raw_output_preview || ''}>{item.raw_output_preview || '-'}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="py-8 text-center text-xs text-slate-600">暂无失败样本</div>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-600">
+        <span>日志 {traffic?.total_logs ?? 0} 条</span>
+        <span>no_reply 调用 {traffic?.no_reply_tool_call_count ?? 0}</span>
+        <span>结构化兜底 {traffic?.structured_fallback_count ?? 0}</span>
+      </div>
+    </Card>
+  )
+}
+
 export function ReplyEvalPage() {
   const [form, setForm] = useState({
     chat_type: 'group',
@@ -165,6 +290,10 @@ export function ReplyEvalPage() {
   const [evalLimit, setEvalLimit] = useState(50)
   const [newCase, setNewCase] = useState(caseToDraft({}))
   const [editingCase, setEditingCase] = useState(null)
+  const [traffic, setTraffic] = useState(null)
+  const [trafficHours, setTrafficHours] = useState(24)
+  const [trafficIncludeTest, setTrafficIncludeTest] = useState(false)
+  const [trafficLoading, setTrafficLoading] = useState(false)
 
   const loadCases = useCallback(() => {
     api.get('/reply-eval/cases').then(r => setCases(r.data.items || [])).catch(() => setCases([]))
@@ -172,7 +301,20 @@ export function ReplyEvalPage() {
   const loadRuns = useCallback(() => {
     api.get('/reply-eval/runs').then(r => setRuns(r.data.items || [])).catch(() => setRuns([]))
   }, [])
-  useEffect(() => { loadCases(); loadRuns() }, [loadCases, loadRuns])
+  const loadTraffic = useCallback(() => {
+    setTrafficLoading(true)
+    api.get('/reply-eval/traffic', {
+      params: {
+        hours: Number(trafficHours) || 24,
+        limit: 50,
+        include_test_sessions: trafficIncludeTest,
+      },
+    })
+      .then(r => setTraffic(r.data))
+      .catch(() => setTraffic(null))
+      .finally(() => setTrafficLoading(false))
+  }, [trafficHours, trafficIncludeTest])
+  useEffect(() => { loadCases(); loadRuns(); loadTraffic() }, [loadCases, loadRuns, loadTraffic])
 
   const setField = (key, value) => setForm(v => ({ ...v, [key]: value }))
   const runManualTest = (realSend = false) => {
@@ -259,8 +401,18 @@ export function ReplyEvalPage() {
           <h1 className="text-xl font-semibold mb-1">Reply 测试</h1>
           <p className="text-xs text-slate-500">单条合约检查、测试集管理与 reply/no_reply A/B 评估</p>
         </div>
-        <ActionButton onClick={() => { loadCases(); loadRuns() }}>刷新</ActionButton>
+        <ActionButton onClick={() => { loadCases(); loadRuns(); loadTraffic() }}>刷新</ActionButton>
       </div>
+
+      <ReplyTrafficPanel
+        traffic={traffic}
+        hours={trafficHours}
+        includeTest={trafficIncludeTest}
+        loading={trafficLoading}
+        onHoursChange={setTrafficHours}
+        onIncludeTestChange={setTrafficIncludeTest}
+        onRefresh={loadTraffic}
+      />
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(480px,0.9fr)]">
         <Card className="p-4">

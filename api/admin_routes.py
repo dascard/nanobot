@@ -4882,6 +4882,41 @@ def _reply_log_attempt(log) -> dict:
     }
 
 
+def _reply_contract_has_final_action(log) -> bool:
+    return bool(
+        getattr(log, "has_reply_tool", 0)
+        or getattr(log, "has_no_reply_tool", 0)
+        or getattr(log, "has_structured_fallback", 0)
+    )
+
+
+def _reply_contract_run_key(log) -> str:
+    return (
+        str(getattr(log, "run_id", "") or "").strip()
+        or str(getattr(log, "trace_id", "") or "").strip()
+        or f"log:{getattr(log, 'id', '')}"
+    )
+
+
+def _is_reply_eval_test_session(session_id: str) -> bool:
+    sid = str(session_id or "").strip().lower()
+    if not sid:
+        return False
+    prefixes = (
+        "reply-test",
+        "reply_test",
+        "reply-eval",
+        "reply_eval",
+        "test-",
+        "private_smoke",
+    )
+    return sid.startswith(prefixes) or "smoke" in sid
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator, 4) if denominator else 0.0
+
+
 def _resolve_reply_test_prompt_settings(body: ReplyTestRunRequest) -> tuple[str, str, bool]:
     variant = str(body.variant or "code_retry")
     engine = str(body.prompt_engine or "v1")
@@ -5338,6 +5373,157 @@ async def reply_eval_run(
     db.commit()
     db.refresh(run)
     return {**_reply_eval_run_to_dict(run), "results": [row_to_dict(row) for row in results]}
+
+
+@router.get("/reply-eval/traffic")
+def reply_eval_real_traffic(
+    hours: int = Query(24, ge=1, le=168),
+    limit: int = Query(50, ge=1, le=200),
+    session_id: str = "",
+    include_test_sessions: bool = False,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    from core.database import ReplyContractCheckLog
+
+    window_hours = max(1, min(int(hours or 24), 168))
+    sample_limit = max(1, min(int(limit or 50), 200))
+    since = datetime.now() - timedelta(hours=window_hours)
+    query = db.query(ReplyContractCheckLog).filter(ReplyContractCheckLog.created_at >= since)
+    if session_id:
+        query = query.filter(ReplyContractCheckLog.session_id == session_id)
+    rows = query.order_by(ReplyContractCheckLog.created_at.desc(), ReplyContractCheckLog.id.desc()).limit(5000).all()
+    if not include_test_sessions:
+        rows = [row for row in rows if not _is_reply_eval_test_session(row.session_id)]
+
+    runs: dict[str, list[Any]] = {}
+    for row in rows:
+        runs.setdefault(_reply_contract_run_key(row), []).append(row)
+
+    total_runs = len(runs)
+    contract_ok_runs = 0
+    first_attempt_ok_runs = 0
+    prompt_miss_count = 0
+    retry_used_runs = 0
+    retry_success_runs = 0
+    retry_failed_after_prompt_count = 0
+    first_overcall_count = 0
+    retry_overcall_count = 0
+    total_final_action_count = 0
+    reply_tool_call_count = 0
+    no_reply_tool_call_count = 0
+    structured_fallback_count = 0
+    result_counts: dict[str, int] = {}
+    session_stats: dict[str, dict[str, Any]] = {}
+
+    for row in rows:
+        result = str(row.result or "")
+        result_counts[result or "-"] = result_counts.get(result or "-", 0) + 1
+        total_final_action_count += int(getattr(row, "total_final_action_count", 0) or 0)
+        reply_tool_call_count += int(getattr(row, "reply_tool_call_count", 0) or 0)
+        no_reply_tool_call_count += int(getattr(row, "no_reply_tool_call_count", 0) or 0)
+        structured_fallback_count += int(getattr(row, "structured_fallback_count", 0) or 0)
+
+    for run_id, run_rows in runs.items():
+        ordered = sorted(run_rows, key=lambda row: (int(row.attempt or 0), row.created_at or datetime.min, int(row.id or 0)))
+        first = next((row for row in ordered if int(row.attempt or 0) == 0), ordered[0] if ordered else None)
+        retry_rows = [row for row in ordered if int(row.attempt or 0) > 0]
+        has_ok = any(_reply_contract_has_final_action(row) for row in ordered)
+        first_ok = bool(first and _reply_contract_has_final_action(first))
+        first_miss = bool(first and not _reply_contract_has_final_action(first))
+        retry_success = any(
+            str(row.result or "") == "retry_success" or _reply_contract_has_final_action(row)
+            for row in retry_rows
+        )
+        retry_failed_after_prompt = bool(retry_rows and not retry_success)
+
+        contract_ok_runs += 1 if has_ok else 0
+        first_attempt_ok_runs += 1 if first_ok else 0
+        prompt_miss_count += 1 if first_miss else 0
+        retry_used_runs += 1 if retry_rows else 0
+        retry_success_runs += 1 if retry_success else 0
+        retry_failed_after_prompt_count += 1 if retry_failed_after_prompt else 0
+        first_overcall_count += 1 if first and int(getattr(first, "total_final_action_count", 0) or 0) > 1 else 0
+        retry_overcall_count += sum(
+            1 for row in retry_rows
+            if int(getattr(row, "total_final_action_count", 0) or 0) != 1
+        )
+
+        sid = str(getattr(first or ordered[0], "session_id", "") or "")
+        stat = session_stats.setdefault(sid, {
+            "session_id": sid,
+            "total_runs": 0,
+            "contract_ok_runs": 0,
+            "prompt_miss_count": 0,
+            "retry_used_runs": 0,
+            "retry_success_runs": 0,
+            "latest_at": "",
+        })
+        stat["total_runs"] += 1
+        stat["contract_ok_runs"] += 1 if has_ok else 0
+        stat["prompt_miss_count"] += 1 if first_miss else 0
+        stat["retry_used_runs"] += 1 if retry_rows else 0
+        stat["retry_success_runs"] += 1 if retry_success else 0
+        latest = max((row.created_at for row in ordered if row.created_at), default=None)
+        if latest and str(latest.isoformat()) > str(stat.get("latest_at") or ""):
+            stat["latest_at"] = latest.isoformat()
+
+    for stat in session_stats.values():
+        stat["contract_ok_rate"] = _safe_rate(int(stat["contract_ok_runs"]), int(stat["total_runs"]))
+
+    failure_rows = [
+        row for row in rows
+        if not _reply_contract_has_final_action(row)
+        or int(getattr(row, "total_final_action_count", 0) or 0) > 1
+    ][:sample_limit]
+
+    return {
+        "window_hours": window_hours,
+        "since": since.isoformat(),
+        "total_logs": len(rows),
+        "total_runs": total_runs,
+        "contract_ok_runs": contract_ok_runs,
+        "contract_ok_rate": _safe_rate(contract_ok_runs, total_runs),
+        "first_attempt_ok_runs": first_attempt_ok_runs,
+        "first_attempt_ok_rate": _safe_rate(first_attempt_ok_runs, total_runs),
+        "prompt_miss_count": prompt_miss_count,
+        "prompt_miss_rate": _safe_rate(prompt_miss_count, total_runs),
+        "retry_used_runs": retry_used_runs,
+        "retry_used_rate": _safe_rate(retry_used_runs, total_runs),
+        "retry_success_runs": retry_success_runs,
+        "retry_success_rate": _safe_rate(retry_success_runs, total_runs),
+        "retry_failed_after_prompt_count": retry_failed_after_prompt_count,
+        "retry_failed_after_prompt_rate": _safe_rate(retry_failed_after_prompt_count, total_runs),
+        "first_overcall_count": first_overcall_count,
+        "retry_overcall_count": retry_overcall_count,
+        "total_final_action_count": total_final_action_count,
+        "reply_tool_call_count": reply_tool_call_count,
+        "no_reply_tool_call_count": no_reply_tool_call_count,
+        "structured_fallback_count": structured_fallback_count,
+        "result_counts": result_counts,
+        "session_breakdown": sorted(
+            session_stats.values(),
+            key=lambda item: (-int(item["total_runs"]), str(item["session_id"])),
+        )[:20],
+        "recent_failures": [
+            {
+                "id": row.id,
+                "trace_id": row.trace_id,
+                "run_id": row.run_id,
+                "session_id": row.session_id,
+                "attempt": int(row.attempt or 0),
+                "result": row.result or "",
+                "total_final_action_count": int(getattr(row, "total_final_action_count", 0) or 0),
+                "reply_tool_call_count": int(getattr(row, "reply_tool_call_count", 0) or 0),
+                "no_reply_tool_call_count": int(getattr(row, "no_reply_tool_call_count", 0) or 0),
+                "raw_output_preview": row.raw_output_preview or "",
+                "created_at": row.created_at.isoformat() if row.created_at else "",
+            }
+            for row in failure_rows
+        ],
+        "include_test_sessions": bool(include_test_sessions),
+        "truncated": len(rows) >= 5000,
+    }
 
 
 @router.get("/reply-eval/runs")

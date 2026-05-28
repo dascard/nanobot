@@ -10,6 +10,9 @@ def test_memory_page_contains_summary_tabs_and_session_ranges():
     assert "近期摘要" in source
     assert "长期摘要" in source
     assert "session_id" in source
+    assert "kind: isRecent ? 'recent' : 'long'" in source
+    assert "latest_digest_preview" in source
+    assert "无长期摘要预览" in source
     assert "turn_start" in source
     assert "source_start_log_id" in source
 
@@ -30,4 +33,7 @@ def test_reply_and_reasoning_views_expose_counts_and_missing_reasoning():
     assert "total_final_action_count" in agent_detail
     assert "prompt_miss_count" in agent_detail
     assert "reply_tool_call_count" in reply_eval
+    assert "/reply-eval/traffic" in reply_eval
+    assert "真实流量" in reply_eval
+    assert "retry_failed_after_prompt_count" in reply_eval
     assert "本次未返回 reasoning_content" in trace_view
