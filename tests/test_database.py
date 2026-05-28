@@ -32,3 +32,14 @@ def test_chat_log_processing_flag(db_session):
     
     updated = db_session.query(ChatLog).filter_by(user_id="user_3").first()
     assert updated.processed == 1
+
+
+def test_sqlite_connect_args_include_busy_timeout(monkeypatch):
+    from core.database import sqlite_connect_args_for_url
+
+    monkeypatch.setenv("SQLITE_BUSY_TIMEOUT_MS", "45000")
+
+    args = sqlite_connect_args_for_url("sqlite:///./data/test.db")
+
+    assert args["check_same_thread"] is False
+    assert args["timeout"] == 45.0

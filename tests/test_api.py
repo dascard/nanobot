@@ -887,6 +887,91 @@ async def test_group_message_ambient_enters_timing_gate(db_session, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_group_message_retries_ambient_log_when_sqlite_locked(db_session, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from api.routes import GroupMessageRequest, group_message
+    from core.database import User
+
+    db_session.add(User(id="group_lock-retry", name="锁测试群"))
+    db_session.commit()
+
+    async def fake_process(*args, **kwargs):
+        return {"action": "no_reply", "generation": 1, "reason": "timing says no"}
+
+    original_commit = db_session.commit
+    commit_calls = {"count": 0}
+
+    def flaky_commit():
+        commit_calls["count"] += 1
+        if commit_calls["count"] == 1:
+            raise OperationalError(
+                "INSERT INTO chat_logs ...",
+                {},
+                Exception("database is locked"),
+            )
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", flaky_commit)
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="lock-retry",
+            sender_id="u-lock",
+            sender_name="锁测试",
+            message="测试锁重试",
+            session_name="锁测试群",
+            message_id="m-lock-retry-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "no_reply"
+    logs = db_session.query(ChatLog).filter_by(session_id="group_lock-retry", role="ambient").all()
+    assert len(logs) == 1
+    assert logs[0].message_id == "m-lock-retry-1"
+    assert commit_calls["count"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_group_message_returns_no_reply_when_sqlite_lock_retries_exhausted(db_session, monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from api.routes import GroupMessageRequest, group_message
+    from core.database import User
+
+    db_session.add(User(id="group_lock-exhausted", name="锁耗尽群"))
+    db_session.commit()
+
+    def always_locked_commit():
+        raise OperationalError(
+            "INSERT INTO chat_logs ...",
+            {},
+            Exception("database is locked"),
+        )
+
+    monkeypatch.setattr(db_session, "commit", always_locked_commit)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="lock-exhausted",
+            sender_id="u-lock",
+            sender_name="锁测试",
+            message="测试锁耗尽",
+            session_name="锁耗尽群",
+            message_id="m-lock-exhausted-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "no_reply"
+    assert data["reason"] == "db_locked:ambient_log"
+
+
+@pytest.mark.asyncio
 async def test_group_message_at_bot_enters_timing(db_session, monkeypatch):
     """@bot 消息进入 timing gate。"""
     from unittest.mock import AsyncMock

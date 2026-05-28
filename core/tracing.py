@@ -444,22 +444,31 @@ class ReplyContractTracer:
     ) -> None:
         try:
             from core.database import ReplyContractCheckLog
+            from core.sqlite_retry import run_sqlite_locked_retry
 
             db = _session()
             try:
-                db.add(ReplyContractCheckLog(
-                    trace_id=str(trace_id or "")[:64],
-                    run_id=str(run_id or "")[:80],
-                    session_id=str(session_id or "")[:128],
-                    attempt=int(attempt or 0),
-                    raw_output_preview=_preview(raw_output or "", max_chars=3000),
-                    has_reply_tool=1 if has_reply_tool else 0,
-                    has_no_reply_tool=1 if has_no_reply_tool else 0,
-                    has_structured_fallback=1 if has_structured_fallback else 0,
-                    result=str(result or "")[:64],
-                    created_at=datetime.now(),
-                ))
-                db.commit()
+                def operation() -> None:
+                    db.add(ReplyContractCheckLog(
+                        trace_id=str(trace_id or "")[:64],
+                        run_id=str(run_id or "")[:80],
+                        session_id=str(session_id or "")[:128],
+                        attempt=int(attempt or 0),
+                        raw_output_preview=_preview(raw_output or "", max_chars=3000),
+                        has_reply_tool=1 if has_reply_tool else 0,
+                        has_no_reply_tool=1 if has_no_reply_tool else 0,
+                        has_structured_fallback=1 if has_structured_fallback else 0,
+                        result=str(result or "")[:64],
+                        created_at=datetime.now(),
+                    ))
+                    db.commit()
+
+                run_sqlite_locked_retry(
+                    operation,
+                    rollback=db.rollback,
+                    label="reply_contract_check_log",
+                    logger=logger,
+                )
             finally:
                 db.close()
         except Exception as e:

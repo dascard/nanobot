@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import (
     Column,
     DateTime,
+    event,
     Float,
     Integer,
     LargeBinary,
@@ -22,7 +23,51 @@ DB_DIR = os.path.abspath("./data")
 DB_PATH = os.path.join(DB_DIR, "nanobot.db")
 # BUG-20 FIX: DATABASE_URL now imported from config.py (single source of truth)
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+def _is_sqlite_database_url(database_url: str) -> bool:
+    try:
+        return make_url(database_url).drivername.startswith("sqlite")
+    except Exception:
+        return False
+
+
+def _sqlite_busy_timeout_ms() -> int:
+    try:
+        return max(1000, int(float(os.environ.get("SQLITE_BUSY_TIMEOUT_MS", "30000"))))
+    except (TypeError, ValueError):
+        return 30000
+
+
+def sqlite_connect_args_for_url(database_url: str) -> dict:
+    if not _is_sqlite_database_url(database_url):
+        return {}
+    return {
+        "check_same_thread": False,
+        "timeout": _sqlite_busy_timeout_ms() / 1000.0,
+    }
+
+
+def configure_sqlite_connection(dbapi_connection, *, database_url: str = DATABASE_URL) -> None:
+    if not _is_sqlite_database_url(database_url):
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute(f"PRAGMA busy_timeout={_sqlite_busy_timeout_ms()}")
+        if sqlite_path_from_database_url(database_url):
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+    finally:
+        cursor.close()
+
+
+engine = create_engine(DATABASE_URL, connect_args=sqlite_connect_args_for_url(DATABASE_URL))
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragmas(dbapi_connection, connection_record):
+    configure_sqlite_connection(dbapi_connection, database_url=DATABASE_URL)
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

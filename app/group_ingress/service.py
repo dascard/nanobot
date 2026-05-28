@@ -11,6 +11,8 @@ from typing import Any
 from app.group_ingress import helpers as h
 from core.database import ChatLog, User
 from core.moderation import check_message_moderation_db
+from core.sqlite_retry import is_sqlite_locked_error
+from core.sqlite_retry import run_sqlite_locked_retry
 
 logger = logging.getLogger("nanobot.group_ingress")
 
@@ -58,13 +60,13 @@ class GroupIngressService:
             req,
             background_tasks=self.background_tasks,
         )
-        user = db.query(User).filter(User.id == group_user_id).first()
-        if not user:
-            db.add(User(id=group_user_id))
-            db.commit()
-        elif req.session_name and user.name != req.session_name:
-            user.name = req.session_name
-            db.commit()
+        try:
+            self._sync_group_user(group_user_id, req.session_name or "")
+        except Exception as exc:
+            if is_sqlite_locked_error(exc):
+                logger.warning("[GroupMsg] db locked while syncing group user group=%s: %s", req.group_id, exc)
+                return {"action": "no_reply", "reason": "db_locked:group_user_sync"}
+            raise
 
         from core.context_builder import build_timing_recent_context
         recent_ctx = build_timing_recent_context(
@@ -75,16 +77,20 @@ class GroupIngressService:
         meta = h.build_group_message_meta(req, registered_stickers)
         if registered_stickers:
             meta["registered_sticker_ids"] = [item["id"] for item in registered_stickers]
-        ambient_log = ChatLog(
-            user_id=group_user_id, session_id=group_user_id,
-            sender_name=req.sender_name, session_name=req.session_name,
-            role="ambient", content=formatted, processed=1,
-            message_id=req.message_id,
-            meta_json=json.dumps(meta, ensure_ascii=False),
-        )
-        db.add(ambient_log)
-        db.commit()
-        db.refresh(ambient_log)
+        try:
+            ambient_log = self._save_ambient_log(
+                group_user_id=group_user_id,
+                sender_name=req.sender_name,
+                session_name=req.session_name,
+                formatted=formatted,
+                message_id=req.message_id,
+                meta=meta,
+            )
+        except Exception as exc:
+            if is_sqlite_locked_error(exc):
+                logger.warning("[GroupMsg] db locked while saving ambient group=%s: %s", req.group_id, exc)
+                return {"action": "no_reply", "reason": "db_locked:ambient_log"}
+            raise
         logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
 
         bot_sender_kind = str(meta.get("sender", {}).get("bot_sender_kind") or "")
@@ -335,3 +341,59 @@ class GroupIngressService:
         except Exception as exc:
             logger.error("[GroupMsg] bridge failed group=%s: %s", req.group_id, exc)
             return {"action": "no_reply", "reason": f"bridge_error: {exc}"}
+
+    def _sync_group_user(self, group_user_id: str, session_name: str) -> None:
+        db = self.db
+
+        def operation() -> None:
+            user = db.query(User).filter(User.id == group_user_id).first()
+            if not user:
+                db.add(User(id=group_user_id, name=session_name or ""))
+                db.commit()
+                return
+            if session_name and user.name != session_name:
+                user.name = session_name
+                db.commit()
+
+        run_sqlite_locked_retry(
+            operation,
+            rollback=db.rollback,
+            label="group_user_sync",
+            logger=logger,
+        )
+
+    def _save_ambient_log(
+        self,
+        *,
+        group_user_id: str,
+        sender_name: str,
+        session_name: str,
+        formatted: str,
+        message_id: str,
+        meta: dict,
+    ) -> ChatLog:
+        db = self.db
+
+        def operation() -> ChatLog:
+            ambient_log = ChatLog(
+                user_id=group_user_id,
+                session_id=group_user_id,
+                sender_name=sender_name,
+                session_name=session_name,
+                role="ambient",
+                content=formatted,
+                processed=1,
+                message_id=message_id,
+                meta_json=json.dumps(meta, ensure_ascii=False),
+            )
+            db.add(ambient_log)
+            db.commit()
+            db.refresh(ambient_log)
+            return ambient_log
+
+        return run_sqlite_locked_retry(
+            operation,
+            rollback=db.rollback,
+            label="group_ambient_log",
+            logger=logger,
+        )
