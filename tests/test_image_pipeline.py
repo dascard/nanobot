@@ -78,3 +78,49 @@ def test_prepare_image_rejects_oversized_download(tmp_path, monkeypatch):
             assert "过大" in str(exc)
         else:
             raise AssertionError("应拒绝超过原始下载上限的图片")
+
+
+def test_prepare_image_reports_qq_expired_download_body(tmp_path, monkeypatch):
+    import urllib.error
+
+    import nanobot_kt.image_pipeline as pipeline
+
+    monkeypatch.setattr(pipeline, "IMAGE_PREPROCESS_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(pipeline, "IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT", 1.0)
+
+    qq_url = "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=abc&rkey=expired"
+    body = b'{"retcode":-5503007,"retmsg":"download url has expired","retryflag":0}'
+    err = urllib.error.HTTPError(
+        qq_url,
+        400,
+        "Bad Request",
+        {"Content-Type": "application/json", "X-ErrNo": "-5503007"},
+        io.BytesIO(body),
+    )
+    mock_opener = MagicMock()
+    mock_opener.open.side_effect = err
+
+    with patch("urllib.request.build_opener", return_value=mock_opener):
+        try:
+            pipeline.prepare_image(qq_url)
+        except ValueError as exc:
+            msg = str(exc)
+            assert "QQ图片链接已过期" in msg
+            assert "-5503007" in msg
+        else:
+            raise AssertionError("应把 QQ 过期响应转换为明确错误")
+
+
+def test_prepare_image_rejects_placeholder_qq_source(tmp_path, monkeypatch):
+    import nanobot_kt.image_pipeline as pipeline
+
+    monkeypatch.setattr(pipeline, "IMAGE_PREPROCESS_CACHE_DIR", str(tmp_path))
+
+    try:
+        pipeline.prepare_image(
+            "https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=xxx&spec=0&r=xxx&rr=xxx"
+        )
+    except ValueError as exc:
+        assert "占位符" in str(exc)
+    else:
+        raise AssertionError("应拒绝已经脱敏的 QQ 图片占位 URL")

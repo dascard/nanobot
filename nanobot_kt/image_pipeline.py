@@ -5,10 +5,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import json
 import logging
 import mimetypes
 import os
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -84,6 +86,103 @@ def _cache_key(source: str) -> str:
     return digest
 
 
+def _is_qq_multimedia_download(parsed: urllib.parse.ParseResult) -> bool:
+    return (
+        parsed.scheme in {"http", "https"}
+        and parsed.netloc.lower() == "multimedia.nt.qq.com.cn"
+        and parsed.path.startswith("/download")
+    )
+
+
+def _looks_like_placeholder_source(source: str, parsed: urllib.parse.ParseResult) -> bool:
+    value = source.strip()
+    if value.startswith("[图片") or value.startswith("[image"):
+        return True
+    if not _is_qq_multimedia_download(parsed):
+        return False
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    for key in ("fileid", "r", "rr", "rkey"):
+        values = query.get(key) or []
+        if any(str(item).strip().lower() == "xxx" for item in values):
+            return True
+    return False
+
+
+def _download_headers(parsed: urllib.parse.ParseResult) -> dict[str, str]:
+    headers = {
+        "User-Agent": "Mozilla/5.0 NanobotImagePipeline",
+    }
+    if _is_qq_multimedia_download(parsed):
+        headers.update(
+            {
+                "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Referer": "https://im.qq.com/",
+            }
+        )
+    return headers
+
+
+def _open_http_request(req: urllib.request.Request, parsed: urllib.parse.ParseResult):
+    if _is_qq_multimedia_download(parsed):
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(req, timeout=IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT)
+    return urllib.request.urlopen(req, timeout=IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT)
+
+
+def _http_error_body_preview(error: urllib.error.HTTPError, *, limit: int = 2048) -> str:
+    try:
+        body = error.read(limit)
+    except Exception:
+        return ""
+    if not body:
+        return ""
+    if isinstance(body, str):
+        return body[:limit]
+    return body.decode("utf-8", errors="replace")[:limit]
+
+
+def _http_header_value(headers: Any, key: str) -> str:
+    try:
+        value = headers.get(key)
+    except Exception:
+        value = None
+    return str(value or "")
+
+
+def _format_download_http_error(source: str, error: urllib.error.HTTPError) -> str:
+    parsed = urllib.parse.urlparse(source)
+    body_preview = _http_error_body_preview(error)
+    retcode = _http_header_value(error.headers, "X-ErrNo")
+    retmsg = ""
+
+    if body_preview:
+        try:
+            payload = json.loads(body_preview)
+            if isinstance(payload, dict):
+                retcode = str(payload.get("retcode") if payload.get("retcode") is not None else retcode)
+                retmsg = str(payload.get("retmsg") or "")
+        except Exception:
+            pass
+
+    if _is_qq_multimedia_download(parsed):
+        detail = " ".join(
+            part
+            for part in (
+                f"retcode={retcode}" if retcode else "",
+                f"retmsg={retmsg}" if retmsg else "",
+            )
+            if part
+        )
+        if retcode == "-5503007" or "expired" in retmsg.lower():
+            return f"QQ图片链接已过期: {detail or body_preview or error.reason}"
+        if retcode == "-5503010" or "invalid rkey" in retmsg.lower():
+            return f"QQ图片链接无效: {detail or body_preview or error.reason}"
+        return f"QQ图片下载失败: HTTP {error.code} {error.reason}; {detail or body_preview}".rstrip("; ")
+
+    return f"图片下载失败: HTTP {error.code} {error.reason}"
+
+
 def _download_source_bytes(source: str) -> tuple[bytes, str]:
     if source.startswith("data:"):
         header, b64 = source.split(",", 1)
@@ -115,12 +214,20 @@ def _download_source_bytes(source: str) -> tuple[bytes, str]:
     if parsed.scheme not in {"http", "https"}:
         raise ValueError("仅支持 http(s)、data 图片地址")
 
+    if _looks_like_placeholder_source(source, parsed):
+        raise ValueError("图片源是占位符或已脱敏，无法下载，请让用户重新发送图片")
+
     req = urllib.request.Request(
         source,
-        headers={"User-Agent": "Mozilla/5.0 NanobotImagePipeline"},
+        headers=_download_headers(parsed),
         method="GET",
     )
-    with urllib.request.urlopen(req, timeout=IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT) as resp:
+    try:
+        resp_ctx = _open_http_request(req, parsed)
+    except urllib.error.HTTPError as exc:
+        raise ValueError(_format_download_http_error(source, exc)) from exc
+
+    with resp_ctx as resp:
         mime = (resp.headers.get_content_type() if hasattr(resp.headers, "get_content_type") else "") or _guess_mime(source)
         content_length = resp.headers.get("Content-Length") if hasattr(resp.headers, "get") else None
         if content_length:
@@ -304,3 +411,43 @@ def prepare_image_parts(
     if errors:
         logger.warning("[image_pipeline] %d/%d sources skipped", len(errors), len(sources))
     return prepared_parts
+
+
+def precache_image_sources(files: Any, *, source_type: str = "", source_name_prefix: str = "") -> list[dict[str, Any]]:
+    """预热图片缓存，不生成 ImagePart。用于保存临时 URL 的第一时间缓存。"""
+    results: list[dict[str, Any]] = []
+    sources = _normalize_sources(files)
+    for idx, source in enumerate(sources, start=1):
+        try:
+            prepared = prepare_image(source)
+        except Exception as exc:
+            logger.warning(
+                "[image_pipeline] precache failed source=%r type=%s prefix=%s error=%s",
+                source[:200],
+                source_type,
+                source_name_prefix,
+                exc,
+            )
+            results.append({"source": source, "ok": False, "error": str(exc)})
+            continue
+        logger.info(
+            "[image_pipeline] precache ok source=%s cache=%s size=%dKB dims=%dx%d name=%s_%d",
+            source[:120],
+            prepared.cache_path,
+            prepared.size_bytes // 1024,
+            prepared.width,
+            prepared.height,
+            source_name_prefix or source_type or "image",
+            idx,
+        )
+        results.append(
+            {
+                "source": source,
+                "ok": True,
+                "cache_path": prepared.cache_path,
+                "size_bytes": prepared.size_bytes,
+                "width": prepared.width,
+                "height": prepared.height,
+            }
+        )
+    return results

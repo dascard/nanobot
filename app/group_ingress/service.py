@@ -77,6 +77,11 @@ class GroupIngressService:
         meta = h.build_group_message_meta(req, registered_stickers)
         if registered_stickers:
             meta["registered_sticker_ids"] = [item["id"] for item in registered_stickers]
+        self._schedule_image_precache(
+            meta.get("files"),
+            group_id=req.group_id,
+            message_id=req.message_id or "",
+        )
         try:
             ambient_log = self._save_ambient_log(
                 group_user_id=group_user_id,
@@ -241,6 +246,11 @@ class GroupIngressService:
                 str(x) for x in (result.get("source_message_ids") or [])
                 if str(x).strip()
             ]
+            bridge_files = self._collect_bridge_files(
+                group_user_id=group_user_id,
+                source_message_ids=source_message_ids,
+                ambient_meta=ambient_meta,
+            )
             chat_query = str(result.get("pending_text") or "").strip()
             if not chat_query:
                 chat_query = h.format_group_planner_message(
@@ -275,6 +285,7 @@ class GroupIngressService:
                 "session_name": req.session_name or "",
                 "trigger_reason": reason,
                 "message_id": req.message_id or "",
+                "files": bridge_files,
                 "timing_decision": "continue",
                 "source_message_ids": source_message_ids,
                 "context_debug": ctx_debug,
@@ -396,4 +407,65 @@ class GroupIngressService:
             rollback=db.rollback,
             label="group_ambient_log",
             logger=logger,
+        )
+
+    def _schedule_image_precache(self, files: Any, *, group_id: str, message_id: str) -> None:
+        normalized = h.normalize_files(files)
+        if not normalized or self.background_tasks is None:
+            return
+        self.background_tasks.add_task(
+            _precache_group_images_bg,
+            normalized,
+            group_id=group_id,
+            message_id=message_id,
+        )
+
+    def _collect_bridge_files(
+        self,
+        *,
+        group_user_id: str,
+        source_message_ids: list[str],
+        ambient_meta: dict,
+    ) -> list[str]:
+        files: list[str] = []
+
+        def add_many(values: Any) -> None:
+            for item in h.normalize_files(values):
+                if item not in files:
+                    files.append(item)
+
+        add_many(ambient_meta.get("files"))
+        if not source_message_ids:
+            return files
+
+        rows = (
+            self.db.query(ChatLog)
+            .filter(
+                ChatLog.session_id == group_user_id,
+                ChatLog.role == "ambient",
+                ChatLog.message_id.in_(source_message_ids),
+            )
+            .all()
+        )
+        for row in rows:
+            add_many(h.safe_meta(row.meta_json).get("files"))
+        return files
+
+
+def _precache_group_images_bg(files: list[str], *, group_id: str, message_id: str) -> None:
+    from nanobot_kt.image_pipeline import precache_image_sources
+
+    results = precache_image_sources(
+        files,
+        source_type="group_message",
+        source_name_prefix=f"group_{group_id}_{message_id or 'message'}",
+    )
+    ok_count = sum(1 for item in results if item.get("ok"))
+    if ok_count < len(results):
+        logger.warning(
+            "[GroupMsg] image precache partial group=%s message_id=%s ok=%d total=%d",
+            group_id,
+            message_id or "-",
+            ok_count,
+            len(results),
         )

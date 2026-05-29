@@ -990,6 +990,7 @@ async def test_group_message_at_bot_enters_timing(db_session, monkeypatch):
         GroupMessageRequest(
             group_id="456", sender_id="u2", sender_name="B",
             message="你是？", session_name="测试群",
+            files=["https://example.com/group-image.png"],
             is_at_bot=True, is_reply_to_bot=False,
             message_id="m-at-1",
         ),
@@ -1005,6 +1006,7 @@ async def test_group_message_at_bot_enters_timing(db_session, monkeypatch):
     assert "[发言内容]你是？" in called_query
     _, kwargs = mock_bridge.handle_message.await_args
     assert "group_recent_context" not in kwargs["metadata"]
+    assert kwargs["metadata"]["files"] == ["https://example.com/group-image.png"]
     assert kwargs["metadata"]["context_debug"]["context_source"] == "chatlog"
 
     assistant_logs = db_session.query(ChatLog).filter_by(user_id="group_456", role="assistant").all()
@@ -1225,6 +1227,39 @@ async def test_group_message_image_auto_registers_sticker(db_session, monkeypatc
     assert calls[0][1]["message"].startswith("[表情包]")
     logs = db_session.query(ChatLog).filter_by(role="ambient").all()
     assert any("[表情包]" in log.content for log in logs)
+
+
+@pytest.mark.asyncio
+async def test_group_message_schedules_image_precache(db_session, monkeypatch):
+    from api.routes import GroupMessageRequest, group_message
+
+    async def fake_process(*args, **kwargs):
+        return {"action": "no_reply", "generation": 1, "reason": "image ambient"}
+
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    background_tasks = BackgroundTasks()
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="123",
+            sender_id="u-img-cache",
+            sender_name="发图人",
+            message="",
+            message_id="m-img-cache-1",
+            session_name="测试群",
+            files=["https://example.com/normal-image.png"],
+        ),
+        db_session,
+        background_tasks,
+        None,
+    )
+
+    assert data["action"] == "no_reply"
+    assert any(
+        task.func.__name__ == "_precache_group_images_bg"
+        and task.args == (["https://example.com/normal-image.png"],)
+        for task in background_tasks.tasks
+    )
 
 
 def test_sticker_register_search_and_disable_api(client):

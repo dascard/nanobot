@@ -312,6 +312,26 @@ def _normalize_files(files: Optional[List[str]]) -> list[str]:
     return [file for file in (files or []) if isinstance(file, str) and file.strip()]
 
 
+def _schedule_image_precache(
+    background_tasks: BackgroundTasks | None,
+    files: Optional[List[str]],
+    *,
+    source_type: str,
+    source_name_prefix: str,
+) -> None:
+    normalized_files = _normalize_files(files)
+    if not normalized_files or background_tasks is None:
+        return
+    from nanobot_kt.image_pipeline import precache_image_sources
+
+    background_tasks.add_task(
+        precache_image_sources,
+        normalized_files,
+        source_type=source_type,
+        source_name_prefix=source_name_prefix,
+    )
+
+
 from core.group_runtime.ids import normalize_group_session_id as _normalize_group_session_id
 from core.settings_service import settings
 
@@ -1982,6 +2002,13 @@ async def proxy_chat(
         ))
         db.commit()
         return {"answer": "", "status": "silent", "reason": "user_blocked"}
+
+    _schedule_image_precache(
+        background_tasks,
+        req.files,
+        source_type="chat_request",
+        source_name_prefix=f"{req.session_id}_{req.message_id or 'message'}",
+    )
 
     # 2. 加载用户画像 (PersonaArchitectAgent 实际输出的键: identity, communication_style, domain_profiles, persona_summary)
     # 兼容性：bot 端 user_id 格式可能变化（"12345" vs "private_12345" vs "group_xxx"）
