@@ -38,6 +38,8 @@ class RollingSummaryRunRequest(BaseModel):
 class RollingSummaryEnqueueRequest(BaseModel):
     user_id: str = ""
     chat_type: Literal["private", "group"] = "private"
+    force: bool = False
+    summary_id: int | None = None
 
 
 def _summary_to_dict(row: RollingSessionSummary | None) -> dict:
@@ -316,46 +318,65 @@ def enqueue_llm_summary(
     _auth=Depends(verify_admin),
 ):
     body = body or RollingSummaryEnqueueRequest()
-    fallback = (
-        db.query(RollingSessionSummary)
-        .filter(
-            RollingSessionSummary.session_id == session_id,
-            RollingSessionSummary.status == "active",
-            RollingSessionSummary.summary_kind == "deterministic_fallback",
+    base_summary = None
+    if body.summary_id:
+        base_summary = (
+            db.query(RollingSessionSummary)
+            .filter(
+                RollingSessionSummary.id == int(body.summary_id),
+                RollingSessionSummary.session_id == session_id,
+            )
+            .first()
         )
-        .order_by(RollingSessionSummary.id.desc())
-        .first()
-    )
-    if fallback is None:
-        raise HTTPException(status_code=404, detail="active deterministic fallback summary not found")
-    turn_ids = _turn_ids_from_summary(fallback)
+    if base_summary is None:
+        base_summary = (
+            db.query(RollingSessionSummary)
+            .filter(
+                RollingSessionSummary.session_id == session_id,
+                RollingSessionSummary.status == "active",
+                RollingSessionSummary.summary_kind == "deterministic_fallback",
+            )
+            .order_by(RollingSessionSummary.id.desc())
+            .first()
+        )
+    if base_summary is None:
+        base_summary = get_best_session_summary(db, session_id)
+    if base_summary is None:
+        raise HTTPException(status_code=404, detail="active rolling summary not found")
+
+    turn_ids = _turn_ids_from_summary(base_summary)
     turns = _load_turns_by_ids(db, turn_ids)
     if not turns:
-        raise HTTPException(status_code=409, detail="fallback summary source turns are missing")
+        raise HTTPException(status_code=409, detail="rolling summary source turns are missing")
 
-    previous = (
-        db.query(RollingSessionSummary)
-        .filter(
-            RollingSessionSummary.session_id == session_id,
-            RollingSessionSummary.status == "active",
-            RollingSessionSummary.summary_kind.in_(("llm_episode", "llm_summary")),
-            RollingSessionSummary.id != fallback.id,
+    previous = None
+    if (base_summary.summary_kind or "") == "deterministic_fallback":
+        previous = (
+            db.query(RollingSessionSummary)
+            .filter(
+                RollingSessionSummary.session_id == session_id,
+                RollingSessionSummary.status == "active",
+                RollingSessionSummary.summary_kind.in_(("llm_episode", "llm_summary")),
+                RollingSessionSummary.id != base_summary.id,
+            )
+            .order_by(RollingSessionSummary.id.desc())
+            .first()
         )
-        .order_by(RollingSessionSummary.id.desc())
-        .first()
-    )
     job, created = enqueue_session_summary_job(
         db,
         session_id=session_id,
-        user_id=body.user_id or fallback.user_id or "",
-        chat_type=body.chat_type or fallback.chat_type or "private",
+        user_id=body.user_id or base_summary.user_id or "",
+        chat_type=body.chat_type or base_summary.chat_type or "private",
         pending_turns=turns,
         previous_summary=previous,
-        fallback_summary=fallback,
+        fallback_summary=base_summary,
+        force=bool(body.force),
     )
     db.commit()
     return {
         "session_id": session_id,
+        "source_summary_id": int(base_summary.id or 0),
+        "source_summary_kind": base_summary.summary_kind or "deterministic_fallback",
         "created": created,
         "job": _job_to_dict(job),
     }

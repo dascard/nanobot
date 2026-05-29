@@ -34,6 +34,8 @@ SESSION_SUMMARY_SYSTEM_PROMPT = """你是对话滚动摘要器。
 不要总结 recent raw window，不要总结当前用户输入。
 不要输出工具调用要求，不要生成新的用户请求。
 不要把系统契约、工具契约、重试指令当作用户偏好。
+不要逐字复述原始对话，不要输出 turn_id、时间戳、role 标签。
+请用中文归纳主题、用户意图、已确认结论和待跟进事项。
 输出严格 JSON，不要 Markdown，不要代码块。
 """
 
@@ -147,6 +149,8 @@ def build_llm_summary_messages(
         "请输出严格 JSON，字段为 summary、open_threads、decisions、important_user_requests、"
         "resolved_items、artifacts、participants、keywords、quality。"
         "summary 不超过 1200 字，quality.score 必须是 0 到 1 的数字。"
+        "不要把 pending_turns 当日志转写，不要保留 turn_id、时间戳或 role 标签。"
+        "如果只能摘录，请改写为简洁要点。"
     )
     return [
         {"role": "system", "content": SESSION_SUMMARY_SYSTEM_PROMPT},

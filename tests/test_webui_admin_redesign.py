@@ -128,6 +128,18 @@ def test_memory_page_exposes_group_overview_and_manual_extract():
     assert "injectable_count" in memory_source
 
 
+def test_session_summary_browser_exposes_llm_regeneration_controls():
+    source = read_app()
+    summary_source = source.split("function SessionSummaryBrowser(")[1].split("// ── Memory ──")[0]
+
+    assert "重新生成 LLM 摘要" in summary_source
+    assert "重试失败摘要任务" in summary_source
+    assert "代码兜底" in summary_source
+    assert "api.post(`/session-memory/${encodeURIComponent(selectedSession)}/rolling-summary/enqueue-llm`" in summary_source
+    assert "api.post(`/session-memory/jobs/${jobId}/retry`" in summary_source
+    assert "setOperationError(formatApiError(e))" in summary_source
+
+
 def test_memory_page_auto_loads_exact_group_input():
     source = read_app()
     memory_source = source.split("function MemoryPage()")[1].split("// ── Audit ──")[0]

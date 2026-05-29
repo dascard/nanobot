@@ -1907,7 +1907,10 @@ function SessionSummaryBrowser({ mode }) {
   const [sessions, setSessions] = useState([])
   const [selectedSession, setSelectedSession] = useState('')
   const [items, setItems] = useState([])
+  const [jobs, setJobs] = useState([])
   const [loading, setLoading] = useState(false)
+  const [operationLoading, setOperationLoading] = useState('')
+  const [operationError, setOperationError] = useState('')
   const [includeContent, setIncludeContent] = useState(false)
   const [query, setQuery] = useState('')
   const isRecent = mode === 'recent'
@@ -1925,15 +1928,22 @@ function SessionSummaryBrowser({ mode }) {
   const loadDetail = useCallback((sessionId = selectedSession, full = includeContent) => {
     if (!sessionId) return
     setLoading(true)
+    setOperationError('')
     const endpoint = isRecent
       ? `/session-memory/sessions/${encodeURIComponent(sessionId)}/summaries`
       : `/session-memory/sessions/${encodeURIComponent(sessionId)}/digests`
     const params = isRecent
       ? { summary_limit_per_session: 50, include_content: full }
       : { digest_limit_per_session: 80, include_content: full }
-    api.get(endpoint, { params })
+    const detailRequest = api.get(endpoint, { params })
       .then(r => setItems(r.data.items || []))
-      .catch(() => setItems([]))
+      .catch(e => { setItems([]); setOperationError(formatApiError(e)) })
+    const jobsRequest = isRecent
+      ? api.get(`/session-memory/${encodeURIComponent(sessionId)}/rolling-summary`)
+        .then(r => setJobs(r.data.jobs || []))
+        .catch(() => setJobs([]))
+      : Promise.resolve(setJobs([]))
+    Promise.allSettled([detailRequest, jobsRequest])
       .finally(() => setLoading(false))
   }, [includeContent, isRecent, selectedSession])
 
@@ -1946,6 +1956,25 @@ function SessionSummaryBrowser({ mode }) {
     return String(s.session_id || '').toLowerCase().includes(needle) ||
       String(s.user_id || '').toLowerCase().includes(needle)
   })
+
+  const enqueueLlmSummary = useCallback(() => {
+    if (!selectedSession) return
+    setOperationLoading('enqueue')
+    setOperationError('')
+    api.post(`/session-memory/${encodeURIComponent(selectedSession)}/rolling-summary/enqueue-llm`, { force: true })
+      .then(() => loadDetail(selectedSession, includeContent))
+      .catch(e => setOperationError(formatApiError(e)))
+      .finally(() => setOperationLoading(''))
+  }, [includeContent, loadDetail, selectedSession])
+
+  const retrySummaryJob = useCallback((jobId) => {
+    setOperationLoading(`retry-${jobId}`)
+    setOperationError('')
+    api.post(`/session-memory/jobs/${jobId}/retry`)
+      .then(() => loadDetail(selectedSession, includeContent))
+      .catch(e => setOperationError(formatApiError(e)))
+      .finally(() => setOperationLoading(''))
+  }, [includeContent, loadDetail, selectedSession])
 
   return (
     <div className="grid gap-4 lg:grid-cols-[360px_minmax(0,1fr)]">
@@ -1985,7 +2014,14 @@ function SessionSummaryBrowser({ mode }) {
               <div className="font-mono text-sm text-slate-200">{selectedSession || '未选择 session'}</div>
               <div className="mt-1 text-xs text-slate-500">{isRecent ? '近期摘要 rolling_session_summaries' : '长期摘要 memory_digests'}</div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              {isRecent && (
+                <button onClick={enqueueLlmSummary} disabled={!selectedSession || operationLoading === 'enqueue'}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs text-white hover:bg-indigo-500 disabled:opacity-50">
+                  <RefreshCw className={`h-3.5 w-3.5 ${operationLoading === 'enqueue' ? 'animate-spin' : ''}`} />
+                  重新生成 LLM 摘要
+                </button>
+              )}
               <button onClick={() => { const next = !includeContent; setIncludeContent(next); loadDetail(selectedSession, next) }}
                 className={`rounded-lg px-3 py-2 text-xs ${includeContent ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-200 hover:bg-slate-700'}`}>
                 {includeContent ? '隐藏全文' : '展开全文'}
@@ -1993,6 +2029,33 @@ function SessionSummaryBrowser({ mode }) {
               <button onClick={() => loadDetail()} className="rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-200 hover:bg-slate-700">刷新</button>
             </div>
           </div>
+          {operationError && (
+            <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">{operationError}</div>
+          )}
+          {isRecent && jobs.length > 0 && (
+            <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/70 p-2">
+              <div className="mb-2 text-[11px] font-medium text-slate-500">LLM 摘要任务</div>
+              <div className="space-y-1">
+                {jobs.slice(0, 5).map(job => (
+                  <div key={job.id} className="flex flex-wrap items-center justify-between gap-2 rounded bg-slate-900 px-2 py-1.5 text-xs text-slate-400">
+                    <div className="min-w-0">
+                      <span className="font-mono text-slate-300">job {job.id}</span>
+                      <span className="ml-2">{job.status}</span>
+                      <span className="ml-2">turn {job.covered_from_turn_id}-{job.covered_until_turn_id}</span>
+                      {job.error && <span className="ml-2 text-red-300">{job.error}</span>}
+                    </div>
+                    {job.status === 'failed' && (
+                      <button onClick={() => retrySummaryJob(job.id)} disabled={operationLoading === `retry-${job.id}`}
+                        className="inline-flex items-center gap-1 rounded bg-slate-800 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700 disabled:opacity-50">
+                        <RefreshCw className={`h-3 w-3 ${operationLoading === `retry-${job.id}` ? 'animate-spin' : ''}`} />
+                        重试失败摘要任务
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
         {loading ? <Spinner /> : items.length === 0 ? (
           <div className="rounded-lg border border-slate-800 py-16 text-center text-sm text-slate-600">当前 session 没有摘要</div>
@@ -2001,7 +2064,8 @@ function SessionSummaryBrowser({ mode }) {
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap gap-2">
                 <Badge tone={isRecent ? 'blue' : 'emerald'}>{isRecent ? `summary ${item.summary_id}` : `digest ${item.digest_id}`}</Badge>
-                {isRecent ? <Badge>{item.summary_kind}</Badge> : <Badge>level {item.level}</Badge>}
+                {isRecent ? <Badge tone={item.summary_kind === 'deterministic_fallback' ? 'amber' : 'emerald'}>{item.summary_kind === 'deterministic_fallback' ? '代码兜底' : 'LLM 摘要'}</Badge> : <Badge>level {item.level}</Badge>}
+                {isRecent && <Badge>{item.summary_kind}</Badge>}
                 {isRecent && <Badge tone={item.is_active ? 'emerald' : item.is_archived ? 'slate' : 'amber'}>{item.is_active ? 'active' : item.is_archived ? 'archived' : 'inactive'}</Badge>}
                 {!isRecent && <Badge>{item.status}</Badge>}
               </div>

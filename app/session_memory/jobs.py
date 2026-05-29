@@ -48,6 +48,7 @@ def enqueue_session_summary_job(
     previous_summary: RollingSessionSummary | None,
     fallback_summary: RollingSessionSummary,
     max_retry: int | None = None,
+    force: bool = False,
 ) -> tuple[SessionSummaryJob, bool]:
     """为 fallback summary 覆盖范围创建 LLM 摘要任务。
 
@@ -66,13 +67,14 @@ def enqueue_session_summary_job(
         source_turn_ids=source_turn_ids,
     )
 
+    dedupe_statuses = ("pending", "running") if force else tuple(ACTIVE_JOB_STATUSES)
     existing = (
         db.query(SessionSummaryJob)
         .filter(
             SessionSummaryJob.session_id == session_id,
             SessionSummaryJob.covered_from_turn_id == covered_from,
             SessionSummaryJob.covered_until_turn_id == covered_until,
-            SessionSummaryJob.status.in_(tuple(ACTIVE_JOB_STATUSES)),
+            SessionSummaryJob.status.in_(dedupe_statuses),
         )
         .order_by(SessionSummaryJob.id.desc())
         .first()

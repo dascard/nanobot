@@ -269,6 +269,46 @@ def test_deterministic_summary_compacts_instead_of_appending_raw_text(db_session
     assert "需要滚动压缩的新增消息 0" not in payload["summary"]
 
 
+def test_deterministic_summary_uses_clean_snippets_without_turn_metadata(db_session):
+    from app.session_memory.summarizer import build_rolling_summary_payload, render_summary_text
+
+    previous = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        status="active",
+        summary_text="此前已经确认 RAG benchmark 需要分 source 展示。",
+        covered_until_turn_id=10,
+    )
+    db_session.add(previous)
+    pending = [
+        _turn(
+            db_session,
+            role="user",
+            content="[Alice]: 请把摘要页面做成可手动重新生成，不要再混入原始对话行。",
+        ),
+        _turn(
+            db_session,
+            role="assistant",
+            content="已确认：需要增加 LLM 摘要重生成按钮，并展示 job 状态。",
+        ),
+    ]
+    db_session.commit()
+
+    payload = build_rolling_summary_payload(
+        previous_summary=previous,
+        pending_turns=pending,
+    )
+    rendered = render_summary_text(payload)
+
+    assert "代码兜底摘要" in rendered
+    assert "手动重新生成" in rendered
+    assert "turn_id=" not in rendered
+    assert "[user]" not in rendered
+    assert "[assistant]" not in rendered
+    assert "Alice]:" not in rendered
+    assert payload["evidence_turn_ids"] == [turn.id for turn in pending]
+
+
 def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session):
     from core.context_builder import build_chat_context
 
@@ -739,6 +779,57 @@ def test_admin_enqueue_llm_summary_job_from_active_fallback(db_session):
     assert response["created"] is True
     assert response["job"]["status"] == "pending"
     assert response["job"]["fallback_summary_id"] == fallback.id
+
+
+def test_admin_force_enqueue_llm_summary_from_active_llm_summary(db_session):
+    from api.admin.session_memory_routes import RollingSummaryEnqueueRequest, enqueue_llm_summary
+
+    turns = [_turn(db_session, content=f"active llm source {i}") for i in range(6)]
+    active_llm = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="现有 LLM 摘要质量较低，需要人工重生成",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+        llm_status="success",
+    )
+    done_job = SessionSummaryJob(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+        fallback_summary_id=99,
+        result_summary_id=100,
+        status="done",
+    )
+    db_session.add_all([active_llm, done_job])
+    db_session.commit()
+
+    response = enqueue_llm_summary(
+        "s1",
+        db_session,
+        body=RollingSummaryEnqueueRequest(force=True),
+    )
+
+    assert response["created"] is True
+    assert response["job"]["status"] == "pending"
+    assert response["job"]["id"] != done_job.id
+    assert response["job"]["fallback_summary_id"] == active_llm.id
+
+    duplicate = enqueue_llm_summary(
+        "s1",
+        db_session,
+        body=RollingSummaryEnqueueRequest(force=True),
+    )
+
+    assert duplicate["created"] is False
+    assert duplicate["job"]["id"] == response["job"]["id"]
 
 
 def test_claim_summary_job_is_atomic_status_guard(db_session):

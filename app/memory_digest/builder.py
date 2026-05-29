@@ -80,6 +80,21 @@ def _normalize_short(content: str) -> str:
     return re.sub(r"\s+", "", str(content or "")).strip().lower()
 
 
+def _message_body(content: str, sender_name: str = "") -> str:
+    text = str(content or "").strip()
+    if not text:
+        return ""
+    match = re.match(r"^\[([^\]]{1,80})\]\s*[:：]\s*(.*)$", text, re.DOTALL)
+    if not match:
+        return text
+    sender = str(sender_name or "").strip()
+    prefix = match.group(1).strip()
+    body = match.group(2).strip()
+    if not sender or prefix == sender:
+        return body
+    return text
+
+
 def _content_tokens(text: str) -> list[str]:
     tokens = re.findall(r"[A-Za-z][A-Za-z0-9_.+-]*|[\u4e00-\u9fff]{2,}", text or "")
     cleaned = []
@@ -170,7 +185,7 @@ class MemoryDigestBuilder:
 
         keywords = self._rank_keywords(valid)
         participants = self._participants(valid)
-        details = [row["content"] for row in valid[: self.max_details] if row["content"]]
+        details = [self._build_detail_text(row) for row in valid[: self.max_details] if row["content"]]
         topic_label = "、".join(keywords[:4]) if keywords else "当天聊天内容"
         topic_flow = f"当天主要围绕 {topic_label} 展开，包含 {len(valid)} 条有效消息。"
         brief = f"群聊讨论了 {topic_label}。" if keywords else "群聊产生了一组可召回摘要。"
@@ -220,7 +235,10 @@ class MemoryDigestBuilder:
         if any(bool(meta.get(flag)) for flag in ("no_context", "internal", "no_learn")):
             return "meta_flag"
 
-        content = str(getattr(log, "content", "") or "").strip()
+        content = _message_body(
+            str(getattr(log, "content", "") or "").strip(),
+            str(getattr(log, "sender_name", "") or "").strip(),
+        )
         if not content:
             return "empty"
         normalized = _normalize_short(content)
@@ -254,7 +272,7 @@ class MemoryDigestBuilder:
     def _format_valid_log(log: ChatLog) -> dict[str, Any]:
         role = str(getattr(log, "role", "") or "unknown").strip()
         sender = str(getattr(log, "sender_name", "") or "").strip()
-        content = str(getattr(log, "content", "") or "").strip()
+        content = _message_body(str(getattr(log, "content", "") or "").strip(), sender)
         if role == "assistant" and _is_html_blob(content):
             content = _html_label(content)
         content = re.sub(r"\s+", " ", content)
@@ -293,8 +311,16 @@ class MemoryDigestBuilder:
         return list(seen.keys())
 
     @staticmethod
+    def _build_detail_text(row: dict[str, Any]) -> str:
+        sender = str(row.get("sender") or "").strip()
+        content = str(row.get("content") or "").strip()
+        if not sender or sender == str(row.get("role") or "").strip():
+            return content[:160]
+        return f"{sender} 提到：{content}"[:160]
+
+    @staticmethod
     def _build_card_text(topic_label: str, details: list[str]) -> str:
         first = details[0] if details else ""
         if first:
-            return f"群里讨论了 {topic_label}；代表消息：{first[:60]}"[:80]
+            return f"群里讨论了 {topic_label}；代表要点：{first[:60]}"[:80]
         return f"群里讨论了 {topic_label}。"[:80]
