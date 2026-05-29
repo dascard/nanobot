@@ -51,6 +51,22 @@ import { EvalsPage } from './features/evals/EvalsPage'
 import { RagDebugPage } from './features/rag/RagDebugPage'
 import { RagBenchmarkPage } from './features/rag/RagBenchmarkPage'
 
+function formatApiError(error, fallback = '请求失败') {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail.map(item => {
+      if (!item || typeof item !== 'object') return String(item)
+      const loc = Array.isArray(item.loc) ? item.loc.join('.') : ''
+      return [loc, item.msg || item.message || JSON.stringify(item)].filter(Boolean).join(': ')
+    }).join('\n')
+  }
+  if (detail && typeof detail === 'object') {
+    return detail.message || detail.error || JSON.stringify(detail)
+  }
+  return error?.message || fallback
+}
+
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { hasError: false, error: null }; }
   static getDerivedStateFromError(error) { return { hasError: true, error } }
@@ -692,28 +708,46 @@ function StickerDedupPage() {
   const [showDisabled, setShowDisabled] = useState(false)
   const [dedupTab, setDedupTab] = useState('exact')
   const [nearDuplicates, setNearDuplicates] = useState([])
+  const [nearError, setNearError] = useState('')
+  const [scanLoading, setScanLoading] = useState(false)
   const navigate = useNavigate()
 
   const loadNear = () => api.get('/stickers/near-duplicate-candidates?limit=100')
-    .then(r => setNearDuplicates(r.data.items || []))
-    .catch(e => alert(e?.response?.data?.detail || e.message))
+    .then(r => { setNearDuplicates(r.data.items || []); setNearError('') })
+    .catch(e => setNearError(formatApiError(e)))
 
   const load = () => api.get('/stickers/duplicate-groups?limit=100')
     .then(r => { setData(r.data || {}); setError(''); if (!selectedGroup && (r.data?.groups || []).length) setSelectedGroup(r.data.groups[0]) })
-    .catch(e => { setError(e?.response?.data?.detail || e.message || '加载失败') })
+    .catch(e => { setError(formatApiError(e, '加载失败')) })
   useEffect(() => { load() }, [])
 
   const doAction = (stickerId, action, body = {}) => {
     api.post(`/stickers/${stickerId}/${action}`, body)
       .then(() => load())
-      .catch(e => alert(e?.response?.data?.detail || e.message))
+      .catch(e => alert(formatApiError(e)))
   }
 
   const runBackfill = () => {
     if (!confirm('将对全库 content_hash 重复分组执行精确去重，确定？')) return
     api.post('/stickers/dedupe/exact/backfill')
       .then(r => { alert(`完成：${r.data.total_groups} 组, ${r.data.total_duplicates} 个标记`); load() })
-      .catch(e => alert(e?.response?.data?.detail || e.message))
+      .catch(e => alert(formatApiError(e)))
+  }
+
+  const runPhashBackfill = () => {
+    api.post('/stickers/phash/backfill?limit=200')
+      .then(r => alert(`phash 补建: ${r.data.ok} OK / ${r.data.skipped} skip`))
+      .catch(e => alert(formatApiError(e)))
+  }
+
+  const runNearScan = () => {
+    if (scanLoading) return
+    setScanLoading(true)
+    setNearError('')
+    api.post('/stickers/near-duplicate/scan?limit=100')
+      .then(r => { alert(`扫描完成: ${r.data.candidates_created} 个候选`); loadNear() })
+      .catch(e => { const msg = formatApiError(e); setNearError(msg); alert(msg) })
+      .finally(() => setScanLoading(false))
   }
 
   const groups = data.groups || []
@@ -731,10 +765,10 @@ function StickerDedupPage() {
         <div className="flex gap-2">
           <button onClick={() => navigate('/stickers')} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">返回列表</button>
           <button onClick={runBackfill} className="px-3 py-1.5 bg-amber-700/50 hover:bg-amber-700 rounded-lg text-xs">一键历史去重</button>
-          <button onClick={() => api.post('/stickers/phash/backfill?limit=200').then(r => alert(`phash 补建: ${r.data.ok} OK / ${r.data.skipped} skip`))}
+          <button onClick={runPhashBackfill}
             className="px-3 py-1.5 bg-slate-700/50 hover:bg-slate-700 rounded-lg text-xs">phash 补建</button>
-          <button onClick={() => api.post('/stickers/near-duplicate/scan?limit=100').then(r => { alert(`扫描完成: ${r.data.candidates_created} 个候选`); loadNear() })}
-            className="px-3 py-1.5 bg-purple-700/50 hover:bg-purple-700 rounded-lg text-xs">扫描疑似重复</button>
+          <button onClick={runNearScan} disabled={scanLoading}
+            className="px-3 py-1.5 bg-purple-700/50 hover:bg-purple-700 disabled:opacity-50 rounded-lg text-xs">{scanLoading ? '扫描中...' : '扫描疑似重复'}</button>
           <button onClick={load} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs">刷新</button>
         </div>
       </div>
@@ -828,6 +862,7 @@ function StickerDedupPage() {
 
       {dedupTab === 'near' && (
         <Card className="p-4 max-h-[calc(100vh-160px)] overflow-auto">
+          {nearError && <div className="mb-3 rounded-lg border border-red-800 bg-red-900/20 px-3 py-2 text-xs text-red-300 whitespace-pre-wrap">{nearError}</div>}
           <table className="w-full text-xs">
             <thead><tr className="text-left text-slate-500 border-b border-slate-800">
               <th className="py-2 px-1 w-10">A</th><th className="py-2 px-1">名称</th><th className="py-2 px-1 w-10">B</th><th className="py-2 px-1">名称</th>
@@ -844,9 +879,9 @@ function StickerDedupPage() {
                   <td className="py-2 px-1"><Badge tone={r.dhash_dist <= 4 ? 'red' : 'amber'}>{r.dhash_dist}</Badge></td>
                   <td className="py-2 px-1">
                     <div className="flex gap-1">
-                      <button onClick={() => api.post(`/stickers/near-duplicate-candidates/${r.id}/confirm`).then(loadNear)}
+                      <button onClick={() => api.post(`/stickers/near-duplicate-candidates/${r.id}/confirm`).then(loadNear).catch(e => alert(formatApiError(e)))}
                         className="px-1.5 py-0.5 bg-emerald-700/40 rounded text-[10px]">确认</button>
-                      <button onClick={() => api.post(`/stickers/near-duplicate-candidates/${r.id}/ignore`).then(loadNear)}
+                      <button onClick={() => api.post(`/stickers/near-duplicate-candidates/${r.id}/ignore`).then(loadNear).catch(e => alert(formatApiError(e)))}
                         className="px-1.5 py-0.5 bg-slate-700/40 rounded text-[10px]">忽略</button>
                     </div>
                   </td>

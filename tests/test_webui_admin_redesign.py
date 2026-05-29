@@ -81,6 +81,16 @@ def test_sticker_duplicate_actions_do_not_use_emoji_buttons():
     assert ">🏷<" not in source
 
 
+def test_sticker_duplicate_page_formats_api_errors():
+    source = read_app()
+    sticker_source = source.split("function StickerDedupPage()")[1].split("// ── Stickers ──")[0]
+
+    assert "formatApiError(" in source
+    assert "setNearError(formatApiError(e))" in sticker_source
+    assert "alert(formatApiError(e))" in sticker_source
+    assert "e?.response?.data?.detail || e.message" not in sticker_source
+
+
 def test_shared_ui_components_support_dense_admin_shell():
     ui_source = UI_JS.read_text(encoding="utf-8")
     css_source = CSS.read_text(encoding="utf-8")

@@ -196,6 +196,15 @@ class TestStickerCRUD:
         assert not any(s["id"] == sid for s in r2.json()["items"]), \
             f"deleted sticker {sid} should not appear in active list"
 
+    def test_near_duplicate_candidates_route_not_shadowed_by_sticker_id(self, client, auth_header):
+        r = client.get(
+            "/api/v1/admin/stickers/near-duplicate-candidates?limit=100",
+            headers=auth_header,
+        )
+
+        assert r.status_code == 200, r.text
+        assert r.json() == {"items": [], "total": 0}
+
 
 class TestBlockRule:
     def test_create_and_list(self, client, auth_header):

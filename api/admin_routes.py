@@ -1079,7 +1079,7 @@ def sticker_duplicate_groups(limit: int = 50, db: Session = Depends(get_db), _au
     return {"groups": groups}
 
 
-@router.get("/stickers/{sticker_id}")
+@router.get("/stickers/{sticker_id:int}")
 def get_sticker(sticker_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
