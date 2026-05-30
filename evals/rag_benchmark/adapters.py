@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import hashlib
 from typing import Any
@@ -106,6 +107,26 @@ def _preview(value: Any, limit: int = 240) -> str:
     return text[:limit] + ("..." if len(text) > limit else "")
 
 
+def _iso_dt(value: Any) -> str:
+    return value.isoformat() if hasattr(value, "isoformat") else (str(value) if value else "")
+
+
+def _safe_int_list(raw: Any) -> list[int]:
+    try:
+        value = json.loads(raw or "[]")
+    except Exception:
+        return []
+    if not isinstance(value, list):
+        return []
+    result: list[int] = []
+    for item in value:
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
 def _candidates(items: list[dict[str, Any]], *, fallback_source_type: str) -> list[BenchmarkCandidate]:
     result: list[BenchmarkCandidate] = []
     for rank, item in enumerate(items, start=1):
@@ -128,6 +149,7 @@ def _candidates(items: list[dict[str, Any]], *, fallback_source_type: str) -> li
             sendable=True if (send_code or reply_token) else None,
             citation=bool(citation) if citation is not None else None,
             score_breakdown=item.get("score_breakdown") if isinstance(item.get("score_breakdown"), dict) else {},
+            metadata=item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
         ))
     return result
 
@@ -260,6 +282,25 @@ def _run_group_memory(db: Session, case: BenchmarkCase, *, provider_mode: str) -
             text_preview=_preview(row.content),
             group_id=str(row.group_id or ""),
             score_breakdown=selection.score_components.get(str(row.id)) or {},
+            metadata={
+                "group_id": str(row.group_id or ""),
+                "memory_type": str(row.memory_type or ""),
+                "first_seen": _iso_dt(row.first_seen),
+                "last_seen": _iso_dt(row.last_seen),
+                "updated_at": _iso_dt(row.updated_at),
+                "created_at": _iso_dt(row.created_at),
+                "last_injected_at": _iso_dt(row.last_injected_at),
+                "confidence": row.confidence,
+                "decay_score": row.decay_score,
+                "evidence_count": row.evidence_count,
+                "evidence_log_ids": _safe_int_list(row.evidence_log_ids_json)[:10],
+                "status": str(row.status or ""),
+                "inject_policy": str(row.inject_policy or ""),
+                "source": str(row.source or ""),
+                "injected_count": row.injected_count,
+                "content_hash": str(row.content_hash or ""),
+                "cluster_key": str(row.cluster_key or ""),
+            },
         )
         for rank, row in enumerate(selection.selected, start=1)
     ]

@@ -37,6 +37,18 @@ BENCHMARK_RUN_LOCK = Path("tmp/rag_benchmark/run.lock")
 RUN_LOCK_STALE_SECONDS = 600
 GENERATOR_VERSION = "rag_benchmark:v1"
 CASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$")
+SENSITIVE_RESULT_KEY_PARTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "header",
+    "password",
+    "request_json",
+    "response_json",
+    "secret",
+    "token",
+)
 
 
 class BenchmarkRunRequest(BaseModel):
@@ -87,6 +99,30 @@ def _safe_rel_path(path: Path) -> str:
 def _preview(text: str, limit: int = 200) -> str:
     value = " ".join(str(text or "").split())
     return value[:limit] + ("..." if len(value) > limit else "")
+
+
+def _safe_result_value(value: Any, *, string_limit: int = 240, depth: int = 0) -> Any:
+    if depth > 4:
+        return _preview(str(value), string_limit)
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, item in value.items():
+            key_str = str(key)
+            if any(part in key_str.lower() for part in SENSITIVE_RESULT_KEY_PARTS):
+                safe[key_str] = "[REDACTED]"
+            else:
+                safe[key_str] = _safe_result_value(item, string_limit=string_limit, depth=depth + 1)
+        return safe
+    if isinstance(value, list):
+        return [
+            _safe_result_value(item, string_limit=string_limit, depth=depth + 1)
+            for item in value[:50]
+        ]
+    if isinstance(value, str):
+        return _preview(value, string_limit)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    return _preview(str(value), string_limit)
 
 
 def _readable_json(path: Path) -> Any:
@@ -329,10 +365,13 @@ def _summary_scores(scores: list[CaseScore]) -> dict[str, Any]:
 
 def _trim_result(result: BenchmarkResult, limit: int) -> dict[str, Any]:
     data = result.model_dump()
-    data["candidates"] = data.get("candidates", [])[:limit]
+    data["candidates"] = [
+        _candidate_result_payload(candidate)
+        for candidate in (data.get("candidates", [])[:limit])
+    ]
     data["candidate_ids"] = data.get("candidate_ids", [])[:limit]
     data["debug_summary"] = {}
-    return data
+    return _safe_result_value(data)
 
 
 def _model_data(value: Any) -> dict[str, Any]:
@@ -341,6 +380,16 @@ def _model_data(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     return {}
+
+
+def _candidate_result_payload(candidate: dict[str, Any]) -> dict[str, Any]:
+    item = _safe_result_value(dict(candidate), string_limit=240)
+    if not isinstance(item, dict):
+        return {}
+    item["title"] = _preview(str(item.get("title") or ""), 120)
+    item["text_preview"] = _preview(str(item.get("text_preview") or item.get("text") or ""), 240)
+    item.pop("text", None)
+    return item
 
 
 def _case_result_payload(
@@ -356,10 +405,7 @@ def _case_result_payload(
     expected = case_data.get("expected") if isinstance(case_data.get("expected"), dict) else {}
     candidates = []
     for candidate in (result_data.get("candidates") or [])[:candidate_limit]:
-        item = dict(candidate)
-        item["title"] = _preview(item.get("title") or "", 120)
-        item["text_preview"] = _preview(item.get("text_preview") or item.get("text") or "", 240)
-        candidates.append(item)
+        candidates.append(_candidate_result_payload(candidate))
     return {
         "case_id": case_data.get("id") or score_data.get("case_id") or result_data.get("case_id"),
         "source_type": case_data.get("source_type") or result_data.get("source_type"),
@@ -602,7 +648,6 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                 results.append(result)
                 scores.append(score_case(case, result))
             metrics = aggregate_scores(selected[:len(scores)], scores)
-            report_paths = write_reports(selected[:len(scores)], results, scores, report_out=BENCHMARK_REPORT_DIR)
             failed = [score.model_dump() for score in scores if not score.ok][:50]
             failed_results = [
                 _trim_result(result, candidate_limit)
@@ -615,13 +660,27 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
             ]
             finished_at = datetime.now()
             executed = len(scores) > 0
+            report_id = ""
+            report_paths_payload: dict[str, str] = {}
+            if executed:
+                report_paths = write_reports(
+                    selected[:len(scores)],
+                    results,
+                    scores,
+                    report_out=BENCHMARK_REPORT_DIR,
+                )
+                report_id = str(report_paths["report_id"])
+                report_paths_payload = {
+                    "json": _safe_rel_path(Path(report_paths["json"])),
+                    "markdown": _safe_rel_path(Path(report_paths["markdown"])),
+                }
             warnings = []
             if not executed:
                 warnings.append("no_cases_executed")
             if timeout_reached:
                 warnings.append("timeout_reached")
             return {
-                "run_id": str(report_paths["report_id"]),
+                "run_id": report_id,
                 "ok": executed and all(score.ok for score in scores) and not timeout_reached,
                 "metrics": metrics,
                 "score_summary": _summary_scores(scores) | {"timeout_reached": timeout_reached},
@@ -631,11 +690,8 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                 "results": failed_results,
                 "preflight": preflight,
                 "stale_generated_cases": stale,
-                "report_id": str(report_paths["report_id"]),
-                "report_paths": {
-                    "json": _safe_rel_path(Path(report_paths["json"])),
-                    "markdown": _safe_rel_path(Path(report_paths["markdown"])),
-                },
+                "report_id": report_id,
+                "report_paths": report_paths_payload,
                 "started_at": started_at.isoformat(),
                 "finished_at": finished_at.isoformat(),
                 "latency_ms": int((time.perf_counter() - started) * 1000),

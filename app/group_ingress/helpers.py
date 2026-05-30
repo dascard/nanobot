@@ -16,6 +16,7 @@ from core.context_builder import (
 from core.database import ChatLog, ConversationTurn
 from core.group_runtime.ids import normalize_group_session_id
 from core.settings_service import settings
+from core.sqlite_retry import run_sqlite_locked_retry
 
 logger = logging.getLogger("nanobot.group_ingress")
 
@@ -447,8 +448,16 @@ def annotate_group_timing_event(
             "directed_to_other": result.get("directed_to_other"),
         }
         meta["timing_gate"] = {k: v for k, v in timing.items() if v not in ("", None)}
-        ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)
-        db.commit()
+        def operation() -> None:
+            ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)
+            db.commit()
+
+        run_sqlite_locked_retry(
+            operation,
+            rollback=db.rollback,
+            label="group_timing_event",
+            logger=logger,
+        )
     except Exception as exc:
         logger.warning("[TimingGate] annotate meta failed log_id=%s: %s", getattr(ambient_log, "id", None), exc)
 
@@ -545,20 +554,28 @@ def find_recent_duplicate_group_reply(
 
 
 def log_group_no_reply(db, user_id: str, query: str, agent_result: str, message_id: str = ""):
-    db.add(ChatLog(
-        user_id=user_id,
-        session_id=user_id,
-        role="system",
-        content=f"[NO_SEND] agent_result={agent_result}",
-        message_id=message_id,
-        meta_json=json.dumps({
-            "agent_result": agent_result,
-            "no_send": True,
-            "note": "群聊主流程未调用 reply/no_reply 工具，无消息发送",
-            "source_message_id": message_id,
-        }, ensure_ascii=False),
-    ))
-    db.commit()
+    def operation() -> None:
+        db.add(ChatLog(
+            user_id=user_id,
+            session_id=user_id,
+            role="system",
+            content=f"[NO_SEND] agent_result={agent_result}",
+            message_id=message_id,
+            meta_json=json.dumps({
+                "agent_result": agent_result,
+                "no_send": True,
+                "note": "群聊主流程未调用 reply/no_reply 工具，无消息发送",
+                "source_message_id": message_id,
+            }, ensure_ascii=False),
+        ))
+        db.commit()
+
+    run_sqlite_locked_retry(
+        operation,
+        rollback=db.rollback,
+        label="group_no_reply",
+        logger=logger,
+    )
 
 
 def persist_group_bridge_reply(
@@ -582,33 +599,41 @@ def persist_group_bridge_reply(
     if reply_meta:
         meta["reply_meta"] = reply_meta
 
-    db.add(ChatLog(
-        user_id=group_user_id,
-        session_id=group_user_id,
-        role="assistant",
-        content=answer,
-        sender_name=(bot_name or "nanobot"),
-        session_name=session_name or "",
-        processed=1,
-        meta_json=json.dumps(meta, ensure_ascii=False),
-    ))
-    db.add(ConversationTurn(
-        user_id=group_user_id,
-        session_id=group_user_id,
-        role="user",
-        content=sanitize_prompt_text(query, 300),
-        source_message_ids_json=source_ids_json,
-        meta_json=json.dumps({
-            "kind": "chat",
-            "source": "group_message",
-            "sender_name": sender_name or "",
-        }, ensure_ascii=False),
-    ))
-    db.add(ConversationTurn(
-        user_id=group_user_id,
-        session_id=group_user_id,
-        role="assistant",
-        content=answer,
-        meta_json=json.dumps({"kind": "chat", "bot_name": (bot_name or "nanobot")}, ensure_ascii=False),
-    ))
-    db.commit()
+    def operation() -> None:
+        db.add(ChatLog(
+            user_id=group_user_id,
+            session_id=group_user_id,
+            role="assistant",
+            content=answer,
+            sender_name=(bot_name or "nanobot"),
+            session_name=session_name or "",
+            processed=1,
+            meta_json=json.dumps(meta, ensure_ascii=False),
+        ))
+        db.add(ConversationTurn(
+            user_id=group_user_id,
+            session_id=group_user_id,
+            role="user",
+            content=sanitize_prompt_text(query, 300),
+            source_message_ids_json=source_ids_json,
+            meta_json=json.dumps({
+                "kind": "chat",
+                "source": "group_message",
+                "sender_name": sender_name or "",
+            }, ensure_ascii=False),
+        ))
+        db.add(ConversationTurn(
+            user_id=group_user_id,
+            session_id=group_user_id,
+            role="assistant",
+            content=answer,
+            meta_json=json.dumps({"kind": "chat", "bot_name": (bot_name or "nanobot")}, ensure_ascii=False),
+        ))
+        db.commit()
+
+    run_sqlite_locked_retry(
+        operation,
+        rollback=db.rollback,
+        label="group_bridge_reply",
+        logger=logger,
+    )

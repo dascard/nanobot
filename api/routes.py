@@ -32,6 +32,7 @@ from app.memory_digest.retrieval_service import MemoryDigestRetrievalService, va
 from clients.model_registry import registry
 from clients.new_api_client import NewAPIClient
 from clients.classifier_client import get_guardrail, get_timing_gate
+from core.sqlite_retry import run_sqlite_locked_retry
 
 logger = logging.getLogger("nanobot.routes")
 router = APIRouter(prefix="/api/v1")
@@ -536,15 +537,6 @@ def _persist_chat_turn(
 
     # 敏感数据（Qwen 判定为否）：原始内容入 sensitive_data，chat_logs 用占位符
     if is_silent:
-        from core.database import SensitiveData
-        db.add(SensitiveData(
-            user_id=req.user_id,
-            session_id=req.session_id,
-            content=archive_user_content,
-            guardrail_status="silent",
-            sender_name=req.sender_name or "",
-            session_name=req.session_name or "",
-        ))
         archive_display_content = "[敏感数据]"
         context_display_content = "[敏感数据]"
     else:
@@ -558,31 +550,6 @@ def _persist_chat_turn(
     source_ids_json = json.dumps(source_ids, ensure_ascii=False) if source_ids else "[]"
     meta = json.dumps(req.client_meta or {}, ensure_ascii=False)
 
-    # ChatLog — 原始存档，进化/画像分析
-    db.add(ChatLog(
-        user_id=req.user_id,
-        session_id=req.session_id,
-        role="user",
-        content=archive_display_content,
-        sender_name=req.sender_name or "",
-        session_name=req.session_name or "",
-        processed=processed_val,
-        message_id=req.message_id,
-        source_message_ids_json=source_ids_json,
-        meta_json=meta,
-    ))
-    db.add(ChatLog(
-        user_id=req.user_id,
-        session_id=req.session_id,
-        role="assistant",
-        content=answer,
-        sender_name="nanobot",
-        session_name=req.session_name or "",
-        processed=assistant_processed_val,
-        meta_json=json.dumps(assistant_meta or {}, ensure_ascii=False),
-    ))
-    # ConversationTurn — 精简上下文，专用于历史注入
-    # HTML 报告只存摘要，避免污染下轮上下文；ChatLog 保留完整原文。
     turn_answer = answer
     turn_answer_kind = "casual_template" if guardrail_status == "casual_template" else "chat"
     if answer:
@@ -598,14 +565,59 @@ def _persist_chat_turn(
     assistant_turn_meta = {"kind": turn_answer_kind}
     if assistant_meta:
         assistant_turn_meta.update(assistant_meta)
-    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
-                            role="user", content=context_display_content,
-                            source_message_ids_json=source_ids_json,
-                            meta_json=json.dumps(user_meta, ensure_ascii=False)))
-    db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
-                            role="assistant", content=turn_answer,
-                            meta_json=json.dumps(assistant_turn_meta, ensure_ascii=False)))
-    db.commit()
+
+    def operation() -> None:
+        if is_silent:
+            from core.database import SensitiveData
+
+            db.add(SensitiveData(
+                user_id=req.user_id,
+                session_id=req.session_id,
+                content=archive_user_content,
+                guardrail_status="silent",
+                sender_name=req.sender_name or "",
+                session_name=req.session_name or "",
+            ))
+        # ChatLog — 原始存档，进化/画像分析
+        db.add(ChatLog(
+            user_id=req.user_id,
+            session_id=req.session_id,
+            role="user",
+            content=archive_display_content,
+            sender_name=req.sender_name or "",
+            session_name=req.session_name or "",
+            processed=processed_val,
+            message_id=req.message_id,
+            source_message_ids_json=source_ids_json,
+            meta_json=meta,
+        ))
+        db.add(ChatLog(
+            user_id=req.user_id,
+            session_id=req.session_id,
+            role="assistant",
+            content=answer,
+            sender_name="nanobot",
+            session_name=req.session_name or "",
+            processed=assistant_processed_val,
+            meta_json=json.dumps(assistant_meta or {}, ensure_ascii=False),
+        ))
+        # ConversationTurn — 精简上下文，专用于历史注入
+        # HTML 报告只存摘要，避免污染下轮上下文；ChatLog 保留完整原文。
+        db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
+                                role="user", content=context_display_content,
+                                source_message_ids_json=source_ids_json,
+                                meta_json=json.dumps(user_meta, ensure_ascii=False)))
+        db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
+                                role="assistant", content=turn_answer,
+                                meta_json=json.dumps(assistant_turn_meta, ensure_ascii=False)))
+        db.commit()
+
+    run_sqlite_locked_retry(
+        operation,
+        rollback=db.rollback,
+        label="chat_turn_persist",
+        logger=logger,
+    )
     from core.evolution import _evolution_running
     if req.user_id in _evolution_running:
         return 0  # 进化正在跑，本轮不计入阈值
@@ -634,36 +646,44 @@ def _persist_group_bridge_reply(
     if reply_meta:
         meta["reply_meta"] = reply_meta
 
-    db.add(ChatLog(
-        user_id=group_user_id,
-        session_id=group_user_id,
-        role="assistant",
-        content=answer,
-        sender_name=(bot_name or "nanobot"),
-        session_name=session_name or "",
-        processed=1,
-        meta_json=json.dumps(meta, ensure_ascii=False),
-    ))
-    db.add(ConversationTurn(
-        user_id=group_user_id,
-        session_id=group_user_id,
-        role="user",
-        content=_sanitize_prompt_text(query, MAX_MEMORY_PER_MSG_CHARS),
-        source_message_ids_json=source_ids_json,
-        meta_json=json.dumps({
-            "kind": "chat",
-            "source": "group_message",
-            "sender_name": sender_name or "",
-        }, ensure_ascii=False),
-    ))
-    db.add(ConversationTurn(
-        user_id=group_user_id,
-        session_id=group_user_id,
-        role="assistant",
-        content=answer,
-        meta_json=json.dumps({"kind": "chat", "bot_name": (bot_name or "nanobot")}, ensure_ascii=False),
-    ))
-    db.commit()
+    def operation() -> None:
+        db.add(ChatLog(
+            user_id=group_user_id,
+            session_id=group_user_id,
+            role="assistant",
+            content=answer,
+            sender_name=(bot_name or "nanobot"),
+            session_name=session_name or "",
+            processed=1,
+            meta_json=json.dumps(meta, ensure_ascii=False),
+        ))
+        db.add(ConversationTurn(
+            user_id=group_user_id,
+            session_id=group_user_id,
+            role="user",
+            content=_sanitize_prompt_text(query, MAX_MEMORY_PER_MSG_CHARS),
+            source_message_ids_json=source_ids_json,
+            meta_json=json.dumps({
+                "kind": "chat",
+                "source": "group_message",
+                "sender_name": sender_name or "",
+            }, ensure_ascii=False),
+        ))
+        db.add(ConversationTurn(
+            user_id=group_user_id,
+            session_id=group_user_id,
+            role="assistant",
+            content=answer,
+            meta_json=json.dumps({"kind": "chat", "bot_name": (bot_name or "nanobot")}, ensure_ascii=False),
+        ))
+        db.commit()
+
+    run_sqlite_locked_retry(
+        operation,
+        rollback=db.rollback,
+        label="group_bridge_reply",
+        logger=logger,
+    )
 
 
 def _normalize_reply_for_duplicate(text: str) -> str:
@@ -722,20 +742,29 @@ def _log_group_no_reply(db: Session, user_id: str, query: str, agent_result: str
     用户原文只通过 message_id 可回查 ChatLog。
     """
     import json as _json
-    db.add(ChatLog(
-        user_id=user_id,
-        session_id=user_id,
-        role="system",
-        content=f"[NO_SEND] agent_result={agent_result}",
-        message_id=message_id,
-        meta_json=_json.dumps({
-            "agent_result": agent_result,
-            "no_send": True,
-            "note": "群聊主流程未调用 reply/no_reply 工具，无消息发送",
-            "source_message_id": message_id,
-        }, ensure_ascii=False),
-    ))
-    db.commit()
+
+    def operation() -> None:
+        db.add(ChatLog(
+            user_id=user_id,
+            session_id=user_id,
+            role="system",
+            content=f"[NO_SEND] agent_result={agent_result}",
+            message_id=message_id,
+            meta_json=_json.dumps({
+                "agent_result": agent_result,
+                "no_send": True,
+                "note": "群聊主流程未调用 reply/no_reply 工具，无消息发送",
+                "source_message_id": message_id,
+            }, ensure_ascii=False),
+        ))
+        db.commit()
+
+    run_sqlite_locked_retry(
+        operation,
+        rollback=db.rollback,
+        label="group_no_reply",
+        logger=logger,
+    )
 
 
 
@@ -916,19 +945,23 @@ def submit_log(
     _auth=Depends(verify_token),
 ):
     """接收聊天记录，累积到阈值后触发后台自进化。"""
-    # 1. 自动注册用户
-    if not db.query(User).filter(User.id == log_req.user_id).first():
-        db.add(User(id=log_req.user_id))
+    def operation() -> None:
+        if not db.query(User).filter(User.id == log_req.user_id).first():
+            db.add(User(id=log_req.user_id))
+        db.add(ChatLog(
+            user_id=log_req.user_id,
+            role=log_req.role,
+            content=log_req.content,
+            processed=0,
+        ))
         db.commit()
 
-    # 2. 写入日志
-    db.add(ChatLog(
-        user_id=log_req.user_id,
-        role=log_req.role,
-        content=log_req.content,
-        processed=0,
-    ))
-    db.commit()
+    run_sqlite_locked_retry(
+        operation,
+        rollback=db.rollback,
+        label="chat_log_submit",
+        logger=logger,
+    )
 
     # 3. 检查阈值
     pending = (
@@ -958,19 +991,26 @@ def submit_ambient_log(req: AmbientLogRequest, db: Session = Depends(get_db),
     """[DEPRECATED] 使用 /group/message 替代。"""
     logger.warning("[DEPRECATED] /log_ambient called by group=%s — migrate to /group/message", req.group_id)
     actual_user_id = _normalize_group_session_id(req.group_id)
-    user = db.query(User).filter(User.id == actual_user_id).first()
-    if not user:
-        db.add(User(id=actual_user_id))
-        db.commit()
-    elif req.session_name and user.name != req.session_name:
-        user.name = req.session_name
-        db.commit()
     formatted = f"[{req.sender_name}]: {req.content}"
-    db.add(ChatLog(user_id=actual_user_id, session_id=actual_user_id,
-                   sender_name=req.sender_name, session_name=req.session_name,
-                   role="ambient", content=formatted, processed=1,
-                   message_id=req.message_id))
-    db.commit()
+
+    def operation() -> None:
+        user = db.query(User).filter(User.id == actual_user_id).first()
+        if not user:
+            db.add(User(id=actual_user_id))
+        elif req.session_name and user.name != req.session_name:
+            user.name = req.session_name
+        db.add(ChatLog(user_id=actual_user_id, session_id=actual_user_id,
+                       sender_name=req.sender_name, session_name=req.session_name,
+                       role="ambient", content=formatted, processed=1,
+                       message_id=req.message_id))
+        db.commit()
+
+    run_sqlite_locked_retry(
+        operation,
+        rollback=db.rollback,
+        label="ambient_log_submit",
+        logger=logger,
+    )
     return {"status": "ok", "message": "ambient log saved [deprecated]"}
 
 

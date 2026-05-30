@@ -29,6 +29,8 @@ from core.database import ConversationTurn, RollingSessionSummary, SessionSummar
 
 logger = logging.getLogger("nanobot.session_summary.llm")
 
+LEGACY_SYNC_WORKER_HELPERS = True
+
 SESSION_SUMMARY_SYSTEM_PROMPT = """你是对话滚动摘要器。
 你只总结输入中列出的 pending ConversationTurn。
 不要总结 recent raw window，不要总结当前用户输入。
@@ -517,6 +519,11 @@ def process_session_summary_job(
     summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
     owner: str = "session-summary-worker",
 ) -> bool:
+    """Legacy test helper.
+
+    生产 worker 应使用 `workers.session_summary_worker.run_once()`，由它拆分
+    claim、LLM 调用和 finalize 的事务边界。本函数保留给旧测试和临时诊断。
+    """
     summarizer = summarizer or default_llm_summary_summarizer
     if job.status == "pending":
         claimed = claim_summary_job(db, int(job.id or 0), owner=owner)
@@ -553,6 +560,11 @@ def run_session_summary_worker_once(
     owner: str = "session-summary-worker",
     limit: int | None = None,
 ) -> dict[str, int]:
+    """Legacy test helper.
+
+    该函数使用调用方传入的 DB session，可能形成较长事务。生产 worker
+    不应直接调用它，应走 `workers.session_summary_worker.run_once()`。
+    """
     jobs = fetch_pending_summary_jobs(db, limit=limit)
     stats = {"processed": 0, "done": 0, "failed": 0}
     for job in jobs:

@@ -140,9 +140,17 @@ class GroupIngressService:
                 "no_learn": mod_result["no_learn"],
                 "no_context": mod_result["no_context"],
             }
-            ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)
-            db.commit()
-            db.refresh(ambient_log)
+
+            def operation() -> None:
+                ambient_log.meta_json = json.dumps(meta, ensure_ascii=False)
+                db.commit()
+
+            run_sqlite_locked_retry(
+                operation,
+                rollback=db.rollback,
+                label="group_moderation_meta",
+                logger=logger,
+            )
             if mod_result["no_reply"]:
                 logger.info("[GroupMsg] content-blocked group=%s pattern=%s",
                             req.group_id, mod_result["pattern"])

@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
@@ -175,6 +176,122 @@ def test_benchmark_run_returns_readable_case_results(client, tmp_path, monkeypat
     assert data["case_results"][0]["candidates"][0]["text_preview"] == "RAG benchmark readonly case"
 
 
+def test_group_memory_case_results_include_time_and_metadata(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_path = tmp_path / "benchmark.db"
+    _engine, db = _file_db(db_path)
+    _seed_memory_case(db)
+    db.add(GroupMemory(
+        id=1,
+        group_id="group_1",
+        memory_type="topic",
+        content="小说《灵歌》完结与番外讨论",
+        content_hash="gm1",
+        evidence_log_ids_json="[11, 12]",
+        confidence=0.8,
+        evidence_count=2,
+        first_seen=datetime(2026, 5, 1, 10, 0, 0),
+        last_seen=datetime(2026, 5, 27, 21, 0, 0),
+        updated_at=datetime(2026, 5, 27, 21, 30, 0),
+        decay_score=0.9,
+        status="active",
+        inject_policy="auto",
+        source="group_analysis",
+        injected_count=3,
+    ))
+    db.commit()
+    db.close()
+    _routes, manual, _generated, _reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+    (manual / "group_memory_case.json").write_text(json.dumps({
+        "id": "group_memory_case",
+        "suite": "rag_benchmark",
+        "source_type": "group_memory",
+        "case_type": "positive",
+        "query": "灵歌 完结 番外",
+        "filters": {"group_id": "group_1"},
+        "expected": {"candidate_ids": ["group_memory:1:memory"], "hit_at": 5},
+        "meta": {"origin": "manual"},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    response = client.post(
+        "/api/v1/admin/rag/benchmark/run",
+        headers=_auth_header(),
+        json={"provider_mode": "no_reranker_baseline", "include_generated": False},
+    )
+
+    assert response.status_code == 200
+    candidate = response.json()["case_results"][0]["candidates"][0]
+    assert candidate["metadata"]["first_seen"] == "2026-05-01T10:00:00"
+    assert candidate["metadata"]["last_seen"] == "2026-05-27T21:00:00"
+    assert candidate["metadata"]["updated_at"] == "2026-05-27T21:30:00"
+    assert candidate["metadata"]["evidence_count"] == 2
+    assert candidate["metadata"]["confidence"] == 0.8
+    assert candidate["metadata"]["decay_score"] == 0.9
+    assert candidate["metadata"]["inject_policy"] == "auto"
+    assert candidate["metadata"]["evidence_log_ids"] == [11, 12]
+
+
+def test_benchmark_case_results_redact_and_clip_candidate_metadata(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_path = tmp_path / "benchmark.db"
+    _engine, db = _file_db(db_path)
+    _seed_memory_case(db)
+    db.close()
+    _routes, manual, _generated, _reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+    (manual / "memory_case.json").write_text(json.dumps({
+        "id": "memory_case",
+        "suite": "rag_benchmark",
+        "source_type": "memory",
+        "case_type": "positive",
+        "query": "RAG benchmark readonly",
+        "expected": {"candidate_ids": ["memory_digest:42:digest:level2"], "hit_at": 5},
+        "meta": {"origin": "manual"},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    from evals.rag_benchmark.schema import BenchmarkCandidate, BenchmarkResult
+
+    def fake_adapter(_db, case, **_kwargs):
+        return BenchmarkResult(
+            case_id=case.id,
+            source_type=case.source_type,
+            candidate_ids=["memory_digest:42:digest:level2"],
+            candidates=[
+                BenchmarkCandidate(
+                    candidate_id="memory_digest:42:digest:level2",
+                    source_type="memory",
+                    rank=1,
+                    title="T" * 200,
+                    text_preview="X" * 600,
+                    metadata={
+                        "authorization": "Bearer secret-token",
+                        "nested": {"api_key": "secret-api-key"},
+                        "notes": "Y" * 1000,
+                    },
+                )
+            ],
+            merged_candidates_count=1,
+            reranker_candidates_count=1,
+        )
+
+    monkeypatch.setattr("api.admin.rag_benchmark_routes.run_case_with_adapter", fake_adapter)
+
+    response = client.post(
+        "/api/v1/admin/rag/benchmark/run",
+        headers=_auth_header(),
+        json={"provider_mode": "deterministic", "include_generated": False},
+    )
+
+    assert response.status_code == 200
+    candidate = response.json()["case_results"][0]["candidates"][0]
+    assert candidate["title"].endswith("...")
+    assert candidate["text_preview"].endswith("...")
+    assert candidate["metadata"]["authorization"] == "[REDACTED]"
+    assert candidate["metadata"]["nested"]["api_key"] == "[REDACTED]"
+    assert candidate["metadata"]["notes"].endswith("...")
+    assert "secret-token" not in json.dumps(candidate, ensure_ascii=False)
+    assert "secret-api-key" not in json.dumps(candidate, ensure_ascii=False)
+
+
 def test_benchmark_missing_fts_returns_preflight_error_without_creating_table(client, tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     db_path = tmp_path / "missing_fts.db"
@@ -279,7 +396,7 @@ def test_manual_case_detail_preserves_full_query_when_saved(client, tmp_path, mo
     assert persisted["query"] == long_query
 
 
-def test_benchmark_sample_marks_fingerprint_and_run_skips_stale_generated(client, tmp_path, monkeypatch):
+def test_benchmark_sample_marks_fingerprint_and_run_skips_stale_generated_without_overwriting_latest(client, tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     db_path = tmp_path / "benchmark.db"
     engine, db = _file_db(db_path)
@@ -299,7 +416,10 @@ def test_benchmark_sample_marks_fingerprint_and_run_skips_stale_generated(client
     _seed_memory_case(db)
     db.commit()
     db.close()
-    _routes, _manual, generated, _reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+    _routes, _manual, generated, reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "latest.json").write_text('{"marker":"keep-json"}', encoding="utf-8")
+    (reports / "latest.md").write_text("keep markdown", encoding="utf-8")
 
     sampled = client.post(
         "/api/v1/admin/rag/benchmark/sample",
@@ -328,6 +448,10 @@ def test_benchmark_sample_marks_fingerprint_and_run_skips_stale_generated(client
     assert data["metrics"]["overall"]["total_cases"] == 0
     assert data["ok"] is False
     assert "no_cases_executed" in data["warnings"]
+    assert data["report_id"] == ""
+    assert data["report_paths"] == {}
+    assert (reports / "latest.json").read_text(encoding="utf-8") == '{"marker":"keep-json"}'
+    assert (reports / "latest.md").read_text(encoding="utf-8") == "keep markdown"
 
 
 def test_benchmark_run_clears_stale_lock(client, tmp_path, monkeypatch):

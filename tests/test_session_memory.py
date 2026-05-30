@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timedelta
 
+import pytest
+
 from core.database import ChatLog, ConversationTurn, RollingSessionSummary, SessionSummaryJob, User
 
 
@@ -291,6 +293,16 @@ def test_deterministic_summary_uses_clean_snippets_without_turn_metadata(db_sess
             role="assistant",
             content="已确认：需要增加 LLM 摘要重生成按钮，并展示 job 状态。",
         ),
+        _turn(
+            db_session,
+            role="user",
+            content="[turn_id=77][2026-05-29 07:40:49][user][Bob] 请清理 turn 元数据和 sender prefix。",
+        ),
+        _turn(
+            db_session,
+            role="assistant",
+            content="[turn_id=78][2026-05-29 07:40:50][assistant][Bot]: 已清理 sender prefix。",
+        ),
     ]
     db_session.commit()
 
@@ -306,6 +318,10 @@ def test_deterministic_summary_uses_clean_snippets_without_turn_metadata(db_sess
     assert "[user]" not in rendered
     assert "[assistant]" not in rendered
     assert "Alice]:" not in rendered
+    assert "[Bob]" not in rendered
+    assert "[Bot]" not in rendered
+    assert "请清理 turn 元数据" in rendered
+    assert "已清理 sender prefix" in rendered
     assert payload["evidence_turn_ids"] == [turn.id for turn in pending]
 
 
@@ -470,6 +486,36 @@ def test_rollup_success_enqueues_llm_summary_job(db_session):
     assert job is not None
     assert job.status == "pending"
     assert job.fallback_summary_id == result.summary.id
+
+
+def test_admin_enqueue_missing_summary_id_returns_404_without_fallback(db_session):
+    from api.admin.session_memory_routes import RollingSummaryEnqueueRequest, enqueue_llm_summary
+    from fastapi import HTTPException
+
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="llm_episode",
+        summary_text="可用的 active 摘要不应被 fallback 使用",
+        covered_from_turn_id=1,
+        covered_until_turn_id=3,
+        source_turn_ids_json="[1,2,3]",
+    )
+    db_session.add(fallback)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        enqueue_llm_summary(
+            "s1",
+            body=RollingSummaryEnqueueRequest(summary_id=999999),
+            db=db_session,
+            _auth=True,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert db_session.query(SessionSummaryJob).count() == 0
 
 
 def test_rollup_dry_run_does_not_enqueue_llm_summary_job(db_session):
@@ -892,6 +938,28 @@ def test_docker_compose_declares_independent_session_summary_worker():
 
     assert "session-summary-worker:" in compose
     assert "python -m workers.session_summary_worker --loop" in compose
+
+
+def test_legacy_sync_worker_helpers_are_marked():
+    from app.session_memory import llm_summarizer
+
+    assert llm_summarizer.LEGACY_SYNC_WORKER_HELPERS is True
+    assert "Legacy" in (llm_summarizer.run_session_summary_worker_once.__doc__ or "")
+    assert "Legacy" in (llm_summarizer.process_session_summary_job.__doc__ or "")
+
+
+def test_worker_run_once_initializes_schema_before_query(monkeypatch):
+    from workers import session_summary_worker as worker
+
+    calls: list[str] = []
+    monkeypatch.setattr(worker, "_schema_ready", False, raising=False)
+    monkeypatch.setattr(worker, "init_db", lambda: calls.append("init"))
+    monkeypatch.setattr(worker, "_claim_next_job", lambda **_kwargs: (None, 0))
+
+    result = worker.run_once(owner="worker-a", limit=1)
+
+    assert calls == ["init"]
+    assert result == {"processed": 0, "done": 0, "failed": 0, "recovered": 0}
 
 
 def test_worker_run_once_commits_claim_before_summarizer(db_session, monkeypatch):

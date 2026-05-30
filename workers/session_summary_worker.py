@@ -11,9 +11,20 @@ from typing import Any
 from app.session_memory import config
 from app.session_memory.jobs import claim_summary_job, fetch_pending_summary_jobs, recover_stale_running_jobs
 from app.session_memory.llm_summarizer import process_claimed_session_summary_job_short_transactions
-from core.database import SessionLocal
+from core.database import SessionLocal, init_db
 
 logger = logging.getLogger("nanobot.session_summary.worker")
+
+_schema_ready = False
+
+
+def _ensure_schema_ready() -> None:
+    """worker 自己确保 schema/migration 已就绪，不依赖 Web 进程启动顺序。"""
+    global _schema_ready
+    if _schema_ready:
+        return
+    init_db()
+    _schema_ready = True
 
 
 def _claim_next_job(*, owner: str, limit: int | None = None) -> tuple[int | None, int]:
@@ -42,6 +53,7 @@ def run_once(
     limit: int | None = None,
     summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
 ) -> dict[str, int]:
+    _ensure_schema_ready()
     max_jobs = max(1, int(limit or config.SESSION_SUMMARY_JOB_BATCH_SIZE))
     stats = {"processed": 0, "done": 0, "failed": 0, "recovered": 0}
     while stats["processed"] < max_jobs:

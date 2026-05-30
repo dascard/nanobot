@@ -174,12 +174,16 @@ def _build_rollup_inputs(
 def list_session_memory_sessions(
     session_limit: int = 50,
     cursor: str = "",
+    kind: str = "all",
+    include_system_sessions: bool = False,
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
     return AdminSessionMemoryBrowser(db).list_sessions(
         session_limit=session_limit,
         cursor=cursor,
+        kind=kind,
+        include_system_sessions=include_system_sessions,
     )
 
 
@@ -328,7 +332,9 @@ def enqueue_llm_summary(
             )
             .first()
         )
-    if base_summary is None:
+        if base_summary is None:
+            raise HTTPException(status_code=404, detail="rolling summary not found")
+    else:
         base_summary = (
             db.query(RollingSessionSummary)
             .filter(
@@ -339,8 +345,8 @@ def enqueue_llm_summary(
             .order_by(RollingSessionSummary.id.desc())
             .first()
         )
-    if base_summary is None:
-        base_summary = get_best_session_summary(db, session_id)
+        if base_summary is None:
+            base_summary = get_best_session_summary(db, session_id)
     if base_summary is None:
         raise HTTPException(status_code=404, detail="active rolling summary not found")
 

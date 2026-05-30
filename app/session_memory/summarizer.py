@@ -30,7 +30,7 @@ def _strip_sender_prefix(text: str) -> str:
     import re
 
     value = str(text or "").strip()
-    match = re.match(r"^\[([^\]]{1,80})\]\s*[:：]\s*(.*)$", value, re.DOTALL)
+    match = re.match(r"^\[([^\]]{1,80})\]\s*[:：]?\s*(.*)$", value, re.DOTALL)
     if match:
         return match.group(2).strip()
     return value
@@ -40,8 +40,8 @@ def _strip_turn_metadata(text: str) -> str:
     import re
 
     value = str(text or "")
-    value = re.sub(r"\[turn_id=\d+\]\[[^\]]*\]\[(?:user|assistant)\]\s*", "", value)
     value = re.sub(r"\[turn_id=\d+\]\[[^\]]*\]\[(?:user|assistant)\]\[[^\]]{1,80}\]\s*", "", value)
+    value = re.sub(r"\[turn_id=\d+\]\[[^\]]*\]\[(?:user|assistant)\]\s*", "", value)
     value = re.sub(r"\[turn_id=\d+\]", "", value)
     return value.strip()
 

@@ -49,6 +49,7 @@ class BenchmarkCandidate(BaseModel):
     sendable: bool | None = None
     citation: bool | None = None
     score_breakdown: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class BenchmarkResult(BaseModel):

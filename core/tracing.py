@@ -85,6 +85,17 @@ def _session():
     return database.SessionLocal()
 
 
+def _run_db_write(db: Any, operation: Any, *, label: str) -> Any:
+    from core.sqlite_retry import run_sqlite_locked_retry
+
+    return run_sqlite_locked_retry(
+        operation,
+        rollback=db.rollback,
+        label=label,
+        logger=logger,
+    )
+
+
 class RunTracer:
     @staticmethod
     def start_run(
@@ -112,27 +123,30 @@ class RunTracer:
 
             db = _session()
             try:
-                db.add(AgentRun(
-                    run_id=run_id,
-                    trace_id=trace_id,
-                    session_id=str(session_id or "")[:128],
-                    user_id=str(user_id or "")[:128],
-                    chat_type=str(chat_type or "")[:32],
-                    group_id=str(group_id or "")[:128],
-                    run_type=str(run_type or "chat")[:32],
-                    prompt_mode=str(prompt_mode or "legacy")[:32],
-                    prompt_key=str(prompt_key or "")[:96],
-                    prompt_source=str(prompt_source or "")[:96],
-                    prompt_runtime_path=str(prompt_runtime_path or ""),
-                    prompt_default_path=str(prompt_default_path or ""),
-                    prompt_sha256=str(prompt_sha256 or "")[:64],
-                    model=str(model or "")[:160],
-                    status="running",
-                    input_preview=_preview(input_preview, max_chars=1000),
-                    meta_json=_json_dumps(meta or {}, max_chars=3000),
-                    started_at=datetime.now(),
-                ))
-                db.commit()
+                def operation() -> None:
+                    db.add(AgentRun(
+                        run_id=run_id,
+                        trace_id=trace_id,
+                        session_id=str(session_id or "")[:128],
+                        user_id=str(user_id or "")[:128],
+                        chat_type=str(chat_type or "")[:32],
+                        group_id=str(group_id or "")[:128],
+                        run_type=str(run_type or "chat")[:32],
+                        prompt_mode=str(prompt_mode or "legacy")[:32],
+                        prompt_key=str(prompt_key or "")[:96],
+                        prompt_source=str(prompt_source or "")[:96],
+                        prompt_runtime_path=str(prompt_runtime_path or ""),
+                        prompt_default_path=str(prompt_default_path or ""),
+                        prompt_sha256=str(prompt_sha256 or "")[:64],
+                        model=str(model or "")[:160],
+                        status="running",
+                        input_preview=_preview(input_preview, max_chars=1000),
+                        meta_json=_json_dumps(meta or {}, max_chars=3000),
+                        started_at=datetime.now(),
+                    ))
+                    db.commit()
+
+                _run_db_write(db, operation, label="agent_run_start")
             finally:
                 db.close()
         except Exception as e:
@@ -155,14 +169,17 @@ class RunTracer:
 
             db = _session()
             try:
-                row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
-                if not row:
-                    return
-                row.prompt_source = str(prompt_source or "")[:96]
-                row.prompt_runtime_path = str(prompt_runtime_path or "")
-                row.prompt_default_path = str(prompt_default_path or "")
-                row.prompt_sha256 = str(prompt_sha256 or "")[:64]
-                db.commit()
+                def operation() -> None:
+                    row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
+                    if not row:
+                        return
+                    row.prompt_source = str(prompt_source or "")[:96]
+                    row.prompt_runtime_path = str(prompt_runtime_path or "")
+                    row.prompt_default_path = str(prompt_default_path or "")
+                    row.prompt_sha256 = str(prompt_sha256 or "")[:64]
+                    db.commit()
+
+                _run_db_write(db, operation, label="agent_run_prompt_source")
             finally:
                 db.close()
         except Exception as e:
@@ -187,20 +204,23 @@ class RunTracer:
 
             db = _session()
             try:
-                row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
-                if not row:
-                    return
-                row.status = str(status or "success")[:32]
-                row.output_preview = _preview(output_preview, max_chars=1000)
-                row.error = _preview(error, max_chars=1000)
-                if latency_ms is not None:
-                    row.latency_ms = int(latency_ms)
-                if model:
-                    row.model = str(model)[:160]
-                if meta is not None:
-                    row.meta_json = _json_dumps(meta, max_chars=3000)
-                row.finished_at = finished_at or datetime.now()
-                db.commit()
+                def operation() -> None:
+                    row = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
+                    if not row:
+                        return
+                    row.status = str(status or "success")[:32]
+                    row.output_preview = _preview(output_preview, max_chars=1000)
+                    row.error = _preview(error, max_chars=1000)
+                    if latency_ms is not None:
+                        row.latency_ms = int(latency_ms)
+                    if model:
+                        row.model = str(model)[:160]
+                    if meta is not None:
+                        row.meta_json = _json_dumps(meta, max_chars=3000)
+                    row.finished_at = finished_at or datetime.now()
+                    db.commit()
+
+                _run_db_write(db, operation, label="agent_run_finish")
             finally:
                 db.close()
         except Exception as e:
@@ -223,16 +243,19 @@ class ToolTracer:
 
             db = _session()
             try:
-                db.add(ToolCall(
-                    tool_call_id=tool_call_id,
-                    trace_id=str(trace_id or "")[:64],
-                    run_id=str(run_id or "")[:80],
-                    tool_name=str(tool_name or "")[:128],
-                    args_json=_json_dumps(args),
-                    status="running",
-                    started_at=datetime.now(),
-                ))
-                db.commit()
+                def operation() -> None:
+                    db.add(ToolCall(
+                        tool_call_id=tool_call_id,
+                        trace_id=str(trace_id or "")[:64],
+                        run_id=str(run_id or "")[:80],
+                        tool_name=str(tool_name or "")[:128],
+                        args_json=_json_dumps(args),
+                        status="running",
+                        started_at=datetime.now(),
+                    ))
+                    db.commit()
+
+                _run_db_write(db, operation, label="tool_call_start")
             finally:
                 db.close()
         except Exception as e:
@@ -257,16 +280,19 @@ class ToolTracer:
 
             db = _session()
             try:
-                row = db.query(ToolCall).filter(ToolCall.tool_call_id == tool_call_id).first()
-                if not row:
-                    return
-                row.status = str(status or "success")[:32]
-                row.result_preview = _preview(result)
-                row.error = _preview(error, max_chars=1000)
-                if latency_ms is not None:
-                    row.latency_ms = int(latency_ms)
-                row.finished_at = finished_at or datetime.now()
-                db.commit()
+                def operation() -> None:
+                    row = db.query(ToolCall).filter(ToolCall.tool_call_id == tool_call_id).first()
+                    if not row:
+                        return
+                    row.status = str(status or "success")[:32]
+                    row.result_preview = _preview(result)
+                    row.error = _preview(error, max_chars=1000)
+                    if latency_ms is not None:
+                        row.latency_ms = int(latency_ms)
+                    row.finished_at = finished_at or datetime.now()
+                    db.commit()
+
+                _run_db_write(db, operation, label="tool_call_finish")
             finally:
                 db.close()
         except Exception as e:
@@ -296,23 +322,26 @@ class PromptTracer:
 
             db = _session()
             try:
-                db.add(PromptRenderLog(
-                    trace_id=str(trace_id or "")[:64],
-                    run_id=str(run_id or "")[:80],
-                    prompt_key=str(prompt_key or "")[:96],
-                    mode=str(mode or "preview")[:32],
-                    prompt_source=str(prompt_source or "")[:96],
-                    prompt_runtime_path=str(prompt_runtime_path or ""),
-                    prompt_default_path=str(prompt_default_path or ""),
-                    prompt_sha256=str(prompt_sha256 or "")[:64],
-                    variables_json=_json_dumps(variables or {}, max_chars=6000),
-                    rendered_preview=_prompt_preview(rendered_content, max_chars=1000),
-                    token_estimate=int(token_estimate or 0),
-                    warnings_json=_json_dumps(warnings or [], max_chars=2000),
-                    error=_preview(error, max_chars=1000),
-                    created_at=datetime.now(),
-                ))
-                db.commit()
+                def operation() -> None:
+                    db.add(PromptRenderLog(
+                        trace_id=str(trace_id or "")[:64],
+                        run_id=str(run_id or "")[:80],
+                        prompt_key=str(prompt_key or "")[:96],
+                        mode=str(mode or "preview")[:32],
+                        prompt_source=str(prompt_source or "")[:96],
+                        prompt_runtime_path=str(prompt_runtime_path or ""),
+                        prompt_default_path=str(prompt_default_path or ""),
+                        prompt_sha256=str(prompt_sha256 or "")[:64],
+                        variables_json=_json_dumps(variables or {}, max_chars=6000),
+                        rendered_preview=_prompt_preview(rendered_content, max_chars=1000),
+                        token_estimate=int(token_estimate or 0),
+                        warnings_json=_json_dumps(warnings or [], max_chars=2000),
+                        error=_preview(error, max_chars=1000),
+                        created_at=datetime.now(),
+                    ))
+                    db.commit()
+
+                _run_db_write(db, operation, label="prompt_render_log")
             finally:
                 db.close()
         except Exception as e:
@@ -362,32 +391,36 @@ class LLMRequestTracer:
 
             db = _session()
             try:
-                log = LLMApiRequestLog(
-                    trace_id=str(trace_id or "")[:64],
-                    run_id=str(run_id or "")[:80],
-                    source=str(source or "")[:64],
-                    provider=str(provider or "")[:64],
-                    model=str(model or "")[:160],
-                    url=str(url or ""),
-                    method=str(method or "POST")[:16],
-                    headers_json=_json_dumps(headers or {}, max_chars=12000),
-                    request_json=_json_dumps(request_payload, max_chars=0),
-                    request_preview=_preview(request_payload, max_chars=4000),
-                    status=str(status or "created")[:32],
-                    response_status=int(response_status or 0),
-                    error=_preview(error, max_chars=2000),
-                    message_sources_json=_json_dumps(lint_result.get("message_sources") or [], max_chars=0),
-                    request_lint_json=_json_dumps(lint_result, max_chars=0),
-                    actual_sent_tools_json=_json_dumps(lint_result.get("actual_sent_tools") or [], max_chars=0),
-                    runtime_enabled_tools_json=_json_dumps(lint_result.get("runtime_enabled_tools") or [], max_chars=0),
-                    runtime_disabled_tools_json=_json_dumps(lint_result.get("runtime_disabled_tools") or [], max_chars=0),
-                    framework_injected_tools_json=_json_dumps(lint_result.get("framework_injected_tools") or [], max_chars=0),
-                    created_at=datetime.now(),
-                )
-                db.add(log)
-                db.commit()
-                db.refresh(log)
-                return int(log.id or 0)
+                def operation() -> int:
+                    log = LLMApiRequestLog(
+                        trace_id=str(trace_id or "")[:64],
+                        run_id=str(run_id or "")[:80],
+                        source=str(source or "")[:64],
+                        provider=str(provider or "")[:64],
+                        model=str(model or "")[:160],
+                        url=str(url or ""),
+                        method=str(method or "POST")[:16],
+                        headers_json=_json_dumps(headers or {}, max_chars=12000),
+                        request_json=_json_dumps(request_payload, max_chars=0),
+                        request_preview=_preview(request_payload, max_chars=4000),
+                        status=str(status or "created")[:32],
+                        response_status=int(response_status or 0),
+                        error=_preview(error, max_chars=2000),
+                        message_sources_json=_json_dumps(lint_result.get("message_sources") or [], max_chars=0),
+                        request_lint_json=_json_dumps(lint_result, max_chars=0),
+                        actual_sent_tools_json=_json_dumps(lint_result.get("actual_sent_tools") or [], max_chars=0),
+                        runtime_enabled_tools_json=_json_dumps(lint_result.get("runtime_enabled_tools") or [], max_chars=0),
+                        runtime_disabled_tools_json=_json_dumps(lint_result.get("runtime_disabled_tools") or [], max_chars=0),
+                        framework_injected_tools_json=_json_dumps(lint_result.get("framework_injected_tools") or [], max_chars=0),
+                        created_at=datetime.now(),
+                    )
+                    db.add(log)
+                    db.flush()
+                    log_id = int(log.id or 0)
+                    db.commit()
+                    return log_id
+
+                return int(_run_db_write(db, operation, label="llm_api_request_log") or 0)
             finally:
                 db.close()
         except Exception as e:
@@ -411,17 +444,20 @@ class LLMRequestTracer:
 
             db = _session()
             try:
-                log = db.query(LLMApiRequestLog).filter(LLMApiRequestLog.id == int(log_id)).first()
-                if log is None:
-                    return
-                log.response_json = _json_dumps(response or {}, max_chars=0)
-                log.response_preview = _preview(response or {}, max_chars=4000)
-                log.response_status = int(response_status or 0)
-                log.status = str(status or "success")[:32]
-                log.error = _preview(error, max_chars=2000)
-                log.latency_ms = int(latency_ms or 0)
-                log.finished_at = datetime.now()
-                db.commit()
+                def operation() -> None:
+                    log = db.query(LLMApiRequestLog).filter(LLMApiRequestLog.id == int(log_id)).first()
+                    if log is None:
+                        return
+                    log.response_json = _json_dumps(response or {}, max_chars=0)
+                    log.response_preview = _preview(response or {}, max_chars=4000)
+                    log.response_status = int(response_status or 0)
+                    log.status = str(status or "success")[:32]
+                    log.error = _preview(error, max_chars=2000)
+                    log.latency_ms = int(latency_ms or 0)
+                    log.finished_at = datetime.now()
+                    db.commit()
+
+                _run_db_write(db, operation, label="llm_api_request_finish")
             finally:
                 db.close()
         except Exception as e:
