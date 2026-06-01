@@ -26,6 +26,50 @@ logger = logging.getLogger("nanobot.memory_digest.llm")
 _URL_RE = re.compile(r"https?://[^\s，。！？；、)）\]>]+|www\.[^\s，。！？；、)）\]>]+", re.IGNORECASE)
 _MAX_SOURCE_LINES = 80
 _MIN_LLM_QUALITY = 0.75
+_CARD_MAX_CHARS = 120
+
+_GENERIC_CARD_PATTERNS: list[re.Pattern] = [
+    re.compile(r"^今天.*讨论"),
+    re.compile(r"^用户希望.*更好"),
+    re.compile(r"^需要优化"),
+    re.compile(r"^本次(对话|讨论|会话).*围绕"),
+    re.compile(r"^需要进一步.*(优化|改进|完善)"),
+    re.compile(r"^讨论了.*相关"),
+    re.compile(r"^用户.*(提出|询问|想知道)"),
+    re.compile(r"^系统.*(应该|需要|可以)"),
+]
+
+
+def _is_generic_card_text(text: str) -> bool:
+    """用正则检测泛化/无信息量的 card 文本。"""
+    t = text.strip()
+    if not t:
+        return True
+    for pat in _GENERIC_CARD_PATTERNS:
+        if pat.search(t):
+            return True
+    return False
+
+
+def _has_keyword_overlap(text: str, source_text: str, *, min_overlap: int = 2) -> bool:
+    """检查 card 文本与 source 是否有基本词面重合。
+
+    中文用双字词组，英文用 3+ 字母单词。
+    """
+    cn_chars = re.findall(r"[一-鿿]{2,}", text)
+    if cn_chars:
+        src_chars = set(re.findall(r"[一-鿿]{2,}", source_text))
+        overlap = sum(1 for c in cn_chars if c in src_chars)
+        if overlap >= min_overlap:
+            return True
+
+    en_words = set(re.findall(r"[a-zA-Z_]{3,}", text.lower()))
+    if en_words:
+        src_words = set(re.findall(r"[a-zA-Z_]{3,}", source_text.lower()))
+        if len(en_words & src_words) >= min_overlap:
+            return True
+
+    return False
 _SYSTEM_TEMPLATE_KEY = "tasks/memory_digest_system"
 _USER_TEMPLATE_KEY = "tasks/memory_digest_user"
 
@@ -347,7 +391,15 @@ def _normalize_llm_meta(
     return meta
 
 
-def audit_llm_digest_meta(meta: dict[str, Any]) -> tuple[bool, list[str]]:
+def audit_llm_digest_meta(
+    meta: dict[str, Any],
+    *,
+    source_rows: list[dict[str, Any]] | None = None,
+) -> tuple[bool, list[str]]:
+    """审计 LLM 生成的 digest meta，验证 card 是否 grounded 于 source。
+
+    source_rows 为可选参数——传入时启用 evidence / keyword overlap 检查。
+    """
     issues: list[str] = []
     if str(meta.get("status") or "") != "active":
         issues.append("status_not_active")
@@ -381,14 +433,47 @@ def audit_llm_digest_meta(meta: dict[str, Any]) -> tuple[bool, list[str]]:
     }, ensure_ascii=False)):
         issues.append("contains_url")
 
+    # 构建 source 上下文（用于 grounded 检查）
+    source_log_ids: set[int] = set()
+    source_text: str = ""
+    if source_rows:
+        for row in source_rows:
+            lid = row.get("log_id")
+            if lid is not None:
+                source_log_ids.add(int(lid))
+        source_text = "\n".join(
+            str(row.get("line") or "").strip() for row in source_rows
+        )
+
     for card in cards:
         text = str(card.get("text") if isinstance(card, dict) else card or "").strip()
-        if len(text) > 180:
+        if len(text) > _CARD_MAX_CHARS:
             issues.append("recall_card_too_long")
+
+        # evidence_log_ids 必须存在于 source
+        evidence_ids = card.get("evidence_log_ids") if isinstance(card, dict) else []
+        if isinstance(evidence_ids, list) and evidence_ids and source_log_ids:
+            for eid in evidence_ids:
+                try:
+                    if int(eid) not in source_log_ids:
+                        issues.append("recall_card_evidence_not_in_source")
+                        break
+                except (TypeError, ValueError):
+                    issues.append("recall_card_evidence_not_in_source")
+                    break
+
+        # 无 evidence → 检查词面重合
+        if (not isinstance(evidence_ids, list) or not evidence_ids) and source_text:
+            if not _has_keyword_overlap(text, source_text):
+                issues.append("recall_card_not_grounded")
+
+        # 泛化句检测（正则）
+        if _is_generic_card_text(text):
+            issues.append("recall_card_too_generic")
+
+        # 路径/栈帧
         if re.search(r"(/[\w.-]+){2,}|[A-Za-z]:\\|[\w.-]+\.py:\d+", text):
             issues.append("recall_card_contains_log_path")
-        if text in {"今天讨论了很多摘要相关问题。", "用户希望系统更好。", "需要优化代码。"}:
-            issues.append("recall_card_too_generic")
 
     return not issues, issues
 
@@ -475,7 +560,7 @@ def build_memory_digest_with_llm(
             user_id=user_id,
             prompt_meta=prompt_meta,
         )
-        audit_ok, issues = audit_llm_digest_meta(meta)
+        audit_ok, issues = audit_llm_digest_meta(meta, source_rows=source_rows)
         if not audit_ok:
             return _fallback_result(fallback, status="fallback", error=",".join(issues), prompt_meta=prompt_meta)
         return MemoryDigestBuildResult(
