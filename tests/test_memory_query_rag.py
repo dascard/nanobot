@@ -242,6 +242,109 @@ def test_memory_rag_uses_fts_recall_before_recent_row_limit(db_session):
     assert result["items"][0]["source_id"] == "old"
 
 
+def test_memory_rag_uses_vector_recall_before_recent_row_limit(db_session):
+    from core.memory_rag import MemoryRagService
+    from core.semantic.adapters import SemanticChunk
+    from core.semantic.indexer import upsert_semantic_chunks
+
+    chunks = [
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="old-vector",
+            source_sub_id="card:old-vector",
+            title="旧向量摘要",
+            text="uvicorn 8000 端口冲突排查。",
+            lexical_text="uvicorn 8000 端口冲突排查。",
+            embedding_text="uvicorn 8000 端口冲突排查。",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        )
+    ]
+    chunks.extend(
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id=f"noise-vector-{idx}",
+            source_sub_id=f"card:noise-vector-{idx}",
+            title=f"向量噪声 {idx}",
+            text="午饭 咖啡 天气",
+            lexical_text="午饭 咖啡 天气",
+            embedding_text="午饭 咖啡 天气",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        )
+        for idx in range(405)
+    )
+    embeddings = {
+        chunk.source_sub_id: json.dumps(KeywordEmbeddingProvider().embed([chunk.embedding_text])[0]).encode("utf-8")
+        for chunk in chunks
+    }
+    upsert_semantic_chunks(
+        db_session,
+        chunks,
+        index_version="fake:v1:v1",
+        embedding_model="fake",
+        embeddings=embeddings,
+    )
+
+    result = MemoryRagService(
+        db_session,
+        embedding_provider=KeywordEmbeddingProvider(),
+        reranker_provider=FixedRerankerProvider({"memory_digest:old-vector:card:old-vector": 0.8}),
+    ).query(
+        "部署失败",
+        source="digest",
+        user_id="u1",
+        session_id="s1",
+        limit=3,
+        include_debug=True,
+    )
+
+    assert result["items"][0]["source_id"] == "old-vector"
+    assert result["stats"]["vector_candidates"] >= 1
+    assert result["debug_trace"]["vector_hits"][0]["candidate_id"] == "memory_digest:old-vector:card:old-vector"
+
+
+def test_memory_rag_does_not_embed_when_index_has_no_vectors(db_session):
+    from core.memory_rag import MemoryRagService
+    from core.semantic.adapters import SemanticChunk
+    from core.semantic.indexer import upsert_semantic_chunks
+
+    class CountingEmbeddingProvider(KeywordEmbeddingProvider):
+        def __init__(self):
+            self.text_batches = []
+
+        def embed(self, texts):
+            self.text_batches.append(list(texts))
+            return super().embed(texts)
+
+    upsert_semantic_chunks(
+        db_session,
+        [
+            SemanticChunk(
+                source_type="memory_digest",
+                source_id="no-row-embedding",
+                source_sub_id="card:0",
+                title="端口记录",
+                text="端口记录",
+                lexical_text="端口记录",
+                embedding_text="端口记录",
+                metadata={"user_id": "u1", "session_id": "s1"},
+            )
+        ],
+        index_version="fake:v1:v1",
+    )
+
+    provider = CountingEmbeddingProvider()
+    result = MemoryRagService(db_session, embedding_provider=provider).query(
+        "端口",
+        source="digest",
+        user_id="u1",
+        session_id="s1",
+        limit=3,
+    )
+
+    assert provider.text_batches == []
+    assert result["stats"]["embedding_candidates"] == 0
+
+
 def test_memory_rag_does_not_rerank_generic_lexical_fallback(db_session):
     from core.memory_rag import MemoryRagService
     from core.semantic.adapters import SemanticChunk

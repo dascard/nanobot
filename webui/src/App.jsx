@@ -1916,14 +1916,18 @@ function SessionSummaryBrowser({ mode }) {
   const isRecent = mode === 'recent'
 
   const loadSessions = useCallback(() => {
-    return api.get('/session-memory/sessions', { params: { session_limit: 100 } })
+    return api.get('/session-memory/sessions', { params: { session_limit: 100, kind: isRecent ? 'recent' : 'long' } })
       .then(r => {
         const next = r.data.items || []
         setSessions(next)
-        if (!selectedSession && next.length) setSelectedSession(next[0].session_id)
+        setSelectedSession(current => (
+          current && next.some(item => item.session_id === current)
+            ? current
+            : (next[0]?.session_id || '')
+        ))
       })
       .catch(() => setSessions([]))
-  }, [selectedSession])
+  }, [isRecent])
 
   const loadDetail = useCallback((sessionId = selectedSession, full = includeContent) => {
     if (!sessionId) return
@@ -1987,7 +1991,14 @@ function SessionSummaryBrowser({ mode }) {
           </label>
         </div>
         <div className="max-h-[620px] overflow-y-auto">
-          {filtered.map(s => (
+          {filtered.map(s => {
+            const count = isRecent ? s.summary_count : s.digest_count
+            const preview = isRecent ? s.active_summary_preview : s.latest_digest_preview
+            const emptyPreview = isRecent ? '无近期摘要预览' : '无长期摘要预览'
+            const rangeText = isRecent
+              ? `turn_start ${s.oldest_turn_index || 0} · turn_end ${s.latest_turn_index || 0}`
+              : `digest_date ${s.latest_digest_date || '-'} · latest ${s.latest_digest_created_at || '-'}`
+            return (
             <button key={s.session_id} onClick={() => { setSelectedSession(s.session_id); loadDetail(s.session_id) }}
               className={`w-full border-b border-slate-800/70 px-3 py-3 text-left transition-colors ${selectedSession === s.session_id ? 'bg-emerald-500/10' : 'hover:bg-slate-800/50'}`}>
               <div className="flex items-center justify-between gap-2">
@@ -1995,14 +2006,15 @@ function SessionSummaryBrowser({ mode }) {
                   <div className="truncate font-mono text-sm text-slate-100">{s.session_id}</div>
                   <div className="mt-0.5 text-[11px] text-slate-500">{s.chat_type || '-'} · {s.user_id || '-'}</div>
                 </div>
-                <Badge tone={isRecent ? 'blue' : 'emerald'}>{isRecent ? s.summary_count : s.digest_count}</Badge>
+                <Badge tone={isRecent ? 'blue' : 'emerald'}>{count}</Badge>
               </div>
               <div className="mt-2 text-[11px] text-slate-500">
-                turn_start {s.oldest_turn_index || 0} · turn_end {s.latest_turn_index || 0}
+                {rangeText}
               </div>
-              <div className="mt-1 truncate text-[11px] text-slate-500">{s.active_summary_preview || '无 active summary'}</div>
+              <div className="mt-1 truncate text-[11px] text-slate-500">{preview || emptyPreview}</div>
             </button>
-          ))}
+            )
+          })}
           {filtered.length === 0 && <div className="px-4 py-10 text-center text-xs text-slate-600">没有摘要 session</div>}
         </div>
       </Card>
@@ -2079,12 +2091,41 @@ function SessionSummaryBrowser({ mode }) {
                 <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">llm {item.llm_status || '-'}</div>
               </div>
             ) : (
-              <div className="mb-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
-                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">digest_date {item.digest_date || '-'}</div>
-                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">source_start_log_id {item.source_start_log_id || '-'}</div>
-                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">source_end_log_id {item.source_end_log_id || '-'}</div>
-                <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">parent {item.parent_id || '-'}</div>
-              </div>
+              <>
+                <div className="mb-2 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                  <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">digest_date {item.digest_date || '-'}</div>
+                  <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">summary_type {item.summary_type || '-'}</div>
+                  <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">generator {item.generator || '-'}</div>
+                  <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">quality_score {Number(item.quality_score || 0).toFixed(2)}</div>
+                  <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">recall_card_count {item.recall_card_count ?? '-'}</div>
+                  <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">message_count {item.message_count ?? '-'}</div>
+                  <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">source_start_log_id {item.source_start_log_id || '-'}</div>
+                  <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">source_end_log_id {item.source_end_log_id || '-'}</div>
+                  <div className="rounded bg-slate-950 px-2 py-1 text-slate-400">parent {item.parent_id || '-'}</div>
+                </div>
+                <div className="mb-2 grid gap-2 text-xs md:grid-cols-2">
+                  <div className="min-w-0 rounded bg-slate-950 px-2 py-1 text-slate-400">
+                    <span className="text-slate-500">source_id </span>
+                    <span className="break-all font-mono text-slate-300">{item.source_id || '-'}</span>
+                  </div>
+                  <div className="min-w-0 rounded bg-slate-950 px-2 py-1 text-slate-400">
+                    <span className="text-slate-500">source_range </span>
+                    <span className="break-all font-mono text-slate-300">{item.source_range || '-'}</span>
+                  </div>
+                  <div className="min-w-0 rounded bg-slate-950 px-2 py-1 text-slate-400">
+                    <span className="text-slate-500">prompt_template </span>
+                    <span className="break-all font-mono text-slate-300">{item.prompt_template || '-'}</span>
+                  </div>
+                  <div className="min-w-0 rounded bg-slate-950 px-2 py-1 text-slate-400">
+                    <span className="text-slate-500">fallback_reason </span>
+                    <span className={item.fallback_reason ? 'break-all text-amber-300' : 'text-slate-300'}>{item.fallback_reason || '-'}</span>
+                  </div>
+                </div>
+                <details className="mb-2">
+                  <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">prompt_version</summary>
+                  <JsonBlock value={item.prompt_version || {}} className="mt-2 max-h-40" />
+                </details>
+              </>
             )}
             <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 p-3 text-xs leading-5 text-slate-300">{item.content || item.preview || '-'}</pre>
             <details className="mt-2">

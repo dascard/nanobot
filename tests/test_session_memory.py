@@ -325,6 +325,42 @@ def test_deterministic_summary_uses_clean_snippets_without_turn_metadata(db_sess
     assert payload["evidence_turn_ids"] == [turn.id for turn in pending]
 
 
+def test_deterministic_summary_redacts_urls_carried_from_previous_summary(db_session):
+    from app.session_memory.summarizer import build_rolling_summary_payload, render_summary_text
+
+    previous = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        status="active",
+        summary_text=(
+            "新增用户请求:\n"
+            "- [turn_id=541][2026-05-20 19:23:20][user] "
+            "https://university.aliyun.com/?clubTaskBiz=subTask..11889016..10224"
+            "&userCode=epc9ljfd&token=secret\n"
+            "- [turn_id=543][2026-05-20 20:14:17][user] 刚才这个链接有什么东西"
+        ),
+        covered_until_turn_id=10,
+    )
+    db_session.add(previous)
+    pending = [
+        _turn(db_session, role="user", content="继续总结刚才群聊里提到的链接和工具问题"),
+        _turn(db_session, role="assistant", content="已确认：后续必须调用工具，不要自己编。"),
+    ]
+    db_session.commit()
+
+    payload = build_rolling_summary_payload(
+        previous_summary=previous,
+        pending_turns=pending,
+    )
+    rendered = render_summary_text(payload)
+
+    assert "http" not in rendered
+    assert "university.aliyun.com" not in rendered
+    assert "token=secret" not in rendered
+    assert "turn_id=" not in rendered
+    assert "刚才这个链接有什么东西" in rendered
+
+
 def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session):
     from core.context_builder import build_chat_context
 

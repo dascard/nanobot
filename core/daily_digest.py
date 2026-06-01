@@ -5,18 +5,22 @@ Daily digest + scheduled task pipeline.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import List
+from collections.abc import Callable
+from typing import Any, List
 
 import aiohttp
 from sqlalchemy import and_
 
 from app.memory_digest.builder import MemoryDigestBuilder
+from app.memory_digest.llm_builder import build_memory_digest_with_llm
+from app.memory_digest.renderer import render_recall_card
 from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
 from config import DAILY_DIGEST_HOUR
 from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
@@ -26,6 +30,12 @@ logger = logging.getLogger("nanobot.daily_digest")
 # QQbot / NoneBot 侧默认监听 8082；若部署环境不同，可通过环境变量覆盖。
 QQBOT_PUSH_URL = os.environ.get("QQBOT_PUSH_URL", "http://172.17.0.1:8082/nanobot/push")
 QQBOT_PUSH_TIMEOUT = float(os.environ.get("QQBOT_PUSH_TIMEOUT", "180"))
+MEMORY_DIGEST_LLM_ENABLED = os.environ.get("MEMORY_DIGEST_LLM_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 
 TOPIC_KEYWORDS = {
     "model_release": ["发布", "release", "new model", "版本", "更新"],
@@ -236,11 +246,80 @@ def _archive_existing_digests(db, session_id: str, digest_date: str) -> None:
         row.meta_json = json.dumps(meta, ensure_ascii=False)
 
 
+def _build_memory_digest_result(
+    *,
+    user_id: str,
+    session_id: str,
+    digest_date: str,
+    logs: List[ChatLog],
+    use_llm: bool | None,
+    llm_summarizer: Callable[[list[dict[str, str]]], Any] | None,
+):
+    llm_enabled = MEMORY_DIGEST_LLM_ENABLED if use_llm is None else bool(use_llm)
+    if not llm_enabled:
+        return MemoryDigestBuilder().build(
+            user_id=user_id,
+            session_id=session_id,
+            digest_date=digest_date,
+            logs=logs,
+        )
+    return build_memory_digest_with_llm(
+        user_id=user_id,
+        session_id=session_id,
+        digest_date=digest_date,
+        logs=logs,
+        summarizer=llm_summarizer,
+        llm_enabled=True,
+    )
+
+
+def _digest_row_meta(
+    meta: dict,
+    *,
+    summary_type: str,
+    recall_card: dict | None = None,
+    recall_card_index: int | None = None,
+) -> dict:
+    row_meta = dict(meta)
+    cards = meta.get("recall_cards") if isinstance(meta.get("recall_cards"), list) else []
+    row_meta["summary_type"] = summary_type
+    row_meta["recall_card_count"] = len(cards)
+    if recall_card is not None:
+        row_meta["recall_cards"] = [recall_card]
+        row_meta["recall_card"] = recall_card
+        row_meta["recall_card_index"] = int(recall_card_index or 0)
+    return row_meta
+
+
+def _ensure_digest_source_meta(
+    meta: dict,
+    *,
+    session_id: str,
+    digest_date: str,
+    start_id: int,
+    end_id: int,
+) -> dict:
+    row_meta = dict(meta)
+    raw = f"{digest_date}|{session_id}|{start_id}|{end_id}|memory_digest_v2"
+    row_meta.setdefault("source_id", hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24])
+    row_meta.setdefault("source_type", "date_session")
+    row_meta.setdefault("source_range", f"log_id {start_id or 0}-{end_id or 0}")
+    source_stats = row_meta.get("source_stats") if isinstance(row_meta.get("source_stats"), dict) else {}
+    row_meta.setdefault("message_count", int(source_stats.get("valid_log_count") or 0))
+    row_meta.setdefault("generator", "deterministic_fallback")
+    row_meta.setdefault("fallback_reason", None)
+    row_meta.setdefault("prompt_template", "")
+    row_meta.setdefault("prompt_version", {})
+    return row_meta
+
+
 def generate_daily_digest_for_date(
     target_date: str,
     user_id: str | None = None,
     *,
     force: bool = False,
+    use_llm: bool | None = None,
+    llm_summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
 ) -> int:
     """
     Summarize one day of chat logs into 3 progressive layers.
@@ -271,17 +350,25 @@ def generate_daily_digest_for_date(
             if not force and _already_digested(db, session_id, target_date):
                 continue
 
-            result = MemoryDigestBuilder().build(
+            result = _build_memory_digest_result(
                 user_id=logs[0].user_id or "",
                 session_id=session_id,
                 digest_date=target_date,
                 logs=logs,
+                use_llm=use_llm,
+                llm_summarizer=llm_summarizer,
             )
 
             start_id = logs[0].id
             end_id = logs[-1].id
             uid = logs[0].user_id or ""
-            meta = dict(result.meta)
+            meta = _ensure_digest_source_meta(
+                dict(result.meta),
+                session_id=session_id,
+                digest_date=target_date,
+                start_id=int(start_id or 0),
+                end_id=int(end_id or 0),
+            )
             if force:
                 _archive_existing_digests(db, session_id, target_date)
 
@@ -292,7 +379,7 @@ def generate_daily_digest_for_date(
                 level=0,
                 parent_id=None,
                 content=result.level_contents.get(0, ""),
-                meta_json=json.dumps(meta, ensure_ascii=False),
+                meta_json=json.dumps(_digest_row_meta(meta, summary_type="detailed_digest"), ensure_ascii=False),
                 source_start_log_id=start_id,
                 source_end_log_id=end_id,
             )
@@ -306,25 +393,36 @@ def generate_daily_digest_for_date(
                 level=1,
                 parent_id=d0.id,
                 content=result.level_contents.get(1, ""),
-                meta_json=json.dumps(meta, ensure_ascii=False),
+                meta_json=json.dumps(_digest_row_meta(meta, summary_type="preview_digest"), ensure_ascii=False),
                 source_start_log_id=start_id,
                 source_end_log_id=end_id,
             )
             db.add(d1)
             db.flush()
 
-            d2 = MemoryDigest(
-                user_id=uid,
-                session_id=session_id,
-                digest_date=target_date,
-                level=2,
-                parent_id=d1.id,
-                content=result.level_contents.get(2, ""),
-                meta_json=json.dumps(meta, ensure_ascii=False),
-                source_start_log_id=start_id,
-                source_end_log_id=end_id,
-            )
-            db.add(d2)
+            cards = meta.get("recall_cards") if isinstance(meta.get("recall_cards"), list) else []
+            if not cards:
+                cards = [None]
+            for index, card in enumerate(cards):
+                card_meta = _digest_row_meta(
+                    meta,
+                    summary_type="recall_card",
+                    recall_card=card if isinstance(card, dict) else None,
+                    recall_card_index=index,
+                )
+                content = render_recall_card(card) if isinstance(card, dict) else result.level_contents.get(2, "")
+                d2 = MemoryDigest(
+                    user_id=uid,
+                    session_id=session_id,
+                    digest_date=target_date,
+                    level=2,
+                    parent_id=d1.id,
+                    content=content,
+                    meta_json=json.dumps(card_meta, ensure_ascii=False),
+                    source_start_log_id=start_id,
+                    source_end_log_id=end_id,
+                )
+                db.add(d2)
             if result.status == "active":
                 created += 1
 

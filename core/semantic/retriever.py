@@ -26,6 +26,12 @@ class FtsRecallHit:
     lexical_score: float
 
 
+@dataclass(frozen=True)
+class VectorRecallHit:
+    item_id: int
+    semantic_score: float
+
+
 def parse_embedding(value: bytes | None) -> list[float] | None:
     if not value:
         return None
@@ -186,6 +192,102 @@ def fts_recall_hits(
         )
         for row in rows
     ]
+
+
+def _stored_vector_query(
+    db: Session,
+    *,
+    source_types: set[str],
+    user_id: str = "",
+    session_id: str = "",
+    group_id: str = "",
+    chat_stream_id: str = "",
+) -> Any:
+    query = (
+        db.query(SemanticIndexItem)
+        .filter(SemanticIndexItem.status == "active")
+        .filter(SemanticIndexItem.visibility == "recall")
+        .filter(SemanticIndexItem.embedding_status == "ok")
+        .filter(SemanticIndexItem.embedding.isnot(None))
+    )
+    if source_types:
+        query = query.filter(SemanticIndexItem.source_type.in_(sorted(source_types)))
+    if user_id:
+        query = query.filter(SemanticIndexItem.user_id == user_id)
+    if session_id:
+        query = query.filter(SemanticIndexItem.session_id == session_id)
+    if group_id:
+        query = query.filter(SemanticIndexItem.group_id == group_id)
+    if chat_stream_id:
+        query = query.filter(SemanticIndexItem.chat_stream_id == chat_stream_id)
+    return query
+
+
+def has_vector_recall_rows(
+    db: Session,
+    *,
+    source_types: set[str],
+    user_id: str = "",
+    session_id: str = "",
+    group_id: str = "",
+    chat_stream_id: str = "",
+    ensure_schema: bool = True,
+) -> bool:
+    if ensure_schema:
+        ensure_semantic_schema(db.bind)
+    return (
+        _stored_vector_query(
+            db,
+            source_types=source_types,
+            user_id=user_id,
+            session_id=session_id,
+            group_id=group_id,
+            chat_stream_id=chat_stream_id,
+        )
+        .limit(1)
+        .first()
+        is not None
+    )
+
+
+def vector_recall_hits(
+    db: Session,
+    *,
+    query_vector: list[float] | None,
+    source_types: set[str],
+    user_id: str = "",
+    session_id: str = "",
+    group_id: str = "",
+    chat_stream_id: str = "",
+    limit: int = 200,
+    max_scan: int = 5000,
+    ensure_schema: bool = True,
+) -> list[VectorRecallHit]:
+    if not query_vector:
+        return []
+    if ensure_schema:
+        ensure_semantic_schema(db.bind)
+
+    rows = (
+        _stored_vector_query(
+            db,
+            source_types=source_types,
+            user_id=user_id,
+            session_id=session_id,
+            group_id=group_id,
+            chat_stream_id=chat_stream_id,
+        )
+        .order_by(SemanticIndexItem.id.desc())
+        .limit(max(1, int(max_scan)))
+        .all()
+    )
+    hits: list[VectorRecallHit] = []
+    for row in rows:
+        semantic = semantic_score_for_row(row, query_vector=query_vector, embedding_provider=None)
+        if semantic is not None and semantic > 0:
+            hits.append(VectorRecallHit(item_id=int(row.id), semantic_score=semantic))
+    hits.sort(key=lambda hit: hit.semantic_score, reverse=True)
+    return hits[: max(1, int(limit))]
 
 
 def semantic_score_for_row(

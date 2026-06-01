@@ -54,15 +54,34 @@ def _join_parts(*parts: Any) -> str:
     return "\n".join(value for value in values if value)
 
 
+def _as_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
     meta = _safe_json(getattr(row, "meta_json", ""), {})
     level = int(getattr(row, "level", 0) or 0)
     source_id = str(getattr(row, "id", "") or "")
+    quality = meta.get("quality") if isinstance(meta.get("quality"), dict) else {}
+    quality_score = _as_float(meta.get("quality_score"), default=_as_float(quality.get("score")))
     base_meta = {
         "user_id": getattr(row, "user_id", "") or "",
         "session_id": getattr(row, "session_id", "") or "",
         "digest_level": level,
         "digest_date": getattr(row, "digest_date", "") or "",
+        "digest_source_id": str(meta.get("source_id") or ""),
+        "source_type": str(meta.get("source_type") or ""),
+        "source_range": str(meta.get("source_range") or ""),
+        "summary_type": str(meta.get("summary_type") or ""),
+        "generator": str(meta.get("generator") or ""),
+        "prompt_template": str(meta.get("prompt_template") or ""),
+        "prompt_version": meta.get("prompt_version") if isinstance(meta.get("prompt_version"), dict) else {},
+        "fallback_reason": meta.get("fallback_reason"),
+        "message_count": int(meta.get("message_count") or 0),
+        "recall_card_count": int(meta.get("recall_card_count") or 0),
     }
 
     if level == 2:
@@ -86,6 +105,7 @@ def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
                     embedding_text=lexical,
                     metadata={**base_meta, "recall_card_index": index},
                     visibility="recall",
+                    quality_score=quality_score,
                     source_prior=0.65,
                 ))
             return chunks
@@ -106,6 +126,7 @@ def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
         embedding_text=text,
         metadata=base_meta,
         visibility=visibility,
+        quality_score=quality_score,
         source_prior=0.6 if visibility == "recall" else 0.3,
     )]
 

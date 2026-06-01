@@ -30,6 +30,50 @@ def test_memory_digest_recall_cards_become_chunks():
     assert "uvicorn" in chunks[0].lexical_text
 
 
+def test_memory_digest_recall_card_chunks_keep_digest_source_metadata():
+    from core.semantic.adapters import chunks_from_memory_digest
+
+    digest = MemoryDigest(
+        id=13,
+        user_id="u1",
+        session_id="s1",
+        digest_date="2026-06-01",
+        level=2,
+        content="单张卡片内容",
+        meta_json=json.dumps({
+            "source_id": "src-20260601-s1",
+            "source_type": "date_session",
+            "source_range": "log_id 100-120",
+            "summary_type": "recall_card",
+            "generator": "llm",
+            "quality": {"score": 0.91},
+            "prompt_template": "tasks/memory_digest_system + tasks/memory_digest_user",
+            "fallback_reason": None,
+            "message_count": 18,
+            "recall_card_count": 3,
+            "recall_cards": [
+                {
+                    "text": "memory_digests 的 level 2 是 RAG 主召回层。",
+                    "keywords": ["memory_digests", "RAG"],
+                }
+            ],
+        }, ensure_ascii=False),
+    )
+
+    chunks = chunks_from_memory_digest(digest)
+
+    assert len(chunks) == 1
+    assert chunks[0].metadata["digest_source_id"] == "src-20260601-s1"
+    assert chunks[0].metadata["source_type"] == "date_session"
+    assert chunks[0].metadata["source_range"] == "log_id 100-120"
+    assert chunks[0].metadata["summary_type"] == "recall_card"
+    assert chunks[0].metadata["generator"] == "llm"
+    assert chunks[0].metadata["prompt_template"] == "tasks/memory_digest_system + tasks/memory_digest_user"
+    assert chunks[0].metadata["message_count"] == 18
+    assert chunks[0].metadata["recall_card_count"] == 3
+    assert chunks[0].quality_score == 0.91
+
+
 def test_memory_digest_level0_is_expand_only():
     from core.semantic.adapters import chunks_from_memory_digest
 

@@ -143,6 +143,107 @@ def test_admin_session_memory_summary_and_digest_details_are_per_session(client,
     assert digest_item["content"] == "完整长期摘要内容"
 
 
+def test_admin_session_memory_digest_details_expose_generation_metadata(client, db_session, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    now = datetime(2026, 5, 28, 12, 0, 0)
+    meta = {
+        "schema_version": 2,
+        "status": "active",
+        "source_id": "src-20260528-group1",
+        "source_type": "date_session",
+        "source_range": "log_id 10-30",
+        "summary_type": "recall_card",
+        "generator": "llm",
+        "quality": {"score": 0.91},
+        "prompt_template": "tasks/memory_digest_system + tasks/memory_digest_user",
+        "prompt_version": {"system_sha256": "abc"},
+        "fallback_reason": None,
+        "recall_card_count": 3,
+        "message_count": 18,
+        "recall_cards": [{"text": "memory_digests 的 level 2 是 RAG 主召回层。"}],
+    }
+    db_session.add(MemoryDigest(
+        id=31,
+        session_id="group_1",
+        user_id="group_1",
+        digest_date="2026-05-28",
+        level=2,
+        parent_id=30,
+        content="[card] memory_digests：level 2 是 RAG 主召回层。",
+        source_start_log_id=10,
+        source_end_log_id=30,
+        meta_json=json.dumps(meta, ensure_ascii=False),
+        created_at=now,
+    ))
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/admin/session-memory/sessions/group_1/digests",
+        headers=_auth_header(),
+        params={"include_content": "true"},
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["source_id"] == "src-20260528-group1"
+    assert item["source_type"] == "date_session"
+    assert item["source_range"] == "log_id 10-30"
+    assert item["summary_type"] == "recall_card"
+    assert item["generator"] == "llm"
+    assert item["quality_score"] == 0.91
+    assert item["prompt_template"] == "tasks/memory_digest_system + tasks/memory_digest_user"
+    assert item["prompt_version"] == {"system_sha256": "abc"}
+    assert item["fallback_reason"] is None
+    assert item["recall_card_count"] == 3
+    assert item["message_count"] == 18
+
+
+def test_admin_session_memory_sessions_prefer_level1_digest_preview_over_latest_card(client, db_session, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    now = datetime(2026, 5, 28, 12, 0, 0)
+    shared = {
+        "schema_version": 2,
+        "status": "active",
+        "source_id": "src-1",
+        "generator": "llm",
+    }
+    db_session.add_all([
+        MemoryDigest(
+            id=50,
+            session_id="group_1",
+            user_id="group_1",
+            digest_date="2026-05-28",
+            level=1,
+            content="WebUI 应展示这条 source 级预览摘要。",
+            meta_json=json.dumps({**shared, "summary_type": "preview_digest"}, ensure_ascii=False),
+            created_at=now,
+        ),
+        MemoryDigest(
+            id=51,
+            session_id="group_1",
+            user_id="group_1",
+            digest_date="2026-05-28",
+            level=2,
+            parent_id=50,
+            content="[card] 这是更晚写入的召回卡片，不应覆盖列表预览。",
+            meta_json=json.dumps({**shared, "summary_type": "recall_card"}, ensure_ascii=False),
+            created_at=now,
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/admin/session-memory/sessions",
+        headers=_auth_header(),
+        params={"session_limit": 10, "kind": "long"},
+    )
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["latest_digest_id"] == 50
+    assert item["latest_digest_preview"] == "WebUI 应展示这条 source 级预览摘要。"
+
+
 def test_admin_session_memory_sessions_normalize_group_aliases_and_filter_system_rows(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     now = datetime(2026, 5, 28, 12, 0, 0)

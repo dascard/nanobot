@@ -413,17 +413,22 @@ WHERE
                 session_id = _canonical_session_id(row.session_id, row.user_id)
                 session_id = session_id if session_id in sessions else alias_to_session.get(str(row.session_id or ""), "")
                 item = sessions.get(session_id)
-                if item is None or item["latest_digest_id"]:
+                if item is None:
                     continue
                 meta = _safe_json(row.meta_json, {})
+                is_preview_digest = int(row.level or 0) == 1 or str(meta.get("summary_type") or "") == "preview_digest"
+                if item["latest_digest_id"] and not (is_preview_digest and not item.get("_latest_digest_is_preview")):
+                    continue
                 item["latest_digest_id"] = row.id
                 item["latest_digest_preview"] = _preview(_digest_preview_text(row, meta))
                 item["latest_digest_date"] = str(row.digest_date or "")
                 item["latest_digest_created_at"] = _iso(row.created_at)
+                item["_latest_digest_is_preview"] = is_preview_digest
 
         page_items = []
         for item in sessions.values():
             item["session_aliases"] = sorted(item.get("session_aliases") or [])
+            item.pop("_latest_digest_is_preview", None)
             page_items.append(item)
         return {
             "items": page_items,
@@ -521,6 +526,17 @@ WHERE
             "preview": _preview(_digest_preview_text(row, meta) or content),
             "source_start_log_id": row.source_start_log_id,
             "source_end_log_id": row.source_end_log_id,
+            "source_id": str(meta.get("source_id") or ""),
+            "source_type": str(meta.get("source_type") or ""),
+            "source_range": str(meta.get("source_range") or ""),
+            "summary_type": str(meta.get("summary_type") or ""),
+            "generator": str(meta.get("generator") or ""),
+            "quality_score": float((meta.get("quality") if isinstance(meta.get("quality"), dict) else {}).get("score") or 0.0),
+            "prompt_template": str(meta.get("prompt_template") or ""),
+            "prompt_version": meta.get("prompt_version") if isinstance(meta.get("prompt_version"), dict) else {},
+            "fallback_reason": meta.get("fallback_reason"),
+            "recall_card_count": int(meta.get("recall_card_count") or 0),
+            "message_count": int(meta.get("message_count") or 0),
             "status": _digest_status(meta),
             "created_at": _iso(row.created_at),
             "raw_json": {"meta_json": meta},

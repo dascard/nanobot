@@ -140,6 +140,22 @@ def test_session_summary_browser_exposes_llm_regeneration_controls():
     assert "setOperationError(formatApiError(e))" in summary_source
 
 
+def test_long_memory_digest_browser_exposes_generation_metadata():
+    source = read_app()
+    summary_source = source.split("function SessionSummaryBrowser(")[1].split("// ── Memory ──")[0]
+
+    assert "summary_type" in summary_source
+    assert "source_id" in summary_source
+    assert "source_range" in summary_source
+    assert "generator" in summary_source
+    assert "quality_score" in summary_source
+    assert "prompt_template" in summary_source
+    assert "prompt_version" in summary_source
+    assert "fallback_reason" in summary_source
+    assert "recall_card_count" in summary_source
+    assert "message_count" in summary_source
+
+
 def test_memory_page_auto_loads_exact_group_input():
     source = read_app()
     memory_source = source.split("function MemoryPage()")[1].split("// ── Audit ──")[0]

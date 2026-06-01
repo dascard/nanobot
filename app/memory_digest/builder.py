@@ -23,6 +23,7 @@ class MemoryDigestBuildResult:
 
 _HTML_SIGNATURES = ("<!doctype", "<html", "<article", "<div class=", "```html")
 _SKIP_ROLES = {"tool", "model", "system", "function"}
+_URL_RE = re.compile(r"https?://[^\s，。！？；、)）\]>]+", re.IGNORECASE)
 _COMMAND_WORDS = {
     "签到",
     "打卡",
@@ -48,6 +49,12 @@ _STOPWORDS = {
     "群里",
     "讨论",
     "效果",
+    "图片",
+    "http",
+    "https",
+    "www",
+    "com",
+    "video",
 }
 
 
@@ -90,9 +97,21 @@ def _message_body(content: str, sender_name: str = "") -> str:
     sender = str(sender_name or "").strip()
     prefix = match.group(1).strip()
     body = match.group(2).strip()
-    if not sender or prefix == sender:
+    if not sender or prefix == sender or prefix in sender or sender in prefix:
         return body
-    return text
+    return body
+
+
+def _strip_urls(text: str) -> str:
+    value = _URL_RE.sub("", str(text or ""))
+    value = re.sub(r"\s+", " ", value)
+    return value.strip(" \t\r\n-_:：，。！？；、【】[]()（）")
+
+
+def _clean_digest_content(content: str) -> str:
+    value = _strip_urls(content)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
 
 
 def _content_tokens(text: str) -> list[str]:
@@ -102,10 +121,39 @@ def _content_tokens(text: str) -> list[str]:
         value = token.strip()
         if not value:
             continue
+        if re.fullmatch(r"[A-Za-z]", value):
+            continue
+        if re.fullmatch(r"[A-Za-z0-9_.+-]+", value) and "." in value and len(value) > 18:
+            continue
+        if re.fullmatch(r"[\u4e00-\u9fff]+", value) and len(value) > 14:
+            continue
         if value.lower() in _STOPWORDS or value in _STOPWORDS:
             continue
         cleaned.append(value)
     return cleaned
+
+
+def _detail_score(row: dict[str, Any]) -> float:
+    content = str(row.get("content") or "").strip()
+    normalized = _normalize_short(content)
+    if not content:
+        return -1.0
+    if MemoryDigestBuilder._is_image_placeholder(normalized):
+        return -1.0
+    if re.fullmatch(r"[\d\s.。!！?？哈啊哦嗯呃~～]+", content):
+        return -0.5
+
+    tokens = _content_tokens(content)
+    score = min(len(content), 160) / 160
+    if "?" in content or "？" in content:
+        score += 0.35
+    if any(re.fullmatch(r"[A-Za-z][A-Za-z0-9_.+-]*", token) for token in tokens):
+        score += 0.18
+    if any(re.fullmatch(r"[\u4e00-\u9fff]{4,}", token) for token in tokens):
+        score += 0.18
+    if len(tokens) <= 1 and len(normalized) < 12:
+        score -= 0.25
+    return score
 
 
 class MemoryDigestBuilder:
@@ -185,20 +233,37 @@ class MemoryDigestBuilder:
 
         keywords = self._rank_keywords(valid)
         participants = self._participants(valid)
-        details = [self._build_detail_text(row) for row in valid[: self.max_details] if row["content"]]
+        detail_rows = sorted(valid, key=_detail_score, reverse=True)
+        details = [self._build_detail_text(row) for row in detail_rows[: self.max_details] if row["content"]]
         topic_label = "、".join(keywords[:4]) if keywords else "当天聊天内容"
         topic_flow = f"当天主要围绕 {topic_label} 展开，包含 {len(valid)} 条有效消息。"
         brief = f"群聊讨论了 {topic_label}。" if keywords else "群聊产生了一组可召回摘要。"
         evidence_ids = [row["log_id"] for row in valid if row.get("log_id")][:8]
-        card_text = self._build_card_text(topic_label, details)
         recall_cards = [{
             "card_id": "card_1",
             "type": "episode_topic",
-            "text": card_text,
+            "text": self._build_card_text(topic_label, details[:3]),
             "keywords": keywords[:8],
             "importance": min(0.95, 0.55 + min(0.35, len(valid) * 0.03)),
             "evidence_log_ids": evidence_ids,
         }]
+        seen_card_text = {recall_cards[0]["text"]}
+        for index, row in enumerate(detail_rows[:3], start=2):
+            detail = self._build_detail_text(row)
+            if not detail:
+                continue
+            card_text = self._build_detail_card_text(topic_label, detail)
+            if card_text in seen_card_text:
+                continue
+            seen_card_text.add(card_text)
+            recall_cards.append({
+                "card_id": f"card_{index}",
+                "type": "episode_detail",
+                "text": card_text,
+                "keywords": keywords[:8],
+                "importance": min(0.95, 0.50 + max(0.0, _detail_score(row)) * 0.35),
+                "evidence_log_ids": [row["log_id"]] if row.get("log_id") else [],
+            })
         meta = {
             **base_meta,
             "status": "active",
@@ -241,6 +306,9 @@ class MemoryDigestBuilder:
         )
         if not content:
             return "empty"
+        cleaned_content = _clean_digest_content(content)
+        if _URL_RE.search(content) and not cleaned_content:
+            return "url_only"
         normalized = _normalize_short(content)
         if self._is_image_placeholder(normalized):
             return "image_placeholder"
@@ -275,6 +343,8 @@ class MemoryDigestBuilder:
         content = _message_body(str(getattr(log, "content", "") or "").strip(), sender)
         if role == "assistant" and _is_html_blob(content):
             content = _html_label(content)
+        else:
+            content = _clean_digest_content(content)
         content = re.sub(r"\s+", " ", content)
         if len(content) > 500:
             content = content[:500] + "..."
@@ -293,9 +363,16 @@ class MemoryDigestBuilder:
     def _rank_keywords(valid: list[dict[str, Any]]) -> list[str]:
         counts: Counter[str] = Counter()
         original_case: dict[str, str] = {}
+        sender_tokens = {
+            token.lower() if re.fullmatch(r"[A-Za-z0-9_.+-]+", token) else token
+            for row in valid
+            for token in _content_tokens(str(row.get("sender") or ""))
+        }
         for row in valid:
             for token in _content_tokens(row.get("content") or ""):
                 key = token.lower() if re.fullmatch(r"[A-Za-z0-9_.+-]+", token) else token
+                if key in sender_tokens:
+                    continue
                 counts[key] += 1
                 original_case.setdefault(key, token)
         ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
@@ -320,7 +397,11 @@ class MemoryDigestBuilder:
 
     @staticmethod
     def _build_card_text(topic_label: str, details: list[str]) -> str:
-        first = details[0] if details else ""
-        if first:
-            return f"群里讨论了 {topic_label}；代表要点：{first[:60]}"[:80]
-        return f"群里讨论了 {topic_label}。"[:80]
+        selected = [detail for detail in details if detail][:3]
+        if selected:
+            return (f"群里讨论了 {topic_label}；要点：" + "；".join(selected))[:160]
+        return f"群里讨论了 {topic_label}。"[:160]
+
+    @staticmethod
+    def _build_detail_card_text(topic_label: str, detail: str) -> str:
+        return f"{topic_label}：{detail}"[:160]

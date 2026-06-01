@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime
 
 from core import daily_digest
@@ -31,10 +32,19 @@ def test_generate_daily_digest_merges_legacy_group_session_ids(db_session, monke
 
     monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
 
-    created = daily_digest.generate_daily_digest_for_date("2026-04-30")
+    created = daily_digest.generate_daily_digest_for_date("2026-04-30", use_llm=False)
 
     assert created == 1
-    assert db_session.query(MemoryDigest).filter_by(session_id="group_123456").count() == 3
+    rows = db_session.query(MemoryDigest).filter_by(session_id="group_123456").all()
+    assert len(rows) >= 3
+    assert sum(1 for row in rows if row.level == 0) == 1
+    assert sum(1 for row in rows if row.level == 1) == 1
+    assert sum(1 for row in rows if row.level == 2) >= 1
+    summary_types = {
+        json.loads(row.meta_json or "{}").get("summary_type")
+        for row in rows
+    }
+    assert {"detailed_digest", "preview_digest", "recall_card"}.issubset(summary_types)
     assert db_session.query(MemoryDigest).filter_by(session_id="123456").count() == 0
 
 

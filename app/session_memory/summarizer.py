@@ -13,6 +13,9 @@ from app.session_memory import config
 from app.session_memory.windowing import estimate_tokens, safe_meta
 
 
+_URL_RE = r"https?://[^\s，。！？；、)）\]>]+"
+
+
 def _format_turn_line(turn: ConversationTurn, *, max_chars: int = 220) -> str:
     from core.context_builder import sanitize_prompt_text
 
@@ -46,11 +49,26 @@ def _strip_turn_metadata(text: str) -> str:
     return value.strip()
 
 
+def _redact_urls(text: str) -> str:
+    import re
+
+    value = re.sub(_URL_RE, "链接", str(text or ""), flags=re.IGNORECASE)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def _clean_summary_memory_text(text: str) -> str:
+    value = _strip_turn_metadata(text)
+    value = _redact_urls(value)
+    value = "\n".join(line.strip() for line in value.splitlines())
+    return value.strip()
+
+
 def _format_turn_snippet(turn: ConversationTurn, *, max_chars: int = 160) -> str:
     from core.context_builder import sanitize_prompt_text
 
     content = sanitize_prompt_text(turn.content or "", max_chars=max_chars).strip()
-    content = _strip_sender_prefix(_strip_turn_metadata(content))
+    content = _strip_sender_prefix(_clean_summary_memory_text(content))
     return " ".join(content.split())
 
 
@@ -67,7 +85,7 @@ def _compact_previous_and_pending(
     pending_turns: Sequence[ConversationTurn],
     max_chars: int,
 ) -> str:
-    previous = _truncate_text(_strip_turn_metadata(previous_text).strip(), 600, suffix="\n...[旧摘要截断]")
+    previous = _truncate_text(_clean_summary_memory_text(previous_text), 600, suffix="\n...[旧摘要截断]")
     user_lines = [
         _format_turn_snippet(turn, max_chars=120)
         for turn in pending_turns
@@ -94,7 +112,7 @@ def _compact_previous_and_pending(
     # 如果仍超长，优先保留新增要点，进一步压缩旧摘要。
     parts = ["代码兜底摘要：以下为自动压缩的对话要点，建议等待或手动生成 LLM 摘要提升质量。"]
     if previous:
-        parts.append("此前已知:\n" + _truncate_text(_strip_turn_metadata(previous_text).strip(), 300, suffix="\n...[旧摘要截断]"))
+        parts.append("此前已知:\n" + _truncate_text(_clean_summary_memory_text(previous_text), 300, suffix="\n...[旧摘要截断]"))
     if user_lines:
         parts.append("新增用户侧要点:\n" + "\n".join(f"- {line}" for line in user_lines if line))
     if assistant_lines:

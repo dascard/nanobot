@@ -109,3 +109,82 @@ def test_fts_recall_orders_by_bm25(db_session):
 
     assert rows_by_id[hits[0].item_id].source_id == "strong"
     assert hits[0].bm25_raw <= hits[-1].bm25_raw
+
+
+def test_vector_recall_uses_stored_embeddings_and_filters_scope(db_session):
+    import json
+
+    from core.database import SemanticIndexItem
+    from core.semantic.retriever import vector_recall_hits
+
+    chunks = [
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="target",
+            source_sub_id="card:target",
+            title="部署线索",
+            text="uvicorn 端口占用",
+            lexical_text="uvicorn 端口占用",
+            embedding_text="uvicorn 端口占用",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        ),
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="other-user",
+            source_sub_id="card:other-user",
+            title="其他用户",
+            text="uvicorn 端口占用",
+            lexical_text="uvicorn 端口占用",
+            embedding_text="uvicorn 端口占用",
+            metadata={"user_id": "u2", "session_id": "s1"},
+        ),
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="missing-embedding",
+            source_sub_id="card:missing",
+            title="缺少向量",
+            text="uvicorn 端口占用",
+            lexical_text="uvicorn 端口占用",
+            embedding_text="uvicorn 端口占用",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        ),
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id="unrelated",
+            source_sub_id="card:unrelated",
+            title="无关",
+            text="模型路由",
+            lexical_text="模型路由",
+            embedding_text="模型路由",
+            metadata={"user_id": "u1", "session_id": "s1"},
+        ),
+    ]
+    upsert_semantic_chunks(
+        db_session,
+        chunks,
+        index_version="fake:v1:v1",
+        embedding_model="fake",
+        embeddings={
+            "card:target": json.dumps([1.0, 0.0, 0.0]).encode("utf-8"),
+            "card:other-user": json.dumps([1.0, 0.0, 0.0]).encode("utf-8"),
+            "card:unrelated": json.dumps([0.0, 1.0, 0.0]).encode("utf-8"),
+        },
+    )
+
+    hits = vector_recall_hits(
+        db_session,
+        query_vector=[1.0, 0.0, 0.0],
+        source_types={"memory_digest"},
+        user_id="u1",
+        session_id="s1",
+        limit=5,
+    )
+    rows_by_id = {
+        row.id: row
+        for row in db_session.query(SemanticIndexItem).filter(
+            SemanticIndexItem.id.in_([hit.item_id for hit in hits])
+        )
+    }
+
+    assert [rows_by_id[hit.item_id].source_id for hit in hits] == ["target"]
+    assert hits[0].semantic_score > 0

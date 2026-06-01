@@ -51,17 +51,34 @@ _GLOBAL_VARIABLES: tuple[VariableDef, ...] = (
     VariableDef("focus", "global", "工具运行时注入的图片摘要重点", "OCR"),
 )
 
+_MEMORY_DIGEST_VARIABLES: tuple[VariableDef, ...] = (
+    VariableDef("date", "memory_digest", "摘要 source 日期", "2026-06-01"),
+    VariableDef("source_id", "memory_digest", "摘要 source 稳定 ID", "20260601_group_1001_1_20_v2"),
+    VariableDef("source_type", "memory_digest", "摘要 source 类型", "date_session"),
+    VariableDef("source_range", "memory_digest", "摘要 source 覆盖范围", "log_id 1-20"),
+    VariableDef("message_count", "memory_digest", "摘要 source 消息数量", "18"),
+    VariableDef("digest_source", "memory_digest", "清洗后的长期摘要输入文本", "[log_id=1] 示例消息"),
+    VariableDef("existing_digest_hint", "memory_digest", "规则摘要或已有摘要提示", "已有主题提示"),
+)
+
 
 def normalize_scope(scope: str) -> str:
     return str(scope or "").removesuffix(".md").strip()
 
 
+def _scoped_variables(scope: str) -> tuple[VariableDef, ...]:
+    normalized = normalize_scope(scope)
+    if normalized in {"tasks/memory_digest_system", "tasks/memory_digest_user"}:
+        return _MEMORY_DIGEST_VARIABLES
+    return ()
+
+
 def list_variables(scope: str = "") -> list[dict[str, str]]:
-    return [item.to_dict() for item in _GLOBAL_VARIABLES]
+    return [item.to_dict() for item in (*_GLOBAL_VARIABLES, *_scoped_variables(scope))]
 
 
 def allowed_variable_names(scope: str) -> set[str]:
-    return {item.name for item in _GLOBAL_VARIABLES}
+    return {item.name for item in (*_GLOBAL_VARIABLES, *_scoped_variables(scope))}
 
 
 def referenced_variable_names(template_text: str) -> set[str]:
