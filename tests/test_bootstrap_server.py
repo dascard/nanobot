@@ -140,6 +140,33 @@ def test_cors_origins_can_be_configured(monkeypatch):
     assert "access-control-allow-origin" not in denied.headers
 
 
+def test_start_schedulers_starts_session_summary_worker(monkeypatch):
+    import config
+    import bootstrap.schedulers as schedulers
+
+    calls: list[str] = []
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    def fake_start_thread(*, name, target):
+        calls.append(name)
+        return object()
+
+    monkeypatch.setattr(config, "DAILY_DIGEST_ENABLED", False)
+    monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
+    monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
+
+    handles = schedulers.start_schedulers(testing=False, logger=Logger())
+
+    assert "session-summary-worker" in calls
+    assert handles.session_summary is not None
+
+
 @pytest.mark.asyncio
 async def test_lifespan_testing_mode_skips_bridge_network_and_scheduler_work(monkeypatch):
     import bootstrap.lifespan as bootstrap_lifespan

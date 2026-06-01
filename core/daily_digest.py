@@ -127,6 +127,20 @@ def _normalize_chatlog_session_id(session_id: str, user_id: str = "") -> str:
     return sid
 
 
+def _session_filter_aliases(session_id: str | None) -> set[str]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return set()
+    aliases = {sid}
+    if sid.startswith("group_"):
+        raw = sid.removeprefix("group_")
+        if raw:
+            aliases.add(raw)
+    elif sid.isdigit():
+        aliases.add(f"group_{sid}")
+    return aliases
+
+
 def _group_push_target_id(session_id: str) -> str:
     session_id = _normalize_group_session_id(session_id)
     return session_id.removeprefix("group_")
@@ -317,6 +331,7 @@ def generate_daily_digest_for_date(
     target_date: str,
     user_id: str | None = None,
     *,
+    session_id: str | None = None,
     force: bool = False,
     use_llm: bool | None = None,
     llm_summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
@@ -334,6 +349,7 @@ def generate_daily_digest_for_date(
             base_query = base_query.filter(ChatLog.user_id == user_id)
 
         all_logs = base_query.order_by(ChatLog.id.asc()).all()
+        session_aliases = _session_filter_aliases(session_id)
 
         by_session: dict[str, List[ChatLog]] = {}
         for log in all_logs:
@@ -341,6 +357,8 @@ def generate_daily_digest_for_date(
                 continue
             sid = _normalize_chatlog_session_id(log.session_id, log.user_id)
             if not sid:
+                continue
+            if session_aliases and sid not in session_aliases:
                 continue
             by_session.setdefault(sid, []).append(log)
 

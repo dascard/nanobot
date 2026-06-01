@@ -1960,16 +1960,44 @@ function SessionSummaryBrowser({ mode }) {
     return String(s.session_id || '').toLowerCase().includes(needle) ||
       String(s.user_id || '').toLowerCase().includes(needle)
   })
+  const selectedSessionInfo = sessions.find(item => item.session_id === selectedSession) || null
 
-  const enqueueLlmSummary = useCallback(() => {
+  const refreshAfterOperation = useCallback(() => {
+    return Promise.allSettled([
+      loadSessions(),
+      selectedSession ? loadDetail(selectedSession, includeContent) : Promise.resolve(),
+    ])
+  }, [includeContent, loadDetail, loadSessions, selectedSession])
+
+  const regenerateRecentSummary = useCallback(() => {
     if (!selectedSession) return
-    setOperationLoading('enqueue')
+    const hasSummary = Number(selectedSessionInfo?.summary_count || 0) > 0
+    setOperationLoading('recent')
     setOperationError('')
-    api.post(`/session-memory/${encodeURIComponent(selectedSession)}/rolling-summary/enqueue-llm`, { force: true })
-      .then(() => loadDetail(selectedSession, includeContent))
+    const chatType = selectedSessionInfo?.chat_type || (selectedSession.startsWith('group_') ? 'group' : 'private')
+    const userId = selectedSessionInfo?.user_id || selectedSession
+    const request = hasSummary
+      ? api.post(`/session-memory/${encodeURIComponent(selectedSession)}/rolling-summary/enqueue-llm`, { force: true, chat_type: chatType, user_id: userId })
+      : api.post(`/session-memory/${encodeURIComponent(selectedSession)}/rolling-summary/run`, { force: true, dry_run: false, chat_type: chatType, user_id: userId })
+    request
+      .then(() => refreshAfterOperation())
       .catch(e => setOperationError(formatApiError(e)))
       .finally(() => setOperationLoading(''))
-  }, [includeContent, loadDetail, selectedSession])
+  }, [refreshAfterOperation, selectedSession, selectedSessionInfo])
+
+  const regenerateLongDigest = useCallback(() => {
+    if (!selectedSession) return
+    setOperationLoading('long')
+    setOperationError('')
+    api.post(`/session-memory/${encodeURIComponent(selectedSession)}/digests/run`, {
+      force: true,
+      target_date: selectedSessionInfo?.latest_digest_date || '',
+      user_id: selectedSessionInfo?.user_id || '',
+    })
+      .then(() => refreshAfterOperation())
+      .catch(e => setOperationError(formatApiError(e)))
+      .finally(() => setOperationLoading(''))
+  }, [refreshAfterOperation, selectedSession, selectedSessionInfo])
 
   const retrySummaryJob = useCallback((jobId) => {
     setOperationLoading(`retry-${jobId}`)
@@ -2027,11 +2055,17 @@ function SessionSummaryBrowser({ mode }) {
               <div className="mt-1 text-xs text-slate-500">{isRecent ? '近期摘要 rolling_session_summaries' : '长期摘要 memory_digests'}</div>
             </div>
             <div className="flex flex-wrap gap-2">
-              {isRecent && (
-                <button onClick={enqueueLlmSummary} disabled={!selectedSession || operationLoading === 'enqueue'}
+              {isRecent ? (
+                <button onClick={regenerateRecentSummary} disabled={!selectedSession || operationLoading === 'recent'}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs text-white hover:bg-indigo-500 disabled:opacity-50">
-                  <RefreshCw className={`h-3.5 w-3.5 ${operationLoading === 'enqueue' ? 'animate-spin' : ''}`} />
-                  重新生成 LLM 摘要
+                  <RefreshCw className={`h-3.5 w-3.5 ${operationLoading === 'recent' ? 'animate-spin' : ''}`} />
+                  {Number(selectedSessionInfo?.summary_count || 0) > 0 ? '重新生成 LLM 摘要' : '生成近期摘要'}
+                </button>
+              ) : (
+                <button onClick={regenerateLongDigest} disabled={!selectedSession || operationLoading === 'long'}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-xs text-white hover:bg-indigo-500 disabled:opacity-50">
+                  <RefreshCw className={`h-3.5 w-3.5 ${operationLoading === 'long' ? 'animate-spin' : ''}`} />
+                  重新生成长期摘要
                 </button>
               )}
               <button onClick={() => { const next = !includeContent; setIncludeContent(next); loadDetail(selectedSession, next) }}

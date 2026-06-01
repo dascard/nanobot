@@ -80,6 +80,47 @@ def test_pending_boundary_between_summary_cursor_and_raw_start(db_session):
     assert [row.id for row in pending] == [turns[2].id, turns[3].id]
 
 
+def test_group_rollup_sender_count_falls_back_to_username_marker(db_session):
+    from app.session_memory.windowing import should_rollup
+
+    turns = [
+        _turn(
+            db_session,
+            session_id="group_1",
+            user_id="group_1",
+            content="[用户名]甲\n[发言内容]第一条群聊消息",
+            meta={"kind": "chat", "source": "group_message"},
+        ),
+        _turn(
+            db_session,
+            session_id="group_1",
+            user_id="group_1",
+            content="[用户名]乙\n[发言内容]第二条群聊消息",
+            meta={"kind": "chat", "source": "group_message"},
+        ),
+        _turn(
+            db_session,
+            session_id="group_1",
+            user_id="group_1",
+            content="[用户名]甲\n[发言内容]第三条群聊消息",
+            meta={"kind": "chat", "source": "group_message"},
+        ),
+        _turn(
+            db_session,
+            session_id="group_1",
+            user_id="group_1",
+            content="[用户名]乙\n[发言内容]第四条群聊消息",
+            meta={"kind": "chat", "source": "group_message"},
+        ),
+    ]
+    db_session.commit()
+
+    ok, debug = should_rollup(turns, chat_type="group")
+
+    assert ok is True
+    assert debug["distinct_senders"] == 2
+
+
 def test_build_session_memory_large_session_uses_latest_raw_window(db_session):
     from core.context_builder import build_session_memory
 

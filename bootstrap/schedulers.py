@@ -22,6 +22,7 @@ class ThreadHandle:
 class SchedulerHandles:
     digest: ThreadHandle | None = None
     scheduled_tasks: ThreadHandle | None = None
+    session_summary: ThreadHandle | None = None
     expression_learner: ThreadHandle | None = None
     eval_sampling: ThreadHandle | None = None
 
@@ -29,6 +30,7 @@ class SchedulerHandles:
         for handle in (
             self.digest,
             self.scheduled_tasks,
+            self.session_summary,
             self.expression_learner,
             self.eval_sampling,
         ):
@@ -61,6 +63,22 @@ def _preload_sentinel(logger: logging.Logger) -> None:
         logger.warning("Sentinel pre-load failed (will retry on first classify): %s", exc)
 
 
+def session_summary_worker_scheduler(stop_event: threading.Event) -> None:
+    from workers.session_summary_worker import run_once
+
+    logger = logging.getLogger("nanobot.session_summary.worker")
+    logger.info("Session summary worker scheduler started.")
+    while not stop_event.is_set():
+        try:
+            stats = run_once()
+            if stats.get("processed"):
+                logger.info("Session summary worker processed: %s", stats)
+        except Exception as exc:
+            logger.exception("Session summary worker scheduler error: %s", exc)
+        stop_event.wait(10.0)
+    logger.info("Session summary worker scheduler stopped.")
+
+
 def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandles:
     """启动后台调度器；测试模式只返回空 handles。"""
     if testing:
@@ -85,6 +103,12 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
         target=scheduled_task_runner,
     )
     logger.info("Scheduled task runner initialized.")
+
+    handles.session_summary = _start_thread(
+        name="session-summary-worker",
+        target=session_summary_worker_scheduler,
+    )
+    logger.info("Session summary worker initialized.")
 
     _preload_sentinel(logger)
 

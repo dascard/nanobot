@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -25,6 +26,8 @@ INTERNAL_KINDS = frozenset({
     "empty_reply",
 })
 
+USERNAME_MARKER_RE = re.compile(r"\[用户名\]\s*([^\r\n\[]+)")
+
 
 def safe_meta(meta_json: str | None) -> dict[str, Any]:
     try:
@@ -40,6 +43,20 @@ def estimate_tokens(text: str) -> int:
     cjk_count = sum(1 for ch in text if "一" <= ch <= "鿿")
     ascii_count = len(text) - cjk_count
     return int(cjk_count * 1.0 + ascii_count * 0.35)
+
+
+def _sender_key_for_turn(turn: ConversationTurn) -> str:
+    meta = safe_meta(getattr(turn, "meta_json", "{}"))
+    for key in ("sender_id", "sender_name", "nickname", "display_name"):
+        value = str(meta.get(key) or "").strip()
+        if value:
+            return value
+
+    content = str(getattr(turn, "content", "") or "")
+    match = USERNAME_MARKER_RE.search(content)
+    if match:
+        return match.group(1).strip()
+    return ""
 
 
 def is_context_eligible_turn(turn: ConversationTurn) -> tuple[bool, str]:
@@ -324,12 +341,7 @@ def should_rollup(
     user_turns = [turn for turn in pending if turn.role == "user"]
     char_count = sum(len(str(turn.content or "")) for turn in pending)
     token_count = sum(estimate_tokens(str(turn.content or "")) for turn in pending)
-    distinct_senders = {
-        str(safe_meta(turn.meta_json).get("sender_id")
-            or safe_meta(turn.meta_json).get("sender_name")
-            or "").strip()
-        for turn in pending
-    }
+    distinct_senders = {_sender_key_for_turn(turn) for turn in pending}
     distinct_senders.discard("")
 
     if chat_type == "group":

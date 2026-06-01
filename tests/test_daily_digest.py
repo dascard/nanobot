@@ -48,6 +48,40 @@ def test_generate_daily_digest_merges_legacy_group_session_ids(db_session, monke
     assert db_session.query(MemoryDigest).filter_by(session_id="123456").count() == 0
 
 
+def test_generate_daily_digest_can_filter_specific_session(db_session, monkeypatch):
+    ts = datetime(2026, 5, 31, 12, 0, 0)
+    db_session.add_all([
+        ChatLog(
+            user_id="shared_user",
+            session_id="private_a",
+            role="user",
+            content="A session should be regenerated",
+            created_at=ts,
+        ),
+        ChatLog(
+            user_id="shared_user",
+            session_id="private_b",
+            role="user",
+            content="B session should stay untouched",
+            created_at=ts,
+        ),
+    ])
+    db_session.commit()
+
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+
+    created = daily_digest.generate_daily_digest_for_date(
+        "2026-05-31",
+        user_id="shared_user",
+        session_id="private_a",
+        use_llm=False,
+    )
+
+    assert created == 1
+    assert db_session.query(MemoryDigest).filter_by(session_id="private_a").count() >= 3
+    assert db_session.query(MemoryDigest).filter_by(session_id="private_b").count() == 0
+
+
 def test_qq_push_timeout_covers_html_rendering_window():
     assert daily_digest.QQBOT_PUSH_TIMEOUT >= 120
 

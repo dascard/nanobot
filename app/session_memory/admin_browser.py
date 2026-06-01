@@ -167,6 +167,7 @@ WITH all_rows AS (
         chat_type AS chat_type,
         1 AS summary_count,
         0 AS digest_count,
+        0 AS turn_count,
         CASE WHEN status = 'archived' THEN 1 ELSE 0 END AS has_archived,
         covered_until_turn_id AS latest_turn_index,
         CASE WHEN covered_from_turn_id > 0 THEN covered_from_turn_id ELSE NULL END AS oldest_turn_index,
@@ -187,12 +188,40 @@ WITH all_rows AS (
         '' AS chat_type,
         0 AS summary_count,
         1 AS digest_count,
+        0 AS turn_count,
         0 AS has_archived,
         0 AS latest_turn_index,
         NULL AS oldest_turn_index,
         created_at AS latest_at
     FROM memory_digests
     WHERE session_id IS NOT NULL AND session_id != ''
+    UNION ALL
+    SELECT
+        CASE
+            WHEN session_id NOT LIKE 'group_%'
+             AND session_id GLOB '[0-9]*'
+             AND user_id LIKE 'group_%'
+            THEN user_id
+            ELSE session_id
+        END AS canonical_session_id,
+        session_id AS alias_session_id,
+        max(user_id) AS user_id,
+        CASE
+            WHEN session_id LIKE 'group_%' THEN 'group'
+            WHEN session_id LIKE 'private_%' THEN 'private'
+            WHEN max(user_id) LIKE 'group_%' THEN 'group'
+            ELSE ''
+        END AS chat_type,
+        0 AS summary_count,
+        0 AS digest_count,
+        count(*) AS turn_count,
+        0 AS has_archived,
+        max(id) AS latest_turn_index,
+        min(id) AS oldest_turn_index,
+        max(created_at) AS latest_at
+    FROM conversation_turns
+    WHERE session_id IS NOT NULL AND session_id != ''
+    GROUP BY canonical_session_id, alias_session_id
 ),
 grouped AS (
     SELECT
@@ -202,6 +231,7 @@ grouped AS (
         max(chat_type) AS chat_type,
         sum(summary_count) AS summary_count,
         sum(digest_count) AS digest_count,
+        sum(turn_count) AS turn_count,
         max(has_archived) AS has_archived,
         max(latest_turn_index) AS latest_turn_index,
         min(oldest_turn_index) AS oldest_turn_index,
@@ -215,7 +245,7 @@ filtered AS (
     FROM grouped
     WHERE
         (:kind = 'all'
-         OR (:kind = 'recent' AND summary_count > 0)
+         OR (:kind = 'recent' AND (summary_count > 0 OR turn_count > 0))
          OR (:kind = 'long' AND digest_count > 0))
         AND (
             :include_system = 1
@@ -265,6 +295,7 @@ WITH all_rows AS (
         chat_type AS chat_type,
         1 AS summary_count,
         0 AS digest_count,
+        0 AS turn_count,
         CASE WHEN status = 'archived' THEN 1 ELSE 0 END AS has_archived,
         covered_until_turn_id AS latest_turn_index,
         CASE WHEN covered_from_turn_id > 0 THEN covered_from_turn_id ELSE NULL END AS oldest_turn_index,
@@ -285,19 +316,48 @@ WITH all_rows AS (
         '' AS chat_type,
         0 AS summary_count,
         1 AS digest_count,
+        0 AS turn_count,
         0 AS has_archived,
         0 AS latest_turn_index,
         NULL AS oldest_turn_index,
         created_at AS latest_at
     FROM memory_digests
     WHERE session_id IS NOT NULL AND session_id != ''
+    UNION ALL
+    SELECT
+        CASE
+            WHEN session_id NOT LIKE 'group_%'
+             AND session_id GLOB '[0-9]*'
+             AND user_id LIKE 'group_%'
+            THEN user_id
+            ELSE session_id
+        END AS canonical_session_id,
+        session_id AS alias_session_id,
+        max(user_id) AS user_id,
+        CASE
+            WHEN session_id LIKE 'group_%' THEN 'group'
+            WHEN session_id LIKE 'private_%' THEN 'private'
+            WHEN max(user_id) LIKE 'group_%' THEN 'group'
+            ELSE ''
+        END AS chat_type,
+        0 AS summary_count,
+        0 AS digest_count,
+        count(*) AS turn_count,
+        0 AS has_archived,
+        max(id) AS latest_turn_index,
+        min(id) AS oldest_turn_index,
+        max(created_at) AS latest_at
+    FROM conversation_turns
+    WHERE session_id IS NOT NULL AND session_id != ''
+    GROUP BY canonical_session_id, alias_session_id
 ),
 grouped AS (
     SELECT
         canonical_session_id AS session_id,
         max(user_id) AS user_id,
         sum(summary_count) AS summary_count,
-        sum(digest_count) AS digest_count
+        sum(digest_count) AS digest_count,
+        sum(turn_count) AS turn_count
     FROM all_rows
     WHERE canonical_session_id IS NOT NULL AND canonical_session_id != ''
     GROUP BY canonical_session_id
@@ -305,7 +365,7 @@ grouped AS (
 SELECT count(*) FROM grouped
 WHERE
     (:kind = 'all'
-     OR (:kind = 'recent' AND summary_count > 0)
+     OR (:kind = 'recent' AND (summary_count > 0 OR turn_count > 0))
      OR (:kind = 'long' AND digest_count > 0))
     AND (
         :include_system = 1
@@ -363,6 +423,7 @@ WHERE
                 "user_id": str(row.get("user_id") or ""),
                 "summary_count": int(row.get("summary_count") or 0),
                 "digest_count": int(row.get("digest_count") or 0),
+                "turn_count": int(row.get("turn_count") or 0),
                 "active_summary_id": None,
                 "active_summary_preview": "",
                 "active_summary_created_at": "",

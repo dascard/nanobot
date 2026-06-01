@@ -21,8 +21,9 @@ from app.session_memory.windowing import (
     raw_window_limits,
 )
 from app.session_memory.jobs import enqueue_session_summary_job, retry_session_summary_job
-from app.session_memory.admin_browser import AdminSessionMemoryBrowser
-from core.database import ConversationTurn, RollingSessionSummary, SessionSummaryJob, User, get_db
+from app.session_memory.admin_browser import AdminSessionMemoryBrowser, _session_aliases
+from core.daily_digest import generate_daily_digest_for_date
+from core.database import ConversationTurn, MemoryDigest, RollingSessionSummary, SessionSummaryJob, User, get_db
 
 router = APIRouter()
 
@@ -40,6 +41,12 @@ class RollingSummaryEnqueueRequest(BaseModel):
     chat_type: Literal["private", "group"] = "private"
     force: bool = False
     summary_id: int | None = None
+
+
+class MemoryDigestRunAdminRequest(BaseModel):
+    target_date: str = ""
+    user_id: str = ""
+    force: bool = True
 
 
 def _summary_to_dict(row: RollingSessionSummary | None) -> dict:
@@ -225,6 +232,42 @@ def list_session_memory_digests(
         level=level,
         parent_id=parent_id,
     )
+
+
+@router.post("/session-memory/{session_id}/digests/run")
+def run_session_memory_digest(
+    session_id: str,
+    body: MemoryDigestRunAdminRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    aliases = _session_aliases(session_id)
+    latest = (
+        db.query(MemoryDigest)
+        .filter(MemoryDigest.session_id.in_(aliases))
+        .order_by(MemoryDigest.digest_date.desc(), MemoryDigest.id.desc())
+        .first()
+    )
+    target_date = str(body.target_date or "").strip()
+    if not target_date:
+        target_date = str(getattr(latest, "digest_date", "") or "").strip()
+    if not target_date:
+        raise HTTPException(status_code=404, detail="latest memory digest date not found")
+
+    selected_user_id = str(body.user_id or getattr(latest, "user_id", "") or session_id).strip()
+    created = generate_daily_digest_for_date(
+        target_date=target_date,
+        user_id=selected_user_id or None,
+        session_id=session_id,
+        force=bool(body.force),
+    )
+    return {
+        "session_id": session_id,
+        "target_date": target_date,
+        "user_id": selected_user_id,
+        "force": bool(body.force),
+        "created_sessions": created,
+    }
 
 
 @router.get("/session-memory/{session_id}/rolling-summary")

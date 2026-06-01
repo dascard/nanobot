@@ -133,9 +133,13 @@ def test_session_summary_browser_exposes_llm_regeneration_controls():
     summary_source = source.split("function SessionSummaryBrowser(")[1].split("// ── Memory ──")[0]
 
     assert "重新生成 LLM 摘要" in summary_source
+    assert "生成近期摘要" in summary_source
+    assert "重新生成长期摘要" in summary_source
     assert "重试失败摘要任务" in summary_source
     assert "代码兜底" in summary_source
     assert "api.post(`/session-memory/${encodeURIComponent(selectedSession)}/rolling-summary/enqueue-llm`" in summary_source
+    assert "api.post(`/session-memory/${encodeURIComponent(selectedSession)}/rolling-summary/run`" in summary_source
+    assert "api.post(`/session-memory/${encodeURIComponent(selectedSession)}/digests/run`" in summary_source
     assert "api.post(`/session-memory/jobs/${jobId}/retry`" in summary_source
     assert "setOperationError(formatApiError(e))" in summary_source
 

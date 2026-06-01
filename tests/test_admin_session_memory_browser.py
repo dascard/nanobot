@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timedelta
 
-from core.database import MemoryDigest, RollingSessionSummary
+from core.database import ConversationTurn, MemoryDigest, RollingSessionSummary
 
 
 def _auth_header():
@@ -351,6 +351,46 @@ def test_admin_session_memory_sessions_kind_filters_current_tab(client, db_sessi
     assert [item["session_id"] for item in long.json()["items"]] == ["private_long"]
 
 
+def test_admin_session_memory_recent_sessions_include_conversation_turn_only_groups(client, db_session, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    now = datetime(2026, 6, 1, 12, 0, 0)
+    db_session.add_all([
+        ConversationTurn(
+            session_id="group_1",
+            user_id="group_1",
+            role="user",
+            content="[用户名]甲\n[发言内容]今晚讨论摘要重生成",
+            meta_json=json.dumps({"kind": "chat", "source": "group_message"}, ensure_ascii=False),
+            created_at=now - timedelta(minutes=2),
+        ),
+        ConversationTurn(
+            session_id="group_1",
+            user_id="group_1",
+            role="assistant",
+            content="收到，我会检查摘要链路。",
+            meta_json=json.dumps({"kind": "chat"}, ensure_ascii=False),
+            created_at=now - timedelta(minutes=1),
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/admin/session-memory/sessions",
+        headers=_auth_header(),
+        params={"kind": "recent"},
+    )
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert [item["session_id"] for item in items] == ["group_1"]
+    item = items[0]
+    assert item["chat_type"] == "group"
+    assert item["summary_count"] == 0
+    assert item["turn_count"] == 2
+    assert item["oldest_turn_index"] > 0
+    assert item["latest_turn_index"] > 0
+
+
 def test_admin_session_memory_sessions_sql_paginates_beyond_scan_window(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     now = datetime(2026, 5, 28, 12, 0, 0)
@@ -445,3 +485,51 @@ def test_admin_session_memory_digest_details_search_group_aliases_and_render_v2_
     full_item = full.json()["items"][0]
     assert "当天主要讨论摘要浏览默认展示" in full_item["content"]
     assert full.json()["session_aliases"] == ["42", "group_42"]
+
+
+def test_admin_session_memory_long_digest_run_endpoint_regenerates_selected_session(client, db_session, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    now = datetime(2026, 6, 1, 12, 0, 0)
+    db_session.add(MemoryDigest(
+        id=70,
+        session_id="group_1",
+        user_id="group_1",
+        digest_date="2026-05-31",
+        level=1,
+        content="旧长期摘要",
+        meta_json=json.dumps({"status": "active"}, ensure_ascii=False),
+        created_at=now,
+    ))
+    db_session.commit()
+    calls = []
+
+    def fake_generate_daily_digest_for_date(*, target_date, user_id=None, session_id=None, force=False, **kwargs):
+        calls.append({
+            "target_date": target_date,
+            "user_id": user_id,
+            "session_id": session_id,
+            "force": force,
+            "kwargs": kwargs,
+        })
+        return 1
+
+    monkeypatch.setattr(
+        "api.admin.session_memory_routes.generate_daily_digest_for_date",
+        fake_generate_daily_digest_for_date,
+    )
+
+    response = client.post(
+        "/api/v1/admin/session-memory/group_1/digests/run",
+        headers=_auth_header(),
+        json={"force": True},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["created_sessions"] == 1
+    assert calls == [{
+        "target_date": "2026-05-31",
+        "user_id": "group_1",
+        "session_id": "group_1",
+        "force": True,
+        "kwargs": {},
+    }]
