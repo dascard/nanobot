@@ -72,6 +72,19 @@ def _safe_json(raw: str | None) -> dict[str, Any]:
         return {}
 
 
+def _collect_digest_row_ids(items: list[_Candidate]) -> list[int]:
+    """从候选集的 meta_json 中收集去重的 digest_row_id。"""
+    row_ids: list[int] = []
+    seen: set[int] = set()
+    for item in items:
+        meta = _safe_json(item.row.meta_json)
+        rid = meta.get("digest_row_id")
+        if isinstance(rid, int) and rid > 0 and rid not in seen:
+            seen.add(rid)
+            row_ids.append(rid)
+    return row_ids
+
+
 def _query_vector(query: str, embedding_provider: Any) -> list[float] | None:
     if embedding_provider is None:
         return None
@@ -440,7 +453,10 @@ class MemoryRagService:
                 },
             }
             if source_type == "memory_digest":
-                parent["digest_id"] = int(source_id) if str(source_id).isdigit() else source_id
+                digest_row_ids = _collect_digest_row_ids(items)
+                parent["digest_id"] = digest_row_ids[0] if digest_row_ids else source_id
+                parent["digest_source_id"] = source_id
+                parent["matched_digest_row_ids"] = digest_row_ids
             if source_type == "session_summary":
                 parent["summary_id"] = int(source_id) if str(source_id).isdigit() else source_id
             parents.append(parent)

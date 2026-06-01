@@ -64,7 +64,7 @@ def _as_float(value: Any, *, default: float = 0.0) -> float:
 def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
     meta = _safe_json(getattr(row, "meta_json", ""), {})
     level = int(getattr(row, "level", 0) or 0)
-    source_id = str(getattr(row, "id", "") or "")
+    source_id = str(meta.get("source_id") or "")
     quality = meta.get("quality") if isinstance(meta.get("quality"), dict) else {}
     quality_score = _as_float(meta.get("quality_score"), default=_as_float(quality.get("score")))
     base_meta = {
@@ -72,6 +72,7 @@ def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
         "session_id": getattr(row, "session_id", "") or "",
         "digest_level": level,
         "digest_date": getattr(row, "digest_date", "") or "",
+        "digest_row_id": int(getattr(row, "id", 0) or 0),
         "digest_source_id": str(meta.get("source_id") or ""),
         "source_type": str(meta.get("source_type") or ""),
         "source_range": str(meta.get("source_range") or ""),
@@ -103,7 +104,7 @@ def chunks_from_memory_digest(row: Any) -> list[SemanticChunk]:
                     text=text,
                     lexical_text=lexical,
                     embedding_text=lexical,
-                    metadata={**base_meta, "recall_card_index": index},
+                    metadata={**base_meta, "recall_card_index": index, "digest_row_id": int(getattr(row, "id", 0) or 0)},
                     visibility="recall",
                     quality_score=quality_score,
                     source_prior=0.65,

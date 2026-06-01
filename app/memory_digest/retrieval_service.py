@@ -211,6 +211,76 @@ class MemoryDigestRetrievalService:
             "chain": [self.serialize(node, include_content=include_detail) for node in chain],
         }
 
+    def expand_by_source(
+        self,
+        *,
+        source_id: str,
+        include_detail: bool = False,
+        include_legacy: bool = False,
+    ) -> dict[str, Any] | None:
+        """按 digest_source_id 展开：聚合所有同 source 的 level0/1/2 行。
+
+        与 expand_digest（按 row id 查找单条）互补，用于 RAG 命中后回溯同 source 的
+        摘要层级和全部卡片。
+        """
+        if not source_id or not str(source_id).strip():
+            return None
+        sid = str(source_id).strip()
+        # LIKE 匹配 meta_json 中的 "source_id" 字段
+        rows = (
+            self.db.query(MemoryDigest)
+            .filter(MemoryDigest.meta_json.like(f'%"source_id":"{sid}"%'))
+            .order_by(MemoryDigest.level.asc(), MemoryDigest.id.asc())
+            .all()
+        )
+        if not rows:
+            return None
+        # 过滤 legacy / 非 active 状态
+        filtered: list[Any] = []
+        for row in rows:
+            meta = safe_digest_meta(row.meta_json)
+            if not include_legacy and _is_legacy(meta):
+                continue
+            if digest_status(meta) not in {"active", "legacy"}:
+                continue
+            filtered.append(row)
+        if not filtered:
+            return None
+
+        level0 = next((r for r in filtered if r.level == 0), None)
+        level1 = next((r for r in filtered if r.level == 1), None)
+        level2_rows = [r for r in filtered if r.level == 2]
+
+        best_meta = safe_digest_meta(level0.meta_json) if level0 else (
+            safe_digest_meta(level1.meta_json) if level1 else safe_digest_meta(filtered[0].meta_json)
+        )
+        all_cards: list[dict[str, Any]] = []
+        for r in level2_rows:
+            m = safe_digest_meta(r.meta_json)
+            cards = m.get("recall_cards") if isinstance(m.get("recall_cards"), list) else []
+            all_cards.extend(cards)
+
+        chain: list[dict[str, Any]] = []
+        if level0:
+            chain.append(self.serialize(level0, include_content=include_detail))
+        if level1:
+            chain.append(self.serialize(level1, include_content=include_detail))
+
+        return {
+            "digest_source_id": sid,
+            "digest_id": level2_rows[0].id if level2_rows else (filtered[0].id if filtered else None),
+            "matched_digest_row_ids": [r.id for r in level2_rows],
+            "user_id": filtered[0].user_id if filtered else "",
+            "session_id": filtered[0].session_id if filtered else "",
+            "digest_date": filtered[0].digest_date if filtered else "",
+            "status": digest_status(best_meta),
+            "preview": best_meta.get("preview") or {},
+            "long_summary": best_meta.get("long_summary") or {},
+            "recall_cards": all_cards,
+            "quality": best_meta.get("quality") or {},
+            "chain": chain,
+        }
+
     def expand_chain(self, base: MemoryDigest, *, reveal_to_level: int) -> list[MemoryDigest]:
         chain = [base]
         current = base

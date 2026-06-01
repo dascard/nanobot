@@ -346,28 +346,42 @@ class MemoryQueryTool(BaseTool):
         include_detail: bool,
         include_legacy: bool,
     ) -> ToolResult:
+        digest_source_id = args.get("digest_source_id") or args.get("source_id")
         digest_id = args.get("digest_id")
-        if digest_id is None:
-            return ToolResult(error="expand mode requires digest_id")
-        item = service.expand_digest(
-            digest_id=int(digest_id),
-            include_detail=include_detail,
-            include_legacy=include_legacy,
-        )
+
+        if digest_source_id:
+            # 优先按 digest_source_id 展开（聚合同 source 所有行）
+            item = service.expand_by_source(
+                source_id=str(digest_source_id),
+                include_detail=include_detail,
+                include_legacy=include_legacy,
+            )
+        elif digest_id is not None:
+            # 回退：按 row id 展开单条
+            item = service.expand_digest(
+                digest_id=int(digest_id),
+                include_detail=include_detail,
+                include_legacy=include_legacy,
+            )
+        else:
+            return ToolResult(error="expand mode requires digest_id or digest_source_id")
+
         if not item:
+            identifier = digest_source_id or digest_id
             return ToolResult(
-                output=f"未找到可展开的摘要 digest_id={digest_id}。",
+                output=f"未找到可展开的摘要 id={identifier}。",
                 exit_code=0,
                 metadata={
                     "structured_content": {
                         "mode": "expand",
-                        "digest_id": int(digest_id),
+                        "digest_id": digest_id,
+                        "digest_source_id": digest_source_id,
                         "item": None,
                     }
                 },
             )
         lines = [
-            f"memory_query expand: digest_id={item.get('digest_id')} date={item.get('digest_date')} session={item.get('session_id')}",
+            f"memory_query expand: digest_id={item.get('digest_id')} source_id={item.get('digest_source_id')} date={item.get('digest_date')} session={item.get('session_id')}",
             "preview:",
             str(item.get("preview") or {}),
             "long_summary:",
@@ -384,7 +398,8 @@ class MemoryQueryTool(BaseTool):
             metadata={
                 "structured_content": {
                     "mode": "expand",
-                    "digest_id": int(digest_id),
+                    "digest_id": item.get("digest_id"),
+                    "digest_source_id": item.get("digest_source_id"),
                     "item": item,
                 }
             },
