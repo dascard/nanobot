@@ -317,7 +317,9 @@ def _ensure_digest_source_meta(
     raw = f"{digest_date}|{session_id}|{start_id}|{end_id}|memory_digest_v2"
     row_meta.setdefault("source_id", hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24])
     row_meta.setdefault("source_type", "date_session")
-    row_meta.setdefault("source_range", f"log_id {start_id or 0}-{end_id or 0}")
+    _raw_range = f"log_id {start_id or 0}-{end_id or 0}"
+    row_meta.setdefault("source_range", _raw_range)
+    row_meta["raw_source_range"] = _raw_range
     source_stats = row_meta.get("source_stats") if isinstance(row_meta.get("source_stats"), dict) else {}
     row_meta.setdefault("message_count", int(source_stats.get("valid_log_count") or 0))
     row_meta.setdefault("generator", "deterministic_fallback")
