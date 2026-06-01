@@ -245,7 +245,7 @@ function RoutesTab({ routes, providers, testResult, onTest, onSaved }) {
 
 function RouteEditModalV2({ route, providers, onClose, onSaved }) {
   const routeKey = route.route_key || route.key
-  const isChatRoute = ['reply', 'fast', 'smart'].includes(routeKey)
+  const isChatRoute = ['reply', 'fast', 'smart', 'session_summary', 'memory_digest'].includes(routeKey)
   const supportsRouteApiKey = !isChatRoute
   const [f, setF] = useState({
     provider_id: route.provider_id || '', model: route.model || '',

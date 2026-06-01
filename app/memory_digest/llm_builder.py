@@ -230,15 +230,20 @@ def build_llm_digest_messages(
 async def default_llm_memory_digest_summarizer_async(messages: list[dict[str, str]]) -> str:
     from config import NEW_API_KEY
     from clients.new_api_client import NewAPIClient
+    from clients.classifier_client import resolve_model_route
 
-    client = NewAPIClient(api_key=NEW_API_KEY)
+    route = resolve_model_route("memory_digest")
+    client = NewAPIClient(
+        api_key=route.get("api_key") or NEW_API_KEY,
+        base_url=route.get("base_url") or "",
+    )
     response = await client.chat_completion(
         messages=messages,
-        temperature=0.1,
-        model_tier="smart",
-        max_tokens=1800,
+        temperature=float(route.get("temperature", 0.1)),
+        manual_model=route.get("model", ""),
+        max_tokens=int(route.get("max_tokens", 1800)),
         llm_source="memory_digest",
-        enable_thinking=False,
+        enable_thinking=route.get("enable_thinking", "false"),
     )
     if isinstance(response, dict) and response.get("error"):
         raise RuntimeError(str(response.get("detail") or response.get("error")))

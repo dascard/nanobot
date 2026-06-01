@@ -515,7 +515,7 @@ def resolve_model_route(route_key: str) -> dict:
         str(route.get("provider_id") or settings.get(f"model.route.{route_key}.provider") or "")
     )
     if not provider_id:
-        if route_key in ("reply", "fast", "smart"):
+        if route_key in ("reply", "fast", "smart", "session_summary", "memory_digest"):
             provider_id = "newapi"
         elif route_key == "sticker_describe":
             provider_id = "local_llama"
@@ -529,8 +529,12 @@ def resolve_model_route(route_key: str) -> dict:
 
     # 确定 model
     model = route.get("model", "")
-    if not model and route_key in ("reply", "fast", "smart"):
-        models = {"reply": LLM_MODEL_REPLY, "fast": LLM_MODEL_FAST, "smart": LLM_MODEL_SMART}
+    if not model and route_key in ("reply", "fast", "smart", "session_summary", "memory_digest"):
+        models = {
+            "reply": LLM_MODEL_REPLY, "fast": LLM_MODEL_FAST, "smart": LLM_MODEL_SMART,
+            "session_summary": LLM_MODEL_FAST,
+            "memory_digest": LLM_MODEL_SMART,
+        }
         model = settings.get(f"model.{route_key}") or models.get(route_key, "")
 
     result = {

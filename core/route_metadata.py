@@ -12,6 +12,8 @@ ROUTE_METADATA: dict[str, dict] = {
     "private_decision":   {"type": "classifier", "label": "私聊决策分类器"},
     "classifier_legacy":  {"type": "classifier", "label": "旧分类器"},
     "sticker_describe":   {"type": "vision",     "label": "表情包打标"},
+    "session_summary":    {"type": "controller", "label": "近期摘要"},
+    "memory_digest":      {"type": "controller", "label": "长期摘要"},
 }
 
 
