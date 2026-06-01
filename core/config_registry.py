@@ -132,6 +132,16 @@ SETTING_DEFS: dict[str, SettingDef] = {
         key="model.fast", env_name="LLM_MODEL_FAST",
         default="", value_type="str", category="model", description="快速模型",
     ),
+    "model.session_summary": SettingDef(
+        key="model.session_summary", env_name="",
+        default="", value_type="str",
+        category="model", description="近期摘要模型",
+    ),
+    "model.memory_digest": SettingDef(
+        key="model.memory_digest", env_name="",
+        default="", value_type="str",
+        category="model", description="长期摘要模型",
+    ),
     "model.reasoning": SettingDef(
         key="model.reasoning", env_name="LLM_MODEL_REASONING",
         default="", value_type="str", category="model", description="推理模型",
@@ -453,6 +463,46 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=0, value_type="int",
         category="model", description="智能模型最大输出 tokens（0=由API决定）", min_value=0, max_value=200000,
     ),
+    "model.route.session_summary.provider": SettingDef(
+        key="model.route.session_summary.provider", env_name="",
+        default="newapi", value_type="str",
+        category="model", description="近期摘要供应商",
+    ),
+    "model.route.session_summary.timeout": SettingDef(
+        key="model.route.session_summary.timeout", env_name="",
+        default=120, value_type="int",
+        category="model", description="近期摘要请求超时(秒)", min_value=3, max_value=300,
+    ),
+    "model.route.session_summary.temperature": SettingDef(
+        key="model.route.session_summary.temperature", env_name="",
+        default=0.1, value_type="float",
+        category="model", description="近期摘要温度", min_value=0, max_value=2,
+    ),
+    "model.route.session_summary.max_tokens": SettingDef(
+        key="model.route.session_summary.max_tokens", env_name="",
+        default=1200, value_type="int",
+        category="model", description="近期摘要最大输出 tokens", min_value=64, max_value=8000,
+    ),
+    "model.route.memory_digest.provider": SettingDef(
+        key="model.route.memory_digest.provider", env_name="",
+        default="newapi", value_type="str",
+        category="model", description="长期摘要供应商",
+    ),
+    "model.route.memory_digest.timeout": SettingDef(
+        key="model.route.memory_digest.timeout", env_name="",
+        default=180, value_type="int",
+        category="model", description="长期摘要请求超时(秒)", min_value=3, max_value=600,
+    ),
+    "model.route.memory_digest.temperature": SettingDef(
+        key="model.route.memory_digest.temperature", env_name="",
+        default=0.1, value_type="float",
+        category="model", description="长期摘要温度", min_value=0, max_value=2,
+    ),
+    "model.route.memory_digest.max_tokens": SettingDef(
+        key="model.route.memory_digest.max_tokens", env_name="",
+        default=1800, value_type="int",
+        category="model", description="长期摘要最大输出 tokens", min_value=128, max_value=12000,
+    ),
     "new_api.timeout": SettingDef(
         key="new_api.timeout", env_name="NEW_API_TIMEOUT",
         default=180, value_type="int",
@@ -553,6 +603,8 @@ for _route_key in (
     "reply",
     "fast",
     "smart",
+    "session_summary",
+    "memory_digest",
     "timing_gate",
     "private_decision",
     "classifier_legacy",

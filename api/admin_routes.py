@@ -3291,6 +3291,8 @@ _ROUTE_SETTING_MAP: dict[str, str] = {
     "reply": "model.reply",
     "fast": "model.fast",
     "smart": "model.smart",
+    "session_summary": "model.session_summary",
+    "memory_digest": "model.memory_digest",
 }
 # classifier routes: route_key 直接对应 model.route.<key>
 _CLASSIFIER_ROUTE_KEYS = {"timing_gate", "private_decision", "classifier_legacy", "sticker_describe"}
@@ -3299,7 +3301,7 @@ _ROUTE_ALIAS: dict[str, str] = {
     "vision": "sticker_describe",
 }
 
-_CHAT_ROUTES = {"reply", "fast", "smart"}
+_CHAT_ROUTES = {"reply", "fast", "smart", "session_summary", "memory_digest"}
 
 
 def _resolve_route_key(route_key: str) -> tuple[str, str, bool]:
