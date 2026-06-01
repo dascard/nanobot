@@ -226,10 +226,16 @@ class MemoryDigestRetrievalService:
         if not source_id or not str(source_id).strip():
             return None
         sid = str(source_id).strip()
-        # LIKE 匹配 meta_json 中的 "source_id" 字段
+        # JSON extract 匹配 meta_json 中的 "source_id" 字段
+        # 注意 json.dumps(ensure_ascii=False) 会在 "source_id": 后加空格
         rows = (
             self.db.query(MemoryDigest)
-            .filter(MemoryDigest.meta_json.like(f'%"source_id":"{sid}"%'))
+            .filter(
+                or_(
+                    MemoryDigest.meta_json.like(f'%"source_id":"{sid}"%'),
+                    MemoryDigest.meta_json.like(f'%"source_id": "{sid}"%'),
+                )
+            )
             .order_by(MemoryDigest.level.asc(), MemoryDigest.id.asc())
             .all()
         )
