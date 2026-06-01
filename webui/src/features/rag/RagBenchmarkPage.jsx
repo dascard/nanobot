@@ -56,6 +56,33 @@ function jsonText(value) {
   return JSON.stringify(value || {}, null, 2)
 }
 
+function formatMetaValue(value) {
+  if (value === null || value === undefined || value === '') return ''
+  if (Array.isArray(value)) return value.join(', ')
+  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(3)
+  return String(value)
+}
+
+function metadataItems(metadata = {}) {
+  return [
+    'first_seen',
+    'last_seen',
+    'updated_at',
+    'created_at',
+    'last_injected_at',
+    'evidence_count',
+    'confidence',
+    'decay_score',
+    'status',
+    'inject_policy',
+    'source',
+    'injected_count',
+    'evidence_log_ids',
+  ]
+    .map(key => [key, formatMetaValue(metadata[key])])
+    .filter(([, value]) => value)
+}
+
 function MetricStat({ label, value, tone = 'slate' }) {
   const color = {
     emerald: 'text-emerald-300',
@@ -542,6 +569,8 @@ export function RagBenchmarkPage() {
                       {result.candidates.map(candidate => {
                         const expected = (result.expected_candidate_ids || []).includes(candidate.candidate_id)
                         const score = Number(candidate.score)
+                        const metaItems = metadataItems(candidate.metadata || {})
+                        const scoreEntries = Object.entries(candidate.score_breakdown || {})
                         return (
                           <div key={candidate.candidate_id} className={`rounded border px-3 py-2 ${expected ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-900/30'}`}>
                             <div className="flex flex-wrap items-center gap-2">
@@ -551,6 +580,27 @@ export function RagBenchmarkPage() {
                             </div>
                             {candidate.title && <div className="mt-1 text-xs font-medium text-slate-200">{candidate.title}</div>}
                             <div className="mt-1 text-xs leading-5 text-slate-400">{candidate.text_preview || '-'}</div>
+                            {metaItems.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1.5">
+                                {metaItems.map(([key, value]) => (
+                                  <span key={key} className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-400">
+                                    <span className="text-slate-500">{key}</span>: {value}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {scoreEntries.length > 0 && (
+                              <details className="mt-2 rounded border border-slate-800 bg-slate-950 px-2 py-1.5">
+                                <summary className="cursor-pointer text-[11px] text-slate-500">score components</summary>
+                                <div className="mt-2 grid gap-1 text-[11px] text-slate-400 sm:grid-cols-2 lg:grid-cols-4">
+                                  {scoreEntries.map(([key, value]) => (
+                                    <div key={key} className="font-mono">
+                                      <span className="text-slate-500">{key}</span>: {formatMetaValue(value)}
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
+                            )}
                           </div>
                         )
                       })}

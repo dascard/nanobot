@@ -42,6 +42,12 @@ def test_rag_benchmark_page_exposes_provider_modes_and_case_controls():
     assert "指标说明" in source
     assert "召回候选" in source
     assert "caseResults" in source
+    assert "metadataItems" in source
+    assert "first_seen" in source
+    assert "last_seen" in source
+    assert "updated_at" in source
+    assert "evidence_count" in source
+    assert "score components" in source
     assert "hit@1 表示 expected candidate 排在第 1 位的 positive case 比例" in source
 
 

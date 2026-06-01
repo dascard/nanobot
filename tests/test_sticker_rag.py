@@ -287,6 +287,56 @@ def test_sticker_search_caps_reranker_batch_size(db_session):
     assert reranker.batch_sizes == [10]
 
 
+def test_sticker_rag_uses_vector_recall_before_recent_row_limit(db_session):
+    from core.database import SemanticIndexItem
+    from core.sticker_rag import StickerRagService
+
+    class ConstantEmbeddingProvider:
+        def embed(self, texts):
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    target = _add_sticker(
+        db_session,
+        "old-vector-sticker",
+        description="猫猫挥手欢迎",
+        tags=["欢迎"],
+        emotions=["friendly"],
+    )
+    noise = [
+        _add_sticker(
+            db_session,
+            f"sticker-vector-noise-{index}",
+            description="午饭咖啡闲聊",
+            tags=["闲聊"],
+            emotions=["neutral"],
+        )
+        for index in range(405)
+    ]
+    _index_stickers(db_session, [target] + noise)
+    for row in db_session.query(SemanticIndexItem).filter(SemanticIndexItem.source_type == "sticker").all():
+        row.embedding = json.dumps(
+            [1.0, 0.0, 0.0] if str(row.source_id) == str(target.id) else [0.0, 1.0, 0.0]
+        ).encode("utf-8")
+        row.embedding_status = "ok"
+        row.embedding_model = "fake"
+    db_session.commit()
+
+    result = StickerRagService(
+        db_session,
+        embedding_provider=ConstantEmbeddingProvider(),
+        reranker_provider=IdentityRerankerProvider({f"sticker:{target.id}:sticker": 0.9}),
+    ).query(
+        "开心",
+        group_id="123",
+        limit=3,
+        include_debug=True,
+    )
+
+    assert result["items"][0]["id"] == target.id
+    assert result["stats"]["vector_candidates"] >= 1
+    assert result["debug_trace"]["vector_hits"][0]["candidate_id"] == f"sticker:{target.id}:sticker"
+
+
 def test_sticker_search_blocks_when_reranker_required_unavailable(db_session, monkeypatch):
     from core.semantic.provider_factory import RagDegradedBlockedError, get_reranker_provider
     from core.sticker_memory import search_stickers

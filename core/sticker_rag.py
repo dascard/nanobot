@@ -11,10 +11,12 @@ from core.database import SemanticIndexItem, StickerMemory
 from core.semantic.reranker import SemanticCandidate
 from core.semantic.retriever import (
     fts_recall_hits,
+    has_vector_recall_rows,
     lexical_overlap_score,
     load_recall_rows,
     load_recall_rows_by_ids,
     semantic_score_for_row,
+    vector_recall_hits,
 )
 from core.semantic.scoring import passes_relevance_gate, weighted_score
 from core.sticker_memory import (
@@ -97,6 +99,19 @@ def _normalize_sticker_query(query: str) -> str:
     return normalized or str(query or "").strip()
 
 
+def _merge_recall_rows(*groups: list[SemanticIndexItem]) -> list[SemanticIndexItem]:
+    rows: list[SemanticIndexItem] = []
+    seen: set[int] = set()
+    for group in groups:
+        for row in group:
+            row_id = int(row.id)
+            if row_id in seen:
+                continue
+            seen.add(row_id)
+            rows.append(row)
+    return rows
+
+
 class StickerRagService:
     def __init__(
         self,
@@ -134,6 +149,12 @@ class StickerRagService:
         include_debug: bool = False,
     ) -> list[dict[str, Any]] | dict[str, Any]:
         recall_query = _normalize_sticker_query(query)
+        has_vector_rows = has_vector_recall_rows(
+            self.db,
+            source_types={"sticker"},
+            ensure_schema=not self.readonly,
+        )
+        query_vector = _query_vector(recall_query, self.embedding_provider) if has_vector_rows else None
         fts_hits = fts_recall_hits(
             self.db,
             recall_query,
@@ -143,22 +164,31 @@ class StickerRagService:
         )
         lexical_by_id = {hit.item_id: hit.lexical_score for hit in fts_hits}
         bm25_by_id = {hit.item_id: hit.bm25_raw for hit in fts_hits}
-        index_rows = load_recall_rows(
+        vector_hits = vector_recall_hits(
+            self.db,
+            query_vector=query_vector,
+            source_types={"sticker"},
+            limit=200,
+            ensure_schema=not self.readonly,
+        )
+        semantic_by_id = {hit.item_id: hit.semantic_score for hit in vector_hits}
+        recent_rows = load_recall_rows(
             self.db,
             source_types={"sticker"},
             limit=400,
             ensure_schema=not self.readonly,
         )
-        rows_by_id = {int(row.id): row for row in index_rows}
-        missing_fts_ids = [hit.item_id for hit in fts_hits if hit.item_id not in rows_by_id]
+        rows_by_id = {int(row.id): row for row in recent_rows}
+        recall_ids = [hit.item_id for hit in fts_hits] + [hit.item_id for hit in vector_hits]
+        missing_fts_ids = [item_id for item_id in recall_ids if item_id not in rows_by_id]
         rows_by_id.update(load_recall_rows_by_ids(
             self.db,
             missing_fts_ids,
             ensure_schema=not self.readonly,
         ))
         fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
-        fts_ids = {int(row.id) for row in fts_ordered}
-        index_rows = fts_ordered + [row for row in index_rows if int(row.id) not in fts_ids]
+        vector_ordered = [rows_by_id[hit.item_id] for hit in vector_hits if hit.item_id in rows_by_id]
+        index_rows = _merge_recall_rows(fts_ordered, vector_ordered, recent_rows)
         sticker_ids = [
             sticker_id
             for row in index_rows
@@ -172,6 +202,7 @@ class StickerRagService:
                     "fallback_reason": "reranker_unavailable" if self.reranker_provider is None else "",
                     "stats": {
                         "fts_candidates": len(fts_hits),
+                        "vector_candidates": len(vector_hits),
                         "merged_candidates": 0,
                         "reranker_candidates": 0,
                         "reranker_input_limit": MAX_RERANK_INPUTS,
@@ -182,6 +213,7 @@ class StickerRagService:
                         "sql_filters": self._debug_sql_filters(group_id, chat_stream_id, include_global),
                         "fts_hits": [],
                         "hard_gate": [],
+                        "vector_hits": [],
                         "embedding_hits": [],
                         "merged_candidates": [],
                         "reranker_input_pairs": [],
@@ -219,13 +251,21 @@ class StickerRagService:
                     if hit.item_id in rows_by_id
                 ],
                 "hard_gate": [],
+                "vector_hits": [
+                    {
+                        "item_id": hit.item_id,
+                        "semantic_score": hit.semantic_score,
+                        "candidate_id": self._row_candidate_id(rows_by_id.get(hit.item_id)),
+                    }
+                    for hit in vector_hits
+                    if hit.item_id in rows_by_id
+                ],
                 "embedding_hits": [],
                 "merged_candidates": [],
                 "reranker_input_pairs": [],
                 "final_candidates": [],
                 "relevance_gate": [],
             }
-        query_vector = _query_vector(recall_query, self.embedding_provider)
         candidates: list[_StickerCandidate] = []
         semantic_hits = 0
         for row in index_rows:
@@ -254,11 +294,9 @@ class StickerRagService:
             lexical = lexical_by_id.get(int(row.id))
             if lexical is None:
                 lexical = lexical_overlap_score(recall_query, row.lexical_text or row.text or "")
-            semantic = semantic_score_for_row(
-                row,
-                query_vector=query_vector,
-                embedding_provider=self.embedding_provider,
-            )
+            semantic = semantic_by_id.get(int(row.id))
+            if semantic is None:
+                semantic = semantic_score_for_row(row, query_vector=query_vector, embedding_provider=None)
             if semantic is not None and semantic > 0:
                 semantic_hits += 1
             if lexical > 0 or (semantic is not None and semantic >= 0.10):
@@ -335,6 +373,7 @@ class StickerRagService:
                 "fallback_reason": "reranker_unavailable" if degraded else "",
                 "stats": {
                     "fts_candidates": len(fts_hits),
+                    "vector_candidates": len(vector_hits),
                     "embedding_candidates": semantic_hits,
                     "merged_candidates": len(candidates),
                     "reranker_candidates": len(rerank_candidates),

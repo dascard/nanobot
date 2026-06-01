@@ -97,6 +97,83 @@ def test_knowledge_query_uses_reranker_before_final_score(db_session):
     assert result["items"][0]["score_breakdown"]["reranker"] == 0.9
 
 
+def test_knowledge_rag_uses_vector_recall_before_recent_row_limit(db_session):
+    import json
+
+    from core.knowledge_rag import KnowledgeRagService
+    from core.semantic.adapters import SemanticChunk
+    from core.semantic.indexer import upsert_semantic_chunks
+
+    class ConstantEmbeddingProvider:
+        def embed(self, texts):
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    chunks = [
+        SemanticChunk(
+            source_type="knowledge",
+            source_id="old-vector-doc",
+            source_sub_id="chunk:old-vector",
+            title="旧知识",
+            text="索引版本和 reranker 分数排查。",
+            lexical_text="索引版本和 reranker 分数排查。",
+            embedding_text="索引版本和 reranker 分数排查。",
+            metadata={
+                "citation": {
+                    "url": "https://example.com/old-vector",
+                    "title": "旧知识",
+                    "trust_level": "medium",
+                }
+            },
+        )
+    ]
+    chunks.extend(
+        SemanticChunk(
+            source_type="knowledge",
+            source_id=f"noise-doc-{index}",
+            source_sub_id=f"chunk:noise-{index}",
+            title=f"噪声知识 {index}",
+            text="午饭咖啡闲聊。",
+            lexical_text="午饭咖啡闲聊。",
+            embedding_text="午饭咖啡闲聊。",
+            metadata={
+                "citation": {
+                    "url": f"https://example.com/noise-{index}",
+                    "title": f"噪声知识 {index}",
+                    "trust_level": "medium",
+                }
+            },
+        )
+        for index in range(605)
+    )
+    embeddings = {
+        chunk.source_sub_id: json.dumps(
+            [1.0, 0.0, 0.0] if chunk.source_id == "old-vector-doc" else [0.0, 1.0, 0.0]
+        ).encode("utf-8")
+        for chunk in chunks
+    }
+    upsert_semantic_chunks(
+        db_session,
+        chunks,
+        index_version="fake:v1:knowledge",
+        embedding_model="fake",
+        embeddings=embeddings,
+    )
+
+    result = KnowledgeRagService(
+        db_session,
+        embedding_provider=ConstantEmbeddingProvider(),
+        reranker_provider=IdentityRerankerProvider({"knowledge:old-vector-doc:chunk:old-vector": 0.9}),
+    ).query(
+        "向量召回",
+        limit=3,
+        include_debug=True,
+    )
+
+    assert result["items"][0]["document_id"] == "old-vector-doc"
+    assert result["stats"]["vector_candidates"] >= 1
+    assert result["debug_trace"]["vector_hits"][0]["candidate_id"] == "knowledge:old-vector-doc:chunk:old-vector"
+
+
 def test_knowledge_query_returns_citations(db_session):
     from core.knowledge_rag import KnowledgeRagService
 
