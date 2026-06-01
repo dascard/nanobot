@@ -824,3 +824,37 @@ def test_memory_query_tool_session_summary_search_and_expand(db_session, monkeyp
     assert expand_result.exit_code == 0
     assert "covered_turns=11..20" in expand_result.output
     assert "原始 ChatLog" not in expand_result.output
+
+
+def test_expand_by_source_matches_default_json_dumps_spacing(db_session):
+    """回归：expand_by_source 必须匹配 json.dumps(ensure_ascii=False) 的带空格格式。"""
+    from app.memory_digest.retrieval_service import MemoryDigestRetrievalService
+
+    source_id = "20260601_group_42_test_spacing_v2"
+    meta = {
+        "schema_version": 2,
+        "status": "active",
+        "source_id": source_id,
+        "preview": {"brief": "测试预览", "keywords": ["测试"], "participants": []},
+        "long_summary": {"topic_flow": "测试详情", "important_details": [], "conclusions": [], "open_loops": []},
+        "recall_cards": [],
+        "quality": {"score": 0.9, "reason": "test"},
+    }
+
+    row = MemoryDigest(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-06-01",
+        level=1,
+        parent_id=None,
+        content="测试预览内容",
+        meta_json=json.dumps(meta, ensure_ascii=False),
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    svc = MemoryDigestRetrievalService(db_session)
+    item = svc.expand_by_source(source_id=source_id)
+    assert item is not None, f"expand_by_source 应匹配到 source_id={source_id}"
+    assert item["digest_source_id"] == source_id
+    assert item["preview"]["brief"] == "测试预览"

@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from core.database import MemoryDigest
@@ -226,12 +226,12 @@ class MemoryDigestRetrievalService:
         if not source_id or not str(source_id).strip():
             return None
         sid = str(source_id).strip()
-        # JSON extract 匹配 meta_json 中的 "source_id" 字段
-        # 注意 json.dumps(ensure_ascii=False) 会在 "source_id": 后加空格
+        # json_extract 语义正确；LIKE 兜底兼容无 JSON1 的 SQLite 或紧凑 JSON
         rows = (
             self.db.query(MemoryDigest)
             .filter(
                 or_(
+                    func.json_extract(MemoryDigest.meta_json, "$.source_id") == sid,
                     MemoryDigest.meta_json.like(f'%"source_id":"{sid}"%'),
                     MemoryDigest.meta_json.like(f'%"source_id": "{sid}"%'),
                 )
