@@ -39,8 +39,6 @@ def render_digest_levels(meta: dict[str, Any]) -> dict[int, str]:
     participants = [str(x).strip() for x in _as_list(preview.get("participants")) if str(x).strip()]
     if participants:
         preview_lines.append("参与者：" + "、".join(participants[:12]))
-    if level2:
-        preview_lines.append(level2)
     level1 = "\n".join(preview_lines).strip()
 
     level0_lines = [

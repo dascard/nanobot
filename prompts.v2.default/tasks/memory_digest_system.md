@@ -42,13 +42,37 @@ Rules:
 Return JSON in this exact shape:
 
 {
-  "preview": "string, level 1 preview digest",
-  "long_summary": "string, level 0 detailed digest",
+  "preview": {
+    "brief": "string, ≤200 chars, level 1 short preview for WebUI lists",
+    "keywords": ["string"],
+    "participants": ["string"]
+  },
+  "long_summary": {
+    "topic_flow": "string, level 0 detailed digest for human review",
+    "important_details": ["string"],
+    "conclusions": ["string"],
+    "open_loops": ["string"]
+  },
   "recall_cards": [
-    "string, level 2 atomic recall card"
+    {
+      "card_id": "card_1",
+      "type": "decision|fact|todo|preference|module|design_rule",
+      "text": "string, ≤120 chars, one atomic memory fact",
+      "keywords": ["string, searchable keywords"],
+      "importance": 0.8,
+      "evidence_log_ids": [1, 2]
+    }
   ],
   "quality": {
     "score": 0.0,
     "reason": "string"
   }
 }
+
+Card field rules:
+- card_id: unique within this digest, e.g. "card_1", "card_2".
+- type: one of decision, fact, todo, preference, module, design_rule.
+- text: ≤120 Chinese characters, one atomic fact per card, independently understandable.
+- keywords: 2-6 concrete search terms (Chinese or English).
+- importance: 0.0-1.0, subjective estimate of long-term retrieval value.
+- evidence_log_ids: log_id integers from digest_source that support this card. Leave empty if unclear.
