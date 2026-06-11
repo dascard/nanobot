@@ -1706,6 +1706,27 @@ def public_sticker_image(
         raise HTTPException(status_code=500, detail="sticker image serve failed")
 
 
+@router.get("/generated-images/{image_id}/image")
+def public_generated_image(
+    image_id: str,
+    token: str = "",
+):
+    """公开生成图片代理端点——用于 OneBot/NapCat 通过 HTTP 拉取。"""
+    expected_token = str(os.environ.get("NANOBOT_GENERATED_IMAGE_TOKEN") or "").strip()
+    if expected_token and not compare_digest(str(token or ""), expected_token):
+        raise HTTPException(status_code=403, detail="invalid generated image token")
+
+    from fastapi.responses import FileResponse
+    from core.generated_images import get_generated_image_path
+
+    try:
+        path = get_generated_image_path(image_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="generated image not found")
+
+    return FileResponse(path, media_type="image/png")
+
+
 @router.post("/stickers/{sticker_id}/disable")
 def disable_sticker_endpoint(
     sticker_id: int,
@@ -2522,11 +2543,12 @@ async def proxy_chat(
                 answer = result_holder.get("answer", "")
                 private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
 
-                # 仅传输层展开图片 token
+                # SSE 流禁止 base64 展开——单个 data chunk 过大会导致 QQbot 侧 Chunk too big。
+                # 有 public URL 时展开为短 CQ URL，否则保留短 token。
                 transport_answer = answer
                 try:
                     from core.generated_images import expand_generated_image_refs_in_content
-                    transport_answer = expand_generated_image_refs_in_content(answer)
+                    transport_answer = expand_generated_image_refs_in_content(answer, allow_base64=False)
                 except Exception:
                     logger.warning("[/chat] stream generated image ref expansion failed", exc_info=True)
 

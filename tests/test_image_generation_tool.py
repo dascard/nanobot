@@ -404,11 +404,35 @@ def test_reply_tool_keeps_short_generated_image_token(monkeypatch, tmp_path):
 
 # ── 传输层展开测试 ──
 
-def test_transport_layer_expands_generated_image_token(monkeypatch, tmp_path):
-    """传输层 expand_generated_image_refs_in_content 应展开成 CQ base64。"""
+def test_transport_layer_expands_to_cq_url_when_public_base_url_configured(monkeypatch, tmp_path):
+    """有 NANOBOT_PUBLIC_BASE_URL 时应展开为短 CQ URL。"""
     from core import generated_images
 
     monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
+    monkeypatch.setenv("NANOBOT_PUBLIC_BASE_URL", "http://nanobot.test:8000")
+    monkeypatch.setenv("NANOBOT_GENERATED_IMAGE_TOKEN", "test-token")
+
+    png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    saved = generated_images.save_generated_image(
+        base64.b64encode(png_data).decode("ascii"),
+        prompt="画一只猫",
+    )
+
+    expanded = generated_images.expand_generated_image_refs_in_content(saved["reply_token"])
+    assert expanded.startswith("[CQ:image,file=http://nanobot.test:8000")
+    assert f"/api/v1/generated-images/{saved['id']}/image?token=test-token" in expanded
+    # 不应包含 base64
+    assert "base64://" not in expanded
+
+
+def test_transport_layer_expands_to_base64_when_no_public_url(monkeypatch, tmp_path):
+    """无 NANOBOT_PUBLIC_BASE_URL 时回退 base64。"""
+    from core import generated_images
+
+    monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
+    monkeypatch.delenv("NANOBOT_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setenv("NANOBOT_PUBLIC_BASE_URL", "")
+
     png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
     saved = generated_images.save_generated_image(
         base64.b64encode(png_data).decode("ascii"),
@@ -418,6 +442,27 @@ def test_transport_layer_expands_generated_image_token(monkeypatch, tmp_path):
     expanded = generated_images.expand_generated_image_refs_in_content(saved["reply_token"])
     assert expanded.startswith("[CQ:image,file=base64://")
     assert base64.b64encode(png_data).decode("ascii") in expanded
+
+
+def test_transport_layer_allow_base64_false_keeps_short_token(monkeypatch, tmp_path):
+    """allow_base64=False 且无 public URL 时保留短 token。"""
+    from core import generated_images
+
+    monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
+    monkeypatch.delenv("NANOBOT_PUBLIC_BASE_URL", raising=False)
+    monkeypatch.setenv("NANOBOT_PUBLIC_BASE_URL", "")
+
+    png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    saved = generated_images.save_generated_image(
+        base64.b64encode(png_data).decode("ascii"),
+        prompt="画一只猫",
+    )
+
+    expanded = generated_images.expand_generated_image_refs_in_content(
+        saved["reply_token"], allow_base64=False
+    )
+    # 保留短 token，不展开
+    assert expanded == saved["reply_token"]
 
 
 # ── generated_images 元数据和清理 ──

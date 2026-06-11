@@ -97,6 +97,11 @@ IMAGE_GENERATION_MODEL = os.environ.get("IMAGE_GENERATION_MODEL", "gpt-image")
 IMAGE_GENERATION_TIMEOUT = float(os.environ.get("IMAGE_GENERATION_TIMEOUT", "600.0"))
 IMAGE_GENERATION_PROMPT_MAX_CHARS = int(os.environ.get("IMAGE_GENERATION_PROMPT_MAX_CHARS", "4000"))
 
+# ── 公开图片代理 URL（表情包 / 生成图） ──
+NANOBOT_PUBLIC_BASE_URL = os.environ.get("NANOBOT_PUBLIC_BASE_URL", "").strip().rstrip("/")
+NANOBOT_STICKER_IMAGE_TOKEN = os.environ.get("NANOBOT_STICKER_IMAGE_TOKEN", "").strip()
+NANOBOT_GENERATED_IMAGE_TOKEN = os.environ.get("NANOBOT_GENERATED_IMAGE_TOKEN", "").strip()
+
 # 自动路由：off | code | model
 AUTO_MODEL_ROUTING_MODE = os.environ.get("AUTO_MODEL_ROUTING_MODE", "code")
 

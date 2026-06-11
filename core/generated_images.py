@@ -317,12 +317,57 @@ def cleanup_generated_images(
     }
 
 
-def expand_generated_image_refs_in_content(content: str) -> str:
-    """把 `[generated_image:...]` 展开成 OneBot base64 CQ 图片码。"""
+def _cq_escape(value: str) -> str:
+    return (
+        str(value or "")
+        .replace("&", "&amp;")
+        .replace("[", "&#91;")
+        .replace("]", "&#93;")
+    )
+
+
+def public_generated_image_url(image_id: str) -> str:
+    """生成图片的公开代理 URL，和 sticker 模式一致。
+
+    OneBot/NapCat 通过此 URL 拉取图片，不经过 SSE/JSON base64。
+    """
+    from urllib.parse import quote, urlencode
+
+    base_url = str(os.environ.get("NANOBOT_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if not base_url:
+        return ""
+    if not _TOKEN_RE.fullmatch(str(image_id or "")):
+        return ""
+    query = {}
+    token = str(os.environ.get("NANOBOT_GENERATED_IMAGE_TOKEN") or "").strip()
+    if token:
+        query["token"] = token
+    suffix = f"?{urlencode(query)}" if query else ""
+    return f"{base_url}/api/v1/generated-images/{image_id}/image{suffix}"
+
+
+def expand_generated_image_refs_in_content(content: str, *, allow_base64: bool = True) -> str:
+    """把 `[generated_image:...]` 展开成 CQ 图片码。
+
+    优先使用公开代理 URL（和 sticker 模式一致）。
+    allow_base64=False 时禁用 base64 fallback（SSE stream 场景防 Chunk too big）。
+    """
     text = str(content or "")
 
     def _replace(match: re.Match[str]) -> str:
         token = match.group(1)
+        url = public_generated_image_url(token)
+        if url:
+            return f"[CQ:image,file={_cq_escape(url)}]"
+
+        if not allow_base64:
+            logger.warning(
+                "[generated_images] no public URL configured and allow_base64=False, "
+                "keeping short token=%s", token,
+            )
+            return match.group(0)
+
+        # 无 public URL 时才回退 base64（非 stream 场景兼容）
         try:
             path = _path_for_token(token)
             with open(path, "rb") as fh:
