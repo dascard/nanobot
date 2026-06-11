@@ -505,7 +505,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
     "new_api.timeout": SettingDef(
         key="new_api.timeout", env_name="NEW_API_TIMEOUT",
-        default=180, value_type="int",
+        default=300, value_type="int",
         category="model", description="NewAPI超时(秒)", min_value=10, max_value=600,
     ),
     "new_api.max_retries": SettingDef(

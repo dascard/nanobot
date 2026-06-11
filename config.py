@@ -86,7 +86,7 @@ OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "")
 # ── New-API 网关 ──
 NEW_API_KEY = os.environ.get("NEW_API_KEY", "")
 NEW_API_BASE_URL = os.environ.get("NEW_API_BASE_URL", "https://api.new-api.com/v1")
-NEW_API_TIMEOUT = int(os.environ.get("NEW_API_TIMEOUT", "180"))
+NEW_API_TIMEOUT = int(os.environ.get("NEW_API_TIMEOUT", "300"))
 NEW_API_AUTO_MODEL_SYNC = os.environ.get("NEW_API_AUTO_MODEL_SYNC", "1") == "1"
 NEW_API_MODEL_SYNC_INTERVAL_MINUTES = int(
     os.environ.get("NEW_API_MODEL_SYNC_INTERVAL_MINUTES", "60")

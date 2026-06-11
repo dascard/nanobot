@@ -37,3 +37,13 @@ def test_dockerignore_excludes_runtime_model_directories():
 
     assert "models/" in ignored
     assert "sentinel/" in ignored
+
+
+def test_new_api_timeout_defaults_to_300_seconds():
+    config_text = Path("config.py").read_text(encoding="utf-8")
+    registry_text = Path("core/config_registry.py").read_text(encoding="utf-8")
+    env_example = Path(".env.example").read_text(encoding="utf-8")
+
+    assert 'NEW_API_TIMEOUT = int(os.environ.get("NEW_API_TIMEOUT", "300"))' in config_text
+    assert "key=\"new_api.timeout\", env_name=\"NEW_API_TIMEOUT\",\n        default=300" in registry_text
+    assert "NEW_API_TIMEOUT=300" in env_example
