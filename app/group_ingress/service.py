@@ -361,7 +361,7 @@ class GroupIngressService:
             transport_answer = formatted_answer
             try:
                 from core.generated_images import expand_generated_image_refs_in_content
-                transport_answer = expand_generated_image_refs_in_content(formatted_answer)
+                transport_answer = expand_generated_image_refs_in_content(formatted_answer, allow_base64=False)
             except Exception:
                 logger.warning("[GroupMsg] generated image ref expansion failed", exc_info=True)
 

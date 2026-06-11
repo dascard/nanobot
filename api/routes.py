@@ -2482,11 +2482,11 @@ async def proxy_chat(
                 if should_push:
                     from core.daily_digest import push_to_qq
 
-                    # 推送前展开图片 token
+                    # 推送前展开图片 token（禁用 base64，避免推送大负载）
                     push_answer = final_answer
                     try:
                         from core.generated_images import expand_generated_image_refs_in_content
-                        push_answer = expand_generated_image_refs_in_content(final_answer)
+                        push_answer = expand_generated_image_refs_in_content(final_answer, allow_base64=False)
                     except Exception:
                         pass
 
@@ -2628,10 +2628,11 @@ async def proxy_chat(
         logger.warning(f"[/chat] EMPTY ANSWER returned from bridge!")
 
     # 仅传输层展开图片 token，数据库仍存短 token
+    # 禁用 base64——所有面向 QQbot 的响应都不应返回大 base64
     transport_answer = answer
     try:
         from core.generated_images import expand_generated_image_refs_in_content
-        transport_answer = expand_generated_image_refs_in_content(answer)
+        transport_answer = expand_generated_image_refs_in_content(answer, allow_base64=False)
     except Exception:
         logger.warning("[/chat] generated image ref expansion failed", exc_info=True)
 
