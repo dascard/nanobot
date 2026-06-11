@@ -169,8 +169,8 @@ class ImageGenerationTool(BaseTool):
                 "quality": {
                     "type": "string",
                     "enum": sorted(_ALLOWED_QUALITIES),
-                    "default": "auto",
-                    "description": "图片质量，默认 auto（由上游模型自行选择）。",
+                    "default": "high",
+                    "description": "图片质量，默认 high。",
                 },
                 "background": {
                     "type": "string",
@@ -375,6 +375,11 @@ class ImageGenerationTool(BaseTool):
                             image_b64 = last_image_b64
                         break
 
+            # 没有最终图，回退到最后一个 partial image
+            if not image_b64 and last_image_b64 and image_event_seen:
+                image_b64 = last_image_b64
+                logger.warning("[image_generation] using last partial image as fallback")
+
             if not image_b64:
                 raise self._build_image_failure_error(
                     last_error_event=last_error_event,
@@ -490,7 +495,7 @@ class ImageGenerationTool(BaseTool):
             )
 
         size = _normalize_option(args.get("size"), _ALLOWED_SIZES, "1024x1024")
-        quality = _normalize_option(args.get("quality"), _ALLOWED_QUALITIES, "auto")
+        quality = _normalize_option(args.get("quality"), _ALLOWED_QUALITIES, "high")
         background = _normalize_option(args.get("background"), _ALLOWED_BACKGROUNDS, "auto")
         try:
             result = await asyncio.to_thread(

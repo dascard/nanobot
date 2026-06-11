@@ -45,8 +45,8 @@ def test_tool_metadata_and_schema():
     assert "prompt" in schema["properties"]
     assert schema["properties"]["size"]["default"] == "1024x1024"
     assert "1024x1024" in schema["properties"]["size"]["enum"]
-    # quality 默认改为 auto
-    assert schema["properties"]["quality"]["default"] == "auto"
+    # quality 默认 high
+    assert schema["properties"]["quality"]["default"] == "high"
     # prompt 应有 maxLength
     assert "maxLength" in schema["properties"]["prompt"]
 

@@ -88,6 +88,14 @@ def save_generated_image(
     meta_path = _meta_path_for_token(token)
     with open(meta_path, "w", encoding="utf-8") as fh:
         json.dump(row, fh, ensure_ascii=False, indent=2, sort_keys=True)
+
+    # 按概率触发清理（约 1/10），避免每次保存都全量扫目录
+    if hash(token) % 10 == 0:
+        try:
+            cleanup_generated_images()
+        except Exception:
+            logger.debug("[generated_images] cleanup after save skipped", exc_info=True)
+
     return row
 
 
