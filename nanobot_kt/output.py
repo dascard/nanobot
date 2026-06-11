@@ -49,6 +49,7 @@ class BufferedOutput(BaseOutputModule):
         "ai_daily": "正在生成 AI 日报...",
         "group_analysis": "正在生成群聊日报...",
         "image_summary": "正在生成图片摘要...",
+        "image_generation": "正在生成图片...",
         "persona_update": "正在更新画像...",
         "memory_read": "正在读取记忆...",
         "memory_write": "正在写入记忆...",

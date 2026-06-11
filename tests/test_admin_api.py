@@ -87,6 +87,53 @@ class TestWebUIStatic:
         assert r.headers["content-type"].startswith("application/json")
 
 
+class TestGeneratedImagesAdmin:
+    def test_list_and_image_response(self, client, auth_header, monkeypatch, tmp_path):
+        import base64
+
+        from core import generated_images
+
+        monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
+        saved = generated_images.save_generated_image(
+            base64.b64encode(b"fake-png").decode("ascii"),
+            prompt="画一只红熊猫喝奶茶",
+            metadata={
+                "model": "gpt-image",
+                "size": "1024x1024",
+                "quality": "high",
+                "background": "auto",
+            },
+        )
+
+        r = client.get(
+            "/api/v1/admin/generated-images?search=红熊猫&page=1&limit=10",
+            headers=auth_header,
+        )
+        data = _ok(r)
+        assert data["total"] == 1
+        assert data["items"][0]["id"] == saved["id"]
+        assert data["items"][0]["prompt"] == "画一只红熊猫喝奶茶"
+        assert data["items"][0]["model"] == "gpt-image"
+        assert data["items"][0]["image_url"] == (
+            f"/api/v1/admin/generated-images/{saved['id']}/image"
+        )
+
+        image = client.get(
+            f"/api/v1/admin/generated-images/{saved['id']}/image",
+            headers=auth_header,
+        )
+        assert image.status_code == 200
+        assert image.headers["content-type"].startswith("image/png")
+        assert image.content == b"fake-png"
+
+    def test_missing_image_response_returns_404(self, client, auth_header):
+        r = client.get(
+            "/api/v1/admin/generated-images/not-present/image",
+            headers=auth_header,
+        )
+        assert r.status_code == 404
+
+
 class TestStickerCRUD:
     def test_create_active(self, client, auth_header):
         r = client.post("/api/v1/admin/stickers", json={

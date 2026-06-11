@@ -46,6 +46,10 @@ tools:
     type: package
     module: nanobot_kt.tools.image_summary
     class: ImageSummaryTool
+  - name: image_generation
+    type: package
+    module: nanobot_kt.tools.image_generation
+    class: ImageGenerationTool
   - name: persona_update
     type: package
     module: nanobot_kt.tools.persona_update

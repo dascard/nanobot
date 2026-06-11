@@ -8,7 +8,7 @@ from core.tool_registry import TOOL_METADATA, get_tool_def
 logger = logging.getLogger("nanobot.runtime_tools")
 
 _DEFAULT_LIGHTWEIGHT_SET = {
-    "reply", "no_reply", "image_summary", "python_sandbox", "sticker_search",
+    "reply", "no_reply", "image_summary", "image_generation", "python_sandbox", "sticker_search",
 }
 
 _SUPPORTED_CHAT_TYPES = {"group", "private", "private_superuser"}

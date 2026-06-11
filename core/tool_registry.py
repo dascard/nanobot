@@ -35,6 +35,11 @@ TOOL_METADATA: dict[str, ToolDef] = {
         private_default=True, group_default=True,
         description="从表情库搜索匹配表情包。",
     ),
+    "image_generation": ToolDef(
+        name="image_generation", label="图片生成", category="communication", risk_level="medium",
+        private_default=True, group_default=True,
+        description="按用户明确要求生成新图片，返回可发送的 CQ 图片码。",
+    ),
 
     # ── 数据分析 ──
     "sql_analysis": ToolDef(

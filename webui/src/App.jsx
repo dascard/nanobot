@@ -12,6 +12,7 @@ import {
   Gauge,
   GitBranch,
   Home,
+  Images,
   ListChecks,
   Menu,
   MessageSquare,
@@ -48,6 +49,7 @@ import { PromptPage, ManagedPromptsPage, PromptV2TemplatesPage, EffectivePromptP
 import { ReplyEvalPage } from './features/reply-eval/ReplyEvalPage'
 import { ToolsPage } from './features/tools/ToolsPage'
 import { EvalsPage } from './features/evals/EvalsPage'
+import { GeneratedImagesPage } from './features/generated-images/GeneratedImagesPage'
 import { RagDebugPage } from './features/rag/RagDebugPage'
 import { RagBenchmarkPage } from './features/rag/RagBenchmarkPage'
 
@@ -193,6 +195,7 @@ const NAV_SECTIONS = [
       { to: '/groups', label: '群聊运行', icon: Users },
       { to: '/memory', label: '群体记忆', icon: Brain },
       { to: '/persona', label: '用户画像', icon: Users },
+      { to: '/generated-images', label: '生成图片', icon: Images },
       { to: '/stickers', label: '表情包', icon: Tags },
       { to: '/stickers/duplicates', label: '去重工作台', icon: Search },
       { to: '/db', label: '数据库', icon: Database },
@@ -2881,6 +2884,7 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/persona" element={<PersonaPage />} />
+          <Route path="/generated-images" element={<GeneratedImagesPage />} />
           <Route path="/reply-eval" element={<ReplyEvalPage />} />
           <Route path="/rag-debug" element={<RagDebugPage />} />
           <Route path="/rag-benchmark" element={<RagBenchmarkPage />} />

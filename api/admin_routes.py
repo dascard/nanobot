@@ -11,6 +11,7 @@ from hmac import compare_digest
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
@@ -1044,6 +1045,32 @@ def list_stickers(
     total = q.count()
     rows = q.order_by(StickerMemory.id.desc()).offset((page - 1) * limit).limit(limit).all()
     return {"total": total, "page": page, "items": [_sticker_dict(r) for r in rows]}
+
+
+@router.get("/generated-images")
+def list_generated_images(
+    page: int = 1,
+    limit: int = 20,
+    search: str = "",
+    _auth=Depends(verify_admin),
+):
+    from core.generated_images import list_generated_images as _list_generated_images
+
+    data = _list_generated_images(page=page, limit=limit, search=search)
+    for item in data["items"]:
+        item["image_url"] = f"/api/v1/admin/generated-images/{item['id']}/image"
+    return data
+
+
+@router.get("/generated-images/{image_id}/image")
+def generated_image_file(image_id: str, _auth=Depends(verify_admin)):
+    from core.generated_images import get_generated_image_path
+
+    try:
+        path = get_generated_image_path(image_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "generated image not found")
+    return FileResponse(path, media_type="image/png")
 
 
 @router.get("/stickers/duplicate-groups")

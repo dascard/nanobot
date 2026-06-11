@@ -82,6 +82,11 @@ class ReplyTool(BaseTool):
         if not content:
             return ToolResult(error="Missing 'content' argument")
         try:
+            from core.generated_images import expand_generated_image_refs_in_content
+            content = expand_generated_image_refs_in_content(content)
+        except Exception:
+            pass
+        try:
             from core.sticker_memory import expand_sticker_refs_in_content, record_sticker_uses_in_content
             content = expand_sticker_refs_in_content(content)
             record_sticker_uses_in_content(content)

@@ -92,6 +92,10 @@ NEW_API_MODEL_SYNC_INTERVAL_MINUTES = int(
     os.environ.get("NEW_API_MODEL_SYNC_INTERVAL_MINUTES", "60")
 )
 
+# ── New-API 图片生成（Responses image_generation） ──
+IMAGE_GENERATION_MODEL = os.environ.get("IMAGE_GENERATION_MODEL", "gpt-image")
+IMAGE_GENERATION_TIMEOUT = float(os.environ.get("IMAGE_GENERATION_TIMEOUT", "600.0"))
+
 # 自动路由：off | code | model
 AUTO_MODEL_ROUTING_MODE = os.environ.get("AUTO_MODEL_ROUTING_MODE", "code")
 

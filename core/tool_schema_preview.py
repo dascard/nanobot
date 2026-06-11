@@ -24,6 +24,7 @@ PACKAGE_TOOL_CLASSES = {
     "memory_query": ("nanobot_kt.tools.memory_query", "MemoryQueryTool"),
     "knowledge_query": ("nanobot_kt.tools.knowledge_query", "KnowledgeQueryTool"),
     "image_summary": ("nanobot_kt.tools.image_summary", "ImageSummaryTool"),
+    "image_generation": ("nanobot_kt.tools.image_generation", "ImageGenerationTool"),
     "persona_update": ("nanobot_kt.tools.persona_update", "PersonaUpdateTool"),
     "schedule_task": ("nanobot_kt.tools.schedule_task", "ScheduleTaskTool"),
     "group_analysis": ("nanobot_kt.tools.group_analysis", "GroupAnalysisTool"),

@@ -513,9 +513,19 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default=3, value_type="int",
         category="model", description="NewAPI最大重试", min_value=0, max_value=10,
     ),
+    "image_generation.model": SettingDef(
+        key="image_generation.model", env_name="IMAGE_GENERATION_MODEL",
+        default="gpt-image", value_type="str",
+        category="image", description="图片生成模型",
+    ),
+    "image_generation.timeout": SettingDef(
+        key="image_generation.timeout", env_name="IMAGE_GENERATION_TIMEOUT",
+        default=600.0, value_type="float",
+        category="image", description="图片生成超时(秒)", min_value=10, max_value=1200,
+    ),
     "tool.lightweight_set": SettingDef(
         key="tool.lightweight_set", env_name="",
-        default='["reply","no_reply","image_summary","python_sandbox","sticker_search"]',
+        default='["reply","no_reply","image_summary","image_generation","python_sandbox","sticker_search"]',
         value_type="str",
         category="tool", description="自动降档轻量预设允许的工具列表（JSON数组）",
     ),

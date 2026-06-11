@@ -13,6 +13,7 @@ FEATURES = {
     "ModelsPage": Path("webui/src/features/models/ModelsPage.jsx"),
     "ToolsPage": Path("webui/src/features/tools/ToolsPage.jsx"),
     "EvalsPage": Path("webui/src/features/evals/EvalsPage.jsx"),
+    "GeneratedImagesPage": Path("webui/src/features/generated-images/GeneratedImagesPage.jsx"),
 }
 
 
@@ -36,6 +37,7 @@ def test_app_js_imports_split_feature_pages():
     assert "from './features/models/ModelsPage'" in source
     assert "from './features/tools/ToolsPage'" in source
     assert "from './features/evals/EvalsPage'" in source
+    assert "from './features/generated-images/GeneratedImagesPage'" in source
 
 
 def test_app_shell_has_fixed_navigation_and_isolated_scroll_regions():
@@ -58,3 +60,15 @@ def test_feature_files_export_pages():
     for component, path in FEATURES.items():
       source = path.read_text(encoding="utf-8")
       assert f"export function {component}(" in source
+
+
+def test_generated_images_page_is_wired_for_gallery():
+    app_source = APP_JS.read_text(encoding="utf-8")
+    page_source = FEATURES["GeneratedImagesPage"].read_text(encoding="utf-8")
+
+    assert "to: '/generated-images'" in app_source
+    assert 'path="/generated-images"' in app_source
+    assert "生成图片" in app_source
+    assert "api.get('/generated-images'" in page_source
+    assert "AuthImage" in page_source
+    assert "完整提示词" in page_source

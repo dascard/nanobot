@@ -36,6 +36,7 @@ _LEGACY_ALIASES: dict[str, str] = {
     "image_summary": "tools/image_summary/usage",
     "image_summary_system": "tools/image_summary/system",
     "image_summary_user": "tools/image_summary/user",
+    "image_generation": "tools/image_generation/usage",
     "news_digest_system": "tools/ai_daily/digest_system",
     "news_digest_user": "tools/ai_daily/digest_user",
     "ai_daily": "tools/ai_daily/usage",
