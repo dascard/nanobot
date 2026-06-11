@@ -2461,10 +2461,18 @@ async def proxy_chat(
                 if should_push:
                     from core.daily_digest import push_to_qq
 
+                    # 推送前展开图片 token
+                    push_answer = final_answer
+                    try:
+                        from core.generated_images import expand_generated_image_refs_in_content
+                        push_answer = expand_generated_image_refs_in_content(final_answer)
+                    except Exception:
+                        pass
+
                     ok = await push_to_qq(
                         "private" if not bridge_meta.get("is_group") else "group",
                         _resolve_push_target_id(req, bool(bridge_meta.get("is_group"))),
-                        final_answer,
+                        push_answer,
                     )
                     if ok:
                         logger.info(
@@ -2513,6 +2521,15 @@ async def proxy_chat(
             else:
                 answer = result_holder.get("answer", "")
                 private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
+
+                # 仅传输层展开图片 token
+                transport_answer = answer
+                try:
+                    from core.generated_images import expand_generated_image_refs_in_content
+                    transport_answer = expand_generated_image_refs_in_content(answer)
+                except Exception:
+                    logger.warning("[/chat] stream generated image ref expansion failed", exc_info=True)
+
                 if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
                     await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
                     _persist_chat_turn(
@@ -2532,7 +2549,7 @@ async def proxy_chat(
                     if pending >= EVOLUTION_THRESHOLD:
                         logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
                         background_tasks.add_task(evolution_task, req.user_id)
-                    yield f"data: {json.dumps({'status': 'done', 'answer': answer}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'status': 'done', 'answer': transport_answer}, ensure_ascii=False)}\n\n"
         finally:
             if not persisted:
                 if runner_task.done():
@@ -2588,6 +2605,14 @@ async def proxy_chat(
     else:
         logger.warning(f"[/chat] EMPTY ANSWER returned from bridge!")
 
+    # 仅传输层展开图片 token，数据库仍存短 token
+    transport_answer = answer
+    try:
+        from core.generated_images import expand_generated_image_refs_in_content
+        transport_answer = expand_generated_image_refs_in_content(answer)
+    except Exception:
+        logger.warning("[/chat] generated image ref expansion failed", exc_info=True)
+
     # 3. 落库 (KT 的 session 管理是独立的, nanobot 原有日志需手动写入)
     await _finalize_private_buffer(req.user_id, answer)
     pending = _persist_chat_turn(db, persist_req, answer, guardrail_status)
@@ -2599,22 +2624,22 @@ async def proxy_chat(
 
     # 5. 模拟短对话：内容自动拆分逻辑（按换行拆成短气泡）
     # HTML 报告不拆分——QQbot 端 html_to_pic 需要完整文档
-    if answer.lstrip().startswith("<article") or answer.lstrip().startswith("<!doctype") or answer.lstrip().startswith("<html"):
-        answer_chunks = [answer]
-    elif not answer.strip():
+    if transport_answer.lstrip().startswith("<article") or transport_answer.lstrip().startswith("<!doctype") or transport_answer.lstrip().startswith("<html"):
+        answer_chunks = [transport_answer]
+    elif not transport_answer.strip():
         answer_chunks = []
-    elif "\n\n" in answer:
-        answer_chunks = [c.strip() for c in answer.split("\n\n") if c.strip()]
-    elif "\n" in answer:
-        answer_chunks = [c.strip() for c in answer.split("\n") if c.strip()]
+    elif "\n\n" in transport_answer:
+        answer_chunks = [c.strip() for c in transport_answer.split("\n\n") if c.strip()]
+    elif "\n" in transport_answer:
+        answer_chunks = [c.strip() for c in transport_answer.split("\n") if c.strip()]
     else:
-        answer_chunks = [answer]
+        answer_chunks = [transport_answer]
 
     logger.info(f"[/chat] Response: answer_chunks_count={len(answer_chunks)}, status=ok")
     return {
         "status": "ok",
         "user_id": req.user_id,
-        "answer": answer,
+        "answer": transport_answer,
         "answer_chunks": answer_chunks,
         "unprocessed_logs": pending
     }

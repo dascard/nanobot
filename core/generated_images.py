@@ -26,6 +26,9 @@ GENERATED_IMAGE_DIR = os.environ.get(
 GENERATED_IMAGE_REF_PATTERN = re.compile(r"\[generated_image:([A-Za-z0-9_-]{8,96})\]")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,96}$")
 
+IMAGE_GENERATION_TTL_DAYS = int(os.environ.get("IMAGE_GENERATION_TTL_DAYS", "14"))
+IMAGE_GENERATION_MAX_FILES = int(os.environ.get("IMAGE_GENERATION_MAX_FILES", "500"))
+
 
 def _compact_b64(value: str) -> str:
     return "".join(str(value or "").split())
@@ -226,6 +229,83 @@ def list_generated_images(
         "page": page,
         "limit": limit,
         "items": page_items,
+    }
+
+
+def cleanup_generated_images(
+    *,
+    max_files: int = IMAGE_GENERATION_MAX_FILES,
+    ttl_days: int = IMAGE_GENERATION_TTL_DAYS,
+) -> dict[str, Any]:
+    """清理过期/超量生成图片。
+
+    规则：
+    1. 删除超过 ttl_days 的 png/json
+    2. 如果文件数超过 max_files，按创建时间删除最旧的
+    3. 删除失败只 warning，不影响主流程
+    """
+    deleted: list[str] = []
+    errors: list[str] = []
+    ttl_seconds = ttl_days * 86400
+    now = time.time()
+
+    try:
+        entries = []
+        try:
+            names = os.listdir(GENERATED_IMAGE_DIR)
+        except FileNotFoundError:
+            return {"deleted": 0, "remaining": 0, "errors": 0}
+
+        for name in names:
+            full = os.path.join(GENERATED_IMAGE_DIR, name)
+            try:
+                stat = os.stat(full)
+                entries.append((full, stat.st_mtime, name))
+            except OSError:
+                continue
+
+        # 按创建时间排序（最旧排最前）
+        entries.sort(key=lambda e: e[1])
+
+        # 1. 删除超过 TTL 的文件
+        for full_path, mtime, name in entries:
+            age = now - mtime
+            if age > ttl_seconds:
+                try:
+                    os.remove(full_path)
+                    deleted.append(name)
+                except OSError as e:
+                    errors.append(f"{name}: {e}")
+
+        # 刷新列表
+        entries = [(p, mt, n) for p, mt, n in entries if n not in deleted]
+
+        # 2. 如果文件数超过上限，删除最旧的
+        if len(entries) > max_files:
+            excess = len(entries) - max_files
+            for full_path, _mtime, name in entries[:excess]:
+                try:
+                    os.remove(full_path)
+                    deleted.append(name)
+                except OSError as e:
+                    errors.append(f"{name}: {e}")
+
+        if deleted:
+            logger.info(
+                "[generated_images] cleanup removed %d files (remaining ~%d)",
+                len(deleted), max(0, len(entries) - len(deleted)),
+            )
+        if errors:
+            logger.warning("[generated_images] cleanup errors: %s", errors)
+
+    except Exception as e:
+        logger.warning("[generated_images] cleanup failed: %s", e)
+        errors.append(str(e))
+
+    return {
+        "deleted": len(deleted),
+        "remaining": max(0, len(os.listdir(GENERATED_IMAGE_DIR)) if os.path.isdir(GENERATED_IMAGE_DIR) else 0),
+        "errors": len(errors),
     }
 
 

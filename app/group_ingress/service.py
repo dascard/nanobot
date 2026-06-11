@@ -315,6 +315,15 @@ class GroupIngressService:
             )
             answer = reply if isinstance(reply, str) else str(reply or "")
             reply_meta = h.pop_bridge_reply_meta(bridge, group_user_id)
+
+            # 仅传输层展开图片 token，数据库仍存短 token
+            transport_answer = answer
+            try:
+                from core.generated_images import expand_generated_image_refs_in_content
+                transport_answer = expand_generated_image_refs_in_content(answer)
+            except Exception:
+                logger.warning("[GroupMsg] generated image ref expansion failed", exc_info=True)
+
             if answer.strip():
                 duplicate = h.find_recent_duplicate_group_reply(db, group_user_id, answer)
                 if duplicate:
@@ -356,7 +365,7 @@ class GroupIngressService:
                     }
             return {
                 "action": "continue",
-                "reply": h.format_group_reply_for_transport(answer, max_chars=4000),
+                "reply": h.format_group_reply_for_transport(transport_answer, max_chars=4000),
                 "reply_meta": reply_meta,
                 "generation": result.get("generation", 0),
                 "reason": str(result.get("reason", ""))[:120],

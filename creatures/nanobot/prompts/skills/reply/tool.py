@@ -81,17 +81,28 @@ class ReplyTool(BaseTool):
         content = str(args.get("content", "")).strip()
         if not content:
             return ToolResult(error="Missing 'content' argument")
-        try:
-            from core.generated_images import expand_generated_image_refs_in_content
-            content = expand_generated_image_refs_in_content(content)
-        except Exception:
-            pass
+        # 不在工具阶段展开 [generated_image:...] token——base64 展开只在最终发送出口进行
+        # 避免 base64 进入 conversation / token 计数 / 日志
         try:
             from core.sticker_memory import expand_sticker_refs_in_content, record_sticker_uses_in_content
             content = expand_sticker_refs_in_content(content)
             record_sticker_uses_in_content(content)
         except Exception:
             pass
+        # 写入运行时缓存兜底——当 KT conversation 未写入 tool result 时
+        # Bridge 可通过此缓存回退提取 reply 输出
+        try:
+            from core.reply_runtime_cache import set_last_reply
+            set_last_reply(content, {
+                "reply_to_message_id": args.get("reply_to_message_id"),
+                "mentions": args.get("mentions"),
+                "quote": bool(args.get("quote")),
+                "at_sender": bool(args.get("at_sender")),
+                "send_mode": str(args.get("send_mode", "normal") or "normal"),
+            })
+        except Exception:
+            pass
+
         return build_reply_tool_result(
             content,
             reply_to_message_id=args.get("reply_to_message_id"),

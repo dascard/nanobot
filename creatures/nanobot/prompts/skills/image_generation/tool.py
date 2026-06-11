@@ -14,6 +14,7 @@ from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResul
 
 from config import (
     IMAGE_GENERATION_MODEL,
+    IMAGE_GENERATION_PROMPT_MAX_CHARS,
     IMAGE_GENERATION_TIMEOUT,
     NEW_API_BASE_URL,
     NEW_API_KEY,
@@ -79,6 +80,57 @@ def _iter_sse_objects(response: Any) -> Iterator[dict[str, Any]]:
             yield payload
 
 
+# ── 增强 SSE 解析 helpers ──
+
+def _extract_response_completed_image_b64(obj: dict[str, Any]) -> str:
+    """从 response.completed 的 response.output 中提取图片。"""
+    response = obj.get("response")
+    if not isinstance(response, dict):
+        return ""
+    output = response.get("output")
+    if not isinstance(output, list):
+        return ""
+    for item in output:
+        if isinstance(item, dict) and item.get("type") == "image_generation_call":
+            b64 = _extract_image_b64(item)
+            if b64:
+                return b64
+    return ""
+
+
+def _extract_any_stream_image_b64(obj: dict[str, Any]) -> str:
+    """从任意 SSE 事件中提取图片 base64（覆盖多种上游形态）。"""
+    event_type = str(obj.get("type") or "")
+
+    # 流式 partial image
+    if event_type == "response.image_generation_call.partial_image":
+        b64 = obj.get("partial_image_b64") or obj.get("b64_json") or obj.get("result")
+        if isinstance(b64, str) and b64.strip():
+            return _compact_b64(b64)
+
+    # 标准 output_item.done
+    item = obj.get("item")
+    if isinstance(item, dict) and item.get("type") == "image_generation_call":
+        b64 = _extract_image_b64(item)
+        if b64:
+            return b64
+
+    # 某些网关可能直接把 image_generation_call 作为事件本体
+    if event_type == "image_generation_call":
+        b64 = _extract_image_b64(obj)
+        if b64:
+            return b64
+
+    # completed 聚合
+    if event_type == "response.completed":
+        return _extract_response_completed_image_b64(obj)
+
+    return ""
+
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
 class ImageGenerationTool(BaseTool):
     """使用 new-api gpt-image 生成图片，并返回 reply 可展开的短 token。"""
 
@@ -106,6 +158,7 @@ class ImageGenerationTool(BaseTool):
                     "type": "string",
                     "description": "图片生成提示词。保留用户要求的主体、风格、构图、文字和约束。",
                     "minLength": 1,
+                    "maxLength": IMAGE_GENERATION_PROMPT_MAX_CHARS,
                 },
                 "size": {
                     "type": "string",
@@ -116,8 +169,8 @@ class ImageGenerationTool(BaseTool):
                 "quality": {
                     "type": "string",
                     "enum": sorted(_ALLOWED_QUALITIES),
-                    "default": "high",
-                    "description": "图片质量，默认 high。",
+                    "default": "auto",
+                    "description": "图片质量，默认 auto（由上游模型自行选择）。",
                 },
                 "background": {
                     "type": "string",
@@ -161,7 +214,6 @@ class ImageGenerationTool(BaseTool):
                     "size": size,
                     "quality": quality,
                     "background": background,
-                    "action": "generate",
                 }
             ],
             "tool_choice": "auto",
@@ -256,6 +308,13 @@ class ImageGenerationTool(BaseTool):
         image_item: dict[str, Any] = {}
         image_b64 = ""
 
+        # 增强 SSE 解析状态
+        last_image_b64 = ""
+        last_completed: dict[str, Any] = {}
+        last_error_event: dict[str, Any] = {}
+        image_event_seen = False
+        debug_events: list[dict[str, Any]] = []
+
         logger.info("  [image_generation] >> %s | model=%s", url, IMAGE_GENERATION_MODEL)
         proxy_handler = urllib.request.ProxyHandler({})
         opener = urllib.request.build_opener(proxy_handler)
@@ -265,28 +324,75 @@ class ImageGenerationTool(BaseTool):
                     response.getcode() if hasattr(response, "getcode") else 200
                 )
                 for obj in _iter_sse_objects(response):
-                    event_type = obj.get("type")
+                    event_type = str(obj.get("type") or "")
+
+                    # 只保留尾部事件，避免日志爆炸
+                    if len(debug_events) < 80:
+                        debug_events.append(obj)
+                    else:
+                        debug_events.pop(0)
+                        debug_events.append(obj)
+
+                    logger.debug(
+                        "[image_generation] SSE type=%s keys=%s",
+                        event_type,
+                        list(obj.keys()),
+                    )
+
                     if event_type == "response.output_text.delta":
                         text_chunks.append(str(obj.get("delta") or ""))
                         continue
-                    if event_type != "response.output_item.done":
+
+                    if event_type in {"response.failed", "response.incomplete", "response.error"}:
+                        last_error_event = obj
                         continue
-                    item = obj.get("item") or {}
-                    if not isinstance(item, dict):
+
+                    if event_type == "response.completed":
+                        response_obj = obj.get("response")
+                        if isinstance(response_obj, dict):
+                            last_completed = response_obj
+
+                    b64 = _extract_any_stream_image_b64(obj)
+                    if b64:
+                        image_event_seen = True
+                        last_image_b64 = b64
+
+                        item = obj.get("item")
+                        if isinstance(item, dict) and item.get("type") == "image_generation_call":
+                            image_item = item
+                            image_b64 = b64
+                            break
+
+                        if event_type == "response.completed":
+                            image_b64 = b64
+                            break
+
+                        # partial image 先暂存，继续等最终图
                         continue
-                    if item.get("type") != "image_generation_call":
-                        continue
-                    image_item = item
-                    image_b64 = _extract_image_b64(item)
-                    if image_b64:
+
+                    if event_type == "response.completed":
+                        if last_image_b64:
+                            image_b64 = last_image_b64
                         break
 
             if not image_b64:
-                raise ValueError("missing image_generation_call image result")
-            image_bytes = base64.b64decode(image_b64, validate=True)
+                raise self._build_image_failure_error(
+                    last_error_event=last_error_event,
+                    last_completed=last_completed,
+                    image_event_seen=image_event_seen,
+                    debug_events=debug_events,
+                )
+
+            # 校验 PNG 魔数
+            raw = base64.b64decode(image_b64, validate=True)
+            if not raw.startswith(_PNG_MAGIC):
+                raise ValueError(
+                    f"image result is not a PNG (first 8 bytes: {raw[:8]!r})"
+                )
+
             result = {
                 "image_b64": image_b64,
-                "image_bytes": len(image_bytes),
+                "image_bytes": len(raw),
                 "text_output": "".join(text_chunks),
                 "revised_prompt": str(image_item.get("revised_prompt") or ""),
             }
@@ -309,17 +415,82 @@ class ImageGenerationTool(BaseTool):
                 started=started,
                 response_status=int(status or 0),
                 status="error",
-                error=str(exc),
+                error=str(exc)[:500],
             )
             raise
+
+    def _build_image_failure_error(
+        self,
+        *,
+        last_error_event: dict[str, Any],
+        last_completed: dict[str, Any],
+        image_event_seen: bool,
+        debug_events: list[dict[str, Any]],
+    ) -> ValueError:
+        """根据上游事件构造分型错误信息。"""
+
+        # 优先：上游明确报错
+        if last_error_event:
+            return ValueError(
+                "image generation upstream error: "
+                + json.dumps(last_error_event, ensure_ascii=False)[:1000]
+            )
+
+        status = str(last_completed.get("status") or "")
+        error = last_completed.get("error")
+        incomplete = last_completed.get("incomplete_details")
+        moderation = last_completed.get("moderation")
+        output = last_completed.get("output")
+        tool_usage = last_completed.get("tool_usage")
+
+        # content_filter / safety 等
+        if error or incomplete or moderation or status in {"failed", "incomplete"}:
+            return ValueError(
+                "image generation blocked or incomplete: "
+                + json.dumps(
+                    {
+                        "status": status,
+                        "error": error,
+                        "incomplete_details": incomplete,
+                        "moderation": moderation,
+                    },
+                    ensure_ascii=False,
+                )[:1000]
+            )
+
+        # new-api 聚合失败：tool_usage 有统计但 output 为空
+        if tool_usage and not output:
+            return ValueError(
+                "image generation produced tool_usage but no image result; "
+                "possible upstream aggregation/moderation issue"
+            )
+
+        # SSE 有图片事件但最终未拿到
+        if image_event_seen:
+            return ValueError(
+                "image generation image event was seen but final image result was unavailable"
+            )
+
+        # 完全无生图事件
+        debug_summary = json.dumps(
+            [{"type": e.get("type"), "keys": list(e.keys())[:5]} for e in debug_events[-20:]],
+            ensure_ascii=False,
+        )[:800]
+        return ValueError(
+            f"missing image_generation_call image result; last {min(len(debug_events), 20)} events: {debug_summary}"
+        )
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         prompt = str(args.get("prompt") or "").strip()
         if not prompt:
-            return ToolResult(error="Missing 'prompt' argument")
+            return ToolResult(error="prompt is required")
+        if len(prompt) > IMAGE_GENERATION_PROMPT_MAX_CHARS:
+            return ToolResult(
+                error=f"prompt too long: {len(prompt)} > {IMAGE_GENERATION_PROMPT_MAX_CHARS}"
+            )
 
         size = _normalize_option(args.get("size"), _ALLOWED_SIZES, "1024x1024")
-        quality = _normalize_option(args.get("quality"), _ALLOWED_QUALITIES, "high")
+        quality = _normalize_option(args.get("quality"), _ALLOWED_QUALITIES, "auto")
         background = _normalize_option(args.get("background"), _ALLOWED_BACKGROUNDS, "auto")
         try:
             result = await asyncio.to_thread(

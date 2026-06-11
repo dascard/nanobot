@@ -585,6 +585,15 @@ class NanobotBridge:
             from nanobot_kt.reply_contract import extract_reply_tool_output
 
             messages = self._agent.controller.conversation.get_messages()
+            # ReplyDebug: 临时诊断日志——确认 conversation 尾部是否有 tool 消息
+            logger.debug("[ReplyDebug] conversation messages=%d", len(messages))
+            for i, msg in enumerate(messages[-8:]):
+                role = _conversation_msg_role(msg)
+                text = _conversation_msg_content(msg)
+                logger.debug(
+                    "[ReplyDebug] tail[%d] role=%s len=%d head=%r",
+                    i, role, len(text), text[:300],
+                )
             result = extract_reply_tool_output(messages)
             if result.no_reply:
                 if session_id:
@@ -601,6 +610,19 @@ class NanobotBridge:
                 return result.reply_text
         except Exception as e:
             logger.debug("[Reply] extraction failed: %s", e)
+
+        # 运行时缓存兜底：KT conversation 未写入 tool result 时回退
+        try:
+            from core.reply_runtime_cache import get_last_reply
+            cached_text, cached_meta = get_last_reply()
+            if cached_text:
+                if session_id and cached_meta:
+                    self._reply_meta_store()[session_id] = cached_meta
+                logger.warning("[Reply] extracted from runtime cache len=%d", len(cached_text))
+                return cached_text
+        except Exception as e:
+            logger.debug("[Reply] runtime cache fallback failed: %s", e)
+
         return ""
 
     def _reply_meta_store(self) -> dict:
@@ -962,6 +984,13 @@ class NanobotBridge:
             self._output.clear()
             if stream_queue is not None:
                 self._output.enable_stream(stream_queue)
+
+            # 每轮清空 reply 运行时缓存
+            try:
+                from core.reply_runtime_cache import clear_last_reply
+                clear_last_reply()
+            except Exception:
+                pass
             logger.info("[SessionRuntime] START session=%s user=%s query_len=%d",
                         session_id, user_id, len(query))
 
