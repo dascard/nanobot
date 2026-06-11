@@ -33,9 +33,9 @@ def _is_sqlite_database_url(database_url: str) -> bool:
 
 def _sqlite_busy_timeout_ms() -> int:
     try:
-        return max(1000, int(float(os.environ.get("SQLITE_BUSY_TIMEOUT_MS", "30000"))))
+        return max(1000, int(float(os.environ.get("SQLITE_BUSY_TIMEOUT_MS", "1000"))))
     except (TypeError, ValueError):
-        return 30000
+        return 1000
 
 
 def sqlite_connect_args_for_url(database_url: str) -> dict:

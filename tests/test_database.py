@@ -43,3 +43,23 @@ def test_sqlite_connect_args_include_busy_timeout(monkeypatch):
 
     assert args["check_same_thread"] is False
     assert args["timeout"] == 45.0
+
+
+def test_sqlite_connect_args_default_busy_timeout_is_short(monkeypatch):
+    from core.database import sqlite_connect_args_for_url
+
+    monkeypatch.delenv("SQLITE_BUSY_TIMEOUT_MS", raising=False)
+
+    args = sqlite_connect_args_for_url("sqlite:///./data/test.db")
+
+    assert args["timeout"] == 1.0
+
+
+def test_sqlite_connect_args_invalid_busy_timeout_falls_back_short(monkeypatch):
+    from core.database import sqlite_connect_args_for_url
+
+    monkeypatch.setenv("SQLITE_BUSY_TIMEOUT_MS", "not-a-number")
+
+    args = sqlite_connect_args_for_url("sqlite:///./data/test.db")
+
+    assert args["timeout"] == 1.0

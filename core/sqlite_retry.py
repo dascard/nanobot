@@ -56,9 +56,11 @@ def run_sqlite_locked_retry(
         else _float_env("SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS", 0.05)
     ))
     for attempt in range(1, max_attempts + 1):
+        started = time.monotonic()
         try:
             return operation()
         except Exception as exc:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
             if not is_sqlite_locked_error(exc) or attempt >= max_attempts:
                 raise
             if rollback is not None:
@@ -73,10 +75,11 @@ def run_sqlite_locked_retry(
                 log_method = getattr(logger, log_method_name, None)
                 if callable(log_method):
                     log_method(
-                        "[SQLite] write locked; retrying label=%s attempt=%d/%d delay=%.3fs",
+                        "[SQLite] write locked; retrying label=%s attempt=%d/%d elapsed_ms=%d delay=%.3fs",
                         label or "write",
                         next_attempt,
                         max_attempts,
+                        elapsed_ms,
                         delay,
                     )
             if delay > 0:

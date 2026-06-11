@@ -196,3 +196,34 @@ def test_sqlite_locked_retry_warns_when_final_retry_is_next():
 
     assert logs["info"] == 0
     assert logs["warning"] == 1
+
+
+def test_sqlite_locked_retry_logs_attempt_elapsed_ms():
+    from core.sqlite_retry import run_sqlite_locked_retry
+
+    calls = {"count": 0}
+    records = []
+
+    class Logger:
+        def info(self, *args, **kwargs):
+            records.append(args)
+
+    def operation():
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OperationalError(
+                "INSERT ...",
+                {},
+                Exception("database is locked"),
+            )
+        return "ok"
+
+    assert run_sqlite_locked_retry(
+        operation,
+        logger=Logger(),
+        attempts=3,
+        base_delay_seconds=0,
+    ) == "ok"
+
+    assert records
+    assert "elapsed_ms" in records[0][0]
