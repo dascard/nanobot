@@ -68,13 +68,17 @@ def run_sqlite_locked_retry(
                     pass
             delay = base_delay * (2 ** (attempt - 1))
             if logger is not None:
-                logger.warning(
-                    "[SQLite] write locked; retrying label=%s attempt=%d/%d delay=%.3fs",
-                    label or "write",
-                    attempt + 1,
-                    max_attempts,
-                    delay,
-                )
+                next_attempt = attempt + 1
+                log_method_name = "warning" if next_attempt >= max_attempts else "info"
+                log_method = getattr(logger, log_method_name, None)
+                if callable(log_method):
+                    log_method(
+                        "[SQLite] write locked; retrying label=%s attempt=%d/%d delay=%.3fs",
+                        label or "write",
+                        next_attempt,
+                        max_attempts,
+                        delay,
+                    )
             if delay > 0:
                 time.sleep(delay)
     return operation()

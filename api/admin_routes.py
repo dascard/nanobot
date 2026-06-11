@@ -109,6 +109,13 @@ class StickerUpdate(BaseModel):
     status: Optional[Literal["active", "disabled", "deleted"]] = None
 
 
+class GeneratedImageCreate(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=8000)
+    size: Literal["1024x1024", "1024x1536", "1536x1024", "auto"] = "1024x1024"
+    quality: Literal["low", "medium", "high", "auto"] = "high"
+    background: Literal["auto", "transparent", "opaque"] = "auto"
+
+
 class BlockRuleCreate(BaseModel):
     user_id: str
     target_type: str = "private"
@@ -1060,6 +1067,61 @@ def list_generated_images(
     for item in data["items"]:
         item["image_url"] = f"/api/v1/admin/generated-images/{item['id']}/image"
     return data
+
+
+@router.post("/generated-images")
+async def create_generated_image(
+    body: GeneratedImageCreate,
+    _auth=Depends(verify_admin),
+):
+    from core.generated_images import GENERATED_IMAGE_REF_PATTERN, get_generated_image
+    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+
+    prompt = str(body.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="prompt is required")
+
+    result = await ImageGenerationTool().execute({
+        "prompt": prompt,
+        "size": body.size,
+        "quality": body.quality,
+        "background": body.background,
+    })
+    if not result.success:
+        error = str(getattr(result, "error", "") or "image generation failed")
+        raise HTTPException(status_code=502, detail=error)
+
+    try:
+        payload = json.loads(result.output or "{}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"invalid image generation output: {exc}")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="invalid image generation output")
+
+    reply_token = str(payload.get("reply_token") or "")
+    match = GENERATED_IMAGE_REF_PATTERN.search(reply_token)
+    if not match:
+        raise HTTPException(status_code=500, detail="image generation output missing reply_token")
+
+    try:
+        item = get_generated_image(match.group(1))
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="generated image file not found")
+    item["image_url"] = f"/api/v1/admin/generated-images/{item['id']}/image"
+    return {
+        "ok": True,
+        "item": item,
+        "tool_output": {
+            "reply_token": reply_token,
+            "mime": payload.get("mime") or item.get("mime") or "image/png",
+            "model": payload.get("model") or item.get("model") or "",
+            "size": payload.get("size") or item.get("size") or "",
+            "quality": payload.get("quality") or item.get("quality") or "",
+            "background": payload.get("background") or item.get("background") or "",
+            "text_output": payload.get("text_output") or "",
+            "revised_prompt": payload.get("revised_prompt") or "",
+        },
+    }
 
 
 @router.get("/generated-images/{image_id}/image")

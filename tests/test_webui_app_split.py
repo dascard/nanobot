@@ -70,5 +70,9 @@ def test_generated_images_page_is_wired_for_gallery():
     assert 'path="/generated-images"' in app_source
     assert "生成图片" in app_source
     assert "api.get('/generated-images'" in page_source
+    assert "api.post('/generated-images'" in page_source
     assert "AuthImage" in page_source
     assert "完整提示词" in page_source
+    assert "测试生图" in page_source
+    assert "generated-image-prompt" in page_source
+    assert "最近结果" in page_source

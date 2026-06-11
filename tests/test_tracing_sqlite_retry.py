@@ -127,3 +127,72 @@ def test_submit_log_retries_sqlite_locked_commit(db_session, monkeypatch):
     assert db_session.query(User).filter_by(id="u-submit-lock").count() == 1
     assert db_session.query(ChatLog).filter_by(user_id="u-submit-lock").count() == 1
     assert commit_calls["count"] >= 2
+
+
+def test_sqlite_locked_retry_logs_transient_retry_below_warning():
+    from core.sqlite_retry import run_sqlite_locked_retry
+
+    calls = {"count": 0}
+    logs = {"info": 0, "warning": 0}
+
+    class Logger:
+        def info(self, *args, **kwargs):
+            logs["info"] += 1
+
+        def warning(self, *args, **kwargs):
+            logs["warning"] += 1
+
+    def operation():
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OperationalError(
+                "INSERT ...",
+                {},
+                Exception("database is locked"),
+            )
+        return "ok"
+
+    assert run_sqlite_locked_retry(
+        operation,
+        logger=Logger(),
+        attempts=4,
+        base_delay_seconds=0,
+    ) == "ok"
+    assert calls["count"] == 2
+    assert logs["info"] == 1
+    assert logs["warning"] == 0
+
+
+def test_sqlite_locked_retry_warns_when_final_retry_is_next():
+    from core.sqlite_retry import run_sqlite_locked_retry
+
+    logs = {"info": 0, "warning": 0}
+
+    class Logger:
+        def info(self, *args, **kwargs):
+            logs["info"] += 1
+
+        def warning(self, *args, **kwargs):
+            logs["warning"] += 1
+
+    def operation():
+        raise OperationalError(
+            "INSERT ...",
+            {},
+            Exception("database is locked"),
+        )
+
+    try:
+        run_sqlite_locked_retry(
+            operation,
+            logger=Logger(),
+            attempts=2,
+            base_delay_seconds=0,
+        )
+    except OperationalError:
+        pass
+    else:
+        raise AssertionError("expected sqlite locked error")
+
+    assert logs["info"] == 0
+    assert logs["warning"] == 1

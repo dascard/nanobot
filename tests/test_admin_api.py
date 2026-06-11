@@ -133,6 +133,92 @@ class TestGeneratedImagesAdmin:
         )
         assert r.status_code == 404
 
+    def test_create_generated_image_response(self, client, auth_header, monkeypatch, tmp_path):
+        import base64
+
+        from kohakuterrarium.modules.tool.base import ToolResult
+
+        from core import generated_images
+
+        seen = {}
+        monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
+
+        async def fake_execute(self, args):
+            seen["args"] = dict(args)
+            saved = generated_images.save_generated_image(
+                base64.b64encode(b"fake-png").decode("ascii"),
+                prompt=args["prompt"],
+                metadata={
+                    "model": "gpt-image",
+                    "size": args["size"],
+                    "quality": args["quality"],
+                    "background": args["background"],
+                },
+            )
+            return ToolResult(output=json.dumps({
+                "reply_token": saved["reply_token"],
+                "mime": "image/png",
+                "model": "gpt-image",
+                "size": args["size"],
+                "quality": args["quality"],
+                "background": args["background"],
+            }, ensure_ascii=False), exit_code=0)
+
+        monkeypatch.setattr(
+            "creatures.nanobot.prompts.skills.image_generation.tool.ImageGenerationTool.execute",
+            fake_execute,
+        )
+
+        r = client.post(
+            "/api/v1/admin/generated-images",
+            json={
+                "prompt": "画一只红熊猫喝奶茶",
+                "size": "1536x1024",
+                "quality": "medium",
+                "background": "transparent",
+            },
+            headers=auth_header,
+        )
+        data = _ok(r)
+
+        assert data["ok"] is True
+        assert seen["args"] == {
+            "prompt": "画一只红熊猫喝奶茶",
+            "size": "1536x1024",
+            "quality": "medium",
+            "background": "transparent",
+        }
+        assert data["item"]["prompt"] == "画一只红熊猫喝奶茶"
+        assert data["item"]["model"] == "gpt-image"
+        assert data["item"]["image_url"] == (
+            f"/api/v1/admin/generated-images/{data['item']['id']}/image"
+        )
+        assert data["tool_output"]["reply_token"] == data["item"]["reply_token"]
+
+        image = client.get(data["item"]["image_url"], headers=auth_header)
+        assert image.status_code == 200
+        assert image.content == b"fake-png"
+
+    def test_create_generated_image_tool_failure_returns_502(self, client, auth_header, monkeypatch):
+        from kohakuterrarium.modules.tool.base import ToolResult
+
+        async def fake_execute(self, args):
+            return ToolResult(error="Image generation failed: upstream unavailable")
+
+        monkeypatch.setattr(
+            "creatures.nanobot.prompts.skills.image_generation.tool.ImageGenerationTool.execute",
+            fake_execute,
+        )
+
+        r = client.post(
+            "/api/v1/admin/generated-images",
+            json={"prompt": "画一只猫"},
+            headers=auth_header,
+        )
+
+        assert r.status_code == 502
+        assert "upstream unavailable" in r.text
+
 
 class TestStickerCRUD:
     def test_create_active(self, client, auth_header):
