@@ -47,6 +47,41 @@ def sqlite_connect_args_for_url(database_url: str) -> dict:
     }
 
 
+def release_clean_session_transaction(db, *, label: str = "", logger=None) -> bool:
+    """释放只读/干净的 Session 事务，避免跨长 await 持有 SQLite 事务。"""
+    try:
+        in_transaction = getattr(db, "in_transaction", None)
+        if not callable(in_transaction) or not in_transaction():
+            return False
+        new_count = len(getattr(db, "new", ()) or ())
+        dirty_count = len(getattr(db, "dirty", ()) or ())
+        deleted_count = len(getattr(db, "deleted", ()) or ())
+        pending_count = new_count + dirty_count + deleted_count
+        if pending_count:
+            if logger is not None:
+                logger.warning(
+                    "[DB] skip releasing session transaction label=%s pending=%d new=%d dirty=%d deleted=%d",
+                    label or "unknown",
+                    pending_count,
+                    new_count,
+                    dirty_count,
+                    deleted_count,
+                )
+            return False
+        db.rollback()
+        if logger is not None:
+            debug = getattr(logger, "debug", None)
+            if callable(debug):
+                debug("[DB] released clean session transaction before await label=%s", label or "unknown")
+        return True
+    except Exception as exc:
+        if logger is not None:
+            warning = getattr(logger, "warning", None)
+            if callable(warning):
+                warning("[DB] failed to release session transaction label=%s: %s", label or "unknown", exc)
+        return False
+
+
 def configure_sqlite_connection(dbapi_connection, *, database_url: str = DATABASE_URL) -> None:
     if not _is_sqlite_database_url(database_url):
         return

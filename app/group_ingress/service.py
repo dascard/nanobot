@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.group_ingress import helpers as h
-from core.database import ChatLog, User
+from core.database import ChatLog, User, release_clean_session_transaction
 from core.moderation import check_message_moderation_db
 from core.sqlite_retry import is_sqlite_locked_error
 from core.sqlite_retry import run_sqlite_locked_retry
@@ -169,29 +169,32 @@ class GroupIngressService:
         t0 = _time.time()
         try:
             ambient_meta = meta
+            timing_message = {
+                "sender_id": req.sender_id,
+                "sender_name": req.sender_name,
+                "message": message_text,
+                "message_id": req.message_id or "",
+                "is_reply_to_bot": bool(ambient_meta.get("directed", {}).get("reply_to_bot")),
+                "is_at_bot": bool(ambient_meta.get("directed", {}).get("at_bot")),
+                "segments": ambient_meta.get("segments", []),
+                "mentions": ambient_meta.get("mentions", []),
+                "reply_to": ambient_meta.get("reply_to"),
+                "directed": ambient_meta.get("directed", {}),
+                "is_directed_to_other": bool(ambient_meta.get("directed", {}).get("directed_to_other")),
+                "self_id": ambient_meta.get("bot", {}).get("self_id", ""),
+                "bot_id": ambient_meta.get("bot", {}).get("bot_id", ""),
+                "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
+            }
+            talk_value = h.get_group_talk_value(group_user_id)
+            release_clean_session_transaction(db, label="group_before_timing_gate", logger=logger)
             result = await runtime.process_message(
                 req.group_id,
-                {
-                    "sender_id": req.sender_id,
-                    "sender_name": req.sender_name,
-                    "message": message_text,
-                    "message_id": req.message_id or "",
-                    "is_reply_to_bot": bool(ambient_meta.get("directed", {}).get("reply_to_bot")),
-                    "is_at_bot": bool(ambient_meta.get("directed", {}).get("at_bot")),
-                    "segments": ambient_meta.get("segments", []),
-                    "mentions": ambient_meta.get("mentions", []),
-                    "reply_to": ambient_meta.get("reply_to"),
-                    "directed": ambient_meta.get("directed", {}),
-                    "is_directed_to_other": bool(ambient_meta.get("directed", {}).get("directed_to_other")),
-                    "self_id": ambient_meta.get("bot", {}).get("self_id", ""),
-                    "bot_id": ambient_meta.get("bot", {}).get("bot_id", ""),
-                    "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
-                },
+                timing_message,
                 session_name=req.session_name or "",
                 bot_aliases=list(req.bot_aliases or []),
                 trigger_reason=reason,
                 recent_context=recent_ctx,
-                talk_value=h.get_group_talk_value(group_user_id),
+                talk_value=talk_value,
             )
             elapsed_ms = int((_time.time() - t0) * 1000)
             action = result.get("action", "no_reply")
@@ -304,6 +307,7 @@ class GroupIngressService:
                 **identity_vars,
             }
             enriched = f"<user_input>\n{chat_query}\n</user_input>"
+            release_clean_session_transaction(db, label="group_before_bridge", logger=logger)
 
             reply = await bridge.handle_message(
                 enriched, session_id=group_user_id, user_id=group_user_id,

@@ -21,7 +21,16 @@ from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER, NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT,
     LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING,
 )
-from core.database import get_db, User, Persona, SystemPrompt, ChatLog, ConversationTurn, MemoryDigest
+from core.database import (
+    get_db,
+    release_clean_session_transaction,
+    User,
+    Persona,
+    SystemPrompt,
+    ChatLog,
+    ConversationTurn,
+    MemoryDigest,
+)
 from core.evolution import evolution_task
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from core.moderation import check_message_moderation_db
@@ -1804,6 +1813,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
     from core.context_builder import build_timing_recent_context
     group_user_id = _normalize_group_session_id(req.group_id)
     recent_ctx = build_timing_recent_context(db, group_user_id, limit=5)
+    release_clean_session_transaction(db, label="group_timer_before_runtime", logger=logger)
 
     runtime = get_group_runtime()
     t0 = _time.time()
@@ -1870,6 +1880,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
                 if not chat_query.strip():
                     chat_query = "timer 触发回复"
                 enriched = f"<user_input>\n{chat_query}\n</user_input>"
+                release_clean_session_transaction(db, label="group_timer_before_bridge", logger=logger)
                 reply = await bridge.handle_message(
                     enriched, session_id=group_user_id, user_id=group_user_id,
                     metadata=bridge_meta,
@@ -2101,6 +2112,7 @@ async def proxy_chat(
         max_total=MAX_MEMORY_TOTAL_CHARS,
         current_user_input=req.query,
     )
+    release_clean_session_transaction(db, label="chat_before_private_decision", logger=logger)
 
     # 4a. 私聊三态分类：先分类再路由
     guardrail_status: str | None = None
@@ -2313,6 +2325,7 @@ async def proxy_chat(
                 persona_text = persona_result.context
         except Exception as exc:
             logger.warning("[/chat] persona injection context failed user=%s: %s", req.user_id, exc)
+    release_clean_session_transaction(db, label="chat_before_bridge", logger=logger)
     if not (_classifier_ran and guardrail_status == "injection"):
         chat_type = "private" if str(req.session_id).startswith("private_") else "group"
         enriched_query = (

@@ -162,6 +162,33 @@ def test_proxy_chat_passes_history_header_to_bridge(client, db_session, monkeypa
     assert len(kwargs["metadata"]["history_messages"]) == 2
 
 
+def test_proxy_chat_releases_db_transaction_before_bridge(client, db_session, monkeypatch):
+    from unittest.mock import patch
+    from unittest.mock import AsyncMock
+
+    _fast_private_reply(monkeypatch)
+
+    async def assert_no_open_transaction(*args, **kwargs):
+        assert not db_session.in_transaction()
+        return "事务已释放"
+
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(side_effect=assert_no_open_transaction)
+
+    with patch("api.routes.get_bridge", return_value=mock_bridge):
+        response = client.post(
+            "/api/v1/chat",
+            json={
+                "user_id": "txn_user",
+                "session_id": "private_txn_user",
+                "query": "测试事务释放",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["answer"] == "事务已释放"
+
+
 def test_resolve_push_target_id_for_group_session():
     from api.routes import ChatProxyRequest, _resolve_push_target_id
 
@@ -884,6 +911,70 @@ async def test_group_message_ambient_enters_timing_gate(db_session, monkeypatch)
     assert calls[0][2]["trigger_reason"] == "ambient"
     # bridge not called
     mock_bridge.handle_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_group_message_releases_db_transaction_before_timing_gate(db_session, monkeypatch):
+    """进入 timing gate 前不能保留请求级 DB 事务。"""
+    from api.routes import GroupMessageRequest, group_message
+
+    async def fake_process(_self, group_id, msg, **kwargs):
+        assert not db_session.in_transaction()
+        return {"action": "no_reply", "generation": 1, "reason": "timing says no"}
+
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="txn-group",
+            sender_id="u-txn",
+            sender_name="事务测试",
+            message="普通消息",
+            session_name="事务群",
+            message_id="m-txn-gate-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "no_reply"
+    assert data["reason"] == "timing says no"
+
+
+@pytest.mark.asyncio
+async def test_group_message_releases_db_transaction_before_bridge(db_session, monkeypatch):
+    """TimingGate 决定回复后，调用 KT bridge 前也要释放 DB 事务。"""
+    from unittest.mock import AsyncMock
+    from api.routes import GroupMessageRequest, group_message
+
+    async def fake_process(*args, **kwargs):
+        return {"action": "continue", "generation": 1, "reason": "reply now"}
+
+    async def assert_no_open_transaction(*args, **kwargs):
+        assert not db_session.in_transaction()
+        return "群聊事务已释放"
+
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(side_effect=assert_no_open_transaction)
+    monkeypatch.setattr("api.routes.get_bridge", lambda: mock_bridge)
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="txn-bridge",
+            sender_id="u-txn",
+            sender_name="事务测试",
+            message="叫一下 bot",
+            session_name="事务群",
+            is_at_bot=True,
+            message_id="m-txn-bridge-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "continue"
+    assert data["reply"] == "群聊事务已释放"
 
 
 @pytest.mark.asyncio
