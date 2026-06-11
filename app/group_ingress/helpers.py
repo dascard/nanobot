@@ -359,31 +359,36 @@ def register_group_stickers_from_message(db, req: Any, *, background_tasks: Any 
             continue
         tags = item.get("tags") if isinstance(item.get("tags"), list) else []
         emotions = item.get("emotions") if isinstance(item.get("emotions"), list) else []
-        sticker = register_sticker(
-            db,
-            chat_stream_id=chat_stream_id,
-            file_ref=file_ref,
-            sticker_hash=str(
-                item.get("hash")
-                or item.get("file_unique")
-                or item.get("file_id")
-                or item.get("emoji_id")
-                or item.get("id")
-                or ""
+        sticker = run_sqlite_locked_retry(
+            lambda: register_sticker(
+                db,
+                chat_stream_id=chat_stream_id,
+                file_ref=file_ref,
+                sticker_hash=str(
+                    item.get("hash")
+                    or item.get("file_unique")
+                    or item.get("file_id")
+                    or item.get("emoji_id")
+                    or item.get("id")
+                    or ""
+                ),
+                send_code=str(item.get("send_code") or ""),
+                name=str(item.get("name") or item.get("summary") or ""),
+                description=str(item.get("description") or ""),
+                tags=tags,
+                emotions=emotions,
+                source_type="auto",
+                status=str(item.get("status") or "active"),
+                meta={
+                    "group_id": req.group_id,
+                    "message_id": req.message_id or "",
+                    "sender_id": req.sender_id or "",
+                    "client_meta": item,
+                },
             ),
-            send_code=str(item.get("send_code") or ""),
-            name=str(item.get("name") or item.get("summary") or ""),
-            description=str(item.get("description") or ""),
-            tags=tags,
-            emotions=emotions,
-            source_type="auto",
-            status=str(item.get("status") or "active"),
-            meta={
-                "group_id": req.group_id,
-                "message_id": req.message_id or "",
-                "sender_id": req.sender_id or "",
-                "client_meta": item,
-            },
+            rollback=db.rollback,
+            label="group_sticker_register",
+            logger=logger,
         )
         registered.append(sticker)
 

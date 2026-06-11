@@ -1623,6 +1623,53 @@ class TestGroupMessageStructured:
         cm = meta.get("client_meta") or meta
         assert cm.get("message_type") in ("sticker", "text", "image", None)
 
+    def test_sticker_auto_register_retries_when_sqlite_locked(self, client, db_session, monkeypatch):
+        from sqlalchemy.exc import OperationalError
+
+        from core.database import StickerMemory
+
+        class FakeGroupRuntime:
+            async def process_message(self, *args, **kwargs):
+                return {"action": "no_reply", "reason": "unit_test_sticker_lock", "generation": 0}
+
+        monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FakeGroupRuntime())
+        monkeypatch.setattr("core.sticker_preview_jobs.cache_sticker_preview_bg", lambda sticker_id: None)
+        monkeypatch.setattr("app.group_ingress.helpers.settings.get_bool", lambda key, default=False: False)
+        original_commit = db_session.commit
+        commit_calls = {"count": 0}
+
+        def flaky_commit():
+            commit_calls["count"] += 1
+            if commit_calls["count"] == 1:
+                raise OperationalError(
+                    "INSERT INTO sticker_memories ...",
+                    {},
+                    Exception("database is locked"),
+                )
+            return original_commit()
+
+        monkeypatch.setattr(db_session, "commit", flaky_commit)
+
+        resp = client.post("/api/v1/group/message", json={
+            "group_id": "123456",
+            "sender_id": "111",
+            "sender_name": "小明",
+            "message": "",
+            "segments": [{"type": "mface", "data": {"file": "sticker-a.png", "summary": "[动画表情]"}}],
+            "client_meta": {
+                "message_type": "sticker",
+                "stickers": [{
+                    "file_ref": "https://example.com/sticker-a.png",
+                    "hash": "sticker-lock-a",
+                    "name": "[动画表情]",
+                }],
+            },
+        })
+
+        assert resp.status_code == 200, resp.text
+        assert db_session.query(StickerMemory).filter_by(sticker_hash="sticker-lock-a").count() == 1
+        assert commit_calls["count"] >= 2
+
     def test_segments_capped_at_30(self, client, db_session):
         segments = [{"type": "text", "data": {"text": f"m{i}"}} for i in range(50)]
         client.post("/api/v1/group/message", json={
