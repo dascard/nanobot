@@ -387,3 +387,140 @@ git diff --stat HEAD
 ```
 
 预期：流式重构只涉及计划列出的文件；`webui/dist`、`nanobot.db`、`__pycache__` 不进入提交。
+
+### 任务 6：Message 携带 Stream 内部字段
+
+**文件：**
+- 修改：`tests/test_streaming_bridge.py`
+- 修改：`vendor/KohakuTerrarium/src/kohakuterrarium/llm/message.py`
+- 修改：`vendor/KohakuTerrarium/src/kohakuterrarium/core/controller.py`
+- 修改：`nanobot_kt/kt_adapter.py`
+- 修改：`nanobot_kt/bridge.py`
+
+- [ ] **步骤 1：编写失败的 Message 字段测试**
+
+在 `tests/test_streaming_bridge.py` 中新增测试，证明 `Message` 对象保留 `stream=True`，但 `to_dict()` 不输出该字段：
+
+```python
+def test_message_stream_flag_is_internal_not_wire():
+    from kohakuterrarium.llm.message import Message, UserMessage
+
+    msg = UserMessage("你好", stream=True)
+    assert msg.stream is True
+    assert "stream" not in msg.to_dict()
+
+    restored = Message.from_dict({"role": "user", "content": "你好", "stream": True})
+    assert restored.stream is True
+    assert "stream" not in restored.to_dict()
+```
+
+- [ ] **步骤 2：编写失败的 Controller 传递测试**
+
+继续在 `tests/test_streaming_bridge.py` 中新增测试，证明事件上下文会写到用户 Message，同时 LLM wire messages 不含 `stream`：
+
+```python
+@pytest.mark.asyncio
+async def test_controller_user_message_carries_stream_without_wire_leak():
+    from kohakuterrarium.core.controller import Controller, ControllerConfig
+    from kohakuterrarium.core.events import create_user_input_event
+
+    class FakeLLM:
+        provider_name = "fake"
+        last_tool_calls = []
+        last_assistant_extra_fields = {}
+        last_assistant_content_parts = None
+
+        def __init__(self):
+            self.seen_messages = None
+
+        async def chat(self, messages, **_kwargs):
+            self.seen_messages = messages
+            yield "ok"
+
+    llm = FakeLLM()
+    controller = Controller(llm, ControllerConfig(include_job_status=False))
+    await controller.push_event(create_user_input_event("你好", stream=True))
+
+    async for _event in controller.run_once():
+        pass
+
+    user_msg = controller.conversation.get_messages()[0]
+    assert user_msg.stream is True
+    assert llm.seen_messages[0] == {"role": "user", "content": "你好"}
+```
+
+- [ ] **步骤 3：运行测试验证失败**
+
+运行：
+
+```bash
+python -B -m pytest \
+  tests/test_streaming_bridge.py::test_message_stream_flag_is_internal_not_wire \
+  tests/test_streaming_bridge.py::test_controller_user_message_carries_stream_without_wire_leak \
+  -q
+```
+
+预期：失败，原因是 `UserMessage` 不接受 `stream` 或 controller append 后的 Message 没有 stream 标记。
+
+- [ ] **步骤 4：实现 Message 与事件传递**
+
+在 `Message` 数据类增加：
+
+```python
+stream: bool = False
+```
+
+`Message.from_dict()` 读取并剔除内部字段：
+
+```python
+stream = bool(data.get("stream", False))
+extras = {k: v for k, v in data.items() if k not in _STANDARD_MESSAGE_KEYS and k != "stream"}
+```
+
+Controller 在 append 用户消息时设置：
+
+```python
+stream=any(bool(e.context.get("stream")) for e in events)
+```
+
+`nanobot_kt.kt_adapter.create_user_event()` 接收 `**context` 并透传给 `create_user_input_event()`；`NanobotBridge.handle_message()` 所有聊天用户事件使用 `create_user_event(event_content, stream=meta["stream"])`。
+
+- [ ] **步骤 5：运行测试验证通过**
+
+运行：
+
+```bash
+python -B -m pytest \
+  tests/test_streaming_bridge.py::test_message_stream_flag_is_internal_not_wire \
+  tests/test_streaming_bridge.py::test_controller_user_message_carries_stream_without_wire_leak \
+  -q
+```
+
+预期：`2 passed`。
+
+- [ ] **步骤 6：运行流式回归测试并 Commit**
+
+运行：
+
+```bash
+python -B -m pytest \
+  tests/test_streaming_api.py \
+  tests/test_streaming_bridge.py \
+  tests/test_streaming_output.py \
+  tests/test_api.py::test_stream_chat_passes_stream_flag_to_bridge \
+  tests/test_api.py::test_stream_chat_emits_progress_and_done_events \
+  -q
+```
+
+预期：全部通过。
+
+提交：
+
+```bash
+git add tests/test_streaming_bridge.py \
+  vendor/KohakuTerrarium/src/kohakuterrarium/llm/message.py \
+  vendor/KohakuTerrarium/src/kohakuterrarium/core/controller.py \
+  nanobot_kt/kt_adapter.py \
+  nanobot_kt/bridge.py
+git commit -m "feat(流式传输): 让 Message 携带 stream 标记"
+```

@@ -9,6 +9,7 @@
 ## 目标
 
 - `ChatProxyRequest.stream` 显式传入 bridge 和 bridge metadata。
+- KT 入站 `Message` 对象携带内部 `stream` 字段，用于标识该用户消息来自流式请求。
 - `NanobotBridge.handle_message()` 与 `NanobotBridgePool.handle_message()` 支持 `stream` 参数。
 - `BufferedOutput.write_stream()` 在启用 stream queue 时发送 `delta` 事件，SSE 可以提前收到 token。
 - `_stream_chat()` 继续支持 `progress`、`heartbeat`、`done` 和错误事件。
@@ -44,6 +45,12 @@
 
 `NanobotBridgePool.handle_message()` 同步增加 `stream` 参数并透传给 child bridge。
 
+### Message 层
+
+KT `Message` 增加内部 `stream: bool = False` 字段。该字段只存在于内存对象上，`Message.to_dict()` 不输出它，`Message.from_dict()` 遇到 `stream` 时只恢复到内部字段，不放进 `extra_fields`，避免下游 OpenAI 兼容 API 收到非标准顶层字段。
+
+Bridge 创建用户事件时把 `stream` 写入 `TriggerEvent.context`。Controller 在把本轮事件合并成用户消息时，如果任一事件带有 `stream=True`，则通过 `conversation.append("user", ..., stream=True)` 让最终入站 `Message` 携带流式标记。
+
 ### 输出层
 
 `BufferedOutput.write_stream()` 仍累积 chunk 到 `_buffer`，并在 stream queue 存在时向队列写入：
@@ -66,6 +73,8 @@
 
 - API 测试：stream 请求调用 bridge 时传入 `stream=True`，SSE body 包含 `delta` 与最终 `done`。
 - Bridge 测试：`NanobotBridge.handle_message(stream=True, stream_queue=queue)` 会启用输出队列，`stream=False` 不启用 token delta。
+- Message 测试：`Message(stream=True)` 在对象上保留标记，但 `to_dict()` 不输出 `stream`。
+- Controller 测试：`TriggerEvent.context["stream"]` 会传到用户 `Message.stream`，同时 LLM wire messages 不包含 `stream`。
 - Output 测试：`BufferedOutput.write_stream()` 在启用 queue 后发送 `delta`，并且 `on_activity()` 的进度事件仍可发送。
 - 回归测试：现有 `progress + done` SSE 测试不破坏；非流式 `/chat` 不受影响。
 
