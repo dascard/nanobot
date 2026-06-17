@@ -17,6 +17,26 @@
 - 不回滚工作区中与本阶段无关的已有脏文件。
 - 所有说明、文档和 commit message 使用中文。
 
+## 进度总览
+
+| 阶段 | 状态 | 交付物 |
+|------|------|--------|
+| 阶段 0：审查 `asyncio.run` 与测试慢速问题 | 已完成 | 代码审查结论与测试性能审查 |
+| 阶段 1：前置缺陷修复与稳定性打底 | 已完成 | BridgePool、日志回滚、TODO 状态同步 |
+| 阶段 2：建立 TimingGate scoring 纯函数与 shadow 可观测 | 已完成 | `core/timing_score.py`、ChatLog/Admin/WebUI 调试字段 |
+| 阶段 3：普通 ambient 规则短路 | 已完成 | 普通 ambient 确定性规则跳过模型 |
+| 阶段 4：模型失败规则兜底 | 已完成 | 模型异常后使用 `rule_fallback` |
+| 阶段 5：eval scoring 覆盖 | 已完成 | timing eval 支持 scoring 校验 |
+| 阶段 6：`directed_to_other` 软化 | 已完成 | 指向他人从 hard no_reply 降级为抑制信号 |
+| 阶段 7：ambient cooldown 软化 | 已完成 | 群聊环境 cooldown 接入 scoring shortcut |
+| 阶段 7.5：同步 TODO 进度 | 已完成 | `docs/todo.md` 同步混合决策进度 |
+| 阶段 8：私聊接入 shared timing scoring | 已完成 | 私聊规则与分类器统一回灌 shared scoring |
+| 阶段 9：timer / legacy cooldown 继续软化 | 已完成 | timer fired 与 legacy cooldown 接入 scoring shortcut |
+| 阶段 10：session / platform 级模型层开关 | 进行中 | 先补策略解析、`rules_only` 和 `shadow` 行为测试，再接入运行时 |
+| 阶段 11：真实日志假阳率评估 | 待开始 | 抽样脚本、shadow 对比、阈值建议 |
+| 阶段 12：timing gate eval 基线与回归门禁 | 待开始 | baseline diff 与阈值门禁 |
+| 阶段 13：文档收尾 | 待开始 | 同步 `docs/todo.md` 与设计文档 |
+
 ## 阶段清单
 
 ### 阶段 0：审查 `asyncio.run` 与测试慢速问题
@@ -142,9 +162,15 @@
 
 ### 阶段 10：session / platform 级模型层开关
 
-状态：待开始。
+状态：进行中。
 
 目标：允许按 session 或 platform 控制 TimingGate 是否启用模型辅助、是否只用规则、是否只做 shadow。
+
+当前进展：
+
+- 已进入阶段 10 的计划与红灯测试准备。
+- 待实现 `core/timing_model_policy.py`、配置注册、群聊运行时接入和入口 platform 透传。
+- 该阶段完成前不会把模型层策略开关标记为已完成。
 
 验收标准：
 
