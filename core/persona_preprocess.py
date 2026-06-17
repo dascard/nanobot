@@ -22,6 +22,7 @@ os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 warnings.filterwarnings("ignore", message=".*CUDA initialization.*")
 from sqlalchemy.orm import Session
 
+from core.context_builder import sanitize_prompt_text
 from core.database import SessionLocal, ChatLog, PersonaFact, PersonaBehavior
 
 logger = logging.getLogger("nanobot.persona")
@@ -207,7 +208,7 @@ def format_candidate_logs(logs: List[Dict[str, Any]]) -> str:
     for log in filter_user_messages(logs):
         log_id = log.get("id", log.get("log_id", ""))
         created_at = str(log.get("created_at") or "").strip()
-        content = str(log.get("content") or "").strip()
+        content = sanitize_prompt_text(log.get("content") or "", 500).strip()
         if not content:
             continue
         if created_at:
