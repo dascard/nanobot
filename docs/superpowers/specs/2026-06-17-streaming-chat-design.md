@@ -1,8 +1,10 @@
 # 流式聊天重构设计
 
+> 状态（2026-06-17）：核心链路已落地。`/chat` 的 `stream` 参数已贯穿 API、Bridge、KT `Message` 和输出队列；SSE 已支持 `delta` 增量事件，最终 `done.answer` 仍是业务权威结果。
+
 ## 背景
 
-`/chat` 请求已经有 `stream` 字段，`docs/message-field-standard.md` 也把它定义为是否启用 SSE 流式响应。但当前服务端只把它用于选择 `StreamingResponse`，SSE 中间阶段发送工具进度和心跳，最终仍在 `done` 事件一次性返回完整 `answer`。KT controller 内部已经以 `stream=True` 调用 LLM provider，`BufferedOutput.write_stream()` 也会累积 chunk，但没有把 token chunk 转发到 API 层。
+设计启动时，`/chat` 请求已经有 `stream` 字段，`docs/message-field-standard.md` 也把它定义为是否启用 SSE 流式响应。但当时服务端只把它用于选择 `StreamingResponse`，SSE 中间阶段发送工具进度和心跳，最终仍在 `done` 事件一次性返回完整 `answer`。KT controller 内部已经以 `stream=True` 调用 LLM provider，`BufferedOutput.write_stream()` 也会累积 chunk，但没有把 token chunk 转发到 API 层。
 
 本次重构的目标是让 `stream` 从 API 请求贯穿到 bridge 调用上下文，并在 SSE 模式下下发增量文本事件。非流式请求保持现有返回结构和持久化行为。
 
@@ -78,8 +80,18 @@ Bridge 创建用户事件时把 `stream` 写入 `TriggerEvent.context`。Control
 - Output 测试：`BufferedOutput.write_stream()` 在启用 queue 后发送 `delta`，并且 `on_activity()` 的进度事件仍可发送。
 - 回归测试：现有 `progress + done` SSE 测试不破坏；非流式 `/chat` 不受影响。
 
+## 实现状态
+
+- API 层已把 `ChatProxyRequest.stream` 写入 `bridge_meta`，并在流式 runner 中以 `stream=True` 调用 Bridge。
+- `_stream_chat()` 已直接转发队列中的 `delta`、`progress` 和错误事件；`done` 事件仍返回最终完整 `answer`。
+- `NanobotBridge.handle_message()` 和 `NanobotBridgePool.handle_message()` 已接收并透传 `stream` 与 `stream_queue`。
+- `BufferedOutput.write_stream()` 已在启用队列时写入 `{"status": "delta", "text": chunk}`。
+- KT `Message` 已增加内部 `stream` 字段；`to_dict()` 不输出该字段，避免污染 OpenAI wire payload。
+- Controller 已把 `TriggerEvent.context["stream"]` 汇总到用户 `Message.stream`，同时 LLM wire messages 不包含 `stream`。
+- 回归测试已覆盖 SSE delta 转发、BridgePool 参数透传、Message 内部字段、Controller wire 隔离、Bridge 到 KT 输出队列的增量链路。
+
 ## 风险
 
-- KT parser 在工具调用格式中也会产生中间文本 chunk，可能包含未完成的结构化标记。第一阶段只把当前已有输出流暴露给 Web SSE；若前端直接展示，需要容忍短暂的未完成文本。
+- KT parser 在工具调用格式中也会产生中间文本 chunk，可能包含未完成的结构化标记。当前生产配置使用 native tool calling，主要 delta 来自 provider 的文本 chunk；如果切回 bracket/XML 工具格式，前端仍需要容忍短暂的未完成文本。
 - 多工具回合下最终 `reply()` 工具可能覆盖模型原始文本。第一阶段仍以最终 `done.answer` 为权威，增量只作为提前反馈。
 - 如果上游 provider chunk 非常碎，SSE 事件数会增加。后续可增加小窗口合并，但本阶段先不引入复杂 backpressure。
