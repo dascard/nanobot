@@ -1972,6 +1972,10 @@ def search_history_logs(
     提供给外部工具调用的数据库本地精确检索 API。
     实现无需全量 RAG 的按需、极速精准回忆。带有上下文支持。
     """
+    def _like_contains(value: str) -> str:
+        escaped = str(value or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return f"%{escaped}%"
+
     base_query = db.query(ChatLog)
     if user_id != "all":
         # 【弹性搜索核心】：允许 user_id 匹配 ID 或者 模糊匹配人名/场景名
@@ -1986,10 +1990,11 @@ def search_history_logs(
             base_query = exact_match
         else:
             # 环境模糊匹配兜底
+            user_pattern = _like_contains(user_id)
             base_query = base_query.filter(
                 or_(
-                    ChatLog.sender_name.like(f"%{user_id}%"),
-                    ChatLog.session_name.like(f"%{user_id}%")
+                    ChatLog.sender_name.like(user_pattern, escape="\\"),
+                    ChatLog.session_name.like(user_pattern, escape="\\")
                 )
             )
 
@@ -2000,7 +2005,10 @@ def search_history_logs(
         final_logs = results
     else:
         # 有关键词：查找匹配及其上下文
-        matches = base_query.filter(ChatLog.content.like(f"%{keyword}%")).order_by(ChatLog.id.desc()).limit(limit).all()
+        keyword_pattern = _like_contains(keyword)
+        matches = base_query.filter(
+            ChatLog.content.like(keyword_pattern, escape="\\")
+        ).order_by(ChatLog.id.desc()).limit(limit).all()
 
         log_dict = {}
         for match in matches:

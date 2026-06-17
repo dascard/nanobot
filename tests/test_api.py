@@ -111,6 +111,75 @@ def test_search_logs_rejects_invalid_context_size(client, monkeypatch):
     assert response.status_code == 422
 
 
+def test_search_logs_keyword_escapes_like_wildcards(client, db_session, monkeypatch):
+    monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "test-token")
+    db_session.add_all([
+        ChatLog(
+            user_id="wildcard_user",
+            session_id="wildcard_session",
+            sender_name="Alice",
+            session_name="Room",
+            role="user",
+            content="这是一条普通日志",
+        ),
+        ChatLog(
+            user_id="wildcard_user",
+            session_id="wildcard_session",
+            sender_name="Alice",
+            session_name="Room",
+            role="user",
+            content="这里包含下划线 marker_value",
+        ),
+    ])
+    db_session.commit()
+
+    percent_response = client.get(
+        "/api/v1/search_logs?user_id=all&keyword=%25",
+        headers={"Authorization": "Bearer test-token"},
+    )
+    underscore_response = client.get(
+        "/api/v1/search_logs?user_id=all&keyword=_",
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert percent_response.status_code == 200
+    assert percent_response.json()["results_found"] == 0
+    assert underscore_response.status_code == 200
+    assert underscore_response.json()["results_found"] == 1
+    assert "marker_value" in underscore_response.json()["logs"]
+
+
+def test_search_logs_user_id_fuzzy_escapes_like_wildcards(client, db_session, monkeypatch):
+    monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "test-token")
+    db_session.add_all([
+        ChatLog(
+            user_id="literal_user_a",
+            session_id="literal_session_a",
+            sender_name="Alice",
+            session_name="Room Alpha",
+            role="user",
+            content="alpha",
+        ),
+        ChatLog(
+            user_id="literal_user_b",
+            session_id="literal_session_b",
+            sender_name="Bob",
+            session_name="Room Beta",
+            role="user",
+            content="beta",
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/search_logs?user_id=%25",
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["results_found"] == 0
+
+
 def test_format_persona_facts_without_truncated_json():
     from api.routes import _format_persona_for_prompt
 
