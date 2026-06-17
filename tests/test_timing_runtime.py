@@ -528,6 +528,41 @@ class TestGroupRuntime:
         assert scoring["signals"]["direct_score"] >= scoring["signals"]["linger_score"]
 
     @pytest.mark.asyncio
+    async def test_recent_followup_uses_decayed_linger_score(self, monkeypatch):
+        """有显式召唤上下文时，followup 的 shadow scoring 使用余韵衰减分。"""
+        import core.group_runtime.runtime as runtime_module
+
+        now = 1000.0
+        monkeypatch.setattr(runtime_module._time, "time", lambda: now)
+        runtime = GroupRuntime()
+
+        await runtime.process_message("group_1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "Nanobot 你看看",
+            "message_id": "m0",
+        }, trigger_reason="bot_name_mentioned")
+        runtime.note_bot_replied("group_1")
+        now += 90
+
+        async def fake_gate(*_a, **_kw):
+            return {"action": "continue", "reason": "followup"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        r = await runtime.process_message("group_1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "再看看呢",
+            "message_id": "m1",
+        }, trigger_reason="ambient", talk_value=0.5)
+
+        assert r["action"] == "continue"
+        linger_score = r["timing_scoring"]["signals"]["linger_score"]
+        assert 0 < linger_score < 0.70
+        assert linger_score == pytest.approx(0.47, abs=0.02)
+
+    @pytest.mark.asyncio
     async def test_group_id_normalized_in_state_key(self):
         """不同格式的 group_id 映射到同一个 runtime state。"""
         runtime = GroupRuntime()

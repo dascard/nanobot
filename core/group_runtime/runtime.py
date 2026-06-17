@@ -21,8 +21,11 @@ MAX_RETRIES = 3
 MAX_AGE_SEC = 120
 IDLE_CLEANUP_SEC = 600
 BOT_REPLY_COOLDOWN_SEC = 30
-BOT_FOLLOWUP_WINDOW_SEC = 120
-LINGER_FOLLOWUP_SCORE = 0.70
+LINGER_TIMEOUT_SECONDS = 180
+LINGER_MAX_MESSAGES = 3
+LINGER_BASE_WEIGHT = 0.70
+LINGER_MIN_INTERVAL_SECS = 10
+BOT_FOLLOWUP_WINDOW_SEC = LINGER_TIMEOUT_SECONDS
 _DIRECT_TRIGGERS = {"at_bot", "reply_to_bot", "bot_name_mentioned", "direct_call", "mentioned"}
 _COOLDOWN_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
 
@@ -182,6 +185,11 @@ class GroupChatState:
     force_reason: str = ""
     talk_value: float = 0.5
     last_trigger_reason: str = "ambient"
+    linger_active_until: float = 0.0
+    linger_reply_count: int = 0
+    linger_source_user_id: str = ""
+    linger_started_by: str = ""
+    linger_last_reply_ts: float = 0.0
     last_active_ts: float = 0.0
     created_at: float = 0.0
 
@@ -303,8 +311,38 @@ class GroupChatState:
     def bot_reply_ago(self) -> float:
         return (_time.time() - self.last_bot_reply_ts) if self.last_bot_reply_ts > 0 else 0
 
+    def activate_linger(self, sender_id: str, trigger_reason: str):
+        self.linger_active_until = _time.time() + LINGER_TIMEOUT_SECONDS
+        self.linger_reply_count = 0
+        self.linger_source_user_id = str(sender_id or "")
+        self.linger_started_by = str(trigger_reason or "")
+        self.linger_last_reply_ts = 0.0
+        self._touch()
+
+    def linger_score_for(self, sender_id: str = "") -> float:
+        now = _time.time()
+        if now >= self.linger_active_until:
+            return 0.0
+        if self.linger_reply_count >= LINGER_MAX_MESSAGES:
+            return 0.0
+
+        elapsed = max(0.0, LINGER_TIMEOUT_SECONDS - (self.linger_active_until - now))
+        time_active = max(0.0, min(1.0, 1.0 - elapsed / LINGER_TIMEOUT_SECONDS))
+        quota_active = max(0.0, min(1.0, 1.0 - self.linger_reply_count / LINGER_MAX_MESSAGES))
+        same_user_weight = 1.0 if sender_id and sender_id == self.linger_source_user_id else 0.65
+        score = (
+            LINGER_BASE_WEIGHT
+            * (0.55 + 0.45 * time_active)
+            * (0.60 + 0.40 * quota_active)
+            * same_user_weight
+        )
+        return max(0.0, min(LINGER_BASE_WEIGHT, score))
+
     def note_bot_replied(self):
         self.last_bot_reply_ts = _time.time()
+        if self.linger_active_until > self.last_bot_reply_ts:
+            self.linger_reply_count += 1
+            self.linger_last_reply_ts = self.last_bot_reply_ts
         self._touch()
 
     def arm_force_continue(self, reason: str):
@@ -409,6 +447,10 @@ class GroupRuntime:
                     )
             ago = state.bot_reply_ago()
             min_interval_active = self._should_cooldown(state, tr)
+            latest_sender_id = msgs[-1].sender_id if msgs else ""
+            linger_score = state.linger_score_for(latest_sender_id) if tr == "recent_bot_followup" else 0.0
+            if tr == "recent_bot_followup" and linger_score <= 0 and state.linger_active_until <= 0:
+                linger_score = LINGER_BASE_WEIGHT
             decision = decide_timing(
                 text=_pending_text_for_scoring(msgs),
                 is_group=True,
@@ -419,7 +461,7 @@ class GroupRuntime:
                 direct_call=tr == "direct_call" or is_direct,
                 is_directed_to_other=should_suppress_directed_to_other(msgs),
                 has_files=_has_file_segments(msgs),
-                linger_score=LINGER_FOLLOWUP_SCORE if tr == "recent_bot_followup" else 0.0,
+                linger_score=linger_score,
                 min_interval_active=min_interval_active,
                 min_interval_remaining=max(0.0, BOT_REPLY_COOLDOWN_SEC - ago),
                 model_hint=model_hint,
@@ -548,7 +590,9 @@ class GroupRuntime:
 
             # 直接触发 → arm force_next_continue
             if tr in _DIRECT_TRIGGERS or pm.is_at_bot or pm.is_reply_to_bot:
-                state.arm_force_continue(tr or ("reply_to_bot" if pm.is_reply_to_bot else "at_bot"))
+                direct_reason = tr or ("reply_to_bot" if pm.is_reply_to_bot else "at_bot")
+                state.activate_linger(pm.sender_id, direct_reason)
+                state.arm_force_continue(direct_reason)
 
             # directed_to_other hard rule：全部指向别人 → no_reply
             if should_suppress_directed_to_other(state.pending):
