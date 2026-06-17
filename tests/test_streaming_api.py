@@ -65,3 +65,35 @@ def test_stream_chat_done_does_not_wait_for_heartbeat(client):
     assert response.status_code == 200
     assert '"status": "done"' in body
     assert elapsed < 2.0
+
+
+def test_stream_chat_error_event_hides_internal_details(client):
+    from unittest.mock import patch
+
+    async def fake_handle_message(*args, **kwargs):
+        raise RuntimeError("sqlite path /srv/nanobot.db leaked-secret")
+
+    with patch("api.routes.get_bridge") as mock_get_bridge:
+        mock_get_bridge.return_value.handle_message.side_effect = fake_handle_message
+        with client.stream(
+            "POST",
+            "/api/v1/chat",
+            json={
+                "user_id": "stream_error_user",
+                "session_id": "group_1000",
+                "query": "test",
+                "stream": True,
+            },
+        ) as response:
+            body = "".join(response.iter_text())
+
+    events = []
+    for chunk in body.split("\n\n"):
+        if not chunk.startswith("data: "):
+            continue
+        events.append(json.loads(chunk[6:]))
+
+    assert response.status_code == 200
+    assert {"status": "error", "message": "系统暂时不可用，请稍后再试"} in events
+    assert "nanobot.db" not in body
+    assert "leaked-secret" not in body

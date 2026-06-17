@@ -52,6 +52,7 @@ from core.agent_step import (
 logger = logging.getLogger("nanobot.routes")
 router = APIRouter(prefix="/api/v1")
 EMPTY_ASSISTANT_PLACEHOLDER = "（无回复内容）"
+SAFE_STREAM_ERROR_MESSAGE = "系统暂时不可用，请稍后再试"
 
 # 私聊缓冲：基础 5 秒窗口；只要有文件附件就延长到 10 秒
 _private_buffers: dict[str, dict] = {}
@@ -2610,7 +2611,7 @@ async def proxy_chat(
                     persisted = True
                 except Exception as pe:
                     logger.error(f"[/chat] Stream persist failed on error path: {pe}")
-                yield f"data: {json.dumps({'status': 'error', 'message': result_holder['error']}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'status': 'error', 'message': SAFE_STREAM_ERROR_MESSAGE}, ensure_ascii=False)}\n\n"
             else:
                 answer = result_holder.get("answer", "")
                 private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
@@ -2635,7 +2636,7 @@ async def proxy_chat(
                         assistant_processed=1,
                     )
                     persisted = True
-                    yield f"data: {json.dumps({'status': 'error', 'message': '系统暂时不可用，请稍后再试'}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'status': 'error', 'message': SAFE_STREAM_ERROR_MESSAGE}, ensure_ascii=False)}\n\n"
                 else:
                     await _finalize_private_buffer(req.user_id, answer)
                     pending = _persist_chat_turn(db, persist_req, answer, guardrail_status)
