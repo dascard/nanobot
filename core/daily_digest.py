@@ -576,10 +576,10 @@ async def run_scheduled_tasks() -> int:
                 )
                 continue
 
+            task.last_run_at = now
+            db.commit()
             ok = await push_to_qq(task.target_type, task.target_id, content)
             if ok:
-                task.last_run_at = now
-                db.commit()
                 executed += 1
                 logger.info(f"Task [{task.name}] completed and pushed")
             else:

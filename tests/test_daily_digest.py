@@ -1,7 +1,7 @@
 import asyncio
 from tests.async_helpers import run_async
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from core import daily_digest
 from core.database import ChatLog, MemoryDigest, ScheduledTask
@@ -175,3 +175,42 @@ def test_generate_task_message_uses_group_session_for_group_target(monkeypatch):
     assert result == "ok"
     assert calls["session_id"] == "group_984760873"
     assert calls["metadata"]["is_group"] is True
+
+
+def test_run_scheduled_tasks_advances_last_run_when_push_fails(db_session, monkeypatch):
+    task = ScheduledTask(
+        name="失败推送",
+        cron_expr="* * * * *",
+        target_type="private",
+        target_id="0000000000",
+        prompt_template="生成日报",
+        enabled=True,
+        last_run_at=None,
+    )
+    db_session.add(task)
+    db_session.commit()
+    task_id = task.id
+    calls = {"generate": 0, "push": 0}
+
+    async def fake_generate(_task):
+        calls["generate"] += 1
+        return "已生成内容"
+
+    async def fake_push(*_args, **_kwargs):
+        calls["push"] += 1
+        return False
+
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(daily_digest, "_generate_task_message", fake_generate)
+    monkeypatch.setattr(daily_digest, "push_to_qq", fake_push)
+
+    first = run_async(daily_digest.run_scheduled_tasks())
+    task = db_session.get(ScheduledTask, task_id)
+    first_run_at = task.last_run_at
+    second = run_async(daily_digest.run_scheduled_tasks())
+
+    assert first == 0
+    assert second == 0
+    assert first_run_at is not None
+    assert first_run_at > datetime.now() - timedelta(seconds=30)
+    assert calls == {"generate": 1, "push": 1}
