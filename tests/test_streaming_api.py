@@ -1,4 +1,5 @@
 import json
+import time
 
 
 def test_stream_chat_forwards_delta_events(client):
@@ -37,3 +38,30 @@ def test_stream_chat_forwards_delta_events(client):
     assert {"status": "delta", "text": "你"} in events
     assert {"status": "delta", "text": "好"} in events
     assert {"status": "done", "answer": "你好"} in events
+
+
+def test_stream_chat_done_does_not_wait_for_heartbeat(client):
+    from unittest.mock import patch
+
+    async def fake_handle_message(*args, **kwargs):
+        return "立即完成"
+
+    with patch("api.routes.get_bridge") as mock_get_bridge:
+        mock_get_bridge.return_value.handle_message.side_effect = fake_handle_message
+        started = time.perf_counter()
+        with client.stream(
+            "POST",
+            "/api/v1/chat",
+            json={
+                "user_id": "stream_fast_user",
+                "session_id": "group_1000",
+                "query": "test",
+                "stream": True,
+            },
+        ) as response:
+            body = "".join(response.iter_text())
+        elapsed = time.perf_counter() - started
+
+    assert response.status_code == 200
+    assert '"status": "done"' in body
+    assert elapsed < 2.0

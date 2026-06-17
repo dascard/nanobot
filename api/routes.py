@@ -2555,14 +2555,35 @@ async def proxy_chat(
             while True:
                 if done.is_set() and stream_queue.empty():
                     break
+                get_task = asyncio.create_task(stream_queue.get())
+                done_task = asyncio.create_task(done.wait())
                 try:
-                    event = await asyncio.wait_for(stream_queue.get(), timeout=heartbeat_interval)
-                except asyncio.TimeoutError:
-                    if done.is_set():
+                    completed, pending = await asyncio.wait(
+                        {get_task, done_task},
+                        timeout=heartbeat_interval,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for pending_task in pending:
+                        pending_task.cancel()
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
+                    if not completed:
+                        yield f"data: {json.dumps({'status': 'heartbeat'}, ensure_ascii=False)}\n\n"
+                        continue
+
+                    if get_task in completed:
+                        event = get_task.result()
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        continue
+
+                    # runner 已完成但没有新事件时，不再等 heartbeat 超时。
+                    if done_task in completed:
                         break
-                    yield f"data: {json.dumps({'status': 'heartbeat'}, ensure_ascii=False)}\n\n"
-                    continue
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                finally:
+                    for task in (get_task, done_task):
+                        if not task.done():
+                            task.cancel()
+                            await asyncio.gather(task, return_exceptions=True)
 
             await asyncio.sleep(0)
             while True:
