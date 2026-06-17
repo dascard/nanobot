@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import inspect
 import json
@@ -25,7 +24,6 @@ from app.session_memory.jobs import (
 from app.session_memory.rolling_summary import archive_active_summaries_for_session, audit_rolling_summary
 from app.session_memory.summarizer import render_summary_text
 from app.session_memory.windowing import estimate_tokens, is_context_eligible_turn
-from core.async_bridge import run_awaitable_sync
 from core.database import ConversationTurn, RollingSessionSummary, SessionSummaryJob
 
 logger = logging.getLogger("nanobot.session_summary.llm")
@@ -188,11 +186,16 @@ async def default_llm_summary_summarizer_async(messages: list[dict[str, str]]) -
 
 
 def default_llm_summary_summarizer(messages: list[dict[str, str]]) -> str:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return run_awaitable_sync(default_llm_summary_summarizer_async(messages))
-    raise RuntimeError("default_llm_summary_summarizer must run in a sync worker process")
+    raise RuntimeError(
+        "sync_summarizer_required: use default_llm_summary_summarizer_async "
+        "with process_claimed_session_summary_job_short_transactions_async"
+    )
+
+
+def _close_awaitable(value: Any) -> None:
+    close = getattr(value, "close", None)
+    if callable(close):
+        close()
 
 
 def _call_summarizer(
@@ -201,7 +204,21 @@ def _call_summarizer(
 ) -> Any:
     result = summarizer(messages)
     if inspect.isawaitable(result):
-        return run_awaitable_sync(result)
+        _close_awaitable(result)
+        raise TypeError(
+            "sync_summarizer_returned_awaitable: "
+            "use process_claimed_session_summary_job_short_transactions_async"
+        )
+    return result
+
+
+async def _call_summarizer_async(
+    summarizer: Callable[[list[dict[str, str]]], Any],
+    messages: list[dict[str, str]],
+) -> Any:
+    result = summarizer(messages)
+    if inspect.isawaitable(result):
+        return await result
     return result
 
 
@@ -484,6 +501,70 @@ def process_claimed_session_summary_job_short_transactions(
 
     try:
         raw = _call_summarizer(summarizer, prepared.messages)
+    except Exception as exc:
+        logger.warning("session summary job failed before finalize: job_id=%s error=%s", job_id, exc)
+        _fail_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+            error=str(exc),
+        )
+        return False
+
+    db = session_factory()
+    try:
+        ok = finalize_claimed_session_summary_job(
+            db,
+            prepared,
+            raw=raw,
+            owner=owner,
+        )
+        db.commit()
+        return ok
+    except Exception as exc:
+        db.rollback()
+        logger.warning("session summary job failed: job_id=%s error=%s", job_id, exc)
+        _fail_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+            error=str(exc),
+        )
+        return False
+    finally:
+        db.close()
+
+
+async def process_claimed_session_summary_job_short_transactions_async(
+    session_factory: Callable[[], Session],
+    *,
+    job_id: int,
+    summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
+    owner: str = "session-summary-worker",
+) -> bool:
+    """异步处理已抢占的 job，LLM 调用不经过同步 bridge。"""
+    summarizer = summarizer or default_llm_summary_summarizer_async
+    db = session_factory()
+    try:
+        prepared = prepare_claimed_session_summary_job(db, int(job_id), owner=owner)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        _fail_claimed_job_with_factory(
+            session_factory,
+            job_id=int(job_id),
+            owner=owner,
+            error=str(exc),
+        )
+        return False
+    finally:
+        db.close()
+
+    if prepared is None:
+        return False
+
+    try:
+        raw = await _call_summarizer_async(summarizer, prepared.messages)
     except Exception as exc:
         logger.warning("session summary job failed before finalize: job_id=%s error=%s", job_id, exc)
         _fail_claimed_job_with_factory(

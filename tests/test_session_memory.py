@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from core.database import ChatLog, ConversationTurn, RollingSessionSummary, SessionSummaryJob, User
+from tests.async_helpers import run_async
 
 
 def _turn(db, *, session_id="s1", user_id="u1", role="user", content="hello", meta=None, created_at=None):
@@ -685,6 +686,55 @@ def test_session_summary_worker_promotes_llm_summary_and_archives_fallback(db_se
     assert "异步 LLM 摘要" in llm_summary.summary_text
 
 
+def test_session_summary_legacy_sync_worker_rejects_awaitable_summarizer(db_session):
+    from app.session_memory.jobs import enqueue_session_summary_job
+    from app.session_memory.llm_summarizer import run_session_summary_worker_once
+
+    turns = [_turn(db_session, content=f"同步 helper 边界用例 {i}") for i in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback 保留",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+        max_retry=2,
+    )
+
+    async def async_summarizer(_messages):
+        return json.dumps({
+            "summary": "同步 helper 不应偷偷 await 这段摘要",
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False)
+
+    result = run_session_summary_worker_once(
+        db_session,
+        summarizer=async_summarizer,
+        owner="test-worker",
+    )
+
+    db_session.refresh(job)
+    db_session.refresh(fallback)
+    assert result["failed"] == 1
+    assert job.status == "pending"
+    assert "sync_summarizer_returned_awaitable" in (job.error or "")
+    assert fallback.status == "active"
+
+
 def test_session_summary_worker_non_json_retries_without_replacing_fallback(db_session):
     from app.session_memory.jobs import enqueue_session_summary_job
     from app.session_memory.llm_summarizer import run_session_summary_worker_once
@@ -1103,6 +1153,57 @@ def test_worker_run_once_commits_claim_before_summarizer(db_session, monkeypatch
     result = worker.run_once(owner="worker-a", limit=1, summarizer=summarizer)
 
     assert result["done"] == 1
+
+
+def test_worker_run_once_async_awaits_async_summarizer(db_session, monkeypatch):
+    from core import database
+    from workers import session_summary_worker as worker
+    from app.session_memory.jobs import enqueue_session_summary_job
+
+    turns = [_turn(db_session, content=f"async worker 用例 {i}") for i in range(6)]
+    fallback = RollingSessionSummary(
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="fallback",
+        covered_from_turn_id=turns[0].id,
+        covered_until_turn_id=turns[-1].id,
+        source_turn_ids_json=json.dumps([turn.id for turn in turns]),
+    )
+    db_session.add(fallback)
+    db_session.commit()
+    job, _created = enqueue_session_summary_job(
+        db_session,
+        session_id="s1",
+        user_id="u1",
+        chat_type="private",
+        pending_turns=turns,
+        previous_summary=None,
+        fallback_summary=fallback,
+        max_retry=2,
+    )
+    db_session.commit()
+    monkeypatch.setattr(worker, "SessionLocal", database.SessionLocal)
+
+    async def async_summarizer(_messages):
+        return json.dumps({
+            "summary": "async worker 直接 await LLM summarizer",
+            "quality": {"score": 0.9, "issues": []},
+        }, ensure_ascii=False)
+
+    result = run_async(
+        worker.run_once_async(
+            owner="worker-a",
+            limit=1,
+            summarizer=async_summarizer,
+        )
+    )
+
+    db_session.refresh(job)
+    assert result["done"] == 1
+    assert job.status == "done"
 
 
 def test_worker_run_once_recovers_stale_running_job(db_session, monkeypatch):

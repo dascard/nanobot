@@ -64,18 +64,14 @@ def _preload_sentinel(logger: logging.Logger) -> None:
 
 
 def session_summary_worker_scheduler(stop_event: threading.Event) -> None:
-    from workers.session_summary_worker import run_once
+    from workers.session_summary_worker import run_until_stopped
 
     logger = logging.getLogger("nanobot.session_summary.worker")
     logger.info("Session summary worker scheduler started.")
-    while not stop_event.is_set():
-        try:
-            stats = run_once()
-            if stats.get("processed"):
-                logger.info("Session summary worker processed: %s", stats)
-        except Exception as exc:
-            logger.exception("Session summary worker scheduler error: %s", exc)
-        stop_event.wait(10.0)
+    try:
+        run_until_stopped(stop_event)
+    except Exception as exc:
+        logger.exception("Session summary worker scheduler error: %s", exc)
     logger.info("Session summary worker scheduler stopped.")
 
 
