@@ -47,3 +47,5 @@ class SuiteReport(BaseModel):
     failed: int
     pass_rate: float
     failed_cases: list[dict[str, Any]] = Field(default_factory=list)
+    baseline_diff: dict[str, Any] | None = None
+    gate: dict[str, Any] | None = None

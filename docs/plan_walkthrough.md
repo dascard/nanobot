@@ -7,7 +7,7 @@
 
 ## 当前目标
 
-优先完成 TimingGate「规则信号 + 模型」混合决策的剩余落地工作。当前阶段 8-11 已完成，下一步优先推进阶段 12：为 `timing_gate` eval 增加 baseline diff 与阈值门禁；随后进入阶段 13，同步 `docs/todo.md` 和相关设计文档。
+优先完成 TimingGate「规则信号 + 模型」混合决策的剩余落地工作。当前阶段 8-12 已完成，下一步进入阶段 13：同步 `docs/todo.md` 和相关设计文档，确保 TODO、设计说明与真实代码状态一致。
 
 ## 执行约束
 
@@ -35,7 +35,7 @@
 | 阶段 9：timer / legacy cooldown 继续软化 | 已完成 | timer fired 与 legacy cooldown 接入 scoring shortcut |
 | 阶段 10：session / platform 级模型层开关 | 已完成 | `enabled` / `rules_only` / `shadow` 策略解析与运行时接入 |
 | 阶段 11：真实日志假阳率评估 | 已完成 | 时机信号审计 CLI、shadow mismatch 报告、阈值建议 |
-| 阶段 12：timing gate eval 基线与回归门禁 | 待开始 | baseline diff 与阈值门禁 |
+| 阶段 12：timing gate eval 基线与回归门禁 | 已完成 | baseline diff、阈值门禁和 CLI 门禁输出 |
 | 阶段 13：文档收尾 | 待开始 | 同步 `docs/todo.md` 与设计文档 |
 
 ## 阶段清单
@@ -212,15 +212,35 @@
 
 ### 阶段 12：timing gate eval 基线与回归门禁
 
-状态：待开始。
+状态：已完成。
 
 目标：把现有 timing eval 从手动运行升级为基线对比和回归门禁。
+
+已完成：
+
+- 已写计划文件：`.Codex/plans/timing-gate-scoring-phase12-eval-baseline.md`
+- 已新增 `evals/baseline.py`，支持读取 baseline report、计算新增失败、修复失败、仍失败和 pass rate delta
+- 已扩展 `SuiteReport`，可选携带 `baseline_diff` 和 `gate`
+- 已扩展 `evals.run.run_suite()`，支持 `baseline_path`、`min_pass_rate`、`max_new_failures`
+- 已扩展 CLI 参数：`--baseline`、`--min-pass-rate`、`--max-new-failures`
+- 已运行阶段 12 定向、TimingGate 回归、CLI 门禁和全量测试
 
 验收标准：
 
 - 新增 baseline diff
 - 支持阈值失败机制
 - 核心 suite 可纳入提交前或 CI 验证流程
+
+验证结果：
+
+- 阶段定向：`11 passed, 1 warning`
+- TimingGate 回归：`81 passed, 1 warning`
+- CLI 门禁：`Gate passed`
+- 全量测试：`1198 passed, 6 skipped, 113 warnings`
+
+相关提交：
+
+- `6dd126c docs(计划): 记录评测门禁计划`
 
 ### 阶段 13：文档收尾
 
@@ -236,4 +256,4 @@
 
 ## 下一步
 
-继续阶段 12：timing gate eval 基线与回归门禁。下一阶段仍按计划文件、TDD 红绿、回归验证和阶段提交推进。
+继续阶段 13：文档收尾。下一阶段重点同步 `docs/todo.md` 和 `docs/superpowers/specs/2026-06-16-timing-gate-scoring-design.md`，把已完成的 TimingGate 混合决策、日志审计和 eval 门禁状态写回文档。
