@@ -88,7 +88,9 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 新增 V2 task template 渲染边界：`classifier_legacy` 和 `memory_extract` 已具备 V2 task 模板、变量白名单和渲染 helper。
 - [x] 迁移分类器任务 prompt 调用方：`clients/classifier_client.py` 的 `timing_gate/private_decision/classifier_legacy` 已改用 V2 task 模板，旧 `core.prompt_runtime` 不再参与分类器路由渲染。
 - [x] 迁移记忆抽取任务 prompt 调用方：`core/legacy_adapter.py` 的 `memory_extract` 已改用 V2 task 模板，旧 `core.prompt_runtime` 不再参与记忆抽取渲染。
-- [ ] 收敛运行时入口：移除 live 发送路径中的 V1 / legacy 分支，保留必要的历史 trace 读取兼容，不破坏旧 `AgentRun` / `ChatLog` 数据展示。
+- [x] 收敛运行时入口：live 发送路径已忽略 `v1` override 并统一进入 V2 canonical runtime，`build_prompt_runtime()` 不再调用 `PromptAssembler`。
+- [x] 修正旧主链路测试口径：`tests/test_kt_framework.py` 不再断言 V1 手工 `<runtime_context>` 注入，改为验证 bridge 传给 V2 prompt runtime 的结构化输入。
+- [x] 提交 P1-6 任务 4：修正旧测试后全量测试已重新通过，并随本阶段单独 commit 归档。
 - [ ] 处理管理面迁移出口：确认 legacy 只读导出 / 对比能力是否仍需保留；若删除页面或路由，先补迁移说明和测试。
 - [ ] 删除冗余资产：删除不再被 live 读取的 V1 / legacy 模块、模板目录和构建脚本，保留测试夹具中确有必要的最小样本。
 - [ ] 去版本化命名：将模板目录、prompt key、配置项和 tracing 字段从 `v2` 命名收敛到规范名；旧配置只保留兼容读取，不再作为 live 主路径。
@@ -106,12 +108,19 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - P1-6 任务 3 红灯：`1 failed, 1 warning`，失败点为记忆抽取 query 仍使用旧候选抽取 prompt。
 - P1-6 任务 3 绿灯：`1 passed, 1 warning`。
 - P1-6 任务 3 evolution / memory 回归：`27 passed, 1 warning`。
+- P1-6 任务 4 红灯：`4 failed, 1 warning`，失败点覆盖 settings / metadata `v1` 仍可进入 live 分支、`PromptAssembler` 仍被调用。
+- P1-6 任务 4 绿灯：`4 passed, 1 warning`。
+- P1-6 任务 4 bridge / streaming 回归：`15 passed, 1 warning`。
+- P1-6 任务 4 首次全量：`1 failed, 1243 passed, 6 skipped, 113 warnings`，失败点为旧 `test_kt_framework` 仍断言 V1 手工 `<runtime_context>` 注入。
+- P1-6 任务 4 旧测试修正：`1 passed, 1 warning`。
+- P1-6 任务 4 bridge / streaming / KT 回归：`67 passed, 1 warning`。
+- P1-6 任务 4 修正后全量：`1244 passed, 6 skipped, 113 warnings`。
 - 任务 3 红灯：`13 failed, 3 passed, 20 warnings`，失败点覆盖旧写接口、V1 preview、legacy GET 副作用和 WebUI 只读断言。
 - 任务 3 绿灯：`16 passed, 20 warnings`。
 - 任务 3 定向：`25 passed, 20 warnings`。
 - P1-5 相关回归：`70 passed, 20 warnings`。
 - WebUI 构建：`npm run build` 通过。
-- 全量测试：`1238 passed, 6 skipped, 113 warnings`。
+- P1-5 收口全量测试：`1238 passed, 6 skipped, 113 warnings`。
 
 P1-6 验收重点：
 

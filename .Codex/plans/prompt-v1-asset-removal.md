@@ -66,8 +66,8 @@
 ## 当前事实
 
 - P1-5 已完成：`fallback_v1` 固定 fail-fast，legacy / managed 写接口返回 410，WebUI 旧页面只读，reply-test / reply-eval 默认 V2。
-- 当前仍存在 V1 live 入口：`build_prompt_runtime()` 的 `input.prompt_engine != "v2"` 会调用 `_build_v1_prompt()`，并最终调用 `PromptAssembler`。
-- 当前仍存在旧后台任务入口：`clients/classifier_client.call_model_route()` 通过 `core.prompt_runtime.render_model_messages()` 读取旧模板；`core/legacy_adapter.py` 通过 `render_prompt_content("memory_extract")` 读取旧模板。
+- 旧后台任务入口已迁移：`clients/classifier_client.call_model_route()` 的分类器 route 已改用 V2 task template；`core/legacy_adapter.py` 的 `memory_extract` 已改用 V2 task template。
+- V1 live 入口已封存：`NanobotBridge` 会忽略 `v1` override 并统一进入 V2 canonical runtime；`build_prompt_runtime()` 不再调用 `PromptAssembler`。
 - 当前仍存在硬依赖：`creatures/nanobot/config.yaml` 声明 `system_prompt_file: prompt.md`，`tests/test_prompt_contract.py` 依赖 `scripts/build_nanobot_prompt.py`。
 
 ## 任务 1：新增 V2 task template 渲染边界
@@ -287,7 +287,7 @@ description: 从对话中提取稳定用户记忆。
 
 预期：PASS。
 
-- [ ] **步骤 7：提交任务 1**
+- [x] **步骤 7：提交任务 1**
 
 运行：
 
@@ -427,7 +427,7 @@ python -B -m pytest tests/test_model_router.py tests/test_timing_gate_prompt_pol
 
 预期：PASS。
 
-- [ ] **步骤 6：提交任务 2**
+- [x] **步骤 6：提交任务 2**
 
 运行：
 
@@ -539,7 +539,7 @@ python -B -m pytest tests/test_evolution.py tests/test_prompt_v2.py tests/test_g
 
 预期：PASS。
 
-- [ ] **步骤 6：提交任务 3**
+- [x] **步骤 6：提交任务 3**
 
 运行：
 
@@ -554,9 +554,10 @@ git commit -m "refactor(记忆): 记忆抽取改用任务模板"
 - 修改：`nanobot_kt/bridge.py`
 - 修改：`nanobot_kt/prompt_runtime.py`
 - 修改：`tests/test_bridge_prompt_v2.py`
-- 修改：`tests/test_streaming_bridge.py`
+- 修改：`tests/test_kt_framework.py`
+- 回归：`tests/test_streaming_bridge.py`
 
-- [ ] **步骤 1：改写红灯测试**
+- [x] **步骤 1：改写红灯测试**
 
 在 `tests/test_bridge_prompt_v2.py` 中将 `test_bridge_resolve_prompt_runtime_engine_honors_v1_override_and_invalid_falls_back` 改为：
 
@@ -621,7 +622,7 @@ async def test_build_prompt_runtime_rejects_v1_live_prompt(monkeypatch):
         ))
 ```
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -631,7 +632,7 @@ python -B -m pytest tests/test_bridge_prompt_v2.py::test_bridge_resolve_prompt_r
 
 预期：FAIL，当前 resolver 仍允许 `v1`，`build_prompt_runtime()` 仍调用 `PromptAssembler`。
 
-- [ ] **步骤 3：修改 bridge engine resolver**
+- [x] **步骤 3：修改 bridge engine resolver**
 
 在 `nanobot_kt/bridge.py` 中把 `_prompt_runtime_engine()` 和 `_resolve_prompt_runtime_engine()` 固定为新主路径：
 
@@ -659,7 +660,7 @@ python -B -m pytest tests/test_bridge_prompt_v2.py::test_bridge_resolve_prompt_r
 
 在 `handle_message()` 中删除非 V2 prompt key / mode 分支，让主路径只生成 `chat_group` / `chat_private`。
 
-- [ ] **步骤 4：修改 `build_prompt_runtime()`**
+- [x] **步骤 4：修改 `build_prompt_runtime()`**
 
 在 `nanobot_kt/prompt_runtime.py` 中删除 `_v1_prompt_key()`、`_v1_prompt_mode()` 和 `_build_v1_prompt()`，并在入口加 guard：
 
@@ -671,28 +672,41 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
 
 保留 `v2` 作为兼容输入，返回结果仍可先写 `prompt_mode="v2"`，去版本化在后续任务处理。
 
-- [ ] **步骤 5：更新受影响测试**
+- [x] **步骤 5：更新受影响测试**
 
 更新 `tests/test_bridge_prompt_v2.py` 中显式 V1 override 断言：不再期待 `prompt_key == "group_chat"` 或 `prompt_mode == "managed"`，改为期待 `chat_group` / `v2`。
 
-更新 `tests/test_streaming_bridge.py` 中 fake `build_prompt_runtime()` 的字段断言，确保它接受 `v2` 兼容值。
+确认 `tests/test_streaming_bridge.py` 中 fake `build_prompt_runtime()` 的字段断言仍接受 `v2` 兼容值，若不接受则同步更新。
 
-- [ ] **步骤 6：运行任务 4 回归**
+更新 `tests/test_kt_framework.py` 中旧 V1 手工 `<runtime_context>` 注入断言，改为验证 bridge 传给 V2 prompt runtime 的结构化输入；该测试应 mock `build_prompt_runtime()`，避免为了桥接输入断言触发真实 V2 编译、DB 查询和模型列表同步。
+
+- [x] **步骤 6：运行任务 4 回归**
 
 运行：
 
 ```bash
-python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_streaming_bridge.py -q -p no:cacheprovider
+python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_streaming_bridge.py tests/test_kt_framework.py -q -p no:cacheprovider
 ```
 
 预期：PASS。
 
-- [ ] **步骤 7：提交任务 4**
+- [x] **步骤 7：运行任务 4 全量测试**
 
 运行：
 
 ```bash
-git add nanobot_kt/bridge.py nanobot_kt/prompt_runtime.py tests/test_bridge_prompt_v2.py tests/test_streaming_bridge.py
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+python -B -m pytest tests/ -v -p no:cacheprovider
+```
+
+预期：PASS。
+
+- [x] **步骤 8：提交任务 4**
+
+运行：
+
+```bash
+git add nanobot_kt/bridge.py nanobot_kt/prompt_runtime.py tests/test_bridge_prompt_v2.py tests/test_kt_framework.py
 git commit -m "refactor(提示词): 封存旧版运行时分支"
 ```
 

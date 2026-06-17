@@ -510,7 +510,9 @@ class NanobotBridge:
             engine = str(settings.get("prompt_runtime.engine", "v2") or "v2").strip().lower()
         except Exception:
             engine = "v2"
-        return engine if engine in {"v1", "v2"} else "v2"
+        if engine == "v1":
+            logger.warning("[PromptRuntime] engine=v1 is removed from live path; using canonical runtime")
+        return "v2"
 
     def _resolve_prompt_runtime_engine(self, meta: dict[str, Any]) -> str:
         prompt_engine = str(
@@ -518,7 +520,9 @@ class NanobotBridge:
             or meta.get("prompt_engine_override")
             or self._prompt_runtime_engine()
         ).strip().lower()
-        return prompt_engine if prompt_engine in {"v1", "v2"} else "v2"
+        if prompt_engine == "v1":
+            logger.warning("[PromptRuntime] v1 metadata override ignored after P1-6")
+        return "v2"
 
     def _prompt_v2_audit_failure_policy(self) -> str:
         try:
@@ -558,10 +562,14 @@ class NanobotBridge:
             logger.warning("[PromptV2] failed to read tool schemas: %s", e)
             tool_schemas = []
 
+        prompt_key = context.prompt_key
+        if context.prompt_engine != "v2" or prompt_key in {"group_chat", "private_chat"}:
+            prompt_key = "chat_group" if context.is_group else "chat_private"
+
         return PromptRuntimeInput(
-            prompt_engine=context.prompt_engine,
-            prompt_mode="v2" if context.prompt_engine == "v2" else context.prompt_mode,
-            prompt_key=context.prompt_key,
+            prompt_engine="v2",
+            prompt_mode="v2",
+            prompt_key=prompt_key,
             chat_type=context.chat_type,
             runtime_chat_type=context.runtime_chat_type,
             session_id=context.session_id,
@@ -989,18 +997,8 @@ class NanobotBridge:
             meta = dict(metadata or {})
             meta["stream"] = bool(stream or meta.get("stream"))
             prompt_engine = self._resolve_prompt_runtime_engine(meta)
-            if prompt_engine == "v2":
-                prompt_mode = "v2"
-                prompt_key = "chat_group" if meta.get("is_group", False) else "chat_private"
-            else:
-                prompt_mode = str(
-                    meta.get("prompt_system_mode_override")
-                    or meta.get("prompt_mode_override")
-                    or self._prompt_system_mode()
-                ).strip().lower()
-                if prompt_mode not in {"legacy", "shadow", "managed"}:
-                    prompt_mode = "shadow"
-                prompt_key = "group_chat" if meta.get("is_group", False) else "private_chat"
+            prompt_mode = "v2"
+            prompt_key = "chat_group" if meta.get("is_group", False) else "chat_private"
             legacy_prompt_meta = dict(getattr(self, "_legacy_prompt_meta", {}) or {})
             from core.tracing import RunTracer, new_trace_id
             from core.tracing_context import reset_trace_context, set_trace_context
@@ -1098,37 +1096,6 @@ class NanobotBridge:
                 logger.info("[SessionRuntime] Reset conversation: %d→%d (system=%d)",
                             before_len, after_len, after_len)
             self._clear_controller_event_state()
-
-            if prompt_engine != "v2" and hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'conversation'):
-                from core.identity import build_identity_vars
-
-                identity_vars = build_identity_vars(
-                    sender_id=meta.get("sender_id") or meta.get("user_id") or user_id,
-                    bot_name=str(meta.get("bot_name") or meta.get("character_name") or ""),
-                    bot_aliases=meta.get("bot_aliases", []),
-                )
-                conv = self._agent.controller.conversation
-                self._remove_system_contexts(conv, self.DYNAMIC_SYSTEM_PREFIXES)
-                # identity_context 放在所有 system context 最前面
-                conv.append("system",
-                    "<identity_context>\n"
-                    f"character_name: {identity_vars['character_name']}\n"
-                    f"name_hint: {identity_vars['name_hint']}\n"
-                    f"alias_names:\n{identity_vars['alias_names']}\n"
-                    f"sender_id: {identity_vars['sender_id']}\n"
-                    f"super_user_id: {identity_vars['super_user_id']}\n"
-                    f"is_super_user: {identity_vars['is_super_user']}\n"
-                    "</identity_context>"
-                )
-                conv.append(
-                    "system",
-                    self._build_runtime_context(
-                        user_id=user_id,
-                        session_id=session_id,
-                        sender_name=sender_name,
-                        meta=meta,
-                    ),
-                )
 
             # --- PromptAssembler 输入：只收集结构化上下文，不在 bridge 手工注入 prompt ---
             persona_text = str(meta.get("persona_text", "")).strip()

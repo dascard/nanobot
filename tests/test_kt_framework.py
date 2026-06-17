@@ -573,9 +573,10 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_injects_runtime_context_system_message(self, MockAgent, mock_load):
+    def test_handle_message_passes_runtime_context_to_prompt_v2(self, MockAgent, mock_load, monkeypatch):
         from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
+        from nanobot_kt.prompt_runtime import PromptRuntimeResult
         import json
 
         mock_config = MagicMock()
@@ -599,6 +600,40 @@ class TestNanobotBridge:
         mock_agent._process_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
 
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient", lambda **_kwargs: route_client)
+        monkeypatch.setattr(
+            "core.tool_plan.build_tool_plan",
+            lambda **_kwargs: MagicMock(
+                enabled={},
+                disabled={},
+                executable_tool_names=set(),
+                runtime_tool_prompt="",
+                sha256="test-tool-plan",
+            ),
+        )
+        monkeypatch.setattr("core.runtime_tool_service.record_runtime_tool_decision", lambda **_kwargs: False)
+
+        captured = {}
+
+        async def fake_build_prompt_runtime(prompt_input):
+            captured["prompt_input"] = prompt_input
+            return PromptRuntimeResult(
+                prompt_key=prompt_input.prompt_key,
+                prompt_mode=prompt_input.prompt_mode,
+                prompt_source="test",
+                prompt_runtime_path="",
+                prompt_default_path="",
+                prompt_sha256="test-sha",
+                pre_event_messages=[{"role": "system", "content": "base"}],
+                event_content=prompt_input.user_input,
+                meta_update={"prompt_engine": "v2"},
+            )
+
+        monkeypatch.setattr("nanobot_kt.prompt_runtime.build_prompt_runtime", fake_build_prompt_runtime)
+
         with patch("nanobot_kt.bridge._current_time_label", return_value="2026-05-01 09:30:00 CST"):
             bridge = NanobotBridge()
 
@@ -607,19 +642,31 @@ class TestNanobotBridge:
                 return await bridge.handle_message(
                     "test query",
                     user_id="u1",
-                    metadata={"prompt_runtime_engine_override": "v1"},
+                    session_id="private-u1",
+                    sender_name="雀",
+                    metadata={
+                        "prompt_runtime_engine_override": "v1",
+                        "user_id": "u1",
+                        "message_id": "msg-1",
+                    },
                 )
 
             result = run_async(_run())
 
         assert result == "ok"
+        prompt_input = captured["prompt_input"]
+        assert prompt_input.prompt_engine == "v2"
+        assert prompt_input.prompt_mode == "v2"
+        assert prompt_input.prompt_key == "chat_private"
+        assert prompt_input.chat_type == "private"
+        assert prompt_input.runtime_chat_type == "private"
+        assert prompt_input.session_id == "private-u1"
+        assert prompt_input.user_id == "u1"
+        assert prompt_input.sender_name == "雀"
+        assert prompt_input.current_message_id == "msg-1"
+        assert prompt_input.user_input == "test query"
         system_messages = [call.args[1] for call in mock_conv.append.call_args_list if call.args[0] == "system"]
-        assert any(
-            "<runtime_context>" in msg
-            and "current_time: 2026-05-01 09:30:00 CST" in msg
-            and "chat_type: private" in msg
-            for msg in system_messages
-        )
+        assert system_messages == ["base"]
 
     @patch("nanobot_kt.bridge.registry")
     @patch("nanobot_kt.bridge.NewAPIClient")

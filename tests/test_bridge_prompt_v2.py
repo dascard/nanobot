@@ -66,20 +66,20 @@ def test_bridge_prompt_runtime_engine_defaults_to_v2_and_invalid_falls_back(monk
     assert bridge._prompt_runtime_engine() == "v2"
 
     monkeypatch.setattr(settings, "get", lambda _key, _default=None: "v1")
-    assert bridge._prompt_runtime_engine() == "v1"
+    assert bridge._prompt_runtime_engine() == "v2"
 
 
-def test_bridge_resolve_prompt_runtime_engine_honors_v1_override_and_invalid_falls_back(monkeypatch):
+def test_bridge_resolve_prompt_runtime_engine_treats_v1_as_canonical_runtime(monkeypatch):
     from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
 
     bridge = NanobotBridge.__new__(NanobotBridge)
-    monkeypatch.setattr(settings, "get", lambda _key, _default=None: "v2")
+    monkeypatch.setattr(settings, "get", lambda _key, _default=None: "v1")
 
-    assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "v1"}) == "v1"
-    assert bridge._resolve_prompt_runtime_engine({"prompt_engine_override": "v1"}) == "v1"
+    assert bridge._prompt_runtime_engine() == "v2"
+    assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "v1"}) == "v2"
+    assert bridge._resolve_prompt_runtime_engine({"prompt_engine_override": "v1"}) == "v2"
     assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "bad"}) == "v2"
-    assert bridge._resolve_prompt_runtime_engine({}) == "v2"
 
 
 def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
@@ -151,7 +151,7 @@ def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
     assert prompt_input.audit_failure_policy == "fail_fast"
 
 
-def test_bridge_build_prompt_runtime_input_for_v1_uses_prompt_mode(monkeypatch):
+def test_bridge_build_prompt_runtime_input_coerces_v1_to_canonical_runtime(monkeypatch):
     from nanobot_kt.bridge import NanobotBridge, PromptRuntimeAssemblyContext
 
     bridge = NanobotBridge.__new__(NanobotBridge)
@@ -183,10 +183,54 @@ def test_bridge_build_prompt_runtime_input_for_v1_uses_prompt_mode(monkeypatch):
         )
     )
 
-    assert prompt_input.prompt_engine == "v1"
-    assert prompt_input.prompt_mode == "managed"
-    assert prompt_input.prompt_key == "group_chat"
+    assert prompt_input.prompt_engine == "v2"
+    assert prompt_input.prompt_mode == "v2"
+    assert prompt_input.prompt_key == "chat_group"
     assert prompt_input.persona_text == "无已存储画像"
+
+
+@pytest.mark.asyncio
+async def test_build_prompt_runtime_rejects_v1_live_prompt(monkeypatch):
+    from nanobot_kt.prompt_runtime import PromptRuntimeInput, build_prompt_runtime
+
+    monkeypatch.setattr(
+        "core.prompt_assembler.PromptAssembler.build",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("PromptAssembler must not run after V1 live branch removal")
+        ),
+    )
+
+    with pytest.raises(ValueError, match="unsupported prompt engine"):
+        await build_prompt_runtime(PromptRuntimeInput(
+            prompt_engine="v1",
+            prompt_mode="legacy",
+            prompt_key="group_chat",
+            chat_type="group",
+            runtime_chat_type="group",
+            session_id="group_1",
+            user_id="u1",
+            group_id="1",
+            sender_name="雀",
+            sender_id="u1",
+            session_name="",
+            trigger_reason="",
+            timing_decision="",
+            current_message_id="",
+            source_message_ids=[],
+            self_id="",
+            bot_id="",
+            bot_name="",
+            bot_aliases=[],
+            user_input="hi",
+            persona_text="",
+            history_header="",
+            history_messages=[],
+            runtime_tool_prompt="",
+            effort_constraint="",
+            trace_id="t",
+            run_id="r",
+            is_group=True,
+        ))
 
 
 def test_bridge_build_prompt_runtime_input_falls_back_when_tool_schemas_unavailable(monkeypatch):

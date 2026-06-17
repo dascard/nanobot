@@ -67,64 +67,10 @@ class PromptRuntimeAuditFailure(RuntimeError):
         super().__init__(message)
 
 
-def _v1_prompt_key(is_group: bool) -> str:
-    return "group_chat" if is_group else "private_chat"
-
-
-def _v1_prompt_mode(value: str) -> str:
-    mode = str(value or "").strip().lower()
-    return mode if mode in {"legacy", "shadow", "managed"} else "shadow"
-
-
-def _build_v1_prompt(input: PromptRuntimeInput) -> PromptRuntimeResult:
-    from core.prompt_assembler import PromptAssembler, PromptBuildContext
-
-    prompt_mode = _v1_prompt_mode(input.prompt_mode)
-    prompt_key = _v1_prompt_key(input.is_group)
-    prompt_build = PromptAssembler().build(
-        PromptBuildContext(
-            mode=prompt_mode,
-            chat_type=input.runtime_chat_type,
-            prompt_key=prompt_key,
-            session_id=input.session_id,
-            user_id=input.user_id,
-            group_id=input.group_id,
-            sender_name=input.sender_name,
-            sender_id=input.sender_id,
-            session_name=input.session_name,
-            trigger_reason=input.trigger_reason,
-            timing_decision=input.timing_decision,
-            current_message_id=input.current_message_id,
-            source_message_ids=input.source_message_ids,
-            self_id=input.self_id,
-            bot_id=input.bot_id,
-            bot_name=input.bot_name,
-            bot_aliases=input.bot_aliases,
-            user_input=input.user_input,
-            persona_text=input.persona_text,
-            history_header=input.history_header,
-            history_messages=input.history_messages,
-            runtime_tool_prompt=input.runtime_tool_prompt,
-            effort_constraint=input.effort_constraint,
-        ),
-        trace_id=input.trace_id,
-        run_id=input.run_id,
-    )
-    return PromptRuntimeResult(
-        prompt_key=prompt_build.prompt_key,
-        prompt_mode=prompt_build.prompt_mode,
-        prompt_source=prompt_build.prompt_source,
-        prompt_runtime_path=prompt_build.prompt_runtime_path,
-        prompt_default_path=prompt_build.prompt_default_path,
-        prompt_sha256=prompt_build.prompt_sha256,
-        pre_event_messages=prompt_build.pre_event_messages,
-        event_content=prompt_build.event_content,
-    )
-
-
 async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult:
-    if input.prompt_engine != "v2":
-        return _build_v1_prompt(input)
+    prompt_engine = str(input.prompt_engine or "v2").strip().lower()
+    if prompt_engine not in {"v2", "canonical", "prompt"}:
+        raise ValueError(f"unsupported prompt engine for live runtime: {input.prompt_engine}")
 
     from core.prompt_v2.audit import PromptAuditError
     from core.prompt_v2.compiler import compile_prompt_plan
