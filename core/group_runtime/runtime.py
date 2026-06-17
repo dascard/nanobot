@@ -22,6 +22,7 @@ MAX_AGE_SEC = 120
 IDLE_CLEANUP_SEC = 600
 BOT_REPLY_COOLDOWN_SEC = 30
 BOT_FOLLOWUP_WINDOW_SEC = 120
+LINGER_FOLLOWUP_SCORE = 0.70
 _DIRECT_TRIGGERS = {"at_bot", "reply_to_bot", "bot_name_mentioned", "direct_call", "mentioned"}
 _COOLDOWN_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
 
@@ -418,6 +419,7 @@ class GroupRuntime:
                 direct_call=tr == "direct_call" or is_direct,
                 is_directed_to_other=should_suppress_directed_to_other(msgs),
                 has_files=_has_file_segments(msgs),
+                linger_score=LINGER_FOLLOWUP_SCORE if tr == "recent_bot_followup" else 0.0,
                 min_interval_active=min_interval_active,
                 min_interval_remaining=max(0.0, BOT_REPLY_COOLDOWN_SEC - ago),
                 model_hint=model_hint,

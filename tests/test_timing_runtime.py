@@ -523,6 +523,9 @@ class TestGroupRuntime:
         assert r["action"] == "continue"
         assert captured["trigger_reason"] == "recent_bot_followup"
         assert captured["pending_trigger"] == "recent_bot_followup"
+        scoring = r["timing_scoring"]
+        assert scoring["signals"]["linger_score"] > 0
+        assert scoring["signals"]["direct_score"] >= scoring["signals"]["linger_score"]
 
     @pytest.mark.asyncio
     async def test_group_id_normalized_in_state_key(self):
