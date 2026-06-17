@@ -542,6 +542,35 @@ class GroupRuntime:
             response.update(payload)
         return response
 
+    def _cooldown_scoring_shortcut(
+        self,
+        state: GroupChatState,
+        trigger_reason: str,
+        *,
+        pending: list[GroupPendingMessage],
+        reason_prefix: str,
+    ) -> dict | None:
+        """尝试用 shared scoring 接管 cooldown；无法短路时保留旧 fallback。"""
+        try:
+            scoring_decision = self._score_timing(
+                state,
+                trigger_reason,
+                pending=pending,
+            )
+        except Exception as exc:
+            logger.debug("[GroupRuntime] cooldown scoring failed: %s", exc, exc_info=True)
+            return None
+        if scoring_decision.stage != "rule_shortcut":
+            return None
+        logger.info("[GroupRuntime] cooldown_scoring_shortcut action=%s pending=%d",
+                    scoring_decision.action, len(pending))
+        return self._apply_scoring_shortcut(
+            state,
+            scoring_decision,
+            pending=pending,
+            reason_prefix=reason_prefix,
+        )
+
     def _attach_shadow_scoring(
         self,
         response: dict,
@@ -713,26 +742,16 @@ class GroupRuntime:
             # 硬 cooldown：bot 刚回复过且非直接互动 → wait
             if self._should_cooldown(state, tr):
                 ago = state.bot_reply_ago()
-                if tr == "ambient":
+                if tr in {"", "ambient"}:
                     snapshot = state.take_snapshot()
-                    try:
-                        scoring_decision = self._score_timing(
-                            state,
-                            tr,
-                            pending=snapshot,
-                        )
-                    except Exception as exc:
-                        scoring_decision = None
-                        logger.debug("[GroupRuntime] cooldown scoring failed: %s", exc, exc_info=True)
-                    if scoring_decision is not None and scoring_decision.stage == "rule_shortcut":
-                        logger.info("[GroupRuntime] cooldown_scoring_shortcut group=%s action=%s pending=%d",
-                                    group_id, scoring_decision.action, len(snapshot))
-                        return self._apply_scoring_shortcut(
-                            state,
-                            scoring_decision,
-                            pending=snapshot,
-                            reason_prefix="cooldown scoring shortcut",
-                        )
+                    scoring_response = self._cooldown_scoring_shortcut(
+                        state,
+                        tr,
+                        pending=snapshot,
+                        reason_prefix="cooldown scoring shortcut",
+                    )
+                    if scoring_response is not None:
+                        return scoring_response
                 return self._attach_shadow_scoring({
                     "action": "wait",
                     "delay_seconds": max(1, math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),
@@ -880,6 +899,15 @@ class GroupRuntime:
 
             if self._should_cooldown(state, trigger_reason or "timer"):
                 ago = state.bot_reply_ago()
+                snapshot = state.take_snapshot()
+                scoring_response = self._cooldown_scoring_shortcut(
+                    state,
+                    trigger_reason or state.last_trigger_reason or "timer",
+                    pending=snapshot,
+                    reason_prefix="timer cooldown scoring shortcut",
+                )
+                if scoring_response is not None:
+                    return scoring_response
                 return self._attach_shadow_scoring({
                     "action": "wait",
                     "delay_seconds": max(1, math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),

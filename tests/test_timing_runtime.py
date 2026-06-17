@@ -394,8 +394,8 @@ class TestGroupRuntime:
         assert r["timing_scoring"]["stage"] == "model_assisted_conflict"
 
     @pytest.mark.asyncio
-    async def test_rate_limited_reports_cooldown(self, monkeypatch):
-        """rate-limit 返回也带正确 cooldown_ago。"""
+    async def test_legacy_cooldown_scoring_reports_cooldown(self, monkeypatch):
+        """legacy 空 trigger 的 cooldown scoring 返回也带正确 cooldown_ago。"""
         runtime = GroupRuntime()
 
         async def fake_gate(_gid, _p, _ctx, _tr):
@@ -411,12 +411,13 @@ class TestGroupRuntime:
         r = await runtime.process_message("g1", {
             "sender_id": "u2", "sender_name": "B", "message": "hi",
         })
-        assert r["action"] == "wait"
+        assert r["action"] == "no_reply"
+        assert r["reason"].startswith("cooldown scoring shortcut:")
         assert r["cooldown_ago"] >= 0  # round 可能导致 0.001→0.0
 
     @pytest.mark.asyncio
     async def test_cooldown_blocks_ambient_after_bot_reply(self):
-        """bot 刚回复后，非 reply_to_bot 非 mention → 硬 wait。"""
+        """legacy 空 trigger 的 cooldown 应先走 scoring，而不是硬 wait。"""
         runtime = GroupRuntime()
         rt_calls = []
 
@@ -434,10 +435,11 @@ class TestGroupRuntime:
         r = await runtime.process_message("g1", {
             "sender_id": "u1", "sender_name": "A", "message": "hello",
         })
-        assert r["action"] == "wait"
-        assert r["delay_seconds"] > 0
-        assert "冷却" in r["reason"]
-        assert len(rt_calls) == 0  # 没调 gate——直接 cooldown 拦截
+        assert r["action"] == "no_reply"
+        assert r["reason"].startswith("cooldown scoring shortcut:")
+        assert r["timing_scoring"]["stage"] == "rule_shortcut"
+        assert r["timing_scoring"]["action"] == "no_reply"
+        assert len(rt_calls) == 0  # gate 未被调用
 
     @pytest.mark.asyncio
     async def test_cooldown_allows_reply_to_bot(self, monkeypatch):
@@ -501,7 +503,7 @@ class TestGroupRuntime:
 
     @pytest.mark.asyncio
     async def test_timer_respects_cooldown(self):
-        """timer 在 cooldown 未结束时继续 wait，不调用 gate。"""
+        """timer 在 cooldown 未结束时先走 scoring，而不是硬 wait。"""
         runtime = GroupRuntime()
         rt_calls = []
 
@@ -520,8 +522,10 @@ class TestGroupRuntime:
         runtime.note_bot_replied("g1")
 
         r = await runtime.handle_timer_fired("g1", generation=1)
-        assert r["action"] == "wait"
-        assert "冷却" in r["reason"]
+        assert r["action"] == "no_reply"
+        assert r["reason"].startswith("timer cooldown scoring shortcut:")
+        assert r["timing_scoring"]["stage"] == "rule_shortcut"
+        assert r["timing_scoring"]["action"] == "no_reply"
         assert len(rt_calls) == 0  # gate 未被调用
 
     def test_build_timing_context_sanitizes_system_tags(self):
