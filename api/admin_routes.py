@@ -5022,18 +5022,18 @@ def _resolve_reply_test_prompt_settings(body: ReplyTestRunRequest) -> tuple[str,
 
     if variant == "prompt_only":
         if not explicit_prompt_engine:
-            engine = "v1"
-        prompt_mode = "managed"
+            engine = "v2"
+        prompt_mode = "v2" if engine == "v2" else "managed"
         enable_retry = False
     elif variant == "code_retry":
         if not explicit_prompt_engine:
-            engine = "v1"
-        prompt_mode = "legacy"
+            engine = "v2"
+        prompt_mode = "v2" if engine == "v2" else "legacy"
         enable_retry = enable_retry
     elif variant == "baseline":
         if not explicit_prompt_engine:
-            engine = "v1"
-        prompt_mode = "legacy"
+            engine = "v2"
+        prompt_mode = "v2" if engine == "v2" else "legacy"
         enable_retry = False
     elif variant == "v1_baseline":
         engine = "v1"
@@ -5041,11 +5041,11 @@ def _resolve_reply_test_prompt_settings(body: ReplyTestRunRequest) -> tuple[str,
         enable_retry = False
     elif variant == "v2_prompt_only":
         engine = "v2"
-        prompt_mode = "legacy"
+        prompt_mode = "v2"
         enable_retry = False
     elif variant == "v2_code_retry":
         engine = "v2"
-        prompt_mode = "legacy"
+        prompt_mode = "v2"
         enable_retry = enable_retry
 
     if engine not in {"v1", "v2"}:
@@ -5074,10 +5074,11 @@ async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
         "history_header": body.recent_context,
         "variant": body.variant,
         "prompt_runtime_engine_override": prompt_engine,
-        "prompt_system_mode_override": prompt_mode,
         "enable_reply_contract_retry": enable_retry,
         "dry_run": bool(body.dry_run),
     }
+    if prompt_engine == "v1":
+        metadata["prompt_system_mode_override"] = prompt_mode
     bridge = get_bridge()
     content = await bridge.handle_message(
         body.message,
@@ -5201,7 +5202,7 @@ class ReplyEvalRunIn(BaseModel):
         "v1_baseline",
         "v2_prompt_only",
         "v2_code_retry",
-    ] = "code_retry"
+    ] = "v2_code_retry"
     case_ids: list[str] = Field(default_factory=list)
     limit: int = 50
 

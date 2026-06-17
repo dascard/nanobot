@@ -17,7 +17,42 @@ def test_reply_test_request_defaults_to_prompt_v2():
 
     assert body.prompt_engine == "v2"
     assert body.variant == "v2_code_retry"
-    assert _resolve_reply_test_prompt_settings(body) == ("v2", "legacy", True)
+    assert _resolve_reply_test_prompt_settings(body) == ("v2", "v2", True)
+
+
+def test_reply_test_old_variants_map_to_v2_by_default():
+    from api.admin_routes import ReplyTestRunRequest, _resolve_reply_test_prompt_settings
+
+    assert _resolve_reply_test_prompt_settings(
+        ReplyTestRunRequest(message="你在吗", variant="baseline")
+    ) == ("v2", "v2", False)
+    assert _resolve_reply_test_prompt_settings(
+        ReplyTestRunRequest(message="你在吗", variant="prompt_only")
+    ) == ("v2", "v2", False)
+    assert _resolve_reply_test_prompt_settings(
+        ReplyTestRunRequest(message="你在吗", variant="code_retry")
+    ) == ("v2", "v2", True)
+
+
+@pytest.mark.parametrize(
+    ("variant", "expected"),
+    [
+        ("baseline", ("v1", "legacy", False)),
+        ("prompt_only", ("v1", "managed", False)),
+        ("code_retry", ("v1", "legacy", True)),
+        ("v1_baseline", ("v1", "legacy", False)),
+    ],
+)
+def test_reply_test_explicit_v1_variants_remain_available(variant, expected):
+    from api.admin_routes import ReplyTestRunRequest, _resolve_reply_test_prompt_settings
+
+    body = ReplyTestRunRequest(
+        message="你在吗",
+        prompt_engine="v1",
+        variant=variant,
+    )
+
+    assert _resolve_reply_test_prompt_settings(body) == expected
 
 
 def _install_fake_reply_bridge(monkeypatch, reply_text="测试回复", capture=None):
@@ -112,7 +147,7 @@ def test_reply_test_run_returns_attempts_final_and_llm_logs(client, auth_header,
     assert json.loads(data["llm_api_request_logs"][0]["response_json"])["choices"][0]["message"]["content"] == "在，怎么了"
 
 
-def test_reply_test_prompt_only_uses_managed_prompt_without_retry(client, auth_header, monkeypatch):
+def test_reply_test_prompt_only_uses_v2_prompt_without_retry(client, auth_header, monkeypatch):
     captured = []
     _install_fake_reply_bridge(monkeypatch, reply_text="可以", capture=captured)
 
@@ -133,9 +168,12 @@ def test_reply_test_prompt_only_uses_managed_prompt_without_retry(client, auth_h
 
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert captured[-1]["prompt_system_mode_override"] == "managed"
+    assert captured[-1]["prompt_runtime_engine_override"] == "v2"
+    assert "prompt_system_mode_override" not in captured[-1]
     assert captured[-1]["enable_reply_contract_retry"] is False
-    assert data["prompt_sha256"] == "m" * 64
+    assert data["prompt_engine"] == "v2"
+    assert data["prompt_mode"] == "v2"
+    assert data["prompt_sha256"] == "v" * 64
     assert data["retry_attempt"]["enabled"] is False
 
 
@@ -162,6 +200,7 @@ def test_reply_test_supports_prompt_engine_v2(client, auth_header, monkeypatch):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert captured[-1]["prompt_runtime_engine_override"] == "v2"
+    assert "prompt_system_mode_override" not in captured[-1]
     assert captured[-1]["enable_reply_contract_retry"] is True
     assert data["prompt_engine"] == "v2"
     assert data["prompt_mode"] == "v2"
@@ -247,16 +286,16 @@ def test_reply_eval_case_crud_preview_and_run(client, auth_header, monkeypatch):
     run = client.post(
         "/api/v1/admin/reply-eval/run",
         headers=auth_header,
-        json={"variant": "code_retry", "case_ids": ["reply_case_manual"]},
+        json={"case_ids": ["reply_case_manual"]},
     )
     assert run.status_code == 200, run.text
     run_data = run.json()
-    assert run_data["variant"] == "code_retry"
+    assert run_data["variant"] == "v2_code_retry"
     assert run_data["total"] == 1
     assert run_data["passed"] == 1
     assert run_data["results"][0]["agent_run_id"]
     assert run_data["results"][0]["trace_id"]
-    assert run_data["results"][0]["prompt_sha256"] == "l" * 64
+    assert run_data["results"][0]["prompt_sha256"] == "v" * 64
     assert run_data["metrics"]["expected_action_accuracy"] == 1.0
     assert run_data["metrics"]["retry_success_rate"] == 1.0
 
@@ -301,6 +340,7 @@ def test_reply_eval_supports_v2_named_variants(client, auth_header, monkeypatch)
     assert data["metrics"]["no_tool_call_rate"] == 1.0
     assert data["metrics"]["fake_tool_claim_rate"] == 0.0
     assert captured[-1]["prompt_runtime_engine_override"] == "v2"
+    assert "prompt_system_mode_override" not in captured[-1]
     assert captured[-1]["enable_reply_contract_retry"] is True
 
 

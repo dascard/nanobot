@@ -268,7 +268,7 @@ git commit -m "refactor(提示词): 禁用旧版审计回退"
 - 修改：`api/admin_routes.py`
 - 修改：`tests/test_reply_admin.py`
 
-- [ ] **步骤 1：更新 reply-test 设置红灯测试**
+- [x] **步骤 1：更新 reply-test 设置红灯测试**
 
 在 `tests/test_reply_admin.py` 中更新默认断言：
 
@@ -300,7 +300,7 @@ def test_reply_test_old_variants_map_to_v2_by_default():
     ) == ("v2", "v2", True)
 ```
 
-- [ ] **步骤 2：更新 reply-eval 默认红灯测试**
+- [x] **步骤 2：更新 reply-eval 默认红灯测试**
 
 在 `tests/test_reply_admin.py::test_reply_eval_case_crud_preview_and_run` 中将 run 请求从：
 
@@ -321,7 +321,7 @@ assert run_data["variant"] == "v2_code_retry"
 assert run_data["results"][0]["prompt_sha256"] == "v" * 64
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -335,7 +335,9 @@ python -B -m pytest \
 
 预期：失败。当前 `_resolve_reply_test_prompt_settings()` 返回 `("v2", "legacy", True)`，旧 alias 会静默映射到 V1，`ReplyEvalRunIn` 默认仍是 `code_retry`。
 
-- [ ] **步骤 4：改 `_resolve_reply_test_prompt_settings()`**
+实际：`5 failed, 20 warnings`，失败点覆盖默认 V2 prompt mode、旧 alias、V2 metadata 和 reply-eval 默认 variant。
+
+- [x] **步骤 4：改 `_resolve_reply_test_prompt_settings()`**
 
 在 `api/admin_routes.py` 中将旧 alias 默认映射到 V2：
 
@@ -369,7 +371,7 @@ python -B -m pytest \
         enable_retry = enable_retry
 ```
 
-- [ ] **步骤 5：V2 metadata 不再下发 V1 prompt mode**
+- [x] **步骤 5：V2 metadata 不再下发 V1 prompt mode**
 
 在 `_run_reply_test_once()` 构造 metadata 后只在 V1 时加入 `prompt_system_mode_override`：
 
@@ -391,7 +393,7 @@ assert captured[-1]["prompt_runtime_engine_override"] == "v2"
 assert "prompt_system_mode_override" not in captured[-1]
 ```
 
-- [ ] **步骤 6：修改 ReplyEvalRunIn 默认 variant**
+- [x] **步骤 6：修改 ReplyEvalRunIn 默认 variant**
 
 在 `api/admin_routes.py` 中将 `ReplyEvalRunIn.variant` 默认值从 `"code_retry"` 改为 `"v2_code_retry"`：
 
@@ -406,7 +408,7 @@ assert "prompt_system_mode_override" not in captured[-1]
     ] = "v2_code_retry"
 ```
 
-- [ ] **步骤 7：运行任务 2 定向测试**
+- [x] **步骤 7：运行任务 2 定向测试**
 
 运行：
 
@@ -416,12 +418,16 @@ python -B -m pytest tests/test_reply_admin.py -q -p no:cacheprovider
 
 预期：全部通过。
 
-- [ ] **步骤 8：提交任务 2**
+实际：补充显式 V1 应急入口回归后，`tests/test_reply_admin.py` 通过，`14 passed, 20 warnings`。
+
+- [x] **步骤 8：提交任务 2**
 
 ```bash
 git add api/admin_routes.py tests/test_reply_admin.py
 git commit -m "refactor(评测): 默认使用 V2 回复评估"
 ```
+
+实际：已提交 `refactor(评测): 默认使用 V2 回复评估`。
 
 ## 任务 3：管理面 legacy 入口降级为只读迁移入口
 
