@@ -193,7 +193,7 @@ class EffectivePromptPreviewRequest(BaseModel):
     group_id: str = ""
     sender_name: str = ""
     prompt_key: str = ""
-    engine: Literal["v1", "v2"] = "v1"
+    engine: Literal["v1", "v2"] = "v2"
     mode: Literal["legacy", "shadow", "managed"] = "shadow"
     user_input: str = ""
     runtime_preset: str = "full"
@@ -4910,7 +4910,7 @@ class ReplyTestRunRequest(BaseModel):
     message: str
     recent_context: str = ""
     persona_text: str = ""
-    prompt_engine: Literal["v1", "v2"] = "v1"
+    prompt_engine: Literal["v1", "v2"] = "v2"
     variant: Literal[
         "baseline",
         "prompt_only",
@@ -4918,7 +4918,7 @@ class ReplyTestRunRequest(BaseModel):
         "v1_baseline",
         "v2_prompt_only",
         "v2_code_retry",
-    ] = "code_retry"
+    ] = "v2_code_retry"
     enable_reply_contract_retry: bool = True
     dry_run: bool = True
 
@@ -5011,18 +5011,28 @@ def _safe_rate(numerator: int, denominator: int) -> float:
 
 
 def _resolve_reply_test_prompt_settings(body: ReplyTestRunRequest) -> tuple[str, str, bool]:
-    variant = str(body.variant or "code_retry")
-    engine = str(body.prompt_engine or "v1")
+    fields_set = getattr(body, "model_fields_set", None)
+    if fields_set is None:
+        fields_set = getattr(body, "__fields_set__", set())
+    explicit_prompt_engine = "prompt_engine" in fields_set
+    variant = str(body.variant or "v2_code_retry")
+    engine = str(body.prompt_engine or "v2")
     prompt_mode = "legacy"
     enable_retry = bool(body.enable_reply_contract_retry)
 
     if variant == "prompt_only":
+        if not explicit_prompt_engine:
+            engine = "v1"
         prompt_mode = "managed"
         enable_retry = False
     elif variant == "code_retry":
+        if not explicit_prompt_engine:
+            engine = "v1"
         prompt_mode = "legacy"
         enable_retry = enable_retry
     elif variant == "baseline":
+        if not explicit_prompt_engine:
+            engine = "v1"
         prompt_mode = "legacy"
         enable_retry = False
     elif variant == "v1_baseline":
@@ -5039,7 +5049,7 @@ def _resolve_reply_test_prompt_settings(body: ReplyTestRunRequest) -> tuple[str,
         enable_retry = enable_retry
 
     if engine not in {"v1", "v2"}:
-        engine = "v1"
+        engine = "v2"
     return engine, prompt_mode, enable_retry
 
 

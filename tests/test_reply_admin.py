@@ -10,6 +10,16 @@ def auth_header(monkeypatch):
     return {"Authorization": "Bearer test-token"}
 
 
+def test_reply_test_request_defaults_to_prompt_v2():
+    from api.admin_routes import ReplyTestRunRequest, _resolve_reply_test_prompt_settings
+
+    body = ReplyTestRunRequest(message="你在吗")
+
+    assert body.prompt_engine == "v2"
+    assert body.variant == "v2_code_retry"
+    assert _resolve_reply_test_prompt_settings(body) == ("v2", "legacy", True)
+
+
 def _install_fake_reply_bridge(monkeypatch, reply_text="测试回复", capture=None):
     class FakeBridge:
         async def handle_message(self, message, *, user_id="", session_id="", sender_name="", metadata=None, stream_queue=None):

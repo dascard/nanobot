@@ -17,6 +17,14 @@ def auth_header(monkeypatch):
     return {"Authorization": "Bearer test-token"}
 
 
+def test_effective_prompt_preview_request_defaults_to_v2():
+    from api.admin_routes import EffectivePromptPreviewRequest
+
+    body = EffectivePromptPreviewRequest()
+
+    assert body.engine == "v2"
+
+
 def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
     from core import database
     from core.tracing import PromptTracer, RunTracer, ToolTracer
@@ -200,6 +208,7 @@ optional_vars:
     effective = client.post(
         "/api/v1/admin/prompt/effective-preview",
         json={
+            "engine": "v1",
             "chat_type": "group",
             "session_id": "group_1001",
             "user_id": "u1",
