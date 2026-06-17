@@ -51,6 +51,41 @@ def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
     assert calls == [("人工智能 科技 最新新闻", "quality", 8)]
 
 
+def test_ai_daily_tool_returns_fallback_html_when_pipeline_empty(monkeypatch):
+    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+
+    monkeypatch.setattr(news_tool, "_run_news_daily_pipeline", lambda *args, **kwargs: "")
+
+    result = run_async(news_tool.AiDailyTool().execute({
+        "query": "今天 AI 新闻",
+        "no_cache": True,
+    }))
+
+    assert result.success
+    payload = json.loads(result.output)
+    content = payload["NANOBOT_REPLY_OUTPUT"]["content"]
+    assert "<article" in content or "<html" in content
+    assert "暂无可用资讯" in content or "工具返回为空" in content
+
+
+def test_ai_daily_tool_returns_fallback_html_when_pipeline_plain_text(monkeypatch):
+    from creatures.nanobot.prompts.skills.news_search import tool as news_tool
+
+    monkeypatch.setattr(news_tool, "_run_news_daily_pipeline", lambda *args, **kwargs: "plain text")
+
+    result = run_async(news_tool.AiDailyTool().execute({
+        "query": "今天 AI 新闻",
+        "no_cache": True,
+    }))
+
+    assert result.success
+    payload = json.loads(result.output)
+    content = payload["NANOBOT_REPLY_OUTPUT"]["content"]
+    assert "<article" in content or "<html" in content
+    assert "资讯结果不完整" in content
+    assert "plain text" in content
+
+
 def test_ai_daily_is_registered_in_kt_config():
     config_text = Path("creatures/nanobot/config.yaml").read_text(encoding="utf-8")
 

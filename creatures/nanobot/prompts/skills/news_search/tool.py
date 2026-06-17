@@ -1713,6 +1713,29 @@ def _build_ai_daily_tool_result(html_result: str, query: str) -> ToolResult:
     return result
 
 
+def _render_ai_daily_fallback(title: str, verdict: str, missing_info: list[str]) -> str:
+    try:
+        from .evidence import FALLBACK_DIGEST
+        from .render import render_html
+
+        return render_html({
+            **FALLBACK_DIGEST,
+            "title": title,
+            "verdict": verdict,
+            "missing_info": missing_info,
+        })
+    except Exception as exc:
+        logger.warning("[ai_daily] fallback render failed: %s", exc)
+        details = "".join(f"<li>{html.escape(str(item))}</li>" for item in missing_info[:3])
+        return (
+            "<article class=\"news-brief news-brief-unavailable\">"
+            f"<h1>{html.escape(title)}</h1>"
+            f"<p>{html.escape(verdict)}</p>"
+            f"<ul>{details}</ul>"
+            "</article>"
+        )
+
+
 class AiDailyTool(BaseTool):
     """Generate an AI/tech daily digest from curated sources."""
 
@@ -1790,20 +1813,23 @@ class AiDailyTool(BaseTool):
                 return _build_ai_daily_tool_result(cached, query)
 
         # KT runs tools concurrently; run blocking code in thread
-        import asyncio
         result = await asyncio.to_thread(
             _run_news_daily_pipeline, query, "quality", max_results,
         )
         # 强制HTML输出——永不为空/不裸文本
         if not result or not str(result).strip():
             logger.error("[ai_daily] empty output query=%r", query)
-            result = render_html({**FALLBACK_DIGEST, "title": "暂无可用资讯",
-                "verdict": "本轮没有生成有效输出，已触发兜底。",
-                "missing_info": ["工具返回为空"]})
+            result = _render_ai_daily_fallback(
+                "暂无可用资讯",
+                "本轮没有生成有效输出，已触发兜底。",
+                ["工具返回为空"],
+            )
         elif "<html" not in str(result).lower() and "<article" not in str(result).lower():
             logger.warning("[ai_daily] non-html output query=%r len=%d", query, len(str(result)))
-            result = render_html({**FALLBACK_DIGEST, "title": "资讯结果不完整",
-                "verdict": "本轮生成结果非标准HTML，已转换兜底。",
-                "missing_info": [str(result)[:200]]})
+            result = _render_ai_daily_fallback(
+                "资讯结果不完整",
+                "本轮生成结果非标准HTML，已转换兜底。",
+                [str(result)[:200]],
+            )
         _store_cached_news_result(cache_key, result)
         return _build_ai_daily_tool_result(result, query)
