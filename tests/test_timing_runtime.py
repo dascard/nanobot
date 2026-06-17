@@ -841,6 +841,46 @@ class TestProcessMessageDirected:
         assert result["source_message_ids"] == ["486560924"]
 
     @pytest.mark.asyncio
+    async def test_process_message_directed_to_other_with_linger_reaches_gate(self, monkeypatch):
+        """directed_to_other + 余韵追问不应被 hard rule 裁死，应进入模型/评分路径。"""
+        from core.group_runtime.runtime import GroupRuntime
+
+        runtime = GroupRuntime()
+        state = runtime._states.setdefault("group_123", GateState(group_id="group_123"))
+        state.activate_linger("111", "at_bot")
+        state.note_bot_replied()
+        captured = {}
+
+        async def fake_gate(group_id, pending, _ctx, trigger_reason):
+            captured["group_id"] = group_id
+            captured["trigger_reason"] = trigger_reason
+            captured["pending_trigger"] = pending[0].trigger_reason
+            return {"action": "continue", "reason": "linger followup"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        result = await runtime.process_message(
+            "group_123",
+            {
+                "sender_id": "111",
+                "sender_name": "A",
+                "message": "@B 继续看看",
+                "message_id": "m1",
+                "is_directed_to_other": True,
+                "directed": {"at_others": True, "directed_to_other": True},
+                "mentions": [{"user_id": "222", "nickname": "B"}],
+            },
+            trigger_reason="ambient",
+            talk_value=1.0,
+        )
+
+        assert result["action"] == "continue"
+        assert "hard_rule" not in result
+        assert captured["trigger_reason"] == "recent_bot_followup"
+        assert captured["pending_trigger"] == "recent_bot_followup"
+        assert result["timing_scoring"]["stage"] == "model_assisted_conflict"
+
+    @pytest.mark.asyncio
     async def test_process_message_at_bot_not_suppressed(self):
         from core.group_runtime.runtime import GroupRuntime
         runtime = GroupRuntime()

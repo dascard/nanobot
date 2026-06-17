@@ -28,6 +28,7 @@ LINGER_MIN_INTERVAL_SECS = 10
 BOT_FOLLOWUP_WINDOW_SEC = LINGER_TIMEOUT_SECONDS
 _DIRECT_TRIGGERS = {"at_bot", "reply_to_bot", "bot_name_mentioned", "direct_call", "mentioned"}
 _COOLDOWN_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
+_DIRECTED_SUPPRESS_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
 
 
 def should_suppress_directed_to_other(pending_msgs: list[GroupPendingMessage]) -> bool:
@@ -37,7 +38,7 @@ def should_suppress_directed_to_other(pending_msgs: list[GroupPendingMessage]) -
     if any(
         m.is_at_bot
         or m.is_reply_to_bot
-        or m.trigger_reason in _DIRECT_TRIGGERS
+        or m.trigger_reason in _DIRECTED_SUPPRESS_BYPASS_TRIGGERS
         for m in pending_msgs
     ):
         return False
@@ -155,6 +156,10 @@ def _has_file_segments(pending: list[GroupPendingMessage]) -> bool:
         any(str(seg.get("type") or "").lower() in file_types for seg in (msg.segments or []))
         for msg in pending
     )
+
+
+def _has_directed_to_other_signal(pending: list[GroupPendingMessage]) -> bool:
+    return any(msg.is_directed_to_other for msg in pending)
 
 
 @dataclass
@@ -469,7 +474,7 @@ class GroupRuntime:
                 is_reply_to_bot=any(m.is_reply_to_bot for m in msgs) or tr == "reply_to_bot",
                 bot_name_mentioned=tr in {"bot_name_mentioned", "mentioned"},
                 direct_call=tr == "direct_call" or is_direct,
-                is_directed_to_other=should_suppress_directed_to_other(msgs),
+                is_directed_to_other=_has_directed_to_other_signal(msgs),
                 has_files=_has_file_segments(msgs),
                 linger_score=linger_score,
                 min_interval_active=min_interval_active,
