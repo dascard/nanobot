@@ -665,19 +665,50 @@ class GroupRuntime:
                 state.activate_linger(pm.sender_id, direct_reason)
                 state.arm_force_continue(direct_reason)
 
-            # directed_to_other hard rule：全部指向别人 → no_reply
+            # directed_to_other：降级为 scoring 抑制信号，独自成立时仍会规则短路 no_reply
             if should_suppress_directed_to_other(state.pending):
-                payload = _pending_payload(state.pending)
+                snapshot = state.take_snapshot()
+                payload = _pending_payload(snapshot)
+                try:
+                    scoring_decision = self._score_timing(
+                        state,
+                        tr,
+                        pending=snapshot,
+                    )
+                except Exception as exc:
+                    logger.debug("[GroupRuntime] directed_to_other scoring failed: %s", exc, exc_info=True)
+                    return self._attach_shadow_scoring({
+                        "action": "no_reply",
+                        "generation": state.generation,
+                        "reason": "directed_to_other scoring unavailable",
+                        "pending_count": len(snapshot),
+                        "trigger_reason": tr,
+                        "directed_to_other": True,
+                        **payload,
+                    }, state, tr, pending=snapshot)
+                if scoring_decision.stage == "rule_shortcut":
+                    response = self._apply_scoring_shortcut(
+                        state,
+                        scoring_decision,
+                        pending=snapshot,
+                        reason_prefix="directed_to_other scoring shortcut",
+                    )
+                    response.update({
+                        "pending_count": len(snapshot),
+                        "trigger_reason": tr,
+                        "directed_to_other": True,
+                        **payload,
+                    })
+                    return response
                 return self._attach_shadow_scoring({
                     "action": "no_reply",
                     "generation": state.generation,
-                    "reason": "directed_to_other_no_bot_target",
-                    "hard_rule": "directed_to_other_no_bot_target",
-                    "pending_count": len(state.pending),
+                    "reason": "directed_to_other scoring non_shortcut",
+                    "pending_count": len(snapshot),
                     "trigger_reason": tr,
                     "directed_to_other": True,
                     **payload,
-                }, state, tr)
+                }, state, tr, pending=snapshot)
 
             # 硬 cooldown：bot 刚回复过且非直接互动 → wait
             if self._should_cooldown(state, tr):

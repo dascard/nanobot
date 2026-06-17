@@ -880,7 +880,7 @@ class TestShouldSuppressDirected:
 
 
 class TestProcessMessageDirected:
-    """process_message() 集成——directed_to_other hard rule"""
+    """process_message() 集成——directed_to_other scoring shortcut"""
 
     @pytest.mark.asyncio
     async def test_process_message_directed_to_other_returns_no_reply(self):
@@ -898,9 +898,9 @@ class TestProcessMessageDirected:
             trigger_reason="ambient", talk_value=1.0,
         )
         assert result["action"] == "no_reply"
-        assert result["reason"] == "directed_to_other_no_bot_target"
-        assert result["hard_rule"] == "directed_to_other_no_bot_target"
-        assert "source_message_ids" in result
+        assert result["reason"].startswith("directed_to_other scoring shortcut:")
+        assert "hard_rule" not in result
+        assert result["source_message_ids"] == ["m1"]
         assert result["pending_count"] == 1
         scoring = result["timing_scoring"]
         assert scoring["stage"] == "rule_shortcut"
@@ -914,7 +914,7 @@ class TestProcessMessageDirected:
         runtime = GroupRuntime()
 
         async def fail_gate(*_args, **_kwargs):
-            raise AssertionError("directed_to_other hard rule should bypass TimingGate")
+            raise AssertionError("directed_to_other scoring shortcut should bypass TimingGate")
 
         monkeypatch.setattr(runtime, "_call_gate", fail_gate)
 
@@ -943,8 +943,10 @@ class TestProcessMessageDirected:
         )
 
         assert result["action"] == "no_reply"
-        assert result["hard_rule"] == "directed_to_other_no_bot_target"
+        assert "hard_rule" not in result
+        assert result["reason"].startswith("directed_to_other scoring shortcut:")
         assert result["source_message_ids"] == ["486560924"]
+        assert result["timing_scoring"]["signals"]["sub_signals"]["s_other"] == 0.75
 
     @pytest.mark.asyncio
     async def test_process_message_directed_to_other_with_linger_reaches_gate(self, monkeypatch):
