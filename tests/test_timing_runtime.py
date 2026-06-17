@@ -621,6 +621,39 @@ class TestGroupRuntime:
         assert scoring["signals"]["direct_score"] >= scoring["signals"]["linger_score"]
 
     @pytest.mark.asyncio
+    async def test_model_failure_uses_rule_fallback_action_not_raw_no_reply(self, monkeypatch):
+        """模型失败时，runtime 应采用 scoring rule_fallback 的最终动作。"""
+        runtime = GroupRuntime()
+        state = runtime._states.setdefault("group_1", GateState(group_id="group_1"))
+        state.activate_linger("u1", "at_bot")
+
+        async def failed_gate(*_args, **_kwargs):
+            return {
+                "action": "no_reply",
+                "error_type": "network_error",
+                "reason": "timeout",
+                "raw": "",
+            }
+
+        monkeypatch.setattr(runtime, "_call_gate", failed_gate)
+
+        result = await runtime.process_message("group_1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "继续看看呢",
+            "message_id": "m1",
+        }, trigger_reason="recent_bot_followup", talk_value=1.0)
+
+        assert result["action"] == "continue"
+        assert result["fallback_action"] == "continue"
+        assert result["error_type"] == "network_error"
+        assert result["source_message_ids"] == ["m1"]
+        assert result["timing_scoring"]["stage"] == "rule_fallback"
+        assert result["timing_scoring"]["action"] == "continue"
+        assert result["timing_scoring"]["model_used"] is False
+        assert result["reason"].startswith("rule_fallback after network_error:")
+
+    @pytest.mark.asyncio
     async def test_recent_followup_uses_decayed_linger_score(self, monkeypatch):
         """有显式召唤上下文时，followup 的 shadow scoring 使用余韵衰减分。"""
         import core.group_runtime.runtime as runtime_module

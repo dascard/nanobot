@@ -894,13 +894,25 @@ class GroupRuntime:
             str(result.get("trigger_reason") or state.last_trigger_reason or ""),
             model_result=result,
         )
+        fallback_reason = ""
+        fallback_delay = None
+        if result.get("error_type") and scoring and scoring.get("stage") == "rule_fallback":
+            scoring_action = str(scoring.get("action") or "").strip()
+            if scoring_action in {"continue", "wait", "no_reply"}:
+                action = scoring_action
+                fallback_delay = scoring.get("delay_seconds")
+                fallback_reason = (
+                    f"rule_fallback after {result.get('error_type')}: "
+                    f"{scoring.get('reason', '')}"
+                )
 
         if action == "continue":
             state.handle_continue()
         elif action == "no_reply":
             state.handle_no_reply()
         elif action == "wait":
-            delay = max(3, min(30, int(result.get("delay_seconds", 5) or 5)))
+            delay_source = fallback_delay if fallback_delay is not None else result.get("delay_seconds", 5)
+            delay = max(3, min(30, int(delay_source or 5)))
             # 防死循环：wait_count>=1 且无新消息 → force no_reply
             if state.wait_count >= 1 and not state.new_messages_during_wait:
                 logger.info("[GroupRuntime] anti-loop: wait_count=%d no_new_msgs → force no_reply",
@@ -918,7 +930,7 @@ class GroupRuntime:
                 action = "no_reply"
                 delay = None
             else:
-                state.start_wait(delay, result.get("reason", ""))
+                state.start_wait(delay, fallback_reason or result.get("reason", ""))
         else:
             state.handle_no_reply()
             action = "no_reply"
@@ -929,7 +941,7 @@ class GroupRuntime:
             "action": action, "delay_seconds": delay,
             "generation": state.generation,
             "cooldown_ago": cooldown,
-            "reason": result.get("reason", ""),
+            "reason": fallback_reason or result.get("reason", ""),
         }
         if scoring:
             response["timing_scoring"] = scoring
