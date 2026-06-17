@@ -31,6 +31,7 @@ async def test_lifespan_calls_bootstrap_facades(monkeypatch):
 
     calls: list[str] = []
     bridge = object()
+    new_api_session = object()
 
     class Handles:
         def stop_all(self):
@@ -71,27 +72,41 @@ async def test_lifespan_calls_bootstrap_facades(monkeypatch):
     async def fake_shutdown_bridge():
         calls.append("shutdown_bridge")
 
+    async def fake_init_new_api_session():
+        calls.append("init_new_api_session")
+        return new_api_session
+
+    async def fake_shutdown_new_api_session(session):
+        assert session is new_api_session
+        calls.append("shutdown_new_api_session")
+
     monkeypatch.setattr(bootstrap_lifespan, "init_bridge", fake_init_bridge)
     monkeypatch.setattr(bootstrap_lifespan, "shutdown_bridge", fake_shutdown_bridge)
+    monkeypatch.setattr(bootstrap_lifespan, "init_new_api_session", fake_init_new_api_session)
+    monkeypatch.setattr(bootstrap_lifespan, "shutdown_new_api_session", fake_shutdown_new_api_session)
 
     app = SimpleNamespace(state=SimpleNamespace())
     async with server.lifespan(app):
         calls.append("inside")
         assert app.state.bridge is bridge
+        assert app.state.new_api_session is new_api_session
 
     assert calls == [
         "init_db",
         "provider_migration",
         "prompt_runtime",
         "start_schedulers:False",
+        "init_new_api_session",
         "network_check",
         "init_bridge",
         "legacy_memory",
         "inside",
         "stop_schedulers",
         "shutdown_bridge",
+        "shutdown_new_api_session",
     ]
     assert app.state.bridge is None
+    assert app.state.new_api_session is None
 
 
 def test_cors_default_allows_any_origin():
@@ -173,6 +188,7 @@ async def test_lifespan_testing_mode_skips_bridge_network_and_scheduler_work(mon
     import server
 
     calls: list[str] = []
+    new_api_session = object()
 
     class Handles:
         def stop_all(self):
@@ -185,6 +201,14 @@ async def test_lifespan_testing_mode_skips_bridge_network_and_scheduler_work(mon
 
     def fail_if_called(*_args, **_kwargs):
         raise AssertionError("testing mode must skip this startup action")
+
+    async def fake_init_new_api_session():
+        calls.append("init_new_api_session")
+        return new_api_session
+
+    async def fake_shutdown_new_api_session(session):
+        assert session is new_api_session
+        calls.append("shutdown_new_api_session")
 
     monkeypatch.setenv("NANOBOT_TESTING", "1")
     monkeypatch.setattr(bootstrap_lifespan, "init_db", lambda: calls.append("init_db"))
@@ -202,6 +226,8 @@ async def test_lifespan_testing_mode_skips_bridge_network_and_scheduler_work(mon
     monkeypatch.setattr(bootstrap_lifespan, "run_startup_network_check", fail_if_called)
     monkeypatch.setattr(bootstrap_lifespan, "init_bridge", fail_if_called)
     monkeypatch.setattr(bootstrap_lifespan, "shutdown_bridge", fail_if_called)
+    monkeypatch.setattr(bootstrap_lifespan, "init_new_api_session", fake_init_new_api_session)
+    monkeypatch.setattr(bootstrap_lifespan, "shutdown_new_api_session", fake_shutdown_new_api_session)
     monkeypatch.setattr(
         bootstrap_lifespan,
         "init_legacy_memory",
@@ -212,14 +238,18 @@ async def test_lifespan_testing_mode_skips_bridge_network_and_scheduler_work(mon
     async with server.lifespan(app):
         calls.append("inside")
         assert app.state.bridge is None
+        assert app.state.new_api_session is new_api_session
 
     assert calls == [
         "init_db",
         "provider_migration",
         "prompt_runtime",
         "start_schedulers_testing",
+        "init_new_api_session",
         "legacy_memory",
         "inside",
         "stop_schedulers",
+        "shutdown_new_api_session",
     ]
     assert app.state.bridge is None
+    assert app.state.new_api_session is None

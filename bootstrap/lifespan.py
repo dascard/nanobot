@@ -27,6 +27,23 @@ async def shutdown_bridge() -> None:
     await _shutdown_bridge()
 
 
+async def init_new_api_session() -> Any:
+    import aiohttp
+    from clients.new_api_client import NewAPIClient
+
+    session = aiohttp.ClientSession()
+    NewAPIClient.set_shared_session(session)
+    return session
+
+
+async def shutdown_new_api_session(session: Any) -> None:
+    from clients.new_api_client import NewAPIClient
+
+    NewAPIClient.set_shared_session(None)
+    if session is not None and not getattr(session, "closed", False):
+        await session.close()
+
+
 def init_legacy_memory() -> None:
     from api.routes import init_legacy_memory as _init_legacy_memory
 
@@ -38,6 +55,7 @@ async def lifespan(app: Any):
     logger = logging.getLogger("nanobot")
     testing = os.environ.get("NANOBOT_TESTING") == "1"
     scheduler_handles: SchedulerHandles | None = None
+    new_api_session: Any | None = None
 
     logger.info("Starting Nanobot Server Gateway...")
     init_db()
@@ -45,6 +63,8 @@ async def lifespan(app: Any):
     run_provider_migration()
     init_prompt_runtimes(logger)
     scheduler_handles = start_schedulers(testing=testing, logger=logger)
+    new_api_session = await init_new_api_session()
+    app.state.new_api_session = new_api_session
 
     if not testing:
         run_startup_network_check(logger)
@@ -61,6 +81,10 @@ async def lifespan(app: Any):
         logger.info("Shutting down Nanobot Server Gateway...")
         if scheduler_handles is not None:
             scheduler_handles.stop_all()
-        if not testing:
-            await shutdown_bridge()
-        app.state.bridge = None
+        try:
+            if not testing:
+                await shutdown_bridge()
+        finally:
+            await shutdown_new_api_session(new_api_session)
+            app.state.bridge = None
+            app.state.new_api_session = None

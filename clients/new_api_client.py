@@ -49,6 +49,7 @@ class NewAPIClient:
     _model_overrides_cache: Dict[str, Any] | None = None
     _failure_tracker: "ModelFailureTracker | None" = None
     _background_tasks: set[asyncio.Task] = set()
+    _shared_session: aiohttp.ClientSession | None = None
 
     @classmethod
     def _track_background_task(cls, awaitable, *, label: str = "background") -> asyncio.Task:
@@ -71,6 +72,10 @@ class NewAPIClient:
 
         task.add_done_callback(_done)
         return task
+
+    @classmethod
+    def set_shared_session(cls, session: aiohttp.ClientSession | None) -> None:
+        cls._shared_session = session
 
     @classmethod
     def get_failure_tracker(cls) -> "ModelFailureTracker":
@@ -107,8 +112,9 @@ class NewAPIClient:
 
     @asynccontextmanager
     async def _request_session(self) -> AsyncIterator[aiohttp.ClientSession]:
-        if self._session is not None:
-            yield self._session
+        session = self._session or self.__class__._shared_session
+        if session is not None:
+            yield session
             return
         async with aiohttp.ClientSession() as session:
             yield session

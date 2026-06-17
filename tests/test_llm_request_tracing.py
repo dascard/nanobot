@@ -437,6 +437,46 @@ def test_new_api_client_uses_injected_session_for_model_fetch(monkeypatch):
     assert session.closed is False
 
 
+def test_new_api_client_uses_shared_session_by_default(monkeypatch):
+    from clients.new_api_client import NewAPIClient
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"data": [{"id": "qwen/shared-model"}]}
+
+    class _SharedSession:
+        def __init__(self):
+            self.get_calls = 0
+
+        def get(self, *args, **kwargs):
+            self.get_calls += 1
+            return _FakeResp()
+
+    def fail_client_session(*_args, **_kwargs):
+        raise AssertionError("已有共享 session 时不应创建逐请求 ClientSession")
+
+    session = _SharedSession()
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", fail_client_session)
+
+    try:
+        NewAPIClient.set_shared_session(session)
+        client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
+        models = run_async(client.fetch_models())
+    finally:
+        NewAPIClient.set_shared_session(None)
+
+    assert [m["id"] for m in models] == ["qwen/shared-model"]
+    assert session.get_calls == 1
+
+
 def test_new_api_client_uses_injected_session_for_chat_completion(monkeypatch):
     from clients.new_api_client import NewAPIClient
 
