@@ -25,6 +25,7 @@ from config import (
     IMAGE_PREPROCESS_ALLOW_LOCAL_FILES,
     IMAGE_PREPROCESS_CACHE_DIR,
     IMAGE_PREPROCESS_DOWNLOAD_TIMEOUT,
+    IMAGE_PREPROCESS_LOCAL_FILE_ROOTS,
     IMAGE_PREPROCESS_MAX_BYTES,
     IMAGE_PREPROCESS_MAX_SIDE,
     IMAGE_PREPROCESS_MIN_QUALITY,
@@ -62,6 +63,30 @@ def _normalize_sources(files: Any) -> list[str]:
 def _ensure_cache_dir() -> Path:
     path = Path(IMAGE_PREPROCESS_CACHE_DIR)
     path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _local_file_roots() -> list[Path]:
+    raw_roots = IMAGE_PREPROCESS_LOCAL_FILE_ROOTS
+    if isinstance(raw_roots, (list, tuple, set)):
+        parts = [str(item) for item in raw_roots]
+    else:
+        parts = str(raw_roots or "").split(os.pathsep)
+    roots: list[Path] = []
+    for part in parts:
+        value = part.strip()
+        if value:
+            roots.append(Path(value).expanduser().resolve())
+    return roots
+
+
+def _resolve_allowed_local_file(path_value: str | Path) -> Path:
+    path = Path(path_value).expanduser().resolve()
+    roots = _local_file_roots()
+    if not roots:
+        raise ValueError("未配置本地图片允许目录")
+    if not any(path == root or root in path.parents for root in roots):
+        raise ValueError("本地图片路径不在允许目录内")
     return path
 
 
@@ -196,7 +221,7 @@ def _download_source_bytes(source: str) -> tuple[bytes, str]:
     if parsed.scheme == "file":
         if not IMAGE_PREPROCESS_ALLOW_LOCAL_FILES:
             raise ValueError("默认禁止读取本地文件图片")
-        path = Path(urllib.parse.urlparse(source).path)
+        path = _resolve_allowed_local_file(urllib.parse.unquote(parsed.path))
         data = path.read_bytes()
         if len(data) > IMAGE_PREPROCESS_RAW_MAX_BYTES:
             raise ValueError(f"图片过大: {len(data)} bytes > {IMAGE_PREPROCESS_RAW_MAX_BYTES} bytes")
@@ -205,7 +230,7 @@ def _download_source_bytes(source: str) -> tuple[bytes, str]:
     if parsed.scheme == "" and Path(source).exists():
         if not IMAGE_PREPROCESS_ALLOW_LOCAL_FILES:
             raise ValueError("默认禁止读取本地文件图片")
-        path = Path(source)
+        path = _resolve_allowed_local_file(source)
         data = path.read_bytes()
         if len(data) > IMAGE_PREPROCESS_RAW_MAX_BYTES:
             raise ValueError(f"图片过大: {len(data)} bytes > {IMAGE_PREPROCESS_RAW_MAX_BYTES} bytes")

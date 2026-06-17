@@ -58,6 +58,41 @@ def test_prepare_image_rejects_local_file_by_default(tmp_path, monkeypatch):
         raise AssertionError("应拒绝默认读取本地图片路径")
 
 
+def test_prepare_image_rejects_local_file_outside_allowed_roots(tmp_path, monkeypatch):
+    import nanobot_kt.image_pipeline as pipeline
+
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    outside_path = tmp_path / "outside.png"
+    outside_path.write_bytes(_make_noisy_png_bytes((16, 16)))
+    monkeypatch.setattr(pipeline, "IMAGE_PREPROCESS_ALLOW_LOCAL_FILES", True)
+    monkeypatch.setattr(pipeline, "IMAGE_PREPROCESS_LOCAL_FILE_ROOTS", str(allowed_dir), raising=False)
+
+    try:
+        pipeline.prepare_image(outside_path.as_uri())
+    except ValueError as exc:
+        assert "允许目录" in str(exc)
+    else:
+        raise AssertionError("应拒绝读取白名单目录外的本地图片")
+
+
+def test_prepare_image_allows_local_file_inside_allowed_roots(tmp_path, monkeypatch):
+    import nanobot_kt.image_pipeline as pipeline
+
+    allowed_dir = tmp_path / "allowed"
+    allowed_dir.mkdir()
+    image_path = allowed_dir / "local.png"
+    image_path.write_bytes(_make_noisy_png_bytes((16, 16)))
+    monkeypatch.setattr(pipeline, "IMAGE_PREPROCESS_ALLOW_LOCAL_FILES", True)
+    monkeypatch.setattr(pipeline, "IMAGE_PREPROCESS_LOCAL_FILE_ROOTS", str(allowed_dir))
+    monkeypatch.setattr(pipeline, "IMAGE_PREPROCESS_CACHE_DIR", str(tmp_path / "cache"))
+
+    prepared = pipeline.prepare_image(str(image_path))
+
+    assert Path(prepared.cache_path).exists()
+    assert prepared.data_url.startswith("data:image/jpeg;base64,")
+
+
 def test_prepare_image_rejects_oversized_download(tmp_path, monkeypatch):
     import nanobot_kt.image_pipeline as pipeline
 
