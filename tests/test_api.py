@@ -228,6 +228,38 @@ def test_stream_chat_emits_progress_and_done_events(client):
     assert {"status": "done", "answer": "最终答案"} in events
 
 
+def test_stream_chat_passes_stream_flag_to_bridge(client):
+    from unittest.mock import patch
+
+    captured = {}
+
+    async def fake_handle_message(*args, **kwargs):
+        captured["metadata"] = kwargs.get("metadata") or {}
+        captured["stream"] = kwargs.get("stream")
+        captured["stream_queue"] = kwargs.get("stream_queue")
+        return "最终答案"
+
+    with patch("api.routes.get_bridge") as mock_get_bridge:
+        mock_get_bridge.return_value.handle_message.side_effect = fake_handle_message
+        with client.stream(
+            "POST",
+            "/api/v1/chat",
+            json={
+                "user_id": "stream_flag_user",
+                "session_id": "group_1000",
+                "query": "test",
+                "stream": True,
+            },
+        ) as response:
+            body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert captured["stream"] is True
+    assert captured["metadata"]["stream"] is True
+    assert captured["stream_queue"] is not None
+    assert '"status": "done"' in body
+
+
 def test_superuser_bypasses_injection_guardrail(client, db_session, monkeypatch):
     from unittest.mock import AsyncMock
     from unittest.mock import patch

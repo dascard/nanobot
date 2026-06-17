@@ -2385,6 +2385,7 @@ async def proxy_chat(
         "history_messages": history_messages,
         "is_group": is_group,
         "is_superuser": is_superuser,
+        "stream": bool(req.stream),
         "complexity": _complexity,
         "private_decision": {
             "action": _private_decision.action,
@@ -2404,6 +2405,7 @@ async def proxy_chat(
             session_id=req.session_id,
             sender_name=req.sender_name or "",
             metadata=bridge_meta,
+            stream=False,
         )
 
     async def _stream_chat():
@@ -2419,6 +2421,7 @@ async def proxy_chat(
                     enriched_query, user_id=req.user_id, session_id=req.session_id,
                     sender_name=req.sender_name or "", metadata=bridge_meta,
                     stream_queue=stream_queue,
+                    stream=True,
                 )
             except Exception as e:
                 result_holder["error"] = str(e)

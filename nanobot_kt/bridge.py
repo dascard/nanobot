@@ -866,6 +866,7 @@ class NanobotBridge:
         sender_name: str = "",
         metadata: dict[str, Any] | None = None,
         stream_queue: asyncio.Queue[dict[str, Any]] | None = None,
+        stream: bool = False,
     ) -> str:
         """
         Send a user message to the KT agent and return the response.
@@ -889,7 +890,8 @@ class NanobotBridge:
 
         async with sess_lock:
             t_start = _time.time()
-            meta = metadata or {}
+            meta = dict(metadata or {})
+            meta["stream"] = bool(stream or meta.get("stream"))
             prompt_engine = str(
                 meta.get("prompt_runtime_engine_override")
                 or meta.get("prompt_engine_override")
@@ -982,8 +984,10 @@ class NanobotBridge:
                 reset_trace_context(trace_tokens)
 
             self._output.clear()
-            if stream_queue is not None:
+            if stream_queue is not None and meta["stream"]:
                 self._output.enable_stream(stream_queue)
+            else:
+                self._output.disable_stream()
 
             # 每轮清空 reply 运行时缓存
             try:
@@ -2025,6 +2029,7 @@ class NanobotBridgePool:
         sender_name: str = "",
         metadata: dict[str, Any] | None = None,
         stream_queue: asyncio.Queue[dict[str, Any]] | None = None,
+        stream: bool = False,
     ) -> str:
         if not self._started:
             await self.start()
@@ -2037,6 +2042,7 @@ class NanobotBridgePool:
             sender_name=sender_name,
             metadata=metadata,
             stream_queue=stream_queue,
+            stream=stream,
         )
 
     def pop_last_reply_meta(self, session_id: str = "") -> dict | None:
