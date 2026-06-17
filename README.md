@@ -232,6 +232,8 @@ Admin DB Browser 只面向管理员调试使用：
 
 普通 API 前缀为 `/api/v1`，管理 API 前缀为 `/api/v1/admin`。
 
+消息入口字段约定见 [`docs/message-field-standard.md`](docs/message-field-standard.md)。
+
 | 端点 | 说明 |
 | --- | --- |
 | `POST /api/v1/chat` | 私聊 / Web 聊天入口 |
