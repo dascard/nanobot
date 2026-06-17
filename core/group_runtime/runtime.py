@@ -857,6 +857,7 @@ class GroupRuntime:
         out: dict[str, dict] = {}
         for gid, state in self._states.items():
             pending = state.take_snapshot()
+            linger_time_remaining = max(0.0, state.linger_active_until - now)
             out[gid] = {
                 "group_id": state.group_id,
                 "stream_id": state.stream_id,
@@ -873,6 +874,12 @@ class GroupRuntime:
                 "wait_reason": state.wait_reason[:120],
                 "last_trigger_reason": state.last_trigger_reason,
                 "last_bot_reply_ago": round(state.bot_reply_ago(), 1),
+                "linger_active": bool(
+                    linger_time_remaining > 0 and state.linger_reply_count < LINGER_MAX_MESSAGES
+                ),
+                "linger_reply_count": state.linger_reply_count,
+                "linger_time_remaining": round(linger_time_remaining, 1),
+                "linger_started_by": state.linger_started_by,
                 "msg_1m": state.recent_message_count(60),
                 "msg_5m": state.recent_message_count(300),
                 "talk_value": state.talk_value,

@@ -293,6 +293,26 @@ class TestGroupRuntime:
         runtime = GroupRuntime()
         runtime.note_bot_replied("nonexistent")  # 不应抛异常
 
+    def test_snapshot_states_exposes_linger_debug_fields(self, monkeypatch):
+        """群运行时快照暴露余韵调试字段，便于 WebUI 排查追问状态。"""
+        import core.group_runtime.runtime as runtime_module
+
+        now = 1000.0
+        monkeypatch.setattr(runtime_module._time, "time", lambda: now)
+        runtime = GroupRuntime()
+        state = GateState(group_id="group_g1")
+        runtime._states["group_g1"] = state
+
+        state.activate_linger("u1", "at_bot")
+        state.note_bot_replied()
+        now += 30
+
+        snapshot = runtime.snapshot_states()["group_g1"]
+
+        assert snapshot["linger_active"] is True
+        assert snapshot["linger_reply_count"] == 1
+        assert snapshot["linger_time_remaining"] == pytest.approx(150.0)
+
     def test_build_timing_context_includes_cooldown(self):
         """last_bot_reply_ago 注入 TimingGate context。"""
         ctx = GroupRuntime._build_timing_context(
