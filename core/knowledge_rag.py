@@ -19,7 +19,7 @@ from core.semantic.retriever import (
     semantic_score_for_row,
     vector_recall_hits,
 )
-from core.semantic.scoring import passes_relevance_gate, weighted_score
+from core.semantic.scoring import passes_relevance_gate, recency_score, weighted_score
 
 
 TRUST_ORDER = {"low": 1, "medium": 2, "high": 3}
@@ -31,6 +31,7 @@ FINAL_WEIGHTS = {
     "source_prior": 0.08,
     "recency": 0.04,
 }
+RECENCY_HALF_LIFE_DAYS = 180.0
 
 
 @dataclass
@@ -457,7 +458,14 @@ class KnowledgeRagService:
                 item.raw_reranker = score.raw_score
         return rerank_inputs
 
-    def _final_score(self, item: _KnowledgeCandidate) -> float:
+    def _recency_score(self, item: _KnowledgeCandidate) -> float:
+        event_at = None
+        if item.document is not None:
+            event_at = item.document.latest_seen or item.document.updated_at
+        event_at = event_at or item.row.source_updated_at or item.row.updated_at or item.row.indexed_at
+        return recency_score(event_at, half_life_days=RECENCY_HALF_LIFE_DAYS)
+
+    def _final_score(self, item: _KnowledgeCandidate, *, recency: float | None = None) -> float:
         relevance = weighted_score(
             {"reranker": item.reranker, "semantic": item.semantic, "lexical": item.lexical},
             RELEVANCE_WEIGHTS,
@@ -472,13 +480,14 @@ class KnowledgeRagService:
                 "relevance": relevance,
                 "trust": TRUST_SCORE[trust],
                 "source_prior": item.row.source_prior or 0.0,
-                "recency": 0.5,
+                "recency": recency if recency is not None else self._recency_score(item),
             },
             FINAL_WEIGHTS,
         )
 
     def _result_item(self, item: _KnowledgeCandidate) -> dict[str, Any]:
-        final = self._final_score(item)
+        recency = self._recency_score(item)
+        final = self._final_score(item, recency=recency)
         document_id = _safe_int(item.row.source_id)
         return {
             "candidate_id": item.candidate_id,
@@ -495,6 +504,7 @@ class KnowledgeRagService:
                 "reranker": item.reranker,
                 "raw_reranker": item.raw_reranker,
                 "trust": TRUST_SCORE[_trust_level(item.citation.get("trust_level") or item.row.trust_level)],
+                "recency": recency,
                 "final": final,
             },
         }

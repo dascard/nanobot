@@ -1,8 +1,10 @@
 import json
 import asyncio
+from datetime import datetime, timedelta
+
 from tests.async_helpers import run_async
 
-from core.database import ChatLog, MemoryDigest, RollingSessionSummary
+from core.database import ChatLog, MemoryDigest, RollingSessionSummary, SemanticIndexItem
 from core.semantic.adapters import (
     chunks_from_memory_digest,
     chunks_from_session_summary,
@@ -104,6 +106,40 @@ def test_memory_query_uses_reranker_after_recall(db_session):
     assert result["degraded"] is False
     assert result["items"][0]["matched_cards"][0]["source_sub_id"] == "card:1"
     assert result["items"][0]["score_breakdown"]["best_card"]["reranker"] == 0.9
+
+
+def test_memory_query_score_breakdown_uses_index_recency(db_session):
+    from core.memory_rag import MemoryRagService
+
+    now = datetime.now()
+    digest = _digest_row(106, cards=[
+        {"title": "旧端口", "text": "端口冲突 recency 旧记录。", "keywords": ["端口"]},
+        {"title": "新端口", "text": "端口冲突 recency 新记录。", "keywords": ["端口"]},
+    ])
+    _index_chunks(db_session, chunks_from_memory_digest(digest))
+    rows = db_session.query(SemanticIndexItem).filter(
+        SemanticIndexItem.source_type == "memory_digest",
+        SemanticIndexItem.source_id == "106",
+    ).all()
+    for row in rows:
+        row.source_updated_at = now if row.source_sub_id == "card:1" else now - timedelta(days=90)
+    db_session.commit()
+
+    service = MemoryRagService(
+        db_session,
+        embedding_provider=KeywordEmbeddingProvider(),
+        reranker_provider=FixedRerankerProvider({
+            "memory_digest:106:card:0": 0.9,
+            "memory_digest:106:card:1": 0.9,
+        }),
+    )
+    result = service.query("端口 recency", source="digest", limit=5)
+    cards = {
+        card["source_sub_id"]: card
+        for card in result["items"][0]["matched_cards"]
+    }
+
+    assert cards["card:1"]["score_breakdown"]["recency"] > cards["card:0"]["score_breakdown"]["recency"]
 
 
 def test_digest_semantic_recall_without_exact_keyword(db_session):

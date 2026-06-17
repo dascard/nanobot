@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -61,6 +61,7 @@ def _add_sticker(
     usage_count=0,
     chat_stream_id="qq:123:group",
     meta=None,
+    last_seen=None,
 ):
     row = StickerMemory(
         chat_stream_id=chat_stream_id,
@@ -76,7 +77,7 @@ def _add_sticker(
         duplicate_of_id=duplicate_of_id,
         describe_status=describe_status,
         usage_count=usage_count,
-        last_seen=datetime(2026, 5, 26, 12, 0, 0),
+        last_seen=last_seen or datetime(2026, 5, 26, 12, 0, 0),
         meta_json=json.dumps(meta or {}, ensure_ascii=False),
     )
     db_session.add(row)
@@ -220,6 +221,41 @@ def test_sticker_search_uses_reranker_before_usage_boost(db_session):
 
     assert [item["id"] for item in results] == [exact_high_relevance.id]
     assert results[0]["score_breakdown"]["reranker"] == 0.9
+
+
+def test_sticker_search_score_breakdown_uses_last_seen_recency(db_session):
+    from core.sticker_memory import search_stickers
+
+    now = datetime.now()
+    old = _add_sticker(
+        db_session,
+        "old-recency",
+        description="拍桌 recency 表情",
+        tags=["拍桌"],
+        last_seen=now - timedelta(days=90),
+    )
+    fresh = _add_sticker(
+        db_session,
+        "fresh-recency",
+        description="拍桌 recency 表情",
+        tags=["拍桌"],
+        last_seen=now,
+    )
+    _index_stickers(db_session, [old, fresh])
+
+    results = search_stickers(
+        db_session,
+        "拍桌 recency",
+        group_id="123",
+        limit=5,
+        reranker_provider=IdentityRerankerProvider({
+            f"sticker:{old.id}:sticker": 0.9,
+            f"sticker:{fresh.id}:sticker": 0.9,
+        }),
+    )
+    by_id = {item["id"]: item for item in results}
+
+    assert by_id[fresh.id]["score_breakdown"]["recency"] > by_id[old.id]["score_breakdown"]["recency"]
 
 
 def test_sticker_search_does_not_rerank_generic_sticker_matches(db_session):

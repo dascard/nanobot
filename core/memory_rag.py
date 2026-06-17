@@ -20,7 +20,7 @@ from core.semantic.retriever import (
     semantic_score_for_row,
     vector_recall_hits,
 )
-from core.semantic.scoring import passes_relevance_gate, weighted_score
+from core.semantic.scoring import passes_relevance_gate, recency_score, weighted_score
 
 
 RELEVANCE_WEIGHTS = {"reranker": 0.70, "semantic": 0.20, "lexical": 0.10}
@@ -32,6 +32,7 @@ FINAL_WEIGHTS = {
     "recency": 0.05,
     "source_prior": 0.05,
 }
+RECENCY_HALF_LIFE_DAYS = 60.0
 
 
 @dataclass
@@ -360,7 +361,11 @@ class MemoryRagService:
             {"semantic": 0.65, "lexical": 0.35},
         )
 
-    def _final_score(self, item: _Candidate) -> float:
+    def _recency_score(self, item: _Candidate) -> float:
+        event_at = item.row.source_updated_at or item.row.updated_at or item.row.indexed_at
+        return recency_score(event_at, half_life_days=RECENCY_HALF_LIFE_DAYS)
+
+    def _final_score(self, item: _Candidate, *, recency: float | None = None) -> float:
         relevance = weighted_score(
             {"reranker": item.reranker, "semantic": item.semantic, "lexical": item.lexical},
             RELEVANCE_WEIGHTS,
@@ -370,7 +375,7 @@ class MemoryRagService:
                 "relevance": relevance,
                 "quality": item.row.quality_score or 0.0,
                 "trust": _trust_score(item.row.trust_level),
-                "recency": 0.5,
+                "recency": recency if recency is not None else self._recency_score(item),
                 "source_prior": item.row.source_prior or 0.0,
             },
             FINAL_WEIGHTS,
@@ -386,7 +391,8 @@ class MemoryRagService:
         return "weak_lexical_fallback"
 
     def _card_dict(self, item: _Candidate) -> dict[str, Any]:
-        final = self._final_score(item)
+        recency = self._recency_score(item)
+        final = self._final_score(item, recency=recency)
         return {
             "candidate_id": item.candidate_id,
             "source_type": item.row.source_type,
@@ -402,6 +408,7 @@ class MemoryRagService:
                 "lexical": item.lexical,
                 "semantic": item.semantic,
                 "reranker": item.reranker,
+                "recency": recency,
                 "final": final,
             },
         }

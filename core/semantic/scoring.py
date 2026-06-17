@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 
 def clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
@@ -43,6 +45,50 @@ def normalize_sqlite_bm25(
     if best is None or worst is None or worst == best:
         return 1.0
     return clamp01((float(worst) - float(raw)) / (float(worst) - float(best)))
+
+
+def _coerce_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _to_utc_naive(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def recency_score(
+    *timestamps: object,
+    now: datetime | None = None,
+    half_life_days: float = 90.0,
+    floor: float = 0.05,
+    default: float = 0.5,
+) -> float:
+    valid = [
+        _to_utc_naive(dt)
+        for dt in (_coerce_datetime(value) for value in timestamps)
+        if dt is not None
+    ]
+    if not valid:
+        return clamp01(default)
+
+    reference = _to_utc_naive(now or datetime.now())
+    latest = max(valid)
+    age_seconds = max(0.0, (reference - latest).total_seconds())
+    half_life_seconds = max(float(half_life_days) * 86400.0, 1.0)
+    floor = clamp01(floor)
+    score = floor + (1.0 - floor) * (0.5 ** (age_seconds / half_life_seconds))
+    return round(clamp01(score), 12)
 
 
 def passes_relevance_gate(

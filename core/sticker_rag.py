@@ -18,7 +18,7 @@ from core.semantic.retriever import (
     semantic_score_for_row,
     vector_recall_hits,
 )
-from core.semantic.scoring import passes_relevance_gate, weighted_score
+from core.semantic.scoring import passes_relevance_gate, recency_score, weighted_score
 from core.sticker_memory import (
     GLOBAL_STICKER_STREAM_ID,
     is_sticker_replyable,
@@ -35,6 +35,7 @@ FINAL_WEIGHTS = {
     "source_prior": 0.05,
     "recency": 0.02,
 }
+RECENCY_HALF_LIFE_DAYS = 30.0
 STICKER_QUERY_STOPWORDS = (
     "表情包",
     "表情",
@@ -462,7 +463,18 @@ class StickerRagService:
                 item.raw_reranker = score.raw_score
         return rerank_inputs
 
-    def _final_score(self, item: _StickerCandidate) -> float:
+    def _recency_score(self, item: _StickerCandidate) -> float:
+        event_at = (
+            item.sticker.last_used
+            or item.sticker.last_seen
+            or item.sticker.created_at
+            or item.row.source_updated_at
+            or item.row.updated_at
+            or item.row.indexed_at
+        )
+        return recency_score(event_at, half_life_days=RECENCY_HALF_LIFE_DAYS)
+
+    def _final_score(self, item: _StickerCandidate, *, recency: float | None = None) -> float:
         relevance = weighted_score(
             {"reranker": item.reranker, "semantic": item.semantic, "lexical": item.lexical},
             RELEVANCE_WEIGHTS,
@@ -472,13 +484,14 @@ class StickerRagService:
                 "relevance": relevance,
                 "usage": _usage_score(item.sticker),
                 "source_prior": item.row.source_prior or 0.0,
-                "recency": 0.5,
+                "recency": recency if recency is not None else self._recency_score(item),
             },
             FINAL_WEIGHTS,
         )
 
     def _result_item(self, item: _StickerCandidate) -> dict[str, Any]:
-        final = self._final_score(item)
+        recency = self._recency_score(item)
+        final = self._final_score(item, recency=recency)
         return sticker_to_dict(item.sticker) | {
             "score": final,
             "score_breakdown": {
@@ -487,6 +500,7 @@ class StickerRagService:
                 "reranker": item.reranker,
                 "raw_reranker": item.raw_reranker,
                 "usage": _usage_score(item.sticker),
+                "recency": recency,
                 "final": final,
             },
         }

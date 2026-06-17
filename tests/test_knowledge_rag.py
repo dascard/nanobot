@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from tests.async_helpers import run_async
 
 
@@ -98,6 +100,51 @@ def test_knowledge_query_uses_reranker_before_final_score(db_session):
 
     assert [item["document_id"] for item in result["items"]] == [exact.id]
     assert result["items"][0]["score_breakdown"]["reranker"] == 0.9
+
+
+def test_knowledge_query_score_breakdown_uses_document_recency(db_session):
+    from core.database import SemanticIndexItem
+    from core.knowledge_rag import KnowledgeRagService
+
+    now = datetime.now()
+    old = _manual_doc(
+        db_session,
+        "old-recency.md",
+        "# RAG\nRAG recency 排序信号。",
+        title="旧知识",
+        trust_level="high",
+    )
+    fresh = _manual_doc(
+        db_session,
+        "fresh-recency.md",
+        "# RAG\nRAG recency 排序信号。",
+        title="新知识",
+        trust_level="high",
+    )
+    old.latest_seen = now - timedelta(days=180)
+    fresh.latest_seen = now
+    db_session.commit()
+    _index_doc(db_session, old)
+    _index_doc(db_session, fresh)
+
+    rows = db_session.query(SemanticIndexItem).filter(
+        SemanticIndexItem.source_type == "knowledge"
+    ).all()
+    for row in rows:
+        row.source_updated_at = now if row.source_id == str(fresh.id) else now - timedelta(days=180)
+    db_session.commit()
+
+    service = KnowledgeRagService(
+        db_session,
+        reranker_provider=IdentityRerankerProvider({
+            f"knowledge:{old.id}:chunk:0": 0.9,
+            f"knowledge:{fresh.id}:chunk:0": 0.9,
+        }),
+    )
+    result = service.query("RAG recency", limit=5)
+    by_doc = {item["document_id"]: item for item in result["items"]}
+
+    assert by_doc[fresh.id]["score_breakdown"]["recency"] > by_doc[old.id]["score_breakdown"]["recency"]
 
 
 def test_knowledge_rag_uses_vector_recall_before_recent_row_limit(db_session):

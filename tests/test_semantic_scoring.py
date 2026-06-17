@@ -1,4 +1,5 @@
 import math
+from datetime import datetime, timedelta
 
 
 def test_weighted_score_renormalizes_none_components():
@@ -29,6 +30,36 @@ def test_sqlite_bm25_smaller_is_better():
     assert normalize_sqlite_bm25(1.0, best=1.0, worst=5.0) == 1.0
     assert normalize_sqlite_bm25(5.0, best=1.0, worst=5.0) == 0.0
     assert normalize_sqlite_bm25(3.0, best=1.0, worst=5.0) == 0.5
+
+
+def test_recency_score_decays_from_latest_to_old():
+    from core.semantic.scoring import recency_score
+
+    now = datetime(2026, 6, 17, 12, 0, 0)
+
+    latest = recency_score(now, now=now, half_life_days=30)
+    old = recency_score(now - timedelta(days=90), now=now, half_life_days=30)
+
+    assert latest == 1.0
+    assert 0.05 <= old < 0.2
+    assert latest > old
+
+
+def test_recency_score_missing_and_future_timestamps_are_stable():
+    from core.semantic.scoring import recency_score
+
+    now = datetime(2026, 6, 17, 12, 0, 0)
+
+    assert recency_score(None, now=now) == 0.5
+    assert recency_score(now + timedelta(days=1), now=now) == 1.0
+
+
+def test_recency_score_accepts_iso_z_timestamp_with_naive_reference():
+    from core.semantic.scoring import recency_score
+
+    now = datetime(2026, 6, 17, 12, 0, 0)
+
+    assert recency_score("2026-06-17T12:00:00Z", now=now) == 1.0
 
 
 def test_fts5_unavailable_marks_degraded():
