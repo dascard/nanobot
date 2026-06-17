@@ -190,6 +190,7 @@ class GroupChatState:
     force_reason: str = ""
     talk_value: float = 0.5
     last_trigger_reason: str = "ambient"
+    platform: str = "qq"
     linger_active_until: float = 0.0
     linger_reply_count: int = 0
     linger_source_user_id: str = ""
@@ -372,8 +373,11 @@ class GroupRuntime:
     """管理所有群的运行时状态——兼容旧 timing_runtime API。"""
 
     def __init__(self):
+        from core.timing_model_policy import resolve_timing_model_policy
+
         self._states: dict[str, GroupChatState] = {}
         self._lock = asyncio.Lock()
+        self.timing_model_policy_resolver = resolve_timing_model_policy
 
     @staticmethod
     def _norm_group_id(group_id: str) -> str:
@@ -542,6 +546,46 @@ class GroupRuntime:
             response.update(payload)
         return response
 
+    @staticmethod
+    def _policy_payload(policy) -> dict:
+        return {
+            "mode": str(getattr(policy, "mode", "enabled") or "enabled"),
+            "source": str(getattr(policy, "source", "default") or "default"),
+        }
+
+    def _resolve_timing_model_policy(self, state: GroupChatState, group_id: str):
+        session_id = state.group_id or group_id
+        platform = state.platform or "qq"
+        return self.timing_model_policy_resolver(session_id, platform)
+
+    def _apply_policy_scoring_decision(
+        self,
+        state: GroupChatState,
+        policy,
+        trigger_reason: str,
+        *,
+        pending: list[GroupPendingMessage],
+        reason_prefix: str,
+        force_direct_score: float = 0.0,
+        shadow_scoring: dict | None = None,
+    ) -> dict:
+        decision = self._score_timing(
+            state,
+            trigger_reason,
+            pending=pending,
+            force_direct_score=force_direct_score,
+        )
+        response = self._apply_scoring_shortcut(
+            state,
+            decision,
+            pending=pending,
+            reason_prefix=reason_prefix,
+        )
+        response["timing_model_policy"] = self._policy_payload(policy)
+        if shadow_scoring is not None:
+            response["timing_model_shadow_scoring"] = shadow_scoring
+        return response
+
     def _cooldown_scoring_shortcut(
         self,
         state: GroupChatState,
@@ -611,6 +655,7 @@ class GroupRuntime:
         bot_aliases: list[str] | None = None,
         recent_context: str = "",
         talk_value: float = 0.5,
+        platform: str = "qq",
     ) -> dict:
         """处理新消息——添加、判断是否触发 gate、返回结果。"""
         from core.group_runtime.ids import normalize_group_stream_id
@@ -643,6 +688,7 @@ class GroupRuntime:
                 stream_id=stream_id,
             ))
             state.talk_value = talk_value
+            state.platform = str(platform or "qq").strip() or "qq"
             tr = str(trigger_reason or "").strip()
             if tr == "ambient" and self._looks_like_recent_bot_followup(state, pm):
                 tr = "recent_bot_followup"
@@ -784,11 +830,23 @@ class GroupRuntime:
                         pending=snapshot,
                         reason_prefix=f"direct trigger: {force_reason}",
                     )
+                policy = self._resolve_timing_model_policy(state, group_id)
+                if policy.mode == "rules_only":
+                    return self._apply_policy_scoring_decision(
+                        state,
+                        policy,
+                        force_reason,
+                        pending=snapshot,
+                        reason_prefix="timing model rules_only",
+                        force_direct_score=1.0,
+                    )
                 state.mark_gate_start()
                 gen = state.generation
                 ctx_snapshot = dict(ctx)
                 tr = force_reason
                 gate_prepared = True
+                gate_policy = policy
+                gate_force_direct_score = 1.0
                 logger.info("[GroupRuntime] force_gate group=%s reason=%s pending=%d",
                             group_id, force_reason, len(snapshot))
 
@@ -838,9 +896,20 @@ class GroupRuntime:
                             reason_prefix="ambient scoring shortcut",
                         )
 
+                policy = self._resolve_timing_model_policy(state, group_id)
+                if policy.mode == "rules_only":
+                    return self._apply_policy_scoring_decision(
+                        state,
+                        policy,
+                        tr,
+                        pending=snapshot,
+                        reason_prefix="timing model rules_only",
+                    )
                 state.mark_gate_start()
                 gen = state.generation
                 ctx_snapshot = dict(ctx)
+                gate_policy = policy
+                gate_force_direct_score = 0.0
 
         result = await self._call_gate(group_id, snapshot, ctx_snapshot, tr)
 
@@ -859,6 +928,24 @@ class GroupRuntime:
                     "cooldown_ago": state.bot_reply_ago(),
                     "reason": "generation mismatch, new messages arrived during gate",
                 }, state, tr, pending=snapshot, model_result=result)
+
+            if getattr(gate_policy, "mode", "enabled") == "shadow":
+                shadow_scoring = self._shadow_scoring(
+                    state,
+                    tr,
+                    pending=snapshot,
+                    model_result=result,
+                    force_direct_score=gate_force_direct_score,
+                )
+                return self._apply_policy_scoring_decision(
+                    state,
+                    gate_policy,
+                    tr,
+                    pending=snapshot,
+                    reason_prefix="timing model shadow",
+                    force_direct_score=gate_force_direct_score,
+                    shadow_scoring=shadow_scoring,
+                )
 
             return self._apply_gate_result(state, result)
 
@@ -930,8 +1017,19 @@ class GroupRuntime:
             if was_waiting:
                 state.end_wait()
 
-            state.mark_gate_start()
             snapshot = state.take_snapshot()
+            policy = self._resolve_timing_model_policy(state, group_id)
+            timer_trigger_reason = trigger_reason or state.last_trigger_reason or "timer"
+            if policy.mode == "rules_only":
+                return self._apply_policy_scoring_decision(
+                    state,
+                    policy,
+                    timer_trigger_reason,
+                    pending=snapshot,
+                    reason_prefix="timing model rules_only",
+                )
+
+            state.mark_gate_start()
             gen = state.generation
             ctx_saved = {
                 "session_name": state.session_name,
@@ -948,7 +1046,7 @@ class GroupRuntime:
                 ctx_saved["wait_reason"] = state.wait_reason
                 ctx_saved["wait_timeout"] = not state.new_messages_during_wait
 
-        result = await self._call_gate(group_id, snapshot, ctx_saved, trigger_reason or "timer")
+        result = await self._call_gate(group_id, snapshot, ctx_saved, timer_trigger_reason)
 
         async with self._lock:
             state = self._states.get(group_id)
@@ -960,7 +1058,23 @@ class GroupRuntime:
                     "action": "no_reply", "delay_seconds": None,
                     "generation": state.generation,
                     "reason": "state changed during timer gate",
-                }, state, trigger_reason or "timer", pending=snapshot, model_result=result)
+                }, state, timer_trigger_reason, pending=snapshot, model_result=result)
+
+            if getattr(policy, "mode", "enabled") == "shadow":
+                shadow_scoring = self._shadow_scoring(
+                    state,
+                    timer_trigger_reason,
+                    pending=snapshot,
+                    model_result=result,
+                )
+                return self._apply_policy_scoring_decision(
+                    state,
+                    policy,
+                    timer_trigger_reason,
+                    pending=snapshot,
+                    reason_prefix="timing model shadow",
+                    shadow_scoring=shadow_scoring,
+                )
 
             return self._apply_gate_result(state, result)
 
@@ -1070,6 +1184,7 @@ class GroupRuntime:
                 "new_messages_during_wait": len(state.new_messages_during_wait),
                 "wait_reason": state.wait_reason[:120],
                 "last_trigger_reason": state.last_trigger_reason,
+                "platform": state.platform,
                 "last_bot_reply_ago": round(state.bot_reply_ago(), 1),
                 "linger_active": bool(
                     linger_time_remaining > 0 and state.linger_reply_count < LINGER_MAX_MESSAGES

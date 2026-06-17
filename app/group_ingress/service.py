@@ -186,6 +186,8 @@ class GroupIngressService:
                 "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
             }
             talk_value = h.get_group_talk_value(group_user_id)
+            client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
+            platform = str(client_meta.get("platform") or "qq").strip() or "qq"
             release_clean_session_transaction(db, label="group_before_timing_gate", logger=logger)
             result = await runtime.process_message(
                 req.group_id,
@@ -195,6 +197,7 @@ class GroupIngressService:
                 trigger_reason=reason,
                 recent_context=recent_ctx,
                 talk_value=talk_value,
+                platform=platform,
             )
             elapsed_ms = int((_time.time() - t0) * 1000)
             action = result.get("action", "no_reply")

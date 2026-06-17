@@ -732,6 +732,109 @@ class TestGroupRuntime:
         assert "min_interval" in scoring["reason"]
 
     @pytest.mark.asyncio
+    async def test_timing_model_policy_rules_only_skips_gate_for_fuzzy_linger(self, monkeypatch):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda session_id, platform: TimingModelPolicy("rules_only", f"session:{session_id}")
+        )
+
+        async def fail_gate(*_args, **_kwargs):
+            raise AssertionError("rules_only 不应调用 TimingGate 模型")
+
+        monkeypatch.setattr(runtime, "_call_gate", fail_gate)
+        state = runtime._states.setdefault("group_1", GateState(group_id="group_1"))
+        state.activate_linger("u1", "at_bot")
+        state.note_bot_replied()
+
+        result = await runtime.process_message(
+            "group_1",
+            {
+                "sender_id": "u1",
+                "sender_name": "A",
+                "message": "继续看看",
+                "message_id": "m1",
+            },
+            trigger_reason="recent_bot_followup",
+            talk_value=1.0,
+        )
+
+        assert result["timing_model_policy"]["mode"] == "rules_only"
+        assert result["timing_model_policy"]["source"] == "session:group_1"
+        assert result["timing_scoring"]["stage"] == "rule_fallback"
+        assert result["timing_scoring"]["model_used"] is False
+
+    @pytest.mark.asyncio
+    async def test_timing_model_policy_shadow_calls_gate_but_uses_rule_decision(self, monkeypatch):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda session_id, platform: TimingModelPolicy("shadow", f"platform:{platform}")
+        )
+        calls = []
+
+        async def fake_gate(*_args, **_kwargs):
+            calls.append(1)
+            return {"action": "no_reply", "reason": "model shadow says no"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+        state = runtime._states.setdefault("group_1", GateState(group_id="group_1"))
+        state.activate_linger("u1", "at_bot")
+        state.note_bot_replied()
+
+        result = await runtime.process_message(
+            "group_1",
+            {
+                "sender_id": "u1",
+                "sender_name": "A",
+                "message": "继续看看",
+                "message_id": "m1",
+            },
+            trigger_reason="recent_bot_followup",
+            talk_value=1.0,
+            platform="web",
+        )
+
+        assert calls == [1]
+        assert result["timing_model_policy"]["mode"] == "shadow"
+        assert result["timing_model_policy"]["source"] == "platform:web"
+        assert result["timing_scoring"]["model_used"] is False
+        assert result["timing_model_shadow_scoring"]["model_action"] == "no_reply"
+
+    @pytest.mark.asyncio
+    async def test_timing_model_policy_rules_only_skips_timer_gate(self, monkeypatch):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda session_id, platform: TimingModelPolicy("rules_only", f"platform:{platform}")
+        )
+
+        async def fail_gate(*_args, **_kwargs):
+            raise AssertionError("rules_only timer 不应调用 TimingGate 模型")
+
+        monkeypatch.setattr(runtime, "_call_gate", fail_gate)
+        state = runtime._states.setdefault("group_1", GateState(group_id="group_1"))
+        state.platform = "web"
+        state.last_gate_completed_ts = 0
+        state.add_message(PendingMessage("u1", "A", "继续看看", trigger_reason="recent_bot_followup"))
+        state.activate_linger("u1", "at_bot")
+        state.last_trigger_reason = "recent_bot_followup"
+
+        result = await runtime.handle_timer_fired(
+            "group_1",
+            state.generation,
+            trigger_reason="recent_bot_followup",
+        )
+
+        assert result["timing_model_policy"]["mode"] == "rules_only"
+        assert result["timing_model_policy"]["source"] == "platform:web"
+        assert result["timing_scoring"]["stage"] == "rule_fallback"
+        assert result["timing_scoring"]["model_used"] is False
+
+    @pytest.mark.asyncio
     async def test_group_id_normalized_in_state_key(self):
         """不同格式的 group_id 映射到同一个 runtime state。"""
         runtime = GroupRuntime()

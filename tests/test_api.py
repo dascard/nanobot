@@ -1216,6 +1216,38 @@ async def test_group_message_ambient_enters_timing_gate(db_session, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_group_message_passes_client_platform_to_timing_gate(db_session, monkeypatch):
+    """client_meta.platform 应透传给 GroupRuntime。"""
+    from api.routes import GroupMessageRequest, group_message
+
+    calls = []
+
+    async def fake_process(_self, group_id, msg, **kwargs):
+        calls.append((group_id, msg, kwargs))
+        return {"action": "no_reply", "generation": 1, "reason": "timing says no"}
+
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="platform-group",
+            sender_id="u-platform",
+            sender_name="平台测试",
+            message="普通消息",
+            session_name="平台群",
+            client_meta={"platform": "web"},
+            message_id="m-platform-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "no_reply"
+    assert calls
+    assert calls[0][2]["platform"] == "web"
+
+
+@pytest.mark.asyncio
 async def test_group_message_releases_db_transaction_before_timing_gate(db_session, monkeypatch):
     """进入 timing gate 前不能保留请求级 DB 事务。"""
     from api.routes import GroupMessageRequest, group_message
