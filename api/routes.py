@@ -2678,7 +2678,7 @@ async def proxy_chat(
             _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
         except Exception as pe:
             logger.error(f"[/chat] Persist failed on KT error path: {pe}")
-        raise HTTPException(status_code=502, detail=f"KT Error: {str(e)}")
+        raise HTTPException(status_code=502, detail=SAFE_STREAM_ERROR_MESSAGE)
 
     private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
     if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":

@@ -339,6 +339,34 @@ def test_proxy_chat_releases_db_transaction_before_bridge(client, db_session, mo
     assert response.json()["answer"] == "事务已释放"
 
 
+def test_proxy_chat_kt_error_does_not_echo_internal_detail(client, db_session, monkeypatch):
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch
+
+    _fast_private_reply(monkeypatch)
+
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(
+        side_effect=RuntimeError("sqlite:///nanobot.db secret stack")
+    )
+
+    with patch("api.routes.get_bridge", return_value=mock_bridge):
+        response = client.post(
+            "/api/v1/chat",
+            json={
+                "user_id": "kt_error_user",
+                "session_id": "private_kt_error_user",
+                "query": "触发内部异常",
+            },
+        )
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert detail == "系统暂时不可用，请稍后再试"
+    assert "sqlite" not in detail
+    assert "secret stack" not in detail
+
+
 def test_resolve_push_target_id_for_group_session():
     from api.routes import ChatProxyRequest, _resolve_push_target_id
 
