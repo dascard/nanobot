@@ -262,6 +262,87 @@ def test_llm_memory_digest_builder_promotes_clean_llm_summary():
     assert "PCL 与 pagefile" in result.level_contents[2]
 
 
+def test_llm_memory_digest_sync_builder_rejects_awaitable_summarizer():
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm
+
+    async def async_summarizer(_messages):
+        return json.dumps(
+            {
+                "preview": "同步 builder 不应 await async summarizer。",
+                "long_summary": "同步 builder 收到 awaitable 时应 fallback，而不是自行创建事件循环。",
+                "recall_cards": ["同步 builder 遇到 awaitable 时必须要求调用方使用 async builder。"],
+                "quality": {"score": 0.9, "reason": "边界清晰。"},
+            },
+            ensure_ascii=False,
+        )
+
+    result = build_memory_digest_with_llm(
+        user_id="group_42",
+        session_id="group_42",
+        digest_date="2026-05-22",
+        logs=[
+            _log(id=1, content="同步 builder 不能偷偷 await"),
+            _log(id=2, sender_name="乙", content="需要改成 async builder"),
+        ],
+        summarizer=async_summarizer,
+    )
+
+    assert result.meta["generator"] == "deterministic_fallback"
+    assert result.meta["llm_status"] == "fallback"
+    assert "sync_summarizer_returned_awaitable" in result.meta["fallback_reason"]
+
+
+def test_llm_memory_digest_async_builder_awaits_async_summarizer():
+    from app.memory_digest.llm_builder import build_memory_digest_with_llm_async
+
+    async def async_summarizer(messages):
+        assert messages[0]["role"] == "system"
+        return json.dumps(
+            {
+                "preview": {
+                    "brief": "async builder 可以直接 await LLM summarizer。",
+                    "keywords": ["async builder", "LLM"],
+                    "participants": ["甲", "乙"],
+                },
+                "long_summary": {
+                    "topic_flow": "讨论确认 LLM memory digest 的默认实现只能挂在 async builder 上。",
+                    "important_details": ["同步 builder 不再桥接 awaitable。"],
+                    "conclusions": ["调用链应把 async 边界上移。"],
+                    "open_loops": [],
+                },
+                "recall_cards": [
+                    {
+                        "card_id": "card_1",
+                        "type": "episode_topic",
+                        "text": "LLM memory digest 默认实现通过 async builder 直接 await。",
+                        "keywords": ["async builder", "memory digest"],
+                        "importance": 0.88,
+                        "evidence_log_ids": [1, 2],
+                    }
+                ],
+                "quality": {"score": 0.9, "issues": []},
+            },
+            ensure_ascii=False,
+        )
+
+    result = run_async(
+        build_memory_digest_with_llm_async(
+            user_id="group_42",
+            session_id="group_42",
+            digest_date="2026-05-22",
+            logs=[
+                _log(id=1, content="LLM memory digest 默认实现需要 async builder"),
+                _log(id=2, sender_name="乙", content="同步 builder 不应该再桥接 awaitable"),
+            ],
+            summarizer=async_summarizer,
+        )
+    )
+
+    assert result.meta["generator"] == "llm"
+    assert result.meta["llm_status"] == "success"
+    assert "async builder" in result.level_contents[2]
+
+
 def test_llm_memory_digest_builder_accepts_goal_string_json_shape_and_records_prompt_metadata():
     from app.memory_digest.llm_builder import build_memory_digest_with_llm
 
@@ -530,6 +611,79 @@ def test_generate_daily_digest_uses_llm_memory_digest_by_default(db_session, mon
     assert meta["generator"] == "llm"
     assert meta["llm_status"] == "success"
     assert "KohakuVQ、Discrete AR" in row.content
+
+
+def test_generate_daily_digest_sync_without_summarizer_does_not_call_default_async(
+    db_session,
+    monkeypatch,
+):
+    from core import daily_digest
+
+    called = False
+
+    async def forbidden_default_async(_messages):
+        nonlocal called
+        called = True
+        return "{}"
+
+    db_session.add_all([
+        _log(id=1, content="同步 daily digest 没有显式 summarizer"),
+        _log(id=2, sender_name="乙", content="不能偷偷调用默认 async LLM"),
+    ])
+    db_session.commit()
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(
+        "app.memory_digest.llm_builder.default_llm_memory_digest_summarizer_async",
+        forbidden_default_async,
+    )
+
+    created = daily_digest.generate_daily_digest_for_date("2026-05-22")
+
+    assert created == 1
+    assert called is False
+    row = db_session.query(MemoryDigest).filter_by(session_id="group_42", level=2).first()
+    meta = json.loads(row.meta_json)
+    assert meta["generator"] == "deterministic_fallback"
+    assert meta["llm_status"] == "fallback"
+    assert "sync_summarizer_required" in meta["fallback_reason"]
+
+
+def test_generate_daily_digest_async_uses_async_llm_summarizer(db_session, monkeypatch):
+    from core import daily_digest
+
+    async def async_summarizer(_messages):
+        return json.dumps(
+            {
+                "preview": "async daily digest 直接 await LLM summarizer。",
+                "long_summary": "异步 daily digest 入口用于默认 LLM 摘要路径，避免同步函数内部运行 awaitable。",
+                "recall_cards": [
+                    "async daily digest 入口负责运行 LLM memory digest summarizer。"
+                ],
+                "quality": {"score": 0.9, "reason": "边界清晰。"},
+            },
+            ensure_ascii=False,
+        )
+
+    db_session.add_all([
+        _log(id=1, content="async daily digest 需要 await summarizer"),
+        _log(id=2, sender_name="乙", content="同步入口不能偷偷桥接"),
+    ])
+    db_session.commit()
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+
+    created = run_async(
+        daily_digest.generate_daily_digest_for_date_async(
+            "2026-05-22",
+            llm_summarizer=async_summarizer,
+        )
+    )
+
+    assert created == 1
+    row = db_session.query(MemoryDigest).filter_by(session_id="group_42", level=2).first()
+    meta = json.loads(row.meta_json)
+    assert meta["generator"] == "llm"
+    assert meta["llm_status"] == "success"
+    assert "async daily digest" in row.content
 
 
 def test_generate_daily_digest_writes_one_level0_one_level1_and_multiple_level2_cards(db_session, monkeypatch):

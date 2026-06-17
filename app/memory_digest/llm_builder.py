@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import inspect
 import json
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Iterable
 
-from core.async_bridge import run_awaitable_sync
 from core.database import ChatLog
 from core.prompt_v2.section_renderer import sha256_text
 from core.prompt_v2.template_loader import load_template
@@ -28,6 +27,14 @@ _URL_RE = re.compile(r"https?://[^\s，。！？；、)）\]>]+|www\.[^\s，。�
 _MAX_SOURCE_LINES = 80
 _MIN_LLM_QUALITY = 0.75
 _CARD_MAX_CHARS = 120
+
+
+@dataclass(frozen=True)
+class _LlmDigestContext:
+    fallback: MemoryDigestBuildResult
+    source_rows: list[dict[str, Any]]
+    messages: list[dict[str, str]]
+    prompt_meta: dict[str, Any]
 
 _GENERIC_CARD_PATTERNS: list[re.Pattern] = [
     re.compile(r"^今天.*讨论"),
@@ -96,10 +103,27 @@ def _safe_json_loads(raw: str) -> dict[str, Any]:
     return value
 
 
+def _close_awaitable(value: Any) -> None:
+    close = getattr(value, "close", None)
+    if callable(close):
+        close()
+
+
 def _call_summarizer(summarizer: Callable[[list[dict[str, str]]], Any], messages: list[dict[str, str]]) -> Any:
     result = summarizer(messages)
     if inspect.isawaitable(result):
-        return run_awaitable_sync(result)
+        _close_awaitable(result)
+        raise TypeError("sync_summarizer_returned_awaitable: use build_memory_digest_with_llm_async")
+    return result
+
+
+async def _call_summarizer_async(
+    summarizer: Callable[[list[dict[str, str]]], Any],
+    messages: list[dict[str, str]],
+) -> Any:
+    result = summarizer(messages)
+    if inspect.isawaitable(result):
+        return await result
     return result
 
 
@@ -299,11 +323,10 @@ async def default_llm_memory_digest_summarizer_async(messages: list[dict[str, st
 
 
 def default_llm_memory_digest_summarizer(messages: list[dict[str, str]]) -> str:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return run_awaitable_sync(default_llm_memory_digest_summarizer_async(messages))
-    raise RuntimeError("default_llm_memory_digest_summarizer must run in a sync worker process")
+    raise RuntimeError(
+        "sync_summarizer_required: use default_llm_memory_digest_summarizer_async "
+        "with build_memory_digest_with_llm_async"
+    )
 
 
 def parse_llm_digest_response(raw: Any) -> dict[str, Any]:
@@ -520,6 +543,76 @@ def _fallback_result(
     )
 
 
+def _prepare_llm_digest_context(
+    *,
+    user_id: str,
+    session_id: str,
+    digest_date: str,
+    logs: Iterable[ChatLog],
+    llm_enabled: bool,
+) -> tuple[_LlmDigestContext | None, MemoryDigestBuildResult | None]:
+    log_rows = list(logs)
+    fallback = MemoryDigestBuilder().build(
+        user_id=user_id,
+        session_id=session_id,
+        digest_date=digest_date,
+        logs=log_rows,
+    )
+    if not llm_enabled:
+        return None, _fallback_result(fallback, status="disabled")
+    if fallback.status != "active":
+        return None, _fallback_result(fallback, status="skipped")
+
+    source_rows = _collect_source_rows(log_rows)
+    if not source_rows:
+        return None, _fallback_result(fallback, status="skipped", error="source_rows_empty")
+
+    messages, prompt_meta = build_llm_digest_messages(
+        session_id=session_id,
+        digest_date=digest_date,
+        fallback=fallback,
+        source_rows=source_rows,
+    )
+    return _LlmDigestContext(
+        fallback=fallback,
+        source_rows=source_rows,
+        messages=messages,
+        prompt_meta=prompt_meta,
+    ), None
+
+
+def _build_memory_digest_result_from_raw(
+    raw: Any,
+    *,
+    context: _LlmDigestContext,
+    session_id: str,
+    digest_date: str,
+    user_id: str,
+) -> MemoryDigestBuildResult:
+    payload = parse_llm_digest_response(raw)
+    meta = _normalize_llm_meta(
+        payload,
+        fallback=context.fallback,
+        session_id=session_id,
+        digest_date=digest_date,
+        user_id=user_id,
+        prompt_meta=context.prompt_meta,
+    )
+    audit_ok, issues = audit_llm_digest_meta(meta, source_rows=context.source_rows)
+    if not audit_ok:
+        return _fallback_result(
+            context.fallback,
+            status="fallback",
+            error=",".join(issues),
+            prompt_meta=context.prompt_meta,
+        )
+    return MemoryDigestBuildResult(
+        status="active",
+        meta=meta,
+        level_contents=render_digest_levels(meta),
+    )
+
+
 def build_memory_digest_with_llm(
     *,
     user_id: str,
@@ -529,48 +622,66 @@ def build_memory_digest_with_llm(
     summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
     llm_enabled: bool = True,
 ) -> MemoryDigestBuildResult:
-    log_rows = list(logs)
-    fallback = MemoryDigestBuilder().build(
+    context, early_result = _prepare_llm_digest_context(
         user_id=user_id,
         session_id=session_id,
         digest_date=digest_date,
-        logs=log_rows,
+        logs=logs,
+        llm_enabled=llm_enabled,
     )
-    if not llm_enabled:
-        return _fallback_result(fallback, status="disabled")
-    if fallback.status != "active":
-        return _fallback_result(fallback, status="skipped")
-
-    source_rows = _collect_source_rows(log_rows)
-    if not source_rows:
-        return _fallback_result(fallback, status="skipped", error="source_rows_empty")
-
-    summarizer = summarizer or default_llm_memory_digest_summarizer
-    messages, prompt_meta = build_llm_digest_messages(
-        session_id=session_id,
-        digest_date=digest_date,
-        fallback=fallback,
-        source_rows=source_rows,
-    )
+    if early_result is not None:
+        return early_result
+    assert context is not None
+    if summarizer is None:
+        return _fallback_result(
+            context.fallback,
+            status="fallback",
+            error="sync_summarizer_required: use build_memory_digest_with_llm_async",
+            prompt_meta=context.prompt_meta,
+        )
     try:
-        raw = _call_summarizer(summarizer, messages)
-        payload = parse_llm_digest_response(raw)
-        meta = _normalize_llm_meta(
-            payload,
-            fallback=fallback,
+        raw = _call_summarizer(summarizer, context.messages)
+        return _build_memory_digest_result_from_raw(
+            raw,
+            context=context,
             session_id=session_id,
             digest_date=digest_date,
             user_id=user_id,
-            prompt_meta=prompt_meta,
-        )
-        audit_ok, issues = audit_llm_digest_meta(meta, source_rows=source_rows)
-        if not audit_ok:
-            return _fallback_result(fallback, status="fallback", error=",".join(issues), prompt_meta=prompt_meta)
-        return MemoryDigestBuildResult(
-            status="active",
-            meta=meta,
-            level_contents=render_digest_levels(meta),
         )
     except Exception as exc:
         logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
-        return _fallback_result(fallback, status="fallback", error=str(exc), prompt_meta=prompt_meta)
+        return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)
+
+
+async def build_memory_digest_with_llm_async(
+    *,
+    user_id: str,
+    session_id: str,
+    digest_date: str,
+    logs: Iterable[ChatLog],
+    summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
+    llm_enabled: bool = True,
+) -> MemoryDigestBuildResult:
+    context, early_result = _prepare_llm_digest_context(
+        user_id=user_id,
+        session_id=session_id,
+        digest_date=digest_date,
+        logs=logs,
+        llm_enabled=llm_enabled,
+    )
+    if early_result is not None:
+        return early_result
+    assert context is not None
+    summarizer = summarizer or default_llm_memory_digest_summarizer_async
+    try:
+        raw = await _call_summarizer_async(summarizer, context.messages)
+        return _build_memory_digest_result_from_raw(
+            raw,
+            context=context,
+            session_id=session_id,
+            digest_date=digest_date,
+            user_id=user_id,
+        )
+    except Exception as exc:
+        logger.warning("memory digest llm fallback: session_id=%s date=%s error=%s", session_id, digest_date, exc)
+        return _fallback_result(context.fallback, status="fallback", error=str(exc), prompt_meta=context.prompt_meta)

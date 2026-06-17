@@ -19,7 +19,7 @@ import aiohttp
 from sqlalchemy import and_
 
 from app.memory_digest.builder import MemoryDigestBuilder
-from app.memory_digest.llm_builder import build_memory_digest_with_llm
+from app.memory_digest.llm_builder import build_memory_digest_with_llm, build_memory_digest_with_llm_async
 from app.memory_digest.renderer import render_recall_card
 from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
 from config import DAILY_DIGEST_HOUR
@@ -291,6 +291,33 @@ def _build_memory_digest_result(
     )
 
 
+async def _build_memory_digest_result_async(
+    *,
+    user_id: str,
+    session_id: str,
+    digest_date: str,
+    logs: List[ChatLog],
+    use_llm: bool | None,
+    llm_summarizer: Callable[[list[dict[str, str]]], Any] | None,
+):
+    llm_enabled = MEMORY_DIGEST_LLM_ENABLED if use_llm is None else bool(use_llm)
+    if not llm_enabled:
+        return MemoryDigestBuilder().build(
+            user_id=user_id,
+            session_id=session_id,
+            digest_date=digest_date,
+            logs=logs,
+        )
+    return await build_memory_digest_with_llm_async(
+        user_id=user_id,
+        session_id=session_id,
+        digest_date=digest_date,
+        logs=logs,
+        summarizer=llm_summarizer,
+        llm_enabled=True,
+    )
+
+
 def _digest_row_meta(
     meta: dict,
     *,
@@ -333,6 +360,112 @@ def _ensure_digest_source_meta(
     return row_meta
 
 
+def _collect_daily_digest_logs_by_session(
+    db,
+    *,
+    target_date: str,
+    user_id: str | None,
+    session_id: str | None,
+) -> dict[str, List[ChatLog]]:
+    start = datetime.strptime(target_date, "%Y-%m-%d")
+    end = start + timedelta(days=1)
+    base_query = db.query(ChatLog).filter(ChatLog.created_at.isnot(None))
+    base_query = base_query.filter(ChatLog.created_at >= start, ChatLog.created_at < end)
+    if user_id:
+        base_query = base_query.filter(ChatLog.user_id == user_id)
+
+    all_logs = base_query.order_by(ChatLog.id.asc()).all()
+    session_aliases = _session_filter_aliases(session_id)
+
+    by_session: dict[str, List[ChatLog]] = {}
+    for log in all_logs:
+        if _to_day(log.created_at) != target_date:
+            continue
+        sid = _normalize_chatlog_session_id(log.session_id, log.user_id)
+        if not sid:
+            continue
+        if session_aliases and sid not in session_aliases:
+            continue
+        by_session.setdefault(sid, []).append(log)
+    return by_session
+
+
+def _write_memory_digest_rows(
+    db,
+    *,
+    session_id: str,
+    target_date: str,
+    logs: List[ChatLog],
+    result,
+    force: bool,
+) -> bool:
+    start_id = logs[0].id
+    end_id = logs[-1].id
+    uid = logs[0].user_id or ""
+    meta = _ensure_digest_source_meta(
+        dict(result.meta),
+        session_id=session_id,
+        digest_date=target_date,
+        start_id=int(start_id or 0),
+        end_id=int(end_id or 0),
+    )
+    if force:
+        _archive_existing_digests(db, session_id, target_date)
+
+    d0 = MemoryDigest(
+        user_id=uid,
+        session_id=session_id,
+        digest_date=target_date,
+        level=0,
+        parent_id=None,
+        content=result.level_contents.get(0, ""),
+        meta_json=json.dumps(_digest_row_meta(meta, summary_type="detailed_digest"), ensure_ascii=False),
+        source_start_log_id=start_id,
+        source_end_log_id=end_id,
+    )
+    db.add(d0)
+    db.flush()
+
+    d1 = MemoryDigest(
+        user_id=uid,
+        session_id=session_id,
+        digest_date=target_date,
+        level=1,
+        parent_id=d0.id,
+        content=result.level_contents.get(1, ""),
+        meta_json=json.dumps(_digest_row_meta(meta, summary_type="preview_digest"), ensure_ascii=False),
+        source_start_log_id=start_id,
+        source_end_log_id=end_id,
+    )
+    db.add(d1)
+    db.flush()
+
+    cards = meta.get("recall_cards") if isinstance(meta.get("recall_cards"), list) else []
+    if not cards:
+        cards = [None]
+    for index, card in enumerate(cards):
+        card_meta = _digest_row_meta(
+            meta,
+            summary_type="recall_card",
+            recall_card=card if isinstance(card, dict) else None,
+            recall_card_index=index,
+        )
+        content = render_recall_card(card) if isinstance(card, dict) else result.level_contents.get(2, "")
+        d2 = MemoryDigest(
+            user_id=uid,
+            session_id=session_id,
+            digest_date=target_date,
+            level=2,
+            parent_id=d1.id,
+            content=content,
+            meta_json=json.dumps(card_meta, ensure_ascii=False),
+            source_start_log_id=start_id,
+            source_end_log_id=end_id,
+        )
+        db.add(d2)
+    return result.status == "active"
+
+
 def generate_daily_digest_for_date(
     target_date: str,
     user_id: str | None = None,
@@ -350,26 +483,12 @@ def generate_daily_digest_for_date(
     db = SessionLocal()
     created = 0
     try:
-        start = datetime.strptime(target_date, "%Y-%m-%d")
-        end = start + timedelta(days=1)
-        base_query = db.query(ChatLog).filter(ChatLog.created_at.isnot(None))
-        base_query = base_query.filter(ChatLog.created_at >= start, ChatLog.created_at < end)
-        if user_id:
-            base_query = base_query.filter(ChatLog.user_id == user_id)
-
-        all_logs = base_query.order_by(ChatLog.id.asc()).all()
-        session_aliases = _session_filter_aliases(session_id)
-
-        by_session: dict[str, List[ChatLog]] = {}
-        for log in all_logs:
-            if _to_day(log.created_at) != target_date:
-                continue
-            sid = _normalize_chatlog_session_id(log.session_id, log.user_id)
-            if not sid:
-                continue
-            if session_aliases and sid not in session_aliases:
-                continue
-            by_session.setdefault(sid, []).append(log)
+        by_session = _collect_daily_digest_logs_by_session(
+            db,
+            target_date=target_date,
+            user_id=user_id,
+            session_id=session_id,
+        )
 
         for session_id, logs in by_session.items():
             if not logs:
@@ -386,71 +505,78 @@ def generate_daily_digest_for_date(
                 llm_summarizer=llm_summarizer,
             )
 
-            start_id = logs[0].id
-            end_id = logs[-1].id
-            uid = logs[0].user_id or ""
-            meta = _ensure_digest_source_meta(
-                dict(result.meta),
+            if _write_memory_digest_rows(
+                db,
+                session_id=session_id,
+                target_date=target_date,
+                logs=logs,
+                result=result,
+                force=force,
+            ):
+                created += 1
+
+        db.commit()
+        if created > 0:
+            logger.info(
+                f"Daily digest generated for {created} session(s), date={target_date}"
+            )
+        return created
+    except Exception:
+        db.rollback()
+        logger.exception(f"Daily digest failed for date={target_date}")
+        return 0
+    finally:
+        db.close()
+
+
+async def generate_daily_digest_for_date_async(
+    target_date: str,
+    user_id: str | None = None,
+    *,
+    session_id: str | None = None,
+    force: bool = False,
+    use_llm: bool | None = None,
+    llm_summarizer: Callable[[list[dict[str, str]]], Any] | None = None,
+) -> int:
+    """
+    Summarize one day of chat logs with an async LLM boundary.
+
+    The database work remains synchronous; only the LLM summarizer boundary is
+    awaited here so sync callers never have to run an awaitable implicitly.
+    """
+    db = SessionLocal()
+    created = 0
+    try:
+        by_session = _collect_daily_digest_logs_by_session(
+            db,
+            target_date=target_date,
+            user_id=user_id,
+            session_id=session_id,
+        )
+
+        for session_id, logs in by_session.items():
+            if not logs:
+                continue
+            if not force and _already_digested(db, session_id, target_date):
+                continue
+
+            result = await _build_memory_digest_result_async(
+                user_id=logs[0].user_id or "",
                 session_id=session_id,
                 digest_date=target_date,
-                start_id=int(start_id or 0),
-                end_id=int(end_id or 0),
+                logs=logs,
+                use_llm=use_llm,
+                llm_summarizer=llm_summarizer,
             )
-            if force:
-                _archive_existing_digests(db, session_id, target_date)
 
-            d0 = MemoryDigest(
-                user_id=uid,
+            if _write_memory_digest_rows(
+                db,
                 session_id=session_id,
-                digest_date=target_date,
-                level=0,
-                parent_id=None,
-                content=result.level_contents.get(0, ""),
-                meta_json=json.dumps(_digest_row_meta(meta, summary_type="detailed_digest"), ensure_ascii=False),
-                source_start_log_id=start_id,
-                source_end_log_id=end_id,
-            )
-            db.add(d0)
-            db.flush()
-
-            d1 = MemoryDigest(
-                user_id=uid,
-                session_id=session_id,
-                digest_date=target_date,
-                level=1,
-                parent_id=d0.id,
-                content=result.level_contents.get(1, ""),
-                meta_json=json.dumps(_digest_row_meta(meta, summary_type="preview_digest"), ensure_ascii=False),
-                source_start_log_id=start_id,
-                source_end_log_id=end_id,
-            )
-            db.add(d1)
-            db.flush()
-
-            cards = meta.get("recall_cards") if isinstance(meta.get("recall_cards"), list) else []
-            if not cards:
-                cards = [None]
-            for index, card in enumerate(cards):
-                card_meta = _digest_row_meta(
-                    meta,
-                    summary_type="recall_card",
-                    recall_card=card if isinstance(card, dict) else None,
-                    recall_card_index=index,
-                )
-                content = render_recall_card(card) if isinstance(card, dict) else result.level_contents.get(2, "")
-                d2 = MemoryDigest(
-                    user_id=uid,
-                    session_id=session_id,
-                    digest_date=target_date,
-                    level=2,
-                    parent_id=d1.id,
-                    content=content,
-                    meta_json=json.dumps(card_meta, ensure_ascii=False),
-                    source_start_log_id=start_id,
-                    source_end_log_id=end_id,
-                )
-                db.add(d2)
-            if result.status == "active":
+                target_date=target_date,
+                logs=logs,
+                result=result,
+                force=force,
+            ):
                 created += 1
 
         db.commit()
