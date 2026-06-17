@@ -95,12 +95,13 @@ def _file_hash(path: str) -> str:
         return ""
 
 
-def list_fragments_with_status() -> list[dict[str, Any]]:
+def list_fragments_with_status(*, ensure_runtime_dir: bool = True) -> list[dict[str, Any]]:
     """列出运行时 fragments，附带与默认版本的对比状态。"""
     import os as _os
     runtime_dir = runtime_fragments_dir()
     default_dir = default_fragments_dir()
-    os.makedirs(runtime_dir, exist_ok=True)
+    if ensure_runtime_dir:
+        os.makedirs(runtime_dir, exist_ok=True)
 
     names: set[str] = set()
     if os.path.isdir(runtime_dir):
@@ -331,7 +332,7 @@ def _runtime_prompt_needs_rebuild(path: str, content: str) -> bool:
     return _included_runtime_fragment_mtime("base") > output_mtime
 
 
-def read_runtime_or_default_prompt() -> dict[str, Any]:
+def read_runtime_or_default_prompt(*, auto_rebuild: bool = True) -> dict[str, Any]:
     """读取完整 prompt.md。优先运行时，fallback 到默认。"""
     rp = runtime_prompt_output()
     dp = legacy_default_prompt_path()
@@ -339,7 +340,7 @@ def read_runtime_or_default_prompt() -> dict[str, Any]:
         with open(rp, "r", encoding="utf-8") as fh:
             content = fh.read()
         auto_rebuilt = False
-        if _runtime_prompt_needs_rebuild(rp, content):
+        if auto_rebuild and _runtime_prompt_needs_rebuild(rp, content):
             result = build_prompt_from_runtime("base")
             if result.get("ok") and os.path.isfile(rp):
                 with open(rp, "r", encoding="utf-8") as fh:

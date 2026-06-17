@@ -201,9 +201,10 @@ optional_vars:
         json={"content": "---\nname: 群聊回复\nrequired_vars:\n  - user_input\n---\n更新 {{ user_input }}\n"},
         headers=auth_header,
     )
-    assert put_resp.status_code == 200, put_resp.text
-    assert put_resp.json()["saved"] is True
-    assert client.get("/api/v1/admin/prompts/group_chat/history", headers=auth_header).json()["items"]
+    assert put_resp.status_code == 410, put_resp.text
+    assert "只读迁移入口" in put_resp.text
+    history_resp = client.get("/api/v1/admin/prompts/group_chat/history", headers=auth_header)
+    assert history_resp.status_code == 200, history_resp.text
 
     effective = client.post(
         "/api/v1/admin/prompt/effective-preview",
@@ -219,22 +220,8 @@ optional_vars:
         },
         headers=auth_header,
     )
-    assert effective.status_code == 200, effective.text
-    effective_json = effective.json()
-    assert effective_json["prompt_source"] == "PromptManager runtime template"
-    assert effective_json["prompt_runtime_path"] == str(prompt_dir / "group_chat.md")
-    assert effective_json["prompt_default_path"]
-    assert len(effective_json["prompt_sha256"]) == 64
-    rendered_request = json.dumps(effective_json["request_json"], ensure_ascii=False)
-    assert "LEGACY_RUNTIME_MARKER" not in rendered_request
-    assert "<user_input>" in rendered_request
-    assert "EFFECTIVE_PROMPT_MARKER" in rendered_request
-    tool_schemas = effective_json["tool_schemas"]
-    tool_schema_by_name = {item["function"]["name"]: item["function"] for item in tool_schemas}
-    assert "group_analysis" in tool_schema_by_name
-    assert "python_sandbox" in tool_schema_by_name
-    assert "简单聊天记录查询" in tool_schema_by_name["python_sandbox"]["description"]
-    assert effective_json["request_json"]["tools"] == tool_schemas
+    assert effective.status_code == 410, effective.text
+    assert "Prompt V1" in effective.text
 
     effective_v2 = client.post(
         "/api/v1/admin/prompt/effective-preview",

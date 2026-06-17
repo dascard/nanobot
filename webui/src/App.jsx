@@ -10,7 +10,6 @@ import {
   Database,
   FileText,
   Gauge,
-  GitBranch,
   Home,
   Images,
   ListChecks,
@@ -178,7 +177,6 @@ const NAV_SECTIONS = [
     items: [
       { to: '/prompt-preview', label: 'V2 运行预览' },
       { to: '/prompt-v2-templates', label: 'V2 模板' },
-      { to: '/prompt-legacy', label: 'Legacy 回滚', icon: GitBranch },
     ],
   },
   {

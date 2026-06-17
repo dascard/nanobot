@@ -7,6 +7,7 @@ import { LLMApiRequestLogsBlock, MessageAccordion, RawJsonAccordion } from '../.
 
 // ── Prompt ──
 export function PromptPage() {
+  const legacyReadOnly = true
   const [prompt, setPrompt] = useState('')
   const [promptSource, setPromptSource] = useState('')
   const [promptOutputPath, setPromptOutputPath] = useState('')
@@ -62,6 +63,7 @@ export function PromptPage() {
     setDiffPreview(null)
   }
   const saveFragment = useCallback(() => {
+    if (legacyReadOnly) return
     if (!editing || !dirty) return
     api.put(`/prompt/fragments/${encodeURIComponent(editing)}`, { content: editContent }).then(r => {
       setToast(`已保存到运行时片段 · ${r.data.after_hash}`)
@@ -69,7 +71,7 @@ export function PromptPage() {
       setEditContent('')
       load()
     }).catch(e => alert(e.response?.data?.detail || '保存失败'))
-  }, [dirty, editContent, editing, load])
+  }, [dirty, editContent, editing, legacyReadOnly, load])
   useEffect(() => {
     const handler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's' && editing) {
@@ -82,6 +84,7 @@ export function PromptPage() {
   }, [editing, saveFragment])
 
   const rebuild = () => {
+    if (legacyReadOnly) return
     setBuilding(true)
     api.post('/prompt/build').then(r => {
       if (r.data.ok) {
@@ -93,6 +96,7 @@ export function PromptPage() {
     }).finally(() => setBuilding(false))
   }
   const initRuntime = () => {
+    if (legacyReadOnly) return
     api.post('/prompt/init-runtime').then(r => {
       setToast(r.data.copied?.length ? `已初始化 ${r.data.copied.length} 个缺失片段` : '所有片段已存在')
       load()
@@ -107,6 +111,7 @@ export function PromptPage() {
       .catch(e => alert(e.response?.data?.detail || '对比失败'))
   }
   const resetToDefault = (name) => {
+    if (legacyReadOnly) return
     if (!confirm(`确认用默认版本覆盖运行时片段 ${name}？当前运行时内容将先备份。`)) return
     api.post(`/prompt/fragments/${encodeURIComponent(name)}/reset-to-default`).then(() => {
       setToast(`已恢复 ${name} 到默认版本`)
@@ -126,8 +131,8 @@ export function PromptPage() {
         <div className="flex gap-3">
           <span className="text-xs text-amber-400 mt-0.5">⚠</span>
           <div>
-            <p className="text-sm text-amber-300 mb-1">Legacy prompt.md 片段（v1 回滚）。</p>
-            <p className="text-xs text-slate-500">此页面只用于 v1 紧急回滚和迁移对比；V2 真实请求与有效预览请使用 Prompt Runtime V2。默认片段目录由 Git 管理，WebUI 保存只写入运行时片段目录。</p>
+            <p className="text-sm text-amber-300 mb-1">Legacy prompt 已降级为只读迁移入口。</p>
+            <p className="text-xs text-slate-500">此页面只用于历史查看和迁移对比；V2 真实请求与有效预览请使用 Prompt Runtime V2。默认片段目录由 Git 管理，旧版运行时写入入口已关闭。</p>
             {(defaultDir || runtimeDir || outputPath) && <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-2 text-[10px] text-slate-600">
               {defaultDir && <span>默认片段: <span className="text-slate-500 font-mono">{defaultDir}</span></span>}
               {runtimeDir && <span>运行时片段: <span className="text-slate-500 font-mono">{runtimeDir}</span></span>}
@@ -139,11 +144,11 @@ export function PromptPage() {
       </Card>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-4">
-          <h1 className="text-2xl font-bold">Legacy prompt.md 片段（v1 回滚）</h1>
-          <Badge tone="amber">v1 rollback only</Badge>
+          <h1 className="text-2xl font-bold">Legacy prompt.md 片段（只读迁移）</h1>
+          <Badge tone="amber">readonly migration</Badge>
           <div className="flex gap-1 bg-slate-900 rounded-lg p-0.5">
             <button onClick={() => setTab('fragments')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'fragments' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>编辑片段</button>
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'fragments' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>查看片段</button>
             <button onClick={() => setTab('preview')}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'preview' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>完整 prompt.md</button>
             <button onClick={() => setTab('backups')}
@@ -152,8 +157,8 @@ export function PromptPage() {
         </div>
         <div className="flex gap-2">
           <NavLink to="/prompt-preview" className="px-3 py-2 bg-emerald-700/70 hover:bg-emerald-700 rounded-xl text-sm">查看 V2 预览</NavLink>
-          <button onClick={initRuntime} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">初始化缺失片段</button>
-          <button onClick={rebuild} disabled={building}
+          <button onClick={initRuntime} disabled={legacyReadOnly} title="Legacy prompt 已降级为只读迁移入口" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-xl text-sm">初始化缺失片段</button>
+          <button onClick={rebuild} disabled={legacyReadOnly || building} title="Legacy prompt 已降级为只读迁移入口"
             className="px-4 py-2 bg-amber-700/70 hover:bg-amber-700 disabled:opacity-50 rounded-xl text-sm font-medium transition-colors">
             {building ? '构建中...' : '重新构建运行时 prompt.md'}
           </button>
@@ -189,8 +194,9 @@ export function PromptPage() {
                   <td className="py-2 px-3 font-mono text-xs text-slate-400">{b.hash}</td>
                   <td className="py-2 px-3 text-slate-400">{b.size}</td>
                   <td className="py-2 px-3">
-                    <button onClick={() => { if (confirm(`确认回滚 ${b.fragment} 到该备份?`)) api.post(`/prompt/backups/${encodeURIComponent(b.name)}/rollback`).then(() => { setToast('已回滚运行时片段，请重新构建 prompt.md'); load() }) }}
-                      className="px-2 py-1 bg-amber-700/50 hover:bg-amber-700 text-amber-300 rounded-lg text-xs">回滚</button>
+                    <button onClick={() => { if (legacyReadOnly) return; if (confirm(`确认回滚 ${b.fragment} 到该备份?`)) api.post(`/prompt/backups/${encodeURIComponent(b.name)}/rollback`).then(() => { setToast('已回滚运行时片段，请重新构建 prompt.md'); load() }) }}
+                      disabled={legacyReadOnly} title="Legacy prompt 已降级为只读迁移入口"
+                      className="px-2 py-1 bg-amber-700/50 hover:bg-amber-700 disabled:opacity-40 text-amber-300 rounded-lg text-xs">回滚</button>
                   </td>
                 </tr>
               ))}
@@ -236,18 +242,19 @@ export function PromptPage() {
                   <div className="flex gap-2">
                     {editingFrag?.has_default && <button onClick={() => viewDefault(editing)} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">查看默认</button>}
                     {editingFrag?.has_default && <button onClick={() => viewDiff(editing)} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">对比默认</button>}
-                    {editingFrag?.has_default && <button onClick={() => resetToDefault(editing)} className="px-3 py-1.5 bg-amber-700/50 hover:bg-amber-700 text-amber-300 rounded-lg text-xs transition-colors">恢复默认</button>}
+                    {editingFrag?.has_default && <button onClick={() => resetToDefault(editing)} disabled={legacyReadOnly} title="Legacy prompt 已降级为只读迁移入口" className="px-3 py-1.5 bg-amber-700/50 hover:bg-amber-700 disabled:opacity-40 text-amber-300 rounded-lg text-xs transition-colors">恢复默认</button>}
                     <button onClick={closeEditor}
                       className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">取消</button>
-                    <button onClick={saveFragment}
-                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-medium transition-colors">保存到运行时片段</button>
+                    <button onClick={saveFragment} disabled={legacyReadOnly || !dirty} title="Legacy prompt 已降级为只读迁移入口"
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 rounded-lg text-xs font-medium transition-colors">保存到运行时片段</button>
                   </div>
                 </div>
                 <textarea value={editContent}
                   onChange={e => setEditContent(e.target.value)}
+                  readOnly={legacyReadOnly}
                   className="flex-1 w-full p-4 rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-300 font-mono leading-relaxed resize-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
                 <div className="text-xs text-slate-600 mt-1">
-                  Ctrl+S 或 Cmd+S 保存 · 保存后需点"重新构建运行时 prompt.md"生效 · {editContent.length} 字符
+                  只读迁移视图 · {editContent.length} 字符
                 </div>
                 {defaultPreview && (
                   <Card className="mt-3 p-4">
@@ -290,6 +297,7 @@ function defaultVarsForPrompt(item) {
 }
 
 export function ManagedPromptsPage() {
+  const legacyReadOnly = true
   const [items, setItems] = useState([])
   const [mode, setMode] = useState('')
   const [selected, setSelected] = useState('')
@@ -331,6 +339,7 @@ export function ManagedPromptsPage() {
   }, [selected])
 
   const save = () => {
+    if (legacyReadOnly) return
     api.put(`/prompts/${encodeURIComponent(selected)}`, { content }).then(r => {
       setToast(`已保存 ${r.data.after_hash}`)
       loadList()
@@ -344,8 +353,12 @@ export function ManagedPromptsPage() {
     api.post(`/prompts/${encodeURIComponent(selected)}/preview`, { variables, mode: 'preview' }).then(r => setPreview(r.data))
       .catch(e => alert(e.response?.data?.detail || '预览失败'))
   }
-  const reload = () => api.post('/prompts/reload').then(() => { setToast('已重新加载模板缓存'); loadList() })
+  const reload = () => {
+    if (legacyReadOnly) return
+    api.post('/prompts/reload').then(() => { setToast('已重新加载模板缓存'); loadList() })
+  }
   const rollback = (name) => {
+    if (legacyReadOnly) return
     if (!confirm(`确认回滚 ${selected} 到该版本?`)) return
     api.post(`/prompts/${encodeURIComponent(selected)}/rollback`, { backup_name: name }).then(() => {
       setToast('已回滚')
@@ -367,14 +380,14 @@ export function ManagedPromptsPage() {
         <div className="flex gap-3">
           <span className="text-xs text-emerald-400 mt-0.5">ℹ</span>
           <div>
-            <p className="text-sm text-emerald-300 mb-1">旧 PromptManager 模板（v1/迁移）。</p>
-            <p className="text-xs text-slate-500">V2 主链路使用独立 `core/prompt_v2` compiler；这里保留用于 v1 回滚、迁移整理和离线对比。默认模板目录：<span className="text-slate-400 font-mono">{defaultDir || 'prompts.default'}</span> · 运行时模板目录：<span className="text-slate-400 font-mono">{promptDir || 'data/prompts'}</span>。</p>
+            <p className="text-sm text-emerald-300 mb-1">旧 PromptManager 模板已降级为只读迁移入口。</p>
+            <p className="text-xs text-slate-500">V2 主链路使用独立 `core/prompt_v2` compiler；这里保留用于迁移整理和离线对比，旧版运行时写入入口已关闭。默认模板目录：<span className="text-slate-400 font-mono">{defaultDir || 'prompts.default'}</span> · 运行时模板目录：<span className="text-slate-400 font-mono">{promptDir || 'data/prompts'}</span>。</p>
           </div>
         </div>
       </Card>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-2xl font-bold mb-1">旧 PromptManager 模板（v1/迁移）</h1>
+          <h1 className="text-2xl font-bold mb-1">旧 PromptManager 模板（只读迁移）</h1>
           <p className="text-slate-500 text-sm">PromptManager Markdown 模板、变量预览、备份与回滚；不作为 V2 主回复编排入口</p>
           {(promptDir || defaultDir) && <div className="flex gap-4 mt-1 text-[10px] text-slate-600">
             {defaultDir && <span>默认模板: <span className="text-slate-500 font-mono">{defaultDir}</span></span>}
@@ -383,8 +396,8 @@ export function ManagedPromptsPage() {
         </div>
         <div className="flex items-center gap-2">
           <Badge tone={mode === 'managed' ? 'emerald' : mode === 'shadow' ? 'blue' : 'slate'}>{mode || 'unknown'}</Badge>
-          <button onClick={reload} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-xl text-sm">Reload</button>
-          <button onClick={save} disabled={!selected} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 rounded-xl text-sm font-medium">保存到运行时模板</button>
+          <button onClick={reload} disabled={legacyReadOnly} title="旧 PromptManager 模板已降级为只读迁移入口" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-xl text-sm">Reload</button>
+          <button onClick={save} disabled={legacyReadOnly || !selected} title="旧 PromptManager 模板已降级为只读迁移入口" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 rounded-xl text-sm font-medium">保存到运行时模板</button>
         </div>
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4" style={{ minHeight: 'calc(100vh - 150px)' }}>
@@ -407,6 +420,7 @@ export function ManagedPromptsPage() {
             <div className="text-xs text-slate-500">{content.length} 字符</div>
           </div>
           <textarea value={content} onChange={e => setContent(e.target.value)}
+            readOnly={legacyReadOnly}
             className="flex-1 min-h-[520px] w-full p-4 rounded-xl bg-slate-900 border border-slate-700 text-sm text-slate-300 font-mono leading-relaxed resize-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none" />
         </div>
         <div className="xl:col-span-4 space-y-4 min-w-0">
@@ -436,7 +450,7 @@ export function ManagedPromptsPage() {
                     <div className="font-mono text-slate-400 truncate">{h.created_at}</div>
                     <div className="text-slate-600">{h.hash} · {h.size} bytes</div>
                   </div>
-                  <button onClick={() => rollback(h.name)} className="px-2 py-1 bg-amber-700/50 hover:bg-amber-700 text-amber-300 rounded-lg">回滚</button>
+                  <button onClick={() => rollback(h.name)} disabled={legacyReadOnly} title="旧 PromptManager 模板已降级为只读迁移入口" className="px-2 py-1 bg-amber-700/50 hover:bg-amber-700 disabled:opacity-40 text-amber-300 rounded-lg">回滚</button>
                 </div>
               ))}
               {!history.length && <div className="py-8 text-center text-sm text-slate-600">暂无备份</div>}

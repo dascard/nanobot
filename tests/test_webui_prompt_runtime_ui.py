@@ -16,7 +16,7 @@ def test_prompt_runtime_v2_is_primary_prompt_nav_entry():
     assert "{ to: '/prompt-preview', label: 'V2 运行预览' }" in source
     assert "{ to: '/prompt-v2-templates', label: 'V2 模板' }" in source
     assert "{ to: '/prompts', label: 'V1 模板 / 对比' }" not in source
-    assert "{ to: '/prompt-legacy', label: 'Legacy 回滚' }" not in source
+    assert "to: '/prompt-legacy'" not in source
     assert "{ to: '/prompt', label: '旧版 Prompt 构建' }" not in source
 
 
@@ -27,6 +27,24 @@ def test_prompt_preview_defaults_to_v2_and_prompt_path_redirects():
     assert '<Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />' in source
     assert '<Route path="/prompt-legacy" element={<PromptPage />} />' in source
     assert '<Route path="/prompt-v2-templates" element={<PromptV2TemplatesPage />} />' in source
+
+
+def test_legacy_prompt_pages_are_readonly_migration_views():
+    source = PROMPT_JS.read_text(encoding="utf-8")
+    legacy_source = source.split("export function PromptPage()")[1].split("// ── Managed Prompts ──")[0]
+    managed_source = source.split("export function ManagedPromptsPage()")[1].split("const PROMPT_V2_RUNTIME_NODES")[0]
+
+    assert "legacyReadOnly = true" in legacy_source
+    assert "Legacy prompt 已降级为只读迁移入口" in legacy_source
+    assert "readOnly={legacyReadOnly}" in legacy_source
+    assert "if (legacyReadOnly) return" in legacy_source
+    assert "disabled={legacyReadOnly}" in legacy_source
+    assert "disabled={legacyReadOnly || building}" in legacy_source
+    assert "disabled={legacyReadOnly || !dirty}" in legacy_source
+    assert "disabled={legacyReadOnly || !selected}" in managed_source
+    assert "旧 PromptManager 模板已降级为只读迁移入口" in managed_source
+    assert "readOnly={legacyReadOnly}" in managed_source
+    assert "disabled={legacyReadOnly}" in managed_source
 
 
 def test_prompt_runtime_v2_page_exposes_template_editor():

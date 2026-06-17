@@ -2182,12 +2182,7 @@ def save_managed_prompt(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    try:
-        result = get_prompt_manager().save_prompt(prompt_key, body.content, operator="admin")
-    except PromptRenderError as e:
-        raise HTTPException(400, str(e))
-    _audit_request(db, request, "save_managed_prompt", "prompt", prompt_key, result)
-    return result
+    raise _legacy_prompt_write_disabled()
 
 
 @router.post("/prompts/{prompt_key}/preview")
@@ -2205,58 +2200,6 @@ def preview_managed_prompt(prompt_key: str, body: PromptPreviewRequest, _auth=De
         raise HTTPException(400, str(e))
 
 
-def _prompt_sha256(content: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(str(content or "").encode("utf-8")).hexdigest()
-
-
-def _legacy_prompt_preview_meta() -> dict:
-    from core.legacy_prompt_runtime import read_runtime_or_default_prompt
-
-    result = read_runtime_or_default_prompt()
-    content = str(result.get("content") or "")
-    source_key = str(result.get("source") or "")
-    if source_key == "runtime":
-        source = "Legacy runtime prompt"
-    elif source_key == "default":
-        source = "Legacy default prompt"
-    else:
-        source = "bridge manual assembly"
-    return {
-        "content": content,
-        "prompt_source": source,
-        "prompt_runtime_path": str(result.get("output_path") or ""),
-        "prompt_default_path": str(result.get("default_path") or ""),
-        "prompt_sha256": _prompt_sha256(content) if content else "",
-    }
-
-
-def _recent_prompt_preview_logs(db: Session, body: EffectivePromptPreviewRequest) -> tuple[str, list[dict]]:
-    from core.database import LLMApiRequestLog
-
-    q = db.query(AgentRun)
-    if body.session_id:
-        q = q.filter(AgentRun.session_id == body.session_id)
-    if body.user_id:
-        q = q.filter(AgentRun.user_id == body.user_id)
-    if body.group_id:
-        q = q.filter(AgentRun.group_id == body.group_id)
-    if body.chat_type:
-        q = q.filter(AgentRun.chat_type == body.chat_type)
-    run = q.order_by(AgentRun.started_at.desc()).first()
-    if not run:
-        return "", []
-    logs = (
-        db.query(LLMApiRequestLog)
-        .filter(LLMApiRequestLog.run_id == run.run_id)
-        .order_by(LLMApiRequestLog.created_at.desc())
-        .limit(5)
-        .all()
-    )
-    return run.run_id, [row_to_dict(row) for row in logs]
-
-
 @router.post("/prompt/effective-preview")
 async def preview_effective_prompt(
     body: EffectivePromptPreviewRequest,
@@ -2267,110 +2210,15 @@ async def preview_effective_prompt(
         from app.prompt_runtime.preview_service import preview_effective_prompt_v2
 
         return await preview_effective_prompt_v2(body, db)
-
-    from core.database import Persona
-    from core.context_builder import build_chat_context
-    from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
-    from core.tool_schema_preview import build_effective_tool_schemas
-
-    is_group = body.chat_type == "group"
-    group_id = body.group_id.strip()
-    session_id = body.session_id.strip() or (f"group_{group_id}" if is_group and group_id else "")
-    user_id = body.user_id.strip()
-    prompt_key = body.prompt_key.strip() or ("group_chat" if is_group else "private_chat")
-
-    persona_text = ""
-    if user_id:
-        persona = db.query(Persona).filter(Persona.user_id == user_id).first()
-        if persona and persona.persona_json:
-            persona_text = persona.persona_json
-
-    history_header, history_messages, history_debug = build_chat_context(
-        db,
-        session_id,
-        user_id=user_id,
-        is_group=is_group,
-        group_id=group_id,
-        current_user_input=body.user_input,
+    raise HTTPException(
+        status_code=410,
+        detail="Prompt V1 effective preview 已降级为只读迁移入口；请使用 engine=v2",
     )
-    runtime_preset = (body.runtime_preset or "full").strip() or "full"
-    enabled, disabled = resolve_effective_tools(
-        chat_type=body.chat_type,
-        group_id=group_id,
-        user_id=user_id,
-        runtime_preset=runtime_preset,
-        db=db,
-    )
-    runtime_tool_prompt = build_runtime_tool_prompt(enabled, disabled, body.chat_type)
-    tool_schemas = build_effective_tool_schemas(enabled, db=db)
-
-    from core.prompt_assembler import PromptAssembler, PromptBuildContext
-
-    prompt_build = PromptAssembler().build(
-        PromptBuildContext(
-            mode=body.mode,
-            chat_type=body.chat_type,
-            prompt_key=prompt_key,
-            session_id=session_id,
-            user_id=user_id,
-            group_id=group_id,
-            sender_name=body.sender_name,
-            sender_id=user_id,
-            user_input=body.user_input,
-            persona_text=persona_text or "无已存储画像",
-            history_header=history_header,
-            history_messages=history_messages,
-            runtime_tool_prompt=runtime_tool_prompt,
-            tool_schemas=tool_schemas,
-        )
-    )
-    messages = prompt_build.messages
-    recent_run_id, recent_logs = _recent_prompt_preview_logs(db, body)
-    tools = [{"name": name, "enabled": bool(enabled.get(name, True))} for name in sorted(enabled.keys())]
-    request_json = prompt_build.request_json
-    return {
-        "chat_type": body.chat_type,
-        "session_id": session_id,
-        "user_id": user_id,
-        "group_id": group_id,
-        "prompt_key": prompt_key,
-        "prompt_mode": prompt_build.prompt_mode,
-        "prompt_source": prompt_build.prompt_source,
-        "prompt_runtime_path": prompt_build.prompt_runtime_path,
-        "prompt_default_path": prompt_build.prompt_default_path,
-        "prompt_sha256": prompt_build.prompt_sha256,
-        "managed_prompt_sha256": prompt_build.managed_prompt_sha256,
-        "legacy_prompt_sha256": prompt_build.legacy_prompt_sha256,
-        "legacy_vs_managed_diff": prompt_build.diff,
-        "warnings": prompt_build.warnings,
-        "system_message": messages[0]["content"] if messages else "",
-        "identity_context": next((m["content"] for m in messages if "<identity_context>" in str(m.get("content", ""))), ""),
-        "runtime_context": next((m["content"] for m in messages if "<runtime_context>" in str(m.get("content", ""))), ""),
-        "persona_reference": next((m["content"] for m in messages if "<persona_reference" in str(m.get("content", ""))), ""),
-        "history_context": prompt_build.variables.get("history_context", ""),
-        "history_debug": history_debug,
-        "group_recent_context": "",
-        "runtime_preset": runtime_preset,
-        "runtime_tool_prompt": runtime_tool_prompt,
-        "tools": tools,
-        "tool_schemas": tool_schemas,
-        "effective_tool_schemas": tool_schemas,
-        "disabled_tools": disabled,
-        "prompt_manager_render": prompt_build.render,
-        "compiled_prompt": prompt_build.to_dict(),
-        "prompt_build": prompt_build.to_dict(),
-        "managed_messages": prompt_build.managed_messages,
-        "legacy_messages": prompt_build.legacy_messages,
-        "messages": messages,
-        "request_json": request_json,
-        "recent_agent_run_id": recent_run_id,
-        "recent_llm_api_logs": recent_logs,
-    }
 
 
 @router.post("/prompts/reload")
 def reload_managed_prompts(_auth=Depends(verify_admin)):
-    return get_prompt_manager().reload()
+    raise _legacy_prompt_write_disabled()
 
 
 @router.get("/prompts/{prompt_key}/history")
@@ -2389,12 +2237,7 @@ def rollback_managed_prompt(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    try:
-        result = get_prompt_manager().rollback(prompt_key, body.backup_name, operator="admin")
-    except PromptRenderError as e:
-        raise HTTPException(400, str(e))
-    _audit_request(db, request, "rollback_managed_prompt", "prompt", prompt_key, result)
-    return result
+    raise _legacy_prompt_write_disabled()
 
 
 # ═══════════════════════════════════════════
@@ -2664,10 +2507,17 @@ def get_llm_api_log(log_id: int, db: Session = Depends(get_db), _auth=Depends(ve
 # Legacy Prompt——运行时分离
 # ═══════════════════════════════════════════
 
+def _legacy_prompt_write_disabled() -> HTTPException:
+    return HTTPException(
+        status_code=410,
+        detail="Legacy prompt 编辑已降级为只读迁移入口；请改用 Prompt Runtime V2 模板",
+    )
+
+
 @router.get("/prompt")
 def get_prompt(_auth=Depends(verify_admin)):
     from core.legacy_prompt_runtime import read_runtime_or_default_prompt
-    result = read_runtime_or_default_prompt()
+    result = read_runtime_or_default_prompt(auto_rebuild=False)
     if result["source"] == "none":
         raise HTTPException(404, "prompt.md not found (no runtime or default)")
     return {
@@ -2682,7 +2532,7 @@ def get_prompt(_auth=Depends(verify_admin)):
 @router.get("/prompt/fragments")
 def list_prompt_fragments(_auth=Depends(verify_admin)):
     from core.legacy_prompt_runtime import list_fragments_with_status, default_fragments_dir, runtime_fragments_dir, runtime_prompt_output, backup_dir as _lbkp_dir
-    items = list_fragments_with_status()
+    items = list_fragments_with_status(ensure_runtime_dir=False)
     return {
         "fragments": items,
         "default_dir": default_fragments_dir(),
@@ -2695,32 +2545,12 @@ def list_prompt_fragments(_auth=Depends(verify_admin)):
 @router.put("/prompt/fragments/{name}")
 def update_prompt_fragment(name: str, body: dict, request: Request, db: Session = Depends(get_db),
                            _auth=Depends(verify_admin)):
-    from core.legacy_prompt_runtime import save_fragment
-    content = str(body.get("content", ""))
-    if not content.strip():
-        raise HTTPException(400, "Refuse to save empty prompt fragment")
-    try:
-        result = save_fragment(name, content)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    _audit_request(db, request, "update_prompt_fragment", "prompt_fragment", name, {
-        "before_hash": result["before_hash"], "after_hash": result["after_hash"],
-        "runtime_path": result["runtime_path"],
-    })
-    return result
+    raise _legacy_prompt_write_disabled()
 
 
 @router.post("/prompt/build")
 def rebuild_prompt(request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    from core.legacy_prompt_runtime import build_prompt_from_runtime
-    try:
-        result = build_prompt_from_runtime(chat_type="base")
-        _audit_request(db, request, "rebuild_prompt", "prompt", "legacy", {
-            "ok": result.get("ok"), "output": result.get("output", ""),
-        })
-        return result
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    raise _legacy_prompt_write_disabled()
 
 
 @router.get("/prompt/fragments/{name}/default")
@@ -2740,7 +2570,7 @@ def diff_prompt_fragment(name: str, _auth=Depends(verify_admin)):
     if not default:
         raise HTTPException(404, f"Default fragment not found: {name}")
     # 找运行时版本
-    items = [f for f in list_fragments_with_status() if f["name"] == name]
+    items = [f for f in list_fragments_with_status(ensure_runtime_dir=False) if f["name"] == name]
     runtime_content = items[0]["content"] if items else ""
     diff_lines = list(difflib.unified_diff(
         default["content"].splitlines(keepends=True),
@@ -2759,23 +2589,12 @@ def diff_prompt_fragment(name: str, _auth=Depends(verify_admin)):
 
 @router.post("/prompt/fragments/{name}/reset-to-default")
 def reset_prompt_fragment(name: str, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    from core.legacy_prompt_runtime import reset_to_default
-    try:
-        result = reset_to_default(name)
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e))
-    _audit_request(db, request, "reset_prompt_fragment", "prompt_fragment", name, result)
-    return result
+    raise _legacy_prompt_write_disabled()
 
 
 @router.post("/prompt/init-runtime")
 def init_prompt_runtime(request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    from core.legacy_prompt_runtime import init_legacy_prompt_runtime_dir
-    result = init_legacy_prompt_runtime_dir()
-    _audit_request(db, request, "init_prompt_runtime", "prompt", "legacy", {
-        "copied": result["copied"],
-    })
-    return result
+    raise _legacy_prompt_write_disabled()
 
 
 def _prompt_backup_dir() -> str:
@@ -2815,38 +2634,7 @@ def list_prompt_backups(_auth=Depends(verify_admin)):
 
 @router.post("/prompt/backups/{backup_name}/rollback")
 def rollback_prompt_backup(backup_name: str, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    import hashlib, shutil
-    from core.legacy_prompt_runtime import runtime_fragments_dir
-
-    parsed = _parse_prompt_backup_name(os.path.basename(backup_name))
-    if not parsed:
-        raise HTTPException(400, "Invalid backup name")
-    bkp_dir = os.path.abspath(_prompt_backup_dir())
-    backup_path = os.path.abspath(os.path.join(bkp_dir, backup_name))
-    if not backup_path.startswith(bkp_dir + os.sep) or not os.path.isfile(backup_path):
-        raise HTTPException(404, "Backup not found")
-
-    runtime_dir = os.path.abspath(runtime_fragments_dir())
-    target = os.path.abspath(os.path.join(runtime_dir, parsed["fragment"]))
-    if not target.startswith(runtime_dir + os.sep):
-        raise HTTPException(400, "Invalid fragment name")
-
-    # 回滚到运行时 fragment（不写 default）
-    if os.path.isfile(target):
-        with open(target, "r", encoding="utf-8") as fh:
-            current = fh.read()
-        current_hash = hashlib.sha256(current.encode()).hexdigest()[:12]
-        rollback_guard = os.path.join(
-            bkp_dir,
-            f"{parsed['fragment']}.{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.{current_hash}.bak",
-        )
-        shutil.copy2(target, rollback_guard)
-    os.makedirs(runtime_dir, exist_ok=True)
-    shutil.copy2(backup_path, target)
-    _audit_request(db, request, "rollback_prompt_fragment", "prompt_fragment", parsed["fragment"], {
-        "backup": backup_name,
-    })
-    return {"ok": True, "fragment": parsed["fragment"], "backup": backup_name}
+    raise _legacy_prompt_write_disabled()
 
 
 # ═══════════════════════════════════════════

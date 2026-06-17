@@ -433,13 +433,14 @@ git commit -m "refactor(评测): 默认使用 V2 回复评估"
 
 **文件：**
 - 修改：`api/admin_routes.py`
+- 修改：`core/legacy_prompt_runtime.py`
 - 修改：`tests/test_prompt_trace_admin.py`
-- 修改：`tests/test_prompt_v2_template_admin.py`
+- 创建：`tests/test_prompt_legacy_admin_readonly.py`
 - 修改：`tests/test_webui_prompt_runtime_ui.py`
 - 修改：`webui/src/App.jsx`
 - 修改：`webui/src/features/prompt/PromptPages.jsx`
 
-- [ ] **步骤 1：为 V1 effective-preview 写红灯测试**
+- [x] **步骤 1：为 V1 effective-preview 写红灯测试**
 
 在 `tests/test_prompt_v2_template_admin.py` 新增测试：
 
@@ -469,9 +470,9 @@ def test_effective_preview_rejects_v1_engine(tmp_path, monkeypatch):
     assert "Prompt V1" in response.text
 ```
 
-如果该文件没有可复用 `client` fixture，则沿用文件内已有 `TestClient(app)` 和 `override_get_db()` 写法。
+实际：集中写入 `tests/test_prompt_legacy_admin_readonly.py::test_effective_preview_v1_returns_410_without_prompt_assembler`，使用全局 `client` fixture，并 monkeypatch `PromptAssembler.build` 为失败哨兵。
 
-- [ ] **步骤 2：为 legacy 写接口阻断写红灯测试**
+- [x] **步骤 2：为 legacy 写接口阻断写红灯测试**
 
 在 `tests/test_prompt_trace_admin.py` 或新增 `tests/test_prompt_legacy_admin_readonly.py` 中添加：
 
@@ -491,7 +492,7 @@ def test_legacy_prompt_write_endpoints_are_readonly(client, auth_header):
     assert reset.status_code == 410
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -504,7 +505,9 @@ python -B -m pytest \
 
 预期：失败。当前 V1 preview 会调用 `PromptAssembler`，legacy 写接口仍可写。
 
-- [ ] **步骤 4：新增 legacy 只读错误 helper**
+实际：红灯集合先失败，`13 failed, 3 passed, 20 warnings`；失败点覆盖 managed / legacy 写接口未 410、V1 preview 未 410、legacy GET 仍创建运行时目录、前端导航和按钮仍可写。
+
+- [x] **步骤 4：新增 legacy 只读错误 helper**
 
 在 `api/admin_routes.py` helper 区加入：
 
@@ -516,7 +519,7 @@ def _legacy_prompt_write_disabled() -> HTTPException:
     )
 ```
 
-- [ ] **步骤 5：拦截 V1 effective-preview**
+- [x] **步骤 5：拦截 V1 effective-preview**
 
 在 `preview_effective_prompt()` 中处理 `body.engine != "v2"`：
 
@@ -530,7 +533,7 @@ def _legacy_prompt_write_disabled() -> HTTPException:
 
 保留历史 trace 查看接口，不要改 `agent-runs` 或 `prompt-render-logs` 读取逻辑。
 
-- [ ] **步骤 6：拦截 legacy 写接口**
+- [x] **步骤 6：拦截 legacy 写接口**
 
 给这些写接口增加：
 
@@ -544,15 +547,20 @@ def _legacy_prompt_write_disabled() -> HTTPException:
 - prompt rollback 写接口
 - `PUT /prompt/fragments/{name}`
 - `POST /prompt/build`
-- `POST /prompt/reset`
-- `POST /prompt/init`
+- `POST /prompt/fragments/{name}/reset-to-default`
+- `POST /prompt/init-runtime`
 - legacy backup rollback 写接口
+- `POST /prompts/reload`
 
 GET /prompt、GET /prompt/fragments、GET /prompt/fragments/{name}/default、GET history 类接口保留。
 
-- [ ] **步骤 7：更新 WebUI legacy 入口**
+补充：`GET /prompt` 改为 `auto_rebuild=False`，`GET /prompt/fragments` 和 diff 改为 `ensure_runtime_dir=False`，避免只读迁移页触发旧运行时写入副作用。
+
+- [x] **步骤 7：更新 WebUI legacy 入口**
 
 在 `webui/src/App.jsx` 中把导航文案从“Legacy 回滚”改为“Legacy 迁移只读”，或从主导航移除。
+
+实际：从主导航移除 `/prompt-legacy`，保留直达路由。
 
 在 `webui/src/features/prompt/PromptPages.jsx` 中禁用写按钮，显示只读状态。按钮禁用示例：
 
@@ -562,7 +570,7 @@ GET /prompt、GET /prompt/fragments、GET /prompt/fragments/{name}/default、GET
 </button>
 ```
 
-- [ ] **步骤 8：运行任务 3 定向测试**
+- [x] **步骤 8：运行任务 3 定向测试**
 
 运行：
 
@@ -576,10 +584,27 @@ python -B -m pytest \
 
 预期：全部通过。
 
+实际：
+
+```bash
+python -B -m pytest tests/test_prompt_legacy_admin_readonly.py tests/test_prompt_trace_admin.py::test_admin_prompt_and_trace_endpoints tests/test_webui_prompt_runtime_ui.py -q -p no:cacheprovider
+# 16 passed, 20 warnings
+
+python -B -m pytest tests/test_prompt_v2_template_admin.py tests/test_prompt_trace_admin.py tests/test_prompt_legacy_admin_readonly.py tests/test_webui_prompt_runtime_ui.py -q -p no:cacheprovider
+# 25 passed, 20 warnings
+
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_prompt_runtime_bootstrap.py tests/test_prompt_manifest.py tests/test_prompt_v2.py tests/test_prompt_v2_template_admin.py tests/test_prompt_trace_admin.py tests/test_reply_admin.py tests/test_webui_prompt_runtime_ui.py tests/test_prompt_legacy_admin_readonly.py -q -p no:cacheprovider
+# 70 passed, 20 warnings
+
+npm run build
+# ✓ built
+```
+
 - [ ] **步骤 9：提交任务 3**
 
 ```bash
-git add api/admin_routes.py tests/test_prompt_v2_template_admin.py tests/test_prompt_trace_admin.py tests/test_prompt_legacy_admin_readonly.py tests/test_webui_prompt_runtime_ui.py webui/src/App.jsx webui/src/features/prompt/PromptPages.jsx
+git add api/admin_routes.py core/legacy_prompt_runtime.py tests/test_prompt_trace_admin.py tests/test_prompt_legacy_admin_readonly.py tests/test_webui_prompt_runtime_ui.py webui/src/App.jsx webui/src/features/prompt/PromptPages.jsx .Codex/plans/prompt-legacy-convergence.md
 git commit -m "refactor(提示词): 降级旧版管理入口"
 ```
 
