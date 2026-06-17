@@ -747,8 +747,28 @@ class GroupRuntime:
                         "reason": "rate limited / gate in progress",
                     }, state, tr)
 
-                state.mark_gate_start()
                 snapshot = state.take_snapshot()
+                if tr == "ambient":
+                    try:
+                        scoring_decision = self._score_timing(
+                            state,
+                            tr,
+                            pending=snapshot,
+                        )
+                    except Exception as exc:
+                        scoring_decision = None
+                        logger.debug("[GroupRuntime] ambient scoring failed: %s", exc, exc_info=True)
+                    if scoring_decision is not None and scoring_decision.stage == "rule_shortcut":
+                        logger.info("[GroupRuntime] ambient_scoring_shortcut group=%s action=%s pending=%d",
+                                    group_id, scoring_decision.action, len(snapshot))
+                        return self._apply_scoring_shortcut(
+                            state,
+                            scoring_decision,
+                            pending=snapshot,
+                            reason_prefix="ambient scoring shortcut",
+                        )
+
+                state.mark_gate_start()
                 gen = state.generation
                 ctx_snapshot = dict(ctx)
 

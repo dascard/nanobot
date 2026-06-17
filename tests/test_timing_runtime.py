@@ -551,6 +551,30 @@ class TestGroupRuntime:
         assert "1/2" in r.get("reason", "")
 
     @pytest.mark.asyncio
+    async def test_ambient_ack_rule_shortcut_skips_gate(self, monkeypatch):
+        """普通 ambient 纯确认应由 scoring 确定 no_reply，不浪费模型调用。"""
+        runtime = GroupRuntime()
+
+        async def fail_gate(*_args, **_kwargs):
+            raise AssertionError("deterministic ambient scoring should skip TimingGate")
+
+        monkeypatch.setattr(runtime, "_call_gate", fail_gate)
+
+        result = await runtime.process_message("g1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "嗯",
+            "message_id": "m1",
+        }, trigger_reason="ambient", talk_value=1.0)
+
+        assert result["action"] == "no_reply"
+        assert result["reason"].startswith("ambient scoring shortcut:")
+        scoring = result["timing_scoring"]
+        assert scoring["stage"] == "rule_shortcut"
+        assert scoring["model_used"] is False
+        assert scoring["signals"]["sub_signals"]["s_ack"] == 0.85
+
+    @pytest.mark.asyncio
     async def test_timer_does_not_bypass_talk_value_gate(self):
         """timer 回调也检查 talk_value——ambient 一条不能绕过。"""
         runtime = GroupRuntime()
