@@ -445,12 +445,22 @@ class GroupRuntime:
                         raw=str(model_result.get("raw") or ""),
                         reason=str(model_result.get("reason") or ""),
                     )
-            ago = state.bot_reply_ago()
-            min_interval_active = self._should_cooldown(state, tr)
             latest_sender_id = msgs[-1].sender_id if msgs else ""
             linger_score = state.linger_score_for(latest_sender_id) if tr == "recent_bot_followup" else 0.0
             if tr == "recent_bot_followup" and linger_score <= 0 and state.linger_active_until <= 0:
                 linger_score = LINGER_BASE_WEIGHT
+            ago = state.bot_reply_ago()
+            linger_interval_active = (
+                tr == "recent_bot_followup"
+                and linger_score > 0
+                and 0 < ago < LINGER_MIN_INTERVAL_SECS
+            )
+            min_interval_active = linger_interval_active or self._should_cooldown(state, tr)
+            min_interval_remaining = (
+                LINGER_MIN_INTERVAL_SECS - ago
+                if linger_interval_active
+                else BOT_REPLY_COOLDOWN_SEC - ago
+            )
             decision = decide_timing(
                 text=_pending_text_for_scoring(msgs),
                 is_group=True,
@@ -463,7 +473,7 @@ class GroupRuntime:
                 has_files=_has_file_segments(msgs),
                 linger_score=linger_score,
                 min_interval_active=min_interval_active,
-                min_interval_remaining=max(0.0, BOT_REPLY_COOLDOWN_SEC - ago),
+                min_interval_remaining=max(0.0, min_interval_remaining),
                 model_hint=model_hint,
             )
             return asdict(decision)

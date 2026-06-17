@@ -583,6 +583,43 @@ class TestGroupRuntime:
         assert linger_score == pytest.approx(0.47, abs=0.02)
 
     @pytest.mark.asyncio
+    async def test_recent_followup_shadow_waits_during_linger_min_interval(self, monkeypatch):
+        """余韵期刚回复后，shadow scoring 应建议等到最小间隔结束。"""
+        import core.group_runtime.runtime as runtime_module
+
+        now = 1000.0
+        monkeypatch.setattr(runtime_module._time, "time", lambda: now)
+        runtime = GroupRuntime()
+
+        await runtime.process_message("group_1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "Nanobot 你看看",
+            "message_id": "m0",
+        }, trigger_reason="bot_name_mentioned")
+        runtime.note_bot_replied("group_1")
+        now += 3
+
+        state = runtime._states["group_1"]
+        state.add_message(PendingMessage(
+            "u1",
+            "A",
+            "继续呢",
+            message_id="m1",
+            trigger_reason="recent_bot_followup",
+        ))
+
+        scoring = runtime._shadow_scoring(
+            state,
+            "recent_bot_followup",
+            model_result={"action": "continue", "reason": "followup"},
+        )
+
+        assert scoring["action"] == "wait"
+        assert scoring["delay_seconds"] == 7
+        assert "min_interval" in scoring["reason"]
+
+    @pytest.mark.asyncio
     async def test_group_id_normalized_in_state_key(self):
         """不同格式的 group_id 映射到同一个 runtime state。"""
         runtime = GroupRuntime()
