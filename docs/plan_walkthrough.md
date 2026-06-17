@@ -8,7 +8,7 @@
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地。下一步优先推进 P1「收敛去债」中的路线项 1：先让 Prompt V2 成为默认 live prompt 路径，再逐步收敛 legacy / managed / V2 三套提示词资产，随后继续处理 H29 `handle_message` 巨函数拆分、连接池复用、响应信封和流式输出契约。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地。下一步优先推进 P1「收敛去债」中的路线项 1：先让 Prompt V2 成为默认 live prompt 路径，再逐步收敛 legacy / managed / V2 三套提示词资产，随后继续处理 H29 `handle_message` 巨函数拆分、残余同步 IO 审计、响应信封和流式输出契约。
 
 ## 执行约束
 
@@ -42,25 +42,26 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | 阶段 12：timing gate eval 基线与回归门禁 | 已完成 | baseline diff、阈值门禁和 CLI 门禁输出 |
 | 阶段 13：TimingGate 文档收尾 | 已完成 | 同步 `docs/todo.md` 与设计文档 |
 | 流式基础贯通：`Message` 带 `stream` 参数 | 已完成 | API → BridgePool → Bridge → KT `Message` → `BufferedOutput.write_stream()` 已贯通 |
-| Prompt V2 默认接管设计 | 已完成，待提交 | `docs/superpowers/specs/2026-06-17-prompt-v2-default-cutover-design.md` |
+| Agent Step SSE 真流式 | 已完成 | `2369081 feat(agent): 支持 step 流式输出` |
+| Prompt V2 默认接管设计 | 已完成 | `36874bf docs(提示词): 设计 V2 默认接管方案` |
 
 ### 后续优先级
 
 | 优先级 | 状态 | 阶段 | 目标 | 阶段性提交建议 |
 |--------|------|------|------|----------------|
-| P1-1 | 待执行 | 提交 Prompt V2 默认接管设计 | 单独提交设计文档，固定本阶段边界和验收清单 | `docs(提示词): 设计 V2 默认接管方案` |
-| P1-2 | 待执行 | 编写 Prompt V2 默认接管实现计划 | 写入 `.Codex/plans/prompt-v2-default-cutover.md`，列出 TDD 步骤、文件、验证命令 | `docs(计划): 记录 V2 默认接管计划` |
-| P1-3 | 待执行 | Prompt V2 默认 live 接管 | 默认 engine 改为 V2，保留显式 V1 回滚，初始化 `data/prompts_v2`，同步 admin preview 和 reply-test 默认值 | `feat(提示词): 默认启用 V2 运行时` |
+| P1-1 | 已完成 | 提交 Prompt V2 默认接管设计 | 单独提交设计文档，固定本阶段边界和验收清单 | `36874bf docs(提示词): 设计 V2 默认接管方案` |
+| P1-2 | 已完成 | 编写 Prompt V2 默认接管实现计划 | 写入 `.Codex/plans/prompt-v2-default-cutover.md`，列出 TDD 步骤、文件、验证命令 | `17b3815 docs(计划): 记录 V2 默认接管计划` |
+| P1-3 | 已完成 | Prompt V2 默认 live 接管 | 默认 engine 改为 V2，保留显式 V1 回滚，初始化 `data/prompts_v2`，同步 admin preview 和 reply-test 默认值 | `2be9329` / `8a1e177` / `8a73909` |
 | P1-4 | 待执行 | H29 第一刀：提取 prompt/runtime 请求组装 | 从 `handle_message()` 中抽出 prompt engine 选择、runtime input 构造和 V2 audit 边界 | `refactor(桥接): 提取提示词运行时组装` |
 | P1-5 | 待执行 | Prompt legacy 收口 | 禁用 live `fallback_v1` 发送路径，管理面和评估面转向 V2-only，legacy 页面降级为只读迁移入口 | `refactor(提示词): 收敛旧版回退路径` |
 | P1-6 | 待执行 | 删除冗余提示词资产并去版本化 | 删除 V1 / legacy 冗余资产，迁移仍有价值的文案，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
-| P1-7 | 待执行 | 连接池复用与残余同步 IO 审计 | 复用应用级 `aiohttp.ClientSession`，审计 compaction / image / sticker 同步 IO | `perf(客户端): 复用模型请求连接池` |
+| P1-7 | 已部分完成，待继续 | 连接池复用与残余同步 IO 审计 | 共享 `aiohttp.ClientSession` 已落地；继续审计 compaction / image / sticker 同步 IO | `4550aca` / `2bf4ee7` |
 | P1-8 | 待执行 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `feat(路由): 按模型能力校验请求` |
 | P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
 | P2-2 | 待执行 | 标准化请求 / 响应信封 | `/chat`、流式 done、`/group/message`、push 共享响应结构，私聊也返回 `reply_meta` | `refactor(消息): 统一响应信封` |
 | P2-3 | 待执行 | QQ 出站渲染契约 | 输出结构化 segments，图片和 HTML 渲染集中在出口层 | `feat(渲染): 定义 QQ 出站消息契约` |
 | P2-4 | 待执行 | Prompt platform × chat_type 二维适配 | V2 模板按平台和会话类型拆分，QQ 专属约定下沉到 platform 分支 | `feat(提示词): 支持平台化模板分支` |
-| P3-1 | 已部分完成，待继续 | SSE 真 token 流式剩余收敛 | 已贯通 `stream` 参数；继续补 chunk 合并窗口、backpressure、工具回合语义和统一信封 | `refactor(流式): 收敛增量输出契约` |
+| P3-1 | 已部分完成，待继续 | SSE 真 token 流式剩余收敛 | 已贯通 `/chat` 的 `stream` 参数并补齐 `/chat-step` SSE；继续补 chunk 合并窗口、backpressure、工具回合语义和统一信封 | `2369081` / 后续 `refactor(流式): 收敛增量输出契约` |
 | P3-2 | 运营项 | TimingGate 持续评估 | 用更多人工标注样本复跑审计，接入外部 CI / PR gate | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
 
@@ -68,51 +69,53 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ### 阶段 A：提交设计文档
 
-状态：待执行。
+状态：已完成。
 
-- [ ] 只暂存 `docs/superpowers/specs/2026-06-17-prompt-v2-default-cutover-design.md`
-- [ ] 运行 `git diff --check -- docs/superpowers/specs/2026-06-17-prompt-v2-default-cutover-design.md`
-- [ ] 提交：`docs(提示词): 设计 V2 默认接管方案`
+- [x] 只暂存 `docs/superpowers/specs/2026-06-17-prompt-v2-default-cutover-design.md`
+- [x] 运行 `git diff --check -- docs/superpowers/specs/2026-06-17-prompt-v2-default-cutover-design.md`
+- [x] 提交：`36874bf docs(提示词): 设计 V2 默认接管方案`
 
 ### 阶段 B：编写实现计划
 
-状态：待执行。
+状态：已完成。
 
-- [ ] 创建 `.Codex/plans/prompt-v2-default-cutover.md`
-- [ ] 覆盖文件职责：`core/config_registry.py`、`nanobot_kt/bridge.py`、`bootstrap/prompt_runtime.py`、`api/admin_routes.py`、相关测试文件
-- [ ] 明确 TDD 验收：默认走 V2、显式 V1 可回滚、非法 engine 回落 V2、admin / reply-test 默认值改为 V2、V2 runtime 初始化不覆盖已有修改
-- [ ] 运行计划占位符扫描和 `git diff --check`
-- [ ] 提交：`docs(计划): 记录 V2 默认接管计划`
+- [x] 创建 `.Codex/plans/prompt-v2-default-cutover.md`
+- [x] 覆盖文件职责：`core/config_registry.py`、`nanobot_kt/bridge.py`、`bootstrap/prompt_runtime.py`、`api/admin_routes.py`、相关测试文件
+- [x] 明确 TDD 验收：默认走 V2、显式 V1 可回滚、非法 engine 回落 V2、admin / reply-test 默认值改为 V2、V2 runtime 初始化不覆盖已有修改
+- [x] 运行计划占位符扫描和 `git diff --check`
+- [x] 提交：`17b3815 docs(计划): 记录 V2 默认接管计划`
 
 ### 阶段 C：TDD 红灯
 
-状态：待执行。
+状态：已完成。
 
-- [ ] 更新 `tests/test_bridge_prompt_v2.py`，验证无 override 默认走 V2、metadata override 为 V1 时仍可回滚、非法 engine 回落 V2
-- [ ] 更新 `tests/test_prompt_manifest.py`，验证 manifest active engine 与 config registry 默认值一致
-- [ ] 更新 `tests/test_prompt_v2_template_registry.py` 或相邻测试，验证 V2 runtime 初始化复制缺失模板且不覆盖已有文件
-- [ ] 更新 `tests/test_prompt_trace_admin.py`，验证 effective preview 默认 engine 为 V2
-- [ ] 更新 `tests/test_reply_admin.py`，验证 reply-test 默认 prompt engine / variant 使用 V2
-- [ ] 运行定向测试并确认新增测试先失败
+- [x] 更新 `tests/test_bridge_prompt_v2.py`，验证无 override 默认走 V2、metadata override 为 V1 时仍可回滚、非法 engine 回落 V2
+- [x] 更新 `tests/test_prompt_manifest.py`，验证 manifest active engine 与 config registry 默认值一致
+- [x] 更新 `tests/test_prompt_v2_template_registry.py`，验证 V2 runtime 初始化复制缺失模板且不覆盖已有文件
+- [x] 更新 `tests/test_prompt_runtime_bootstrap.py`，验证启动初始化 V2 runtime 和 V1 显式回滚 warning
+- [x] 更新 `tests/test_prompt_trace_admin.py`，验证 effective preview 默认 engine 为 V2
+- [x] 更新 `tests/test_reply_admin.py`，验证 reply-test 默认 prompt engine / variant 使用 V2
+- [x] 已按 TDD 确认新增测试先失败，再由实现变绿
 
 ### 阶段 D：最小实现
 
-状态：待执行。
+状态：已完成。
 
-- [ ] `core/config_registry.py`：`prompt_runtime.engine` 默认值改为 `v2`
-- [ ] `nanobot_kt/bridge.py`：engine fallback 从 V1 改为 V2，显式 V1 override 仍生效
-- [ ] `bootstrap/prompt_runtime.py`：启动时初始化或检查 `data/prompts_v2`，已有 runtime 修改不覆盖
-- [ ] `api/admin_routes.py`：effective preview 和 reply-test 默认值切到 V2
-- [ ] 启动诊断：有效 engine 仍为 V1 时记录显式回滚 warning
+- [x] `core/config_registry.py`：`prompt_runtime.engine` 默认值改为 `v2`
+- [x] `nanobot_kt/bridge.py`：engine fallback 从 V1 改为 V2，显式 V1 override 仍生效
+- [x] `core/prompt_v2/template_registry.py` / `bootstrap/prompt_runtime.py`：启动时初始化 `data/prompts_v2`，已有 runtime 修改不覆盖
+- [x] `api/admin_routes.py`：effective preview 和 reply-test 默认值切到 V2
+- [x] 启动诊断：有效 engine 仍为 V1 时记录显式回滚 warning
 
 ### 阶段 E：验证与提交
 
-状态：待执行。
+状态：已完成。
 
-- [ ] 运行定向测试：`python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_prompt_manifest.py tests/test_prompt_v2_template_registry.py tests/test_prompt_trace_admin.py tests/test_reply_admin.py -q -p no:cacheprovider`
-- [ ] 运行全量测试：`python -B -m pytest tests/ -q -p no:cacheprovider --durations=20`
-- [ ] 同步 `docs/todo.md` 和本文件状态
-- [ ] 提交：`feat(提示词): 默认启用 V2 运行时`
+- [x] 运行定向测试：`32 passed, 20 warnings`
+- [x] 运行全量测试：`1206 passed, 6 skipped, 113 warnings`
+- [x] 插队修复运行时错误：`22e0b79 fix(调度): 兼容无 Runner 的定时任务`
+- [x] 同步 `docs/todo.md` 和本文件状态
+- [x] 提交文档收尾：本次 `docs(计划): 同步阶段进度`
 
 ## 阶段清单
 

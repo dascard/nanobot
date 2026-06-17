@@ -141,19 +141,20 @@
 
 #### 路线项 1 — 提示词三套引擎收敛为唯一 V2  ·〔关联 H29〕
 
-- **现状**：运行时同时存在三套提示词资产并按 settings 切换。默认 `prompt_runtime.engine=v1`（`nanobot_kt/bridge.py:481`）、`prompt_mode=shadow`（:470），主链路实际走 `core/prompt_assembler.py`（模块自述 "Deprecated: V1 rollback only"，:1-24）+ legacy 整页 `creatures/nanobot/prompt.md` + `prompts.legacy.default/fragments/`。V2（`prompts.v2.default/` + `chat/flow.json` + `core/prompt_v2/`）已建成但默认未启用，运行时目录 `data/prompts_v2` 甚至未初始化（`bootstrap/prompt_runtime.py` 只初始化 managed + legacy）。`prompts.default/`（managed）仅做 shadow 影子对比，不真正发送。
+- **现状（2026-06-17 已部分落地）**：默认 live 路径已切到 V2：`prompt_runtime.engine` 注册默认值为 `v2`（`core/config_registry.py:138`），`NanobotBridge` 缺省 / 非法 engine fallback 均回落 V2（`nanobot_kt/bridge.py:481-497`），启动时会初始化 `data/prompts_v2`（`bootstrap/prompt_runtime.py:27`、`core/prompt_v2/template_registry.py:78`），admin effective preview 与 reply-test 默认也改为 V2。V1 / legacy 仍作为显式回滚路径保留：`NANOBOT_PROMPT_ENGINE=v1`、DB setting 或 metadata override 可切回旧 `core/prompt_assembler.py` + legacy 整页 `creatures/nanobot/prompt.md` + `prompts.legacy.default/fragments/`。`prompts.default/`（managed）仍主要服务旧引擎 / 对比入口。
 - **痛点**：同一交互定位 / 输出契约 / 安全规则在三处各写一份，改一处易漏其余两处；`bridge.handle_message` 内 v1/v2 双分支（:893 / :1006 / :1128）是 H29 巨函数复杂度的来源之一；admin 端深度耦合 legacy fragment 编辑端点（`api/admin_routes.py:2213-2817`）。
 - **目标**：只保留 V2 一套模板与一条 compile 路径，删除 `core/prompt_assembler.py`、`core/legacy_prompt_runtime.py`、`prompts.legacy.default/`、`prompts.default/`、`creatures/nanobot/prompt.md` 及 `scripts/build_nanobot_prompt.py`；去掉 "v2/V2" 版本后缀，模板目录、settings key、prompt_key、tracing 字段统一为无版本号的规范名。
 - **关联**：与 H29（bridge 巨函数拆分）同 PR；`core/prompt_v2/template_registry.py` 的 `_LEGACY_ALIASES` 改名时一并清理；`evals/`、tracing 按三套语义打点需同步改。
 - **粗略路径**：① 先把默认 engine 切到 v2，灰度验证 shadow/audit 无回归（需先初始化 `data/prompts_v2`）→ ② 全仓清点 `prompt_runtime.engine`/`prompt_mode`/`legacy`/`shadow`/`managed` 引用 → ③ `nanobot_kt/prompt_runtime.py` 收敛为单一 V2 路径，删 `_build_v1_prompt` 与 audit fallback_v1 → ④ 删 V1/legacy 模块与冗余模板，迁移仍有价值的文案进 V2 → ⑤ 去版本后缀、改规范名（含 settings/prompt_key/目录/tracing）→ ⑥ 同步 admin UI 与测试。
+- **实施状态（2026-06-17）**：粗略路径第 ① 步已完成并验证。剩余工作从第 ② 步开始：清点旧 key / legacy 引用，提取 H29 prompt/runtime 组装边界，再逐步禁用 live `fallback_v1`、迁移旧任务 prompt、删除冗余资产并去版本化。
 
 #### 路线项 2 — LLM 等 IO 调用全面异步化与连接池复用  ·〔关联 H7；H1 已满足〕
 
-- **现状**：核心 LLM 调用已是 aiohttp 异步（`clients/new_api_client.py`），但**每次请求新建** `aiohttp.ClientSession()`——`fetch_models`(:221)、`chat_completion_stream`(:621)、`chat_completion`(:794) 各自 `async with ClientSession()`，连接池逐请求丢弃。分类器 / 护栏走 urllib 同步但调用点已用 `asyncio.to_thread` 卸载（H1 已满足，见附录）。残余同步 HTTP：会话压缩 `core/compaction.py:106`（`requests.post`）、图片下载 `nanobot_kt/image_pipeline.py` 与 `core/sticker_preview.py`（urllib）、`core/daily_digest.py` 的 `time.sleep` 重试。
-- **痛点**：高并发下每请求 TCP + TLS 握手开销、FD 抖动、无 keep-alive；`compaction.py` 的同步 `requests.post` 若落在异步上下文且未 to_thread，会阻塞事件循环。
-- **目标**：lifespan 建应用级单例 `ClientSession`（统一连接数 / 超时配置）注入 client 复用连接池；残余同步 HTTP 要么异步化，要么确认已 `to_thread` 卸载。
+- **现状（2026-06-17 已部分落地）**：核心 LLM 调用已是 aiohttp 异步，应用级共享 `ClientSession` 已在 lifespan 中创建并注入 `NewAPIClient`（`bootstrap/lifespan.py:30-44,66-68`），`chat_completion` / `chat_completion_stream` 已通过 `_request_session()` 复用实例或共享 session（`clients/new_api_client.py:113-120,669-674,854-861`）。已提交 `4550aca refactor(模型客户端): 支持复用注入会话` 与 `2bf4ee7 refactor(模型客户端): 接入共享会话生命周期`。分类器 / 护栏走 urllib 同步但调用点已用 `asyncio.to_thread` 卸载（H1 已满足，见附录）。残余同步 HTTP：会话压缩 `core/compaction.py:106`（`requests.post`）、图片下载 `nanobot_kt/image_pipeline.py` 与 `core/sticker_preview.py`（urllib）、`core/daily_digest.py` 的 `time.sleep` 重试。
+- **痛点**：模型请求连接池抖动已修复；剩余风险集中在残余同步 HTTP / `time.sleep` 是否落在异步热路径，尤其 `compaction.py` 的同步 `requests.post` 若未 `to_thread` 卸载，会阻塞事件循环。
+- **目标**：保持 lifespan 应用级单例 `ClientSession` 复用连接池；残余同步 HTTP 要么异步化，要么确认已 `to_thread` 卸载。
 - **关联**：H7（ClientSession 逐请求创建，P2 性能）；H1 已满足（附录）；连接池是项 6 真流式的前置。
-- **粗略路径**：① lifespan 创建共享 session → ② new_api_client 三处 `async with ClientSession()` 改为复用注入的 session → ③ 审计 compaction / image / sticker 同步 IO，热路径异步化或确认 to_thread。
+- **粗略路径**：① lifespan 创建共享 session（已完成）→ ② new_api_client 三处 `async with ClientSession()` 改为复用注入的 session（已完成）→ ③ 审计 compaction / image / sticker 同步 IO，热路径异步化或确认 to_thread。
 
 #### 路线项 3 — 请求构造按模型能力校验（image_url / 多模态），能力声明入模型配置
 
@@ -205,11 +206,11 @@
 
 #### 路线项 6 — SSE 真 token 流式重构（stream 参数全链路贯穿）  ·〔关联 H30〕
 
-- **现状（2026-06-17 已部分落地）**：API 层已有 stream 开关（`ChatProxyRequest.stream`）与 SSE 出口 `_stream_chat`，`stream` 已贯穿 API → BridgePool → Bridge → KT `Message`。`BufferedOutput.write_stream()` 会向 SSE 队列发送 `delta` 事件，`done.answer` 仍作为最终业务权威结果。`clients.new_api_client.chat_completion_stream()` 仍主要用于请求追踪和底层客户端测试，生产 reply 链路通过 KT OpenAI provider 的 streaming 迭代输出进入 `BufferedOutput`。
+- **现状（2026-06-17 已部分落地）**：API 层已有 stream 开关（`ChatProxyRequest.stream`）与 SSE 出口 `_stream_chat`，`stream` 已贯穿 API → BridgePool → Bridge → KT `Message`。`BufferedOutput.write_stream()` 会向 SSE 队列发送 `delta` 事件，`done.answer` 仍作为最终业务权威结果。`/chat-step` 也已接入 `run_agent_step_stream()`，通过 `NewAPIClient.chat_completion_stream()` 下发 final-answer delta，并在工具选择阶段拼合流式 tool call 后发送最终 `tool_call` 事件（`2369081 feat(agent): 支持 step 流式输出`）。生产 reply 链路仍通过 KT OpenAI provider 的 streaming 迭代输出进入 `BufferedOutput`。
 - **痛点**：多工具回合下，增量文本可能先于最终 `reply()` 工具合同出现，前端必须把 `done.answer` 视为权威结果；chunk 粒度目前直接跟随 provider，尚未做小窗口合并或 backpressure；`/group/message` 与 QQbot 出站渲染仍不是同一套响应信封。
 - **目标**：保持 `stream` 参数全链路贯穿，SSE 稳定下发增量 token；继续收敛 chunk 合并、工具回合语义和响应信封，使 Web SSE、QQbot 推送与最终持久化共享同一套输出契约（兼顾 QQbot 单 chunk 大小限制与 base64 禁用约定）。
 - **关联**：H30（RAG `query()` 巨函数拆分，便于流式分段）；依赖项 2 连接池；与项 5 响应信封、项 7 渲染（增量 chunk 如何渲染）协同。
-- **粗略路径**：① 已完成 API / Bridge / KT Message / BufferedOutput 的 stream 贯穿 → ② 为 provider chunk 增加可选合并窗口与 backpressure 策略 → ③ 明确工具回合 / reply 合同与增量事件的前端展示规则 → ④ 与路线项 5/7 合并响应信封和出站渲染契约 → ⑤ 约定 chunk 大小与图片 token 展开时机。
+- **粗略路径**：① 已完成 API / Bridge / KT Message / BufferedOutput 的 stream 贯穿 → ② 已完成 `/chat-step` SSE 增量输出与流式 tool call 拼合 → ③ 为 provider chunk 增加可选合并窗口与 backpressure 策略 → ④ 明确工具回合 / reply 合同与增量事件的前端展示规则 → ⑤ 与路线项 5/7 合并响应信封和出站渲染契约 → ⑥ 约定 chunk 大小与图片 token 展开时机。
 
 #### 路线项 10 — TimingGate 引入「规则信号 + 模型」混合决策  ·〔关联 H2〕
 
