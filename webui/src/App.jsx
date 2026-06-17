@@ -633,9 +633,9 @@ function TimingGatePage() {
               className="w-full p-2 rounded-lg bg-slate-950 border border-slate-700 font-mono text-xs mb-2" />
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs text-slate-500">次数</span>
-              <input type="number" min="1" max="20" value={repeats} onChange={e => setRepeats(e.target.value)}
+              <input type="number" min="1" max="5" value={repeats} onChange={e => setRepeats(e.target.value)}
                 className="w-16 p-1.5 rounded bg-slate-950 border border-slate-700 text-xs" />
-              <button onClick={() => setRepeats(20)} className="px-2 py-1 bg-slate-800 rounded text-xs">20次</button>
+              <button onClick={() => setRepeats(5)} className="px-2 py-1 bg-slate-800 rounded text-xs">5次</button>
             </div>
             <button onClick={runTest} disabled={running}
               className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-lg text-xs font-medium w-full">
@@ -677,6 +677,15 @@ function TimingEventsTable({ rows = [], selectedId, onSelect }) {
 function TimingEventDetail({ event, onUseAsTest }) {
   if (!event) return <div className="text-slate-500 text-sm py-8 text-center">点击左侧记录查看详情</div>
   const contextText = event.context || event.input_summary || event.pending_text || ''
+  const scoring = event.scoring || {}
+  const signals = scoring.signals || {}
+  const subSignals = signals.sub_signals || {}
+  const hasScoring = Object.keys(scoring).length > 0
+  const scoreValue = (value) => {
+    if (value === null || value === undefined || value === '') return '-'
+    const n = Number(value)
+    return Number.isFinite(n) ? n.toFixed(3) : String(value)
+  }
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -690,6 +699,57 @@ function TimingEventDetail({ event, onUseAsTest }) {
         <div>hard: {event.hard_rule || '-'}</div><div>dir: {event.directed_to_other ? 'yes' : '-'}</div>
       </div>
       <div><div className="text-xs text-slate-500 mb-1">触发消息</div><div className="text-xs bg-slate-950 rounded p-2 max-h-24 overflow-auto">{event.trigger_message || '-'}</div></div>
+      <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="text-xs font-medium text-slate-300">规则评分</div>
+          <Badge tone={hasScoring ? 'blue' : 'slate'}>{scoring.stage || '暂无 scoring'}</Badge>
+        </div>
+        {hasScoring ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
+              <div className="rounded border border-slate-800 bg-slate-900 px-2 py-1.5">
+                <div className="text-slate-500">E_rule</div>
+                <div className="font-mono text-slate-200">{scoreValue(scoring.participation_score)}</div>
+              </div>
+              <div className="rounded border border-slate-800 bg-slate-900 px-2 py-1.5">
+                <div className="text-slate-500">E_final</div>
+                <div className="font-mono text-slate-200">{scoreValue(scoring.final_score)}</div>
+              </div>
+              <div className="rounded border border-slate-800 bg-slate-900 px-2 py-1.5">
+                <div className="text-slate-500">theta</div>
+                <div className="font-mono text-slate-200">{scoreValue(scoring.theta)}</div>
+              </div>
+              <div className="rounded border border-slate-800 bg-slate-900 px-2 py-1.5">
+                <div className="text-slate-500">band</div>
+                <div className="font-mono text-slate-200">{scoreValue(scoring.low_threshold)} / {scoreValue(scoring.high_threshold)}</div>
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-slate-500">信号分解</div>
+              <div className="grid grid-cols-3 gap-1.5 text-[11px] text-slate-400">
+                <div>d0: <span className="font-mono text-slate-200">{scoreValue(signals.explicit_direct_score)}</span></div>
+                <div>linger: <span className="font-mono text-slate-200">{scoreValue(signals.linger_score)}</span></div>
+                <div>d: <span className="font-mono text-slate-200">{scoreValue(signals.direct_score)}</span></div>
+                <div>w: <span className="font-mono text-slate-200">{scoreValue(signals.wait_signal)}</span></div>
+                <div>s: <span className="font-mono text-slate-200">{scoreValue(signals.suppress_score)}</span></div>
+                <div>s_ack: <span className="font-mono text-slate-200">{scoreValue(subSignals.s_ack)}</span></div>
+                <div>s_transport: <span className="font-mono text-slate-200">{scoreValue(subSignals.s_transport)}</span></div>
+                <div>s_other: <span className="font-mono text-slate-200">{scoreValue(subSignals.s_other)}</span></div>
+                <div>s_bot: <span className="font-mono text-slate-200">{scoreValue(subSignals.s_bot)}</span></div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400">
+              <div>模型参与: <span className="text-slate-200">{scoring.model_used ? 'yes' : 'no'}</span></div>
+              <div>model_action: <span className="text-slate-200">{scoring.model_action || '-'}</span></div>
+              <div>model_confidence: <span className="font-mono text-slate-200">{scoreValue(scoring.model_confidence)}</span></div>
+              <div>model_weight: <span className="font-mono text-slate-200">{scoreValue(scoring.model_weight)}</span></div>
+            </div>
+            {scoring.reason && <div className="text-[11px] leading-4 text-slate-500">{scoring.reason}</div>}
+          </div>
+        ) : (
+          <div className="text-xs text-slate-600">旧记录或非 shadow 路径没有 scoring 字段。</div>
+        )}
+      </div>
       <div>
         <div className="flex items-center justify-between mb-1">
           <div className="text-xs text-slate-500">模型输入</div>
@@ -698,6 +758,7 @@ function TimingEventDetail({ event, onUseAsTest }) {
         <pre className="rounded bg-slate-950 border border-slate-800 p-2 text-[10px] whitespace-pre-wrap max-h-48 overflow-auto">{contextText || '(无)'}</pre>
       </div>
       <div><div className="text-xs text-slate-500 mb-1">raw</div><pre className="rounded bg-slate-950 border border-slate-800 p-2 text-[10px] whitespace-pre-wrap max-h-32 overflow-auto">{event.raw || '-'}</pre></div>
+      {hasScoring && <JsonBlock value={scoring} className="max-h-40" />}
       <JsonBlock value={{ action: event.action, delay: event.delay_seconds, reason: event.reason, error_type: event.error_type, parse_error: event.parse_error, fallback: event.fallback_action }} />
     </div>
   )

@@ -37,3 +37,26 @@ def test_reply_and_reasoning_views_expose_counts_and_missing_reasoning():
     assert "真实流量" in reply_eval
     assert "retry_failed_after_prompt_count" in reply_eval
     assert "本次未返回 reasoning_content" in trace_view
+
+
+def test_timing_gate_detail_exposes_scoring_breakdown():
+    source = (ROOT / "webui/src/App.jsx").read_text(encoding="utf-8")
+
+    assert "const scoring = event.scoring || {}" in source
+    assert "规则评分" in source
+    assert "信号分解" in source
+    assert "模型参与" in source
+    assert "participation_score" in source
+    assert "final_score" in source
+    assert "s_ack" in source
+    assert "s_transport" in source
+    assert "model_weight" in source
+
+
+def test_timing_gate_manual_test_repeats_matches_backend_cap():
+    source = (ROOT / "webui/src/App.jsx").read_text(encoding="utf-8")
+
+    assert 'max="5"' in source
+    assert "setRepeats(5)" in source
+    assert "5次" in source
+    assert "20次" not in source
