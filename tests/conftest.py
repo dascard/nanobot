@@ -78,6 +78,8 @@ def db_session():
 @pytest.fixture(scope="function")
 def client(db_session):
     """提供 FastAPI TestClient，并覆盖 get_db 依赖"""
+    from api import routes
+
     def override_get_db():
         try:
             yield db_session
@@ -85,6 +87,7 @@ def client(db_session):
             pass
             
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[routes.verify_token] = lambda: None
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

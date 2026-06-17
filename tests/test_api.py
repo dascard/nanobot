@@ -28,6 +28,7 @@ def _fast_private_reply(monkeypatch):
     monkeypatch.setattr("api.routes.get_guardrail", lambda: FastGuardrail())
     monkeypatch.setattr("api.routes.PRIVATE_BUFFER_WINDOW_SECONDS", 0.0)
     monkeypatch.setattr("api.routes.PRIVATE_BUFFER_WINDOW_WITH_FILES_SECONDS", 0.0)
+    monkeypatch.setattr("api.routes._schedule_image_precache", lambda *args, **kwargs: None)
 
 
 def test_health_check(client):

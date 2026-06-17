@@ -16,6 +16,11 @@ def client(tmp_path, monkeypatch):
     """独立 SQLite 测试库——不污染真实数据库。"""
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "test-token")
+    monkeypatch.setattr("api.admin.system_routes._VERSION_CACHE", None)
+    monkeypatch.setenv("NANOBOT_GIT_COMMIT", "testcommit")
+    monkeypatch.setenv("NANOBOT_GIT_BRANCH", "test-branch")
+    monkeypatch.setenv("NANOBOT_GIT_COMMIT_DATE", "2026-06-16T00:00:00+08:00")
+    monkeypatch.setenv("NANOBOT_GIT_DIRTY", "false")
     engine = create_engine(
         f"sqlite:///{tmp_path / 'test.db'}",
         connect_args={"check_same_thread": False},
