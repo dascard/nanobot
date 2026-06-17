@@ -64,12 +64,33 @@ class BufferedOutput(BaseOutputModule):
         self._agent_ref: Any = None  # bridge 注入，tool_done 时设 interrupt
         self._complete_event = asyncio.Event()
         self._stream_queue: asyncio.Queue[dict[str, Any]] | None = None
+        self._stream_tasks: set[asyncio.Task[Any]] = set()
 
     def enable_stream(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         self._stream_queue = queue
 
     def disable_stream(self) -> None:
         self._stream_queue = None
+
+    def _discard_stream_task(self, task: asyncio.Task[Any]) -> None:
+        self._stream_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("[BufferedOutput] stream event task failed: %s", exc, exc_info=True)
+
+    def _schedule_stream_event(self, event: dict[str, Any]) -> None:
+        if self._stream_queue is None:
+            return
+        try:
+            task = asyncio.create_task(self._stream_queue.put(event))
+        except RuntimeError:
+            logger.debug("[BufferedOutput] stream event dropped without running loop: %s", event)
+            return
+        self._stream_tasks.add(task)
+        task.add_done_callback(self._discard_stream_task)
 
     async def start(self) -> None:
         logger.info("[BufferedOutput.start] Initializing")
@@ -84,6 +105,8 @@ class BufferedOutput(BaseOutputModule):
     async def write_stream(self, chunk: str) -> None:
         logger.info(f"[BufferedOutput.write_stream] called with {len(chunk)} chars: {chunk[:100] if chunk else '(empty)'}")
         self._buffer.append(chunk)
+        if chunk and self._stream_queue is not None:
+            await self._stream_queue.put({"status": "delta", "text": chunk})
 
     async def flush(self) -> None:
         logger.debug(f"[BufferedOutput.flush] called, current buffer_len={len(''.join(self._buffer))}")
@@ -113,16 +136,14 @@ class BufferedOutput(BaseOutputModule):
             logger.error(f"[Activity] {activity_type}: {detail}")
             self._buffer.append(f"\n[系统内部错误] {detail}")
             if self._stream_queue is not None:
-                asyncio.ensure_future(self._stream_queue.put({"status": "error", "message": detail}))
+                self._schedule_stream_event({"status": "error", "message": detail})
             return
 
         if activity_type == "tool_error":
             logger.error(f"[Activity] {activity_type}: {detail}")
             if self._stream_queue is not None:
-                asyncio.ensure_future(
-                    self._stream_queue.put(
-                        {"status": "progress", "text": f"工具失败：{detail}"}
-                    )
+                self._schedule_stream_event(
+                    {"status": "progress", "text": f"工具失败：{detail}"}
                 )
             return
 
@@ -147,7 +168,7 @@ class BufferedOutput(BaseOutputModule):
             # reply 是内部工具——不推送到 QQbot 作为进度提示
             if tool_name != "reply" and self._stream_queue is not None:
                 hint = self._TOOL_HINTS.get(tool_name, f"正在执行 {tool_name}")
-                asyncio.ensure_future(self._stream_queue.put({"status": "progress", "text": hint}))
+                self._schedule_stream_event({"status": "progress", "text": hint})
             return
 
         if activity_type == "tool_done":
