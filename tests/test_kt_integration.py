@@ -337,6 +337,28 @@ class TestSQLiteMemoryDetachedLogs:
         mock_db.rollback.assert_called_once()
         mock_db.close.assert_called_once()
 
+    def test_save_log_rolls_back_when_commit_fails(self):
+        """save_log() 提交失败时必须 rollback，避免复用连接残留失败事务。"""
+        from sqlalchemy.exc import SQLAlchemyError
+        from core.legacy_adapter import SQLiteMemory
+
+        memory = SQLiteMemory()
+        mock_db = MagicMock()
+        mock_db.commit.side_effect = SQLAlchemyError("commit failed")
+
+        with patch.object(memory, "_get_session", return_value=mock_db):
+            with pytest.raises(SQLAlchemyError):
+                memory.save_log(
+                    user_id="u1",
+                    session_id="s1",
+                    role="user",
+                    content="hello",
+                )
+
+        mock_db.add.assert_called_once()
+        mock_db.rollback.assert_called_once()
+        mock_db.close.assert_called_once()
+
 
 # ── Evolution Dict Access Test ──
 

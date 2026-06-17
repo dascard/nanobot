@@ -226,6 +226,10 @@ class SQLiteMemory:
             log = ChatLog(**kwargs)
             db.add(log)
             db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception("save_log failed; transaction rolled back")
+            raise
         finally:
             db.close()
 
