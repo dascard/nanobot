@@ -19,7 +19,12 @@ from config import (
     NEW_API_MODEL_SYNC_INTERVAL_MINUTES,
     AUTO_MODEL_ROUTING_MODE,
 )
-from clients.model_registry import registry
+from clients.model_registry import (
+    registry,
+    model_cost_value,
+    model_intelligence_value,
+    normalize_model_cost_fields,
+)
 from core.final_tools import filter_payload_tools
 from core.llm_stream_trace import LLMStreamTraceAccumulator
 from core.llm_request_sanitizer import sanitize_payload_messages
@@ -158,6 +163,7 @@ class NewAPIClient:
         }
 
     def _apply_model_override(self, model_id: str, base: Dict[str, Any]) -> Dict[str, Any]:
+        base = normalize_model_cost_fields(base)
         overrides = self._load_model_overrides()
         if not overrides:
             return base
@@ -212,7 +218,7 @@ class NewAPIClient:
                 merged["tags"] = final_tags
             # Regenerate description to match final tag state
             merged["description"] = self._build_description(model_id, final_tags)
-        return merged
+        return normalize_model_cost_fields(merged, fallback=base)
 
     def _build_description(self, model_id: str, tags: List[str]) -> str:
         """Build a human-readable description from model ID and tags."""
@@ -375,7 +381,7 @@ class NewAPIClient:
             return manual_model
         models = registry.get_models_by_provider(self.registry_provider)
         if models:
-            models.sort(key=lambda m: m.get("cost_input_1m", 999))
+            models.sort(key=lambda m: model_cost_value(m.get("cost_input_1m")))
             return models[0]["id"]
         return "gpt-4o"
 
@@ -459,10 +465,10 @@ class NewAPIClient:
                                max_cost: Optional[float] = None,
                                avoid_tags: Optional[List[str]] = None,
                                ) -> List[Dict[str, Any]]:
-        """Return models ordered by priority: downward from intel_floor, then upward.
+        """Return healthy models ordered by priority.
 
-        Phase 1 (downward): models with intel >= intel_floor, cheapest-first.
-        Phase 2 (upward): models with intel > split_idx, cheapest-first.
+        Phase 1: models meeting intel_floor, priority-score first.
+        Phase 2: lower-intelligence fallback models, priority-score first.
         """
         all_models = registry.get_models_by_provider(provider)
         if not all_models:
@@ -471,12 +477,16 @@ class NewAPIClient:
         exclude_lower = [em.lower() for em in (exclude_models or [])]
         avoid_tags_set = set(t.lower() for t in (avoid_tags or []))
         tracker = self._safe_get_failure_tracker()
-        max_cost_val = max_cost if max_cost is not None else LLM_BUDGET_CAP
+        max_cost_val = model_cost_value(
+            max_cost if max_cost is not None else LLM_BUDGET_CAP,
+            default=LLM_BUDGET_CAP,
+        )
 
         candidates = []
         for m in all_models:
             mid = m.get("id", "")
-            tags = [t.lower() for t in (m.get("tags") or [])]
+            raw_tags = m.get("tags") or []
+            tags = [str(t).lower() for t in raw_tags] if isinstance(raw_tags, list) else []
             if mid.lower() in exclude_lower:
                 continue
             if "unstable" in tags:
@@ -485,7 +495,7 @@ class NewAPIClient:
                 continue
             if avoid_tags_set and any(at in tags for at in avoid_tags_set):
                 continue
-            if m.get("cost_input_1m", 999) > max_cost_val:
+            if model_cost_value(m.get("cost_input_1m")) > max_cost_val:
                 continue
             if tracker is not None and tracker.sync_is_disabled(mid):
                 continue
@@ -494,23 +504,18 @@ class NewAPIClient:
         if not candidates:
             return []
 
-        # Sort by priority score (lower = better)
-        candidates.sort(key=lambda m: registry.compute_priority_score(m))
+        qualified = [
+            m for m in candidates
+            if model_intelligence_value(m.get("intelligence")) >= intel_floor
+        ]
+        fallback = [
+            m for m in candidates
+            if model_intelligence_value(m.get("intelligence")) < intel_floor
+        ]
 
-        # Find split_idx: first model with intel >= intel_floor
-        split_idx = None
-        for i, m in enumerate(candidates):
-            if m.get("intelligence", 0) >= intel_floor:
-                split_idx = i
-                break
-
-        if split_idx is None:
-            return candidates  # No model meets the floor, return all
-
-        # Phase 1: downward (split_idx → 0), Phase 2: upward (split_idx+1 → end)
-        downward = list(reversed(candidates[:split_idx + 1]))
-        upward = candidates[split_idx + 1:]
-        return downward + upward
+        qualified.sort(key=lambda m: registry.compute_priority_score(m))
+        fallback.sort(key=lambda m: registry.compute_priority_score(m))
+        return qualified + fallback
 
     def resolve_model(self, messages: List[Dict[str, Any]],
                       tools: Optional[List[Dict[str, Any]]] = None,
@@ -533,7 +538,7 @@ class NewAPIClient:
 
         if not candidates:
             all_models = registry.get_models_by_provider(self.registry_provider)
-            all_models.sort(key=lambda m: m.get("cost_input_1m", 999))
+            all_models.sort(key=lambda m: model_cost_value(m.get("cost_input_1m")))
             if all_models:
                 fallback = all_models[0]["id"]
                 logger.warning(f"No healthy candidates, using cheapest: {fallback}")

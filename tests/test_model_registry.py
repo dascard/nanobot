@@ -68,3 +68,25 @@ class TestSelectModel:
         # smart 全 disabled → 降级 fast（空）→ fallback 返回最便宜
         result = r.select_model("x", tier="smart")
         assert result in ("d1", "d2")
+
+    def test_select_model_treats_none_cost_as_unknown_under_budget(self):
+        r = _make_registry([
+            {"id": "unknown-cost", "provider": "x", "tier": "fast",
+             "intelligence": 10, "cost_input_1m": None, "enabled": True},
+            {"id": "ok", "provider": "x", "tier": "fast",
+             "intelligence": 6, "cost_input_1m": 0.2, "enabled": True},
+        ])
+        assert r.select_model("x", tier="fast", max_cost=1.0) == "ok"
+
+    def test_add_or_update_many_normalizes_none_cost(self, monkeypatch):
+        r = _make_registry([])
+        monkeypatch.setattr(r, "save_registry", lambda: None)
+
+        assert r.add_or_update_many([
+            {"id": "m", "provider": "x", "tier": "fast",
+             "intelligence": 5, "cost_input_1m": None, "cost_output_1m": None}
+        ]) == 1
+
+        saved = r.data["models"][0]
+        assert saved["cost_input_1m"] == 999.0
+        assert saved["cost_output_1m"] == 999.0

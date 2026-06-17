@@ -325,6 +325,12 @@ class TestComplexityEstimator:
 
 
 class TestPriorityScore:
+    def test_priority_score_treats_none_cost_as_unknown(self):
+        from clients.model_registry import ModelRegistry
+        unknown = {"id": "unknown", "cost_input_1m": None, "intelligence": 8, "tags": []}
+        known = {"id": "known", "cost_input_1m": 0.2, "intelligence": 8, "tags": []}
+        assert ModelRegistry.compute_priority_score(known) < ModelRegistry.compute_priority_score(unknown)
+
     def test_free_ranks_higher_than_paid_same_intel(self):
         from clients.model_registry import ModelRegistry
         free = {"id": "a", "cost_input_1m": 0.0, "intelligence": 8, "tags": ["free", "general"]}
@@ -348,6 +354,77 @@ class TestPriorityScore:
         cheap = {"id": "a", "cost_input_1m": 0.04, "intelligence": 7, "tags": []}
         expensive = {"id": "b", "cost_input_1m": 0.43, "intelligence": 7, "tags": []}
         assert ModelRegistry.compute_priority_score(cheap) < ModelRegistry.compute_priority_score(expensive)
+
+    def test_ordered_candidates_handles_none_cost_and_keeps_floor_first(self, monkeypatch):
+        from clients import new_api_client as module
+        from clients.new_api_client import NewAPIClient
+
+        class FakeRegistry:
+            def get_models_by_provider(self, provider):
+                assert provider == "x"
+                return [
+                    {
+                        "id": "below-free",
+                        "provider": "x",
+                        "intelligence": 6,
+                        "cost_input_1m": 0.0,
+                        "tags": ["free"],
+                    },
+                    {
+                        "id": "qualified-known",
+                        "provider": "x",
+                        "intelligence": 8,
+                        "cost_input_1m": 0.2,
+                        "tags": [],
+                    },
+                    {
+                        "id": "qualified-null",
+                        "provider": "x",
+                        "intelligence": 9,
+                        "cost_input_1m": None,
+                        "tags": [],
+                    },
+                ]
+
+            def compute_priority_score(self, model):
+                from clients.model_registry import ModelRegistry
+                return ModelRegistry.compute_priority_score(model)
+
+        monkeypatch.setattr(module, "registry", FakeRegistry())
+        monkeypatch.setattr(NewAPIClient, "_failure_tracker", None)
+        monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
+
+        client = NewAPIClient(api_key="test", base_url="http://test")
+        ids = [
+            item["id"]
+            for item in client.get_ordered_candidates("x", intel_floor=8, max_cost=1.0)
+        ]
+
+        assert ids == ["qualified-known", "below-free"]
+
+    def test_model_override_null_cost_keeps_base_cost(self, monkeypatch):
+        from clients.new_api_client import NewAPIClient
+
+        monkeypatch.setattr(
+            NewAPIClient,
+            "_model_overrides_cache",
+            {"paid-model": {"cost_input_1m": None, "cost_output_1m": None}},
+        )
+
+        client = NewAPIClient(api_key="test", base_url="http://test")
+        merged = client._apply_model_override(
+            "paid-model",
+            {
+                "id": "paid-model",
+                "tags": ["paid"],
+                "cost_input_1m": 0.2,
+                "cost_output_1m": 0.8,
+                "description": "base",
+            },
+        )
+
+        assert merged["cost_input_1m"] == 0.2
+        assert merged["cost_output_1m"] == 0.8
 
 
 class TestFailureTracker:

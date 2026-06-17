@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import time
 import asyncio
@@ -13,6 +14,41 @@ MODEL_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "models.json")
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 _FAILURE_STATE_PATH = os.path.join(_DATA_DIR, "model_failures.json")
 _RUNTIME_STATE_PATH = os.path.join(_DATA_DIR, "runtime_state.json")
+UNKNOWN_MODEL_COST = 999.0
+
+
+def model_cost_value(value: Any, default: float = UNKNOWN_MODEL_COST) -> float:
+    try:
+        cost = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(cost) or cost < 0:
+        return float(default)
+    return cost
+
+
+def model_intelligence_value(value: Any, default: float = 0.0) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(score):
+        return float(default)
+    return score
+
+
+def normalize_model_cost_fields(
+    model: Dict[str, Any],
+    *,
+    fallback: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    normalized = dict(model)
+    for field in ("cost_input_1m", "cost_output_1m"):
+        value = normalized.get(field)
+        if value is None and fallback is not None:
+            value = fallback.get(field)
+        normalized[field] = model_cost_value(value)
+    return normalized
 
 
 def _atomic_write(path: str, data: Any) -> None:
@@ -167,12 +203,13 @@ class ModelRegistry:
                  + free_bonus + unstable_penalty
         """
         from core.settings_service import settings
-        cost = model.get("cost_input_1m", 999)
-        intel = model.get("intelligence", 0)
-        tags = [t.lower() for t in (model.get("tags") or [])]
+        cost = model_cost_value(model.get("cost_input_1m"))
+        intel = model_intelligence_value(model.get("intelligence"))
+        raw_tags = model.get("tags") or []
+        tags = [str(t).lower() for t in raw_tags] if isinstance(raw_tags, list) else []
 
-        cost_norm = cost / max_cost
-        intel_norm = intel / max_intel
+        cost_norm = cost / max(model_cost_value(max_cost, default=10.0), 1e-9)
+        intel_norm = intel / max(model_intelligence_value(max_intel, default=15.0), 1e-9)
         free_b = settings.get_float("router.free_bonus", -2.0) if "free" in tags else 0.0
         unstable_p = settings.get_float("router.unstable_penalty", 5.0) if "unstable" in tags else 0.0
 
@@ -221,9 +258,10 @@ class ModelRegistry:
                 unstable = " [UNSTABLE]" if "unstable" in tags else ""
                 desc = (m.get("description") or "").strip()
                 desc_suffix = f" — {desc[:80]}" if desc else ""
+                cost = model_cost_value(m.get("cost_input_1m"), default=0.0)
                 lines.append(
                     f"  {m.get('id')} | intel={m.get('intelligence',0)} "
-                    f"| cost=${m.get('cost_input_1m',0):.2f}/1M "
+                    f"| cost=${cost:.2f}/1M "
                     f"| {is_free}{unstable}{desc_suffix}"
                 )
         for t, tier_models in sorted(tiers.items()):
@@ -282,8 +320,8 @@ class ModelRegistry:
             tags = _tags_of(m)
             tag_hit = sum(1 for t in required_tags if t in tags)
             avoid_hit = sum(1 for t in avoid_tags if t in tags)
-            intel = m.get("intelligence", 0)
-            cost = m.get("cost_input_1m", 999)
+            intel = model_intelligence_value(m.get("intelligence"))
+            cost = model_cost_value(m.get("cost_input_1m"))
             is_free = 1 if (prefer_free and "free" in tags) else 0
             # sort desc by tag/avoid/is_free/intelligence, asc by cost
             return (tag_hit, -avoid_hit, is_free, intel, -cost)
@@ -299,7 +337,7 @@ class ModelRegistry:
 
             # Apply cost filter
             if max_cost is not None:
-                candidates = [m for m in candidates if m.get("cost_input_1m", 999) <= max_cost]
+                candidates = [m for m in candidates if model_cost_value(m.get("cost_input_1m")) <= max_cost]
                 logger.debug(f"select_model: tier={t}, after_cost_filter={len(candidates)}")
 
             # Apply intelligence filter
@@ -333,16 +371,16 @@ class ModelRegistry:
 
                 # 跨层免费优先：当前层最优是付费的，检查其他层有无智力接近的免费模型
                 if prefer_free and "free" not in _tags_of(selected):
-                    sel_intel = selected.get("intelligence", 0)
+                    sel_intel = model_intelligence_value(selected.get("intelligence"))
                     for c in all_candidates:
                         tags_c = _tags_of(c)
                         if "free" not in tags_c:
                             continue
                         if c.get("enabled", True) is False:
                             continue
-                        if c.get("intelligence", 0) < sel_intel - 1:
+                        if model_intelligence_value(c.get("intelligence")) < sel_intel - 1:
                             continue
-                        if max_cost is not None and c.get("cost_input_1m", 999) > max_cost:
+                        if max_cost is not None and model_cost_value(c.get("cost_input_1m")) > max_cost:
                             continue
                         if exclude_models and c.get("id", "").lower() in (em.lower() for em in exclude_models):
                             continue
@@ -369,11 +407,11 @@ class ModelRegistry:
         # 如果全部 disabled，则退回最便宜的（总得给手动指定留后路）
         enabled = [m for m in all_candidates if m.get("enabled", True) is not False]
         pool = enabled if enabled else all_candidates
-        pool.sort(key=lambda x: x.get("cost_input_1m", 999))
+        pool.sort(key=lambda x: model_cost_value(x.get("cost_input_1m")))
         cheap_model = pool[0]
 
         target_id = cheap_model.get("id")
-        if max_cost is not None and cheap_model.get("cost_input_1m", 999) > max_cost:
+        if max_cost is not None and model_cost_value(cheap_model.get("cost_input_1m")) > max_cost:
             logger.warning(f"No model found for {provider} under budget {max_cost}. Using cheapest: {target_id}")
 
         logger.info(
@@ -400,6 +438,7 @@ class ModelRegistry:
             logger.error(f"Failed to save registry: {e}")
 
     def add_or_update_model(self, model_data: Dict[str, Any]):
+        model_data = normalize_model_cost_fields(model_data)
         model_id = model_data.get("id")
         if not model_id: return
         
@@ -431,7 +470,8 @@ class ModelRegistry:
         updated_ids = []
         new_ids = []
 
-        for m in models:
+        for raw_model in models:
+            m = normalize_model_cost_fields(raw_model)
             model_id = m.get("id")
             if not model_id:
                 continue
