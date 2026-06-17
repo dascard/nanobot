@@ -627,12 +627,12 @@ class NanobotKTController:
 
         extraction_prompt = build_candidate_extraction_prompt(existing_persona, logs_text)
         try:
-            from core.prompt_runtime import render_prompt_content
+            from core.prompt_v2.task_templates import render_task_prompt
 
-            extraction_prompt = render_prompt_content(
+            extraction_prompt = render_task_prompt(
                 "memory_extract",
                 {"conversation": logs_text, "existing_memory": existing_persona},
-                extraction_prompt,
+                fallback_text=extraction_prompt,
             )
         except Exception:
             pass

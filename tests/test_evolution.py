@@ -48,3 +48,53 @@ def test_evolution_task_triggered(db_session):
     # 验证 evolve 被调用（实际的 DB 标记由 controller.evolve 内部完成，此处为 mock）
     mock_controller.evolve.assert_awaited_once_with("evo_user_2")
 
+
+@pytest.mark.asyncio
+async def test_legacy_adapter_memory_extract_uses_v2_task_template(monkeypatch):
+    from core.legacy_adapter import NanobotKTController
+
+    captured = {}
+
+    class FakeMemory:
+        def get_unprocessed_logs(self, user_id):
+            return [{"id": 1, "role": "user", "content": "我长期使用 Python"}]
+
+        def get_user_persona(self, user_id):
+            return "{}"
+
+        def mark_logs_processed(self, ids):
+            captured["processed"] = ids
+
+    class FakeProvider:
+        async def invoke_raw(self, *, query, system_prompt, user_id, model_tier):
+            captured["query"] = query
+            return '{"candidates":[]}'
+
+    class FakeAnalyst:
+        async def run(self, logs, provider):
+            return {}
+
+    monkeypatch.setattr(
+        "core.prompt_v2.task_templates.render_task_prompt",
+        lambda key, values, fallback_text="": (
+            f"V2 记忆模板: {values['conversation']} / {values['existing_memory']}"
+        ),
+    )
+    monkeypatch.setattr(
+        "core.prompt_runtime.render_prompt_content",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("memory_extract must not use old PromptManager runtime")
+        ),
+    )
+
+    engine = NanobotKTController.__new__(NanobotKTController)
+    engine.memory = FakeMemory()
+    engine.provider = FakeProvider()
+    engine.log_analyst = FakeAnalyst()
+
+    await engine.evolve("u1")
+
+    assert "V2 记忆模板:" in captured["query"]
+    assert "我长期使用 Python" in captured["query"]
+    assert captured["processed"] == [1]
+

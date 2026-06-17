@@ -442,7 +442,7 @@ git commit -m "refactor(提示词): 分类器改用任务模板"
 - 修改：`core/legacy_adapter.py`
 - 修改：`tests/test_evolution.py`
 
-- [ ] **步骤 1：写红灯测试**
+- [x] **步骤 1：写红灯测试**
 
 在 `tests/test_evolution.py` 新增：
 
@@ -495,7 +495,7 @@ def test_legacy_adapter_memory_extract_uses_v2_task_template(monkeypatch):
     assert captured["processed"] == [1]
 ```
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -506,7 +506,7 @@ python -B -m pytest tests/test_evolution.py::test_legacy_adapter_memory_extract_
 
 预期：FAIL，当前代码仍导入并调用 `core.prompt_runtime.render_prompt_content()`。
 
-- [ ] **步骤 3：修改 `core/legacy_adapter.py`**
+- [x] **步骤 3：修改 `core/legacy_adapter.py`**
 
 将旧渲染分支替换为：
 
@@ -523,13 +523,13 @@ python -B -m pytest tests/test_evolution.py::test_legacy_adapter_memory_extract_
             pass
 ```
 
-- [ ] **步骤 4：运行任务 3 测试**
+- [x] **步骤 4：运行任务 3 测试**
 
 运行步骤 2 命令。
 
 预期：PASS。
 
-- [ ] **步骤 5：运行 evolution / memory 回归**
+- [x] **步骤 5：运行 evolution / memory 回归**
 
 运行：
 
