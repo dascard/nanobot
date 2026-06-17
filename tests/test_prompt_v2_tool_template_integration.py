@@ -64,6 +64,55 @@ def test_outgoing_tool_schema_description_uses_v2_tool_template(tmp_path, monkey
     assert "V2 SCHEMA TEMPLATE MARKER" in description
 
 
+def test_tool_template_policy_caches_directory_scan(tmp_path, monkeypatch):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    _write_tool_template(default_dir, "tools/cache_scan/nested/usage", "cache_scan", "CACHE SCAN BODY")
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    import core.prompt_v2.tool_templates as module
+
+    module.clear_tool_template_policy_cache()
+    real_list_template_keys = module.list_template_keys
+    scan_count = 0
+
+    def counted_list_template_keys():
+        nonlocal scan_count
+        scan_count += 1
+        return real_list_template_keys()
+
+    monkeypatch.setattr(module, "list_template_keys", counted_list_template_keys)
+
+    first = module.get_tool_template_policy("cache_scan")
+    second = module.get_tool_template_policy("cache_scan")
+
+    assert first and first.body == "CACHE SCAN BODY"
+    assert second and second.body == "CACHE SCAN BODY"
+    assert scan_count == 1
+
+
+def test_saving_template_clears_tool_template_policy_cache(tmp_path, monkeypatch):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    _write_tool_template(default_dir, "tools/cache_clear/usage", "cache_clear", "DEFAULT CACHE BODY")
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.template_store import save_template
+    from core.prompt_v2.tool_templates import clear_tool_template_policy_cache, get_tool_template_policy
+
+    clear_tool_template_policy_cache()
+    before = get_tool_template_policy("cache_clear")
+    assert before and before.body == "DEFAULT CACHE BODY"
+
+    save_template("tools/cache_clear/usage", "RUNTIME CACHE BODY")
+
+    after = get_tool_template_policy("cache_clear")
+    assert after and after.body == "RUNTIME CACHE BODY"
+    assert after.source == "runtime"
+
+
 def test_group_analysis_internal_llm_uses_v2_templates(tmp_path, monkeypatch):
     default_dir = tmp_path / "defaults"
     runtime_dir = tmp_path / "runtime"

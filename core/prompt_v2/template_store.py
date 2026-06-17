@@ -152,6 +152,9 @@ def create_template(
     }
     normalized = text.rstrip() + "\n"
     path.write_text(_frontmatter_text(frontmatter) + normalized, encoding="utf-8")
+    from core.prompt_v2.tool_templates import clear_tool_template_policy_cache
+
+    clear_tool_template_policy_cache()
     return {
         "saved": True,
         "created": True,
@@ -170,6 +173,9 @@ def save_template(template_key: str, content: str) -> dict[str, Any]:
     before = _read_body(path)
     normalized = text.rstrip() + "\n"
     path.write_text(normalized, encoding="utf-8")
+    from core.prompt_v2.tool_templates import clear_tool_template_policy_cache
+
+    clear_tool_template_policy_cache()
     return {
         "saved": True,
         "template_key": key,
@@ -185,6 +191,9 @@ def delete_runtime_template(template_key: str) -> dict[str, Any]:
     existed = path.exists()
     if existed:
         path.unlink()
+        from core.prompt_v2.tool_templates import clear_tool_template_policy_cache
+
+        clear_tool_template_policy_cache()
     return {
         "deleted": existed,
         "template_key": key,

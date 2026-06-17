@@ -3,11 +3,17 @@ from __future__ import annotations
 import copy
 import logging
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 from core.prompt_v2.section_renderer import sha256_text
 from core.prompt_v2.template_loader import load_template
-from core.prompt_v2.template_registry import list_template_keys, resolve_template_key, runtime_template_dir
+from core.prompt_v2.template_registry import (
+    default_template_dir,
+    list_template_keys,
+    resolve_template_key,
+    runtime_template_dir,
+)
 from core.prompt_v2.variables import render_scoped_template
 
 logger = logging.getLogger("nanobot.prompt_v2.tool_templates")
@@ -24,7 +30,12 @@ class ToolTemplatePolicy:
 
 
 def _template_keys() -> set[str]:
-    return set(list_template_keys())
+    return set(_template_keys_for_dirs(str(default_template_dir()), str(runtime_template_dir())))
+
+
+@lru_cache(maxsize=32)
+def _template_keys_for_dirs(_default_dir: str, _runtime_dir: str) -> tuple[str, ...]:
+    return tuple(list_template_keys())
 
 
 def _kind_for(key: str, frontmatter: dict[str, Any]) -> str:
@@ -75,7 +86,7 @@ def _policy_from_key(key: str, values: dict[str, Any] | None = None) -> ToolTemp
     )
 
 
-def get_tool_template_policy(tool_name: str, values: dict[str, Any] | None = None) -> ToolTemplatePolicy | None:
+def _get_tool_template_policy_uncached(tool_name: str, values: dict[str, Any] | None = None) -> ToolTemplatePolicy | None:
     name = str(tool_name or "").strip()
     if not name:
         return None
@@ -90,6 +101,25 @@ def get_tool_template_policy(tool_name: str, values: dict[str, Any] | None = Non
         if policy and policy.tool_name == name:
             return policy
     return None
+
+
+@lru_cache(maxsize=256)
+def _cached_tool_template_policy(tool_name: str, _default_dir: str, _runtime_dir: str) -> ToolTemplatePolicy | None:
+    return _get_tool_template_policy_uncached(tool_name, None)
+
+
+def clear_tool_template_policy_cache() -> None:
+    _template_keys_for_dirs.cache_clear()
+    _cached_tool_template_policy.cache_clear()
+
+
+def get_tool_template_policy(tool_name: str, values: dict[str, Any] | None = None) -> ToolTemplatePolicy | None:
+    name = str(tool_name or "").strip()
+    if not name:
+        return None
+    if values:
+        return _get_tool_template_policy_uncached(name, values)
+    return _cached_tool_template_policy(name, str(default_template_dir()), str(runtime_template_dir()))
 
 
 def render_tool_execution_template(
