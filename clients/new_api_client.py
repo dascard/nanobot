@@ -10,6 +10,7 @@ import re
 import time
 import os
 import fnmatch
+from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional, AsyncIterator
 
 from config import (
@@ -90,6 +91,7 @@ class NewAPIClient:
         timeout: Optional[int] = None,
         max_retries: int = 3,
         registry_provider: str = "new-api",
+        session: aiohttp.ClientSession | None = None,
     ):
         self.api_key = api_key
         self.base_url = (base_url or NEW_API_BASE_URL).rstrip("/")
@@ -97,10 +99,19 @@ class NewAPIClient:
         self._timeout_override = timeout
         self.max_retries = max_retries
         self.last_usage: Dict[str, int] = {}
+        self._session = session
 
     @property
     def _timeout(self) -> int:
         return self._timeout_override or _new_api_timeout()
+
+    @asynccontextmanager
+    async def _request_session(self) -> AsyncIterator[aiohttp.ClientSession]:
+        if self._session is not None:
+            yield self._session
+            return
+        async with aiohttp.ClientSession() as session:
+            yield session
 
     @classmethod
     def _load_model_overrides(cls) -> Dict[str, Any]:
@@ -247,7 +258,7 @@ class NewAPIClient:
 
         url = f"{self.base_url}/models"
         headers = self._build_headers()
-        async with aiohttp.ClientSession() as session:
+        async with self._request_session() as session:
             try:
                 async with session.get(
                     url,
@@ -649,7 +660,7 @@ class NewAPIClient:
                     )
                 except Exception as _e:
                     logger.warning("record llm api request failed: %s", _e)
-                async with aiohttp.ClientSession() as session:
+                async with self._request_session() as session:
                     try:
                         async with session.post(
                             url, headers=headers, json=payload,
@@ -834,7 +845,7 @@ class NewAPIClient:
             logger.warning("record llm api stream request failed: %s", _e)
         tracker = self._safe_get_failure_tracker()
 
-        async with aiohttp.ClientSession() as session:
+        async with self._request_session() as session:
             try:
                 async with session.post(
                     url,

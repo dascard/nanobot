@@ -396,6 +396,106 @@ def test_new_api_chat_completion_finishes_request_on_success(monkeypatch):
     assert finished[0]["response"]["choices"][0]["message"]["content"] == "成功"
 
 
+def test_new_api_client_uses_injected_session_for_model_fetch(monkeypatch):
+    from clients.new_api_client import NewAPIClient
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"data": [{"id": "qwen/free-model"}]}
+
+    class _InjectedSession:
+        def __init__(self):
+            self.get_calls = 0
+            self.closed = False
+
+        def get(self, *args, **kwargs):
+            self.get_calls += 1
+            return _FakeResp()
+
+        async def close(self):
+            self.closed = True
+
+    def fail_client_session(*_args, **_kwargs):
+        raise AssertionError("应复用注入 session，不应创建逐请求 ClientSession")
+
+    session = _InjectedSession()
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", fail_client_session)
+
+    client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1", session=session)
+    models = run_async(client.fetch_models())
+
+    assert [m["id"] for m in models] == ["qwen/free-model"]
+    assert session.get_calls == 1
+    assert session.closed is False
+
+
+def test_new_api_client_uses_injected_session_for_chat_completion(monkeypatch):
+    from clients.new_api_client import NewAPIClient
+
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **_kwargs: 321),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **_kwargs: None),
+    )
+    monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
+    monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
+    monkeypatch.setattr(NewAPIClient, "get_ordered_candidates", lambda self, **kwargs: [{"id": "model-success", "intelligence": 7}])
+    monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"choices": [{"message": {"content": "复用"}}], "usage": {"total_tokens": 3}}
+
+        async def text(self):
+            return "ok"
+
+    class _InjectedSession:
+        def __init__(self):
+            self.post_calls = 0
+            self.closed = False
+
+        def post(self, *args, **kwargs):
+            self.post_calls += 1
+            return _FakeResp()
+
+        async def close(self):
+            self.closed = True
+
+    def fail_client_session(*_args, **_kwargs):
+        raise AssertionError("应复用注入 session，不应创建逐请求 ClientSession")
+
+    session = _InjectedSession()
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", fail_client_session)
+
+    client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1", session=session)
+    first = run_async(client.chat_completion([{"role": "user", "content": "你好"}]))
+    second = run_async(client.chat_completion([{"role": "user", "content": "再来"}]))
+
+    assert first["choices"][0]["message"]["content"] == "复用"
+    assert second["choices"][0]["message"]["content"] == "复用"
+    assert session.post_calls == 2
+    assert session.closed is False
+
+
 def test_new_api_chat_completion_stream_finishes_request_on_success(monkeypatch):
     from clients.new_api_client import NewAPIClient
 
@@ -471,6 +571,83 @@ def test_new_api_chat_completion_stream_finishes_request_on_success(monkeypatch)
     assert finished[0]["response_status"] == 200
     assert finished[0]["status"] == "stream_success"
     assert finished[0]["response"]["content"] == "你好"
+
+
+def test_new_api_client_uses_injected_session_for_chat_completion_stream(monkeypatch):
+    from clients.new_api_client import NewAPIClient
+
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **_kwargs: 654),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **_kwargs: None),
+    )
+    monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
+    monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
+    monkeypatch.setattr(NewAPIClient, "get_ordered_candidates", lambda self, **kwargs: [{"id": "model-stream", "intelligence": 7}])
+    monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
+
+    class _FakeContent:
+        def __init__(self):
+            self._lines = iter([
+                'data: {"choices":[{"delta":{"content":"流"}}]}\n\n'.encode("utf-8"),
+                'data: {"choices":[{"delta":{"content":"式"}}]}\n\n'.encode("utf-8"),
+                b"data: [DONE]\n\n",
+            ])
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._lines)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    class _FakeResp:
+        status = 200
+
+        def __init__(self):
+            self.content = _FakeContent()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def text(self):
+            return "ok"
+
+    class _InjectedSession:
+        def __init__(self):
+            self.post_calls = 0
+            self.closed = False
+
+        def post(self, *args, **kwargs):
+            self.post_calls += 1
+            return _FakeResp()
+
+        async def close(self):
+            self.closed = True
+
+    def fail_client_session(*_args, **_kwargs):
+        raise AssertionError("应复用注入 session，不应创建逐请求 ClientSession")
+
+    session = _InjectedSession()
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", fail_client_session)
+
+    async def collect():
+        client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1", session=session)
+        return [chunk async for chunk in client.chat_completion_stream([{"role": "user", "content": "流式"}])]
+
+    chunks = run_async(collect())
+
+    assert [c["choices"][0]["delta"]["content"] for c in chunks] == ["流", "式"]
+    assert session.post_calls == 1
+    assert session.closed is False
 
 
 def test_new_api_chat_completion_stream_records_reasoning_metrics(monkeypatch):
