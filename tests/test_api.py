@@ -180,6 +180,29 @@ def test_search_logs_user_id_fuzzy_escapes_like_wildcards(client, db_session, mo
     assert response.json()["results_found"] == 0
 
 
+def test_chat_management_endpoints_do_not_echo_internal_errors():
+    from fastapi import HTTPException
+    from api.routes import compact_history, get_history_summary, mark_clear
+
+    class BrokenDB:
+        def query(self, *_args, **_kwargs):
+            raise RuntimeError("missing_internal_column /tmp/nanobot.db")
+
+    cases = [
+        lambda: mark_clear(user_id="u1", db=BrokenDB(), _auth=None),
+        lambda: get_history_summary(user_id="u1", db=BrokenDB(), _auth=None),
+        lambda: compact_history(user_id="u1", db=BrokenDB(), _auth=None),
+    ]
+
+    for call in cases:
+        with pytest.raises(HTTPException) as exc:
+            call()
+        assert exc.value.status_code == 500
+        assert exc.value.detail == "内部错误"
+        assert "missing_internal_column" not in exc.value.detail
+        assert "nanobot.db" not in exc.value.detail
+
+
 def test_format_persona_facts_without_truncated_json():
     from api.routes import _format_persona_for_prompt
 

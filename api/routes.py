@@ -827,9 +827,9 @@ def mark_clear(
             "deleted_context_rows": deleted,
             "archived_rolling_summaries": archived,
         }
-    except Exception as e:
-        logger.error(f"[/mark-clear] Failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("[/mark-clear] Failed")
+        raise HTTPException(status_code=500, detail="内部错误")
 
 
 @router.get("/chat/history-summary")
@@ -870,9 +870,9 @@ def get_history_summary(
             "recent_assistant_messages": assistant_msgs[-5:],
             "recent_tool_calls": tool_msgs[-5:],
         }
-    except Exception as e:
-        logger.error(f"[/history-summary] Failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("[/history-summary] Failed")
+        raise HTTPException(status_code=500, detail="内部错误")
 
 
 @router.post("/chat/compact-history")
@@ -914,9 +914,9 @@ def compact_history(
             }
         else:
             return {"status": "error", "message": "无法确定要保留的记录", "deleted_count": 0}
-    except Exception as e:
-        logger.error(f"[/compact-history] Failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("[/compact-history] Failed")
+        raise HTTPException(status_code=500, detail="内部错误")
 
 
 @router.get("/context")
