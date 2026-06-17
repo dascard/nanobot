@@ -1,6 +1,6 @@
 # TimingGate 真实日志假阳率评估实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:executing-plans 或在当前会话中逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:executing-plans 或在当前会话中逐任务实现此计划。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
 **目标：** 用真实 `ChatLog` 中的 `timing_gate.scoring` 抽样评估 `s_ack`、`s_transport`、`w_marker` 假阳性风险，输出可复跑的 shadow 对比报告，记录样本量、误判类型和阈值建议。
 
@@ -31,7 +31,7 @@
 - 创建：`core/eval_sampling/timing_signal_audit.py`
 - 测试：`tests/test_timing_signal_audit.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 在 `tests/test_timing_signal_audit.py` 中新增：
 
@@ -80,7 +80,7 @@ def test_extract_timing_signal_samples_reads_scoring_sub_signals():
     assert samples[0]["text_preview"] == "[A]: 好的"
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -90,7 +90,7 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY; python 
 
 预期：FAIL，报错 `ModuleNotFoundError: No module named 'core.eval_sampling.timing_signal_audit'`。
 
-- [ ] **步骤 3：编写最少实现代码**
+- [x] **步骤 3：编写最少实现代码**
 
 在 `core/eval_sampling/timing_signal_audit.py` 中实现：
 
@@ -124,7 +124,7 @@ def extract_timing_signal_samples(rows, *, signal_names=SIGNAL_NAMES, min_value=
   - `reason`
   - `text_preview`
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行步骤 2 命令，预期 PASS。
 
@@ -136,7 +136,7 @@ def extract_timing_signal_samples(rows, *, signal_names=SIGNAL_NAMES, min_value=
 - 修改：`core/eval_sampling/timing_signal_audit.py`
 - 测试：`tests/test_timing_signal_audit.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 新增：
 
@@ -162,7 +162,7 @@ def test_build_timing_signal_audit_report_counts_labels_and_suggestions():
     assert report["shadow"]["action_mismatch_rate"] == 0.5
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -172,7 +172,7 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY; python 
 
 预期：FAIL，报错 `cannot import name 'build_timing_signal_audit_report'` 或断言失败。
 
-- [ ] **步骤 3：编写最少实现代码**
+- [x] **步骤 3：编写最少实现代码**
 
 新增：
 
@@ -217,7 +217,7 @@ shadow 对比规则：
 - 两者不同则 `action_mismatch=True`
 - 报告只记录差异，不自动判定谁正确，也不调参
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行步骤 2 命令，预期 PASS。
 
@@ -229,7 +229,7 @@ shadow 对比规则：
 - 创建：`evals/timing_signal_audit.py`
 - 测试：`tests/test_timing_signal_audit.py`
 
-- [ ] **步骤 1：编写失败的测试**
+- [x] **步骤 1：编写失败的测试**
 
 新增：
 
@@ -269,7 +269,7 @@ def test_timing_signal_audit_cli_writes_report(tmp_path, db_session):
     assert payload["shadow"]["action_mismatch_count"] == 1
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -279,7 +279,7 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY; python 
 
 预期：FAIL，报错 `ModuleNotFoundError: No module named 'evals.timing_signal_audit'`。
 
-- [ ] **步骤 3：编写最少实现代码**
+- [x] **步骤 3：编写最少实现代码**
 
 在 `evals/timing_signal_audit.py` 中实现：
 
@@ -313,7 +313,7 @@ CLI 参数：
 - `generated_at`
 - `source`，包含 `db`、`after_id`、`limit`
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行步骤 2 命令，预期 PASS。
 
@@ -327,25 +327,25 @@ CLI 参数：
 - 创建：`tests/test_timing_signal_audit.py`
 - 创建：`.Codex/plans/timing-gate-scoring-phase11-log-audit.md`
 
-- [ ] **步骤 1：运行阶段 11 定向测试**
+- [x] **步骤 1：运行阶段 11 定向测试**
 
 ```bash
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY; python -B -m pytest tests/test_timing_signal_audit.py -q -p no:cacheprovider
 ```
 
-- [ ] **步骤 2：运行 TimingGate 回归**
+- [x] **步骤 2：运行 TimingGate 回归**
 
 ```bash
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY; python -B -m pytest tests/test_timing_score.py tests/test_timing_runtime.py tests/test_timing_gate_prompt_policy.py tests/test_timing_signal_audit.py -q -p no:cacheprovider
 ```
 
-- [ ] **步骤 3：运行全量测试**
+- [x] **步骤 3：运行全量测试**
 
 ```bash
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY; python -B -m pytest tests/ -q -p no:cacheprovider --durations=20
 ```
 
-- [ ] **步骤 4：检查 diff 并提交实现**
+- [x] **步骤 4：检查 diff 并提交实现**
 
 ```bash
 git diff --check -- core/eval_sampling/timing_signal_audit.py evals/timing_signal_audit.py tests/test_timing_signal_audit.py .Codex/plans/timing-gate-scoring-phase11-log-audit.md
@@ -356,7 +356,7 @@ git diff --cached --check -- core/eval_sampling/timing_signal_audit.py evals/tim
 git commit -m "feat(评测): 添加时机信号日志审计"
 ```
 
-- [ ] **步骤 5：同步阶段文档并单独提交**
+- [x] **步骤 5：同步阶段文档并单独提交**
 
 修改 `docs/plan_walkthrough.md`：
 
