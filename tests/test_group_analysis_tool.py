@@ -37,6 +37,38 @@ def test_resolve_analysis_window_hours_defaults_and_overrides():
     assert resolve_analysis_window_hours(None, "全部历史") is None
 
 
+def test_call_llm_branch_does_not_inspect_helper_signature(monkeypatch):
+    import inspect
+    from creatures.nanobot.prompts.skills.group_analysis import analyzer
+
+    captured = {}
+
+    async def fake_call(_client, _system_prompt, _prompt, max_retries=2, *, prompt_key="", prompt_vars=None):
+        captured["prompt_key"] = prompt_key
+        captured["prompt_vars"] = prompt_vars
+        return "ok"
+
+    def fail_signature(_obj):
+        raise AssertionError("不应在每个分支调用时探测 helper 签名")
+
+    monkeypatch.setattr(analyzer, "_call_llm_with_retry", fake_call)
+    monkeypatch.setattr(inspect, "signature", fail_signature)
+
+    result = run_async(analyzer._call_llm_branch(
+        object(),
+        "system",
+        "prompt",
+        prompt_key="group_analysis_topics",
+        prompt_vars={"messages_text": "今天聊 AI"},
+    ))
+
+    assert result == "ok"
+    assert captured == {
+        "prompt_key": "group_analysis_topics",
+        "prompt_vars": {"messages_text": "今天聊 AI"},
+    }
+
+
 def test_group_analysis_resolves_group_name_from_chatlog_session_name(db_session):
     from core.database import ChatLog
     from creatures.nanobot.prompts.skills.group_analysis.repository import GroupAnalysisRepository
@@ -413,7 +445,7 @@ def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
         def close(self):
             return None
 
-    async def fake_call(_client, _system_prompt, prompt, max_retries=2):
+    async def fake_call(_client, _system_prompt, prompt, max_retries=2, *, prompt_key="", prompt_vars=None):
         if "核心讨论话题" in prompt:
             return '{"topics":[{"topic":"AI 模型","contributors":["A","B"],"detail":"大家在讨论价格和 benchmark。"}]}'
         if "用户发言统计" in prompt:
@@ -503,7 +535,7 @@ def test_group_analysis_tool_filters_artifacts_before_llm(monkeypatch):
         def close(self):
             return None
 
-    async def fake_call(_client, _system_prompt, prompt, max_retries=2):
+    async def fake_call(_client, _system_prompt, prompt, max_retries=2, *, prompt_key="", prompt_vars=None):
         prompts.append(prompt)
         assert "旧日报" not in prompt
         assert "[NO_SEND]" not in prompt

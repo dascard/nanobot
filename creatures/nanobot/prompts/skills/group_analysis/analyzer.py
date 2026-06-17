@@ -2,7 +2,6 @@
 
 import asyncio
 from collections import Counter, defaultdict
-import inspect
 import json
 import logging
 import re
@@ -292,19 +291,14 @@ async def _call_llm_branch(
     prompt_key: str,
     prompt_vars: dict,
 ) -> str:
-    """调用分支 LLM；兼容测试中 monkeypatch 的旧签名 helper。"""
-    signature = inspect.signature(_call_llm_with_retry)
-    params = signature.parameters
-    supports_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
-    if supports_kwargs or "prompt_key" in params:
-        return await _call_llm_with_retry(
-            client,
-            sys_prompt,
-            prompt,
-            prompt_key=prompt_key,
-            prompt_vars=prompt_vars,
-        )
-    return await _call_llm_with_retry(client, sys_prompt, prompt)
+    """调用分支 LLM，并保留 prompt 模板追踪上下文。"""
+    return await _call_llm_with_retry(
+        client,
+        sys_prompt,
+        prompt,
+        prompt_key=prompt_key,
+        prompt_vars=prompt_vars,
+    )
 
 
 async def analyze_group(payload: dict, instructions: str = "") -> dict:
