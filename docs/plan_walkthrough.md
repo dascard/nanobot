@@ -123,15 +123,22 @@
 
 ### 阶段 9：timer / legacy cooldown 继续软化
 
-状态：待开始。
+状态：已完成。
 
 目标：处理仍保留兼容 hard wait 的 timer path 和 `trigger_reason=""` legacy cooldown，尽量纳入 scoring 或 min interval 语义。
 
-验收标准：
+已完成：
 
-- 新增红绿测试覆盖 timer cooldown
-- 新增红绿测试覆盖 legacy 空 trigger cooldown
-- 不破坏已有 wait 行为
+- 已写计划文件：`.Codex/plans/timing-gate-scoring-phase9-cooldown.md`
+- 已将 legacy 空 `trigger_reason` cooldown 接入 scoring shortcut
+- 已将 timer fired cooldown 接入 scoring shortcut
+- 已保留 scoring 不可用或非短路时的旧 hard wait fallback
+- 已确认 timer 不绕过 talk_value gate、generation mismatch 和 direct bypass 语义
+- 已运行 `TestGroupRuntime`、TimingGate 回归和全量测试
+
+相关提交：
+
+- `b2d5adf refactor(时机门控): 软化计时冷却路径`
 
 ### 阶段 10：session / platform 级模型层开关
 
@@ -183,4 +190,4 @@
 
 ## 下一步
 
-继续阶段 9：软化 timer path 和 `trigger_reason=""` legacy cooldown 中仍保留的兼容 hard wait。下一阶段仍按计划文件、TDD 红绿、回归验证和阶段提交推进。
+继续阶段 10：增加 session / platform 级 TimingGate 模型层开关。下一阶段仍按计划文件、TDD 红绿、回归验证和阶段提交推进。
