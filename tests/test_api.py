@@ -905,6 +905,98 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
     assert "u-shrink" not in _private_buffers
 
 
+@pytest.mark.asyncio
+async def test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer(db_session, monkeypatch):
+    import asyncio
+    from api.routes import ChatProxyRequest, proxy_chat, _private_buffers
+    from core.private_timing import PrivateDecision
+
+    _private_buffers.clear()
+
+    class DummyGuardrail:
+        def classify(self, message, allow_injection_passthrough=False):
+            return {"status": "reply", "complexity": 5}
+
+    class WaitPrivateGate:
+        async def classify(self, *args, **kwargs):
+            return PrivateDecision("wait", "unit_test", 1.0, "unit_test")
+
+    fake_now = {"value": 0.0}
+    sleep_started = asyncio.Event()
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(_delay):
+        sleep_started.set()
+        await real_sleep(3600)
+
+    monkeypatch.setattr("core.private_timing.get_private_gate", lambda: WaitPrivateGate())
+    monkeypatch.setattr("api.routes.get_guardrail", lambda: DummyGuardrail())
+    monkeypatch.setattr("api.routes.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("api.routes._time.time", lambda: fake_now["value"])
+
+    req1 = ChatProxyRequest(user_id="u-cancel", session_id="private_u-cancel", query="第一句")
+    req2 = ChatProxyRequest(user_id="u-cancel", session_id="private_u-cancel", query="第二句")
+
+    task1 = asyncio.create_task(proxy_chat(req1, BackgroundTasks(), db_session, None))
+    try:
+        await sleep_started.wait()
+        task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
+        await real_sleep(0)
+
+        task1.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task1
+
+        result2 = await asyncio.wait_for(task2, timeout=1)
+        assert result2 == {"status": "silent", "user_id": "u-cancel"}
+        assert "u-cancel" not in _private_buffers
+    finally:
+        _private_buffers.clear()
+
+
+@pytest.mark.asyncio
+async def test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer(db_session, monkeypatch):
+    import asyncio
+    from api.routes import ChatProxyRequest, proxy_chat, _private_buffers
+
+    _private_buffers.clear()
+    _fast_private_reply(monkeypatch)
+
+    bridge_entered = asyncio.Event()
+    release_bridge = asyncio.Event()
+
+    class FakeBridge:
+        async def handle_message(self, *args, **kwargs):
+            bridge_entered.set()
+            await release_bridge.wait()
+            return "不会返回"
+
+        def pop_last_reply_meta(self, session_id):
+            return {}
+
+    monkeypatch.setattr("api.routes.get_bridge", lambda: FakeBridge())
+
+    req1 = ChatProxyRequest(user_id="u-bridge-cancel", session_id="private_u-bridge-cancel", query="第一句")
+    req2 = ChatProxyRequest(user_id="u-bridge-cancel", session_id="private_u-bridge-cancel", query="第二句")
+
+    task1 = asyncio.create_task(proxy_chat(req1, BackgroundTasks(), db_session, None))
+    try:
+        await bridge_entered.wait()
+        task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
+        await asyncio.sleep(0)
+
+        task1.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task1
+
+        result2 = await asyncio.wait_for(task2, timeout=1)
+        assert result2 == {"status": "silent", "user_id": "u-bridge-cancel"}
+        assert "u-bridge-cancel" not in _private_buffers
+    finally:
+        release_bridge.set()
+        _private_buffers.clear()
+
+
 # ── /group/message 测试 ──
 
 @pytest.mark.asyncio

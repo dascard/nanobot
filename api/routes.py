@@ -53,6 +53,7 @@ _private_lock = asyncio.Lock()
 MAX_BUFFERED_MESSAGES = 10  # 单用户 5s 窗口内最多收集条数
 PRIVATE_BUFFER_WINDOW_SECONDS = 5.0
 PRIVATE_BUFFER_WINDOW_WITH_FILES_SECONDS = 10.0
+PRIVATE_BUFFER_FOLLOWER_TIMEOUT_SECONDS = 900.0
 
 # Prompt budget caps to avoid hidden context blow-up.
 MAX_QUERY_CHARS = 2000
@@ -2254,7 +2255,17 @@ async def proxy_chat(
             if done_event is not None:
                 # 缓冲期内后续消息：等待第一条完成，但不返回 answer
                 # 第一条消息已通过 HTTP 响应返回了 answer，后续消息只静默消费
-                await done_event.wait()
+                try:
+                    await asyncio.wait_for(
+                        done_event.wait(),
+                        timeout=PRIVATE_BUFFER_FOLLOWER_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[/chat] Private buffer follower timed out: user=%s",
+                        req.user_id,
+                    )
+                    await _finalize_private_buffer(req.user_id)
                 return {"status": "silent", "user_id": req.user_id}
 
             if not is_first:
@@ -2309,6 +2320,9 @@ async def proxy_chat(
                 result.get("passthrough", False),
                 req.user_id,
             )
+        except asyncio.CancelledError:
+            await _finalize_private_buffer(req.user_id)
+            raise
         except Exception:
             await _finalize_private_buffer(req.user_id)
             raise
@@ -2598,6 +2612,9 @@ async def proxy_chat(
 
     try:
         answer = await _do_chat()
+    except asyncio.CancelledError:
+        await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
+        raise
     except Exception as e:
         logger.error(f"[/chat] KT Agent failed: {e}")
         try:
