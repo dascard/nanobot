@@ -25,26 +25,28 @@ def test_prompt_preview_defaults_to_v2_and_prompt_path_redirects():
 
     assert "engine: 'v2'" in source
     assert '<Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />' in source
-    assert '<Route path="/prompt-legacy" element={<PromptPage />} />' in source
+    assert '<Route path="/prompt-legacy"' not in source
+    assert '<Route path="/prompts"' not in source
     assert '<Route path="/prompt-v2-templates" element={<PromptV2TemplatesPage />} />' in source
 
 
-def test_legacy_prompt_pages_are_readonly_migration_views():
-    source = PROMPT_JS.read_text(encoding="utf-8")
-    legacy_source = source.split("export function PromptPage()")[1].split("// ── Managed Prompts ──")[0]
-    managed_source = source.split("export function ManagedPromptsPage()")[1].split("const PROMPT_V2_RUNTIME_NODES")[0]
+def test_legacy_prompt_pages_are_removed_from_webui():
+    app_source = APP_JS.read_text(encoding="utf-8")
+    prompt_source = PROMPT_JS.read_text(encoding="utf-8")
+    prompt_import = next(
+        line for line in app_source.splitlines()
+        if "features/prompt/PromptPages" in line
+    )
+    prompt_import_names = prompt_import.split("import", 1)[1].split("from", 1)[0]
 
-    assert "legacyReadOnly = true" in legacy_source
-    assert "Legacy prompt 已降级为只读迁移入口" in legacy_source
-    assert "readOnly={legacyReadOnly}" in legacy_source
-    assert "if (legacyReadOnly) return" in legacy_source
-    assert "disabled={legacyReadOnly}" in legacy_source
-    assert "disabled={legacyReadOnly || building}" in legacy_source
-    assert "disabled={legacyReadOnly || !dirty}" in legacy_source
-    assert "disabled={legacyReadOnly || !selected}" in managed_source
-    assert "旧 PromptManager 模板已降级为只读迁移入口" in managed_source
-    assert "readOnly={legacyReadOnly}" in managed_source
-    assert "disabled={legacyReadOnly}" in managed_source
+    assert "PromptPage" not in prompt_import_names
+    assert "ManagedPromptsPage" not in prompt_import_names
+    assert "<PromptPage" not in app_source
+    assert "<ManagedPromptsPage" not in app_source
+    assert "export function PromptPage()" not in prompt_source
+    assert "export function ManagedPromptsPage()" not in prompt_source
+    assert "/prompt/fragments" not in prompt_source
+    assert "/prompts/" not in prompt_source
 
 
 def test_prompt_runtime_v2_page_exposes_template_editor():

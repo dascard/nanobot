@@ -161,50 +161,12 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     from core import database
     from core.tracing import LLMRequestTracer, ReplyContractTracer, RunTracer, ToolTracer
 
-    prompt_dir = tmp_path / "prompts"
-    backup_dir = tmp_path / "backups"
-    prompt_dir.mkdir()
-    (prompt_dir / "group_chat.md").write_text(
-        """---
-name: 群聊回复
-required_vars:
-  - user_input
-optional_vars:
-  - history_context
----
-{{ history_context }}
-用户: {{ user_input }}
-""",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("NANOBOT_PROMPT_DIR", str(prompt_dir))
-    monkeypatch.setenv("NANOBOT_PROMPT_BACKUP_DIR", str(backup_dir))
-    monkeypatch.setattr("api.admin_routes.get_prompt_manager", lambda: __import__("core.prompts", fromlist=["PromptManager"]).PromptManager(prompt_dir=prompt_dir, backup_dir=backup_dir))
     legacy_prompt = tmp_path / "runtime_prompt.md"
     legacy_prompt.write_text("旧 Prompt 运行时标记 LEGACY_RUNTIME_MARKER", encoding="utf-8")
     monkeypatch.setenv("NANOBOT_LEGACY_PROMPT_OUTPUT", str(legacy_prompt))
 
     list_resp = client.get("/api/v1/admin/prompts", headers=auth_header)
-    assert list_resp.status_code == 200, list_resp.text
-    assert list_resp.json()["items"][0]["prompt_key"] == "group_chat"
-
-    preview = client.post(
-        "/api/v1/admin/prompts/group_chat/preview",
-        json={"variables": {"user_input": "你好", "history_context": "历史"}, "mode": "shadow"},
-        headers=auth_header,
-    )
-    assert preview.status_code == 200, preview.text
-    assert "用户: 你好" in preview.json()["content"]
-
-    put_resp = client.put(
-        "/api/v1/admin/prompts/group_chat",
-        json={"content": "---\nname: 群聊回复\nrequired_vars:\n  - user_input\n---\n更新 {{ user_input }}\n"},
-        headers=auth_header,
-    )
-    assert put_resp.status_code == 410, put_resp.text
-    assert "只读迁移入口" in put_resp.text
-    history_resp = client.get("/api/v1/admin/prompts/group_chat/history", headers=auth_header)
-    assert history_resp.status_code == 200, history_resp.text
+    assert list_resp.status_code in {404, 410}, list_resp.text
 
     effective = client.post(
         "/api/v1/admin/prompt/effective-preview",

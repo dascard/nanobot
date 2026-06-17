@@ -44,7 +44,7 @@ import { ToolCallsPage } from './features/agent-runs/ToolCallsPage'
 import { LLMApiLogsPage } from './features/agent-runs/LLMApiLogsPage'
 import { ModelRepliesTab } from './features/logs/ModelRepliesTab'
 import { ModelsPage } from './features/models/ModelsPage'
-import { PromptPage, ManagedPromptsPage, PromptV2TemplatesPage, EffectivePromptPreviewPage } from './features/prompt/PromptPages'
+import { PromptV2TemplatesPage, EffectivePromptPreviewPage } from './features/prompt/PromptPages'
 import { ReplyEvalPage } from './features/reply-eval/ReplyEvalPage'
 import { ToolsPage } from './features/tools/ToolsPage'
 import { EvalsPage } from './features/evals/EvalsPage'
@@ -2951,8 +2951,6 @@ export default function App() {
           <Route path="/db" element={<DbPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />
-          <Route path="/prompt-legacy" element={<PromptPage />} />
-          <Route path="/prompts" element={<ManagedPromptsPage />} />
           <Route path="/prompt-preview" element={<EffectivePromptPreviewPage />} />
           <Route path="/prompt-v2-templates" element={<PromptV2TemplatesPage />} />
           <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />

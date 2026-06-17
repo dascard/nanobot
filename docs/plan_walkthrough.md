@@ -77,7 +77,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 当前详细计划：P1-6 删除冗余提示词资产并去版本化
 
-状态：当前推进。P1-6 任务 1-4 已完成并提交，当前处于任务 5 中间态：测试已先改写并跑出预期红灯，后端旧 route 删除草稿已在工作区，前端旧页面 / 路由删除、后端 410 兼容出口、定向回归、WebUI 构建和阶段提交仍待完成。后续仍按「管理面下线 → 删除冗余资产 → 去版本化命名 → 验证收尾」顺序推进。
+状态：当前推进。P1-6 任务 1-5 已完成：旧管理入口已由后端 410 catch-all 接管，WebUI 旧 route / 旧页面组件已删除，任务 5 定向、相关回归、WebUI 构建和全量测试均已通过。后续继续任务 6「删除 legacy prompt 资产与构建脚本」，再进入任务 7「建立无版本 canonical prompt 命名兼容层」。
 
 - [x] 重新核对 `docs/todo.md` 路线项 1，确认 P1-6 是 P1-5 之后的下一优先级。
 - [x] 核对 `docs/TODO_LIST.md`，确认它记录了更旧的路线状态，仅作历史核对，不作为优先级来源。
@@ -91,7 +91,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 收敛运行时入口：live 发送路径已忽略 `v1` override 并统一进入 V2 canonical runtime，`build_prompt_runtime()` 不再调用 `PromptAssembler`。
 - [x] 修正旧主链路测试口径：`tests/test_kt_framework.py` 不再断言 V1 手工 `<runtime_context>` 注入，改为验证 bridge 传给 V2 prompt runtime 的结构化输入。
 - [x] 提交 P1-6 任务 4：修正旧测试后全量测试已重新通过，并随本阶段单独 commit 归档。
-- [ ] 处理管理面迁移出口（进行中）：旧入口下线测试已改写并完成红灯验证；`api/admin_routes.py` 已有删除旧 managed / legacy route 的草稿；尚需补最小 410 兼容出口、删除 WebUI 旧 route / 旧组件、跑定向回归与 WebUI 构建后单独提交。
+- [x] 处理管理面迁移出口：旧入口下线测试已改写并完成红灯验证；后端旧 managed / legacy route 已删除并补最小 410 catch-all；WebUI `/prompt-legacy`、`/prompts` 和旧页面组件已删除；任务 5 定向回归、WebUI 构建和全量测试已通过，随本阶段单独提交归档。
 - [ ] 删除冗余资产：删除不再被 live 读取的 V1 / legacy 模块、模板目录和构建脚本，保留测试夹具中确有必要的最小样本。
 - [ ] 去版本化命名：将模板目录、prompt key、配置项和 tracing 字段从 `v2` 命名收敛到规范名；旧配置只保留兼容读取，不再作为 live 主路径。
 - [ ] 同步提示词说明：修改 `creatures/nanobot/config.yaml`、提示词文档和相关 admin 文案时，检查 `creatures/nanobot/prompt.md` 的引用是否已废弃或应删除。
@@ -116,6 +116,11 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - P1-6 任务 4 bridge / streaming / KT 回归：`67 passed, 1 warning`。
 - P1-6 任务 4 修正后全量：`1244 passed, 6 skipped, 113 warnings`。
 - P1-6 任务 5 红灯：`9 failed, 17 passed, 20 warnings`，失败点覆盖旧 GET 路由仍返回 200、WebUI 仍暴露 `/prompt-legacy` / `/prompts` 直达路由和旧组件 import / export。
+- P1-6 任务 5 定向：`27 passed, 20 warnings`。
+- P1-6 任务 5 相关回归：`47 passed, 20 warnings`。
+- P1-6 任务 5 WebUI 构建：`npm run build` 通过。
+- P1-6 任务 5 首次全量：`1 failed, 1251 passed, 6 skipped, 113 warnings`，失败点为 `tests/test_token_utils.py` 仍导入已随旧 `/prompt` 管理页删除的 `_prompt_metrics()`。
+- P1-6 任务 5 修正旧测试后全量：`1252 passed, 6 skipped, 113 warnings`。
 - P1-5 任务 3 红灯：`13 failed, 3 passed, 20 warnings`，失败点覆盖旧写接口、V1 preview、legacy GET 副作用和 WebUI 只读断言。
 - P1-5 任务 3 绿灯：`16 passed, 20 warnings`。
 - P1-5 任务 3 定向：`25 passed, 20 warnings`。

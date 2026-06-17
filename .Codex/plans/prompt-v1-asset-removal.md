@@ -719,6 +719,7 @@ git commit -m "refactor(提示词): 封存旧版运行时分支"
 - 修改：`tests/test_prompt_legacy_admin_readonly.py`
 - 修改：`tests/test_prompt_trace_admin.py`
 - 修改：`tests/test_webui_prompt_runtime_ui.py`
+- 修改：`tests/test_token_utils.py`
 
 - [x] **步骤 1：写红灯测试**
 
@@ -736,9 +737,16 @@ assert '<Route path="/prompts"' not in source
 def test_legacy_prompt_pages_are_removed_from_webui():
     app_source = APP_JS.read_text(encoding="utf-8")
     prompt_source = PROMPT_JS.read_text(encoding="utf-8")
+    prompt_import = next(
+        line for line in app_source.splitlines()
+        if "features/prompt/PromptPages" in line
+    )
+    prompt_import_names = prompt_import.split("import", 1)[1].split("from", 1)[0]
 
-    assert "PromptPage" not in app_source
-    assert "ManagedPromptsPage" not in app_source
+    assert "PromptPage" not in prompt_import_names
+    assert "ManagedPromptsPage" not in prompt_import_names
+    assert "<PromptPage" not in app_source
+    assert "<ManagedPromptsPage" not in app_source
     assert "export function PromptPage()" not in prompt_source
     assert "export function ManagedPromptsPage()" not in prompt_source
     assert "/prompt/fragments" not in prompt_source
@@ -772,11 +780,9 @@ python -B -m pytest tests/test_prompt_legacy_admin_readonly.py tests/test_prompt
 
 已执行结果：`9 failed, 17 passed, 20 warnings`。失败点符合预期，覆盖旧 GET 路由仍返回 200、WebUI 仍暴露 `/prompt-legacy` / `/prompts` 直达路由和旧组件 import / export。
 
-- [ ] **步骤 3：删除后端旧 route 区块**
+- [x] **步骤 3：删除后端旧 route 区块**
 
 在 `api/admin_routes.py` 删除 managed prompt route 区块和 legacy prompt route 区块，保留 `POST /prompt/effective-preview` 的 V2 分支。删除不再使用的 `PromptSaveRequest`、`PromptPreviewRequest`、`PromptRollbackRequest` 和 `_prompt_metrics()`。
-
-当前中间态：旧 managed / legacy route 区块删除草稿已在工作区；完成前仍需补最小 410 兼容出口并跑回归，避免旧写入口落到未预期的状态码。
 
 如果为了兼容旧客户端选择 410 而不是 404，保留最小 route：
 
@@ -786,13 +792,15 @@ def legacy_prompt_routes_removed(path: str, _auth=Depends(verify_admin)):
     raise HTTPException(410, "Legacy prompt 管理入口已下线；请使用 Prompt 模板页面")
 ```
 
-- [ ] **步骤 4：删除前端旧页面**
+实际实现：旧 managed / legacy route 区块已删除，保留 `POST /prompt/effective-preview` 的 V2 分支；`/prompts*` 与 `/prompt*` 旧入口改由最小 catch-all 返回 410，避免旧写入口落到 404 / 422。
+
+- [x] **步骤 4：删除前端旧页面**
 
 在 `webui/src/App.jsx` 删除 `PromptPage`、`ManagedPromptsPage` import 和 `/prompt-legacy`、`/prompts` route。保留 `/prompt` 到 `/prompt-preview` redirect。
 
 在 `webui/src/features/prompt/PromptPages.jsx` 删除 `PromptPage` 和 `ManagedPromptsPage` 组件，以及只服务它们的 state / API 调用。
 
-- [ ] **步骤 5：运行任务 5 回归**
+- [x] **步骤 5：运行任务 5 回归**
 
 运行：
 
@@ -803,12 +811,20 @@ cd webui && npm run build
 
 预期：PASS。
 
-- [ ] **步骤 6：提交任务 5**
+已执行结果：
+
+- 定向：`27 passed, 20 warnings`。
+- 相关回归：`47 passed, 20 warnings`。
+- WebUI 构建：`npm run build` 通过。
+- 首次全量：`1 failed, 1251 passed, 6 skipped, 113 warnings`，失败点为 `tests/test_token_utils.py` 仍导入已随旧 `/prompt` 管理页删除的 `_prompt_metrics()`。
+- 修正旧测试后全量：`1252 passed, 6 skipped, 113 warnings`。
+
+- [x] **步骤 6：提交任务 5**
 
 运行：
 
 ```bash
-git add api/admin_routes.py webui/src/App.jsx webui/src/features/prompt/PromptPages.jsx tests/test_prompt_legacy_admin_readonly.py tests/test_prompt_trace_admin.py tests/test_webui_prompt_runtime_ui.py
+git add api/admin_routes.py webui/src/App.jsx webui/src/features/prompt/PromptPages.jsx tests/test_prompt_legacy_admin_readonly.py tests/test_prompt_trace_admin.py tests/test_webui_prompt_runtime_ui.py tests/test_token_utils.py
 git commit -m "refactor(提示词): 下线旧版管理入口"
 ```
 
