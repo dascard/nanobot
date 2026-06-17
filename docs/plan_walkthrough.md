@@ -7,7 +7,7 @@
 
 ## 当前目标
 
-优先完成 TimingGate「规则信号 + 模型」混合决策的剩余落地工作。当前阶段 8-12 已完成，下一步进入阶段 13：同步 `docs/todo.md` 和相关设计文档，确保 TODO、设计说明与真实代码状态一致。
+优先完成 TimingGate「规则信号 + 模型」混合决策的剩余落地工作。当前阶段 8-13 已完成，TimingGate 混合决策路线已进入持续运营和后续路线项维护阶段。
 
 ## 执行约束
 
@@ -36,7 +36,7 @@
 | 阶段 10：session / platform 级模型层开关 | 已完成 | `enabled` / `rules_only` / `shadow` 策略解析与运行时接入 |
 | 阶段 11：真实日志假阳率评估 | 已完成 | 时机信号审计 CLI、shadow mismatch 报告、阈值建议 |
 | 阶段 12：timing gate eval 基线与回归门禁 | 已完成 | baseline diff、阈值门禁和 CLI 门禁输出 |
-| 阶段 13：文档收尾 | 待开始 | 同步 `docs/todo.md` 与设计文档 |
+| 阶段 13：文档收尾 | 已完成 | 同步 `docs/todo.md` 与设计文档 |
 
 ## 阶段清单
 
@@ -244,9 +244,15 @@
 
 ### 阶段 13：文档收尾
 
-状态：待开始。
+状态：已完成。
 
 目标：所有代码阶段完成后，同步 `docs/todo.md` 和相关设计文档，确保文档与真实代码状态一致。
+
+已完成：
+
+- 已同步 `docs/todo.md` 路线项 10，标记私聊 shared scoring、timer / legacy cooldown 软化、模型策略开关、真实日志审计和 eval 门禁已落地
+- 已同步 `docs/todo.md` 路线项 8，记录 baseline diff / 阈值门禁已完成，CI 接入和标注闭环作为后续运营项
+- 已同步 `docs/superpowers/specs/2026-06-16-timing-gate-scoring-design.md`，增加 2026-06-17 实施状态并更新验收清单
 
 验收标准：
 
@@ -256,4 +262,4 @@
 
 ## 下一步
 
-继续阶段 13：文档收尾。下一阶段重点同步 `docs/todo.md` 和 `docs/superpowers/specs/2026-06-16-timing-gate-scoring-design.md`，把已完成的 TimingGate 混合决策、日志审计和 eval 门禁状态写回文档。
+TimingGate 混合决策路线已完成阶段性落地。后续优先级回到 `docs/todo.md` 的架构演进路线：继续推进真实日志标注 / CI 接入等运营项，或转入 P1 / P2 中提示词收敛、多平台底座等后续工作。
