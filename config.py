@@ -13,7 +13,7 @@ load_dotenv()
 EVOLUTION_THRESHOLD = int(os.environ.get("EVOLUTION_THRESHOLD", "10"))
 
 # ── API 认证 ──
-# NANOBOT_API_TOKEN：bot 推送 / chat / group/message 接口认证（为空则不启用）
+# NANOBOT_API_TOKEN：bot 推送 / chat / group/message 接口认证（为空则接口返回 503）
 NANOBOT_API_TOKEN = os.environ.get("NANOBOT_API_TOKEN", "")
 
 # NANOBOT_ADMIN_TOKEN：WebUI /api/v1/admin/* 管理接口认证（自动生成，必填）
