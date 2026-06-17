@@ -3,6 +3,8 @@ from tests.async_helpers import run_async
 import json
 from datetime import datetime, timedelta
 
+from sqlalchemy import event
+
 from core import daily_digest
 from core.database import ChatLog, MemoryDigest, ScheduledTask
 
@@ -81,6 +83,36 @@ def test_generate_daily_digest_can_filter_specific_session(db_session, monkeypat
     assert created == 1
     assert db_session.query(MemoryDigest).filter_by(session_id="private_a").count() >= 3
     assert db_session.query(MemoryDigest).filter_by(session_id="private_b").count() == 0
+
+
+def test_generate_daily_digest_filters_target_date_in_sql(db_session, monkeypatch):
+    target_ts = datetime(2026, 5, 31, 12, 0, 0)
+    other_ts = datetime(2026, 5, 30, 12, 0, 0)
+    db_session.add_all([
+        ChatLog(user_id="u_sql_date", session_id="private_sql", role="user", content="目标日内容", created_at=target_ts),
+        ChatLog(user_id="u_sql_date", session_id="private_sql", role="user", content="非目标日内容", created_at=other_ts),
+    ])
+    db_session.commit()
+    statements: list[str] = []
+
+    def capture_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "chat_logs" in statement.lower() and "select" in statement.lower():
+            statements.append(statement.lower())
+
+    event.listen(db_session.bind, "before_cursor_execute", capture_sql)
+    monkeypatch.setattr(daily_digest, "SessionLocal", lambda: db_session)
+    try:
+        created = daily_digest.generate_daily_digest_for_date(
+            "2026-05-31",
+            user_id="u_sql_date",
+            use_llm=False,
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", capture_sql)
+
+    assert created == 1
+    chatlog_selects = [sql for sql in statements if "from chat_logs" in sql]
+    assert any("created_at >=" in sql and "created_at <" in sql for sql in chatlog_selects)
 
 
 def test_qq_push_timeout_covers_html_rendering_window():

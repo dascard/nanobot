@@ -351,7 +351,10 @@ def generate_daily_digest_for_date(
     db = SessionLocal()
     created = 0
     try:
+        start = datetime.strptime(target_date, "%Y-%m-%d")
+        end = start + timedelta(days=1)
         base_query = db.query(ChatLog).filter(ChatLog.created_at.isnot(None))
+        base_query = base_query.filter(ChatLog.created_at >= start, ChatLog.created_at < end)
         if user_id:
             base_query = base_query.filter(ChatLog.user_id == user_id)
 
