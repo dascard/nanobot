@@ -77,6 +77,8 @@ def sanitize_prompt_text(text: str, max_chars: int = 0) -> str:
         "</timing_recent_context>": "(/TIMING_RECENT_CONTEXT_TAG)",
         "<message_meta>": "(MESSAGE_META_TAG)",
         "</message_meta>": "(/MESSAGE_META_TAG)",
+        "<task_template>": "(TASK_TEMPLATE_TAG)",
+        "</task_template>": "(/TASK_TEMPLATE_TAG)",
         "<user_input>": "(USER_INPUT_TAG)",
         "</user_input>": "(/USER_INPUT_TAG)",
         "[SYSTEM]": "(SYSTEM_TAG)", "[/SYSTEM]": "(/SYSTEM_TAG)",
