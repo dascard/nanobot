@@ -939,6 +939,36 @@ class TestPersonaAdmin:
         assert data["items"][0]["parse_error"] is True
         assert data["items"][0]["fallback_action"] == "no_reply"
 
+    def test_timing_gate_events_returns_scoring(self, client, auth_header):
+        now = datetime.now()
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(ChatLog(
+                user_id="group_3004", session_id="group_3004",
+                role="ambient", content="[D]: @B 你看", session_name="评分群",
+                created_at=now,
+                meta_json=json.dumps({
+                    "timing_gate": {
+                        "mode": "message",
+                        "action": "no_reply",
+                        "reason": "directed_to_other_no_bot_target",
+                        "hard_rule": "directed_to_other_no_bot_target",
+                        "scoring": {
+                            "stage": "rule_shortcut",
+                            "action": "no_reply",
+                            "signals": {"sub_signals": {"s_other": 0.75}},
+                        },
+                    }
+                }, ensure_ascii=False),
+            ))
+            db.commit()
+
+        data = _ok(client.get("/api/v1/admin/timing-gate/events", headers=auth_header))
+        item = data["items"][0]
+        assert item["action"] == "no_reply"
+        assert item["hard_rule"] == "directed_to_other_no_bot_target"
+        assert item["scoring"]["stage"] == "rule_shortcut"
+        assert item["scoring"]["signals"]["sub_signals"]["s_other"] == 0.75
+
 
 class TestModelCatalog:
     """模型目录 + 路由 API 测试"""

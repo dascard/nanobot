@@ -363,6 +363,7 @@ def _timing_event_dict(row: ChatLog) -> dict:
         "hard_rule": timing.get("hard_rule"),
         "directed_to_other": timing.get("directed_to_other"),
         "pending_text": timing.get("pending_text", ""),
+        "scoring": timing.get("scoring") or {},
     }
 
 

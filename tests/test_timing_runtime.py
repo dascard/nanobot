@@ -701,6 +701,10 @@ class TestProcessMessageDirected:
         assert result["hard_rule"] == "directed_to_other_no_bot_target"
         assert "source_message_ids" in result
         assert result["pending_count"] == 1
+        scoring = result["timing_scoring"]
+        assert scoring["stage"] == "rule_shortcut"
+        assert scoring["action"] == "no_reply"
+        assert scoring["signals"]["sub_signals"]["s_other"] == 0.75
 
     @pytest.mark.asyncio
     async def test_process_message_directed_to_other_with_other_bot_thinking_bypasses_gate(self, monkeypatch):

@@ -451,6 +451,7 @@ def annotate_group_timing_event(
             "context": str(result.get("context") or "")[:8000],
             "hard_rule": result.get("hard_rule"),
             "directed_to_other": result.get("directed_to_other"),
+            "scoring": result.get("timing_scoring"),
         }
         meta["timing_gate"] = {k: v for k, v in timing.items() if v not in ("", None)}
         def operation() -> None:
