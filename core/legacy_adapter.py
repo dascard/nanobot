@@ -11,6 +11,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from core.database import ChatLog, Persona, SystemPrompt, User, SessionLocal
+from core.token_utils import estimate_tokens as _shared_estimate_tokens
 from config import (
     ADMIN_USER_ID, OPENAI_API_KEY, OPENAI_BASE_URL,
     MAX_TOOL_ROUNDS,
@@ -932,8 +933,7 @@ class PromptAuditorAgent:
     """System Prompt 五问审计精简引擎 (High Fidelity: Draft -> Audit -> Synthesize)"""
     @staticmethod
     def _estimate_tokens(text: str) -> int:
-        # 粗略估算：中文约 2 字符/Token，英文约 4 字符/Token；用 2 做保守上界
-        return max(1, len(text) // 2)
+        return max(1, _shared_estimate_tokens(text))
 
     @staticmethod
     def _compute_deletion_rate(audit_report: str) -> float:

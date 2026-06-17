@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from core.token_utils import estimate_tokens as _shared_estimate_tokens
+
 logger_name = "nanobot.prompt_manager"
 
 
@@ -201,10 +203,7 @@ def _format_var(value: Any) -> str:
 
 
 def _estimate_tokens(text: str) -> int:
-    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
-    ascii_chars = sum(1 for ch in text if ord(ch) < 128)
-    other = max(0, len(text) - cjk - ascii_chars)
-    return int(cjk * 1.0 + ascii_chars * 0.35 + other * 0.8)
+    return _shared_estimate_tokens(text)
 
 
 def _hash_text(text: str) -> str:

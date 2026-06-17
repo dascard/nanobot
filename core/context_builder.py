@@ -8,6 +8,8 @@ import logging
 from html import escape
 from datetime import datetime, timedelta
 
+from core.token_utils import estimate_tokens
+
 logger = logging.getLogger("nanobot.context_builder")
 
 MAX_GROUP_CONTEXT_ROWS = 10
@@ -98,14 +100,6 @@ def sanitize_prompt_text(text: str, max_chars: int = 0) -> str:
     if max_chars > 0:
         cleaned = _cap_text(cleaned, max_chars, "sanitized_prompt")
     return cleaned
-
-
-def estimate_tokens(text: str) -> int:
-    if not text:
-        return 0
-    cjk_count = sum(1 for ch in text if "一" <= ch <= "鿿")
-    ascii_count = len(text) - cjk_count
-    return int(cjk_count * 1.0 + ascii_count * 0.35)
 
 
 def relative_time_label(dt: datetime) -> str:

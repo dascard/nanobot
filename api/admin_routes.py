@@ -26,6 +26,7 @@ from core.database import (
     AgentRun, ToolCall, PromptRenderLog,
 )
 from core.prompts import PromptRenderError, get_prompt_manager
+from core.token_utils import estimate_tokens
 from core.tracing import row_to_dict
 from config import NANOBOT_ADMIN_TOKEN
 
@@ -410,10 +411,7 @@ def _runtime_snapshot() -> dict:
 
 
 def _prompt_metrics(content: str) -> dict:
-    cjk = sum(1 for ch in content if "\u4e00" <= ch <= "\u9fff")
-    ascii_chars = sum(1 for ch in content if ord(ch) < 128)
-    other = max(0, len(content) - cjk - ascii_chars)
-    estimated_tokens = int(cjk * 1.0 + ascii_chars * 0.35 + other * 0.8)
+    estimated_tokens = estimate_tokens(content)
     lines = [line.strip() for line in content.splitlines() if line.strip()]
     seen: set[str] = set()
     duplicates: list[str] = []

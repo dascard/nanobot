@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.session_memory import config
 from core.database import ConversationTurn
+from core.token_utils import estimate_tokens
 
 RAW_WINDOW_CANDIDATE_MIN_LIMIT = 200
 RAW_WINDOW_CANDIDATE_MULTIPLIER = 8
@@ -35,14 +36,6 @@ def safe_meta(meta_json: str | None) -> dict[str, Any]:
         return value if isinstance(value, dict) else {}
     except (TypeError, json.JSONDecodeError):
         return {}
-
-
-def estimate_tokens(text: str) -> int:
-    if not text:
-        return 0
-    cjk_count = sum(1 for ch in text if "一" <= ch <= "鿿")
-    ascii_count = len(text) - cjk_count
-    return int(cjk_count * 1.0 + ascii_count * 0.35)
 
 
 def _sender_key_for_turn(turn: ConversationTurn) -> str:
