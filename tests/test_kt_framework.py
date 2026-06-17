@@ -604,7 +604,11 @@ class TestNanobotBridge:
 
             async def _run():
                 await bridge.start()
-                return await bridge.handle_message("test query", user_id="u1")
+                return await bridge.handle_message(
+                    "test query",
+                    user_id="u1",
+                    metadata={"prompt_runtime_engine_override": "v1"},
+                )
 
             result = run_async(_run())
 
