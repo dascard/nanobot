@@ -8,7 +8,7 @@
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管也已完成。当前优先推进 P1「收敛去债」中的 H29 第一刀：先从 `NanobotBridge.handle_message()` 提取 Prompt Runtime 请求组装边界，只移动 `PromptRuntimeInput` 构造逻辑，不移动 trace 生命周期、tool plan 构建、conversation 注入或 audit 异常处理。完成该重构后，再继续 legacy 收口、残余同步 IO 审计、响应信封和流式输出契约。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管和 H29 第一刀也已完成。下一步优先推进 P1「收敛去债」中的 Prompt legacy 收口：先写 P1-5 实现计划，再逐步禁用 live `fallback_v1` 发送路径，让管理面和评估面转向 V2-only，随后继续删除冗余提示词资产、残余同步 IO 审计、响应信封和流式输出契约。
 
 ## 文档口径
 
@@ -50,6 +50,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | 流式基础贯通：`Message` 带 `stream` 参数 | 已完成 | API → BridgePool → Bridge → KT `Message` → `BufferedOutput.write_stream()` 已贯通 |
 | Agent Step SSE 真流式 | 已完成 | `2369081 feat(agent): 支持 step 流式输出` |
 | Prompt V2 默认接管 | 已完成 | 设计、计划、默认 live 接管和文档同步均已落地 |
+| P1-4 Prompt Runtime 请求组装提取 | 已完成 | `PromptRuntimeInput` 组装已从 `handle_message()` 提取为可单测边界 |
 
 ### 后续优先级
 
@@ -58,8 +59,8 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-1 | 已完成 | 提交 Prompt V2 默认接管设计 | 单独提交设计文档，固定本阶段边界和验收清单 | `36874bf docs(提示词): 设计 V2 默认接管方案` |
 | P1-2 | 已完成 | 编写 Prompt V2 默认接管实现计划 | 写入 `.Codex/plans/prompt-v2-default-cutover.md`，列出 TDD 步骤、文件、验证命令 | `17b3815 docs(计划): 记录 V2 默认接管计划` |
 | P1-3 | 已完成 | Prompt V2 默认 live 接管 | 默认 engine 改为 V2，保留显式 V1 回滚，初始化 `data/prompts_v2`，同步 admin preview 和 reply-test 默认值 | `2be9329` / `8a1e177` / `8a73909` |
-| P1-4 | 计划已写，待 TDD 实现 | H29 第一刀：提取 Prompt Runtime 请求组装 | 从 `handle_message()` 中抽出 `PromptRuntimeInput` 构造边界，不移动 trace、tool plan、conversation 注入和 audit 异常处理 | `refactor(桥接): 提取提示词运行时组装` |
-| P1-5 | 待执行 | Prompt legacy 收口 | 禁用 live `fallback_v1` 发送路径，管理面和评估面转向 V2-only，legacy 页面降级为只读迁移入口 | `refactor(提示词): 收敛旧版回退路径` |
+| P1-4 | 已完成 | H29 第一刀：提取 Prompt Runtime 请求组装 | 从 `handle_message()` 中抽出 `PromptRuntimeInput` 构造边界，不移动 trace、tool plan、conversation 注入和 audit 异常处理 | `refactor(桥接): 提取提示词运行时组装` |
+| P1-5 | 待写计划 | Prompt legacy 收口 | 禁用 live `fallback_v1` 发送路径，管理面和评估面转向 V2-only，legacy 页面降级为只读迁移入口 | `refactor(提示词): 收敛旧版回退路径` |
 | P1-6 | 待执行 | 删除冗余提示词资产并去版本化 | 删除 V1 / legacy 冗余资产，迁移仍有价值的文案，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
 | P1-7 | 已部分完成，待继续 | 连接池复用与残余同步 IO 审计 | 共享 `aiohttp.ClientSession` 已落地；继续审计 compaction / image / sticker 同步 IO | `4550aca` / `2bf4ee7` |
 | P1-8 | 待执行 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `feat(路由): 按模型能力校验请求` |
@@ -71,7 +72,16 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-2 | 运营项 | TimingGate 持续评估 | 用更多人工标注样本复跑审计，接入外部 CI / PR gate | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
 
-## 下一步详细计划：P1-4 Prompt Runtime 请求组装提取
+## 下一步候选：P1-5 Prompt legacy 收口
+
+状态：待写实现计划。
+
+- [ ] 重新核对 `docs/todo.md` 路线项 1 的 legacy 收口目标。
+- [ ] 清点 `fallback_v1`、`prompt_runtime.engine=v1`、legacy / managed prompt 入口和管理端引用。
+- [ ] 写入独立实现计划，明确 TDD 验收：live 路径不再 fallback 到 V1、显式回滚策略边界清晰、管理端只保留迁移 / 审计入口。
+- [ ] 按 TDD 执行，阶段完成后单独提交。
+
+## 已完成阶段详情：P1-4 Prompt Runtime 请求组装提取
 
 计划文件：`.Codex/plans/prompt-runtime-request-extraction.md`
 
@@ -88,33 +98,33 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ### 阶段 B：TDD 红灯
 
-状态：待执行。
+状态：已完成。
 
-- [ ] 在 `tests/test_bridge_prompt_v2.py` 新增 `_build_prompt_runtime_input` 单元测试。
-- [ ] 覆盖 V2 默认组装：prompt key、fallback V1 prompt mode、身份字段、上下文字段、tool schema、trace 字段和 audit policy。
-- [ ] 覆盖 V1 override 组装：`group_chat/private_chat` key、显式 prompt mode、空画像 fallback。
-- [ ] 覆盖 `source_message_ids` 清洗和 tool schema 读取失败降级。
-- [ ] 运行新增测试并确认先失败，失败原因应是 helper / context 尚不存在。
+- [x] 在 `tests/test_bridge_prompt_v2.py` 新增 `_build_prompt_runtime_input` 单元测试。
+- [x] 覆盖 V2 默认组装：prompt key、fallback V1 prompt mode、身份字段、上下文字段、tool schema、trace 字段和 audit policy。
+- [x] 覆盖 V1 override 组装：`group_chat/private_chat` key、显式 prompt mode、空画像 fallback。
+- [x] 覆盖 `source_message_ids` 清洗和 tool schema 读取失败降级。
+- [x] 运行新增测试并确认先失败：`3 failed, 1 warning`，失败原因为 `PromptRuntimeAssemblyContext` 不存在。
 
 ### 阶段 C：最小实现
 
-状态：待执行。
+状态：已完成。
 
-- [ ] 在 `nanobot_kt/bridge.py` 增加最小组装边界，优先保持 bridge 私有方法，不把 bridge metadata 解析下沉到 `prompt_runtime.py`。
-- [ ] 构造并返回 `PromptRuntimeInput`，保持现有字段语义不变。
-- [ ] 对 V2 仍传入 V1 fallback prompt mode，避免 `fallback_v1` audit 策略退化。
-- [ ] 保持 v2 的 `chat_group/chat_private` 与 v1 的 `group_chat/private_chat` 不混用。
-- [ ] 不移动 `build_prompt_runtime()` 调用、`PromptRuntimeAuditFailure` 处理、`RunTracer.update_prompt_source()`、`apply_prompt_messages()` 和 `create_user_event()`。
+- [x] 在 `nanobot_kt/bridge.py` 增加最小组装边界，保持 bridge 私有方法，不把 bridge metadata 解析下沉到 `prompt_runtime.py`。
+- [x] 构造并返回 `PromptRuntimeInput`，保持现有字段语义不变。
+- [x] 对 V2 仍传入 V1 fallback prompt mode，避免 `fallback_v1` audit 策略退化。
+- [x] 保持 v2 的 `chat_group/chat_private` 与 v1 的 `group_chat/private_chat` 不混用。
+- [x] 未移动 `build_prompt_runtime()` 调用、`PromptRuntimeAuditFailure` 处理、`RunTracer.update_prompt_source()`、`apply_prompt_messages()` 和 `create_user_event()`。
 
 ### 阶段 D：验证与提交
 
-状态：待执行。
+状态：已完成。
 
-- [ ] 运行新增测试，确认红灯转绿。
-- [ ] 运行 `tests/test_bridge_prompt_v2.py` 和 `tests/test_streaming_bridge.py`。
-- [ ] 运行 prompt runtime 相关回归：`tests/test_prompt_runtime_bootstrap.py`、`tests/test_prompt_manifest.py`、`tests/test_reply_admin.py`。
-- [ ] 提交前运行全量测试：`python -B -m pytest tests/ -q -p no:cacheprovider --durations=20`。
-- [ ] 单独提交实现：`refactor(桥接): 提取提示词运行时组装`
+- [x] 运行新增测试，确认红灯转绿：`3 passed, 1 warning`。
+- [x] 运行 `tests/test_bridge_prompt_v2.py` 和 `tests/test_streaming_bridge.py`：`14 passed, 1 warning`。
+- [x] 运行 prompt runtime 相关回归：`28 passed, 20 warnings`。
+- [x] 提交前运行全量测试：`1221 passed, 6 skipped, 113 warnings in 84.27s`。
+- [x] 单独提交实现：`refactor(桥接): 提取提示词运行时组装`
 
 ## 已完成阶段详情：Prompt V2 默认接管
 

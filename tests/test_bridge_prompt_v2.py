@@ -42,6 +42,17 @@ class _FakeOutput:
         return "".join(self._buffer)
 
 
+def _prompt_tool_plan(**overrides):
+    defaults = {
+        "runtime_tool_prompt": "<runtime_tool_prompt>工具</runtime_tool_prompt>",
+        "sent_tool_schemas": [
+            {"type": "function", "function": {"name": "reply"}},
+        ],
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
 def test_bridge_prompt_runtime_engine_defaults_to_v2_and_invalid_falls_back(monkeypatch):
     from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
@@ -69,6 +80,156 @@ def test_bridge_resolve_prompt_runtime_engine_honors_v1_override_and_invalid_fal
     assert bridge._resolve_prompt_runtime_engine({"prompt_engine_override": "v1"}) == "v1"
     assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "bad"}) == "v2"
     assert bridge._resolve_prompt_runtime_engine({}) == "v2"
+
+
+def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
+    from nanobot_kt.bridge import NanobotBridge, PromptRuntimeAssemblyContext
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    monkeypatch.setattr(bridge, "_prompt_v2_audit_failure_policy", lambda: "fail_fast")
+    monkeypatch.setattr(bridge, "_prompt_system_mode", lambda: "legacy")
+
+    prompt_input = bridge._build_prompt_runtime_input(
+        PromptRuntimeAssemblyContext(
+            prompt_engine="v2",
+            prompt_mode="v2",
+            prompt_key="chat_group",
+            chat_type="group",
+            runtime_chat_type="group",
+            session_id="group_1001",
+            user_id="u1",
+            group_id="1001",
+            sender_name="雀",
+            query="当前问题",
+            persona_text="画像",
+            history_header="历史头",
+            history_messages=[{"role": "user", "content": "旧消息"}],
+            runtime_tool_prompt="工具提示",
+            effort_constraint="short",
+            trace_id="trace_1",
+            run_id="run_1",
+            is_group=True,
+            meta={
+                "prompt_system_mode_override": "managed",
+                "sender_id": "sender_1",
+                "session_name": "测试群",
+                "trigger_reason": "direct",
+                "timing_decision": "continue",
+                "message_id": "msg_1",
+                "source_message_ids": ["msg_0", "", "  ", 42],
+                "self_id": "bot_self",
+                "bot_id": "bot_1",
+                "character_name": "七濑",
+                "bot_aliases": ["bot", ""],
+                "group_profile_context": "群画像",
+                "expression_context": "表达",
+                "jargon_context": "黑话",
+                "context_debug": {"group_memory_injected": True},
+            },
+            tool_plan=_prompt_tool_plan(),
+        )
+    )
+
+    assert prompt_input.prompt_engine == "v2"
+    assert prompt_input.prompt_mode == "managed"
+    assert prompt_input.prompt_key == "chat_group"
+    assert prompt_input.chat_type == "group"
+    assert prompt_input.runtime_chat_type == "group"
+    assert prompt_input.sender_id == "sender_1"
+    assert prompt_input.bot_name == "七濑"
+    assert prompt_input.source_message_ids == ["msg_0", "42"]
+    assert prompt_input.persona_text == "画像"
+    assert prompt_input.history_messages == [{"role": "user", "content": "旧消息"}]
+    assert prompt_input.runtime_tool_prompt == "工具提示"
+    assert prompt_input.tool_schemas == [
+        {"type": "function", "function": {"name": "reply"}},
+    ]
+    assert prompt_input.group_profile_context == "群画像"
+    assert prompt_input.expression_context == "表达"
+    assert prompt_input.jargon_context == "黑话"
+    assert prompt_input.debug == {"context_debug": {"group_memory_injected": True}}
+    assert prompt_input.audit_failure_policy == "fail_fast"
+
+
+def test_bridge_build_prompt_runtime_input_for_v1_uses_prompt_mode(monkeypatch):
+    from nanobot_kt.bridge import NanobotBridge, PromptRuntimeAssemblyContext
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    monkeypatch.setattr(bridge, "_prompt_v2_audit_failure_policy", lambda: "fail_fast")
+    monkeypatch.setattr(bridge, "_prompt_system_mode", lambda: "shadow")
+
+    prompt_input = bridge._build_prompt_runtime_input(
+        PromptRuntimeAssemblyContext(
+            prompt_engine="v1",
+            prompt_mode="managed",
+            prompt_key="group_chat",
+            chat_type="group",
+            runtime_chat_type="group",
+            session_id="group_1001",
+            user_id="u1",
+            group_id="1001",
+            sender_name="雀",
+            query="当前问题",
+            persona_text="",
+            history_header="",
+            history_messages=[],
+            runtime_tool_prompt="",
+            effort_constraint="",
+            trace_id="trace_1",
+            run_id="run_1",
+            is_group=True,
+            meta={"prompt_mode_override": "bad"},
+            tool_plan=_prompt_tool_plan(sent_tool_schemas=[]),
+        )
+    )
+
+    assert prompt_input.prompt_engine == "v1"
+    assert prompt_input.prompt_mode == "managed"
+    assert prompt_input.prompt_key == "group_chat"
+    assert prompt_input.persona_text == "无已存储画像"
+
+
+def test_bridge_build_prompt_runtime_input_falls_back_when_tool_schemas_unavailable(monkeypatch):
+    from nanobot_kt.bridge import NanobotBridge, PromptRuntimeAssemblyContext
+
+    class BrokenToolPlan:
+        @property
+        def sent_tool_schemas(self):
+            raise RuntimeError("schemas unavailable")
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    monkeypatch.setattr(bridge, "_prompt_v2_audit_failure_policy", lambda: "fail_fast")
+    monkeypatch.setattr(bridge, "_prompt_system_mode", lambda: "shadow")
+
+    prompt_input = bridge._build_prompt_runtime_input(
+        PromptRuntimeAssemblyContext(
+            prompt_engine="v2",
+            prompt_mode="v2",
+            prompt_key="chat_private",
+            chat_type="private",
+            runtime_chat_type="private_superuser",
+            session_id="u1",
+            user_id="u1",
+            group_id="",
+            sender_name="雀",
+            query="当前问题",
+            persona_text="",
+            history_header="",
+            history_messages=[],
+            runtime_tool_prompt="",
+            effort_constraint="",
+            trace_id="trace_1",
+            run_id="run_1",
+            is_group=False,
+            meta={"bot_name": "七濑"},
+            tool_plan=BrokenToolPlan(),
+        )
+    )
+
+    assert prompt_input.prompt_mode == "shadow"
+    assert prompt_input.runtime_chat_type == "private_superuser"
+    assert prompt_input.bot_name == "七濑"
+    assert prompt_input.tool_schemas == []
 
 
 @pytest.mark.asyncio

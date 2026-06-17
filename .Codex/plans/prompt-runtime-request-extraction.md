@@ -26,7 +26,7 @@
 **文件：**
 - 修改：`tests/test_bridge_prompt_v2.py`
 
-- [ ] **步骤 1：新增 helper 测试导入和最小 tool plan fake**
+- [x] **步骤 1：新增 helper 测试导入和最小 tool plan fake**
 
 在 `tests/test_bridge_prompt_v2.py` 中增加测试用 fake：
 
@@ -42,7 +42,7 @@ def _prompt_tool_plan(**overrides):
     return SimpleNamespace(**defaults)
 ```
 
-- [ ] **步骤 2：新增 V2 组装测试**
+- [x] **步骤 2：新增 V2 组装测试**
 
 新增测试：
 
@@ -80,7 +80,7 @@ def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
                 "trigger_reason": "direct",
                 "timing_decision": "continue",
                 "message_id": "msg_1",
-                "source_message_ids": ["msg_0", "", None],
+                "source_message_ids": ["msg_0", "", "  ", 42],
                 "self_id": "bot_self",
                 "bot_id": "bot_1",
                 "character_name": "七濑",
@@ -99,7 +99,7 @@ def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
     assert prompt_input.prompt_key == "chat_group"
     assert prompt_input.sender_id == "sender_1"
     assert prompt_input.bot_name == "七濑"
-    assert prompt_input.source_message_ids == ["msg_0"]
+    assert prompt_input.source_message_ids == ["msg_0", "42"]
     assert prompt_input.persona_text == "画像"
     assert prompt_input.tool_schemas == [
         {"type": "function", "function": {"name": "reply"}},
@@ -108,7 +108,7 @@ def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
     assert prompt_input.audit_failure_policy == "fail_fast"
 ```
 
-- [ ] **步骤 3：新增 V1 override 组装测试**
+- [x] **步骤 3：新增 V1 override 组装测试**
 
 新增测试：
 
@@ -151,7 +151,7 @@ def test_bridge_build_prompt_runtime_input_for_v1_uses_prompt_mode(monkeypatch):
     assert prompt_input.persona_text == "无已存储画像"
 ```
 
-- [ ] **步骤 4：运行红灯测试**
+- [x] **步骤 4：运行红灯测试**
 
 运行：
 
@@ -159,17 +159,18 @@ def test_bridge_build_prompt_runtime_input_for_v1_uses_prompt_mode(monkeypatch):
 python -B -m pytest \
   tests/test_bridge_prompt_v2.py::test_bridge_build_prompt_runtime_input_for_v2 \
   tests/test_bridge_prompt_v2.py::test_bridge_build_prompt_runtime_input_for_v1_uses_prompt_mode \
+  tests/test_bridge_prompt_v2.py::test_bridge_build_prompt_runtime_input_falls_back_when_tool_schemas_unavailable \
   -q -p no:cacheprovider
 ```
 
-预期：失败，报 `ImportError` 或 `AttributeError`，因为 `PromptRuntimeAssemblyContext` / `_build_prompt_runtime_input` 尚不存在。
+结果：红灯已验证，3 个测试均因 `PromptRuntimeAssemblyContext` 尚不存在失败。
 
 ## 任务 2：实现最小组装 helper
 
 **文件：**
 - 修改：`nanobot_kt/bridge.py`
 
-- [ ] **步骤 1：新增 dataclass 导入和上下文类型**
+- [x] **步骤 1：新增 dataclass 导入和上下文类型**
 
 在文件顶部已有 import 附近加入：
 
@@ -204,7 +205,7 @@ class PromptRuntimeAssemblyContext:
     tool_plan: Any
 ```
 
-- [ ] **步骤 2：新增 `_build_prompt_runtime_input()`**
+- [x] **步骤 2：新增 `_build_prompt_runtime_input()`**
 
 在 `_prompt_v2_audit_failure_policy()` 后面新增：
 
@@ -271,7 +272,7 @@ class PromptRuntimeAssemblyContext:
         )
 ```
 
-- [ ] **步骤 3：运行红灯测试验证转绿**
+- [x] **步骤 3：运行红灯测试验证转绿**
 
 运行：
 
@@ -279,17 +280,18 @@ class PromptRuntimeAssemblyContext:
 python -B -m pytest \
   tests/test_bridge_prompt_v2.py::test_bridge_build_prompt_runtime_input_for_v2 \
   tests/test_bridge_prompt_v2.py::test_bridge_build_prompt_runtime_input_for_v1_uses_prompt_mode \
+  tests/test_bridge_prompt_v2.py::test_bridge_build_prompt_runtime_input_falls_back_when_tool_schemas_unavailable \
   -q -p no:cacheprovider
 ```
 
-预期：2 个测试通过。
+结果：`3 passed, 1 warning`。
 
 ## 任务 3：让 `handle_message()` 使用 helper
 
 **文件：**
 - 修改：`nanobot_kt/bridge.py`
 
-- [ ] **步骤 1：替换内联 `PromptRuntimeInput(...)`**
+- [x] **步骤 1：替换内联 `PromptRuntimeInput(...)`**
 
 将 `handle_message()` 中 `source_message_ids`、`v1_prompt_mode`、`tool_schemas` 和内联 `PromptRuntimeInput(...)` 替换为：
 
@@ -321,11 +323,11 @@ python -B -m pytest \
                 prompt_build = await build_prompt_runtime(prompt_input)
 ```
 
-- [ ] **步骤 2：保持异常处理不变**
+- [x] **步骤 2：保持异常处理不变**
 
 `except PromptRuntimeAuditFailure`、`run_meta.update(prompt_build.meta_update)`、`RunTracer.update_prompt_source()` 和 `apply_prompt_messages()` 不移动。
 
-- [ ] **步骤 3：运行 bridge prompt 相关测试**
+- [x] **步骤 3：运行 bridge prompt 相关测试**
 
 运行：
 
@@ -333,26 +335,26 @@ python -B -m pytest \
 python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_streaming_bridge.py -q -p no:cacheprovider
 ```
 
-预期：全部通过。
+结果：`14 passed, 1 warning`。
 
 ## 任务 4：验证和提交
 
 **文件：**
 - 修改：`nanobot_kt/bridge.py`
 - 修改：`tests/test_bridge_prompt_v2.py`
-- 创建：`.codex/plans/prompt-runtime-request-extraction.md`
+- 创建：`.Codex/plans/prompt-runtime-request-extraction.md`
 
-- [ ] **步骤 1：格式检查**
+- [x] **步骤 1：格式检查**
 
 运行：
 
 ```bash
-git diff --check -- nanobot_kt/bridge.py tests/test_bridge_prompt_v2.py .codex/plans/prompt-runtime-request-extraction.md
+git diff --check -- nanobot_kt/bridge.py tests/test_bridge_prompt_v2.py .Codex/plans/prompt-runtime-request-extraction.md docs/plan_walkthrough.md
 ```
 
-预期：无输出。
+结果：无输出。
 
-- [ ] **步骤 2：定向回归**
+- [x] **步骤 2：定向回归**
 
 运行：
 
@@ -366,9 +368,9 @@ python -B -m pytest \
   -q -p no:cacheprovider
 ```
 
-预期：全部通过。
+结果：`28 passed, 20 warnings`。
 
-- [ ] **步骤 3：全量测试**
+- [x] **步骤 3：全量测试**
 
 运行：
 
@@ -377,18 +379,18 @@ unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 python -B -m pytest tests/ -q -p no:cacheprovider --durations=20
 ```
 
-预期：0 failures。
+结果：`1221 passed, 6 skipped, 113 warnings in 84.27s`。
 
-- [ ] **步骤 4：提交计划**
+- [x] **步骤 4：提交计划**
 
 如果只提交计划文件：
 
 ```bash
-git add .codex/plans/prompt-runtime-request-extraction.md
+git add .Codex/plans/prompt-runtime-request-extraction.md
 git commit -m "docs(计划): 记录提示词运行时组装提取计划"
 ```
 
-- [ ] **步骤 5：提交实现**
+- [x] **步骤 5：提交实现**
 
 实现完成后：
 

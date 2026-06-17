@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import inspect
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -154,6 +155,30 @@ async def _call_tracker_method(tracker: Any, method_name: str, model_id: str) ->
     result = method(model_id)
     if inspect.isawaitable(result):
         await result
+
+
+@dataclass(frozen=True)
+class PromptRuntimeAssemblyContext:
+    prompt_engine: str
+    prompt_mode: str
+    prompt_key: str
+    chat_type: str
+    runtime_chat_type: str
+    session_id: str
+    user_id: str
+    group_id: str
+    sender_name: str
+    query: str
+    persona_text: str
+    history_header: str
+    history_messages: list[dict[str, Any]]
+    runtime_tool_prompt: str
+    effort_constraint: str
+    trace_id: str
+    run_id: str
+    is_group: bool
+    meta: dict[str, Any]
+    tool_plan: Any
 
 
 class NanobotBridge:
@@ -506,6 +531,67 @@ class NanobotBridge:
         except Exception:
             policy = "fail_fast"
         return policy if policy in {"fail_fast", "fallback_v1"} else "fail_fast"
+
+    def _build_prompt_runtime_input(
+        self,
+        context: PromptRuntimeAssemblyContext,
+    ) -> "PromptRuntimeInput":
+        from nanobot_kt.prompt_runtime import PromptRuntimeInput
+
+        meta = dict(context.meta or {})
+        source_message_ids = [
+            str(x) for x in (meta.get("source_message_ids") or [])
+            if str(x).strip()
+        ]
+        v1_prompt_mode = str(
+            meta.get("prompt_system_mode_override")
+            or meta.get("prompt_mode_override")
+            or self._prompt_system_mode()
+        ).strip().lower()
+        if v1_prompt_mode not in {"legacy", "shadow", "managed"}:
+            v1_prompt_mode = "shadow"
+        try:
+            tool_schemas = list(context.tool_plan.sent_tool_schemas)
+        except Exception as e:
+            logger.warning("[PromptV2] failed to read tool schemas: %s", e)
+            tool_schemas = []
+
+        return PromptRuntimeInput(
+            prompt_engine=context.prompt_engine,
+            prompt_mode=v1_prompt_mode if context.prompt_engine == "v2" else context.prompt_mode,
+            prompt_key=context.prompt_key,
+            chat_type=context.chat_type,
+            runtime_chat_type=context.runtime_chat_type,
+            session_id=context.session_id,
+            user_id=context.user_id,
+            group_id=context.group_id,
+            sender_name=context.sender_name,
+            sender_id=str(meta.get("sender_id") or meta.get("user_id") or context.user_id),
+            session_name=str(meta.get("session_name") or ""),
+            trigger_reason=str(meta.get("trigger_reason") or ""),
+            timing_decision=str(meta.get("timing_decision") or ""),
+            current_message_id=str(meta.get("message_id") or ""),
+            source_message_ids=source_message_ids,
+            self_id=str(meta.get("self_id") or ""),
+            bot_id=str(meta.get("bot_id") or ""),
+            bot_name=str(meta.get("bot_name") or meta.get("character_name") or ""),
+            bot_aliases=list(meta.get("bot_aliases") or []),
+            user_input=context.query,
+            persona_text=context.persona_text or "无已存储画像",
+            history_header=context.history_header,
+            history_messages=context.history_messages,
+            runtime_tool_prompt=context.runtime_tool_prompt,
+            effort_constraint=context.effort_constraint,
+            trace_id=context.trace_id,
+            run_id=context.run_id,
+            is_group=context.is_group,
+            group_profile_context=str(meta.get("group_profile_context") or ""),
+            expression_context=str(meta.get("expression_context") or ""),
+            jargon_context=str(meta.get("jargon_context") or ""),
+            tool_schemas=tool_schemas,
+            debug={"context_debug": meta.get("context_debug") or {}},
+            audit_failure_policy=self._prompt_v2_audit_failure_policy(),
+        )
 
     def _history_context_text(self, history_header: str, history_messages: list[dict[str, Any]]) -> str:
         parts: list[str] = []
@@ -1112,65 +1198,35 @@ class NanobotBridge:
 
             from nanobot_kt.prompt_runtime import (
                 PromptRuntimeAuditFailure,
-                PromptRuntimeInput,
                 build_prompt_runtime,
             )
 
-            source_message_ids = [
-                str(x) for x in (meta.get("source_message_ids") or [])
-                if str(x).strip()
-            ]
-            v1_prompt_mode = str(
-                meta.get("prompt_system_mode_override")
-                or meta.get("prompt_mode_override")
-                or self._prompt_system_mode()
-            ).strip().lower()
-            if v1_prompt_mode not in {"legacy", "shadow", "managed"}:
-                v1_prompt_mode = "shadow"
-            try:
-                tool_schemas = list(tool_plan.sent_tool_schemas)
-            except Exception as e:
-                logger.warning("[PromptV2] failed to read tool schemas: %s", e)
-                tool_schemas = []
-            try:
-                prompt_build = await build_prompt_runtime(
-                    PromptRuntimeInput(
-                        prompt_engine=prompt_engine,
-                        prompt_mode=v1_prompt_mode if prompt_engine == "v2" else prompt_mode,
-                        prompt_key=prompt_key,
-                        chat_type=chat_type,
-                        runtime_chat_type=runtime_chat_type,
-                        session_id=session_id,
-                        user_id=user_id,
-                        group_id=group_id,
-                        sender_name=sender_name,
-                        sender_id=str(meta.get("sender_id") or meta.get("user_id") or user_id),
-                        session_name=str(meta.get("session_name") or ""),
-                        trigger_reason=str(meta.get("trigger_reason") or ""),
-                        timing_decision=str(meta.get("timing_decision") or ""),
-                        current_message_id=str(meta.get("message_id") or ""),
-                        source_message_ids=source_message_ids,
-                        self_id=str(meta.get("self_id") or ""),
-                        bot_id=str(meta.get("bot_id") or ""),
-                        bot_name=str(meta.get("bot_name") or meta.get("character_name") or ""),
-                        bot_aliases=list(meta.get("bot_aliases") or []),
-                        user_input=query,
-                        persona_text=persona_text or "无已存储画像",
-                        history_header=history_header,
-                        history_messages=history_messages,
-                        runtime_tool_prompt=runtime_tool_prompt,
-                        effort_constraint=effort_constraint,
-                        trace_id=trace_id,
-                        run_id=run_handle.run_id,
-                        is_group=is_group,
-                        group_profile_context=str(meta.get("group_profile_context") or ""),
-                        expression_context=str(meta.get("expression_context") or ""),
-                        jargon_context=str(meta.get("jargon_context") or ""),
-                        tool_schemas=tool_schemas,
-                        debug={"context_debug": meta.get("context_debug") or {}},
-                        audit_failure_policy=self._prompt_v2_audit_failure_policy(),
-                    )
+            prompt_input = self._build_prompt_runtime_input(
+                PromptRuntimeAssemblyContext(
+                    prompt_engine=prompt_engine,
+                    prompt_mode=prompt_mode,
+                    prompt_key=prompt_key,
+                    chat_type=chat_type,
+                    runtime_chat_type=runtime_chat_type,
+                    session_id=session_id,
+                    user_id=user_id,
+                    group_id=group_id,
+                    sender_name=sender_name,
+                    query=query,
+                    persona_text=persona_text,
+                    history_header=history_header,
+                    history_messages=history_messages,
+                    runtime_tool_prompt=runtime_tool_prompt,
+                    effort_constraint=effort_constraint,
+                    trace_id=trace_id,
+                    run_id=run_handle.run_id,
+                    is_group=is_group,
+                    meta=meta,
+                    tool_plan=tool_plan,
                 )
+            )
+            try:
+                prompt_build = await build_prompt_runtime(prompt_input)
             except PromptRuntimeAuditFailure as e:
                 logger.error("[PromptV2] live audit failed: %s", e)
                 run_meta.update(e.meta_update)
