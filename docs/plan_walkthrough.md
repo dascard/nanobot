@@ -8,7 +8,7 @@
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管和 H29 第一刀也已完成。下一步优先推进 P1「收敛去债」中的 Prompt legacy 收口：先写 P1-5 实现计划，再逐步禁用 live `fallback_v1` 发送路径，让管理面和评估面转向 V2-only，随后继续删除冗余提示词资产、残余同步 IO 审计、响应信封和流式输出契约。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管和 H29 第一刀也已完成。当前优先推进 P1「收敛去债」中的 Prompt legacy 收口：P1-5 实现计划已写入 `.Codex/plans/prompt-legacy-convergence.md`，下一步按计划禁用 live `fallback_v1` 发送路径，让管理面和评估面转向 V2-only，并把 legacy 页面降级为只读迁移入口；随后进入 P1-6，迁移旧任务 prompt、删除冗余提示词资产并去版本化。
 
 ## 文档口径
 
@@ -60,8 +60,8 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-2 | 已完成 | 编写 Prompt V2 默认接管实现计划 | 写入 `.Codex/plans/prompt-v2-default-cutover.md`，列出 TDD 步骤、文件、验证命令 | `17b3815 docs(计划): 记录 V2 默认接管计划` |
 | P1-3 | 已完成 | Prompt V2 默认 live 接管 | 默认 engine 改为 V2，保留显式 V1 回滚，初始化 `data/prompts_v2`，同步 admin preview 和 reply-test 默认值 | `2be9329` / `8a1e177` / `8a73909` |
 | P1-4 | 已完成 | H29 第一刀：提取 Prompt Runtime 请求组装 | 从 `handle_message()` 中抽出 `PromptRuntimeInput` 构造边界，不移动 trace、tool plan、conversation 注入和 audit 异常处理 | `refactor(桥接): 提取提示词运行时组装` |
-| P1-5 | 待写计划 | Prompt legacy 收口 | 禁用 live `fallback_v1` 发送路径，管理面和评估面转向 V2-only，legacy 页面降级为只读迁移入口 | `refactor(提示词): 收敛旧版回退路径` |
-| P1-6 | 待执行 | 删除冗余提示词资产并去版本化 | 删除 V1 / legacy 冗余资产，迁移仍有价值的文案，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
+| P1-5 | 计划已写，待执行 | Prompt legacy 收口 | 禁用 live `fallback_v1` 发送路径，管理面和评估面转向 V2-only，legacy 页面降级为只读迁移入口 | `refactor(提示词): 收敛旧版回退路径` |
+| P1-6 | 待写计划 | 删除冗余提示词资产并去版本化 | 迁移旧任务 prompt，删除 V1 / legacy 冗余资产，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
 | P1-7 | 已部分完成，待继续 | 连接池复用与残余同步 IO 审计 | 共享 `aiohttp.ClientSession` 已落地；继续审计 compaction / image / sticker 同步 IO | `4550aca` / `2bf4ee7` |
 | P1-8 | 待执行 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `feat(路由): 按模型能力校验请求` |
 | P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
@@ -72,14 +72,24 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-2 | 运营项 | TimingGate 持续评估 | 用更多人工标注样本复跑审计，接入外部 CI / PR gate | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
 
-## 下一步候选：P1-5 Prompt legacy 收口
+## 当前详细计划：P1-5 Prompt legacy 收口
 
-状态：待写实现计划。
+状态：计划已写，待执行。
 
-- [ ] 重新核对 `docs/todo.md` 路线项 1 的 legacy 收口目标。
-- [ ] 清点 `fallback_v1`、`prompt_runtime.engine=v1`、legacy / managed prompt 入口和管理端引用。
-- [ ] 写入独立实现计划，明确 TDD 验收：live 路径不再 fallback 到 V1、显式回滚策略边界清晰、管理端只保留迁移 / 审计入口。
+- [x] 重新核对 `docs/todo.md` 路线项 1 的 legacy 收口目标。
+- [x] 清点 `fallback_v1`、`prompt_runtime.engine=v1`、legacy / managed prompt 入口和管理端引用。
+- [x] 写入独立实现计划：`.Codex/plans/prompt-legacy-convergence.md`。
+- [x] 明确 TDD 验收：live 路径不再 fallback 到 V1、显式回滚策略边界清晰、管理端只保留迁移 / 审计入口。
 - [ ] 按 TDD 执行，阶段完成后单独提交。
+
+P1-6 前置迁移清单：
+
+- 迁移 `clients/classifier_client.py` 的 `timing_gate/private_decision/classifier_legacy` 到 V2 task 模板。
+- 迁移 `core/legacy_adapter.py` 的 `memory_extract` 到 V2 task 模板。
+- 清点 `prompts.default/group_analysis*.md` 和 `sql_analysis.md` 是否仍被 live 读取。
+- 导出并比对 `data/prompts/`、`data/prompt_fragments/`、`data/runtime_prompt/prompt.md` 中仍有价值的运行时文案。
+- 先移除 `creatures/nanobot/config.yaml` 对 `prompt.md` 的依赖，再删除 `creatures/nanobot/prompt.md`。
+- 删除旧 admin 写接口和旧 WebUI 页面前，保留导出 / 迁移说明。
 
 ## 已完成阶段详情：P1-4 Prompt Runtime 请求组装提取
 

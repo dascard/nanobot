@@ -146,7 +146,7 @@
 - **目标**：只保留 V2 一套模板与一条 compile 路径，删除 `core/prompt_assembler.py`、`core/legacy_prompt_runtime.py`、`prompts.legacy.default/`、`prompts.default/`、`creatures/nanobot/prompt.md` 及 `scripts/build_nanobot_prompt.py`；去掉 "v2/V2" 版本后缀，模板目录、settings key、prompt_key、tracing 字段统一为无版本号的规范名。
 - **关联**：与 H29（bridge 巨函数拆分）同 PR；`core/prompt_v2/template_registry.py` 的 `_LEGACY_ALIASES` 改名时一并清理；`evals/`、tracing 按三套语义打点需同步改。
 - **粗略路径**：① 先把默认 engine 切到 v2，灰度验证 shadow/audit 无回归（需先初始化 `data/prompts_v2`）→ ② 全仓清点 `prompt_runtime.engine`/`prompt_mode`/`legacy`/`shadow`/`managed` 引用 → ③ `nanobot_kt/prompt_runtime.py` 收敛为单一 V2 路径，删 `_build_v1_prompt` 与 audit fallback_v1 → ④ 删 V1/legacy 模块与冗余模板，迁移仍有价值的文案进 V2 → ⑤ 去版本后缀、改规范名（含 settings/prompt_key/目录/tracing）→ ⑥ 同步 admin UI 与测试。
-- **实施状态（2026-06-17）**：粗略路径第 ① 步已完成并验证。剩余工作从第 ② 步开始：清点旧 key / legacy 引用，提取 H29 prompt/runtime 组装边界，再逐步禁用 live `fallback_v1`、迁移旧任务 prompt、删除冗余资产并去版本化。
+- **实施状态（2026-06-17）**：粗略路径第 ① 步已完成并验证，H29 第一刀已提取 `PromptRuntimeInput` 请求组装边界。P1-5「Prompt legacy 收口」计划已写入 `.Codex/plans/prompt-legacy-convergence.md`，下一步按 TDD 禁用 live `fallback_v1`、让评估 / 管理入口转向 V2-only，并把 legacy 页面降级为只读迁移入口；P1-6 再迁移旧任务 prompt、删除冗余资产并去版本化。
 
 #### 路线项 2 — LLM 等 IO 调用全面异步化与连接池复用  ·〔关联 H7；H1 已满足〕
 
