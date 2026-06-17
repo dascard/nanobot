@@ -1,4 +1,5 @@
 """Tests for the new model routing system."""
+import asyncio
 import pytest
 
 
@@ -247,6 +248,48 @@ required_vars:
         assert "legacy system" not in json.dumps(messages, ensure_ascii=False)
         assert captured["payload"]["enable_thinking"] is False
         assert captured["payload"]["thinking"] == {"type": "disabled"}
+
+
+class TestNewAPIBackgroundTasks:
+    @pytest.mark.asyncio
+    async def test_background_task_is_kept_until_done(self):
+        from clients.new_api_client import NewAPIClient
+
+        NewAPIClient._background_tasks.clear()
+        release = asyncio.Event()
+
+        async def wait_for_release():
+            await release.wait()
+
+        task = NewAPIClient._track_background_task(wait_for_release(), label="unit_wait")
+        try:
+            await asyncio.sleep(0)
+            assert task in NewAPIClient._background_tasks
+            release.set()
+            await task
+            await asyncio.sleep(0)
+            assert task not in NewAPIClient._background_tasks
+        finally:
+            NewAPIClient._background_tasks.clear()
+
+    @pytest.mark.asyncio
+    async def test_background_task_exception_is_observed_and_discarded(self, caplog):
+        from clients.new_api_client import NewAPIClient
+
+        NewAPIClient._background_tasks.clear()
+
+        async def fail():
+            raise RuntimeError("tracker failed")
+
+        with caplog.at_level("WARNING", logger="nanobot.new_api"):
+            task = NewAPIClient._track_background_task(fail(), label="unit_fail")
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        assert task.done()
+        assert task not in NewAPIClient._background_tasks
+        assert "unit_fail" in caplog.text
+        assert "tracker failed" in caplog.text
 
 
 class TestComplexityEstimator:

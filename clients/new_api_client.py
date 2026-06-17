@@ -42,6 +42,29 @@ class NewAPIClient:
     _model_sync_lock = asyncio.Lock()
     _model_overrides_cache: Dict[str, Any] | None = None
     _failure_tracker: "ModelFailureTracker | None" = None
+    _background_tasks: set[asyncio.Task] = set()
+
+    @classmethod
+    def _track_background_task(cls, awaitable, *, label: str = "background") -> asyncio.Task:
+        task = asyncio.create_task(awaitable, name=f"new-api:{label}")
+        cls._background_tasks.add(task)
+
+        def _done(done: asyncio.Task) -> None:
+            cls._background_tasks.discard(done)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                logger.debug("NewAPI background task cancelled: %s", label)
+            except Exception as exc:
+                logger.warning(
+                    "NewAPI background task failed [%s]: %s",
+                    label,
+                    exc,
+                    exc_info=True,
+                )
+
+        task.add_done_callback(_done)
+        return task
 
     @classmethod
     def get_failure_tracker(cls) -> "ModelFailureTracker":
@@ -317,7 +340,10 @@ class NewAPIClient:
             updated = registry.add_or_update_many(models)
             self.__class__._last_model_sync_ts = now
             # Persist sync timestamp so restart doesn't re-sync
-            asyncio.ensure_future(_rs.set("last_model_sync_ts", now))
+            self.__class__._track_background_task(
+                _rs.set("last_model_sync_ts", now),
+                label="persist_model_sync_ts",
+            )
 
             # Post-sync summary: list all models by tier with free/paid breakdown
             all_models = registry.get_models_by_provider(self.registry_provider)
@@ -638,7 +664,10 @@ class NewAPIClient:
                                 except Exception as _e:
                                     logger.warning("finish llm api request failed: %s", _e)
                                 if tracker is not None:
-                                    asyncio.create_task(tracker.record_success(target_model))
+                                    self.__class__._track_background_task(
+                                        tracker.record_success(target_model),
+                                        label="record_success",
+                                    )
                                 self.last_usage = result.get("usage", {})
                                 result["_nanobot_model_id"] = target_model
                                 result["_nanobot_complexity"] = complexity
@@ -659,7 +688,10 @@ class NewAPIClient:
                             except Exception as _e:
                                 logger.warning("finish llm api request failed: %s", _e)
                             if tracker is not None:
-                                asyncio.create_task(tracker.record_failure(target_model))
+                                self.__class__._track_background_task(
+                                    tracker.record_failure(target_model),
+                                    label="record_failure",
+                                )
 
                             if resp.status == 429:
                                 logger.warning(f"new-api: {target_model} 429 rate-limited, switching")
@@ -687,7 +719,10 @@ class NewAPIClient:
                         except Exception:
                             pass
                         if tracker is not None:
-                            asyncio.create_task(tracker.record_failure(target_model))
+                            self.__class__._track_background_task(
+                                tracker.record_failure(target_model),
+                                label="record_failure",
+                            )
                         logger.warning(f"new-api timeout: {target_model}, switching")
                         break
                     except aiohttp.ClientError as e:
@@ -705,7 +740,10 @@ class NewAPIClient:
                         except Exception:
                             pass
                         if tracker is not None:
-                            asyncio.create_task(tracker.record_failure(target_model))
+                            self.__class__._track_background_task(
+                                tracker.record_failure(target_model),
+                                label="record_failure",
+                            )
                         logger.warning(f"new-api network error: {target_model}, {e}, switching")
                         break  # network error → next model immediately
 
@@ -814,7 +852,10 @@ class NewAPIClient:
                         except Exception:
                             pass
                         if tracker is not None:
-                            asyncio.create_task(tracker.record_failure(target_model))
+                            self.__class__._track_background_task(
+                                tracker.record_failure(target_model),
+                                label="stream_record_failure",
+                            )
                         yield {"error": f"API Error {resp.status}", "detail": detail}
                         return
 
@@ -832,7 +873,10 @@ class NewAPIClient:
                             if chunk.get("usage"):
                                 self.last_usage = chunk["usage"]
                                 if tracker is not None:
-                                    asyncio.create_task(tracker.record_success(target_model))
+                                    self.__class__._track_background_task(
+                                        tracker.record_success(target_model),
+                                        label="stream_record_success",
+                                    )
                             stream_trace.record_chunk(chunk)
                             yield chunk
                         except json.JSONDecodeError:
@@ -864,7 +908,10 @@ class NewAPIClient:
                 except Exception:
                     pass
                 if tracker is not None:
-                    asyncio.create_task(tracker.record_failure(target_model))
+                    self.__class__._track_background_task(
+                        tracker.record_failure(target_model),
+                        label="stream_record_failure",
+                    )
                 yield {"error": "Timeout", "detail": "stream timed out"}
             except aiohttp.ClientError as e:
                 logger.error(f"new-api stream error: {e}")
@@ -881,7 +928,10 @@ class NewAPIClient:
                 except Exception:
                     pass
                 if tracker is not None:
-                    asyncio.create_task(tracker.record_failure(target_model))
+                    self.__class__._track_background_task(
+                        tracker.record_failure(target_model),
+                        label="stream_record_failure",
+                    )
                 yield {"error": "NetworkError", "detail": str(e)}
 
 
