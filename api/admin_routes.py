@@ -2126,8 +2126,9 @@ def query_table(table_name: str, page: int = 1, limit: int = 50,
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    except Exception:
+        logger.exception("admin db table query failed: table=%s", table_name)
+        raise HTTPException(500, "内部错误")
 
 
 @router.post("/db/query")
@@ -2142,8 +2143,9 @@ def execute_readonly_query(body: DbQuery, db: Session = Depends(get_db), _auth=D
         return {"columns": columns, "rows": rows, "cell_meta": cell_meta, "row_count": len(rows)}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(500, str(e))
+    except Exception:
+        logger.exception("admin readonly db query failed")
+        raise HTTPException(500, "内部错误")
 
 
 # ═══════════════════════════════════════════

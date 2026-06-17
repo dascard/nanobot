@@ -129,6 +129,22 @@ def test_db_query_uses_safe_serializer(client, monkeypatch, db_session):
     assert payload["cell_meta"][0]["pattern"]["truncated"] is True
 
 
+def test_db_query_does_not_echo_internal_sql_errors(client, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    response = client.post(
+        "/api/v1/admin/db/query",
+        headers=_auth_header(),
+        json={"query": "SELECT missing_internal_column FROM users"},
+    )
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail == "内部错误"
+    assert "missing_internal_column" not in detail
+    assert "SELECT" not in detail.upper()
+
+
 def test_db_table_clamps_pagination(client, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
 
