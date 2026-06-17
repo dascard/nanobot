@@ -61,6 +61,20 @@ _MEMORY_DIGEST_VARIABLES: tuple[VariableDef, ...] = (
     VariableDef("existing_digest_hint", "memory_digest", "规则摘要或已有摘要提示", "已有主题提示"),
 )
 
+_CLASSIFIER_TASK_VARIABLES: tuple[VariableDef, ...] = (
+    VariableDef("message", "classifier_task", "待判定消息", "ping"),
+    VariableDef("system_prompt", "classifier_task", "调用方旧系统提示", "只输出 JSON"),
+    VariableDef("pending_text", "classifier_task", "待判定群聊文本", "ping"),
+    VariableDef("recent_context", "classifier_task", "近期上下文", "上一句"),
+    VariableDef("bot_name", "classifier_task", "机器人名称", "七濑"),
+    VariableDef("group_profile", "classifier_task", "群体画像", "技术群"),
+)
+
+_MEMORY_EXTRACT_VARIABLES: tuple[VariableDef, ...] = (
+    VariableDef("conversation", "memory_extract", "待抽取的对话文本", "用户: 喜欢 TypeScript"),
+    VariableDef("existing_memory", "memory_extract", "已有用户记忆", "{}"),
+)
+
 
 def normalize_scope(scope: str) -> str:
     return str(scope or "").removesuffix(".md").strip()
@@ -70,6 +84,10 @@ def _scoped_variables(scope: str) -> tuple[VariableDef, ...]:
     normalized = normalize_scope(scope)
     if normalized in {"tasks/memory_digest_system", "tasks/memory_digest_user"}:
         return _MEMORY_DIGEST_VARIABLES
+    if normalized in {"tasks/classifier_legacy", "tasks/private_decision", "tasks/timing_gate"}:
+        return _CLASSIFIER_TASK_VARIABLES
+    if normalized == "tasks/memory_extract":
+        return _MEMORY_EXTRACT_VARIABLES
     return ()
 
 

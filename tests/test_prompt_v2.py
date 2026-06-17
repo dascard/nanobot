@@ -419,6 +419,56 @@ def test_prompt_v2_section_variables_are_whitelisted_by_scope():
         render_scoped_template("identity_context", "{{ unknown_name }}", {})
 
 
+def test_prompt_v2_renders_classifier_legacy_task_template(tmp_path, monkeypatch):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    task_path = default_dir / "tasks" / "classifier_legacy.md"
+    task_path.parent.mkdir(parents=True)
+    task_path.write_text(
+        "---\nname: 旧分类器兼容\nversion: 1\nkind: task\ntool_name: classifier_legacy\n---\n"
+        "{{ system_prompt }}\n待判定消息:\n{{ message }}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.task_templates import render_task_prompt
+
+    rendered = render_task_prompt(
+        "classifier_legacy",
+        {"system_prompt": "旧系统", "message": "ping"},
+        fallback_text="fallback",
+    )
+
+    assert "旧系统" in rendered
+    assert "待判定消息:" in rendered
+    assert "ping" in rendered
+
+
+def test_prompt_v2_renders_memory_extract_task_template(tmp_path, monkeypatch):
+    default_dir = tmp_path / "defaults"
+    task_path = default_dir / "tasks" / "memory_extract.md"
+    task_path.parent.mkdir(parents=True)
+    task_path.write_text(
+        "---\nname: 记忆抽取\nversion: 1\nkind: task\ntool_name: memory_extract\n---\n"
+        "已有记忆:\n{{ existing_memory }}\n对话:\n{{ conversation }}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(default_dir / "runtime"))
+
+    from core.prompt_v2.task_templates import render_task_prompt
+
+    rendered = render_task_prompt(
+        "memory_extract",
+        {"conversation": "用户: 喜欢 TypeScript", "existing_memory": "{}"},
+        fallback_text="fallback",
+    )
+
+    assert "喜欢 TypeScript" in rendered
+    assert "已有记忆:" in rendered
+
+
 def test_prompt_v2_templates_are_isolated_from_prompt_manager_and_legacy_runtime():
     import core.prompt_v2.compiler as compiler
     from core.prompt_v2.template_loader import load_template

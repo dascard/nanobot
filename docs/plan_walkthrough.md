@@ -85,7 +85,8 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 写入 P1-6 设计文档：`docs/superpowers/specs/2026-06-17-prompt-v1-asset-removal-design.md`。
 - [x] 写入 P1-6 实现计划：`.Codex/plans/prompt-v1-asset-removal.md`。
 - [x] 只读清点仍依赖旧 prompt 的 live 引用：`classifier_legacy`、`memory_extract`、`PromptAssembler`、`LegacyPromptRuntime`、`prompts.default`、`prompts.legacy.default`、`creatures/nanobot/prompt.md` 和相关 admin / WebUI 路由。
-- [ ] 先迁移后台任务 prompt：把 `clients/classifier_client.py` 的 `timing_gate/private_decision/classifier_legacy` 与 `core/legacy_adapter.py` 的 `memory_extract` 迁到 V2 task 模板，并补红绿测试。
+- [x] 新增 V2 task template 渲染边界：`classifier_legacy` 和 `memory_extract` 已具备 V2 task 模板、变量白名单和渲染 helper。
+- [ ] 迁移后台任务 prompt 调用方：把 `clients/classifier_client.py` 的 `timing_gate/private_decision/classifier_legacy` 与 `core/legacy_adapter.py` 的 `memory_extract` 迁到 V2 task 模板，并补红绿测试。
 - [ ] 收敛运行时入口：移除 live 发送路径中的 V1 / legacy 分支，保留必要的历史 trace 读取兼容，不破坏旧 `AgentRun` / `ChatLog` 数据展示。
 - [ ] 处理管理面迁移出口：确认 legacy 只读导出 / 对比能力是否仍需保留；若删除页面或路由，先补迁移说明和测试。
 - [ ] 删除冗余资产：删除不再被 live 读取的 V1 / legacy 模块、模板目录和构建脚本，保留测试夹具中确有必要的最小样本。
@@ -95,6 +96,9 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 验证记录：
 
+- P1-6 任务 1 红灯：`2 failed, 1 warning`，失败点为 `core.prompt_v2.task_templates` 模块不存在。
+- P1-6 任务 1 绿灯：`2 passed, 1 warning`。
+- P1-6 任务 1 Prompt V2 回归：`24 passed, 1 warning`。
 - 任务 3 红灯：`13 failed, 3 passed, 20 warnings`，失败点覆盖旧写接口、V1 preview、legacy GET 副作用和 WebUI 只读断言。
 - 任务 3 绿灯：`16 passed, 20 warnings`。
 - 任务 3 定向：`25 passed, 20 warnings`。

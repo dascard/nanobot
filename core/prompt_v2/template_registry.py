@@ -47,12 +47,16 @@ _LEGACY_ALIASES: dict[str, str] = {
     "persona_update": "tools/persona_update/usage",
     "schedule_task": "tools/schedule_task/usage",
     "sticker_search": "tools/sticker_search/usage",
+    "classifier_legacy": "tasks/classifier_legacy",
+    "private_decision": "tasks/private_decision",
     "timing_gate": "tasks/timing_gate",
     "memory_extract": "tasks/memory_extract",
     "reply_contract_retry": "tasks/reply_contract_retry",
 }
 
 _TASK_TOOL_NAMES: dict[str, str] = {
+    "tasks/classifier_legacy": "classifier_legacy",
+    "tasks/private_decision": "private_decision",
     "tasks/timing_gate": "timing_gate",
     "tasks/memory_extract": "memory_extract",
     "tasks/reply_contract_retry": "reply",

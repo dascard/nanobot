@@ -82,7 +82,7 @@
 - 修改：`data/prompts_v2/tasks/memory_extract.md`
 - 测试：`tests/test_prompt_v2.py`
 
-- [ ] **步骤 1：写红灯测试**
+- [x] **步骤 1：写红灯测试**
 
 在 `tests/test_prompt_v2.py` 新增测试：
 
@@ -140,7 +140,7 @@ def test_prompt_v2_renders_memory_extract_task_template(tmp_path, monkeypatch):
     assert "已有记忆:" in rendered
 ```
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -151,7 +151,7 @@ python -B -m pytest tests/test_prompt_v2.py::test_prompt_v2_renders_classifier_l
 
 预期：FAIL，原因是 `core.prompt_v2.task_templates` 不存在，或变量白名单不允许 `conversation` / `existing_memory` / `message` / `system_prompt`。
 
-- [ ] **步骤 3：新增 V2 task helper**
+- [x] **步骤 3：新增 V2 task helper**
 
 创建 `core/prompt_v2/task_templates.py`：
 
@@ -189,7 +189,7 @@ def render_task_messages(
     return [{"role": "system", "content": rendered}]
 ```
 
-- [ ] **步骤 4：补变量作用域和 alias**
+- [x] **步骤 4：补变量作用域和 alias**
 
 在 `core/prompt_v2/variables.py` 添加：
 
@@ -232,7 +232,7 @@ if normalized == "tasks/memory_extract":
 "tasks/private_decision": "private_decision",
 ```
 
-- [ ] **步骤 5：迁移模板内容**
+- [x] **步骤 5：迁移模板内容**
 
 新增 `prompts.v2.default/tasks/classifier_legacy.md` 和 `data/prompts_v2/tasks/classifier_legacy.md`：
 
@@ -281,7 +281,7 @@ description: 从对话中提取稳定用户记忆。
 {{ conversation }}
 ```
 
-- [ ] **步骤 6：运行任务 1 测试**
+- [x] **步骤 6：运行任务 1 测试**
 
 运行步骤 2 命令。
 
