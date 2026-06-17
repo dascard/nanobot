@@ -275,6 +275,57 @@ class TestNanobotBridge:
 
         run_async(_run())
 
+    def test_bridge_pool_stop_waits_for_inflight_bridge(self, monkeypatch):
+        import nanobot_kt.bridge as bridge_mod
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        stop_entered = asyncio.Event()
+
+        class FakeBridge:
+            def __init__(self, _creature_path="creatures/nanobot"):
+                self.stop_count = 0
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                self.stop_count += 1
+                stop_entered.set()
+
+            async def handle_message(self, query, *, session_id="", **_kwargs):
+                if session_id == "busy":
+                    entered.set()
+                    await release.wait()
+                return session_id
+
+        monkeypatch.setattr(bridge_mod, "NanobotBridge", FakeBridge)
+
+        async def _run():
+            pool = bridge_mod.NanobotBridgePool()
+            await pool.start()
+
+            busy_task = asyncio.create_task(pool.handle_message("a", session_id="busy"))
+            await entered.wait()
+            busy_bridge = pool._bridges["busy"]
+
+            stop_task = asyncio.create_task(pool.stop())
+            try:
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(stop_entered.wait(), timeout=0.05)
+                assert busy_bridge.stop_count == 0
+
+                release.set()
+                assert await busy_task == "busy"
+                await asyncio.wait_for(stop_task, timeout=1)
+                assert busy_bridge.stop_count == 1
+            finally:
+                release.set()
+                await asyncio.gather(busy_task, return_exceptions=True)
+                await asyncio.gather(stop_task, return_exceptions=True)
+
+        run_async(_run())
+
     def test_bridge_pool_tracks_stale_stop_task_until_finished(self, monkeypatch, caplog):
         import time
         import nanobot_kt.bridge as bridge_mod
