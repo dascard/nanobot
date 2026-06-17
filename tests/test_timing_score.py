@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
+import pytest
+
 from core.timing_score import TimingModelHint, decide_timing, extract_signals
 
 
@@ -65,6 +67,38 @@ def test_directed_to_other_with_linger_escalates_to_model():
 
 def test_non_pure_ack_is_not_suppressed_as_ack():
     signals = extract_signals(text="好的，帮我查下 X", is_group=True)
+
+    assert signals.sub_signals["s_ack"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_score", "expected_tier"),
+    [
+        ("sk-secret-token-value", 0.95, "secret"),
+        ("a3f9" * 24, 0.95, "blob"),
+        ("https://example.com/a", 0.75, "url"),
+        ("```python\nprint(1)\n```", 0.65, "codeblock"),
+        ("日志" * 420, 0.55, "long_dump"),
+    ],
+)
+def test_transport_signal_tiers_match_design(text, expected_score, expected_tier):
+    signals = extract_signals(text=text, is_group=True)
+
+    assert signals.sub_signals["s_transport"] == expected_score
+    assert signals.sub_signals["s_transport_tier"] == expected_tier
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "好的，帮我查下 X",
+        "好的？",
+        "好的 https://example.com",
+        "好的\n```python\nprint(1)\n```",
+    ],
+)
+def test_non_pure_ack_variants_are_not_suppressed_as_ack(text):
+    signals = extract_signals(text=text, is_group=True)
 
     assert signals.sub_signals["s_ack"] == 0.0
 

@@ -78,6 +78,8 @@ _SECRET_MARKERS = (
     "-----begin",
 )
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
+_HEX_BLOB_RE = re.compile(r"^[0-9a-fA-F]{64,}$")
+_BASE64_BLOB_RE = re.compile(r"^[A-Za-z0-9+/_=-]{96,}$")
 
 
 @dataclass(frozen=True)
@@ -148,6 +150,15 @@ def _has_code_block(text: str) -> bool:
     return "```" in stripped or stripped.startswith(("    ", "\t"))
 
 
+def _looks_like_blob(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not stripped or any(ch.isspace() for ch in stripped):
+        return False
+    if _has_url(stripped):
+        return False
+    return bool(_HEX_BLOB_RE.fullmatch(stripped) or _BASE64_BLOB_RE.fullmatch(stripped))
+
+
 def _is_pure_ack(text: str, *, has_files: bool) -> bool:
     if has_files:
         return False
@@ -173,6 +184,8 @@ def _transport_signal(text: str, *, has_files: bool) -> tuple[float, str]:
     lowered = raw.lower()
     if any(marker in lowered for marker in _SECRET_MARKERS):
         return 0.95, "secret"
+    if _looks_like_blob(raw):
+        return 0.95, "blob"
     if _has_url(raw):
         return 0.75, "url"
     if _has_code_block(raw):
