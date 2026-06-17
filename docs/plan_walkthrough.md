@@ -83,8 +83,8 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 核对 `docs/TODO_LIST.md`，确认它记录了更旧的路线状态，仅作历史核对，不作为优先级来源。
 - [x] 标记 P1-5 Prompt legacy 收口已完成，并把本文件的当前执行焦点切到 P1-6。
 - [x] 写入 P1-6 设计文档：`docs/superpowers/specs/2026-06-17-prompt-v1-asset-removal-design.md`。
-- [ ] 写入 P1-6 实现计划：`.Codex/plans/prompt-v1-asset-removal.md`。
-- [ ] 只读清点仍依赖旧 prompt 的 live 引用：`classifier_legacy`、`memory_extract`、`PromptAssembler`、`LegacyPromptRuntime`、`prompts.default`、`prompts.legacy.default`、`creatures/nanobot/prompt.md` 和相关 admin / WebUI 路由。
+- [x] 写入 P1-6 实现计划：`.Codex/plans/prompt-v1-asset-removal.md`。
+- [x] 只读清点仍依赖旧 prompt 的 live 引用：`classifier_legacy`、`memory_extract`、`PromptAssembler`、`LegacyPromptRuntime`、`prompts.default`、`prompts.legacy.default`、`creatures/nanobot/prompt.md` 和相关 admin / WebUI 路由。
 - [ ] 先迁移后台任务 prompt：把 `clients/classifier_client.py` 的 `timing_gate/private_decision/classifier_legacy` 与 `core/legacy_adapter.py` 的 `memory_extract` 迁到 V2 task 模板，并补红绿测试。
 - [ ] 收敛运行时入口：移除 live 发送路径中的 V1 / legacy 分支，保留必要的历史 trace 读取兼容，不破坏旧 `AgentRun` / `ChatLog` 数据展示。
 - [ ] 处理管理面迁移出口：确认 legacy 只读导出 / 对比能力是否仍需保留；若删除页面或路由，先补迁移说明和测试。
