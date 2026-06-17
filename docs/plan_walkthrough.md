@@ -4,7 +4,7 @@
 更新日期：2026-06-17
 本轮计划写入日期：2026-06-17
 
-本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。
+本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次更新基于 2026-06-17 的提交状态重新校准：P1-5 已完成，当前执行焦点切到 P1-6。
 
 ## 当前目标
 
@@ -13,7 +13,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 ## 文档口径
 
 - `docs/todo.md` 是当前架构路线的主参考。
-- `docs/TODO_LIST.md` 是历史完成清单，目前存在滞后状态，例如仍描述 Prompt V2 默认未启用、TimingGate 阶段仍在中途；后续仅作为历史核对材料，不作为优先级来源。
+- `docs/TODO_LIST.md` 是历史完成清单，目前未跟踪且存在滞后状态，例如仍描述 Prompt V2 默认未启用、TimingGate 阶段仍在中途；后续仅作为历史核对材料，不作为优先级来源。
 - 本文件记录「下一阶段怎么推进」，每次阶段完成后要同步状态并单独提交。
 
 ## 执行约束
@@ -64,7 +64,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-3 | 已完成 | Prompt V2 默认 live 接管 | 默认 engine 改为 V2，保留显式 V1 回滚，初始化 `data/prompts_v2`，同步 admin preview 和 reply-test 默认值 | `2be9329` / `8a1e177` / `8a73909` |
 | P1-4 | 已完成 | H29 第一刀：提取 Prompt Runtime 请求组装 | 从 `handle_message()` 中抽出 `PromptRuntimeInput` 构造边界，不移动 trace、tool plan、conversation 注入和 audit 异常处理 | `refactor(桥接): 提取提示词运行时组装` |
 | P1-5 | 已完成 | Prompt legacy 收口 | live `fallback_v1` 已禁用，评估入口已转 V2，legacy / managed 管理写入口已降级为只读迁移入口 | `afc3dd4` / `99c1803` / `5009034` |
-| P1-6 | 下一步，待写计划 | 删除冗余提示词资产并去版本化 | 迁移旧任务 prompt，删除 V1 / legacy 冗余资产，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
+| P1-6 | 当前推进 | 删除冗余提示词资产并去版本化 | 迁移旧任务 prompt，删除 V1 / legacy 冗余资产，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
 | P1-7 | 已部分完成，待继续 | 连接池复用与残余同步 IO 审计 | 共享 `aiohttp.ClientSession` 已落地；继续审计 compaction / image / sticker 同步 IO | `4550aca` / `2bf4ee7` |
 | P1-8 | 待执行 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `feat(路由): 按模型能力校验请求` |
 | P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
@@ -75,19 +75,23 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-2 | 运营项 | TimingGate 持续评估 | 用更多人工标注样本复跑审计，接入外部 CI / PR gate | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
 
-## 当前详细计划：P1-5 Prompt legacy 收口
+## 当前详细计划：P1-6 删除冗余提示词资产并去版本化
 
-状态：已完成。任务 1 / 2 / 3 已完成并分别提交；任务 4 文档同步与任务 5 验证收尾已完成。
+状态：当前推进。P1-5 已完成，P1-6 先做设计和迁移计划，不直接大规模删除资产；确认引用关系、测试边界和回滚兼容后，再分阶段提交实现。
 
-- [x] 重新核对 `docs/todo.md` 路线项 1 的 legacy 收口目标。
-- [x] 清点 `fallback_v1`、`prompt_runtime.engine=v1`、legacy / managed prompt 入口和管理端引用。
-- [x] 写入独立实现计划：`.Codex/plans/prompt-legacy-convergence.md`。
-- [x] 明确 TDD 验收：live 路径不再 fallback 到 V1、显式回滚策略边界清晰、管理端只保留迁移 / 审计入口。
-- [x] 任务 1：禁用 V2 audit 失败后的 `fallback_v1` live 发送路径，并固定 fail-fast。
-- [x] 任务 2：`reply-test` / `reply-eval` 默认与旧 alias 转向 V2-only，显式 V1 应急入口保留。
-- [x] 任务 3：按 TDD 将 legacy / managed 管理写入口降级为只读迁移入口。
-- [x] 任务 4：P1-5 全部完成后同步 `docs/todo.md`、本文件和相关设计文档。
-- [x] 任务 5：运行 P1-5 定向回归、全量测试和禁止项扫描。
+- [x] 重新核对 `docs/todo.md` 路线项 1，确认 P1-6 是 P1-5 之后的下一优先级。
+- [x] 核对 `docs/TODO_LIST.md`，确认它记录了更旧的路线状态，仅作历史核对，不作为优先级来源。
+- [x] 标记 P1-5 Prompt legacy 收口已完成，并把本文件的当前执行焦点切到 P1-6。
+- [ ] 写入 P1-6 设计文档：`docs/superpowers/specs/2026-06-17-prompt-v1-asset-removal-design.md`。
+- [ ] 写入 P1-6 实现计划：`.Codex/plans/prompt-v1-asset-removal.md`。
+- [ ] 只读清点仍依赖旧 prompt 的 live 引用：`classifier_legacy`、`memory_extract`、`PromptAssembler`、`LegacyPromptRuntime`、`prompts.default`、`prompts.legacy.default`、`creatures/nanobot/prompt.md` 和相关 admin / WebUI 路由。
+- [ ] 先迁移后台任务 prompt：把 `clients/classifier_client.py` 的 `timing_gate/private_decision/classifier_legacy` 与 `core/legacy_adapter.py` 的 `memory_extract` 迁到 V2 task 模板，并补红绿测试。
+- [ ] 收敛运行时入口：移除 live 发送路径中的 V1 / legacy 分支，保留必要的历史 trace 读取兼容，不破坏旧 `AgentRun` / `ChatLog` 数据展示。
+- [ ] 处理管理面迁移出口：确认 legacy 只读导出 / 对比能力是否仍需保留；若删除页面或路由，先补迁移说明和测试。
+- [ ] 删除冗余资产：删除不再被 live 读取的 V1 / legacy 模块、模板目录和构建脚本，保留测试夹具中确有必要的最小样本。
+- [ ] 去版本化命名：将模板目录、prompt key、配置项和 tracing 字段从 `v2` 命名收敛到规范名；旧配置只保留兼容读取，不再作为 live 主路径。
+- [ ] 同步提示词说明：修改 `creatures/nanobot/config.yaml`、提示词文档和相关 admin 文案时，检查 `creatures/nanobot/prompt.md` 的引用是否已废弃或应删除。
+- [ ] 验证收尾：运行 P1-6 定向测试、prompt runtime / reply admin 回归、禁止项扫描、全量测试，并按阶段单独 commit。
 
 验证记录：
 
@@ -98,14 +102,13 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - WebUI 构建：`npm run build` 通过。
 - 全量测试：`1238 passed, 6 skipped, 113 warnings`。
 
-P1-6 前置迁移清单：
+P1-6 验收重点：
 
-- 迁移 `clients/classifier_client.py` 的 `timing_gate/private_decision/classifier_legacy` 到 V2 task 模板。
-- 迁移 `core/legacy_adapter.py` 的 `memory_extract` 到 V2 task 模板。
-- 清点 `prompts.default/group_analysis*.md` 和 `sql_analysis.md` 是否仍被 live 读取。
-- 导出并比对 `data/prompts/`、`data/prompt_fragments/`、`data/runtime_prompt/prompt.md` 中仍有价值的运行时文案。
-- 先移除 `creatures/nanobot/config.yaml` 对 `prompt.md` 的依赖，再删除 `creatures/nanobot/prompt.md`。
-- 删除旧 admin 写接口和旧 WebUI 页面前，保留导出 / 迁移说明。
+- 默认 live 路径不再构造、加载或回退到 V1 / legacy prompt。
+- 后台任务 prompt 已进入 V2 task template 管理，不再依赖旧 fragment / legacy prompt key。
+- 删除资产前有 `rg` 级别的引用清点，确认剩余引用只属于历史兼容、测试夹具或迁移说明。
+- 去版本化命名不破坏现有历史 trace / eval 报告读取。
+- admin / WebUI 对已删除旧能力的展示是只读、迁移说明或明确下线，不再暴露可写入口。
 
 ## 已完成阶段详情：P1-4 Prompt Runtime 请求组装提取
 
@@ -428,4 +431,4 @@ P1-6 前置迁移清单：
 
 ## 下一步
 
-TimingGate 混合决策路线已完成阶段性落地。后续优先级回到 `docs/todo.md` 的架构演进路线：继续推进真实日志标注 / CI 接入等运营项，或转入 P1 / P2 中提示词收敛、多平台底座等后续工作。
+当前优先执行 P1-6。下一轮先写 P1-6 设计文档和实现计划，再按 TDD 拆分任务 prompt 迁移、运行时入口收敛、冗余资产删除和去版本化命名。TimingGate 真实日志标注 / CI 接入属于后续运营项，暂不抢占 P1-6 的实现顺序。
