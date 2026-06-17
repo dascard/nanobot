@@ -33,7 +33,7 @@
 | 阶段 8：私聊接入 shared timing scoring | 已完成 | 私聊规则与分类器统一回灌 shared scoring |
 | 阶段 9：timer / legacy cooldown 继续软化 | 已完成 | timer fired 与 legacy cooldown 接入 scoring shortcut |
 | 阶段 10：session / platform 级模型层开关 | 已完成 | `enabled` / `rules_only` / `shadow` 策略解析与运行时接入 |
-| 阶段 11：真实日志假阳率评估 | 待开始 | 抽样脚本、shadow 对比、阈值建议 |
+| 阶段 11：真实日志假阳率评估 | 已完成 | 时机信号审计 CLI、shadow mismatch 报告、阈值建议 |
 | 阶段 12：timing gate eval 基线与回归门禁 | 待开始 | baseline diff 与阈值门禁 |
 | 阶段 13：文档收尾 | 待开始 | 同步 `docs/todo.md` 与设计文档 |
 
@@ -187,15 +187,27 @@
 
 ### 阶段 11：真实日志假阳率评估
 
-状态：待开始。
+状态：已完成。
 
 目标：用真实 ChatLog 抽样评估 `s_ack`、`s_transport`、`w_marker` 的假阳性，并输出 shadow 对比结果。
+
+已完成：
+
+- 已写计划文件：`.Codex/plans/timing-gate-scoring-phase11-log-audit.md`
+- 已新增 `core/eval_sampling/timing_signal_audit.py`，从 `ChatLog.meta_json.timing_gate.scoring` 抽取信号样本
+- 已新增 `evals/timing_signal_audit.py`，支持从运行 DB 生成 JSON 审计报告
+- 报告包含人工标注假阳率、`runtime_action` 与 `scoring_action` 的 shadow mismatch 统计
+- 已运行阶段 11 定向、TimingGate 回归和全量测试
 
 验收标准：
 
 - 有可复跑脚本或 eval runner
 - 记录样本量、误判类型和建议阈值
 - 不凭感觉直接调参
+
+相关提交：
+
+- `efb04a0 feat(评测): 添加时机信号日志审计`
 
 ### 阶段 12：timing gate eval 基线与回归门禁
 
@@ -223,4 +235,4 @@
 
 ## 下一步
 
-继续阶段 11：真实日志假阳率评估。下一阶段仍按计划文件、TDD 红绿、回归验证和阶段提交推进。
+继续阶段 12：timing gate eval 基线与回归门禁。下一阶段仍按计划文件、TDD 红绿、回归验证和阶段提交推进。
