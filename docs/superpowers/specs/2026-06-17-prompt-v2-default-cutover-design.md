@@ -174,3 +174,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider --durations=20
 4. 迁移 classifier / legacy adapter 的任务 prompt。
 5. 删除 V1 / legacy 资产。
 6. 去掉 V2 命名后缀，统一为无版本运行时。
+
+### P1-5 补充（2026-06-17）
+
+P1-5 已完成前 3 项收口：`fallback_v1` 已从 live 发送路径移除，V2 audit 失败统一 fail-fast；`reply-test` / `reply-eval` 默认和旧 alias 已转向 V2；legacy / managed 管理写入口已降级为只读迁移入口。显式 `prompt_runtime.engine=v1` 应急回滚和旧资产删除延后到 P1-6 前置迁移后处理。

@@ -1,7 +1,7 @@
 # Prompt legacy 收口实现计划
 
 计划日期：2026-06-17
-状态：进行中，任务 1 / 2 已完成，任务 3 待执行
+状态：已完成
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
@@ -601,12 +601,14 @@ npm run build
 # ✓ built
 ```
 
-- [ ] **步骤 9：提交任务 3**
+- [x] **步骤 9：提交任务 3**
 
 ```bash
 git add api/admin_routes.py core/legacy_prompt_runtime.py tests/test_prompt_trace_admin.py tests/test_prompt_legacy_admin_readonly.py tests/test_webui_prompt_runtime_ui.py webui/src/App.jsx webui/src/features/prompt/PromptPages.jsx .Codex/plans/prompt-legacy-convergence.md
 git commit -m "refactor(提示词): 降级旧版管理入口"
 ```
+
+实际：已提交 `5009034 refactor(提示词): 降级旧版管理入口`。
 
 ## 任务 4：同步文档和后续删除清单
 
@@ -616,7 +618,7 @@ git commit -m "refactor(提示词): 降级旧版管理入口"
 - 修改：`docs/superpowers/specs/2026-06-17-prompt-v2-default-cutover-design.md`
 - 修改：`.Codex/plans/prompt-legacy-convergence.md`
 
-- [ ] **步骤 1：同步 `docs/todo.md` 路线项 1**
+- [x] **步骤 1：同步 `docs/todo.md` 路线项 1**
 
 在路线项 1 的实施状态中加入：
 
@@ -624,7 +626,7 @@ git commit -m "refactor(提示词): 降级旧版管理入口"
 P1-5 已完成：live `fallback_v1` 发送路径已禁用，reply-test / reply-eval 默认转向 V2，legacy / managed 管理写入口降级为只读迁移入口。显式 `prompt_runtime.engine=v1` 应急回滚仍保留，legacy 资产删除延后到 P1-6。
 ```
 
-- [ ] **步骤 2：同步 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：同步 `docs/plan_walkthrough.md`**
 
 将 P1-5 状态改为已完成，并把下一步候选改为 P1-6：
 
@@ -633,7 +635,7 @@ P1-5 已完成：live `fallback_v1` 发送路径已禁用，reply-test / reply-e
 | P1-6 | 待写计划 | 删除冗余提示词资产并去版本化 | 迁移后台 task prompt，删除 V1 / legacy 冗余资产，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
 ```
 
-- [ ] **步骤 3：同步默认接管设计文档**
+- [x] **步骤 3：同步默认接管设计文档**
 
 在 `docs/superpowers/specs/2026-06-17-prompt-v2-default-cutover-design.md` 的后续步骤中标记：
 
@@ -641,7 +643,7 @@ P1-5 已完成：live `fallback_v1` 发送路径已禁用，reply-test / reply-e
 补充（P1-5）：`fallback_v1` 已从 live 路径移除；V2 audit 失败统一 fail-fast。显式 V1 应急回滚入口暂保留到 P1-6 资产删除阶段前。
 ```
 
-- [ ] **步骤 4：记录 P1-6 前置迁移清单**
+- [x] **步骤 4：记录 P1-6 前置迁移清单**
 
 在本计划末尾或 `docs/plan_walkthrough.md` 增加 P1-6 前置清单：
 
@@ -652,7 +654,7 @@ P1-5 已完成：live `fallback_v1` 发送路径已禁用，reply-test / reply-e
 - 移除 `creatures/nanobot/config.yaml` 对 `prompt.md` 的依赖后，才能删除 `creatures/nanobot/prompt.md`。
 - 删除旧 admin 写接口和旧 WebUI 页面前，保留导出 / 迁移说明。
 
-- [ ] **步骤 5：文档格式检查**
+- [x] **步骤 5：文档格式检查**
 
 运行：
 
@@ -665,6 +667,8 @@ git diff --check -- \
 ```
 
 预期：无输出。
+
+实际：`git diff --check` 无输出；过时文案扫描无匹配。
 
 - [ ] **步骤 6：提交任务 4**
 

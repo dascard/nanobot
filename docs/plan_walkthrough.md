@@ -8,7 +8,7 @@
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管和 H29 第一刀也已完成。当前优先推进 P1「收敛去债」中的 Prompt legacy 收口：P1-5 已完成任务 1 / 2，live `fallback_v1` 发送路径已禁用，`reply-test` / `reply-eval` 默认已转向 V2；下一步优先执行任务 3，把 legacy / managed 管理写入口降级为只读迁移入口。P1-5 完成后再进入 P1-6，迁移旧任务 prompt、删除冗余提示词资产并去版本化。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀和 P1-5 Prompt legacy 收口均已完成。当前下一步优先进入 P1-6：迁移仍依赖旧 prompt 的后台任务，删除 V1 / legacy 冗余资产，并去掉 V2 命名后缀。
 
 ## 文档口径
 
@@ -53,6 +53,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-4 Prompt Runtime 请求组装提取 | 已完成 | `PromptRuntimeInput` 组装已从 `handle_message()` 提取为可单测边界 |
 | P1-5 任务 1：禁用旧版审计回退 | 已完成 | `afc3dd4 refactor(提示词): 禁用旧版审计回退` |
 | P1-5 任务 2：默认使用 V2 回复评估 | 已完成 | `99c1803 refactor(评测): 默认使用 V2 回复评估` |
+| P1-5 任务 3：旧版管理入口只读化 | 已完成 | `5009034 refactor(提示词): 降级旧版管理入口` |
 
 ### 后续优先级
 
@@ -62,8 +63,8 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-2 | 已完成 | 编写 Prompt V2 默认接管实现计划 | 写入 `.Codex/plans/prompt-v2-default-cutover.md`，列出 TDD 步骤、文件、验证命令 | `17b3815 docs(计划): 记录 V2 默认接管计划` |
 | P1-3 | 已完成 | Prompt V2 默认 live 接管 | 默认 engine 改为 V2，保留显式 V1 回滚，初始化 `data/prompts_v2`，同步 admin preview 和 reply-test 默认值 | `2be9329` / `8a1e177` / `8a73909` |
 | P1-4 | 已完成 | H29 第一刀：提取 Prompt Runtime 请求组装 | 从 `handle_message()` 中抽出 `PromptRuntimeInput` 构造边界，不移动 trace、tool plan、conversation 注入和 audit 异常处理 | `refactor(桥接): 提取提示词运行时组装` |
-| P1-5 | 进行中：任务 1/2 已完成，任务 3 待执行 | Prompt legacy 收口 | live `fallback_v1` 已禁用，评估入口已转 V2；下一步降级 legacy / managed 管理写入口 | `refactor(提示词): 降级旧版管理入口` |
-| P1-6 | 待写计划 | 删除冗余提示词资产并去版本化 | 迁移旧任务 prompt，删除 V1 / legacy 冗余资产，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
+| P1-5 | 已完成 | Prompt legacy 收口 | live `fallback_v1` 已禁用，评估入口已转 V2，legacy / managed 管理写入口已降级为只读迁移入口 | `afc3dd4` / `99c1803` / `5009034` |
+| P1-6 | 下一步，待写计划 | 删除冗余提示词资产并去版本化 | 迁移旧任务 prompt，删除 V1 / legacy 冗余资产，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
 | P1-7 | 已部分完成，待继续 | 连接池复用与残余同步 IO 审计 | 共享 `aiohttp.ClientSession` 已落地；继续审计 compaction / image / sticker 同步 IO | `4550aca` / `2bf4ee7` |
 | P1-8 | 待执行 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `feat(路由): 按模型能力校验请求` |
 | P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
@@ -76,7 +77,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 当前详细计划：P1-5 Prompt legacy 收口
 
-状态：进行中。任务 1 / 2 已完成并提交，下一步执行任务 3「管理面 legacy 入口降级为只读迁移入口」。
+状态：已完成。任务 1 / 2 / 3 已完成并分别提交；任务 4 文档同步与任务 5 验证收尾已完成。
 
 - [x] 重新核对 `docs/todo.md` 路线项 1 的 legacy 收口目标。
 - [x] 清点 `fallback_v1`、`prompt_runtime.engine=v1`、legacy / managed prompt 入口和管理端引用。
@@ -84,11 +85,18 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 明确 TDD 验收：live 路径不再 fallback 到 V1、显式回滚策略边界清晰、管理端只保留迁移 / 审计入口。
 - [x] 任务 1：禁用 V2 audit 失败后的 `fallback_v1` live 发送路径，并固定 fail-fast。
 - [x] 任务 2：`reply-test` / `reply-eval` 默认与旧 alias 转向 V2-only，显式 V1 应急入口保留。
-- [ ] 任务 3：按 TDD 将 legacy / managed 管理写入口降级为只读迁移入口。
-- [ ] 任务 4：P1-5 全部完成后同步 `docs/todo.md`、本文件和相关设计文档。
-- [ ] 任务 5：运行 P1-5 定向回归、全量测试和禁止项扫描。
+- [x] 任务 3：按 TDD 将 legacy / managed 管理写入口降级为只读迁移入口。
+- [x] 任务 4：P1-5 全部完成后同步 `docs/todo.md`、本文件和相关设计文档。
+- [x] 任务 5：运行 P1-5 定向回归、全量测试和禁止项扫描。
 
-备注：本次同步只记录 P1-5 进行中状态，不替代任务 4 的完成后收尾文档更新。
+验证记录：
+
+- 任务 3 红灯：`13 failed, 3 passed, 20 warnings`，失败点覆盖旧写接口、V1 preview、legacy GET 副作用和 WebUI 只读断言。
+- 任务 3 绿灯：`16 passed, 20 warnings`。
+- 任务 3 定向：`25 passed, 20 warnings`。
+- P1-5 相关回归：`70 passed, 20 warnings`。
+- WebUI 构建：`npm run build` 通过。
+- 全量测试：`1238 passed, 6 skipped, 113 warnings`。
 
 P1-6 前置迁移清单：
 
@@ -130,7 +138,7 @@ P1-6 前置迁移清单：
 
 - [x] 在 `nanobot_kt/bridge.py` 增加最小组装边界，保持 bridge 私有方法，不把 bridge metadata 解析下沉到 `prompt_runtime.py`。
 - [x] 构造并返回 `PromptRuntimeInput`，保持现有字段语义不变。
-- [x] 对 V2 仍传入 V1 fallback prompt mode，避免 `fallback_v1` audit 策略退化。
+- [x] 当时对 V2 仍传入 V1 fallback prompt mode，作为旧审计回退策略的兼容边界；P1-5 任务 1 后已固定为 `v2`。
 - [x] 保持 v2 的 `chat_group/chat_private` 与 v1 的 `group_chat/private_chat` 不混用。
 - [x] 未移动 `build_prompt_runtime()` 调用、`PromptRuntimeAuditFailure` 处理、`RunTracer.update_prompt_source()`、`apply_prompt_messages()` 和 `create_user_event()`。
 
