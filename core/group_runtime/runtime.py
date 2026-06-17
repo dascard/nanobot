@@ -713,6 +713,26 @@ class GroupRuntime:
             # 硬 cooldown：bot 刚回复过且非直接互动 → wait
             if self._should_cooldown(state, tr):
                 ago = state.bot_reply_ago()
+                if tr == "ambient":
+                    snapshot = state.take_snapshot()
+                    try:
+                        scoring_decision = self._score_timing(
+                            state,
+                            tr,
+                            pending=snapshot,
+                        )
+                    except Exception as exc:
+                        scoring_decision = None
+                        logger.debug("[GroupRuntime] cooldown scoring failed: %s", exc, exc_info=True)
+                    if scoring_decision is not None and scoring_decision.stage == "rule_shortcut":
+                        logger.info("[GroupRuntime] cooldown_scoring_shortcut group=%s action=%s pending=%d",
+                                    group_id, scoring_decision.action, len(snapshot))
+                        return self._apply_scoring_shortcut(
+                            state,
+                            scoring_decision,
+                            pending=snapshot,
+                            reason_prefix="cooldown scoring shortcut",
+                        )
                 return self._attach_shadow_scoring({
                     "action": "wait",
                     "delay_seconds": max(1, math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),

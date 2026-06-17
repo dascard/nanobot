@@ -476,7 +476,7 @@ class TestGroupRuntime:
 
     @pytest.mark.asyncio
     async def test_ambient_trigger_does_not_bypass_cooldown(self):
-        """trigger_reason="ambient" 不应绕过 cooldown。"""
+        """trigger_reason="ambient" 的 cooldown 应先走 scoring，而不是硬 wait。"""
         runtime = GroupRuntime()
         rt_calls = []
 
@@ -493,8 +493,10 @@ class TestGroupRuntime:
         r = await runtime.process_message("g1", {
             "sender_id": "u1", "sender_name": "A", "message": "hello",
         }, trigger_reason="ambient")
-        assert r["action"] == "wait"
-        assert "冷却" in r["reason"]
+        assert r["action"] == "no_reply"
+        assert r["reason"].startswith("cooldown scoring shortcut:")
+        assert r["timing_scoring"]["stage"] == "rule_shortcut"
+        assert r["timing_scoring"]["action"] == "no_reply"
         assert len(rt_calls) == 0  # gate 未被调用
 
     @pytest.mark.asyncio
