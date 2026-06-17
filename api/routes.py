@@ -9,7 +9,7 @@ import asyncio
 import time as _time
 from hmac import compare_digest
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Response
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -201,12 +201,12 @@ def _format_persona_for_prompt(persona_data: dict, max_chars: int = MAX_PERSONA_
 def verify_token(authorization: str = Header(default="")):
     """
     简单 Bearer Token 校验。
-    若环境变量 NANOBOT_API_TOKEN 为空，则不启用认证（开发模式）。
+    若环境变量 NANOBOT_API_TOKEN 为空，则拒绝访问，避免生产漏配裸奔。
     """
     if not NANOBOT_API_TOKEN:
-        return  # 未配置 Token 则跳过认证
+        raise HTTPException(status_code=503, detail="API token not configured")
     token = authorization.replace("Bearer ", "").strip()
-    if not compare_digest(token, NANOBOT_API_TOKEN):
+    if not token or not compare_digest(token, NANOBOT_API_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing API token")
 
 
@@ -1957,8 +1957,8 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
 def search_history_logs(
     user_id: str,
     keyword: str = "",
-    limit: int = 50,
-    context_size: int = 0,
+    limit: int = Query(default=50, ge=1, le=200),
+    context_size: int = Query(default=0, ge=0, le=20),
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),
 ):

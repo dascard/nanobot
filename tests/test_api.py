@@ -54,6 +54,63 @@ def test_get_context_with_auth(client):
     pass # 留作集成测试，我们在 conftest.py 里禁用了 Token
 
 
+def test_api_auth_no_token_configured_returns_503(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    from api import routes
+
+    monkeypatch.setattr(routes, "NANOBOT_API_TOKEN", "")
+
+    with pytest.raises(HTTPException) as exc:
+        routes.verify_token(authorization="")
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "API token not configured"
+
+
+def test_api_auth_missing_or_wrong_token_returns_401(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    from api import routes
+
+    monkeypatch.setattr(routes, "NANOBOT_API_TOKEN", "test-token")
+
+    for header in ("", "Bearer wrong"):
+        with pytest.raises(HTTPException) as exc:
+            routes.verify_token(authorization=header)
+        assert exc.value.status_code == 401
+
+
+def test_api_auth_accepts_valid_bearer_token(monkeypatch):
+    from api import routes
+
+    monkeypatch.setattr(routes, "NANOBOT_API_TOKEN", "test-token")
+
+    assert routes.verify_token(authorization="Bearer test-token") is None
+
+
+def test_search_logs_rejects_limit_above_max(client, monkeypatch):
+    monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "test-token")
+
+    response = client.get(
+        "/api/v1/search_logs?user_id=all&limit=201",
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_search_logs_rejects_invalid_context_size(client, monkeypatch):
+    monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "test-token")
+
+    response = client.get(
+        "/api/v1/search_logs?user_id=all&context_size=21",
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 422
+
+
 def test_format_persona_facts_without_truncated_json():
     from api.routes import _format_persona_for_prompt
 
