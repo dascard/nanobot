@@ -146,7 +146,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="fail_fast",
         value_type="str",
         category="prompt",
-        description="Prompt Runtime V2 live audit 失败策略: fail_fast/fallback_v1",
+        description="Prompt Runtime V2 live audit 失败策略；fallback_v1 已废弃，运行时固定 fail_fast",
     ),
     "model.smart": SettingDef(
         key="model.smart", env_name="LLM_MODEL_SMART",

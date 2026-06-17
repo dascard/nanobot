@@ -169,27 +169,10 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
             "prompt_v2_audit_failed": True,
             "audit_issues": audit_issues,
         }
-        if input.audit_failure_policy != "fallback_v1":
-            raise PromptRuntimeAuditFailure(
-                f"Prompt Runtime V2 审计失败: {exc}",
-                meta_update=meta_update,
-            ) from exc
-        meta_update["prompt_fallback"] = "v1"
-        fallback_input = PromptRuntimeInput(
-            **{
-                **input.__dict__,
-                "prompt_engine": "v1",
-                "prompt_mode": _v1_prompt_mode(input.prompt_mode),
-                "prompt_key": _v1_prompt_key(input.is_group),
-            }
-        )
-        fallback = _build_v1_prompt(fallback_input)
-        return PromptRuntimeResult(
-            **{
-                **fallback.__dict__,
-                "meta_update": meta_update,
-            }
-        )
+        raise PromptRuntimeAuditFailure(
+            f"Prompt Runtime V2 审计失败: {exc}",
+            meta_update=meta_update,
+        ) from exc
 
     PromptTracer.record_render(
         trace_id=input.trace_id,

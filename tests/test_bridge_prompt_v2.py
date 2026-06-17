@@ -131,7 +131,7 @@ def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
     )
 
     assert prompt_input.prompt_engine == "v2"
-    assert prompt_input.prompt_mode == "managed"
+    assert prompt_input.prompt_mode == "v2"
     assert prompt_input.prompt_key == "chat_group"
     assert prompt_input.chat_type == "group"
     assert prompt_input.runtime_chat_type == "group"
@@ -226,7 +226,7 @@ def test_bridge_build_prompt_runtime_input_falls_back_when_tool_schemas_unavaila
         )
     )
 
-    assert prompt_input.prompt_mode == "shadow"
+    assert prompt_input.prompt_mode == "v2"
     assert prompt_input.runtime_chat_type == "private_superuser"
     assert prompt_input.bot_name == "七濑"
     assert prompt_input.tool_schemas == []
@@ -556,11 +556,10 @@ async def test_bridge_engine_v2_fails_fast_when_prompt_audit_fails(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_bridge_engine_v2_can_fallback_to_v1_when_audit_policy_allows(monkeypatch, db_session):
+async def test_bridge_engine_v2_ignores_fallback_v1_policy_when_audit_fails(monkeypatch, db_session):
     from core import database
     from core.database import AgentRun
     from core.prompt_v2.audit import PromptAuditError
-    from core.prompt_v2.schema import PromptPlan
     from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
 
@@ -575,73 +574,31 @@ async def test_bridge_engine_v2_can_fallback_to_v1_when_audit_policy_allows(monk
     bridge._legacy_prompt_meta = {}
     bridge._last_prompt_render_meta = {}
 
-    conversation = _FakeConversation()
     seen_events = []
 
     async def fake_process_event(event):
         seen_events.append(event)
-        bridge._output._buffer.append('{"action":"reply","content":"fallback 回复"}')
+        bridge._output._buffer.append('{"action":"reply","content":"不应发送"}')
         return "ok"
 
     bridge._agent = SimpleNamespace(
-        controller=SimpleNamespace(conversation=conversation),
+        controller=SimpleNamespace(conversation=_FakeConversation()),
         registry=SimpleNamespace(_tools={"reply": object(), "no_reply": object()}),
         _process_event=fake_process_event,
         executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
     )
 
-    failed_plan = PromptPlan(
-        engine="v2",
-        chat_type="group",
-        prompt_key="chat_group",
-        messages=[{"role": "user", "content": "<user_input>\n坏计划\n</user_input>"}],
-        tool_schemas=[],
-        section_hashes={},
-        prompt_sha256="c" * 64,
-        token_estimate=1,
-        warnings=[],
-        debug={},
-    )
-
     async def fake_compile(*_args, **kwargs):
         assert kwargs.get("strict_audit") is True
-        raise PromptAuditError(["runtime_tool_prompt must appear once, got 0"], plan=failed_plan)
+        raise PromptAuditError(["runtime_tool_prompt must appear once, got 0"])
 
     monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile)
-
-    build_calls = []
-
-    def fake_build(self, context, *, trace_id="", run_id=""):
-        build_calls.append(context)
-        return SimpleNamespace(
-            prompt_key=context.prompt_key,
-            prompt_mode=context.mode,
-            prompt_source="Legacy fallback prompt",
-            prompt_runtime_path="/tmp/v1.md",
-            prompt_default_path="/tmp/default.md",
-            prompt_sha256="d" * 64,
-            pre_event_messages=[{"role": "system", "content": "V1_SYSTEM"}],
-            event_content="<user_input>\nV1_USER\n</user_input>",
-        )
-
-    monkeypatch.setattr("core.prompt_assembler.PromptAssembler.build", fake_build)
-    monkeypatch.setattr("clients.classifier_client.resolve_model_route", lambda _route: {
-        "provider_id": "newapi",
-        "base_url": "http://127.0.0.1:1/v1",
-        "api_key": "test",
-        "timeout": 1,
-    })
-    monkeypatch.setattr("clients.classifier_client.ensure_model_route_enabled", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr("nanobot_kt.bridge.registry.get_models_by_provider", lambda _provider: [{"id": "fake"}])
-    monkeypatch.setattr("core.tool_schema_preview.build_effective_tool_schemas", lambda _enabled: [])
-
-    fake_client = MagicMock()
-    fake_client.sync_models_to_registry = AsyncMock()
-    fake_client.estimate_complexity = MagicMock(return_value=3)
-    fake_client.get_ordered_candidates = MagicMock(return_value=[
-        {"id": "fake-model", "intelligence": 8, "cost_input_1m": 0.0, "context_window": 128000}
-    ])
-    monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient", lambda *args, **kwargs: fake_client)
+    monkeypatch.setattr(
+        "core.prompt_assembler.PromptAssembler.build",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("V2 audit failure must not fallback to PromptAssembler")
+        ),
+    )
 
     result = await bridge.handle_message(
         "原始当前",
@@ -654,21 +611,17 @@ async def test_bridge_engine_v2_can_fallback_to_v1_when_audit_policy_allows(monk
             "is_group": True,
             "group_id": "1003",
             "runtime_preset": "none",
-            "reply_model": "fake-model",
             "enable_reply_contract_retry": False,
         },
     )
 
-    assert result == "fallback 回复"
-    assert build_calls
-    assert build_calls[0].prompt_key == "group_chat"
-    assert seen_events
-    assert seen_events[0].content == "<user_input>\nV1_USER\n</user_input>"
-
+    assert result == ""
+    assert seen_events == []
+    assert bridge.pop_last_reply_meta("group_1003")["_agent_result"] == "prompt_v2_audit_failed"
     run = db_session.query(AgentRun).filter(AgentRun.session_id == "group_1003").first()
     assert run is not None
     assert '"prompt_v2_audit_failed": true' in run.meta_json
-    assert '"prompt_fallback": "v1"' in run.meta_json
+    assert "prompt_fallback" not in run.meta_json
     assert "runtime_tool_prompt must appear once" in run.meta_json
 
 

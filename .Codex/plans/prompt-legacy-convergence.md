@@ -79,7 +79,7 @@
 - 修改：`core/config_registry.py`
 - 修改：`core/prompt_assembler.py`
 
-- [ ] **步骤 1：改写 V2 audit fallback 红灯测试**
+- [x] **步骤 1：改写 V2 audit fallback 红灯测试**
 
 在 `tests/test_bridge_prompt_v2.py` 中将现有 `test_bridge_engine_v2_can_fallback_to_v1_when_audit_policy_allows` 改名并改写为：
 
@@ -152,7 +152,7 @@ async def test_bridge_engine_v2_ignores_fallback_v1_policy_when_audit_fails(monk
     assert "prompt_fallback" not in run.meta_json
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -164,7 +164,9 @@ python -B -m pytest \
 
 预期：失败。当前代码会在 `fallback_v1` 策略下调用 `PromptAssembler`，测试应因 `AssertionError("V2 audit failure must not fallback to PromptAssembler")` 失败。
 
-- [ ] **步骤 3：让 `_prompt_v2_audit_failure_policy()` 固定 fail-fast**
+实际：红灯集合 `4 failed, 1 warning`，失败原因覆盖 V2 `prompt_mode` 仍为旧 mode、`fallback_v1` 仍调用 `PromptAssembler`、配置描述仍宣传 `fallback_v1`。
+
+- [x] **步骤 3：让 `_prompt_v2_audit_failure_policy()` 固定 fail-fast**
 
 在 `nanobot_kt/bridge.py` 中把 helper 收敛为：
 
@@ -184,7 +186,7 @@ python -B -m pytest \
         return "fail_fast"
 ```
 
-- [ ] **步骤 4：删除 V2 audit fallback 发送分支**
+- [x] **步骤 4：删除 V2 audit fallback 发送分支**
 
 在 `nanobot_kt/prompt_runtime.py` 中删除 `if input.audit_failure_policy != "fallback_v1"` 之后的 fallback 构造，改为始终抛出 `PromptRuntimeAuditFailure`：
 
@@ -202,7 +204,7 @@ python -B -m pytest \
         ) from exc
 ```
 
-- [ ] **步骤 5：V2 input 不再携带 V1 prompt mode**
+- [x] **步骤 5：V2 input 不再携带 V1 prompt mode**
 
 在 `nanobot_kt/bridge.py` 的 `_build_prompt_runtime_input()` 中保留 V1 prompt mode 解析，但只用于 `context.prompt_engine != "v2"`：
 
@@ -220,7 +222,7 @@ python -B -m pytest \
 assert prompt_input.prompt_mode == "v2"
 ```
 
-- [ ] **步骤 6：更新配置和注释**
+- [x] **步骤 6：更新配置和注释**
 
 在 `core/config_registry.py` 中将描述改为：
 
@@ -235,7 +237,7 @@ description="Prompt Runtime V2 live audit 失败策略；fallback_v1 已废弃�
 新增提示词行为必须使用 `core.prompt_v2.compile_prompt_plan`。
 ```
 
-- [ ] **步骤 7：运行任务 1 定向测试**
+- [x] **步骤 7：运行任务 1 定向测试**
 
 运行：
 
@@ -249,12 +251,16 @@ python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 8：提交任务 1**
+实际：`16 passed, 1 warning`。
+
+- [x] **步骤 8：提交任务 1**
 
 ```bash
 git add nanobot_kt/prompt_runtime.py nanobot_kt/bridge.py core/config_registry.py core/prompt_assembler.py tests/test_bridge_prompt_v2.py tests/test_prompt_manifest.py
 git commit -m "refactor(提示词): 禁用旧版审计回退"
 ```
+
+实际：已提交 `refactor(提示词): 禁用旧版审计回退`。
 
 ## 任务 2：reply-test 和 reply-eval 默认转向 V2-only
 

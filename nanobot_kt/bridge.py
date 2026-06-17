@@ -530,7 +530,9 @@ class NanobotBridge:
             ).strip().lower()
         except Exception:
             policy = "fail_fast"
-        return policy if policy in {"fail_fast", "fallback_v1"} else "fail_fast"
+        if policy == "fallback_v1":
+            logger.warning("[PromptV2] fallback_v1 audit policy is deprecated; using fail_fast")
+        return "fail_fast"
 
     def _build_prompt_runtime_input(
         self,
@@ -558,7 +560,7 @@ class NanobotBridge:
 
         return PromptRuntimeInput(
             prompt_engine=context.prompt_engine,
-            prompt_mode=v1_prompt_mode if context.prompt_engine == "v2" else context.prompt_mode,
+            prompt_mode="v2" if context.prompt_engine == "v2" else context.prompt_mode,
             prompt_key=context.prompt_key,
             chat_type=context.chat_type,
             runtime_chat_type=context.runtime_chat_type,

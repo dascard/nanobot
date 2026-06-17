@@ -1,8 +1,8 @@
 """Deprecated: V1 rollback only 的主回复 Prompt 编排入口。
 
-本模块仅保留给 Prompt Runtime V2 live audit 失败时的显式 V1 回退、
-以及旧测试/旧管理页面兼容使用。新增提示词行为必须使用
-`core.prompt_v2.compile_prompt_plan`，不要在这里扩展新功能。
+本模块仅保留给显式 V1 应急回滚、迁移对比和旧测试兼容使用。
+新增提示词行为必须使用 `core.prompt_v2.compile_prompt_plan`，
+不要在这里扩展新功能。
 """
 
 from __future__ import annotations
@@ -23,7 +23,8 @@ from core.prompts import get_prompt_manager
 
 IS_V1_FALLBACK_ONLY = True
 DEPRECATED_REASON = (
-    "PromptAssembler is deprecated and kept only for V1 rollback. "
+    "PromptAssembler is deprecated and kept only for explicit V1 rollback, "
+    "migration comparison, and legacy test compatibility. "
     "New prompt behavior must use core.prompt_v2.compile_prompt_plan."
 )
 

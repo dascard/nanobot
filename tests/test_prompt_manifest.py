@@ -22,6 +22,16 @@ def test_prompt_runtime_config_default_matches_manifest_active_engine():
     assert SETTING_DEFS["prompt_runtime.engine"].default == manifest["active_engine"]
 
 
+def test_prompt_v2_audit_fallback_v1_policy_is_deprecated():
+    from core.config_registry import SETTING_DEFS
+
+    setting = SETTING_DEFS["prompt_runtime.v2_audit_failure_policy"]
+
+    assert setting.default == "fail_fast"
+    assert "已废弃" in setting.description
+    assert "固定 fail_fast" in setting.description
+
+
 def test_legacy_prompt_runtime_is_marked_rollback_only():
     import core.legacy_prompt_runtime as runtime
 
