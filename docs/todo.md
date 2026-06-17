@@ -213,11 +213,11 @@
 
 #### 路线项 10 — TimingGate 引入「规则信号 + 模型」混合决策  ·〔关联 H2〕
 
-- **现状**：群聊「是否回复」是**纯 Qwen 模型判断**。`TimingGate.judge`（`clients/classifier_client.py:1215`）调 `call_model_route(route_key="timing_gate")` 输出三态 continue/wait/no_reply，**每条群消息都过一次模型**（远端 llama-server；admin test 路由 `:961` 还是同步调用），失败兜底 no_reply。**无任何非模型规则信号**——冷却时间 / 消息频率 / 是否 @bot / 关键词 / 群活跃度全交给模型在 prompt 里判断（`evals/cases/timing_gate/*` 即在测这些场景）。
-- **痛点**：每个 session_id 不分场景都付一次模型 RTT（延迟 + 成本 + 远端不可用即全群哑火）；很多场景（明确 @bot、冷却期内的纯语气词）用确定性规则即可秒判却仍走模型；H2 指出 admin 同步测试路由可阻塞线程池。
-- **目标**：「规则信号 + 模型」混合决策——先用廉价确定性规则（@bot 强制 continue、冷却窗口内 / 纯语气词强制 no_reply、消息频率 / 活跃度阈值）做前置短路，规则不确定时才回退模型；不同 session_id / 平台可配置是否走模型层（私聊、低活跃群可跳过）。
-- **关联**：H2（timing-gate 同步路由异步化 + 收紧 repeats）；可复用 `evals/cases/timing_gate/*` 做规则化前后的回归基线。
-- **粗略路径**：① 抽规则评估层（@/冷却/频率/关键词 → continue/no_reply/uncertain 的公式综合）→ ② 仅 uncertain 才调 TimingGate 模型 → ③ session / 平台级开关决定是否启用模型层 → ④ 决策来源(rule/model) 落 meta 便于审计 → ⑤ 用 timing_gate eval 套件验证规则化不回归。
+- **现状**：核心链路已从「纯 Qwen 三态判断」推进到 scoring 混合决策。已新增 `core/timing_score.py`，覆盖 `d0/linger/s_ack/s_transport/s_other/w_*` 信号、`E_rule/E_final`、冲突升级、模型权重和 `rule_fallback`；`GroupRuntime` 已接入 shadow scoring、普通 ambient 确定性短路、模型失败规则兜底、`directed_to_other` scoring 软化，以及 `trigger_reason="ambient"` 的 cooldown scoring 短路。`timing_scoring` 已写入 ChatLog meta 并由 admin events / WebUI 调试页透出，`evals` 也能在 action 缺失时执行 scoring 并校验 `expected.scoring`。
+- **已完成**：`@bot + 图片` 规则 WAIT 不调模型；纯 ambient / 纯确认可规则 `no_reply`；`directed_to_other + linger` 进入冲突升级；模型 `network_error/parse_error` 后使用规则侧 `rule_fallback`，不再全群哑火；`s_ack` 排除请求词、问号、URL、代码、文件；`s_transport` 已按 secret/blob/url/codeblock/long dump 分档；`force_next_continue` 已降级为 `d0=1.0` 后完整走 Stage 1-4。
+- **剩余**：私聊 classifier 尚未切到同一 scoring 公式；timer / legacy 空 trigger 的 cooldown 仍保留兼容 hard wait；session / platform 级模型层开关尚未落地；真实群聊日志的 `s_ack/s_transport/w_marker` 假阳率评估和 shadow 对比仍需补；路线项 8 的 eval 基线 / 回归门禁还未接入 CI。
+- **关联**：H2 已完成 admin route 异步化和 repeats 收紧；后续与路线项 8（评测体系）、路线项 5/7（响应信封与调试可观测）继续协同。
+- **下一步**：① 私聊接入统一 scoring 公式 → ② timer / legacy cooldown 继续软化 → ③ 增加 session / platform 配置开关 → ④ 用真实 ChatLog scoring 抽样评估假阳率 → ⑤ 将 timing gate eval 纳入基线和回归门禁。
 
 ---
 
