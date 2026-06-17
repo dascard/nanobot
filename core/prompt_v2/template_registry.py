@@ -75,6 +75,28 @@ def runtime_template_dir() -> Path:
     return Path(os.environ.get("NANOBOT_PROMPT_V2_RUNTIME_DIR") or (_repo_root() / "data" / "prompts_v2"))
 
 
+def init_prompt_v2_runtime_dir() -> dict[str, Any]:
+    source_dir = default_template_dir()
+    runtime_dir = runtime_template_dir()
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    if not source_dir.exists():
+        return {"source_dir": str(source_dir), "runtime_dir": str(runtime_dir), "copied": copied}
+
+    for source_path in sorted(source_dir.rglob("*")):
+        if not source_path.is_file() or source_path.suffix not in {".md", ".json"}:
+            continue
+        rel = source_path.relative_to(source_dir)
+        target_path = runtime_dir / rel
+        if target_path.exists():
+            continue
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+        copied.append(rel.as_posix())
+
+    return {"source_dir": str(source_dir), "runtime_dir": str(runtime_dir), "copied": copied}
+
+
 def _normalize(raw_key: str) -> str:
     raw = str(raw_key or "").removesuffix(".md").strip()
     if raw.startswith("/"):

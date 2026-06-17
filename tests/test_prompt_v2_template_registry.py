@@ -43,6 +43,29 @@ def test_prompt_v2_registry_resolves_slash_keys_aliases_and_paths(tmp_path, monk
     assert records["tools/group_analysis/topics"]["source"] == "runtime"
 
 
+def test_prompt_v2_init_runtime_dir_copies_missing_files_without_overwrite(tmp_path, monkeypatch):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    (default_dir / "chat").mkdir(parents=True)
+    (default_dir / "chat" / "main.md").write_text("DEFAULT MAIN\n", encoding="utf-8")
+    (default_dir / "chat" / "flow.json").write_text('{"nodes": [], "edges": []}\n', encoding="utf-8")
+    (runtime_dir / "chat").mkdir(parents=True)
+    (runtime_dir / "chat" / "main.md").write_text("RUNTIME MAIN\n", encoding="utf-8")
+
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    result = init_prompt_v2_runtime_dir()
+
+    assert result["runtime_dir"] == str(runtime_dir)
+    assert result["source_dir"] == str(default_dir)
+    assert result["copied"] == ["chat/flow.json"]
+    assert (runtime_dir / "chat" / "main.md").read_text(encoding="utf-8") == "RUNTIME MAIN\n"
+    assert (runtime_dir / "chat" / "flow.json").read_text(encoding="utf-8") == '{"nodes": [], "edges": []}\n'
+
+
 @pytest.mark.parametrize("bad_key", ["../secret", "/abs/path", "tools\\bad", "tools//bad", ""])
 def test_prompt_v2_registry_rejects_unsafe_template_keys(bad_key):
     from core.prompt_v2.template_registry import resolve_template_key
