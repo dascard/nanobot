@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 import json
 from unittest.mock import MagicMock, patch
 
@@ -33,7 +34,7 @@ def test_execute_requires_images():
     from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
 
     tool = ImageSummaryTool()
-    result = asyncio.run(tool.execute({"files": []}))
+    result = run_async(tool.execute({"files": []}))
     assert not result.success
     assert "files" in result.error.lower()
 
@@ -83,7 +84,7 @@ def test_execute_calls_local_qwen_with_multimodal_payload():
             mock_opener.open.return_value = mock_response
             mock_build_opener.return_value = mock_opener
 
-            result = asyncio.run(
+            result = run_async(
                 tool.execute(
                     {
                         "files": ["https://example.com/cat.png"],
@@ -160,7 +161,7 @@ def test_execute_records_direct_llm_request():
                     mock_build_opener.return_value = mock_opener
 
                     with llm_trace_scope(trace_id="trace-img", run_id="run-img", source="replyer"):
-                        result = asyncio.run(
+                        result = run_async(
                             ImageSummaryTool().execute({"files": ["https://example.com/a.png"]})
                         )
 
@@ -202,7 +203,7 @@ def test_execute_accepts_json_codeblock():
             mock_opener = MagicMock()
             mock_opener.open.return_value = mock_response
             mock_build_opener.return_value = mock_opener
-            result = asyncio.run(tool.execute({"files": ["https://example.com/cat.png"]}))
+            result = run_async(tool.execute({"files": ["https://example.com/cat.png"]}))
 
     assert result.success
     data = json.loads(result.output)

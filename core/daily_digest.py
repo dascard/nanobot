@@ -23,6 +23,7 @@ from app.memory_digest.llm_builder import build_memory_digest_with_llm
 from app.memory_digest.renderer import render_recall_card
 from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
 from config import DAILY_DIGEST_HOUR
+from core.async_bridge import run_awaitable_sync
 from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
 
 logger = logging.getLogger("nanobot.daily_digest")
@@ -638,7 +639,7 @@ def scheduled_task_runner(stop_event: threading.Event) -> None:
     logger.info("Scheduled task runner started")
     while not stop_event.is_set():
         try:
-            asyncio.run(run_scheduled_tasks())
+            run_awaitable_sync(run_scheduled_tasks())
         except Exception as e:
             logger.error(f"Scheduled task tick failed: {e}")
         # Sleep 60 seconds (check once a minute)

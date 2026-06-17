@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from tests.async_helpers import run_async
+
 
 def _write_tool_template(base: Path, key: str, tool_name: str, body: str) -> None:
     path = base / f"{key}.md"
@@ -121,7 +123,7 @@ def test_group_analysis_internal_llm_uses_v2_templates(tmp_path, monkeypatch):
 
     import asyncio
 
-    result = asyncio.run(
+    result = run_async(
         analyzer.analyze_group(
             {
                 "msg_text": "[12:00] [A]: 今天聊 AI",

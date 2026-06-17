@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 import json
 from datetime import datetime
 from pathlib import Path
@@ -45,7 +46,7 @@ def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
     assert "freshness" in schema["properties"]
     assert "target_date" in schema["properties"]
 
-    result = asyncio.run(ai_daily.execute({"query": "人工智能 科技 最新新闻", "max_results": 5}))
+    result = run_async(ai_daily.execute({"query": "人工智能 科技 最新新闻", "max_results": 5}))
     assert result.success
     assert calls == [("人工智能 科技 最新新闻", "quality", 8)]
 

@@ -22,6 +22,7 @@ from email.utils import parsedate_to_datetime
 from duckduckgo_search import DDGS
 import trafilatura
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from core.async_bridge import run_awaitable_sync
 from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
 
 logger = logging.getLogger("nanobot.ai_daily")
@@ -492,21 +493,7 @@ def _build_news_layout_fallback(
 
 
 def _run_async_blocking(coro: Any) -> Any:
-    result: Dict[str, Any] = {}
-    error: Dict[str, BaseException] = {}
-
-    def _runner() -> None:
-        try:
-            result["value"] = asyncio.run(coro)
-        except BaseException as exc:  # pragma: no cover - 仅用于线程桥接
-            error["value"] = exc
-
-    thread = threading.Thread(target=_runner, daemon=True)
-    thread.start()
-    thread.join()
-    if "value" in error:
-        raise error["value"]
-    return result.get("value")
+    return run_awaitable_sync(coro)
 
 
 def _summarize_news_layout(
@@ -954,7 +941,7 @@ def _model_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_r
             with llm_trace_scope(source="ai_daily"):
                 return await client.chat_completion(messages=messages, temperature=0.0, model_tier="fast")
 
-        resp = __import__("asyncio").run(_ask())
+        resp = run_awaitable_sync(_ask())
         content = (
             resp.get("choices", [{}])[0]
             .get("message", {})
@@ -1623,7 +1610,6 @@ def _call_llm_simple(system: str, prompt: str, temperature: float = 0.1, max_tok
     try:
         from clients.new_api_client import NewAPIClient
         from config import NEW_API_KEY, NEW_API_BASE_URL
-        import asyncio as _asyncio
 
         async def _call():
             client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
@@ -1638,15 +1624,7 @@ def _call_llm_simple(system: str, prompt: str, temperature: float = 0.1, max_tok
                 return resp["choices"][0]["message"]["content"]
             return ""
 
-        try:
-            loop = _asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop and loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                return pool.submit(_asyncio.run, _call()).result()
-        return _asyncio.run(_call())
+        return run_awaitable_sync(_call())
     except Exception as e:
         logger.warning("[news_v2] LLM call failed: %s", e)
         return ""

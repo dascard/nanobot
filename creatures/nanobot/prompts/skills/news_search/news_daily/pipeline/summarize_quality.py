@@ -117,7 +117,7 @@ def summarize_quality(cards: list[dict], fallback: dict) -> dict:
     try:
         from clients.new_api_client import NewAPIClient
         from config import NEW_API_KEY, NEW_API_BASE_URL
-        import asyncio
+        from core.async_bridge import run_awaitable_sync
 
         async def _call():
             client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL, timeout=20)
@@ -135,16 +135,7 @@ def summarize_quality(cards: list[dict], fallback: dict) -> dict:
                 return resp["choices"][0]["message"]["content"]
             return ""
 
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop and loop.is_running():
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                raw = pool.submit(asyncio.run, _call()).result()
-        else:
-            raw = asyncio.run(_call())
+        raw = run_awaitable_sync(_call())
 
         if not raw:
             logger.warning("[quality] LLM returned empty, using fallback"); return fallback

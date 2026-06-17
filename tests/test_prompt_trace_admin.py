@@ -1,5 +1,6 @@
 import json
 import asyncio
+from tests.async_helpers import run_async
 from datetime import datetime
 
 import pytest
@@ -132,7 +133,7 @@ def test_executor_records_tool_call_with_contextvars(tmp_path, monkeypatch):
         finally:
             reset_trace_context(tokens)
 
-    result = asyncio.run(run_tool())
+    result = run_async(run_tool())
     assert result.output == "echo:hi"
 
     db = TestingSessionLocal()

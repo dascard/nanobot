@@ -1,5 +1,6 @@
 import json
 import asyncio
+from tests.async_helpers import run_async
 
 from core.database import ChatLog, MemoryDigest, RollingSessionSummary
 from core.semantic.adapters import (
@@ -491,7 +492,7 @@ def test_memory_query_tool_search_routes_all_sources_through_memory_rag(db_sessi
 
     tool = MemoryQueryTool()
     for source in ("digest", "session_summary", "all"):
-        result = asyncio.run(tool._execute({
+        result = run_async(tool._execute({
             "source": source,
             "mode": "search",
             "query": "端口",
@@ -527,7 +528,7 @@ def test_memory_query_tool_blocks_when_reranker_required_unavailable(db_session,
     monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
 
     get_reranker_provider.cache_clear()
-    result = asyncio.run(MemoryQueryTool()._execute({
+    result = run_async(MemoryQueryTool()._execute({
         "source": "digest",
         "mode": "search",
         "query": "KohakuVQ",

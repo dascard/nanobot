@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -111,7 +112,7 @@ def test_openai_sdk_tracer_sanitizes_messages_before_request(monkeypatch):
         provider="newapi",
         base_url="http://same-provider.test/v1",
     )
-    asyncio.run(llm._client.chat.completions.create(
+    run_async(llm._client.chat.completions.create(
         model="manual-model",
         messages=[{"role": "system", "content": KT_DOC_TEXT}],
     ))

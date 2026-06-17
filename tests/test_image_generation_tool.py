@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 import base64
 import json
 from pathlib import Path
@@ -54,7 +55,7 @@ def test_tool_metadata_and_schema():
 def test_execute_requires_prompt():
     from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
 
-    result = asyncio.run(ImageGenerationTool().execute({"prompt": "  "}))
+    result = run_async(ImageGenerationTool().execute({"prompt": "  "}))
 
     assert not result.success
     assert "prompt" in result.error.lower()
@@ -66,7 +67,7 @@ def test_execute_rejects_too_long_prompt(monkeypatch):
 
     monkeypatch.setattr(image_tool, "IMAGE_GENERATION_PROMPT_MAX_CHARS", 50)
 
-    result = asyncio.run(ImageGenerationTool().execute({"prompt": "x" * 60}))
+    result = run_async(ImageGenerationTool().execute({"prompt": "x" * 60}))
 
     assert not result.success
     assert "too long" in result.error.lower()
@@ -109,7 +110,7 @@ def test_execute_calls_new_api_responses_and_returns_generated_image_token(monke
     monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
 
     with patch("urllib.request.build_opener", return_value=mock_opener):
-        result = asyncio.run(
+        result = run_async(
             ImageGenerationTool().execute(
                 {
                     "prompt": "Generate a cute red panda drinking boba tea, sticker style.",
@@ -187,7 +188,7 @@ def test_execute_partial_image_then_completed(monkeypatch, tmp_path):
     monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
 
     with patch("urllib.request.build_opener", return_value=mock_opener):
-        result = asyncio.run(ImageGenerationTool().execute({"prompt": "画一只猫"}))
+        result = run_async(ImageGenerationTool().execute({"prompt": "画一只猫"}))
 
     assert result.success
     payload = json.loads(result.output)
@@ -229,7 +230,7 @@ def test_execute_completed_output_aggregation(monkeypatch, tmp_path):
     monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
 
     with patch("urllib.request.build_opener", return_value=mock_opener):
-        result = asyncio.run(ImageGenerationTool().execute({"prompt": "画一只猫"}))
+        result = run_async(ImageGenerationTool().execute({"prompt": "画一只猫"}))
 
     assert result.success
     payload = json.loads(result.output)
@@ -262,7 +263,7 @@ def test_execute_moderation_blocked(monkeypatch):
     monkeypatch.setattr(image_tool, "NEW_API_BASE_URL", "http://new-api.test/v1")
 
     with patch("urllib.request.build_opener", return_value=mock_opener):
-        result = asyncio.run(ImageGenerationTool().execute({"prompt": "画违规内容"}))
+        result = run_async(ImageGenerationTool().execute({"prompt": "画违规内容"}))
 
     assert not result.success
     assert "blocked or incomplete" in result.error
@@ -288,7 +289,7 @@ def test_execute_upstream_error_event(monkeypatch):
     monkeypatch.setattr(image_tool, "NEW_API_BASE_URL", "http://new-api.test/v1")
 
     with patch("urllib.request.build_opener", return_value=mock_opener):
-        result = asyncio.run(ImageGenerationTool().execute({"prompt": "画一只猫"}))
+        result = run_async(ImageGenerationTool().execute({"prompt": "画一只猫"}))
 
     assert not result.success
     assert "upstream error" in result.error
@@ -320,7 +321,7 @@ def test_execute_tool_usage_but_no_output(monkeypatch):
     monkeypatch.setattr(image_tool, "NEW_API_BASE_URL", "http://new-api.test/v1")
 
     with patch("urllib.request.build_opener", return_value=mock_opener):
-        result = asyncio.run(ImageGenerationTool().execute({"prompt": "画一只猫"}))
+        result = run_async(ImageGenerationTool().execute({"prompt": "画一只猫"}))
 
     assert not result.success
     assert "possible upstream aggregation" in result.error
@@ -344,7 +345,7 @@ def test_execute_reports_missing_image_result(monkeypatch):
     monkeypatch.setattr(image_tool, "NEW_API_BASE_URL", "http://new-api.test/v1")
 
     with patch("urllib.request.build_opener", return_value=mock_opener):
-        result = asyncio.run(ImageGenerationTool().execute({"prompt": "画一只猫"}))
+        result = run_async(ImageGenerationTool().execute({"prompt": "画一只猫"}))
 
     assert not result.success
     assert "missing image_generation_call" in result.error
@@ -374,7 +375,7 @@ def test_execute_rejects_non_png_result(monkeypatch, tmp_path):
     monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
 
     with patch("urllib.request.build_opener", return_value=mock_opener):
-        result = asyncio.run(ImageGenerationTool().execute({"prompt": "画一只猫"}))
+        result = run_async(ImageGenerationTool().execute({"prompt": "画一只猫"}))
 
     assert not result.success
     assert "not a PNG" in result.error
@@ -394,7 +395,7 @@ def test_reply_tool_keeps_short_generated_image_token(monkeypatch, tmp_path):
         prompt="画一只猫",
     )
 
-    result = asyncio.run(ReplyTool()._execute({"content": saved["reply_token"]}))
+    result = run_async(ReplyTool()._execute({"content": saved["reply_token"]}))
 
     assert not result.error
     payload = json.loads(result.output)

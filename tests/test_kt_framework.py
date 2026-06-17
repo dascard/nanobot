@@ -6,6 +6,7 @@ Uses mocks to avoid requiring real APIs or KT agent infrastructure.
 """
 
 import asyncio
+from tests.async_helpers import run_async
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -18,14 +19,14 @@ class TestBufferedOutput:
     def test_write_and_get(self):
         from nanobot_kt.output import BufferedOutput
         output = BufferedOutput()
-        asyncio.run(output.write("hello"))
-        asyncio.run(output.write(" world"))
+        run_async(output.write("hello"))
+        run_async(output.write(" world"))
         assert output.get_response() == "hello world"
 
     def test_clear(self):
         from nanobot_kt.output import BufferedOutput
         output = BufferedOutput()
-        asyncio.run(output.write("test"))
+        run_async(output.write("test"))
         output.clear()
         assert output.get_response() == ""
 
@@ -33,15 +34,15 @@ class TestBufferedOutput:
         from nanobot_kt.output import BufferedOutput
         output = BufferedOutput()
 
-        asyncio.run(output.write("old"))
+        run_async(output.write("old"))
         assert output.get_response() == "old"
 
         # on_processing_start should clear buffer
-        asyncio.run(output.on_processing_start())
+        run_async(output.on_processing_start())
         assert output.get_response() == ""
 
-        asyncio.run(output.write_stream("new "))
-        asyncio.run(output.write_stream("data"))
+        run_async(output.write_stream("new "))
+        run_async(output.write_stream("data"))
         assert output.get_response() == "new data"
 
     def test_on_activity_does_not_crash(self):
@@ -60,7 +61,7 @@ class TestBufferedOutput:
             event = await queue.get()
             return output.get_response(), event
 
-        response, event = asyncio.run(_run())
+        response, event = run_async(_run())
         assert response == ""
         assert event["status"] == "progress"
         assert "工具失败" in event["text"]
@@ -83,7 +84,7 @@ class TestSQLAnalysisTool:
         mock_instance.run_query.return_value = "id|count\n1|42"
 
         tool = SQLAnalysisTool()
-        result = asyncio.run(tool.execute({"sql": "SELECT count(id) AS count FROM chat_logs LIMIT 1"}))
+        result = run_async(tool.execute({"sql": "SELECT count(id) AS count FROM chat_logs LIMIT 1"}))
         assert result.success
         assert "42" in result.output
 
@@ -91,7 +92,7 @@ class TestSQLAnalysisTool:
     def test_execute_empty_sql(self, MockSandbox):
         from creatures.nanobot.prompts.skills.sql_analysis.tool import SQLAnalysisTool
         tool = SQLAnalysisTool()
-        result = asyncio.run(tool.execute({"sql": ""}))
+        result = run_async(tool.execute({"sql": ""}))
         assert not result.success
 
 
@@ -110,7 +111,7 @@ class TestPythonSandboxTool:
         mock_instance.execute_python_analysis.return_value = "result: 42"
 
         tool = PythonSandboxTool()
-        result = asyncio.run(tool.execute({"code": "print(42)"}))
+        result = run_async(tool.execute({"code": "print(42)"}))
         assert result.success
         assert "42" in result.output
 
@@ -129,7 +130,7 @@ class TestAiDailyTool:
         mock_daily.return_value = "<article>AI news: GPT-5 released</article>"
 
         tool = AiDailyTool()
-        result = asyncio.run(tool.execute({"query": "AI news"}))
+        result = run_async(tool.execute({"query": "AI news"}))
         assert result.success
         assert "GPT-5" in result.output
 
@@ -222,7 +223,7 @@ class TestNanobotBridge:
             await pool.stop()
             return results
 
-        results = asyncio.run(_run())
+        results = run_async(_run())
         assert sorted(results) == ["session-a", "session-b"]
         assert max_active == 2
 
@@ -242,7 +243,7 @@ class TestNanobotBridge:
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge("creatures/nanobot")
-        asyncio.run(bridge.start())
+        run_async(bridge.start())
 
         mock_load.assert_called_once_with("creatures/nanobot")
         MockAgent.assert_called_once()
@@ -283,7 +284,7 @@ class TestNanobotBridge:
             await bridge.start()
             return await bridge.handle_message("test query", user_id="u1")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result == "Hello from KT"
 
     @patch("nanobot_kt.bridge.load_agent_config")
@@ -356,14 +357,14 @@ class TestNanobotBridge:
                 bridge.handle_message("b", user_id="u1", session_id="same-session", metadata={"complexity": 1}),
             )
 
-        assert asyncio.run(_run()) == ["ok", "ok"]
+        assert run_async(_run()) == ["ok", "ok"]
         assert max_active == 1
 
     def test_handle_message_without_init(self):
         """Test that handle_message returns error if agent not started."""
         from nanobot_kt.bridge import NanobotBridge
         bridge = NanobotBridge()
-        result = asyncio.run(bridge.handle_message("test"))
+        result = run_async(bridge.handle_message("test"))
         assert "not initialized" in result.lower() or "Error" in result
 
     @patch("nanobot_kt.bridge.load_agent_config")
@@ -417,7 +418,7 @@ class TestNanobotBridge:
                     metadata={"files": ["https://example.com/a.png", "https://example.com/b.png"]},
                 )
 
-            result = asyncio.run(_run())
+            result = run_async(_run())
 
         assert result == "ok"
         mock_prepare.assert_called_once()
@@ -457,7 +458,7 @@ class TestNanobotBridge:
                 await bridge.start()
                 return await bridge.handle_message("test query", user_id="u1")
 
-            result = asyncio.run(_run())
+            result = run_async(_run())
 
         assert result == "ok"
         system_messages = [call.args[1] for call in mock_conv.append.call_args_list if call.args[0] == "system"]
@@ -530,7 +531,7 @@ class TestNanobotBridge:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1", session_id="private_u1", metadata={"complexity": 3})
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result == "高智回复"
         assert captured["intel_floor"] == 12
         assert captured["max_cost"] == 10.0
@@ -611,7 +612,7 @@ class TestNanobotBridge:
                 metadata={"complexity": 3},
             )
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result == "覆盖测试"
         # 手动模型路径：不应调用 get_ordered_candidates
         assert not auto_called, "settings override should use manual model, not auto-routing"
@@ -694,7 +695,7 @@ class TestNanobotBridge:
                 metadata={"complexity": 3},
             )
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result == "自动回退"
         # disabled 模型应触发自动路由
         assert auto_kwargs.get("intel_floor") == 12, f"Expected auto-routing, got kwargs={auto_kwargs}"
@@ -769,7 +770,7 @@ class TestNanobotBridge:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1", session_id="private_u1", metadata={"complexity": 3})
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result == "openrouter 回复"
         assert client_kwargs["registry_provider"] == "openrouter"
@@ -838,7 +839,7 @@ class TestNanobotBridge:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1", session_id="private_u1", metadata={"complexity": 3})
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result == "换 key 回复"
         assert llm._api_key == "new-key"
@@ -916,7 +917,7 @@ class TestNanobotBridge:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1", session_id="private_u1", metadata={"complexity": 3})
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result == "参数同步回复"
         assert llm.config.temperature == 0.2
@@ -966,7 +967,7 @@ class TestNanobotBridge:
             await bridge.start()
             return await bridge.handle_message("给我最新 AI 新闻", user_id="u1")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result.startswith("<article")
         assert '\\"' not in result
@@ -1012,7 +1013,7 @@ class TestNanobotBridge:
             await bridge.start()
             return await bridge.handle_message("分析第二团体这个群的消息", user_id="u1")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result.startswith("<!DOCTYPE html>")
         assert "group-analysis-report" in result
@@ -1067,7 +1068,7 @@ class TestNanobotBridge:
             await bridge.start()
             return await bridge.handle_message("分析这个群的消息", user_id="u1")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result == group_html
 
@@ -1106,7 +1107,7 @@ class TestNanobotBridge:
                 },
             )
 
-        asyncio.run(_run())
+        run_async(_run())
         mock_conv.append.assert_any_call(
             "system",
             "[最近若干条对话历史，仅用于理解语境，已按行数和 token 预算裁剪。]",
@@ -1158,7 +1159,7 @@ class TestNanobotBridge:
                 metadata={"is_group": True, "group_id": "123", "runtime_preset": "lightweight"},
             )
 
-        assert asyncio.run(_run()) == "ok"
+        assert run_async(_run()) == "ok"
         assert "sticker_search" in mock_agent.registry._tools
         restriction_text = "\n".join(msg["content"] for msg in messages)
         assert "sticker_search：" not in restriction_text
@@ -1228,7 +1229,7 @@ class TestReplyContract:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result == "这是给用户的回复"
 
     @patch("nanobot_kt.bridge.load_agent_config")
@@ -1271,7 +1272,7 @@ class TestReplyContract:
             await bridge.start()
             return await bridge.handle_message("群日报", user_id="u1")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result.startswith("<!DOCTYPE html>")
         assert "group-analysis-report" in result
 
@@ -1313,7 +1314,7 @@ class TestReplyContract:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert not result or result == ""
 
     @patch("nanobot_kt.bridge.load_agent_config")
@@ -1371,7 +1372,7 @@ class TestReplyContract:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1", session_id="s-retry")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result == "重试后的回复"
         assert mock_agent._process_event.await_count == 2
@@ -1431,7 +1432,7 @@ class TestReplyContract:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1", session_id="s-suppress")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result == "还是直接输出普通文本"
         assert mock_agent._process_event.await_count == 2
@@ -1488,7 +1489,7 @@ class TestReplyContract:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1", session_id="s-fake-claim")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result == ""
         assert bridge.is_no_tool_call("s-fake-claim") is True
@@ -1548,7 +1549,7 @@ class TestReplyContract:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1", session_id="s-marker-repair")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
 
         assert result == "修复后的回复"
         logs = db_session.query(ReplyContractCheckLog).order_by(ReplyContractCheckLog.attempt.asc()).all()
@@ -1591,7 +1592,7 @@ class TestReplyContract:
             await bridge.start()
             return await bridge.handle_message("你好", user_id="u1")
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert not result or result == ""
         assert "调 group_analysis" not in (result or "")
 
@@ -1655,7 +1656,7 @@ class TestNoteBotRepliedBridge:
                 metadata={"is_group": True},
             )
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result == "群聊回复"
         mock_note.assert_called_once()  # 核心：确认 bridge 调用了 note_bot_replied
 
@@ -1698,7 +1699,7 @@ class TestNoteBotRepliedBridge:
                 metadata={"is_group": False},
             )
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result == "私聊回复"
         mock_note.assert_not_called()
 
@@ -1741,7 +1742,7 @@ class TestNoteBotRepliedBridge:
                 metadata={"is_group": True, "dry_run": True},
             )
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result == "dry-run 回复"
         mock_note.assert_not_called()
 
@@ -1782,7 +1783,7 @@ class TestNoteBotRepliedBridge:
                 metadata={"is_group": True},
             )
 
-        asyncio.run(_run())
+        run_async(_run())
         mock_note.assert_not_called()
 
     @patch("nanobot_kt.bridge.load_agent_config")
@@ -1826,5 +1827,5 @@ class TestNoteBotRepliedBridge:
                 metadata={"is_group": True},
             )
 
-        result = asyncio.run(_run())
+        result = run_async(_run())
         assert result == "回复"

@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 import json
 
 
@@ -34,7 +35,7 @@ def test_ai_daily_ingest_failure_does_not_fail_tool(monkeypatch):
     monkeypatch.setattr("core.ai_daily_ingest.ingest_ai_daily_html", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("db down")))
     news_tool._NEWS_SEARCH_CACHE.clear()
 
-    result = asyncio.run(news_tool.AiDailyTool().execute({
+    result = run_async(news_tool.AiDailyTool().execute({
         "query": "今天 AI 新闻",
         "max_results": 8,
         "no_cache": True,
@@ -80,7 +81,7 @@ def test_ai_daily_ingest_records_warning_in_tool_meta(monkeypatch):
     monkeypatch.setattr("core.ai_daily_ingest.ingest_ai_daily_html", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("write failed")))
     news_tool._NEWS_SEARCH_CACHE.clear()
 
-    result = asyncio.run(news_tool.AiDailyTool().execute({
+    result = run_async(news_tool.AiDailyTool().execute({
         "query": "今天 AI 新闻",
         "no_cache": True,
     }))

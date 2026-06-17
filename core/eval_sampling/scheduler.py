@@ -1,11 +1,11 @@
 """后台采样调度——定期扫日志和 DB 新数据，写入 EvalCandidate。"""
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import time
 
+from core.async_bridge import run_awaitable_sync
 from core.database import SessionLocal
 
 logger = logging.getLogger("nanobot.eval.scheduler")
@@ -98,7 +98,7 @@ def eval_sampling_scheduler(stop_event):
     interval = max(60, settings.get_int("eval.sample_interval_sec", 600))
     while not stop_event.wait(timeout=interval):
         try:
-            created = asyncio.run(run_sampling_cycle())
+            created = run_awaitable_sync(run_sampling_cycle())
             if created:
                 logger.debug(f"[EvalSample] cycle created {created} candidates")
         except Exception as e:

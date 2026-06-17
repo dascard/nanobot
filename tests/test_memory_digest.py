@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 import json
 from datetime import datetime
 
@@ -716,13 +717,13 @@ def test_memory_query_tool_search_and_expand(db_session, monkeypatch):
     monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
 
     tool = MemoryQueryTool()
-    search_result = asyncio.run(tool._execute({
+    search_result = run_async(tool._execute({
         "mode": "search",
         "query": "KohakuVQ",
         "session_id": "group_42",
         "limit": 5,
     }))
-    expand_result = asyncio.run(tool._execute({
+    expand_result = run_async(tool._execute({
         "mode": "expand",
         "digest_id": row.id,
         "include_detail": True,
@@ -750,7 +751,7 @@ def test_memory_query_tool_time_accepts_date_range(db_session, monkeypatch):
     monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
 
     tool = MemoryQueryTool()
-    result = asyncio.run(tool._execute({
+    result = run_async(tool._execute({
         "mode": "time",
         "session_id": "group_42",
         "date_start": "2026-05-21",
@@ -768,7 +769,7 @@ def test_memory_query_tool_rejects_invalid_date_range(monkeypatch):
     from creatures.nanobot.prompts.skills.memory_query.tool import MemoryQueryTool
 
     tool = MemoryQueryTool()
-    result = asyncio.run(tool._execute({
+    result = run_async(tool._execute({
         "mode": "time",
         "date_start": "2026-5-2",
     }))
@@ -804,14 +805,14 @@ def test_memory_query_tool_session_summary_search_and_expand(db_session, monkeyp
     monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
 
     tool = MemoryQueryTool()
-    search_result = asyncio.run(tool._execute({
+    search_result = run_async(tool._execute({
         "source": "session_summary",
         "mode": "search",
         "query": "worker",
         "session_id": "s1",
         "limit": 5,
     }))
-    expand_result = asyncio.run(tool._execute({
+    expand_result = run_async(tool._execute({
         "source": "session_summary",
         "mode": "expand",
         "summary_id": row.id,

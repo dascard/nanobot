@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 import json
 
 import pytest
@@ -283,8 +284,8 @@ def test_ai_daily_tool_reuses_equivalent_daily_query_cache(monkeypatch):
 
     tool = news_tool.AiDailyTool()
     q = "2026年5月1日 人工智能 新闻"
-    first = asyncio.run(tool.execute({"query": q, "max_results": 5}))
-    second = asyncio.run(tool.execute({"query": q, "max_results": 5}))
+    first = run_async(tool.execute({"query": q, "max_results": 5}))
+    second = run_async(tool.execute({"query": q, "max_results": 5}))
 
     assert first.success
     assert second.success
@@ -382,7 +383,7 @@ def test_ai_daily_tool_wraps_html_as_reply_output():
     html = '<!DOCTYPE html><html><body><article class="news-brief">AI 资讯</article></body></html>'
 
     with patch("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline", return_value=html):
-        result = asyncio.run(AiDailyTool().execute({"query": "今天 AI 新闻"}))
+        result = run_async(AiDailyTool().execute({"query": "今天 AI 新闻"}))
 
     assert result.success
     payload = json.loads(result.output)

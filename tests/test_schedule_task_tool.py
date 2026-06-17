@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 from types import SimpleNamespace
 
 
@@ -30,7 +31,7 @@ def test_schedule_task_create_uses_runtime_context_target(monkeypatch):
     }))
 
     tool = ScheduleTaskTool()
-    result = asyncio.run(tool.execute({
+    result = run_async(tool.execute({
         "action": "create",
         "name": "早报",
         "cron_expr": "0 9 * * *",

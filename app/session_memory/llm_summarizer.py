@@ -25,6 +25,7 @@ from app.session_memory.jobs import (
 from app.session_memory.rolling_summary import archive_active_summaries_for_session, audit_rolling_summary
 from app.session_memory.summarizer import render_summary_text
 from app.session_memory.windowing import estimate_tokens, is_context_eligible_turn
+from core.async_bridge import run_awaitable_sync
 from core.database import ConversationTurn, RollingSessionSummary, SessionSummaryJob
 
 logger = logging.getLogger("nanobot.session_summary.llm")
@@ -190,7 +191,7 @@ def default_llm_summary_summarizer(messages: list[dict[str, str]]) -> str:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(default_llm_summary_summarizer_async(messages))
+        return run_awaitable_sync(default_llm_summary_summarizer_async(messages))
     raise RuntimeError("default_llm_summary_summarizer must run in a sync worker process")
 
 
@@ -200,7 +201,7 @@ def _call_summarizer(
 ) -> Any:
     result = summarizer(messages)
     if inspect.isawaitable(result):
-        return asyncio.run(result)
+        return run_awaitable_sync(result)
     return result
 
 

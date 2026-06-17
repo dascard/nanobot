@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 import json
 from datetime import datetime
 
@@ -132,7 +133,7 @@ def test_generate_task_message_uses_kt_agent(monkeypatch):
         prompt_template="给我今天的AI日报",
     )
 
-    result = asyncio.run(daily_digest._generate_task_message(task))
+    result = run_async(daily_digest._generate_task_message(task))
 
     assert result.startswith("<article")
     assert calls["started"] is True
@@ -169,7 +170,7 @@ def test_generate_task_message_uses_group_session_for_group_target(monkeypatch):
         prompt_template="总结这个群今天的消息",
     )
 
-    result = asyncio.run(daily_digest._generate_task_message(task))
+    result = run_async(daily_digest._generate_task_message(task))
 
     assert result == "ok"
     assert calls["session_id"] == "group_984760873"

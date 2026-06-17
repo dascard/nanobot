@@ -1,3 +1,6 @@
+from tests.async_helpers import run_async
+
+
 class IdentityRerankerProvider:
     def __init__(self, scores):
         self.scores = scores
@@ -351,7 +354,7 @@ def test_knowledge_query_tool_blocks_when_reranker_required_unavailable(db_sessi
     monkeypatch.setattr(database, "SessionLocal", lambda: db_session)
 
     get_reranker_provider.cache_clear()
-    result = asyncio.run(KnowledgeQueryTool()._execute({
+    result = run_async(KnowledgeQueryTool()._execute({
         "mode": "search",
         "query": "RAG",
         "limit": 3,

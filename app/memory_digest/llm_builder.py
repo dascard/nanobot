@@ -11,6 +11,7 @@ import re
 from collections.abc import Callable
 from typing import Any, Iterable
 
+from core.async_bridge import run_awaitable_sync
 from core.database import ChatLog
 from core.prompt_v2.section_renderer import sha256_text
 from core.prompt_v2.template_loader import load_template
@@ -98,7 +99,7 @@ def _safe_json_loads(raw: str) -> dict[str, Any]:
 def _call_summarizer(summarizer: Callable[[list[dict[str, str]]], Any], messages: list[dict[str, str]]) -> Any:
     result = summarizer(messages)
     if inspect.isawaitable(result):
-        return asyncio.run(result)
+        return run_awaitable_sync(result)
     return result
 
 
@@ -301,7 +302,7 @@ def default_llm_memory_digest_summarizer(messages: list[dict[str, str]]) -> str:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(default_llm_memory_digest_summarizer_async(messages))
+        return run_awaitable_sync(default_llm_memory_digest_summarizer_async(messages))
     raise RuntimeError("default_llm_memory_digest_summarizer must run in a sync worker process")
 
 

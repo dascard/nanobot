@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import asyncio
+from tests.async_helpers import run_async
 import json
 
 
@@ -426,7 +427,7 @@ def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
     monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.analyzer._call_llm_with_retry", fake_call)
 
     tool = GroupAnalysisTool()
-    result = asyncio.run(tool.execute({"group_id": "123", "instructions": "最近2小时"}))
+    result = run_async(tool.execute({"group_id": "123", "instructions": "最近2小时"}))
 
     assert result.success
     from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
@@ -520,7 +521,7 @@ def test_group_analysis_tool_filters_artifacts_before_llm(monkeypatch):
     monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.analyzer._call_llm_with_retry", fake_call)
 
     tool = GroupAnalysisTool()
-    result = asyncio.run(tool.execute({"group_id": "123", "window_hours": 24}))
+    result = run_async(tool.execute({"group_id": "123", "window_hours": 24}))
 
     assert result.success
     assert prompts
@@ -555,7 +556,7 @@ def test_group_analysis_uses_deterministic_fallback_when_llm_fails(monkeypatch):
     monkeypatch.setattr(new_api_client, "NewAPIClient", DummyClient)
     monkeypatch.setattr("creatures.nanobot.prompts.skills.group_analysis.analyzer._call_llm_with_retry", fail_call)
 
-    result = asyncio.run(analyze_group(payload, ""))
+    result = run_async(analyze_group(payload, ""))
 
     assert result["topics"]["topics"]
     assert result["titles"]["users"]

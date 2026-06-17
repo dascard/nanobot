@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 import json
 
 
@@ -21,7 +22,7 @@ def test_sticker_search_tool_returns_cq_send_code(db_session, monkeypatch):
         lambda: db_session,
     )
 
-    result = asyncio.run(
+    result = run_async(
         StickerSearchTool()._execute({"query": "震惊", "group_id": "123", "limit": 3})
     )
 
@@ -64,7 +65,7 @@ def test_sticker_search_tool_blocks_when_reranker_required_unavailable(db_sessio
     from core.semantic.provider_factory import get_reranker_provider
 
     get_reranker_provider.cache_clear()
-    result = asyncio.run(
+    result = run_async(
         StickerSearchTool()._execute({"query": "震惊", "group_id": "123", "limit": 3})
     )
     get_reranker_provider.cache_clear()
@@ -89,7 +90,7 @@ def test_reply_tool_records_sent_sticker_usage(db_session, monkeypatch):
 
     monkeypatch.setattr("core.sticker_memory.SessionLocal", lambda: db_session)
 
-    result = asyncio.run(
+    result = run_async(
         ReplyTool()._execute({"content": "[CQ:image,file=https://example.com/reply.png]"})
     )
 
@@ -114,7 +115,7 @@ def test_reply_tool_expands_sticker_token_and_records_usage(db_session, monkeypa
 
     monkeypatch.setattr("core.sticker_memory.SessionLocal", lambda: db_session)
 
-    result = asyncio.run(ReplyTool()._execute({"content": f"[sticker:{sticker['id']}]"}))
+    result = run_async(ReplyTool()._execute({"content": f"[sticker:{sticker['id']}]"}))
 
     assert not result.error
     payload = json.loads(result.output)
@@ -144,7 +145,7 @@ def test_reply_tool_canonicalizes_legacy_double_escaped_sticker_code(db_session,
 
     monkeypatch.setattr("core.sticker_memory.SessionLocal", lambda: db_session)
 
-    result = asyncio.run(ReplyTool()._execute({"content": f"[sticker:{sticker['id']}]"}))
+    result = run_async(ReplyTool()._execute({"content": f"[sticker:{sticker['id']}]"}))
 
     payload = json.loads(result.output)
     assert payload[REPLY_MARKER]["content"] == (

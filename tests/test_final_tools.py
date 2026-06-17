@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -76,7 +77,7 @@ def test_openai_sdk_tracer_filters_tools_before_request(monkeypatch):
         base_url="http://same-provider.test/v1",
     )
     with final_tools_scope(FinalToolSet(allowed={"reply"}, disabled={"python_sandbox": "禁用"})):
-        asyncio.run(llm._client.chat.completions.create(
+        run_async(llm._client.chat.completions.create(
             model="manual-model",
             messages=[{"role": "user", "content": "你好"}],
             tools=[_tool("reply"), _tool("python_sandbox"), _tool("skill")],

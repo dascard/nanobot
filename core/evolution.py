@@ -3,9 +3,9 @@
 通过 NanobotKTController 调度专门的 Sub-agents 进行日志分析、画像提炼与审计。
 """
 import threading
-import asyncio
 import logging
 from core.database import SessionLocal
+from core.async_bridge import run_awaitable_sync
 from core.legacy_adapter import SQLiteMemory, UnifiedProvider, NanobotKTController
 from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER,
@@ -47,26 +47,6 @@ def _build_provider() -> UnifiedProvider:
         timeout=_evo_timeout() if LLM_PROVIDER == "new-api" else None,
     )
 
-def _run_async(coro):
-    """
-    安全执行异步协程：兼容 '已有事件循环' 和 '无事件循环' 两种环境。
-    BUG-02 FIX: 避免在已有 event loop 的线程中调用 asyncio.run() 导致 RuntimeError。
-    """
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    
-    if loop and loop.is_running():
-        # 已在 event loop 中 (e.g. FastAPI BackgroundTask)：创建新线程执行
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, coro)
-            return future.result()
-    else:
-        # 没有 event loop (e.g. 直接调用)：安全使用 asyncio.run
-        return asyncio.run(coro)
-
 def evolution_task(user_id: str) -> None:
     """
     进化任务入口：委托给 KT 控制器执行。
@@ -91,8 +71,8 @@ def evolution_task(user_id: str) -> None:
         provider = _build_provider()
         controller = NanobotKTController(provider, memory)
         
-        # BUG-02 FIX: 使用安全的异步执行器
-        _run_async(controller.evolve(user_id))
+        # BUG-02 FIX: 使用集中异步桥接器
+        run_awaitable_sync(controller.evolve(user_id))
         
         # BUG-05 FIX: 移除外部兜底 mark_logs_processed
         # controller.evolve() 内部已负责标记日志，此处不再重复标记

@@ -1,4 +1,5 @@
 import asyncio
+from tests.async_helpers import run_async
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -125,7 +126,7 @@ def test_openai_sdk_tracer_records_non_stream_request(monkeypatch):
         base_url="http://same-provider.test/v1",
     )
     with llm_trace_scope(trace_id="trace-r", run_id="run-r", source="replyer"):
-        result = asyncio.run(llm._client.chat.completions.create(
+        result = run_async(llm._client.chat.completions.create(
             model="manual-model",
             messages=[{"role": "user", "content": "你好"}],
             temperature=0,
@@ -207,7 +208,7 @@ def test_openai_sdk_tracer_records_stream_request(monkeypatch):
             )
             return [chunk async for chunk in result]
 
-    chunks = asyncio.run(_run())
+    chunks = run_async(_run())
 
     assert recorded
     row = recorded[0]
@@ -282,7 +283,7 @@ def test_openai_sdk_tracer_records_stream_reasoning_metrics(monkeypatch):
             )
             return [chunk async for chunk in result]
 
-    chunks = asyncio.run(_run())
+    chunks = run_async(_run())
 
     assert chunks
     assert finished
@@ -383,7 +384,7 @@ def test_new_api_chat_completion_finishes_request_on_success(monkeypatch):
     monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", lambda: _FakeSession())
 
     client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
-    result = asyncio.run(client.chat_completion([{"role": "user", "content": "你好"}]))
+    result = run_async(client.chat_completion([{"role": "user", "content": "你好"}]))
 
     assert result["choices"][0]["message"]["content"] == "成功"
     assert recorded
@@ -459,7 +460,7 @@ def test_new_api_chat_completion_stream_finishes_request_on_success(monkeypatch)
         client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
         return [chunk async for chunk in client.chat_completion_stream([{"role": "user", "content": "流式"}])]
 
-    chunks = asyncio.run(collect())
+    chunks = run_async(collect())
 
     assert len(chunks) == 2
     assert recorded
@@ -537,7 +538,7 @@ def test_new_api_chat_completion_stream_records_reasoning_metrics(monkeypatch):
         client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
         return [chunk async for chunk in client.chat_completion_stream([{"role": "user", "content": "流式"}])]
 
-    chunks = asyncio.run(collect())
+    chunks = run_async(collect())
 
     assert len(chunks) == 3
     assert recorded

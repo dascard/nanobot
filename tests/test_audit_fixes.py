@@ -8,6 +8,8 @@ from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path
 
+from tests.async_helpers import run_async
+
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -74,8 +76,7 @@ class TestToolDispatch:
             return "mock result"
         controller.local_tools["ai_daily"] = mock_tool
 
-        import asyncio
-        asyncio.run(controller._execute_local_tool("/ai_daily latest AI models", "user", "session"))
+        run_async(controller._execute_local_tool("/ai_daily latest AI models", "user", "session"))
 
         assert len(called_args) == 1
         assert called_args[0] == "latest AI models"  # 前缀应被剥离
