@@ -13,6 +13,15 @@ def test_prompt_manifest_declares_v2_active_and_v1_rollback_only():
     assert manifest["engines"]["v1"]["status"] == "rollback_only"
 
 
+def test_prompt_runtime_config_default_matches_manifest_active_engine():
+    from core.config_registry import SETTING_DEFS
+
+    manifest = json.loads(Path("prompt_manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["active_engine"] == "v2"
+    assert SETTING_DEFS["prompt_runtime.engine"].default == manifest["active_engine"]
+
+
 def test_legacy_prompt_runtime_is_marked_rollback_only():
     import core.legacy_prompt_runtime as runtime
 

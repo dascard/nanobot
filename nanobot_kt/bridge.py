@@ -482,10 +482,18 @@ class NanobotBridge:
         try:
             from core.settings_service import settings
 
-            engine = str(settings.get("prompt_runtime.engine", "v1") or "v1").strip().lower()
+            engine = str(settings.get("prompt_runtime.engine", "v2") or "v2").strip().lower()
         except Exception:
-            engine = "v1"
-        return engine if engine in {"v1", "v2"} else "v1"
+            engine = "v2"
+        return engine if engine in {"v1", "v2"} else "v2"
+
+    def _resolve_prompt_runtime_engine(self, meta: dict[str, Any]) -> str:
+        prompt_engine = str(
+            meta.get("prompt_runtime_engine_override")
+            or meta.get("prompt_engine_override")
+            or self._prompt_runtime_engine()
+        ).strip().lower()
+        return prompt_engine if prompt_engine in {"v1", "v2"} else "v2"
 
     def _prompt_v2_audit_failure_policy(self) -> str:
         try:
@@ -892,13 +900,7 @@ class NanobotBridge:
             t_start = _time.time()
             meta = dict(metadata or {})
             meta["stream"] = bool(stream or meta.get("stream"))
-            prompt_engine = str(
-                meta.get("prompt_runtime_engine_override")
-                or meta.get("prompt_engine_override")
-                or self._prompt_runtime_engine()
-            ).strip().lower()
-            if prompt_engine not in {"v1", "v2"}:
-                prompt_engine = "v1"
+            prompt_engine = self._resolve_prompt_runtime_engine(meta)
             if prompt_engine == "v2":
                 prompt_mode = "v2"
                 prompt_key = "chat_group" if meta.get("is_group", False) else "chat_private"

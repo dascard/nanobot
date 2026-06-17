@@ -137,7 +137,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
     "prompt_runtime.engine": SettingDef(
         key="prompt_runtime.engine", env_name="NANOBOT_PROMPT_ENGINE",
-        default="v1", value_type="str",
+        default="v2", value_type="str",
         category="prompt", description="提示词运行引擎: v1/v2",
     ),
     "prompt_runtime.v2_audit_failure_policy": SettingDef(

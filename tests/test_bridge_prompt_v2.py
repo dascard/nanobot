@@ -42,6 +42,35 @@ class _FakeOutput:
         return "".join(self._buffer)
 
 
+def test_bridge_prompt_runtime_engine_defaults_to_v2_and_invalid_falls_back(monkeypatch):
+    from core.settings_service import settings
+    from nanobot_kt.bridge import NanobotBridge
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+
+    monkeypatch.setattr(settings, "get", lambda _key, _default=None: None)
+    assert bridge._prompt_runtime_engine() == "v2"
+
+    monkeypatch.setattr(settings, "get", lambda _key, _default=None: "bad-engine")
+    assert bridge._prompt_runtime_engine() == "v2"
+
+    monkeypatch.setattr(settings, "get", lambda _key, _default=None: "v1")
+    assert bridge._prompt_runtime_engine() == "v1"
+
+
+def test_bridge_resolve_prompt_runtime_engine_honors_v1_override_and_invalid_falls_back(monkeypatch):
+    from core.settings_service import settings
+    from nanobot_kt.bridge import NanobotBridge
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    monkeypatch.setattr(settings, "get", lambda _key, _default=None: "v2")
+
+    assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "v1"}) == "v1"
+    assert bridge._resolve_prompt_runtime_engine({"prompt_engine_override": "v1"}) == "v1"
+    assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "bad"}) == "v2"
+    assert bridge._resolve_prompt_runtime_engine({}) == "v2"
+
+
 @pytest.mark.asyncio
 async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event(monkeypatch, db_session):
     from core import database
@@ -165,7 +194,6 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
         session_id="group_1001",
         sender_name="雀",
         metadata={
-            "prompt_runtime_engine_override": "v2",
             "prompt_system_mode_override": "managed",
             "chat_type": "group",
             "is_group": True,
