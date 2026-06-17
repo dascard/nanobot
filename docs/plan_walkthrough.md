@@ -32,7 +32,7 @@
 | 阶段 7.5：同步 TODO 进度 | 已完成 | `docs/todo.md` 同步混合决策进度 |
 | 阶段 8：私聊接入 shared timing scoring | 已完成 | 私聊规则与分类器统一回灌 shared scoring |
 | 阶段 9：timer / legacy cooldown 继续软化 | 已完成 | timer fired 与 legacy cooldown 接入 scoring shortcut |
-| 阶段 10：session / platform 级模型层开关 | 进行中 | 先补策略解析、`rules_only` 和 `shadow` 行为测试，再接入运行时 |
+| 阶段 10：session / platform 级模型层开关 | 已完成 | `enabled` / `rules_only` / `shadow` 策略解析与运行时接入 |
 | 阶段 11：真实日志假阳率评估 | 待开始 | 抽样脚本、shadow 对比、阈值建议 |
 | 阶段 12：timing gate eval 基线与回归门禁 | 待开始 | baseline diff 与阈值门禁 |
 | 阶段 13：文档收尾 | 待开始 | 同步 `docs/todo.md` 与设计文档 |
@@ -162,21 +162,28 @@
 
 ### 阶段 10：session / platform 级模型层开关
 
-状态：进行中。
+状态：已完成。
 
 目标：允许按 session 或 platform 控制 TimingGate 是否启用模型辅助、是否只用规则、是否只做 shadow。
 
-当前进展：
+已完成：
 
-- 已进入阶段 10 的计划与红灯测试准备。
-- 待实现 `core/timing_model_policy.py`、配置注册、群聊运行时接入和入口 platform 透传。
-- 该阶段完成前不会把模型层策略开关标记为已完成。
+- 已写计划文件：`.Codex/plans/timing-gate-scoring-phase10-model-policy.md`
+- 已新增 `core/timing_model_policy.py`，按 session > platform > default 解析策略
+- 已注册 `timing_gate.model_policy.default`、`timing_gate.model_policy.platforms`、`timing_gate.model_policy.sessions`
+- 已在群聊消息路径和 timer 路径接入 `enabled`、`rules_only`、`shadow`
+- 已从 `/group/message` 的 `client_meta.platform` 透传 platform，默认 `qq`
+- 已运行 Phase 10 定向、TimingGate 回归和全量测试
 
 验收标准：
 
 - 默认配置向后兼容
-- 单测覆盖 group/private、session override 和 platform default
-- 管理或调试字段能解释当前开关来源
+- 单测覆盖 session override、platform override、默认策略和 alias 归一化
+- 响应调试字段能解释当前开关模式与来源
+
+相关提交：
+
+- `452f20b feat(时机门控): 添加模型层策略开关`
 
 ### 阶段 11：真实日志假阳率评估
 
@@ -216,4 +223,4 @@
 
 ## 下一步
 
-继续阶段 10：增加 session / platform 级 TimingGate 模型层开关。下一阶段仍按计划文件、TDD 红绿、回归验证和阶段提交推进。
+继续阶段 11：真实日志假阳率评估。下一阶段仍按计划文件、TDD 红绿、回归验证和阶段提交推进。
