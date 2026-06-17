@@ -109,6 +109,7 @@ AUTO_MODEL_ROUTING_MODE = os.environ.get("AUTO_MODEL_ROUTING_MODE", "code")
 LLM_MODEL_SMART = os.environ.get("LLM_MODEL_SMART", "")
 LLM_MODEL_FAST = os.environ.get("LLM_MODEL_FAST", "")
 LLM_MODEL_REASONING = os.environ.get("LLM_MODEL_REASONING", "")
+NANOBOT_AGENT_STEP_MODEL = os.environ.get("NANOBOT_AGENT_STEP_MODEL", "").strip()
 LLM_BUDGET_CAP = float(
     os.environ.get("LLM_BUDGET_CAP", "10.0")
 )  # 每百万 Token 输入的最大允许成本

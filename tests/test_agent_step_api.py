@@ -37,6 +37,10 @@ def _step_request(stream: bool = False) -> dict:
 
 def test_chat_step_returns_tool_call(client, monkeypatch):
     calls = []
+    monkeypatch.setattr(
+        "core.agent_step.NANOBOT_AGENT_STEP_MODEL",
+        "fixed-agent-step-model",
+    )
 
     async def fake_chat_completion(self, **kwargs):
         calls.append(kwargs)
@@ -82,6 +86,7 @@ def test_chat_step_returns_tool_call(client, monkeypatch):
     assert calls
     assert calls[0]["tools"][0]["function"]["name"] == "synergy.energy.load_types"
     assert calls[0]["tools"][0]["function"]["parameters"]["properties"]["ef"]["type"] == "number"
+    assert calls[0]["manual_model"] == "fixed-agent-step-model"
 
 
 def test_chat_step_returns_final_answer(client, monkeypatch):

@@ -88,6 +88,7 @@ NEW_API_TIMEOUT=180
 
 NANOBOT_API_TOKEN=<random-api-token>
 NANOBOT_ADMIN_TOKEN=<random-admin-token>
+NANOBOT_AGENT_STEP_MODEL=<fixed-model-id-for-synergy-agent-step>
 
 DATABASE_URL=sqlite:///./data/nanobot.db
 LOG_DIR=./data

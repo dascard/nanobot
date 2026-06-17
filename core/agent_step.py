@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from clients.new_api_client import NewAPIClient
-from config import NEW_API_BASE_URL, NEW_API_KEY
+from config import NANOBOT_AGENT_STEP_MODEL, NEW_API_BASE_URL, NEW_API_KEY
 
 
 AGENT_STEP_PROTOCOL = "agent-step.v1"
@@ -341,6 +341,7 @@ async def run_agent_step(req: AgentStepRequest) -> AgentStepResponse:
         tools=_openai_tools(req),
         temperature=0.2,
         model_tier="smart",
+        manual_model=NANOBOT_AGENT_STEP_MODEL,
         max_tokens=1200,
         llm_source="agent_step",
     )
