@@ -264,3 +264,43 @@ def test_run_scheduled_tasks_advances_last_run_when_push_fails(db_session, monke
     assert first_run_at is not None
     assert first_run_at > datetime.now() - timedelta(seconds=30)
     assert calls == {"generate": 1, "push": 1}
+
+
+def test_scheduled_task_runner_does_not_require_asyncio_runner(monkeypatch):
+    import asyncio
+    import threading
+
+    stop_event = threading.Event()
+    calls = {"run": 0}
+
+    async def fake_run_scheduled_tasks():
+        calls["run"] += 1
+        stop_event.set()
+        return 0
+
+    monkeypatch.delattr(asyncio, "Runner", raising=False)
+    monkeypatch.setattr(daily_digest, "run_scheduled_tasks", fake_run_scheduled_tasks)
+
+    daily_digest.scheduled_task_runner(stop_event)
+
+    assert calls == {"run": 1}
+
+
+def test_scheduled_task_runner_runs_async_loop_without_sync_bridge(monkeypatch):
+    import threading
+
+    stop_event = threading.Event()
+    calls = {"run": 0}
+
+    async def fake_run_scheduled_tasks():
+        calls["run"] += 1
+        stop_event.set()
+        return 0
+
+    monkeypatch.setattr(daily_digest, "run_scheduled_tasks", fake_run_scheduled_tasks)
+
+    assert not hasattr(daily_digest, "run_awaitable_sync")
+
+    daily_digest.scheduled_task_runner(stop_event)
+
+    assert calls == {"run": 1}

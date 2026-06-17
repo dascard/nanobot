@@ -11,8 +11,27 @@ from typing import Any, TypeVar
 T = TypeVar("T")
 
 
+def _run_in_manual_loop(coro: Coroutine[Any, Any, T]) -> T:
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            shutdown_default_executor = getattr(loop, "shutdown_default_executor", None)
+            if shutdown_default_executor is not None:
+                loop.run_until_complete(shutdown_default_executor())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+
 def _run_in_fresh_loop(coro: Coroutine[Any, Any, T]) -> T:
-    with asyncio.Runner() as runner:
+    runner_cls = getattr(asyncio, "Runner", None)
+    if runner_cls is None:
+        return _run_in_manual_loop(coro)
+    with runner_cls() as runner:
         return runner.run(coro)
 
 

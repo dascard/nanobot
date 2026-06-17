@@ -23,7 +23,6 @@ from app.memory_digest.llm_builder import build_memory_digest_with_llm
 from app.memory_digest.renderer import render_recall_card
 from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
 from config import DAILY_DIGEST_HOUR
-from core.async_bridge import run_awaitable_sync
 from core.context_builder import sanitize_prompt_text
 from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
 
@@ -641,17 +640,39 @@ def _match(value: int, expr: str) -> bool:
     return False
 
 
-def scheduled_task_runner(stop_event: threading.Event) -> None:
-    """后台线程：每分钟检查一次定时任务。"""
+async def scheduled_task_loop(stop_event: threading.Event, *, poll_interval_seconds: float = 60.0) -> None:
+    """异步主循环：每分钟检查一次定时任务。"""
     logger.info("Scheduled task runner started")
     while not stop_event.is_set():
         try:
-            run_awaitable_sync(run_scheduled_tasks())
+            await run_scheduled_tasks()
         except Exception as e:
             logger.error(f"Scheduled task tick failed: {e}")
-        # Sleep 60 seconds (check once a minute)
-        for _ in range(60):
-            if stop_event.is_set():
-                break
-            time.sleep(1)
+
+        remaining = float(poll_interval_seconds)
+        while remaining > 0 and not stop_event.is_set():
+            step = min(1.0, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
     logger.info("Scheduled task runner stopped")
+
+
+def _run_scheduled_task_loop(stop_event: threading.Event) -> None:
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(scheduled_task_loop(stop_event))
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            shutdown_default_executor = getattr(loop, "shutdown_default_executor", None)
+            if shutdown_default_executor is not None:
+                loop.run_until_complete(shutdown_default_executor())
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+
+def scheduled_task_runner(stop_event: threading.Event) -> None:
+    """后台线程入口：在线程内持有一个事件循环运行异步调度主循环。"""
+    _run_scheduled_task_loop(stop_event)

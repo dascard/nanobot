@@ -26,6 +26,14 @@ def test_run_awaitable_sync_runs_without_existing_event_loop():
     assert run_awaitable_sync(_return_value("ok")) == "ok"
 
 
+def test_run_awaitable_sync_runs_when_asyncio_runner_is_unavailable(monkeypatch):
+    import asyncio
+
+    monkeypatch.delattr(asyncio, "Runner")
+
+    assert run_awaitable_sync(_return_value("ok-without-runner")) == "ok-without-runner"
+
+
 def test_run_awaitable_sync_propagates_exceptions():
     with pytest.raises(RuntimeError, match="boom"):
         run_awaitable_sync(_raise_error())
