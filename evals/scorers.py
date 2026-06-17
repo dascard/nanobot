@@ -1,6 +1,30 @@
 """硬评分器——只做 deterministic checks，不做 LLM judge。"""
 from __future__ import annotations
+
+from typing import Any
+
 from evals.schema import EvalCase, EvalOutput
+
+
+def _compare_expected_dict(
+    errors: list[str],
+    prefix: str,
+    expected: dict[str, Any],
+    actual: Any,
+) -> None:
+    if not isinstance(actual, dict):
+        errors.append(f"{prefix} missing or not dict: expected=dict actual={type(actual).__name__}")
+        return
+    for key, expected_value in expected.items():
+        path = f"{prefix}.{key}"
+        if key not in actual:
+            errors.append(f"{path} missing")
+            continue
+        actual_value = actual.get(key)
+        if isinstance(expected_value, dict):
+            _compare_expected_dict(errors, path, expected_value, actual_value)
+        elif actual_value != expected_value:
+            errors.append(f"{path} mismatch: expected={expected_value} actual={actual_value}")
 
 
 def score_case(case: EvalCase, output: EvalOutput) -> dict:
@@ -24,6 +48,19 @@ def score_case(case: EvalCase, output: EvalOutput) -> dict:
         expected = str(exp["timing_action"] or "")
         if actual != expected:
             errors.append(f"timing_action mismatch: expected={expected} actual={actual}")
+
+    # scoring breakdown
+    if "scoring" in exp:
+        expected_scoring = exp["scoring"]
+        if isinstance(expected_scoring, dict):
+            _compare_expected_dict(
+                errors,
+                "scoring",
+                expected_scoring,
+                output.raw.get("scoring") if isinstance(output.raw, dict) else None,
+            )
+        else:
+            errors.append("scoring expected value must be a dict")
 
     # forbidden_tools
     for tool in exp.get("forbidden_tools", []):

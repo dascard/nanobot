@@ -78,6 +78,31 @@ def test_timing_gate_eval_suite_runs_offline():
     assert report.pass_rate == 1.0
 
 
+def test_timing_gate_eval_runner_uses_rule_scoring_when_action_missing():
+    from evals.schema import EvalCase
+    from evals.runners.timing_gate_runner import run_timing_gate_case
+
+    case = EvalCase(
+        id="timing_gate_runner_scoring",
+        suite="timing_gate",
+        input={
+            "text": "@nanobot 这个报错怎么修",
+            "is_group": True,
+            "is_at_bot": True,
+            "trigger_reason": "at_bot",
+        },
+    )
+
+    output = run_timing_gate_case(case)
+
+    assert output.timing_action == "continue"
+    assert output.should_reply is True
+    scoring = output.raw["scoring"]
+    assert scoring["stage"] == "rule_shortcut"
+    assert scoring["model_used"] is False
+    assert scoring["signals"]["explicit_direct_score"] == 0.95
+
+
 def test_timing_gate_scorer_checks_expected_action():
     from evals.schema import EvalCase, EvalOutput
     from evals.scorers import score_case
@@ -93,3 +118,38 @@ def test_timing_gate_scorer_checks_expected_action():
 
     assert result["passed"] is False
     assert any("timing_action mismatch" in err for err in result["errors"])
+
+
+def test_timing_gate_scorer_rejects_scoring_stage_model_used_signal_mismatch():
+    from evals.schema import EvalCase, EvalOutput
+    from evals.scorers import score_case
+
+    case = EvalCase(
+        id="timing_gate_scorer_scoring",
+        suite="timing_gate",
+        expected={
+            "scoring": {
+                "stage": "rule_shortcut",
+                "model_used": False,
+                "signals": {"sub_signals": {"s_transport_tier": "url"}},
+            },
+        },
+    )
+    output = EvalOutput(
+        case_id=case.id,
+        suite=case.suite,
+        raw={
+            "scoring": {
+                "stage": "model_assisted",
+                "model_used": True,
+                "signals": {"sub_signals": {"s_transport_tier": "blob"}},
+            }
+        },
+    )
+
+    result = score_case(case, output)
+
+    assert result["passed"] is False
+    assert any("scoring.stage mismatch" in err for err in result["errors"])
+    assert any("scoring.model_used mismatch" in err for err in result["errors"])
+    assert any("scoring.signals.sub_signals.s_transport_tier mismatch" in err for err in result["errors"])
