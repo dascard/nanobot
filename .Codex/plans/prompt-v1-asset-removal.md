@@ -720,7 +720,7 @@ git commit -m "refactor(提示词): 封存旧版运行时分支"
 - 修改：`tests/test_prompt_trace_admin.py`
 - 修改：`tests/test_webui_prompt_runtime_ui.py`
 
-- [ ] **步骤 1：写红灯测试**
+- [x] **步骤 1：写红灯测试**
 
 将 `tests/test_webui_prompt_runtime_ui.py::test_prompt_preview_defaults_to_v2_and_prompt_path_redirects` 改为断言旧直达路由不存在：
 
@@ -760,7 +760,7 @@ def test_legacy_prompt_read_endpoints_are_gone(client, auth_header, path):
     assert response.status_code in {404, 410}
 ```
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -770,9 +770,13 @@ python -B -m pytest tests/test_prompt_legacy_admin_readonly.py tests/test_prompt
 
 预期：FAIL，旧 GET / WebUI route 仍存在。
 
+已执行结果：`9 failed, 17 passed, 20 warnings`。失败点符合预期，覆盖旧 GET 路由仍返回 200、WebUI 仍暴露 `/prompt-legacy` / `/prompts` 直达路由和旧组件 import / export。
+
 - [ ] **步骤 3：删除后端旧 route 区块**
 
 在 `api/admin_routes.py` 删除 managed prompt route 区块和 legacy prompt route 区块，保留 `POST /prompt/effective-preview` 的 V2 分支。删除不再使用的 `PromptSaveRequest`、`PromptPreviewRequest`、`PromptRollbackRequest` 和 `_prompt_metrics()`。
+
+当前中间态：旧 managed / legacy route 区块删除草稿已在工作区；完成前仍需补最小 410 兼容出口并跑回归，避免旧写入口落到未预期的状态码。
 
 如果为了兼容旧客户端选择 410 而不是 404，保留最小 route：
 
