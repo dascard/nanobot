@@ -8,7 +8,7 @@
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管和 H29 第一刀也已完成。当前优先推进 P1「收敛去债」中的 Prompt legacy 收口：P1-5 实现计划已写入 `.Codex/plans/prompt-legacy-convergence.md`，下一步按计划禁用 live `fallback_v1` 发送路径，让管理面和评估面转向 V2-only，并把 legacy 页面降级为只读迁移入口；随后进入 P1-6，迁移旧任务 prompt、删除冗余提示词资产并去版本化。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管和 H29 第一刀也已完成。当前优先推进 P1「收敛去债」中的 Prompt legacy 收口：P1-5 已完成任务 1 / 2，live `fallback_v1` 发送路径已禁用，`reply-test` / `reply-eval` 默认已转向 V2；下一步优先执行任务 3，把 legacy / managed 管理写入口降级为只读迁移入口。P1-5 完成后再进入 P1-6，迁移旧任务 prompt、删除冗余提示词资产并去版本化。
 
 ## 文档口径
 
@@ -51,6 +51,8 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | Agent Step SSE 真流式 | 已完成 | `2369081 feat(agent): 支持 step 流式输出` |
 | Prompt V2 默认接管 | 已完成 | 设计、计划、默认 live 接管和文档同步均已落地 |
 | P1-4 Prompt Runtime 请求组装提取 | 已完成 | `PromptRuntimeInput` 组装已从 `handle_message()` 提取为可单测边界 |
+| P1-5 任务 1：禁用旧版审计回退 | 已完成 | `afc3dd4 refactor(提示词): 禁用旧版审计回退` |
+| P1-5 任务 2：默认使用 V2 回复评估 | 已完成 | `99c1803 refactor(评测): 默认使用 V2 回复评估` |
 
 ### 后续优先级
 
@@ -60,7 +62,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-2 | 已完成 | 编写 Prompt V2 默认接管实现计划 | 写入 `.Codex/plans/prompt-v2-default-cutover.md`，列出 TDD 步骤、文件、验证命令 | `17b3815 docs(计划): 记录 V2 默认接管计划` |
 | P1-3 | 已完成 | Prompt V2 默认 live 接管 | 默认 engine 改为 V2，保留显式 V1 回滚，初始化 `data/prompts_v2`，同步 admin preview 和 reply-test 默认值 | `2be9329` / `8a1e177` / `8a73909` |
 | P1-4 | 已完成 | H29 第一刀：提取 Prompt Runtime 请求组装 | 从 `handle_message()` 中抽出 `PromptRuntimeInput` 构造边界，不移动 trace、tool plan、conversation 注入和 audit 异常处理 | `refactor(桥接): 提取提示词运行时组装` |
-| P1-5 | 计划已写，待执行 | Prompt legacy 收口 | 禁用 live `fallback_v1` 发送路径，管理面和评估面转向 V2-only，legacy 页面降级为只读迁移入口 | `refactor(提示词): 收敛旧版回退路径` |
+| P1-5 | 进行中：任务 1/2 已完成，任务 3 待执行 | Prompt legacy 收口 | live `fallback_v1` 已禁用，评估入口已转 V2；下一步降级 legacy / managed 管理写入口 | `refactor(提示词): 降级旧版管理入口` |
 | P1-6 | 待写计划 | 删除冗余提示词资产并去版本化 | 迁移旧任务 prompt，删除 V1 / legacy 冗余资产，去掉 V2 命名后缀 | `refactor(提示词): 统一提示词运行时命名` |
 | P1-7 | 已部分完成，待继续 | 连接池复用与残余同步 IO 审计 | 共享 `aiohttp.ClientSession` 已落地；继续审计 compaction / image / sticker 同步 IO | `4550aca` / `2bf4ee7` |
 | P1-8 | 待执行 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `feat(路由): 按模型能力校验请求` |
@@ -74,13 +76,19 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 当前详细计划：P1-5 Prompt legacy 收口
 
-状态：计划已写，待执行。
+状态：进行中。任务 1 / 2 已完成并提交，下一步执行任务 3「管理面 legacy 入口降级为只读迁移入口」。
 
 - [x] 重新核对 `docs/todo.md` 路线项 1 的 legacy 收口目标。
 - [x] 清点 `fallback_v1`、`prompt_runtime.engine=v1`、legacy / managed prompt 入口和管理端引用。
 - [x] 写入独立实现计划：`.Codex/plans/prompt-legacy-convergence.md`。
 - [x] 明确 TDD 验收：live 路径不再 fallback 到 V1、显式回滚策略边界清晰、管理端只保留迁移 / 审计入口。
-- [ ] 按 TDD 执行，阶段完成后单独提交。
+- [x] 任务 1：禁用 V2 audit 失败后的 `fallback_v1` live 发送路径，并固定 fail-fast。
+- [x] 任务 2：`reply-test` / `reply-eval` 默认与旧 alias 转向 V2-only，显式 V1 应急入口保留。
+- [ ] 任务 3：按 TDD 将 legacy / managed 管理写入口降级为只读迁移入口。
+- [ ] 任务 4：P1-5 全部完成后同步 `docs/todo.md`、本文件和相关设计文档。
+- [ ] 任务 5：运行 P1-5 定向回归、全量测试和禁止项扫描。
+
+备注：本次同步只记录 P1-5 进行中状态，不替代任务 4 的完成后收尾文档更新。
 
 P1-6 前置迁移清单：
 

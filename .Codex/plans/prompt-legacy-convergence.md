@@ -1,7 +1,7 @@
 # Prompt legacy 收口实现计划
 
 计划日期：2026-06-17
-状态：计划已写，待执行
+状态：进行中，任务 1 / 2 已完成，任务 3 待执行
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
