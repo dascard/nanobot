@@ -8,6 +8,7 @@ import json
 import logging
 import re
 from typing import List, Optional, Dict, Any
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from core.database import ChatLog, Persona, SystemPrompt, User, SessionLocal
 from config import (
@@ -286,6 +287,10 @@ class SQLiteMemory:
                 {ChatLog.processed: 1}, synchronize_session='fetch'
             )
             db.commit()
+        except SQLAlchemyError:
+            db.rollback()
+            logger.exception("mark_logs_processed failed; transaction rolled back")
+            raise
         finally:
             db.close()
 

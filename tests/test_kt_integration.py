@@ -321,6 +321,22 @@ class TestSQLiteMemoryDetachedLogs:
         # Verify session was closed
         mock_db.close.assert_called_once()
 
+    def test_mark_logs_processed_rolls_back_when_commit_fails(self):
+        """mark_logs_processed() 提交失败时必须 rollback，避免 session 残留半失败状态。"""
+        from sqlalchemy.exc import SQLAlchemyError
+        from core.legacy_adapter import SQLiteMemory
+
+        memory = SQLiteMemory()
+        mock_db = MagicMock()
+        mock_db.commit.side_effect = SQLAlchemyError("commit failed")
+
+        with patch.object(memory, "_get_session", return_value=mock_db):
+            with pytest.raises(SQLAlchemyError):
+                memory.mark_logs_processed([1, 2])
+
+        mock_db.rollback.assert_called_once()
+        mock_db.close.assert_called_once()
+
 
 # ── Evolution Dict Access Test ──
 
