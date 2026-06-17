@@ -239,12 +239,13 @@ def call_model_route(
                 route_key, route.get("provider_id", ""), base_url[:80], route.get("model", ""))
 
     if not messages:
-        messages = [
+        fallback_messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ]
+        messages = fallback_messages
         try:
-            from core.prompt_runtime import render_model_messages
+            from core.prompt_v2.task_templates import render_task_messages
 
             prompt_key = {
                 "timing_gate": "timing_gate",
@@ -252,7 +253,7 @@ def call_model_route(
                 "classifier_legacy": "classifier_legacy",
             }.get(route_key, "")
             if prompt_key:
-                messages = render_model_messages(
+                messages = render_task_messages(
                     prompt_key,
                     {
                         "message": user_message,
@@ -262,10 +263,10 @@ def call_model_route(
                         "bot_name": "",
                         "group_profile": "",
                     },
-                    messages,
+                    fallback_messages=fallback_messages,
                 )
         except Exception as e:
-            logger.warning("[call_model_route] PromptManager fallback route=%s error=%s", route_key, e)
+            logger.warning("[call_model_route] PromptV2 task fallback route=%s error=%s", route_key, e)
 
     payload: dict = {
         "messages": messages,

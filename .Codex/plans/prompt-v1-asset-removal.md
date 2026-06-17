@@ -302,7 +302,7 @@ git commit -m "feat(提示词): 添加后台任务模板渲染"
 - 修改：`clients/classifier_client.py`
 - 修改：`tests/test_model_router.py`
 
-- [ ] **步骤 1：改写红灯测试**
+- [x] **步骤 1：改写红灯测试**
 
 将 `tests/test_model_router.py` 中 `test_call_model_route_uses_prompt_manager_in_managed_mode` 改名为 `test_call_model_route_uses_v2_task_template_for_classifier_routes`，并改成：
 
@@ -370,7 +370,7 @@ def test_call_model_route_uses_v2_task_template_for_classifier_routes(self, tmp_
     assert captured["payload"]["enable_thinking"] is False
 ```
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -381,7 +381,7 @@ python -B -m pytest tests/test_model_router.py::TestClassifierRouteProviderResol
 
 预期：FAIL，当前代码仍调用 `core.prompt_runtime.render_model_messages()`。
 
-- [ ] **步骤 3：修改 `call_model_route()`**
+- [x] **步骤 3：修改 `call_model_route()`**
 
 在 `clients/classifier_client.py` 中替换旧 `render_model_messages()` 分支：
 
@@ -411,13 +411,13 @@ python -B -m pytest tests/test_model_router.py::TestClassifierRouteProviderResol
             logger.warning("[call_model_route] Prompt V2 task render fallback route=%s error=%s", route_key, e)
 ```
 
-- [ ] **步骤 4：运行任务 2 测试**
+- [x] **步骤 4：运行任务 2 测试**
 
 运行步骤 2 命令。
 
 预期：PASS。
 
-- [ ] **步骤 5：运行分类器路由回归**
+- [x] **步骤 5：运行分类器路由回归**
 
 运行：
 

@@ -178,26 +178,36 @@ class TestClassifierRouteProviderResolution:
         with pytest.raises(RuntimeError, match="provider disabled: local_qwen"):
             call_model_route(route_key="timing_gate", user_message="ping")
 
-    def test_call_model_route_uses_prompt_manager_in_managed_mode(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("route_key", ["timing_gate", "private_decision", "classifier_legacy"])
+    def test_call_model_route_uses_v2_task_template_for_classifier_routes(
+        self, route_key, tmp_path, monkeypatch
+    ):
         import json
 
         from clients.classifier_client import call_model_route
-        import core.prompts.manager as prompt_manager_module
 
-        prompt_dir = tmp_path / "prompts"
-        prompt_dir.mkdir()
-        (prompt_dir / "timing_gate.md").write_text(
-            """---
+        default_dir = tmp_path / "prompts_v2"
+        task_path = default_dir / "tasks" / f"{route_key}.md"
+        task_path.parent.mkdir(parents=True)
+        task_path.write_text(
+            f"""---
 name: Timing Gate
-required_vars:
-  - pending_text
+version: 1
+kind: task
+tool_name: {route_key}
 ---
-模板判定: {{ pending_text }}
+V2 判定: {{{{ pending_text }}}} / {{{{ bot_name }}}}
 """,
             encoding="utf-8",
         )
-        monkeypatch.setenv("NANOBOT_PROMPT_DIR", str(prompt_dir))
-        prompt_manager_module._MANAGER = None
+        monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+        monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(tmp_path / "runtime_v2"))
+        monkeypatch.setattr(
+            "core.prompt_runtime.render_model_messages",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("classifier routes must not use old PromptManager runtime")
+            ),
+        )
 
         values = {
             "prompt_system.mode": "managed",
@@ -238,13 +248,13 @@ required_vars:
         )
 
         assert call_model_route(
-            route_key="timing_gate",
+            route_key=route_key,
             system_prompt="legacy system",
             user_message="ping",
         ) == "ok"
 
         messages = captured["payload"]["messages"]
-        assert "模板判定: ping" in messages[0]["content"]
+        assert "V2 判定: ping" in messages[0]["content"]
         assert "legacy system" not in json.dumps(messages, ensure_ascii=False)
         assert captured["payload"]["enable_thinking"] is False
         assert captured["payload"]["thinking"] == {"type": "disabled"}
