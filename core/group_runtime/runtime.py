@@ -351,7 +351,7 @@ class GroupChatState:
         self._touch()
 
     def arm_force_continue(self, reason: str):
-        """设置强制 continue 标记——下一轮跳过 TimingGate。"""
+        """设置强制指向标记——下一轮以 d0=1.0 进入评分/门控。"""
         self.force_next_continue = True
         self.force_reason = reason
 
@@ -430,61 +430,117 @@ class GroupRuntime:
         *,
         pending: list[GroupPendingMessage] | None = None,
         model_result: dict | None = None,
+        force_direct_score: float = 0.0,
     ) -> dict:
         """生成 TimingGate scoring shadow 字段，不参与主决策。"""
         try:
-            from core.timing_score import TimingModelHint, decide_timing
-
-            msgs = list(pending if pending is not None else state.pending)
-            tr = str(trigger_reason or state.last_trigger_reason or "").strip()
-            is_direct = tr in _DIRECT_TRIGGERS
-            model_hint = None
-            if model_result:
-                error_type = str(model_result.get("error_type") or "")
-                action = str(model_result.get("action") or "").strip()
-                confidence = 0.0 if error_type else 0.8
-                if action:
-                    model_hint = TimingModelHint(
-                        action=action,
-                        confidence=confidence,
-                        raw=str(model_result.get("raw") or ""),
-                        reason=str(model_result.get("reason") or ""),
-                    )
-            latest_sender_id = msgs[-1].sender_id if msgs else ""
-            linger_score = state.linger_score_for(latest_sender_id) if tr == "recent_bot_followup" else 0.0
-            if tr == "recent_bot_followup" and linger_score <= 0 and state.linger_active_until <= 0:
-                linger_score = LINGER_BASE_WEIGHT
-            ago = state.bot_reply_ago()
-            linger_interval_active = (
-                tr == "recent_bot_followup"
-                and linger_score > 0
-                and 0 < ago < LINGER_MIN_INTERVAL_SECS
-            )
-            min_interval_active = linger_interval_active or self._should_cooldown(state, tr)
-            min_interval_remaining = (
-                LINGER_MIN_INTERVAL_SECS - ago
-                if linger_interval_active
-                else BOT_REPLY_COOLDOWN_SEC - ago
-            )
-            decision = decide_timing(
-                text=_pending_text_for_scoring(msgs),
-                is_group=True,
-                is_private=False,
-                is_at_bot=any(m.is_at_bot for m in msgs) or tr == "at_bot",
-                is_reply_to_bot=any(m.is_reply_to_bot for m in msgs) or tr == "reply_to_bot",
-                bot_name_mentioned=tr in {"bot_name_mentioned", "mentioned"},
-                direct_call=tr == "direct_call" or is_direct,
-                is_directed_to_other=_has_directed_to_other_signal(msgs),
-                has_files=_has_file_segments(msgs),
-                linger_score=linger_score,
-                min_interval_active=min_interval_active,
-                min_interval_remaining=max(0.0, min_interval_remaining),
-                model_hint=model_hint,
+            decision = self._score_timing(
+                state,
+                trigger_reason,
+                pending=pending,
+                model_result=model_result,
+                force_direct_score=force_direct_score,
             )
             return asdict(decision)
         except Exception as exc:
             logger.debug("[GroupRuntime] shadow scoring failed: %s", exc, exc_info=True)
             return {}
+
+    def _score_timing(
+        self,
+        state: GroupChatState,
+        trigger_reason: str,
+        *,
+        pending: list[GroupPendingMessage] | None = None,
+        model_result: dict | None = None,
+        force_direct_score: float = 0.0,
+    ):
+        """计算 TimingGate scoring 决策，供 shadow 字段和规则短路复用。"""
+        from core.timing_score import TimingModelHint, decide_timing
+
+        msgs = list(pending if pending is not None else state.pending)
+        tr = str(trigger_reason or state.last_trigger_reason or "").strip()
+        is_direct = tr in _DIRECT_TRIGGERS
+        model_hint = None
+        if model_result:
+            error_type = str(model_result.get("error_type") or "")
+            action = str(model_result.get("action") or "").strip()
+            confidence = 0.0 if error_type else 0.8
+            if action:
+                model_hint = TimingModelHint(
+                    action=action,
+                    confidence=confidence,
+                    raw=str(model_result.get("raw") or ""),
+                    reason=str(model_result.get("reason") or ""),
+                )
+        latest_sender_id = msgs[-1].sender_id if msgs else ""
+        linger_score = state.linger_score_for(latest_sender_id) if tr == "recent_bot_followup" else 0.0
+        if tr == "recent_bot_followup" and linger_score <= 0 and state.linger_active_until <= 0:
+            linger_score = LINGER_BASE_WEIGHT
+        ago = state.bot_reply_ago()
+        linger_interval_active = (
+            tr == "recent_bot_followup"
+            and linger_score > 0
+            and 0 < ago < LINGER_MIN_INTERVAL_SECS
+        )
+        min_interval_active = linger_interval_active or self._should_cooldown(state, tr)
+        min_interval_remaining = (
+            LINGER_MIN_INTERVAL_SECS - ago
+            if linger_interval_active
+            else BOT_REPLY_COOLDOWN_SEC - ago
+        )
+        return decide_timing(
+            text=_pending_text_for_scoring(msgs),
+            is_group=True,
+            is_private=False,
+            is_at_bot=any(m.is_at_bot for m in msgs) or tr == "at_bot",
+            is_reply_to_bot=any(m.is_reply_to_bot for m in msgs) or tr == "reply_to_bot",
+            bot_name_mentioned=tr in {"bot_name_mentioned", "mentioned"},
+            direct_call=tr == "direct_call" or is_direct,
+            is_directed_to_other=_has_directed_to_other_signal(msgs),
+            has_files=_has_file_segments(msgs),
+            linger_score=linger_score,
+            force_direct_score=force_direct_score,
+            min_interval_active=min_interval_active,
+            min_interval_remaining=max(0.0, min_interval_remaining),
+            model_hint=model_hint,
+        )
+
+    def _apply_scoring_shortcut(
+        self,
+        state: GroupChatState,
+        decision,
+        *,
+        pending: list[GroupPendingMessage],
+        reason_prefix: str,
+    ) -> dict:
+        """应用规则评分短路结果。调用方需持有 runtime lock。"""
+        action = decision.action
+        delay = decision.delay_seconds
+        payload = _pending_payload(pending)
+        state.mark_gate_start()
+        if action == "continue":
+            state.handle_continue()
+        elif action == "wait":
+            delay = int(delay or 5)
+            state.start_wait(delay, decision.reason)
+        else:
+            action = "no_reply"
+            delay = None
+            state.handle_no_reply()
+        cooldown = round(state.bot_reply_ago(), 1)
+        state.mark_gate_done()
+        response = {
+            "action": action,
+            "delay_seconds": delay,
+            "generation": state.generation,
+            "cooldown_ago": cooldown,
+            "reason": f"{reason_prefix}: {decision.reason}",
+            "timing_scoring": asdict(decision),
+        }
+        if action == "continue":
+            response.update(payload)
+        return response
 
     def _attach_shadow_scoring(
         self,
@@ -634,52 +690,67 @@ class GroupRuntime:
                     "reason": "bot 刚回复过，冷却中",
                 }, state, tr)
 
-            # force_next_continue → 直接 continue
+            gate_prepared = False
             if state.force_next_continue:
+                force_reason = state.force_reason or tr
+                snapshot = state.take_snapshot()
+                try:
+                    scoring_decision = self._score_timing(
+                        state,
+                        force_reason,
+                        pending=snapshot,
+                        force_direct_score=1.0,
+                    )
+                except Exception as exc:
+                    scoring_decision = None
+                    logger.debug("[GroupRuntime] force scoring failed: %s", exc, exc_info=True)
                 state.force_next_continue = False
+                if scoring_decision is not None and scoring_decision.stage == "rule_shortcut":
+                    logger.info("[GroupRuntime] force_scoring_shortcut group=%s reason=%s action=%s pending=%d",
+                                group_id, force_reason, scoring_decision.action, len(snapshot))
+                    return self._apply_scoring_shortcut(
+                        state,
+                        scoring_decision,
+                        pending=snapshot,
+                        reason_prefix=f"direct trigger: {force_reason}",
+                    )
+                state.mark_gate_start()
+                gen = state.generation
+                ctx_snapshot = dict(ctx)
+                tr = force_reason
+                gate_prepared = True
+                logger.info("[GroupRuntime] force_gate group=%s reason=%s pending=%d",
+                            group_id, force_reason, len(snapshot))
+
+            if not gate_prepared:
+                # talk_value gate：普通 ambient 消息按频率控制
+                if tr == "ambient" and not self._should_gate_by_frequency(state, talk_value):
+                    threshold = max(1, round(1.0 / max(talk_value, 0.05)))
+                    return self._attach_shadow_scoring({
+                        "action": "wait",
+                        "delay_seconds": state.next_gate_delay(),
+                        "generation": state.generation,
+                        "cooldown_ago": state.bot_reply_ago(),
+                        "reason": (
+                            f"talk_value gate: {len(state.pending)}/{threshold} pending "
+                            f"(talk={talk_value:.2f}, msg_1m={state.recent_message_count(60)}, "
+                            f"msg_5m={state.recent_message_count(300)})"
+                        ),
+                    }, state, tr)
+
+                if not state.can_trigger_gate():
+                    return self._attach_shadow_scoring({
+                        "action": "wait",
+                        "delay_seconds": state.next_gate_delay(),
+                        "generation": state.generation,
+                        "cooldown_ago": state.bot_reply_ago(),
+                        "reason": "rate limited / gate in progress",
+                    }, state, tr)
+
+                state.mark_gate_start()
                 snapshot = state.take_snapshot()
                 gen = state.generation
-                payload = _pending_payload(snapshot)
-                state.mark_gate_start()
-                state.handle_continue()
-                state.mark_gate_done()
-                logger.info("[GroupRuntime] force_continue group=%s reason=%s pending=%d",
-                            group_id, state.force_reason, len(snapshot))
-                return self._attach_shadow_scoring({
-                    "action": "continue",
-                    "generation": gen,
-                    "reason": f"direct trigger: {state.force_reason}",
-                    **payload,
-                }, state, state.force_reason or tr, pending=snapshot)
-
-            # talk_value gate：普通 ambient 消息按频率控制
-            if tr == "ambient" and not self._should_gate_by_frequency(state, talk_value):
-                threshold = max(1, round(1.0 / max(talk_value, 0.05)))
-                return self._attach_shadow_scoring({
-                    "action": "wait",
-                    "delay_seconds": state.next_gate_delay(),
-                    "generation": state.generation,
-                    "cooldown_ago": state.bot_reply_ago(),
-                    "reason": (
-                        f"talk_value gate: {len(state.pending)}/{threshold} pending "
-                        f"(talk={talk_value:.2f}, msg_1m={state.recent_message_count(60)}, "
-                        f"msg_5m={state.recent_message_count(300)})"
-                    ),
-                }, state, tr)
-
-            if not state.can_trigger_gate():
-                return self._attach_shadow_scoring({
-                    "action": "wait",
-                    "delay_seconds": state.next_gate_delay(),
-                    "generation": state.generation,
-                    "cooldown_ago": state.bot_reply_ago(),
-                    "reason": "rate limited / gate in progress",
-                }, state, tr)
-
-            state.mark_gate_start()
-            snapshot = state.take_snapshot()
-            gen = state.generation
-            ctx_snapshot = dict(ctx)
+                ctx_snapshot = dict(ctx)
 
         result = await self._call_gate(group_id, snapshot, ctx_snapshot, tr)
 

@@ -227,6 +227,7 @@ def extract_signals(
     is_other_bot: bool = False,
     has_files: bool = False,
     linger_score: float = 0.0,
+    force_direct_score: float = 0.0,
 ) -> TimingSignals:
     """从结构化上下文提取 TimingGate scoring 信号。"""
     private_context = bool(is_private or not is_group)
@@ -237,6 +238,7 @@ def extract_signals(
         bot_name_mentioned=bot_name_mentioned,
         direct_call=direct_call,
     )
+    d0 = max(d0, _clip01(force_direct_score))
     linger = _clip01(linger_score)
     direct = max(d0, linger)
 
@@ -368,6 +370,7 @@ def decide_timing(
     is_other_bot: bool = False,
     has_files: bool = False,
     linger_score: float = 0.0,
+    force_direct_score: float = 0.0,
     min_interval_active: bool = False,
     min_interval_remaining: float = 0.0,
     model_hint: TimingModelHint | None = None,
@@ -385,6 +388,7 @@ def decide_timing(
         is_other_bot=is_other_bot,
         has_files=has_files,
         linger_score=linger_score,
+        force_direct_score=force_direct_score,
     )
     rule_score = compute_rule_score(signals)
     theta = select_theta(signals, is_private=is_private)

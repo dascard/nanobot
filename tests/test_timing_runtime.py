@@ -345,6 +345,55 @@ class TestGroupRuntime:
         assert len(gate_calls) == 0
 
     @pytest.mark.asyncio
+    async def test_direct_at_bot_with_image_waits_via_scoring_without_gate(self, monkeypatch):
+        """@bot + 图片只应进入就绪度 wait，不应由 force_next_continue 直接 continue。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            raise AssertionError("@bot + 图片应由规则评分短路为 wait，不应调用 TimingGate")
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        r = await runtime.process_message("g1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "@bot 看这个",
+            "is_at_bot": True,
+            "segments": [{"type": "image", "url": "https://example.com/a.png"}],
+        }, trigger_reason="at_bot")
+
+        assert r["action"] == "wait"
+        assert r["delay_seconds"] == 5
+        assert r["timing_scoring"]["stage"] == "rule_shortcut"
+        signals = r["timing_scoring"]["signals"]
+        assert signals["explicit_direct_score"] == 1.0
+        assert signals["sub_signals"]["w_file"] == 0.45
+        assert signals["sub_signals"]["s_transport"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_direct_at_bot_transport_conflict_reaches_gate(self, monkeypatch):
+        """@bot + URL 是参与/抑制冲突，应进入 TimingGate 而不是被强制 continue。"""
+        runtime = GroupRuntime()
+        gate_calls = []
+
+        async def fake_gate(group_id, pending, _ctx, trigger_reason):
+            gate_calls.append((group_id, pending[0].message, trigger_reason))
+            return {"action": "no_reply", "reason": "transport conflict"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        r = await runtime.process_message("g1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "@bot https://example.com/secret",
+            "is_at_bot": True,
+        }, trigger_reason="at_bot")
+
+        assert r["action"] == "no_reply"
+        assert gate_calls == [("group_g1", "@bot https://example.com/secret", "at_bot")]
+        assert r["timing_scoring"]["stage"] == "model_assisted_conflict"
+
+    @pytest.mark.asyncio
     async def test_rate_limited_reports_cooldown(self, monkeypatch):
         """rate-limit 返回也带正确 cooldown_ago。"""
         runtime = GroupRuntime()
