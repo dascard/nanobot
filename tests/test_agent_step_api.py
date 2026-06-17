@@ -35,6 +35,15 @@ def _step_request(stream: bool = False) -> dict:
     }
 
 
+def _sse_events(body: str) -> list[dict]:
+    events = []
+    for block in body.strip().split("\n\n"):
+        if not block.startswith("data: "):
+            continue
+        events.append(json.loads(block.removeprefix("data: ")))
+    return events
+
+
 def test_chat_step_returns_tool_call(client, monkeypatch):
     calls = []
     monkeypatch.setattr(
@@ -126,17 +135,37 @@ def test_chat_step_returns_final_answer(client, monkeypatch):
 
 
 def test_chat_step_stream_reuses_sse_framing(client, monkeypatch):
-    async def fake_chat_completion(self, **kwargs):
-        return {
+    calls = []
+
+    async def fake_chat_completion_stream(self, **kwargs):
+        calls.append(kwargs)
+        yield {
             "choices": [
                 {
-                    "message": {
+                    "delta": {
                         "tool_calls": [
                             {
+                                "index": 0,
                                 "id": "call_1",
                                 "type": "function",
                                 "function": {
                                     "name": "synergy.energy.load_types",
+                                    "arguments": "",
+                                },
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        yield {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
                                     "arguments": '{"price": 0.8}',
                                 },
                             }
@@ -147,8 +176,8 @@ def test_chat_step_stream_reuses_sse_framing(client, monkeypatch):
         }
 
     monkeypatch.setattr(
-        "core.agent_step.NewAPIClient.chat_completion",
-        fake_chat_completion,
+        "core.agent_step.NewAPIClient.chat_completion_stream",
+        fake_chat_completion_stream,
     )
 
     with client.stream(
@@ -161,6 +190,136 @@ def test_chat_step_stream_reuses_sse_framing(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
-    assert 'data: {"status": "progress"' in body
-    assert '"status": "tool_call"' in body
-    assert '"name": "synergy.energy.load_types"' in body
+    events = _sse_events(body)
+    assert [event["status"] for event in events] == ["progress", "tool_call"]
+    assert events[1]["tool_calls"] == [
+        {
+            "id": "call_1",
+            "name": "synergy.energy.load_types",
+            "arguments": {"price": 0.8},
+        }
+    ]
+    assert calls[0]["max_tokens"] == 1200
+
+
+def test_chat_step_stream_accumulates_split_tool_name(client, monkeypatch):
+    async def fake_chat_completion_stream(self, **kwargs):
+        yield {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {
+                                    "name": "synergy.energy.",
+                                },
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        yield {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
+                                    "name": "load_types",
+                                    "arguments": '{"ef": 0.57}',
+                                },
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        "core.agent_step.NewAPIClient.chat_completion_stream",
+        fake_chat_completion_stream,
+    )
+
+    with client.stream(
+        "POST",
+        "/api/v1/chat-step",
+        json=_step_request(stream=True),
+        headers={"Accept": "text/event-stream"},
+    ) as response:
+        events = _sse_events("".join(response.iter_text()))
+
+    assert response.status_code == 200
+    assert events[-1]["status"] == "tool_call"
+    assert events[-1]["tool_calls"][0]["name"] == "synergy.energy.load_types"
+    assert events[-1]["tool_calls"][0]["arguments"] == {"ef": 0.57}
+
+
+def test_chat_step_stream_emits_final_answer_deltas(client, monkeypatch):
+    req = _step_request(stream=True)
+    req["tool_results"] = [
+        {
+            "id": "call_1",
+            "name": "synergy.energy.load_types",
+            "status": "success",
+            "summary": "Maximum_Load 占比最高。",
+            "data": {"types": [{"load_type": "Maximum_Load", "percent": 44.91}]},
+        }
+    ]
+
+    async def fake_chat_completion_stream(self, **kwargs):
+        yield {"choices": [{"delta": {"content": "Maximum_Load 占比"}}]}
+        yield {"choices": [{"delta": {"content": "最高，约 44.9%。"}}]}
+
+    monkeypatch.setattr(
+        "core.agent_step.NewAPIClient.chat_completion_stream",
+        fake_chat_completion_stream,
+    )
+
+    with client.stream(
+        "POST",
+        "/api/v1/chat-step",
+        json=req,
+        headers={"Accept": "text/event-stream"},
+    ) as response:
+        body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    events = _sse_events(body)
+    assert [event["status"] for event in events] == ["progress", "delta", "delta", "final"]
+    assert events[1]["content"] == "Maximum_Load 占比"
+    assert events[2]["content"] == "最高，约 44.9%。"
+    assert events[-1]["answer"] == "Maximum_Load 占比最高，约 44.9%。"
+
+
+def test_chat_step_stream_without_tools_prompts_for_natural_text(client, monkeypatch):
+    req = _step_request(stream=True)
+    req["tools"] = []
+    calls = []
+
+    async def fake_chat_completion_stream(self, **kwargs):
+        calls.append(kwargs)
+        yield {"choices": [{"delta": {"content": "可以直接回答。"}}]}
+
+    monkeypatch.setattr(
+        "core.agent_step.NewAPIClient.chat_completion_stream",
+        fake_chat_completion_stream,
+    )
+
+    with client.stream(
+        "POST",
+        "/api/v1/chat-step",
+        json=req,
+        headers={"Accept": "text/event-stream"},
+    ) as response:
+        events = _sse_events("".join(response.iter_text()))
+
+    assert response.status_code == 200
+    system_prompt = calls[0]["messages"][0]["content"]
+    assert "如果无需工具或已有 tool_results 足够回答" in system_prompt
+    assert [event["status"] for event in events] == ["progress", "delta", "final"]
+    assert events[-1]["answer"] == "可以直接回答。"

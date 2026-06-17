@@ -46,6 +46,7 @@ from core.agent_step import (
     AgentStepRequest,
     agent_step_event_payload,
     run_agent_step,
+    run_agent_step_stream,
     sse_data as agent_step_sse_data,
 )
 
@@ -2065,8 +2066,8 @@ async def chat_step(req: AgentStepRequest, accept: str = Header(default="")):
                 "status": "progress",
                 "text": "正在判断需要的业务工具...",
             })
-            response = await run_agent_step(req)
-            yield agent_step_sse_data(agent_step_event_payload(response))
+            async for event in run_agent_step_stream(req):
+                yield agent_step_sse_data(event)
 
         return StreamingResponse(_event_stream(), media_type="text/event-stream")
 

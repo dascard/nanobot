@@ -778,6 +778,7 @@ class NewAPIClient:
         temperature: float = 0.7,
         model_tier: str = "smart",
         manual_model: str = "",
+        max_tokens: int | None = None,
         trace_id: str = "",
         run_id: str = "",
         llm_source: str = "",
@@ -816,6 +817,7 @@ class NewAPIClient:
             temperature,
             True,
             target_model,
+            max_tokens=max_tokens,
             enable_thinking=enable_thinking,
         )
         started = time.time()

@@ -159,13 +159,17 @@ def _openai_tools(req: AgentStepRequest) -> list[dict[str, Any]]:
     return tools
 
 
-def _messages(req: AgentStepRequest) -> list[dict[str, str]]:
+def _messages(req: AgentStepRequest, *, stream_text: bool = False) -> list[dict[str, str]]:
     instructions = req.instructions
+    final_rule = (
+        "如果无需工具或已有 tool_results 足够回答，直接输出面向用户的自然语言答案，不要输出 JSON。"
+        if stream_text
+        else '如果已有 tool_results 足够回答，必须只输出 JSON：{"status":"final","answer":"...","suggested_questions":["..."]}。'
+    )
     system = (
         "你是 agent-step.v1 的推理节点。你不能执行工具，也不能访问调用方 API 或数据库。\n"
         "如果需要业务数据，必须使用本轮 tools schema 中的原生 function call 选择工具和参数。\n"
-        "如果已有 tool_results 足够回答，必须只输出 JSON："
-        '{"status":"final","answer":"...","suggested_questions":["..."]}。\n'
+        f"{final_rule}\n"
         f"回复语言：{instructions.language}。artifact_policy={instructions.artifact_policy}。"
         f"do_not_fabricate={instructions.do_not_fabricate}。"
     )
@@ -193,6 +197,64 @@ def _first_message(result: dict[str, Any]) -> dict[str, Any]:
         return {}
     message = first.get("message")
     return message if isinstance(message, dict) else {}
+
+
+def _stream_delta(chunk: dict[str, Any]) -> dict[str, Any]:
+    choices = chunk.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return {}
+    first = choices[0]
+    if not isinstance(first, dict):
+        return {}
+    delta = first.get("delta")
+    if isinstance(delta, dict):
+        return delta
+    message = first.get("message")
+    return message if isinstance(message, dict) else {}
+
+
+def _accumulate_stream_tool_calls(
+    calls: dict[int, dict[str, Any]],
+    raw_calls: Any,
+) -> None:
+    if not isinstance(raw_calls, list):
+        return
+    for fallback_index, raw_call in enumerate(raw_calls):
+        if not isinstance(raw_call, dict):
+            continue
+        index = raw_call.get("index")
+        if not isinstance(index, int):
+            index = fallback_index
+        entry = calls.setdefault(
+            index,
+            {
+                "id": "",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            },
+        )
+        call_id = raw_call.get("id")
+        if isinstance(call_id, str) and call_id:
+            entry["id"] = call_id
+        call_type = raw_call.get("type")
+        if isinstance(call_type, str) and call_type:
+            entry["type"] = call_type
+        function = raw_call.get("function")
+        if not isinstance(function, dict):
+            continue
+        target_function = entry.setdefault("function", {"name": "", "arguments": ""})
+        name = function.get("name")
+        if isinstance(name, str) and name:
+            current_name = str(target_function.get("name") or "")
+            if not current_name:
+                target_function["name"] = name
+            elif name.startswith(current_name):
+                target_function["name"] = name
+            elif not current_name.endswith(name):
+                target_function["name"] = current_name + name
+        arguments = function.get("arguments")
+        if isinstance(arguments, str) and arguments:
+            target_function["arguments"] = str(target_function.get("arguments") or "") + arguments
 
 
 def _parse_arguments(raw: Any) -> dict[str, Any]:
@@ -346,6 +408,70 @@ async def run_agent_step(req: AgentStepRequest) -> AgentStepResponse:
         llm_source="agent_step",
     )
     return normalize_agent_step_response(req, result)
+
+
+async def run_agent_step_stream(req: AgentStepRequest):
+    if req.protocol != AGENT_STEP_PROTOCOL:
+        yield agent_step_event_payload(_error_response(
+            req,
+            code="invalid_protocol",
+            message=f"不支持的协议：{req.protocol}",
+            root_cause="protocol_mismatch",
+            retry=f"使用 {AGENT_STEP_PROTOCOL} 重新请求。",
+            stop=True,
+        ))
+        return
+
+    client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
+    content_chunks: list[str] = []
+    stream_tool_calls: dict[int, dict[str, Any]] = {}
+    emit_delta = bool(req.tool_results) or not req.tools
+
+    async for chunk in client.chat_completion_stream(
+        messages=_messages(req, stream_text=True),
+        tools=_openai_tools(req),
+        temperature=0.2,
+        model_tier="smart",
+        manual_model=NANOBOT_AGENT_STEP_MODEL,
+        max_tokens=1200,
+        llm_source="agent_step",
+    ):
+        if chunk.get("error"):
+            yield agent_step_event_payload(_error_response(
+                req,
+                code="llm_error",
+                message=str(chunk.get("error")),
+                root_cause="new_api_chat_completion_stream_failed",
+                retry="稍后重试或检查模型网关配置。",
+                stop=False,
+            ))
+            return
+
+        delta = _stream_delta(chunk)
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            content_chunks.append(content)
+            if emit_delta:
+                yield {"status": "delta", "content": content}
+        _accumulate_stream_tool_calls(stream_tool_calls, delta.get("tool_calls"))
+
+    if stream_tool_calls:
+        message = {"tool_calls": [stream_tool_calls[index] for index in sorted(stream_tool_calls)]}
+        response = _parse_tool_calls(req, message)
+        if response is None:
+            response = _error_response(
+                req,
+                code="invalid_tool_call_stream",
+                message="模型流式工具调用不完整。",
+                root_cause="stream_tool_call_incomplete",
+                retry="重新发起 step 请求。",
+                stop=False,
+            )
+        yield agent_step_event_payload(response)
+        return
+
+    response = _parse_final_content(req, "".join(content_chunks))
+    yield agent_step_event_payload(response)
 
 
 def agent_step_event_payload(response: AgentStepResponse) -> dict[str, Any]:
