@@ -227,6 +227,103 @@ class TestNanobotBridge:
         assert sorted(results) == ["session-a", "session-b"]
         assert max_active == 2
 
+    def test_bridge_pool_ttl_does_not_stop_inflight_bridge(self, monkeypatch):
+        import time
+        import nanobot_kt.bridge as bridge_mod
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        class FakeBridge:
+            def __init__(self, _creature_path="creatures/nanobot"):
+                self.stop_count = 0
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                self.stop_count += 1
+
+            async def handle_message(self, query, *, session_id="", **_kwargs):
+                if session_id == "busy":
+                    entered.set()
+                    await release.wait()
+                return session_id
+
+        monkeypatch.setattr(bridge_mod, "NanobotBridge", FakeBridge)
+
+        async def _run():
+            pool = bridge_mod.NanobotBridgePool()
+            pool.BRIDGE_TTL_SECONDS = 0.01
+            await pool.start()
+
+            busy_task = asyncio.create_task(pool.handle_message("a", session_id="busy"))
+            await entered.wait()
+            busy_bridge = pool._bridges["busy"]
+            pool._bridge_last_used["busy"] = time.time() - 10
+
+            fresh_result = await pool.handle_message("b", session_id="fresh")
+            await asyncio.sleep(0)
+
+            assert fresh_result == "fresh"
+            assert busy_bridge.stop_count == 0
+            assert pool._bridges["busy"] is busy_bridge
+
+            release.set()
+            assert await busy_task == "busy"
+            await pool.stop()
+
+        run_async(_run())
+
+    def test_bridge_pool_tracks_stale_stop_task_until_finished(self, monkeypatch, caplog):
+        import time
+        import nanobot_kt.bridge as bridge_mod
+
+        release_stop = asyncio.Event()
+        entered_stop = asyncio.Event()
+
+        class FakeBridge:
+            def __init__(self, _creature_path="creatures/nanobot"):
+                self.stop_count = 0
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                self.stop_count += 1
+                entered_stop.set()
+                await release_stop.wait()
+
+            async def handle_message(self, query, *, session_id="", **_kwargs):
+                return session_id
+
+        monkeypatch.setattr(bridge_mod, "NanobotBridge", FakeBridge)
+
+        async def _run():
+            pool = bridge_mod.NanobotBridgePool()
+            pool.BRIDGE_TTL_SECONDS = 0.01
+            await pool.start()
+            assert await pool.handle_message("a", session_id="stale") == "stale"
+            stale_bridge = pool._bridges["stale"]
+            pool._bridge_last_used["stale"] = time.time() - 10
+
+            assert await pool.handle_message("b", session_id="fresh") == "fresh"
+            await entered_stop.wait()
+            assert stale_bridge.stop_count == 1
+            assert len(pool._stop_tasks) == 1
+
+            release_stop.set()
+            for task in list(pool._stop_tasks):
+                await task
+            await asyncio.sleep(0)
+            assert pool._stop_tasks == set()
+
+            await pool.stop()
+
+        with caplog.at_level("WARNING", logger="nanobot.kt"):
+            run_async(_run())
+        assert "Task exception was never retrieved" not in caplog.text
+
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_bridge_start(self, MockAgent, mock_load):

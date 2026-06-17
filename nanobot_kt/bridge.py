@@ -1956,6 +1956,8 @@ class NanobotBridgePool:
         self.creature_path = creature_path
         self._bridges: dict[str, NanobotBridge] = {}
         self._bridge_last_used: dict[str, float] = {}
+        self._bridge_inflight: dict[str, int] = {}
+        self._stop_tasks: set[asyncio.Task] = set()
         self._create_lock = asyncio.Lock()
         self._started = False
         self.BRIDGE_TTL_SECONDS = 600  # 10 分钟无使用则回收
@@ -1986,9 +1988,13 @@ class NanobotBridgePool:
         async with self._create_lock:
             bridges = list(self._bridges.values())
             self._bridges.clear()
+            self._bridge_last_used.clear()
+            self._bridge_inflight.clear()
             self._started = False
         if bridges:
             await asyncio.gather(*(bridge.stop() for bridge in bridges), return_exceptions=True)
+        if self._stop_tasks:
+            await asyncio.gather(*list(self._stop_tasks), return_exceptions=True)
         logger.info("[NanobotBridgePool] stopped")
 
     def _session_key(self, user_id: str = "", session_id: str = "") -> str:
@@ -1998,29 +2004,75 @@ class NanobotBridgePool:
         uid = str(user_id or "").strip()
         return f"user:{uid}" if uid else "_default"
 
-    async def _get_bridge(self, key: str) -> NanobotBridge:
-        import time as _t
-        async with self._create_lock:
-            # TTL 清理
-            now = _t.time()
-            stale = [k for k, ts in list(self._bridge_last_used.items())
-                     if now - ts > self.BRIDGE_TTL_SECONDS]
-            for k in stale:
-                b = self._bridges.pop(k, None)
-                self._bridge_last_used.pop(k, None)
-                if b:
-                    asyncio.create_task(b.stop())
-            if stale:
-                logger.info("[BridgePool] Cleaned %d stale bridges", len(stale))
+    def _track_stop_task(self, bridge: NanobotBridge, key: str) -> asyncio.Task:
+        task = asyncio.create_task(bridge.stop(), name=f"bridge-stop:{key}")
+        self._stop_tasks.add(task)
 
-            bridge = self._bridges.get(key)
-            if bridge is None:
-                bridge = NanobotBridge(self.creature_path)
-                await bridge.start()
-                self._bridges[key] = bridge
-                logger.info("[NanobotBridgePool] created child bridge for session=%s", key)
-            self._bridge_last_used[key] = _t.time()
+        def _done(done: asyncio.Task) -> None:
+            self._stop_tasks.discard(done)
+            try:
+                done.result()
+            except asyncio.CancelledError:
+                logger.debug("[BridgePool] stop task cancelled for session=%s", key)
+            except Exception as exc:
+                logger.warning(
+                    "[BridgePool] stop task failed for session=%s: %s",
+                    key,
+                    exc,
+                    exc_info=True,
+                )
+
+        task.add_done_callback(_done)
+        return task
+
+    async def _get_or_create_bridge_locked(self, key: str) -> NanobotBridge:
+        import time as _t
+
+        # TTL 清理只回收空闲 bridge；正在处理请求的 bridge 由 release 刷新 last_used。
+        now = _t.time()
+        stale = [
+            k for k, ts in list(self._bridge_last_used.items())
+            if now - ts > self.BRIDGE_TTL_SECONDS and self._bridge_inflight.get(k, 0) <= 0
+        ]
+        for k in stale:
+            b = self._bridges.pop(k, None)
+            self._bridge_last_used.pop(k, None)
+            self._bridge_inflight.pop(k, None)
+            if b:
+                self._track_stop_task(b, k)
+        if stale:
+            logger.info("[BridgePool] Cleaned %d stale bridges", len(stale))
+
+        bridge = self._bridges.get(key)
+        if bridge is None:
+            bridge = NanobotBridge(self.creature_path)
+            await bridge.start()
+            self._bridges[key] = bridge
+            logger.info("[NanobotBridgePool] created child bridge for session=%s", key)
+        self._bridge_last_used[key] = _t.time()
+        return bridge
+
+    async def _get_bridge(self, key: str) -> NanobotBridge:
+        async with self._create_lock:
+            return await self._get_or_create_bridge_locked(key)
+
+    async def _acquire_bridge(self, key: str) -> NanobotBridge:
+        async with self._create_lock:
+            bridge = await self._get_or_create_bridge_locked(key)
+            self._bridge_inflight[key] = self._bridge_inflight.get(key, 0) + 1
             return bridge
+
+    async def _release_bridge(self, key: str) -> None:
+        import time as _t
+
+        async with self._create_lock:
+            count = self._bridge_inflight.get(key, 0)
+            if count <= 1:
+                self._bridge_inflight.pop(key, None)
+                if key in self._bridges:
+                    self._bridge_last_used[key] = _t.time()
+            else:
+                self._bridge_inflight[key] = count - 1
 
     async def handle_message(
         self,
@@ -2036,16 +2088,19 @@ class NanobotBridgePool:
         if not self._started:
             await self.start()
         key = self._session_key(user_id=user_id, session_id=session_id)
-        bridge = await self._get_bridge(key)
-        return await bridge.handle_message(
-            query,
-            user_id=user_id,
-            session_id=session_id,
-            sender_name=sender_name,
-            metadata=metadata,
-            stream_queue=stream_queue,
-            stream=stream,
-        )
+        bridge = await self._acquire_bridge(key)
+        try:
+            return await bridge.handle_message(
+                query,
+                user_id=user_id,
+                session_id=session_id,
+                sender_name=sender_name,
+                metadata=metadata,
+                stream_queue=stream_queue,
+                stream=stream,
+            )
+        finally:
+            await self._release_bridge(key)
 
     def pop_last_reply_meta(self, session_id: str = "") -> dict | None:
         """从对应会话的 child bridge 取出最近一次 reply_meta。"""
