@@ -107,6 +107,8 @@ class TimingDecision:
     theta: float
     low_threshold: float
     high_threshold: float
+    conflict_score: float
+    soft_reject_cap: float
     delay_seconds: int | None
     model_used: bool
     model_action: str
@@ -343,11 +345,14 @@ def _valid_model_hint(model_hint: TimingModelHint | None) -> bool:
 
 
 def _soft_reject_cap(score: float, signals: TimingSignals) -> float:
+    return _round_score(min(score, _soft_reject_cap_limit(signals)))
+
+
+def _soft_reject_cap_limit(signals: TimingSignals) -> float:
     s_bot = _clip01(float(signals.sub_signals.get("s_bot", 0.0) or 0.0))
     if s_bot <= 0:
-        return score
-    cap = 1.0 - BOT_SOFT_REJECT_GAMMA * s_bot
-    return _round_score(min(score, cap))
+        return 1.0
+    return _round_score(1.0 - BOT_SOFT_REJECT_GAMMA * s_bot)
 
 
 def decide_timing(
@@ -386,6 +391,8 @@ def decide_timing(
     low = round(max(0.0, theta - margin), 6)
     high = round(min(1.0, theta + margin), 6)
     kappa = min(signals.direct_score, signals.suppress_score)
+    conflict_score = _round_score(kappa)
+    soft_reject_cap = _soft_reject_cap_limit(signals)
 
     model_action = str(model_hint.action if model_hint else "" or "").strip().lower()
     model_confidence = _clip01(float(model_hint.confidence if model_hint else 0.0))
@@ -414,6 +421,8 @@ def decide_timing(
                 theta=theta,
                 low_threshold=low,
                 high_threshold=high,
+                conflict_score=conflict_score,
+                soft_reject_cap=soft_reject_cap,
                 delay_seconds=delay,
                 model_used=True,
                 model_action=model_action,
@@ -438,6 +447,8 @@ def decide_timing(
             theta=theta,
             low_threshold=low,
             high_threshold=high,
+            conflict_score=conflict_score,
+            soft_reject_cap=soft_reject_cap,
             delay_seconds=delay,
             model_used=False,
             model_action=model_action,
@@ -463,6 +474,8 @@ def decide_timing(
             theta=theta,
             low_threshold=low,
             high_threshold=high,
+            conflict_score=conflict_score,
+            soft_reject_cap=soft_reject_cap,
             delay_seconds=delay,
             model_used=False,
             model_action="",
@@ -481,6 +494,8 @@ def decide_timing(
             theta=theta,
             low_threshold=low,
             high_threshold=high,
+            conflict_score=conflict_score,
+            soft_reject_cap=soft_reject_cap,
             delay_seconds=None,
             model_used=False,
             model_action="",
@@ -512,6 +527,8 @@ def decide_timing(
             theta=theta,
             low_threshold=low,
             high_threshold=high,
+            conflict_score=conflict_score,
+            soft_reject_cap=soft_reject_cap,
             delay_seconds=delay,
             model_used=True,
             model_action=model_action,
@@ -537,6 +554,8 @@ def decide_timing(
         theta=theta,
         low_threshold=low,
         high_threshold=high,
+        conflict_score=conflict_score,
+        soft_reject_cap=soft_reject_cap,
         delay_seconds=delay,
         model_used=False,
         model_action=model_action,

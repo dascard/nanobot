@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from core.timing_score import TimingModelHint, decide_timing, extract_signals
 
 
@@ -102,3 +104,26 @@ def test_model_failure_in_fuzzy_band_falls_back_to_rule_side():
     assert decision.stage == "rule_fallback"
     assert decision.model_used is False
     assert decision.action == "continue"
+
+
+def test_decision_exposes_conflict_and_soft_reject_debug_fields():
+    decision = decide_timing(
+        text="@bot https://example.com/a",
+        is_group=True,
+        is_at_bot=True,
+        is_other_bot=True,
+        model_hint=TimingModelHint(
+            action="continue",
+            confidence=0.8,
+            raw="{}",
+            reason="被明确点名",
+        ),
+    )
+
+    payload = asdict(decision)
+
+    assert payload["conflict_score"] == min(
+        decision.signals.direct_score,
+        decision.signals.suppress_score,
+    )
+    assert payload["soft_reject_cap"] == 0.44
