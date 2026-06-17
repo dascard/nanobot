@@ -682,7 +682,7 @@ git commit -m "docs(提示词): 同步旧版收口状态"
 **文件：**
 - 不新增文件；验证本阶段全部改动。
 
-- [ ] **步骤 1：运行 P1-5 定向回归**
+- [x] **步骤 1：运行 P1-5 定向回归**
 
 运行：
 
@@ -702,7 +702,9 @@ python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行全量测试**
+实际：已纳入 `tests/test_prompt_legacy_admin_readonly.py` 后运行，`70 passed, 20 warnings`。
+
+- [x] **步骤 2：运行全量测试**
 
 运行：
 
@@ -713,7 +715,9 @@ python -B -m pytest tests/ -q -p no:cacheprovider --durations=20
 
 预期：0 failures。
 
-- [ ] **步骤 3：检查禁止项**
+实际：代码冻结后重新运行，`1238 passed, 6 skipped, 113 warnings in 84.68s`。
+
+- [x] **步骤 3：检查禁止项**
 
 运行：
 
@@ -727,7 +731,9 @@ rg -n 'prompt_fallback|fallback_v1|PromptAssembler\\.build' nanobot_kt api tests
 - `fallback_v1` 只允许出现在废弃配置说明、迁移文档或负向测试中。
 - `PromptAssembler.build` 只允许出现在显式 V1 rollback、只读迁移、旧测试或负向守卫测试中。
 
-- [ ] **步骤 4：最终提交状态检查**
+实际：命中项均属于废弃配置说明、历史设计文档或负向守卫测试；未发现 live V2 fallback 发送路径。
+
+- [x] **步骤 4：最终提交状态检查**
 
 运行：
 
@@ -737,3 +743,9 @@ git log --oneline -5
 ```
 
 预期：本阶段文件已分阶段提交；工作区只剩与本阶段无关的既有脏文件。
+
+实际：
+
+- 最近提交：`cb183b8 docs(提示词): 同步旧版收口状态`、`5009034 refactor(提示词): 降级旧版管理入口`、`99c1803 refactor(评测): 默认使用 V2 回复评估`、`afc3dd4 refactor(提示词): 禁用旧版审计回退`。
+- 任务文件无未提交差异。
+- 剩余脏文件主要是既有 pycache、`docs/goal.md`、未跟踪计划 / skill 文件，以及 `npm run build` 产生但未纳入提交的 `webui/dist` 构建产物。
