@@ -2,7 +2,9 @@
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+
+from core.timing_score import TimingDecision, TimingModelHint, decide_timing
 
 logger = logging.getLogger("nanobot.private_timing")
 
@@ -112,6 +114,7 @@ class PrivateDecision:
     complexity: int = 0
     effort: str = "short"       # "ignore" | "casual" | "short" | "serious"
     runtime_preset: str = "lightweight"  # "none" | "lightweight" | "full"
+    timing_scoring: dict | None = None
 
 
 @dataclass
@@ -131,18 +134,32 @@ class PrivateTimingGate:
         if not text and not has_files:
             self.stats["no_reply"] += 1
             return _log_d("no_reply", "empty message", 1.0, "rule_empty", "ignore", "none", user_id)
+
+        scoring = _score_private_timing(text, has_files=has_files)
+        if scoring.stage == "rule_shortcut":
+            return self._decision_from_scoring_shortcut(
+                scoring,
+                text,
+                user_id=user_id,
+                is_superuser=is_superuser,
+            )
+
         if text in _NO_REPLY_SET:
             self.stats["no_reply"] += 1
-            return _log_d("no_reply", "short acknowledgement", 0.9, "rule_ack", "ignore", "none", user_id)
+            return _log_d("no_reply", "short acknowledgement", 0.9, "rule_ack", "ignore", "none",
+                          user_id, timing_scoring=asdict(scoring))
         if any(m in text for m in _WAIT_MARKERS) and len(text) < 30:
             self.stats["wait"] += 1
-            return _log_d("wait", "looks incomplete", 0.8, "rule_wait", "ignore", "none", user_id)
+            return _log_d("wait", "looks incomplete", 0.8, "rule_wait", "ignore", "none",
+                          user_id, timing_scoring=asdict(scoring))
         if _looks_transport_only(text, has_files):
             self.stats["no_reply"] += 1
-            return _log_d("no_reply", "transport_only", 0.95, "rule_transport", "ignore", "none", user_id)
+            return _log_d("no_reply", "transport_only", 0.95, "rule_transport", "ignore", "none",
+                          user_id, timing_scoring=asdict(scoring))
         if has_files and not text:
             self.stats["reply_now"] += 1
-            return _log_d("reply_now", "image_only", 0.95, "rule_image_only", "short", "lightweight", user_id, complexity=3)
+            return _log_d("reply_now", "image_only", 0.95, "rule_image_only", "short", "lightweight",
+                          user_id, complexity=3, timing_scoring=asdict(scoring))
 
         effort, runtime_preset, intent = _infer_effort(text, is_superuser)
 
@@ -160,16 +177,19 @@ class PrivateTimingGate:
             from clients.classifier_client import get_private_decision_classifier
             from config import CLASSIFIER_TIMEOUT
             import asyncio
+            classifier = self.classifier or get_private_decision_classifier()
             result = await asyncio.wait_for(
-                asyncio.to_thread(get_private_decision_classifier().classify, text, has_files),
+                asyncio.to_thread(classifier.classify, text, has_files),
                 timeout=CLASSIFIER_TIMEOUT + 1,
             )
-            action = result.get("action", "reply_now")
+            scoring = _score_private_timing(text, has_files=has_files, model_result=result)
+            action = _private_action_from_timing(scoring.action)
             complexity = int(result.get("complexity", 0) or 0)
             self.stats[action] += 1
             d = PrivateDecision(action=action, reason=result.get("reason", ""),
-                                confidence=1.0, raw_label=result.get("raw", ""),
-                                complexity=complexity, effort=effort, runtime_preset=runtime_preset)
+                                confidence=scoring.model_confidence or 1.0, raw_label=result.get("raw", ""),
+                                complexity=complexity, effort=effort, runtime_preset=runtime_preset,
+                                timing_scoring=asdict(scoring))
             logger.info("[PrivateDecision] result user=%s action=%s effort=%s tool=%s complexity=%s",
                         user_id, action, effort, runtime_preset, complexity)
             return d
@@ -180,19 +200,115 @@ class PrivateTimingGate:
 
         if _looks_transport_only(text, has_files):
             self.stats["no_reply"] += 1
-            return _log_d("no_reply", "fallback transport", 0.6, "fallback_transport", "ignore", "none", user_id)
-        self.stats["reply_now"] += 1
-        return _log_d("reply_now", "fallback default", 0.5, "fallback", effort, runtime_preset, user_id)
+            return _log_d("no_reply", "fallback transport", 0.6, "fallback_transport", "ignore", "none",
+                          user_id, timing_scoring=asdict(scoring))
+        action = _private_action_from_timing(scoring.action)
+        if action == "reply_now":
+            self.stats["reply_now"] += 1
+            return _log_d("reply_now", "fallback default", 0.5, "fallback", effort, runtime_preset,
+                          user_id, timing_scoring=asdict(scoring))
+        self.stats[action] += 1
+        return _log_d(action, f"fallback scoring: {scoring.reason}", 0.5, "fallback_scoring", "ignore",
+                      "none", user_id, timing_scoring=asdict(scoring))
+
+    def _decision_from_scoring_shortcut(
+        self,
+        scoring: TimingDecision,
+        text: str,
+        *,
+        user_id: str,
+        is_superuser: bool,
+    ) -> PrivateDecision:
+        action = _private_action_from_timing(scoring.action)
+        if action == "reply_now":
+            effort, runtime_preset, intent = _infer_effort(text, is_superuser)
+            complexity = _complexity_for_effort(effort)
+            reason = intent
+        elif action == "wait":
+            effort = "short"
+            runtime_preset = "lightweight"
+            complexity = 0
+            reason = scoring.reason
+        else:
+            effort = "ignore"
+            runtime_preset = "none"
+            complexity = 0
+            reason = scoring.reason
+
+        self.stats[action] += 1
+        return _log_d(
+            action,
+            reason,
+            1.0,
+            "scoring_rule_shortcut",
+            effort,
+            runtime_preset,
+            user_id,
+            complexity=complexity,
+            timing_scoring=asdict(scoring),
+        )
 
 
 def _log_d(action: str, reason: str, confidence: float, raw: str,
            effort: str, runtime_preset: str, user_id: str,
-           complexity: int = 0) -> PrivateDecision:
+           complexity: int = 0, timing_scoring: dict | None = None) -> PrivateDecision:
     d = PrivateDecision(action, reason, confidence, raw,
-                        complexity=complexity, effort=effort, runtime_preset=runtime_preset)
+                        complexity=complexity, effort=effort, runtime_preset=runtime_preset,
+                        timing_scoring=timing_scoring)
     logger.info("[PrivateDecision] rule user=%s action=%s effort=%s tool=%s conf=%.2f reason=%s",
                 user_id, action, effort, runtime_preset, confidence, reason[:80])
     return d
+
+
+def _score_private_timing(
+    text: str,
+    *,
+    has_files: bool = False,
+    model_result: dict | None = None,
+) -> TimingDecision:
+    model_hint = _model_hint_from_private_result(model_result) if model_result else None
+    return decide_timing(
+        text,
+        is_group=False,
+        is_private=True,
+        has_files=has_files,
+        model_hint=model_hint,
+    )
+
+
+def _model_hint_from_private_result(result: dict) -> TimingModelHint:
+    reason = str(result.get("reason", ""))
+    confidence = 0.5 if _is_low_confidence_private_parse(reason) else 0.8
+    return TimingModelHint(
+        action=str(result.get("action", "reply_now")),
+        confidence=confidence,
+        raw=str(result.get("raw", "")),
+        reason=reason,
+    )
+
+
+def _is_low_confidence_private_parse(reason: str) -> bool:
+    lowered = str(reason or "").lower()
+    return any(marker in lowered for marker in ("fallback", "invalid", "legacy"))
+
+
+def _private_action_from_timing(action: str) -> str:
+    normalized = str(action or "").strip().lower()
+    if normalized in {"continue", "reply_now"}:
+        return "reply_now"
+    if normalized in {"wait", "no_reply"}:
+        return normalized
+    return "reply_now"
+
+
+def _complexity_for_effort(effort: str) -> int:
+    if effort == "serious":
+        return 6
+    if effort == "casual":
+        return 2
+    if effort == "short":
+        return 3
+    return 0
 
 
 _gate: PrivateTimingGate | None = None
