@@ -969,6 +969,19 @@ class TestPersonaAdmin:
         assert item["scoring"]["stage"] == "rule_shortcut"
         assert item["scoring"]["signals"]["sub_signals"]["s_other"] == 0.75
 
+    def test_timing_gate_test_route_is_async(self):
+        import inspect
+        from api.admin_routes import timing_gate_test
+
+        assert inspect.iscoroutinefunction(timing_gate_test)
+
+    def test_timing_gate_test_repeats_is_capped_to_five(self):
+        from pydantic import ValidationError
+        from api.admin_routes import TimingGateTestRequest
+
+        with pytest.raises(ValidationError):
+            TimingGateTestRequest(context="测试", repeats=6)
+
 
 class TestModelCatalog:
     """模型目录 + 路由 API 测试"""

@@ -1,5 +1,6 @@
 """WebUI 管理 API——Sticker/Block/Config/DB 管理。prefix=/api/v1/admin，认证使用 NANOBOT_ADMIN_TOKEN。"""
 
+import asyncio
 import json
 import logging
 import os
@@ -955,11 +956,11 @@ def timing_gate_events(
 
 class TimingGateTestRequest(BaseModel):
     context: str = Field(default="", max_length=8000)
-    repeats: int = Field(default=1, ge=1, le=20)
+    repeats: int = Field(default=1, ge=1, le=5)
 
 
 @router.post("/timing-gate/test")
-def timing_gate_test(body: TimingGateTestRequest, _auth=Depends(verify_admin)):
+async def timing_gate_test(body: TimingGateTestRequest, _auth=Depends(verify_admin)):
     import time
     from clients.classifier_client import get_timing_gate
 
@@ -968,7 +969,7 @@ def timing_gate_test(body: TimingGateTestRequest, _auth=Depends(verify_admin)):
     runs = []
     for idx in range(body.repeats):
         t0 = time.time()
-        result = gate.judge(context)
+        result = await asyncio.to_thread(gate.judge, context)
         latency_ms = int((time.time() - t0) * 1000)
         runs.append({
             "index": idx + 1,
