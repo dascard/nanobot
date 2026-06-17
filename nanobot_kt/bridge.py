@@ -1220,7 +1220,7 @@ class NanobotBridge:
                 event_content = make_multimodal_content(prompt_build.event_content, images=image_parts)
             else:
                 event_content = prompt_build.event_content
-            event = create_user_event(event_content)
+            event = create_user_event(event_content, stream=meta["stream"])
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 
             # --- Dynamic Model Routing (new priority-ordered system) ---
@@ -1362,12 +1362,12 @@ class NanobotBridge:
                 logger.warning(f"[Model Router] Failure tracker unavailable: {e}")
             max_attempts = min(len(candidates), 8) if candidates else 5
             result = None
-            next_event = create_user_event(event_content)
+            next_event = create_user_event(event_content, stream=meta["stream"])
 
             for attempt in range(max_attempts):
                 self._output.clear()
                 event = next_event
-                next_event = create_user_event(event_content)
+                next_event = create_user_event(event_content, stream=meta["stream"])
 
                 # Get next model from ordered list
                 try:
@@ -1500,9 +1500,9 @@ class NanobotBridge:
                             content = msgs[user_idx].content
                             if isinstance(content, str) and content == query:
                                 self._agent.controller.conversation.truncate_from(user_idx)
-                            next_event = create_user_event(event_content)
+                            next_event = create_user_event(event_content, stream=meta["stream"])
                     if not tool_results_preserved:
-                        next_event = create_user_event(event_content)
+                        next_event = create_user_event(event_content, stream=meta["stream"])
                     continue
                 else:
                     await _call_tracker_method(tracker, "record_success", target_model)

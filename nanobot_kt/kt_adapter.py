@@ -36,8 +36,8 @@ def apply_prompt_messages(agent: Any, messages: list[dict[str, Any]]) -> int:
     return len(messages or [])
 
 
-def create_user_event(content: Any) -> Any:
-    return create_user_input_event(content)
+def create_user_event(content: Any, **context: Any) -> Any:
+    return create_user_input_event(content, **context)
 
 
 async def process_event(agent: Any, event: Any) -> Any:
