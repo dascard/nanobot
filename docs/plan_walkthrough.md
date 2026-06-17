@@ -4,11 +4,11 @@
 更新日期：2026-06-17
 本轮计划写入日期：2026-06-17
 
-本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次更新基于 2026-06-17 的提交状态和当前工作区中间态重新校准：P1-6 任务 4 已提交，任务 5「下线 legacy 管理页和旧 admin 迁移路由」已完成红灯验证并进入实现阶段，尚未完成前端收口、回归验证和阶段提交。
+本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-17，基于最新阶段提交 `5e3c064 refactor(提示词): 下线旧版管理入口` 重新核对：P1-6 任务 1-5 已完成并提交，当前下一步是任务 6「删除 legacy prompt 资产与构建脚本」。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口，以及 P1-6 的任务模板迁移和 V1 live 分支封存均已完成。当前执行焦点是 P1-6 任务 5：把 legacy / managed 管理面从「只读迁移入口」推进到明确下线，随后再删除冗余 V1 / legacy 资产并做去版本化命名。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口，以及 P1-6 的任务模板迁移、V1 live 分支封存和旧管理面下线均已完成。当前执行焦点是 P1-6 任务 6：删除冗余 V1 / legacy 资产与构建脚本；随后进入任务 7，建立无版本 canonical prompt 命名兼容层。
 
 ## 文档口径
 
@@ -64,7 +64,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-3 | 已完成 | Prompt V2 默认 live 接管 | 默认 engine 改为 V2，保留显式 V1 回滚，初始化 `data/prompts_v2`，同步 admin preview 和 reply-test 默认值 | `2be9329` / `8a1e177` / `8a73909` |
 | P1-4 | 已完成 | H29 第一刀：提取 Prompt Runtime 请求组装 | 从 `handle_message()` 中抽出 `PromptRuntimeInput` 构造边界，不移动 trace、tool plan、conversation 注入和 audit 异常处理 | `refactor(桥接): 提取提示词运行时组装` |
 | P1-5 | 已完成 | Prompt legacy 收口 | live `fallback_v1` 已禁用，评估入口已转 V2，legacy / managed 管理写入口已降级为只读迁移入口 | `afc3dd4` / `99c1803` / `5009034` |
-| P1-6 | 当前推进，任务 5 中间态 | 删除冗余提示词资产并去版本化 | 旧任务 prompt 与 V1 live 分支已收敛；当前先下线 legacy 管理面，再删除冗余资产并去掉 V2 命名后缀 | `refactor(提示词): 下线旧版管理入口` |
+| P1-6 | 当前推进，任务 6 待执行 | 删除冗余提示词资产并去版本化 | 旧任务 prompt、V1 live 分支和 legacy 管理面已收敛；当前删除旧资产与构建脚本，再去掉 V2 命名后缀 | `refactor(提示词): 删除旧版提示词资产` |
 | P1-7 | 已部分完成，待继续 | 连接池复用与残余同步 IO 审计 | 共享 `aiohttp.ClientSession` 已落地；继续审计 compaction / image / sticker 同步 IO | `4550aca` / `2bf4ee7` |
 | P1-8 | 待执行 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `feat(路由): 按模型能力校验请求` |
 | P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
@@ -457,4 +457,4 @@ P1-6 验收重点：
 
 ## 下一步
 
-当前优先执行 P1-6 任务 5。下一步先完成管理面下线：补后端旧 prompt 路由的最小 410 兼容出口，删除 WebUI `/prompt-legacy`、`/prompts` 和旧页面组件，运行任务 5 定向回归与 `npm run build`，再按阶段单独提交。任务 5 提交后继续任务 6 删除 legacy prompt 资产与构建脚本，任务 7 建立无版本 canonical prompt 命名兼容层；TimingGate 真实日志标注 / CI 接入属于后续运营项，暂不抢占 P1-6 的实现顺序。
+当前优先执行 P1-6 任务 6。下一步先写守卫红灯测试，确认 `creatures/nanobot/prompt.md`、`scripts/build_nanobot_prompt.py`、`core/prompt_runtime.py`、`core/prompt_assembler.py`、`core/prompt_compiler.py`、`core/legacy_prompt_runtime.py` 等旧资产仍存在；随后移除 `creatures/nanobot/config.yaml` 对 `prompt.md` 的依赖，删除旧模块、旧模板目录和构建脚本，调整 legacy prompt 相关测试口径。任务 6 完成并单独提交后，继续任务 7 建立无版本 canonical prompt 命名兼容层；TimingGate 真实日志标注 / CI 接入属于后续运营项，暂不抢占 P1-6 的实现顺序。
