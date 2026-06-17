@@ -42,6 +42,12 @@ from clients.model_registry import registry
 from clients.new_api_client import NewAPIClient
 from clients.classifier_client import get_guardrail, get_timing_gate
 from core.sqlite_retry import run_sqlite_locked_retry
+from core.agent_step import (
+    AgentStepRequest,
+    agent_step_event_payload,
+    run_agent_step,
+    sse_data as agent_step_sse_data,
+)
 
 logger = logging.getLogger("nanobot.routes")
 router = APIRouter(prefix="/api/v1")
@@ -2037,6 +2043,26 @@ def search_history_logs(
 async def render_markdown(text: str):
     """遗留端点，已弃用。目前直接内嵌 base64 返回"""
     return {"status": "deprecated"}
+
+
+@router.post("/chat-step", dependencies=[Depends(verify_token)])
+async def chat_step(req: AgentStepRequest, accept: str = Header(default="")):
+    """SynergyOpt 等外部编排方使用的 HTTP 半 ReAct step/resume 端点。"""
+    wants_stream = req.stream or "text/event-stream" in str(accept or "").lower()
+
+    if wants_stream:
+        async def _event_stream():
+            yield agent_step_sse_data({
+                "status": "progress",
+                "text": "正在判断需要的业务工具...",
+            })
+            response = await run_agent_step(req)
+            yield agent_step_sse_data(agent_step_event_payload(response))
+
+        return StreamingResponse(_event_stream(), media_type="text/event-stream")
+
+    response = await run_agent_step(req)
+    return agent_step_event_payload(response)
 
 
 
