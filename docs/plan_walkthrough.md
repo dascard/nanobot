@@ -1,12 +1,13 @@
 # Nanobot Server 阶段计划 Walkthrough
 
+计划日期：2026-06-17
 更新日期：2026-06-17
 
 本文记录当前任务的完整阶段计划，用于继续推进 `docs/todo.md` 中 TimingGate 混合决策路线，并保持每个阶段完成后单独验证、单独提交。
 
 ## 当前目标
 
-优先完成 TimingGate「规则信号 + 模型」混合决策的剩余落地工作。当前重点是让私聊和群聊共享同一套 scoring 公式，并在后续阶段继续处理 cooldown 兼容路径、配置开关、真实日志评估和 eval 门禁。
+优先完成 TimingGate「规则信号 + 模型」混合决策的剩余落地工作。当前阶段 8-11 已完成，下一步优先推进阶段 12：为 `timing_gate` eval 增加 baseline diff 与阈值门禁；随后进入阶段 13，同步 `docs/todo.md` 和相关设计文档。
 
 ## 执行约束
 
