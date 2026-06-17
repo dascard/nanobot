@@ -15,4 +15,5 @@ async def main():
     prompt = await agent.controller.prompt_manager.build_system_prompt(agent.controller.registry, "bracket")
     print(prompt)
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
