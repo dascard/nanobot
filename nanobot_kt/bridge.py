@@ -987,7 +987,9 @@ class NanobotBridge:
             if stream_queue is not None and meta["stream"]:
                 self._output.enable_stream(stream_queue)
             else:
-                self._output.disable_stream()
+                disable_stream = getattr(self._output, "disable_stream", None)
+                if callable(disable_stream):
+                    disable_stream()
 
             # 每轮清空 reply 运行时缓存
             try:
