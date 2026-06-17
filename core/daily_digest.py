@@ -24,6 +24,7 @@ from app.memory_digest.renderer import render_recall_card
 from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
 from config import DAILY_DIGEST_HOUR
 from core.async_bridge import run_awaitable_sync
+from core.context_builder import sanitize_prompt_text
 from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
 
 logger = logging.getLogger("nanobot.daily_digest")
@@ -80,12 +81,15 @@ def _next_run_delay_seconds(now: datetime, run_hour: int) -> int:
 def _build_scheduled_task_query(task: ScheduledTask, now: datetime | None = None) -> str:
     now = now or datetime.now()
     time_label = now.strftime("%Y-%m-%d %H:%M:%S")
-    prompt = (task.prompt_template or "").strip()
+    prompt = sanitize_prompt_text(task.prompt_template or "", max_chars=2000).strip()
+    task_name = sanitize_prompt_text(task.name or "未命名任务", max_chars=120)
+    target_type = sanitize_prompt_text(task.target_type or "", max_chars=40)
+    target_id = sanitize_prompt_text(task.target_id or "", max_chars=80)
     return (
         "[定时任务执行]\n"
         f"当前时间（北京时间）：{time_label}\n"
-        f"任务名称：{task.name or '未命名任务'}\n"
-        f"推送目标：{task.target_type}/{task.target_id}\n\n"
+        f"任务名称：{task_name}\n"
+        f"推送目标：{target_type}/{target_id}\n\n"
         "执行规则：\n"
         "- 必须完成下面的任务模板，不要改写为闲聊。\n"
         "- 如果任务涉及今天、最新、新闻、资讯、日报、早报，必须先调用 ai_daily 获取实时来源；禁止只凭模型内置知识生成。\n"
