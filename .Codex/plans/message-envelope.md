@@ -15,9 +15,9 @@
 - 设计文档：`docs/superpowers/specs/2026-06-18-message-envelope-design.md`，提交 `c984036 docs(消息): 设计响应信封标准`。
 - 当前计划文件路径按项目约定使用 `.Codex/plans/message-envelope.md`。
 - `docs/todo.md` 路线项 5 已进入设计阶段；代码未落地前不要把路线项 5 标记为完成。
-- `/chat` 非流式成功响应当前返回 `status`、`user_id`、`answer`、`answer_chunks` 和 `unprocessed_logs`。
-- `/chat` SSE done 当前返回 `{status: "done", answer}`，SSE framing 是 `data: {...}`，不要改成 `event: done`。
-- `/chat` 已弹出 `private_reply_meta`，但成功路径没有把它写入 HTTP 或 SSE 响应。
+- `/chat` 非流式成功响应已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status`、`user_id`、`answer`、`answer_chunks` 和 `unprocessed_logs`。
+- `/chat` SSE done 已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status="done"` 与 `answer`；SSE framing 仍是 `data: {...}`，不要改成 `event: done`。
+- `/chat` 已把过滤后的 `private_reply_meta` 写入非流式成功响应和 SSE done 响应。
 - `/group/message` route 只返回 `GroupIngressService.handle(req)` 的 dict，包装应优先放在 `app/group_ingress/service.py`。
 - `push_to_qq(target_type, target_id, message) -> bool` 的旧签名必须保持。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
@@ -106,7 +106,7 @@ def envelope_to_message(envelope: Mapping[str, Any] | None) -> str: ...
 - 创建：`tests/test_message_envelope.py`
 - 创建：`core/message_envelope.py`
 
-- [ ] **步骤 1：编写 builder 红灯测试**
+- [x] **步骤 1：编写 builder 红灯测试**
 
 创建 `tests/test_message_envelope.py`：
 
@@ -215,7 +215,7 @@ def test_envelope_to_message_prefers_reply_then_textual_messages():
     assert envelope_to_message({"messages": [{"type": "image", "url": "https://example.com/a.png"}]}) == ""
 ```
 
-- [ ] **步骤 2：运行 builder 红灯**
+- [x] **步骤 2：运行 builder 红灯**
 
 运行：
 
@@ -225,7 +225,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_message_envelope.py -v 
 
 预期：失败，报错包含 `ModuleNotFoundError: No module named 'core.message_envelope'`。
 
-- [ ] **步骤 3：实现最小 builder**
+- [x] **步骤 3：实现最小 builder**
 
 创建 `core/message_envelope.py`：
 
@@ -365,7 +365,7 @@ def envelope_to_message(envelope: Mapping[str, Any] | None) -> str:
     return "\n".join(parts)
 ```
 
-- [ ] **步骤 4：运行 builder 绿灯**
+- [x] **步骤 4：运行 builder 绿灯**
 
 运行：
 
@@ -375,7 +375,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_message_envelope.py -v 
 
 预期：`5 passed`。
 
-- [ ] **步骤 5：运行相关回归**
+- [x] **步骤 5：运行相关回归**
 
 运行：
 
@@ -388,7 +388,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：新增 builder 测试和现有 reply_meta store 测试全部通过。
 
-- [ ] **步骤 6：提交 builder**
+- [x] **步骤 6：提交 builder**
 
 ```bash
 git add core/message_envelope.py tests/test_message_envelope.py
@@ -404,7 +404,7 @@ git commit -m "feat(消息): 构建响应信封"
 
 **并行约束：** 本任务独占 `api/routes.py`。群聊 owner 和 push owner 不得修改 `api/routes.py`。
 
-- [ ] **步骤 1：编写 `/chat` 非流式红灯测试**
+- [x] **步骤 1：编写 `/chat` 非流式红灯测试**
 
 创建 `tests/test_chat_response_envelope.py`：
 
@@ -460,7 +460,7 @@ def test_proxy_chat_returns_standard_envelope_and_filtered_reply_meta(client, mo
     assert data["meta"]["unprocessed_logs"] >= 0
 ```
 
-- [ ] **步骤 2：编写 `/chat` 静默红灯测试**
+- [x] **步骤 2：编写 `/chat` 静默红灯测试**
 
 在同一文件追加：
 
@@ -503,7 +503,7 @@ def test_proxy_chat_no_reply_returns_empty_standard_envelope(client, monkeypatch
     assert data["meta"]["chat_type"] == "private"
 ```
 
-- [ ] **步骤 3：编写 SSE done 红灯测试**
+- [x] **步骤 3：编写 SSE done 红灯测试**
 
 创建 `tests/test_streaming_response_envelope.py`：
 
@@ -552,7 +552,7 @@ def test_stream_chat_done_includes_standard_envelope_and_reply_meta(client):
     assert done_event["meta"]["chat_type"] == "private"
 ```
 
-- [ ] **步骤 4：运行 API 红灯**
+- [x] **步骤 4：运行 API 红灯**
 
 运行：
 
@@ -565,7 +565,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：失败，报错包含缺少 `reply`、`messages`、`reply_meta` 或 `meta`。
 
-- [ ] **步骤 5：在 `api/routes.py` 增加 chat 响应 helper**
+- [x] **步骤 5：在 `api/routes.py` 增加 chat 响应 helper**
 
 在 `_pop_bridge_reply_meta()` 后添加：
 
@@ -629,7 +629,7 @@ def _chat_response_payload(
     return payload
 ```
 
-- [ ] **步骤 6：接入 `/chat` 非流式与 SSE done**
+- [x] **步骤 6：接入 `/chat` 非流式与 SSE done**
 
 在 `/chat` 短路分支使用：
 
@@ -685,7 +685,7 @@ yield f"data: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
 
 不要改 `progress`、`delta`、`heartbeat` 和 `error` 事件结构。
 
-- [ ] **步骤 7：运行 API 绿灯和回归**
+- [x] **步骤 7：运行 API 绿灯和回归**
 
 运行：
 
@@ -701,7 +701,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 8：提交 API 信封**
+- [x] **步骤 8：提交 API 信封**
 
 ```bash
 git add api/routes.py tests/test_chat_response_envelope.py tests/test_streaming_response_envelope.py

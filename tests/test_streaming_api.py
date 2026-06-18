@@ -37,7 +37,10 @@ def test_stream_chat_forwards_delta_events(client):
     assert {"status": "progress", "text": "正在处理..."} in events
     assert {"status": "delta", "text": "你"} in events
     assert {"status": "delta", "text": "好"} in events
-    assert {"status": "done", "answer": "你好"} in events
+    done_event = next(item for item in events if item.get("status") == "done")
+    assert done_event["answer"] == "你好"
+    assert done_event["reply"] == "你好"
+    assert done_event["messages"] == [{"type": "text", "text": "你好"}]
 
 
 def test_stream_chat_done_does_not_wait_for_heartbeat(client):

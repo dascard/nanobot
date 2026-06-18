@@ -31,6 +31,16 @@ def _fast_private_reply(monkeypatch):
     monkeypatch.setattr("api.routes._schedule_image_precache", lambda *args, **kwargs: None)
 
 
+def _assert_silent_response(result, user_id):
+    assert result["status"] == "silent"
+    assert result["user_id"] == user_id
+    assert result["answer"] == ""
+    assert result["reply"] == ""
+    assert result["messages"] == []
+    assert result["reply_meta"] == {}
+    assert result["meta"]["user_id"] == user_id
+
+
 def test_health_check(client):
     response = client.get("/api/v1/health")
     assert response.status_code == 200
@@ -428,7 +438,10 @@ def test_stream_chat_emits_progress_and_done_events(client):
 
     assert {"status": "progress", "text": "正在搜索资讯..."} in events
     assert {"status": "progress", "text": "正在查询数据库..."} in events
-    assert {"status": "done", "answer": "最终答案"} in events
+    done_event = next(item for item in events if item.get("status") == "done")
+    assert done_event["answer"] == "最终答案"
+    assert done_event["reply"] == "最终答案"
+    assert done_event["messages"] == [{"type": "text", "text": "最终答案"}]
 
 
 def test_stream_chat_passes_stream_flag_to_bridge(client):
@@ -871,8 +884,8 @@ async def test_private_buffer_silent_releases_waiters(db_session, monkeypatch):
     result1 = await asyncio.wait_for(task1, timeout=1)
     result2 = await asyncio.wait_for(task2, timeout=1)
 
-    assert result1 == {"status": "silent", "user_id": "u-buffer"}
-    assert result2 == {"status": "silent", "user_id": "u-buffer"}
+    _assert_silent_response(result1, "u-buffer")
+    _assert_silent_response(result2, "u-buffer")
     assert "u-buffer" not in _private_buffers
 
 
@@ -937,7 +950,7 @@ async def test_private_buffer_refreshes_window_and_persists_merged_messages(db_s
 
     assert result1["status"] == "ok"
     assert result1["answer"] == "合并回复"
-    assert result2 == {"status": "silent", "user_id": "u-merged"}
+    _assert_silent_response(result2, "u-merged")
 
     user_logs = db_session.query(ChatLog).filter_by(user_id="u-merged", role="user").all()
     assistant_logs = db_session.query(ChatLog).filter_by(user_id="u-merged", role="assistant").all()
@@ -1012,7 +1025,7 @@ async def test_private_buffer_merges_files_for_final_bridge_request(db_session, 
     result2 = await asyncio.wait_for(task2, timeout=1)
 
     assert result1["status"] == "ok"
-    assert result2 == {"status": "silent", "user_id": "u-files"}
+    _assert_silent_response(result2, "u-files")
     _, kwargs = mock_bridge.handle_message.await_args
     assert kwargs["metadata"]["files"] == [
         "https://example.com/a.png",
@@ -1104,7 +1117,7 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
 
     assert result1["status"] == "ok"
     assert result1["answer"] == "图后文本回复"
-    assert result2 == {"status": "silent", "user_id": "u-shrink"}
+    _assert_silent_response(result2, "u-shrink")
     assert "u-shrink" not in _private_buffers
 
 
@@ -1151,7 +1164,7 @@ async def test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer(db
             await task1
 
         result2 = await asyncio.wait_for(task2, timeout=1)
-        assert result2 == {"status": "silent", "user_id": "u-cancel"}
+        _assert_silent_response(result2, "u-cancel")
         assert "u-cancel" not in _private_buffers
     finally:
         _private_buffers.clear()
@@ -1193,7 +1206,7 @@ async def test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer(d
             await task1
 
         result2 = await asyncio.wait_for(task2, timeout=1)
-        assert result2 == {"status": "silent", "user_id": "u-bridge-cancel"}
+        _assert_silent_response(result2, "u-bridge-cancel")
         assert "u-bridge-cancel" not in _private_buffers
     finally:
         release_bridge.set()

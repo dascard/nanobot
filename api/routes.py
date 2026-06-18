@@ -49,6 +49,7 @@ from core.agent_step import (
     run_agent_step_stream,
     sse_data as agent_step_sse_data,
 )
+from core.message_envelope import build_chat_response_envelope
 
 logger = logging.getLogger("nanobot.routes")
 router = APIRouter(prefix="/api/v1")
@@ -502,6 +503,108 @@ def _extract_group_id_from_chat_request(req: ChatProxyRequest) -> str:
     if session_id.startswith("group_"):
         return session_id[len("group_"):]
     return session_id or str(req.user_id or "").strip()
+
+
+def _chat_request_platform(req: ChatProxyRequest) -> str:
+    client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
+    return str(client_meta.get("platform") or "qq").strip().lower() or "qq"
+
+
+def _chat_request_type(req: ChatProxyRequest) -> str:
+    return "private" if str(req.session_id).startswith("private_") else "group"
+
+
+def _split_chat_answer_chunks(answer: str) -> list[str]:
+    text = str(answer or "")
+    if text.lstrip().startswith("<article") or text.lstrip().startswith("<!doctype") or text.lstrip().startswith("<html"):
+        return [text]
+    if not text.strip():
+        return []
+    if "\n\n" in text:
+        return [c.strip() for c in text.split("\n\n") if c.strip()]
+    if "\n" in text:
+        return [c.strip() for c in text.split("\n") if c.strip()]
+    return [text]
+
+
+def _chat_response_meta(
+    req: ChatProxyRequest,
+    *,
+    platform: str = "",
+    chat_type: str = "",
+    unprocessed_logs: int | None = None,
+    reason: str = "",
+    source: str = "",
+    intent: str = "",
+    guardrail_status: str | None = None,
+    extra_meta: dict | None = None,
+) -> dict[str, Any]:
+    meta: dict[str, Any] = {
+        "user_id": req.user_id,
+        "session_id": req.session_id,
+        "platform": platform or _chat_request_platform(req),
+        "chat_type": chat_type or _chat_request_type(req),
+    }
+    if unprocessed_logs is not None:
+        meta["unprocessed_logs"] = unprocessed_logs
+    if reason:
+        meta["reason"] = reason
+    if source:
+        meta["source"] = source
+    if intent:
+        meta["intent"] = intent
+    if guardrail_status:
+        meta["guardrail_status"] = guardrail_status
+    if isinstance(extra_meta, dict):
+        meta.update(extra_meta)
+    return meta
+
+
+def _chat_response_payload(
+    req: ChatProxyRequest,
+    *,
+    status: str,
+    answer: str = "",
+    reply_meta: dict | None = None,
+    platform: str = "",
+    chat_type: str = "",
+    unprocessed_logs: int | None = None,
+    reason: str = "",
+    source: str = "",
+    intent: str = "",
+    guardrail_status: str | None = None,
+    include_answer_chunks: bool = False,
+    extra_meta: dict | None = None,
+) -> dict[str, Any]:
+    payload = build_chat_response_envelope(
+        status=status,
+        answer=answer,
+        reply_meta=reply_meta,
+        meta=_chat_response_meta(
+            req,
+            platform=platform,
+            chat_type=chat_type,
+            unprocessed_logs=unprocessed_logs,
+            reason=reason,
+            source=source,
+            intent=intent,
+            guardrail_status=guardrail_status,
+            extra_meta=extra_meta,
+        ),
+    )
+    payload["user_id"] = req.user_id
+    payload["answer"] = payload["reply"]
+    if unprocessed_logs is not None:
+        payload["unprocessed_logs"] = unprocessed_logs
+    if reason:
+        payload["reason"] = reason
+    if source:
+        payload["source"] = source
+    if intent:
+        payload["intent"] = intent
+    if include_answer_chunks:
+        payload["answer_chunks"] = _split_chat_answer_chunks(payload["reply"])
+    return payload
 
 
 def _is_guardrail_superuser(user_id: str) -> bool:
@@ -2104,7 +2207,13 @@ async def proxy_chat(
             meta_json=json.dumps({"blocked": True, "reason": "user_blocked"}, ensure_ascii=False),
         ))
         db.commit()
-        return {"answer": "", "status": "silent", "reason": "user_blocked"}
+        return _chat_response_payload(
+            req,
+            status="silent",
+            reason="user_blocked",
+            guardrail_status="silent",
+            include_answer_chunks=True,
+        )
 
     _schedule_image_precache(
         background_tasks,
@@ -2190,17 +2299,38 @@ async def proxy_chat(
                 )
             if _private_decision.action == "no_reply":
                 _persist_chat_turn(db, req, "", guardrail_status=None)
-                return {"status": "no_reply", "user_id": req.user_id}
+                return _chat_response_payload(
+                    req,
+                    status="no_reply",
+                    reason=_private_decision.reason,
+                    include_answer_chunks=True,
+                )
             if _private_decision.effort == "casual":
                 from core.reply_templates import get_casual_reply
                 reply = get_casual_reply(req.query, is_superuser=is_superuser)
                 if reply:
                     _persist_chat_turn(db, req, reply, guardrail_status="casual_template")
-                    return {"status": "ok", "answer": reply, "source": "casual_template", "intent": _private_decision.reason}
+                    return _chat_response_payload(
+                        req,
+                        status="ok",
+                        answer=reply,
+                        source="casual_template",
+                        intent=_private_decision.reason,
+                        guardrail_status="casual_template",
+                        include_answer_chunks=True,
+                    )
                 # 无模板匹配——casual 不进 bridge，走默认短句
                 fallback = "你先说事" if req.query else ""
                 _persist_chat_turn(db, req, fallback, guardrail_status="casual_template")
-                return {"status": "ok", "answer": fallback, "source": "casual_template", "intent": _private_decision.reason}
+                return _chat_response_payload(
+                    req,
+                    status="ok",
+                    answer=fallback,
+                    source="casual_template",
+                    intent=_private_decision.reason,
+                    guardrail_status="casual_template",
+                    include_answer_chunks=True,
+                )
             if _private_decision.action == "reply_now":
                 messages = req.merged_messages or [req.query]
                 buffered_query = _join_buffered_messages(messages)
@@ -2296,17 +2426,32 @@ async def proxy_chat(
                         req.user_id,
                     )
                     await _finalize_private_buffer(req.user_id)
-                return {"status": "silent", "user_id": req.user_id}
+                return _chat_response_payload(
+                    req,
+                    status="silent",
+                    reason="private_buffer_follower",
+                    include_answer_chunks=True,
+                )
 
             if not is_first:
-                return {"status": "silent", "user_id": req.user_id}
+                return _chat_response_payload(
+                    req,
+                    status="silent",
+                    reason="private_buffer_not_first",
+                    include_answer_chunks=True,
+                )
 
             # 第一条消息负责等待“最后一条消息后的 5 秒静默期”
             while True:
                 async with _private_lock:
                     buf = _private_buffers.get(req.user_id)
                     if buf is None:
-                        return {"status": "silent", "user_id": req.user_id}
+                        return _chat_response_payload(
+                            req,
+                            status="silent",
+                            reason="private_buffer_missing",
+                            include_answer_chunks=True,
+                        )
                     deadline = float(buf["deadline"])
                 remaining = deadline - _time.time()
                 if remaining <= 0:
@@ -2316,7 +2461,12 @@ async def proxy_chat(
             async with _private_lock:
                 buf = _private_buffers.get(req.user_id)
                 if buf is None:
-                    return {"status": "silent", "user_id": req.user_id}
+                    return _chat_response_payload(
+                        req,
+                        status="silent",
+                        reason="private_buffer_missing",
+                        include_answer_chunks=True,
+                    )
                 buffered_messages = list(buf["queries"])
                 buffered_files = list(buf.get("files", []))
                 qwen_task = buf["qwen_task"]
@@ -2365,7 +2515,13 @@ async def proxy_chat(
     if _classifier_ran and guardrail_status == "silent":
         await _finalize_private_buffer(req.user_id)
         _persist_chat_turn(db, persist_req, "（数据中转，自动静默）", guardrail_status)
-        return {"status": "silent", "user_id": req.user_id}
+        return _chat_response_payload(
+            req,
+            status="silent",
+            reason="guardrail_silent",
+            guardrail_status=guardrail_status,
+            include_answer_chunks=True,
+        )
 
     if _classifier_ran and guardrail_status == "injection":
         enriched_query = (
@@ -2415,8 +2571,7 @@ async def proxy_chat(
     bridge = get_bridge()
     _complexity = (_private_decision.complexity if _private_decision and _private_decision.complexity else 3)
     _constraint = (get_effort_constraint(_private_decision.effort) if _private_decision else "")
-    client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
-    platform = str(client_meta.get("platform") or "qq").strip().lower() or "qq"
+    platform = _chat_request_platform(req)
     bridge_meta = {
         "chat_type": "group" if is_group else "private",
         "platform": platform,
@@ -2642,7 +2797,17 @@ async def proxy_chat(
                     if pending >= EVOLUTION_THRESHOLD:
                         logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
                         background_tasks.add_task(evolution_task, req.user_id)
-                    yield f"data: {json.dumps({'status': 'done', 'answer': transport_answer}, ensure_ascii=False)}\n\n"
+                    done_payload = _chat_response_payload(
+                        req,
+                        status="done",
+                        answer=transport_answer,
+                        reply_meta=private_reply_meta,
+                        platform=platform,
+                        chat_type=str(bridge_meta.get("chat_type") or ""),
+                        unprocessed_logs=pending,
+                        guardrail_status=guardrail_status,
+                    )
+                    yield f"data: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
         finally:
             if not persisted:
                 if runner_task.done():
@@ -2719,27 +2884,20 @@ async def proxy_chat(
         logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
         background_tasks.add_task(evolution_task, req.user_id)
 
-    # 5. 模拟短对话：内容自动拆分逻辑（按换行拆成短气泡）
-    # HTML 报告不拆分——QQbot 端 html_to_pic 需要完整文档
-    if transport_answer.lstrip().startswith("<article") or transport_answer.lstrip().startswith("<!doctype") or transport_answer.lstrip().startswith("<html"):
-        answer_chunks = [transport_answer]
-    elif not transport_answer.strip():
-        answer_chunks = []
-    elif "\n\n" in transport_answer:
-        answer_chunks = [c.strip() for c in transport_answer.split("\n\n") if c.strip()]
-    elif "\n" in transport_answer:
-        answer_chunks = [c.strip() for c in transport_answer.split("\n") if c.strip()]
-    else:
-        answer_chunks = [transport_answer]
+    answer_chunks = _split_chat_answer_chunks(transport_answer)
 
     logger.info(f"[/chat] Response: answer_chunks_count={len(answer_chunks)}, status=ok")
-    return {
-        "status": "ok",
-        "user_id": req.user_id,
-        "answer": transport_answer,
-        "answer_chunks": answer_chunks,
-        "unprocessed_logs": pending
-    }
+    return _chat_response_payload(
+        req,
+        status="ok",
+        answer=transport_answer,
+        reply_meta=private_reply_meta,
+        platform=platform,
+        chat_type=str(bridge_meta.get("chat_type") or ""),
+        unprocessed_logs=pending,
+        guardrail_status=guardrail_status,
+        include_answer_chunks=True,
+    )
 
 @router.post("/evolution/trigger")
 def trigger_evolution(
