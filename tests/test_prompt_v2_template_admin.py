@@ -241,18 +241,25 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             json={
                 "engine": "v2",
                 "chat_type": "private",
+                "platform": "web",
                 "user_id": "u1",
                 "user_input": "你好",
             },
             headers=_auth_header(),
         )
         assert preview.status_code == 200, preview.text
-        messages = preview.json()["request_json"]["messages"]
+        preview_data = preview.json()
+        assert preview_data["platform"] == "web"
+        assert preview_data["prompt_plan"]["platform"] == "web"
+        assert "qq_common_policy" not in preview_data["debug"].get("flow_node_ids", [])
+        messages = preview_data["request_json"]["messages"]
         rendered = str(messages)
+        assert "platform: web" in rendered
+        assert "QQ 平台" not in rendered
         assert "默认主规则 private" in rendered
         assert "你叫" in rendered
         assert messages[-1]["role"] == "user"
-        assert preview.json()["debug"]["flow_source"] == "runtime"
+        assert preview_data["debug"]["flow_source"] == "runtime"
     finally:
         app.dependency_overrides.clear()
 

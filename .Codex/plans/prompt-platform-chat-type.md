@@ -1021,7 +1021,7 @@ git commit -m "feat(提示词): 拆分 QQ 平台模板"
 - 修改：`tests/test_kt_framework.py`
 - 修改：`tests/test_admin_api.py`
 
-- [ ] **步骤 1：补集成断言**
+- [x] **步骤 1：补集成断言**
 
 根据任务 1 到任务 3 的落地结果，补齐以下断言：
 
@@ -1056,7 +1056,7 @@ assert data["prompt_plan"]["platform"] == "web"
 assert "qq_common_policy" not in data["debug"].get("flow_node_ids", [])
 ```
 
-- [ ] **步骤 2：运行提示词平台定向回归**
+- [x] **步骤 2：运行提示词平台定向回归**
 
 运行：
 
@@ -1066,7 +1066,15 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py tests/test
 
 预期：通过。
 
-- [ ] **步骤 3：运行 Prompt Runtime 相关完整回归**
+实际执行时额外纳入 `tests/test_prompt_v2_template_admin.py`，因为 Admin effective-preview 的真实编译预览测试归属在该文件：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py tests/test_prompt_v2_template_admin.py -k "platform or prompt_v2" -v -p no:cacheprovider
+```
+
+结果：50 passed, 127 deselected, 1 warning。
+
+- [x] **步骤 3：运行 Prompt Runtime 相关完整回归**
 
 运行：
 
@@ -1076,7 +1084,15 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py tests/test
 
 预期：通过。
 
-- [ ] **步骤 4：提交任务 4**
+实际执行时额外纳入 `tests/test_prompt_v2_template_admin.py`，覆盖 Admin 模板管理和 effective-preview 真实链路：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py tests/test_prompt_v2_template_registry.py tests/test_prompt_v2_template_admin.py -v -p no:cacheprovider
+```
+
+结果：190 passed, 1 warning。
+
+- [x] **步骤 4：提交任务 4**
 
 ```bash
 git add tests/test_prompt_v2.py tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py

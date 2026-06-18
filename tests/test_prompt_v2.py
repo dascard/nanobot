@@ -300,9 +300,12 @@ async def test_prompt_v2_default_flow_selects_qq_platform_templates():
         PromptCompileRequest(chat_type="group", platform="qq", user_input="你好"),
     )
 
+    assert plan.platform == "qq"
+    assert plan.debug["platform"] == "qq"
     assert "qq_common_policy" in plan.debug["flow_node_ids"]
     assert "qq_group_policy" in plan.debug["flow_node_ids"]
     joined = "\n".join(str(message["content"]) for message in plan.messages)
+    assert "platform: qq" in joined
     assert "QQ 平台" in joined
     assert "QQ 群聊" in joined
 
@@ -316,9 +319,12 @@ async def test_prompt_v2_default_flow_skips_qq_templates_for_web_private():
         PromptCompileRequest(chat_type="private", platform="web", user_input="你好"),
     )
 
+    assert plan.platform == "web"
+    assert plan.debug["platform"] == "web"
     assert "qq_common_policy" not in plan.debug["flow_node_ids"]
     assert "qq_group_policy" not in plan.debug["flow_node_ids"]
     joined = "\n".join(str(message["content"]) for message in plan.messages)
+    assert "platform: web" in joined
     assert "QQ 平台" not in joined
     assert "OneBot" not in joined
     assert "CQ 码" not in joined
