@@ -1,4 +1,4 @@
-name: TimingGate Eval
+name: Eval PR Gate
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ on:
       - master
 
 jobs:
-  timing-gate:
+  eval-pr-gate:
     runs-on: ubuntu-latest
     env:
       NANOBOT_TESTING: "1"
@@ -30,8 +30,5 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Run TimingGate guard tests
-        run: python -B -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py -v -p no:cacheprovider
-
-      - name: Run TimingGate eval gate
-        run: bash scripts/run_timing_gate_gate.sh
+      - name: Run eval PR gate
+        run: bash scripts/run_eval_pr_gate.sh

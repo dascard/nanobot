@@ -258,13 +258,14 @@ def test_eval_pr_gate_script_runs_stable_suites():
     assert "max-unexpected-source-rate" in text
 
 
-def test_timing_gate_workflow_runs_gate_script():
+def test_eval_pr_gate_workflow_runs_unified_script():
     workflow = Path(".github/workflows/timing-gate-eval.yml")
 
     assert workflow.exists()
     text = workflow.read_text(encoding="utf-8")
-    assert "scripts/run_timing_gate_gate.sh" in text
-    assert "tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py" in text
+    assert "name: Eval PR Gate" in text
+    assert "eval-pr-gate:" in text
+    assert "scripts/run_eval_pr_gate.sh" in text
 
 
 def test_model_routing_eval_filters_required_capabilities_for_image_case():
