@@ -274,6 +274,8 @@
 | `stickers` | list[object] | 表情包注册信息，群聊图片/表情场景使用。 |
 | `raw` | object | 必要的原始平台摘要。只保留排查必需字段，不放完整 event。 |
 
+工具策略解析使用标准化后的 `client_meta.platform`。缺省值为 `qq`，用于兼容现有 QQ / NapCat 调用；新平台 adapter 必须显式传入平台名。
+
 ### `client_meta.trace`
 
 ```json

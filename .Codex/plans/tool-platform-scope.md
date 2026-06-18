@@ -19,8 +19,8 @@
 - 任务 2 已完成并提交：`295e3f7 feat(工具): 记录平台维度决策`。
 - 任务 3 已完成并提交：`73bbe8a feat(消息): 透传客户端平台`。真实入口已透传 platform 到 Bridge 和 ToolPlan。
 - 任务 4 已完成并提交：`d9a1bae feat(工具): 支持平台覆盖接口`。Admin API 已支持 platform 覆盖写入、预览和 targets。
-- 任务 5 已完成：WebUI 工具页已增加 platform selector 和「指定平台」覆盖入口。
-- 当前下一步：任务 6「文档收口与最终验证」。
+- 任务 5 已完成并提交：`2b0e203 feat(工具): 配置平台覆盖`。WebUI 工具页已增加 platform selector 和「指定平台」覆盖入口。
+- 任务 6 已完成文档收口与最终验证；下一优先级切到 P2-2「标准化请求 / 响应信封」。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
 ## 文件结构
@@ -955,7 +955,7 @@ git commit -m "feat(工具): 配置平台覆盖"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/tool-platform-scope.md`
 
-- [ ] **步骤 1：同步消息字段标准**
+- [x] **步骤 1：同步消息字段标准**
 
 在 `docs/message-field-standard.md` 的 `client_meta.platform` 附近补充：
 
@@ -963,7 +963,7 @@ git commit -m "feat(工具): 配置平台覆盖"
 工具策略解析使用标准化后的 `client_meta.platform`。缺省值为 `qq`，用于兼容现有 QQ / NapCat 调用；新平台 adapter 必须显式传入平台名。
 ```
 
-- [ ] **步骤 2：同步 TODO 路线项 4**
+- [x] **步骤 2：同步 TODO 路线项 4**
 
 在 `docs/todo.md` 的路线项 4 里把 P2-1 状态改为已落地口径，至少包含：
 
@@ -972,7 +972,7 @@ git commit -m "feat(工具): 配置平台覆盖"
 - `/chat`、`/group/message`、Bridge 和 Admin API 已透传 platform。
 - WebUI 工具页可配置平台覆盖。
 
-- [ ] **步骤 3：同步 plan walkthrough 和本计划**
+- [x] **步骤 3：同步 plan walkthrough 和本计划**
 
 在 `docs/plan_walkthrough.md`：
 
@@ -987,7 +987,7 @@ git commit -m "feat(工具): 配置平台覆盖"
 - 记录每个任务提交号。
 - 记录最终验证输出。
 
-- [ ] **步骤 4：运行文档扫描**
+- [x] **步骤 4：运行文档扫描**
 
 ```bash
 python - <<'PY'
@@ -1020,7 +1020,9 @@ git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkth
 
 预期：`rg` 无输出，`git diff --check` 无输出。
 
-- [ ] **步骤 5：运行 P2-1 定向回归**
+结果：过时占位词扫描无输出；`git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/tool-platform-scope.md` 无输出。
+
+- [x] **步骤 5：运行 P2-1 定向回归**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
@@ -1036,7 +1038,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 6：运行全量测试**
+结果：`183 passed, 139 warnings in 41.61s`。
+
+- [x] **步骤 6：运行全量测试**
 
 ```bash
 env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY \
@@ -1045,7 +1049,9 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 
 预期：全部通过。
 
-- [ ] **步骤 7：提交文档收口**
+结果：`1246 passed, 6 skipped, 139 warnings in 85.67s`。
+
+- [x] **步骤 7：提交文档收口**
 
 ```bash
 git add docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/tool-platform-scope.md
@@ -1059,7 +1065,7 @@ git commit -m "docs(计划): 同步工具平台配置状态"
 3. 任务 3：真实入口透传 platform。
 4. 任务 4：Admin API 支持平台覆盖。（已完成）
 5. 任务 5：WebUI 工具页配置平台覆盖。（已完成）
-6. 任务 6：文档收口与最终验证。（下一步）
+6. 任务 6：文档收口与最终验证。（已完成）
 
 每个任务完成后必须运行对应验证命令并单独提交。禁止使用 `git add .` 或 `git add -A`。
 
@@ -1073,5 +1079,5 @@ git commit -m "docs(计划): 同步工具平台配置状态"
 - [x] Bridge 把 platform 传给 `build_tool_plan()` 和 `record_runtime_tool_decision()`。
 - [x] Admin API 能创建和预览 platform override。
 - [x] WebUI 工具页能选择 platform 并配置「指定平台」覆盖。
-- [ ] `docs/message-field-standard.md`、`docs/todo.md`、`docs/plan_walkthrough.md` 和本计划同步当前状态。
-- [ ] 全量测试通过。
+- [x] `docs/message-field-standard.md`、`docs/todo.md`、`docs/plan_walkthrough.md` 和本计划同步当前状态。
+- [x] 全量测试通过。
