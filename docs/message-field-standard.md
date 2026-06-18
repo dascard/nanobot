@@ -310,7 +310,7 @@ QQ push 仍保留旧 helper 签名 `push_to_qq(target_type, target_id, message) 
 | `platform` | string | 平台名，如 `qq`、`web`、`synergy`、`feishu`、`wechat`。 |
 | `adapter` | string | adapter 名称，如 `napcat`、`webui`、`synergy-opt`。 |
 | `adapter_version` | string | adapter 版本，便于排查字段变化。 |
-| `chat_type` | string | `private`、`group`、`business`、`system`。 |
+| `chat_type` | string | 当前运行时入口使用 `private` 或 `group`；其它业务类型需先在 adapter 层映射到现有入口语义。 |
 | `task` | object | 业务任务信息，如 `name`、`version`、`intent`。 |
 | `trace` | object | 链路追踪信息，如 `request_id`、`correlation_id`、`source`。 |
 | `business` | object | 业务系统上下文，如 app、tenant、dataset_refs、chart_refs。 |
@@ -318,6 +318,14 @@ QQ push 仍保留旧 helper 签名 `push_to_qq(target_type, target_id, message) 
 | `raw` | object | 必要的原始平台摘要。只保留排查必需字段，不放完整 event。 |
 
 工具策略解析使用标准化后的 `client_meta.platform`。缺省值为 `qq`，用于兼容现有 QQ / NapCat 调用；新平台 adapter 必须显式传入平台名。
+
+运行时边界校验：
+
+- `platform` 缺省为 `qq`；传入时必须是字符串，服务端会执行 `strip().lower()`，并要求匹配 `^[a-z][a-z0-9_-]{0,31}$`。
+- `/chat` 和 `/group/message` 会校验 `client_meta.chat_type` 与入口事实一致；`/group/message` 必须是 `group`，`/chat` 按会话入口推导为 `private` 或 `group`。
+- `trace` 必须是 object；`trace.request_id`、`trace.correlation_id`、`trace.source` 若存在，必须是字符串，服务端会 `strip()` 并裁剪到 128 字符。
+- `trace.request_id` 不是必填字段；传入合法值时，`/chat` 会在响应信封 `meta.request_id` 中回传归一化后的值。
+- 其它扩展字段会原样保留，但不得放完整平台 event 或敏感凭据。
 
 ### `client_meta.trace`
 

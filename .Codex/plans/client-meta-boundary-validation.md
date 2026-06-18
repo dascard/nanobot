@@ -15,15 +15,15 @@
 - P2-2 响应信封已完成，最新文档收口提交为 `617aa25 docs(计划): 同步响应信封状态`。
 - `docs/todo.md` 路线项 5 剩余尾项是 `client_meta` 边界层解析 / 校验。
 - `api/routes.py` 当前 `_chat_request_platform()` 只做 `str(...).strip().lower()`，没有格式校验。
-- `app/group_ingress/service.py` 当前也直接从 `req.client_meta.platform` 读取平台，未校验 `chat_type` 和 `trace`。
-- `docs/plan_walkthrough.md` 仍有两处 P2-2 旧口径需要同步：文档口径段和底部“下一步”段。
+- `app/group_ingress/service.py` 继续从 `req.client_meta.platform` 读取平台；route 层先归一化 `req.client_meta`，因此 service 不需要重复校验。
+- `docs/plan_walkthrough.md` 已同步 P2-2.5 状态，底部“下一步”已切到 P2-3「QQ 出站渲染契约」。
 
 ## 任务 1：新增 helper 红灯测试
 
 **文件：**
 - 创建：`tests/test_client_meta.py`
 
-- [ ] **步骤 1：编写失败的 helper 测试**
+- [x] **步骤 1：编写失败的 helper 测试**
 
 ```python
 import pytest
@@ -80,7 +80,7 @@ def test_normalize_client_meta_rejects_non_string_request_id():
         )
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -96,7 +96,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_client_meta.py -v -p no
 - 创建：`core/client_meta.py`
 - 测试：`tests/test_client_meta.py`
 
-- [ ] **步骤 1：编写最少实现**
+- [x] **步骤 1：编写最少实现**
 
 ```python
 """client_meta 边界解析与校验。"""
@@ -187,7 +187,7 @@ def client_meta_request_id(client_meta: Mapping[str, Any] | None) -> str:
     return str(trace.get("request_id") or "")
 ```
 
-- [ ] **步骤 2：运行 helper 测试验证通过**
+- [x] **步骤 2：运行 helper 测试验证通过**
 
 运行：
 
@@ -204,7 +204,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_client_meta.py -v -p no
 - 修改：`tests/test_group_response_envelope.py`
 - 可选修改：`tests/test_api.py`
 
-- [ ] **步骤 1：新增 `/chat` API 测试**
+- [x] **步骤 1：新增 `/chat` API 测试**
 
 在 `tests/test_chat_response_envelope.py` 追加：
 
@@ -261,7 +261,7 @@ def test_proxy_chat_rejects_conflicting_client_meta_chat_type(client, monkeypatc
     assert "client_meta" in response.json()["detail"]
 ```
 
-- [ ] **步骤 2：新增 `/group/message` API 测试**
+- [x] **步骤 2：新增 `/group/message` API 测试**
 
 在 `tests/test_group_response_envelope.py` 追加：
 
@@ -325,7 +325,7 @@ async def test_group_message_preserves_normalized_trace_in_ambient_log(db_sessio
     assert meta["client_meta"]["stickers"] == [{"file": "s.png"}]
 ```
 
-- [ ] **步骤 3：运行 API 测试验证失败**
+- [x] **步骤 3：运行 API 测试验证失败**
 
 运行：
 
@@ -346,7 +346,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 - 测试：`tests/test_chat_response_envelope.py`
 - 测试：`tests/test_group_response_envelope.py`
 
-- [ ] **步骤 1：在 `api/routes.py` 导入 helper**
+- [x] **步骤 1：在 `api/routes.py` 导入 helper**
 
 ```python
 from core.client_meta import (
@@ -356,7 +356,7 @@ from core.client_meta import (
 )
 ```
 
-- [ ] **步骤 2：新增 route 层转换函数**
+- [x] **步骤 2：新增 route 层转换函数**
 
 放在 `_chat_request_platform()` 前后：
 
@@ -373,7 +373,7 @@ def _normalize_request_client_meta(req: Any, *, expected_chat_type: str) -> dict
     return normalized
 ```
 
-- [ ] **步骤 3：在 `/chat` 入口最前面归一化**
+- [x] **步骤 3：在 `/chat` 入口最前面归一化**
 
 在 `proxy_chat()` 日志前加入：
 
@@ -381,7 +381,7 @@ def _normalize_request_client_meta(req: Any, *, expected_chat_type: str) -> dict
     _normalize_request_client_meta(req, expected_chat_type=_chat_request_type(req))
 ```
 
-- [ ] **步骤 4：在 `/group/message` 入口归一化**
+- [x] **步骤 4：在 `/group/message` 入口归一化**
 
 在创建 `GroupIngressService` 前加入：
 
@@ -389,7 +389,7 @@ def _normalize_request_client_meta(req: Any, *, expected_chat_type: str) -> dict
     _normalize_request_client_meta(req, expected_chat_type="group")
 ```
 
-- [ ] **步骤 5：把 `request_id` 投影到 `/chat` 响应 meta**
+- [x] **步骤 5：把 `request_id` 投影到 `/chat` 响应 meta**
 
 在 `_chat_response_meta()` 里加入：
 
@@ -401,7 +401,7 @@ def _normalize_request_client_meta(req: Any, *, expected_chat_type: str) -> dict
 
 `app/group_ingress/service.py` 不需要单独投影 `request_id`；它的 `_response()` 继续通过 `req.client_meta` 读取平台，ambient log 会保存归一化后的 `client_meta`。
 
-- [ ] **步骤 6：运行 API 测试验证通过**
+- [x] **步骤 6：运行 API 测试验证通过**
 
 运行：
 
@@ -418,6 +418,13 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：全部通过。
 
+已验证：
+
+- helper 红灯：`PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_client_meta.py -v -p no:cacheprovider`，结果 `5 failed, 1 warning`，失败原因均为 `ModuleNotFoundError: No module named 'core.client_meta'`。
+- helper 绿灯：同一命令，结果 `5 passed, 1 warning in 0.60s`。
+- API 红灯：`PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_chat_response_envelope.py tests/test_group_response_envelope.py -v -p no:cacheprovider`，结果 `4 failed, 5 passed, 21 warnings`。
+- API 绿灯：`PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_client_meta.py tests/test_chat_response_envelope.py tests/test_group_response_envelope.py -v -p no:cacheprovider`，结果 `14 passed, 21 warnings in 2.70s`。
+
 ## 任务 5：同步文档状态并最终验证
 
 **文件：**
@@ -426,7 +433,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/client-meta-boundary-validation.md`
 
-- [ ] **步骤 1：同步 `docs/message-field-standard.md`**
+- [x] **步骤 1：同步 `docs/message-field-standard.md`**
 
 在 `client_meta` 章节补运行时校验口径：
 
@@ -439,13 +446,13 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 - 其它扩展字段保留，但不应放完整平台 event。
 ```
 
-- [ ] **步骤 2：同步路线文档**
+- [x] **步骤 2：同步路线文档**
 
 把 `docs/todo.md` 路线项 5 的状态改为：响应信封与 `client_meta` 关键字段边界校验已完成；P2-3 继续处理 QQ 出站渲染契约。
 
-把 `docs/plan_walkthrough.md` 中过时的“尚未进入代码实现”和底部 P2-2 下一步旧段落改为当前事实。
+把 `docs/plan_walkthrough.md` 中过时的 P2-2 旧口径改为当前事实，并将底部“下一步”切到 P2-3。
 
-- [ ] **步骤 3：运行文档检查**
+- [x] **步骤 3：运行文档检查**
 
 运行：
 
@@ -486,7 +493,7 @@ git diff --check -- \
 
 预期：两条命令均无输出，退出码 0。
 
-- [ ] **步骤 4：运行定向回归**
+- [x] **步骤 4：运行定向回归**
 
 运行：
 
@@ -503,7 +510,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行全量测试**
+- [x] **步骤 5：运行全量测试**
 
 运行：
 
@@ -514,7 +521,14 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 
 预期：0 failures。
 
-- [ ] **步骤 6：提交**
+已验证：
+
+- 文档占位词扫描：`docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/client-meta-boundary-validation.md docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，结果无输出，退出码 0。
+- 文档格式检查：`git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/client-meta-boundary-validation.md docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，结果无输出，退出码 0。
+- 定向回归：`PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_client_meta.py tests/test_chat_response_envelope.py tests/test_group_response_envelope.py tests/test_api.py::test_proxy_chat_passes_client_platform_to_bridge tests/test_api.py::test_group_message_passes_client_platform_to_timing_gate tests/test_api.py::test_group_message_passes_client_platform_to_bridge -v -p no:cacheprovider`，结果 `17 passed, 21 warnings in 3.29s`。
+- 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1272 passed, 6 skipped, 139 warnings in 86.68s`。
+
+- [x] **步骤 6：提交**
 
 ```bash
 git add \
@@ -533,10 +547,10 @@ git commit -m "feat(消息): 校验客户端元信息边界"
 
 ## 验收清单
 
-- [ ] `/chat` 缺省 `client_meta` 仍按 `platform=qq` 工作。
-- [ ] `/chat` 合法 `trace.request_id` 进入响应 `meta.request_id`。
-- [ ] `/chat` 冲突 `client_meta.chat_type` 返回 400，且不调用 Bridge。
-- [ ] `/group/message` 冲突 `client_meta.chat_type` 返回 400，且不进入 TimingGate。
-- [ ] `/group/message` 归一化后的 `client_meta` 写入 ambient log，且保留 `stickers` 等扩展。
-- [ ] P2-2 响应信封旧字段兼容不变。
-- [ ] 定向测试和全量测试通过。
+- [x] `/chat` 缺省 `client_meta` 仍按 `platform=qq` 工作。
+- [x] `/chat` 合法 `trace.request_id` 进入响应 `meta.request_id`。
+- [x] `/chat` 冲突 `client_meta.chat_type` 返回 400，且不调用 Bridge。
+- [x] `/group/message` 冲突 `client_meta.chat_type` 返回 400，且不进入 TimingGate。
+- [x] `/group/message` 归一化后的 `client_meta` 写入 ambient log，且保留 `stickers` 等扩展。
+- [x] P2-2 响应信封旧字段兼容不变。
+- [x] 定向测试和全量测试通过。

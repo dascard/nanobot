@@ -49,6 +49,11 @@ from core.agent_step import (
     run_agent_step_stream,
     sse_data as agent_step_sse_data,
 )
+from core.client_meta import (
+    ClientMetaValidationError,
+    client_meta_request_id,
+    normalize_client_meta,
+)
 from core.message_envelope import build_chat_response_envelope
 
 logger = logging.getLogger("nanobot.routes")
@@ -514,6 +519,18 @@ def _chat_request_type(req: ChatProxyRequest) -> str:
     return "private" if str(req.session_id).startswith("private_") else "group"
 
 
+def _normalize_request_client_meta(req: Any, *, expected_chat_type: str) -> dict[str, Any]:
+    try:
+        normalized = normalize_client_meta(
+            getattr(req, "client_meta", None),
+            expected_chat_type=expected_chat_type,
+        )
+    except ClientMetaValidationError as exc:
+        raise HTTPException(400, f"invalid client_meta: {exc}") from exc
+    req.client_meta = normalized
+    return normalized
+
+
 def _split_chat_answer_chunks(answer: str) -> list[str]:
     text = str(answer or "")
     if text.lstrip().startswith("<article") or text.lstrip().startswith("<!doctype") or text.lstrip().startswith("<html"):
@@ -545,6 +562,9 @@ def _chat_response_meta(
         "platform": platform or _chat_request_platform(req),
         "chat_type": chat_type or _chat_request_type(req),
     }
+    request_id = client_meta_request_id(req.client_meta)
+    if request_id:
+        meta["request_id"] = request_id
     if unprocessed_logs is not None:
         meta["unprocessed_logs"] = unprocessed_logs
     if reason:
@@ -1672,6 +1692,7 @@ async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
     """统一群聊入口：route 只做依赖注入，业务流程在 GroupIngressService。"""
     from app.group_ingress.service import GroupIngressService
 
+    _normalize_request_client_meta(req, expected_chat_type="group")
     service = GroupIngressService(
         db=db,
         background_tasks=background_tasks,
@@ -2183,6 +2204,7 @@ async def proxy_chat(
     """
     统一网关：接收客户端的发问，通过 KT Agent 处理，返回结果并双向落库。
     """
+    _normalize_request_client_meta(req, expected_chat_type=_chat_request_type(req))
     logger.info(f"[/chat] Request START: user={req.user_id}, session={req.session_id}, query={req.query[:100]}, sender={req.sender_name}, files={req.files}, session_name={req.session_name}")
 
     # 1. 自动注册用户 & 更新用户名

@@ -6,15 +6,15 @@
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
-P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `docs(计划): 同步响应信封状态` 收口。路线项 5 仍保留 `client_meta` 边界层解析 / 校验作为后续小任务。
+P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，本阶段实现 `core/client_meta.py` 并接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。P2-2 响应信封兼容双写已统一 `/chat`、流式 done、`/group/message` 和 push 的响应结构，并让私聊路径返回过滤后的 `reply_meta`；路线项 5 的剩余工作是 `client_meta` 边界层解析 / 校验。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；下一优先级切到 P2-3「QQ 出站渲染契约」。
 
 ## 文档口径
 
-- `docs/todo.md` 是当前架构路线的主参考，但它只记录路线级状态；当它与提交记录、`.Codex/plans/` 任务进度或本文件冲突时，以已提交代码和本文件的当前详细计划为准。本轮已重新核对路线项 5，确认 P2-2 响应信封兼容双写已完成并通过验证；路线项 5 当前只剩 `client_meta` 边界层解析 / 校验尾项。
+- `docs/todo.md` 是当前架构路线的主参考，但它只记录路线级状态；当它与提交记录、`.Codex/plans/` 任务进度或本文件冲突时，以已提交代码和本文件的当前详细计划为准。本轮已重新核对路线项 5，确认 P2-2 响应信封兼容双写和 P2-2.5 `client_meta` 边界层解析 / 校验均已完成；路线项 5 后续只保留与 P2-3 出站渲染契约相邻的富媒体表达工作。
 - `docs/TODO_LIST.md` 是历史完成清单，目前未跟踪且存在滞后状态，例如仍描述 Prompt V2 默认未启用、TimingGate 阶段仍在中途；后续仅作为历史核对材料，不作为优先级来源。
 - 本文件记录「下一阶段怎么推进」，每次阶段完成后要同步状态并单独提交。
 
@@ -70,12 +70,51 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-7 | 已完成 | 残余同步 IO 审计与收口 | 贴纸 fallback、图片附件预处理和 Direct 工具同步 IO 守卫均已落地，路线项 2 已完成收口 | `8ce5210` / `d96e7cd` / `c7e91a9` / `641d080` / `0489bac` / `b3d27f5` |
 | P1-8 | 已完成 | 模型能力校验 | registry、直接 New API、Bridge 主回复、payload guard、无视觉候选降级和 `model_routing` eval 覆盖均已接入 `supports_image` / `supports_tools` / `supports_stream` | `ded7213` / `d4748d2` / `388c00f` / `d907a98` / `66fdfd9` / `d2a7a1f` / `e1d3bef` |
 | P2-1 | 已完成 | 工具配置增加 platform 维度 | platform scope 解析、ToolPlan / FinalTools 透传、`RuntimeToolDecision.platform` 迁移、`/tools/decisions` 输出、真实入口到 Bridge 的 platform 透传、Admin API platform 覆盖和预览、WebUI 平台覆盖入口，以及消息字段标准文档收口均已完成 | `d221180` / `7c0fda9` / `bb7489c` / `295e3f7` / `73bbe8a` / `d9a1bae` / `2b0e203` |
-| P2-2 | 已完成（响应信封），client_meta 校验后续 | 标准化请求 / 响应信封 | 设计已随 `c984036` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；共享 builder、`/chat` 非流式、SSE done、`/group/message`、定时任务 push、route push、响应侧文档和最终验证均已完成 | `c984036` / `147421b` / `57006f3` / `49b3104` / `fc0eeaf` / `0c37a30` / `docs(计划): 同步响应信封状态` |
+| P2-2 | 已完成 | 标准化请求 / 响应信封 | 设计已随 `c984036` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；共享 builder、`/chat` 非流式、SSE done、`/group/message`、定时任务 push、route push、响应侧文档和最终验证均已完成 | `c984036` / `147421b` / `57006f3` / `49b3104` / `fc0eeaf` / `0c37a30` / `617aa25` |
+| P2-2.5 | 已完成 | `client_meta` 边界层校验 | 新增 `core/client_meta.py`，在 `/chat` 和 `/group/message` 入口归一化 `platform`、校验 `chat_type`、裁剪 trace 字段，并保留扩展字段 | `ce05b35` / `feat(消息): 校验客户端元信息边界` |
 | P2-3 | 待执行 | QQ 出站渲染契约 | 输出结构化 segments，图片和 HTML 渲染集中在出口层 | `feat(渲染): 定义 QQ 出站消息契约` |
 | P2-4 | 待执行 | Prompt platform × chat_type 二维适配 | V2 模板按平台和会话类型拆分，QQ 专属约定下沉到 platform 分支 | `feat(提示词): 支持平台化模板分支` |
 | P3-1 | 已部分完成，待继续 | SSE 真 token 流式剩余收敛 | 已贯通 `/chat` 的 `stream` 参数并补齐 `/chat-step` SSE；继续补 chunk 合并窗口、backpressure、工具回合语义和统一信封 | `2369081` / 后续 `refactor(流式): 收敛增量输出契约` |
 | P3-2 | 运营项 | TimingGate 持续评估 | 用更多人工标注样本复跑审计，接入外部 CI / PR gate | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
+
+## 当前详细计划：P2-2.5 `client_meta` 边界层校验
+
+状态：P2-2.5 已完成实现并通过最终验证。设计文档为 `docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，实现计划为 `.Codex/plans/client-meta-boundary-validation.md`。本阶段新增 `core/client_meta.py` 纯 helper，route 层把 helper 校验错误转换为 HTTP 400；`/chat` 和 `/group/message` 均会在业务处理前归一化 `req.client_meta`，避免冲突 `chat_type` 或非法 trace 字段继续进入 Bridge、TimingGate 和 ambient log。
+
+目标：
+
+- `platform` 缺省为 `qq`，传入时执行 `strip().lower()` 并要求匹配 `^[a-z][a-z0-9_-]{0,31}$`。
+- `/chat` 与 `/group/message` 校验 `client_meta.chat_type` 与入口事实一致，冲突时返回 400。
+- `trace.request_id`、`trace.correlation_id`、`trace.source` 必须是字符串，服务端会裁剪到 128 字符。
+- `/chat` 将归一化后的 `trace.request_id` 投影到响应信封 `meta.request_id`。
+- 群聊 ambient log 保存归一化后的 `client_meta`，并继续保留 `stickers`、`raw`、`business` 等扩展字段。
+
+阶段拆分：
+
+- [x] 写入设计文档：`docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`。提交：`ce05b35 docs(计划): 设计客户端元信息校验`。
+- [x] 写入实现计划：`.Codex/plans/client-meta-boundary-validation.md`。
+- [x] 任务 1：新增 helper 红灯测试 `tests/test_client_meta.py`。
+- [x] 任务 2：实现 `core/client_meta.py`，覆盖 platform 默认值、平台归一化、`chat_type` 冲突、trace 字符串校验和扩展字段保留。
+- [x] 任务 3：补 `/chat` 与 `/group/message` API 红灯测试，覆盖响应 `meta.request_id`、冲突 `chat_type` 400、ambient log 归一化。
+- [x] 任务 4：在 `api/routes.py` 接入 route 层 `client_meta` 归一化和错误转换。
+- [x] 任务 5：同步 `docs/message-field-standard.md`、`docs/todo.md`、本文件和实现计划状态，并在最终验证后提交。
+
+最新验证记录：
+
+- helper 红灯：`tests/test_client_meta.py` 先失败于 `ModuleNotFoundError: No module named 'core.client_meta'`，结果 `5 failed, 1 warning`。
+- helper 绿灯：`tests/test_client_meta.py`，结果 `5 passed, 1 warning in 0.60s`。
+- API 红灯：`tests/test_chat_response_envelope.py tests/test_group_response_envelope.py`，结果 `4 failed, 5 passed, 21 warnings`；失败点为响应 `meta.request_id` 缺失、冲突 `chat_type` 未返回 400、群聊 ambient log 中 `client_meta` 未归一。
+- API 绿灯：`tests/test_client_meta.py tests/test_chat_response_envelope.py tests/test_group_response_envelope.py`，结果 `14 passed, 21 warnings in 2.70s`。
+- 文档占位词扫描：`docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/client-meta-boundary-validation.md docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，结果无输出，退出码 0。
+- 文档格式检查：`git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/client-meta-boundary-validation.md docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，结果无输出，退出码 0。
+- P2-2.5 定向回归：`tests/test_client_meta.py tests/test_chat_response_envelope.py tests/test_group_response_envelope.py tests/test_api.py::test_proxy_chat_passes_client_platform_to_bridge tests/test_api.py::test_group_message_passes_client_platform_to_timing_gate tests/test_api.py::test_group_message_passes_client_platform_to_bridge`，结果 `17 passed, 21 warnings in 3.29s`。
+- 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1272 passed, 6 skipped, 139 warnings in 86.68s`。
+
+后续事项：
+
+- P2-3 继续处理 QQ 出站渲染契约，包含结构化 `segments`、图片、@、引用和 HTML-to-pic 出口层职责。
+- TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P2 执行顺序。
 
 ## 当前详细计划：P2-2 标准化请求 / 响应信封
 
@@ -124,7 +163,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 后续事项：
 
-- 路线项 5 仍保留 `client_meta` 边界层解析 / 校验，至少校验 `platform`、`chat_type` 和 `trace.request_id`。
+- P2-2.5 已收口 `client_meta` 边界层解析 / 校验，`platform`、`chat_type` 和 `trace` 关键字段均已有运行时校验。
 - P2-3 继续处理 QQ 出站渲染契约，包含结构化 `segments`、图片、@、引用和 HTML-to-pic 出口层职责。
 
 建议阶段性提交：
@@ -728,6 +767,6 @@ P1-6 验收重点：
 
 ## 下一步
 
-路线项 5 先做 `client_meta` 边界层解析 / 校验尾项：为 `/chat` 和 `/group/message` 统一校验 `platform`、`chat_type` 与 `trace.request_id`，并保留旧 QQ / NapCat 扩展字段兼容。该小阶段设计文档为 `docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，实现计划为 `.Codex/plans/client-meta-boundary-validation.md`。
+进入 P2-3「QQ 出站渲染契约」：定义结构化出站 `segments`、集中 CQ renderer、图片 token 展开和 HTML-to-pic 出口层职责，使 QQ push、群聊回复和私聊信封共享同一套可渲染消息协议。
 
-完成后进入 P2-3「QQ 出站渲染契约」：定义结构化出站 `segments` / CQ renderer / HTML-to-pic 出口层职责。TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P2 执行顺序。
+TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P2 执行顺序。

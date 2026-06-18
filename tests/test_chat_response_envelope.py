@@ -85,3 +85,55 @@ def test_proxy_chat_no_reply_returns_empty_standard_envelope(client, monkeypatch
     assert data["reply_meta"] == {}
     assert data["meta"]["platform"] == "qq"
     assert data["meta"]["chat_type"] == "private"
+
+
+def test_proxy_chat_meta_includes_normalized_trace_request_id(client, monkeypatch):
+    _fast_private_reply(monkeypatch)
+
+    class FakeBridge:
+        async def handle_message(self, *args, **kwargs):
+            return "带 trace 回复"
+
+        def pop_last_reply_meta(self, session_id):
+            return {}
+
+    with patch("api.routes.get_bridge", return_value=FakeBridge()):
+        response = client.post(
+            "/api/v1/chat",
+            json={
+                "user_id": "trace_user",
+                "session_id": "private_trace_user",
+                "query": "trace",
+                "client_meta": {
+                    "platform": " Web ",
+                    "trace": {"request_id": " req-123 "},
+                },
+            },
+        )
+
+    data = response.json()
+    assert response.status_code == 200
+    assert data["meta"]["platform"] == "web"
+    assert data["meta"]["request_id"] == "req-123"
+
+
+def test_proxy_chat_rejects_conflicting_client_meta_chat_type(client, monkeypatch):
+    _fast_private_reply(monkeypatch)
+
+    class FakeBridge:
+        async def handle_message(self, *args, **kwargs):
+            raise AssertionError("invalid client_meta must not reach bridge")
+
+    with patch("api.routes.get_bridge", return_value=FakeBridge()):
+        response = client.post(
+            "/api/v1/chat",
+            json={
+                "user_id": "bad_meta_user",
+                "session_id": "private_bad_meta_user",
+                "query": "bad",
+                "client_meta": {"chat_type": "group"},
+            },
+        )
+
+    assert response.status_code == 400
+    assert "client_meta" in response.json()["detail"]

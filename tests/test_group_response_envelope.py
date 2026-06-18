@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 
@@ -140,3 +142,67 @@ async def test_group_message_prompt_audit_failure_keeps_standard_envelope(
     assert data["reason"] == "prompt_v2_audit_failed"
     assert data["diagnostics"]["agent_result"] == "prompt_v2_audit_failed"
     assert data["meta"]["diagnostics"]["agent_result"] == "prompt_v2_audit_failed"
+
+
+@pytest.mark.asyncio
+async def test_group_message_rejects_conflicting_client_meta_chat_type(db_session, monkeypatch):
+    from api.routes import GroupMessageRequest, group_message
+
+    async def fake_process(*args, **kwargs):
+        raise AssertionError("invalid client_meta must not enter TimingGate")
+
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    with pytest.raises(Exception) as exc:
+        await group_message(
+            GroupMessageRequest(
+                group_id="bad-meta-group",
+                sender_id="u-bad-meta",
+                message="bad",
+                client_meta={"chat_type": "private"},
+            ),
+            db_session,
+            None,
+        )
+
+    assert getattr(exc.value, "status_code", None) == 400
+    assert "client_meta" in str(getattr(exc.value, "detail", ""))
+
+
+@pytest.mark.asyncio
+async def test_group_message_preserves_normalized_trace_in_ambient_log(db_session, monkeypatch):
+    from api.routes import GroupMessageRequest, group_message
+    from core.database import ChatLog
+
+    async def fake_process(*args, **kwargs):
+        return {"action": "no_reply", "generation": 1, "reason": "unit"}
+
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="trace-group",
+            sender_id="u-trace",
+            message="trace",
+            client_meta={
+                "platform": " Web ",
+                "trace": {"request_id": " req-group-1 "},
+                "stickers": [{"file": "s.png"}],
+            },
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["status"] == "no_reply"
+    ambient = (
+        db_session.query(ChatLog)
+        .filter_by(role="ambient")
+        .order_by(ChatLog.id.desc())
+        .first()
+    )
+    meta = json.loads(ambient.meta_json)
+    assert meta["client_meta"]["platform"] == "web"
+    assert meta["client_meta"]["chat_type"] == "group"
+    assert meta["client_meta"]["trace"]["request_id"] == "req-group-1"
+    assert meta["client_meta"]["stickers"] == [{"file": "s.png"}]
