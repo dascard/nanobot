@@ -847,7 +847,7 @@ git commit -m "feat(评测): 增加候选标注命令"
 - 创建：`evals/baselines/capability_model_routing.json`
 - 测试：`tests/test_eval_baseline.py`
 
-- [ ] **步骤 1：编写 dataset / suite 语义红灯测试**
+- [x] **步骤 1：编写 dataset / suite 语义红灯测试**
 
 在 `tests/test_eval_baseline.py` 新增：
 
@@ -866,7 +866,7 @@ def test_capability_dataset_uses_case_suite_as_runner():
 
 红灯预期：缺少 `capability_model_routing` 数据集。
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -876,7 +876,7 @@ python -m pytest tests/test_eval_baseline.py::test_capability_dataset_uses_case_
 
 预期：失败于 `assert cases`。
 
-- [ ] **步骤 3：新增能力数据集 case**
+- [x] **步骤 3：新增能力数据集 case**
 
 创建 `evals/cases/capability_model_routing/model_routing_stream_required_001.json`：
 
@@ -917,7 +917,7 @@ python -m pytest tests/test_eval_baseline.py::test_capability_dataset_uses_case_
 }
 ```
 
-- [ ] **步骤 4：生成 baseline**
+- [x] **步骤 4：生成 baseline**
 
 运行：
 
@@ -944,7 +944,7 @@ Suite: capability_model_routing  total=1  passed=1  failed=0  pass_rate=100.0%
 }
 ```
 
-- [ ] **步骤 5：运行 dataset gate**
+- [x] **步骤 5：运行 dataset gate**
 
 运行：
 
@@ -954,7 +954,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run --suite capability_model_routin
 
 预期：`Gate passed`。
 
-- [ ] **步骤 6：运行测试绿灯**
+- [x] **步骤 6：运行测试绿灯**
 
 运行：
 
@@ -964,7 +964,7 @@ python -m pytest tests/test_eval_baseline.py::test_capability_dataset_uses_case_
 
 预期：通过。
 
-- [ ] **步骤 7：提交任务 5**
+- [x] **步骤 7：提交任务 5**
 
 运行：
 
@@ -973,6 +973,14 @@ git diff --check -- evals/cases/capability_model_routing/model_routing_stream_re
 git add evals/cases/capability_model_routing/model_routing_stream_required_001.json evals/baselines/capability_model_routing.json tests/test_eval_baseline.py
 git commit -m "test(评测): 增加模型路由能力数据集"
 ```
+
+验证记录：
+
+- 红灯：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_baseline.py::test_capability_dataset_uses_case_suite_as_runner -v -p no:cacheprovider`，结果 `1 failed, 1 warning in 5.92s`；失败点为 `load_cases("capability_model_routing")` 返回空列表。
+- Suite：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run --suite capability_model_routing`，结果 `total=1 passed=1 failed=0 pass_rate=100.0%`。
+- Gate：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run --suite capability_model_routing --baseline evals/baselines/capability_model_routing.json --min-pass-rate 1.0 --max-new-failures 0`，结果 `Gate passed`。
+- 绿灯：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_baseline.py::test_capability_dataset_uses_case_suite_as_runner -v -p no:cacheprovider`，结果 `1 passed, 1 warning in 0.75s`。
+- 相关完整回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_baseline.py -v -p no:cacheprovider`，结果 `11 passed, 1 warning in 1.00s`。
 
 ---
 

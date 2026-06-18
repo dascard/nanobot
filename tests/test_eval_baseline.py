@@ -297,3 +297,15 @@ def test_model_routing_eval_filters_required_capabilities_for_image_case():
     assert result.output["model_used"] == "vision-model"
     assert result.output["raw"]["required_capabilities"] == {"supports_image": True}
     assert result.output["raw"]["ordered_candidates"] == ["vision-model"]
+
+
+def test_capability_dataset_uses_case_suite_as_runner():
+    from evals.run import load_cases, run_suite
+
+    cases = load_cases("capability_model_routing")
+
+    assert cases
+    assert {case.suite for case in cases} == {"model_routing"}
+    report = run_suite("capability_model_routing")
+    assert report.total == len(cases)
+    assert report.failed == 0

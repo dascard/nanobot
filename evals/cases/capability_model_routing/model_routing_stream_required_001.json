@@ -1,0 +1,34 @@
+{
+  "id": "model_routing_stream_required_001",
+  "suite": "model_routing",
+  "description": "流式请求必须过滤不支持 stream 的模型",
+  "input": {
+    "stream": true,
+    "provider": "new-api",
+    "models": [
+      {
+        "id": "text-fast-no-stream",
+        "provider": "new-api",
+        "tier": "fast",
+        "enabled": true,
+        "supports_stream": false,
+        "intelligence": 8,
+        "cost_input_1m": 0
+      },
+      {
+        "id": "text-fast-stream",
+        "provider": "new-api",
+        "tier": "fast",
+        "enabled": true,
+        "supports_stream": true,
+        "intelligence": 7,
+        "cost_input_1m": 0
+      }
+    ]
+  },
+  "expected": {
+    "model_used": "text-fast-stream",
+    "should_call_auto_routing": true
+  },
+  "tags": ["capability:model_routing", "stream", "routing"]
+}
