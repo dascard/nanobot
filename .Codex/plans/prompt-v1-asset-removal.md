@@ -70,6 +70,7 @@
 - 旧后台任务入口已迁移：`clients/classifier_client.call_model_route()` 的分类器 route 已改用 V2 task template；`core/legacy_adapter.py` 的 `memory_extract` 已改用 V2 task template。
 - V1 live 入口已封存：`NanobotBridge` 会忽略 `v1` override 并统一进入 V2 canonical runtime；`build_prompt_runtime()` 不再调用 `PromptAssembler`。
 - 任务 6 当前状态：`creatures/nanobot/config.yaml` 已移除 `system_prompt_file: prompt.md`，旧 prompt 模块、旧模板目录、`prompt.md` 和构建脚本已从 live tree 删除，并通过引用扫描、相关回归、WebUI 构建和全量测试。
+- 任务 7 当前状态（2026-06-18）：红灯测试已写入并确认失败；实现修正进行中，尚未完成绿灯、WebUI 构建、全量测试和阶段提交。
 
 ## 任务 1：新增 V2 task template 渲染边界
 
@@ -969,6 +970,12 @@ git commit -m "refactor(提示词): 删除旧版提示词资产"
 
 **文件：**
 - 修改：`core/prompt_v2/template_registry.py`
+- 修改：`core/config_registry.py`
+- 修改：`core/prompt_v2/compiler.py`
+- 修改：`bootstrap/prompt_runtime.py`
+- 修改：`nanobot_kt/bridge.py`
+- 修改：`nanobot_kt/prompt_runtime.py`
+- 修改：`app/prompt_runtime/preview_service.py`
 - 修改：`api/admin/prompt_v2_routes.py`
 - 修改：`api/admin_routes.py`
 - 修改：`webui/src/App.jsx`
@@ -976,10 +983,11 @@ git commit -m "refactor(提示词): 删除旧版提示词资产"
 - 修改：`prompt_manifest.json`
 - 修改：`tests/test_prompt_manifest.py`
 - 修改：`tests/test_prompt_v2_template_registry.py`
+- 修改：`tests/test_prompt_v2_template_admin.py`
 - 修改：`tests/test_webui_prompt_runtime_ui.py`
 - 修改：`tests/test_reply_admin.py`
 
-- [ ] **步骤 1：写红灯测试**
+- [x] **步骤 1：写红灯测试**
 
 在 `tests/test_prompt_manifest.py` 中新增：
 
@@ -1012,15 +1020,30 @@ def test_prompt_template_registry_prefers_canonical_env_names(tmp_path, monkeypa
     assert runtime_template_dir() == runtime_dir
 ```
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
 ```bash
-python -B -m pytest tests/test_prompt_manifest.py::test_prompt_manifest_declares_single_canonical_engine_with_legacy_aliases tests/test_prompt_v2_template_registry.py::test_prompt_template_registry_prefers_canonical_env_names -q -p no:cacheprovider
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+python -B -m pytest \
+  tests/test_prompt_manifest.py::test_prompt_manifest_declares_only_canonical_prompt_engine \
+  tests/test_prompt_manifest.py::test_prompt_runtime_config_default_matches_manifest_active_engine \
+  tests/test_prompt_v2_template_registry.py::test_prompt_template_registry_prefers_canonical_env_names \
+  tests/test_prompt_v2_template_registry.py::test_prompt_template_registry_keeps_v2_env_names_as_compat_fallback \
+  tests/test_prompt_v2_template_admin.py::test_prompt_template_admin_exposes_canonical_and_v2_compat_routes \
+  tests/test_webui_prompt_runtime_ui.py::test_prompt_runtime_is_primary_prompt_nav_entry \
+  tests/test_webui_prompt_runtime_ui.py::test_prompt_preview_defaults_to_canonical_prompt_and_prompt_path_redirects \
+  tests/test_webui_prompt_runtime_ui.py::test_prompt_runtime_v2_page_exposes_template_editor \
+  tests/test_reply_admin.py::test_reply_test_request_defaults_to_canonical_prompt \
+  tests/test_reply_admin.py::test_reply_test_old_variants_map_to_v2_by_default \
+  tests/test_reply_admin.py::test_reply_test_explicit_v1_variants_are_coerced_to_v2 \
+  tests/test_reply_admin.py::test_reply_test_prompt_only_uses_v2_prompt_without_retry \
+  tests/test_reply_admin.py::test_reply_test_supports_prompt_engine_alias_v2 \
+  -q -p no:cacheprovider
 ```
 
-预期：FAIL，manifest 仍声明 `v2/v1`，registry 仍优先 `NANOBOT_PROMPT_V2_*`。
+已确认红灯：`15 failed, 1 passed, 20 warnings`。失败点覆盖 manifest / config 仍输出 `v2`、registry env 优先级仍为旧名、canonical admin route 尚不可用、WebUI 主入口和 reply-test 仍使用 `v2`。
 
 - [ ] **步骤 3：修改 registry env 兼容层**
 
@@ -1032,7 +1055,7 @@ def default_template_dir() -> Path:
         os.environ.get("NANOBOT_PROMPT_DEFAULT_DIR")
         or os.environ.get("NANOBOT_PROMPT_V2_DIR")
         or os.environ.get("NANOBOT_PROMPT_V2_DEFAULT_DIR")
-        or (_repo_root() / "prompts.default")
+        or (_repo_root() / "prompts.v2.default")
     )
 
 
@@ -1040,11 +1063,11 @@ def runtime_template_dir() -> Path:
     return Path(
         os.environ.get("NANOBOT_PROMPT_RUNTIME_DIR")
         or os.environ.get("NANOBOT_PROMPT_V2_RUNTIME_DIR")
-        or (_repo_root() / "data" / "prompts")
+        or (_repo_root() / "data" / "prompts_v2")
     )
 ```
 
-旧 V1 `prompts.default/` 已在任务 6 删除后，才允许把 canonical 默认目录改回 `prompts.default`。
+任务 7 只建立 canonical 命名兼容层，不物理重命名目录。`prompts.v2.default`、`data/prompts_v2` 和 `data/prompts_v2_history` 暂时保留为兼容物理路径；后续如需迁移目录，应单独设计并单独验证。
 
 - [ ] **步骤 4：更新 manifest 和 API/UI 文案**
 
@@ -1057,9 +1080,9 @@ def runtime_template_dir() -> Path:
   "engines": {
     "prompt": {
       "status": "active",
-      "default_dir": "prompts.default",
-      "runtime_dir": "data/prompts",
-      "backup_dir": "data/prompts_history"
+      "default_dir": "prompts.v2.default",
+      "runtime_dir": "data/prompts_v2",
+      "backup_dir": "data/prompts_v2_history"
     }
   },
   "compat_aliases": {
@@ -1078,16 +1101,27 @@ WebUI 新主路由使用 `/prompt-templates`，旧 `/prompt-v2-templates` redire
 
 - `prompt_v2_audit_failed`
 - `v2_code_retry`
-- `prompt_mode` 历史字段
+- `v2_prompt_only`
+- 历史 trace 中已经存在的 `prompt_mode=v2`
 
-在代码注释或测试中明确它们是兼容字段，避免一次性破坏 API / trace / eval。
+live 新输出应使用 `prompt_engine="prompt"`、`prompt_mode="prompt"` 和 `prompt_source="Prompt Runtime"`；旧字段仅作兼容读取，避免一次性破坏 API / trace / eval。
 
 - [ ] **步骤 6：运行任务 7 回归**
 
 运行：
 
 ```bash
-python -B -m pytest tests/test_prompt_manifest.py tests/test_prompt_v2_template_registry.py tests/test_reply_admin.py tests/test_webui_prompt_runtime_ui.py -q -p no:cacheprovider
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
+python -B -m pytest \
+  tests/test_prompt_manifest.py \
+  tests/test_prompt_v2_template_registry.py \
+  tests/test_prompt_v2_template_admin.py \
+  tests/test_prompt_trace_admin.py \
+  tests/test_reply_admin.py \
+  tests/test_bridge_prompt_v2.py \
+  tests/test_prompt_runtime_bootstrap.py \
+  tests/test_webui_prompt_runtime_ui.py \
+  -q -p no:cacheprovider
 cd webui && npm run build
 ```
 
