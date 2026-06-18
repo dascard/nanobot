@@ -59,7 +59,7 @@ export function EvalsPage() {
   }
 
   const doLabel = (caseId) => {
-    // 从表单构建 expected_json
+    // 从表单构建 expected
     let expectedJson = { ...labelFields }
     delete expectedJson._rawJson
     if (labelShowJson && labelFields._rawJson) {
@@ -69,7 +69,7 @@ export function EvalsPage() {
       alert('请先选择期望值')
       return
     }
-    api.post(`/evals/candidates/${encodeURIComponent(caseId)}/label`, { expected_json: expectedJson })
+    api.post(`/evals/candidates/${encodeURIComponent(caseId)}/label`, { expected: expectedJson })
       .then(() => { setShowLabel(null); loadCandidates() })
       .catch(e => alert(e.response?.data?.detail || e.message))
   }

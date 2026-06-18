@@ -5336,6 +5336,11 @@ def eval_patch_candidate(
 
 class LabelRequest(BaseModel):
     expected: dict = Field(default_factory=dict)
+    expected_json: Optional[dict] = None
+    note: str = ""
+
+    def normalized_expected(self) -> dict:
+        return self.expected or self.expected_json or {}
 
 
 @router.post("/evals/candidates/{case_id}/label")
@@ -5344,11 +5349,15 @@ def eval_label_candidate(
     request: Request, db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    result = label_candidate(db, case_id, body.expected)
+    expected = body.normalized_expected()
+    try:
+        result = label_candidate(db, case_id, expected, note=body.note or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not result:
         raise HTTPException(404, "candidate not found")
     _audit_request(db, request, "label_candidate", "eval_candidate", case_id,
-                   {"expected_keys": list(body.expected.keys())})
+                   {"expected_keys": list(expected.keys())})
     return result
 
 

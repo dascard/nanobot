@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from core.database import EvalCandidate, EvalRun, EvalRunResult
+from evals.expected_contract import validate_expected_contract
 
 
 # ── Cursor ──
@@ -128,13 +129,16 @@ def update_candidate(db, case_id: str, **fields):
     return _candidate_dict(row)
 
 
-def label_candidate(db, case_id: str, expected_dict: dict):
+def label_candidate(db, case_id: str, expected_dict: dict, *, note: str | None = None):
     """标记候选：设置 expected_json 和 status=labeled。"""
     row = get_candidate(db, case_id)
     if not row:
         return None
+    validate_expected_contract(row.suite, expected_dict)
     row.expected_json = json.dumps(expected_dict, ensure_ascii=False)
     row.status = "labeled"
+    if note is not None:
+        row.note = note
     row.updated_at = datetime.now()
     db.commit()
     return _candidate_dict(row)

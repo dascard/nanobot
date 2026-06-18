@@ -9,6 +9,7 @@ MODELS_JS = Path("webui/src/features/models/ModelsPage.jsx")
 PROMPT_JS = Path("webui/src/features/prompt/PromptPages.jsx")
 REPLY_EVAL_JS = Path("webui/src/features/reply-eval/ReplyEvalPage.jsx")
 TOOLS_JS = Path("webui/src/features/tools/ToolsPage.jsx")
+EVALS_JS = Path("webui/src/features/evals/EvalsPage.jsx")
 
 
 def read_app() -> str:
@@ -69,6 +70,13 @@ def test_reply_eval_case_editor_controls_are_labelled():
     assert "Field id=\"reply-edit-title\"" in source
     assert "id=\"reply-edit-context\"" in source
     assert "aria-label=\"选择测试用例\"" in source
+
+
+def test_eval_candidate_label_posts_expected_field():
+    source = EVALS_JS.read_text(encoding="utf-8")
+
+    assert "expected_json: expectedJson" not in source
+    assert "{ expected: expectedJson }" in source
 
 
 def test_sticker_duplicate_actions_do_not_use_emoji_buttons():

@@ -248,7 +248,7 @@ git commit -m "fix(评测): 校验可评分期望字段"
 - 测试：`tests/test_eval_candidate_contract.py`
 - 测试：`tests/test_webui_admin_redesign.py` 或现有 WebUI 静态测试文件
 
-- [ ] **步骤 1：编写 store 标注红灯测试**
+- [x] **步骤 1：编写 store 标注红灯测试**
 
 在 `tests/test_eval_candidate_contract.py` 新增 helper 和测试：
 
@@ -288,7 +288,7 @@ def test_label_candidate_rejects_empty_or_needs_label(db_session):
             label_candidate(db_session, "cand_timing_gate_1", expected)
 ```
 
-- [ ] **步骤 2：编写 API 字段兼容红灯测试**
+- [x] **步骤 2：编写 API 字段兼容红灯测试**
 
 在可复用 admin client 的测试文件中新增，或在 `tests/test_eval_candidate_contract.py` 里用 `TestClient`：
 
@@ -308,7 +308,7 @@ def test_eval_label_candidate_accepts_expected_json_legacy_field(client, auth_he
 
 如果项目现有 admin 测试路径不带 `/api/v1/admin` 前缀，应按实际路由前缀调整。
 
-- [ ] **步骤 3：编写 WebUI 静态红灯测试**
+- [x] **步骤 3：编写 WebUI 静态红灯测试**
 
 在 `tests/test_webui_admin_redesign.py` 新增：
 
@@ -320,7 +320,7 @@ def test_eval_candidate_label_posts_expected_field():
     assert "{ expected: expectedJson }" in text
 ```
 
-- [ ] **步骤 4：运行红灯测试**
+- [x] **步骤 4：运行红灯测试**
 
 运行：
 
@@ -331,7 +331,7 @@ python -m pytest tests/test_webui_admin_redesign.py::test_eval_candidate_label_p
 
 预期：当前实现失败于空 expected 未拒绝、legacy 字段未读取或前端仍发送 `expected_json`。
 
-- [ ] **步骤 5：修复 store 标注校验**
+- [x] **步骤 5：修复 store 标注校验**
 
 在 `core/eval_sampling/store.py` 引入：
 
@@ -357,7 +357,7 @@ def label_candidate(db, case_id: str, expected_dict: dict, *, note: str | None =
     return _candidate_dict(row)
 ```
 
-- [ ] **步骤 6：修复 Admin label 请求**
+- [x] **步骤 6：修复 Admin label 请求**
 
 在 `api/admin_routes.py` 中扩展模型：
 
@@ -383,7 +383,7 @@ class LabelRequest(BaseModel):
 
 审计信息使用 `expected.keys()`。
 
-- [ ] **步骤 7：修复 WebUI 请求字段**
+- [x] **步骤 7：修复 WebUI 请求字段**
 
 在 `webui/src/features/evals/EvalsPage.jsx`：
 
@@ -391,7 +391,7 @@ class LabelRequest(BaseModel):
 api.post(`/evals/candidates/${encodeURIComponent(caseId)}/label`, { expected: expectedJson })
 ```
 
-- [ ] **步骤 8：运行标注测试绿灯**
+- [x] **步骤 8：运行标注测试绿灯**
 
 运行：
 
@@ -402,7 +402,7 @@ python -m pytest tests/test_webui_admin_redesign.py::test_eval_candidate_label_p
 
 预期：全部通过。
 
-- [ ] **步骤 9：提交任务 2**
+- [x] **步骤 9：提交任务 2**
 
 运行：
 
@@ -411,6 +411,14 @@ git diff --check -- core/eval_sampling/store.py api/admin_routes.py webui/src/fe
 git add core/eval_sampling/store.py api/admin_routes.py webui/src/features/evals/EvalsPage.jsx tests/test_eval_candidate_contract.py tests/test_webui_admin_redesign.py
 git commit -m "fix(评测): 修复候选标注契约"
 ```
+
+验证记录：
+
+- 红灯：`python -m pytest tests/test_eval_candidate_contract.py -k "label_candidate or expected_json" -v && python -m pytest tests/test_webui_admin_redesign.py::test_eval_candidate_label_posts_expected_field -v`，结果后端用例 `2 failed`；失败点为空 expected 未拒绝、API legacy `expected_json` 被吞掉。
+- 绿灯：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidate_contract.py -k "label_candidate or expected_json" -v -p no:cacheprovider`，结果 `2 passed, 4 deselected, 21 warnings in 1.00s`。
+- WebUI 静态守卫：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_webui_admin_redesign.py::test_eval_candidate_label_posts_expected_field -v -p no:cacheprovider`，结果 `1 passed, 1 warning in 0.47s`。
+- 相关完整回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidate_contract.py -v -p no:cacheprovider`，结果 `6 passed, 21 warnings in 1.23s`。
+- WebUI 完整静态回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_webui_admin_redesign.py -v -p no:cacheprovider`，结果 `17 passed, 1 warning in 0.71s`。
 
 ---
 
