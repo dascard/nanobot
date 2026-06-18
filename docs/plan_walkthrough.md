@@ -78,7 +78,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-2 | 已完成 | 私聊 TimingGate 可观测补齐 | 私聊 `timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化 | `feat(时机): 持久化私聊评分元信息` |
 | P3-3A | 已完成 | TimingGate 标注审计复跑 | `timing_signal_audit` 已支持离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
 | P3-3B | 已完成 | TimingGate CI / PR gate | 已新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
-| P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
+| P4-1 | 计划中 | 评测体系扩展 | 设计已固定 expected 契约、候选标注、promote dry-run、dataset / suite 边界和首个能力数据集路径 | `docs(评测): 设计标注闭环` |
 
 ## 当前详细计划：P3-2 私聊 TimingGate 可观测补齐
 
@@ -176,6 +176,38 @@ P3-3B 验证记录：
 - 文档 / 计划阶段单独提交：`docs(评测): 设计 TimingGate 持续评估`。
 - P3-3A 单独提交：`feat(评测): 支持时机信号标注复跑`。
 - P3-3B 单独提交：`ci(评测): 接入 timing gate 回归门禁`。
+
+## 当前详细计划：P4-1 评测数据集与标注闭环
+
+状态：设计文档已完成并随 `e4fb70a docs(评测): 设计标注闭环` 提交；实现计划写入 `.Codex/plans/eval-dataset-labeling.md`。P4-1 第一阶段采用契约优先方案，先修正候选标注和晋升安全，再扩离线 CLI 与首个能力数据集。
+
+目标：
+
+- 修复 WebUI / Admin 标注字段错配，避免 expected 被静默写成空对象。
+- 禁止空 expected、`needs_label=true` 和不可评分 expected 进入 labeled / promoted 状态。
+- 补齐历史未评分 expected key 的测试与 scorer 覆盖。
+- 增加 promote dry-run、`target_dataset` 和来源 `meta`。
+- 增加离线 candidates export / import-labels / promote 命令。
+- 新增 `capability_model_routing` 数据集和 baseline，固定 dataset / suite 两层语义。
+
+阶段拆分：
+
+- [x] 设计文档：`docs/superpowers/specs/2026-06-18-eval-dataset-labeling-design.md`。提交：`e4fb70a docs(评测): 设计标注闭环`。
+- [ ] 实现计划：`.Codex/plans/eval-dataset-labeling.md`。
+- [ ] 任务 1：Expected 契约与历史未评分 key。
+- [ ] 任务 2：候选标注契约修复。
+- [ ] 任务 3：Promote dry-run 与 dataset 目标。
+- [ ] 任务 4：离线 candidates CLI。
+- [ ] 任务 5：首个 per-capability 数据集。
+- [ ] 任务 6：文档收口。
+- [ ] 任务 7：最终验证与交接。
+
+验证计划：
+
+- 计划阶段：`git diff --check`、占位词扫描和 U+FFFD 扫描。
+- 定向回归：`tests/test_eval_candidate_contract.py`、`tests/test_eval_candidates_cli.py`、`tests/test_eval_baseline.py`、`tests/test_timing_gate_prompt_policy.py`。
+- 门禁：`bash scripts/run_timing_gate_gate.sh` 和 `python -B -m evals.run --suite capability_model_routing --baseline evals/baselines/capability_model_routing.json --min-pass-rate 1.0 --max-new-failures 0`。
+- 最终回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`。
 
 ## 已完成阶段详情：P3-1 SSE 真 token 流式剩余收敛
 
