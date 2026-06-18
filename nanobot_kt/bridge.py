@@ -23,7 +23,7 @@ from openai import AsyncOpenAI
 from nanobot_kt.output import BufferedOutput
 from nanobot_kt.image_pipeline import prepare_image_parts
 from clients.new_api_client import NewAPIClient
-from clients.model_registry import registry
+from clients.model_registry import model_supports_capabilities, registry
 from core.llm_sdk_tracing import install_openai_chat_completion_tracer
 
 from config import (
@@ -1135,6 +1135,7 @@ class NanobotBridge:
 
             # Create a user input event for the KT controller
             files = meta.get("files")
+            image_parts = []
             if files:
                 image_parts = await asyncio.to_thread(
                     prepare_image_parts,
@@ -1146,6 +1147,15 @@ class NanobotBridge:
                 event_content = make_multimodal_content(prompt_build.event_content, images=image_parts)
             else:
                 event_content = prompt_build.event_content
+            try:
+                has_tool_schemas = bool(list(getattr(tool_plan, "sent_tool_schemas", []) or []))
+            except Exception:
+                has_tool_schemas = False
+            required_capabilities = {"supports_stream": True}
+            if image_parts:
+                required_capabilities["supports_image"] = True
+            if has_tool_schemas:
+                required_capabilities["supports_tools"] = True
             event = create_user_event(event_content, stream=meta["stream"])
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 
@@ -1226,6 +1236,19 @@ class NanobotBridge:
                             manual_reply_model,
                         )
                         manual_reply_model = ""
+                    elif info and not model_supports_capabilities(info, required_capabilities):
+                        logger.warning(
+                            "[ReplyModel] configured model lacks capabilities: %s required=%s, falling back to auto",
+                            manual_reply_model,
+                            required_capabilities,
+                        )
+                        manual_reply_model = ""
+                    elif info is None and required_capabilities.get("supports_image"):
+                        logger.warning(
+                            "[ReplyModel] configured model is unknown for image request: %s, falling back to auto",
+                            manual_reply_model,
+                        )
+                        manual_reply_model = ""
 
                 if manual_reply_model:
                     candidates = [{
@@ -1243,10 +1266,11 @@ class NanobotBridge:
                         provider=_route_registry_provider,
                         intel_floor=reply_intel_floor,
                         max_cost=REPLY_MODEL_MAX_COST,
+                        required_capabilities=required_capabilities,
                     )
                     logger.info(
-                        "[ReplyModel] auto complexity=%s base_floor=%s reply_floor=%s max_cost=%.3f",
-                        complexity, base_intel_floor, reply_intel_floor, REPLY_MODEL_MAX_COST,
+                        "[ReplyModel] auto complexity=%s base_floor=%s reply_floor=%s max_cost=%.3f required=%s",
+                        complexity, base_intel_floor, reply_intel_floor, REPLY_MODEL_MAX_COST, required_capabilities,
                     )
                 logger.info(
                     f"[Model Router] complexity={complexity}, intel_floor={reply_intel_floor}, "

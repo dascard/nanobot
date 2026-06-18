@@ -98,6 +98,8 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
     from nanobot_kt.bridge import NanobotBridge
     from nanobot_kt.output import BufferedOutput
 
+    captured_route_kwargs = {}
+
     class FakeLLM:
         provider_name = "unit"
         last_tool_calls = []
@@ -192,6 +194,7 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
             return 1
 
         def get_ordered_candidates(self, **_kwargs):
+            captured_route_kwargs.update(_kwargs)
             return [{"id": "unit-model", "intelligence": 1, "context_window": 128000}]
 
         @classmethod
@@ -226,6 +229,7 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
     monkeypatch.setattr("core.tool_plan.reset_current_tool_plan", lambda _token: None)
     monkeypatch.setattr("core.runtime_tool_service.record_runtime_tool_decision", lambda **_kwargs: False)
     monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
+    monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "", raising=False)
     monkeypatch.setattr(
         "core.tool_plan.build_tool_plan",
         lambda **_kwargs: SimpleNamespace(
@@ -237,6 +241,7 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
             sha256="b" * 64,
         ),
     )
+    monkeypatch.setattr("core.settings_service.settings.get", lambda key, default=None: default)
     monkeypatch.setattr("nanobot_kt.prompt_runtime.build_prompt_runtime", fake_build_prompt_runtime)
     monkeypatch.setattr(
         "nanobot_kt.model_runtime.resolve_reply_route_plan",
@@ -277,7 +282,6 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
         session_id="private_u1",
         metadata={
             "complexity": 1,
-            "reply_model": "unit-model",
             "runtime_preset": "none",
             "prompt_runtime_engine_override": "v1",
             "enable_reply_contract_retry": False,
@@ -296,6 +300,7 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
         {"status": "delta", "text": "好"},
     ]
     assert fake_llm.seen_kwargs["stream"] is True
+    assert captured_route_kwargs["required_capabilities"]["supports_stream"] is True
     user_wire = next(msg for msg in fake_llm.seen_messages if msg["role"] == "user")
     assert user_wire == {"role": "user", "content": "你好"}
     user_message = next(
