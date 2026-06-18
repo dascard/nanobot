@@ -218,9 +218,9 @@
 
 - **现状（2026-06-18 已落地）**：核心链路已从「纯 Qwen 三态判断」推进到 scoring 混合决策。已新增 `core/timing_score.py`，覆盖 `d0/linger/s_ack/s_transport/s_other/w_*` 信号、`E_rule/E_final`、冲突升级、模型权重和 `rule_fallback`；`GroupRuntime` 已接入 shadow scoring、普通 ambient 确定性短路、模型失败规则兜底、`directed_to_other` scoring 软化、ambient / legacy / timer cooldown scoring 短路，以及 session / platform 级模型层策略。私聊已接入同一套 shared timing scoring，分类器结果回灌为 `TimingModelHint`。群聊 `timing_scoring` 已写入 ChatLog meta 并由 admin events / WebUI 调试页透出；私聊 `PrivateDecision.timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化为 `timing_gate`，可回溯 action、reason、effort、runtime_preset 与 scoring 明细。`evals` 也能在 action 缺失时执行 scoring 并校验 `expected.scoring`。
 - **已完成**：`@bot + 图片` 规则 WAIT 不调模型；纯 ambient / 纯确认可规则 `no_reply`；`directed_to_other + linger` 进入冲突升级；模型 `network_error/parse_error` 后使用规则侧 `rule_fallback`，不再全群哑火；`s_ack` 排除请求词、问号、URL、代码、文件；`s_transport` 已按 secret/blob/url/codeblock/long dump 分档；`force_next_continue` 已降级为 `d0=1.0` 后完整走 Stage 1-4；`enabled` / `rules_only` / `shadow` 模型策略已支持 default / platform / session 三级覆盖；真实 ChatLog 信号审计 CLI 已输出假阳率、shadow mismatch 和阈值建议；`timing_gate` eval 已支持 baseline diff 和阈值门禁；私聊评分已补齐 ChatLog meta 可观测闭环。
-- **剩余**：核心混合决策主线和私聊可观测闭环均已完成。P3-3 已拆成两个可执行阶段：P3-3A 补 `timing_signal_audit` 离线 labeled report / sidecar labels 复跑入口，P3-3B 把 `python -m evals.run --suite timing_gate --baseline ... --min-pass-rate ... --max-new-failures ...` 收敛为仓库自包含 CI / PR gate。更多真实样本的选择、标注仲裁、定期复跑和是否按报告调参仍是运营动作；通用 `candidates → labeled` 产品化闭环留到路线项 8 / P4。
+- **剩余**：核心混合决策主线和私聊可观测闭环均已完成。P3-3A 已补齐 `timing_signal_audit` 离线 labeled report / sidecar labels 复跑入口；P3-3B 仍需把 `python -m evals.run --suite timing_gate --baseline ... --min-pass-rate ... --max-new-failures ...` 收敛为仓库自包含 CI / PR gate。更多真实样本的选择、标注仲裁、定期复跑和是否按报告调参仍是运营动作；通用 `candidates → labeled` 产品化闭环留到路线项 8 / P4。
 - **关联**：H2 已完成 admin route 异步化和 repeats 收紧；后续与路线项 8（评测体系）、路线项 5/7（响应信封与调试可观测）继续协同。
-- **下一步**：按 `docs/superpowers/specs/2026-06-18-timing-gate-continuous-eval-design.md` 和 `.Codex/plans/timing-gate-continuous-eval.md` 执行：先落 P3-3A 标注审计复跑入口，再落 P3-3B timing gate eval 门禁。
+- **下一步**：按 `docs/superpowers/specs/2026-06-18-timing-gate-continuous-eval-design.md` 和 `.Codex/plans/timing-gate-continuous-eval.md` 执行 P3-3B timing gate eval 门禁。
 
 ---
 

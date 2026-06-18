@@ -134,9 +134,9 @@ P3-3 拆成两个可以独立提交和回滚的阶段。
 
 ## 七、验收标准
 
-- [ ] `timing_signal_audit` 可在无 DB 的情况下复跑已有 labeled report。
-- [ ] sidecar JSON / JSONL label 可按 `log_id + signal_name` 合并。
-- [ ] 标注复跑报告能输出 labeled 样本数、假阳率和建议状态。
+- [x] `timing_signal_audit` 可在无 DB 的情况下复跑已有 labeled report。
+- [x] sidecar JSON / JSONL label 可按 `log_id + signal_name` 合并。
+- [x] 标注复跑报告能输出 labeled 样本数、假阳率和建议状态。
 - [ ] `timing_gate` gate 有仓库内 baseline，不依赖 `evals/reports/latest.json`。
 - [ ] `scripts/run_timing_gate_gate.sh` 本地可直接运行并返回正确 exit code。
 - [ ] CI workflow 调用统一脚本，并显式设置测试环境变量，避免 `.env` 写入副作用。

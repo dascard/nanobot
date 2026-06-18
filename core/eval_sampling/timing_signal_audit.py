@@ -97,6 +97,26 @@ def normalize_label(value: str) -> str:
     return "unknown"
 
 
+def merge_timing_signal_labels(
+    samples: list[dict[str, Any]],
+    labels: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """按 log_id + signal_name 合并人工标注，返回新样本列表。"""
+    label_by_key = {
+        (label.get("log_id"), str(label.get("signal_name") or "")): label
+        for label in labels
+        if label.get("log_id") is not None and label.get("signal_name")
+    }
+    merged: list[dict[str, Any]] = []
+    for sample in samples:
+        item = dict(sample)
+        label = label_by_key.get((sample.get("log_id"), str(sample.get("signal_name") or "")))
+        if label:
+            item.update(label)
+        merged.append(item)
+    return merged
+
+
 def _empty_signal_stats() -> dict:
     return {
         "samples": 0,

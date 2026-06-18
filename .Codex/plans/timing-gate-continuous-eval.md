@@ -34,7 +34,7 @@
 - 修改：`evals/timing_signal_audit.py`
 - 测试：`tests/test_timing_signal_audit.py`
 
-- [ ] **步骤 1：编写 sidecar label 合并红灯测试**
+- [x] **步骤 1：编写 sidecar label 合并红灯测试**
 
 在 `tests/test_timing_signal_audit.py` 中新增测试，构造两个 sample 和一个 sidecar labels 列表，断言 `(log_id, signal_name)` 匹配后 `label` 被覆盖，`note` 被保留，未匹配样本不变。
 
@@ -64,7 +64,7 @@ def test_merge_timing_signal_labels_overrides_by_log_id_and_signal():
     assert "label" not in merged[1]
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -74,7 +74,7 @@ python -m pytest tests/test_timing_signal_audit.py::test_merge_timing_signal_lab
 
 预期：失败于 `ImportError` 或 `AttributeError`，因为 `merge_timing_signal_labels` 尚不存在。
 
-- [ ] **步骤 3：实现最小纯函数**
+- [x] **步骤 3：实现最小纯函数**
 
 在 `core/eval_sampling/timing_signal_audit.py` 增加 `merge_timing_signal_labels(samples, labels)`：
 
@@ -100,7 +100,7 @@ def merge_timing_signal_labels(
 
 实际实现需要复用文件现有 import 风格，并确保 `Any` 已导入。
 
-- [ ] **步骤 4：运行合并测试绿灯**
+- [x] **步骤 4：运行合并测试绿灯**
 
 运行：
 
@@ -110,7 +110,7 @@ python -m pytest tests/test_timing_signal_audit.py::test_merge_timing_signal_lab
 
 预期：通过。
 
-- [ ] **步骤 5：编写离线 report 复跑红灯测试**
+- [x] **步骤 5：编写离线 report 复跑红灯测试**
 
 新增测试，使用 `tmp_path` 写入一个包含 `samples` 的 report JSON 和一个 labels JSONL，然后调用 CLI `main([...])` 或新 helper，断言输出 report 的 `labeled_samples == 2`，`signals.s_ack.false_positive_count == 1`。
 
@@ -122,7 +122,7 @@ python -m pytest tests/test_timing_signal_audit.py -k "input_report or labels" -
 
 预期：失败于 CLI 参数不存在。
 
-- [ ] **步骤 6：实现 CLI 离线模式**
+- [x] **步骤 6：实现 CLI 离线模式**
 
 在 `evals/timing_signal_audit.py` 中增加：
 
@@ -131,7 +131,7 @@ python -m pytest tests/test_timing_signal_audit.py -k "input_report or labels" -
 - 当存在 `--input-report` 时，不连接 DB，不执行 `query_timing_rows()`。
 - 输出格式仍包含 `samples`、`generated_at`、`source`，`source.mode` 为 `input_report`。
 
-- [ ] **步骤 7：运行 P3-3A 定向测试**
+- [x] **步骤 7：运行 P3-3A 定向测试**
 
 运行：
 
@@ -141,7 +141,7 @@ python -m pytest tests/test_timing_signal_audit.py -v
 
 预期：全部通过。
 
-- [ ] **步骤 8：运行相邻回归**
+- [x] **步骤 8：运行相邻回归**
 
 运行：
 
@@ -151,7 +151,7 @@ python -m pytest tests/test_timing_signal_audit.py tests/test_timing_gate_prompt
 
 预期：全部通过。
 
-- [ ] **步骤 9：同步文档状态**
+- [x] **步骤 9：同步文档状态**
 
 更新：
 
@@ -159,7 +159,7 @@ python -m pytest tests/test_timing_signal_audit.py tests/test_timing_gate_prompt
 - `docs/plan_walkthrough.md` 当前详细计划中的 P3-3A 任务状态。
 - `docs/superpowers/specs/2026-06-18-timing-gate-continuous-eval-design.md` 验收勾选状态。
 
-- [ ] **步骤 10：提交 P3-3A**
+- [x] **步骤 10：提交 P3-3A**
 
 运行：
 

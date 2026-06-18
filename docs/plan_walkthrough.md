@@ -76,7 +76,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P2-4 | 已完成 | Prompt platform × chat_type 二维适配 | V2 模板按平台和会话类型拆分，QQ 专属约定下沉到 platform 分支；`web × private` 不再注入 QQ 平台模板 | `27e632f` / `164b215` / `ca93dc2` / `18d0b0d` / `17a7bd8` / `fe2d81b` |
 | P3-1 | 已完成 | SSE 真 token 流式剩余收敛 | 已完成 `/chat` API delta 合并、`done` 权威测试、Bridge `final.replace`、API final 规范化、bounded queue / progress backpressure、断连 drain 和最终验证 | `bca50b8` / `e56a406` / `d8e8703` / `84cb0cb` / `a987d31` / `88268a1` / `a5f705a` / `87f3b40` / `docs(计划): 完成 SSE 最终验证` |
 | P3-2 | 已完成 | 私聊 TimingGate 可观测补齐 | 私聊 `timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化 | `feat(时机): 持久化私聊评分元信息` |
-| P3-3A | 计划完成 | TimingGate 标注审计复跑 | 新增 `timing_signal_audit` 离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
+| P3-3A | 已完成 | TimingGate 标注审计复跑 | `timing_signal_audit` 已支持离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
 | P3-3B | 待执行 | TimingGate CI / PR gate | 新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
 
@@ -111,7 +111,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 下一步：
 
-- 进入 P3-3A「TimingGate 标注审计复跑入口」TDD 实现。
+- 进入 P3-3B「TimingGate CI / PR gate」TDD 实现。
 
 ## 当前详细计划：P3-3 TimingGate 持续评估
 
@@ -129,11 +129,11 @@ P3-3A 目标：
 - [x] 收敛只读审计结论，明确真实标注复跑缺口。
 - [x] 写入设计文档：`docs/superpowers/specs/2026-06-18-timing-gate-continuous-eval-design.md`。
 - [x] 写入实现计划：`.Codex/plans/timing-gate-continuous-eval.md`。
-- [ ] 在 `core/eval_sampling/timing_signal_audit.py` 增加纯函数 label merge helper。
-- [ ] 在 `evals/timing_signal_audit.py` 增加 `--input-report` / `--labels` 离线复跑模式。
-- [ ] 在 `tests/test_timing_signal_audit.py` 覆盖 sidecar 合并、labeled report 复跑和建议状态。
-- [ ] 同步 `docs/todo.md`、本文件和设计文档状态。
-- [ ] 运行定向验证并提交 `feat(评测): 支持时机信号标注复跑`。
+- [x] 在 `core/eval_sampling/timing_signal_audit.py` 增加纯函数 label merge helper。
+- [x] 在 `evals/timing_signal_audit.py` 增加 `--input-report` / `--labels` 离线复跑模式。
+- [x] 在 `tests/test_timing_signal_audit.py` 覆盖 sidecar 合并、labeled report 复跑和建议状态。
+- [x] 同步 `docs/todo.md`、本文件和设计文档状态。
+- [x] 运行最终检查并提交 `feat(评测): 支持时机信号标注复跑`。
 
 P3-3B 目标：
 
@@ -152,6 +152,14 @@ P3-3B 目标：
 - P3-3 文档阶段：`git diff --check`、文档占位词扫描、U+FFFD 扫描。
 - P3-3A：`python -m pytest tests/test_timing_signal_audit.py tests/test_timing_gate_prompt_policy.py -v`。
 - P3-3B：`python -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py -v`、`bash scripts/run_timing_gate_gate.sh`、全量 `python -B -m pytest tests/ -v -p no:cacheprovider`。
+
+P3-3A 验证记录：
+
+- 红灯：`python -m pytest tests/test_timing_signal_audit.py::test_merge_timing_signal_labels_overrides_by_log_id_and_signal tests/test_timing_signal_audit.py::test_run_labeled_audit_merges_jsonl_labels_and_writes_report -v`，结果 `2 failed, 1 warning in 5.90s`；失败点为缺少 `merge_timing_signal_labels` 和 `run_labeled_audit`。
+- 绿灯：同一新增测试命令结果 `2 passed, 1 warning in 0.71s`。
+- P3-3A 文件回归：`python -m pytest tests/test_timing_signal_audit.py -v`，结果 `5 passed, 1 warning in 0.86s`。
+- CLI 入口调整后相邻回归：`python -m pytest tests/test_timing_signal_audit.py tests/test_timing_gate_prompt_policy.py -v`，结果 `12 passed, 1 warning in 1.45s`。
+- 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1316 passed, 6 skipped, 139 warnings in 99.05s`。
 
 提交边界：
 
