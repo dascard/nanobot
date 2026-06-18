@@ -32,7 +32,9 @@ def test_embedded_timing_gate_prompt_is_conservative_and_parser_aligned():
 
 
 def test_default_timing_gate_template_matches_runtime_actions():
-    prompt_text = _strip_frontmatter(Path("prompts.default/timing_gate.md").read_text(encoding="utf-8"))
+    prompt_text = _strip_frontmatter(
+        Path("prompts.v2.default/tasks/timing_gate.md").read_text(encoding="utf-8")
+    )
 
     assert "continue|wait|no_reply" in prompt_text
     assert "默认 no_reply" in prompt_text

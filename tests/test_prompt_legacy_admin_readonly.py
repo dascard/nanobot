@@ -28,12 +28,7 @@ def test_legacy_prompt_write_endpoints_are_readonly(client, auth_header, method,
     assert "只读迁移入口" in response.text
 
 
-def test_effective_preview_v1_returns_410_without_prompt_assembler(client, auth_header, monkeypatch):
-    def fail_assembler(*_args, **_kwargs):
-        raise AssertionError("V1 effective preview must not call PromptAssembler after P1-5")
-
-    monkeypatch.setattr("core.prompt_assembler.PromptAssembler.build", fail_assembler)
-
+def test_effective_preview_v1_returns_410(client, auth_header):
     response = client.post(
         "/api/v1/admin/prompt/effective-preview",
         json={

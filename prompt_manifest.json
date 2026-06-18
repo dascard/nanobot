@@ -7,13 +7,6 @@
       "default_dir": "prompts.v2.default",
       "runtime_dir": "data/prompts_v2",
       "backup_dir": "data/prompts_v2_history"
-    },
-    "v1": {
-      "status": "rollback_only",
-      "default_dir": "creatures/nanobot/prompts/system",
-      "runtime_dir": "data/prompt_fragments",
-      "backup_dir": "data/prompt_fragments_history",
-      "generated_output": "data/runtime_prompt/prompt.md"
     }
   }
 }

@@ -1,6 +1,6 @@
 # Nanobot Server
 
-Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配器 / Web 客户端消息，运行 KohakuTerrarium Agent，维护聊天记忆、群聊运行状态、TimingGate 判定、RAG 语义索引、表情包数据、Prompt 构建结果和管理后台调试面板。
+Nanobot Server 是 Nanobot 的服务端运行核心，负责接收聊天适配器 / Web 客户端消息，运行 KohakuTerrarium Agent，维护聊天记忆、群聊运行状态、TimingGate 判定、RAG 语义索引、表情包数据、Prompt Runtime 模板和管理后台调试面板。
 
 ## 主要能力
 
@@ -52,7 +52,7 @@ graph TD
 | `core/` | 数据库、群运行态、TimingGate、表情包、记忆、RAG 和配置 |
 | `evals/rag_benchmark/` | RAG benchmark case、adapter、runner、scoring 和报告生成 |
 | `nanobot_kt/` | KT Bridge、输出适配和工具实现 |
-| `creatures/nanobot/` | KT creature 配置、Prompt fragment 和工具说明 |
+| `creatures/nanobot/` | KT creature 配置、工具说明和运行记忆 |
 | `workers/` | Session summary 与语义索引异步 worker |
 | `webui/` | Admin WebUI 前端 |
 | `vendor/KohakuTerrarium/` | KT 框架子模块 |
@@ -255,32 +255,33 @@ Admin DB Browser 只面向管理员调试使用：
 | `POST /api/v1/admin/rag/benchmark/sample` | 从当前数据库只读抽样 generated case |
 | `POST /api/v1/admin/rag/benchmark/run` | 执行 RAG Benchmark |
 | `GET /api/v1/admin/rag/benchmark/reports/latest` | 查看最近一次 benchmark 报告 |
-| `GET /api/v1/admin/prompt` | Prompt 预览 / 构建相关数据 |
+| `GET /api/v1/admin/prompt` | Prompt Runtime 预览 / 模板管理相关数据 |
 | `GET /api/v1/admin/models/status` | 模型状态 |
 | `GET /api/v1/admin/db/tables` | 只读数据库表清单 |
 | `GET /api/v1/admin/db/tables/{table_name}` | 只读分页查看白名单表 |
 | `POST /api/v1/admin/db/query` | 受限只读 SQL 查询 |
 | `GET /api/v1/admin/logs` | 日志列表 |
 
-## Prompt 构建
+## Prompt Runtime 模板
 
-Prompt fragment 位于：
+默认模板位于：
 
 ```text
-creatures/nanobot/prompts/
+prompts.v2.default/
 ```
 
-构建并检查：
+运行时可编辑模板位于：
+
+```text
+data/prompts_v2/
+```
+
+服务启动时会通过 `bootstrap/prompt_runtime.py` 初始化运行时模板目录，只复制缺失模板，不覆盖已有运行时修改。修改对话组装、历史注入、工具契约或任务 prompt 时，需要同步检查默认模板、运行时模板和变量白名单。
+
+常用检查：
 
 ```bash
-python scripts/build_nanobot_prompt.py --check
-python scripts/build_nanobot_prompt.py
-```
-
-生成结果写入：
-
-```text
-creatures/nanobot/prompt.md
+python -B -m pytest tests/test_prompt_v2.py tests/test_prompt_manifest.py -q -p no:cacheprovider
 ```
 
 ## 测试

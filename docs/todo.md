@@ -141,12 +141,12 @@
 
 #### 路线项 1 — 提示词三套引擎收敛为唯一 V2  ·〔关联 H29〕
 
-- **现状（2026-06-17 已部分落地）**：默认 live 路径已切到 V2：`prompt_runtime.engine` 注册默认值为 `v2`（`core/config_registry.py:138`），`NanobotBridge` 缺省 / 非法 engine fallback 均回落 V2（`nanobot_kt/bridge.py:481-497`），启动时会初始化 `data/prompts_v2`（`bootstrap/prompt_runtime.py:27`、`core/prompt_v2/template_registry.py:78`），admin effective preview、reply-test 与 reply-eval 默认也改为 V2。V2 audit 失败后的 `fallback_v1` live 发送路径已禁用，残留配置仅作为废弃兼容项处理；P1-6 已继续封存 V1 live override，旧 `v1` settings / metadata 不再切回 `core/prompt_assembler.py` 主链路。`classifier_legacy` 与 `memory_extract` 已迁移到 V2 task template，旧 managed / legacy 管理入口已下线为最小 410 兼容出口。
-- **痛点**：同一交互定位 / 输出契约 / 安全规则仍在旧模块、旧模板目录和测试口径中残留，改动时容易被历史资产误导；`bridge.handle_message` 的主链路已减少 v1/v2 分支压力，但 `core/prompt_assembler.py`、`core/legacy_prompt_runtime.py`、`creatures/nanobot/prompt.md`、`prompts.default/` 和 `prompts.legacy.default/` 等冗余资产仍会增加 H29 后续拆分成本。
-- **目标**：只保留 V2 一套模板与一条 compile 路径，删除 `core/prompt_assembler.py`、`core/legacy_prompt_runtime.py`、`prompts.legacy.default/`、`prompts.default/`、`creatures/nanobot/prompt.md` 及 `scripts/build_nanobot_prompt.py`；去掉 "v2/V2" 版本后缀，模板目录、settings key、prompt_key、tracing 字段统一为无版本号的规范名。
+- **现状（2026-06-17 已部分落地）**：默认 live 路径已切到 V2：`prompt_runtime.engine` 注册默认值为 `v2`（`core/config_registry.py:138`），`NanobotBridge` 缺省 / 非法 engine fallback 均回落 V2（`nanobot_kt/bridge.py:481-497`），启动时会初始化 `data/prompts_v2`（`bootstrap/prompt_runtime.py:27`、`core/prompt_v2/template_registry.py:78`），admin effective preview、reply-test 与 reply-eval 默认也改为 V2。V2 audit 失败后的 `fallback_v1` live 发送路径已禁用，残留配置仅作为废弃兼容项处理；P1-6 已继续封存 V1 live override，旧 `v1` settings / metadata 不再切回旧 assembler 主链路。`classifier_legacy`、`memory_extract` 与 `timing_gate` 已迁移到 V2 task template，旧 managed / legacy 管理入口已下线为最小 410 兼容出口。P1-6 任务 6 已删除 legacy prompt 模块、旧模板目录和构建脚本，并通过引用扫描、相关回归、WebUI 构建和全量测试。
+- **痛点**：同一交互定位 / 输出契约 / 安全规则已经收敛到 V2 模板，但命名仍带 `v2/V2` 历史后缀；后续 H29 拆分和 platform 维度扩展前，需要把目录、prompt key、配置项、admin 文案和 tracing 字段收敛为无版本 canonical 名称，同时保留旧 key 的兼容读取。
+- **目标**：只保留 V2 一套模板与一条 compile 路径，删除旧 assembler / legacy runtime、旧模板目录、旧 `prompt.md` 和旧构建脚本；去掉 "v2/V2" 版本后缀，模板目录、settings key、prompt_key、tracing 字段统一为无版本号的规范名。
 - **关联**：与 H29（bridge 巨函数拆分）同 PR；`core/prompt_v2/template_registry.py` 的 `_LEGACY_ALIASES` 改名时一并清理；`evals/`、tracing 按三套语义打点需同步改。
 - **粗略路径**：① 先把默认 engine 切到 v2，灰度验证 shadow/audit 无回归（需先初始化 `data/prompts_v2`）→ ② 全仓清点 `prompt_runtime.engine`/`prompt_mode`/`legacy`/`shadow`/`managed` 引用 → ③ `nanobot_kt/prompt_runtime.py` 收敛为单一 V2 路径，删 `_build_v1_prompt` 与 audit fallback_v1 → ④ 删 V1/legacy 模块与冗余模板，迁移仍有价值的文案进 V2 → ⑤ 去版本后缀、改规范名（含 settings/prompt_key/目录/tracing）→ ⑥ 同步 admin UI 与测试。
-- **实施状态（2026-06-17）**：粗略路径第 ① 步已完成并验证，H29 第一刀已提取 `PromptRuntimeInput` 请求组装边界。P1-5「Prompt legacy 收口」已完成：live `fallback_v1` 发送路径已禁用，`reply-test` / `reply-eval` 默认与旧 alias 已转向 V2-only，legacy / managed 管理写入口已降级为只读迁移入口。P1-6 任务 1-5 已完成：旧任务 prompt 已迁移到 V2 task template，V1 live 分支已封存，旧管理面已下线并通过回归测试。下一步执行 P1-6 任务 6，删除冗余 V1 / legacy 资产与构建脚本；之后再做任务 7 的无版本 canonical prompt 命名兼容层。
+- **实施状态（2026-06-17）**：粗略路径第 ① 步已完成并验证，H29 第一刀已提取 `PromptRuntimeInput` 请求组装边界。P1-5「Prompt legacy 收口」已完成：live `fallback_v1` 发送路径已禁用，`reply-test` / `reply-eval` 默认与旧 alias 已转向 V2-only，legacy / managed 管理写入口已降级为只读迁移入口。P1-6 任务 1-6 已完成：旧任务 prompt 已迁移到 V2 task template，V1 live 分支已封存，旧管理面已下线并通过回归测试，旧模块、旧模板目录、`prompt.md` 和构建脚本已从 live tree 移除。下一步执行任务 7 的无版本 canonical prompt 命名兼容层。
 
 #### 路线项 2 — LLM 等 IO 调用全面异步化与连接池复用  ·〔关联 H7；H1 已满足〕
 
@@ -190,7 +190,7 @@
 - **痛点**：图片展开分散在工具层(sticker)与传输层(generated_image)两套机制；入站是结构化 segments、出站却是裸 CQ 字符串（不对称，下游需反解析）；`NANOBOT_PUBLIC_BASE_URL` 未配置时保留无法渲染的短 token（约定不闭环）；send_mode/quote/at 在私聊丢失；HTML / 文本 / 图片渲染分支判断散落多处。`docs/message-field-standard.md` 只规范入站，**完全没有出站渲染约定**。
 - **目标**：定一份「qq 端出站渲染契约」，以结构化 segments（text/image/html/at/reply）输出（与入站 `GroupMessageRequest.segments` 对称），富媒体统一走公开代理 URL（base64 仅作显式 fallback），图片展开收敛到单一出口层，发送指令私聊群聊一致下发。
 - **关联**：与项 5 共享 reply_meta / 响应信封载体，强烈建议合并设计；落地时为 `message-field-standard.md` 补「出站渲染契约」一节。
-- **粗略路径**：① 盘点「内容类型 → qq 渲染」映射表 → ② 定义出站 segments 契约或集中 CQ renderer 模块 → ③ sticker 与 generated_image 展开收敛到统一出站层（保留不污染 conversation/token 的约束）→ ④ 明确 base URL 未配置时降级策略 → ⑤ reply_meta 纳入信封、私聊也下发 → ⑥ 同步 `creatures/nanobot/prompt.md` 中 reply 工具发送约定描述。
+- **粗略路径**：① 盘点「内容类型 → qq 渲染」映射表 → ② 定义出站 segments 契约或集中 CQ renderer 模块 → ③ sticker 与 generated_image 展开收敛到统一出站层（保留不污染 conversation/token 的约束）→ ④ 明确 base URL 未配置时降级策略 → ⑤ reply_meta 纳入信封、私聊也下发 → ⑥ 同步 canonical Prompt Runtime 模板中的 reply 工具发送约定描述。
 
 #### 路线项 9 — 提示词模板按 platform × chat_type 二维适配  ·〔依赖项 1〕
 

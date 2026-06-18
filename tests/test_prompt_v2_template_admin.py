@@ -259,12 +259,8 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
             debug={"template_path": "/tmp/v2.md"},
         )
 
-    def fail_assembler(*_args, **_kwargs):
-        raise AssertionError("V2 effective preview must not call PromptAssembler")
-
     monkeypatch.setattr("core.prompt_v2.preview.build_preview_plan", fail_preview_wrapper)
     monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile)
-    monkeypatch.setattr("core.prompt_assembler.PromptAssembler.build", fail_assembler)
 
     app.dependency_overrides[get_db] = override_get_db
     try:

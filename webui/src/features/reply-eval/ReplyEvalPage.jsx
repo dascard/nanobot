@@ -275,7 +275,7 @@ export function ReplyEvalPage() {
     sender_id: 'admin',
     sender_name: 'admin',
     message: '你在吗',
-    variant: 'code_retry',
+    variant: 'v2_code_retry',
     enable_reply_contract_retry: true,
   })
   const [testResult, setTestResult] = useState(null)
@@ -286,7 +286,7 @@ export function ReplyEvalPage() {
   const [runs, setRuns] = useState([])
   const [runResult, setRunResult] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [evalVariant, setEvalVariant] = useState('code_retry')
+  const [evalVariant, setEvalVariant] = useState('v2_code_retry')
   const [evalLimit, setEvalLimit] = useState(50)
   const [newCase, setNewCase] = useState(caseToDraft({}))
   const [editingCase, setEditingCase] = useState(null)
@@ -432,9 +432,9 @@ export function ReplyEvalPage() {
             </label>
             <label className="text-[11px] text-slate-500">variant
               <select aria-label="variant" value={form.variant} onChange={e => setField('variant', e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs">
+                <option value="v2_code_retry">v2_code_retry</option>
+                <option value="v2_prompt_only">v2_prompt_only</option>
                 <option value="baseline">baseline</option>
-                <option value="prompt_only">prompt_only</option>
-                <option value="code_retry">code_retry</option>
               </select>
             </label>
             <label className="text-[11px] text-slate-500">session_id
@@ -504,9 +504,9 @@ export function ReplyEvalPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
             <label className="text-[11px] text-slate-500">variant
               <select aria-label="评估 variant" value={evalVariant} onChange={e => setEvalVariant(e.target.value)} className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5 text-xs">
+                <option value="v2_code_retry">v2_code_retry</option>
+                <option value="v2_prompt_only">v2_prompt_only</option>
                 <option value="baseline">baseline</option>
-                <option value="prompt_only">prompt_only</option>
-                <option value="code_retry">code_retry</option>
               </select>
             </label>
             <label className="text-[11px] text-slate-500">limit
@@ -517,8 +517,8 @@ export function ReplyEvalPage() {
               <ActionButton onClick={() => setSelectedCases(new Set())}>清空选择</ActionButton>
             </div>
           </div>
-          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[11px] text-amber-200 mb-3">
-            prompt_only 当前作为独立 variant 记录；是否切换实验 Prompt 需以后端 PromptManager 配置为准。
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2 text-[11px] text-emerald-200 mb-3">
+            所有 variant 都使用当前 canonical Prompt Runtime；prompt_only 仅关闭合约重试。
           </div>
           {runResult && (
             <div className="grid grid-cols-1 xl:grid-cols-[220px_1fr] gap-3 mb-4">

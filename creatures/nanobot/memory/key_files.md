@@ -18,7 +18,8 @@ Critical file paths in the nanobot-server project.
 | File | Role |
 |------|------|
 | `creatures/nanobot/config.yaml` | Agent config — tools, sub-agents, controller |
-| `creatures/nanobot/prompt.md` | System prompt / personality |
+| `prompts.v2.default/` | Canonical Prompt Runtime default templates |
+| `data/prompts_v2/` | Runtime prompt templates copied from defaults and editable in deployments |
 
 ## Database
 

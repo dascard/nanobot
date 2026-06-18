@@ -46,6 +46,7 @@
   - 移除 `system_prompt_file: prompt.md` 依赖。
 - 删除：`creatures/nanobot/prompt.md`
 - 删除：`scripts/build_nanobot_prompt.py`
+- 删除：`scripts/migrate_legacy_fragments_to_managed.py`
 - 删除：`core/prompt_runtime.py`
 - 删除：`core/prompt_assembler.py`
 - 删除：`core/prompt_compiler.py`
@@ -68,7 +69,7 @@
 - P1-5 已完成：`fallback_v1` 固定 fail-fast，legacy / managed 写接口返回 410，WebUI 旧页面只读，reply-test / reply-eval 默认 V2。
 - 旧后台任务入口已迁移：`clients/classifier_client.call_model_route()` 的分类器 route 已改用 V2 task template；`core/legacy_adapter.py` 的 `memory_extract` 已改用 V2 task template。
 - V1 live 入口已封存：`NanobotBridge` 会忽略 `v1` override 并统一进入 V2 canonical runtime；`build_prompt_runtime()` 不再调用 `PromptAssembler`。
-- 当前仍存在硬依赖：`creatures/nanobot/config.yaml` 声明 `system_prompt_file: prompt.md`，`tests/test_prompt_contract.py` 依赖 `scripts/build_nanobot_prompt.py`。
+- 任务 6 当前状态：`creatures/nanobot/config.yaml` 已移除 `system_prompt_file: prompt.md`，旧 prompt 模块、旧模板目录、`prompt.md` 和构建脚本已从 live tree 删除，并通过引用扫描、相关回归、WebUI 构建和全量测试。
 
 ## 任务 1：新增 V2 task template 渲染边界
 
@@ -846,7 +847,7 @@ git commit -m "refactor(提示词): 下线旧版管理入口"
 - 修改：`tests/test_legacy_prompt_runtime.py`
 - 修改：`tests/test_prompt_manifest.py`
 
-- [ ] **步骤 1：写守卫红灯测试**
+- [x] **步骤 1：写守卫红灯测试**
 
 新增 `tests/test_prompt_legacy_removal.py`：
 
@@ -872,7 +873,7 @@ def test_nanobot_config_no_longer_requires_legacy_prompt_file():
     assert "system_prompt_file: prompt.md" not in config
 ```
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -882,7 +883,9 @@ python -B -m pytest tests/test_prompt_legacy_removal.py -q -p no:cacheprovider
 
 预期：FAIL，旧文件仍存在且 config 仍声明 `prompt.md`。
 
-- [ ] **步骤 3：移除 config 依赖**
+已执行结果：`3 failed, 1 warning`，失败点符合预期。
+
+- [x] **步骤 3：移除 config 依赖**
 
 从 `creatures/nanobot/config.yaml` 删除：
 
@@ -892,12 +895,12 @@ system_prompt_file: prompt.md
 
 确认 `NanobotBridge._load_legacy_prompt_into_config()` 已不再需要被调用；若仍被调用，在任务 4 或本任务中删除调用点。
 
-- [ ] **步骤 4：删除旧模块和脚本**
+- [x] **步骤 4：删除旧模块和脚本**
 
 删除：
 
 ```bash
-git rm core/prompt_runtime.py core/prompt_assembler.py core/prompt_compiler.py core/legacy_prompt_runtime.py scripts/build_nanobot_prompt.py creatures/nanobot/prompt.md
+git rm core/prompt_runtime.py core/prompt_assembler.py core/prompt_compiler.py core/legacy_prompt_runtime.py scripts/build_nanobot_prompt.py scripts/migrate_legacy_fragments_to_managed.py creatures/nanobot/prompt.md
 ```
 
 删除或缩减测试：
@@ -907,7 +910,7 @@ git rm core/prompt_runtime.py core/prompt_assembler.py core/prompt_compiler.py c
 - `tests/test_legacy_prompt_runtime.py` 删除。
 - `tests/test_prompt_manager.py` 中只保留不依赖 live 的 PromptManager 单元测试，或随 `core.prompts` 下线策略删除。
 
-- [ ] **步骤 5：删除旧模板目录生产依赖**
+- [x] **步骤 5：删除旧模板目录生产依赖**
 
 运行引用清点：
 
@@ -927,7 +930,13 @@ git rm -r data/prompt_fragments data/runtime_prompt
 
 如果 `data/prompts/` 仍包含运行时用户覆盖，先保留并在文档中标为迁移备份，不在本任务删除。
 
-- [ ] **步骤 6：运行任务 6 回归**
+已执行结果：
+
+- 守卫绿灯：`3 passed, 1 warning`。
+- 首轮任务 6 定向：`1 failed, 53 passed, 1 warning`，失败点为 V2 `timing_gate` task 模板仍是占位内容。
+- 修正 `timing_gate` 默认与运行时模板后，`tests/test_timing_gate_prompt_policy.py` 为 `7 passed, 1 warning`。
+
+- [x] **步骤 6：运行任务 6 回归**
 
 运行：
 
@@ -936,6 +945,14 @@ python -B -m pytest tests/test_prompt_legacy_removal.py tests/test_prompt_manife
 ```
 
 预期：PASS。
+
+已执行结果：
+
+- 主定向：`54 passed, 1 warning`。
+- 相关回归：`104 passed, 20 warnings`。
+- 生产禁止项扫描：无命中；测试中的命中仅为守卫断言和隔离断言。
+- WebUI 构建：`npm run build` 通过，Vite 仅提示大 chunk 与插件耗时 warning。
+- 全量测试：`1214 passed, 6 skipped, 113 warnings in 80.22s`。
 
 - [ ] **步骤 7：提交任务 6**
 

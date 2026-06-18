@@ -455,7 +455,6 @@ async def test_bridge_injects_history_messages(db_session):
             user_id="u1",
             session_id="s1",
             metadata={
-                "prompt_system_mode_override": "shadow",
                 "persona_text": "",
                 "raw_query": "当前消息",
                 "reply_model": "test-model",

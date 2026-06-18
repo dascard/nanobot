@@ -80,12 +80,6 @@ async def test_legacy_adapter_memory_extract_uses_v2_task_template(monkeypatch):
             f"V2 记忆模板: {values['conversation']} / {values['existing_memory']}"
         ),
     )
-    monkeypatch.setattr(
-        "core.prompt_runtime.render_prompt_content",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("memory_extract must not use old PromptManager runtime")
-        ),
-    )
 
     engine = NanobotKTController.__new__(NanobotKTController)
     engine.memory = FakeMemory()

@@ -104,10 +104,14 @@ def _default_backup_dir() -> Path:
 
 
 def _default_source_dir() -> Path:
-    """默认模板源目录（Git 管理），用于首次初始化运行时目录。"""
+    """兼容 PromptManager 的默认模板源目录。
+
+    旧 Git 管理模板目录已下线；未显式配置时只读取运行时目录自身，
+    避免在启动或测试中重新引入旧资产。
+    """
     return Path(
         os.environ.get("NANOBOT_PROMPT_DEFAULT_DIR")
-        or (_repo_root() / "prompts.default")
+        or _default_prompt_dir()
     )
 
 

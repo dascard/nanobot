@@ -97,7 +97,7 @@ chinese-commit-conventions  → 规范化提交
 - **熔断器**：`ModelFailureTracker` 连续 3 次失败后自动禁用 5min
 - **Token 估算**：CJK 字符按 1.0，ASCII 按 0.35（不求精确，量级判断）
 - **中文优先**：bot 使用者是中文用户，所有 prompt 和回复用中文
-- **提示词同步**：修改 `enriched_query` 组装逻辑、历史注入方式、conversation 结构时，**必须检查 `creatures/nanobot/prompt.md` 是否仍然准确**。如果 prompt 引用的标记（如 `<user_input>`、`<history_context>`）或行为描述（如"历史通过 conversation 注入"）已过时，必须在同一 PR 中更新
+- **提示词同步**：修改 `enriched_query` 组装逻辑、历史注入方式、conversation 结构、工具输出契约或 prompt runtime 输入时，**必须检查 canonical Prompt Runtime 模板是否仍然准确**，重点包括 `prompts.v2.default/chat/*`、`prompts.v2.default/tasks/*`、`prompts.v2.default/tools/*/usage.md`、`core/prompt_v2/variables.py` 和 `core/prompt_v2/template_registry.py`。如果模板引用的变量、标记或行为描述已过时，必须在同一 PR 中更新默认模板与必要的 `data/prompts_v2/` 运行时模板。
 
 ## 禁止行为（反复犯错的教训）
 

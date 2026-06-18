@@ -268,7 +268,6 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
     bridge._output = output
     bridge._agent = StreamingHarness(fake_llm, output)
     bridge._session_locks = {}
-    bridge._legacy_prompt_meta = {}
     bridge._last_prompt_render_meta = {}
 
     queue = asyncio.Queue()
@@ -281,7 +280,6 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
             "reply_model": "unit-model",
             "runtime_preset": "none",
             "prompt_runtime_engine_override": "v1",
-            "prompt_system_mode_override": "legacy",
             "enable_reply_contract_retry": False,
         },
         stream=True,

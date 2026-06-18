@@ -475,8 +475,10 @@ def test_prompt_v2_templates_are_isolated_from_prompt_manager_and_legacy_runtime
 
     source = inspect.getsource(compiler)
     assert "core.legacy_prompt_runtime" not in source
+    assert "core.prompt_runtime" not in source
     assert "PromptManager" not in source
     assert "prompt_assembler" not in source
+    assert "build_nanobot_prompt" not in source
 
     main = load_template("chat/main").body
     group = load_template("chat/branch_group").body

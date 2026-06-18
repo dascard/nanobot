@@ -37,13 +37,13 @@ def test_reply_test_old_variants_map_to_v2_by_default():
 @pytest.mark.parametrize(
     ("variant", "expected"),
     [
-        ("baseline", ("v1", "legacy", False)),
-        ("prompt_only", ("v1", "managed", False)),
-        ("code_retry", ("v1", "legacy", True)),
-        ("v1_baseline", ("v1", "legacy", False)),
+        ("baseline", ("v2", "v2", False)),
+        ("prompt_only", ("v2", "v2", False)),
+        ("code_retry", ("v2", "v2", True)),
+        ("v1_baseline", ("v2", "v2", False)),
     ],
 )
-def test_reply_test_explicit_v1_variants_remain_available(variant, expected):
+def test_reply_test_explicit_v1_variants_are_coerced_to_v2(variant, expected):
     from api.admin_routes import ReplyTestRunRequest, _resolve_reply_test_prompt_settings
 
     body = ReplyTestRunRequest(
@@ -63,9 +63,8 @@ def _install_fake_reply_bridge(monkeypatch, reply_text="测试回复", capture=N
             if capture is not None:
                 capture.append(dict(metadata or {}))
             trace_id = metadata.get("trace_id") if metadata else ""
-            prompt_engine = str((metadata or {}).get("prompt_runtime_engine_override") or "v1")
-            prompt_mode = str((metadata or {}).get("prompt_system_mode_override") or "legacy")
-            prompt_sha = ("v" if prompt_engine == "v2" else ("m" if prompt_mode == "managed" else "l")) * 64
+            prompt_engine = str((metadata or {}).get("prompt_runtime_engine_override") or "v2")
+            prompt_sha = "v" * 64
             run = RunTracer.start_run(
                 trace_id=trace_id,
                 session_id=session_id,
@@ -73,9 +72,9 @@ def _install_fake_reply_bridge(monkeypatch, reply_text="测试回复", capture=N
                 chat_type=metadata.get("chat_type", "group") if metadata else "group",
                 group_id=metadata.get("group_id", "") if metadata else "",
                 run_type="reply_test",
-                prompt_mode=prompt_engine if prompt_engine == "v2" else prompt_mode,
-                prompt_key="chat_group" if prompt_engine == "v2" else "group_chat",
-                prompt_source="Prompt Runtime V2" if prompt_engine == "v2" else ("PromptManager runtime template" if prompt_mode == "managed" else "Legacy runtime prompt"),
+                prompt_mode="v2",
+                prompt_key="chat_group",
+                prompt_source="Prompt Runtime V2",
                 prompt_sha256=prompt_sha,
                 input_preview=message,
             )

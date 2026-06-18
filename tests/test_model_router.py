@@ -202,15 +202,8 @@ V2 判定: {{{{ pending_text }}}} / {{{{ bot_name }}}}
         )
         monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
         monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(tmp_path / "runtime_v2"))
-        monkeypatch.setattr(
-            "core.prompt_runtime.render_model_messages",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                AssertionError("classifier routes must not use old PromptManager runtime")
-            ),
-        )
 
         values = {
-            "prompt_system.mode": "managed",
             "model.route.timing_gate.base_url": "http://local-test/v1",
             "model.route.timing_gate.model": "unit-model",
             "model.route.timing_gate.max_tokens": 80,

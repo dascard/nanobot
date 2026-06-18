@@ -87,7 +87,6 @@ def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
 
     bridge = NanobotBridge.__new__(NanobotBridge)
     monkeypatch.setattr(bridge, "_prompt_v2_audit_failure_policy", lambda: "fail_fast")
-    monkeypatch.setattr(bridge, "_prompt_system_mode", lambda: "legacy")
 
     prompt_input = bridge._build_prompt_runtime_input(
         PromptRuntimeAssemblyContext(
@@ -110,7 +109,6 @@ def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
             run_id="run_1",
             is_group=True,
             meta={
-                "prompt_system_mode_override": "managed",
                 "sender_id": "sender_1",
                 "session_name": "测试群",
                 "trigger_reason": "direct",
@@ -156,7 +154,6 @@ def test_bridge_build_prompt_runtime_input_coerces_v1_to_canonical_runtime(monke
 
     bridge = NanobotBridge.__new__(NanobotBridge)
     monkeypatch.setattr(bridge, "_prompt_v2_audit_failure_policy", lambda: "fail_fast")
-    monkeypatch.setattr(bridge, "_prompt_system_mode", lambda: "shadow")
 
     prompt_input = bridge._build_prompt_runtime_input(
         PromptRuntimeAssemblyContext(
@@ -192,13 +189,6 @@ def test_bridge_build_prompt_runtime_input_coerces_v1_to_canonical_runtime(monke
 @pytest.mark.asyncio
 async def test_build_prompt_runtime_rejects_v1_live_prompt(monkeypatch):
     from nanobot_kt.prompt_runtime import PromptRuntimeInput, build_prompt_runtime
-
-    monkeypatch.setattr(
-        "core.prompt_assembler.PromptAssembler.build",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("PromptAssembler must not run after V1 live branch removal")
-        ),
-    )
 
     with pytest.raises(ValueError, match="unsupported prompt engine"):
         await build_prompt_runtime(PromptRuntimeInput(
@@ -243,7 +233,6 @@ def test_bridge_build_prompt_runtime_input_falls_back_when_tool_schemas_unavaila
 
     bridge = NanobotBridge.__new__(NanobotBridge)
     monkeypatch.setattr(bridge, "_prompt_v2_audit_failure_policy", lambda: "fail_fast")
-    monkeypatch.setattr(bridge, "_prompt_system_mode", lambda: "shadow")
 
     prompt_input = bridge._build_prompt_runtime_input(
         PromptRuntimeAssemblyContext(
@@ -317,7 +306,6 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
     bridge.creature_path = "creatures/nanobot"
     bridge._output = _FakeOutput()
     bridge._session_locks = {}
-    bridge._legacy_prompt_meta = {}
     bridge._last_prompt_render_meta = {}
 
     conversation = _FakeConversation()
@@ -367,12 +355,6 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
         )
 
     monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile)
-    monkeypatch.setattr(
-        "core.prompt_assembler.PromptAssembler.build",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("PromptAssembler must not run for successful V2 live requests")
-        ),
-    )
     monkeypatch.setattr("clients.classifier_client.resolve_model_route", lambda _route: {
         "provider_id": "newapi",
         "base_url": "http://127.0.0.1:1/v1",
@@ -399,7 +381,6 @@ async def test_bridge_engine_v2_uses_prompt_plan_for_conversation_and_user_event
         session_id="group_1001",
         sender_name="雀",
         metadata={
-            "prompt_system_mode_override": "managed",
             "chat_type": "group",
             "is_group": True,
             "group_id": "1001",
@@ -448,7 +429,6 @@ async def test_bridge_engine_v2_uses_character_name_as_bot_name(monkeypatch, db_
     bridge.creature_path = "creatures/nanobot"
     bridge._output = _FakeOutput()
     bridge._session_locks = {}
-    bridge._legacy_prompt_meta = {}
     bridge._last_prompt_render_meta = {}
     bridge._agent = SimpleNamespace(
         controller=SimpleNamespace(conversation=_FakeConversation()),
@@ -546,7 +526,6 @@ async def test_bridge_engine_v2_fails_fast_when_prompt_audit_fails(monkeypatch, 
     bridge.creature_path = "creatures/nanobot"
     bridge._output = _FakeOutput()
     bridge._session_locks = {}
-    bridge._legacy_prompt_meta = {}
     bridge._last_prompt_render_meta = {}
 
     conversation = _FakeConversation()
@@ -615,7 +594,6 @@ async def test_bridge_engine_v2_ignores_fallback_v1_policy_when_audit_fails(monk
     bridge.creature_path = "creatures/nanobot"
     bridge._output = _FakeOutput()
     bridge._session_locks = {}
-    bridge._legacy_prompt_meta = {}
     bridge._last_prompt_render_meta = {}
 
     seen_events = []
@@ -637,13 +615,6 @@ async def test_bridge_engine_v2_ignores_fallback_v1_policy_when_audit_fails(monk
         raise PromptAuditError(["runtime_tool_prompt must appear once, got 0"])
 
     monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile)
-    monkeypatch.setattr(
-        "core.prompt_assembler.PromptAssembler.build",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("V2 audit failure must not fallback to PromptAssembler")
-        ),
-    )
-
     result = await bridge.handle_message(
         "原始当前",
         user_id="u1",
@@ -682,7 +653,6 @@ async def test_bridge_tool_plan_does_not_mutate_registry_tools(monkeypatch, db_s
     bridge.creature_path = "creatures/nanobot"
     bridge._output = _FakeOutput()
     bridge._session_locks = {}
-    bridge._legacy_prompt_meta = {}
     bridge._last_prompt_render_meta = {}
 
     conversation = _FakeConversation()

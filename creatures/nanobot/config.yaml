@@ -100,6 +100,3 @@ output:
   type: custom
   module: nanobot_kt.output
   class: BufferedOutput
-
-# ── System Prompt ──
-system_prompt_file: prompt.md

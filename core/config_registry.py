@@ -130,15 +130,10 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="deepseek-v4-flash-max", value_type="str",
         category="model", description="对话回复模型ID",
     ),
-    "prompt_system.mode": SettingDef(
-        key="prompt_system.mode", env_name="NANOBOT_PROMPT_MODE",
-        default="shadow", value_type="str",
-        category="prompt", description="提示词系统模式: legacy/shadow/managed",
-    ),
     "prompt_runtime.engine": SettingDef(
         key="prompt_runtime.engine", env_name="NANOBOT_PROMPT_ENGINE",
         default="v2", value_type="str",
-        category="prompt", description="提示词运行引擎: v1/v2",
+        category="prompt", description="提示词运行引擎；旧 v1 值会被迁移兼容层归一到 canonical runtime",
     ),
     "prompt_runtime.v2_audit_failure_policy": SettingDef(
         key="prompt_runtime.v2_audit_failure_policy",

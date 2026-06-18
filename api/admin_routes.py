@@ -456,12 +456,14 @@ def overview(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
              "detail": IMAGE_SUMMARY_API_URL or CLASSIFIER_API_URL},
         ])
 
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        prompt_path = os.path.join(base, "creatures", "nanobot", "prompt.md")
+        from core.prompt_v2.template_registry import default_template_dir, runtime_template_dir
+
+        default_prompt_dir = default_template_dir()
+        runtime_prompt_dir = runtime_template_dir()
         health.append({
-            "name": "Prompt 构建状态",
-            "ok": os.path.exists(prompt_path) and os.path.getsize(prompt_path) > 0,
-            "detail": prompt_path,
+            "name": "Prompt 模板状态",
+            "ok": default_prompt_dir.is_dir() and runtime_prompt_dir.is_dir(),
+            "detail": f"default={default_prompt_dir}; runtime={runtime_prompt_dir}",
         })
 
         sticker_dir = _cache_dir()
@@ -4567,45 +4569,23 @@ def _safe_rate(numerator: int, denominator: int) -> float:
 
 
 def _resolve_reply_test_prompt_settings(body: ReplyTestRunRequest) -> tuple[str, str, bool]:
-    fields_set = getattr(body, "model_fields_set", None)
-    if fields_set is None:
-        fields_set = getattr(body, "__fields_set__", set())
-    explicit_prompt_engine = "prompt_engine" in fields_set
     variant = str(body.variant or "v2_code_retry")
-    engine = str(body.prompt_engine or "v2")
-    prompt_mode = "legacy"
+    engine = "v2"
+    prompt_mode = "v2"
     enable_retry = bool(body.enable_reply_contract_retry)
 
     if variant == "prompt_only":
-        if not explicit_prompt_engine:
-            engine = "v2"
-        prompt_mode = "v2" if engine == "v2" else "managed"
         enable_retry = False
     elif variant == "code_retry":
-        if not explicit_prompt_engine:
-            engine = "v2"
-        prompt_mode = "v2" if engine == "v2" else "legacy"
         enable_retry = enable_retry
     elif variant == "baseline":
-        if not explicit_prompt_engine:
-            engine = "v2"
-        prompt_mode = "v2" if engine == "v2" else "legacy"
         enable_retry = False
     elif variant == "v1_baseline":
-        engine = "v1"
-        prompt_mode = "legacy"
         enable_retry = False
     elif variant == "v2_prompt_only":
-        engine = "v2"
-        prompt_mode = "v2"
         enable_retry = False
     elif variant == "v2_code_retry":
-        engine = "v2"
-        prompt_mode = "v2"
         enable_retry = enable_retry
-
-    if engine not in {"v1", "v2"}:
-        engine = "v2"
     return engine, prompt_mode, enable_retry
 
 
@@ -4633,8 +4613,6 @@ async def _run_reply_test_once(body: ReplyTestRunRequest, db: Session) -> dict:
         "enable_reply_contract_retry": enable_retry,
         "dry_run": bool(body.dry_run),
     }
-    if prompt_engine == "v1":
-        metadata["prompt_system_mode_override"] = prompt_mode
     bridge = get_bridge()
     content = await bridge.handle_message(
         body.message,

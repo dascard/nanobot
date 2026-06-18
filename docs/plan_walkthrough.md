@@ -4,11 +4,11 @@
 更新日期：2026-06-17
 本轮计划写入日期：2026-06-17
 
-本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-17，基于最新阶段提交 `5e3c064 refactor(提示词): 下线旧版管理入口` 重新核对：P1-6 任务 1-5 已完成并提交，当前下一步是任务 6「删除 legacy prompt 资产与构建脚本」。
+本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-17，基于当前工作区和 `docs/todo.md` 重新核对：P1-6 任务 1-5 已完成并提交，任务 6「删除 legacy prompt 资产与构建脚本」已完成删除、代码改造、引用扫描、WebUI 构建和全量测试，随本阶段提交归档。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口，以及 P1-6 的任务模板迁移、V1 live 分支封存和旧管理面下线均已完成。当前执行焦点是 P1-6 任务 6：删除冗余 V1 / legacy 资产与构建脚本；随后进入任务 7，建立无版本 canonical prompt 命名兼容层。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口，以及 P1-6 的任务模板迁移、V1 live 分支封存、旧管理面下线和旧资产删除均已完成。当前执行焦点切换到 P1-6 任务 7：建立无版本 canonical prompt 命名兼容层。
 
 ## 文档口径
 
@@ -64,7 +64,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-3 | 已完成 | Prompt V2 默认 live 接管 | 默认 engine 改为 V2，保留显式 V1 回滚，初始化 `data/prompts_v2`，同步 admin preview 和 reply-test 默认值 | `2be9329` / `8a1e177` / `8a73909` |
 | P1-4 | 已完成 | H29 第一刀：提取 Prompt Runtime 请求组装 | 从 `handle_message()` 中抽出 `PromptRuntimeInput` 构造边界，不移动 trace、tool plan、conversation 注入和 audit 异常处理 | `refactor(桥接): 提取提示词运行时组装` |
 | P1-5 | 已完成 | Prompt legacy 收口 | live `fallback_v1` 已禁用，评估入口已转 V2，legacy / managed 管理写入口已降级为只读迁移入口 | `afc3dd4` / `99c1803` / `5009034` |
-| P1-6 | 当前推进，任务 6 待执行 | 删除冗余提示词资产并去版本化 | 旧任务 prompt、V1 live 分支和 legacy 管理面已收敛；当前删除旧资产与构建脚本，再去掉 V2 命名后缀 | `refactor(提示词): 删除旧版提示词资产` |
+| P1-6 | 当前推进，任务 6 已验证 | 删除冗余提示词资产并去版本化 | 旧任务 prompt、V1 live 分支、legacy 管理面和旧资产删除已完成并验证；下一步去掉 V2 命名后缀 | `refactor(提示词): 删除旧版提示词资产` |
 | P1-7 | 已部分完成，待继续 | 连接池复用与残余同步 IO 审计 | 共享 `aiohttp.ClientSession` 已落地；继续审计 compaction / image / sticker 同步 IO | `4550aca` / `2bf4ee7` |
 | P1-8 | 待执行 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `feat(路由): 按模型能力校验请求` |
 | P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
@@ -77,14 +77,14 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 当前详细计划：P1-6 删除冗余提示词资产并去版本化
 
-状态：当前推进。P1-6 任务 1-5 已完成：旧管理入口已由后端 410 catch-all 接管，WebUI 旧 route / 旧页面组件已删除，任务 5 定向、相关回归、WebUI 构建和全量测试均已通过。后续继续任务 6「删除 legacy prompt 资产与构建脚本」，再进入任务 7「建立无版本 canonical prompt 命名兼容层」。
+状态：当前推进。P1-6 任务 1-5 已完成：旧管理入口已由后端 410 catch-all 接管，WebUI 旧 route / 旧页面组件已删除，任务 5 定向、相关回归、WebUI 构建和全量测试均已通过。任务 6 已完成守卫红灯、旧资产删除、旧配置依赖移除、主要测试口径调整、当前态文档同步、禁止项扫描、相关回归、WebUI 构建和全量测试；任务 6 随本阶段单独提交归档后，进入任务 7「建立无版本 canonical prompt 命名兼容层」。
 
 - [x] 重新核对 `docs/todo.md` 路线项 1，确认 P1-6 是 P1-5 之后的下一优先级。
 - [x] 核对 `docs/TODO_LIST.md`，确认它记录了更旧的路线状态，仅作历史核对，不作为优先级来源。
 - [x] 标记 P1-5 Prompt legacy 收口已完成，并把本文件的当前执行焦点切到 P1-6。
 - [x] 写入 P1-6 设计文档：`docs/superpowers/specs/2026-06-17-prompt-v1-asset-removal-design.md`。
 - [x] 写入 P1-6 实现计划：`.Codex/plans/prompt-v1-asset-removal.md`。
-- [x] 只读清点仍依赖旧 prompt 的 live 引用：`classifier_legacy`、`memory_extract`、`PromptAssembler`、`LegacyPromptRuntime`、`prompts.default`、`prompts.legacy.default`、`creatures/nanobot/prompt.md` 和相关 admin / WebUI 路由。
+- [x] 只读清点仍依赖旧 prompt 的 live 引用：后台任务 prompt、旧运行时模块、旧模板目录和相关 admin / WebUI 路由均已纳入迁移或删除范围。
 - [x] 新增 V2 task template 渲染边界：`classifier_legacy` 和 `memory_extract` 已具备 V2 task 模板、变量白名单和渲染 helper。
 - [x] 迁移分类器任务 prompt 调用方：`clients/classifier_client.py` 的 `timing_gate/private_decision/classifier_legacy` 已改用 V2 task 模板，旧 `core.prompt_runtime` 不再参与分类器路由渲染。
 - [x] 迁移记忆抽取任务 prompt 调用方：`core/legacy_adapter.py` 的 `memory_extract` 已改用 V2 task 模板，旧 `core.prompt_runtime` 不再参与记忆抽取渲染。
@@ -92,10 +92,10 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 修正旧主链路测试口径：`tests/test_kt_framework.py` 不再断言 V1 手工 `<runtime_context>` 注入，改为验证 bridge 传给 V2 prompt runtime 的结构化输入。
 - [x] 提交 P1-6 任务 4：修正旧测试后全量测试已重新通过，并随本阶段单独 commit 归档。
 - [x] 处理管理面迁移出口：旧入口下线测试已改写并完成红灯验证；后端旧 managed / legacy route 已删除并补最小 410 catch-all；WebUI `/prompt-legacy`、`/prompts` 和旧页面组件已删除；任务 5 定向回归、WebUI 构建和全量测试已通过，随本阶段单独提交归档。
-- [ ] 删除冗余资产：删除不再被 live 读取的 V1 / legacy 模块、模板目录和构建脚本，保留测试夹具中确有必要的最小样本。
+- [x] 删除冗余资产：删除不再被 live 读取的 V1 / legacy 模块、模板目录和构建脚本，保留测试夹具中确有必要的最小样本。
 - [ ] 去版本化命名：将模板目录、prompt key、配置项和 tracing 字段从 `v2` 命名收敛到规范名；旧配置只保留兼容读取，不再作为 live 主路径。
-- [ ] 同步提示词说明：修改 `creatures/nanobot/config.yaml`、提示词文档和相关 admin 文案时，检查 `creatures/nanobot/prompt.md` 的引用是否已废弃或应删除。
-- [ ] 验证收尾：运行 P1-6 定向测试、prompt runtime / reply admin 回归、禁止项扫描、全量测试，并按阶段单独 commit。
+- [x] 同步提示词说明：当前态文档已从旧单文件 prompt / 旧 builder 口径改为 canonical Prompt Runtime 模板目录；历史规格中的旧引用保留为历史上下文。
+- [x] 验证收尾：运行 P1-6 定向测试、prompt runtime / reply admin 回归、禁止项扫描、WebUI 构建、全量测试，并按阶段单独 commit。
 
 验证记录：
 
@@ -121,6 +121,15 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - P1-6 任务 5 WebUI 构建：`npm run build` 通过。
 - P1-6 任务 5 首次全量：`1 failed, 1251 passed, 6 skipped, 113 warnings`，失败点为 `tests/test_token_utils.py` 仍导入已随旧 `/prompt` 管理页删除的 `_prompt_metrics()`。
 - P1-6 任务 5 修正旧测试后全量：`1252 passed, 6 skipped, 113 warnings`。
+- P1-6 任务 6 守卫红灯：`3 failed, 1 warning`，失败点覆盖旧模块 / 旧目录仍存在和 `config.yaml` 仍引用 `prompt.md`。
+- P1-6 任务 6 守卫绿灯：`3 passed, 1 warning`。
+- P1-6 任务 6 首轮定向：`1 failed, 53 passed, 1 warning`，失败点为 V2 `timing_gate` task 模板仍是占位内容。
+- P1-6 任务 6 timing gate 修正后定向：`7 passed, 1 warning`。
+- P1-6 任务 6 主定向：`54 passed, 1 warning`。
+- P1-6 任务 6 相关回归：`104 passed, 20 warnings`。
+- P1-6 任务 6 生产禁止项扫描：无命中；测试中的命中仅为守卫断言和隔离断言。
+- P1-6 任务 6 WebUI 构建：`npm run build` 通过，Vite 仅提示大 chunk 与插件耗时 warning。
+- P1-6 任务 6 全量测试：`1214 passed, 6 skipped, 113 warnings in 80.22s`。
 - P1-5 任务 3 红灯：`13 failed, 3 passed, 20 warnings`，失败点覆盖旧写接口、V1 preview、legacy GET 副作用和 WebUI 只读断言。
 - P1-5 任务 3 绿灯：`16 passed, 20 warnings`。
 - P1-5 任务 3 定向：`25 passed, 20 warnings`。
@@ -457,4 +466,4 @@ P1-6 验收重点：
 
 ## 下一步
 
-当前优先执行 P1-6 任务 6。下一步先写守卫红灯测试，确认 `creatures/nanobot/prompt.md`、`scripts/build_nanobot_prompt.py`、`core/prompt_runtime.py`、`core/prompt_assembler.py`、`core/prompt_compiler.py`、`core/legacy_prompt_runtime.py` 等旧资产仍存在；随后移除 `creatures/nanobot/config.yaml` 对 `prompt.md` 的依赖，删除旧模块、旧模板目录和构建脚本，调整 legacy prompt 相关测试口径。任务 6 完成并单独提交后，继续任务 7 建立无版本 canonical prompt 命名兼容层；TimingGate 真实日志标注 / CI 接入属于后续运营项，暂不抢占 P1-6 的实现顺序。
+当前优先进入 P1-6 任务 7：建立无版本 canonical prompt 命名兼容层。任务 7 需要先写红灯测试，覆盖 manifest 单 canonical engine、旧 `v2` key 的兼容读取、admin / reply-test / WebUI 入口的 canonical 命名展示；再逐步把模板目录、prompt key、配置项和 tracing 字段从 `v2` 命名收敛到规范名。TimingGate 真实日志标注 / CI 接入属于后续运营项，暂不抢占 P1-6 的实现顺序。

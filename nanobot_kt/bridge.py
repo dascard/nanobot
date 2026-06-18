@@ -200,53 +200,21 @@ class NanobotBridge:
         self._output = BufferedOutput()
         self._agent: Optional[Agent] = None
         self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session 分锁
-        self._legacy_prompt_meta: dict[str, str] = {}
         self._last_prompt_render_meta: dict[str, str] = {}
 
-    def _load_legacy_prompt_into_config(self, config: Any) -> dict[str, str]:
-        """禁用 KT config 内置 prompt，legacy 只保留为 PromptAssembler rollback 来源。"""
-        fallback_content = str(getattr(config, "system_prompt", "") or "")
+    def _disable_config_prompt(self, config: Any) -> None:
+        """禁用 KT config 内置 prompt，主链路统一由 canonical prompt runtime 注入。"""
         config.system_prompt = ""
-        try:
-            from core.legacy_prompt_runtime import read_runtime_or_default_prompt
-
-            result = read_runtime_or_default_prompt()
-            content = str(result.get("content") or fallback_content or "")
-            source_key = str(result.get("source") or "")
-            if source_key == "runtime":
-                source = "Legacy runtime prompt"
-            elif source_key == "default":
-                source = "Legacy default prompt"
-            else:
-                source = "Legacy rollback prompt"
-            return {
-                "prompt_source": source,
-                "prompt_runtime_path": str(result.get("output_path") or ""),
-                "prompt_default_path": str(result.get("default_path") or ""),
-                "prompt_sha256": _sha256_text(content) if content else "",
-            }
-        except Exception:
-            logger.warning("[Prompt] failed to load legacy rollback prompt meta", exc_info=True)
-        return {
-            "prompt_source": "Legacy rollback prompt",
-            "prompt_runtime_path": "",
-            "prompt_default_path": "",
-            "prompt_sha256": _sha256_text(fallback_content) if fallback_content else "",
-        }
 
     async def start(self) -> None:
         """Initialize the KT agent from creature config."""
         logger.info(f"Loading KT agent from {self.creature_path}")
         config = load_agent_config(self.creature_path)
-        self._legacy_prompt_meta = self._load_legacy_prompt_into_config(config)
+        self._disable_config_prompt(config)
         config.include_tools_in_prompt = False
         config.include_hints_in_prompt = False
         config.skill_index_budget_bytes = 0
-        logger.info(
-            "[Prompt] config prompt disabled; effective source=%s sha=%s",
-            self._legacy_prompt_meta.get("prompt_source") or "",
-            (self._legacy_prompt_meta.get("prompt_sha256") or "")[:12],
-        )
+        logger.info("[Prompt] config prompt disabled; canonical prompt runtime will inject messages")
         self._agent = Agent(
             config,
             output_module=self._output,
@@ -492,17 +460,6 @@ class NanobotBridge:
         lines.append("</runtime_context>")
         return "\n".join(lines)
 
-    def _prompt_system_mode(self) -> str:
-        try:
-            from core.settings_service import settings
-
-            mode = str(settings.get("prompt_system.mode", "shadow") or "shadow").strip().lower()
-        except Exception:
-            mode = "shadow"
-        if mode not in {"legacy", "shadow", "managed"}:
-            return "shadow"
-        return mode
-
     def _prompt_runtime_engine(self) -> str:
         try:
             from core.settings_service import settings
@@ -549,13 +506,6 @@ class NanobotBridge:
             str(x) for x in (meta.get("source_message_ids") or [])
             if str(x).strip()
         ]
-        v1_prompt_mode = str(
-            meta.get("prompt_system_mode_override")
-            or meta.get("prompt_mode_override")
-            or self._prompt_system_mode()
-        ).strip().lower()
-        if v1_prompt_mode not in {"legacy", "shadow", "managed"}:
-            v1_prompt_mode = "shadow"
         try:
             tool_schemas = list(context.tool_plan.sent_tool_schemas)
         except Exception as e:
@@ -613,56 +563,6 @@ class NanobotBridge:
             if content:
                 parts.append(f"{role}: {content}")
         return "\n".join(parts)
-
-    def _render_runtime_prompt(
-        self,
-        *,
-        prompt_key: str,
-        mode: str,
-        variables: dict[str, Any],
-        trace_id: str,
-        run_id: str,
-    ) -> str:
-        self._last_prompt_render_meta = {}
-        if mode == "legacy":
-            return ""
-        try:
-            from core.prompts import get_prompt_manager
-
-            rendered = get_prompt_manager().render(
-                prompt_key,
-                variables,
-                trace_id=trace_id,
-                run_id=run_id,
-                mode=mode,
-                strict=False,
-            )
-            self._last_prompt_render_meta = {
-                "prompt_source": rendered.prompt_source,
-                "prompt_runtime_path": rendered.prompt_runtime_path,
-                "prompt_default_path": rendered.prompt_default_path,
-                "prompt_sha256": rendered.prompt_sha256,
-            }
-            logger.info("[PromptManager] rendered key=%s mode=%s tokens=%s warnings=%d",
-                        prompt_key, mode, rendered.token_estimate, len(rendered.warnings))
-            return rendered.content
-        except Exception as e:
-            logger.warning("[PromptManager] render failed key=%s mode=%s fallback=legacy error=%s",
-                           prompt_key, mode, e)
-            try:
-                from core.tracing import PromptTracer
-
-                PromptTracer.record_render(
-                    trace_id=trace_id,
-                    run_id=run_id,
-                    prompt_key=prompt_key,
-                    mode=mode,
-                    variables=variables,
-                    error=str(e),
-                )
-            except Exception:
-                pass
-            return ""
 
     def _remove_system_contexts(self, conv: Any, prefixes: tuple[str, ...]) -> None:
         if not hasattr(conv, "_messages"):
@@ -999,7 +899,6 @@ class NanobotBridge:
             prompt_engine = self._resolve_prompt_runtime_engine(meta)
             prompt_mode = "v2"
             prompt_key = "chat_group" if meta.get("is_group", False) else "chat_private"
-            legacy_prompt_meta = dict(getattr(self, "_legacy_prompt_meta", {}) or {})
             from core.tracing import RunTracer, new_trace_id
             from core.tracing_context import reset_trace_context, set_trace_context
 
@@ -1020,10 +919,10 @@ class NanobotBridge:
                 run_type="chat",
                 prompt_mode=prompt_mode,
                 prompt_key=prompt_key,
-                prompt_source=legacy_prompt_meta.get("prompt_source", "Legacy rollback prompt"),
-                prompt_runtime_path=legacy_prompt_meta.get("prompt_runtime_path", ""),
-                prompt_default_path=legacy_prompt_meta.get("prompt_default_path", ""),
-                prompt_sha256=legacy_prompt_meta.get("prompt_sha256", ""),
+                prompt_source="Prompt Runtime V2",
+                prompt_runtime_path="",
+                prompt_default_path="",
+                prompt_sha256="",
                 input_preview=query,
                 meta=run_meta,
             )
@@ -1097,7 +996,7 @@ class NanobotBridge:
                             before_len, after_len, after_len)
             self._clear_controller_event_state()
 
-            # --- PromptAssembler 输入：只收集结构化上下文，不在 bridge 手工注入 prompt ---
+            # --- Prompt runtime 输入：只收集结构化上下文，不在 bridge 手工注入 prompt ---
             persona_text = str(meta.get("persona_text", "")).strip()
             history_messages = meta.get("history_messages", [])
             history_header = str(meta.get("history_header", "")).strip()
