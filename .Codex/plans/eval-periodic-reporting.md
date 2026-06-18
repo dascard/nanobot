@@ -10,6 +10,28 @@
 
 ---
 
+## 当前状态
+
+- P4-5B 设计已完成并提交：`b9e6f20 docs(评测): 设计周期复跑归档`。
+- P4-5B 实现计划已完成并提交：`650edb2 docs(计划): 记录周期复跑计划`。
+- 任务 1 周期性 keep-going 脚本已完成并提交：`8912585 ci(评测): 增加周期评测脚本`。
+- 任务 2 workflow schedule、manual dispatch 和 artifact 归档已完成并提交：`9e80a8b ci(评测): 归档周期评测报告`。
+- 任务 3 文档收口已完成，提交目标为 `docs(评测): 收口周期复跑状态`。
+
+## 实际验证摘要
+
+- 任务 1 红灯：两个周期性脚本测试失败于 `assert script.exists()`。
+- 任务 1 绿灯：两个周期性脚本测试结果 `2 passed, 1 warning in 0.73s`。
+- 任务 1 周期性脚本：`bash scripts/run_eval_periodic.sh` 输出评测守卫 `24 passed, 1 warning in 1.76s`，所有子 gate 均为 `Gate passed`。
+- 任务 2 红灯：workflow 三个新增测试失败于缺少 `workflow_dispatch`、`actions/upload-artifact@v4` 和 `retention-days: 14`。
+- 任务 2 绿灯：workflow 四个定向测试结果 `4 passed, 1 warning in 0.82s`。
+- 任务 2 评测守卫组合：`tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py` 结果 `27 passed, 1 warning in 1.75s`。
+- 任务 3 文档自检：占位词扫描无匹配，U+FFFD 扫描通过，`git diff --check` 无输出。
+- 任务 3 定向回归：`tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py tests/test_rag_benchmark.py` 结果 `40 passed, 1 warning in 2.42s`。
+- 任务 3 周期性脚本：`bash scripts/run_eval_periodic.sh` 输出评测守卫 `27 passed, 1 warning in 1.78s`，所有子 gate 均为 `Gate passed`。
+- 任务 3 PR gate：`bash scripts/run_eval_pr_gate.sh` 输出评测守卫 `27 passed, 1 warning in 1.76s`，所有子 gate 均为 `Gate passed`。
+- 任务 3 全量回归：`python -B -m pytest tests/ -v -p no:cacheprovider` 结果 `1366 passed, 6 skipped, 139 warnings in 101.52s`。
+
 ## 设计来源
 
 - 设计文档：`docs/superpowers/specs/2026-06-18-eval-periodic-reporting-design.md`
@@ -39,7 +61,7 @@
 - 创建：`scripts/run_eval_periodic.sh`
 - 修改：`tests/test_eval_baseline.py`
 
-- [ ] **步骤 1：编写脚本红灯测试**
+- [x] **步骤 1：编写脚本红灯测试**
 
 在 `tests/test_eval_baseline.py` 的 `test_eval_pr_gate_script_runs_stable_suites` 后追加：
 
@@ -75,7 +97,7 @@ def test_eval_periodic_script_keeps_going_for_archival_reports():
     assert "exit \"$status\"" in text
 ```
 
-- [ ] **步骤 2：运行脚本红灯测试**
+- [x] **步骤 2：运行脚本红灯测试**
 
 运行：
 
@@ -89,7 +111,7 @@ python -B -m pytest \
 
 预期：FAIL，失败点为 `assert script.exists()`，因为 `scripts/run_eval_periodic.sh` 尚不存在。
 
-- [ ] **步骤 3：创建周期性脚本**
+- [x] **步骤 3：创建周期性脚本**
 
 创建 `scripts/run_eval_periodic.sh`：
 
@@ -166,7 +188,7 @@ run_step "rag benchmark manual deterministic gate" \
 exit "$status"
 ```
 
-- [ ] **步骤 4：设置脚本可执行位**
+- [x] **步骤 4：设置脚本可执行位**
 
 运行：
 
@@ -174,7 +196,7 @@ exit "$status"
 chmod +x scripts/run_eval_periodic.sh
 ```
 
-- [ ] **步骤 5：运行脚本绿灯测试**
+- [x] **步骤 5：运行脚本绿灯测试**
 
 运行：
 
@@ -188,7 +210,7 @@ python -B -m pytest \
 
 预期：PASS，`2 passed`。
 
-- [ ] **步骤 6：运行周期性脚本**
+- [x] **步骤 6：运行周期性脚本**
 
 运行：
 
@@ -198,7 +220,7 @@ bash scripts/run_eval_periodic.sh
 
 预期：退出码 0；输出包含每个 `run_step` 的 passed；各子 gate 均输出 `Gate passed`。
 
-- [ ] **步骤 7：提交任务 1**
+- [x] **步骤 7：提交任务 1**
 
 运行：
 
@@ -213,7 +235,7 @@ git commit -m "ci(评测): 增加周期评测脚本"
 - 修改：`.github/workflows/timing-gate-eval.yml`
 - 修改：`tests/test_eval_baseline.py`
 
-- [ ] **步骤 1：编写 workflow 红灯测试**
+- [x] **步骤 1：编写 workflow 红灯测试**
 
 在 `tests/test_eval_baseline.py` 的 workflow 测试附近追加：
 
@@ -247,7 +269,7 @@ def test_eval_workflow_artifact_retention_is_bounded():
     assert "retention-days: 14" in text
 ```
 
-- [ ] **步骤 2：运行 workflow 红灯测试**
+- [x] **步骤 2：运行 workflow 红灯测试**
 
 运行：
 
@@ -262,7 +284,7 @@ python -B -m pytest \
 
 预期：FAIL，失败点为缺少 `workflow_dispatch`、`schedule` 或 artifact 上传配置。
 
-- [ ] **步骤 3：修改 workflow**
+- [x] **步骤 3：修改 workflow**
 
 将 `.github/workflows/timing-gate-eval.yml` 的触发器扩展为：
 
@@ -302,7 +324,7 @@ on:
             tmp/rag_benchmark/reports/*.md
 ```
 
-- [ ] **步骤 4：运行 workflow 绿灯测试**
+- [x] **步骤 4：运行 workflow 绿灯测试**
 
 运行：
 
@@ -318,7 +340,7 @@ python -B -m pytest \
 
 预期：PASS，`4 passed`。
 
-- [ ] **步骤 5：运行评测守卫组合**
+- [x] **步骤 5：运行评测守卫组合**
 
 运行：
 
@@ -328,7 +350,7 @@ python -B -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_po
 
 预期：PASS。
 
-- [ ] **步骤 6：提交任务 2**
+- [x] **步骤 6：提交任务 2**
 
 运行：
 
@@ -345,7 +367,7 @@ git commit -m "ci(评测): 归档周期评测报告"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/eval-periodic-reporting.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 在统一 PR Gate 章节后新增「周期性复跑与报告归档」说明：
 
@@ -376,11 +398,11 @@ Artifact 名称为 `eval-reports-${{ github.run_id }}`，保留 14 天，包含�
 排查失败时，先看 workflow 失败步骤，再下载 artifact。通用 suite 优先看 `evals/reports/YYYY-MM-DD-<suite>.json`，不要只看 `latest.json`；RAG benchmark 优先看 `tmp/rag_benchmark/reports/latest.md` 和对应 run-id JSON。
 ````
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 把路线项 8 的 P4-5B 状态改为已完成，说明周期性 workflow、manual dispatch、artifact 归档和 keep-going 脚本已落地；下一阶段保留 P4-5C RAG manual 样本扩充。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 在后续优先级表中将 P4-5B 标记为已完成，新增 P4-5B 详情章节，记录：
 
@@ -390,11 +412,11 @@ Artifact 名称为 `eval-reports-${{ github.run_id }}`，保留 14 天，包含�
 - 红灯 / 绿灯 / 最终验证输出。
 - P4-5C 仍为下一步。
 
-- [ ] **步骤 4：勾选本计划已完成步骤**
+- [x] **步骤 4：勾选本计划已完成步骤**
 
 在 `.Codex/plans/eval-periodic-reporting.md` 中把已完成步骤改为 `[x]`，并在文件顶部新增实际提交和验证摘要。
 
-- [ ] **步骤 5：运行文档自检**
+- [x] **步骤 5：运行文档自检**
 
 运行：
 
@@ -419,7 +441,7 @@ git diff --check -- .Codex/plans/eval-periodic-reporting.md docs/evals.md docs/t
 
 预期：`rg` 无输出且退出码为 1；U+FFFD 扫描通过；`git diff --check` 无输出。
 
-- [ ] **步骤 6：运行最终验证**
+- [x] **步骤 6：运行最终验证**
 
 运行：
 
@@ -432,7 +454,7 @@ python -B -m pytest tests/ -v -p no:cacheprovider
 
 预期：全部退出码为 0，全量 pytest 无 failure。
 
-- [ ] **步骤 7：提交任务 3**
+- [x] **步骤 7：提交任务 3**
 
 运行：
 

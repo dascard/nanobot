@@ -40,7 +40,32 @@ bash scripts/run_eval_pr_gate.sh
 
 `.github/workflows/timing-gate-eval.yml` 在 PR 和主分支 push 上调用同一个脚本。Workflow 显式设置 `NANOBOT_TESTING`、`DATABASE_URL`、`NEW_API_KEY` 和 `NANOBOT_ADMIN_TOKEN`，避免测试导入配置时写入 `.env`。
 
-该入口只运行稳定 baseline gate。周期性复跑、报告归档和 RAG manual 样本扩充分别留给 P4-5B / P4-5C。
+该入口只运行稳定 baseline gate。P4-5B 已完成周期性复跑和报告归档；RAG manual 样本扩充留给 P4-5C。
+
+## 周期性复跑与报告归档
+
+P4-5B 使用同一组稳定离线 gate 做周期性复跑，但执行入口是：
+
+```bash
+bash scripts/run_eval_periodic.sh
+```
+
+该脚本与 PR gate 覆盖相同 suite，但采用 keep-going 策略：单个 gate 失败后继续运行后续 gate，最后用累计退出码反映整体结果。这样即使前面的 suite 失败，后续 suite 和 RAG benchmark 仍能产出报告。
+
+`.github/workflows/timing-gate-eval.yml` 的触发方式：
+
+- `pull_request` / `push`：运行 `scripts/run_eval_pr_gate.sh`，保持 fail-fast。
+- `schedule` / `workflow_dispatch`：运行 `scripts/run_eval_periodic.sh`，并上传报告 artifact。
+
+周期性 schedule 为 UTC 周日 20:20，即北京时间周一 04:20。
+
+Artifact 名称为 `eval-reports-${{ github.run_id }}`，保留 14 天，包含：
+
+- `evals/reports/*.json`
+- `tmp/rag_benchmark/reports/*.json`
+- `tmp/rag_benchmark/reports/*.md`
+
+排查失败时，先看 workflow 失败步骤，再下载 artifact。通用 suite 优先看 `evals/reports/YYYY-MM-DD-<suite>.json`，不要只看 `latest.json`；RAG benchmark 优先看 `tmp/rag_benchmark/reports/latest.md` 和对应 run-id JSON。
 
 ## Baseline 更新规则
 
@@ -168,4 +193,4 @@ Generated case 只作为本地 DB 采样候选，不进入仓库稳定 baseline�
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入。周期性复跑、报告归档和 RAG manual 样本扩充留到 P4-5B / P4-5C 继续推进。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入；P4-5B 已完成周期性复跑、手动触发和报告 artifact 归档。RAG manual 样本扩充留到 P4-5C 继续推进。
