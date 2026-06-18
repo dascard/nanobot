@@ -40,7 +40,7 @@ bash scripts/run_eval_pr_gate.sh
 
 `.github/workflows/timing-gate-eval.yml` 在 PR 和主分支 push 上调用同一个脚本。Workflow 显式设置 `NANOBOT_TESTING`、`DATABASE_URL`、`NEW_API_KEY` 和 `NANOBOT_ADMIN_TOKEN`，避免测试导入配置时写入 `.env`。
 
-该入口只运行稳定 baseline gate。P4-5B 已完成周期性复跑和报告归档；RAG manual 样本扩充留给 P4-5C。
+该入口只运行稳定 baseline gate。P4-5B 已完成周期性复跑和报告归档；P4-5C 已完成第一轮 RAG manual 样本扩充。下一步转向 fixture-backed positive RAG case 或更多真实样本运营动作。
 
 ## 周期性复跑与报告归档
 
@@ -184,6 +184,10 @@ python -B -m evals.rag_benchmark.run \
 
 Generated case 只作为本地 DB 采样候选，不进入仓库稳定 baseline。人工确认后的样本应保存为 manual case，再纳入 `evals/baselines/rag_benchmark.json` 对应的 gate。
 
+P4-5C 已将 manual deterministic gate 的样本从 3 个扩充到 9 个。新增样本仍全部是 `constraint_only`，用于覆盖 memory、knowledge、sticker 和 group_memory 的过滤、scope、citation、sendable 约束；positive exact 样本需要固定 fixture DB 后再纳入稳定 gate。
+
+更新 manual case 时必须同步 `evals/baselines/rag_benchmark.json`，并保证 baseline 的 `case_scores[*].case_id` 集合与 enabled manual case 集合一致。`tests/test_rag_benchmark.py::test_rag_benchmark_baseline_file_matches_manual_gate_contract` 会守住这个合同。
+
 ## 失败处理
 
 - `pass_rate below threshold`：当前 suite 有失败。先看 `Failed:` 列表，修 case 或修实现。
@@ -193,4 +197,4 @@ Generated case 只作为本地 DB 采样候选，不进入仓库稳定 baseline�
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入；P4-5B 已完成周期性复跑、手动触发和报告 artifact 归档。RAG manual 样本扩充留到 P4-5C 继续推进。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入；P4-5B 已完成周期性复跑、手动触发和报告 artifact 归档；P4-5C 已完成第一轮 RAG manual 样本扩充。下一步转向 fixture-backed positive RAG case 或更多真实样本运营动作。

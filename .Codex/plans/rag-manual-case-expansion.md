@@ -16,6 +16,22 @@
 - 当前范围：扩充稳定 manual case、更新 baseline、补 baseline 合同测试、文档收口。
 - 不纳入本计划：positive fixture DB、runtime provider、generated case 入库、Admin / WebUI 改造、RAG 主链路重构。
 
+## 实际执行记录
+
+- 设计提交：`de97759 docs(评测): 设计 RAG manual 扩样`。
+- 计划提交：`5511a50 docs(计划): 记录 RAG manual 扩样计划`。
+- 任务 1 提交：`2189391 test(评测): 收紧 RAG baseline 合同`。
+- 插入修复提交：`93fe947 fix(知识库): 过滤未知发布时间资料`。新增 `knowledge_manual_future_publish_filter_constraint_001` 后，manual gate 暴露 `published_after` 会放行未知发布时间资料；已补回归测试并修复过滤逻辑。
+- 任务 2 提交：`dcf492b test(评测): 扩充 RAG manual 样本`。
+- 任务 2 红灯：新增 6 个 manual case 后，`test_rag_benchmark_baseline_file_matches_manual_gate_contract` 失败于 `assert 3 == 9`。
+- 任务 2 gate：`python -B -m evals.rag_benchmark.run --manual evals/cases/rag_benchmark/manual --generated tmp/rag_benchmark/empty --provider-mode deterministic --manual-only --baseline evals/baselines/rag_benchmark.json --min-pass-rate 1.0 --max-new-failures 0 --max-degraded-rate 0.0 --max-unexpected-source-rate 0.0` 输出 `cases=9 passed=9 failed=0` 和 `Gate passed`。
+- 任务 2 相邻回归：`python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -v -p no:cacheprovider` 结果 `32 passed, 1 warning in 1.96s`。
+- 任务 3 文档自检：占位词扫描通过，U+FFFD 扫描通过，`git diff --check` 无输出。
+- 任务 3 定向回归：`python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -v -p no:cacheprovider` 结果 `32 passed, 1 warning in 1.90s`。
+- 任务 3 PR gate：`bash scripts/run_eval_pr_gate.sh` 结果为评测守卫 `27 passed, 1 warning in 1.81s`，各子 gate 均输出 `Gate passed`，RAG gate 输出 `cases=9 passed=9 failed=0`。
+- 任务 3 周期性 gate：`bash scripts/run_eval_periodic.sh` 结果为评测守卫 `27 passed, 1 warning in 1.75s`，各子 gate 均输出 `Gate passed`，RAG gate 输出 `cases=9 passed=9 failed=0`。
+- 任务 3 全量回归：`python -B -m pytest tests/ -v -p no:cacheprovider` 结果 `1367 passed, 6 skipped, 139 warnings in 99.86s`。
+
 ## 文件结构
 
 - 修改：`tests/test_rag_benchmark.py`
@@ -48,7 +64,7 @@
 **文件：**
 - 修改：`tests/test_rag_benchmark.py`
 
-- [ ] **步骤 1：编写 baseline 合同红灯测试**
+- [x] **步骤 1：编写 baseline 合同红灯测试**
 
 替换 `test_rag_benchmark_baseline_file_matches_manual_gate_contract`：
 
@@ -78,7 +94,7 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     assert all("case_id" in item and "ok" in item for item in baseline["case_scores"])
 ```
 
-- [ ] **步骤 2：运行当前绿灯保护**
+- [x] **步骤 2：运行当前绿灯保护**
 
 运行：
 
@@ -88,7 +104,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：PASS。当前 manual case 和 baseline 都是 3 个，说明增强后的合同测试不会误伤现状。
 
-- [ ] **步骤 3：提交任务 1**
+- [x] **步骤 3：提交任务 1**
 
 运行：
 
@@ -109,7 +125,7 @@ git commit -m "test(评测): 收紧 RAG baseline 合同"
 - 修改：`evals/baselines/rag_benchmark.json`
 - 修改：`tests/test_rag_benchmark.py`
 
-- [ ] **步骤 1：新增 6 个 manual case**
+- [x] **步骤 1：新增 6 个 manual case**
 
 创建 `memory_empty_user_session_constraint.json`：
 
@@ -278,7 +294,7 @@ git commit -m "test(评测): 收紧 RAG baseline 合同"
 }
 ```
 
-- [ ] **步骤 2：运行 baseline 合同红灯**
+- [x] **步骤 2：运行 baseline 合同红灯**
 
 运行：
 
@@ -288,7 +304,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：FAIL。失败点为 `total_cases` 或 case id 集合不一致，因为新增 6 个 manual case 后 baseline 仍只有 3 个。
 
-- [ ] **步骤 3：更新 baseline**
+- [x] **步骤 3：更新 baseline**
 
 将 `evals/baselines/rag_benchmark.json` 更新为 9 个 case 的稳定 baseline。`case_scores` 至少包含以下 9 个 id，全部 `ok=true`：
 
@@ -308,7 +324,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 `metrics.overall.total_cases` 和 `passed_cases` 设为 `9`，`pass_rate` 设为 `1.0`，`positive_cases`、`hit@1`、`hit@3`、`hit@5`、`mrr` 保持 `0.0`，`failed_cases` 保持空数组。
 
-- [ ] **步骤 4：运行 RAG 单文件绿灯**
+- [x] **步骤 4：运行 RAG 单文件绿灯**
 
 运行：
 
@@ -318,7 +334,7 @@ python -B -m pytest tests/test_rag_benchmark.py -v -p no:cacheprovider
 
 预期：PASS。
 
-- [ ] **步骤 5：运行 RAG manual deterministic gate**
+- [x] **步骤 5：运行 RAG manual deterministic gate**
 
 运行：
 
@@ -337,7 +353,7 @@ python -B -m evals.rag_benchmark.run \
 
 预期：退出码 0，输出包含 `cases=9 passed=9 failed=0` 和 `Gate passed`。
 
-- [ ] **步骤 6：运行评测守卫相邻回归**
+- [x] **步骤 6：运行评测守卫相邻回归**
 
 运行：
 
@@ -347,7 +363,7 @@ python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -v -
 
 预期：PASS。
 
-- [ ] **步骤 7：提交任务 2**
+- [x] **步骤 7：提交任务 2**
 
 运行：
 
@@ -372,7 +388,7 @@ git commit -m "test(评测): 扩充 RAG manual 样本"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/rag-manual-case-expansion.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 在 RAG Benchmark 边界章节补充：
 
@@ -382,7 +398,7 @@ P4-5C 已将 manual deterministic gate 的样本从 3 个扩充到 9 个。当�
 更新 manual case 时必须同步 `evals/baselines/rag_benchmark.json`，并保证 baseline 的 `case_scores[*].case_id` 集合与 enabled manual case 集合一致。
 ```
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 把路线项 8 的 P4-5C 状态改为已完成，并记录：
 
@@ -391,7 +407,7 @@ P4-5C 已将 manual deterministic gate 的样本从 3 个扩充到 9 个。当�
 - RAG manual deterministic gate 输出 `cases=9 passed=9 failed=0` 和 `Gate passed`。
 - 下一步转为 fixture-backed positive RAG case 或更多真实样本运营动作。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 新增「已完成阶段详情：P4-5C RAG manual 样本扩充」章节，记录：
 
@@ -401,11 +417,11 @@ P4-5C 已将 manual deterministic gate 的样本从 3 个扩充到 9 个。当�
 - 红灯 / 绿灯 / gate / 全量回归输出。
 - Positive exact 样本被排除在本阶段外的原因。
 
-- [ ] **步骤 4：勾选本计划已完成步骤**
+- [x] **步骤 4：勾选本计划已完成步骤**
 
 在 `.Codex/plans/rag-manual-case-expansion.md` 中勾选已完成步骤，并记录实际验证结果。
 
-- [ ] **步骤 5：运行文档自检**
+- [x] **步骤 5：运行文档自检**
 
 运行：
 
@@ -442,7 +458,7 @@ git diff --check -- .Codex/plans/rag-manual-case-expansion.md docs/evals.md docs
 
 预期：占位词扫描通过，U+FFFD 扫描通过，`git diff --check` 无输出。
 
-- [ ] **步骤 6：运行最终验证**
+- [x] **步骤 6：运行最终验证**
 
 运行：
 
@@ -455,7 +471,7 @@ python -B -m pytest tests/ -v -p no:cacheprovider
 
 预期：全部退出码为 0，全量 pytest 无 failure。
 
-- [ ] **步骤 7：提交任务 3**
+- [x] **步骤 7：提交任务 3**
 
 运行：
 
