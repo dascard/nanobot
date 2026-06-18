@@ -138,13 +138,13 @@ git commit -m "fix(贴纸): 隔离预览缓存同步 IO"
 **文件：**
 - 修改：`tests/test_kt_framework.py`
 
-- [ ] **步骤 1：写红灯测试**
+- [x] **步骤 1：写红灯测试**
 
 在已有多模态附件测试附近新增断言：当 `files` 存在时，`NanobotBridge.handle_message()` 必须调用 `nanobot_kt.bridge.asyncio.to_thread`，且第一个参数是 `prepare_image_parts`。
 
 测试要 monkeypatch `asyncio.to_thread` 为 async fake，直接调用传入函数或返回预构造 image parts，避免真实图片下载。
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -154,11 +154,13 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_kt_framework.py -k "mul
 
 预期：如果当前测试没有守卫，应先 FAIL 于缺少断言或 fake 未被调用；若当前实现已经调用 `to_thread`，可用临时反向 monkeypatch 或先断言一个当前不存在的调用细节确认测试有效。
 
-- [ ] **步骤 3：最小实现**
+实际：新增守卫后临时把 `NanobotBridge.handle_message()` 改为直接调用 `prepare_image_parts(...)`，单测失败于 `assert to_thread_calls`，证明测试能捕获缺少线程卸载的回归；随后已恢复生产代码。
+
+- [x] **步骤 3：最小实现**
 
 当前生产代码已使用 `await asyncio.to_thread(prepare_image_parts, ...)`。如果测试红灯暴露实现缺口，只做最小修正；否则不改生产代码，只提交测试守卫。
 
-- [ ] **步骤 4：运行绿灯与回归**
+- [x] **步骤 4：运行绿灯与回归**
 
 运行：
 
@@ -168,7 +170,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_kt_framework.py tests/t
 
 预期：PASS。
 
-- [ ] **步骤 5：提交任务 2**
+实际：守卫单测通过，`1 passed, 1 warning`；图片相关回归通过，`59 passed, 1 warning`。
+
+- [x] **步骤 5：提交任务 2**
 
 运行：
 

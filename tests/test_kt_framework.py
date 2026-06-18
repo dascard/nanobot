@@ -539,9 +539,14 @@ class TestNanobotBridge:
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
 
         captured = {}
+        to_thread_calls = []
 
         async def fake_process(event):
             captured["event"] = event
+
+        async def fake_to_thread(func, *args, **kwargs):
+            to_thread_calls.append((func, args, kwargs))
+            return func(*args, **kwargs)
 
         mock_agent._process_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
@@ -555,7 +560,7 @@ class TestNanobotBridge:
                     source_name="attachment_1",
                 )
             ],
-        ) as mock_prepare:
+        ) as mock_prepare, patch("nanobot_kt.bridge.asyncio.to_thread", new=fake_to_thread):
             bridge = NanobotBridge()
 
             async def _run():
@@ -570,6 +575,15 @@ class TestNanobotBridge:
 
         assert result == "ok"
         mock_prepare.assert_called_once()
+        assert to_thread_calls
+        func, args, kwargs = to_thread_calls[0]
+        assert func is mock_prepare
+        assert args == (["https://example.com/a.png", "https://example.com/b.png"],)
+        assert kwargs == {
+            "source_type": "qq",
+            "source_name_prefix": "attachment",
+            "detail": "low",
+        }
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
