@@ -292,7 +292,9 @@ def test_chat_step_stream_emits_final_answer_deltas(client, monkeypatch):
     events = _sse_events(body)
     assert [event["status"] for event in events] == ["progress", "delta", "delta", "final"]
     assert events[1]["content"] == "Maximum_Load 占比"
+    assert "text" not in events[1]
     assert events[2]["content"] == "最高，约 44.9%。"
+    assert "text" not in events[2]
     assert events[-1]["answer"] == "Maximum_Load 占比最高，约 44.9%。"
 
 
