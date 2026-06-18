@@ -18,7 +18,7 @@
 - [x] 第一阶段设计文档已提交：`bca50b8 docs(流式): 设计 SSE 收敛方案`。
 - [x] 实现计划已提交：`e56a406 docs(计划): 记录 SSE 收敛计划`。
 - [x] 任务 1 至任务 5 已完成，提交为 `d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`。
-- [x] 任务 6 文档收口已完成，任务 7 最终验证待执行。
+- [x] 任务 6 文档收口已完成，任务 7 最终验证已完成。
 
 ## 关键事实
 
@@ -862,9 +862,10 @@ git commit -m "docs(流式): 收口 SSE 收敛状态"
 ## 任务 7：最终验证
 
 **文件：**
-- 不修改文件。
+- 修改：`.Codex/plans/streaming-sse-convergence.md`
+- 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行格式检查**
+- [x] **步骤 1：运行格式检查**
 
 运行：
 
@@ -874,7 +875,9 @@ git diff --check
 
 预期：无输出，退出码为 0。
 
-- [ ] **步骤 2：运行流式相关回归**
+结果：无输出，退出码为 0。
+
+- [x] **步骤 2：运行流式相关回归**
 
 运行：
 
@@ -884,7 +887,9 @@ python -m pytest tests/test_streaming_api.py tests/test_streaming_response_envel
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 3：运行 API / Bridge 相关回归**
+结果：`23 passed, 21 warnings in 6.73s`。
+
+- [x] **步骤 3：运行 API / Bridge 相关回归**
 
 运行：
 
@@ -894,7 +899,9 @@ python -m pytest tests/test_api.py tests/test_chat_response_envelope.py tests/te
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 4：运行全量测试**
+结果：`145 passed, 21 warnings in 40.76s`。
+
+- [x] **步骤 4：运行全量测试**
 
 运行：
 
@@ -904,7 +911,9 @@ python -m pytest tests/ -v
 
 预期：全部通过，失败数为 0。若外部服务导致非代码失败，必须记录完整失败用例和根因，不得声明全量通过。
 
-- [ ] **步骤 5：最终状态检查**
+结果：`1311 passed, 6 skipped, 139 warnings in 99.87s`。
+
+- [x] **步骤 5：最终状态检查**
 
 运行：
 
@@ -914,3 +923,5 @@ git log -8 --oneline
 ```
 
 预期：只剩仓库原有无关脏文件；最新提交覆盖任务 1 到任务 6。
+
+结果：`git status --short` 仍显示既有无关脏文件和未跟踪文件；最新提交覆盖任务 1 到任务 7，P3-1 已完成。
