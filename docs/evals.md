@@ -1,6 +1,6 @@
 # 评测与门禁
 
-本文记录当前仓库内 `evals/` 的稳定入口和 TimingGate 门禁规则。
+本文记录当前仓库内 `evals/` 的稳定入口、候选标注闭环和本地门禁规则。
 
 ## TimingGate 门禁
 
@@ -47,6 +47,54 @@ python -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_polic
 bash scripts/run_timing_gate_gate.sh
 ```
 
+## 候选标注闭环
+
+通用流程是 `candidates → labeled → dataset case`：
+
+1. 从数据库导出候选 case。
+2. 人工在 JSONL 中补齐可评分 `expected`。
+3. 导入标签，把候选状态改为 `labeled`。
+4. 先 dry-run 检查晋升计划，再写入目标数据集。
+
+常用命令：
+
+```bash
+python -m evals.candidates export --suite timing_gate --status candidate --out /tmp/candidates.jsonl
+python -m evals.candidates import-labels --labels /tmp/labels.jsonl
+python -m evals.candidates promote --suite timing_gate --target-dataset timing_gate --dry-run
+python -m evals.candidates promote --suite timing_gate --target-dataset timing_gate --apply
+```
+
+标签文件每行是一个 JSON 对象，最小格式如下：
+
+```json
+{"case_id":"cand_timing_gate_1","expected":{"timing_action":"continue"},"note":"人工确认"}
+```
+
+`expected` 必须满足 `evals.expected_contract.SCOREABLE_EXPECTED_KEYS` 定义的可评分字段契约：
+
+- 不能是空对象。
+- 不能保留 `needs_label: true`。
+- 不能包含 scorer 不会读取的字段。
+
+Admin 接口兼容旧字段 `expected_json`，但新调用应统一发送 `expected`。WebUI 标注入口也按 `{ expected: expectedJson }` 提交，避免把人工标签静默写成空对象。
+
+## Dataset 与 Suite
+
+`dataset` 是 `evals/cases/<dataset>` 目录名，用于组织数据集和门禁维度。`suite` 是每个 case 内部的执行类型，决定使用哪个 runner / scorer。
+
+因此二者可以不同。例如 `evals/cases/capability_model_routing/model_routing_stream_required_001.json` 属于 `capability_model_routing` dataset，但 case 内 `suite` 是 `model_routing`，运行时仍使用 `model_routing` runner 和 scorer。
+
+本地运行能力数据集门禁：
+
+```bash
+python -B -m evals.run --suite capability_model_routing --baseline evals/baselines/capability_model_routing.json --min-pass-rate 1.0 --max-new-failures 0
+```
+
+## RAG Benchmark 边界
+
+`evals/rag_benchmark/` 保持独立 benchmark 入口，不并入通用 `EvalCase`。原因是 RAG benchmark 需要独立的召回样本、索引上下文和评分口径；通用 candidates 闭环只负责把可评分的用户交互样本沉淀为稳定 case。
+
 ## 失败处理
 
 - `pass_rate below threshold`：当前 suite 有失败。先看 `Failed:` 列表，修 case 或修实现。
@@ -56,4 +104,4 @@ bash scripts/run_timing_gate_gate.sh
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；更完整的 Admin 标注工作台、RAG 标注闭环和更多 suite 的 PR gate 留在 P4 后续阶段推进。

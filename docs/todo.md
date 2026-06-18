@@ -228,11 +228,11 @@
 
 #### 路线项 8 — 评测体系从既有 `evals/` 框架升级为基线 + 回归门禁（大工程）
 
-- **现状（2026-06-17 已部分升级）**：评测框架**已存在**而非空白：`evals/run.py`（CLI `python -m evals.run --suite <name>`）+ `schema.py`（`EvalCase`/`EvalOutput`/`EvalResult`/`SuiteReport` pydantic）+ `scorers.py` + `runners/`（sticker / memory / moderation / model_routing 等 per-suite runner）+ `cases/`（regression 10 例、rag_benchmark/manual、timing_gate 多例、candidates）+ `sample_from_db.py`/`sample_from_logs.py`（从库 / 日志采样造例）。`evals/baseline.py` 已提供 baseline diff 与阈值门禁，`run.py` 已支持 `--baseline`、`--min-pass-rate`、`--max-new-failures`，`SuiteReport` 可携带 `baseline_diff` 与 `gate`。
-- **痛点**：baseline diff 和门禁能力已具备，TimingGate CI / PR gate 已完成首个仓库自包含接入；覆盖仍偏核心 suite。提示词质量 / 回复合同 / RAG 召回 / TimingGate 各有少量 case 但无系统化标注数据集与人工评分回流；候选 case(`candidates`，needs_label) 标注流程未闭环。2026-06-18 审计还发现通用候选标注存在 `expected_json` / `expected` 字段错配、空 expected 可被提升、promote 固定写入 `regression` 目录的问题，P4-1 第一阶段先修这些会污染评测数据的契约缺口。
+- **现状（2026-06-18 已推进）**：评测框架**已存在**而非空白：`evals/run.py`（CLI `python -m evals.run --suite <name>`）+ `schema.py`（`EvalCase`/`EvalOutput`/`EvalResult`/`SuiteReport` pydantic）+ `scorers.py` + `runners/`（sticker / memory / moderation / model_routing 等 per-suite runner）+ `cases/`（regression 10 例、rag_benchmark/manual、timing_gate 多例、candidates、capability_model_routing）+ `sample_from_db.py`/`sample_from_logs.py`（从库 / 日志采样造例）。`evals/baseline.py` 已提供 baseline diff 与阈值门禁，`run.py` 已支持 `--baseline`、`--min-pass-rate`、`--max-new-failures`，`SuiteReport` 可携带 `baseline_diff` 与 `gate`；TimingGate CI / PR gate 和首个 `capability_model_routing` 能力数据集 gate 均已落地。
+- **痛点**：baseline diff 和门禁能力已具备，TimingGate CI / PR gate 已完成首个仓库自包含接入；覆盖仍偏核心 suite。提示词质量 / 回复合同 / RAG 召回 / TimingGate 各有少量 case 但无系统化标注数据集与人工评分回流。P4-1 已先修复会污染评测数据的契约缺口：`expected_json` / `expected` 字段错配已兼容，空 expected、`needs_label=true` 和不可评分字段会被拒绝，promote 已支持 dry-run 与 `target_dataset`，离线 candidates export / import-labels / promote CLI 已可用。
 - **目标**：把既有 `evals/` 升级为体系——统一指标与基线快照、回归对比门禁（PR 跑核心 suite 并比对 pass_rate / score 漂移）、分能力数据集（提示词 / 路由 / RAG / TimingGate / 渲染）、人工标注回流与 `candidates → labeled` 闭环。
 - **关联**：依赖项 1 / 6 / 10 等行为先稳定（否则基线频繁失效）；与项 10 共享 timing_gate 套件、项 3 共享 model_routing 套件。
-- **粗略路径**：① 固化基线快照与指标口径（已完成 timing_gate 核心 suite）→ ② `run.py` 增 baseline diff + 阈值门禁（已完成）→ ③ 接入 TimingGate 外部 CI / PR gate（已完成 P3-3B）→ ④ P4-1 先修 expected 契约、候选标注、promote dry-run 和 dataset / suite 边界（设计已提交，计划已写入 `.Codex/plans/eval-dataset-labeling.md`）→ ⑤ 扩 per-capability 数据集（首个目标为 `capability_model_routing`）→ ⑥ 打通更多 candidates 标注闭环并逐步纳入提交前 / PR 必跑。
+- **粗略路径**：① 固化基线快照与指标口径（已完成 timing_gate 核心 suite）→ ② `run.py` 增 baseline diff + 阈值门禁（已完成）→ ③ 接入 TimingGate 外部 CI / PR gate（已完成 P3-3B）→ ④ P4-1 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 数据集（核心闭环已完成，计划记录在 `.Codex/plans/eval-dataset-labeling.md`）→ ⑤ 扩更多 per-capability 数据集和更多 suite PR gate → ⑥ 产品化 Admin 标注工作台、RAG 标注闭环和周期性复跑。
 
 ---
 

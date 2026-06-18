@@ -992,7 +992,7 @@ git commit -m "test(评测): 增加模型路由能力数据集"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/eval-dataset-labeling.md`
 
-- [ ] **步骤 1：同步 eval 操作手册**
+- [x] **步骤 1：同步 eval 操作手册**
 
 在 `docs/evals.md` 增加：
 
@@ -1002,7 +1002,7 @@ git commit -m "test(评测): 增加模型路由能力数据集"
 - `capability_model_routing` 本地 gate 命令。
 - RAG benchmark 不并入通用 EvalCase 的边界。
 
-- [ ] **步骤 2：同步路线状态**
+- [x] **步骤 2：同步路线状态**
 
 更新 `docs/todo.md` 路线项 8：
 
@@ -1010,7 +1010,7 @@ git commit -m "test(评测): 增加模型路由能力数据集"
 - 记录首个 `capability_model_routing` 数据集和 baseline。
 - 将更大的 Admin 工作台、RAG 标注闭环和更多 suite PR gate 留在 P4 后续阶段。
 
-- [ ] **步骤 3：同步 walkthrough**
+- [x] **步骤 3：同步 walkthrough**
 
 更新 `docs/plan_walkthrough.md`：
 
@@ -1018,7 +1018,7 @@ git commit -m "test(评测): 增加模型路由能力数据集"
 - P4-1 实现计划路径：`.Codex/plans/eval-dataset-labeling.md`。
 - 记录每个任务提交和验证结果。
 
-- [ ] **步骤 4：运行文档扫描**
+- [x] **步骤 4：运行文档扫描**
 
 运行：
 
@@ -1046,7 +1046,7 @@ git diff --check -- docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/p
 
 预期：三个命令都无有效错误输出；`rg` 无匹配时退出码为 1，属于通过。
 
-- [ ] **步骤 5：提交任务 6**
+- [x] **步骤 5：提交任务 6**
 
 运行：
 
@@ -1054,6 +1054,16 @@ git diff --check -- docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/p
 git add docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/eval-dataset-labeling.md
 git commit -m "docs(评测): 收口标注闭环状态"
 ```
+
+验证记录：
+
+- 文档占位词扫描：`rg -n "T[O]DO|待[定]|后续[实]现|类似[任]务|添加[适]当|为上[述]" docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/eval-dataset-labeling.md`，结果无匹配；`rg` 退出码为 1，符合预期。
+- U+FFFD 扫描：`python - <<'PY' ... PY`，结果无输出。
+- Diff 空白检查：`git diff --check -- docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/eval-dataset-labeling.md`，结果无输出。
+- 评测定向组合：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_baseline.py tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py tests/test_timing_gate_prompt_policy.py -v -p no:cacheprovider`，结果 `33 passed, 21 warnings in 3.36s`。
+- TimingGate 门禁：`bash scripts/run_timing_gate_gate.sh`，结果 `Suite: timing_gate total=18 passed=18 failed=0 pass_rate=100.0%`，`Gate passed`。
+- 能力数据集门禁：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run --suite capability_model_routing --baseline evals/baselines/capability_model_routing.json --min-pass-rate 1.0 --max-new-failures 0`，结果 `Suite: capability_model_routing total=1 passed=1 failed=0 pass_rate=100.0%`，`Gate passed`。
+- 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1338 passed, 6 skipped, 139 warnings in 98.50s`。
 
 ---
 
