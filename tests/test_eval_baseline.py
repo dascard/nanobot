@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from evals.schema import EvalCase, SuiteReport
 
@@ -67,6 +68,46 @@ def test_evaluate_gate_fails_for_low_pass_rate_and_new_failures():
     assert gate["max_new_failures"] == 0
     assert any("pass_rate" in error for error in gate["errors"])
     assert any("new_failed_cases" in error for error in gate["errors"])
+
+
+def test_evaluate_gate_requires_baseline_for_new_failure_limit():
+    from evals.baseline import evaluate_gate
+
+    report = SuiteReport(
+        suite="timing_gate",
+        total=1,
+        passed=1,
+        failed=0,
+        pass_rate=1.0,
+        failed_cases=[],
+    )
+
+    gate = evaluate_gate(report, max_new_failures=0)
+
+    assert gate["passed"] is False
+    assert any("baseline required" in error for error in gate["errors"])
+
+
+def test_evaluate_gate_fails_for_baseline_suite_mismatch():
+    from evals.baseline import evaluate_gate
+
+    report = SuiteReport(
+        suite="timing_gate",
+        total=1,
+        passed=1,
+        failed=0,
+        pass_rate=1.0,
+        failed_cases=[],
+    )
+
+    gate = evaluate_gate(
+        report,
+        baseline_diff={"baseline_suite": "regression", "new_failed_cases": []},
+        max_new_failures=0,
+    )
+
+    assert gate["passed"] is False
+    assert any("baseline suite mismatch" in error for error in gate["errors"])
 
 
 def test_run_suite_writes_baseline_diff_and_gate(monkeypatch, tmp_path):
@@ -145,6 +186,66 @@ def test_eval_run_cli_returns_failure_when_gate_fails(monkeypatch, tmp_path, cap
     assert exit_code == 1
     assert "Gate failed" in captured.out
     assert "pass_rate" in captured.out
+
+
+def test_eval_run_cli_returns_success_when_gate_passes(monkeypatch, tmp_path, capsys):
+    from evals import run as eval_run
+
+    reports_dir = tmp_path / "reports"
+    monkeypatch.setattr(eval_run, "REPORTS_DIR", reports_dir)
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(
+        json.dumps(
+            {
+                "suite": "timing_gate",
+                "total": 15,
+                "passed": 15,
+                "failed": 0,
+                "pass_rate": 1.0,
+                "failed_cases": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = eval_run.main(
+        [
+            "--suite",
+            "timing_gate",
+            "--baseline",
+            str(baseline_path),
+            "--min-pass-rate",
+            "1.0",
+            "--max-new-failures",
+            "0",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Gate passed" in captured.out
+
+
+def test_timing_gate_gate_script_uses_stable_baseline():
+    script = Path("scripts/run_timing_gate_gate.sh")
+
+    assert script.exists()
+    text = script.read_text(encoding="utf-8")
+    assert "evals/baselines/timing_gate.json" in text
+    assert "--suite timing_gate" in text
+    assert "--min-pass-rate 1.0" in text
+    assert "--max-new-failures 0" in text
+    assert "NANOBOT_ADMIN_TOKEN" in text
+
+
+def test_timing_gate_workflow_runs_gate_script():
+    workflow = Path(".github/workflows/timing-gate-eval.yml")
+
+    assert workflow.exists()
+    text = workflow.read_text(encoding="utf-8")
+    assert "scripts/run_timing_gate_gate.sh" in text
+    assert "tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py" in text
 
 
 def test_model_routing_eval_filters_required_capabilities_for_image_case():

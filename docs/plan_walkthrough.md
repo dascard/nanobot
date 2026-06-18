@@ -10,7 +10,7 @@ P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并�
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」和 P3-2「私聊 TimingGate 可观测补齐」均已完成验证。下一执行重点进入 TimingGate 与评测体系的运营闭环：P3-3A 先补 `timing_signal_audit` 人工标注样本离线复跑入口，P3-3B 再接入仓库自包含的 timing_gate CI / PR gate；P4-1 保留 per-capability 数据集扩展和通用 `candidates → labeled` 标注闭环。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」和 P3-3B「TimingGate CI / PR gate」均已完成验证。下一执行重点转入 P4-1：扩 per-capability 数据集，打通通用 `candidates → labeled` 标注闭环。
 
 ## 文档口径
 
@@ -77,7 +77,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-1 | 已完成 | SSE 真 token 流式剩余收敛 | 已完成 `/chat` API delta 合并、`done` 权威测试、Bridge `final.replace`、API final 规范化、bounded queue / progress backpressure、断连 drain 和最终验证 | `bca50b8` / `e56a406` / `d8e8703` / `84cb0cb` / `a987d31` / `88268a1` / `a5f705a` / `87f3b40` / `docs(计划): 完成 SSE 最终验证` |
 | P3-2 | 已完成 | 私聊 TimingGate 可观测补齐 | 私聊 `timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化 | `feat(时机): 持久化私聊评分元信息` |
 | P3-3A | 已完成 | TimingGate 标注审计复跑 | `timing_signal_audit` 已支持离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
-| P3-3B | 待执行 | TimingGate CI / PR gate | 新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
+| P3-3B | 已完成 | TimingGate CI / PR gate | 已新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
 
 ## 当前详细计划：P3-2 私聊 TimingGate 可观测补齐
@@ -111,7 +111,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 下一步：
 
-- 进入 P3-3B「TimingGate CI / PR gate」TDD 实现。
+- 进入 P4-1「评测体系扩展」设计 / 计划。
 
 ## 当前详细计划：P3-3 TimingGate 持续评估
 
@@ -137,15 +137,15 @@ P3-3A 目标：
 
 P3-3B 目标：
 
-- [ ] 新增 `evals/baselines/timing_gate.json`，避免依赖被忽略或覆盖的 `evals/reports/latest.json`。
-- [ ] 新增至少 2 个无 `input.action` 的正式 `timing_gate` scoring case。
-- [ ] 补充 `tests/test_eval_baseline.py` gate 成功路径和异常配置守卫。
-- [ ] 补充 `tests/test_timing_gate_prompt_policy.py`，要求正式 suite 含 scoring case。
-- [ ] 新增 `scripts/run_timing_gate_gate.sh`，统一本地和 CI 命令。
-- [ ] 新增 `.github/workflows/timing-gate-eval.yml`，运行轻量 pytest 和 timing gate eval gate。
-- [ ] 如验证需要，给 `evals/run.py` 增加 `--no-write-report` 或 `--report-dir`，减少 CI 写报告副作用。
-- [ ] 新增或更新 `docs/evals.md`，记录 baseline 更新规则和失败处理。
-- [ ] 运行定向验证、门禁脚本和全量 pytest，提交 `ci(评测): 接入 timing gate 回归门禁`。
+- [x] 新增 `evals/baselines/timing_gate.json`，避免依赖被忽略或覆盖的 `evals/reports/latest.json`。
+- [x] 新增至少 2 个无 `input.action` 的正式 `timing_gate` scoring case。
+- [x] 补充 `tests/test_eval_baseline.py` gate 成功路径和异常配置守卫。
+- [x] 补充 `tests/test_timing_gate_prompt_policy.py`，要求正式 suite 含 scoring case。
+- [x] 新增 `scripts/run_timing_gate_gate.sh`，统一本地和 CI 命令。
+- [x] 新增 `.github/workflows/timing-gate-eval.yml`，运行轻量 pytest 和 timing gate eval gate。
+- [x] 保持 `evals/run.py` 现有报告写入行为，本阶段 workflow 不启用 `git diff --exit-code`，`evals/reports/*.json` 继续被 `.gitignore` 忽略。
+- [x] 新增 `docs/evals.md`，记录 baseline 更新规则和失败处理。
+- [x] 运行最终检查并提交 `ci(评测): 接入 timing gate 回归门禁`。
 
 验证计划：
 
@@ -160,6 +160,16 @@ P3-3A 验证记录：
 - P3-3A 文件回归：`python -m pytest tests/test_timing_signal_audit.py -v`，结果 `5 passed, 1 warning in 0.86s`。
 - CLI 入口调整后相邻回归：`python -m pytest tests/test_timing_signal_audit.py tests/test_timing_gate_prompt_policy.py -v`，结果 `12 passed, 1 warning in 1.45s`。
 - 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1316 passed, 6 skipped, 139 warnings in 99.05s`。
+
+P3-3B 验证记录：
+
+- 红灯：`python -m pytest tests/test_eval_baseline.py::test_evaluate_gate_requires_baseline_for_new_failure_limit tests/test_eval_baseline.py::test_evaluate_gate_fails_for_baseline_suite_mismatch tests/test_eval_baseline.py::test_eval_run_cli_returns_success_when_gate_passes tests/test_eval_baseline.py::test_timing_gate_gate_script_uses_stable_baseline tests/test_eval_baseline.py::test_timing_gate_workflow_runs_gate_script tests/test_timing_gate_prompt_policy.py::test_timing_gate_eval_suite_contains_rule_scoring_cases -v`，结果 `3 failed, 3 passed, 1 warning in 6.31s`；失败点为缺少门禁脚本、workflow 和正式 scoring case。
+- 新增红灯集合绿灯：同一命令结果 `6 passed, 1 warning in 1.00s`。
+- TimingGate suite 守卫回归：`python -m pytest tests/test_timing_gate_prompt_policy.py -v`，结果 `8 passed, 1 warning in 1.02s`。
+- Eval baseline 回归：`python -m pytest tests/test_eval_baseline.py -v`，结果 `10 passed, 1 warning in 1.15s`。
+- 门禁脚本：`bash scripts/run_timing_gate_gate.sh`，结果 `Suite: timing_gate total=18 passed=18 failed=0 pass_rate=100.0%`，`Gate passed`。
+- 定向组合：`python -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py -v && bash scripts/run_timing_gate_gate.sh`，结果 `18 passed, 1 warning in 1.67s`，随后 `Gate passed`。
+- 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1322 passed, 6 skipped, 139 warnings in 100.88s`。
 
 提交边界：
 

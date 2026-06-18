@@ -1,0 +1,37 @@
+name: TimingGate Eval
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  timing-gate:
+    runs-on: ubuntu-latest
+    env:
+      NANOBOT_TESTING: "1"
+      DATABASE_URL: "sqlite:///:memory:"
+      NEW_API_KEY: "test-key-for-ci"
+      NANOBOT_ADMIN_TOKEN: "test-admin-token"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run TimingGate guard tests
+        run: python -B -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py -v -p no:cacheprovider
+
+      - name: Run TimingGate eval gate
+        run: bash scripts/run_timing_gate_gate.sh

@@ -1,0 +1,30 @@
+{
+  "id": "timing_gate_scoring_at_bot_continue",
+  "suite": "timing_gate",
+  "description": "无 action 回放：@bot 明确请求应由 scoring 直接 continue",
+  "input": {
+    "text": "@nanobot 这个报错怎么修",
+    "is_group": true,
+    "is_at_bot": true,
+    "trigger_reason": "at_bot"
+  },
+  "expected": {
+    "timing_action": "continue",
+    "should_reply": true,
+    "scoring": {
+      "stage": "rule_shortcut",
+      "model_used": false,
+      "action": "continue",
+      "signals": {
+        "explicit_direct_score": 0.95,
+        "direct_score": 0.95,
+        "suppress_score": 0.0,
+        "sub_signals": {
+          "s_ack": 0.0,
+          "s_transport": 0.0
+        }
+      }
+    }
+  },
+  "tags": ["directed", "scoring", "continue"]
+}

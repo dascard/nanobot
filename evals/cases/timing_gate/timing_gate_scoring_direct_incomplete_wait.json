@@ -1,0 +1,31 @@
+{
+  "id": "timing_gate_scoring_direct_incomplete_wait",
+  "suite": "timing_gate",
+  "description": "无 action 回放：点名 bot 但明确还要继续贴材料时 scoring 应 wait",
+  "input": {
+    "text": "nanobot 等下，我把日志贴完",
+    "is_group": true,
+    "bot_name_mentioned": true,
+    "trigger_reason": "bot_name_mentioned"
+  },
+  "expected": {
+    "timing_action": "wait",
+    "should_reply": false,
+    "scoring": {
+      "stage": "rule_shortcut",
+      "model_used": false,
+      "action": "wait",
+      "delay_seconds": 8,
+      "signals": {
+        "explicit_direct_score": 0.75,
+        "direct_score": 0.75,
+        "wait_signal": 1.0,
+        "suppress_score": 0.0,
+        "sub_signals": {
+          "w_marker": 1.0
+        }
+      }
+    }
+  },
+  "tags": ["directed", "continuous_input", "scoring", "wait"]
+}

@@ -1,0 +1,29 @@
+{
+  "id": "timing_gate_scoring_directed_other_no_reply",
+  "suite": "timing_gate",
+  "description": "无 action 回放：明确指向他人且未指向 bot 时 scoring 应 no_reply",
+  "input": {
+    "text": "@小明 这个你看一下",
+    "is_group": true,
+    "is_directed_to_other": true,
+    "trigger_reason": "ambient"
+  },
+  "expected": {
+    "timing_action": "no_reply",
+    "should_reply": false,
+    "scoring": {
+      "stage": "rule_shortcut",
+      "model_used": false,
+      "action": "no_reply",
+      "signals": {
+        "explicit_direct_score": 0.0,
+        "direct_score": 0.0,
+        "suppress_score": 0.75,
+        "sub_signals": {
+          "s_other": 0.75
+        }
+      }
+    }
+  },
+  "tags": ["directed_to_other", "scoring", "no_reply"]
+}

@@ -70,6 +70,18 @@ def test_timing_gate_eval_suite_has_conservative_group_coverage():
     }.issubset(tags)
 
 
+def test_timing_gate_eval_suite_contains_rule_scoring_cases():
+    from evals.run import load_cases
+
+    cases = load_cases("timing_gate")
+    scoring_cases = [case for case in cases if not case.input.get("action")]
+
+    assert len(scoring_cases) >= 2
+    for case in scoring_cases:
+        assert case.expected.get("timing_action") in {"continue", "wait", "no_reply"}
+        assert isinstance(case.expected.get("scoring"), dict)
+
+
 def test_timing_gate_eval_suite_runs_offline():
     from evals.run import run_suite
 

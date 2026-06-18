@@ -189,7 +189,7 @@ git commit -m "feat(评测): 支持时机信号标注复跑"
 - 修改：`tests/test_timing_gate_prompt_policy.py`
 - 创建或修改：`docs/evals.md`
 
-- [ ] **步骤 1：编写 gate 成功路径红灯测试**
+- [x] **步骤 1：编写 gate 成功路径红灯测试**
 
 在 `tests/test_eval_baseline.py` 新增 `test_eval_run_cli_returns_success_when_gate_passes()`，使用临时 baseline 和 monkeypatch 后的 `REPORTS_DIR`，断言 `main([...]) == 0` 且输出 `Gate passed`。
 
@@ -201,7 +201,7 @@ python -m pytest tests/test_eval_baseline.py::test_eval_run_cli_returns_success_
 
 预期：如果当前已可通过，则记录为既有能力；否则按失败信息补最小实现。
 
-- [ ] **步骤 2：编写 gate 异常配置测试**
+- [x] **步骤 2：编写 gate 异常配置测试**
 
 新增两个纯函数测试：
 
@@ -216,7 +216,7 @@ python -m pytest tests/test_eval_baseline.py -k "baseline_required or suite_mism
 
 预期：第一条应已通过或接近通过；suite mismatch 若已覆盖则保留为回归守卫。
 
-- [ ] **步骤 3：编写正式 suite scoring case 守卫红灯测试**
+- [x] **步骤 3：编写正式 suite scoring case 守卫红灯测试**
 
 在 `tests/test_timing_gate_prompt_policy.py` 新增断言，要求正式 `timing_gate` suite 至少有 2 个 case 不含 `input.action`。
 
@@ -228,7 +228,7 @@ python -m pytest tests/test_timing_gate_prompt_policy.py::test_timing_gate_eval_
 
 预期：失败，因为当前正式 suite 全部带 `input.action`。
 
-- [ ] **步骤 4：新增无 action scoring case**
+- [x] **步骤 4：新增无 action scoring case**
 
 新增 2 到 3 个 `evals/cases/timing_gate/timing_gate_scoring_*.json`：
 
@@ -236,7 +236,7 @@ python -m pytest tests/test_timing_gate_prompt_policy.py::test_timing_gate_eval_
 - 指向他人：期望 `no_reply`，关键 `s_other` 或 `suppression_score` 非 0。
 - 连续输入碎片：期望 `wait`，关键 `readiness_score` 低于继续阈值。
 
-- [ ] **步骤 5：运行 suite 守卫绿灯**
+- [x] **步骤 5：运行 suite 守卫绿灯**
 
 运行：
 
@@ -246,7 +246,7 @@ python -m pytest tests/test_timing_gate_prompt_policy.py -v
 
 预期：全部通过。
 
-- [ ] **步骤 6：新增稳定 baseline**
+- [x] **步骤 6：新增稳定 baseline**
 
 运行当前 suite：
 
@@ -269,7 +269,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run --suite timing_gate
 
 实际 `total` 以新增 case 后的运行结果为准。
 
-- [ ] **步骤 7：新增统一脚本**
+- [x] **步骤 7：新增统一脚本**
 
 创建 `scripts/run_timing_gate_gate.sh`：
 
@@ -292,15 +292,15 @@ python -B -m evals.run \
   --max-new-failures 0
 ```
 
-- [ ] **步骤 8：新增 CI workflow**
+- [x] **步骤 8：新增 CI workflow**
 
 创建 `.github/workflows/timing-gate-eval.yml`，使用 Python 3.10，安装 `requirements.txt`，先跑 `python -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py -v`，再跑 `bash scripts/run_timing_gate_gate.sh`。
 
-- [ ] **步骤 9：补充 `--no-write-report` 或 `--report-dir`**
+- [x] **步骤 9：补充 `--no-write-report` 或 `--report-dir`**
 
 若本地验证发现 report 写入副作用影响 CI 或测试，给 `evals/run.py` 增加 `--no-write-report` 或 `--report-dir`。新增参数必须有测试覆盖，并让脚本 / workflow 使用无副作用模式。
 
-- [ ] **步骤 10：补充评测文档**
+- [x] **步骤 10：补充评测文档**
 
 新增或更新 `docs/evals.md`，包含：
 
@@ -310,7 +310,7 @@ python -B -m evals.run \
 - `min_pass_rate` 和 `max_new_failures` 含义。
 - gate 失败时如何判断是新失败、旧失败修复还是 baseline 过期。
 
-- [ ] **步骤 11：运行 P3-3B 定向验证**
+- [x] **步骤 11：运行 P3-3B 定向验证**
 
 运行：
 
@@ -321,7 +321,7 @@ bash scripts/run_timing_gate_gate.sh
 
 预期：全部通过，脚本 exit code 为 0。
 
-- [ ] **步骤 12：运行全量验证**
+- [x] **步骤 12：运行全量验证**
 
 运行：
 
@@ -331,7 +331,9 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 
 预期：0 failures。
 
-- [ ] **步骤 13：同步文档状态**
+- 实际结果：`1322 passed, 6 skipped, 139 warnings in 100.88s`。
+
+- [x] **步骤 13：同步文档状态**
 
 更新：
 
@@ -340,7 +342,7 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 - `docs/superpowers/specs/2026-06-16-timing-gate-scoring-design.md` 实施状态。
 - 本计划任务勾选状态。
 
-- [ ] **步骤 14：提交 P3-3B**
+- [x] **步骤 14：提交 P3-3B**
 
 只暂存本阶段文件：
 
