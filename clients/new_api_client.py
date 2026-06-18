@@ -44,6 +44,33 @@ MODEL_OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), "data", "model_ov
 _RETRYABLE_STATUS = {429, 502, 503, 504}
 
 
+def messages_have_image_url(messages: List[Dict[str, Any]]) -> bool:
+    for message in messages or []:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                return True
+    return False
+
+
+def required_capabilities_for_request(
+    messages: List[Dict[str, Any]],
+    *,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    stream: bool = False,
+) -> Dict[str, bool]:
+    required: Dict[str, bool] = {}
+    if messages_have_image_url(messages):
+        required["supports_image"] = True
+    if tools:
+        required["supports_tools"] = True
+    if stream:
+        required["supports_stream"] = True
+    return required
+
+
 class NewAPIClient:
     _last_model_sync_ts: float | None = None  # lazy-init from runtime_state
     _model_sync_lock = asyncio.Lock()
@@ -599,10 +626,17 @@ class NewAPIClient:
         await self.sync_models_to_registry(force=False)
 
         complexity = self.estimate_complexity(messages, tools)
+        required_capabilities = required_capabilities_for_request(
+            messages,
+            tools=tools,
+            stream=False,
+        )
         if manual_model:
             info = registry.get_model_info(manual_model)
             if info and info.get("enabled", True) is False:
                 return {"error": f"Model disabled: {manual_model}"}
+            if info and not model_supports_capabilities(info, required_capabilities):
+                return {"error": f"Model lacks required capabilities: {manual_model}"}
             candidates = [{
                 "id": manual_model,
                 "intelligence": 0,
@@ -613,6 +647,7 @@ class NewAPIClient:
             candidates = self.get_ordered_candidates(
                 provider=self.registry_provider,
                 intel_floor=intel_floor,
+                required_capabilities=required_capabilities,
             )
             if not candidates:
                 return {"error": "No candidates available"}
@@ -799,10 +834,18 @@ class NewAPIClient:
         await self.sync_models_to_registry(force=False)
 
         complexity = self.estimate_complexity(messages, tools)
+        required_capabilities = required_capabilities_for_request(
+            messages,
+            tools=tools,
+            stream=True,
+        )
         if manual_model:
             info = registry.get_model_info(manual_model)
             if info and info.get("enabled", True) is False:
                 yield {"error": f"Model disabled: {manual_model}"}
+                return
+            if info and not model_supports_capabilities(info, required_capabilities):
+                yield {"error": f"Model lacks required capabilities: {manual_model}"}
                 return
             target_model = manual_model
         else:
@@ -810,11 +853,13 @@ class NewAPIClient:
             candidates = self.get_ordered_candidates(
                 provider=self.registry_provider,
                 intel_floor=intel_floor,
+                required_capabilities=required_capabilities,
             )
             if candidates:
                 target_model = str(candidates[0].get("id", ""))
             else:
-                target_model = self._resolve_model(model_tier, manual_model)
+                yield {"error": "No candidates available"}
+                return
 
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
