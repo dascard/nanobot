@@ -61,6 +61,32 @@ router = APIRouter(prefix="/api/v1")
 EMPTY_ASSISTANT_PLACEHOLDER = "（无回复内容）"
 SAFE_STREAM_ERROR_MESSAGE = "系统暂时不可用，请稍后再试"
 
+
+def _normalize_chat_stream_event(event: Any) -> dict[str, Any] | None:
+    if not isinstance(event, dict):
+        return None
+
+    status = str(event.get("status") or "")
+    if status == "delta":
+        text = event.get("text", "")
+        if text is None:
+            text = ""
+        text = str(text)
+        if not text:
+            return None
+        normalized = dict(event)
+        normalized["status"] = "delta"
+        normalized["text"] = text
+        return normalized
+
+    if status:
+        normalized = dict(event)
+        normalized["status"] = status
+        return normalized
+
+    return None
+
+
 # 私聊缓冲：基础 5 秒窗口；只要有文件附件就延长到 10 秒
 _private_buffers: dict[str, dict] = {}
 _private_lock = asyncio.Lock()
@@ -2654,6 +2680,52 @@ async def proxy_chat(
 
         runner_task = asyncio.create_task(runner())
         heartbeat_interval = 5
+        pending_delta_parts: list[str] = []
+
+        def _encode_sse(event: dict[str, Any]) -> str:
+            return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+        def _pop_pending_delta_event() -> dict[str, str] | None:
+            if not pending_delta_parts:
+                return None
+            text = "".join(pending_delta_parts)
+            pending_delta_parts.clear()
+            return {"status": "delta", "text": text}
+
+        async def _yield_queue_event(raw_event: Any):
+            event = _normalize_chat_stream_event(raw_event)
+            if event is None:
+                return
+
+            if event.get("status") == "delta":
+                pending_delta_parts.append(str(event.get("text") or ""))
+                while True:
+                    try:
+                        next_raw = stream_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
+                    next_event = _normalize_chat_stream_event(next_raw)
+                    if next_event is None:
+                        continue
+                    if next_event.get("status") == "delta":
+                        pending_delta_parts.append(str(next_event.get("text") or ""))
+                        continue
+
+                    pending_delta = _pop_pending_delta_event()
+                    if pending_delta is not None:
+                        yield _encode_sse(pending_delta)
+                    yield _encode_sse(next_event)
+
+                pending_delta = _pop_pending_delta_event()
+                if pending_delta is not None:
+                    yield _encode_sse(pending_delta)
+                return
+
+            pending_delta = _pop_pending_delta_event()
+            if pending_delta is not None:
+                yield _encode_sse(pending_delta)
+            yield _encode_sse(event)
 
         async def _persist_stream_result_after_runner_done(
             *,
@@ -2767,8 +2839,8 @@ async def proxy_chat(
                         continue
 
                     if get_task in completed:
-                        event = get_task.result()
-                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        async for chunk in _yield_queue_event(get_task.result()):
+                            yield chunk
                         continue
 
                     # runner 已完成但没有新事件时，不再等 heartbeat 超时。
@@ -2786,7 +2858,11 @@ async def proxy_chat(
                     event = stream_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                async for chunk in _yield_queue_event(event):
+                    yield chunk
+            pending_delta = _pop_pending_delta_event()
+            if pending_delta is not None:
+                yield _encode_sse(pending_delta)
 
             if "error" in result_holder:
                 err_msg = str(result_holder.get("error") or "unknown")
