@@ -123,6 +123,8 @@ Rendering contract gate：
 python -B -m evals.run --suite capability_rendering_contract --baseline evals/baselines/capability_rendering_contract.json --min-pass-rate 1.0 --max-new-failures 0
 ```
 
+2026-06-18 收口验证：`capability_reply_contract` gate 输出 `total=3 passed=3 failed=0` 和 `Gate passed`；`capability_rendering_contract` gate 输出 `total=5 passed=5 failed=0` 和 `Gate passed`；评测定向回归为 `34 passed, 21 warnings`，渲染相邻回归为 `17 passed, 1 warning`，全量回归为 `1353 passed, 6 skipped, 139 warnings`。
+
 ## RAG Benchmark 边界
 
 `evals/rag_benchmark/` 保持独立 benchmark 入口，不并入通用 `EvalCase`。原因是 RAG benchmark 需要独立的召回样本、索引上下文和评分口径；通用 candidates 闭环只负责把可评分的用户交互样本沉淀为稳定 case。

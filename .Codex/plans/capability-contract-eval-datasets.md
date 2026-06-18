@@ -662,11 +662,12 @@ git commit -m "feat(评测): 扩展渲染契约数据集"
 ## 任务 3：P4-3C 收口验证
 
 **文件：**
+- 修改：`.Codex/plans/capability-contract-eval-datasets.md`
 - 修改：`docs/evals.md`
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行 P4-3 定向测试集合**
+- [x] **步骤 1：运行 P4-3 定向测试集合**
 
 运行：
 
@@ -677,9 +678,9 @@ tests/test_eval_candidate_contract.py tests/test_eval_baseline.py \
 -v -p no:cacheprovider
 ```
 
-预期：PASS，且包含 P4-3 新增测试。
+结果：PASS，`34 passed, 21 warnings in 3.10s`，覆盖 P4-3 新增测试。
 
-- [ ] **步骤 2：运行两个能力数据集 gate**
+- [x] **步骤 2：运行两个能力数据集 gate**
 
 运行：
 
@@ -692,7 +693,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run \
 --max-new-failures 0
 ```
 
-预期：退出码 0，输出包含 `Gate passed`。
+结果：退出码 0，输出 `Suite: capability_reply_contract total=3 passed=3 failed=0 pass_rate=100.0%` 和 `Gate passed`。
 
 再运行：
 
@@ -705,9 +706,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run \
 --max-new-failures 0
 ```
 
-预期：退出码 0，输出包含 `Gate passed`。
+结果：退出码 0，输出 `Suite: capability_rendering_contract total=5 passed=5 failed=0 pass_rate=100.0%` 和 `Gate passed`。
 
-- [ ] **步骤 3：运行渲染相邻回归**
+- [x] **步骤 3：运行渲染相邻回归**
 
 运行：
 
@@ -718,9 +719,9 @@ tests/test_qq_outbound_renderer.py tests/test_push_envelope.py \
 -v -p no:cacheprovider
 ```
 
-预期：PASS。
+结果：PASS，`17 passed, 1 warning in 0.72s`。
 
-- [ ] **步骤 4：运行全量回归**
+- [x] **步骤 4：运行全量回归**
 
 运行：
 
@@ -729,9 +730,9 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider
 ```
 
-预期：0 failures。若出现失败，先确认是否由 P4-3 变更引入；与 P4-3 无关的既有脏项不得回滚。
+结果：0 failures，`1353 passed, 6 skipped, 139 warnings in 99.23s`。
 
-- [ ] **步骤 5：同步最终文档状态**
+- [x] **步骤 5：同步最终文档状态**
 
 在 `docs/plan_walkthrough.md` 更新 P4-3：
 
@@ -747,7 +748,7 @@ P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数
 
 在 `docs/evals.md` 保留两个能力数据集 gate 命令和 dataset / suite 说明。
 
-- [ ] **步骤 6：文档和 diff 自检**
+- [x] **步骤 6：文档和 diff 自检**
 
 运行：
 
@@ -789,12 +790,12 @@ docs/plan_walkthrough.md
 
 预期：无输出。
 
-- [ ] **步骤 7：提交 P4-3C 收口**
+- [x] **步骤 7：提交 P4-3C 收口**
 
 运行：
 
 ```bash
-git add docs/evals.md docs/todo.md docs/plan_walkthrough.md
+git add .Codex/plans/capability-contract-eval-datasets.md docs/evals.md docs/todo.md docs/plan_walkthrough.md
 git commit -m "docs(评测): 收口能力数据集状态"
 ```
 
