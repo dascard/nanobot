@@ -56,11 +56,30 @@ function jsonText(value) {
   return JSON.stringify(value || {}, null, 2)
 }
 
+function optionalNumber(value) {
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
 function formatMetaValue(value) {
   if (value === null || value === undefined || value === '') return ''
   if (Array.isArray(value)) return value.join(', ')
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(3)
   return String(value)
+}
+
+function formatCaseId(value) {
+  if (value === null || value === undefined || value === '') return ''
+  if (typeof value === 'string' || typeof value === 'number') return String(value)
+  if (value.case_id) return String(value.case_id)
+  if (value.id) return String(value.id)
+  return JSON.stringify(value)
+}
+
+function caseIdItems(value) {
+  return Array.isArray(value) ? value.map(formatCaseId).filter(Boolean) : []
 }
 
 function metadataItems(metadata = {}) {
@@ -106,6 +125,27 @@ function MetricStat({ label, value, tone = 'slate' }) {
       </div>
       <div className={`truncate text-lg font-semibold leading-tight ${color}`} title={title}>{value ?? '...'}</div>
     </Card>
+  )
+}
+
+function BaselineDiffList({ label, items }) {
+  const values = caseIdItems(items)
+  return (
+    <details open={values.length > 0 && values.length <= 6} className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+      <summary className="flex cursor-pointer items-center justify-between gap-2 text-xs text-slate-300">
+        <span className="font-mono">{label}</span>
+        <span className="rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-[11px] text-slate-400">{values.length}</span>
+      </summary>
+      {values.length === 0 ? (
+        <div className="mt-2 text-[11px] text-slate-600">无</div>
+      ) : (
+        <ul className="mt-2 max-h-40 space-y-1 overflow-auto text-[11px] text-slate-400">
+          {values.map(item => (
+            <li key={item} className="break-all font-mono">{item}</li>
+          ))}
+        </ul>
+      )}
+    </details>
   )
 }
 
@@ -309,6 +349,11 @@ export function RagBenchmarkPage() {
     timeout_seconds: 60,
     per_case_timeout_seconds: 15,
     include_candidates_limit: 10,
+    baseline_path: '',
+    min_pass_rate: '',
+    max_new_failures: '',
+    max_degraded_rate: '',
+    max_unexpected_source_rate: '',
   })
   const [runResult, setRunResult] = useState(null)
   const [latest, setLatest] = useState(null)
@@ -377,6 +422,11 @@ export function RagBenchmarkPage() {
       timeout_seconds: Number(runOptions.timeout_seconds) || 60,
       per_case_timeout_seconds: Number(runOptions.per_case_timeout_seconds) || 15,
       include_candidates_limit: Number(runOptions.include_candidates_limit) || 10,
+      baseline_path: runOptions.baseline_path || '',
+      min_pass_rate: optionalNumber(runOptions.min_pass_rate),
+      max_new_failures: optionalNumber(runOptions.max_new_failures),
+      max_degraded_rate: optionalNumber(runOptions.max_degraded_rate),
+      max_unexpected_source_rate: optionalNumber(runOptions.max_unexpected_source_rate),
     })
       .then(r => {
         setRunResult(r.data)
@@ -391,6 +441,11 @@ export function RagBenchmarkPage() {
   const overall = metrics.overall || {}
   const failedScores = runResult?.failed_scores || latest?.failed_scores || []
   const caseResults = runResult?.case_results || latest?.case_results || []
+  const gate = runResult?.gate || latest?.gate || null
+  const baselineDiff = runResult?.baseline_diff || latest?.baseline_diff || null
+  const newFailedCases = baselineDiff?.new_failed_cases || []
+  const fixedCases = baselineDiff?.fixed_cases || []
+  const stillFailedCases = baselineDiff?.still_failed_cases || []
   const staleCount = runResult?.stale_generated_cases?.length || 0
   const runWarnings = runResult?.warnings || []
   const preflight = status?.preflight || runResult?.preflight || {}
@@ -439,6 +494,34 @@ export function RagBenchmarkPage() {
         指标说明：pass rate 统计所有执行 case 的评分是否通过；hit@K 和 MRR 只统计 positive case 的 expected candidate 排名，
         所以 constraint_only/negative 全通过时，pass rate 可能是 100%，但 hit@K 仍为 0。
       </div>
+
+      <Card className="p-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h2 className="text-sm font-medium text-slate-200">Gate</h2>
+            <div className="mt-1 text-[11px] text-slate-500">baseline_diff 回归对比和 gate.passed 门禁状态</div>
+          </div>
+          {gate ? (
+            <Badge tone={gate.passed ? 'emerald' : 'red'}>{gate.passed ? 'Gate passed' : 'Gate failed'}</Badge>
+          ) : (
+            <Badge>Gate not requested</Badge>
+          )}
+        </div>
+        {gate?.errors?.length > 0 && (
+          <div className="mt-3 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+            {gate.errors.join(' / ')}
+          </div>
+        )}
+        <div className="mt-3 grid gap-2 text-xs text-slate-400 md:grid-cols-4">
+          <div className="rounded border border-slate-800 bg-slate-950 px-3 py-2">
+            <span className="mr-2 text-slate-500">baseline_path</span>
+            <span className="font-mono">{baselineDiff?.baseline_path || '-'}</span>
+          </div>
+          <BaselineDiffList label="new_failed_cases" items={newFailedCases} />
+          <BaselineDiffList label="fixed_cases" items={fixedCases} />
+          <BaselineDiffList label="still_failed_cases" items={stillFailedCases} />
+        </div>
+      </Card>
 
       <Card className="p-3">
         <div className="grid gap-3 lg:grid-cols-[repeat(7,minmax(0,1fr))_auto] lg:items-end">
@@ -526,6 +609,38 @@ export function RagBenchmarkPage() {
               ))}
             </div>
           </div>
+        </div>
+        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <Field id="rag-benchmark-baseline-path" label="baseline_path">
+            <input id="rag-benchmark-baseline-path" value={runOptions.baseline_path}
+              onChange={e => setRunOptions({ ...runOptions, baseline_path: e.target.value })}
+              placeholder="可留空使用默认 baseline"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
+          </Field>
+          <Field id="rag-benchmark-min-pass-rate" label="min_pass_rate">
+            <input id="rag-benchmark-min-pass-rate" type="number" min="0" max="1" step="0.01" value={runOptions.min_pass_rate}
+              onChange={e => setRunOptions({ ...runOptions, min_pass_rate: e.target.value })}
+              placeholder="可选"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
+          </Field>
+          <Field id="rag-benchmark-max-new-failures" label="max_new_failures">
+            <input id="rag-benchmark-max-new-failures" type="number" min="0" step="1" value={runOptions.max_new_failures}
+              onChange={e => setRunOptions({ ...runOptions, max_new_failures: e.target.value })}
+              placeholder="可选"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
+          </Field>
+          <Field id="rag-benchmark-max-degraded-rate" label="max_degraded_rate">
+            <input id="rag-benchmark-max-degraded-rate" type="number" min="0" max="1" step="0.01" value={runOptions.max_degraded_rate}
+              onChange={e => setRunOptions({ ...runOptions, max_degraded_rate: e.target.value })}
+              placeholder="可选"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
+          </Field>
+          <Field id="rag-benchmark-max-unexpected-source-rate" label="max_unexpected_source_rate">
+            <input id="rag-benchmark-max-unexpected-source-rate" type="number" min="0" max="1" step="0.01" value={runOptions.max_unexpected_source_rate}
+              onChange={e => setRunOptions({ ...runOptions, max_unexpected_source_rate: e.target.value })}
+              placeholder="可选"
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
+          </Field>
         </div>
         {runOptions.provider_mode === 'runtime' && (
           <div className="mt-2 text-[11px] text-amber-300">runtime 会触发真实 provider，可能加载模型；timeout 是软超时，单个调用不保证强杀。</div>

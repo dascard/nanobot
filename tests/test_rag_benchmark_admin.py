@@ -176,6 +176,55 @@ def test_benchmark_run_returns_readable_case_results(client, tmp_path, monkeypat
     assert data["case_results"][0]["candidates"][0]["text_preview"] == "RAG benchmark readonly case"
 
 
+def test_benchmark_run_returns_gate_when_baseline_requested(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_path = tmp_path / "benchmark.db"
+    _engine, db = _file_db(db_path)
+    _seed_memory_case(db)
+    db.close()
+    routes, manual, _generated, reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+    baseline = tmp_path / "baseline.json"
+    monkeypatch.setattr(routes, "BENCHMARK_BASELINE_PATH", baseline)
+    (manual / "memory_case.json").write_text(json.dumps({
+        "id": "memory_case",
+        "suite": "rag_benchmark",
+        "source_type": "memory",
+        "case_type": "positive",
+        "query": "RAG benchmark readonly",
+        "expected": {"candidate_ids": ["memory_digest:42:digest:level2"], "hit_at": 5},
+        "meta": {"origin": "manual"},
+    }, ensure_ascii=False), encoding="utf-8")
+    baseline.write_text(json.dumps({
+        "suite": "rag_benchmark",
+        "provider_mode": "deterministic",
+        "case_scope": "manual",
+        "metrics": {"overall": {"total_cases": 1, "passed_cases": 1, "pass_rate": 1.0}},
+        "case_scores": [{"case_id": "memory_case", "ok": True, "errors": []}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    response = client.post(
+        "/api/v1/admin/rag/benchmark/run",
+        headers=_auth_header(),
+        json={
+            "provider_mode": "deterministic",
+            "include_generated": False,
+            "baseline_path": str(baseline),
+            "min_pass_rate": 1.0,
+            "max_new_failures": 0,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["gate"]["passed"] is True
+    assert data["baseline_diff"]["new_failed_cases"] == []
+    assert json.loads((reports / "latest.json").read_text(encoding="utf-8"))["gate"]["passed"] is True
+    latest = client.get("/api/v1/admin/rag/benchmark/reports/latest", headers=_auth_header())
+    assert latest.status_code == 200
+    assert latest.json()["gate"]["passed"] is True
+    assert latest.json()["baseline_diff"]["new_failed_cases"] == []
+
+
 def test_group_memory_case_results_include_time_and_metadata(client, tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     db_path = tmp_path / "benchmark.db"

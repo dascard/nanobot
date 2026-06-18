@@ -19,8 +19,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from api.admin.common import audit_request, verify_admin
 from core.database import get_db, sqlite_path_from_database_url
 from evals.rag_benchmark.adapters import run_case_with_adapter
+from evals.rag_benchmark.baseline import (
+    build_rag_baseline_diff,
+    evaluate_rag_gate,
+    load_rag_baseline,
+)
 from evals.rag_benchmark.cases import load_cases
-from evals.rag_benchmark.report import write_reports
+from evals.rag_benchmark.report import build_rag_report_payload, write_reports
 from evals.rag_benchmark.sample import sample_cases, write_generated_cases
 from evals.rag_benchmark.schema import BenchmarkCase, BenchmarkResult, CaseScore
 from evals.rag_benchmark.scoring import aggregate_scores, score_case
@@ -31,6 +36,7 @@ router = APIRouter(prefix="/benchmark", tags=["admin-rag-benchmark"])
 BENCHMARK_MANUAL_DIR = Path("evals/cases/rag_benchmark/manual")
 BENCHMARK_GENERATED_DIR = Path("tmp/rag_benchmark/generated")
 BENCHMARK_REPORT_DIR = Path("tmp/rag_benchmark/reports")
+BENCHMARK_BASELINE_PATH = Path("evals/baselines/rag_benchmark.json")
 BENCHMARK_CASE_BACKUP_DIR = Path("tmp/rag_benchmark/case_backups")
 BENCHMARK_CASE_TRASH_DIR = Path("tmp/rag_benchmark/case_trash")
 BENCHMARK_RUN_LOCK = Path("tmp/rag_benchmark/run.lock")
@@ -64,6 +70,13 @@ class BenchmarkRunRequest(BaseModel):
     timeout_seconds: int = 60
     per_case_timeout_seconds: int = 15
     include_candidates_limit: int = 10
+    baseline_path: str = ""
+    min_pass_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    min_hit_at_5: float | None = Field(default=None, ge=0.0, le=1.0)
+    min_mrr: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_new_failures: int | None = Field(default=None, ge=0)
+    max_degraded_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_unexpected_source_rate: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class BenchmarkSampleRequest(BaseModel):
@@ -363,6 +376,30 @@ def _summary_scores(scores: list[CaseScore]) -> dict[str, Any]:
     }
 
 
+def _case_scope(*, include_manual: bool, include_generated: bool) -> str:
+    if include_manual and include_generated:
+        return "manual+generated"
+    if include_manual:
+        return "manual"
+    if include_generated:
+        return "generated"
+    return "none"
+
+
+def _gate_requested(body: BenchmarkRunRequest) -> bool:
+    return bool(body.baseline_path) or any(
+        value is not None
+        for value in (
+            body.min_pass_rate,
+            body.min_hit_at_5,
+            body.min_mrr,
+            body.max_new_failures,
+            body.max_degraded_rate,
+            body.max_unexpected_source_rate,
+        )
+    )
+
+
 def _trim_result(result: BenchmarkResult, limit: int) -> dict[str, Any]:
     data = result.model_dump()
     data["candidates"] = [
@@ -658,6 +695,43 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                 _case_result_payload(case, result, score, candidate_limit=candidate_limit)
                 for case, result, score in zip(selected[:len(scores)], results, scores)
             ]
+            case_scope = _case_scope(
+                include_manual=body.include_manual,
+                include_generated=body.include_generated,
+            )
+            report_payload = build_rag_report_payload(
+                selected[:len(scores)],
+                results,
+                scores,
+                provider_mode=provider_mode,
+                case_scope=case_scope,
+            )
+            baseline_diff = None
+            gate = None
+            if _gate_requested(body):
+                baseline_missing_error = ""
+                baseline_path = Path(body.baseline_path) if body.baseline_path else BENCHMARK_BASELINE_PATH
+                if baseline_path.exists():
+                    baseline_diff = build_rag_baseline_diff(
+                        report_payload,
+                        load_rag_baseline(baseline_path),
+                        baseline_path=_safe_rel_path(baseline_path),
+                    )
+                elif body.baseline_path or body.max_new_failures is not None:
+                    baseline_missing_error = f"baseline not found: {_safe_rel_path(baseline_path)}"
+                gate = evaluate_rag_gate(
+                    report_payload,
+                    baseline_diff=baseline_diff,
+                    min_pass_rate=body.min_pass_rate,
+                    min_hit_at_5=body.min_hit_at_5,
+                    min_mrr=body.min_mrr,
+                    max_new_failures=body.max_new_failures,
+                    max_degraded_rate=body.max_degraded_rate,
+                    max_unexpected_source_rate=body.max_unexpected_source_rate,
+                )
+                if baseline_missing_error:
+                    gate["errors"].append(baseline_missing_error)
+                    gate["passed"] = False
             finished_at = datetime.now()
             executed = len(scores) > 0
             report_id = ""
@@ -668,6 +742,10 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                     results,
                     scores,
                     report_out=BENCHMARK_REPORT_DIR,
+                    provider_mode=provider_mode,
+                    case_scope=case_scope,
+                    baseline_diff=baseline_diff,
+                    gate=gate,
                 )
                 report_id = str(report_paths["report_id"])
                 report_paths_payload = {
@@ -681,8 +759,15 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                 warnings.append("timeout_reached")
             return {
                 "run_id": report_id,
-                "ok": executed and all(score.ok for score in scores) and not timeout_reached,
+                "ok": (
+                    executed
+                    and all(score.ok for score in scores)
+                    and not timeout_reached
+                    and (gate is None or bool(gate.get("passed")))
+                ),
                 "metrics": metrics,
+                "baseline_diff": baseline_diff,
+                "gate": gate,
                 "score_summary": _summary_scores(scores) | {"timeout_reached": timeout_reached},
                 "warnings": warnings,
                 "failed_scores": failed,
@@ -714,6 +799,8 @@ def latest_benchmark_report(_auth=Depends(verify_admin)):
     return {
         "exists": True,
         "metrics": payload.get("metrics") or {},
+        "baseline_diff": payload.get("baseline_diff"),
+        "gate": payload.get("gate"),
         "failed_scores": [score for score in scores if not score.get("ok")][:50],
         "case_results": [
             _case_result_payload(case, result, score, candidate_limit=10)

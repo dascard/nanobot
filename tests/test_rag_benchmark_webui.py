@@ -51,6 +51,21 @@ def test_rag_benchmark_page_exposes_provider_modes_and_case_controls():
     assert "hit@1 表示 expected candidate 排在第 1 位的 positive case 比例" in source
 
 
+def test_rag_benchmark_page_exposes_gate_and_baseline_diff():
+    source = PAGE.read_text(encoding="utf-8")
+
+    assert "baseline_path" in source
+    assert "min_pass_rate" in source
+    assert "max_new_failures" in source
+    assert "baseline_diff" in source
+    assert "gate" in source
+    assert "Gate passed" in source
+    assert "Gate failed" in source
+    assert "new_failed_cases" in source
+    assert "fixed_cases" in source
+    assert "still_failed_cases" in source
+
+
 def test_rag_benchmark_markdown_report_is_plain_text():
     source = PAGE.read_text(encoding="utf-8")
 
