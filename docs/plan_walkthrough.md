@@ -10,7 +10,7 @@ P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并�
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」和 P4-1「评测数据集与标注闭环」均已完成验证。下一执行重点回到 P4 评测体系扩展：更多 per-capability 数据集、Admin 标注工作台、RAG 标注闭环和更多 suite PR gate。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」和 P4-1「评测数据集与标注闭环」均已完成验证。当前执行重点进入 P4-2「Admin 标注工作台契约化与 promote 预检 UI」：先补后端 expected schema / API，再改 WebUI 标注和 promote 两阶段工作流。
 
 ## 文档口径
 
@@ -80,8 +80,59 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-3A | 已完成 | TimingGate 标注审计复跑 | `timing_signal_audit` 已支持离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
 | P3-3B | 已完成 | TimingGate CI / PR gate | 已新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 已完成 | 评测体系扩展 | expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界、首个 `capability_model_routing` 能力数据集、文档收口和最终验证均已完成 | `e4fb70a` / `8b892a8` / `4f4cce7` / `b84cbf1` / `7a84084` / `71c3a53` / `a494f3b` / `5a8b601` |
+| P4-2 | 计划已完成 | Admin 标注工作台契约化与 promote 预检 UI | 设计文档和实现计划已写入，阶段拆为 P4-2A 后端契约 schema/API 与 P4-2B WebUI 工作台 | `docs(评测): 设计标注工作台契约` |
 
-## 当前详细计划：P3-2 私聊 TimingGate 可观测补齐
+## 当前详细计划：P4-2 Admin 标注工作台契约化与 promote 预检 UI
+
+状态：计划阶段已完成，待进入 P4-2A 后端契约实现。设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`；实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。本阶段不重复 P4-1 的 store / CLI / runner，不新增 RAG benchmark，也不扩更多 suite gate。
+
+目标：
+
+- 后端暴露 canonical expected contract，包含 `scoreable_keys`、`field_schema`、`suite_presets` 和 `deprecated_keys`。
+- `validate_expected_contract()` 从 key 白名单升级到类型 / 枚举校验，拒绝 `"false"`、`123`、非法 `timing_action` 和旧 UI 字段。
+- Admin label API 保留 `expected_json` 兼容，但拒绝 `expected` 与 `expected_json` 内容冲突。
+- Promote apply 响应与 dry-run 对齐，返回 `dry_run=false`、`case_id`、`suite`、`target_dataset` 和真实 `path`。
+- WebUI 标注表单从 `/evals/expected-contract` 读取契约，只提交 scorer 会读取的 expected 字段；人工解释写入 `note`。
+- WebUI promote 改为 modal，两阶段执行 dry-run → apply，用户必须确认 `target_dataset` 和 `path` 后才写正式 case。
+
+已完成计划项：
+
+- [x] 三路只读审计：前端表单、后端契约 / API、测试 / 文档边界均已完成。
+- [x] 设计文档：`docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`。
+- [x] 实现计划：`.Codex/plans/admin-eval-workbench-contract.md`。
+- [x] 子 agent 分工：后端契约 agent、WebUI 工作台 agent、验证 agent。
+
+实现阶段拆分：
+
+- [ ] P4-2A-1：新增 expected contract endpoint，返回 `scoreable_keys`、`field_schema`、`suite_presets` 和 `deprecated_keys`。
+- [ ] P4-2A-2：收紧 expected 类型 / 枚举校验，并拒绝 `expected` / `expected_json` 冲突。
+- [ ] P4-2A-3：对齐 promote apply 响应字段，保持 dry-run / apply 契约一致。
+- [ ] P4-2B-1：WebUI label modal 加载 expected contract，移除旧 expected 字段，`note` 与 `expected` 分离。
+- [ ] P4-2B-2：WebUI promote modal 支持 `target_dataset`、dry-run 预检、预检结果展示和 apply 二次确认。
+- [ ] P4-2B-3：运行 WebUI 静态测试、候选闭环回归和 `npm --prefix webui run build`。
+- [ ] P4-2 收口：同步 `docs/evals.md`、`docs/todo.md`、本文件和最终验证记录。
+
+子 agent 分配：
+
+- 后端契约 agent：负责 `evals/expected_contract.py`、`api/admin_routes.py`、`tests/test_eval_candidate_contract.py`，提交 P4-2A。
+- WebUI 工作台 agent：负责 `webui/src/features/evals/EvalsPage.jsx`、`tests/test_webui_admin_redesign.py`，依赖 P4-2A 的 endpoint 契约，提交 P4-2B。
+- 验证 agent：只读审查最终 diff，确认未误改 P4-1 store / CLI / runner，并核对验证输出；主线程决定是否采纳结论。
+
+验证计划：
+
+- 计划阶段：文档占位词扫描、U+FFFD 扫描、`git diff --check`。
+- P4-2A：`tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py`。
+- P4-2B：`tests/test_webui_admin_redesign.py` 和 `npm --prefix webui run build`。
+- 最终回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`。
+
+提交边界：
+
+- 计划阶段：`docs(评测): 设计标注工作台契约`。
+- P4-2A 后端契约：按 endpoint、类型校验、promote 响应拆成 2 到 3 个提交。
+- P4-2B WebUI 工作台：按 label modal 和 promote modal 拆成 2 个提交。
+- 文档收口：`docs(评测): 收口标注工作台状态`。
+
+## 已完成阶段详情：P3-2 私聊 TimingGate 可观测补齐
 
 状态：P3-2 已完成 TDD 红灯、代码实现、定向回归和文档收口。实现计划为 `.Codex/plans/private-timing-scoring-meta.md`，提交建议为 `feat(时机): 持久化私聊评分元信息`。
 

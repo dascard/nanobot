@@ -79,6 +79,17 @@ python -m evals.candidates promote --suite timing_gate --target-dataset timing_g
 
 Admin 接口兼容旧字段 `expected_json`，但新调用应统一发送 `expected`。WebUI 标注入口也按 `{ expected: expectedJson }` 提交，避免把人工标签静默写成空对象。
 
+## Admin WebUI 工作台改造目标
+
+P4-2 已将 Admin 标注工作台拆为后端契约和 WebUI 两个阶段，设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`，实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。
+
+实现阶段必须遵守以下边界：
+
+- WebUI 从 `/api/v1/admin/evals/expected-contract` 读取 expected 契约，不再手写 `expected_action`、`should_learn`、`quality`、`reason`、`delay_seconds` 等不可评分字段。
+- 标注请求只提交 scorer 会读取的 `expected` 字段；人工解释写入 `note`，不写入 `expected.reason`。
+- Promote 操作必须先发送 `{ "dry_run": true, "target_dataset": "..." }`，展示后端返回的 `target_dataset`、`path` 和 case 摘要后，再发送 apply 请求。
+- Apply 成功后展示后端返回的真实 `path`，不能写死 `regression`。
+
 ## Dataset 与 Suite
 
 `dataset` 是 `evals/cases/<dataset>` 目录名，用于组织数据集和门禁维度。`suite` 是每个 case 内部的执行类型，决定使用哪个 runner / scorer。
@@ -104,4 +115,4 @@ python -B -m evals.run --suite capability_model_routing --baseline evals/baselin
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；更完整的 Admin 标注工作台、RAG 标注闭环和更多 suite 的 PR gate 留在 P4 后续阶段推进。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已进入 Admin 标注工作台契约化与 promote 预检 UI 阶段；RAG 标注闭环和更多 suite 的 PR gate 留在 P4 后续阶段推进。
