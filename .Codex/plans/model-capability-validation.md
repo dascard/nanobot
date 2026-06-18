@@ -52,10 +52,21 @@
 
 - 设计文档：`docs/superpowers/specs/2026-06-18-model-capability-validation-design.md`，提交 `ded7213 docs(模型能力): 设计请求能力校验`。
 - P1-7 已完成，路线项 2 全量验证记录为 `1222 passed, 6 skipped, 113 warnings`。
-- `NewAPIClient.get_ordered_candidates()` 当前没有 `required_capabilities`。
+- `NewAPIClient.get_ordered_candidates()` 已支持 `required_capabilities` 硬过滤。
 - `ModelRegistry.select_model(required_tags=...)` 是软过滤，不承载本阶段硬能力约束。
-- Bridge 带图请求已能在模型路由前知道 `files` / `image_parts`，但没有把 `has_image` 传给候选过滤。
-- KT provider 对真实模型请求固定 streaming，因此 Bridge 主回复至少要排除显式 `supports_stream=False` 的候选。
+- Bridge 带图请求已能在模型路由前知道 `files` / `image_parts`，并已把 `supports_image`、ToolPlan schema 推导出的 `supports_tools`、KT 固定 streaming 对应的 `supports_stream` 传给候选过滤。
+- KT provider 对真实模型请求固定 streaming，因此 Bridge 主回复会排除显式 `supports_stream=False` 的候选。
+
+## 当前进度（2026-06-18 校准）
+
+- [x] 设计文档已提交：`ded7213 docs(模型能力): 设计请求能力校验`。
+- [x] 实现计划已提交：`d4748d2 docs(计划): 记录模型能力校验计划`。
+- [x] 任务 1-3 已完成：registry 能力归一化、override `null` fallback、`get_ordered_candidates(required_capabilities=...)` 硬过滤。提交：`388c00f feat(模型能力): 归一化能力并过滤候选`。
+- [x] 任务 4 已完成：直接 New API 请求能力推导和手动模型能力错误返回。提交：`d907a98 feat(模型能力): 推导直接请求能力需求`。
+- [x] 任务 5 已完成：Bridge 主回复路由能力需求传递和手动回复模型能力回退。提交：`66fdfd9 feat(桥接): 接入回复模型能力校验`。
+- [ ] 任务 6 待执行：无视觉候选降级和 payload / SDK request 前 guard。
+- [ ] 任务 7 待执行：扩展 `model_routing` eval。
+- [ ] 任务 8 待执行：P1-8 整体完成后的文档收口和最终验证。
 
 ## 任务 1：模型能力归一化红灯测试
 
@@ -595,7 +606,7 @@ git commit -m "feat(模型能力): 推导直接请求能力需求"
 - 测试：`tests/test_kt_framework.py`
 - 测试：`tests/test_streaming_bridge.py`
 
-- [ ] **步骤 1：编写带图候选能力红灯测试**
+- [x] **步骤 1：编写带图候选能力红灯测试**
 
 在 `tests/test_kt_framework.py` 的多模态测试附近新增：
 
@@ -622,15 +633,15 @@ async def test_handle_message_with_files_requests_vision_candidates(monkeypatch)
     assert captured["required_capabilities"]["supports_image"] is True
 ```
 
-- [ ] **步骤 2：编写 stream 显式 false 排除测试**
+- [x] **步骤 2：编写 stream 能力需求传递红灯测试**
 
-在 `tests/test_streaming_bridge.py` 中新增测试，registry candidates 包含 `supports_stream=False` 和 `supports_stream=True`，断言最终进入 FakeLLM 的模型不是显式 false 的那个。
+在 `tests/test_streaming_bridge.py` 中更新流式 Bridge 测试，捕获自动候选路由参数，断言真实 KT streaming 请求会传入 `required_capabilities["supports_stream"] is True`。
 
 ```python
-assert selected_model == "stream-capable-model"
+assert captured_route_kwargs["required_capabilities"]["supports_stream"] is True
 ```
 
-- [ ] **步骤 3：运行红灯**
+- [x] **步骤 3：运行红灯**
 
 运行：
 
@@ -641,7 +652,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_streaming_bridge.py -k 
 
 预期：FAIL。当前 Bridge 不传 `required_capabilities`。
 
-- [ ] **步骤 4：实现 Bridge 能力需求构造**
+- [x] **步骤 4：实现 Bridge 能力需求构造**
 
 在 `nanobot_kt/bridge.py` 图片 event content 构造后、调用 `get_ordered_candidates()` 前计算：
 
@@ -658,7 +669,7 @@ required_capabilities = {k: v for k, v in required_capabilities.items() if v}
 
 若 `prompt_build` 实际字段名不是 `tool_schemas`，以当前 `PromptRuntimeInput` 中传给 Prompt Runtime 的 schema 字段为准。
 
-- [ ] **步骤 5：自动路由传能力需求**
+- [x] **步骤 5：自动路由传能力需求**
 
 在 Bridge 调用中加入：
 
@@ -671,7 +682,7 @@ candidates = route_client.get_ordered_candidates(
 )
 ```
 
-- [ ] **步骤 6：手动回复模型也校验能力**
+- [x] **步骤 6：手动回复模型也校验能力**
 
 在 `manual_reply_model` disabled 检查后加入：
 
@@ -687,7 +698,7 @@ if manual_reply_model and info and not model_supports_capabilities(info, require
 
 如果 `info is None` 且 `has_image` 为 true，也回退自动路由并记录 warning。
 
-- [ ] **步骤 7：运行绿灯和 Bridge 回归**
+- [x] **步骤 7：运行绿灯和 Bridge 回归**
 
 运行：
 
@@ -695,14 +706,21 @@ if manual_reply_model and info and not model_supports_capabilities(info, require
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_kt_framework.py tests/test_streaming_bridge.py -q -p no:cacheprovider
 ```
 
-预期：PASS。
+结果：
 
-- [ ] **步骤 8：提交任务 5**
+- 新增任务 5 定向：`3 passed, 1 warning in 2.89s`。
+- Bridge 回归：`58 passed, 1 warning in 18.26s`。
+- P1-8 相关回归：`126 passed, 1 warning in 19.58s`。
+- 全量回归：`1230 passed, 6 skipped, 113 warnings in 88.28s`。
+
+- [x] **步骤 8：提交任务 5**
 
 ```bash
 git add nanobot_kt/bridge.py tests/test_kt_framework.py tests/test_streaming_bridge.py
 git commit -m "feat(桥接): 接入回复模型能力校验"
 ```
+
+已提交：`66fdfd9 feat(桥接): 接入回复模型能力校验`。
 
 ## 任务 6：无视觉候选降级和 payload 前 guard
 
@@ -984,12 +1002,12 @@ git commit -m "docs(计划): 同步模型能力校验状态"
 
 ## 最终验收清单
 
-- [ ] `clients/data/models.json` 或同步后的 registry 记录能看到顶层 `supports_image`、`supports_tools`、`supports_stream`。
-- [ ] `get_ordered_candidates(required_capabilities={"supports_image": True})` 不返回纯文本模型。
-- [ ] Bridge 带图主回复请求传入 `supports_image` 能力需求。
-- [ ] 直接 `chat_completion()` 的 tools 请求传入 `supports_tools` 能力需求。
-- [ ] 直接 `chat_completion_stream()` 传入 `supports_stream` 能力需求。
-- [ ] 手动回复模型能力不匹配时不会直接绕过过滤。
+- [x] `clients/data/models.json` 或同步后的 registry 记录能看到顶层 `supports_image`、`supports_tools`、`supports_stream`。
+- [x] `get_ordered_candidates(required_capabilities={"supports_image": True})` 不返回纯文本模型。
+- [x] Bridge 带图主回复请求传入 `supports_image` 能力需求。
+- [x] 直接 `chat_completion()` 的 tools 请求传入 `supports_tools` 能力需求。
+- [x] 直接 `chat_completion_stream()` 传入 `supports_stream` 能力需求。
+- [x] 手动回复模型能力不匹配时不会直接绕过过滤。
 - [ ] 无视觉候选时不会把 `image_url` 发给纯文本模型。
 - [ ] `python -m evals.run --suite model_routing` 覆盖带图路由 case 并通过。
 - [ ] 全量测试 `tests/` 通过。

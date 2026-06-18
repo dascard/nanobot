@@ -159,11 +159,11 @@
 
 #### 路线项 3 — 请求构造按模型能力校验（image_url / 多模态），能力声明入模型配置
 
-- **现状**：带图请求**全程不校验**目标模型是否支持图片。图片在 `nanobot_kt/bridge.py:1205-1216` 注入为 OpenAI `image_url`（base64 data_url，`image_pipeline.py:363-372`）；模型路由 `bridge.py:1270-1310` 用**纯文本 raw_query** 估 complexity 并 `get_ordered_candidates`（`new_api_client.py:431-487`），从不传 `required_tags=['vision']`，「便宜优先」大概率选中无视觉能力模型。模型能力仅以 tag 形式存在，靠 id 关键字猜测（`new_api_client.py:106-107`）+ `model_overrides.json` 手工标注，**无结构化 capabilities 字段**；`core/route_metadata.py:30-39` 的 `route_capability_for` 已返回 vision 但无人消费（全仓 `required_tags`×`vision` 命中为 0）。
-- **痛点**：带图消息路由到纯文本模型 → 模型忽略图片或上游报 400，且 400 被熔断器误记为「模型失败」（误禁可用模型）；base64 直入 payload 与 `docs/message-field-standard.md` 禁 base64 的方向相悖且无大小校验。
-- **目标**：模型能力（`supports_image`/`supports_tools`/`supports_stream`、单图大小 / 数量上限）结构化写入模型配置；构造阶段检测 messages 含 `image_url` 时，**强制只在 vision 候选中选模型**，并按能力校验图片格式 / 大小，不满足则降级（剥图 + 文本兜底）或换模型，而非无脑塞。
-- **关联**：呼应项 9（多模态行为描述需同步 `prompt.md`）；与熔断器记账正确性（E4/E5）相关；主 reply 与 sticker_describe（走专用 vision provider）的能力口径需统一。
-- **粗略路径**：① `model_overrides.json`/registry 增结构化 capabilities → ② 构造边界生成 `has_image` 信号 → ③ 路由在 `has_image` 时按 `capabilities.supports_image` 过滤候选 → ④ `_build_payload` 前按能力校验 / 裁剪 image_url、stream、tools → ⑤ 统一两套 vision 机制的能力引用。
+- **现状（2026-06-18 部分落地）**：模型记录已归一到顶层 `supports_image` / `supports_tools` / `supports_stream` 字段，并兼容 `model_overrides.json` 的顶层字段和嵌套 `capabilities`；`get_ordered_candidates(required_capabilities=...)` 已支持硬过滤，显式不满足能力的候选不会进入排序。直接 `NewAPIClient.chat_completion()` / `chat_completion_stream()` 已能从 messages、tools 和 stream 推导能力需求；Bridge 主回复路由也已从 `metadata["files"]`、ToolPlan schema 和 KT 固定 streaming 请求事实生成能力需求，手动回复模型不满足能力时回退自动路由。当前尚未完成 payload / SDK request 前 guard、无视觉候选降级和 `model_routing` eval 覆盖。
+- **剩余痛点**：候选过滤已经能降低不兼容模型命中率，但 payload / SDK request 边界仍需要防绕过安全网；当没有可用视觉候选时，仍需明确降级为纯文本说明或错误，禁止把 `image_url` 发给纯文本模型。base64 data_url 直入 payload 与 `docs/message-field-standard.md` 禁 base64 的长期方向仍需在后续出站 / 入站契约中继续收敛。
+- **目标**：模型能力（`supports_image` / `supports_tools` / `supports_stream`、单图大小 / 数量上限）结构化写入模型配置；构造阶段检测 messages 含 `image_url` 时，强制只在 vision 候选中选模型，并按能力校验图片格式 / 大小，不满足则降级（剥图 + 文本兜底）或换模型，而非无脑塞。
+- **关联**：呼应项 9（多模态行为描述需同步 canonical Prompt Runtime 模板）；与熔断器记账正确性（E4/E5）相关；主 reply 与 sticker_describe（走专用 vision provider）的能力口径需统一。
+- **粗略路径**：① `model_overrides.json` / registry 增结构化 capabilities（已完成）→ ② 构造边界生成 `has_image` / tools / stream 信号（直接 New API 与 Bridge 已完成）→ ③ 路由在 `has_image` 时按 `supports_image` 过滤候选（已完成）→ ④ `_build_payload` / SDK request 前按能力校验 / 裁剪 image_url、stream、tools（待执行）→ ⑤ 扩展 `model_routing` eval 并统一两套 vision 机制的能力引用（待执行）。
 
 ---
 

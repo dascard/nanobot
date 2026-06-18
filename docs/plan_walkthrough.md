@@ -4,11 +4,11 @@
 更新日期：2026-06-18
 本轮计划写入日期：2026-06-18
 
-本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。当前焦点仍是 P1-8「模型能力校验」：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地。下一步优先推进 Bridge 主回复路由的 `supports_image` / `supports_tools` / `supports_stream` 能力校验和无视觉候选降级。
+本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。当前焦点仍是 P1-8「模型能力校验」：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地。下一步优先推进 payload / SDK request 前 guard、无视觉候选降级和 `model_routing` eval 覆盖。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛，以及 P1-7 残余同步 IO 审计与 async 热路径隔离均已完成。当前进入 `docs/todo.md` 路线项 3：请求构造按模型能力校验。P1-8 已完成模型记录顶层 `supports_image` / `supports_tools` / `supports_stream` 归一化、候选硬过滤，以及直接 `NewAPIClient.chat_completion()` / `chat_completion_stream()` 的请求能力推导。剩余重点是主回复路由、payload / SDK request 前安全网、无视觉候选降级和 `model_routing` eval 覆盖，避免把 `image_url`、tools 或 streaming 请求发给不支持的模型。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛，以及 P1-7 残余同步 IO 审计与 async 热路径隔离均已完成。当前进入 `docs/todo.md` 路线项 3：请求构造按模型能力校验。P1-8 已完成模型记录顶层 `supports_image` / `supports_tools` / `supports_stream` 归一化、候选硬过滤、直接 `NewAPIClient.chat_completion()` / `chat_completion_stream()` 的请求能力推导，以及 Bridge 主回复路由的 `files` / ToolPlan / KT 固定 streaming 能力需求传递。剩余重点是 payload / SDK request 前安全网、无视觉候选降级和 `model_routing` eval 覆盖，避免把 `image_url`、tools 或 streaming 请求发给不支持的模型。
 
 ## 文档口径
 
@@ -66,7 +66,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-5 | 已完成 | Prompt legacy 收口 | live `fallback_v1` 已禁用，评估入口已转 V2，legacy / managed 管理写入口已降级为只读迁移入口 | `afc3dd4` / `99c1803` / `5009034` |
 | P1-6 | 已完成 | 删除冗余提示词资产并去版本化 | 旧任务 prompt、V1 live 分支、legacy 管理面、旧资产删除、canonical 命名兼容层和文档最终验证均已完成 | `4fe00bb` / `docs(计划): 同步提示词收口最终状态` |
 | P1-7 | 已完成 | 残余同步 IO 审计与收口 | 贴纸 fallback、图片附件预处理和 Direct 工具同步 IO 守卫均已落地，路线项 2 已完成收口 | `8ce5210` / `d96e7cd` / `c7e91a9` / `641d080` / `0489bac` / `b3d27f5` |
-| P1-8 | 部分完成，Bridge 待执行 | 模型能力校验 | registry / 直接 New API 已接入 `supports_image` / `supports_tools` / `supports_stream`；下一步把 Bridge 主回复、降级 guard 和 eval 接入能力校验 | `ded7213` / `d4748d2` / `388c00f` / `d907a98` / 后续 `feat(桥接): 接入回复模型能力校验` |
+| P1-8 | 部分完成，guard 待执行 | 模型能力校验 | registry、直接 New API 和 Bridge 主回复已接入 `supports_image` / `supports_tools` / `supports_stream`；下一步做无视觉候选降级、payload / SDK request 前 guard 和 eval 覆盖 | `ded7213` / `d4748d2` / `388c00f` / `d907a98` / `66fdfd9` |
 | P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
 | P2-2 | 待执行 | 标准化请求 / 响应信封 | `/chat`、流式 done、`/group/message`、push 共享响应结构，私聊也返回 `reply_meta` | `refactor(消息): 统一响应信封` |
 | P2-3 | 待执行 | QQ 出站渲染契约 | 输出结构化 segments，图片和 HTML 渲染集中在出口层 | `feat(渲染): 定义 QQ 出站消息契约` |
@@ -77,13 +77,13 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 当前详细计划：P1-8 模型能力校验
 
-状态：P1-8 已进入实现中段。`docs/todo.md` 路线项 3 是当前主参考，但它仍停留在路线级旧口径，尚未反映 `388c00f` 和 `d907a98` 的阶段性进展；后续推进时以本文件、`.Codex/plans/`、最近提交和实际测试结果共同校准。`docs/TODO_LIST.md` 仍是历史清单，不能作为当前优先级来源。
+状态：P1-8 已进入实现中段。`docs/todo.md` 路线项 3 是当前主参考，本次已从早期「尚未接入能力校验」口径同步为阶段性落地口径；P1-8 整体仍未完成，后续推进时以本文件、`.Codex/plans/`、最近提交和实际测试结果共同校准。`docs/TODO_LIST.md` 仍是历史清单，不能作为当前优先级来源。
 
 目标：
 
 - 把模型能力从 tags / 模型 ID 猜测升级为模型记录顶层结构化字段，至少包括 `supports_image`、`supports_tools` 和 `supports_stream`。（已完成 registry / override / 候选硬过滤）
-- 在候选模型排序前生成请求能力需求：messages 含 `image_url` 时要求 `supports_image`，传入 tools 时要求 `supports_tools`，真实 streaming 请求要求 `supports_stream`。（已完成直接 New API 路径，Bridge 待接入）
-- 主回复路由、`NewAPIClient.chat_completion()`、`chat_completion_stream()` 和 KT SDK request 边界都不能绕过能力过滤。（直接 New API 已完成，Bridge 与 payload guard 待完成）
+- 在候选模型排序前生成请求能力需求：messages 含 `image_url` 时要求 `supports_image`，传入 tools 时要求 `supports_tools`，真实 streaming 请求要求 `supports_stream`。（已完成直接 New API 路径和 Bridge 主回复路由）
+- 主回复路由、`NewAPIClient.chat_completion()`、`chat_completion_stream()` 和 KT SDK request 边界都不能绕过能力过滤。（直接 New API 与 Bridge 已完成，payload guard 待完成）
 - 手动指定回复模型也要校验能力；不满足时记录原因并回退自动路由，而不是盲发 payload。
 - 当没有可用视觉模型时，降级为纯文本说明或明确错误，禁止把 `image_url` 发给纯文本模型。
 
@@ -106,7 +106,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 写入实现计划：`.Codex/plans/model-capability-validation.md`，按 TDD 拆分红灯、绿灯、重构和阶段提交。
 - [x] 任务 1-3：完成 registry 能力归一化、override `null` fallback、`get_ordered_candidates(required_capabilities=...)` 硬过滤和相关测试。提交：`388c00f feat(模型能力): 归一化能力并过滤候选`。说明：Bridge 带图候选要求已顺延到任务 5，不再归入任务 1。
 - [x] 任务 4：直接 New API 请求已从 messages / tools / stream 自动推导能力需求，`chat_completion()` 和 `chat_completion_stream()` 均会把 `required_capabilities` 传给候选排序，手动模型能力不匹配会返回错误。提交：`d907a98 feat(模型能力): 推导直接请求能力需求`。
-- [ ] 任务 5：让 `NanobotBridge` 主回复路由消费 `files`、ToolPlan schema 和 KT 固定 streaming 请求事实，手动模型同样执行能力校验。
+- [x] 任务 5：让 `NanobotBridge` 主回复路由消费 `files`、ToolPlan schema 和 KT 固定 streaming 请求事实，手动模型同样执行能力校验。提交：`66fdfd9 feat(桥接): 接入回复模型能力校验`。
 - [ ] 任务 6：实现 payload / SDK request 前安全网和无视觉候选时的降级策略，确保纯文本模型不会收到 `image_url` payload。
 - [ ] 任务 7：扩展 `model_routing` eval case / runner，覆盖带图请求必须选 vision 候选，保留现有 regression case 的发现路径。
 - [ ] 任务 8：同步 `docs/todo.md`、本文件、`.Codex/plans/model-capability-validation.md` 和相关 Prompt Runtime 文档口径，并运行定向与全量验证。`docs/todo.md` 应在 P1-8 整体完成后再把路线项 3 改为已落地。
@@ -115,6 +115,10 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 - `d907a98` 提交前定向回归：`tests/test_llm_request_tracing.py tests/test_final_tools.py tests/test_model_router.py`，结果 `59 passed, 1 warning in 2.14s`。
 - `d907a98` 提交前全量回归：`tests/`，结果 `1228 passed, 6 skipped, 113 warnings in 84.26s`。
+- `66fdfd9` 提交前新增任务 5 定向：`tests/test_kt_framework.py::TestNanobotBridge::test_handle_message_with_files_requests_vision_candidates`、`tests/test_kt_framework.py::TestNanobotBridge::test_reply_model_lacking_required_capability_falls_back_to_auto`、`tests/test_streaming_bridge.py::test_bridge_handle_message_streams_controller_text_deltas`，结果 `3 passed, 1 warning in 2.89s`。
+- `66fdfd9` 提交前 Bridge 回归：`tests/test_kt_framework.py tests/test_streaming_bridge.py`，结果 `58 passed, 1 warning in 18.26s`。
+- `66fdfd9` 提交前 P1-8 相关回归：`tests/test_model_registry.py tests/test_model_router.py tests/test_llm_request_tracing.py tests/test_final_tools.py tests/test_kt_framework.py tests/test_streaming_bridge.py`，结果 `126 passed, 1 warning in 19.58s`。
+- `66fdfd9` 提交前全量回归：`tests/`，结果 `1230 passed, 6 skipped, 113 warnings in 88.28s`。
 
 建议阶段性提交：
 
@@ -122,7 +126,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - 已完成：`d4748d2 docs(计划): 记录模型能力校验计划`
 - 已完成：`388c00f feat(模型能力): 归一化能力并过滤候选`
 - 已完成：`d907a98 feat(模型能力): 推导直接请求能力需求`
-- 待执行：`feat(桥接): 接入回复模型能力校验`
+- 已完成：`66fdfd9 feat(桥接): 接入回复模型能力校验`
 - 待执行：`fix(模型能力): 防止发送不兼容请求`
 - 待执行：`test(评测): 覆盖视觉模型路由`
 - 待执行：`docs(计划): 同步模型能力校验状态`
@@ -573,4 +577,4 @@ P1-6 验收重点：
 
 ## 下一步
 
-P1-7 已完成收口。当前优先级是 P1-8 模型能力校验：设计、计划、registry 能力归一化、候选硬过滤和直接 New API 请求能力推导均已提交；下一步先做 Bridge 主回复路由能力校验，再做无视觉候选降级、payload / SDK request 前 guard、`model_routing` eval 和最终文档收口。P1-8 完成后再进入 P2 的 platform 维度底座；TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P1 执行顺序。
+P1-7 已完成收口。当前优先级是 P1-8 模型能力校验：设计、计划、registry 能力归一化、候选硬过滤、直接 New API 请求能力推导和 Bridge 主回复路由能力校验均已提交；下一步先做无视觉候选降级与 payload / SDK request 前 guard，再做 `model_routing` eval 和最终文档收口。P1-8 完成后再进入 P2 的 platform 维度底座；TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P1 执行顺序。
