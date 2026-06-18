@@ -11,6 +11,7 @@ from typing import Any
 
 from app.group_ingress import helpers as h
 from core.database import ChatLog, User, release_clean_session_transaction
+from core.message_envelope import build_group_response_envelope
 from core.moderation import check_message_moderation_db
 from core.sqlite_retry import is_sqlite_locked_error
 from core.sqlite_retry import run_sqlite_locked_retry
@@ -35,6 +36,58 @@ class GroupIngressService:
         self.background_tasks = background_tasks
         self.bridge_provider = bridge_provider
 
+    def _platform_from_request(self, req: Any) -> str:
+        client_meta = getattr(req, "client_meta", None)
+        client_meta = client_meta if isinstance(client_meta, dict) else {}
+        return str(client_meta.get("platform") or "qq").strip().lower() or "qq"
+
+    def _response(
+        self,
+        req: Any,
+        *,
+        action: str,
+        reply: str = "",
+        reply_meta: dict | None = None,
+        generation: int | None = None,
+        reason: str = "",
+        delay_seconds: int | float | None = None,
+        diagnostics: dict | None = None,
+        duplicate_reply: dict | None = None,
+        extra: dict | None = None,
+    ) -> dict[str, Any]:
+        reason_text = str(reason or "")[:120]
+        envelope = build_group_response_envelope(
+            action=action,
+            reply=reply,
+            reply_meta=reply_meta,
+            generation=generation,
+            reason=reason_text,
+            delay_seconds=delay_seconds,
+            diagnostics=diagnostics,
+            duplicate_reply=duplicate_reply,
+            meta={
+                "platform": self._platform_from_request(req),
+                "chat_type": "group",
+                "group_id": getattr(req, "group_id", ""),
+                "message_id": getattr(req, "message_id", "") or "",
+                "sender_id": getattr(req, "sender_id", "") or "",
+            },
+        )
+        payload = dict(envelope)
+        if generation is not None:
+            payload["generation"] = generation
+        if delay_seconds is not None:
+            payload["delay_seconds"] = delay_seconds
+        if reason_text:
+            payload["reason"] = reason_text
+        if diagnostics:
+            payload["diagnostics"] = diagnostics
+        if duplicate_reply:
+            payload["duplicate_reply"] = duplicate_reply
+        if isinstance(extra, dict):
+            payload.update(extra)
+        return payload
+
     async def handle(self, req: Any) -> dict:
         from core.timing_runtime import get_group_runtime
 
@@ -54,7 +107,7 @@ class GroupIngressService:
             ).first()
             if dup:
                 logger.info("[GroupMsg] duplicate ignored group=%s message_id=%s", group_user_id, req.message_id)
-                return {"action": "no_reply", "reason": "duplicate_message"}
+                return self._response(req, action="no_reply", reason="duplicate_message")
 
         registered_stickers = h.register_group_stickers_from_message(
             db,
@@ -68,7 +121,7 @@ class GroupIngressService:
         except Exception as exc:
             if is_sqlite_locked_error(exc):
                 logger.warning("[GroupMsg] db locked while syncing group user group=%s: %s", req.group_id, exc)
-                return {"action": "no_reply", "reason": "db_locked:group_user_sync"}
+                return self._response(req, action="no_reply", reason="db_locked:group_user_sync")
             raise
 
         from core.context_builder import build_timing_recent_context
@@ -97,7 +150,7 @@ class GroupIngressService:
         except Exception as exc:
             if is_sqlite_locked_error(exc):
                 logger.warning("[GroupMsg] db locked while saving ambient group=%s: %s", req.group_id, exc)
-                return {"action": "no_reply", "reason": "db_locked:ambient_log"}
+                return self._response(req, action="no_reply", reason="db_locked:ambient_log")
             raise
         logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
 
@@ -114,7 +167,13 @@ class GroupIngressService:
                 trigger_reason="bot_sender",
                 latency_ms=0,
             )
-            return result
+            return self._response(
+                req,
+                action="no_reply",
+                generation=0,
+                reason=f"bot_sender:{bot_sender_kind}",
+                extra={"hard_rule": "bot_sender_no_timing"},
+            )
 
         if h.check_user_blocked(db, req.sender_id, target_type="group", group_id=req.group_id):
             logger.info("[GroupMsg] blocked group=%s sender=%s", req.group_id, req.sender_id)
@@ -124,7 +183,7 @@ class GroupIngressService:
                 trigger_reason="user_blocked",
                 latency_ms=0,
             )
-            return {"action": "no_reply", "reason": "user_blocked"}
+            return self._response(req, action="no_reply", reason="user_blocked", generation=0)
 
         from core.group_runtime.ids import normalize_group_stream_id
         stream_id = normalize_group_stream_id(req.group_id)
@@ -163,7 +222,7 @@ class GroupIngressService:
                     trigger_reason="content_blocked",
                     latency_ms=0,
                 )
-                return {"action": "no_reply", "reason": "content_blocked"}
+                return self._response(req, action="no_reply", reason="content_blocked", generation=0)
 
         reason = h.derive_group_trigger_reason(req)
         logger.info("[GroupMsg] trigger=%s enter_timing=true", reason)
@@ -229,16 +288,17 @@ class GroupIngressService:
                     runtime=runtime,
                 )
 
-            return {
-                "action": action,
-                "delay_seconds": result.get("delay_seconds"),
-                "generation": result.get("generation", 0),
-                "reason": str(result.get("reason", ""))[:120],
-            }
+            return self._response(
+                req,
+                action=action,
+                delay_seconds=result.get("delay_seconds"),
+                generation=result.get("generation", 0),
+                reason=str(result.get("reason", ""))[:120],
+            )
 
         except Exception as exc:
             logger.warning("[GroupMsg] group=%s FAILED: %s", req.group_id, exc)
-            return {"action": "no_reply", "reason": f"error: {exc}"}
+            return self._response(req, action="no_reply", reason=f"error: {exc}")
 
     async def _continue_to_bridge(
         self,
@@ -330,12 +390,13 @@ class GroupIngressService:
                 if duplicate:
                     agent_result = "duplicate_reply_suppressed"
                     h.log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
-                    return {
-                        "action": "no_reply",
-                        "reason": agent_result,
-                        "duplicate_reply": duplicate,
-                        "generation": result.get("generation", 0),
-                    }
+                    return self._response(
+                        req,
+                        action="no_reply",
+                        reason=agent_result,
+                        duplicate_reply=duplicate,
+                        generation=result.get("generation", 0),
+                    )
                 h.persist_group_bridge_reply(
                     db,
                     group_user_id=group_user_id,
@@ -353,17 +414,19 @@ class GroupIngressService:
                 agent_result = h.derive_group_agent_result(bridge, group_user_id, reply_meta)
                 h.log_group_no_reply(db, group_user_id, chat_query, agent_result, req.message_id)
                 if agent_result == "prompt_v2_audit_failed":
-                    return {
-                        "action": "no_reply",
-                        "reply": "",
-                        "reply_meta": reply_meta,
-                        "generation": result.get("generation", 0),
-                        "reason": agent_result,
-                        "diagnostics": {
+                    diagnostics = {
                             "timing_action": result.get("action", "continue"),
                             "agent_result": agent_result,
-                        },
                     }
+                    return self._response(
+                        req,
+                        action="no_reply",
+                        reply="",
+                        reply_meta=reply_meta,
+                        generation=result.get("generation", 0),
+                        reason=agent_result,
+                        diagnostics=diagnostics,
+                    )
             # 先对短 token 文本做格式化截断，再展开图片 CQ base64
             # 必须在 base64 展开前截断，否则 CQ 码会被 format_group_reply_for_transport 截断损坏
             formatted_answer = h.format_group_reply_for_transport(answer, max_chars=4000)
@@ -374,16 +437,17 @@ class GroupIngressService:
             except Exception:
                 logger.warning("[GroupMsg] generated image ref expansion failed", exc_info=True)
 
-            return {
-                "action": "continue",
-                "reply": transport_answer,
-                "reply_meta": reply_meta,
-                "generation": result.get("generation", 0),
-                "reason": str(result.get("reason", ""))[:120],
-            }
+            return self._response(
+                req,
+                action="continue",
+                reply=transport_answer,
+                reply_meta=reply_meta,
+                generation=result.get("generation", 0),
+                reason=str(result.get("reason", ""))[:120],
+            )
         except Exception as exc:
             logger.error("[GroupMsg] bridge failed group=%s: %s", req.group_id, exc)
-            return {"action": "no_reply", "reason": f"bridge_error: {exc}"}
+            return self._response(req, action="no_reply", reason=f"bridge_error: {exc}")
 
     def _sync_group_user(self, group_user_id: str, session_name: str) -> None:
         db = self.db

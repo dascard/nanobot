@@ -18,7 +18,7 @@
 - `/chat` 非流式成功响应已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status`、`user_id`、`answer`、`answer_chunks` 和 `unprocessed_logs`。
 - `/chat` SSE done 已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status="done"` 与 `answer`；SSE framing 仍是 `data: {...}`，不要改成 `event: done`。
 - `/chat` 已把过滤后的 `private_reply_meta` 写入非流式成功响应和 SSE done 响应。
-- `/group/message` route 只返回 `GroupIngressService.handle(req)` 的 dict，包装应优先放在 `app/group_ingress/service.py`。
+- `/group/message` route 只返回 `GroupIngressService.handle(req)` 的 dict；群聊响应包装已放在 `app/group_ingress/service.py`，route 层无需改动。
 - `push_to_qq(target_type, target_id, message) -> bool` 的旧签名必须保持。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
@@ -716,7 +716,7 @@ git commit -m "feat(消息): 返回私聊响应信封"
 
 **并行约束：** 本任务不得修改 `api/routes.py`。如果 route 层需要调整，交给任务 5。
 
-- [ ] **步骤 1：编写 continue 红灯测试**
+- [x] **步骤 1：编写 continue 红灯测试**
 
 创建 `tests/test_group_response_envelope.py`：
 
@@ -776,7 +776,7 @@ async def test_group_message_continue_returns_standard_envelope(db_session, monk
     assert data["meta"]["generation"] == 3
 ```
 
-- [ ] **步骤 2：编写 wait 与 audit 红灯测试**
+- [x] **步骤 2：编写 wait 与 audit 红灯测试**
 
 在同一文件追加：
 
@@ -859,7 +859,7 @@ async def test_group_message_prompt_audit_failure_keeps_standard_envelope(db_ses
     assert data["meta"]["diagnostics"]["agent_result"] == "prompt_v2_audit_failed"
 ```
 
-- [ ] **步骤 3：运行群聊红灯**
+- [x] **步骤 3：运行群聊红灯**
 
 运行：
 
@@ -869,7 +869,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_group_response_envelope
 
 预期：失败，报错包含缺少 `status`、`messages` 或 `meta`。
 
-- [ ] **步骤 4：在 `GroupIngressService` 增加响应 helper**
+- [x] **步骤 4：在 `GroupIngressService` 增加响应 helper**
 
 在 `GroupIngressService` 类内添加：
 
@@ -934,7 +934,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_group_response_envelope
         return base
 ```
 
-- [ ] **步骤 5：替换 `handle()` 和 `_continue_to_bridge()` 的可控返回**
+- [x] **步骤 5：替换 `handle()` 和 `_continue_to_bridge()` 的可控返回**
 
 将 duplicate、DB lock、bot sender、user blocked、content blocked、timing wait、timing no_reply、duplicate reply suppressed、prompt audit failure、continue success 和 bridge exception 分支改为 `_response(...)`。
 
@@ -965,7 +965,7 @@ return self._response(
 )
 ```
 
-- [ ] **步骤 6：运行群聊绿灯和回归**
+- [x] **步骤 6：运行群聊绿灯和回归**
 
 运行：
 
@@ -980,7 +980,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 7：提交群聊信封**
+- [x] **步骤 7：提交群聊信封**
 
 ```bash
 git add app/group_ingress/service.py tests/test_group_response_envelope.py
