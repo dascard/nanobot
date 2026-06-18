@@ -1073,7 +1073,7 @@ git commit -m "docs(评测): 收口标注闭环状态"
 - 修改：`.Codex/plans/eval-dataset-labeling.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行候选闭环定向回归**
+- [x] **步骤 1：运行候选闭环定向回归**
 
 运行：
 
@@ -1083,7 +1083,7 @@ python -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candidate
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行 eval 相关回归**
+- [x] **步骤 2：运行 eval 相关回归**
 
 运行：
 
@@ -1095,7 +1095,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run --suite capability_model_routin
 
 预期：pytest 通过，两个 gate 均输出 `Gate passed`。
 
-- [ ] **步骤 3：运行 WebUI 静态回归**
+- [x] **步骤 3：运行 WebUI 静态回归**
 
 运行：
 
@@ -1105,7 +1105,7 @@ python -m pytest tests/test_webui_admin_redesign.py -v
 
 预期：通过。
 
-- [ ] **步骤 4：运行全量验证**
+- [x] **步骤 4：运行全量验证**
 
 运行：
 
@@ -1115,7 +1115,7 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 
 预期：0 failures。
 
-- [ ] **步骤 5：同步最终验证记录**
+- [x] **步骤 5：同步最终验证记录**
 
 更新 `.Codex/plans/eval-dataset-labeling.md` 和 `docs/plan_walkthrough.md`：
 
@@ -1124,7 +1124,7 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 - 填入全量测试结果。
 - 标记 P4-1 当前阶段完成。
 
-- [ ] **步骤 6：最终提交**
+- [x] **步骤 6：最终提交**
 
 运行：
 
@@ -1133,6 +1133,15 @@ git diff --check -- .Codex/plans/eval-dataset-labeling.md docs/plan_walkthrough.
 git add .Codex/plans/eval-dataset-labeling.md docs/plan_walkthrough.md
 git commit -m "docs(计划): 完成标注闭环验证"
 ```
+
+最终验证记录：
+
+- 候选闭环定向回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py -v -p no:cacheprovider`，结果 `14 passed, 21 warnings in 2.20s`。
+- Eval 相关回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py -v -p no:cacheprovider`，结果 `19 passed, 1 warning in 1.62s`。
+- TimingGate 门禁：`bash scripts/run_timing_gate_gate.sh`，结果 `Suite: timing_gate total=18 passed=18 failed=0 pass_rate=100.0%`，`Gate passed`。
+- 能力数据集门禁：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run --suite capability_model_routing --baseline evals/baselines/capability_model_routing.json --min-pass-rate 1.0 --max-new-failures 0`，结果 `Suite: capability_model_routing total=1 passed=1 failed=0 pass_rate=100.0%`，`Gate passed`。
+- WebUI 静态回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_webui_admin_redesign.py -v -p no:cacheprovider`，结果 `17 passed, 1 warning in 0.93s`。
+- 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1338 passed, 6 skipped, 139 warnings in 96.90s`。
 
 ---
 

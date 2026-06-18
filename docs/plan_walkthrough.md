@@ -10,7 +10,7 @@ P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并�
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」和 P3-3B「TimingGate CI / PR gate」均已完成验证。当前执行重点是 P4-1 文档收口和最终验证：expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 能力数据集已经落地，下一步是确认全量回归并交接后续 P4 扩展。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」和 P4-1「评测数据集与标注闭环」均已完成验证。下一执行重点回到 P4 评测体系扩展：更多 per-capability 数据集、Admin 标注工作台、RAG 标注闭环和更多 suite PR gate。
 
 ## 文档口径
 
@@ -78,7 +78,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-2 | 已完成 | 私聊 TimingGate 可观测补齐 | 私聊 `timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化 | `feat(时机): 持久化私聊评分元信息` |
 | P3-3A | 已完成 | TimingGate 标注审计复跑 | `timing_signal_audit` 已支持离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
 | P3-3B | 已完成 | TimingGate CI / PR gate | 已新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
-| P4-1 | 实现中 | 评测体系扩展 | expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集已完成；文档收口和最终验证进行中 | `e4fb70a` / `8b892a8` / `4f4cce7` / `b84cbf1` / `7a84084` / `71c3a53` / `a494f3b` |
+| P4-1 | 已完成 | 评测体系扩展 | expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界、首个 `capability_model_routing` 能力数据集、文档收口和最终验证均已完成 | `e4fb70a` / `8b892a8` / `4f4cce7` / `b84cbf1` / `7a84084` / `71c3a53` / `a494f3b` / `5a8b601` |
 
 ## 当前详细计划：P3-2 私聊 TimingGate 可观测补齐
 
@@ -179,7 +179,7 @@ P3-3B 验证记录：
 
 ## 当前详细计划：P4-1 评测数据集与标注闭环
 
-状态：设计文档已完成并随 `e4fb70a docs(评测): 设计标注闭环` 提交；实现计划已随 `8b892a8 docs(计划): 记录标注闭环计划` 提交。P4-1 第一阶段采用契约优先方案，已完成 expected 契约、候选标注、晋升安全、离线 CLI 与首个能力数据集；当前处于文档收口和最终验证阶段。
+状态：已完成。设计文档已随 `e4fb70a docs(评测): 设计标注闭环` 提交；实现计划已随 `8b892a8 docs(计划): 记录标注闭环计划` 提交。P4-1 第一阶段采用契约优先方案，已完成 expected 契约、候选标注、晋升安全、离线 CLI、首个能力数据集、文档收口和最终验证。
 
 目标：
 
@@ -200,7 +200,7 @@ P3-3B 验证记录：
 - [x] 任务 4：离线 candidates CLI。提交：`71c3a53 feat(评测): 增加候选标注命令`。
 - [x] 任务 5：首个 per-capability 数据集。提交：`a494f3b test(评测): 增加模型路由能力数据集`。
 - [x] 任务 6：文档收口。提交：`docs(评测): 收口标注闭环状态`。
-- [ ] 任务 7：最终验证与交接。
+- [x] 任务 7：最终验证与交接。提交：`docs(计划): 完成标注闭环验证`。
 
 验证计划：
 
@@ -217,6 +217,7 @@ P3-3B 验证记录：
 - 任务 4：候选 CLI 覆盖 export、import-labels、promote dry-run / apply 和 CLI main，定向回归为 `7 passed`，全量回归为 `1337 passed, 6 skipped`。
 - 任务 5：`capability_model_routing` suite 和 baseline gate 均通过，`tests/test_eval_baseline.py` 为 `11 passed`，全量回归为 `1338 passed, 6 skipped`。
 - 任务 6：文档占位词扫描、U+FFFD 扫描和 `git diff --check` 均无错误输出；评测定向组合为 `33 passed, 21 warnings`，TimingGate 与 `capability_model_routing` gate 均输出 `Gate passed`，全量回归为 `1338 passed, 6 skipped, 139 warnings`。
+- 任务 7：候选闭环定向回归为 `14 passed, 21 warnings`；eval 相关回归为 `19 passed, 1 warning`；TimingGate 与 `capability_model_routing` gate 均输出 `Gate passed`；WebUI 静态回归为 `17 passed, 1 warning`；全量回归为 `1338 passed, 6 skipped, 139 warnings`。
 
 ## 已完成阶段详情：P3-1 SSE 真 token 流式剩余收敛
 
