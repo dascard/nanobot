@@ -4,11 +4,11 @@
 
 ---
 
-## 实施状态（2026-06-17）
+## 实施状态（2026-06-18）
 
 核心 TimingGate 混合决策主线已完成。已落地 shared timing scoring、群聊 / 私聊统一公式、ambient / legacy / timer cooldown 软化、模型失败规则兜底、session / platform 级模型策略、真实日志信号审计 CLI，以及 `timing_gate` eval baseline diff / 阈值门禁。
 
-仍需作为运营项持续推进：用更多真实群聊标注样本复跑 `evals/timing_signal_audit.py` 并按报告调阈值；把 `python -m evals.run --suite timing_gate --baseline ... --min-pass-rate ... --max-new-failures ...` 接入外部 CI / PR gate。
+P3-3「持续评估」已完成拆分设计，详见 `docs/superpowers/specs/2026-06-18-timing-gate-continuous-eval-design.md` 和 `.Codex/plans/timing-gate-continuous-eval.md`。下一步先补 `evals/timing_signal_audit.py` 的离线 labeled report / sidecar labels 复跑入口，再把 `python -m evals.run --suite timing_gate --baseline ... --min-pass-rate ... --max-new-failures ...` 收敛为仓库自包含 CI / PR gate。更多真实样本选择、标注仲裁、定期复跑和按报告调参仍按运营动作推进；通用 `candidates → labeled` 产品化闭环留到 P4 评测体系。
 
 ---
 

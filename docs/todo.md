@@ -218,9 +218,9 @@
 
 - **现状（2026-06-18 已落地）**：核心链路已从「纯 Qwen 三态判断」推进到 scoring 混合决策。已新增 `core/timing_score.py`，覆盖 `d0/linger/s_ack/s_transport/s_other/w_*` 信号、`E_rule/E_final`、冲突升级、模型权重和 `rule_fallback`；`GroupRuntime` 已接入 shadow scoring、普通 ambient 确定性短路、模型失败规则兜底、`directed_to_other` scoring 软化、ambient / legacy / timer cooldown scoring 短路，以及 session / platform 级模型层策略。私聊已接入同一套 shared timing scoring，分类器结果回灌为 `TimingModelHint`。群聊 `timing_scoring` 已写入 ChatLog meta 并由 admin events / WebUI 调试页透出；私聊 `PrivateDecision.timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化为 `timing_gate`，可回溯 action、reason、effort、runtime_preset 与 scoring 明细。`evals` 也能在 action 缺失时执行 scoring 并校验 `expected.scoring`。
 - **已完成**：`@bot + 图片` 规则 WAIT 不调模型；纯 ambient / 纯确认可规则 `no_reply`；`directed_to_other + linger` 进入冲突升级；模型 `network_error/parse_error` 后使用规则侧 `rule_fallback`，不再全群哑火；`s_ack` 排除请求词、问号、URL、代码、文件；`s_transport` 已按 secret/blob/url/codeblock/long dump 分档；`force_next_continue` 已降级为 `d0=1.0` 后完整走 Stage 1-4；`enabled` / `rules_only` / `shadow` 模型策略已支持 default / platform / session 三级覆盖；真实 ChatLog 信号审计 CLI 已输出假阳率、shadow mismatch 和阈值建议；`timing_gate` eval 已支持 baseline diff 和阈值门禁；私聊评分已补齐 ChatLog meta 可观测闭环。
-- **剩余**：核心混合决策主线和私聊可观测闭环均已完成。剩余为持续运营项：用更多人工标注样本复跑 `timing_signal_audit` 并按报告调参；把 `python -m evals.run --suite timing_gate --baseline ... --min-pass-rate ... --max-new-failures ...` 接入外部 CI；继续与路线项 5/7 的响应信封和调试可观测协同。
+- **剩余**：核心混合决策主线和私聊可观测闭环均已完成。P3-3 已拆成两个可执行阶段：P3-3A 补 `timing_signal_audit` 离线 labeled report / sidecar labels 复跑入口，P3-3B 把 `python -m evals.run --suite timing_gate --baseline ... --min-pass-rate ... --max-new-failures ...` 收敛为仓库自包含 CI / PR gate。更多真实样本的选择、标注仲裁、定期复跑和是否按报告调参仍是运营动作；通用 `candidates → labeled` 产品化闭环留到路线项 8 / P4。
 - **关联**：H2 已完成 admin route 异步化和 repeats 收紧；后续与路线项 8（评测体系）、路线项 5/7（响应信封与调试可观测）继续协同。
-- **下一步**：进入运营收尾，复跑真实日志审计、按标注结果调阈值，并将 timing gate eval 门禁接入外部 CI。
+- **下一步**：按 `docs/superpowers/specs/2026-06-18-timing-gate-continuous-eval-design.md` 和 `.Codex/plans/timing-gate-continuous-eval.md` 执行：先落 P3-3A 标注审计复跑入口，再落 P3-3B timing gate eval 门禁。
 
 ---
 
@@ -229,10 +229,10 @@
 #### 路线项 8 — 评测体系从既有 `evals/` 框架升级为基线 + 回归门禁（大工程）
 
 - **现状（2026-06-17 已部分升级）**：评测框架**已存在**而非空白：`evals/run.py`（CLI `python -m evals.run --suite <name>`）+ `schema.py`（`EvalCase`/`EvalOutput`/`EvalResult`/`SuiteReport` pydantic）+ `scorers.py` + `runners/`（sticker / memory / moderation / model_routing 等 per-suite runner）+ `cases/`（regression 10 例、rag_benchmark/manual、timing_gate 多例、candidates）+ `sample_from_db.py`/`sample_from_logs.py`（从库 / 日志采样造例）。`evals/baseline.py` 已提供 baseline diff 与阈值门禁，`run.py` 已支持 `--baseline`、`--min-pass-rate`、`--max-new-failures`，`SuiteReport` 可携带 `baseline_diff` 与 `gate`。
-- **痛点**：baseline diff 和门禁能力已具备，但覆盖仍偏核心 suite；外部 CI 尚未接入；提示词质量 / 回复合同 / RAG 召回 / TimingGate 各有少量 case 但无系统化标注数据集与人工评分回流；候选 case(`candidates`，needs_label) 标注流程未闭环。
+- **痛点**：baseline diff 和门禁能力已具备，但覆盖仍偏核心 suite；TimingGate CI / PR gate 已进入 P3-3B 计划，尚未实现；提示词质量 / 回复合同 / RAG 召回 / TimingGate 各有少量 case 但无系统化标注数据集与人工评分回流；候选 case(`candidates`，needs_label) 标注流程未闭环。
 - **目标**：把既有 `evals/` 升级为体系——统一指标与基线快照、回归对比门禁（PR 跑核心 suite 并比对 pass_rate / score 漂移）、分能力数据集（提示词 / 路由 / RAG / TimingGate / 渲染）、人工标注回流与 `candidates → labeled` 闭环。
 - **关联**：依赖项 1 / 6 / 10 等行为先稳定（否则基线频繁失效）；与项 10 共享 timing_gate 套件、项 3 共享 model_routing 套件。
-- **粗略路径**：① 固化基线快照与指标口径（已完成 timing_gate 核心 suite）→ ② `run.py` 增 baseline diff + 阈值门禁（已完成）→ ③ 接入外部 CI / PR gate → ④ 扩 per-capability 数据集（`sample_from_logs` 批量造例 + 人工标注）→ ⑤ 打通 candidates 标注闭环 → ⑥ 关键 suite 纳入提交前 / PR 必跑。
+- **粗略路径**：① 固化基线快照与指标口径（已完成 timing_gate 核心 suite）→ ② `run.py` 增 baseline diff + 阈值门禁（已完成）→ ③ 接入 TimingGate 外部 CI / PR gate（P3-3B 计划中）→ ④ 扩 per-capability 数据集（`sample_from_logs` 批量造例 + 人工标注）→ ⑤ 打通 candidates 标注闭环 → ⑥ 关键 suite 纳入提交前 / PR 必跑。
 
 ---
 

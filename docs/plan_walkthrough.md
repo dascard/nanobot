@@ -6,11 +6,11 @@
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
-P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和定向验证，提交建议为 `feat(时机): 持久化私聊评分元信息`。
+P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计和阶段拆分，计划先落 P3-3A 标注审计复跑入口，再落 P3-3B 仓库自包含 CI / PR gate。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」和 P3-2「私聊 TimingGate 可观测补齐」均已完成验证。下一执行重点进入 TimingGate 与评测体系的运营闭环：外部 CI / PR gate、真实标注样本复跑调参，以及 P4 评测数据集扩展。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」和 P3-2「私聊 TimingGate 可观测补齐」均已完成验证。下一执行重点进入 TimingGate 与评测体系的运营闭环：P3-3A 先补 `timing_signal_audit` 人工标注样本离线复跑入口，P3-3B 再接入仓库自包含的 timing_gate CI / PR gate；P4-1 保留 per-capability 数据集扩展和通用 `candidates → labeled` 标注闭环。
 
 ## 文档口径
 
@@ -76,7 +76,8 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P2-4 | 已完成 | Prompt platform × chat_type 二维适配 | V2 模板按平台和会话类型拆分，QQ 专属约定下沉到 platform 分支；`web × private` 不再注入 QQ 平台模板 | `27e632f` / `164b215` / `ca93dc2` / `18d0b0d` / `17a7bd8` / `fe2d81b` |
 | P3-1 | 已完成 | SSE 真 token 流式剩余收敛 | 已完成 `/chat` API delta 合并、`done` 权威测试、Bridge `final.replace`、API final 规范化、bounded queue / progress backpressure、断连 drain 和最终验证 | `bca50b8` / `e56a406` / `d8e8703` / `84cb0cb` / `a987d31` / `88268a1` / `a5f705a` / `87f3b40` / `docs(计划): 完成 SSE 最终验证` |
 | P3-2 | 已完成 | 私聊 TimingGate 可观测补齐 | 私聊 `timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化 | `feat(时机): 持久化私聊评分元信息` |
-| P3-3 | 运营项 | TimingGate 持续评估 | 用更多人工标注样本复跑审计，接入外部 CI / PR gate | `ci(评测): 接入 timing gate 回归门禁` |
+| P3-3A | 计划完成 | TimingGate 标注审计复跑 | 新增 `timing_signal_audit` 离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
+| P3-3B | 待执行 | TimingGate CI / PR gate | 新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
 
 ## 当前详细计划：P3-2 私聊 TimingGate 可观测补齐
@@ -110,7 +111,53 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 下一步：
 
-- 进入 P3-3「TimingGate 持续评估」，或先处理 `/models/status` 缺少 `CLASSIFIER_API_URL` import 的独立小修。
+- 进入 P3-3A「TimingGate 标注审计复跑入口」TDD 实现。
+
+## 当前详细计划：P3-3 TimingGate 持续评估
+
+状态：已完成三路只读审计、设计文档和实现计划。设计文档为 `docs/superpowers/specs/2026-06-18-timing-gate-continuous-eval-design.md`；实现计划为 `.Codex/plans/timing-gate-continuous-eval.md`。P3-3 不做通用 candidates 产品化闭环，该闭环留到 P4-1。
+
+审计结论：
+
+- `timing_signal_audit` 现有 CLI 能从 DB 抽样并聚合样本内已有 `label` 字段，但缺少读取 labeled report 或 sidecar labels 后复跑的入口。
+- `evals.run` 已支持 `--baseline`、`--min-pass-rate`、`--max-new-failures`，但仓库缺稳定 baseline、统一脚本和 CI workflow。
+- 当前正式 `evals/cases/timing_gate/*.json` 全部带 `input.action`，主要验证 action 回放；需要新增无 action case 覆盖 `decide_timing()` scoring 路径。
+- 当前没有 `.github`、`.gitlab-ci.yml`、`pytest.ini`、根级 `pyproject.toml` 或 `Makefile`；首个 CI gate 应保持轻量，并显式设置 `NANOBOT_ADMIN_TOKEN`，避免 `config.py` 在 CI 中写 `.env`。
+
+P3-3A 目标：
+
+- [x] 收敛只读审计结论，明确真实标注复跑缺口。
+- [x] 写入设计文档：`docs/superpowers/specs/2026-06-18-timing-gate-continuous-eval-design.md`。
+- [x] 写入实现计划：`.Codex/plans/timing-gate-continuous-eval.md`。
+- [ ] 在 `core/eval_sampling/timing_signal_audit.py` 增加纯函数 label merge helper。
+- [ ] 在 `evals/timing_signal_audit.py` 增加 `--input-report` / `--labels` 离线复跑模式。
+- [ ] 在 `tests/test_timing_signal_audit.py` 覆盖 sidecar 合并、labeled report 复跑和建议状态。
+- [ ] 同步 `docs/todo.md`、本文件和设计文档状态。
+- [ ] 运行定向验证并提交 `feat(评测): 支持时机信号标注复跑`。
+
+P3-3B 目标：
+
+- [ ] 新增 `evals/baselines/timing_gate.json`，避免依赖被忽略或覆盖的 `evals/reports/latest.json`。
+- [ ] 新增至少 2 个无 `input.action` 的正式 `timing_gate` scoring case。
+- [ ] 补充 `tests/test_eval_baseline.py` gate 成功路径和异常配置守卫。
+- [ ] 补充 `tests/test_timing_gate_prompt_policy.py`，要求正式 suite 含 scoring case。
+- [ ] 新增 `scripts/run_timing_gate_gate.sh`，统一本地和 CI 命令。
+- [ ] 新增 `.github/workflows/timing-gate-eval.yml`，运行轻量 pytest 和 timing gate eval gate。
+- [ ] 如验证需要，给 `evals/run.py` 增加 `--no-write-report` 或 `--report-dir`，减少 CI 写报告副作用。
+- [ ] 新增或更新 `docs/evals.md`，记录 baseline 更新规则和失败处理。
+- [ ] 运行定向验证、门禁脚本和全量 pytest，提交 `ci(评测): 接入 timing gate 回归门禁`。
+
+验证计划：
+
+- P3-3 文档阶段：`git diff --check`、文档占位词扫描、U+FFFD 扫描。
+- P3-3A：`python -m pytest tests/test_timing_signal_audit.py tests/test_timing_gate_prompt_policy.py -v`。
+- P3-3B：`python -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py -v`、`bash scripts/run_timing_gate_gate.sh`、全量 `python -B -m pytest tests/ -v -p no:cacheprovider`。
+
+提交边界：
+
+- 文档 / 计划阶段单独提交：`docs(评测): 设计 TimingGate 持续评估`。
+- P3-3A 单独提交：`feat(评测): 支持时机信号标注复跑`。
+- P3-3B 单独提交：`ci(评测): 接入 timing gate 回归门禁`。
 
 ## 已完成阶段详情：P3-1 SSE 真 token 流式剩余收敛
 
