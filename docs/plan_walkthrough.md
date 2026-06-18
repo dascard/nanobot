@@ -4,7 +4,7 @@
 更新日期：2026-06-18
 本轮计划写入日期：2026-06-18
 
-本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。当前焦点切到 P1-8「模型能力校验」：先补设计与实现计划，再按 TDD 推进 image / tools / stream 能力过滤和降级。
+本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。当前焦点仍是 P1-8「模型能力校验」：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，当前阶段收口实现计划，下一步从能力归一化红灯测试开始按 TDD 推进 image / tools / stream 能力过滤和降级。
 
 ## 当前目标
 
@@ -66,7 +66,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-5 | 已完成 | Prompt legacy 收口 | live `fallback_v1` 已禁用，评估入口已转 V2，legacy / managed 管理写入口已降级为只读迁移入口 | `afc3dd4` / `99c1803` / `5009034` |
 | P1-6 | 已完成 | 删除冗余提示词资产并去版本化 | 旧任务 prompt、V1 live 分支、legacy 管理面、旧资产删除、canonical 命名兼容层和文档最终验证均已完成 | `4fe00bb` / `docs(计划): 同步提示词收口最终状态` |
 | P1-7 | 已完成 | 残余同步 IO 审计与收口 | 贴纸 fallback、图片附件预处理和 Direct 工具同步 IO 守卫均已落地，路线项 2 已完成收口 | `8ce5210` / `d96e7cd` / `c7e91a9` / `641d080` / `0489bac` / `b3d27f5` |
-| P1-8 | 当前下一阶段 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `docs(模型能力): 设计请求能力校验` / `docs(计划): 记录模型能力校验计划` / `feat(路由): 按模型能力校验请求` |
+| P1-8 | 计划收口，待实现 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `ded7213` / `docs(计划): 记录模型能力校验计划` / `test(模型能力): 覆盖能力归一化红灯` |
 | P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
 | P2-2 | 待执行 | 标准化请求 / 响应信封 | `/chat`、流式 done、`/group/message`、push 共享响应结构，私聊也返回 `reply_meta` | `refactor(消息): 统一响应信封` |
 | P2-3 | 待执行 | QQ 出站渲染契约 | 输出结构化 segments，图片和 HTML 渲染集中在出口层 | `feat(渲染): 定义 QQ 出站消息契约` |
@@ -77,7 +77,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 当前详细计划：P1-8 模型能力校验
 
-状态：待设计、待计划、待实现。`docs/todo.md` 路线项 3 是当前主参考；它的进度可能不会实时反映每个提交，因此后续推进时同时以本文件、`.Codex/plans/` 和提交记录校准。
+状态：设计已提交，计划进入提交收口，代码实现尚未开始。`docs/todo.md` 路线项 3 是当前主参考；它的进度可能不会实时反映每个提交，因此后续推进时同时以本文件、`.Codex/plans/` 和提交记录校准。`docs/TODO_LIST.md` 仍是历史清单，不能作为当前优先级来源。
 
 目标：
 
@@ -102,9 +102,9 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 已确认 P1-7 已完成：定向测试 `186 passed, 20 warnings`，全量测试 `1222 passed, 6 skipped, 113 warnings`，并随 `b3d27f5` 归档。
 - [x] 已从 `docs/todo.md` 确认下一优先级为路线项 3「请求构造按模型能力校验」。
 - [x] 已完成 P1-8 只读审计：模型 registry / overrides、Bridge 图片和 stream 数据流、现有测试覆盖缺口均已梳理。
-- [ ] 写入设计文档：`docs/superpowers/specs/2026-06-18-model-capability-validation-design.md`，覆盖能力字段、过滤策略、降级策略、手动模型策略和测试计划。
-- [ ] 写入实现计划：`.Codex/plans/model-capability-validation.md`，按 TDD 拆分红灯、绿灯、重构和阶段提交。
-- [ ] 任务 1：先补红灯测试，覆盖 registry 能力归一化、override null fallback、`get_ordered_candidates(required_capabilities=...)` 硬过滤，以及 Bridge 带图请求必须要求 vision 候选。
+- [x] 写入设计文档：`docs/superpowers/specs/2026-06-18-model-capability-validation-design.md`，覆盖能力字段、过滤策略、降级策略、手动模型策略和测试计划。提交：`ded7213 docs(模型能力): 设计请求能力校验`。
+- [x] 写入实现计划：`.Codex/plans/model-capability-validation.md`，按 TDD 拆分红灯、绿灯、重构和阶段提交。
+- [ ] 任务 1：先补红灯测试，覆盖 registry 能力归一化、override null fallback、`get_ordered_candidates(required_capabilities=...)` 硬过滤，以及 Bridge 带图请求必须要求 vision 候选；完成后单独提交 `test(模型能力): 覆盖能力归一化红灯`。
 - [ ] 任务 2：为模型注册 / overrides 增加结构化能力归一化，兼容顶层字段和 `capabilities` 嵌套输入，并把能力变化纳入 registry 更新检测。
 - [ ] 任务 3：扩展候选排序接口，支持 `required_capabilities` 严格过滤，并补 no-candidate 诊断信息；不改旧 `required_tags` 软过滤语义。
 - [ ] 任务 4：让直接 New API 请求从 messages / tools / stream 自动推导能力需求，避免 `/chat-step` 等非 Bridge 入口绕过过滤。
@@ -568,4 +568,4 @@ P1-6 验收重点：
 
 ## 下一步
 
-P1-7 已完成收口。下一优先级是 P1-8 模型能力校验：为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，并在请求构造前按能力过滤和降级；之后进入 P2 的 platform 维度底座。TimingGate 真实日志标注 / CI 接入属于后续运营项，不抢占 P1 后续实现顺序。
+P1-7 已完成收口。当前优先级是 P1-8 模型能力校验：设计已提交，计划收口后先从能力归一化红灯测试开始，为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，并在请求构造前按能力过滤和降级。P1-8 完成后再进入 P2 的 platform 维度底座；TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P1 执行顺序。
