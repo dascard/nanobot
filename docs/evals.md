@@ -102,6 +102,15 @@ P4-2 已将 Admin 标注工作台拆为后端契约和 WebUI 两个阶段，设�
 python -B -m evals.run --suite capability_model_routing --baseline evals/baselines/capability_model_routing.json --min-pass-rate 1.0 --max-new-failures 0
 ```
 
+## 能力契约数据集规划
+
+P4-3 设计文档为 `docs/superpowers/specs/2026-06-18-capability-contract-eval-datasets-design.md`。本阶段扩展两个 per-capability 数据集：
+
+- `capability_reply_contract`：组织群聊回复合同样本，case 内 `suite` 复用 `reply_contract` / `group_reply`，不新增 runner。
+- `capability_rendering_contract`：组织响应信封到 QQ 出站消息的渲染样本，case 内 `suite` 使用新增 `rendering_contract` runner。
+
+`rendering_contract` runner 只做离线渲染：读取 `case.input.envelope`，调用 `render_qq_outbound_envelope()`，把最终字符串写入 `EvalOutput.reply_text` 和 `output.raw["rendered_message"]`，把 `reply_meta` 写入 `EvalOutput.reply_meta`。评分继续复用 `must_contain`、`must_not_contain`、`send_mode`、`reply_to_message_id` 和 `mentions`。
+
 ## RAG Benchmark 边界
 
 `evals/rag_benchmark/` 保持独立 benchmark 入口，不并入通用 `EvalCase`。原因是 RAG benchmark 需要独立的召回样本、索引上下文和评分口径；通用 candidates 闭环只负责把可评分的用户交互样本沉淀为稳定 case。
@@ -115,4 +124,4 @@ python -B -m evals.run --suite capability_model_routing --baseline evals/baselin
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；RAG 标注闭环和更多 suite 的 PR gate 留在 P4 后续阶段推进。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 聚焦 `capability_reply_contract` / `capability_rendering_contract` 数据集。RAG 标注闭环和更多 suite 的 PR gate 留在 P4-4 / P4-5 推进。
