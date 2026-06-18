@@ -4,11 +4,11 @@
 更新日期：2026-06-18
 本轮计划写入日期：2026-06-18
 
-本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 任务 1-6 已随 `597a514 refactor(提示词): 删除旧版提示词资产` 归档；任务 7「建立无版本 canonical prompt 命名兼容层」已随 `4fe00bb refactor(提示词): 建立无版本运行时命名` 归档。当前进入任务 8：文档同步与最终验证。
+本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交、`docs/todo.md` 和 P1-7 设计文档重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」设计已随 `8ce5210 docs(同步IO): 设计残余阻塞收口` 归档。当前焦点切到 P1-7 实现计划与任务 1：收口 `background_tasks=None` 贴纸预览缓存 fallback。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口，以及 P1-6 的任务模板迁移、V1 live 分支封存、旧管理面下线、旧资产删除、无版本命名兼容层和文档最终验证均已完成。下一步回到 `docs/todo.md` 的后续路线：P1-7 残余同步 IO 审计、P1-8 模型能力校验，以及 P2 的 platform 维度底座。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口，以及 P1-6 的任务模板迁移、V1 live 分支封存、旧管理面下线、旧资产删除、无版本命名兼容层和文档最终验证均已完成。当前进入 `docs/todo.md` 路线项 2 的最后收口：P1-7 残余同步 IO 审计与 async 热路径隔离。P1-7 完成后，下一优先级回到 P1-8 模型能力校验，以及 P2 的 platform 维度底座。
 
 ## 文档口径
 
@@ -65,7 +65,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-4 | 已完成 | H29 第一刀：提取 Prompt Runtime 请求组装 | 从 `handle_message()` 中抽出 `PromptRuntimeInput` 构造边界，不移动 trace、tool plan、conversation 注入和 audit 异常处理 | `refactor(桥接): 提取提示词运行时组装` |
 | P1-5 | 已完成 | Prompt legacy 收口 | live `fallback_v1` 已禁用，评估入口已转 V2，legacy / managed 管理写入口已降级为只读迁移入口 | `afc3dd4` / `99c1803` / `5009034` |
 | P1-6 | 已完成 | 删除冗余提示词资产并去版本化 | 旧任务 prompt、V1 live 分支、legacy 管理面、旧资产删除、canonical 命名兼容层和文档最终验证均已完成 | `4fe00bb` / `docs(计划): 同步提示词收口最终状态` |
-| P1-7 | 已部分完成，待继续 | 连接池复用与残余同步 IO 审计 | 共享 `aiohttp.ClientSession` 已落地；继续审计 compaction / image / sticker 同步 IO | `4550aca` / `2bf4ee7` |
+| P1-7 | 设计完成，计划已写入，待实现 | 残余同步 IO 审计与收口 | 已确认唯一必修风险是贴纸预览 `background_tasks=None` fallback；下一步修 async service 边界并补图片 / Direct 工具 `to_thread` 守卫 | `8ce5210` / `docs(计划): 校准同步 IO 推进计划` |
 | P1-8 | 待执行 | 模型能力校验 | 为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，请求构造前按能力过滤和降级 | `feat(路由): 按模型能力校验请求` |
 | P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
 | P2-2 | 待执行 | 标准化请求 / 响应信封 | `/chat`、流式 done、`/group/message`、push 共享响应结构，私聊也返回 `reply_meta` | `refactor(消息): 统一响应信封` |
@@ -75,7 +75,44 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-2 | 运营项 | TimingGate 持续评估 | 用更多人工标注样本复跑审计，接入外部 CI / PR gate | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
 
-## 当前详细计划：P1-6 删除冗余提示词资产并去版本化
+## 当前详细计划：P1-7 残余同步 IO 审计与收口
+
+状态：设计已完成，实施计划已写入，代码实现待执行。P1-7 不做全仓 `urllib` / `requests` 异步化，目标是确认同步 IO 是否仍会直接落在 async 热路径，并只修已经确认的风险点。
+
+设计文档：`docs/superpowers/specs/2026-06-18-sync-io-audit-design.md`
+
+实现计划：`.Codex/plans/sync-io-audit.md`
+
+当前结论：
+
+- [x] 共享 `aiohttp.ClientSession` 已随 `4550aca` 和 `2bf4ee7` 落地，核心 LLM 请求不再逐请求创建 session。
+- [x] P1-7 只读审计已完成，并随 `8ce5210` 写入设计文档。
+- [x] `nanobot_kt/image_pipeline.py` 主链路已由 `NanobotBridge.handle_message()` 使用 `await asyncio.to_thread(prepare_image_parts, ...)` 卸载。
+- [x] 私聊 / 群聊图片预缓存通过 Starlette `BackgroundTasks` 执行同步函数，不直接阻塞 ASGI event loop。
+- [x] `image_generation`、`image_summary` 和当前注册的 `ai_daily` 工具入口已在 `_execute()` 内使用 `asyncio.to_thread()` 包住同步 HTTP / 抓取逻辑。
+- [x] `daily_digest_scheduler()` 的 `time.sleep()` 运行在独立 daemon thread 中，不属于 ASGI event loop 阻塞。
+- [x] `core/compaction.py` 当前从同步 `/context` endpoint 调用，风险是占用 worker，不是 event loop 阻塞。
+- [x] 已确认必修风险：`app/group_ingress/helpers.py` 的 `register_group_stickers_from_message()` 在 `background_tasks is None` 时会直接调用 `cache_sticker_preview()`，可能从 `GroupIngressService.handle()` 的 async 路径进入。
+- [x] 已写入 P1-7 实现计划，拆为 4 个阶段性提交：贴纸 fallback 收口、图片附件守卫、Direct 工具守卫、路线文档收尾。
+- [ ] 任务 1：按 TDD 修复贴纸预览 `background_tasks=None` fallback，确保 async service 不直接执行同步 DNS / urllib / 文件 IO / 图片解码。
+- [ ] 任务 2：补图片附件 `to_thread` 回归守卫。
+- [ ] 任务 3：补 `image_generation`、`image_summary`、`ai_daily` Direct 工具 `to_thread` 回归守卫。
+- [ ] 任务 4：同步 `docs/todo.md`、本文件和 `.Codex/plans/sync-io-audit.md` 的最终状态，并运行定向与全量验证。
+
+下一步执行顺序：
+
+1. 提交本轮 P1-7 计划校准文档，保持计划阶段单独 commit。
+2. 进入任务 1，先写红灯测试，证明 `background_tasks=None` 当前不会经过 `asyncio.to_thread()`。
+3. 做最小实现：helper 不再在未知调用上下文里直接缓存；async service 负责 `await asyncio.to_thread(...)` 或明确跳过即时缓存。
+4. 跑贴纸定向回归并单独提交 `fix(贴纸): 隔离预览缓存同步 IO`。
+
+验证要求：
+
+- 文档计划提交前运行 `git diff --check`，并扫描计划占位符。
+- 任务 1 至任务 3 每个阶段都必须先定向验证再 commit。
+- P1-7 收尾阶段必须运行相关定向测试和 `python -B -m pytest tests/ -q -p no:cacheprovider --durations=20`。
+
+## 已完成阶段详情：P1-6 删除冗余提示词资产并去版本化
 
 状态：已完成。P1-6 任务 1-6 已完成：旧管理入口已由后端 410 catch-all 接管，WebUI 旧 route / 旧页面组件已删除，旧任务 prompt 已迁移到 V2 task template，V1 live 分支已封存，旧资产删除、禁止项扫描、相关回归、WebUI 构建和全量测试均已通过，并已随 `597a514` 单独提交归档。任务 7「建立无版本 canonical prompt 命名兼容层」已完成红灯、绿灯实现、相关回归、WebUI 构建、禁止项扫描和全量测试，并已随 `4fe00bb` 单独提交归档。任务 8 已把 `docs/todo.md`、本文件、P1-6 设计文档和实现计划同步到当前事实，并通过最终引用守卫和回归验证。
 
@@ -485,4 +522,4 @@ P1-6 验收重点：
 
 ## 下一步
 
-P1-6 已完成收口。`docs/todo.md` 中的后续路线仍可作为优先级参考：优先看 P1-7 残余同步 IO 审计、P1-8 模型能力校验，以及 P2 的 platform 维度底座；TimingGate 真实日志标注 / CI 接入属于后续运营项，不抢占 P1 后续实现顺序。
+先完成 P1-7 任务 1：贴纸预览 `background_tasks=None` fallback 的 async 热路径收口。P1-7 收尾后，`docs/todo.md` 中的下一优先级是 P1-8 模型能力校验，以及 P2 的 platform 维度底座；TimingGate 真实日志标注 / CI 接入属于后续运营项，不抢占 P1 后续实现顺序。
