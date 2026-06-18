@@ -1,0 +1,20 @@
+{
+  "id": "reply_quote_to_bot_001",
+  "suite": "reply_contract",
+  "description": "用户引用 bot 历史消息时应使用 quote 发送模式。",
+  "input": {
+    "message": "这条我补充一下",
+    "is_reply_to_bot": true,
+    "reply_to_message_id": "bot-msg-42",
+    "sender_id": "user-1",
+    "sender_name": "用户一",
+    "self_id": "bot-1"
+  },
+  "expected": {
+    "should_reply": true,
+    "required_tools": ["reply"],
+    "send_mode": "quote",
+    "reply_to_message_id": "bot-msg-42"
+  },
+  "tags": ["capability", "reply_contract", "quote"]
+}

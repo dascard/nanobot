@@ -309,3 +309,19 @@ def test_capability_dataset_uses_case_suite_as_runner():
     report = run_suite("capability_model_routing")
     assert report.total == len(cases)
     assert report.failed == 0
+
+
+def test_capability_reply_contract_dataset_uses_reply_runner():
+    from evals.run import load_cases, run_suite
+
+    cases = load_cases("capability_reply_contract")
+
+    assert {case.id for case in cases} == {
+        "reply_quote_to_bot_001",
+        "reply_at_bot_mention_mode_001",
+        "reply_directed_to_other_no_reply_001",
+    }
+    assert {case.suite for case in cases} == {"reply_contract"}
+    report = run_suite("capability_reply_contract")
+    assert report.total == len(cases)
+    assert report.failed == 0

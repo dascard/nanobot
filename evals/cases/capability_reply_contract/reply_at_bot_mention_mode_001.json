@@ -1,0 +1,20 @@
+{
+  "id": "reply_at_bot_mention_mode_001",
+  "suite": "reply_contract",
+  "description": "用户 at bot 时应使用 mention 发送模式，并保留 mentions。",
+  "input": {
+    "message": "@nanobot 看一下这个问题",
+    "is_at_bot": true,
+    "mentions": [{"user_id": "10001"}],
+    "sender_id": "user-2",
+    "sender_name": "用户二",
+    "self_id": "bot-1"
+  },
+  "expected": {
+    "should_reply": true,
+    "required_tools": ["reply"],
+    "send_mode": "mention",
+    "mentions": ["10001"]
+  },
+  "tags": ["capability", "reply_contract", "mention"]
+}

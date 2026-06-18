@@ -109,6 +109,12 @@ P4-3 设计文档为 `docs/superpowers/specs/2026-06-18-capability-contract-eval
 - `capability_reply_contract`：组织群聊回复合同样本，case 内 `suite` 复用 `reply_contract` / `group_reply`，不新增 runner。
 - `capability_rendering_contract`：组织响应信封到 QQ 出站消息的渲染样本，case 内 `suite` 使用新增 `rendering_contract` runner。
 
+Reply contract gate：
+
+```bash
+python -B -m evals.run --suite capability_reply_contract --baseline evals/baselines/capability_reply_contract.json --min-pass-rate 1.0 --max-new-failures 0
+```
+
 `rendering_contract` runner 只做离线渲染：读取 `case.input.envelope`，调用 `render_qq_outbound_envelope()`，把最终字符串写入 `EvalOutput.reply_text` 和 `output.raw["rendered_message"]`，把 `reply_meta` 写入 `EvalOutput.reply_meta`。评分继续复用 `must_contain`、`must_not_contain`、`send_mode`、`reply_to_message_id` 和 `mentions`。
 
 ## RAG Benchmark 边界

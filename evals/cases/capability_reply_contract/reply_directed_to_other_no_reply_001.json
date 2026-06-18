@@ -1,0 +1,18 @@
+{
+  "id": "reply_directed_to_other_no_reply_001",
+  "suite": "reply_contract",
+  "description": "用户明确指向他人且未 at bot 时应静默。",
+  "input": {
+    "message": "小明你怎么看这段日志",
+    "is_directed_to_other": true,
+    "trigger_reason": "ambient",
+    "sender_id": "user-3",
+    "sender_name": "用户三",
+    "self_id": "bot-1"
+  },
+  "expected": {
+    "should_reply": false,
+    "forbidden_tools": ["reply"]
+  },
+  "tags": ["capability", "reply_contract", "directed_to_other", "no_reply"]
+}
