@@ -14,7 +14,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 文档口径
 
-- `docs/todo.md` 是当前架构路线的主参考，但它只记录路线级状态；当它与提交记录、`.Codex/plans/` 任务进度或本文件冲突时，以已提交代码和本文件的当前详细计划为准。本轮已重新核对路线项 5，确认 P2-2 设计已提交、实现计划已写入，尚未进入代码实现。
+- `docs/todo.md` 是当前架构路线的主参考，但它只记录路线级状态；当它与提交记录、`.Codex/plans/` 任务进度或本文件冲突时，以已提交代码和本文件的当前详细计划为准。本轮已重新核对路线项 5，确认 P2-2 响应信封兼容双写已完成并通过验证；路线项 5 当前只剩 `client_meta` 边界层解析 / 校验尾项。
 - `docs/TODO_LIST.md` 是历史完成清单，目前未跟踪且存在滞后状态，例如仍描述 Prompt V2 默认未启用、TimingGate 阶段仍在中途；后续仅作为历史核对材料，不作为优先级来源。
 - 本文件记录「下一阶段怎么推进」，每次阶段完成后要同步状态并单独提交。
 
@@ -728,4 +728,6 @@ P1-6 验收重点：
 
 ## 下一步
 
-P2-2「标准化请求 / 响应信封」已完成只读审计，设计文档已随 `c984036` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`。代码阶段先做统一信封 builder，再按 API owner、群聊 owner、push owner 拆分互不干扰的写入面；`api/routes.py` 的 push call site 由主线程或 API owner 单独集成，避免多个 worker 并行修改同一文件。P2-3 的出站 segments / CQ renderer / HTML-to-pic 不在本阶段展开。TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P2 执行顺序。
+路线项 5 先做 `client_meta` 边界层解析 / 校验尾项：为 `/chat` 和 `/group/message` 统一校验 `platform`、`chat_type` 与 `trace.request_id`，并保留旧 QQ / NapCat 扩展字段兼容。该小阶段设计文档为 `docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，实现计划为 `.Codex/plans/client-meta-boundary-validation.md`。
+
+完成后进入 P2-3「QQ 出站渲染契约」：定义结构化出站 `segments` / CQ renderer / HTML-to-pic 出口层职责。TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P2 执行顺序。
