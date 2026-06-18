@@ -13,6 +13,7 @@ class EvalCase(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
     expected: dict[str, Any] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvalOutput(BaseModel):

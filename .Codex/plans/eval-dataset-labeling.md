@@ -39,7 +39,7 @@
 - 修改：`evals/runners/sticker_runner.py`
 - 测试：`tests/test_eval_candidate_contract.py`
 
-- [ ] **步骤 1：编写 expected 契约红灯测试**
+- [x] **步骤 1：编写 expected 契约红灯测试**
 
 在 `tests/test_eval_candidate_contract.py` 新增：
 
@@ -62,7 +62,7 @@ def test_validate_expected_accepts_scored_keys():
     validate_expected_contract("model_routing", {"model_used": "vision-model"})
 ```
 
-- [ ] **步骤 2：编写 sticker 历史 expected 红灯测试**
+- [x] **步骤 2：编写 sticker 历史 expected 红灯测试**
 
 同一测试文件新增：
 
@@ -92,7 +92,7 @@ def test_sticker_expected_fields_are_scored():
 
 红灯预期：`ModuleNotFoundError: evals.expected_contract`，或 sticker case 因缺少 `served_sticker_id` / `send_source` 输出而失败。
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -102,7 +102,7 @@ python -m pytest tests/test_eval_candidate_contract.py::test_validate_expected_r
 
 预期：至少 1 个失败，失败点来自新契约或历史未评分字段。
 
-- [ ] **步骤 4：新增 expected 契约 helper**
+- [x] **步骤 4：新增 expected 契约 helper**
 
 创建 `evals/expected_contract.py`：
 
@@ -155,7 +155,7 @@ def validate_expected_contract(suite: str, expected: Mapping[str, Any]) -> None:
         raise ValueError(f"expected contains unscored keys for suite={suite}: {unknown}")
 ```
 
-- [ ] **步骤 5：给 EvalCase 增加 meta**
+- [x] **步骤 5：给 EvalCase 增加 meta**
 
 在 `evals/schema.py` 的 `EvalCase` 增加：
 
@@ -163,7 +163,7 @@ def validate_expected_contract(suite: str, expected: Mapping[str, Any]) -> None:
     meta: dict[str, Any] = Field(default_factory=dict)
 ```
 
-- [ ] **步骤 6：补齐 scorer 对 sticker 字段的评分**
+- [x] **步骤 6：补齐 scorer 对 sticker 字段的评分**
 
 在 `evals/scorers.py` 末尾附近增加：
 
@@ -181,7 +181,7 @@ def validate_expected_contract(suite: str, expected: Mapping[str, Any]) -> None:
             errors.append(f"send_source mismatch: expected={exp['send_source']} actual={actual}")
 ```
 
-- [ ] **步骤 7：补齐 sticker runner 输出**
+- [x] **步骤 7：补齐 sticker runner 输出**
 
 在 `evals/runners/sticker_runner.py`：
 
@@ -200,7 +200,7 @@ def validate_expected_contract(suite: str, expected: Mapping[str, Any]) -> None:
 
 如果实际 endpoint 暴露了 canonical id，应优先读取响应或 header 中的真实值；否则保持 runner 内部构造的 deterministic 值。
 
-- [ ] **步骤 8：运行契约测试绿灯**
+- [x] **步骤 8：运行契约测试绿灯**
 
 运行：
 
@@ -210,7 +210,7 @@ python -m pytest tests/test_eval_candidate_contract.py -v
 
 预期：本任务新增测试通过。
 
-- [ ] **步骤 9：运行相邻回归**
+- [x] **步骤 9：运行相邻回归**
 
 运行：
 
@@ -220,7 +220,7 @@ python -m pytest tests/test_eval_baseline.py tests/test_tools_package.py -k "sti
 
 预期：相关回归通过。
 
-- [ ] **步骤 10：提交任务 1**
+- [x] **步骤 10：提交任务 1**
 
 运行：
 
@@ -229,6 +229,13 @@ git diff --check -- evals/expected_contract.py evals/schema.py evals/scorers.py 
 git add evals/expected_contract.py evals/schema.py evals/scorers.py evals/runners/sticker_runner.py tests/test_eval_candidate_contract.py
 git commit -m "fix(评测): 校验可评分期望字段"
 ```
+
+验证记录：
+
+- 红灯：`python -m pytest tests/test_eval_candidate_contract.py::test_validate_expected_rejects_empty_needs_label_and_unknown_key tests/test_eval_candidate_contract.py::test_sticker_expected_fields_are_scored tests/test_eval_candidate_contract.py::test_sticker_runner_outputs_expected_contract_fields -v`，结果 `3 failed, 1 warning in 6.26s`；失败点为缺少 `evals.expected_contract`、scorer 忽略 `served_sticker_id/send_source`、runner 未输出 `served_sticker_id`。
+- 绿灯：`python -m pytest tests/test_eval_candidate_contract.py -v`，结果 `4 passed, 1 warning in 0.93s`。
+- 相邻回归：`python -m pytest tests/test_eval_baseline.py -v`，结果 `10 passed, 1 warning in 1.06s`。
+- Regression eval：`PYTHONDONTWRITEBYTECODE=1 python -B -m evals.run --suite regression`，结果 `total=11 passed=11 failed=0`。
 
 ---
 

@@ -40,6 +40,10 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
             db = Session()
 
             try:
+                local_path = os.path.join(tmp_cache_dir, f"eval_sticker_{sticker_id}.png")
+                with open(local_path, "wb") as f:
+                    f.write(b"fake-png-content-for-eval")
+
                 row = StickerMemory(
                     id=sticker_id,
                     file_ref="https://multimedia.nt.qq.com.cn/download?appid=1407&fileid=test",
@@ -49,6 +53,7 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
                     emotions_json="[]",
                     status="active",
                     preview_status="ok",
+                    local_path=local_path,
                     chat_stream_id="qq:123:group",
                 )
                 db.add(row)
@@ -56,6 +61,8 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
 
                 result = expand_sticker_refs_in_content(inp["content"], db)
                 out.raw["expanded_content"] = result
+                if "/api/v1/stickers/" in result and "gchat.qpic.cn" not in result:
+                    out.raw["send_source"] = "public_proxy"
             finally:
                 db.close()
 
@@ -129,6 +136,7 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
                 out.http_status = resp.status_code
                 out.content_type = resp.headers.get("content-type", "")
                 out.raw["response_body_len"] = len(resp.content)
+                out.raw["served_sticker_id"] = duplicate_of_id or sticker_id
             finally:
                 app.dependency_overrides.clear()
 

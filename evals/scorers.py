@@ -121,6 +121,19 @@ def score_case(case: EvalCase, output: EvalOutput) -> dict:
         if not str(output.content_type or "").startswith(exp["content_type_prefix"]):
             errors.append(f"content_type mismatch: expected prefix={exp['content_type_prefix']} actual={output.content_type}")
 
+    # sticker transport fields
+    if "served_sticker_id" in exp:
+        actual = output.raw.get("served_sticker_id")
+        if str(actual or "") != str(exp["served_sticker_id"]):
+            errors.append(
+                f"served_sticker_id mismatch: expected={exp['served_sticker_id']} actual={actual}"
+            )
+
+    if "send_source" in exp:
+        actual = output.raw.get("send_source")
+        if actual != exp["send_source"]:
+            errors.append(f"send_source mismatch: expected={exp['send_source']} actual={actual}")
+
     # forbidden_terms — check jargon_terms / expression_terms in db_writes
     forbidden_terms = exp.get("forbidden_terms", [])
     if isinstance(forbidden_terms, str):
