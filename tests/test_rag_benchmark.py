@@ -675,12 +675,24 @@ def test_rag_benchmark_cli_passes_manual_deterministic_gate(tmp_path, capsys):
 
 def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     from evals.rag_benchmark.baseline import load_rag_baseline
+    from evals.rag_benchmark.cases import load_cases
 
     baseline = load_rag_baseline("evals/baselines/rag_benchmark.json")
+    manual_cases = [
+        case
+        for case in load_cases(
+            manual_dir="evals/cases/rag_benchmark/manual",
+            generated_dir="tmp/rag_benchmark/__contract_empty__",
+        )
+        if case.status == "enabled"
+    ]
+    baseline_case_ids = {str(item.get("case_id") or "") for item in baseline["case_scores"]}
+    manual_case_ids = {case.id for case in manual_cases}
 
     assert baseline["suite"] == "rag_benchmark"
     assert baseline["provider_mode"] == "deterministic"
     assert baseline["case_scope"] == "manual"
-    assert baseline["metrics"]["overall"]["total_cases"] >= 1
+    assert baseline["metrics"]["overall"]["total_cases"] == len(manual_cases)
+    assert baseline_case_ids == manual_case_ids
     assert "case_scores" in baseline
     assert all("case_id" in item and "ok" in item for item in baseline["case_scores"])
