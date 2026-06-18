@@ -12,7 +12,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, List
 
 import aiohttp
@@ -655,6 +655,25 @@ async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
         return False
 
 
+async def push_envelope_to_qq(
+    target_type: str,
+    target_id: str,
+    envelope: Mapping[str, Any] | None,
+) -> bool:
+    """从标准响应信封派生旧 QQbot push message。"""
+    from core.message_envelope import envelope_to_message
+
+    message = envelope_to_message(envelope)
+    if not message.strip():
+        logger.warning(
+            "Skip empty QQ push envelope target_type=%s target_id=%s",
+            target_type,
+            target_id,
+        )
+        return False
+    return await push_to_qq(target_type, target_id, message)
+
+
 # ── 定时任务调度 ──
 
 
@@ -710,12 +729,26 @@ async def run_scheduled_tasks() -> int:
 
             task.last_run_at = now
             db.commit()
-            ok = await push_to_qq(task.target_type, task.target_id, content)
+            from core.message_envelope import build_chat_response_envelope
+
+            envelope = build_chat_response_envelope(
+                status="ok",
+                answer=content,
+                meta={
+                    "platform": "qq",
+                    "chat_type": "scheduled_task",
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "target_type": task.target_type,
+                    "target_id": task.target_id,
+                },
+            )
+            ok = await push_envelope_to_qq(task.target_type, task.target_id, envelope)
             if ok:
                 executed += 1
                 logger.info(f"Task [{task.name}] completed and pushed")
             else:
-                logger.error(f"Task [{task.name}] push_to_qq failed")
+                logger.error(f"Task [{task.name}] push_envelope_to_qq failed")
     except Exception as e:
         logger.exception(f"Scheduled tasks runner failed: {e}")
     finally:

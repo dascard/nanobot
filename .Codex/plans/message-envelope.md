@@ -14,12 +14,13 @@
 
 - 设计文档：`docs/superpowers/specs/2026-06-18-message-envelope-design.md`，提交 `c984036 docs(消息): 设计响应信封标准`。
 - 当前计划文件路径按项目约定使用 `.Codex/plans/message-envelope.md`。
-- `docs/todo.md` 路线项 5 已进入设计阶段；代码未落地前不要把路线项 5 标记为完成。
+- `docs/todo.md` 路线项 5 正在代码落地阶段；共享 builder、`/chat`、`/group/message` 和 push 适配已完成，route push 集成与响应侧文档仍待推进。
 - `/chat` 非流式成功响应已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status`、`user_id`、`answer`、`answer_chunks` 和 `unprocessed_logs`。
 - `/chat` SSE done 已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status="done"` 与 `answer`；SSE framing 仍是 `data: {...}`，不要改成 `event: done`。
 - `/chat` 已把过滤后的 `private_reply_meta` 写入非流式成功响应和 SSE done 响应。
 - `/group/message` route 只返回 `GroupIngressService.handle(req)` 的 dict；群聊响应包装已放在 `app/group_ingress/service.py`，route 层无需改动。
 - `push_to_qq(target_type, target_id, message) -> bool` 的旧签名必须保持。
+- `push_envelope_to_qq(target_type, target_id, envelope) -> bool` 已在 `core/daily_digest.py` 中作为旧 QQbot push 适配层落地；定时任务推送已先构造标准信封，再通过适配层派生旧 `message` 字段。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
 ## 并行执行策略
@@ -995,7 +996,7 @@ git commit -m "feat(消息): 返回群聊响应信封"
 
 **并行约束：** 本任务不改 `api/routes.py`。手动任务运行和流式断连 push 的 route 集成放到任务 5。
 
-- [ ] **步骤 1：编写 push helper 红灯测试**
+- [x] **步骤 1：编写 push helper 红灯测试**
 
 创建 `tests/test_push_envelope.py`：
 
@@ -1088,7 +1089,7 @@ def test_push_envelope_to_qq_skips_empty_message(monkeypatch):
     assert calls == []
 ```
 
-- [ ] **步骤 2：运行 push 红灯**
+- [x] **步骤 2：运行 push 红灯**
 
 运行：
 
@@ -1098,7 +1099,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_push_envelope.py -v -p 
 
 预期：失败，报错包含 `AttributeError: module 'core.daily_digest' has no attribute 'push_envelope_to_qq'`。
 
-- [ ] **步骤 3：实现 `push_envelope_to_qq()`**
+- [x] **步骤 3：实现 `push_envelope_to_qq()`**
 
 在 `core/daily_digest.py` 的 `push_to_qq()` 后添加：
 
@@ -1114,7 +1115,7 @@ async def push_envelope_to_qq(target_type: str, target_id: str, envelope: dict) 
     return await push_to_qq(target_type, target_id, message)
 ```
 
-- [ ] **步骤 4：让定时任务使用信封适配层**
+- [x] **步骤 4：让定时任务使用信封适配层**
 
 在 `run_scheduled_tasks()` 中替换：
 
@@ -1144,7 +1145,7 @@ ok = await push_envelope_to_qq(task.target_type, task.target_id, envelope)
 
 保留 `last_run_at` 在 push 前推进的现有语义。
 
-- [ ] **步骤 5：运行 push 绿灯和回归**
+- [x] **步骤 5：运行 push 绿灯和回归**
 
 运行：
 
@@ -1157,7 +1158,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交 push 适配**
+- [x] **步骤 6：提交 push 适配**
 
 ```bash
 git add core/daily_digest.py tests/test_push_envelope.py
@@ -1427,13 +1428,13 @@ git commit -m "docs(计划): 同步响应信封状态"
 
 ## 验收清单
 
-- [ ] `/chat` 非流式成功响应包含 `reply`、`messages`、`reply_meta` 和 `meta`，同时保留 `answer`、`answer_chunks`、`status`、`user_id` 和 `unprocessed_logs`。
-- [ ] `/chat` 静默 / 不回复短路响应包含空 `reply`、空 `messages`、空 `reply_meta` 和基础 `meta`。
-- [ ] `/chat` SSE done 事件包含 `reply`、`messages`、`reply_meta` 和 `meta`，同时保留 `status="done"` 和 `answer`。
-- [ ] `/group/message` continue / wait / no_reply / prompt audit 分支都包含标准信封字段，同时保留旧调度字段。
-- [ ] 对外 `reply_meta` 不暴露 `_agent_result`、`_no_reply` 和 `_no_reply_reason`。
-- [ ] `push_to_qq(target_type, target_id, message) -> bool` 旧签名保持不变。
-- [ ] `push_envelope_to_qq(target_type, target_id, envelope) -> bool` 可从 `reply` 或 `messages` 派生旧 `message`。
+- [x] `/chat` 非流式成功响应包含 `reply`、`messages`、`reply_meta` 和 `meta`，同时保留 `answer`、`answer_chunks`、`status`、`user_id` 和 `unprocessed_logs`。
+- [x] `/chat` 静默 / 不回复短路响应包含空 `reply`、空 `messages`、空 `reply_meta` 和基础 `meta`。
+- [x] `/chat` SSE done 事件包含 `reply`、`messages`、`reply_meta` 和 `meta`，同时保留 `status="done"` 和 `answer`。
+- [x] `/group/message` continue / wait / no_reply / prompt audit 分支都包含标准信封字段，同时保留旧调度字段。
+- [x] 对外 `reply_meta` 不暴露 `_agent_result`、`_no_reply` 和 `_no_reply_reason`。
+- [x] `push_to_qq(target_type, target_id, message) -> bool` 旧签名保持不变。
+- [x] `push_envelope_to_qq(target_type, target_id, envelope) -> bool` 可从 `reply` 或 `messages` 派生旧 `message`。
 - [ ] `api/routes.py` 中 push call site 由单一 owner 集成，没有与群聊 / push worker 发生写冲突。
 - [ ] `docs/message-field-standard.md` 记录响应信封标准和 P2-2 / P2-3 边界。
 - [ ] 定向测试和全量测试通过。
