@@ -697,6 +697,12 @@ def _knowledge_library_tables(conn: Any, engine: Any, db_path: str | None) -> No
     ])
 
 
+def _runtime_tool_decision_platform_column(conn: Any, engine: Any, db_path: str | None) -> None:
+    _add_missing_columns(conn, "runtime_tool_decisions", {
+        "platform": "TEXT DEFAULT ''",
+    })
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_chat_log_metadata_columns", "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -717,6 +723,7 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260526_session_summary_jobs", "session summary jobs", _session_summary_jobs),
     ("20260526_semantic_rag_tables", "semantic rag tables", _semantic_rag_tables),
     ("20260526_knowledge_library_tables", "knowledge library tables", _knowledge_library_tables),
+    ("20260618_runtime_tool_decision_platform", "runtime tool decision platform column", _runtime_tool_decision_platform_column),
 ]
 
 

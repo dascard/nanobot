@@ -621,13 +621,13 @@ class ContentBlockRule(Base):
 
 
 class ToolOverride(Base):
-    """工具权限覆盖——per-group/per-user/per-chat_type 启用/禁用。"""
+    """工具权限覆盖——per-chat_type/per-platform/per-group/per-user 启用/禁用。"""
     __tablename__ = "tool_overrides"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     tool_name = Column(String, nullable=False, index=True)
-    scope_type = Column(String, nullable=False)  # "group" | "user" | "chat_type"
-    scope_id = Column(String, nullable=False)    # group_id / user_id / "private"|"group"
+    scope_type = Column(String, nullable=False)  # "chat_type" | "platform" | "group" | "user"
+    scope_id = Column(String, nullable=False)    # chat_type / platform / group_id / user_id
     enabled = Column(Integer, nullable=False, default=1)
     reason = Column(Text, default="")
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
@@ -646,6 +646,7 @@ class RuntimeToolDecision(Base):
     session_id = Column(String, index=True)
     message_id = Column(String, default="")
     chat_type = Column(String, default="group")  # "group" | "private"
+    platform = Column(String, default="")
     group_id = Column(String, default="")
     user_id = Column(String, default="")
     runtime_preset = Column(String, default="full")  # "none" | "lightweight" | "full"

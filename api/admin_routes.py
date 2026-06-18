@@ -4384,6 +4384,7 @@ def list_runtime_preset_decisions(session_id: str = "", limit: int = 50,
         items.append({
             "id": r.id, "session_id": r.session_id, "message_id": r.message_id,
             "chat_type": r.chat_type, "group_id": r.group_id, "user_id": r.user_id,
+            "platform": getattr(r, "platform", "") or "",
             "runtime_preset": r.runtime_preset,
             "effective_tools": _json.loads(r.effective_tools_json or "[]") if isinstance(r.effective_tools_json or "", str) else [],
             "disabled_reasons": reasons,

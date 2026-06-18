@@ -219,6 +219,7 @@ def test_record_runtime_tool_decision_can_use_injected_db(monkeypatch, db_sessio
         chat_type="group",
         group_id="g1",
         user_id="u1",
+        platform="web",
         runtime_preset="lightweight",
         enabled={"reply": True, "python_sandbox": False},
         disabled={"python_sandbox": "运行时轻量预设"},
@@ -228,6 +229,7 @@ def test_record_runtime_tool_decision_can_use_injected_db(monkeypatch, db_sessio
     db_session.commit()
 
     row = db_session.query(RuntimeToolDecision).filter_by(session_id="s1").one()
+    assert row.platform == "web"
     assert row.runtime_preset == "lightweight"
     assert row.effective_tools_json == '["reply"]'
 

@@ -134,6 +134,39 @@ def test_session_summary_jobs_table_is_created_by_migration():
     assert "next_retry_at" in columns
 
 
+def test_runtime_tool_decision_platform_column_added_to_existing_table(tmp_path):
+    from core.schema_migrations import run_schema_migrations
+
+    db_path = tmp_path / "old.db"
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE runtime_tool_decisions ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "session_id TEXT, "
+            "message_id TEXT, "
+            "chat_type TEXT, "
+            "group_id TEXT, "
+            "user_id TEXT, "
+            "runtime_preset TEXT, "
+            "enabled_tools_json TEXT, "
+            "disabled_tools_json TEXT, "
+            "disabled_reasons_json TEXT, "
+            "effective_tools_json TEXT, "
+            "created_at DATETIME"
+            ")"
+        ))
+
+    run_schema_migrations(engine, db_path=str(db_path))
+
+    columns = {col["name"] for col in inspect(engine).get_columns("runtime_tool_decisions")}
+    assert "platform" in columns
+
+    run_schema_migrations(engine, db_path=str(db_path))
+    columns_again = {col["name"] for col in inspect(engine).get_columns("runtime_tool_decisions")}
+    assert "platform" in columns_again
+
+
 def test_persona_fact_governance_columns_are_added_to_existing_table():
     from core.schema_migrations import run_schema_migrations
 

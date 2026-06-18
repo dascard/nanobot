@@ -1365,6 +1365,28 @@ class TestToolAdmin:
         assert "8888" in user_ids
         assert "30001" not in user_ids
 
+    def test_tool_decisions_returns_platform(self, client, auth_header):
+        from core.runtime_tool_service import record_runtime_tool_decision
+
+        with next(app.dependency_overrides[get_db]()) as db:
+            record_runtime_tool_decision(
+                session_id="s-platform",
+                message_id="m1",
+                chat_type="private",
+                platform="web",
+                runtime_preset="full",
+                enabled={"reply": True},
+                disabled={},
+                effective_tools=["reply"],
+                db=db,
+            )
+            db.commit()
+
+        r = client.get("/api/v1/admin/tools/decisions", headers=auth_header)
+        assert r.status_code == 200, r.text
+        item = next(x for x in r.json()["items"] if x["session_id"] == "s-platform")
+        assert item["platform"] == "web"
+
 
 class TestModelRoutes:
     def test_patch_route_updates_and_reads_back(self, client, auth_header, monkeypatch):
