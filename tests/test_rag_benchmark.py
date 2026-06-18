@@ -431,3 +431,75 @@ def test_reporter_writes_to_tmp_by_default(tmp_path, monkeypatch):
     assert paths["markdown"] == Path("tmp/rag_benchmark/reports/latest.md")
     assert paths["json"].exists()
     assert paths["markdown"].exists()
+
+
+def test_rag_baseline_diff_reports_new_fixed_and_metric_deltas():
+    from evals.rag_benchmark.baseline import (
+        build_rag_baseline_diff,
+        evaluate_rag_gate,
+    )
+
+    baseline = {
+        "suite": "rag_benchmark",
+        "provider_mode": "deterministic",
+        "case_scope": "manual",
+        "metrics": {
+            "overall": {
+                "total_cases": 2,
+                "passed_cases": 1,
+                "pass_rate": 0.5,
+                "hit@5": 0.25,
+                "mrr": 0.1,
+                "degraded_rate": 0.0,
+                "case_false_positive_rate": 0.0,
+                "unexpected_source_rate": 0.0,
+            }
+        },
+        "case_scores": [
+            {"case_id": "fixed_case", "ok": False, "errors": ["old"]},
+            {"case_id": "stable_case", "ok": True, "errors": []},
+        ],
+    }
+    current = {
+        "suite": "rag_benchmark",
+        "provider_mode": "deterministic",
+        "case_scope": "manual",
+        "metrics": {
+            "overall": {
+                "total_cases": 3,
+                "passed_cases": 2,
+                "pass_rate": 2 / 3,
+                "hit@5": 0.5,
+                "mrr": 0.3,
+                "degraded_rate": 0.0,
+                "case_false_positive_rate": 0.0,
+                "unexpected_source_rate": 0.0,
+            }
+        },
+        "case_scores": [
+            {"case_id": "fixed_case", "ok": True, "errors": []},
+            {"case_id": "stable_case", "ok": True, "errors": []},
+            {"case_id": "new_failed_case", "ok": False, "errors": ["new"]},
+        ],
+    }
+
+    diff = build_rag_baseline_diff(current, baseline, baseline_path="baseline.json")
+
+    assert diff["baseline_path"] == "baseline.json"
+    assert diff["total_delta"] == 1
+    assert diff["new_failed_cases"] == ["new_failed_case"]
+    assert diff["fixed_cases"] == ["fixed_case"]
+    assert diff["still_failed_cases"] == []
+    assert diff["metric_deltas"]["overall.hit@5"] == 0.25
+
+    gate = evaluate_rag_gate(
+        current,
+        baseline_diff=diff,
+        min_pass_rate=1.0,
+        max_new_failures=0,
+        max_degraded_rate=0.0,
+    )
+
+    assert gate["passed"] is False
+    assert "pass_rate below threshold" in gate["errors"]
+    assert "new_failed_cases exceeds threshold" in gate["errors"]
