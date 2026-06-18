@@ -185,13 +185,13 @@
 - **关联**：与项 7（reply_meta 是渲染约定的载体）强耦合，建议合并设计；`push_to_qq`（`core/daily_digest.py:498`）是第三条出口，统一时不可漏。
 - **粗略路径**：① 完成四出口只读审计和响应信封设计（已完成）→ ② 写入 `.Codex/plans/message-envelope.md` 实现计划（已完成）→ ③ 抽统一响应信封模型（已完成共享 builder）→ ④ 让 `/chat` 非流式和流式 done 同形态并接入过滤后的 reply_meta（已完成）→ ⑤ 接入 `/group/message` 信封（已完成）→ ⑥ 接入 push 信封适配与 route push call site（已完成）→ ⑦ `client_meta` 增边界层解析 / 校验（已完成）→ ⑧ 给 `message-field-standard.md` 补响应侧和 `client_meta` 运行时标准（已完成）。
 
-#### 路线项 7 — qqbot 端出站渲染契约（与入站对称的结构化输出）
+#### 路线项 7 — QQbot 端出站渲染契约（响应信封到 QQ legacy message）
 
-- **现状**：qq 端渲染**无显式协议**，靠两类隐式约定拼凑。① 富媒体内联 OneBot CQ 码字符串：sticker 在**工具层**展开 `[sticker:id]→[CQ:image,file=...]`（`reply/tool.py:88`、`sticker_memory.py:107`），生成图 `[generated_image:token]` 在**传输出口层**展开为 `[CQ:image,file=URL]`/base64（`generated_images.py:349-380`，优先公开代理 URL）；近三次提交已对所有 QQbot 出口统一 `allow_base64=False`。② 发送行为靠 reply_meta（send_mode/quote/at/mentions，`reply/tool.py:9`），群聊响应透传给 qqbot，私聊不带。③ HTML 报告 `is_html_reply` 不截断，靠 qqbot 端 `html_to_pic` 渲染。
-- **痛点**：图片展开分散在工具层(sticker)与传输层(generated_image)两套机制；入站是结构化 segments、出站却是裸 CQ 字符串（不对称，下游需反解析）；`NANOBOT_PUBLIC_BASE_URL` 未配置时保留无法渲染的短 token（约定不闭环）；send_mode/quote/at 在私聊丢失；HTML / 文本 / 图片渲染分支判断散落多处。`docs/message-field-standard.md` 只规范入站，**完全没有出站渲染约定**。
-- **目标**：定一份「qq 端出站渲染契约」，以结构化 segments（text/image/html/at/reply）输出（与入站 `GroupMessageRequest.segments` 对称），富媒体统一走公开代理 URL（base64 仅作显式 fallback），图片展开收敛到单一出口层，发送指令私聊群聊一致下发。
-- **关联**：与项 5 共享 reply_meta / 响应信封载体，强烈建议合并设计；落地时为 `message-field-standard.md` 补「出站渲染契约」一节。
-- **粗略路径**：① 盘点「内容类型 → qq 渲染」映射表 → ② 定义出站 segments 契约或集中 CQ renderer 模块 → ③ sticker 与 generated_image 展开收敛到统一出站层（保留不污染 conversation/token 的约束）→ ④ 明确 base URL 未配置时降级策略 → ⑤ reply_meta 纳入信封、私聊也下发 → ⑥ 同步 canonical Prompt Runtime 模板中的 reply 工具发送约定描述。
+- **现状（2026-06-18 设计/计划已落地）**：P2-2 已完成响应信封兼容双写，私聊、SSE done、群聊和 push 路径都能承载 `reply`、`messages`、`reply_meta` 和 `meta`；P2-2.5 已完成 `client_meta` 边界校验。P2-3 只读审计已确认当前 QQ 出站仍靠隐式约定拼凑：`push_envelope_to_qq()` 仍通过 `envelope_to_message()` 派生旧 `message`，会忽略非文本 `messages`；sticker 多在 `ReplyTool` 层提前展开为 CQ 码；generated image 在部分 API / push 出口通过 `expand_generated_image_refs_in_content(..., allow_base64=False)` 展开；`schedule_task` 工具的 `action == "run"` 分支仍直接调用 `push_to_qq()`。设计文档已随 `c72ddb3 docs(渲染): 设计 QQ 出站契约` 提交，实现计划已写入 `.Codex/plans/qq-outbound-rendering-contract.md`。
+- **痛点**：图片展开分散在工具层、API 出口和 push 适配层；入站有结构化 `segments`，出站已有响应信封 `messages`，但 QQ 发送仍依赖裸 CQ 字符串；`NANOBOT_PUBLIC_BASE_URL` 未配置时只能保留短 token；`reply_meta` 已下发但 push 路径不消费；HTML / 文本 / 图片渲染分支判断散落多处；prompt 工具说明仍容易让模型误以为需要手写 CQ 码。
+- **目标**：以响应信封 `messages` 作为 canonical 出站内容层，`reply` 作为兼容 fallback；新增集中式 `core.qq_outbound_renderer`，统一把 `envelope/messages/reply_meta` 渲染成 QQbot 旧 `message` 字符串。首版不新增顶层 `segments` 或 `out_segments`，不破坏 `push_to_qq(target_type, target_id, message) -> bool` 旧签名；富媒体优先公开 URL，QQ-facing 路径继续禁止 base64 fallback；短 token `[sticker:<id>]` 和 `[generated_image:<id>]` 作为模型与 Nanobot 之间的稳定引用，由出口 renderer 负责最终渲染。
+- **关联**：依赖项 5 的响应信封和 `client_meta` 校验；与项 9 的 platform × chat_type 提示词拆分共享 prompt 语义边界；落地后需要为 `docs/message-field-standard.md` 补「响应出站渲染契约」章节。
+- **粗略路径**：① 已完成「内容类型 → QQ 渲染」只读审计和设计文档 → ② 新增 `core/qq_outbound_renderer.py` 与 renderer 单测 → ③ `push_envelope_to_qq()` 改用 renderer，保持旧 `push_to_qq()` 签名 → ④ schedule task run 分支改走响应信封和 `push_envelope_to_qq()` → ⑤ 固化 route push 和富媒体信封边界回归 → ⑥ 同步 reply / sticker_search / image_generation 工具说明 → ⑦ 同步 `docs/message-field-standard.md`、`docs/todo.md` 和 walkthrough，并运行定向与全量验证。
 
 #### 路线项 9 — 提示词模板按 platform × chat_type 二维适配  ·〔依赖项 1〕
 
