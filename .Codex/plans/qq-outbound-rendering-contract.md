@@ -128,7 +128,7 @@ def render_qq_message_items(
 - 创建：`core/qq_outbound_renderer.py`
 - 创建：`tests/test_qq_outbound_renderer.py`
 
-- [ ] **步骤 1：编写 renderer 红灯测试**
+- [x] **步骤 1：编写 renderer 红灯测试**
 
 创建 `tests/test_qq_outbound_renderer.py`：
 
@@ -226,7 +226,7 @@ def test_render_empty_envelope_returns_empty_message():
     assert result.messages == []
 ```
 
-- [ ] **步骤 2：运行 renderer 红灯**
+- [x] **步骤 2：运行 renderer 红灯**
 
 运行：
 
@@ -236,7 +236,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_qq_outbound_renderer.py
 
 预期：FAIL，报错包含 `ModuleNotFoundError: No module named 'core.qq_outbound_renderer'`。
 
-- [ ] **步骤 3：实现最小 renderer**
+- [x] **步骤 3：实现最小 renderer**
 
 创建 `core/qq_outbound_renderer.py`：
 
@@ -360,7 +360,7 @@ def _render_generated_image_token(image_id: str, *, warnings: list[str]) -> str:
 
 注意：`allow_base64` 在首版作为显式参数保留，但生产路径必须传默认值 `False`。如果后续确实要支持 base64，需要另起任务并补安全说明。
 
-- [ ] **步骤 4：运行 renderer 绿灯**
+- [x] **步骤 4：运行 renderer 绿灯**
 
 运行：
 
@@ -370,7 +370,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_qq_outbound_renderer.py
 
 预期：PASS，至少 `7 passed`。
 
-- [ ] **步骤 5：运行相邻回归**
+- [x] **步骤 5：运行相邻回归**
 
 运行：
 
@@ -385,7 +385,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：PASS。若 `tests/test_sticker_tool.py` 或 `tests/test_image_generation_tool.py` 文件名不同，先用 `rg --files tests | rg 'sticker|image_generation'` 查真实文件，再只替换命令里的路径。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 运行：
 
