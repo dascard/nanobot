@@ -77,7 +77,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 当前详细计划：P1-7 残余同步 IO 审计与收口
 
-状态：设计已完成，实施计划已写入，代码实现待执行。P1-7 不做全仓 `urllib` / `requests` 异步化，目标是确认同步 IO 是否仍会直接落在 async 热路径，并只修已经确认的风险点。
+状态：已完成。P1-7 不做全仓 `urllib` / `requests` 异步化，目标是确认同步 IO 是否仍会直接落在 async 热路径，并只修已经确认的风险点。
 
 设计文档：`docs/superpowers/specs/2026-06-18-sync-io-audit-design.md`
 
@@ -94,23 +94,22 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] `core/compaction.py` 当前从同步 `/context` endpoint 调用，风险是占用 worker，不是 event loop 阻塞。
 - [x] 已确认必修风险：`app/group_ingress/helpers.py` 的 `register_group_stickers_from_message()` 在 `background_tasks is None` 时会直接调用 `cache_sticker_preview()`，可能从 `GroupIngressService.handle()` 的 async 路径进入。
 - [x] 已写入 P1-7 实现计划，拆为 4 个阶段性提交：贴纸 fallback 收口、图片附件守卫、Direct 工具守卫、路线文档收尾。
-- [ ] 任务 1：按 TDD 修复贴纸预览 `background_tasks=None` fallback，确保 async service 不直接执行同步 DNS / urllib / 文件 IO / 图片解码。
-- [ ] 任务 2：补图片附件 `to_thread` 回归守卫。
-- [ ] 任务 3：补 `image_generation`、`image_summary`、`ai_daily` Direct 工具 `to_thread` 回归守卫。
-- [ ] 任务 4：同步 `docs/todo.md`、本文件和 `.Codex/plans/sync-io-audit.md` 的最终状态，并运行定向与全量验证。
+- [x] 任务 1：按 TDD 修复贴纸预览 `background_tasks=None` fallback，确保 async service 不直接执行同步 DNS / urllib / 文件 IO / 图片解码。提交：`c7e91a9 fix(贴纸): 隔离预览缓存同步 IO`。
+- [x] 任务 2：补图片附件 `to_thread` 回归守卫。提交：`641d080 test(图片): 守卫附件预处理线程卸载`。
+- [x] 任务 3：补 `image_generation`、`image_summary`、`ai_daily` Direct 工具 `to_thread` 回归守卫。提交：`0489bac test(工具): 守卫同步调用线程卸载`。
+- [x] 任务 4：同步 `docs/todo.md`、本文件和 `.Codex/plans/sync-io-audit.md` 的最终状态，并运行定向与全量验证。
 
-下一步执行顺序：
+验证记录：
 
-1. 提交本轮 P1-7 计划校准文档，保持计划阶段单独 commit。
-2. 进入任务 1，先写红灯测试，证明 `background_tasks=None` 当前不会经过 `asyncio.to_thread()`。
-3. 做最小实现：helper 不再在未知调用上下文里直接缓存；async service 负责 `await asyncio.to_thread(...)` 或明确跳过即时缓存。
-4. 跑贴纸定向回归并单独提交 `fix(贴纸): 隔离预览缓存同步 IO`。
-
-验证要求：
-
-- 文档计划提交前运行 `git diff --check`，并扫描计划占位符。
-- 任务 1 至任务 3 每个阶段都必须先定向验证再 commit。
-- P1-7 收尾阶段必须运行相关定向测试和 `python -B -m pytest tests/ -q -p no:cacheprovider --durations=20`。
+- 任务 1 红灯：`test_group_message_sticker_preview_without_background_tasks_uses_to_thread` 失败，调用顺序第一项为 `direct_cache`。
+- 任务 1 绿灯：新增测试 `1 passed, 1 warning`；贴纸入口回归 `6 passed, 70 deselected, 20 warnings`；`tests/test_sticker_memory.py` `10 passed, 1 warning`。
+- 任务 2 红灯：临时直接调用 `prepare_image_parts(...)` 后，`test_handle_message_uses_multimodal_event_for_files` 失败于 `assert to_thread_calls`。
+- 任务 2 绿灯：守卫单测 `1 passed, 1 warning`；图片相关回归 `59 passed, 1 warning`。
+- 任务 3 红灯：临时把 3 个 Direct 工具改为直接同步调用后，3 个新增守卫全部失败，均未记录到 `asyncio.to_thread`。
+- 任务 3 绿灯：新增守卫 `3 passed, 1 warning`；Direct 工具回归 `41 passed, 1 warning`。
+- 引用审计：`cache_sticker_preview(` 只剩后台 job、同步 admin / public endpoint；async service 使用 `await asyncio.to_thread(cache_sticker_preview_bg, sticker_id)`。
+- P1-7 定向测试：`186 passed, 20 warnings in 35.26s`。
+- P1-7 全量测试：`1222 passed, 6 skipped, 113 warnings in 86.76s`。
 
 ## 已完成阶段详情：P1-6 删除冗余提示词资产并去版本化
 
@@ -522,4 +521,4 @@ P1-6 验收重点：
 
 ## 下一步
 
-先完成 P1-7 任务 1：贴纸预览 `background_tasks=None` fallback 的 async 热路径收口。P1-7 收尾后，`docs/todo.md` 中的下一优先级是 P1-8 模型能力校验，以及 P2 的 platform 维度底座；TimingGate 真实日志标注 / CI 接入属于后续运营项，不抢占 P1 后续实现顺序。
+P1-7 已完成收口。下一优先级是 P1-8 模型能力校验：为模型配置补 `supports_image` / `supports_tools` / `supports_stream`，并在请求构造前按能力过滤和降级；之后进入 P2 的 platform 维度底座。TimingGate 真实日志标注 / CI 接入属于后续运营项，不抢占 P1 后续实现顺序。

@@ -242,7 +242,7 @@ git commit -m "test(工具): 守卫同步调用线程卸载"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/sync-io-audit.md`
 
-- [ ] **步骤 1：同步路线状态**
+- [x] **步骤 1：同步路线状态**
 
 在 `docs/todo.md` 路线项 2 记录：
 
@@ -253,7 +253,7 @@ git commit -m "test(工具): 守卫同步调用线程卸载"
 
 在 `docs/plan_walkthrough.md` 记录 P1-7 提交号和验证结果。
 
-- [ ] **步骤 2：运行引用和静态检查**
+- [x] **步骤 2：运行引用和静态检查**
 
 运行：
 
@@ -265,7 +265,9 @@ rg -n "requests\\.post|urllib\\.request\\.urlopen|time\\.sleep|asyncio\\.to_thre
 
 预期：`git diff --check` 无输出；`rg` 结果能区分同步边界，不要求清零。
 
-- [ ] **步骤 3：运行定向测试**
+实际：`cache_sticker_preview(` 仅命中后台 job、同步 admin / public endpoint；残余同步 HTTP / sleep 均能区分线程边界或同步 endpoint，async service 侧命中 `await asyncio.to_thread(cache_sticker_preview_bg, sticker_id)`。
+
+- [x] **步骤 3：运行定向测试**
 
 运行：
 
@@ -275,7 +277,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_api.py tests/test_stick
 
 预期：PASS。
 
-- [ ] **步骤 4：运行全量测试**
+实际：`186 passed, 20 warnings in 35.26s`。
+
+- [x] **步骤 4：运行全量测试**
 
 运行：
 
@@ -285,7 +289,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -q -p no:cacheprovider --du
 
 预期：0 failures。
 
-- [ ] **步骤 5：提交文档收尾**
+实际：`1222 passed, 6 skipped, 113 warnings in 86.76s`。
+
+- [x] **步骤 5：提交文档收尾**
 
 运行：
 

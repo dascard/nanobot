@@ -150,11 +150,12 @@
 
 #### 路线项 2 — LLM 等 IO 调用全面异步化与连接池复用  ·〔关联 H7；H1 已满足〕
 
-- **现状（2026-06-18 已部分落地）**：核心 LLM 调用已是 aiohttp 异步，应用级共享 `ClientSession` 已在 lifespan 中创建并注入 `NewAPIClient`（`bootstrap/lifespan.py:30-44,66-68`），`chat_completion` / `chat_completion_stream` 已通过 `_request_session()` 复用实例或共享 session（`clients/new_api_client.py:113-120,669-674,854-861`）。已提交 `4550aca refactor(模型客户端): 支持复用注入会话` 与 `2bf4ee7 refactor(模型客户端): 接入共享会话生命周期`。分类器 / 护栏走 urllib 同步但调用点已用 `asyncio.to_thread` 卸载（H1 已满足，见附录）。P1-7 只读审计已随 `8ce5210 docs(同步IO): 设计残余阻塞收口` 归档：图片附件主链路、私聊 / 群聊图片预缓存、`image_generation`、`image_summary`、`ai_daily` 和 `daily_digest_scheduler()` 均已有线程边界；`core/compaction.py` 当前从同步 `/context` endpoint 调用，风险是占用 worker，不是 event loop 阻塞。
-- **痛点**：模型请求连接池抖动已修复；剩余必修风险集中在 `app/group_ingress/helpers.py` 的贴纸预览缓存 fallback。`register_group_stickers_from_message()` 在 `background_tasks is None` 时会直接调用同步 `cache_sticker_preview()`，如果从 `GroupIngressService.handle()` 的 async 路径进入，会把 DNS、urllib 下载、文件写入和图片解码放回事件循环。
-- **目标**：保持 lifespan 应用级单例 `ClientSession` 复用连接池；残余同步 HTTP 要么已在线程边界内运行，要么在 async service 调用点显式 `asyncio.to_thread()` 卸载。P1-7 第一刀先收口贴纸 fallback，并为图片附件与 Direct 工具同步调用补回归守卫；`/context` compaction worker 占用和工具专用 executor 作为后续优化处理。
+- **现状（2026-06-18 已完成）**：核心 LLM 调用已是 aiohttp 异步，应用级共享 `ClientSession` 已在 lifespan 中创建并注入 `NewAPIClient`（`bootstrap/lifespan.py:30-44,66-68`），`chat_completion` / `chat_completion_stream` 已通过 `_request_session()` 复用实例或共享 session（`clients/new_api_client.py:113-120,669-674,854-861`）。已提交 `4550aca refactor(模型客户端): 支持复用注入会话` 与 `2bf4ee7 refactor(模型客户端): 接入共享会话生命周期`。分类器 / 护栏走 urllib 同步但调用点已用 `asyncio.to_thread` 卸载（H1 已满足，见附录）。P1-7 已完成：只读审计随 `8ce5210` 归档；贴纸预览 `background_tasks=None` fallback 已随 `c7e91a9` 收口；图片附件与 Direct 工具线程卸载守卫已随 `641d080` 和 `0489bac` 落地。图片附件主链路、私聊 / 群聊图片预缓存、`image_generation`、`image_summary`、`ai_daily` 和 `daily_digest_scheduler()` 均已有明确线程边界；`core/compaction.py` 当前从同步 `/context` endpoint 调用，风险是占用 worker，不是 event loop 阻塞。
+- **剩余风险**：路线项 2 的 event loop 阻塞风险已完成收口。后续仍可优化 `/context` compaction 的 worker 占用、`ai_daily` 的专用 bounded executor，以及 admin / public sticker preview 同步 endpoint 的 worker 占用，但这些不阻塞路线项 2 完成。
+- **目标**：保持 lifespan 应用级单例 `ClientSession` 复用连接池；残余同步 HTTP 要么已在线程边界内运行，要么在 async service 调用点显式 `asyncio.to_thread()` 卸载。P1-7 已把贴纸 fallback、图片附件和 Direct 工具同步调用纳入回归守卫。
 - **关联**：H7（ClientSession 逐请求创建，P2 性能）；H1 已满足（附录）；连接池是项 6 真流式的前置。
-- **粗略路径**：① lifespan 创建共享 session（已完成）→ ② new_api_client 三处 `async with ClientSession()` 改为复用注入的 session（已完成）→ ③ 审计 compaction / image / sticker / 工具层同步 IO（设计已完成）→ ④ 修复贴纸 `background_tasks=None` fallback 的 async 热路径风险 → ⑤ 补图片附件与 Direct 工具 `to_thread` 回归守卫 → ⑥ 同步文档并将路线项 2 标记为完成。
+- **粗略路径**：① lifespan 创建共享 session（已完成）→ ② new_api_client 三处 `async with ClientSession()` 改为复用注入的 session（已完成）→ ③ 审计 compaction / image / sticker / 工具层同步 IO（已完成）→ ④ 修复贴纸 `background_tasks=None` fallback 的 async 热路径风险（已完成）→ ⑤ 补图片附件与 Direct 工具 `to_thread` 回归守卫（已完成）→ ⑥ 同步文档并将路线项 2 标记为完成（当前文档收尾）。
+- **验证状态（2026-06-18）**：P1-7 定向测试 `186 passed, 20 warnings`；全量测试 `1222 passed, 6 skipped, 113 warnings in 86.76s`。
 
 #### 路线项 3 — 请求构造按模型能力校验（image_url / 多模态），能力声明入模型配置
 
