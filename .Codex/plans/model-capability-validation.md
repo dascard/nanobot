@@ -67,8 +67,8 @@
 - [x] 任务 4 已完成：直接 New API 请求能力推导和手动模型能力错误返回。提交：`d907a98 feat(模型能力): 推导直接请求能力需求`。
 - [x] 任务 5 已完成：Bridge 主回复路由能力需求传递和手动回复模型能力回退。提交：`66fdfd9 feat(桥接): 接入回复模型能力校验`。
 - [x] 任务 6 已完成：无视觉候选降级和 payload / SDK request 前 guard。提交：`d2a7a1f fix(模型能力): 防止发送不兼容请求`。
-- [ ] 任务 7 待执行：扩展 `model_routing` eval。
-- [ ] 任务 8 待执行：P1-8 整体完成后的文档收口和最终验证。
+- [x] 任务 7 已完成：扩展 `model_routing` eval，覆盖带图请求必须选择 vision 候选。提交：`e1d3bef test(评测): 覆盖视觉模型路由`。
+- [x] 任务 8 已完成：P1-8 整体完成后的文档收口和最终验证。
 
 ## 任务 6 验证记录
 
@@ -77,6 +77,14 @@
 - 任务 6 相关回归：`tests/test_kt_framework.py tests/test_final_tools.py tests/test_llm_request_tracing.py`，结果 `88 passed, 1 warning in 19.26s`。
 - P1-8 相关回归：`tests/test_model_registry.py tests/test_model_router.py tests/test_llm_request_tracing.py tests/test_final_tools.py tests/test_kt_framework.py tests/test_streaming_bridge.py`，结果 `130 passed, 1 warning in 20.40s`。
 - 全量回归：`tests/`，结果 `1234 passed, 6 skipped, 113 warnings in 88.05s`。
+
+## 任务 7 验证记录
+
+- 红灯：新增 `regression_model_routing_vision_required_001` 后，`python -m evals.run --suite model_routing` 失败，结果 `total=3 passed=2 failed=1`，失败原因是旧 runner 选择了 `text-cheap`。
+- 绿灯：`python -m evals.run --suite model_routing`，结果 `total=3 passed=3 failed=0`；`tests/test_eval_baseline.py`，结果 `5 passed, 1 warning in 0.84s`。
+- 任务 7 相关回归：`tests/test_eval_baseline.py tests/test_model_router.py`，结果 `34 passed, 1 warning in 1.23s`。
+- P1-8 相关回归：`tests/test_model_registry.py tests/test_model_router.py tests/test_llm_request_tracing.py tests/test_final_tools.py tests/test_kt_framework.py tests/test_streaming_bridge.py tests/test_eval_baseline.py`，结果 `135 passed, 1 warning in 21.05s`。
+- 全量回归：`tests/`，结果 `1235 passed, 6 skipped, 113 warnings in 87.72s`。
 
 ## 任务 1：模型能力归一化红灯测试
 
@@ -862,7 +870,7 @@ git commit -m "fix(模型能力): 防止发送不兼容请求"
 - 创建：`evals/cases/regression/regression_model_routing_vision_required_001.json`
 - 测试：`tests/test_eval_baseline.py` 或新增 eval runner 测试
 
-- [ ] **步骤 1：新增 regression case**
+- [x] **步骤 1：新增 regression case**
 
 创建 `evals/cases/regression/regression_model_routing_vision_required_001.json`：
 
@@ -908,7 +916,7 @@ git commit -m "fix(模型能力): 防止发送不兼容请求"
 }
 ```
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -919,7 +927,7 @@ python -m evals.run --suite model_routing
 
 预期：model_routing case 失败或 runner 无法消费 `has_image`。
 
-- [ ] **步骤 3：扩展 runner**
+- [x] **步骤 3：扩展 runner**
 
 在 `evals/runners/model_routing_runner.py` 中：
 
@@ -932,7 +940,7 @@ required_capabilities.update(case.input.get("required_capabilities") or {})
 
 优先使用 `NewAPIClient.get_ordered_candidates()` 或 registry helper，而不是旧 `select_model(required_tags=...)`。
 
-- [ ] **步骤 4：运行绿灯**
+- [x] **步骤 4：运行绿灯**
 
 运行：
 
@@ -943,7 +951,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_baseline.py -q -p 
 
 预期：PASS，且新 case 使用 `vision-model`。
 
-- [ ] **步骤 5：提交任务 7**
+- [x] **步骤 5：提交任务 7**
 
 ```bash
 git add evals/runners/model_routing_runner.py evals/cases/regression/regression_model_routing_vision_required_001.json tests/test_eval_baseline.py
@@ -952,6 +960,8 @@ git commit -m "test(评测): 覆盖视觉模型路由"
 
 只暂存实际修改过的文件。
 
+已提交：`e1d3bef test(评测): 覆盖视觉模型路由`。
+
 ## 任务 8：文档收口与全量验证
 
 **文件：**
@@ -959,7 +969,7 @@ git commit -m "test(评测): 覆盖视觉模型路由"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`docs/superpowers/specs/2026-06-18-model-capability-validation-design.md`（若实现中策略变化）
 
-- [ ] **步骤 1：同步 `docs/todo.md` 路线项 3**
+- [x] **步骤 1：同步 `docs/todo.md` 路线项 3**
 
 把路线项 3 的现状改为已落地，记录：
 
@@ -968,11 +978,11 @@ git commit -m "test(评测): 覆盖视觉模型路由"
 - 无视觉候选不会发送 `image_url`。
 - `model_routing` eval 已覆盖带图请求。
 
-- [ ] **步骤 2：同步 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：同步 `docs/plan_walkthrough.md`**
 
 在 P1-8 当前计划中标记已完成任务和提交号，下一优先级切到 P2 platform 维度底座。
 
-- [ ] **步骤 3：检查 Prompt Runtime 文档口径**
+- [x] **步骤 3：检查 Prompt Runtime 文档口径**
 
 运行：
 
@@ -982,7 +992,7 @@ rg -n "image_url|图片|视觉|stream|tools|capabilit|模型能力" data/prompts
 
 若 Prompt Runtime 文档描述了图片或工具发送行为，确认它没有声称纯文本模型能读取图片，也没有过时地描述旧 prompt 单文件路径。
 
-- [ ] **步骤 4：运行最终验证**
+- [x] **步骤 4：运行最终验证**
 
 运行：
 
@@ -1003,7 +1013,7 @@ python -m evals.run --suite model_routing
 - 全量测试通过。
 - model_routing eval 通过。
 
-- [ ] **步骤 5：提交任务 8**
+- [x] **步骤 5：提交任务 8**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md docs/superpowers/specs/2026-06-18-model-capability-validation-design.md .Codex/plans/model-capability-validation.md
@@ -1021,5 +1031,5 @@ git commit -m "docs(计划): 同步模型能力校验状态"
 - [x] 直接 `chat_completion_stream()` 传入 `supports_stream` 能力需求。
 - [x] 手动回复模型能力不匹配时不会直接绕过过滤。
 - [x] 无视觉候选时不会把 `image_url` 发给纯文本模型。
-- [ ] `python -m evals.run --suite model_routing` 覆盖带图路由 case 并通过。
-- [ ] 全量测试 `tests/` 通过。
+- [x] `python -m evals.run --suite model_routing` 覆盖带图路由 case 并通过。
+- [x] 全量测试 `tests/` 通过。

@@ -352,17 +352,29 @@ Bridge / KT 路径因 provider 固定 streaming，候选过滤至少要排除显
 
 ## 验收标准
 
-- [ ] 模型 registry 记录有顶层 `supports_image`、`supports_tools`、`supports_stream`。
-- [ ] overrides 顶层能力字段和嵌套 `capabilities` 输入都能归一到顶层 `supports_*`。
-- [ ] override 中 `supports_*: null` 不会抹掉 base 能力。
-- [ ] `get_ordered_candidates(required_capabilities=...)` 是硬过滤，不复用旧 `required_tags` 软过滤。
-- [ ] 带图 Bridge 主回复请求会要求 `supports_image` 候选。
-- [ ] 直接 `chat_completion()` 的 image / tools 请求会要求对应能力。
-- [ ] 直接 `chat_completion_stream()` 会要求 `supports_stream`，并同时处理 image / tools。
-- [ ] 手动回复模型能力不匹配时不会绕过过滤。
-- [ ] 无视觉候选时不会把 `image_url` 发给纯文本模型。
-- [ ] `model_routing` eval 覆盖带图请求必须选 vision 模型。
-- [ ] 文档同步 `docs/todo.md`、`docs/plan_walkthrough.md` 和相关 Prompt Runtime 描述。
+- [x] 模型 registry 记录有顶层 `supports_image`、`supports_tools`、`supports_stream`。
+- [x] overrides 顶层能力字段和嵌套 `capabilities` 输入都能归一到顶层 `supports_*`。
+- [x] override 中 `supports_*: null` 不会抹掉 base 能力。
+- [x] `get_ordered_candidates(required_capabilities=...)` 是硬过滤，不复用旧 `required_tags` 软过滤。
+- [x] 带图 Bridge 主回复请求会要求 `supports_image` 候选。
+- [x] 直接 `chat_completion()` 的 image / tools 请求会要求对应能力。
+- [x] 直接 `chat_completion_stream()` 会要求 `supports_stream`，并同时处理 image / tools。
+- [x] 手动回复模型能力不匹配时不会绕过过滤。
+- [x] 无视觉候选时不会把 `image_url` 发给纯文本模型。
+- [x] `model_routing` eval 覆盖带图请求必须选 vision 模型。
+- [x] 文档同步 `docs/todo.md`、`docs/plan_walkthrough.md` 和相关 Prompt Runtime 描述。
+
+## 实施状态（2026-06-18）
+
+P1-8 已完成并按阶段提交：
+
+- `388c00f feat(模型能力): 归一化能力并过滤候选`：完成 registry 能力归一化、override `null` fallback 和 `required_capabilities` 候选硬过滤。
+- `d907a98 feat(模型能力): 推导直接请求能力需求`：完成直接 New API 路径的 image / tools / stream 能力需求推导和手动模型能力错误返回。
+- `66fdfd9 feat(桥接): 接入回复模型能力校验`：完成 Bridge 主回复路由能力需求传递和手动回复模型能力回退。
+- `d2a7a1f fix(模型能力): 防止发送不兼容请求`：完成 payload / SDK request 前 guard，以及无视觉候选时剥离图片并降级为纯文本说明。
+- `e1d3bef test(评测): 覆盖视觉模型路由`：完成 `model_routing` eval 的带图请求能力过滤覆盖。
+
+保留到后续路线项处理的范围包括：base64 data URL 长期收敛、图片数量 / 大小上限、多平台消息信封，以及 QQ 出站渲染契约。
 
 ## 测试计划
 

@@ -159,11 +159,11 @@
 
 #### 路线项 3 — 请求构造按模型能力校验（image_url / 多模态），能力声明入模型配置
 
-- **现状（2026-06-18 部分落地）**：模型记录已归一到顶层 `supports_image` / `supports_tools` / `supports_stream` 字段，并兼容 `model_overrides.json` 的顶层字段和嵌套 `capabilities`；`get_ordered_candidates(required_capabilities=...)` 已支持硬过滤，显式不满足能力的候选不会进入排序。直接 `NewAPIClient.chat_completion()` / `chat_completion_stream()` 已能从 messages、tools 和 stream 推导能力需求；Bridge 主回复路由也已从 `metadata["files"]`、ToolPlan schema 和 KT 固定 streaming 请求事实生成能力需求，手动回复模型不满足能力时回退自动路由。payload / SDK request 前 guard 已防止绕过候选过滤；无视觉候选时会降级为纯文本说明并重新路由，不再把 `image_url` 发给纯文本模型。当前尚未完成 `model_routing` eval 覆盖和最终文档收口。
-- **剩余痛点**：能力校验主链路和 payload 安全网已经落地，但 `model_routing` eval 还需要补带图请求必须选 vision 候选的回归 case，防止后续改动破坏路由行为。base64 data_url 直入 payload 与 `docs/message-field-standard.md` 禁 base64 的长期方向仍需在后续出站 / 入站契约中继续收敛。
+- **现状（2026-06-18 已落地）**：模型记录已归一到顶层 `supports_image` / `supports_tools` / `supports_stream` 字段，并兼容 `model_overrides.json` 的顶层字段和嵌套 `capabilities`；`get_ordered_candidates(required_capabilities=...)` 已支持硬过滤，显式不满足能力的候选不会进入排序。直接 `NewAPIClient.chat_completion()` / `chat_completion_stream()` 已能从 messages、tools 和 stream 推导能力需求；Bridge 主回复路由也已从 `metadata["files"]`、ToolPlan schema 和 KT 固定 streaming 请求事实生成能力需求，手动回复模型不满足能力时回退自动路由。payload / SDK request 前 guard 已防止绕过候选过滤；无视觉候选时会降级为纯文本说明并重新路由，不再把 `image_url` 发给纯文本模型。`model_routing` eval 已覆盖带图请求必须选 vision 候选，防止后续改动破坏能力硬过滤。
+- **剩余痛点**：路线项 3 的能力校验主链路已完成。base64 data URL 直入 payload 与 `docs/message-field-standard.md` 禁 base64 的长期方向仍需在后续出站 / 入站契约中继续收敛；图片数量 / 大小上限也应跟随多平台消息信封和出站渲染契约继续设计。
 - **目标**：模型能力（`supports_image` / `supports_tools` / `supports_stream`、单图大小 / 数量上限）结构化写入模型配置；构造阶段检测 messages 含 `image_url` 时，强制只在 vision 候选中选模型，并按能力校验图片格式 / 大小，不满足则降级（剥图 + 文本兜底）或换模型，而非无脑塞。
 - **关联**：呼应项 9（多模态行为描述需同步 canonical Prompt Runtime 模板）；与熔断器记账正确性（E4/E5）相关；主 reply 与 sticker_describe（走专用 vision provider）的能力口径需统一。
-- **粗略路径**：① `model_overrides.json` / registry 增结构化 capabilities（已完成）→ ② 构造边界生成 `has_image` / tools / stream 信号（直接 New API 与 Bridge 已完成）→ ③ 路由在 `has_image` 时按 `supports_image` 过滤候选（已完成）→ ④ `_build_payload` / SDK request 前按能力校验 / 裁剪 image_url、stream、tools（已完成）→ ⑤ 扩展 `model_routing` eval 并统一两套 vision 机制的能力引用（待执行）。
+- **粗略路径**：① `model_overrides.json` / registry 增结构化 capabilities（已完成）→ ② 构造边界生成 `has_image` / tools / stream 信号（直接 New API 与 Bridge 已完成）→ ③ 路由在 `has_image` 时按 `supports_image` 过滤候选（已完成）→ ④ `_build_payload` / SDK request 前按能力校验 / 裁剪 image_url、stream、tools（已完成）→ ⑤ 扩展 `model_routing` eval 并统一两套 vision 机制的能力引用（已完成）。
 
 ---
 
