@@ -1,0 +1,49 @@
+{
+  "suite": "rag_benchmark",
+  "provider_mode": "deterministic",
+  "case_scope": "manual",
+  "metrics": {
+    "overall": {
+      "total_cases": 3,
+      "positive_cases": 0,
+      "passed_cases": 3,
+      "pass_rate": 1.0,
+      "hit@1": 0.0,
+      "hit@3": 0.0,
+      "hit@5": 0.0,
+      "mrr": 0.0,
+      "case_false_positive_rate": 0.0,
+      "forbidden_hit_rate@5": 0.0,
+      "unexpected_source_rate": 0.0,
+      "degraded_rate": 0.0,
+      "avg_latency_ms": 0.0,
+      "p95_latency_ms": 0,
+      "avg_reranker_candidates": 0.0,
+      "max_reranker_candidates": 0
+    }
+  },
+  "failed_cases": [],
+  "case_scores": [
+    {
+      "case_id": "group_memory_manual_filter_constraint_001",
+      "source_type": "group_memory",
+      "case_type": "constraint_only",
+      "ok": true,
+      "errors": []
+    },
+    {
+      "case_id": "knowledge_manual_citation_constraint_001",
+      "source_type": "knowledge",
+      "case_type": "constraint_only",
+      "ok": true,
+      "errors": []
+    },
+    {
+      "case_id": "sticker_manual_generic_constraint_001",
+      "source_type": "sticker",
+      "case_type": "constraint_only",
+      "ok": true,
+      "errors": []
+    }
+  ]
+}

@@ -671,3 +671,16 @@ def test_rag_benchmark_cli_passes_manual_deterministic_gate(tmp_path, capsys):
     report = json.loads((reports / "latest.json").read_text(encoding="utf-8"))
     assert report["gate"]["passed"] is True
     assert report["baseline_diff"]["new_failed_cases"] == []
+
+
+def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
+    from evals.rag_benchmark.baseline import load_rag_baseline
+
+    baseline = load_rag_baseline("evals/baselines/rag_benchmark.json")
+
+    assert baseline["suite"] == "rag_benchmark"
+    assert baseline["provider_mode"] == "deterministic"
+    assert baseline["case_scope"] == "manual"
+    assert baseline["metrics"]["overall"]["total_cases"] >= 1
+    assert "case_scores" in baseline
+    assert all("case_id" in item and "ok" in item for item in baseline["case_scores"])
