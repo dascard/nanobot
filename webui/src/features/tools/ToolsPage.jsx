@@ -16,8 +16,14 @@ export function ToolsPage() {
     { key: 'group_default', label: '群聊', chatType: 'group', help: '群聊的基础工具模板' },
     { key: 'lightweight_default', label: '轻量预设', chatType: 'group', help: '运行时自动降档时使用的轻量工具集合' },
   ]
+  const platformOptions = [
+    { key: 'qq', label: 'QQ' },
+    { key: 'web', label: 'Web' },
+    { key: 'synergy', label: 'Synergy' },
+  ]
   const [tab, setTab] = useState('defaults')
   const [templateKey, setTemplateKey] = useState('group_default')
+  const [platform, setPlatform] = useState('qq')
   const [tools, setTools] = useState([])
   const [regInfo, setRegInfo] = useState(null)
   const [regAvail, setRegAvail] = useState(false)
@@ -36,6 +42,7 @@ export function ToolsPage() {
     api.get('/tools', {
       params: {
         chat_type: tab === 'defaults' ? activeTemplate.chatType : isUserOverride ? 'private' : 'group',
+        platform: platform,
         group_id: tab === 'overrides' && overrideScope === 'group' ? targetId : '',
         user_id: isUserOverride ? targetId : '',
       },
@@ -46,7 +53,7 @@ export function ToolsPage() {
       setRegEmpty(r.data.registry_empty)
       setBridgeCt(r.data.bridge_count || 0)
     })
-  }, [tab, overrideScope, targetId, activeTemplate.chatType])
+  }, [tab, overrideScope, targetId, activeTemplate.chatType, platform])
   const loadTargets = useCallback(() => {
     if (tab !== 'overrides') return
     api.get('/tools/targets', {
@@ -63,7 +70,14 @@ export function ToolsPage() {
   }
 
   const scopeForTab = () => {
-    if (tab !== 'overrides' || !targetId.trim()) return null
+    if (tab !== 'overrides') return null
+    if (overrideScope === 'platform') {
+      return {
+        scope_type: 'platform',
+        scope_id: platform.trim(),
+      }
+    }
+    if (!targetId.trim()) return null
     return {
       scope_type: overrideScope,
       scope_id: targetId.trim(),
@@ -82,6 +96,9 @@ export function ToolsPage() {
     api.delete(`/tools/${t.name}/override`, { params: scope }).then(load)
   }
   const selectTarget = (target) => {
+    if (overrideScope === 'platform') {
+      setPlatform(target.id)
+    }
     setTargetId(target.id)
     setTargetSearch(target.label)
     setTargetPickerOpen(false)
@@ -102,6 +119,18 @@ export function ToolsPage() {
           <button key={t.key} onClick={() => setTab(t.key)} className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === t.key ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{t.label}</button>
         ))}
       </div>
+      {tab !== 'audit' && (
+        <div className="mb-4 flex flex-wrap items-end gap-3">
+          <label htmlFor="tool-platform-select" className="text-xs text-slate-500">
+            预览平台
+            <select id="tool-platform-select" value={platform} onChange={e => setPlatform(e.target.value)}
+              className="mt-1 block min-w-[140px] rounded-lg bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200">
+              {platformOptions.map(item => <option key={item.key} value={item.key}>{item.label}</option>)}
+            </select>
+          </label>
+          <span className="pb-1.5 text-xs text-slate-500">用于预览该平台下的运行时工具状态。</span>
+        </div>
+      )}
       {tab === 'defaults' && (
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <label htmlFor="tool-template-select" className="text-xs text-slate-500">
@@ -122,16 +151,17 @@ export function ToolsPage() {
               className="mt-1 block min-w-[120px] rounded-lg bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200">
               <option value="group">指定群聊</option>
               <option value="user">指定私聊</option>
+              <option value="platform">指定平台</option>
             </select>
           </label>
           <div className="relative">
             <label htmlFor="tool-override-target" className="text-xs text-slate-500">
-              {overrideScope === 'group' ? '搜索群聊' : '搜索私聊用户'}
+              {overrideScope === 'platform' ? '选择平台' : overrideScope === 'group' ? '搜索群聊' : '搜索私聊用户'}
               <input id="tool-override-target" value={targetSearch}
                 onFocus={() => setTargetPickerOpen(true)}
                 onBlur={() => setTimeout(() => setTargetPickerOpen(false), 120)}
                 onChange={e => onTargetInput(e.target.value)}
-                placeholder={overrideScope === 'group' ? '输入群名或群号' : '输入昵称或用户 ID'}
+                placeholder={overrideScope === 'platform' ? '选择 QQ、Web 或 Synergy' : overrideScope === 'group' ? '输入群名或群号' : '输入昵称或用户 ID'}
                 className="mt-1 block w-72 rounded-lg bg-slate-900 border border-slate-700 px-2.5 py-1.5 text-xs text-slate-200" />
             </label>
             {targetPickerOpen && (
@@ -152,7 +182,11 @@ export function ToolsPage() {
               </div>
             )}
           </div>
-          <span className="pb-1.5 text-xs text-slate-500">{targetId ? `当前目标：${targetId}` : '请选择一个已记录的真实目标；覆盖不会对手填未知 ID 生效。'}</span>
+          <span className="pb-1.5 text-xs text-slate-500">
+            {overrideScope === 'platform'
+              ? `当前平台：${platform}`
+              : targetId ? `当前目标：${targetId}` : '请选择一个已记录的真实目标；覆盖不会对手填未知 ID 生效。'}
+          </span>
         </div>
       )}
       {tab !== 'audit' && <div className="mb-4 flex gap-4 text-xs text-slate-400">
@@ -187,6 +221,7 @@ export function ToolsPage() {
               const isLocked = t.force_enabled
               const isSubagent = t.is_subagent
               const configured = t.configured_enabled ?? t.effective
+              const overrideReady = overrideScope === 'platform' ? Boolean(platform.trim()) : Boolean(targetId.trim())
               const overrideValue = t.override_present
                 ? (t.override_enabled ? 'enabled' : 'disabled')
                 : 'inherit'
@@ -222,8 +257,8 @@ export function ToolsPage() {
                       {!isForced && !isLocked && !isSubagent && (
                         <select value={overrideValue}
                           onChange={e => { const v = e.target.value; if (v === 'inherit') clearOverride(t); else setOverride(t, v === 'enabled') }}
-                          disabled={!targetId.trim()}
-                          className={`p-1 rounded text-xs bg-slate-900 border border-slate-700 ${!targetId.trim() ? 'opacity-40' : ''}`}>
+                          disabled={!overrideReady}
+                          className={`p-1 rounded text-xs bg-slate-900 border border-slate-700 ${!overrideReady ? 'opacity-40' : ''}`}>
                           <option value="inherit">继承（{configured ? '启用' : '禁用'}）</option>
                           <option value="enabled">启用</option>
                           <option value="disabled">禁用</option>

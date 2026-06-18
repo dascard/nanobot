@@ -19,7 +19,8 @@
 - 任务 2 已完成并提交：`295e3f7 feat(工具): 记录平台维度决策`。
 - 任务 3 已完成并提交：`73bbe8a feat(消息): 透传客户端平台`。真实入口已透传 platform 到 Bridge 和 ToolPlan。
 - 任务 4 已完成并提交：`d9a1bae feat(工具): 支持平台覆盖接口`。Admin API 已支持 platform 覆盖写入、预览和 targets。
-- 当前下一步：任务 5「WebUI 工具页增加 platform selector」。
+- 任务 5 已完成：WebUI 工具页已增加 platform selector 和「指定平台」覆盖入口。
+- 当前下一步：任务 6「文档收口与最终验证」。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
 ## 文件结构
@@ -821,7 +822,7 @@ git commit -m "feat(工具): 支持平台覆盖接口"
 - 修改：`webui/src/features/tools/ToolsPage.jsx`
 - 修改：`tests/test_webui_admin_redesign.py` 或 `tests/test_webui_app_split.py`
 
-- [ ] **步骤 1：编写 WebUI 红灯测试**
+- [x] **步骤 1：编写 WebUI 红灯测试**
 
 在已有 WebUI 静态测试中追加：
 
@@ -841,7 +842,7 @@ def test_tools_page_exposes_platform_scope_controls():
 from pathlib import Path
 ```
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_webui_admin_redesign.py -k "tools_page_exposes_platform" -v -p no:cacheprovider
@@ -849,7 +850,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_webui_admin_redesign.py
 
 预期：失败，页面没有 platform 控件。
 
-- [ ] **步骤 3：实现 ToolsPage 状态和 API 参数**
+- [x] **步骤 3：实现 ToolsPage 状态和 API 参数**
 
 在 `ToolsPage.jsx` 添加：
 
@@ -865,12 +866,12 @@ const [platform, setPlatform] = useState('qq')
 `api.get('/tools')` 参数加入：
 
 ```javascript
-platform,
+platform: platform,
 ```
 
 `load` 的 dependency 加入 `platform`。
 
-- [ ] **步骤 4：实现覆盖对象 platform**
+- [x] **步骤 4：实现覆盖对象 platform**
 
 `overrideScope` 下拉新增：
 
@@ -897,7 +898,7 @@ if (overrideScope === 'platform') {
 }
 ```
 
-- [ ] **步骤 5：实现 UI 控件**
+- [x] **步骤 5：实现 UI 控件**
 
 在默认模板和指定覆盖区域上方加入：
 
@@ -913,7 +914,7 @@ if (overrideScope === 'platform') {
 
 保持现有布局，不新增大面积页面结构。
 
-- [ ] **步骤 6：运行 WebUI 静态测试**
+- [x] **步骤 6：运行 WebUI 静态测试**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_webui_admin_redesign.py tests/test_webui_app_split.py -v -p no:cacheprovider
@@ -921,7 +922,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_webui_admin_redesign.py
 
 预期：全部通过。
 
-- [ ] **步骤 7：运行 WebUI 构建**
+- [x] **步骤 7：运行 WebUI 构建**
 
 ```bash
 cd webui && npm run build
@@ -929,7 +930,7 @@ cd webui && npm run build
 
 预期：构建成功。Vite chunk size warning 可记录，不作为失败。
 
-- [ ] **步骤 8：提交任务 5**
+- [x] **步骤 8：提交任务 5**
 
 ```bash
 git add webui/src/features/tools/ToolsPage.jsx tests/test_webui_admin_redesign.py tests/test_webui_app_split.py
@@ -937,6 +938,14 @@ git commit -m "feat(工具): 配置平台覆盖"
 ```
 
 只暂存实际修改过的测试文件；如果只改了其中一个测试文件，不暂存另一个。
+
+任务 5 验证记录：
+
+- 红灯：`tests/test_webui_admin_redesign.py -k "tools_page_exposes_platform"` 先失败于缺少 `tool-platform-select`。
+- 绿灯：同一定向测试 `1 passed, 15 deselected, 1 warning`。
+- WebUI 静态回归：`tests/test_webui_admin_redesign.py tests/test_webui_app_split.py`，结果 `21 passed, 1 warning`。
+- WebUI 构建：`npm run build` 通过；Vite 仅提示大 chunk 和 `rolldown:vite-resolve` 插件耗时 warning。
+- 全量测试：`1246 passed, 6 skipped, 139 warnings in 84.80s`。
 
 ## 任务 6：文档收口与最终验证
 
@@ -1049,8 +1058,8 @@ git commit -m "docs(计划): 同步工具平台配置状态"
 2. 任务 2：审计记录和迁移。
 3. 任务 3：真实入口透传 platform。
 4. 任务 4：Admin API 支持平台覆盖。（已完成）
-5. 任务 5：WebUI 工具页配置平台覆盖。（下一步）
-6. 任务 6：文档收口与最终验证。
+5. 任务 5：WebUI 工具页配置平台覆盖。（已完成）
+6. 任务 6：文档收口与最终验证。（下一步）
 
 每个任务完成后必须运行对应验证命令并单独提交。禁止使用 `git add .` 或 `git add -A`。
 
@@ -1063,6 +1072,6 @@ git commit -m "docs(计划): 同步工具平台配置状态"
 - [x] `/chat` 和 `/group/message` 都把 `client_meta.platform` 传到 Bridge。
 - [x] Bridge 把 platform 传给 `build_tool_plan()` 和 `record_runtime_tool_decision()`。
 - [x] Admin API 能创建和预览 platform override。
-- [ ] WebUI 工具页能选择 platform 并配置「指定平台」覆盖。
+- [x] WebUI 工具页能选择 platform 并配置「指定平台」覆盖。
 - [ ] `docs/message-field-standard.md`、`docs/todo.md`、`docs/plan_walkthrough.md` 和本计划同步当前状态。
 - [ ] 全量测试通过。

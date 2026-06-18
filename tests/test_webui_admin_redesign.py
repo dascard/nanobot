@@ -8,6 +8,7 @@ LLM_LOGS_JS = Path("webui/src/features/agent-runs/LLMApiLogsPage.jsx")
 MODELS_JS = Path("webui/src/features/models/ModelsPage.jsx")
 PROMPT_JS = Path("webui/src/features/prompt/PromptPages.jsx")
 REPLY_EVAL_JS = Path("webui/src/features/reply-eval/ReplyEvalPage.jsx")
+TOOLS_JS = Path("webui/src/features/tools/ToolsPage.jsx")
 
 
 def read_app() -> str:
@@ -201,3 +202,12 @@ def test_persona_page_exposes_governance_and_injection_preview():
     assert "模拟注入" in persona_source
     assert "inject_policy" in persona_source
     assert "禁用" in persona_source
+
+
+def test_tools_page_exposes_platform_scope_controls():
+    source = TOOLS_JS.read_text(encoding="utf-8")
+
+    assert "tool-platform-select" in source
+    assert "指定平台" in source
+    assert "platform:" in source
+    assert "scope_type: 'platform'" in source or 'scope_type: \"platform\"' in source
