@@ -732,7 +732,7 @@ git commit -m "test(推送): 固化路由信封出口"
 - 修改：`tests/test_message_envelope.py`
 - 按测试结果可修改：`core/message_envelope.py`、`app/group_ingress/service.py`
 
-- [ ] **步骤 1：编写富媒体边界测试**
+- [x] **步骤 1：编写富媒体边界测试**
 
 在 `tests/test_message_envelope.py` 增加：
 
@@ -754,7 +754,7 @@ def test_renderer_does_not_drop_image_messages_even_if_legacy_envelope_helper_ig
 
 在 `tests/test_group_response_envelope.py` 增加 HTML 不截断或不破坏的现有 service 测试，断言 `messages[0]["type"] == "html"` 且 `reply` 保留完整 HTML。
 
-- [ ] **步骤 2：运行富媒体红灯**
+- [x] **步骤 2：运行富媒体红灯**
 
 运行：
 
@@ -767,7 +767,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：如果 renderer 已在任务 1 处理 image，第一项 PASS；若群聊 HTML 仍被截断，相关测试 FAIL。
 
-- [ ] **步骤 3：按失败点最小修改**
+- [x] **步骤 3：按失败点最小修改**
+
+本轮新增保护性测试已通过，现有实现满足边界，因此没有修改 `core/message_envelope.py` 或 `app/group_ingress/service.py`。
 
 如果 `core/message_envelope.py` 需要扩展，不改变 `envelope_to_message()` 旧兼容行为，只确保 builder 能保留显式传入的 `messages`：
 
@@ -782,7 +784,7 @@ def build_group_response_envelope(..., messages: list[Mapping[str, Any]] | None 
 transport_reply = answer if is_html_reply else format_group_reply_for_transport(answer, max_chars=4000)
 ```
 
-- [ ] **步骤 4：运行富媒体绿灯**
+- [x] **步骤 4：运行富媒体绿灯**
 
 运行：
 
@@ -796,7 +798,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：PASS。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 运行：
 

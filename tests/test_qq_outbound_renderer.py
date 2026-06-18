@@ -32,6 +32,35 @@ def test_render_image_url_as_cq_image():
     assert result.message == "[CQ:image,file=https://example.test/a.png]"
 
 
+def test_render_image_generated_image_id_uses_public_url(monkeypatch):
+    monkeypatch.setattr(
+        "core.qq_outbound_renderer.public_generated_image_url",
+        lambda image_id: f"https://cdn.test/{image_id}.png",
+    )
+
+    result = render_qq_message_items(
+        [{"type": "image", "generated_image_id": "img_12345678"}]
+    )
+
+    assert result.message == "[CQ:image,file=https://cdn.test/img_12345678.png]"
+    assert result.warnings == []
+
+
+def test_render_image_generated_image_id_without_public_url_keeps_token(monkeypatch):
+    monkeypatch.setattr(
+        "core.qq_outbound_renderer.public_generated_image_url",
+        lambda image_id: None,
+    )
+
+    result = render_qq_message_items(
+        [{"type": "image", "generated_image_id": "img_12345678"}]
+    )
+
+    assert result.message == "[generated_image:img_12345678]"
+    assert "base64://" not in result.message
+    assert result.warnings == ["generated_image_without_public_url:img_12345678"]
+
+
 def test_render_text_expands_sticker_token(monkeypatch):
     monkeypatch.setattr(
         "core.qq_outbound_renderer.expand_sticker_refs_in_content",

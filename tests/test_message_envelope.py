@@ -3,6 +3,7 @@ from core.message_envelope import build_group_response_envelope
 from core.message_envelope import build_text_messages
 from core.message_envelope import envelope_to_message
 from core.message_envelope import sanitize_reply_meta
+from core.qq_outbound_renderer import render_qq_outbound_envelope
 
 
 def test_build_text_messages_handles_empty_text_and_html():
@@ -113,3 +114,15 @@ def test_envelope_to_message_prefers_reply_then_textual_messages():
         )
         == ""
     )
+
+
+def test_qq_renderer_does_not_drop_image_messages():
+    envelope = {
+        "reply": "",
+        "messages": [{"type": "image", "url": "https://example.test/a.png"}],
+        "reply_meta": {},
+    }
+
+    result = render_qq_outbound_envelope(envelope)
+
+    assert result.message == "[CQ:image,file=https://example.test/a.png]"

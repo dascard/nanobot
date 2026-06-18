@@ -56,6 +56,46 @@ async def test_group_message_continue_returns_standard_envelope(db_session, monk
 
 
 @pytest.mark.asyncio
+async def test_group_message_continue_preserves_html_envelope(db_session, monkeypatch):
+    from api.routes import GroupMessageRequest, group_message
+
+    html = "<article><h1>报告</h1><p>" + ("长内容" * 1600) + "</p></article>"
+
+    async def fake_process(*args, **kwargs):
+        return {"action": "continue", "generation": 4, "reason": "html report"}
+
+    class FakeBridge:
+        async def handle_message(self, *args, **kwargs):
+            return html
+
+        def pop_last_reply_meta(self, session_id):
+            return {}
+
+    monkeypatch.setattr("api.routes.get_bridge", lambda: FakeBridge())
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="html-envelope-group",
+            sender_id="u-html",
+            sender_name="HTML 测试",
+            message="生成报告",
+            session_name="HTML 群",
+            is_at_bot=True,
+            client_meta={"platform": "qq"},
+            message_id="m-html-envelope-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "continue"
+    assert data["status"] == "ok"
+    assert data["reply"] == html
+    assert data["messages"] == [{"type": "html", "text": html}]
+
+
+@pytest.mark.asyncio
 async def test_group_message_wait_returns_empty_standard_envelope(db_session, monkeypatch):
     from api.routes import GroupMessageRequest, group_message
 
