@@ -882,6 +882,106 @@ async def test_stream_disconnect_prompt_v2_audit_failure_is_no_send(db_session, 
     assert assistant_meta["agent_result"] == "prompt_v2_audit_failed"
 
 
+def test_proxy_chat_persists_private_timing_scoring_meta(client, db_session, monkeypatch):
+    from core.private_timing import PrivateDecision
+
+    class Gate:
+        async def classify(self, *args, **kwargs):
+            return PrivateDecision(
+                "reply_now",
+                "unit_test_reason",
+                1.0,
+                "unit_test_raw",
+                complexity=5,
+                effort="short",
+                runtime_preset="lightweight",
+                timing_scoring={
+                    "stage": "rule_shortcut",
+                    "action": "continue",
+                    "signals": {"sub_signals": {"is_private": True}},
+                },
+            )
+
+    class Guardrail:
+        def classify(self, *args, **kwargs):
+            return {"status": "reply", "complexity": 5}
+
+    class Bridge:
+        async def handle_message(self, *args, **kwargs):
+            return "私聊回复"
+
+    monkeypatch.setattr("core.private_timing.get_private_gate", lambda: Gate())
+    monkeypatch.setattr("api.routes.get_guardrail", lambda: Guardrail())
+    monkeypatch.setattr("api.routes.get_bridge", lambda: Bridge())
+    monkeypatch.setattr("api.routes.PRIVATE_BUFFER_WINDOW_SECONDS", 0.0)
+
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "user_id": "u-private-score",
+            "session_id": "private_u-private-score",
+            "query": "帮我看一下",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    rows = (
+        db_session.query(ChatLog)
+        .filter(ChatLog.user_id == "u-private-score")
+        .order_by(ChatLog.id)
+        .all()
+    )
+    assert len(rows) == 2
+    user_meta = json.loads(rows[0].meta_json)
+    assistant_meta = json.loads(rows[1].meta_json)
+    assert user_meta["timing_gate"]["mode"] == "private"
+    assert user_meta["timing_gate"]["action"] == "reply_now"
+    assert user_meta["timing_gate"]["scoring"]["stage"] == "rule_shortcut"
+    assert user_meta["timing_gate"]["scoring"]["signals"]["sub_signals"]["is_private"] is True
+    assert assistant_meta["timing_gate"]["mode"] == "private"
+    assert assistant_meta["timing_gate"]["scoring"]["action"] == "continue"
+
+
+def test_proxy_chat_no_reply_persists_private_timing_scoring_meta(client, db_session, monkeypatch):
+    from core.private_timing import PrivateDecision
+
+    class Gate:
+        async def classify(self, *args, **kwargs):
+            return PrivateDecision(
+                "no_reply",
+                "ambient_ack",
+                1.0,
+                "rule_ack",
+                effort="ignore",
+                runtime_preset="none",
+                timing_scoring={"stage": "rule_shortcut", "action": "no_reply"},
+            )
+
+    monkeypatch.setattr("core.private_timing.get_private_gate", lambda: Gate())
+    monkeypatch.setattr("api.routes.PRIVATE_BUFFER_WINDOW_SECONDS", 0.0)
+
+    response = client.post(
+        "/api/v1/chat",
+        json={
+            "user_id": "u-private-no-reply",
+            "session_id": "private_u-private-no-reply",
+            "query": "嗯",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "no_reply"
+    rows = (
+        db_session.query(ChatLog)
+        .filter(ChatLog.user_id == "u-private-no-reply")
+        .order_by(ChatLog.id)
+        .all()
+    )
+    assert len(rows) == 2
+    assert json.loads(rows[0].meta_json)["timing_gate"]["scoring"]["action"] == "no_reply"
+    assert json.loads(rows[1].meta_json)["timing_gate"]["reason"] == "ambient_ack"
+
+
 @pytest.mark.asyncio
 async def test_private_buffer_silent_releases_waiters(db_session, monkeypatch):
     import asyncio

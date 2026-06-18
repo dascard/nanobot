@@ -19,7 +19,7 @@
 - 修改：`tests/test_api.py`
   - 新增私聊 ChatLog meta 回归测试，覆盖最终回复和 `no_reply` 两条关键路径。
 - 修改：`docs/todo.md`
-  - 实现后把路线项 10 的“私聊可观测待补齐”改为已补齐，并保留 CI / 真实标注为运营项。
+  - 实现后把路线项 10 的私聊可观测状态改为已补齐，并保留 CI / 真实标注为运营项。
 - 修改：`docs/plan_walkthrough.md`
   - 记录 P3-2 的提交、验证命令和下一步。
 
@@ -27,7 +27,7 @@
 
 - `core/private_timing.PrivateDecision` 已包含 `timing_scoring` 字段。
 - `api/routes.py` 中 `_private_decision` 已在私聊路由内可用。
-- `_persist_chat_turn()` 当前只把 `req.client_meta` 写入 user ChatLog meta，把 `assistant_meta` 写入 assistant ChatLog meta；没有 `timing_scoring` 参数，因此私聊评分没有进入 ChatLog。
+- `_persist_chat_turn()` 原本只把 `req.client_meta` 写入 user ChatLog meta，把 `assistant_meta` 写入 assistant ChatLog meta；没有 `timing_scoring` 参数，因此私聊评分没有进入 ChatLog。
 - 群聊已有独立 timing event meta；本计划不改变群聊逻辑。
 
 ## 任务 1：写失败测试
@@ -35,7 +35,7 @@
 **文件：**
 - 修改：`tests/test_api.py`
 
-- [ ] **步骤 1：新增私聊成功回复持久化评分测试**
+- [x] **步骤 1：新增私聊成功回复持久化评分测试**
 
 在 `tests/test_api.py` 中新增测试，使用 fake private gate 返回带 `timing_scoring` 的 `PrivateDecision`，并让 fake bridge 返回固定文本：
 
@@ -96,7 +96,7 @@ def test_proxy_chat_persists_private_timing_scoring_meta(client, db_session, mon
     assert assistant_meta["timing_gate"]["scoring"]["action"] == "continue"
 ```
 
-- [ ] **步骤 2：新增私聊 no_reply 持久化评分测试**
+- [x] **步骤 2：新增私聊 no_reply 持久化评分测试**
 
 在同一文件中新增测试，fake private gate 返回 `no_reply`，断言 ChatLog 已写入评分 meta，且 assistant meta 也包含同一 `timing_gate` 摘要：
 
@@ -137,7 +137,7 @@ def test_proxy_chat_no_reply_persists_private_timing_scoring_meta(client, db_ses
     assert json.loads(rows[1].meta_json)["timing_gate"]["reason"] == "ambient_ack"
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -147,12 +147,14 @@ python -m pytest tests/test_api.py::test_proxy_chat_persists_private_timing_scor
 
 预期：两个测试失败，失败原因为 `timing_gate` 不存在或缺少 `scoring` 字段。
 
+实际结果：`2 failed, 21 warnings`；两个断言均失败于 `KeyError: 'timing_gate'`，证明回归测试能捕获私聊评分未持久化的问题。
+
 ## 任务 2：实现私聊 timing meta 持久化
 
 **文件：**
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：新增 meta helper**
+- [x] **步骤 1：新增 meta helper**
 
 在 `api/routes.py` 中新增 helper，把 `PrivateDecision` 转成稳定的 meta 片段：
 
@@ -173,7 +175,7 @@ def _private_timing_meta(decision: Any | None) -> dict[str, Any] | None:
     }
 ```
 
-- [ ] **步骤 2：扩展 `_persist_chat_turn()` 参数**
+- [x] **步骤 2：扩展 `_persist_chat_turn()` 参数**
 
 给 `_persist_chat_turn()` 增加 keyword-only 参数 `timing_meta: dict | None = None`。合并规则：
 
@@ -196,7 +198,7 @@ if timing_meta:
 
 assistant ChatLog 的 `meta_json` 改为 `assistant_chat_meta`。
 
-- [ ] **步骤 3：私聊路由调用点传入 timing meta**
+- [x] **步骤 3：私聊路由调用点传入 timing meta**
 
 在 `_private_decision` 得到后创建：
 
@@ -214,7 +216,7 @@ private_timing_meta = _private_timing_meta(_private_decision)
 
 群聊和非私聊路径保持 `timing_meta=None`。
 
-- [ ] **步骤 4：运行绿灯测试**
+- [x] **步骤 4：运行绿灯测试**
 
 运行：
 
@@ -224,6 +226,8 @@ python -m pytest tests/test_api.py::test_proxy_chat_persists_private_timing_scor
 
 预期：全部通过。
 
+实际结果：初次绿灯为 `2 passed, 21 warnings in 1.60s`；提交前复跑为 `2 passed, 21 warnings in 1.63s`。
+
 ## 任务 3：回归与文档收口
 
 **文件：**
@@ -231,7 +235,7 @@ python -m pytest tests/test_api.py::test_proxy_chat_persists_private_timing_scor
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/private-timing-scoring-meta.md`
 
-- [ ] **步骤 1：运行定向回归**
+- [x] **步骤 1：运行定向回归**
 
 运行：
 
@@ -241,7 +245,9 @@ python -m pytest tests/test_private_timing.py tests/test_api.py -k "private_timi
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 2：运行相邻回归**
+实际结果：初次定向回归为 `12 passed, 73 deselected, 21 warnings in 1.87s`；提交前复跑为 `12 passed, 73 deselected, 21 warnings in 2.40s`。
+
+- [x] **步骤 2：运行相邻回归**
 
 运行：
 
@@ -251,25 +257,33 @@ python -m pytest tests/test_api.py tests/test_chat_response_envelope.py tests/te
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 3：同步文档状态**
+实际结果：初次相邻回归为 `87 passed, 21 warnings in 20.24s`；提交前复跑为 `87 passed, 21 warnings in 20.07s`。
+
+- [x] **步骤 3：同步文档状态**
 
 更新：
 
 - `docs/todo.md` 路线项 10：私聊 `timing_scoring` 已持久化，剩余改为 CI / 真实标注运营项。
-- `docs/plan_walkthrough.md`：记录 P3-2 完成状态、验证命令和提交号。
+- `docs/plan_walkthrough.md`：记录 P3-2 完成状态、验证命令和提交建议。
 - `.Codex/plans/private-timing-scoring-meta.md`：勾选已完成步骤，记录验证结果。
 
-- [ ] **步骤 4：运行格式检查**
+- [x] **步骤 4：运行格式检查与最终复跑**
 
 运行：
 
 ```bash
+rg -n "待[定]|后续[实]现|类似[任]务|添加[适]当|为上[述]" .Codex/plans/private-timing-scoring-meta.md docs/todo.md docs/plan_walkthrough.md
 git diff --check
+python -m pytest tests/test_api.py::test_proxy_chat_persists_private_timing_scoring_meta tests/test_api.py::test_proxy_chat_no_reply_persists_private_timing_scoring_meta -v
+python -m pytest tests/test_private_timing.py tests/test_api.py -k "private_timing or private_buffer or proxy_chat_persists_private_timing_scoring_meta or proxy_chat_no_reply_persists_private_timing_scoring_meta" -v
+python -m pytest tests/test_api.py tests/test_chat_response_envelope.py tests/test_streaming_response_envelope.py -v
 ```
 
-预期：无输出，退出码为 0。
+预期：扫描和格式检查无异常；pytest 回归全部通过，失败数为 0。
 
-- [ ] **步骤 5：阶段提交**
+实际结果：占位词扫描无输出；U+FFFD 扫描无输出；`git diff --check -- api/routes.py tests/test_api.py docs/todo.md docs/plan_walkthrough.md .Codex/plans/private-timing-scoring-meta.md` 无输出；pytest 复跑结果分别为 `2 passed, 21 warnings in 1.63s`、`12 passed, 73 deselected, 21 warnings in 2.40s`、`87 passed, 21 warnings in 20.07s`；全量回归 `1313 passed, 6 skipped, 139 warnings in 101.70s`。
+
+- [x] **步骤 5：阶段提交**
 
 只暂存本阶段文件：
 

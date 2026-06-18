@@ -216,11 +216,11 @@
 
 #### 路线项 10 — TimingGate 引入「规则信号 + 模型」混合决策  ·〔关联 H2〕
 
-- **现状（2026-06-18 已落地，私聊可观测待补齐）**：核心链路已从「纯 Qwen 三态判断」推进到 scoring 混合决策。已新增 `core/timing_score.py`，覆盖 `d0/linger/s_ack/s_transport/s_other/w_*` 信号、`E_rule/E_final`、冲突升级、模型权重和 `rule_fallback`；`GroupRuntime` 已接入 shadow scoring、普通 ambient 确定性短路、模型失败规则兜底、`directed_to_other` scoring 软化、ambient / legacy / timer cooldown scoring 短路，以及 session / platform 级模型层策略。私聊已接入同一套 shared timing scoring，分类器结果回灌为 `TimingModelHint`。群聊 `timing_scoring` 已写入 ChatLog meta 并由 admin events / WebUI 调试页透出；私聊当前只在 `PrivateDecision.timing_scoring` 内携带，尚未持久化到 ChatLog meta。`evals` 也能在 action 缺失时执行 scoring 并校验 `expected.scoring`。
-- **已完成**：`@bot + 图片` 规则 WAIT 不调模型；纯 ambient / 纯确认可规则 `no_reply`；`directed_to_other + linger` 进入冲突升级；模型 `network_error/parse_error` 后使用规则侧 `rule_fallback`，不再全群哑火；`s_ack` 排除请求词、问号、URL、代码、文件；`s_transport` 已按 secret/blob/url/codeblock/long dump 分档；`force_next_continue` 已降级为 `d0=1.0` 后完整走 Stage 1-4；`enabled` / `rules_only` / `shadow` 模型策略已支持 default / platform / session 三级覆盖；真实 ChatLog 信号审计 CLI 已输出假阳率、shadow mismatch 和阈值建议；`timing_gate` eval 已支持 baseline diff 和阈值门禁。
-- **剩余**：核心混合决策主线已完成。下一步先补私聊 `timing_scoring` 持久化到 ChatLog meta 的最小闭环，避免私聊调试缺少评分证据；随后推进持续运营项：用更多人工标注样本复跑 `timing_signal_audit` 并按报告调参；把 `python -m evals.run --suite timing_gate --baseline ... --min-pass-rate ... --max-new-failures ...` 接入外部 CI；继续与路线项 5/7 的响应信封和调试可观测协同。
+- **现状（2026-06-18 已落地）**：核心链路已从「纯 Qwen 三态判断」推进到 scoring 混合决策。已新增 `core/timing_score.py`，覆盖 `d0/linger/s_ack/s_transport/s_other/w_*` 信号、`E_rule/E_final`、冲突升级、模型权重和 `rule_fallback`；`GroupRuntime` 已接入 shadow scoring、普通 ambient 确定性短路、模型失败规则兜底、`directed_to_other` scoring 软化、ambient / legacy / timer cooldown scoring 短路，以及 session / platform 级模型层策略。私聊已接入同一套 shared timing scoring，分类器结果回灌为 `TimingModelHint`。群聊 `timing_scoring` 已写入 ChatLog meta 并由 admin events / WebUI 调试页透出；私聊 `PrivateDecision.timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化为 `timing_gate`，可回溯 action、reason、effort、runtime_preset 与 scoring 明细。`evals` 也能在 action 缺失时执行 scoring 并校验 `expected.scoring`。
+- **已完成**：`@bot + 图片` 规则 WAIT 不调模型；纯 ambient / 纯确认可规则 `no_reply`；`directed_to_other + linger` 进入冲突升级；模型 `network_error/parse_error` 后使用规则侧 `rule_fallback`，不再全群哑火；`s_ack` 排除请求词、问号、URL、代码、文件；`s_transport` 已按 secret/blob/url/codeblock/long dump 分档；`force_next_continue` 已降级为 `d0=1.0` 后完整走 Stage 1-4；`enabled` / `rules_only` / `shadow` 模型策略已支持 default / platform / session 三级覆盖；真实 ChatLog 信号审计 CLI 已输出假阳率、shadow mismatch 和阈值建议；`timing_gate` eval 已支持 baseline diff 和阈值门禁；私聊评分已补齐 ChatLog meta 可观测闭环。
+- **剩余**：核心混合决策主线和私聊可观测闭环均已完成。剩余为持续运营项：用更多人工标注样本复跑 `timing_signal_audit` 并按报告调参；把 `python -m evals.run --suite timing_gate --baseline ... --min-pass-rate ... --max-new-failures ...` 接入外部 CI；继续与路线项 5/7 的响应信封和调试可观测协同。
 - **关联**：H2 已完成 admin route 异步化和 repeats 收紧；后续与路线项 8（评测体系）、路线项 5/7（响应信封与调试可观测）继续协同。
-- **下一步**：先实现私聊评分持久化；再进入运营收尾，复跑真实日志审计、按标注结果调阈值，并将 timing gate eval 门禁接入外部 CI。
+- **下一步**：进入运营收尾，复跑真实日志审计、按标注结果调阈值，并将 timing gate eval 门禁接入外部 CI。
 
 ---
 

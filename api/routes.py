@@ -700,6 +700,22 @@ def _private_prompt_audit_failure_meta() -> dict:
     }
 
 
+def _private_timing_meta(decision: Any | None) -> dict[str, Any] | None:
+    if decision is None:
+        return None
+    scoring = getattr(decision, "timing_scoring", None)
+    if not isinstance(scoring, dict):
+        return None
+    return {
+        "mode": "private",
+        "action": str(getattr(decision, "action", "") or ""),
+        "reason": str(getattr(decision, "reason", "") or ""),
+        "effort": str(getattr(decision, "effort", "") or ""),
+        "runtime_preset": str(getattr(decision, "runtime_preset", "") or ""),
+        "scoring": scoring,
+    }
+
+
 def _persist_chat_turn(
     db: Session,
     req: ChatProxyRequest,
@@ -708,6 +724,7 @@ def _persist_chat_turn(
     *,
     assistant_meta: dict | None = None,
     assistant_processed: int | None = None,
+    timing_meta: dict | None = None,
 ) -> int:
     """Persist a chat turn to both ChatLog (evolution) and ConversationTurn (context)."""
     is_injection = guardrail_status == "injection"
@@ -744,9 +761,16 @@ def _persist_chat_turn(
             turn_answer = answer[:2000] + "\n...[截断]"
     user_meta = _safe_meta(meta)
     user_meta["kind"] = "chat"
+    if timing_meta:
+        user_meta["timing_gate"] = timing_meta
     assistant_turn_meta = {"kind": turn_answer_kind}
+    if timing_meta:
+        assistant_turn_meta["timing_gate"] = timing_meta
     if assistant_meta:
         assistant_turn_meta.update(assistant_meta)
+    assistant_chat_meta = dict(assistant_meta or {})
+    if timing_meta:
+        assistant_chat_meta["timing_gate"] = timing_meta
 
     def operation() -> None:
         if is_silent:
@@ -771,7 +795,7 @@ def _persist_chat_turn(
             processed=processed_val,
             message_id=req.message_id,
             source_message_ids_json=source_ids_json,
-            meta_json=meta,
+            meta_json=json.dumps(user_meta, ensure_ascii=False),
         ))
         db.add(ChatLog(
             user_id=req.user_id,
@@ -781,7 +805,7 @@ def _persist_chat_turn(
             sender_name="nanobot",
             session_name=req.session_name or "",
             processed=assistant_processed_val,
-            meta_json=json.dumps(assistant_meta or {}, ensure_ascii=False),
+            meta_json=json.dumps(assistant_chat_meta, ensure_ascii=False),
         ))
         # ConversationTurn — 精简上下文，专用于历史注入
         # HTML 报告只存摘要，避免污染下轮上下文；ChatLog 保留完整原文。
@@ -2344,6 +2368,7 @@ async def proxy_chat(
     buffered_query: str | None = None
     buffered_files: list[str] | None = None
     _private_decision: PrivateDecision | None = None
+    private_timing_meta: dict | None = None
 
     if not is_group and not req.classification_request:
         from core.private_timing import get_private_gate, PrivateDecision, get_effort_constraint
@@ -2360,8 +2385,9 @@ async def proxy_chat(
                 _private_decision = await private_gate.classify(
                     req.query, user_id=req.user_id, has_files=bool(req.files),
                 )
+            private_timing_meta = _private_timing_meta(_private_decision)
             if _private_decision.action == "no_reply":
-                _persist_chat_turn(db, req, "", guardrail_status=None)
+                _persist_chat_turn(db, req, "", guardrail_status=None, timing_meta=private_timing_meta)
                 return _chat_response_payload(
                     req,
                     status="no_reply",
@@ -2372,7 +2398,13 @@ async def proxy_chat(
                 from core.reply_templates import get_casual_reply
                 reply = get_casual_reply(req.query, is_superuser=is_superuser)
                 if reply:
-                    _persist_chat_turn(db, req, reply, guardrail_status="casual_template")
+                    _persist_chat_turn(
+                        db,
+                        req,
+                        reply,
+                        guardrail_status="casual_template",
+                        timing_meta=private_timing_meta,
+                    )
                     return _chat_response_payload(
                         req,
                         status="ok",
@@ -2381,10 +2413,16 @@ async def proxy_chat(
                         intent=_private_decision.reason,
                         guardrail_status="casual_template",
                         include_answer_chunks=True,
-                    )
+                )
                 # 无模板匹配——casual 不进 bridge，走默认短句
                 fallback = "你先说事" if req.query else ""
-                _persist_chat_turn(db, req, fallback, guardrail_status="casual_template")
+                _persist_chat_turn(
+                    db,
+                    req,
+                    fallback,
+                    guardrail_status="casual_template",
+                    timing_meta=private_timing_meta,
+                )
                 return _chat_response_payload(
                     req,
                     status="ok",
@@ -2577,7 +2615,13 @@ async def proxy_chat(
 
     if _classifier_ran and guardrail_status == "silent":
         await _finalize_private_buffer(req.user_id)
-        _persist_chat_turn(db, persist_req, "（数据中转，自动静默）", guardrail_status)
+        _persist_chat_turn(
+            db,
+            persist_req,
+            "（数据中转，自动静默）",
+            guardrail_status,
+            timing_meta=private_timing_meta,
+        )
         return _chat_response_payload(
             req,
             status="silent",
@@ -2804,6 +2848,7 @@ async def proxy_chat(
                         guardrail_status,
                         assistant_meta=assistant_meta,
                         assistant_processed=assistant_processed,
+                        timing_meta=private_timing_meta,
                     )
 
                 if persist_db is not None:
@@ -2911,7 +2956,13 @@ async def proxy_chat(
                 logger.error(f"[/chat] Stream runner failed: user={req.user_id}, session={req.session_id}, error={err_msg}")
                 try:
                     await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-                    _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
+                    _persist_chat_turn(
+                        db,
+                        persist_req,
+                        EMPTY_ASSISTANT_PLACEHOLDER,
+                        guardrail_status,
+                        timing_meta=private_timing_meta,
+                    )
                     persisted = True
                 except Exception as pe:
                     logger.error(f"[/chat] Stream persist failed on error path: {pe}")
@@ -2938,12 +2989,19 @@ async def proxy_chat(
                         guardrail_status,
                         assistant_meta=_private_prompt_audit_failure_meta(),
                         assistant_processed=1,
+                        timing_meta=private_timing_meta,
                     )
                     persisted = True
                     yield f"data: {json.dumps({'status': 'error', 'message': SAFE_STREAM_ERROR_MESSAGE}, ensure_ascii=False)}\n\n"
                 else:
                     await _finalize_private_buffer(req.user_id, answer)
-                    pending = _persist_chat_turn(db, persist_req, answer, guardrail_status)
+                    pending = _persist_chat_turn(
+                        db,
+                        persist_req,
+                        answer,
+                        guardrail_status,
+                        timing_meta=private_timing_meta,
+                    )
                     persisted = True
                     if pending >= EVOLUTION_THRESHOLD:
                         logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
@@ -2990,7 +3048,13 @@ async def proxy_chat(
         logger.error(f"[/chat] KT Agent failed: {e}")
         try:
             await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-            _persist_chat_turn(db, persist_req, EMPTY_ASSISTANT_PLACEHOLDER, guardrail_status)
+            _persist_chat_turn(
+                db,
+                persist_req,
+                EMPTY_ASSISTANT_PLACEHOLDER,
+                guardrail_status,
+                timing_meta=private_timing_meta,
+            )
         except Exception as pe:
             logger.error(f"[/chat] Persist failed on KT error path: {pe}")
         raise HTTPException(status_code=502, detail=SAFE_STREAM_ERROR_MESSAGE)
@@ -3007,6 +3071,7 @@ async def proxy_chat(
                 guardrail_status,
                 assistant_meta=_private_prompt_audit_failure_meta(),
                 assistant_processed=1,
+                timing_meta=private_timing_meta,
             )
         except Exception as pe:
             logger.error(f"[/chat] Persist failed on prompt audit error path: {pe}")
@@ -3029,7 +3094,13 @@ async def proxy_chat(
 
     # 3. 落库 (KT 的 session 管理是独立的, nanobot 原有日志需手动写入)
     await _finalize_private_buffer(req.user_id, answer)
-    pending = _persist_chat_turn(db, persist_req, answer, guardrail_status)
+    pending = _persist_chat_turn(
+        db,
+        persist_req,
+        answer,
+        guardrail_status,
+        timing_meta=private_timing_meta,
+    )
 
     # 4. 检查进化触发阈值 (按 user_id 计数，而非 session_id，确保个人消息足够才触发进化)
     if pending >= EVOLUTION_THRESHOLD:
