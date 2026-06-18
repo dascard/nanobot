@@ -6,16 +6,16 @@
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
-P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。
+P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」已完成最终验证。下一优先级是 P2-4「Prompt platform × chat_type 二维适配」，除非用户另行调整。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」和 P2-4「Prompt platform × chat_type 二维适配」均已完成最终验证。本轮文档收口后，下一优先级默认转入 P3-1「SSE 真 token 流式剩余收敛」，除非用户另行调整。
 
 ## 文档口径
 
 - `docs/todo.md` 是当前架构路线的主参考，但它只记录路线级状态；当它与提交记录、`.Codex/plans/` 任务进度或本文件冲突时，以已提交代码和本文件的当前详细计划为准。本轮已重新核对路线项 5，确认 P2-2 响应信封兼容双写和 P2-2.5 `client_meta` 边界层解析 / 校验均已完成；路线项 5 后续只保留与 P2-3 出站渲染契约相邻的富媒体表达工作。
-- `docs/TODO_LIST.md` 是历史完成清单，目前未跟踪且存在滞后状态，例如仍描述 Prompt V2 默认未启用、TimingGate 阶段仍在中途；后续仅作为历史核对材料，不作为优先级来源。
+- 历史待办清单文件目前未跟踪且存在滞后状态，例如仍描述 Prompt V2 默认未启用、TimingGate 阶段仍在中途；后续仅作为历史核对材料，不作为优先级来源。
 - 本文件记录「下一阶段怎么推进」，每次阶段完成后要同步状态并单独提交。
 
 ## 执行约束
@@ -35,14 +35,14 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | 阶段 | 状态 | 交付物 |
 |------|------|--------|
 | 阶段 0：审查 `asyncio.run` 与测试慢速问题 | 已完成 | 代码审查结论与测试性能审查 |
-| 阶段 1：前置缺陷修复与稳定性打底 | 已完成 | BridgePool、日志回滚、TODO 状态同步 |
+| 阶段 1：前置缺陷修复与稳定性打底 | 已完成 | BridgePool、日志回滚、待办状态同步 |
 | 阶段 2：建立 TimingGate scoring 纯函数与 shadow 可观测 | 已完成 | `core/timing_score.py`、ChatLog/Admin/WebUI 调试字段 |
 | 阶段 3：普通 ambient 规则短路 | 已完成 | 普通 ambient 确定性规则跳过模型 |
 | 阶段 4：模型失败规则兜底 | 已完成 | 模型异常后使用 `rule_fallback` |
 | 阶段 5：eval scoring 覆盖 | 已完成 | timing eval 支持 scoring 校验 |
 | 阶段 6：`directed_to_other` 软化 | 已完成 | 指向他人从 hard no_reply 降级为抑制信号 |
 | 阶段 7：ambient cooldown 软化 | 已完成 | 群聊环境 cooldown 接入 scoring shortcut |
-| 阶段 7.5：同步 TODO 进度 | 已完成 | `docs/todo.md` 同步混合决策进度 |
+| 阶段 7.5：同步待办进度 | 已完成 | `docs/todo.md` 同步混合决策进度 |
 | 阶段 8：私聊接入 shared timing scoring | 已完成 | 私聊规则与分类器统一回灌 shared scoring |
 | 阶段 9：timer / legacy cooldown 继续软化 | 已完成 | timer fired 与 legacy cooldown 接入 scoring shortcut |
 | 阶段 10：session / platform 级模型层开关 | 已完成 | `enabled` / `rules_only` / `shadow` 策略解析与运行时接入 |
@@ -73,7 +73,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P2-2 | 已完成 | 标准化请求 / 响应信封 | 设计已随 `c984036` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；共享 builder、`/chat` 非流式、SSE done、`/group/message`、定时任务 push、route push、响应侧文档和最终验证均已完成 | `c984036` / `147421b` / `57006f3` / `49b3104` / `fc0eeaf` / `0c37a30` / `617aa25` |
 | P2-2.5 | 已完成 | `client_meta` 边界层校验 | 新增 `core/client_meta.py`，在 `/chat` 和 `/group/message` 入口归一化 `platform`、校验 `chat_type`、裁剪 trace 字段，并保留扩展字段 | `ce05b35` / `feat(消息): 校验客户端元信息边界` |
 | P2-3 | 已完成 | QQ 出站渲染契约 | 以响应信封 `messages` 为 canonical 出站内容层，通过集中式 QQ renderer 派生旧 QQbot `message` 字符串 | `c72ddb3` / `1f4aa69` / `72a9751` / `0c8c590` / `f19b09b` / `f0bfbdf` / `04ff6d3` / `6aea7f8` / `docs(计划): 收口 QQ 出站渲染状态` |
-| P2-4 | 待执行 | Prompt platform × chat_type 二维适配 | V2 模板按平台和会话类型拆分，QQ 专属约定下沉到 platform 分支 | `feat(提示词): 支持平台化模板分支` |
+| P2-4 | 已完成 | Prompt platform × chat_type 二维适配 | V2 模板按平台和会话类型拆分，QQ 专属约定下沉到 platform 分支；`web × private` 不再注入 QQ 平台模板 | `27e632f` / `164b215` / `ca93dc2` / `18d0b0d` / `17a7bd8` / `fe2d81b` |
 | P3-1 | 已部分完成，待继续 | SSE 真 token 流式剩余收敛 | 已贯通 `/chat` 的 `stream` 参数并补齐 `/chat-step` SSE；继续补 chunk 合并窗口、backpressure、工具回合语义和统一信封 | `2369081` / 后续 `refactor(流式): 收敛增量输出契约` |
 | P3-2 | 运营项 | TimingGate 持续评估 | 用更多人工标注样本复跑审计，接入外部 CI / PR gate | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
@@ -123,7 +123,50 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 后续事项：
 
-- 下一步优先进入 P2-4「Prompt platform × chat_type 二维适配」，除非用户另行指定。
+- P2-4「Prompt platform × chat_type 二维适配」已完成。下一步默认进入 P3-1「SSE 真 token 流式剩余收敛」，除非用户另行指定。
+
+## 已完成阶段详情：P2-4 Prompt platform × chat_type 二维适配
+
+状态：P2-4 已完成实现、集成回归和本轮文档收口。设计文档为 `docs/superpowers/specs/2026-06-18-prompt-platform-chat-type-design.md`，已随 `27e632f docs(提示词): 设计平台化提示词分支` 提交；实现计划为 `.Codex/plans/prompt-platform-chat-type.md`，已随 `164b215 docs(计划): 记录平台化提示词计划` 提交。本阶段保留 `chat_type ∈ {group, private}` 表达会话语义，新增 `platform` 表达客户端平台；Prompt Runtime 按 `platform × chat_type` 过滤 flow，QQ 私有规则下沉到 `chat/platform/qq/*` 平台分支。
+
+目标：
+
+- `platform` 从 Bridge metadata 进入 `PromptRuntimeInput`、`PromptCompileRequest`、`PromptPlan`、`debug` 和 `<runtime_context>`。
+- flow 节点和边支持 `platforms` 条件，并拒绝 `chat_types × platforms` 条件重叠的歧义出边。
+- QQ 平台模板拆分为 `chat/platform/qq/common.md` 和 `chat/platform/qq/group.md`，公共群聊 / 私聊模板不再写死 QQ 私有措辞。
+- `qq × group` 注入通用群聊模板、QQ common 模板和 QQ 群聊模板；`qq × private` 注入通用私聊模板和 QQ common 模板；`web × private` 不注入 QQ 平台模板。
+- Admin effective-preview 支持 `platform`，并让 ToolPlan 与 PromptCompileRequest 使用同一个平台值。
+
+已完成任务：
+
+- [x] 设计文档：明确 platform 与 chat_type 的职责边界、flow 条件规则和模板迁移策略。提交：`27e632f docs(提示词): 设计平台化提示词分支`。
+- [x] 实现计划：写入 `.Codex/plans/prompt-platform-chat-type.md`，拆分任务 1 到任务 5 的文件 owner、验证命令和提交边界。提交：`164b215 docs(计划): 记录平台化提示词计划`。
+- [x] 任务 1：Prompt Runtime core 支持 platform 维度，覆盖 schema、variables、context、flow、compiler 和二维冲突测试。提交：`ca93dc2 feat(提示词): 支持平台化编排条件`。
+- [x] 任务 2：Bridge 和 Admin 预览透传 platform，覆盖 PromptRuntimeInput、PromptCompileRequest、ToolPlan 和 effective-preview 响应。提交：`18d0b0d feat(提示词): 透传提示词平台上下文`。
+- [x] 任务 3：迁移 flow 和提示词模板，新增 QQ 平台模板，同步 `prompts.v2.default` 与 `data/prompts_v2`，并清理工具 usage 中的 QQ / OneBot / CQ 私有表述。提交：`17a7bd8 feat(提示词): 拆分 QQ 平台模板`。
+- [x] 任务 4：补平台化提示词集成回归，覆盖默认 QQ、Web 私聊和 Admin 真实预览链路。提交：`fe2d81b test(提示词): 覆盖平台化提示词链路`。
+- [x] 任务 5：同步 `docs/todo.md`、本文件和实现计划状态，运行文档扫描、定向回归、Prompt Runtime 完整回归与全量测试后单独提交。
+
+验证记录：
+
+- 任务 2 定向：`tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_prompt_v2_template_admin.py -k "platform"`，结果 `4 passed, 73 deselected, 1 warning`。
+- 任务 2 相关完整回归：`tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_prompt_v2_template_admin.py`，结果 `77 passed, 1 warning`。
+- 任务 2 全量回归：`tests/`，结果 `1297 passed, 6 skipped, 139 warnings`。
+- 任务 3 模板一致性：`diff -qr prompts.v2.default data/prompts_v2`，结果无输出。
+- 任务 3 平台模板定向：`tests/test_prompt_v2.py tests/test_prompt_v2_template_registry.py -k "default_flow_selects_qq_platform_templates or default_flow_skips_qq_templates or platform_templates_are_addressable or platform_words_are_isolated or tool_usage_avoids_platform_private_message_codes"`，结果 `5 passed, 33 deselected, 1 warning`。
+- 任务 3 Prompt Runtime / registry 回归：`tests/test_prompt_v2.py tests/test_prompt_v2_template_registry.py`，结果 `38 passed, 1 warning`。
+- 任务 3 全量回归：`tests/`，结果 `1302 passed, 6 skipped, 139 warnings`。
+- 任务 4 最小集成断言：`tests/test_prompt_v2.py tests/test_prompt_v2_template_admin.py -k "default_flow_selects_qq_platform_templates or default_flow_skips_qq_templates or templates_can_be_edited_from_admin"`，结果 `3 passed, 30 deselected, 1 warning`。
+- 任务 4 平台定向回归：`tests/test_prompt_v2.py tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py tests/test_prompt_v2_template_admin.py -k "platform or prompt_v2"`，结果 `50 passed, 127 deselected, 1 warning`。
+- 任务 4 Prompt Runtime 完整回归：`tests/test_prompt_v2.py tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py tests/test_prompt_v2_template_registry.py tests/test_prompt_v2_template_admin.py`，结果 `190 passed, 1 warning`。
+- 任务 5 文档扫描：`.Codex/plans/prompt-platform-chat-type.md docs/todo.md docs/plan_walkthrough.md`，结果 `scan ok`；`git diff --check` 无输出；`diff -qr prompts.v2.default data/prompts_v2` 无输出。
+- 任务 5 Prompt Runtime 完整回归：`tests/test_prompt_v2.py tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py tests/test_prompt_v2_template_registry.py tests/test_prompt_v2_template_admin.py`，结果 `190 passed, 1 warning`。
+- 任务 5 全量回归：`tests/`，结果 `1302 passed, 6 skipped, 139 warnings in 99.24s`。
+
+剩余边界：
+
+- 工具模板 selector 暂不按平台拆分；现阶段只清理工具 usage 的平台私有措辞。
+- TimingGate task 模板的平台化仍由 TimingGate 路线独立推进。
 
 ## 已完成阶段详情：P2-2.5 `client_meta` 边界层校验
 
@@ -184,7 +227,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 阶段拆分：
 
-- [x] 核对 `docs/todo.md` 路线项 5，确认 P2-2 是 P2 多平台底座的下一优先级；`docs/TODO_LIST.md` 明显滞后，仅作历史材料。
+- [x] 核对 `docs/todo.md` 路线项 5，确认 P2-2 是 P2 多平台底座的下一优先级；历史待办清单文件明显滞后，仅作历史材料。
 - [x] 完成只读审计：私聊 / Web 路径、群聊路径、push / 定时任务出口的响应字段差异均已梳理。
 - [x] 写入设计文档：`docs/superpowers/specs/2026-06-18-message-envelope-design.md`，明确兼容双写方案、字段映射、P2-2 / P2-3 边界、测试计划和验收标准。提交：`c984036 docs(消息): 设计响应信封标准`。
 - [x] 写入实现计划：`.Codex/plans/message-envelope.md`，按接口先行、API / 群聊 / push 文件 owner、主线程集成和阶段提交拆解。
@@ -304,7 +347,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 已完成阶段详情：P1-8 模型能力校验
 
-状态：P1-8 已完成。`docs/todo.md` 路线项 3 已从早期「尚未接入能力校验」口径同步为已落地口径；后续只保留 base64 data URL、图片数量 / 大小上限、platform 出站契约等相邻路线项。`docs/TODO_LIST.md` 仍是历史清单，不能作为当前优先级来源。
+状态：P1-8 已完成。`docs/todo.md` 路线项 3 已从早期「尚未接入能力校验」口径同步为已落地口径；后续只保留 base64 data URL、图片数量 / 大小上限、platform 出站契约等相邻路线项。历史待办清单文件仍是历史清单，不能作为当前优先级来源。
 
 目标：
 
@@ -409,7 +452,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 状态：已完成。P1-6 任务 1-6 已完成：旧管理入口已由后端 410 catch-all 接管，WebUI 旧 route / 旧页面组件已删除，旧任务 prompt 已迁移到 V2 task template，V1 live 分支已封存，旧资产删除、禁止项扫描、相关回归、WebUI 构建和全量测试均已通过，并已随 `597a514` 单独提交归档。任务 7「建立无版本 canonical prompt 命名兼容层」已完成红灯、绿灯实现、相关回归、WebUI 构建、禁止项扫描和全量测试，并已随 `4fe00bb` 单独提交归档。任务 8 已把 `docs/todo.md`、本文件、P1-6 设计文档和实现计划同步到当前事实，并通过最终引用守卫和回归验证。
 
 - [x] 重新核对 `docs/todo.md` 路线项 1，确认 P1-6 是 P1-5 之后的下一优先级。
-- [x] 核对 `docs/TODO_LIST.md`，确认它记录了更旧的路线状态，仅作历史核对，不作为优先级来源。
+- [x] 核对历史待办清单文件，确认它记录了更旧的路线状态，仅作历史核对，不作为优先级来源。
 - [x] 标记 P1-5 Prompt legacy 收口已完成，并把本文件的当前执行焦点切到 P1-6。
 - [x] 写入 P1-6 设计文档：`docs/superpowers/specs/2026-06-17-prompt-v1-asset-removal-design.md`。
 - [x] 写入 P1-6 实现计划：`.Codex/plans/prompt-v1-asset-removal.md`。
@@ -602,13 +645,13 @@ P1-6 验收重点：
 
 状态：已完成。
 
-已完成 BridgePool 在途请求等待、日志保存失败回滚、相关 TODO 状态同步等前置修复。
+已完成 BridgePool 在途请求等待、日志保存失败回滚、相关待办状态同步等前置修复。
 
 相关提交：
 
 - `95683ed fix(BridgePool): 停止前等待在途请求完成`
 - `91d5f75 fix(记忆): 保存日志失败时回滚事务`
-- `3a4ce44 docs(TODO): 同步缺陷修复状态`
+- `3a4ce44`：同步缺陷修复状态
 
 ### 阶段 2：建立 TimingGate scoring 纯函数与 shadow 可观测
 
@@ -666,7 +709,7 @@ P1-6 验收重点：
 
 - `9bbf945 refactor(时机门控): 软化群聊环境冷却`
 
-### 阶段 7.5：同步 TODO 进度
+### 阶段 7.5：同步待办进度
 
 状态：已完成。
 
@@ -814,6 +857,6 @@ P1-6 验收重点：
 
 ## 下一步
 
-P2-3「QQ 出站渲染契约」已完成收口。下一步进入 P2-4「Prompt platform × chat_type 二维适配」：把 QQ 专属提示词约定下沉到 platform 分支，让 Web / QQ 等入口共享通用输出契约但保留平台差异。
+P2-4「Prompt platform × chat_type 二维适配」已完成收口。下一步默认进入 P3-1「SSE 真 token 流式剩余收敛」：继续补齐 chunk 合并窗口、backpressure、工具回合语义和统一信封展示规则。
 
-TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P2 执行顺序。
+TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占当前执行顺序。

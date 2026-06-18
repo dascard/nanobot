@@ -161,7 +161,7 @@ def ordered_nodes_for_chat(
 - 修改：`core/prompt_v2/flow.py`
 - 修改：`core/prompt_v2/compiler.py`
 
-- [ ] **步骤 1：编写 flow 二维筛选红灯测试**
+- [x] **步骤 1：编写 flow 二维筛选红灯测试**
 
 在 `tests/test_prompt_v2.py` 追加：
 
@@ -212,7 +212,7 @@ def test_prompt_v2_flow_filters_by_chat_type_and_platform():
     ]
 ```
 
-- [ ] **步骤 2：编写 flow 冲突和平台格式红灯测试**
+- [x] **步骤 2：编写 flow 冲突和平台格式红灯测试**
 
 继续追加：
 
@@ -255,7 +255,7 @@ def test_prompt_v2_flow_rejects_invalid_platform_values():
         validate_flow(flow)
 ```
 
-- [ ] **步骤 3：编写编译请求和变量红灯测试**
+- [x] **步骤 3：编写编译请求和变量红灯测试**
 
 追加：
 
@@ -309,7 +309,7 @@ async def test_prompt_v2_compile_plan_exposes_platform(monkeypatch):
     assert plan.debug["flow_node_ids"] == ["base", "web_private", "current_user_event"]
 ```
 
-- [ ] **步骤 4：运行红灯**
+- [x] **步骤 4：运行红灯**
 
 运行：
 
@@ -319,7 +319,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py -k "platfo
 
 预期：失败，原因包括 `ordered_nodes_for_chat()` 不接受 `platform`、`PromptCompileRequest` 不接受 `platform` 或模板变量 `platform` 未进入白名单。
 
-- [ ] **步骤 5：实现 `PromptCompileRequest` 和 `PromptPlan` 平台字段**
+- [x] **步骤 5：实现 `PromptCompileRequest` 和 `PromptPlan` 平台字段**
 
 在 `core/prompt_v2/schema.py` 中加入：
 
@@ -352,7 +352,7 @@ def normalized_platform(self) -> str:
 
 同时更新所有直接构造 `PromptPlan(...)` 的测试和源码调用，传入 `platform="qq"` 或 `platform=plan.platform`。
 
-- [ ] **步骤 6：实现模板变量和 runtime context 平台输出**
+- [x] **步骤 6：实现模板变量和 runtime context 平台输出**
 
 在 `core/prompt_v2/variables.py` 的 `_GLOBAL_VARIABLES` 里加入：
 
@@ -373,7 +373,7 @@ platform = request.normalized_platform
 lines = ["<runtime_context>", f"platform: {platform}", f"chat_type: {chat_type}"]
 ```
 
-- [ ] **步骤 7：实现 flow `platforms` 归一化和二维冲突检测**
+- [x] **步骤 7：实现 flow `platforms` 归一化和二维冲突检测**
 
 在 `core/prompt_v2/flow.py` 中加入平台正则和归一化：
 
@@ -456,7 +456,7 @@ def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str, platform: str =
 
 并在函数内使用归一化后的 `platform` 调用 `_applies(dict(node), chat_type, platform)`。
 
-- [ ] **步骤 8：编译器传入平台并写入 debug**
+- [x] **步骤 8：编译器传入平台并写入 debug**
 
 在 `core/prompt_v2/compiler.py` 中加入：
 
@@ -473,7 +473,7 @@ debug 增加：
 
 构造 `PromptPlan` 时传入 `platform=platform`；审计失败返回的新 `PromptPlan` 也保留 `platform=plan.platform`。
 
-- [ ] **步骤 9：运行任务 1 定向测试**
+- [x] **步骤 9：运行任务 1 定向测试**
 
 运行：
 
@@ -484,7 +484,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py -v -p no:c
 
 预期：两条命令均通过。
 
-- [ ] **步骤 10：提交任务 1**
+- [x] **步骤 10：提交任务 1**
 
 只暂存任务 1 文件：
 
@@ -492,6 +492,8 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py -v -p no:c
 git add tests/test_prompt_v2.py core/prompt_v2/schema.py core/prompt_v2/variables.py core/prompt_v2/context_adapters.py core/prompt_v2/flow.py core/prompt_v2/compiler.py
 git commit -m "feat(提示词): 支持平台化编排条件"
 ```
+
+实际提交：`ca93dc2 feat(提示词): 支持平台化编排条件`。
 
 ## 任务 2：Bridge 和 Admin 预览透传 platform
 
@@ -749,6 +751,8 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_bridge_prompt_v2.py tes
 git add tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_prompt_v2_template_admin.py nanobot_kt/bridge.py nanobot_kt/prompt_runtime.py api/admin_routes.py app/prompt_runtime/preview_service.py .Codex/plans/prompt-platform-chat-type.md
 git commit -m "feat(提示词): 透传提示词平台上下文"
 ```
+
+实际提交：`18d0b0d feat(提示词): 透传提示词平台上下文`。
 
 ## 任务 3：迁移 flow 和提示词模板
 
@@ -1013,6 +1017,8 @@ git add -f prompts.v2.default/chat/platform/qq/common.md data/prompts_v2/chat/pl
 git commit -m "feat(提示词): 拆分 QQ 平台模板"
 ```
 
+实际提交：`17a7bd8 feat(提示词): 拆分 QQ 平台模板`。
+
 ## 任务 4：平台化提示词集成回归
 
 **文件：**
@@ -1099,6 +1105,8 @@ git add tests/test_prompt_v2.py tests/test_bridge_prompt_v2.py tests/test_kt_fra
 git commit -m "test(提示词): 覆盖平台化提示词链路"
 ```
 
+实际提交：`fe2d81b test(提示词): 覆盖平台化提示词链路`。
+
 如果任务 4 没有新增文件改动，只记录验证输出到任务 5 文档收口，不创建空提交。
 
 ## 任务 5：文档收口和最终验收
@@ -1108,7 +1116,7 @@ git commit -m "test(提示词): 覆盖平台化提示词链路"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/prompt-platform-chat-type.md`
 
-- [ ] **步骤 1：同步 `docs/todo.md` 路线项 9**
+- [x] **步骤 1：同步 `docs/todo.md` 路线项 9**
 
 把路线项 9 的「现状」更新为已落地口径，必须包含：
 
@@ -1126,7 +1134,7 @@ git commit -m "test(提示词): 覆盖平台化提示词链路"
 - TimingGate task 模板的平台化仍由 TimingGate 路线独立推进。
 ```
 
-- [ ] **步骤 2：同步 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：同步 `docs/plan_walkthrough.md`**
 
 把 P2-4 表格状态改为已完成，并新增本阶段详情，记录：
 
@@ -1140,11 +1148,11 @@ git commit -m "test(提示词): 覆盖平台化提示词链路"
 - 最终全量回归输出
 ```
 
-- [ ] **步骤 3：勾选本计划任务**
+- [x] **步骤 3：勾选本计划任务**
 
 在 `.Codex/plans/prompt-platform-chat-type.md` 中把已完成步骤从 `- [ ]` 改为 `- [x]`，并在每个任务末尾记录实际提交号。
 
-- [ ] **步骤 4：运行文档扫描**
+- [x] **步骤 4：运行文档扫描**
 
 运行：
 
@@ -1171,7 +1179,9 @@ git diff --check -- .Codex/plans/prompt-platform-chat-type.md docs/todo.md docs/
 
 预期：输出 `scan ok`，`git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 5：运行最终回归**
+实际结果：输出 `scan ok`；`git diff --check` 无输出；`diff -qr prompts.v2.default data/prompts_v2` 无输出。
+
+- [x] **步骤 5：运行最终回归**
 
 运行：
 
@@ -1182,7 +1192,19 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider
 
 预期：两条命令均通过。
 
-- [ ] **步骤 6：提交文档收口**
+实际执行时额外纳入 `tests/test_prompt_v2_template_admin.py`，覆盖 Admin effective-preview 真实链路：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py tests/test_prompt_v2_template_registry.py tests/test_prompt_v2_template_admin.py -v -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider
+```
+
+结果：
+
+- Prompt Runtime 相关完整回归：190 passed, 1 warning。
+- 全量回归：1302 passed, 6 skipped, 139 warnings in 99.24s。
+
+- [x] **步骤 6：提交文档收口**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/prompt-platform-chat-type.md
@@ -1191,14 +1213,14 @@ git commit -m "docs(计划): 收口平台化提示词状态"
 
 ## 最终验收清单
 
-- [ ] `platform` 从 Bridge metadata 进入 `PromptRuntimeInput`、`PromptCompileRequest`、`PromptPlan`、`debug` 和 `<runtime_context>`。
-- [ ] `ordered_nodes_for_chat()` 支持 `platform` 参数，旧调用默认 `qq`。
-- [ ] flow 配置支持 `platforms`，并能拒绝二维条件重叠的歧义出边。
-- [ ] `qq × group` 注入通用群聊模板、QQ common 模板和 QQ 群聊模板。
-- [ ] `qq × private` 注入通用私聊模板和 QQ common 模板。
-- [ ] `web × private` 不注入 QQ 平台模板。
-- [ ] `chat/main.md`、`chat/branch_group.md`、`chat/branch_private.md` 不再写死 QQ。
-- [ ] `prompts.v2.default` 和 `data/prompts_v2` 的相关模板保持一致。
-- [ ] Admin 有效预览支持 platform，并让 ToolPlan 与 PromptCompileRequest 使用同一个平台值。
-- [ ] Prompt Runtime 定向回归通过。
-- [ ] 全量 `python -m pytest tests/ -v` 通过。
+- [x] `platform` 从 Bridge metadata 进入 `PromptRuntimeInput`、`PromptCompileRequest`、`PromptPlan`、`debug` 和 `<runtime_context>`。
+- [x] `ordered_nodes_for_chat()` 支持 `platform` 参数，旧调用默认 `qq`。
+- [x] flow 配置支持 `platforms`，并能拒绝二维条件重叠的歧义出边。
+- [x] `qq × group` 注入通用群聊模板、QQ common 模板和 QQ 群聊模板。
+- [x] `qq × private` 注入通用私聊模板和 QQ common 模板。
+- [x] `web × private` 不注入 QQ 平台模板。
+- [x] `chat/main.md`、`chat/branch_group.md`、`chat/branch_private.md` 不再写死 QQ。
+- [x] `prompts.v2.default` 和 `data/prompts_v2` 的相关模板保持一致。
+- [x] Admin 有效预览支持 platform，并让 ToolPlan 与 PromptCompileRequest 使用同一个平台值。
+- [x] Prompt Runtime 定向回归通过。
+- [x] 全量 `python -m pytest tests/ -v` 通过。

@@ -1,4 +1,4 @@
-# Nanobot Server — TODO 计划
+# Nanobot Server — 待办计划
 
 > 本文件分两部分：**一、缺陷修复清单**（来自 2026-06-16 全仓库 Python 代码审查 + 逐条对抗式核验）；**二、架构演进路线**（2026-06-16 读真实代码核实重写，每项含现状/痛点/目标/关联/粗略路径）。
 > 缺陷条目均经「读真实代码 + 引用行号」核验，已剔除 11 项误报（见附录）。严重度 = 真实可利用性，非原始审查给分。
@@ -195,11 +195,12 @@
 
 #### 路线项 9 — 提示词模板按 platform × chat_type 二维适配  ·〔依赖项 1〕
 
-- **现状**：提示词**无 platform 维度**，唯一区分维度是 chat_type ∈ {group, private}，且文案写死 QQ。V2 编排图只认 `CHAT_TYPES={'group','private'}`（`core/prompt_v2/flow.py:26`，强校验，传其它值即 `PromptFlowError`），分支模板开头硬编码「当前对话发生在 QQ 群聊 / 私聊中」（`branch_group.md`/`branch_private.md`/`main.md`）；bridge 仅由 `is_group` 推 chat_type（`bridge.py:1041`），`PromptCompileRequest`/`PromptRuntimeInput` 均无 platform 字段。
-- **痛点**：平台耦合写死在自然语言里、散落四处；flow chat_type 是封闭二值枚举，不改 schema 无法扩展；QQ 特有约定（msg_id / 表情包 / @ 机制）混在通用群聊规则里，Web 端不成立；三套模板都无平台维度（见项 1），现在加要在三处同时改。
-- **目标**：组装从一维(chat_type)升级为二维(platform×chat_type)，platform ∈ {qq, web, ...} 可扩展；平台无关规则（输出契约 / 安全 / 风格）留公共模板，平台相关约定（QQ 的 msg_id/表情/@、Web 的 markdown/富文本）下沉 platform 专属分支，bridge/schema 全链路透传 platform。
-- **关联**：**依赖项 1** 先收敛单引擎，否则要在 legacy/managed/v2 三套上同时加平台维度，成本极高；与项 4/5/7 同属 platform 维度簇。
-- **粗略路径**：① schema / `PromptRuntimeInput` / bridge meta 增 platform 字段(默认 qq) → ② `flow.py` 节点 / 边支持 platform（或合成 `qq_group`/`web_private` 复合 key），放宽 `CHAT_TYPES` 强校验 → ③ 拆模板：QQ 专属约定抽到 `platform/qq/*.md`，`main.md` 去 QQ 字样 → ④ compiler `ordered_nodes_for_chat` 按 (platform, chat_type) 过滤 → ⑤ 入口按来源注入 platform → ⑥ 补 group/private × qq/web 渲染快照测试。
+- **现状（2026-06-18 已落地）**：P2-4 已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，相关提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。Prompt Runtime 已按 `platform × chat_type` 过滤 flow；`chat_type` 仍只表达会话语义（`group` / `private`），`platform` 表达客户端平台并默认兼容 `qq`。`platform` 已从 Bridge metadata 进入 `PromptRuntimeInput`、`PromptCompileRequest`、`PromptPlan`、`debug` 和 `<runtime_context>`；Admin effective-preview 也会把同一个平台值传给 ToolPlan 与 PromptCompileRequest。
+- **已落地边界**：`flow.py` 的节点和边已支持 `platforms` 条件，`ordered_nodes_for_chat(flow, chat_type, platform="qq")` 按二维条件过滤，`validate_flow()` 会拒绝 `chat_types × platforms` 条件重叠的歧义出边。QQ 专属规则已迁入 `chat/platform/qq/common.md` 与 `chat/platform/qq/group.md`，默认 flow 通过 `qq_common_policy` 和 `qq_group_policy` 注入；`web × private` 不再注入 QQ 平台模板。`prompts.v2.default` 与 `data/prompts_v2` 的相关模板保持同步。
+- **目标**：组装从一维（`chat_type`）升级为二维（`platform × chat_type`），平台无关规则（输出契约 / 安全 / 风格）留在公共模板，平台相关约定（QQ 的 msg_id / 表情 / @ 机制等）下沉到 platform 专属分支，bridge/schema 全链路透传 platform。
+- **剩余演进项**：工具模板 selector 暂不按平台拆分；TimingGate task 模板的平台化仍由 TimingGate 路线独立推进。
+- **关联**：**依赖项 1** 已先收敛为单一 Prompt Runtime 主路径；本项与项 4/5/7 同属 platform 维度簇。
+- **粗略路径**：① schema / `PromptRuntimeInput` / bridge meta 增 platform 字段（默认 qq，已完成）→ ② `flow.py` 节点 / 边支持 `platforms` 条件与二维冲突检测（已完成）→ ③ 拆模板：QQ 专属约定抽到 `platform/qq/*.md`，公共模板去 QQ 私有措辞（已完成）→ ④ compiler `ordered_nodes_for_chat` 按 `platform × chat_type` 过滤（已完成）→ ⑤ 入口按来源注入 platform（已完成）→ ⑥ 补 `qq/web × group/private` 编译和 Admin 预览回归（已完成）。
 
 ---
 
