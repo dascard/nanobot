@@ -1281,6 +1281,40 @@ class NanobotBridge:
                 candidates = []
             # --------------------------------------------------------
 
+            if (
+                not candidates
+                and image_parts
+                and required_capabilities.get("supports_image")
+            ):
+                event_content = (
+                    f"{prompt_build.event_content}\n\n"
+                    "[系统提示：当前没有可用视觉模型，图片内容未被读取。请不要推测图片内容。]"
+                )
+                required_capabilities = dict(required_capabilities)
+                required_capabilities.pop("supports_image", None)
+                logger.warning(
+                    "[Model Router] no vision-capable candidates; degrading image request to text-only content required=%s",
+                    required_capabilities,
+                )
+                if (
+                    route_client is not None
+                    and "_route_registry_provider" in locals()
+                    and "reply_intel_floor" in locals()
+                ):
+                    try:
+                        candidates = route_client.get_ordered_candidates(
+                            provider=_route_registry_provider,
+                            intel_floor=reply_intel_floor,
+                            max_cost=REPLY_MODEL_MAX_COST,
+                            required_capabilities=required_capabilities,
+                        )
+                        logger.info(
+                            "[Model Router] degraded text-only candidates=%s",
+                            [(c.get("id", "")[:30], c.get("intelligence")) for c in candidates[:8]],
+                        )
+                    except Exception as e:
+                        logger.error("[Model Router] degraded text-only route failed: %s", e, exc_info=True)
+
             if not candidates:
                 fallback_model = ""
                 try:

@@ -71,6 +71,28 @@ def required_capabilities_for_request(
     return required
 
 
+def validate_payload_capabilities(
+    *,
+    model_info: Optional[Dict[str, Any]],
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    stream: bool = False,
+) -> None:
+    if not model_info:
+        return
+    required = required_capabilities_for_request(messages, tools=tools, stream=stream)
+    missing = [
+        field
+        for field, required_value in required.items()
+        if required_value and not model_supports_capabilities(model_info, {field: True})
+    ]
+    if missing:
+        model_id = str(model_info.get("id") or "(unknown)")
+        raise ValueError(
+            f"model lacks required capabilities: {model_id} missing={','.join(missing)}"
+        )
+
+
 class NewAPIClient:
     _last_model_sync_ts: float | None = None  # lazy-init from runtime_state
     _model_sync_lock = asyncio.Lock()
@@ -448,6 +470,7 @@ class NewAPIClient:
         model: str,
         max_tokens: int | None = None,
         enable_thinking: Any = "auto",
+        model_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
             "model": model,
@@ -462,6 +485,12 @@ class NewAPIClient:
             payload["tool_choice"] = "auto"
         payload = sanitize_payload_messages(payload)
         payload = filter_payload_tools(payload)
+        validate_payload_capabilities(
+            model_info=model_info,
+            messages=payload["messages"],
+            tools=payload.get("tools"),
+            stream=bool(payload.get("stream")),
+        )
         return apply_enable_thinking_to_payload(payload, model, enable_thinking)
 
     def _safe_get_failure_tracker(self):
@@ -637,11 +666,11 @@ class NewAPIClient:
                 return {"error": f"Model disabled: {manual_model}"}
             if info and not model_supports_capabilities(info, required_capabilities):
                 return {"error": f"Model lacks required capabilities: {manual_model}"}
-            candidates = [{
-                "id": manual_model,
-                "intelligence": 0,
-                "cost_input_1m": 0.0,
-            }]
+            manual_candidate = dict(info or {})
+            manual_candidate.setdefault("id", manual_model)
+            manual_candidate.setdefault("intelligence", 0)
+            manual_candidate.setdefault("cost_input_1m", 0.0)
+            candidates = [manual_candidate]
         else:
             intel_floor = max(1, complexity - 1)
             candidates = self.get_ordered_candidates(
@@ -676,6 +705,7 @@ class NewAPIClient:
                     target_model,
                     max_tokens=max_tokens,
                     enable_thinking=enable_thinking,
+                    model_info=model,
                 )
                 started = time.time()
                 log_id = 0
@@ -847,6 +877,8 @@ class NewAPIClient:
             if info and not model_supports_capabilities(info, required_capabilities):
                 yield {"error": f"Model lacks required capabilities: {manual_model}"}
                 return
+            target_model_info = dict(info or {})
+            target_model_info.setdefault("id", manual_model)
             target_model = manual_model
         else:
             intel_floor = max(1, complexity - 1)
@@ -856,7 +888,8 @@ class NewAPIClient:
                 required_capabilities=required_capabilities,
             )
             if candidates:
-                target_model = str(candidates[0].get("id", ""))
+                target_model_info = candidates[0]
+                target_model = str(target_model_info.get("id", ""))
             else:
                 yield {"error": "No candidates available"}
                 return
@@ -871,6 +904,7 @@ class NewAPIClient:
             target_model,
             max_tokens=max_tokens,
             enable_thinking=enable_thinking,
+            model_info=target_model_info,
         )
         started = time.time()
         log_id = 0

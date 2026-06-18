@@ -3,6 +3,8 @@ from tests.async_helpers import run_async
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 
 def _tool(name):
     return {"type": "function", "function": {"name": name, "parameters": {}}}
@@ -105,6 +107,64 @@ def test_new_api_client_build_payload_uses_final_tools_scope():
         )
 
     assert [tool["function"]["name"] for tool in payload["tools"]] == ["reply"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "model_info", "expected"),
+    [
+        (
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "看图"},
+                            {"type": "image_url", "image_url": {"url": "data:image/png;base64,xxx"}},
+                        ],
+                    }
+                ],
+                "tools": None,
+                "stream": False,
+            },
+            {"id": "text-only", "supports_image": False},
+            "supports_image",
+        ),
+        (
+            {
+                "messages": [{"role": "user", "content": "查一下"}],
+                "tools": [_tool("search")],
+                "stream": False,
+            },
+            {"id": "no-tools", "supports_tools": False},
+            "supports_tools",
+        ),
+        (
+            {
+                "messages": [{"role": "user", "content": "hello"}],
+                "tools": None,
+                "stream": True,
+            },
+            {"id": "no-stream", "supports_stream": False},
+            "supports_stream",
+        ),
+    ],
+)
+def test_new_api_payload_rejects_required_capabilities_when_model_lacks_support(
+    kwargs,
+    model_info,
+    expected,
+):
+    from clients.new_api_client import NewAPIClient
+
+    client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
+
+    with pytest.raises(ValueError, match=expected):
+        client._build_payload(
+            temperature=0,
+            model=str(model_info["id"]),
+            model_info=model_info,
+            **kwargs,
+        )
 
 
 def test_runtime_preset_prompt_does_not_expand_enabled_tool_schema():

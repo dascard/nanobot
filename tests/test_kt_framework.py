@@ -677,6 +677,111 @@ class TestNanobotBridge:
         assert captured["required_capabilities"]["supports_image"] is True
         assert captured["required_capabilities"]["supports_stream"] is True
 
+    @patch("nanobot_kt.bridge.registry")
+    @patch("nanobot_kt.bridge.NewAPIClient")
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_with_files_degrades_to_text_without_vision_candidate(
+        self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
+    ):
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from kohakuterrarium.llm.message import ImagePart
+        from nanobot_kt.bridge import NanobotBridge
+        import json
+
+        monkeypatch.setattr("core.settings_service.settings.get", lambda key, default=None: default)
+        monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "", raising=False)
+        mock_registry.get_models_by_provider.return_value = [{"id": "text-model"}]
+
+        route_calls = []
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+
+        def fake_candidates(**kwargs):
+            route_calls.append(kwargs)
+            required = kwargs.get("required_capabilities") or {}
+            if required.get("supports_image"):
+                return []
+            return [{
+                "id": "text-model",
+                "supports_image": False,
+                "supports_tools": True,
+                "supports_stream": True,
+                "intelligence": 7,
+                "cost_input_1m": 0.0,
+                "context_window": 128000,
+            }]
+
+        route_client.get_ordered_candidates.side_effect = fake_candidates
+        MockClient.return_value = route_client
+        MockClient.get_failure_tracker.return_value = MagicMock(
+            record_success=AsyncMock(),
+            record_failure=AsyncMock(),
+        )
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        reply_output = json.dumps({REPLY_MARKER: {"content": "降级回复"}}, ensure_ascii=False)
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+
+        captured_events = []
+
+        async def fake_process(event):
+            captured_events.append(event)
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(
+            conversation=mock_conv,
+            llm=MagicMock(config=MagicMock(model="old-model")),
+        )
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        with patch(
+            "nanobot_kt.bridge.prepare_image_parts",
+            return_value=[
+                ImagePart(
+                    url="data:image/jpeg;base64,ZmFrZQ==",
+                    detail="low",
+                    source_type="qq",
+                    source_name="attachment_1",
+                )
+            ],
+        ):
+            bridge = NanobotBridge()
+
+            async def _run():
+                await bridge.start()
+                return await bridge.handle_message(
+                    "看看这张图",
+                    user_id="u1",
+                    session_id="private_u1",
+                    metadata={
+                        "complexity": 3,
+                        "files": ["https://example.com/a.png"],
+                    },
+                )
+
+            result = run_async(_run())
+
+        assert result == "降级回复"
+        assert route_calls[0]["required_capabilities"]["supports_image"] is True
+        assert "supports_image" not in route_calls[1]["required_capabilities"]
+        assert captured_events
+        event_content = captured_events[-1].content
+        assert isinstance(event_content, str)
+        assert "图片内容未被读取" in event_content
+        assert "image_url" not in event_content
+
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_passes_runtime_context_to_prompt_runtime(self, MockAgent, mock_load, monkeypatch):
