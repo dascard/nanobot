@@ -2417,7 +2417,7 @@ def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     from clients.classifier_client import (
         Guardrail, resolve_model_route, list_providers, build_model_catalog,
     )
-    from config import NEW_API_BASE_URL, NEW_API_KEY
+    from config import NEW_API_BASE_URL, NEW_API_KEY, CLASSIFIER_API_URL
 
     # ── Providers (脱敏) ──
     from clients.classifier_client import provider_public
