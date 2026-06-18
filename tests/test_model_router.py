@@ -429,6 +429,83 @@ class TestPriorityScore:
         assert merged["cost_input_1m"] == 0.2
         assert merged["cost_output_1m"] == 0.8
 
+    def test_model_override_null_capability_keeps_base_capability(self, monkeypatch):
+        from clients.new_api_client import NewAPIClient
+
+        monkeypatch.setattr(
+            NewAPIClient,
+            "_model_overrides_cache",
+            {"vision-model": {"supports_image": None}},
+        )
+
+        client = NewAPIClient(api_key="test", base_url="http://test")
+        merged = client._apply_model_override(
+            "vision-model",
+            {
+                "id": "vision-model",
+                "tags": ["vision"],
+                "supports_image": True,
+                "supports_tools": True,
+                "supports_stream": True,
+                "cost_input_1m": 0.0,
+                "cost_output_1m": 0.0,
+                "description": "base",
+            },
+        )
+
+        assert merged["supports_image"] is True
+
+    def test_ordered_candidates_filters_required_capabilities_before_intel_fallback(self, monkeypatch):
+        from clients import new_api_client as module
+        from clients.new_api_client import NewAPIClient
+
+        class FakeRegistry:
+            def get_models_by_provider(self, provider):
+                assert provider == "x"
+                return [
+                    {
+                        "id": "smart-text",
+                        "provider": "x",
+                        "tier": "smart",
+                        "intelligence": 9,
+                        "cost_input_1m": 0.01,
+                        "tags": ["general"],
+                        "supports_image": False,
+                        "supports_tools": False,
+                        "supports_stream": True,
+                        "enabled": True,
+                    },
+                    {
+                        "id": "fast-tool",
+                        "provider": "x",
+                        "tier": "fast",
+                        "intelligence": 4,
+                        "cost_input_1m": 0.02,
+                        "tags": ["tool_use"],
+                        "supports_image": False,
+                        "supports_tools": True,
+                        "supports_stream": True,
+                        "enabled": True,
+                    },
+                ]
+
+            def compute_priority_score(self, model):
+                from clients.model_registry import ModelRegistry
+                return ModelRegistry.compute_priority_score(model)
+
+        monkeypatch.setattr(module, "registry", FakeRegistry())
+        monkeypatch.setattr(NewAPIClient, "_failure_tracker", None)
+        monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
+
+        client = NewAPIClient(api_key="test", base_url="http://test")
+        candidates = client.get_ordered_candidates(
+            "x",
+            intel_floor=8,
+            required_capabilities={"supports_tools": True},
+        )
+
+        assert [m["id"] for m in candidates] == ["fast-tool"]
+
 
 class TestFailureTracker:
     def test_record_and_check(self):

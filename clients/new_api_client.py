@@ -24,7 +24,8 @@ from clients.model_registry import (
     registry,
     model_cost_value,
     model_intelligence_value,
-    normalize_model_cost_fields,
+    model_supports_capabilities,
+    normalize_model_record,
 )
 from core.final_tools import filter_payload_tools
 from core.llm_stream_trace import LLMStreamTraceAccumulator
@@ -177,10 +178,13 @@ class NewAPIClient:
             "tags": tags_list,
             "description": desc,
             "intelligence": intelligence,
+            "supports_image": "vision" in tags_list or "multimodal" in tags_list,
+            "supports_tools": True,
+            "supports_stream": True,
         }
 
     def _apply_model_override(self, model_id: str, base: Dict[str, Any]) -> Dict[str, Any]:
-        base = normalize_model_cost_fields(base)
+        base = normalize_model_record(base)
         overrides = self._load_model_overrides()
         if not overrides:
             return base
@@ -235,7 +239,7 @@ class NewAPIClient:
                 merged["tags"] = final_tags
             # Regenerate description to match final tag state
             merged["description"] = self._build_description(model_id, final_tags)
-        return normalize_model_cost_fields(merged, fallback=base)
+        return normalize_model_record(merged, fallback=base)
 
     def _build_description(self, model_id: str, tags: List[str]) -> str:
         """Build a human-readable description from model ID and tags."""
@@ -481,6 +485,7 @@ class NewAPIClient:
                                exclude_models: Optional[List[str]] = None,
                                max_cost: Optional[float] = None,
                                avoid_tags: Optional[List[str]] = None,
+                               required_capabilities: Optional[Dict[str, bool]] = None,
                                ) -> List[Dict[str, Any]]:
         """Return healthy models ordered by priority.
 
@@ -511,6 +516,8 @@ class NewAPIClient:
             if m.get("enabled", True) is False:
                 continue
             if avoid_tags_set and any(at in tags for at in avoid_tags_set):
+                continue
+            if not model_supports_capabilities(m, required_capabilities):
                 continue
             if model_cost_value(m.get("cost_input_1m")) > max_cost_val:
                 continue

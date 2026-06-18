@@ -15,6 +15,7 @@ _DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 _FAILURE_STATE_PATH = os.path.join(_DATA_DIR, "model_failures.json")
 _RUNTIME_STATE_PATH = os.path.join(_DATA_DIR, "runtime_state.json")
 UNKNOWN_MODEL_COST = 999.0
+CAPABILITY_FIELDS = ("supports_image", "supports_tools", "supports_stream")
 
 
 def model_cost_value(value: Any, default: float = UNKNOWN_MODEL_COST) -> float:
@@ -49,6 +50,84 @@ def normalize_model_cost_fields(
             value = fallback.get(field)
         normalized[field] = model_cost_value(value)
     return normalized
+
+
+def _coerce_optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _model_tags(model: Dict[str, Any]) -> List[str]:
+    tags = model.get("tags") or []
+    if not isinstance(tags, list):
+        return []
+    return [str(t).lower() for t in tags]
+
+
+def _infer_supports_image(model: Dict[str, Any]) -> bool:
+    tags = set(_model_tags(model))
+    model_id = str(model.get("id") or "").lower()
+    if {"vision", "multimodal"} & tags:
+        return True
+    return any(marker in model_id for marker in ("vision", "vl", "omni"))
+
+
+def normalize_model_capability_fields(
+    model: Dict[str, Any],
+    *,
+    fallback: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    normalized = dict(model)
+    nested = normalized.get("capabilities")
+    nested_map = nested if isinstance(nested, dict) else {}
+
+    for field in CAPABILITY_FIELDS:
+        short = field.removeprefix("supports_")
+        raw = normalized.get(field)
+        if raw is None:
+            raw = nested_map.get(short, nested_map.get(field))
+        if raw is None and fallback is not None:
+            raw = fallback.get(field)
+
+        value = _coerce_optional_bool(raw)
+        if value is None:
+            value = _infer_supports_image(normalized) if field == "supports_image" else True
+        normalized[field] = value
+
+    return normalized
+
+
+def normalize_model_record(
+    model: Dict[str, Any],
+    *,
+    fallback: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    normalized = normalize_model_cost_fields(model, fallback=fallback)
+    return normalize_model_capability_fields(normalized, fallback=fallback)
+
+
+def model_supports_capabilities(
+    model: Dict[str, Any],
+    required_capabilities: Optional[Dict[str, bool]] = None,
+) -> bool:
+    if not required_capabilities:
+        return True
+    normalized = normalize_model_capability_fields(model)
+    for field, required in required_capabilities.items():
+        if not required:
+            continue
+        if normalized.get(field) is not True:
+            return False
+    return True
 
 
 def _atomic_write(path: str, data: Any) -> None:
@@ -438,7 +517,7 @@ class ModelRegistry:
             logger.error(f"Failed to save registry: {e}")
 
     def add_or_update_model(self, model_data: Dict[str, Any]):
-        model_data = normalize_model_cost_fields(model_data)
+        model_data = normalize_model_record(model_data)
         model_id = model_data.get("id")
         if not model_id: return
         
@@ -471,17 +550,22 @@ class ModelRegistry:
         new_ids = []
 
         for raw_model in models:
-            m = normalize_model_cost_fields(raw_model)
-            model_id = m.get("id")
+            model_id = raw_model.get("id")
             if not model_id:
                 continue
+            old = models_list[index[model_id]] if model_id in index else None
+            m = normalize_model_record(raw_model, fallback=old)
             if model_id in index:
-                old = models_list[index[model_id]]
                 # Check if anything changed
                 changed = (
                     old.get("tier") != m.get("tier") or
                     old.get("intelligence") != m.get("intelligence") or
                     old.get("cost_input_1m") != m.get("cost_input_1m") or
+                    old.get("cost_output_1m") != m.get("cost_output_1m") or
+                    old.get("context_window") != m.get("context_window") or
+                    old.get("supports_image") != m.get("supports_image") or
+                    old.get("supports_tools") != m.get("supports_tools") or
+                    old.get("supports_stream") != m.get("supports_stream") or
                     sorted(old.get("tags") or []) != sorted(m.get("tags") or [])
                 )
                 models_list[index[model_id]] = m

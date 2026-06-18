@@ -90,3 +90,37 @@ class TestSelectModel:
         saved = r.data["models"][0]
         assert saved["cost_input_1m"] == 999.0
         assert saved["cost_output_1m"] == 999.0
+
+    def test_add_or_update_many_normalizes_capability_defaults(self, monkeypatch):
+        r = _make_registry([])
+        monkeypatch.setattr(r, "save_registry", lambda: None)
+
+        assert r.add_or_update_many([
+            {
+                "id": "qwen/qwen-vl-plus",
+                "provider": "x",
+                "tier": "smart",
+                "intelligence": 7,
+                "cost_input_1m": None,
+                "cost_output_1m": None,
+                "tags": ["vision", "multimodal"],
+            },
+            {
+                "id": "legacy/text-only",
+                "provider": "x",
+                "tier": "fast",
+                "intelligence": 5,
+                "cost_input_1m": 0.1,
+                "cost_output_1m": 0.2,
+                "tags": ["general"],
+            },
+        ]) == 2
+
+        vision = r.get_model_info("qwen/qwen-vl-plus")
+        text = r.get_model_info("legacy/text-only")
+        assert vision["supports_image"] is True
+        assert vision["supports_tools"] is True
+        assert vision["supports_stream"] is True
+        assert text["supports_image"] is False
+        assert text["supports_tools"] is True
+        assert text["supports_stream"] is True
