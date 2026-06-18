@@ -1,0 +1,41 @@
+{
+  "id": "regression_model_routing_vision_required_001",
+  "suite": "model_routing",
+  "description": "带图请求必须选择支持 vision 的模型，不能因为价格或智能分选纯文本模型",
+  "input": {
+    "provider": "new-api",
+    "requested_tier": "smart",
+    "has_image": true,
+    "models": [
+      {
+        "id": "text-cheap",
+        "provider": "new-api",
+        "tier": "smart",
+        "intelligence": 9,
+        "cost_input_1m": 0.001,
+        "tags": ["general"],
+        "supports_image": false,
+        "supports_tools": true,
+        "supports_stream": true,
+        "enabled": true
+      },
+      {
+        "id": "vision-model",
+        "provider": "new-api",
+        "tier": "smart",
+        "intelligence": 7,
+        "cost_input_1m": 0.02,
+        "tags": ["vision", "multimodal"],
+        "supports_image": true,
+        "supports_tools": true,
+        "supports_stream": true,
+        "enabled": true
+      }
+    ]
+  },
+  "expected": {
+    "model_used": "vision-model",
+    "must_not_use": ["text-cheap"]
+  },
+  "tags": ["model_routing", "vision"]
+}

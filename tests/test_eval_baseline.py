@@ -1,6 +1,6 @@
 import json
 
-from evals.schema import SuiteReport
+from evals.schema import EvalCase, SuiteReport
 
 
 def test_build_baseline_diff_reports_new_fixed_and_delta():
@@ -145,3 +145,54 @@ def test_eval_run_cli_returns_failure_when_gate_fails(monkeypatch, tmp_path, cap
     assert exit_code == 1
     assert "Gate failed" in captured.out
     assert "pass_rate" in captured.out
+
+
+def test_model_routing_eval_filters_required_capabilities_for_image_case():
+    from evals.run import run_case
+
+    result = run_case(
+        EvalCase(
+            id="unit_model_routing_vision_required",
+            suite="model_routing",
+            input={
+                "provider": "new-api",
+                "requested_tier": "smart",
+                "has_image": True,
+                "models": [
+                    {
+                        "id": "text-cheap",
+                        "provider": "new-api",
+                        "tier": "smart",
+                        "intelligence": 9,
+                        "cost_input_1m": 0.001,
+                        "tags": ["general"],
+                        "supports_image": False,
+                        "supports_tools": True,
+                        "supports_stream": True,
+                        "enabled": True,
+                    },
+                    {
+                        "id": "vision-model",
+                        "provider": "new-api",
+                        "tier": "smart",
+                        "intelligence": 7,
+                        "cost_input_1m": 0.02,
+                        "tags": ["vision", "multimodal"],
+                        "supports_image": True,
+                        "supports_tools": True,
+                        "supports_stream": True,
+                        "enabled": True,
+                    },
+                ],
+            },
+            expected={
+                "model_used": "vision-model",
+                "must_not_use": ["text-cheap"],
+            },
+        )
+    )
+
+    assert result.passed is True
+    assert result.output["model_used"] == "vision-model"
+    assert result.output["raw"]["required_capabilities"] == {"supports_image": True}
+    assert result.output["raw"]["ordered_candidates"] == ["vision-model"]

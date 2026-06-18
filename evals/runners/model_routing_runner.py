@@ -4,18 +4,72 @@ from __future__ import annotations
 from evals.schema import EvalCase, EvalOutput
 
 
+def _required_capabilities_from_input(inp: dict) -> dict[str, bool]:
+    required: dict[str, bool] = {}
+    if inp.get("has_image"):
+        required["supports_image"] = True
+    if inp.get("has_tools"):
+        required["supports_tools"] = True
+    if inp.get("stream"):
+        required["supports_stream"] = True
+
+    explicit = inp.get("required_capabilities") or {}
+    if isinstance(explicit, dict):
+        for key, value in explicit.items():
+            if value:
+                required[str(key)] = True
+    return required
+
+
 def run_model_routing_case(case: EvalCase) -> EvalOutput:
     inp = case.input
     out = EvalOutput(case_id=case.id, suite=case.suite, raw=dict(inp))
 
     models = inp.get("models", [])
-    requested_tier = inp.get("requested_tier", "fast")
+    provider = str(inp.get("provider") or "new-api")
+    intel_floor = int(inp.get("intel_floor", inp.get("min_intelligence", 0)) or 0)
 
-    if models and requested_tier:
+    if models:
+        from clients.model_registry import ModelRegistry
+        from clients import new_api_client
+        from clients.new_api_client import NewAPIClient
+
+        reg = ModelRegistry.__new__(ModelRegistry)
+        reg.data = {"models": list(models), "last_updated": "2026-01-01T00:00:00"}
+        required_capabilities = _required_capabilities_from_input(inp)
+
+        orig_registry = new_api_client.registry
+        orig_safe_tracker = NewAPIClient._safe_get_failure_tracker
+        new_api_client.registry = reg
+        NewAPIClient._safe_get_failure_tracker = lambda self: None
+        try:
+            client = NewAPIClient(
+                api_key="eval-key",
+                base_url="http://eval.invalid/v1",
+                registry_provider=provider,
+            )
+            candidates = client.get_ordered_candidates(
+                provider=provider,
+                intel_floor=intel_floor,
+                max_cost=inp.get("max_cost"),
+                required_capabilities=required_capabilities,
+            )
+        finally:
+            new_api_client.registry = orig_registry
+            NewAPIClient._safe_get_failure_tracker = orig_safe_tracker
+
+        result = candidates[0].get("id", "") if candidates else ""
+        out.model_used = result
+        out.raw["auto_routing_called"] = bool(result)
+        out.raw["required_capabilities"] = required_capabilities
+        out.raw["ordered_candidates"] = [c.get("id", "") for c in candidates]
+
+    requested_tier = inp.get("requested_tier", "fast")
+    if models and requested_tier and not out.model_used and not out.raw.get("required_capabilities"):
         from clients.model_registry import ModelRegistry
         reg = ModelRegistry.__new__(ModelRegistry)
         reg.data = {"models": list(models), "last_updated": "2026-01-01T00:00:00"}
-        result = reg.select_model("new-api", tier=requested_tier)
+        result = reg.select_model(provider, tier=requested_tier)
         out.model_used = result or ""
         out.raw["auto_routing_called"] = result is not None
 
