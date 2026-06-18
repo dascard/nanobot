@@ -81,11 +81,11 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-3B | 已完成 | TimingGate CI / PR gate | 已新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 已完成 | 评测体系扩展 | expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界、首个 `capability_model_routing` 能力数据集、文档收口和最终验证均已完成 | `e4fb70a` / `8b892a8` / `4f4cce7` / `b84cbf1` / `7a84084` / `71c3a53` / `a494f3b` / `5a8b601` |
 | P4-2 | 已完成 | Admin 标注工作台契约化与 promote 预检 UI | 后端 expected 契约、WebUI 契约化标注、`note` / `expected` 分离、promote dry-run → apply 预检 UI、WebUI build 和全量回归均已完成 | `docs(评测): 设计标注工作台契约` / `feat(评测): 暴露期望契约校验` / `feat(评测): 契约化标注工作台` |
-| P4-3 | 设计待审查 | 能力契约评测数据集扩展 | 扩展 `capability_reply_contract` / `capability_rendering_contract` 数据集，reply 复用现有 runner，rendering 新增离线 runner 并复用 scorer | `docs(评测): 设计能力数据集扩展` |
+| P4-3 | 计划已写入 | 能力契约评测数据集扩展 | 扩展 `capability_reply_contract` / `capability_rendering_contract` 数据集，reply 复用现有 runner，rendering 新增离线 runner 并复用 scorer | `docs(评测): 设计能力数据集扩展` / `docs(计划): 记录能力数据集扩展计划` |
 
 ## 当前详细计划：P4-3 能力契约评测数据集扩展
 
-状态：设计文档已写入并完成规格自检，等待审查后进入实现计划。P4-3 采用「数据集优先 + 最小 runner」方案，设计文档为 `docs/superpowers/specs/2026-06-18-capability-contract-eval-datasets-design.md`。本阶段不做 RAG 标注闭环、不接入更多 suite PR gate、不修改生产 QQ renderer 或真实 QQ push。
+状态：设计文档和实现计划已写入，等待执行 P4-3A。P4-3 采用「数据集优先 + 最小 runner」方案，设计文档为 `docs/superpowers/specs/2026-06-18-capability-contract-eval-datasets-design.md`，实现计划为 `.Codex/plans/capability-contract-eval-datasets.md`。本阶段不做 RAG 标注闭环、不接入更多 suite PR gate、不修改生产 QQ renderer 或真实 QQ push。
 
 目标：
 
@@ -101,7 +101,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 只读审计 evals 代码结构：确认 `load_cases()` 按 dataset 目录加载，`run_case()` 按 case 内 `suite` 分发 runner。
 - [x] 方案选择：采用 reply 复用现有 runner、rendering 新增最小离线 runner 的方案。
 - [x] 设计文档：写入 `docs/superpowers/specs/2026-06-18-capability-contract-eval-datasets-design.md` 并完成规格自检。
-- [ ] 实现计划：写入 `.Codex/plans/capability-contract-eval-datasets.md`，明确 TDD 步骤、文件清单、验证顺序和子 agent 协作边界。
+- [x] 实现计划：写入 `.Codex/plans/capability-contract-eval-datasets.md`，明确 TDD 步骤、文件清单、验证顺序和子 agent 协作边界。
 - [ ] P4-3A：新增 `capability_reply_contract` cases、baseline、测试和文档。
 - [ ] P4-3B：新增 `rendering_contract` runner、expected preset、`capability_rendering_contract` cases、baseline、测试和文档。
 - [ ] P4-3C：运行两个能力数据集 gate、相关回归和全量测试，更新 walkthrough / todo 状态并提交。
