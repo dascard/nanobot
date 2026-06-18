@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -332,6 +333,82 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
     assert data["tool_schemas"] == plan_tool_schemas
     assert len(data["tool_plan_sha256"]) == 64
     assert data["warnings"] == ["preview warning"]
+
+
+def test_effective_preview_v2_passes_platform_to_tools_and_compiler(tmp_path, monkeypatch):
+    from core.prompt_v2.schema import PromptPlan
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'preview_platform.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    captured = {}
+
+    async def fake_compile(request, *, strict_audit=False):
+        captured["compile_platform"] = request.platform
+        captured["compile_normalized_platform"] = request.normalized_platform
+        return PromptPlan(
+            engine="prompt",
+            chat_type=request.normalized_chat_type,
+            platform=request.normalized_platform,
+            prompt_key=request.normalized_prompt_key,
+            messages=[{"role": "user", "content": "<user_input>\nhi\n</user_input>"}],
+            tool_schemas=[],
+            section_hashes={},
+            prompt_sha256="b" * 64,
+            token_estimate=1,
+            warnings=[],
+            debug={"platform": request.normalized_platform, "flow_node_ids": ["base"]},
+        )
+
+    def fake_build_tool_plan(**kwargs):
+        captured["tool_platform"] = kwargs.get("platform")
+        return SimpleNamespace(
+            enabled={},
+            disabled={},
+            runtime_tool_prompt="",
+            sent_tool_schemas=[],
+            sha256="c" * 64,
+        )
+
+    monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile)
+    monkeypatch.setattr("core.tool_plan.build_tool_plan", fake_build_tool_plan)
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/admin/prompt/effective-preview",
+            json={
+                "engine": "v2",
+                "chat_type": "private",
+                "platform": "web",
+                "user_id": "u1",
+                "user_input": "hi",
+            },
+            headers=_auth_header(),
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["platform"] == "web"
+    assert data["prompt_plan"]["platform"] == "web"
+    assert captured["compile_platform"] == "web"
+    assert captured["compile_normalized_platform"] == "web"
+    assert captured["tool_platform"] == "web"
 
 
 def test_effective_preview_v2_returns_400_for_invalid_flow(tmp_path, monkeypatch):

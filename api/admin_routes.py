@@ -177,6 +177,7 @@ class DbQuery(BaseModel):
 
 class EffectivePromptPreviewRequest(BaseModel):
     chat_type: Literal["private", "group"] = "private"
+    platform: str = "qq"
     session_id: str = ""
     user_id: str = ""
     group_id: str = ""

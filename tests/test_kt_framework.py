@@ -933,6 +933,7 @@ class TestNanobotBridge:
         monkeypatch.setattr("core.runtime_tool_service.record_runtime_tool_decision", fake_record_runtime_tool_decision)
 
         async def fake_build_prompt_runtime(prompt_input):
+            captured["prompt_platform"] = prompt_input.platform
             return PromptRuntimeResult(
                 prompt_key=prompt_input.prompt_key,
                 prompt_mode=prompt_input.prompt_mode,
@@ -963,6 +964,7 @@ class TestNanobotBridge:
         assert result == "ok"
         assert captured["tool_plan_platform"] == "web"
         assert captured["decision_platform"] == "web"
+        assert captured["prompt_platform"] == "web"
 
     @patch("nanobot_kt.bridge.registry")
     @patch("nanobot_kt.bridge.NewAPIClient")

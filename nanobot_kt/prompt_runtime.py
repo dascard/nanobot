@@ -46,6 +46,7 @@ class PromptRuntimeInput:
     tool_schemas: list[dict[str, Any]] = field(default_factory=list)
     debug: dict[str, Any] = field(default_factory=dict)
     audit_failure_policy: str = "fail_fast"
+    platform: str = "qq"
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,7 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
 
     prompt_request = PromptCompileRequest(
         chat_type=input.chat_type,
+        platform=input.platform,
         prompt_key=input.prompt_key,
         session_id=input.session_id,
         user_id=input.user_id,

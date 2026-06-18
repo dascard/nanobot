@@ -76,7 +76,7 @@
 - 修改：`tests/test_prompt_v2.py`
 - 修改：`tests/test_bridge_prompt_v2.py`
 - 修改：`tests/test_kt_framework.py`
-- 修改：`tests/test_admin_api.py`
+- 修改：`tests/test_prompt_v2_template_admin.py`
 - 修改：`tests/test_prompt_v2_template_registry.py`
 
 ## 并行执行策略
@@ -504,7 +504,7 @@ git commit -m "feat(提示词): 支持平台化编排条件"
 - 修改：`api/admin_routes.py`
 - 修改：`app/prompt_runtime/preview_service.py`
 
-- [ ] **步骤 1：编写 Bridge 输入映射红灯测试**
+- [x] **步骤 1：编写 Bridge 输入映射红灯测试**
 
 在 `tests/test_bridge_prompt_v2.py` 追加或扩展现有 `_build_prompt_runtime_input` 测试：
 
@@ -544,7 +544,7 @@ def test_bridge_build_prompt_runtime_input_passes_platform(monkeypatch):
     assert prompt_input.platform == "web"
 ```
 
-- [ ] **步骤 2：编写 `handle_message()` 透传红灯测试**
+- [x] **步骤 2：编写 `handle_message()` 透传红灯测试**
 
 在 `tests/test_kt_framework.py` 的平台 ToolPlan 测试附近补断言：
 
@@ -562,7 +562,7 @@ assert captured["prompt_platform"] == "web"
 
 如果现有 fake result 不是公共 helper，复用同文件已存在的 fake result 结构，不新建跨文件依赖。
 
-- [ ] **步骤 3：编写 `build_prompt_runtime()` 透传红灯测试**
+- [x] **步骤 3：编写 `build_prompt_runtime()` 透传红灯测试**
 
 在 `tests/test_bridge_prompt_v2.py` 中现有 `fake_compile_prompt_plan` 测试旁追加断言：
 
@@ -590,9 +590,9 @@ async def fake_compile_prompt_plan(request, *, strict_audit=False):
 assert captured["compile_platform"] == "web"
 ```
 
-- [ ] **步骤 4：编写 Admin 预览红灯测试**
+- [x] **步骤 4：编写 Admin 预览红灯测试**
 
-在 `tests/test_admin_api.py` 增加：
+在 `tests/test_prompt_v2_template_admin.py` 增加：
 
 ```python
 def test_effective_prompt_preview_accepts_platform(client, auth_header, monkeypatch):
@@ -644,17 +644,17 @@ def test_effective_prompt_preview_accepts_platform(client, auth_header, monkeypa
 
 如果 monkeypatch 路径不匹配当前导入方式，按实际导入点调整，但保留 4 个断言。
 
-- [ ] **步骤 5：运行红灯**
+- [x] **步骤 5：运行红灯**
 
 运行：
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py -k "platform" -v -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_prompt_v2_template_admin.py -k "platform" -v -p no:cacheprovider
 ```
 
 预期：失败，原因包括 dataclass 不接受 `platform`、`PromptRuntimeInput` 没有平台字段或预览响应缺少 `platform`。
 
-- [ ] **步骤 6：实现 Bridge 和 runtime 透传**
+- [x] **步骤 6：实现 Bridge 和 runtime 透传**
 
 在 `nanobot_kt/bridge.py` 中修改 dataclass：
 
@@ -692,7 +692,7 @@ platform: str = "qq"
 platform=input.platform,
 ```
 
-- [ ] **步骤 7：实现 Admin 预览平台参数**
+- [x] **步骤 7：实现 Admin 预览平台参数**
 
 在 `api/admin_routes.py` 的 `EffectivePromptPreviewRequest` 加入：
 
@@ -732,21 +732,21 @@ platform=platform,
 "platform": platform,
 ```
 
-- [ ] **步骤 8：运行任务 2 定向测试**
+- [x] **步骤 8：运行任务 2 定向测试**
 
 运行：
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py -k "platform" -v -p no:cacheprovider
-PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py -v -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_prompt_v2_template_admin.py -k "platform" -v -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_prompt_v2_template_admin.py -v -p no:cacheprovider
 ```
 
 预期：两条命令均通过。
 
-- [ ] **步骤 9：提交任务 2**
+- [x] **步骤 9：提交任务 2**
 
 ```bash
-git add tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_admin_api.py nanobot_kt/bridge.py nanobot_kt/prompt_runtime.py api/admin_routes.py app/prompt_runtime/preview_service.py
+git add tests/test_bridge_prompt_v2.py tests/test_kt_framework.py tests/test_prompt_v2_template_admin.py nanobot_kt/bridge.py nanobot_kt/prompt_runtime.py api/admin_routes.py app/prompt_runtime/preview_service.py .Codex/plans/prompt-platform-chat-type.md
 git commit -m "feat(提示词): 透传提示词平台上下文"
 ```
 

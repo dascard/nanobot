@@ -179,6 +179,7 @@ class PromptRuntimeAssemblyContext:
     is_group: bool
     meta: dict[str, Any]
     tool_plan: Any
+    platform: str = "qq"
 
 
 class NanobotBridge:
@@ -522,6 +523,7 @@ class NanobotBridge:
             prompt_key=prompt_key,
             chat_type=context.chat_type,
             runtime_chat_type=context.runtime_chat_type,
+            platform=context.platform,
             session_id=context.session_id,
             user_id=context.user_id,
             group_id=context.group_id,
@@ -1080,6 +1082,7 @@ class NanobotBridge:
                     prompt_key=prompt_key,
                     chat_type=chat_type,
                     runtime_chat_type=runtime_chat_type,
+                    platform=platform,
                     session_id=session_id,
                     user_id=user_id,
                     group_id=group_id,

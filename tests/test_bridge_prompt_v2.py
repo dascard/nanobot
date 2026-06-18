@@ -149,6 +149,41 @@ def test_bridge_build_prompt_runtime_input_maps_v2_alias_to_prompt(monkeypatch):
     assert prompt_input.audit_failure_policy == "fail_fast"
 
 
+def test_bridge_build_prompt_runtime_input_passes_platform(monkeypatch):
+    from nanobot_kt.bridge import NanobotBridge, PromptRuntimeAssemblyContext
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    monkeypatch.setattr(bridge, "_prompt_v2_audit_failure_policy", lambda: "fail_fast")
+
+    prompt_input = bridge._build_prompt_runtime_input(
+        PromptRuntimeAssemblyContext(
+            prompt_engine="prompt",
+            prompt_mode="prompt",
+            prompt_key="chat_private",
+            chat_type="private",
+            runtime_chat_type="private",
+            platform="web",
+            session_id="private_u1",
+            user_id="u1",
+            group_id="",
+            sender_name="用户",
+            query="你好",
+            persona_text="画像",
+            history_header="",
+            history_messages=[],
+            runtime_tool_prompt="[RuntimeTool]",
+            effort_constraint="",
+            trace_id="trace-1",
+            run_id="run-1",
+            is_group=False,
+            meta={"platform": "web", "user_id": "u1"},
+            tool_plan=_prompt_tool_plan(sent_tool_schemas=[]),
+        )
+    )
+
+    assert prompt_input.platform == "web"
+
+
 def test_bridge_build_prompt_runtime_input_coerces_v1_to_canonical_runtime(monkeypatch):
     from nanobot_kt.bridge import NanobotBridge, PromptRuntimeAssemblyContext
 
@@ -221,6 +256,69 @@ async def test_build_prompt_runtime_rejects_v1_live_prompt(monkeypatch):
             run_id="r",
             is_group=True,
         ))
+
+
+@pytest.mark.asyncio
+async def test_build_prompt_runtime_passes_platform_to_compile_request(monkeypatch):
+    from core.prompt_v2.schema import PromptPlan
+    from nanobot_kt.prompt_runtime import PromptRuntimeInput, build_prompt_runtime
+
+    captured = {}
+
+    async def fake_compile_prompt_plan(request, *, strict_audit=False):
+        captured["platform"] = request.platform
+        captured["normalized_platform"] = request.normalized_platform
+        return PromptPlan(
+            engine="prompt",
+            chat_type="private",
+            platform=request.normalized_platform,
+            prompt_key="chat_private",
+            messages=[{"role": "user", "content": "<user_input>\n你好\n</user_input>"}],
+            tool_schemas=[],
+            section_hashes={},
+            prompt_sha256="a" * 64,
+            token_estimate=1,
+            warnings=[],
+            debug={},
+        )
+
+    monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fake_compile_prompt_plan)
+    monkeypatch.setattr("core.tracing.PromptTracer.record_render", lambda **_kwargs: None)
+
+    result = await build_prompt_runtime(PromptRuntimeInput(
+        prompt_engine="prompt",
+        prompt_mode="prompt",
+        prompt_key="chat_private",
+        chat_type="private",
+        runtime_chat_type="private",
+        platform="web",
+        session_id="private_u1",
+        user_id="u1",
+        group_id="",
+        sender_name="用户",
+        sender_id="u1",
+        session_name="",
+        trigger_reason="",
+        timing_decision="",
+        current_message_id="",
+        source_message_ids=[],
+        self_id="",
+        bot_id="",
+        bot_name="",
+        bot_aliases=[],
+        user_input="你好",
+        persona_text="画像",
+        history_header="",
+        history_messages=[],
+        runtime_tool_prompt="[RuntimeTool]",
+        effort_constraint="",
+        trace_id="trace-1",
+        run_id="run-1",
+    ))
+
+    assert captured["platform"] == "web"
+    assert captured["normalized_platform"] == "web"
+    assert result.prompt_key == "chat_private"
 
 
 def test_bridge_build_prompt_runtime_input_falls_back_when_tool_schemas_unavailable(monkeypatch):

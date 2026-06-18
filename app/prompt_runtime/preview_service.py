@@ -48,6 +48,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     from fastapi import HTTPException
 
     chat_type = _strip(getattr(body, "chat_type", "")) or "private"
+    platform = (_strip(getattr(body, "platform", "")) or "qq").lower()
     is_group = chat_type == "group"
     group_id = _strip(getattr(body, "group_id", ""))
     session_id = _strip(getattr(body, "session_id", "")) or (
@@ -91,6 +92,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         chat_type=chat_type,
         group_id=group_id,
         user_id=user_id,
+        platform=platform,
         runtime_preset=runtime_preset,
         db=db,
     )
@@ -107,6 +109,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         plan = await prompt_compiler.compile_prompt_plan(
             PromptCompileRequest(
                 chat_type=chat_type,
+                platform=platform,
                 prompt_key=v2_prompt_key,
                 session_id=session_id,
                 user_id=user_id,
@@ -132,6 +135,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     return {
         "engine": "prompt",
         "chat_type": chat_type,
+        "platform": platform,
         "session_id": session_id,
         "user_id": user_id,
         "group_id": group_id,
