@@ -5276,7 +5276,7 @@ def reply_eval_get_run(
 from core.database import EvalCandidate, EvalRun, EvalRunResult
 from core.eval_sampling.store import (
     list_candidates, get_candidate, update_candidate,
-    label_candidate, ignore_candidate, promote_candidate,
+    label_candidate, ignore_candidate, plan_candidate_promotion, promote_candidate,
     save_run, save_run_results, get_runs, get_run,
 )
 
@@ -5343,6 +5343,11 @@ class LabelRequest(BaseModel):
         return self.expected or self.expected_json or {}
 
 
+class PromoteRequest(BaseModel):
+    target_dataset: str = "regression"
+    dry_run: bool = False
+
+
 @router.post("/evals/candidates/{case_id}/label")
 def eval_label_candidate(
     case_id: str, body: LabelRequest,
@@ -5375,16 +5380,36 @@ def eval_ignore_candidate(
 
 @router.post("/evals/candidates/{case_id}/promote")
 def eval_promote_candidate(
-    case_id: str, request: Request, db: Session = Depends(get_db),
+    case_id: str, request: Request, body: PromoteRequest | None = None,
+    db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
+    body = body or PromoteRequest()
     try:
-        path = promote_candidate(db, case_id)
+        if body.dry_run:
+            plan = plan_candidate_promotion(db, case_id, target_dataset=body.target_dataset)
+            _audit_request(
+                db,
+                request,
+                "promote_candidate_dry_run",
+                "eval_candidate",
+                case_id,
+                {"path": plan["path"], "target_dataset": plan["target_dataset"]},
+            )
+            return {"dry_run": True, **plan}
+        path = promote_candidate(db, case_id, target_dataset=body.target_dataset)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not path:
         raise HTTPException(404, "candidate not found")
-    _audit_request(db, request, "promote_candidate", "eval_candidate", case_id, {"path": path})
+    _audit_request(
+        db,
+        request,
+        "promote_candidate",
+        "eval_candidate",
+        case_id,
+        {"path": path, "target_dataset": body.target_dataset},
+    )
     return {"ok": True, "path": path}
 
 

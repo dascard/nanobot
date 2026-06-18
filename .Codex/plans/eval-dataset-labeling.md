@@ -429,7 +429,7 @@ git commit -m "fix(评测): 修复候选标注契约"
 - 修改：`api/admin_routes.py`
 - 测试：`tests/test_eval_candidate_contract.py`
 
-- [ ] **步骤 1：编写 promote 校验红灯测试**
+- [x] **步骤 1：编写 promote 校验红灯测试**
 
 在 `tests/test_eval_candidate_contract.py` 新增：
 
@@ -453,7 +453,7 @@ def test_promote_candidate_rejects_unlabeled_empty_and_file_conflict(db_session,
         promote_candidate(db_session, "cand_timing_gate_1")
 ```
 
-- [ ] **步骤 2：编写 dry-run 红灯测试**
+- [x] **步骤 2：编写 dry-run 红灯测试**
 
 ```python
 def test_promote_candidate_dry_run_does_not_write_or_change_status(db_session, tmp_path, monkeypatch):
@@ -472,7 +472,7 @@ def test_promote_candidate_dry_run_does_not_write_or_change_status(db_session, t
     assert get_candidate(db_session, "cand_timing_gate_1").status == "labeled"
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -482,7 +482,7 @@ python -m pytest tests/test_eval_candidate_contract.py -k "promote_candidate" -v
 
 预期：失败于缺少 `plan_candidate_promotion`、不拒绝冲突或 dry-run 仍写文件。
 
-- [ ] **步骤 4：新增 REPO_ROOT 和 dataset sanitizer**
+- [x] **步骤 4：新增 REPO_ROOT 和 dataset sanitizer**
 
 在 `core/eval_sampling/store.py` 顶部增加：
 
@@ -502,7 +502,7 @@ def _safe_dataset_name(value: str) -> str:
 
 需要同时 `import re`。
 
-- [ ] **步骤 5：实现晋升计划**
+- [x] **步骤 5：实现晋升计划**
 
 新增：
 
@@ -549,7 +549,7 @@ def plan_candidate_promotion(db, case_id: str, *, target_dataset: str = "regress
     }
 ```
 
-- [ ] **步骤 6：改造 promote_candidate**
+- [x] **步骤 6：改造 promote_candidate**
 
 ```python
 def promote_candidate(db, case_id: str, *, target_dataset: str = "regression") -> str | None:
@@ -570,7 +570,7 @@ def promote_candidate(db, case_id: str, *, target_dataset: str = "regression") -
     return str(out_path)
 ```
 
-- [ ] **步骤 7：扩展 Admin promote 请求**
+- [x] **步骤 7：扩展 Admin promote 请求**
 
 在 `api/admin_routes.py` 增加：
 
@@ -601,7 +601,7 @@ def eval_promote_candidate(
         raise HTTPException(400, str(e))
 ```
 
-- [ ] **步骤 8：运行 promote 测试绿灯**
+- [x] **步骤 8：运行 promote 测试绿灯**
 
 运行：
 
@@ -611,7 +611,7 @@ python -m pytest tests/test_eval_candidate_contract.py -k "promote_candidate" -v
 
 预期：全部通过。
 
-- [ ] **步骤 9：提交任务 3**
+- [x] **步骤 9：提交任务 3**
 
 运行：
 
@@ -620,6 +620,12 @@ git diff --check -- core/eval_sampling/store.py api/admin_routes.py tests/test_e
 git add core/eval_sampling/store.py api/admin_routes.py tests/test_eval_candidate_contract.py
 git commit -m "feat(评测): 支持候选晋升预检"
 ```
+
+验证记录：
+
+- 红灯：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidate_contract.py -k "promote_candidate" -v -p no:cacheprovider`，结果 `4 failed, 6 deselected, 21 warnings in 6.35s`；失败点为文件冲突未拒绝、缺少 `plan_candidate_promotion`、`promote_candidate` 不接受 `target_dataset`、Admin dry-run 返回缺少 `dry_run`。
+- 绿灯：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidate_contract.py -k "promote_candidate" -v -p no:cacheprovider`，结果 `4 passed, 6 deselected, 21 warnings in 1.24s`。
+- 相关完整回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidate_contract.py -v -p no:cacheprovider`，结果 `10 passed, 21 warnings in 1.75s`。
 
 ---
 

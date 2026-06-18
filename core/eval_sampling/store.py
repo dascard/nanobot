@@ -5,12 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from core.database import EvalCandidate, EvalRun, EvalRunResult
 from evals.expected_contract import validate_expected_contract
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 # ── Cursor ──
@@ -155,34 +159,79 @@ def ignore_candidate(db, case_id: str):
     return _candidate_dict(row)
 
 
-def promote_candidate(db, case_id: str) -> str | None:
-    """提升候选到 regression 目录。必须已标注 (status=labeled, needs_label 已移除)。"""
+def _safe_dataset_name(value: str) -> str:
+    name = str(value or "regression").strip()
+    if not name or not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        raise ValueError(f"invalid target_dataset: {value}")
+    return name
+
+
+def plan_candidate_promotion(db, case_id: str, *, target_dataset: str = "regression") -> dict:
+    """构建候选晋升计划，不写文件、不改 DB。"""
     row = get_candidate(db, case_id)
     if not row:
-        return None
+        raise ValueError("candidate not found")
     if row.status != "labeled":
         raise ValueError("candidate must be labeled before promote")
-    expected = json.loads(row.expected_json or "{}")
-    if expected.get("needs_label"):
-        raise ValueError("candidate must have explicit expected values (not needs_label)")
-    # 写 JSON 文件到 evals/cases/regression/
-    base = Path(__file__).resolve().parent.parent.parent
-    target_dir = base / "evals" / "cases" / "regression"
-    target_dir.mkdir(parents=True, exist_ok=True)
+    expected = _safe_json(row.expected_json, {})
+    validate_expected_contract(row.suite, expected)
+
+    dataset = _safe_dataset_name(target_dataset)
+    target_dir = REPO_ROOT / "evals" / "cases" / dataset
     out_path = target_dir / f"{case_id}.json"
+    if out_path.exists():
+        raise ValueError(f"target case already exists: {out_path}")
+
+    tags = _safe_json(row.tags_json, [])
+    if not isinstance(tags, list):
+        tags = []
+    if "promoted" not in tags:
+        tags = [*tags, "promoted"]
 
     case_data = {
         "id": case_id,
         "suite": row.suite,
         "description": row.description,
-        "input": json.loads(row.input_json or "{}"),
-        "expected": json.loads(row.expected_json or "{}"),
-        "tags": json.loads(row.tags_json or "[]"),
+        "input": _safe_json(row.input_json, {}),
+        "expected": expected,
+        "tags": tags,
+        "meta": {
+            "origin": "eval_candidate",
+            "source": row.source,
+            "source_ref": row.source_ref or "",
+            "fingerprint": row.fingerprint or "",
+        },
     }
-    out_path.write_text(
-        json.dumps(case_data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    return {
+        "case_id": case_id,
+        "suite": row.suite,
+        "target_dataset": dataset,
+        "path": str(out_path),
+        "case": case_data,
+    }
+
+
+def promote_candidate(db, case_id: str, *, target_dataset: str = "regression") -> str | None:
+    """提升候选到指定 eval dataset。必须已标注。"""
+    try:
+        plan = plan_candidate_promotion(db, case_id, target_dataset=target_dataset)
+    except ValueError as e:
+        if str(e) == "candidate not found":
+            return None
+        raise
+
+    out_path = Path(plan["path"])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with out_path.open("x", encoding="utf-8") as fh:
+            json.dump(plan["case"], fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+    except FileExistsError as e:
+        raise ValueError(f"target case already exists: {out_path}") from e
+
+    row = get_candidate(db, case_id)
+    if not row:
+        return None
     row.status = "promoted"
     row.updated_at = datetime.now()
     db.commit()

@@ -27,6 +27,14 @@ def _insert_candidate(db_session, *, case_id="cand_timing_gate_1", suite="timing
     return row
 
 
+def _redirect_promote_root(monkeypatch, tmp_path):
+    from core.eval_sampling import store
+
+    monkeypatch.setattr(store, "__file__", str(tmp_path / "core" / "eval_sampling" / "store.py"))
+    monkeypatch.setattr(store, "REPO_ROOT", tmp_path, raising=False)
+    return store
+
+
 def test_validate_expected_rejects_empty_needs_label_and_unknown_key():
     from evals.expected_contract import validate_expected_contract
 
@@ -112,3 +120,87 @@ def test_eval_label_candidate_accepts_expected_json_legacy_field(
 
     assert response.status_code == 200, response.text
     assert response.json()["expected"] == {"timing_action": "continue"}
+
+
+def test_promote_candidate_rejects_unlabeled_and_file_conflict(db_session, tmp_path, monkeypatch):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    from core.eval_sampling.store import label_candidate, promote_candidate
+
+    _insert_candidate(db_session)
+
+    with pytest.raises(ValueError, match="labeled"):
+        promote_candidate(db_session, "cand_timing_gate_1")
+
+    label_candidate(db_session, "cand_timing_gate_1", {"timing_action": "continue"})
+    target = tmp_path / "evals" / "cases" / "regression" / "cand_timing_gate_1.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="already exists"):
+        promote_candidate(db_session, "cand_timing_gate_1")
+
+
+def test_promote_candidate_dry_run_does_not_write_or_change_status(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    from core.eval_sampling.store import get_candidate, label_candidate, plan_candidate_promotion
+
+    _insert_candidate(db_session)
+    label_candidate(db_session, "cand_timing_gate_1", {"timing_action": "continue"})
+
+    plan = plan_candidate_promotion(db_session, "cand_timing_gate_1", target_dataset="timing_gate")
+
+    assert plan["target_dataset"] == "timing_gate"
+    assert plan["path"].endswith("evals/cases/timing_gate/cand_timing_gate_1.json")
+    assert not (tmp_path / "evals" / "cases" / "timing_gate" / "cand_timing_gate_1.json").exists()
+    assert get_candidate(db_session, "cand_timing_gate_1").status == "labeled"
+
+
+def test_promote_candidate_writes_target_dataset_and_meta(db_session, tmp_path, monkeypatch):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    from core.eval_sampling.store import get_candidate, label_candidate, promote_candidate
+
+    _insert_candidate(db_session)
+    label_candidate(db_session, "cand_timing_gate_1", {"timing_action": "continue"})
+
+    path = promote_candidate(db_session, "cand_timing_gate_1", target_dataset="timing_gate")
+
+    assert path.endswith("evals/cases/timing_gate/cand_timing_gate_1.json")
+    target = tmp_path / "evals" / "cases" / "timing_gate" / "cand_timing_gate_1.json"
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["expected"] == {"timing_action": "continue"}
+    assert data["tags"] == ["sampled", "timing_gate", "promoted"]
+    assert data["meta"]["origin"] == "eval_candidate"
+    assert data["meta"]["source_ref"] == "chatlog:1"
+    assert get_candidate(db_session, "cand_timing_gate_1").status == "promoted"
+
+
+def test_eval_promote_candidate_dry_run_uses_target_dataset(
+    client,
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    from core.eval_sampling.store import get_candidate, label_candidate
+
+    _insert_candidate(db_session)
+    label_candidate(db_session, "cand_timing_gate_1", {"timing_action": "continue"})
+
+    response = client.post(
+        "/api/v1/admin/evals/candidates/cand_timing_gate_1/promote",
+        headers=_auth_header(),
+        json={"dry_run": True, "target_dataset": "timing_gate"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["dry_run"] is True
+    assert payload["target_dataset"] == "timing_gate"
+    assert payload["path"].endswith("evals/cases/timing_gate/cand_timing_gate_1.json")
+    assert not (tmp_path / "evals" / "cases" / "timing_gate" / "cand_timing_gate_1.json").exists()
+    assert get_candidate(db_session, "cand_timing_gate_1").status == "labeled"
