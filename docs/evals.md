@@ -22,14 +22,25 @@ python -B -m evals.run --suite timing_gate --baseline evals/baselines/timing_gat
 - `--max-new-failures 0`：相对 baseline 不允许出现新增失败 case。
 - `evals/baselines/timing_gate.json`：仓库内稳定基线，不依赖会被覆盖的 `evals/reports/latest.json`。
 
-## CI 入口
+## 统一 PR Gate
 
-`.github/workflows/timing-gate-eval.yml` 在 PR 和主分支 push 上运行：
+P4-5A 已将稳定离线 gate 收敛为一个本地 / CI 共用入口：
 
-1. `python -B -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py -v -p no:cacheprovider`
-2. `bash scripts/run_timing_gate_gate.sh`
+```bash
+bash scripts/run_eval_pr_gate.sh
+```
 
-Workflow 显式设置 `NANOBOT_TESTING`、`DATABASE_URL`、`NEW_API_KEY` 和 `NANOBOT_ADMIN_TOKEN`，避免测试导入配置时写入 `.env`。
+当前覆盖：
+
+- `timing_gate`
+- `capability_model_routing`
+- `capability_reply_contract`
+- `capability_rendering_contract`
+- RAG benchmark manual deterministic gate
+
+`.github/workflows/timing-gate-eval.yml` 在 PR 和主分支 push 上调用同一个脚本。Workflow 显式设置 `NANOBOT_TESTING`、`DATABASE_URL`、`NEW_API_KEY` 和 `NANOBOT_ADMIN_TOKEN`，避免测试导入配置时写入 `.env`。
+
+该入口只运行稳定 baseline gate。周期性复跑、报告归档和 RAG manual 样本扩充分别留给 P4-5B / P4-5C。
 
 ## Baseline 更新规则
 
@@ -157,4 +168,4 @@ Generated case 只作为本地 DB 采样候选，不进入仓库稳定 baseline�
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示。更多 suite 的 PR gate、周期性复跑和 RAG manual 样本扩充留到 P4-5 继续推进。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入。周期性复跑、报告归档和 RAG manual 样本扩充留到 P4-5B / P4-5C 继续推进。

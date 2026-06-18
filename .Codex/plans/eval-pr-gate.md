@@ -8,6 +8,27 @@
 
 **技术栈：** Bash、GitHub Actions、pytest、`evals.run`、`evals.rag_benchmark.run`。
 
+**状态（2026-06-18）：** P4-5A 已完成统一脚本、CI 接入、文档收口和最终验证。
+
+**提交记录：**
+- 设计提交：`a520fed docs(评测): 设计统一评测门禁`
+- 计划提交：`bac2192 docs(计划): 记录统一评测门禁计划`
+- 任务 1 提交：`8aa08db ci(评测): 增加统一评测门禁脚本`
+- 任务 2 提交：`d8f5739 ci(评测): 接入统一评测门禁`
+- 任务 3 提交：本提交 `docs(评测): 收口统一评测门禁状态`
+
+**实际验证摘要：**
+- 任务 1 红灯：`tests/test_eval_baseline.py::test_eval_pr_gate_script_runs_stable_suites` 失败于 `assert script.exists()`。
+- 任务 1 绿灯：同一测试结果 `1 passed, 1 warning in 0.48s`。
+- 任务 1 统一 gate：`bash scripts/run_eval_pr_gate.sh` 输出评测守卫 `22 passed, 1 warning in 1.53s`，`timing_gate`、`capability_model_routing`、`capability_reply_contract`、`capability_rendering_contract` 和 RAG manual deterministic gate 均为 `Gate passed`。
+- 任务 2 红灯：`tests/test_eval_baseline.py::test_eval_pr_gate_workflow_runs_unified_script` 失败于 workflow 仍为 `TimingGate Eval`。
+- 任务 2 绿灯：同一测试结果 `1 passed, 1 warning in 0.58s`。
+- 任务 2 评测守卫组合：`tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py tests/test_rag_benchmark.py` 结果为 `35 passed, 1 warning in 2.21s`。
+- 任务 3 文档自检：占位词扫描无匹配，U+FFFD 扫描通过，`git diff --check` 无输出。
+- 任务 3 定向回归：`tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py tests/test_rag_benchmark.py` 结果为 `35 passed, 1 warning in 2.34s`。
+- 任务 3 统一 gate：`bash scripts/run_eval_pr_gate.sh` 输出评测守卫 `22 passed, 1 warning in 1.77s`，`timing_gate`、`capability_model_routing`、`capability_reply_contract`、`capability_rendering_contract` 和 RAG manual deterministic gate 均为 `Gate passed`。
+- 任务 3 全量回归：`python -B -m pytest tests/ -v -p no:cacheprovider` 结果为 `1361 passed, 6 skipped, 139 warnings in 100.83s`。
+
 ---
 
 ## 设计来源
@@ -39,7 +60,7 @@
 - 创建：`scripts/run_eval_pr_gate.sh`
 - 修改：`tests/test_eval_baseline.py`
 
-- [ ] **步骤 1：编写脚本红灯测试**
+- [x] **步骤 1：编写脚本红灯测试**
 
 在 `tests/test_eval_baseline.py` 的 `test_timing_gate_gate_script_uses_stable_baseline` 后追加：
 
@@ -63,7 +84,7 @@ def test_eval_pr_gate_script_runs_stable_suites():
     assert "max-unexpected-source-rate" in text
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -73,7 +94,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_pr_gate_script_runs_s
 
 预期：FAIL，失败点为 `assert script.exists()`，因为 `scripts/run_eval_pr_gate.sh` 尚不存在。
 
-- [ ] **步骤 3：创建统一脚本**
+- [x] **步骤 3：创建统一脚本**
 
 创建 `scripts/run_eval_pr_gate.sh`：
 
@@ -127,7 +148,7 @@ python -B -m evals.rag_benchmark.run \
   --max-unexpected-source-rate 0.0
 ```
 
-- [ ] **步骤 4：设置脚本可执行位**
+- [x] **步骤 4：设置脚本可执行位**
 
 运行：
 
@@ -135,7 +156,7 @@ python -B -m evals.rag_benchmark.run \
 chmod +x scripts/run_eval_pr_gate.sh
 ```
 
-- [ ] **步骤 5：运行脚本绿灯测试**
+- [x] **步骤 5：运行脚本绿灯测试**
 
 运行：
 
@@ -145,7 +166,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_pr_gate_script_runs_s
 
 预期：PASS，`1 passed`。
 
-- [ ] **步骤 6：运行统一 gate 脚本**
+- [x] **步骤 6：运行统一 gate 脚本**
 
 运行：
 
@@ -155,7 +176,7 @@ bash scripts/run_eval_pr_gate.sh
 
 预期：退出码 0；输出包含 TimingGate、capability suite 和 RAG benchmark 的 `Gate passed`。
 
-- [ ] **步骤 7：提交任务 1**
+- [x] **步骤 7：提交任务 1**
 
 运行：
 
@@ -170,7 +191,7 @@ git commit -m "ci(评测): 增加统一评测门禁脚本"
 - 修改：`.github/workflows/timing-gate-eval.yml`
 - 修改：`tests/test_eval_baseline.py`
 
-- [ ] **步骤 1：编写 workflow 红灯测试**
+- [x] **步骤 1：编写 workflow 红灯测试**
 
 将 `tests/test_eval_baseline.py` 中的 `test_timing_gate_workflow_runs_gate_script` 改名并替换为：
 
@@ -185,7 +206,7 @@ def test_eval_pr_gate_workflow_runs_unified_script():
     assert "scripts/run_eval_pr_gate.sh" in text
 ```
 
-- [ ] **步骤 2：运行 workflow 红灯测试**
+- [x] **步骤 2：运行 workflow 红灯测试**
 
 运行：
 
@@ -195,7 +216,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_pr_gate_workflow_runs
 
 预期：FAIL，失败点为 workflow 仍叫 `TimingGate Eval` 或仍调用 `scripts/run_timing_gate_gate.sh`。
 
-- [ ] **步骤 3：修改 workflow**
+- [x] **步骤 3：修改 workflow**
 
 将 `.github/workflows/timing-gate-eval.yml` 改为：
 
@@ -236,7 +257,7 @@ jobs:
         run: bash scripts/run_eval_pr_gate.sh
 ```
 
-- [ ] **步骤 4：运行 workflow 绿灯测试**
+- [x] **步骤 4：运行 workflow 绿灯测试**
 
 运行：
 
@@ -246,7 +267,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_pr_gate_workflow_runs
 
 预期：PASS，`1 passed`。
 
-- [ ] **步骤 5：运行评测守卫组合**
+- [x] **步骤 5：运行评测守卫组合**
 
 运行：
 
@@ -256,7 +277,7 @@ python -B -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_po
 
 预期：PASS。
 
-- [ ] **步骤 6：提交任务 2**
+- [x] **步骤 6：提交任务 2**
 
 运行：
 
@@ -273,7 +294,7 @@ git commit -m "ci(评测): 接入统一评测门禁"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/eval-pr-gate.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 在评测门禁说明区域加入统一入口：
 
@@ -297,11 +318,11 @@ bash scripts/run_eval_pr_gate.sh
 该入口只运行稳定 baseline gate。周期性复跑、报告归档和 RAG manual 样本扩充分别留给 P4-5B / P4-5C。
 ````
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 把路线项 8 的下一步描述改为：P4-5A 统一 PR gate 已完成，下一阶段进入 P4-5B 周期性复跑和 P4-5C RAG manual 样本扩充。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 在进度表新增或更新 P4-5A 记录：
 
@@ -311,11 +332,11 @@ bash scripts/run_eval_pr_gate.sh
 
 并记录实际验证输出。
 
-- [ ] **步骤 4：勾选本计划已完成步骤**
+- [x] **步骤 4：勾选本计划已完成步骤**
 
 在 `.Codex/plans/eval-pr-gate.md` 中把已完成步骤改为 `[x]`，并在文件顶部新增实际提交和验证摘要。
 
-- [ ] **步骤 5：运行文档自检**
+- [x] **步骤 5：运行文档自检**
 
 运行：
 
@@ -340,7 +361,7 @@ git diff --check -- .Codex/plans/eval-pr-gate.md docs/evals.md docs/todo.md docs
 
 预期：`rg` 无输出且退出码为 1；U+FFFD 扫描通过；`git diff --check` 无输出。
 
-- [ ] **步骤 6：运行最终验证**
+- [x] **步骤 6：运行最终验证**
 
 运行：
 
@@ -352,7 +373,7 @@ python -B -m pytest tests/ -v -p no:cacheprovider
 
 预期：全部退出码为 0，全量 pytest 无 failure。
 
-- [ ] **步骤 7：提交任务 3**
+- [x] **步骤 7：提交任务 3**
 
 运行：
 
