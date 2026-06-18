@@ -49,6 +49,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | 阶段 11：真实日志假阳率评估 | 已完成 | 时机信号审计 CLI、shadow mismatch 报告、阈值建议 |
 | 阶段 12：timing gate eval 基线与回归门禁 | 已完成 | baseline diff、阈值门禁和 CLI 门禁输出 |
 | 阶段 13：TimingGate 文档收尾 | 已完成 | 同步 `docs/todo.md` 与设计文档 |
+| 阶段 13.5：TimingGate scoring 最终判定补漏 | 已完成 | 群聊正常模型路径采用 scoring blend 最终动作，旧格式解析降权到 `0.5` |
 | 流式基础贯通：`Message` 带 `stream` 参数 | 已完成 | API → BridgePool → Bridge → KT `Message` → `BufferedOutput.write_stream()` 已贯通 |
 | Agent Step SSE 真流式 | 已完成 | `2369081 feat(agent): 支持 step 流式输出` |
 | Prompt V2 默认接管 | 已完成 | 设计、计划、默认 live 接管和文档同步均已落地 |
@@ -1048,6 +1049,28 @@ P1-6 验收重点：
 - `docs/todo.md` 不再描述已过时状态
 - 剩余限制明确写出
 - 文档变更单独提交
+
+### 阶段 13.5：TimingGate scoring 最终判定补漏
+
+状态：已完成。
+
+目标：收口 2026-06-18 复审发现的 TimingGate 规格偏差，确保群聊 enabled 正常模型返回路径也以 shared scoring 的 `E_final >= theta` 判定为准，而不是继续采用模型 raw `action`；同时把 TimingGate 输出解析质量回灌到 `TimingModelHint.confidence`。
+
+已完成：
+
+- JSON 解析结果携带 `parse_quality="json"` 与 `model_confidence=0.8`。
+- 旧格式 `是/否,数字` 解析结果携带 `parse_quality="legacy"` 与 `model_confidence=0.5`。
+- 非法输出和网络错误携带低置信 `model_confidence=0.0`。
+- 群聊 `_apply_gate_result()` 在正常模型返回、模型失败和 timer 路径均使用 `_score_timing()` 的最终 `action/delay_seconds/reason`。
+- `wait.delay_seconds` 上限从 30 秒收敛到设计要求的 15 秒。
+- 补充红灯回归：低置信 legacy `continue` 在 `directed_to_other + linger` 冲突场景下应被 scoring blend 判为 `no_reply`。
+
+验证结果：
+
+- 红灯验证：新增解析质量 / delay 上限 / scoring blend 用例在实现前失败。
+- 定向回归：`tests/test_timing_gate.py tests/test_timing_runtime.py`，结果 `76 passed, 1 warning`。
+- TimingGate 相关回归：`tests/test_timing_gate.py tests/test_timing_score.py tests/test_timing_runtime.py tests/test_timing_gate_prompt_policy.py tests/test_timing_signal_audit.py tests/test_private_timing.py`，结果 `110 passed, 1 warning`。
+- CLI 门禁：`scripts/run_timing_gate_gate.sh`，结果 `Suite: timing_gate total=18 passed=18 failed=0`，`Gate passed`。
 
 ## 下一步
 

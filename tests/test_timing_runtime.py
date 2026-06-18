@@ -85,8 +85,10 @@ class TestGroupRuntime:
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
 
         r1 = await runtime.process_message("g1", {
-            "sender_id": "u1", "sender_name": "A", "message": "hello",
-        })
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "Nanobot 你看 https://example.com",
+        }, trigger_reason="bot_name_mentioned")
         assert r1["action"] == "continue"
         assert r1["delay_seconds"] is None  # continue 无 delay
 
@@ -152,8 +154,10 @@ class TestGroupRuntime:
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
 
         r1 = await runtime.process_message("g1", {
-            "sender_id": "u1", "sender_name": "A", "message": "hello",
-        })
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "Nanobot 你看 https://example.com",
+        }, trigger_reason="bot_name_mentioned")
         assert r1["action"] == "wait"
         gen = r1["generation"]
 
@@ -194,8 +198,10 @@ class TestGroupRuntime:
 
         monkeypatch.setattr(runtime, "_call_gate", fake_gate)
         r = await runtime.process_message("g1", {
-            "sender_id": "u1", "sender_name": "A", "message": "hello",
-        })
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "Nanobot 你看 https://example.com",
+        }, trigger_reason="bot_name_mentioned")
         assert r["action"] == "continue"
         assert r["delay_seconds"] is None
 
@@ -206,8 +212,10 @@ class TestGroupRuntime:
         # reset state to allow gate
         runtime._states["group_g1"].last_gate_completed_ts = 0
         r2 = await runtime.process_message("g1", {
-            "sender_id": "u2", "sender_name": "B", "message": "hi",
-        })
+            "sender_id": "u2",
+            "sender_name": "B",
+            "message": "Nanobot 再看下 https://example.com/2",
+        }, trigger_reason="bot_name_mentioned")
         assert r2["action"] == "no_reply"
         assert r2["delay_seconds"] is None
 
@@ -223,13 +231,13 @@ class TestGroupRuntime:
         r = await runtime.process_message("g1", {
             "sender_id": "u1",
             "sender_name": "A",
-            "message": "你怎么看这个方案",
+            "message": "Nanobot 你怎么看这个方案 https://example.com",
             "message_id": "m100",
-        })
+        }, trigger_reason="bot_name_mentioned")
 
         assert r["action"] == "continue"
         assert "[用户名]A" in r["pending_text"]
-        assert "[发言内容]你怎么看这个方案" in r["pending_text"]
+        assert "[发言内容]Nanobot 你怎么看这个方案 https://example.com" in r["pending_text"]
         assert r["source_message_ids"] == ["m100"]
 
     @pytest.mark.asyncio
@@ -619,12 +627,13 @@ class TestGroupRuntime:
             "message_id": "m1",
         }, trigger_reason="ambient", talk_value=0.5)
 
-        assert r["action"] == "continue"
+        assert r["action"] == "wait"
         assert captured["trigger_reason"] == "recent_bot_followup"
         assert captured["pending_trigger"] == "recent_bot_followup"
         scoring = r["timing_scoring"]
         assert scoring["signals"]["linger_score"] > 0
         assert scoring["signals"]["direct_score"] >= scoring["signals"]["linger_score"]
+        assert scoring["reason"].endswith("min_interval")
 
     @pytest.mark.asyncio
     async def test_model_failure_uses_rule_fallback_action_not_raw_no_reply(self, monkeypatch):
@@ -658,6 +667,43 @@ class TestGroupRuntime:
         assert result["timing_scoring"]["action"] == "continue"
         assert result["timing_scoring"]["model_used"] is False
         assert result["reason"].startswith("rule_fallback after network_error:")
+
+    @pytest.mark.asyncio
+    async def test_normal_model_result_uses_scoring_blend_action(self, monkeypatch):
+        """正常模型返回也应采用 scoring blend 后的最终动作。"""
+        runtime = GroupRuntime()
+        state = runtime._states.setdefault("group_1", GateState(group_id="group_1"))
+        state.activate_linger("u1", "at_bot")
+        state.last_bot_reply_ts = _time.time() - 20
+
+        async def low_confidence_gate(*_args, **_kwargs):
+            return {
+                "action": "continue",
+                "reason": "legacy parser says continue",
+                "raw": "是,7",
+                "parse_quality": "legacy",
+                "model_confidence": 0.5,
+            }
+
+        monkeypatch.setattr(runtime, "_call_gate", low_confidence_gate)
+
+        result = await runtime.process_message("group_1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "@B 继续看看",
+            "message_id": "m1",
+            "is_directed_to_other": True,
+            "directed": {"at_others": True, "directed_to_other": True},
+            "mentions": [{"user_id": "u2", "nickname": "B"}],
+        }, trigger_reason="ambient", talk_value=1.0)
+
+        assert result["action"] == "no_reply"
+        assert result["reason"].startswith("scoring blend:")
+        assert result["timing_scoring"]["stage"] == "model_assisted_conflict"
+        assert result["timing_scoring"]["action"] == "no_reply"
+        assert result["timing_scoring"]["model_used"] is True
+        assert result["timing_scoring"]["model_action"] == "continue"
+        assert result["timing_scoring"]["model_confidence"] == 0.5
 
     @pytest.mark.asyncio
     async def test_recent_followup_uses_decayed_linger_score(self, monkeypatch):
@@ -1091,7 +1137,7 @@ class TestProcessMessageDirected:
             talk_value=1.0,
         )
 
-        assert result["action"] == "continue"
+        assert result["action"] == "wait"
         assert "hard_rule" not in result
         assert captured["trigger_reason"] == "recent_bot_followup"
         assert captured["pending_trigger"] == "recent_bot_followup"

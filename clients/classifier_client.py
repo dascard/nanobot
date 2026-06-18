@@ -1180,13 +1180,15 @@ class TimingGate:
                 action = str(data.get("action", "")).strip().lower()
                 if action in ("continue", "wait", "no_reply"):
                     delay = int(data.get("delay_seconds", 5))
-                    delay = max(3, min(30, delay))
+                    delay = max(3, min(15, delay))
                     return {
                         "action": action,
                         "delay_seconds": delay if action == "wait" else None,
                         "reason": str(data.get("reason", ""))[:200],
                         "raw": raw[:200],
                         "error_type": None,
+                        "parse_quality": "json",
+                        "model_confidence": 0.8,
                     }
         except (json.JSONDecodeError, ValueError, KeyError, TypeError):
             pass
@@ -1201,6 +1203,8 @@ class TimingGate:
                 "reason": "旧格式兼容",
                 "raw": raw[:200],
                 "error_type": None,
+                "parse_quality": "legacy",
+                "model_confidence": 0.5,
             }
 
         # 非法 → no_reply
@@ -1211,6 +1215,8 @@ class TimingGate:
             "reason": "非法输出",
             "raw": raw[:200],
             "error_type": "parse_error",
+            "parse_quality": "invalid",
+            "model_confidence": 0.0,
         }
 
     def judge(self, context: str) -> dict:
@@ -1241,6 +1247,8 @@ class TimingGate:
                 "reason": f"Qwen不可用: {e}",
                 "raw": "",
                 "error_type": "network_error",
+                "parse_quality": "network_error",
+                "model_confidence": 0.0,
             }
 
 

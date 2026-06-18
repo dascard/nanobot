@@ -30,6 +30,8 @@ class TestParseOutput:
         assert r["action"] == "continue"
         assert r["delay_seconds"] is None
         assert r["error_type"] is None
+        assert r["parse_quality"] == "json"
+        assert r["model_confidence"] == 0.8
 
     def test_wait_with_delay(self):
         from clients.classifier_client import TimingGate
@@ -56,7 +58,7 @@ class TestParseOutput:
         from clients.classifier_client import TimingGate
         g = TimingGate()
         r = g._parse_output('{"action":"wait","delay_seconds":99}')
-        assert r["delay_seconds"] == 30
+        assert r["delay_seconds"] == 15
 
     def test_old_format_yes_is_continue(self):
         from clients.classifier_client import TimingGate
@@ -64,6 +66,8 @@ class TestParseOutput:
         r = g._parse_output("是,7")
         assert r["action"] == "continue"
         assert r["reason"] == "旧格式兼容"
+        assert r["parse_quality"] == "legacy"
+        assert r["model_confidence"] == 0.5
 
     def test_old_format_no_is_no_reply(self):
         from clients.classifier_client import TimingGate

@@ -31,6 +31,26 @@ _COOLDOWN_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
 _DIRECTED_SUPPRESS_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
 
 
+def _model_confidence_from_gate_result(result: dict) -> float:
+    """从 TimingGate 结果提取模型置信度，兼容旧 parser 输出。"""
+    raw_confidence = result.get("model_confidence")
+    if raw_confidence is not None:
+        try:
+            confidence = float(raw_confidence)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if not math.isfinite(confidence):
+            return 0.0
+        return max(0.0, min(1.0, confidence))
+
+    parse_quality = str(result.get("parse_quality") or "").strip().lower()
+    if parse_quality == "legacy":
+        return 0.5
+    if parse_quality in {"invalid", "network_error"}:
+        return 0.0
+    return 0.8
+
+
 def should_suppress_directed_to_other(pending_msgs: list[GroupPendingMessage]) -> bool:
     """全部 pending 都指向其他用户且没有指向 bot → 不应插嘴。"""
     if not pending_msgs:
@@ -469,7 +489,9 @@ class GroupRuntime:
         if model_result:
             error_type = str(model_result.get("error_type") or "")
             action = str(model_result.get("action") or "").strip()
-            confidence = 0.0 if error_type else 0.8
+            confidence = _model_confidence_from_gate_result(model_result)
+            if error_type:
+                confidence = 0.0
             if action:
                 model_hint = TimingModelHint(
                     action=action,
@@ -947,7 +969,13 @@ class GroupRuntime:
                     shadow_scoring=shadow_scoring,
                 )
 
-            return self._apply_gate_result(state, result)
+            return self._apply_gate_result(
+                state,
+                result,
+                trigger_reason=tr,
+                pending=snapshot,
+                force_direct_score=gate_force_direct_score,
+            )
 
     async def handle_timer_fired(self, group_id: str, generation: int,
                                  trigger_reason: str = "",
@@ -1076,36 +1104,55 @@ class GroupRuntime:
                     shadow_scoring=shadow_scoring,
                 )
 
-            return self._apply_gate_result(state, result)
+            return self._apply_gate_result(
+                state,
+                result,
+                trigger_reason=timer_trigger_reason,
+                pending=snapshot,
+            )
 
-    def _apply_gate_result(self, state: GroupChatState, result: dict) -> dict:
+    def _apply_gate_result(
+        self,
+        state: GroupChatState,
+        result: dict,
+        *,
+        trigger_reason: str = "",
+        pending: list[GroupPendingMessage] | None = None,
+        force_direct_score: float = 0.0,
+    ) -> dict:
         action = result.get("action", "no_reply")
         delay = None
-        payload = _pending_payload(state.pending)
+        pending_msgs = list(pending if pending is not None else state.pending)
+        payload = _pending_payload(pending_msgs)
         scoring = self._shadow_scoring(
             state,
-            str(result.get("trigger_reason") or state.last_trigger_reason or ""),
+            str(result.get("trigger_reason") or trigger_reason or state.last_trigger_reason or ""),
+            pending=pending_msgs,
             model_result=result,
+            force_direct_score=force_direct_score,
         )
-        fallback_reason = ""
-        fallback_delay = None
-        if result.get("error_type") and scoring and scoring.get("stage") == "rule_fallback":
+        scoring_reason = ""
+        scoring_delay = None
+        if scoring:
             scoring_action = str(scoring.get("action") or "").strip()
             if scoring_action in {"continue", "wait", "no_reply"}:
                 action = scoring_action
-                fallback_delay = scoring.get("delay_seconds")
-                fallback_reason = (
-                    f"rule_fallback after {result.get('error_type')}: "
-                    f"{scoring.get('reason', '')}"
-                )
+                scoring_delay = scoring.get("delay_seconds")
+                if result.get("error_type") and scoring.get("stage") == "rule_fallback":
+                    scoring_reason = (
+                        f"rule_fallback after {result.get('error_type')}: "
+                        f"{scoring.get('reason', '')}"
+                    )
+                else:
+                    scoring_reason = f"scoring blend: {scoring.get('reason', '')}"
 
         if action == "continue":
             state.handle_continue()
         elif action == "no_reply":
             state.handle_no_reply()
         elif action == "wait":
-            delay_source = fallback_delay if fallback_delay is not None else result.get("delay_seconds", 5)
-            delay = max(3, min(30, int(delay_source or 5)))
+            delay_source = scoring_delay if scoring_delay is not None else result.get("delay_seconds", 5)
+            delay = max(3, min(15, int(delay_source or 5)))
             # 防死循环：wait_count>=1 且无新消息 → force no_reply
             if state.wait_count >= 1 and not state.new_messages_during_wait:
                 logger.info("[GroupRuntime] anti-loop: wait_count=%d no_new_msgs → force no_reply",
@@ -1123,7 +1170,7 @@ class GroupRuntime:
                 action = "no_reply"
                 delay = None
             else:
-                state.start_wait(delay, fallback_reason or result.get("reason", ""))
+                state.start_wait(delay, scoring_reason or result.get("reason", ""))
         else:
             state.handle_no_reply()
             action = "no_reply"
@@ -1134,13 +1181,13 @@ class GroupRuntime:
             "action": action, "delay_seconds": delay,
             "generation": state.generation,
             "cooldown_ago": cooldown,
-            "reason": fallback_reason or result.get("reason", ""),
+            "reason": scoring_reason or result.get("reason", ""),
         }
         if scoring:
             response["timing_scoring"] = scoring
         for key in (
             "raw", "error_type", "latency_ms", "context", "context_chars",
-            "pending_count", "trigger_reason",
+            "pending_count", "trigger_reason", "parse_quality", "model_confidence",
         ):
             if key in result:
                 response[key] = result.get(key)
