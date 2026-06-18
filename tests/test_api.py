@@ -312,6 +312,31 @@ def test_proxy_chat_passes_history_header_to_bridge(client, db_session, monkeypa
     assert len(kwargs["metadata"]["history_messages"]) == 2
 
 
+def test_proxy_chat_passes_client_platform_to_bridge(client, monkeypatch):
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch
+
+    _fast_private_reply(monkeypatch)
+
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(return_value="平台回复")
+
+    with patch("api.routes.get_bridge", return_value=mock_bridge):
+        response = client.post(
+            "/api/v1/chat",
+            json={
+                "user_id": "platform_user",
+                "session_id": "private_platform_user",
+                "query": "平台消息",
+                "client_meta": {"platform": "web"},
+            },
+        )
+
+    assert response.status_code == 200
+    _, kwargs = mock_bridge.handle_message.await_args
+    assert kwargs["metadata"]["platform"] == "web"
+
+
 def test_proxy_chat_releases_db_transaction_before_bridge(client, db_session, monkeypatch):
     from unittest.mock import patch
     from unittest.mock import AsyncMock
@@ -1245,6 +1270,41 @@ async def test_group_message_passes_client_platform_to_timing_gate(db_session, m
     assert data["action"] == "no_reply"
     assert calls
     assert calls[0][2]["platform"] == "web"
+
+
+@pytest.mark.asyncio
+async def test_group_message_passes_client_platform_to_bridge(db_session, monkeypatch):
+    """TimingGate 决定回复后，client_meta.platform 应继续透传给 Bridge。"""
+    from unittest.mock import AsyncMock
+    from api.routes import GroupMessageRequest, group_message
+
+    async def fake_process(*args, **kwargs):
+        return {"action": "continue", "generation": 1, "reason": "reply now"}
+
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(return_value="平台群聊回复")
+    monkeypatch.setattr("api.routes.get_bridge", lambda: mock_bridge)
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="platform-bridge-group",
+            sender_id="u-platform",
+            sender_name="平台测试",
+            message="bot 你好",
+            session_name="平台群",
+            is_at_bot=True,
+            client_meta={"platform": "web"},
+            message_id="m-platform-bridge-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "continue"
+    assert data["reply"] == "平台群聊回复"
+    _, kwargs = mock_bridge.handle_message.await_args
+    assert kwargs["metadata"]["platform"] == "web"
 
 
 @pytest.mark.asyncio

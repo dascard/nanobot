@@ -879,6 +879,91 @@ class TestNanobotBridge:
         system_messages = [call.args[1] for call in mock_conv.append.call_args_list if call.args[0] == "system"]
         assert system_messages == ["base"]
 
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_passes_platform_to_tool_plan_and_decision(self, MockAgent, mock_load, monkeypatch):
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from core.tool_plan import ToolPlan
+        from nanobot_kt.bridge import NanobotBridge
+        from nanobot_kt.prompt_runtime import PromptRuntimeResult
+        import json
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        reply_output = json.dumps({REPLY_MARKER: {"content": "ok"}}, ensure_ascii=False)
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
+
+        async def fake_process(event):
+            pass
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient", lambda **_kwargs: route_client)
+
+        captured: dict[str, str] = {}
+
+        def fake_build_tool_plan(**kwargs):
+            captured["tool_plan_platform"] = kwargs.get("platform")
+            return ToolPlan.from_effective_tools(
+                enabled={"reply": True, "no_reply": True},
+                disabled={},
+                chat_type=kwargs.get("chat_type", "private"),
+                tool_schemas=[],
+            )
+
+        def fake_record_runtime_tool_decision(**kwargs):
+            captured["decision_platform"] = kwargs.get("platform")
+            return False
+
+        monkeypatch.setattr("core.tool_plan.build_tool_plan", fake_build_tool_plan)
+        monkeypatch.setattr("core.runtime_tool_service.record_runtime_tool_decision", fake_record_runtime_tool_decision)
+
+        async def fake_build_prompt_runtime(prompt_input):
+            return PromptRuntimeResult(
+                prompt_key=prompt_input.prompt_key,
+                prompt_mode=prompt_input.prompt_mode,
+                prompt_source="test",
+                prompt_runtime_path="",
+                prompt_default_path="",
+                prompt_sha256="test-sha",
+                pre_event_messages=[{"role": "system", "content": "base"}],
+                event_content=prompt_input.user_input,
+                meta_update={"prompt_engine": "prompt"},
+            )
+
+        monkeypatch.setattr("nanobot_kt.prompt_runtime.build_prompt_runtime", fake_build_prompt_runtime)
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "test query",
+                user_id="u1",
+                session_id="private-u1",
+                metadata={"platform": "web", "user_id": "u1", "message_id": "msg-platform"},
+            )
+
+        result = run_async(_run())
+
+        assert result == "ok"
+        assert captured["tool_plan_platform"] == "web"
+        assert captured["decision_platform"] == "web"
+
     @patch("nanobot_kt.bridge.registry")
     @patch("nanobot_kt.bridge.NewAPIClient")
     @patch("nanobot_kt.bridge.load_agent_config")

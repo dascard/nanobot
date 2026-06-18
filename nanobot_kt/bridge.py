@@ -1008,6 +1008,7 @@ class NanobotBridge:
             runtime_chat_type = "private_superuser" if (not is_group and meta.get("is_superuser")) else chat_type
             group_id = str(meta.get("group_id", session_id or "")).strip()
             user_id = str(meta.get("user_id", session_id or "")).strip()
+            platform = str(meta.get("platform") or "qq").strip().lower() or "qq"
 
             from core.final_tools import set_current_final_tools
             from core.tool_plan import build_tool_plan, set_current_tool_plan
@@ -1017,6 +1018,7 @@ class NanobotBridge:
             with UnitOfWork() as uow:
                 tool_plan = build_tool_plan(
                     chat_type=runtime_chat_type, group_id=group_id, user_id=user_id,
+                    platform=platform,
                     runtime_preset=runtime_preset, db=uow.db,
                 )
                 decision_recorded = record_runtime_tool_decision(
@@ -1025,6 +1027,7 @@ class NanobotBridge:
                     chat_type=runtime_chat_type,
                     group_id=group_id,
                     user_id=user_id,
+                    platform=platform,
                     runtime_preset=runtime_preset,
                     enabled=tool_plan.enabled,
                     disabled=tool_plan.disabled,
@@ -1057,6 +1060,7 @@ class NanobotBridge:
                         "session_id": session_id,
                         "group_id": group_id,
                         "user_id": user_id,
+                        "platform": platform,
                         "sender_name": sender_name,
                     }
             except Exception as e:

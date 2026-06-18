@@ -2415,8 +2415,11 @@ async def proxy_chat(
     bridge = get_bridge()
     _complexity = (_private_decision.complexity if _private_decision and _private_decision.complexity else 3)
     _constraint = (get_effort_constraint(_private_decision.effort) if _private_decision else "")
+    client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
+    platform = str(client_meta.get("platform") or "qq").strip().lower() or "qq"
     bridge_meta = {
         "chat_type": "group" if is_group else "private",
+        "platform": platform,
         "user_id": req.user_id,
         "session_id": req.session_id,
         "sender_name": req.sender_name or "",

@@ -17,7 +17,8 @@
 - `docs/todo.md` 路线项 4 是当前 P2 首项；P2-4 Prompt Runtime 平台化不纳入本计划。
 - 任务 1 已完成并提交：`bb7489c feat(工具): 支持平台维度解析`。
 - 任务 2 已完成并提交：`295e3f7 feat(工具): 记录平台维度决策`。
-- 当前下一步：任务 3「真实入口透传 platform 到 Bridge 和 ToolPlan」。
+- 任务 3 已完成并纳入本次提交：真实入口已透传 platform 到 Bridge 和 ToolPlan。
+- 当前下一步：任务 4「Admin API 支持 platform 覆盖和预览」。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
 ## 文件结构
@@ -492,7 +493,7 @@ git commit -m "feat(工具): 记录平台维度决策"
 - 修改：`app/group_ingress/service.py`
 - 修改：`nanobot_kt/bridge.py`
 
-- [ ] **步骤 1：编写 `/chat` 透传红灯测试**
+- [x] **步骤 1：编写 `/chat` 透传红灯测试**
 
 在 `tests/test_api.py` 追加或扩展现有 bridge metadata 测试：
 
@@ -517,7 +518,7 @@ def test_proxy_chat_passes_client_platform_to_bridge(client, monkeypatch, auth_h
     assert seen["platform"] == "web"
 ```
 
-- [ ] **步骤 2：编写群聊 Bridge 透传红灯测试**
+- [x] **步骤 2：编写群聊 Bridge 透传红灯测试**
 
 扩展现有 `test_group_message_passes_client_platform_to_timing_gate` 附近测试：
 
@@ -546,7 +547,7 @@ def test_group_message_passes_client_platform_to_bridge(client, monkeypatch):
 
 如果现有群聊测试使用 service 级 fake bridge，而不是 patch `get_bridge`，沿用现有 fixture 写法。
 
-- [ ] **步骤 3：编写 Bridge 调用 ToolPlan 红灯测试**
+- [x] **步骤 3：编写 Bridge 调用 ToolPlan 红灯测试**
 
 在 `tests/test_kt_framework.py` 增加：
 
@@ -583,7 +584,7 @@ async def test_bridge_passes_platform_to_tool_plan_and_decision(monkeypatch):
 
 按当前 `NanobotBridge` 测试夹具调整初始化和 controller fake，保持不联网。
 
-- [ ] **步骤 4：运行红灯**
+- [x] **步骤 4：运行红灯**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_api.py -k "client_platform_to_bridge" tests/test_kt_framework.py -k "platform_to_tool_plan" -v -p no:cacheprovider
@@ -591,7 +592,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_api.py -k "client_platf
 
 预期：失败，platform 没有进入 metadata 或 ToolPlan。
 
-- [ ] **步骤 5：实现 `/chat` platform metadata**
+- [x] **步骤 5：实现 `/chat` platform metadata**
 
 在 `api/routes.py` 构造 `bridge_meta` 前解析：
 
@@ -606,7 +607,7 @@ platform = str(client_meta.get("platform") or "qq").strip().lower() or "qq"
 "platform": platform,
 ```
 
-- [ ] **步骤 6：实现群聊 `_continue_to_bridge()` platform metadata**
+- [x] **步骤 6：实现群聊 `_continue_to_bridge()` platform metadata**
 
 在 `app/group_ingress/service.py` 的 `_continue_to_bridge()` 内解析：
 
@@ -621,7 +622,7 @@ platform = str(client_meta.get("platform") or "qq").strip().lower() or "qq"
 "platform": platform,
 ```
 
-- [ ] **步骤 7：实现 Bridge 透传**
+- [x] **步骤 7：实现 Bridge 透传**
 
 在 `nanobot_kt/bridge.py::handle_message()` 取值：
 
@@ -652,7 +653,7 @@ decision_recorded = record_runtime_tool_decision(
 )
 ```
 
-- [ ] **步骤 8：运行绿灯和入口回归**
+- [x] **步骤 8：运行绿灯和入口回归**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_api.py tests/test_kt_framework.py -v -p no:cacheprovider
@@ -660,7 +661,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_api.py tests/test_kt_fr
 
 预期：全部通过。
 
-- [ ] **步骤 9：提交任务 3**
+- [x] **步骤 9：提交任务 3**
 
 ```bash
 git add tests/test_api.py tests/test_kt_framework.py api/routes.py app/group_ingress/service.py nanobot_kt/bridge.py
@@ -1058,8 +1059,8 @@ git commit -m "docs(计划): 同步工具平台配置状态"
 - [x] precedence 固定为 `chat_type < platform < group < user`，并由测试覆盖。
 - [x] `runtime_preset=none`、`force_enabled`、群聊 `force_disabled_group` 不会被 platform override 绕过。
 - [x] `RuntimeToolDecision.platform` 在新库和旧库迁移后都存在，并能通过 `/tools/decisions` 查询。
-- [ ] `/chat` 和 `/group/message` 都把 `client_meta.platform` 传到 Bridge。
-- [ ] Bridge 把 platform 传给 `build_tool_plan()` 和 `record_runtime_tool_decision()`。
+- [x] `/chat` 和 `/group/message` 都把 `client_meta.platform` 传到 Bridge。
+- [x] Bridge 把 platform 传给 `build_tool_plan()` 和 `record_runtime_tool_decision()`。
 - [ ] Admin API 能创建、删除、预览 platform override。
 - [ ] WebUI 工具页能选择 platform 并配置「指定平台」覆盖。
 - [ ] `docs/message-field-standard.md`、`docs/todo.md`、`docs/plan_walkthrough.md` 和本计划同步当前状态。

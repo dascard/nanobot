@@ -289,8 +289,11 @@ class GroupIngressService:
                 bot_name=ambient_meta.get("bot", {}).get("bot_name", ""),
                 bot_aliases=list(req.bot_aliases or []),
             )
+            client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
+            platform = str(client_meta.get("platform") or "qq").strip().lower() or "qq"
             bridge_meta = {
                 "chat_type": "group",
+                "platform": platform,
                 "user_id": group_user_id,
                 "session_id": group_user_id,
                 "sender_name": req.sender_name,
