@@ -15,6 +15,9 @@
 - 设计文档：`docs/superpowers/specs/2026-06-18-tool-platform-scope-design.md`，提交 `d221180 docs(工具): 设计平台维度配置`。
 - 当前计划文件路径按项目约定使用 `.Codex/plans/tool-platform-scope.md`。
 - `docs/todo.md` 路线项 4 是当前 P2 首项；P2-4 Prompt Runtime 平台化不纳入本计划。
+- 任务 1 已完成并提交：`bb7489c feat(工具): 支持平台维度解析`。
+- 任务 2 已完成并提交：`295e3f7 feat(工具): 记录平台维度决策`。
+- 当前下一步：任务 3「真实入口透传 platform 到 Bridge 和 ToolPlan」。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
 ## 文件结构
@@ -68,7 +71,7 @@
 - 修改：`core/tool_plan.py`
 - 修改：`core/final_tools.py`
 
-- [ ] **步骤 1：编写 platform override 红灯测试**
+- [x] **步骤 1：编写 platform override 红灯测试**
 
 在 `tests/test_tool_plan.py` 追加测试：
 
@@ -119,7 +122,7 @@ def test_platform_override_precedence_between_chat_type_group_and_user(db_sessio
     assert "memory_query" not in disabled_platform_only
 ```
 
-- [ ] **步骤 2：编写硬约束红灯测试**
+- [x] **步骤 2：编写硬约束红灯测试**
 
 继续在 `tests/test_tool_plan.py` 追加：
 
@@ -156,7 +159,7 @@ def test_platform_override_cannot_bypass_none_or_hard_constraints(db_session):
     assert disabled_group["write"] == "群聊强制禁用"
 ```
 
-- [ ] **步骤 3：编写 ToolPlan / FinalTools 透传红灯测试**
+- [x] **步骤 3：编写 ToolPlan / FinalTools 透传红灯测试**
 
 追加测试：
 
@@ -184,7 +187,7 @@ def test_build_tool_plan_and_final_tools_pass_platform(db_session):
     assert final_tools.disabled["image_generation"] == "Web 禁用图片生成"
 ```
 
-- [ ] **步骤 4：运行红灯**
+- [x] **步骤 4：运行红灯**
 
 运行：
 
@@ -194,7 +197,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_tool_plan.py -k "platfo
 
 预期：失败，报错包含 `unexpected keyword argument 'platform'` 或平台覆盖未生效。
 
-- [ ] **步骤 5：实现 platform 归一化和解析**
+- [x] **步骤 5：实现 platform 归一化和解析**
 
 在 `core/runtime_tool_service.py` 添加 helper：
 
@@ -244,7 +247,7 @@ for row in sorted(rows, key=lambda r: {
     ...
 ```
 
-- [ ] **步骤 6：透传 ToolPlan / FinalTools platform**
+- [x] **步骤 6：透传 ToolPlan / FinalTools platform**
 
 在 `core/tool_plan.py`：
 
@@ -289,7 +292,7 @@ def resolve_final_tools(
     )
 ```
 
-- [ ] **步骤 7：运行绿灯和相关回归**
+- [x] **步骤 7：运行绿灯和相关回归**
 
 运行：
 
@@ -299,7 +302,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_tool_plan.py tests/test
 
 预期：全部通过。
 
-- [ ] **步骤 8：提交任务 1**
+- [x] **步骤 8：提交任务 1**
 
 ```bash
 git add tests/test_tool_plan.py core/runtime_tool_service.py core/tool_plan.py core/final_tools.py
@@ -316,7 +319,7 @@ git commit -m "feat(工具): 支持平台维度解析"
 - 修改：`core/runtime_tool_service.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：编写 decision 写入红灯测试**
+- [x] **步骤 1：编写 decision 写入红灯测试**
 
 修改 `tests/test_tool_plan.py::test_record_runtime_tool_decision_can_use_injected_db`：
 
@@ -340,7 +343,7 @@ assert row.platform == "web"
 
 预期当前失败：`record_runtime_tool_decision()` 不接受 `platform`，或 ORM 字段不存在。
 
-- [ ] **步骤 2：编写迁移红灯测试**
+- [x] **步骤 2：编写迁移红灯测试**
 
 在 `tests/test_schema_migrations.py` 追加：
 
@@ -380,7 +383,7 @@ def test_runtime_tool_decision_platform_column_added_to_existing_table(tmp_path)
     assert "platform" in columns_again
 ```
 
-- [ ] **步骤 3：编写 Admin decisions 红灯测试**
+- [x] **步骤 3：编写 Admin decisions 红灯测试**
 
 在 `tests/test_admin_api.py::TestToolAdmin` 增加：
 
@@ -407,7 +410,7 @@ def test_tool_decisions_returns_platform(self, client, auth_header, db_session):
     assert item["platform"] == "web"
 ```
 
-- [ ] **步骤 4：运行红灯**
+- [x] **步骤 4：运行红灯**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_tool_plan.py::test_record_runtime_tool_decision_can_use_injected_db tests/test_schema_migrations.py::test_runtime_tool_decision_platform_column_added_to_existing_table tests/test_admin_api.py::TestToolAdmin::test_tool_decisions_returns_platform -v -p no:cacheprovider
@@ -415,7 +418,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_tool_plan.py::test_reco
 
 预期：失败。
 
-- [ ] **步骤 5：实现 ORM 字段和写入**
+- [x] **步骤 5：实现 ORM 字段和写入**
 
 在 `core/database.py`：
 
@@ -440,7 +443,7 @@ platform: str = "",
 platform=normalize_tool_platform(platform),
 ```
 
-- [ ] **步骤 6：实现 schema migration**
+- [x] **步骤 6：实现 schema migration**
 
 在 `core/schema_migrations.py` 增加：
 
@@ -457,7 +460,7 @@ def _runtime_tool_decision_platform_column(conn: Any, engine: Any, db_path: str 
 ("20260618_runtime_tool_decision_platform", "runtime tool decision platform column", _runtime_tool_decision_platform_column),
 ```
 
-- [ ] **步骤 7：让 Admin decisions 返回 platform**
+- [x] **步骤 7：让 Admin decisions 返回 platform**
 
 在 `api/admin_routes.py::list_runtime_preset_decisions()` 的 item 中加入：
 
@@ -465,7 +468,7 @@ def _runtime_tool_decision_platform_column(conn: Any, engine: Any, db_path: str 
 "platform": getattr(r, "platform", "") or "",
 ```
 
-- [ ] **步骤 8：运行绿灯和迁移回归**
+- [x] **步骤 8：运行绿灯和迁移回归**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_tool_plan.py tests/test_schema_migrations.py tests/test_admin_api.py::TestToolAdmin -v -p no:cacheprovider
@@ -473,7 +476,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_tool_plan.py tests/test
 
 预期：全部通过。
 
-- [ ] **步骤 9：提交任务 2**
+- [x] **步骤 9：提交任务 2**
 
 ```bash
 git add tests/test_tool_plan.py tests/test_schema_migrations.py tests/test_admin_api.py core/database.py core/schema_migrations.py core/runtime_tool_service.py api/admin_routes.py
@@ -1051,10 +1054,10 @@ git commit -m "docs(计划): 同步工具平台配置状态"
 
 ## 最终验收清单
 
-- [ ] `resolve_effective_tools(platform="web")` 能应用 `ToolOverride(scope_type="platform", scope_id="web")`。
-- [ ] precedence 固定为 `chat_type < platform < group < user`，并由测试覆盖。
-- [ ] `runtime_preset=none`、`force_enabled`、群聊 `force_disabled_group` 不会被 platform override 绕过。
-- [ ] `RuntimeToolDecision.platform` 在新库和旧库迁移后都存在，并能通过 `/tools/decisions` 查询。
+- [x] `resolve_effective_tools(platform="web")` 能应用 `ToolOverride(scope_type="platform", scope_id="web")`。
+- [x] precedence 固定为 `chat_type < platform < group < user`，并由测试覆盖。
+- [x] `runtime_preset=none`、`force_enabled`、群聊 `force_disabled_group` 不会被 platform override 绕过。
+- [x] `RuntimeToolDecision.platform` 在新库和旧库迁移后都存在，并能通过 `/tools/decisions` 查询。
 - [ ] `/chat` 和 `/group/message` 都把 `client_meta.platform` 传到 Bridge。
 - [ ] Bridge 把 platform 传给 `build_tool_plan()` 和 `record_runtime_tool_decision()`。
 - [ ] Admin API 能创建、删除、预览 platform override。

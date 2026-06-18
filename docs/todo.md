@@ -171,11 +171,11 @@
 
 #### 路线项 4 — 工具配置增加 platform 维度（session 级已具备）
 
-- **现状（已部分落地）**：工具启用**已按多维度解析**，并非全局单一。`build_tool_plan`（`core/tool_plan.py:134`）→ `resolve_effective_tools`（`core/runtime_tool_service.py:112`）按合并顺序生效：`TOOL_METADATA` 默认(private/group) → `force_enabled`/`force_disabled_group` → `runtime_preset`(none/lightweight/full) → `ToolOverride` 表(scope_type ∈ chat_type/group/user) → 硬约束兜底；每请求经 `record_runtime_tool_decision` 落库。BridgePool 按 `session_id` 建独立 child bridge（`bridge.py:1988-2017`），但每个 child 装载**相同**整套 creature 工具，真正裁剪发生在请求期的 `tool_plan.sent_tool_schemas`。
-- **痛点**：**缺 platform 维度**——`ToolOverride.scope_type` 只有 chat_type/group/user，chat_type 只有 group/private(+superuser)，全链路隐式假定平台 = QQ（`tool_plan.py`/`final_tools.py`/`runtime_tool_service.py` 中 platform 命中为 0）；未来 Web 端无法表达「该平台禁用某工具」。即 session 级裁剪已有，**平台级裁剪为空白**。
-- **目标**：为工具解析增加 platform 维度（`ToolOverride` 增 platform scope，或 chat_type 升级为 platform×chat_type 复合键），形成「平台 × 会话类型 × 群/用户」的工具可用性矩阵，多平台接入时各平台可独立配置工具白名单。
+- **现状（2026-06-18 部分落地）**：工具启用**已按多维度解析**，并非全局单一。`build_tool_plan`（`core/tool_plan.py:134`）→ `resolve_effective_tools`（`core/runtime_tool_service.py:116`）按合并顺序生效：`TOOL_METADATA` 默认(private/group) → `force_enabled`/`force_disabled_group` → `runtime_preset`(none/lightweight/full) → `ToolOverride` 表(scope_type ∈ chat_type/platform/group/user) → 硬约束兜底。后端解析已支持 `ToolOverride(scope_type="platform", scope_id="<platform>")`，顺序固定为 `chat_type < platform < group < user`；`build_tool_plan()` 和 `resolve_final_tools()` 已透传 `platform` 参数。每请求经 `record_runtime_tool_decision` 落库，`RuntimeToolDecision.platform` 字段和旧库补列迁移已落地，`/tools/decisions` 已返回 platform。
+- **剩余痛点**：真实入口透传尚未完成：`/chat`、群聊 `_continue_to_bridge()` 和 `NanobotBridge.handle_message()` 还需要把标准化后的 `client_meta.platform` 传给 ToolPlan 和运行时决策记录。Admin API 仍未完整支持创建 / 预览 platform override，WebUI 工具页也还没有平台 selector 和「指定平台」覆盖入口。因此后端基础能力已具备，但用户侧配置闭环尚未完成。
+- **目标**：为工具解析增加完整 platform 维度，形成「平台 × 会话类型 × 群/用户」的工具可用性矩阵，多平台接入时各平台可独立配置工具白名单；同时保证 `runtime_preset=none`、`force_enabled` 和群聊强制禁用等硬约束不能被 platform override 绕过。
 - **关联**：与项 9（platform×chat_type 提示词）、项 3（模型能力矩阵）、项 5/7（platform 化消息与渲染）同属 platform 维度，建议成簇。
-- **粗略路径**：① 入口按来源注入 platform（默认 qq 向后兼容）→ ② `ToolOverride` 增 platform scope 并纳入解析顺序 → ③ `TOOL_METADATA` 默认值支持平台维度 → ④ runtime_tool_decision / 审计带 platform → ⑤ admin 工具配置页增平台维度。
+- **粗略路径**：① 入口按来源注入 platform（默认 qq 向后兼容，待执行）→ ② `ToolOverride` 增 platform scope 并纳入解析顺序（已完成）→ ③ `build_tool_plan()` / `resolve_final_tools()` 透传 platform（已完成）→ ④ runtime_tool_decision / 审计带 platform（已完成）→ ⑤ Admin API 支持 platform override 创建、删除和预览（待执行）→ ⑥ WebUI 工具配置页增平台维度（待执行）→ ⑦ 同步 `docs/message-field-standard.md` 和阶段计划（待执行）。
 
 #### 路线项 5 — messages 接口统一为标准化请求 / 响应信封（兼顾 qqbot）
 
