@@ -635,7 +635,7 @@ git commit -m "feat(评测): 支持候选晋升预检"
 - 创建：`evals/candidates.py`
 - 测试：`tests/test_eval_candidates_cli.py`
 
-- [ ] **步骤 1：编写 CLI helper 红灯测试**
+- [x] **步骤 1：编写 CLI helper 红灯测试**
 
 创建 `tests/test_eval_candidates_cli.py`：
 
@@ -678,7 +678,7 @@ def test_import_labels_updates_expected(db_session, tmp_path):
     assert result["updated"] == 1
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -688,7 +688,7 @@ python -m pytest tests/test_eval_candidates_cli.py -v
 
 预期：失败于缺少 `evals.candidates`。
 
-- [ ] **步骤 3：实现 CLI helper**
+- [x] **步骤 3：实现 CLI helper**
 
 创建 `evals/candidates.py`，核心函数：
 
@@ -755,7 +755,7 @@ def promote_labeled(db, *, suite: str = "", target_dataset: str = "regression", 
     return {"count": len(plans), "items": plans}
 ```
 
-- [ ] **步骤 4：实现 CLI main**
+- [x] **步骤 4：实现 CLI main**
 
 在同一文件增加：
 
@@ -812,7 +812,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **步骤 5：运行 CLI 测试绿灯**
+- [x] **步骤 5：运行 CLI 测试绿灯**
 
 运行：
 
@@ -822,7 +822,7 @@ python -m pytest tests/test_eval_candidates_cli.py -v
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交任务 4**
+- [x] **步骤 6：提交任务 4**
 
 运行：
 
@@ -831,6 +831,12 @@ git diff --check -- evals/candidates.py tests/test_eval_candidates_cli.py
 git add evals/candidates.py tests/test_eval_candidates_cli.py
 git commit -m "feat(评测): 增加候选标注命令"
 ```
+
+验证记录：
+
+- 红灯：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidates_cli.py -v -p no:cacheprovider`，结果 `4 failed, 1 warning in 6.01s`；失败点为缺少 `evals.candidates`。
+- 绿灯：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidates_cli.py -v -p no:cacheprovider`，结果 `4 passed, 1 warning in 0.87s`。
+- 相关完整回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py -v -p no:cacheprovider`，结果 `14 passed, 21 warnings in 2.26s`。
 
 ---
 
