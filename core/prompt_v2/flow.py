@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ RUNTIME_NODE_KEYS = {
 }
 
 CHAT_TYPES = {"group", "private"}
+_ANY_PLATFORM = "*"
+_PLATFORM_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
 DEFAULT_FLOW: dict[str, Any] = {
@@ -79,11 +82,23 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _applies(item: dict[str, Any], chat_type: str) -> bool:
+def _normalize_platform(platform: str) -> str:
+    return str(platform or "").strip().lower() or "qq"
+
+
+def _applies(item: dict[str, Any], chat_type: str, platform: str) -> bool:
     chat_types = item.get("chat_types")
-    if not chat_types:
+    if chat_types:
+        if isinstance(chat_types, str):
+            chat_types = [chat_types]
+        if chat_type not in {str(value).strip().lower() for value in chat_types}:
+            return False
+    platforms = item.get("platforms")
+    if not platforms:
         return True
-    return chat_type in {str(value).strip().lower() for value in chat_types}
+    if isinstance(platforms, str):
+        platforms = [platforms]
+    return platform in {str(value).strip().lower() for value in platforms}
 
 
 def _normalize_chat_types(item: dict[str, Any], *, label: str) -> list[str]:
@@ -99,9 +114,43 @@ def _normalize_chat_types(item: dict[str, Any], *, label: str) -> list[str]:
     return sorted(set(values), key=values.index)
 
 
+def _normalize_platforms(item: dict[str, Any], *, label: str) -> list[str]:
+    raw = item.get("platforms")
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        raw = [raw]
+    values = [str(value).strip().lower() for value in raw if str(value).strip()]
+    invalid = sorted(value for value in set(values) if not _PLATFORM_RE.fullmatch(value))
+    if invalid:
+        raise PromptFlowError(f"{label}.platforms 不支持: {', '.join(invalid)}")
+    return sorted(set(values), key=values.index)
+
+
 def _condition_chat_types(item: dict[str, Any]) -> set[str]:
     chat_types = _normalize_chat_types(item, label="edge")
     return set(chat_types or CHAT_TYPES)
+
+
+def _condition_platforms(item: dict[str, Any], *, label: str) -> set[str]:
+    platforms = _normalize_platforms(item, label=label)
+    return set(platforms or [_ANY_PLATFORM])
+
+
+def _intersect_platform_conditions(*conditions: set[str]) -> set[str]:
+    result: set[str] = {_ANY_PLATFORM}
+    for condition in conditions:
+        if _ANY_PLATFORM in result:
+            result = set(condition)
+        elif _ANY_PLATFORM in condition:
+            continue
+        else:
+            result &= condition
+    return result
+
+
+def _platform_sets_overlap(left: set[str], right: set[str]) -> bool:
+    return _ANY_PLATFORM in left or _ANY_PLATFORM in right or bool(left & right)
 
 
 def _node_index(nodes: list[dict[str, Any]]) -> dict[str, int]:
@@ -135,12 +184,19 @@ def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
         chat_types = _normalize_chat_types(node, label=f"node {node_id}")
         if chat_types:
             node["chat_types"] = chat_types
+        platforms = _normalize_platforms(node, label=f"node {node_id}")
+        if platforms:
+            node["platforms"] = platforms
         ids.add(node_id)
         normalized_nodes.append(node)
 
     normalized_edges: list[dict[str, Any]] = []
-    node_conditions = {str(node.get("id")): _condition_chat_types(node) for node in normalized_nodes}
-    outgoing_conditions: dict[tuple[str, str], str] = {}
+    node_chat_conditions = {str(node.get("id")): _condition_chat_types(node) for node in normalized_nodes}
+    node_platform_conditions = {
+        str(node.get("id")): _condition_platforms(node, label=f"node {node.get('id')}")
+        for node in normalized_nodes
+    }
+    outgoing_conditions: dict[str, list[tuple[set[str], set[str], str]]] = {}
     for raw in edges:
         edge = dict(raw or {})
         start = str(edge.get("from") or "").strip()
@@ -150,19 +206,27 @@ def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
         chat_types = _normalize_chat_types(edge, label=f"edge {start}->{end}")
         if chat_types:
             edge["chat_types"] = chat_types
+        platforms = _normalize_platforms(edge, label=f"edge {start}->{end}")
+        if platforms:
+            edge["platforms"] = platforms
         active_chat_types = (
             _condition_chat_types(edge)
-            & node_conditions.get(start, set())
-            & node_conditions.get(end, set())
+            & node_chat_conditions.get(start, set())
+            & node_chat_conditions.get(end, set())
         )
-        for chat_type in active_chat_types:
-            key = (start, chat_type)
-            previous = outgoing_conditions.get(key)
-            if previous:
-                raise PromptFlowError(
-                    f"node {start} 在 {chat_type} 同一条件只能有一条出边: {previous}, {end}"
-                )
-            outgoing_conditions[key] = end
+        active_platforms = _intersect_platform_conditions(
+            _condition_platforms(edge, label=f"edge {start}->{end}"),
+            node_platform_conditions.get(start, {_ANY_PLATFORM}),
+            node_platform_conditions.get(end, {_ANY_PLATFORM}),
+        )
+        if active_chat_types and active_platforms:
+            for previous_chat_types, previous_platforms, previous_end in outgoing_conditions.get(start, []):
+                if active_chat_types & previous_chat_types and _platform_sets_overlap(active_platforms, previous_platforms):
+                    overlap_chat = ", ".join(sorted(active_chat_types & previous_chat_types))
+                    raise PromptFlowError(
+                        f"node {start} 在 {overlap_chat} 同一条件只能有一条出边: {previous_end}, {end}"
+                    )
+            outgoing_conditions.setdefault(start, []).append((active_chat_types, active_platforms, end))
         normalized_edges.append(edge)
 
     return {"version": int(flow.get("version") or 1), "nodes": normalized_nodes, "edges": normalized_edges}
@@ -186,12 +250,17 @@ def save_flow(flow: dict[str, Any]) -> dict[str, Any]:
     return {"saved": True, "runtime_path": str(path), "flow": normalized}
 
 
-def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str) -> list[dict[str, Any]]:
+def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str, platform: str = "qq") -> list[dict[str, Any]]:
     flow = validate_flow(flow)
     chat_type = str(chat_type or "").strip().lower()
+    platform = _normalize_platform(platform)
     if chat_type not in CHAT_TYPES:
         chat_type = "private"
-    all_nodes = [dict(node) for node in flow.get("nodes") or [] if _applies(dict(node), chat_type)]
+    all_nodes = [
+        dict(node)
+        for node in flow.get("nodes") or []
+        if _applies(dict(node), chat_type, platform)
+    ]
     node_ids = {str(node.get("id")) for node in all_nodes}
     order_index = _node_index(all_nodes)
     all_edges = [
@@ -203,7 +272,7 @@ def ordered_nodes_for_chat(flow: dict[str, Any], chat_type: str) -> list[dict[st
     edges = [
         dict(edge)
         for edge in all_edges
-        if _applies(dict(edge), chat_type)
+        if _applies(dict(edge), chat_type, platform)
     ]
     all_incident: dict[str, bool] = {node_id: False for node_id in node_ids}
     active_incident: dict[str, bool] = {node_id: False for node_id in node_ids}

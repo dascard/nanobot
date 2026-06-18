@@ -153,6 +153,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             "super_user_id",
             "is_super_user",
             "chat_type",
+            "platform",
             "session_id",
             "group_id",
             "user_id",

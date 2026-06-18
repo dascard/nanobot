@@ -22,6 +22,7 @@ class PromptPlan:
     token_estimate: int
     warnings: list[str]
     debug: dict[str, Any]
+    platform: str = "qq"
 
     @property
     def messages_without_current_user(self) -> list[dict[str, Any]]:
@@ -53,6 +54,7 @@ class PromptPlan:
 @dataclass
 class PromptCompileRequest:
     chat_type: str = "private"
+    platform: str = "qq"
     prompt_key: str = ""
     session_id: str = ""
     user_id: str = ""
@@ -86,6 +88,11 @@ class PromptCompileRequest:
         if value == "group":
             return "group"
         return "private"
+
+    @property
+    def normalized_platform(self) -> str:
+        value = str(self.platform or "").strip().lower()
+        return value or "qq"
 
     @property
     def normalized_prompt_key(self) -> str:

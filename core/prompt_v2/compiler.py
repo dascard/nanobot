@@ -56,6 +56,7 @@ async def compile_prompt_plan(
         request = PromptCompileRequest(**request)
 
     chat_type = request.normalized_chat_type
+    platform = request.normalized_platform
     prompt_key = request.normalized_prompt_key
 
     template_values = build_template_values(request)
@@ -87,7 +88,7 @@ async def compile_prompt_plan(
     runtime_tool_prompt = _clean_runtime_tool_prompt(request.runtime_tool_prompt)
     current_user = ensure_user_input_block(request.user_input)
     flow_state = load_flow()
-    ordered_nodes = ordered_nodes_for_chat(flow_state.flow, chat_type)
+    ordered_nodes = ordered_nodes_for_chat(flow_state.flow, chat_type, platform=platform)
     warnings: list[str] = []
 
     runtime_sections: dict[str, Any] = {
@@ -174,6 +175,7 @@ async def compile_prompt_plan(
         "flow_node_count": len(ordered_nodes),
         "flow_entry_node_id": str(ordered_nodes[0].get("id") or "") if ordered_nodes else "",
         "flow_node_ids": [str(node.get("id") or "") for node in ordered_nodes],
+        "platform": platform,
         "history_message_count": len(history_messages),
         "has_group_context": bool(group_context),
         "tool_schema_count": len(request.tool_schemas or []),
@@ -190,6 +192,7 @@ async def compile_prompt_plan(
         token_estimate=token_estimate,
         warnings=warnings,
         debug=jsonable(debug),
+        platform=platform,
     )
     audit = audit_prompt_plan(plan)
     if audit.ok:
@@ -207,4 +210,5 @@ async def compile_prompt_plan(
         token_estimate=plan.token_estimate,
         warnings=list(plan.warnings) + audit.issues,
         debug=plan.debug,
+        platform=plan.platform,
     )

@@ -31,6 +31,7 @@ _GLOBAL_VARIABLES: tuple[VariableDef, ...] = (
     VariableDef("super_user_id", "global", "超级用户 ID 列表", "0000000000"),
     VariableDef("is_super_user", "global", "当前发送者是否超级用户", "true"),
     VariableDef("chat_type", "global", "当前会话类型", "group"),
+    VariableDef("platform", "global", "当前客户端平台", "qq"),
     VariableDef("session_id", "global", "当前会话 ID", "group_1001"),
     VariableDef("group_id", "global", "当前群号，私聊为空", "1001"),
     VariableDef("user_id", "global", "当前用户 ID", "0000000000"),

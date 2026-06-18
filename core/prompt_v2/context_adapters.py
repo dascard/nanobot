@@ -43,6 +43,7 @@ def build_template_values(request, *, current_time: str | None = None) -> dict[s
     return {
         **identity_vars,
         "chat_type": request.normalized_chat_type,
+        "platform": request.normalized_platform,
         "session_id": str(request.session_id or "").strip(),
         "group_id": _request_group_id(request),
         "user_id": str(request.user_id or "").strip(),
@@ -56,10 +57,11 @@ def build_template_values(request, *, current_time: str | None = None) -> dict[s
 
 def build_runtime_context(request, *, current_time: str | None = None) -> str:
     chat_type = request.normalized_chat_type
+    platform = request.normalized_platform
     group_id = _request_group_id(request)
     session_id = str(request.session_id or "").strip()
 
-    lines = ["<runtime_context>", f"chat_type: {chat_type}"]
+    lines = ["<runtime_context>", f"platform: {platform}", f"chat_type: {chat_type}"]
     for key, value in [
         ("session_id", session_id),
         ("user_id", request.user_id),

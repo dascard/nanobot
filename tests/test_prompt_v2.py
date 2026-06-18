@@ -122,6 +122,175 @@ def test_prompt_v2_flow_entry_is_derived_from_in_degree_not_node_order():
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == ["base", "identity", "tail"]
 
 
+def test_prompt_v2_flow_filters_by_chat_type_and_platform():
+    from core.prompt_v2.flow import ordered_nodes_for_chat
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "base", "type": "template", "template_key": "chat/main"},
+            {"id": "qq_common", "type": "template", "template_key": "chat/platform/qq/common", "platforms": ["qq"]},
+            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group", "chat_types": ["group"]},
+            {
+                "id": "qq_group",
+                "type": "template",
+                "template_key": "chat/platform/qq/group",
+                "chat_types": ["group"],
+                "platforms": ["qq"],
+            },
+            {"id": "private_policy", "type": "template", "template_key": "chat/branch_private", "chat_types": ["private"]},
+            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+        ],
+        "edges": [
+            {"from": "base", "to": "qq_common", "platforms": ["qq"]},
+            {"from": "base", "to": "group_policy", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "qq_common", "to": "group_policy", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "group_policy", "to": "qq_group", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "qq_group", "to": "tail", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "group_policy", "to": "tail", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "qq_common", "to": "private_policy", "chat_types": ["private"], "platforms": ["qq"]},
+            {"from": "base", "to": "private_policy", "chat_types": ["private"], "platforms": ["web"]},
+            {"from": "private_policy", "to": "tail", "chat_types": ["private"]},
+        ],
+    }
+
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="qq")] == [
+        "base",
+        "qq_common",
+        "group_policy",
+        "qq_group",
+        "tail",
+    ]
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "private", platform="qq")] == [
+        "base",
+        "qq_common",
+        "private_policy",
+        "tail",
+    ]
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "private", platform="web")] == [
+        "base",
+        "private_policy",
+        "tail",
+    ]
+
+
+def test_prompt_v2_flow_allows_disjoint_platform_branches_for_same_chat_type():
+    from core.prompt_v2.flow import ordered_nodes_for_chat
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "base", "type": "template", "template_key": "chat/main"},
+            {"id": "qq", "type": "template", "template_key": "chat/platform/qq/group"},
+            {"id": "web", "type": "template", "template_key": "chat/branch_group"},
+            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+        ],
+        "edges": [
+            {"from": "base", "to": "qq", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "base", "to": "web", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "qq", "to": "tail", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "web", "to": "tail", "chat_types": ["group"], "platforms": ["web"]},
+        ],
+    }
+
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="qq")] == ["base", "qq", "tail"]
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="web")] == ["base", "web", "tail"]
+
+
+def test_prompt_v2_flow_rejects_overlapping_platform_branches():
+    from core.prompt_v2.flow import PromptFlowError, validate_flow
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "base", "type": "template", "template_key": "chat/main"},
+            {"id": "generic", "type": "template", "template_key": "chat/branch_group"},
+            {"id": "qq", "type": "template", "template_key": "chat/platform/qq/group"},
+        ],
+        "edges": [
+            {"from": "base", "to": "generic", "chat_types": ["group"]},
+            {"from": "base", "to": "qq", "chat_types": ["group"], "platforms": ["qq"]},
+        ],
+    }
+
+    with pytest.raises(PromptFlowError, match="同一条件只能有一条出边"):
+        validate_flow(flow)
+
+
+def test_prompt_v2_flow_rejects_invalid_platform_values():
+    from core.prompt_v2.flow import PromptFlowError, validate_flow
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "base", "type": "template", "template_key": "chat/main", "platforms": ["QQ!"]},
+            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+        ],
+        "edges": [{"from": "base", "to": "tail"}],
+    }
+
+    with pytest.raises(PromptFlowError, match="platforms 不支持"):
+        validate_flow(flow)
+
+
+def test_prompt_v2_template_values_and_runtime_context_include_platform():
+    from core.prompt_v2.context_adapters import build_runtime_context, build_template_values
+    from core.prompt_v2.schema import PromptCompileRequest
+    from core.prompt_v2.variables import render_scoped_template
+
+    request = PromptCompileRequest(chat_type="group", platform="Web", session_id="group_1001")
+    values = build_template_values(request, current_time="2026-06-18 10:00:00 CST")
+
+    assert request.normalized_platform == "web"
+    assert values["platform"] == "web"
+    assert render_scoped_template("chat/main", "platform={{ platform }}", values) == "platform=web"
+
+    runtime_context = build_runtime_context(request, current_time=values["current_time"])
+    assert "platform: web" in runtime_context
+    assert "chat_type: group" in runtime_context
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_compile_plan_exposes_platform(monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    flow = {
+        "version": 1,
+        "nodes": [
+            {"id": "base", "type": "template", "template_key": "chat/main"},
+            {
+                "id": "web_private",
+                "type": "template",
+                "template_key": "chat/branch_private",
+                "chat_types": ["private"],
+                "platforms": ["web"],
+            },
+            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
+        ],
+        "edges": [
+            {"from": "base", "to": "web_private", "chat_types": ["private"], "platforms": ["web"]},
+            {"from": "web_private", "to": "current_user_event", "chat_types": ["private"], "platforms": ["web"]},
+        ],
+    }
+    monkeypatch.setattr(
+        compiler,
+        "load_flow",
+        lambda: SimpleNamespace(flow=flow, path=Path("test-flow.json"), source="test"),
+    )
+
+    plan = await compiler.compile_prompt_plan(
+        PromptCompileRequest(chat_type="private", platform="web", user_input="你好"),
+    )
+
+    assert plan.platform == "web"
+    assert plan.debug["platform"] == "web"
+    assert plan.debug["flow_node_ids"] == ["base", "web_private", "current_user_event"]
+
+
 @pytest.mark.asyncio
 async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections():
     from core.prompt_v2.compiler import compile_prompt_plan
