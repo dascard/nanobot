@@ -298,6 +298,7 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
     assert events == [
         {"status": "delta", "text": "你"},
         {"status": "delta", "text": "好"},
+        {"status": "final", "text": "你好", "replace": True, "source": "bridge"},
     ]
     assert fake_llm.seen_kwargs["stream"] is True
     assert captured_route_kwargs["required_capabilities"]["supports_stream"] is True

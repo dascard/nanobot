@@ -108,6 +108,24 @@ class BufferedOutput(BaseOutputModule):
         if chunk and self._stream_queue is not None:
             await self._stream_queue.put({"status": "delta", "text": chunk})
 
+    async def write_final(
+        self,
+        text: str,
+        *,
+        replace: bool = True,
+        source: str = "bridge",
+    ) -> None:
+        if not text or self._stream_queue is None:
+            return
+        await self._stream_queue.put(
+            {
+                "status": "final",
+                "text": str(text),
+                "replace": bool(replace),
+                "source": str(source or "bridge"),
+            }
+        )
+
     async def flush(self) -> None:
         logger.debug(f"[BufferedOutput.flush] called, current buffer_len={len(''.join(self._buffer))}")
 

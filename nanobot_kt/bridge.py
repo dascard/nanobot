@@ -1926,6 +1926,11 @@ class NanobotBridge:
                 except Exception as e:
                     logger.warning("[GroupRuntime] note_bot_replied failed: %s", e)
 
+            if stream and stream_queue is not None and response:
+                writer = getattr(self._output, "write_final", None)
+                if writer is not None:
+                    await writer(str(response), replace=True, source="bridge")
+
             self._restore_saved_tools()
             _finish_agent_trace(
                 "success",
