@@ -50,7 +50,7 @@
 - 修改：`app/group_ingress/service.py`
 - 测试：`tests/test_group_ingress_sticker_preview.py` 或 `tests/test_api.py`
 
-- [ ] **步骤 1：写红灯测试**
+- [x] **步骤 1：写红灯测试**
 
 新增测试，构造 `GroupIngressService.handle(..., background_tasks=None)`，让 sticker 注册路径命中 `background_tasks=None`。monkeypatch 同步缓存函数为会记录调用线程的 fake，并 monkeypatch `asyncio.to_thread` 使测试能断言 service 层显式卸载。
 
@@ -78,7 +78,7 @@ async def test_group_ingress_sticker_preview_without_background_tasks_uses_to_th
 
 如果现有测试辅助构造成本较高，可先用 `register_group_stickers_from_message()` 单元测试固定 helper 不直接调用 `core.sticker_preview.cache_sticker_preview()`，再补 service 层调用测试。
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -90,7 +90,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_group_ingress_sticker_p
 
 预期：FAIL，当前 `background_tasks=None` 分支会直接同步调用 `cache_sticker_preview()`，不会经过 `asyncio.to_thread()`。
 
-- [ ] **步骤 3：最小实现**
+实际：`tests/test_api.py::test_group_message_sticker_preview_without_background_tasks_uses_to_thread` 失败，调用顺序第一项为 `direct_cache`，符合红灯预期。
+
+- [x] **步骤 3：最小实现**
 
 实现原则：
 
@@ -99,13 +101,15 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_group_ingress_sticker_p
 - `app/group_ingress/service.py` 在 async 上下文中收集需要即时缓存的 sticker id，并在 handle 流程中用 `await asyncio.to_thread(cache_sticker_preview, db, sticker_id, force=force)` 处理，或明确跳过即时缓存并记录日志。
 - 不改 `cache_sticker_preview()` 的同步实现。
 
-- [ ] **步骤 4：运行绿灯**
+- [x] **步骤 4：运行绿灯**
 
 运行步骤 2 的测试。
 
 预期：PASS。
 
-- [ ] **步骤 5：运行贴纸相关回归**
+实际：新增测试通过，`1 passed, 1 warning`。
+
+- [x] **步骤 5：运行贴纸相关回归**
 
 运行：
 
@@ -116,7 +120,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_sticker_memory.py -q -p
 
 预期：PASS。
 
-- [ ] **步骤 6：提交任务 1**
+实际：`tests/test_api.py -k "sticker or group_message_image_auto_registers_sticker"` 通过，`6 passed, 70 deselected, 20 warnings`；`tests/test_sticker_memory.py` 通过，`10 passed, 1 warning`。
+
+- [x] **步骤 6：提交任务 1**
 
 运行：
 

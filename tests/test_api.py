@@ -1655,6 +1655,68 @@ async def test_group_message_image_auto_registers_sticker(db_session, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_group_message_sticker_preview_without_background_tasks_uses_to_thread(db_session, monkeypatch):
+    """无 BackgroundTasks 的程序化调用不能在 async 路径直接缓存表情预览。"""
+    from types import SimpleNamespace
+
+    import app.group_ingress.service as service_module
+    from api.routes import GroupMessageRequest, group_message
+    from core.database import StickerMemory
+
+    calls = []
+
+    async def fake_process(_self, group_id, msg, **kwargs):
+        return {"action": "no_reply", "generation": 1, "reason": "image ambient"}
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append(("to_thread", getattr(func, "__name__", repr(func)), args, kwargs))
+        return func(*args, **kwargs)
+
+    def fake_direct_cache(db, sticker_id, *, force=False):
+        calls.append(("direct_cache", int(sticker_id), force))
+        return None
+
+    def fake_background_cache(sticker_id):
+        calls.append(("background_cache", int(sticker_id)))
+        return None
+
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+    monkeypatch.setattr("core.sticker_preview.cache_sticker_preview", fake_direct_cache)
+    monkeypatch.setattr("core.sticker_preview_jobs.cache_sticker_preview_bg", fake_background_cache)
+    monkeypatch.setattr(service_module, "asyncio", SimpleNamespace(to_thread=fake_to_thread), raising=False)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="123",
+            sender_id="u-img-thread",
+            sender_name="发图人",
+            message="",
+            message_id="m-img-thread-1",
+            session_name="测试群",
+            files=["https://example.com/thread-sticker.png"],
+            client_meta={
+                "message_type": "sticker",
+                "stickers": [
+                    {
+                        "file": "https://example.com/thread-sticker.png",
+                        "hash": "sticker-hash-thread",
+                        "name": "线程缓存",
+                    }
+                ],
+            },
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "no_reply"
+    assert db_session.query(StickerMemory).filter_by(sticker_hash="sticker-hash-thread").count() == 1
+    assert calls
+    assert calls[0][0] == "to_thread"
+    assert any(call[0] in {"direct_cache", "background_cache"} for call in calls[1:])
+
+
+@pytest.mark.asyncio
 async def test_group_message_schedules_image_precache(db_session, monkeypatch):
     from api.routes import GroupMessageRequest, group_message
 

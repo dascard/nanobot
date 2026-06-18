@@ -1427,12 +1427,6 @@ def _register_group_stickers_from_message(
         if sticker_id:
             if background_tasks is not None:
                 background_tasks.add_task(_cache_sticker_preview_bg, sticker_id)
-            else:
-                try:
-                    from core.sticker_preview import cache_sticker_preview
-                    cache_sticker_preview(db, sticker_id)
-                except Exception as e:
-                    logger.warning("[StickerPreview] register cache failed id=%s: %s", sticker_id, e)
 
         if (
             background_tasks is not None

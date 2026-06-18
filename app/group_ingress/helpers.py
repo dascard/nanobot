@@ -398,13 +398,6 @@ def register_group_stickers_from_message(db, req: Any, *, background_tasks: Any 
                 from core.sticker_preview_jobs import cache_sticker_preview_bg
 
                 background_tasks.add_task(cache_sticker_preview_bg, sticker_id)
-            else:
-                try:
-                    from core.sticker_preview import cache_sticker_preview
-
-                    cache_sticker_preview(db, sticker_id)
-                except Exception as exc:
-                    logger.warning("[StickerPreview] register cache failed id=%s: %s", sticker_id, exc)
 
         if (
             background_tasks is not None

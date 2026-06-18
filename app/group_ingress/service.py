@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time as _time
@@ -60,6 +61,8 @@ class GroupIngressService:
             req,
             background_tasks=self.background_tasks,
         )
+        if registered_stickers and self.background_tasks is None:
+            await self._cache_registered_sticker_previews(registered_stickers)
         try:
             self._sync_group_user(group_user_id, req.session_name or "")
         except Exception as exc:
@@ -445,6 +448,18 @@ class GroupIngressService:
             group_id=group_id,
             message_id=message_id,
         )
+
+    async def _cache_registered_sticker_previews(self, registered_stickers: list[dict]) -> None:
+        from core.sticker_preview_jobs import cache_sticker_preview_bg
+
+        for item in registered_stickers:
+            sticker_id = int(item.get("id") or 0)
+            if not sticker_id:
+                continue
+            try:
+                await asyncio.to_thread(cache_sticker_preview_bg, sticker_id)
+            except Exception as exc:
+                logger.warning("[StickerPreview] register cache failed id=%s: %s", sticker_id, exc)
 
     def _collect_bridge_files(
         self,
