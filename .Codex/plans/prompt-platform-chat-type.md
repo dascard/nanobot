@@ -774,7 +774,7 @@ git commit -m "feat(提示词): 透传提示词平台上下文"
 - 修改：`prompts.v2.default/tools/image_generation/usage.md`
 - 修改：`data/prompts_v2/tools/image_generation/usage.md`
 
-- [ ] **步骤 1：编写默认模板二维编译红灯测试**
+- [x] **步骤 1：编写默认模板二维编译红灯测试**
 
 在 `tests/test_prompt_v2.py` 追加：
 
@@ -812,7 +812,7 @@ async def test_prompt_v2_default_flow_skips_qq_templates_for_web_private():
     assert "CQ 码" not in joined
 ```
 
-- [ ] **步骤 2：编写模板隔离和注册表红灯测试**
+- [x] **步骤 2：编写模板隔离和注册表红灯测试**
 
 在 `tests/test_prompt_v2_template_registry.py` 追加：
 
@@ -846,7 +846,7 @@ def test_prompt_platform_words_are_isolated_to_platform_templates():
     assert "QQ 群聊" in qq_group
 ```
 
-- [ ] **步骤 3：运行红灯**
+- [x] **步骤 3：运行红灯**
 
 运行：
 
@@ -856,7 +856,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py tests/test
 
 预期：失败，原因包括平台模板文件不存在、默认 flow 不包含平台节点或通用模板仍含 QQ 词。
 
-- [ ] **步骤 4：更新两个 `chat/flow.json`**
+- [x] **步骤 4：更新两个 `chat/flow.json`**
 
 把 `prompts.v2.default/chat/flow.json` 和 `data/prompts_v2/chat/flow.json` 同步改成同一结构：
 
@@ -904,7 +904,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py tests/test
 
 如果要支持 `synergy` 或其他平台，不能在本任务写死到 flow；缺省非 QQ 平台先走 web 口径需要由调用方传 `platform="web"`。
 
-- [ ] **步骤 5：通用化群聊和私聊模板**
+- [x] **步骤 5：通用化群聊和私聊模板**
 
 把两个根目录下 `chat/branch_group.md` 的开头改成：
 
@@ -932,7 +932,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py tests/test
 私聊中可以更认真、更细致地帮用户处理问题，但仍然保持自然口吻：
 ```
 
-- [ ] **步骤 6：新增 QQ 平台模板**
+- [x] **步骤 6：新增 QQ 平台模板**
 
 创建两个根目录的 `chat/platform/qq/common.md`：
 
@@ -973,7 +973,7 @@ description: Prompt Runtime QQ 群聊规则；由编排图在 platform=qq 且 ch
 - 群聊上下文里的 `[msg_id]`、`[时间]`、`[用户名]`、`[发言内容]` 是消息元数据，不要复述。
 ```
 
-- [ ] **步骤 7：清理工具 usage 平台词**
+- [x] **步骤 7：清理工具 usage 平台词**
 
 在两个根目录的 `tools/reply/usage.md`、`tools/sticker_search/usage.md`、`tools/image_generation/usage.md` 中，把「QQ 发送前」「OneBot CQ 码」改成平台无关表述：
 
@@ -982,7 +982,7 @@ description: Prompt Runtime QQ 群聊规则；由编排图在 platform=qq 且 ch
 - 优先使用工具返回的 `reply_token`，不要手写平台私有消息码；平台私有码只用于兼容旧输出，不是推荐格式。
 ```
 
-- [ ] **步骤 8：验证模板目录一致**
+- [x] **步骤 8：验证模板目录一致**
 
 运行：
 
@@ -992,7 +992,7 @@ diff -qr prompts.v2.default data/prompts_v2
 
 预期：无输出，退出码 0。
 
-- [ ] **步骤 9：运行任务 3 定向测试**
+- [x] **步骤 9：运行任务 3 定向测试**
 
 运行：
 
@@ -1003,7 +1003,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_prompt_v2.py tests/test
 
 预期：两条命令均通过。
 
-- [ ] **步骤 10：提交任务 3**
+- [x] **步骤 10：提交任务 3**
 
 如果 `data/prompts_v2` 新文件受 ignore 影响，使用 `git add -f` 精确暂存新增文件：
 

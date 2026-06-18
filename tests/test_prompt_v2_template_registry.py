@@ -129,3 +129,48 @@ def test_prompt_v2_registry_rejects_unsafe_template_keys(bad_key):
 
     with pytest.raises(ValueError):
         resolve_template_key(bad_key)
+
+
+def test_prompt_platform_templates_are_addressable():
+    from core.prompt_v2.template_loader import load_template
+    from core.prompt_v2.template_registry import resolve_template_key
+
+    assert resolve_template_key("chat/platform/qq/common") == "chat/platform/qq/common"
+    assert load_template("chat/platform/qq/common").body
+    assert load_template("chat/platform/qq/group").body
+
+
+def test_prompt_platform_words_are_isolated_to_platform_templates():
+    roots = [Path("prompts.v2.default"), Path("data/prompts_v2")]
+    forbidden_common = ("QQ", "OneBot", "CQ 码", "NapCat", "@", "群友", "斗图", "表情包")
+
+    for root in roots:
+        main = (root / "chat" / "main.md").read_text(encoding="utf-8")
+        group = (root / "chat" / "branch_group.md").read_text(encoding="utf-8")
+        private = (root / "chat" / "branch_private.md").read_text(encoding="utf-8")
+        qq_common = (root / "chat" / "platform" / "qq" / "common.md").read_text(encoding="utf-8")
+        qq_group = (root / "chat" / "platform" / "qq" / "group.md").read_text(encoding="utf-8")
+
+        for text in (main, group, private):
+            for needle in forbidden_common:
+                assert needle not in text, f"{needle} should stay out of generic chat templates under {root}"
+
+        assert "QQ 平台" in qq_common
+        assert "OneBot" in qq_common
+        assert "QQ 群聊" in qq_group
+
+
+def test_prompt_tool_usage_avoids_platform_private_message_codes():
+    roots = [Path("prompts.v2.default"), Path("data/prompts_v2")]
+    usage_paths = [
+        "tools/reply/usage.md",
+        "tools/sticker_search/usage.md",
+        "tools/image_generation/usage.md",
+    ]
+    forbidden = ("QQ 发送前", "OneBot CQ 码")
+
+    for root in roots:
+        for rel_path in usage_paths:
+            text = (root / rel_path).read_text(encoding="utf-8")
+            for needle in forbidden:
+                assert needle not in text, f"{needle} should stay out of platform-neutral tool usage {root / rel_path}"

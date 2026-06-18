@@ -292,6 +292,39 @@ async def test_prompt_v2_compile_plan_exposes_platform(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_prompt_v2_default_flow_selects_qq_platform_templates():
+    from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    plan = await compile_prompt_plan(
+        PromptCompileRequest(chat_type="group", platform="qq", user_input="你好"),
+    )
+
+    assert "qq_common_policy" in plan.debug["flow_node_ids"]
+    assert "qq_group_policy" in plan.debug["flow_node_ids"]
+    joined = "\n".join(str(message["content"]) for message in plan.messages)
+    assert "QQ 平台" in joined
+    assert "QQ 群聊" in joined
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_default_flow_skips_qq_templates_for_web_private():
+    from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    plan = await compile_prompt_plan(
+        PromptCompileRequest(chat_type="private", platform="web", user_input="你好"),
+    )
+
+    assert "qq_common_policy" not in plan.debug["flow_node_ids"]
+    assert "qq_group_policy" not in plan.debug["flow_node_ids"]
+    joined = "\n".join(str(message["content"]) for message in plan.messages)
+    assert "QQ 平台" not in joined
+    assert "OneBot" not in joined
+    assert "CQ 码" not in joined
+
+
+@pytest.mark.asyncio
 async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections():
     from core.prompt_v2.compiler import compile_prompt_plan
     from core.prompt_v2.schema import PromptCompileRequest, PromptPlan
@@ -340,9 +373,17 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
     assert plan.section_hashes["base_contract"]
     assert plan.section_hashes["runtime_tool_prompt"]
     assert plan.debug["history_message_count"] == 2
+    assert plan.debug["flow_node_ids"][:4] == [
+        "base_contract",
+        "qq_common_policy",
+        "group_policy",
+        "qq_group_policy",
+    ]
 
     roles = [m["role"] for m in plan.messages]
     assert roles == [
+        "system",
+        "system",
         "system",
         "system",
         "system",
@@ -358,6 +399,8 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
 
     contents = [str(m["content"]) for m in plan.messages]
     joined = "\n".join(contents)
+    assert "## QQ 平台" in joined
+    assert "## QQ 群聊" in joined
     assert "## 群聊行为" in joined
     assert "## 私聊行为" not in joined
     assert sum("<user_input>" in c for c in contents) == 1
