@@ -18,7 +18,7 @@
 - 任务 1 已完成并提交：`bb7489c feat(工具): 支持平台维度解析`。
 - 任务 2 已完成并提交：`295e3f7 feat(工具): 记录平台维度决策`。
 - 任务 3 已完成并提交：`73bbe8a feat(消息): 透传客户端平台`。真实入口已透传 platform 到 Bridge 和 ToolPlan。
-- 当前下一步：任务 4「Admin API 支持 platform 覆盖和预览」。
+- 当前下一步：任务 5「WebUI 工具页增加 platform selector」。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
 ## 文件结构
@@ -674,7 +674,7 @@ git commit -m "feat(消息): 透传客户端平台"
 - 修改：`tests/test_admin_api.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：编写 platform override API 红灯测试**
+- [x] **步骤 1：编写 platform override API 红灯测试**
 
 在 `tests/test_admin_api.py::TestToolAdmin` 增加：
 
@@ -700,7 +700,7 @@ def test_tool_platform_override_can_be_created_and_previewed(self, client, auth_
     assert data["disabled"]["image_generation"] == "Web 禁用图片生成"
 ```
 
-- [ ] **步骤 2：编写 `/tools` 和 targets 红灯测试**
+- [x] **步骤 2：编写 `/tools` 和 targets 红灯测试**
 
 继续追加：
 
@@ -731,7 +731,7 @@ def test_tools_list_reports_platform_override_and_targets(self, client, auth_hea
     assert {"qq", "web", "synergy"}.issubset(ids)
 ```
 
-- [ ] **步骤 3：运行红灯**
+- [x] **步骤 3：运行红灯**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_admin_api.py::TestToolAdmin -k "platform" -v -p no:cacheprovider
@@ -739,7 +739,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_admin_api.py::TestToolA
 
 预期：失败，API 拒绝 platform 或预览未传 platform。
 
-- [ ] **步骤 4：实现 Admin 校验和归一化**
+- [x] **步骤 4：实现 Admin 校验和归一化**
 
 在 `api/admin_routes.py` 引入 `normalize_tool_platform` 并调整校验：
 
@@ -755,7 +755,7 @@ if body.scope_type == "platform":
 
 如果 Pydantic model 不允许直接写 `body.scope_id`，使用局部变量 `scope_id` 并在查询和写入中使用该变量。
 
-- [ ] **步骤 5：实现 `/tools` platform preview**
+- [x] **步骤 5：实现 `/tools` platform preview**
 
 给 `list_tools()` 增加参数：
 
@@ -783,7 +783,7 @@ elif platform:
     override_scope_id = platform
 ```
 
-- [ ] **步骤 6：实现 `/tools/effective` 和 `/tools/targets`**
+- [x] **步骤 6：实现 `/tools/effective` 和 `/tools/targets`**
 
 `get_effective_tools()` 增加 platform 参数并返回。
 
@@ -799,7 +799,7 @@ items = [
 
 再合并已有 `ToolOverride(scope_type="platform")` 的 `scope_id`，避免重复。
 
-- [ ] **步骤 7：运行绿灯和 Admin 回归**
+- [x] **步骤 7：运行绿灯和 Admin 回归**
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_admin_api.py::TestToolAdmin -v -p no:cacheprovider
@@ -807,7 +807,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_admin_api.py::TestToolA
 
 预期：全部通过。
 
-- [ ] **步骤 8：提交任务 4**
+- [x] **步骤 8：提交任务 4**
 
 ```bash
 git add tests/test_admin_api.py api/admin_routes.py
@@ -1047,8 +1047,8 @@ git commit -m "docs(计划): 同步工具平台配置状态"
 1. 任务 1：后端解析支持 platform scope。
 2. 任务 2：审计记录和迁移。
 3. 任务 3：真实入口透传 platform。
-4. 任务 4：Admin API 支持平台覆盖。
-5. 任务 5：WebUI 工具页配置平台覆盖。
+4. 任务 4：Admin API 支持平台覆盖。（已完成）
+5. 任务 5：WebUI 工具页配置平台覆盖。（下一步）
 6. 任务 6：文档收口与最终验证。
 
 每个任务完成后必须运行对应验证命令并单独提交。禁止使用 `git add .` 或 `git add -A`。
@@ -1061,7 +1061,7 @@ git commit -m "docs(计划): 同步工具平台配置状态"
 - [x] `RuntimeToolDecision.platform` 在新库和旧库迁移后都存在，并能通过 `/tools/decisions` 查询。
 - [x] `/chat` 和 `/group/message` 都把 `client_meta.platform` 传到 Bridge。
 - [x] Bridge 把 platform 传给 `build_tool_plan()` 和 `record_runtime_tool_decision()`。
-- [ ] Admin API 能创建、删除、预览 platform override。
+- [x] Admin API 能创建和预览 platform override。
 - [ ] WebUI 工具页能选择 platform 并配置「指定平台」覆盖。
 - [ ] `docs/message-field-standard.md`、`docs/todo.md`、`docs/plan_walkthrough.md` 和本计划同步当前状态。
 - [ ] 全量测试通过。

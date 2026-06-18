@@ -1312,6 +1312,63 @@ class TestToolAdmin:
         assert tools["python_sandbox"]["override_present"] is False
         assert tools["python_sandbox"]["override_enabled"] is None
 
+    def test_tool_platform_override_can_be_created_and_previewed(self, client, auth_header):
+        r = client.put(
+            "/api/v1/admin/tools/image_generation/override",
+            json={
+                "scope_type": "platform",
+                "scope_id": "web",
+                "enabled": False,
+                "reason": "Web 禁用图片生成",
+            },
+            headers=auth_header,
+        )
+        assert r.status_code == 200, r.text
+
+        effective = client.get(
+            "/api/v1/admin/tools/effective",
+            params={"chat_type": "private", "platform": "web"},
+            headers=auth_header,
+        )
+        assert effective.status_code == 200, effective.text
+        data = effective.json()
+        assert data["platform"] == "web"
+        assert data["enabled"].get("image_generation") is None
+        assert data["disabled"]["image_generation"] == "Web 禁用图片生成"
+
+    def test_tools_list_reports_platform_override_and_targets(self, client, auth_header):
+        _ok(client.put(
+            "/api/v1/admin/tools/image_generation/override",
+            json={
+                "scope_type": "platform",
+                "scope_id": "web",
+                "enabled": False,
+                "reason": "Web 禁用图片生成",
+            },
+            headers=auth_header,
+        ))
+
+        tools = client.get(
+            "/api/v1/admin/tools",
+            params={"platform": "web"},
+            headers=auth_header,
+        )
+        assert tools.status_code == 200, tools.text
+        data = tools.json()
+        assert data["platform"] == "web"
+        item = next(x for x in data["tools"] if x["name"] == "image_generation")
+        assert item["override_present"] is True
+        assert item["override_enabled"] is False
+        assert item["runtime_effective"] is False
+
+        targets = client.get(
+            "/api/v1/admin/tools/targets",
+            params={"scope_type": "platform"},
+            headers=auth_header,
+        )
+        target_ids = {item["id"] for item in targets.json()["items"]}
+        assert {"qq", "web", "synergy"}.issubset(target_ids)
+
     def test_tool_targets_list_real_groups_and_users(self, client, auth_header):
         now = datetime.now()
         with next(app.dependency_overrides[get_db]()) as db:

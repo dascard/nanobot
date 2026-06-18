@@ -3911,7 +3911,7 @@ class ToolUpdateBody(BaseModel):
 
 
 class ToolOverrideBody(BaseModel):
-    scope_type: str  # "group" | "user" | "chat_type"
+    scope_type: str  # "group" | "user" | "chat_type" | "platform"
     scope_id: str
     enabled: bool
     reason: str = ""
@@ -3954,7 +3954,8 @@ def _tool_target_label(name: str, target_id: str, fallback: str) -> str:
 
 @router.get("/tools")
 async def list_tools(chat_type: str = "group", group_id: str = "",
-                      user_id: str = "", runtime_preset: str = "full",
+                      user_id: str = "", platform: str = "qq",
+                      runtime_preset: str = "full",
                       db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """列出所有工具配置状态，并可预览指定运行时预设下的可用性。"""
     # registry probe: 无 child bridge 时自动创建一个用于探测
@@ -3969,6 +3970,7 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
     from core.tool_registry import TOOL_METADATA
     from core.runtime_tool_service import (
         normalize_tool_chat_type,
+        normalize_tool_platform,
         resolve_effective_tools,
         resolve_lightweight_default,
         resolve_tool_default,
@@ -3977,13 +3979,14 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
 
     runtime_preset = normalize_runtime_preset(runtime_preset)
     chat_type = normalize_tool_chat_type(chat_type)
+    platform = normalize_tool_platform(platform) or "qq"
     configured_enabled, configured_disabled = resolve_effective_tools(
         chat_type=chat_type, group_id=group_id, user_id=user_id,
-        runtime_preset="full", db=db,
+        platform=platform, runtime_preset="full", db=db,
     )
     runtime_enabled, runtime_disabled = resolve_effective_tools(
         chat_type=chat_type, group_id=group_id, user_id=user_id,
-        runtime_preset=runtime_preset, db=db,
+        platform=platform, runtime_preset=runtime_preset, db=db,
     )
     # 从 bridge 获取 KT registry 实际加载的工具列表
     registry_info: dict = {}
@@ -4012,6 +4015,9 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
     elif group_id:
         override_scope_type = "group"
         override_scope_id = str(group_id).strip()
+    elif platform:
+        override_scope_type = "platform"
+        override_scope_id = platform
     override_state: dict[str, bool] = {}
     if override_scope_type and override_scope_id:
         try:
@@ -4061,17 +4067,66 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             "registry_available": registry_available,
             "registry_empty": bool(registry_available and len(kt_loaded) == 0),
             "bridge_count": bridge_count,
-            "runtime_preset": runtime_preset}
+            "runtime_preset": runtime_preset,
+            "platform": platform}
 
 
 @router.get("/tools/targets")
 def list_tool_targets(scope_type: str = "group", search: str = "", limit: int = 50,
                       db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """列出工具覆盖可选择的真实群聊/私聊目标。"""
-    scope = "user" if scope_type == "user" else "group"
+    if scope_type == "platform":
+        scope = "platform"
+    elif scope_type == "user":
+        scope = "user"
+    else:
+        scope = "group"
     search_text = str(search or "").strip().lower()
     max_items = max(1, min(int(limit or 50), 100))
     candidates: dict[str, dict] = {}
+
+    if scope == "platform":
+        from core.database import ToolOverride
+        from core.runtime_tool_service import normalize_tool_platform
+
+        def add_platform_candidate(platform_id: str, name: str, source: str) -> None:
+            clean_id = normalize_tool_platform(platform_id)
+            if not clean_id:
+                return
+            clean_name = str(name or "").strip() or clean_id
+            label = f"{clean_name} ({clean_id})"
+            haystack = f"{clean_id} {clean_name} {label}".lower()
+            if search_text and search_text not in haystack:
+                return
+            old = candidates.get(clean_id)
+            if old:
+                sources = set(old.get("_sources") or [])
+                if source:
+                    sources.add(source)
+                old["_sources"] = sorted(sources)
+                old["source"] = "+".join(old["_sources"])
+                return
+            candidates[clean_id] = {
+                "id": clean_id,
+                "label": label,
+                "name": clean_name,
+                "scope_type": "platform",
+                "source": source,
+                "recent_at": "",
+                "_sources": [source] if source else [],
+            }
+
+        for platform_id, name in (("qq", "QQ"), ("web", "Web"), ("synergy", "Synergy")):
+            add_platform_candidate(platform_id, name, "builtin")
+        for row in db.query(ToolOverride.scope_id).filter(
+            ToolOverride.scope_type == "platform"
+        ).distinct().all():
+            add_platform_candidate(row[0], row[0], "tool_overrides")
+
+        items = sorted(candidates.values(), key=lambda item: item["label"])[:max_items]
+        for item in items:
+            item.pop("_sources", None)
+        return {"scope_type": scope, "items": items}
 
     def add_candidate(target_id: str, name: str = "", source: str = "",
                       recent_at=None) -> None:
@@ -4283,12 +4338,19 @@ def set_tool_override(tool_name: str, body: ToolOverrideBody,
     """设置工具作用域覆盖——upsert ToolOverride。"""
     from core.tool_registry import get_tool_def
     from core.database import ToolOverride
+    from core.runtime_tool_service import normalize_tool_platform
 
-    if body.scope_type not in {"group", "user", "chat_type"}:
-        raise HTTPException(400, "scope_type must be group/user/chat_type")
-    if body.scope_type == "chat_type" and body.scope_id not in {"private", "private_superuser", "group"}:
+    scope_type = str(body.scope_type or "").strip().lower()
+    scope_id = str(body.scope_id or "").strip()
+    if scope_type not in {"group", "user", "chat_type", "platform"}:
+        raise HTTPException(400, "scope_type must be group/user/chat_type/platform")
+    if scope_type == "chat_type" and scope_id not in {"private", "private_superuser", "group"}:
         raise HTTPException(400, "chat_type scope_id must be private/private_superuser/group")
-    if body.scope_type in {"group", "user"} and not body.scope_id.strip():
+    if scope_type == "platform":
+        scope_id = normalize_tool_platform(scope_id)
+        if not scope_id:
+            raise HTTPException(400, "scope_id required for platform scope")
+    if scope_type in {"group", "user"} and not scope_id:
         raise HTTPException(400, "scope_id required for group/user scope")
 
     td = get_tool_def(tool_name)
@@ -4299,18 +4361,18 @@ def set_tool_override(tool_name: str, body: ToolOverrideBody,
 
     row = db.query(ToolOverride).filter(
         ToolOverride.tool_name == tool_name,
-        ToolOverride.scope_type == body.scope_type,
-        ToolOverride.scope_id == body.scope_id,
+        ToolOverride.scope_type == scope_type,
+        ToolOverride.scope_id == scope_id,
     ).first()
     if not row:
-        row = ToolOverride(tool_name=tool_name, scope_type=body.scope_type,
-                           scope_id=body.scope_id)
+        row = ToolOverride(tool_name=tool_name, scope_type=scope_type,
+                           scope_id=scope_id)
         db.add(row)
     row.enabled = 1 if body.enabled else 0
     row.reason = body.reason
     db.commit()
     _audit(db, "tool_override", "tool", tool_name,
-           {"scope_type": body.scope_type, "scope_id": body.scope_id,
+           {"scope_type": scope_type, "scope_id": scope_id,
             "enabled": row.enabled, "reason": body.reason},
            ip_address=_client_ip(request))
     return {"ok": True, "tool": tool_name}
@@ -4322,6 +4384,11 @@ def delete_tool_override(tool_name: str, request: Request, scope_type: str = "",
                          _auth=Depends(verify_admin)):
     """删除工具作用域覆盖。"""
     from core.database import ToolOverride
+    from core.runtime_tool_service import normalize_tool_platform
+    scope_type = str(scope_type or "").strip().lower()
+    scope_id = str(scope_id or "").strip()
+    if scope_type == "platform":
+        scope_id = normalize_tool_platform(scope_id)
     row = db.query(ToolOverride).filter(
         ToolOverride.tool_name == tool_name,
         ToolOverride.scope_type == scope_type,
@@ -4339,24 +4406,28 @@ def delete_tool_override(tool_name: str, request: Request, scope_type: str = "",
 
 @router.get("/tools/effective")
 def get_effective_tools(chat_type: str = "group", group_id: str = "", user_id: str = "",
+                         platform: str = "qq",
                          runtime_preset: str = "full",
                          db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """查看给定上下文的实际生效工具列表。"""
     from core.runtime_tool_service import (
         build_runtime_tool_prompt,
+        normalize_tool_platform,
         normalize_runtime_preset,
         resolve_effective_tools,
     )
     from core.tool_schema_preview import build_effective_tool_schemas
     runtime_preset = normalize_runtime_preset(runtime_preset)
+    platform = normalize_tool_platform(platform) or "qq"
     enabled, disabled = resolve_effective_tools(
         chat_type=chat_type, group_id=group_id, user_id=user_id,
-        runtime_preset=runtime_preset, db=db,
+        platform=platform, runtime_preset=runtime_preset, db=db,
     )
     prompt = build_runtime_tool_prompt(enabled, disabled, chat_type)
     tool_schemas = build_effective_tool_schemas(enabled, db=db)
     return {
         "chat_type": chat_type, "group_id": group_id, "user_id": user_id,
+        "platform": platform,
         "runtime_preset": runtime_preset,
         "enabled": {k: v for k, v in enabled.items() if v},
         "disabled": {k: v for k, v in disabled.items()},
