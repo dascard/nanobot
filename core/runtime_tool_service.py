@@ -28,6 +28,10 @@ def normalize_tool_chat_type(chat_type: str = "group") -> str:
     return "private" if value.startswith("private") else "group"
 
 
+def normalize_tool_platform(platform: str = "") -> str:
+    return str(platform or "").strip().lower()
+
+
 def _metadata_default(tool_name: str, chat_type: str) -> bool:
     td = get_tool_def(tool_name)
     if not td:
@@ -113,6 +117,7 @@ def resolve_effective_tools(
     chat_type: str = "group",
     group_id: str = "",
     user_id: str = "",
+    platform: str = "",
     runtime_preset: str = "full",
     db=None,
 ) -> tuple[dict[str, bool], dict[str, str]]:
@@ -122,12 +127,13 @@ def resolve_effective_tools(
     1. TOOL_METADATA 默认值 (private_default/group_default)
     2. force_enabled / force_disabled_group 初始硬约束
     3. 运行时预设 (none/lightweight/full)
-    4. ToolOverride 表 (scope_type=chat_type/group/user)，显式覆盖可放开轻量预设
+    4. ToolOverride 表 (scope_type=chat_type/platform/group/user)，显式覆盖可放开轻量预设
     5. force_enabled / force_disabled_group 硬约束最终兜底
 
     返回 (enabled: {tool_name: bool}, disabled_reasons: {tool_name: reason})
     """
     chat_type = normalize_tool_chat_type(chat_type)
+    platform = normalize_tool_platform(platform)
     runtime_preset = normalize_runtime_preset(runtime_preset)
     enabled: dict[str, bool] = {}
     disabled: dict[str, str] = {}
@@ -161,13 +167,21 @@ def resolve_effective_tools(
     if db is not None and runtime_preset != "none":
         try:
             from core.database import ToolOverride
-            rows = db.query(ToolOverride).filter(
-                (ToolOverride.scope_type == "chat_type") & (ToolOverride.scope_id == chat_type)
-                | (ToolOverride.scope_type == "group") & (ToolOverride.scope_id == group_id)
-                | (ToolOverride.scope_type == "user") & (ToolOverride.scope_id == user_id)
-            ).all()
+            from sqlalchemy import or_
+
+            conditions = [
+                (ToolOverride.scope_type == "chat_type") & (ToolOverride.scope_id == chat_type),
+            ]
+            if platform:
+                conditions.append((ToolOverride.scope_type == "platform") & (ToolOverride.scope_id == platform))
+            if group_id:
+                conditions.append((ToolOverride.scope_type == "group") & (ToolOverride.scope_id == group_id))
+            if user_id:
+                conditions.append((ToolOverride.scope_type == "user") & (ToolOverride.scope_id == user_id))
+
+            rows = db.query(ToolOverride).filter(or_(*conditions)).all()
             for row in sorted(rows, key=lambda r: {
-                "chat_type": 1, "group": 2, "user": 3,
+                "chat_type": 1, "platform": 2, "group": 3, "user": 4,
             }.get(r.scope_type, 9)):
                 if row.tool_name not in TOOL_METADATA:
                     continue

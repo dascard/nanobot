@@ -48,6 +48,7 @@ def resolve_final_tools(
     chat_type: str = "group",
     group_id: str = "",
     user_id: str = "",
+    platform: str = "",
     runtime_preset: str = "full",
     db: Any = None,
 ) -> FinalToolSet:
@@ -58,6 +59,7 @@ def resolve_final_tools(
         chat_type=chat_type,
         group_id=group_id,
         user_id=user_id,
+        platform=platform,
         runtime_preset=runtime_preset,
         db=db,
     )

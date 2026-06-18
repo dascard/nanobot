@@ -59,6 +59,107 @@ def test_tool_plan_exposes_memory_query_by_default_and_can_disable(db_session):
     assert "memory_query：测试禁用" in disabled_plan.runtime_tool_prompt
 
 
+def test_platform_override_precedence_between_chat_type_group_and_user(db_session):
+    from core.database import ToolOverride
+    from core.runtime_tool_service import resolve_effective_tools
+
+    db_session.add_all([
+        ToolOverride(tool_name="memory_query", scope_type="chat_type", scope_id="private", enabled=0, reason="私聊禁用"),
+        ToolOverride(tool_name="memory_query", scope_type="platform", scope_id="web", enabled=1, reason="Web 放开"),
+        ToolOverride(tool_name="memory_query", scope_type="group", scope_id="g1", enabled=0, reason="群覆盖禁用"),
+        ToolOverride(tool_name="memory_query", scope_type="user", scope_id="u1", enabled=1, reason="用户覆盖放开"),
+    ])
+    db_session.commit()
+
+    enabled, disabled = resolve_effective_tools(
+        chat_type="private",
+        platform="web",
+        group_id="g1",
+        user_id="u1",
+        runtime_preset="full",
+        db=db_session,
+    )
+    assert enabled["memory_query"] is True
+    assert "memory_query" not in disabled
+
+    enabled_without_user, disabled_without_user = resolve_effective_tools(
+        chat_type="private",
+        platform="web",
+        group_id="g1",
+        user_id="",
+        runtime_preset="full",
+        db=db_session,
+    )
+    assert enabled_without_user["memory_query"] is False
+    assert disabled_without_user["memory_query"] == "群覆盖禁用"
+
+    enabled_platform_only, disabled_platform_only = resolve_effective_tools(
+        chat_type="private",
+        platform="web",
+        group_id="",
+        user_id="",
+        runtime_preset="full",
+        db=db_session,
+    )
+    assert enabled_platform_only["memory_query"] is True
+    assert "memory_query" not in disabled_platform_only
+
+
+def test_platform_override_cannot_bypass_none_or_hard_constraints(db_session):
+    from core.database import ToolOverride
+    from core.runtime_tool_service import resolve_effective_tools
+
+    db_session.add_all([
+        ToolOverride(tool_name="memory_query", scope_type="platform", scope_id="web", enabled=1, reason="Web 放开"),
+        ToolOverride(tool_name="reply", scope_type="platform", scope_id="web", enabled=0, reason="错误禁用回复"),
+        ToolOverride(tool_name="write", scope_type="platform", scope_id="web", enabled=1, reason="错误放开写文件"),
+    ])
+    db_session.commit()
+
+    enabled_none, disabled_none = resolve_effective_tools(
+        chat_type="private",
+        platform="web",
+        runtime_preset="none",
+        db=db_session,
+    )
+    assert enabled_none["memory_query"] is False
+    assert disabled_none["memory_query"] == "运行时预设=none"
+
+    enabled_group, disabled_group = resolve_effective_tools(
+        chat_type="group",
+        platform="web",
+        runtime_preset="full",
+        db=db_session,
+    )
+    assert enabled_group["reply"] is True
+    assert "reply" not in disabled_group
+    assert enabled_group["write"] is False
+    assert disabled_group["write"] == "群聊强制禁用"
+
+
+def test_build_tool_plan_and_final_tools_pass_platform(db_session):
+    from core.database import ToolOverride
+    from core.final_tools import resolve_final_tools
+    from core.tool_plan import build_tool_plan
+
+    db_session.add(ToolOverride(
+        tool_name="image_generation",
+        scope_type="platform",
+        scope_id="web",
+        enabled=0,
+        reason="Web 禁用图片生成",
+    ))
+    db_session.commit()
+
+    plan = build_tool_plan(chat_type="private", platform="web", runtime_preset="full", db=db_session)
+    final_tools = resolve_final_tools(chat_type="private", platform="web", runtime_preset="full", db=db_session)
+
+    assert plan.enabled["image_generation"] is False
+    assert "image_generation" not in plan.sent_tool_names
+    assert "image_generation" not in final_tools.allowed
+    assert final_tools.disabled["image_generation"] == "Web 禁用图片生成"
+
+
 def test_filter_payload_tools_accepts_tool_plan(monkeypatch):
     from core.final_tools import filter_payload_tools
     from core.tool_plan import ToolPlan
