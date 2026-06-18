@@ -278,6 +278,29 @@ def test_knowledge_query_filters_by_trust_and_date(db_session):
     assert [item["document_id"] for item in result["items"]] == [recent.id]
 
 
+def test_knowledge_query_published_after_excludes_unknown_publish_date(db_session):
+    from core.knowledge_rag import KnowledgeRagService
+
+    unknown_date = _manual_doc(
+        db_session,
+        "unknown-date.md",
+        "RAG 召回策略未知发布时间文档。",
+        title="未知发布时间",
+        trust_level="medium",
+    )
+    _index_doc(db_session, unknown_date)
+
+    result = KnowledgeRagService(db_session).query(
+        "RAG 召回策略",
+        published_after="2999-01-01",
+        limit=5,
+        include_debug=True,
+    )
+
+    assert result["items"] == []
+    assert result["stats"]["skipped_filter"] == 1
+
+
 def test_expand_returns_document_chunk_not_raw_unbounded_text(db_session):
     from core.database import KnowledgeChunk
     from core.knowledge_rag import KnowledgeRagService

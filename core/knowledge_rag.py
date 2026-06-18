@@ -418,6 +418,8 @@ class KnowledgeRagService:
             or citation.get("published_at")
             or ""
         )
+        if (published_after or published_before) and not published_at:
+            return False
         if published_after and published_at and published_at < str(published_after):
             return False
         if published_before and published_at and published_at > str(published_before):
