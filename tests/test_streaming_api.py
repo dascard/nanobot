@@ -182,3 +182,46 @@ def test_stream_chat_flushes_pending_delta_before_done(client):
     assert events[statuses.index("delta")] == {"status": "delta", "text": "最后"}
     assert statuses.index("delta") < statuses.index("done")
     assert events[statuses.index("done")]["answer"] == "最后答案"
+
+
+def test_stream_chat_normalizes_final_replace_before_done(client):
+    from unittest.mock import patch
+
+    async def fake_handle_message(*args, **kwargs):
+        queue = kwargs.get("stream_queue")
+        assert queue is not None
+        await queue.put({"status": "delta", "text": "草稿"})
+        await queue.put({"status": "final", "text": "最终"})
+        return "最终"
+
+    with patch("api.routes.get_bridge") as mock_get_bridge:
+        mock_get_bridge.return_value.handle_message.side_effect = fake_handle_message
+        with client.stream(
+            "POST",
+            "/api/v1/chat",
+            json={
+                "user_id": "stream_final_user",
+                "session_id": "group_1000",
+                "query": "test",
+                "stream": True,
+            },
+        ) as response:
+            body = "".join(response.iter_text())
+
+    events = [
+        json.loads(chunk[6:])
+        for chunk in body.split("\n\n")
+        if chunk.startswith("data: ")
+    ]
+    final_index = next(i for i, item in enumerate(events) if item.get("status") == "final")
+    done_index = next(i for i, item in enumerate(events) if item.get("status") == "done")
+
+    assert response.status_code == 200
+    assert events[final_index] == {
+        "status": "final",
+        "text": "最终",
+        "replace": True,
+        "source": "bridge",
+    }
+    assert final_index < done_index
+    assert events[done_index]["answer"] == "最终"

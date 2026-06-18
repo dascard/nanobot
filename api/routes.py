@@ -79,6 +79,20 @@ def _normalize_chat_stream_event(event: Any) -> dict[str, Any] | None:
         normalized["text"] = text
         return normalized
 
+    if status == "final":
+        text = event.get("text", "")
+        if text is None:
+            text = ""
+        text = str(text)
+        if not text:
+            return None
+        return {
+            "status": "final",
+            "text": text,
+            "replace": bool(event.get("replace", True)),
+            "source": str(event.get("source") or "bridge"),
+        }
+
     if status:
         normalized = dict(event)
         normalized["status"] = status
