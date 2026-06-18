@@ -57,6 +57,9 @@ def run_case(case: EvalCase) -> EvalResult:
     elif suite in ("group_reply", "reply_contract"):
         from evals.runners.group_reply_runner import run_group_reply_case
         output = run_group_reply_case(case)
+    elif suite in ("rendering_contract",):
+        from evals.runners.rendering_runner import run_rendering_case
+        output = run_rendering_case(case)
     elif suite in ("timing_gate",):
         from evals.runners.timing_gate_runner import run_timing_gate_case
         output = run_timing_gate_case(case)

@@ -325,3 +325,21 @@ def test_capability_reply_contract_dataset_uses_reply_runner():
     report = run_suite("capability_reply_contract")
     assert report.total == len(cases)
     assert report.failed == 0
+
+
+def test_capability_rendering_contract_dataset_runs_offline():
+    from evals.run import load_cases, run_suite
+
+    cases = load_cases("capability_rendering_contract")
+
+    assert {case.id for case in cases} == {
+        "render_text_html_order_001",
+        "render_image_url_as_cq_001",
+        "render_generated_image_public_url_001",
+        "render_generated_image_without_public_url_001",
+        "render_reply_meta_preserved_001",
+    }
+    assert {case.suite for case in cases} == {"rendering_contract"}
+    report = run_suite("capability_rendering_contract")
+    assert report.total == len(cases)
+    assert report.failed == 0

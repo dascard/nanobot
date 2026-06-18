@@ -1,0 +1,22 @@
+{
+  "id": "render_generated_image_public_url_001",
+  "suite": "rendering_contract",
+  "description": "generated image 有 public base URL 时渲染为 CQ image。",
+  "input": {
+    "public_base_url": "https://nanobot.example.test",
+    "generated_image_token": "eval-token",
+    "envelope": {
+      "messages": [
+        {"type": "image", "generated_image_id": "img_public_001"}
+      ]
+    }
+  },
+  "expected": {
+    "should_reply": true,
+    "must_contain": [
+      "[CQ:image,file=https://nanobot.example.test/api/v1/generated-images/img_public_001/image?token=eval-token]"
+    ],
+    "must_not_contain": ["[generated_image:img_public_001]", "base64://"]
+  },
+  "tags": ["capability", "rendering_contract", "generated_image", "public_url"]
+}

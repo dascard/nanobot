@@ -155,6 +155,34 @@ def test_eval_expected_contract_endpoint_exposes_scoreable_keys(client, monkeypa
         assert deprecated not in payload["scoreable_keys"]
 
 
+def test_rendering_contract_expected_preset_uses_scoreable_fields():
+    from evals.expected_contract import expected_contract_payload
+    from evals.expected_contract import validate_expected_contract
+
+    payload = expected_contract_payload()
+    fields = payload["suite_presets"]["rendering_contract"]["fields"]
+
+    assert fields == [
+        "should_reply",
+        "send_mode",
+        "reply_to_message_id",
+        "mentions",
+        "must_contain",
+        "must_not_contain",
+    ]
+    validate_expected_contract(
+        "rendering_contract",
+        {
+            "should_reply": True,
+            "send_mode": "quote",
+            "reply_to_message_id": "msg-1",
+            "mentions": ["10001"],
+            "must_contain": ["[CQ:image"],
+            "must_not_contain": ["base64://"],
+        },
+    )
+
+
 @pytest.mark.parametrize(
     ("suite", "expected", "message"),
     [

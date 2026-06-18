@@ -1,0 +1,25 @@
+{
+  "id": "render_reply_meta_preserved_001",
+  "suite": "rendering_contract",
+  "description": "渲染后保留 quote 与 mentions 元信息，并清理内部字段。",
+  "input": {
+    "envelope": {
+      "messages": [{"type": "text", "text": "收到"}],
+      "reply_meta": {
+        "send_mode": "quote",
+        "reply_to_message_id": "msg-77",
+        "mentions": ["10001"],
+        "_agent_result": "drop"
+      }
+    }
+  },
+  "expected": {
+    "should_reply": true,
+    "send_mode": "quote",
+    "reply_to_message_id": "msg-77",
+    "mentions": ["10001"],
+    "must_contain": ["收到"],
+    "must_not_contain": ["_agent_result"]
+  },
+  "tags": ["capability", "rendering_contract", "reply_meta"]
+}

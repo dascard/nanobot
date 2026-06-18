@@ -443,7 +443,7 @@ def run_rendering_case(case: EvalCase) -> EvalOutput:
   "expected": {
     "should_reply": true,
     "send_mode": "normal",
-    "must_contain": ["A\\\\n<article>B</article>"]
+    "must_contain": ["A\\n<article>B</article>"]
   },
   "tags": ["capability", "rendering_contract", "text", "html"]
 }

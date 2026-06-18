@@ -1,0 +1,21 @@
+{
+  "id": "render_generated_image_without_public_url_001",
+  "suite": "rendering_contract",
+  "description": "generated image 缺少 public URL 时保留 token 并记录 warning。",
+  "input": {
+    "envelope": {
+      "messages": [
+        {"type": "image", "generated_image_id": "img_missing_001"}
+      ]
+    }
+  },
+  "expected": {
+    "should_reply": true,
+    "must_contain": [
+      "[generated_image:img_missing_001]",
+      "generated_image_without_public_url:img_missing_001"
+    ],
+    "must_not_contain": ["base64://"]
+  },
+  "tags": ["capability", "rendering_contract", "generated_image", "fallback"]
+}

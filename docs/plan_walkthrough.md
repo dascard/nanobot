@@ -81,11 +81,11 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-3B | 已完成 | TimingGate CI / PR gate | 已新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 已完成 | 评测体系扩展 | expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界、首个 `capability_model_routing` 能力数据集、文档收口和最终验证均已完成 | `e4fb70a` / `8b892a8` / `4f4cce7` / `b84cbf1` / `7a84084` / `71c3a53` / `a494f3b` / `5a8b601` |
 | P4-2 | 已完成 | Admin 标注工作台契约化与 promote 预检 UI | 后端 expected 契约、WebUI 契约化标注、`note` / `expected` 分离、promote dry-run → apply 预检 UI、WebUI build 和全量回归均已完成 | `docs(评测): 设计标注工作台契约` / `feat(评测): 暴露期望契约校验` / `feat(评测): 契约化标注工作台` |
-| P4-3 | P4-3A 已完成 | 能力契约评测数据集扩展 | `capability_reply_contract` 数据集和 baseline 已完成；下一步实现 `capability_rendering_contract` 离线 runner / 数据集 | `docs(评测): 设计能力数据集扩展` / `docs(计划): 记录能力数据集扩展计划` / `feat(评测): 扩展回复契约数据集` |
+| P4-3 | P4-3B 已完成 | 能力契约评测数据集扩展 | `capability_reply_contract` 与 `capability_rendering_contract` 数据集、baseline 和离线 gate 均已完成；下一步进入 P4-3C 收口验证 | `docs(评测): 设计能力数据集扩展` / `docs(计划): 记录能力数据集扩展计划` / `feat(评测): 扩展回复契约数据集` / `feat(评测): 扩展渲染契约数据集` |
 
 ## 当前详细计划：P4-3 能力契约评测数据集扩展
 
-状态：P4-3A Reply Contract 数据集已完成，等待执行 P4-3B Rendering Contract runner / 数据集。P4-3 采用「数据集优先 + 最小 runner」方案，设计文档为 `docs/superpowers/specs/2026-06-18-capability-contract-eval-datasets-design.md`，实现计划为 `.Codex/plans/capability-contract-eval-datasets.md`。本阶段不做 RAG 标注闭环、不接入更多 suite PR gate、不修改生产 QQ renderer 或真实 QQ push。
+状态：P4-3B Rendering Contract runner / 数据集已完成，等待执行 P4-3C 收口验证。P4-3 采用「数据集优先 + 最小 runner」方案，设计文档为 `docs/superpowers/specs/2026-06-18-capability-contract-eval-datasets-design.md`，实现计划为 `.Codex/plans/capability-contract-eval-datasets.md`。本阶段不做 RAG 标注闭环、不接入更多 suite PR gate、不修改生产 QQ renderer 或真实 QQ push。
 
 目标：
 
@@ -103,7 +103,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] 设计文档：写入 `docs/superpowers/specs/2026-06-18-capability-contract-eval-datasets-design.md` 并完成规格自检。
 - [x] 实现计划：写入 `.Codex/plans/capability-contract-eval-datasets.md`，明确 TDD 步骤、文件清单、验证顺序和子 agent 协作边界。
 - [x] P4-3A：新增 `capability_reply_contract` cases、baseline、测试和文档。
-- [ ] P4-3B：新增 `rendering_contract` runner、expected preset、`capability_rendering_contract` cases、baseline、测试和文档。
+- [x] P4-3B：新增 `rendering_contract` runner、expected preset、`capability_rendering_contract` cases、baseline、测试和文档。
 - [ ] P4-3C：运行两个能力数据集 gate、相关回归和全量测试，更新 walkthrough / todo 状态并提交。
 
 子 agent 分配：
@@ -116,7 +116,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 - 设计阶段：设计文档占位词扫描、U+FFFD 扫描、`git diff --check`。
 - P4-3A：红灯 `tests/test_eval_baseline.py::test_capability_reply_contract_dataset_uses_reply_runner` 失败于 `cases` 为空；绿灯同一测试 `1 passed, 1 warning in 0.83s`；`python -B -m evals.run --suite capability_reply_contract --baseline evals/baselines/capability_reply_contract.json --min-pass-rate 1.0 --max-new-failures 0` 输出 `total=3 passed=3 failed=0` 和 `Gate passed`。
-- P4-3B：`tests/test_eval_candidate_contract.py`、`tests/test_eval_baseline.py` 中 rendering contract 用例、`tests/test_qq_outbound_renderer.py tests/test_push_envelope.py`，以及 `python -B -m evals.run --suite capability_rendering_contract --baseline evals/baselines/capability_rendering_contract.json --min-pass-rate 1.0 --max-new-failures 0`。
+- P4-3B：红灯 `tests/test_eval_candidate_contract.py::test_rendering_contract_expected_preset_uses_scoreable_fields tests/test_eval_baseline.py::test_capability_rendering_contract_dataset_runs_offline` 失败于缺少 `rendering_contract` preset 和数据集为空；绿灯同一集合 `2 passed, 1 warning in 0.89s`；渲染相邻回归 `tests/test_qq_outbound_renderer.py tests/test_push_envelope.py` 结果 `17 passed, 1 warning in 1.03s`；`python -B -m evals.run --suite capability_rendering_contract --baseline evals/baselines/capability_rendering_contract.json --min-pass-rate 1.0 --max-new-failures 0` 输出 `total=5 passed=5 failed=0` 和 `Gate passed`。
 - 最终回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`。
 
 提交边界：

@@ -102,6 +102,16 @@ SUITE_EXPECTED_PRESETS: dict[str, dict[str, list[str]]] = {
             "must_not_contain",
         ],
     },
+    "rendering_contract": {
+        "fields": [
+            "should_reply",
+            "send_mode",
+            "reply_to_message_id",
+            "mentions",
+            "must_contain",
+            "must_not_contain",
+        ],
+    },
     "memory_learning": {
         "fields": [
             "no_learn",

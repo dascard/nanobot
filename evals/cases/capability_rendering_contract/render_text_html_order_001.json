@@ -1,0 +1,20 @@
+{
+  "id": "render_text_html_order_001",
+  "suite": "rendering_contract",
+  "description": "text 与 html 消息按数组顺序渲染。",
+  "input": {
+    "envelope": {
+      "messages": [
+        {"type": "text", "text": "A"},
+        {"type": "html", "text": "<article>B</article>"}
+      ],
+      "reply_meta": {"send_mode": "normal"}
+    }
+  },
+  "expected": {
+    "should_reply": true,
+    "send_mode": "normal",
+    "must_contain": ["A\\n<article>B</article>"]
+  },
+  "tags": ["capability", "rendering_contract", "text", "html"]
+}
