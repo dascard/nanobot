@@ -27,12 +27,18 @@ def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
     from core.tool_registry import TOOL_METADATA
 
     calls = []
+    to_thread_calls = []
 
     def fake_daily(query, mode="quality", limit=8):
         calls.append((query, mode, limit))
         return "<article>AI daily</article>"
 
+    async def fake_to_thread(func, *args, **kwargs):
+        to_thread_calls.append((func, args, kwargs))
+        return func(*args, **kwargs)
+
     monkeypatch.setattr("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline", fake_daily)
+    monkeypatch.setattr(news_tool.asyncio, "to_thread", fake_to_thread)
 
     ai_daily = AiDailyTool()
 
@@ -49,6 +55,7 @@ def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
     result = run_async(ai_daily.execute({"query": "人工智能 科技 最新新闻", "max_results": 5}))
     assert result.success
     assert calls == [("人工智能 科技 最新新闻", "quality", 8)]
+    assert to_thread_calls == [(fake_daily, ("人工智能 科技 最新新闻", "quality", 8), {})]
 
 
 def test_ai_daily_tool_returns_fallback_html_when_pipeline_empty(monkeypatch):

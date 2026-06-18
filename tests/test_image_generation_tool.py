@@ -73,6 +73,56 @@ def test_execute_rejects_too_long_prompt(monkeypatch):
     assert "too long" in result.error.lower()
 
 
+def test_execute_uses_to_thread_for_new_api(monkeypatch, tmp_path):
+    from core import generated_images
+    from creatures.nanobot.prompts.skills.image_generation import tool as image_tool
+    from creatures.nanobot.prompts.skills.image_generation.tool import ImageGenerationTool
+
+    png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+    image_b64 = base64.b64encode(png_data).decode("ascii")
+    calls = []
+
+    def fake_call_new_api(*, prompt, size, quality, background):
+        return {
+            "image_b64": image_b64,
+            "revised_prompt": prompt,
+            "text_output": "ok",
+        }
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append((func, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(generated_images, "GENERATED_IMAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(image_tool.asyncio, "to_thread", fake_to_thread)
+
+    tool = ImageGenerationTool()
+    monkeypatch.setattr(tool, "_call_new_api", fake_call_new_api)
+
+    result = run_async(
+        tool.execute(
+            {
+                "prompt": "画一只猫",
+                "size": "1024x1024",
+                "quality": "high",
+                "background": "auto",
+            }
+        )
+    )
+
+    assert result.success
+    assert calls
+    func, args, kwargs = calls[0]
+    assert func is fake_call_new_api
+    assert args == ()
+    assert kwargs == {
+        "prompt": "画一只猫",
+        "size": "1024x1024",
+        "quality": "high",
+        "background": "auto",
+    }
+
+
 # ── 标准 output_item.done 成功 ──
 
 def test_execute_calls_new_api_responses_and_returns_generated_image_token(monkeypatch, tmp_path):

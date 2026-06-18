@@ -39,6 +39,38 @@ def test_execute_requires_images():
     assert "files" in result.error.lower()
 
 
+def test_execute_uses_to_thread_for_qwen_call(monkeypatch):
+    from creatures.nanobot.prompts.skills.image_summary import tool as image_tool
+    from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
+
+    calls = []
+
+    def fake_call_qwen(files, focus):
+        return json.dumps(
+            {
+                "overall_summary": "线程摘要",
+                "per_image": [],
+                "keywords": [],
+                "risk_flags": [],
+                "confidence": "high",
+            },
+            ensure_ascii=False,
+        )
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append((func, args, kwargs))
+        return func(*args, **kwargs)
+
+    tool = ImageSummaryTool()
+    monkeypatch.setattr(tool, "_call_qwen", fake_call_qwen)
+    monkeypatch.setattr(image_tool.asyncio, "to_thread", fake_to_thread)
+
+    result = run_async(tool.execute({"files": ["https://example.com/cat.png"], "focus": "主体"}))
+
+    assert result.success
+    assert calls == [(fake_call_qwen, (["https://example.com/cat.png"], "主体"), {})]
+
+
 def test_execute_calls_local_qwen_with_multimodal_payload():
     from creatures.nanobot.prompts.skills.image_summary.tool import ImageSummaryTool
     from kohakuterrarium.llm.message import ImagePart

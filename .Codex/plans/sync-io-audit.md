@@ -190,7 +190,7 @@ git commit -m "test(图片): 守卫附件预处理线程卸载"
 - 修改：`tests/test_image_summary_tool.py`
 - 修改：`tests/test_ai_daily_tool_and_sources.py`
 
-- [ ] **步骤 1：写红灯测试**
+- [x] **步骤 1：写红灯测试**
 
 分别为 3 个工具新增测试：
 
@@ -200,7 +200,7 @@ git commit -m "test(图片): 守卫附件预处理线程卸载"
 
 测试通过 monkeypatch `asyncio.to_thread` 记录函数对象和参数，不访问外网。
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -210,17 +210,21 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_image_generation_tool.p
 
 预期：新增测试在未实现守卫断言或当前调用不匹配时 FAIL。若当前生产代码已经满足，先确认测试能通过反向 monkeypatch 失败，保证测试不是空断言。
 
-- [ ] **步骤 3：最小实现**
+实际：临时把 3 个工具 `_execute()` 改为直接同步调用后，3 个新增守卫全部失败，失败点均为未记录到 `asyncio.to_thread` 调用；随后已恢复生产代码。
+
+- [x] **步骤 3：最小实现**
 
 当前生产代码已具备 `to_thread` 调用。若测试暴露缺口，只做局部修正；否则只提交测试。
 
-- [ ] **步骤 4：运行绿灯**
+- [x] **步骤 4：运行绿灯**
 
 运行步骤 2 命令。
 
 预期：PASS。
 
-- [ ] **步骤 5：提交任务 3**
+实际：新增守卫通过，`3 passed, 1 warning`；Direct 工具定向回归通过，`41 passed, 1 warning`。
+
+- [x] **步骤 5：提交任务 3**
 
 运行：
 
