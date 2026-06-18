@@ -4,7 +4,7 @@
 更新日期：2026-06-18
 本轮计划写入日期：2026-06-18
 
-本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。当前优先级已切到 P2-2「标准化请求 / 响应信封」：只读审计已完成，设计文档已写入 `docs/superpowers/specs/2026-06-18-message-envelope-design.md`，下一步是提交设计、写实现计划并按 TDD 实现。
+本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。当前优先级已切到 P2-2「标准化请求 / 响应信封」：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`，下一步是按接口先行和多 owner 分工执行 TDD 实现。
 
 ## 当前目标
 
@@ -12,7 +12,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 文档口径
 
-- `docs/todo.md` 是当前架构路线的主参考，但它只记录路线级状态；当它与提交记录、`.Codex/plans/` 任务进度或本文件冲突时，以已提交代码和本文件的当前详细计划为准。本轮已重新核对路线项 5，确认 P2-2 已进入设计阶段，尚未进入代码实现。
+- `docs/todo.md` 是当前架构路线的主参考，但它只记录路线级状态；当它与提交记录、`.Codex/plans/` 任务进度或本文件冲突时，以已提交代码和本文件的当前详细计划为准。本轮已重新核对路线项 5，确认 P2-2 设计已提交、实现计划已写入，尚未进入代码实现。
 - `docs/TODO_LIST.md` 是历史完成清单，目前未跟踪且存在滞后状态，例如仍描述 Prompt V2 默认未启用、TimingGate 阶段仍在中途；后续仅作为历史核对材料，不作为优先级来源。
 - 本文件记录「下一阶段怎么推进」，每次阶段完成后要同步状态并单独提交。
 
@@ -68,7 +68,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-7 | 已完成 | 残余同步 IO 审计与收口 | 贴纸 fallback、图片附件预处理和 Direct 工具同步 IO 守卫均已落地，路线项 2 已完成收口 | `8ce5210` / `d96e7cd` / `c7e91a9` / `641d080` / `0489bac` / `b3d27f5` |
 | P1-8 | 已完成 | 模型能力校验 | registry、直接 New API、Bridge 主回复、payload guard、无视觉候选降级和 `model_routing` eval 覆盖均已接入 `supports_image` / `supports_tools` / `supports_stream` | `ded7213` / `d4748d2` / `388c00f` / `d907a98` / `66fdfd9` / `d2a7a1f` / `e1d3bef` |
 | P2-1 | 已完成 | 工具配置增加 platform 维度 | platform scope 解析、ToolPlan / FinalTools 透传、`RuntimeToolDecision.platform` 迁移、`/tools/decisions` 输出、真实入口到 Bridge 的 platform 透传、Admin API platform 覆盖和预览、WebUI 平台覆盖入口，以及消息字段标准文档收口均已完成 | `d221180` / `7c0fda9` / `bb7489c` / `295e3f7` / `73bbe8a` / `d9a1bae` / `2b0e203` |
-| P2-2 | 设计中 | 标准化请求 / 响应信封 | 已完成只读审计并写入设计文档；下一步提交设计、写实现计划，再让 `/chat`、流式 done、`/group/message`、push 共享响应结构，私聊也返回过滤后的 `reply_meta` | `docs(消息): 设计响应信封标准` / `refactor(消息): 统一响应信封` |
+| P2-2 | 计划已写入 | 标准化请求 / 响应信封 | 设计已随 `c984036` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；代码阶段先提交共享 builder，再按 API / 群聊 / push owner 分工推进兼容双写 | `c984036` / `docs(计划): 记录响应信封实现计划` / `refactor(消息): 统一响应信封` |
 | P2-3 | 待执行 | QQ 出站渲染契约 | 输出结构化 segments，图片和 HTML 渲染集中在出口层 | `feat(渲染): 定义 QQ 出站消息契约` |
 | P2-4 | 待执行 | Prompt platform × chat_type 二维适配 | V2 模板按平台和会话类型拆分，QQ 专属约定下沉到 platform 分支 | `feat(提示词): 支持平台化模板分支` |
 | P3-1 | 已部分完成，待继续 | SSE 真 token 流式剩余收敛 | 已贯通 `/chat` 的 `stream` 参数并补齐 `/chat-step` SSE；继续补 chunk 合并窗口、backpressure、工具回合语义和统一信封 | `2369081` / 后续 `refactor(流式): 收敛增量输出契约` |
@@ -77,7 +77,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 ## 当前详细计划：P2-2 标准化请求 / 响应信封
 
-状态：P2-2 已进入设计阶段，尚未开始代码实现。只读审计已确认 `/chat`、`/chat` SSE done、`/group/message` 和 push / 定时任务出口仍使用不同响应形态；`docs/superpowers/specs/2026-06-18-message-envelope-design.md` 已写入兼容双写方案。当前阶段先提交设计文档，再写 `.Codex/plans/message-envelope.md` 实现计划，随后按 TDD 逐项落地。
+状态：P2-2 设计已提交，代码尚未开始。只读审计已确认 `/chat`、`/chat` SSE done、`/group/message` 和 push / 定时任务出口仍使用不同响应形态；`docs/superpowers/specs/2026-06-18-message-envelope-design.md` 已写入兼容双写方案并随 `c984036` 提交。`.Codex/plans/message-envelope.md` 已改为接口先行、文件 owner 清晰、可在隔离 worktree 中并行执行的实现计划。
 
 目标：
 
@@ -98,19 +98,18 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 - [x] 核对 `docs/todo.md` 路线项 5，确认 P2-2 是 P2 多平台底座的下一优先级；`docs/TODO_LIST.md` 明显滞后，仅作历史材料。
 - [x] 完成只读审计：私聊 / Web 路径、群聊路径、push / 定时任务出口的响应字段差异均已梳理。
-- [x] 写入设计文档：`docs/superpowers/specs/2026-06-18-message-envelope-design.md`，明确兼容双写方案、字段映射、P2-2 / P2-3 边界、测试计划和验收标准。
-- [ ] 提交设计文档和本轮计划校准，避免实现阶段基于过时 `plan_walkthrough.md` 推进。
-- [ ] 写入实现计划：`.Codex/plans/message-envelope.md`，按红灯、绿灯、重构和阶段提交拆解。
-- [ ] 任务 1：新增 `core/message_envelope.py` 或等价模块，覆盖 `messages` 构造、`reply_meta` 过滤、`meta` 组装和信封 builder 的单元测试。
-- [ ] 任务 2：`/chat` 非流式接入响应信封，保留旧字段并返回过滤后的私聊 `reply_meta`。
-- [ ] 任务 3：`/chat` SSE done 接入响应信封，保留旧 done 事件字段。
-- [ ] 任务 4：`/group/message` continue / wait / no_reply 接入响应信封，保留 `action` 调度语义。
-- [ ] 任务 5：push / 定时任务新增信封适配 helper，旧 `push_to_qq(...)` 签名不变。
+- [x] 写入设计文档：`docs/superpowers/specs/2026-06-18-message-envelope-design.md`，明确兼容双写方案、字段映射、P2-2 / P2-3 边界、测试计划和验收标准。提交：`c984036 docs(消息): 设计响应信封标准`。
+- [x] 写入实现计划：`.Codex/plans/message-envelope.md`，按接口先行、API / 群聊 / push 文件 owner、主线程集成和阶段提交拆解。
+- [ ] 任务 1：新增 `core/message_envelope.py`，覆盖 `messages` 构造、`reply_meta` 过滤、`meta` 组装和信封 builder 的单元测试。
+- [ ] 任务 2：API owner 在 `api/routes.py` 接入 `/chat` 非流式和 SSE done 响应信封，保留旧字段并返回过滤后的私聊 `reply_meta`。
+- [ ] 任务 3：群聊 owner 在 `app/group_ingress/service.py` 接入 continue / wait / no_reply 响应信封，保留 `action` 调度语义。
+- [ ] 任务 4：push owner 在 `core/daily_digest.py` 新增信封适配 helper，旧 `push_to_qq(...)` 签名不变。
+- [ ] 任务 5：主线程集成 `api/routes.py` 中手动任务运行和流式断连 push call site，避免与 API / push worker 冲突。
 - [ ] 任务 6：同步 `docs/message-field-standard.md`、`docs/todo.md`、本文件和实现计划状态，运行定向与全量验证后单独提交。
 
 下一步验证：
 
-- 设计阶段先运行文档占位词扫描和 `git diff --check`。
+- 计划阶段先运行文档占位词扫描和 `git diff --check`。
 - 进入实现后按 TDD 先写失败测试，重点覆盖 `/chat` 非流式、`/chat` SSE done、`/group/message` 三类响应和 `push_envelope_to_qq()`。
 - 每个代码阶段运行对应定向测试；阶段收口前运行 `python -B -m pytest tests/ -v -p no:cacheprovider` 全量回归。
 
@@ -715,4 +714,4 @@ P1-6 验收重点：
 
 ## 下一步
 
-P2-2「标准化请求 / 响应信封」已完成只读审计并写入设计文档，当前下一步是提交 `docs/superpowers/specs/2026-06-18-message-envelope-design.md` 和本轮计划校准，然后写入 `.Codex/plans/message-envelope.md`。实现阶段先做统一信封 builder，再依次接入 `/chat` 非流式、`/chat` SSE done、`/group/message` 和 push 适配；P2-3 的出站 segments / CQ renderer / HTML-to-pic 不在本阶段展开。TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P2 执行顺序。
+P2-2「标准化请求 / 响应信封」已完成只读审计，设计文档已随 `c984036` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`。代码阶段先做统一信封 builder，再按 API owner、群聊 owner、push owner 拆分互不干扰的写入面；`api/routes.py` 的 push call site 由主线程或 API owner 单独集成，避免多个 worker 并行修改同一文件。P2-3 的出站 segments / CQ renderer / HTML-to-pic 不在本阶段展开。TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占 P2 执行顺序。

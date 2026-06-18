@@ -177,13 +177,13 @@
 - **关联**：与项 9（platform×chat_type 提示词）、项 3（模型能力矩阵）、项 5/7（platform 化消息与渲染）同属 platform 维度，建议成簇。
 - **粗略路径**：① 入口按来源注入 platform（默认 qq 向后兼容，已完成）→ ② `ToolOverride` 增 platform scope 并纳入解析顺序（已完成）→ ③ `build_tool_plan()` / `resolve_final_tools()` 透传 platform（已完成）→ ④ runtime_tool_decision / 审计带 platform（已完成）→ ⑤ Admin API 支持 platform override 创建和预览（已完成）→ ⑥ WebUI 工具配置页增平台维度（已完成）→ ⑦ 同步 `docs/message-field-standard.md` 和阶段计划（已完成）。
 
-#### 路线项 5 — messages 接口统一为标准化请求 / 响应信封（设计中，兼顾 qqbot）
+#### 路线项 5 — messages 接口统一为标准化请求 / 响应信封（计划已写入，兼顾 qqbot）
 
-- **现状（2026-06-18 设计中）**：两个对外入口——私聊 / Web 业务入口 `ChatProxyRequest`（`api/routes.py:220`）与群聊 `GroupMessageRequest`（:1036），请求字段已基本对齐 `docs/message-field-standard.md`。但**响应不统一**：私聊 `/chat` 返回 `{status, answer, answer_chunks, ...}`（按换行在服务端拆气泡），群聊 `/group/message` 返回 `{action, reply, reply_meta, ...}`（用 `action=continue/no_reply`，正文字段叫 `reply` 且无 answer_chunks）。同一语义在请求 / 响应 / 推送三处各叫 query/message/answer/reply。P2-2 只读审计已完成，设计文档已写入 `docs/superpowers/specs/2026-06-18-message-envelope-design.md`，推荐采用兼容双写：新增 `reply`、`messages`、`reply_meta`、`meta`，同时保留旧字段。
+- **现状（2026-06-18 计划已写入）**：两个对外入口——私聊 / Web 业务入口 `ChatProxyRequest`（`api/routes.py:220`）与群聊 `GroupMessageRequest`（:1036），请求字段已基本对齐 `docs/message-field-standard.md`。但**响应不统一**：私聊 `/chat` 返回 `{status, answer, answer_chunks, ...}`（按换行在服务端拆气泡），群聊 `/group/message` 返回 `{action, reply, reply_meta, ...}`（用 `action=continue/no_reply`，正文字段叫 `reply` 且无 answer_chunks）。同一语义在请求 / 响应 / 推送三处各叫 query/message/answer/reply。P2-2 只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交；实现计划已写入 `.Codex/plans/message-envelope.md`，采用接口先行、API / 群聊 / push owner 分工和兼容双写方案：新增 `reply`、`messages`、`reply_meta`、`meta`，同时保留旧字段。
 - **痛点**：私聊与群聊响应是两套不兼容 schema，调用方按入口分别处理；私聊路径 `reply_meta`（send_mode/quote/at）只取出做审计、**从不进响应**，AI 发送意图丢失；answer_chunks 拆分只在私聊侧；client_meta 是「君子协定」，新平台易塞裸 ID / 整份 event。
 - **目标**：两入口共享一套标准化请求 / 响应信封 `{status|action, messages|reply, reply_meta, meta}`，正文字段名统一，私聊也带过滤后的 reply_meta；client_meta 由文档约定升级为运行时轻量 schema（至少校验 platform / chat_type / trace.request_id）。
 - **关联**：与项 7（reply_meta 是渲染约定的载体）强耦合，建议合并设计；`push_to_qq`（`core/daily_digest.py:498`）是第三条出口，统一时不可漏。
-- **粗略路径**：① 完成四出口只读审计和响应信封设计（已完成）→ ② 写入 `.Codex/plans/message-envelope.md` 实现计划 → ③ 抽统一响应信封模型，让 `/chat` 非流式、`/chat` 流式 done、`/group/message`、push 四出口同形态 → ④ 私聊路径接入过滤后的 reply_meta → ⑤ answer_chunks 拆分提取为共享 helper → ⑥ client_meta 增边界层解析 / 校验 → ⑦ 给 `message-field-standard.md` 补响应侧标准。
+- **粗略路径**：① 完成四出口只读审计和响应信封设计（已完成）→ ② 写入 `.Codex/plans/message-envelope.md` 实现计划（已完成）→ ③ 抽统一响应信封模型，让 `/chat` 非流式、`/chat` 流式 done、`/group/message`、push 四出口同形态 → ④ 私聊路径接入过滤后的 reply_meta → ⑤ answer_chunks 拆分提取为共享 helper → ⑥ client_meta 增边界层解析 / 校验 → ⑦ 给 `message-field-standard.md` 补响应侧标准。
 
 #### 路线项 7 — qqbot 端出站渲染契约（与入站对称的结构化输出）
 
