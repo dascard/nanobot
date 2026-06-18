@@ -94,13 +94,26 @@ class ScheduleTaskTool(BaseTool):
                     t = db.query(ScheduledTask).filter(ScheduledTask.id == task_id).first()
                     if not t:
                         return ToolResult(error=f"任务 {task_id} 不存在")
-                    from core.daily_digest import _generate_task_message, push_to_qq
+                    from core.daily_digest import _generate_task_message, push_envelope_to_qq
+                    from core.message_envelope import build_chat_response_envelope
 
                     logger.info(f"[schedule_task] Manual run: {t.name}")
                     content = await _generate_task_message(t)
                     if not content:
                         return ToolResult(error=f"任务 {t.name} 生成内容失败")
-                    ok = await push_to_qq(t.target_type, t.target_id, content)
+                    target_type = str(t.target_type or "").strip()
+                    target_id = str(t.target_id or "").strip()
+                    envelope = build_chat_response_envelope(
+                        status="ok",
+                        answer=content,
+                        meta={
+                            "platform": "qq",
+                            "chat_type": "private" if target_type == "private" else "group",
+                            "source": "schedule_task_tool",
+                            "task_id": t.id,
+                        },
+                    )
+                    ok = await push_envelope_to_qq(target_type, target_id, envelope)
                     if ok:
                         from datetime import datetime
                         t.last_run_at = datetime.now()
