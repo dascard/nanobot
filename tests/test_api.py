@@ -719,6 +719,62 @@ async def test_stream_disconnect_background_push_uses_result_holder(db_session, 
 
 
 @pytest.mark.asyncio
+async def test_stream_disconnect_drains_bounded_queue_for_background_runner(db_session, monkeypatch):
+    import asyncio
+    import api.routes as routes
+    from api.routes import ChatProxyRequest, proxy_chat, _private_buffers
+
+    _private_buffers.clear()
+    _fast_private_reply(monkeypatch)
+    monkeypatch.setattr(routes, "CHAT_STREAM_QUEUE_MAXSIZE", 1, raising=False)
+
+    release = asyncio.Event()
+    pushed = []
+
+    class FakeBridge:
+        async def handle_message(self, *args, stream_queue=None, **kwargs):
+            await stream_queue.put({"status": "progress", "message": "thinking"})
+            await release.wait()
+            await stream_queue.put({"status": "delta", "text": "A"})
+            await stream_queue.put({"status": "delta", "text": "B"})
+            return "断连后的 bounded 回复"
+
+        def pop_last_reply_meta(self, session_id):
+            return {}
+
+    async def fake_push_envelope(target_type, target_id, envelope):
+        pushed.append((target_type, target_id, envelope))
+        return True
+
+    monkeypatch.setattr("api.routes.get_bridge", lambda: FakeBridge())
+    monkeypatch.setattr("core.daily_digest.push_envelope_to_qq", fake_push_envelope)
+
+    background_tasks = BackgroundTasks()
+    response = await proxy_chat(
+        ChatProxyRequest(
+            user_id="u-stream-bounded-abort",
+            session_id="private_u-stream-bounded-abort",
+            query="流式 bounded 断连",
+            stream=True,
+        ),
+        background_tasks,
+        db_session,
+        None,
+    )
+
+    iterator = response.body_iterator
+    first_event = await asyncio.wait_for(iterator.__anext__(), timeout=1)
+    assert "thinking" in first_event
+
+    await iterator.aclose()
+    release.set()
+    await asyncio.wait_for(background_tasks(), timeout=1)
+
+    assert pushed[0][0:2] == ("private", "u-stream-bounded-abort")
+    assert pushed[0][2]["reply"] == "断连后的 bounded 回复"
+
+
+@pytest.mark.asyncio
 async def test_stream_disconnect_after_runner_done_persists_result_holder(db_session, monkeypatch):
     import asyncio
     from api.routes import ChatProxyRequest, proxy_chat, _private_buffers

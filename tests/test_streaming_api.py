@@ -225,3 +225,33 @@ def test_stream_chat_normalizes_final_replace_before_done(client):
     }
     assert final_index < done_index
     assert events[done_index]["answer"] == "最终"
+
+
+def test_stream_chat_uses_bounded_stream_queue(client):
+    from unittest.mock import patch
+
+    captured = {}
+
+    async def fake_handle_message(*args, **kwargs):
+        queue = kwargs.get("stream_queue")
+        assert queue is not None
+        captured["maxsize"] = queue.maxsize
+        return "ok"
+
+    with patch("api.routes.get_bridge") as mock_get_bridge:
+        mock_get_bridge.return_value.handle_message.side_effect = fake_handle_message
+        with client.stream(
+            "POST",
+            "/api/v1/chat",
+            json={
+                "user_id": "stream_queue_bound_user",
+                "session_id": "group_1000",
+                "query": "test",
+                "stream": True,
+            },
+        ) as response:
+            body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert '"status": "done"' in body
+    assert captured["maxsize"] > 0

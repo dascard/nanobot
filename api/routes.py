@@ -60,6 +60,7 @@ logger = logging.getLogger("nanobot.routes")
 router = APIRouter(prefix="/api/v1")
 EMPTY_ASSISTANT_PLACEHOLDER = "（无回复内容）"
 SAFE_STREAM_ERROR_MESSAGE = "系统暂时不可用，请稍后再试"
+CHAT_STREAM_QUEUE_MAXSIZE = 128
 
 
 def _normalize_chat_stream_event(event: Any) -> dict[str, Any] | None:
@@ -2676,7 +2677,7 @@ async def proxy_chat(
         """SSE streaming with progress events and heartbeats."""
         result_holder: dict = {}
         done = asyncio.Event()
-        stream_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        stream_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=CHAT_STREAM_QUEUE_MAXSIZE)
         persisted = False
 
         async def runner():
@@ -2741,13 +2742,36 @@ async def proxy_chat(
                 yield _encode_sse(pending_delta)
             yield _encode_sse(event)
 
+        async def _drain_stream_queue_until_runner_done() -> None:
+            while True:
+                while True:
+                    try:
+                        stream_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
+                if runner_task.done():
+                    return
+
+                try:
+                    await asyncio.wait_for(stream_queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+
         async def _persist_stream_result_after_runner_done(
             *,
             push: bool,
             persist_db: Session | None = None,
+            drain_stream: bool = False,
         ) -> None:
+            drain_task = (
+                asyncio.create_task(_drain_stream_queue_until_runner_done())
+                if drain_stream else None
+            )
             try:
                 await runner_task
+                if drain_task is not None:
+                    await drain_task
                 final_answer = EMPTY_ASSISTANT_PLACEHOLDER
                 assistant_meta = None
                 assistant_processed = None
@@ -2831,6 +2855,10 @@ async def proxy_chat(
                         )
             except Exception as e:
                 logger.error(f"[/chat] Background finish failed: {e}")
+            finally:
+                if drain_task is not None and not drain_task.done():
+                    drain_task.cancel()
+                    await asyncio.gather(drain_task, return_exceptions=True)
 
         try:
             while True:
@@ -2941,6 +2969,7 @@ async def proxy_chat(
                         _persist_stream_result_after_runner_done,
                         push=True,
                         persist_db=None,
+                        drain_stream=True,
                     )
                     await _finalize_private_buffer(req.user_id)
                     logger.warning(

@@ -84,6 +84,15 @@ class BufferedOutput(BaseOutputModule):
     def _schedule_stream_event(self, event: dict[str, Any]) -> None:
         if self._stream_queue is None:
             return
+        if event.get("status") == "progress":
+            try:
+                self._stream_queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.debug(
+                    "[BufferedOutput] progress event dropped because stream queue is full: %s",
+                    event,
+                )
+            return
         try:
             task = asyncio.create_task(self._stream_queue.put(event))
         except RuntimeError:
