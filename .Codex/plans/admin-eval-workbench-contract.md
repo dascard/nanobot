@@ -35,7 +35,7 @@
 - 修改：`api/admin_routes.py`
 - 测试：`tests/test_eval_candidate_contract.py`
 
-- [ ] **步骤 1：编写 expected contract endpoint 红灯测试**
+- [x] **步骤 1：编写 expected contract endpoint 红灯测试**
 
 在 `tests/test_eval_candidate_contract.py` 新增：
 
@@ -66,7 +66,7 @@ def test_eval_expected_contract_endpoint_exposes_scoreable_keys(client, monkeypa
         assert deprecated not in payload["scoreable_keys"]
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -79,7 +79,7 @@ tests/test_eval_candidate_contract.py::test_eval_expected_contract_endpoint_expo
 
 预期：失败于 404，说明 endpoint 尚未实现。
 
-- [ ] **步骤 3：扩展 expected contract schema**
+- [x] **步骤 3：扩展 expected contract schema**
 
 在 `evals/expected_contract.py` 中保留 `SCOREABLE_EXPECTED_KEYS`，新增：
 
@@ -187,7 +187,7 @@ def expected_contract_payload() -> dict[str, Any]:
     }
 ```
 
-- [ ] **步骤 4：新增 Admin contract endpoint**
+- [x] **步骤 4：新增 Admin contract endpoint**
 
 在 `api/admin_routes.py` 的 eval candidate API 区域导入 helper：
 
@@ -203,7 +203,7 @@ def eval_expected_contract(_auth=Depends(verify_admin)):
     return expected_contract_payload()
 ```
 
-- [ ] **步骤 5：运行 endpoint 绿灯测试**
+- [x] **步骤 5：运行 endpoint 绿灯测试**
 
 运行：
 
@@ -216,7 +216,7 @@ tests/test_eval_candidate_contract.py::test_eval_expected_contract_endpoint_expo
 
 预期：该测试通过。
 
-- [ ] **步骤 6：Commit P4-2A 第一个后端切片**
+- [x] **步骤 6：纳入 P4-2A 后端阶段提交**
 
 ```bash
 git add evals/expected_contract.py api/admin_routes.py tests/test_eval_candidate_contract.py
@@ -230,7 +230,7 @@ git commit -m "feat(评测): 暴露期望字段契约"
 - 修改：`api/admin_routes.py`
 - 测试：`tests/test_eval_candidate_contract.py`
 
-- [ ] **步骤 1：编写类型 / 枚举校验红灯测试**
+- [x] **步骤 1：编写类型 / 枚举校验红灯测试**
 
 在 `tests/test_eval_candidate_contract.py` 新增：
 
@@ -270,7 +270,7 @@ def test_validate_expected_accepts_typed_values():
     validate_expected_contract("sticker", {"http_status": 200, "served_sticker_id": 74})
 ```
 
-- [ ] **步骤 2：编写 label 冲突红灯测试**
+- [x] **步骤 2：编写 label 冲突红灯测试**
 
 同文件新增：
 
@@ -296,7 +296,7 @@ def test_eval_label_candidate_rejects_conflicting_expected_fields(
     assert "expected" in response.json()["detail"]
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -311,7 +311,7 @@ tests/test_eval_candidate_contract.py::test_eval_label_candidate_rejects_conflic
 
 预期：至少类型 / 枚举校验和冲突测试失败。
 
-- [ ] **步骤 4：实现类型校验 helper**
+- [x] **步骤 4：实现类型校验 helper**
 
 在 `evals/expected_contract.py` 增加：
 
@@ -360,7 +360,7 @@ def validate_expected_contract(suite: str, expected: Mapping[str, Any]) -> None:
         _validate_type(str(key), value, EXPECTED_FIELD_SCHEMA[str(key)])
 ```
 
-- [ ] **步骤 5：实现 LabelRequest 冲突保护**
+- [x] **步骤 5：实现 LabelRequest 冲突保护**
 
 在 `api/admin_routes.py` 的 `LabelRequest` 中替换 `normalized_expected()`：
 
@@ -381,7 +381,7 @@ def validate_expected_contract(suite: str, expected: Mapping[str, Any]) -> None:
         raise HTTPException(400, str(e))
 ```
 
-- [ ] **步骤 6：运行后端契约绿灯测试**
+- [x] **步骤 6：运行后端契约绿灯测试**
 
 运行：
 
@@ -392,7 +392,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_eval_candidate_contract
 
 预期：`tests/test_eval_candidate_contract.py` 全部通过。
 
-- [ ] **步骤 7：Commit P4-2A 第二个后端切片**
+- [x] **步骤 7：纳入 P4-2A 后端阶段提交**
 
 ```bash
 git add evals/expected_contract.py api/admin_routes.py tests/test_eval_candidate_contract.py
@@ -405,7 +405,7 @@ git commit -m "fix(评测): 校验期望字段类型"
 - 修改：`api/admin_routes.py`
 - 测试：`tests/test_eval_candidate_contract.py`
 
-- [ ] **步骤 1：编写 promote apply 响应红灯测试**
+- [x] **步骤 1：编写 promote apply 响应红灯测试**
 
 在 `tests/test_eval_candidate_contract.py` 新增：
 
@@ -439,7 +439,7 @@ def test_eval_promote_candidate_apply_response_matches_dry_run_contract(
     assert payload["path"].endswith("evals/cases/timing_gate/cand_timing_gate_1.json")
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -452,7 +452,7 @@ tests/test_eval_candidate_contract.py::test_eval_promote_candidate_apply_respons
 
 预期：失败于响应缺少 `dry_run`、`case_id`、`suite` 或 `target_dataset`。
 
-- [ ] **步骤 3：调整 promote apply 响应**
+- [x] **步骤 3：调整 promote apply 响应**
 
 在 `api/admin_routes.py` 的 `eval_promote_candidate()` 中，把 apply 分支改为先 dry-run 取计划，再执行写入：
 
@@ -474,7 +474,7 @@ tests/test_eval_candidate_contract.py::test_eval_promote_candidate_apply_respons
     }
 ```
 
-- [ ] **步骤 4：运行后端 P4-2A 回归**
+- [x] **步骤 4：运行后端 P4-2A 回归**
 
 运行：
 
@@ -487,7 +487,7 @@ tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py \
 
 预期：候选契约与 CLI 回归全部通过。
 
-- [ ] **步骤 5：Commit P4-2A 完整后端阶段**
+- [x] **步骤 5：Commit P4-2A 完整后端阶段**
 
 ```bash
 git add api/admin_routes.py tests/test_eval_candidate_contract.py

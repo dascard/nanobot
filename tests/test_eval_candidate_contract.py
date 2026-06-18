@@ -122,6 +122,95 @@ def test_eval_label_candidate_accepts_expected_json_legacy_field(
     assert response.json()["expected"] == {"timing_action": "continue"}
 
 
+def test_eval_expected_contract_endpoint_exposes_scoreable_keys(client, monkeypatch):
+    from evals.expected_contract import SCOREABLE_EXPECTED_KEYS
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    response = client.get(
+        "/api/v1/admin/evals/expected-contract",
+        headers=_auth_header(),
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert sorted(payload["scoreable_keys"]) == sorted(SCOREABLE_EXPECTED_KEYS)
+    assert set(payload["field_schema"]) == set(SCOREABLE_EXPECTED_KEYS)
+    assert payload["suite_presets"]["timing_gate"]["fields"][0] == "timing_action"
+    assert payload["field_schema"]["timing_action"]["type"] == "enum"
+    assert payload["field_schema"]["timing_action"]["values"] == [
+        "continue",
+        "wait",
+        "no_reply",
+    ]
+    for deprecated in (
+        "expected_action",
+        "should_learn",
+        "quality",
+        "category",
+        "meaning",
+        "delay_seconds",
+    ):
+        assert deprecated in payload["deprecated_keys"]
+        assert deprecated not in payload["scoreable_keys"]
+
+
+@pytest.mark.parametrize(
+    ("suite", "expected", "message"),
+    [
+        ("timing_gate", {"timing_action": 123}, "timing_action"),
+        ("timing_gate", {"timing_action": "maybe"}, "timing_action"),
+        ("timing_gate", {"should_reply": "false"}, "should_reply"),
+        ("group_reply", {"required_tools": "reply"}, "required_tools"),
+        ("sticker", {"http_status": "200"}, "http_status"),
+        ("timing_gate", {"expected_action": "continue"}, "expected_action"),
+    ],
+)
+def test_validate_expected_rejects_bad_types_and_deprecated_keys(suite, expected, message):
+    from evals.expected_contract import validate_expected_contract
+
+    with pytest.raises(ValueError, match=message):
+        validate_expected_contract(suite, expected)
+
+
+def test_validate_expected_accepts_typed_values():
+    from evals.expected_contract import validate_expected_contract
+
+    validate_expected_contract(
+        "group_reply",
+        {
+            "should_reply": True,
+            "required_tools": ["reply"],
+            "mentions": [{"user_id": "456"}],
+            "must_contain": ["关键句"],
+            "send_mode": "quote",
+            "reply_to_message_id": "m-1",
+        },
+    )
+    validate_expected_contract("sticker", {"http_status": 200, "served_sticker_id": 74})
+
+
+def test_eval_label_candidate_rejects_conflicting_expected_fields(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    _insert_candidate(db_session)
+
+    response = client.post(
+        "/api/v1/admin/evals/candidates/cand_timing_gate_1/label",
+        headers=_auth_header(),
+        json={
+            "expected": {"timing_action": "continue"},
+            "expected_json": {"timing_action": "no_reply"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert "expected" in response.json()["detail"]
+
+
 def test_promote_candidate_rejects_unlabeled_and_file_conflict(db_session, tmp_path, monkeypatch):
     _redirect_promote_root(monkeypatch, tmp_path)
     from core.eval_sampling.store import label_candidate, promote_candidate
@@ -204,3 +293,32 @@ def test_eval_promote_candidate_dry_run_uses_target_dataset(
     assert payload["path"].endswith("evals/cases/timing_gate/cand_timing_gate_1.json")
     assert not (tmp_path / "evals" / "cases" / "timing_gate" / "cand_timing_gate_1.json").exists()
     assert get_candidate(db_session, "cand_timing_gate_1").status == "labeled"
+
+
+def test_eval_promote_candidate_apply_response_matches_dry_run_contract(
+    client,
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    from core.eval_sampling.store import label_candidate
+
+    _insert_candidate(db_session)
+    label_candidate(db_session, "cand_timing_gate_1", {"timing_action": "continue"})
+
+    response = client.post(
+        "/api/v1/admin/evals/candidates/cand_timing_gate_1/promote",
+        headers=_auth_header(),
+        json={"dry_run": False, "target_dataset": "timing_gate"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["dry_run"] is False
+    assert payload["case_id"] == "cand_timing_gate_1"
+    assert payload["suite"] == "timing_gate"
+    assert payload["target_dataset"] == "timing_gate"
+    assert payload["path"].endswith("evals/cases/timing_gate/cand_timing_gate_1.json")

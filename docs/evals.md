@@ -81,7 +81,7 @@ Admin 接口兼容旧字段 `expected_json`，但新调用应统一发送 `expec
 
 ## Admin WebUI 工作台改造目标
 
-P4-2 已将 Admin 标注工作台拆为后端契约和 WebUI 两个阶段，设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`，实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。
+P4-2 已将 Admin 标注工作台拆为后端契约和 WebUI 两个阶段，设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`，实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。P4-2A 后端契约 schema/API 已完成定向回归；P4-2B WebUI 工作台仍需按契约接入。
 
 实现阶段必须遵守以下边界：
 

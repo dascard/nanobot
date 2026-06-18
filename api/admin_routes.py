@@ -5279,6 +5279,12 @@ from core.eval_sampling.store import (
     label_candidate, ignore_candidate, plan_candidate_promotion, promote_candidate,
     save_run, save_run_results, get_runs, get_run,
 )
+from evals.expected_contract import expected_contract_payload
+
+
+@router.get("/evals/expected-contract")
+def eval_expected_contract(_auth=Depends(verify_admin)):
+    return expected_contract_payload()
 
 
 @router.get("/evals/candidates")
@@ -5340,6 +5346,8 @@ class LabelRequest(BaseModel):
     note: str = ""
 
     def normalized_expected(self) -> dict:
+        if self.expected and self.expected_json and self.expected != self.expected_json:
+            raise ValueError("expected and expected_json conflict")
         return self.expected or self.expected_json or {}
 
 
@@ -5354,8 +5362,8 @@ def eval_label_candidate(
     request: Request, db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    expected = body.normalized_expected()
     try:
+        expected = body.normalized_expected()
         result = label_candidate(db, case_id, expected, note=body.note or None)
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -5397,6 +5405,7 @@ def eval_promote_candidate(
                 {"path": plan["path"], "target_dataset": plan["target_dataset"]},
             )
             return {"dry_run": True, **plan}
+        plan = plan_candidate_promotion(db, case_id, target_dataset=body.target_dataset)
         path = promote_candidate(db, case_id, target_dataset=body.target_dataset)
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -5410,7 +5419,14 @@ def eval_promote_candidate(
         case_id,
         {"path": path, "target_dataset": body.target_dataset},
     )
-    return {"ok": True, "path": path}
+    return {
+        "ok": True,
+        "dry_run": False,
+        "case_id": plan["case_id"],
+        "suite": plan["suite"],
+        "target_dataset": plan["target_dataset"],
+        "path": path,
+    }
 
 
 @router.post("/evals/sample/run")

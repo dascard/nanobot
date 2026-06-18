@@ -80,11 +80,11 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-3A | 已完成 | TimingGate 标注审计复跑 | `timing_signal_audit` 已支持离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
 | P3-3B | 已完成 | TimingGate CI / PR gate | 已新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 已完成 | 评测体系扩展 | expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界、首个 `capability_model_routing` 能力数据集、文档收口和最终验证均已完成 | `e4fb70a` / `8b892a8` / `4f4cce7` / `b84cbf1` / `7a84084` / `71c3a53` / `a494f3b` / `5a8b601` |
-| P4-2 | 计划已完成 | Admin 标注工作台契约化与 promote 预检 UI | 设计文档和实现计划已写入，阶段拆为 P4-2A 后端契约 schema/API 与 P4-2B WebUI 工作台 | `docs(评测): 设计标注工作台契约` |
+| P4-2 | 进行中 | Admin 标注工作台契约化与 promote 预检 UI | 设计文档和实现计划已写入，P4-2A 后端契约 schema/API 已完成定向回归，P4-2B WebUI 工作台待实现 | `docs(评测): 设计标注工作台契约` / `feat(评测): 暴露期望契约校验` |
 
 ## 当前详细计划：P4-2 Admin 标注工作台契约化与 promote 预检 UI
 
-状态：计划阶段已完成，待进入 P4-2A 后端契约实现。设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`；实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。本阶段不重复 P4-1 的 store / CLI / runner，不新增 RAG benchmark，也不扩更多 suite gate。
+状态：P4-2A 后端契约已完成红灯、实现、定向回归和提交前全量验证；P4-2B WebUI 工作台待实现。设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`；实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。本阶段不重复 P4-1 的 store / CLI / runner，不新增 RAG benchmark，也不扩更多 suite gate。
 
 目标：
 
@@ -104,9 +104,9 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 实现阶段拆分：
 
-- [ ] P4-2A-1：新增 expected contract endpoint，返回 `scoreable_keys`、`field_schema`、`suite_presets` 和 `deprecated_keys`。
-- [ ] P4-2A-2：收紧 expected 类型 / 枚举校验，并拒绝 `expected` / `expected_json` 冲突。
-- [ ] P4-2A-3：对齐 promote apply 响应字段，保持 dry-run / apply 契约一致。
+- [x] P4-2A-1：新增 expected contract endpoint，返回 `scoreable_keys`、`field_schema`、`suite_presets` 和 `deprecated_keys`。
+- [x] P4-2A-2：收紧 expected 类型 / 枚举校验，并拒绝 `expected` / `expected_json` 冲突。
+- [x] P4-2A-3：对齐 promote apply 响应字段，保持 dry-run / apply 契约一致。
 - [ ] P4-2B-1：WebUI label modal 加载 expected contract，移除旧 expected 字段，`note` 与 `expected` 分离。
 - [ ] P4-2B-2：WebUI promote modal 支持 `target_dataset`、dry-run 预检、预检结果展示和 apply 二次确认。
 - [ ] P4-2B-3：运行 WebUI 静态测试、候选闭环回归和 `npm --prefix webui run build`。
@@ -125,10 +125,17 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - P4-2B：`tests/test_webui_admin_redesign.py` 和 `npm --prefix webui run build`。
 - 最终回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`。
 
+P4-2A 验证记录：
+
+- 红灯：新增 endpoint、类型 / 枚举、label 冲突和 promote apply 响应用例后运行新增集合，结果 `8 failed, 2 passed, 21 warnings in 7.02s`；失败点为 endpoint 404、类型校验未触发、冲突请求返回 200、apply 响应缺 `dry_run`。
+- 绿灯：同一新增集合复跑，结果 `10 passed, 21 warnings in 1.82s`。
+- 后端定向回归：`tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py`，结果 `24 passed, 21 warnings in 3.30s`。
+- 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1349 passed, 6 skipped, 139 warnings in 103.57s`。
+
 提交边界：
 
 - 计划阶段：`docs(评测): 设计标注工作台契约`。
-- P4-2A 后端契约：按 endpoint、类型校验、promote 响应拆成 2 到 3 个提交。
+- P4-2A 后端契约：`feat(评测): 暴露期望契约校验`。
 - P4-2B WebUI 工作台：按 label modal 和 promote modal 拆成 2 个提交。
 - 文档收口：`docs(评测): 收口标注工作台状态`。
 
