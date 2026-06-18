@@ -297,9 +297,19 @@ HTML 正文结构：
 
 `/group/message` 响应继续保留 `action`、`reply`、`reply_meta`、`generation`、`reason`、`delay_seconds`、`diagnostics` 等旧字段，同时增加 `status`、`messages` 和 `meta`。群聊 `action="continue"` 在标准信封中映射为 `status="ok"`。
 
-QQ push 仍保留旧 helper 签名 `push_to_qq(target_type, target_id, message) -> bool`。新代码应优先构造标准信封，再通过 `push_envelope_to_qq(target_type, target_id, envelope)` 派生旧 QQbot `message` 字段；若 `reply` 为空，则只拼接 `messages` 中 `type` 为 `text` 或 `html` 的 `text`，忽略图片等未定义类型。
+### 响应出站渲染契约
 
-图片、@、引用和完整出站 `segments` 协议由 P2-3「QQ 出站渲染契约」负责，不在 P2-2 定义。面向 QQbot 的传输路径仍必须避免 base64 大负载；流式断连后台 push 在构造信封前继续使用 `expand_generated_image_refs_in_content(..., allow_base64=False)`。
+响应信封里的 `messages` 是出站内容 canonical 数组，`reply` 是旧客户端和简单展示 fallback。新代码应优先构造标准信封；面向 QQbot 的发送路径统一通过 `core.qq_outbound_renderer.render_qq_outbound_envelope()` 渲染为旧 `message` 字符串，再由 `push_envelope_to_qq()` 调用仍保留旧签名的 `push_to_qq(target_type, target_id, message) -> bool`。
+
+P2-3 已实现的 QQ 渲染输入包括：
+
+- `type="text"` 和 `type="html"`：使用 `text` 字段并按 `messages` 顺序拼接。
+- `type="image"` 且带 `url`：渲染为 `[CQ:image,file=<url>]`。
+- `type="image"` 且带 `generated_image_id`，或正文里的 `[generated_image:<id>]`：优先使用公开 URL 渲染为 CQ 图片；无公开 URL 时保留短 token 并记录 warning。
+- 正文里的 `[sticker:<id>]`：通过贴纸展开逻辑兼容渲染。
+- 已存在的 OneBot CQ 码：按文本原样保留，不拆分、不重写。
+
+QQ-facing 路径必须保持 `allow_base64=False`，生成图无公开 URL 时不得回退到 `base64://`。`reply_meta` 表示发送意图并只保留白名单字段；首版不从 `reply_meta` 派生 `[CQ:at]` 或 `[CQ:reply]`。首版也不新增顶层 `segments` / `out_segments`，HTML 作为 `html` 文本进入 legacy message，不在 Nanobot 服务端转图片。
 
 ## `client_meta` 标准结构
 

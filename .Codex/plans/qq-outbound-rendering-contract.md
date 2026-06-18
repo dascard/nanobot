@@ -16,12 +16,12 @@
 - 当前计划文件路径按项目约定使用 `.Codex/plans/qq-outbound-rendering-contract.md`。
 - P2-2 响应信封已完成：`core/message_envelope.py` 输出 `reply`、`messages`、`reply_meta` 和 `meta`，旧字段兼容保留。
 - P2-2.5 `client_meta` 已完成：`platform` 缺省 `qq`，`chat_type` 与入口事实一致，trace 字段已校验和裁剪。
-- `push_envelope_to_qq()` 当前仍通过 `envelope_to_message()` 派生 legacy `message`，因此会忽略 `messages` 中非文本项。
-- `push_to_qq(target_type, target_id, message) -> bool` 旧签名必须保持。
-- `[generated_image:<id>]` 当前由散落的 `expand_generated_image_refs_in_content(..., allow_base64=False)` 调用展开。renderer 接管后，QQ-facing 路径仍禁止 `base64://`。
-- `[sticker:<id>]` 当前通常在 `ReplyTool` 层提前展开。renderer 仍要兼容该短 token，避免绕过 reply 工具的出口丢表情。
-- `creatures/nanobot/prompts/skills/schedule_task/tool.py` 的 `action == "run"` 仍直接调用 `push_to_qq()`，是 P2-3 必修绕过点。
-- 工具说明存在两个物理根目录：`prompts.v2.default/tools/*/usage.md` 和 `data/prompts_v2/tools/*/usage.md`。两边必须同步修改。
+- `push_envelope_to_qq()` 已通过 `render_qq_outbound_envelope(envelope, allow_base64=False)` 派生 legacy `message`，不再依赖会忽略图片的 `envelope_to_message()`。
+- `push_to_qq(target_type, target_id, message) -> bool` 旧签名已保持不变。
+- `[generated_image:<id>]` 已由 renderer 统一处理：有公开 URL 时转 CQ 图片，无公开 URL 时保留短 token；QQ-facing 路径仍禁止 `base64://`。
+- `[sticker:<id>]` 已由 renderer 兼容展开；`ReplyTool` 层提前展开仍保留为兼容路径。
+- `creatures/nanobot/prompts/skills/schedule_task/tool.py` 的 `action == "run"` 已改走响应信封和 `push_envelope_to_qq()`。
+- 工具说明存在两个物理根目录：`prompts.v2.default/tools/*/usage.md` 和 `data/prompts_v2/tools/*/usage.md`。两边已同步修改，并随 `6aea7f8 docs(提示词): 说明出站渲染职责` 提交。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md`、`nanobot.db` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
 ## 文件结构
@@ -823,7 +823,7 @@ git commit -m "test(渲染): 保护富媒体信封边界"
 - 修改：`data/prompts_v2/tools/sticker_search/usage.md`
 - 修改：`data/prompts_v2/tools/image_generation/usage.md`
 
-- [ ] **步骤 1：定位旧文案**
+- [x] **步骤 1：定位旧文案**
 
 运行：
 
@@ -839,7 +839,7 @@ rg -n "reply_token|send_code|CQ:image|generated_image|sticker" \
 
 预期：输出当前短 token 和 CQ 码说明位置。
 
-- [ ] **步骤 2：修改 6 个 usage 文档**
+- [x] **步骤 2：修改 6 个 usage 文档**
 
 统一口径：
 
@@ -861,7 +861,7 @@ rg -n "reply_token|send_code|CQ:image|generated_image|sticker" \
 生成图片后，把工具返回的 `[generated_image:<id>]` 放入 `reply(content)`。不要把 base64 或本地文件路径写进回复。
 ```
 
-- [ ] **步骤 3：验证两个 prompt 根目录一致**
+- [x] **步骤 3：验证两个 prompt 根目录一致**
 
 运行：
 
@@ -873,7 +873,7 @@ diff -u prompts.v2.default/tools/image_generation/usage.md data/prompts_v2/tools
 
 预期：如果两个根目录原本就存在路径或标题差异，diff 可以有已知差异；本任务新增的短 token 口径必须一致。若 diff 太大，改用 `rg -n` 精确检查新增句子在两个根目录都存在。
 
-- [ ] **步骤 4：运行 prompt 文档扫描**
+- [x] **步骤 4：运行 prompt 文档扫描**
 
 运行：
 
@@ -904,7 +904,7 @@ PY
 
 预期：无输出，退出码 0。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 运行：
 
@@ -927,7 +927,7 @@ git commit -m "docs(提示词): 说明出站渲染职责"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/qq-outbound-rendering-contract.md`
 
-- [ ] **步骤 1：同步消息字段标准**
+- [x] **步骤 1：同步消息字段标准**
 
 在 `docs/message-field-standard.md` 增加「响应出站渲染契约」小节，写明：
 
@@ -937,7 +937,7 @@ QQ 出站由 `core.qq_outbound_renderer.render_qq_outbound_envelope()` 统一渲
 QQ-facing 路径禁止 base64 fallback；生成图优先公开 URL，无公开 URL 时保留短 token 并记录 warning。
 ```
 
-- [ ] **步骤 2：同步路线项 7**
+- [x] **步骤 2：同步路线项 7**
 
 把 `docs/todo.md` 路线项 7 更新为已完成 P2-3 主线，并列出仍保留的相邻演进项：
 
@@ -947,15 +947,15 @@ QQ-facing 路径禁止 base64 fallback；生成图优先公开 URL，无公开 U
 
 不要修改路线项编号。
 
-- [ ] **步骤 3：同步 walkthrough**
+- [x] **步骤 3：同步 walkthrough**
 
 在 `docs/plan_walkthrough.md`：
 
-- 把 P2-3 从「待执行」更新为「实现中」或「已完成」，按实际代码任务完成状态选择。
+- 把 P2-3 更新为当前实现状态，按代码任务和验证结果标记完成度。
 - 增加本计划路径和各任务提交号。
 - 记录定向测试和全量测试的新鲜输出。
 
-- [ ] **步骤 4：运行 P2-3 定向回归**
+- [x] **步骤 4：运行 P2-3 定向回归**
 
 运行：
 
@@ -975,7 +975,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：PASS。
 
-- [ ] **步骤 5：运行全量回归**
+- [x] **步骤 5：运行全量回归**
 
 运行：
 
@@ -986,7 +986,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider
 
 预期：PASS，失败数为 0。
 
-- [ ] **步骤 6：运行文档扫描**
+- [x] **步骤 6：运行文档扫描**
 
 运行：
 
@@ -1020,7 +1020,7 @@ PY
 
 预期：无输出，退出码 0。
 
-- [ ] **步骤 7：运行 diff 检查**
+- [x] **步骤 7：运行 diff 检查**
 
 运行：
 
@@ -1034,7 +1034,7 @@ git diff --check -- \
 
 预期：无输出，退出码 0。
 
-- [ ] **步骤 8：Commit**
+- [x] **步骤 8：Commit**
 
 运行：
 
@@ -1044,17 +1044,17 @@ git add \
   docs/todo.md \
   docs/plan_walkthrough.md \
   .Codex/plans/qq-outbound-rendering-contract.md
-git commit -m "docs(计划): 同步 QQ 出站渲染计划"
+git commit -m "docs(计划): 收口 QQ 出站渲染状态"
 ```
 
 ## 最终验收清单
 
-- [ ] `core/qq_outbound_renderer.py` 存在，且 `render_qq_outbound_envelope()` 是 QQ push 信封的唯一渲染入口。
-- [ ] `push_to_qq(target_type, target_id, message) -> bool` 旧签名未改。
-- [ ] `[generated_image:<id>]` 有公开 URL 时渲染为 `[CQ:image,file=<url>]`。
-- [ ] 无公开 URL 时保留 `[generated_image:<id>]`，且 `message` 不包含 `base64://`。
-- [ ] `[sticker:<id>]` 在 renderer 层可兼容展开。
-- [ ] schedule task `action == "run"` 不再直接调用 `push_to_qq()`。
-- [ ] `/chat`、SSE done、`/group/message` 的旧字段继续兼容。
-- [ ] prompt usage 文档说明短 token 和 renderer 职责，两个 prompt 根目录口径一致。
-- [ ] P2-3 定向回归和全量回归通过。
+- [x] `core/qq_outbound_renderer.py` 存在，且 `render_qq_outbound_envelope()` 是 QQ push 信封的唯一渲染入口。
+- [x] `push_to_qq(target_type, target_id, message) -> bool` 旧签名未改。
+- [x] `[generated_image:<id>]` 有公开 URL 时渲染为 `[CQ:image,file=<url>]`。
+- [x] 无公开 URL 时保留 `[generated_image:<id>]`，且 `message` 不包含 `base64://`。
+- [x] `[sticker:<id>]` 在 renderer 层可兼容展开。
+- [x] schedule task `action == "run"` 不再直接调用 `push_to_qq()`。
+- [x] `/chat`、SSE done、`/group/message` 的旧字段继续兼容。
+- [x] prompt usage 文档说明短 token 和 renderer 职责，两个 prompt 根目录口径一致。
+- [x] P2-3 定向回归和全量回归通过。
