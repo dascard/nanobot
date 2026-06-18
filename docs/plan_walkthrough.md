@@ -4,11 +4,11 @@
 更新日期：2026-06-18
 本轮计划写入日期：2026-06-18
 
-本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。下一步优先进入 P2 platform 维度底座。
+本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。当前优先级已切到 P2 platform 维度底座，并已完成 P2-1「工具配置增加 platform 维度」的后端运行时、Admin API 和 WebUI 只读审计；下一阶段先写设计文档，再按计划进入 TDD 实现。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离，以及 P1-8 模型能力校验均已完成。当前 `docs/todo.md` 路线项 3 已落地：模型记录顶层 `supports_image` / `supports_tools` / `supports_stream` 已归一化，直接 New API 和 Bridge 主回复都会按请求能力过滤候选，payload / SDK request 前 guard 会再次校验最终请求，无视觉候选时会降级为纯文本说明，`model_routing` eval 已覆盖带图请求必须选择 vision 候选。下一阶段优先进入 P2 platform 维度底座。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离，以及 P1-8 模型能力校验均已完成。当前 `docs/todo.md` 路线项 3 已落地：模型记录顶层 `supports_image` / `supports_tools` / `supports_stream` 已归一化，直接 New API 和 Bridge 主回复都会按请求能力过滤候选，payload / SDK request 前 guard 会再次校验最终请求，无视觉候选时会降级为纯文本说明，`model_routing` eval 已覆盖带图请求必须选择 vision 候选。下一阶段优先执行 `docs/todo.md` 路线项 4，也就是 P2-1「工具配置增加 platform 维度」。
 
 ## 文档口径
 
@@ -67,7 +67,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P1-6 | 已完成 | 删除冗余提示词资产并去版本化 | 旧任务 prompt、V1 live 分支、legacy 管理面、旧资产删除、canonical 命名兼容层和文档最终验证均已完成 | `4fe00bb` / `docs(计划): 同步提示词收口最终状态` |
 | P1-7 | 已完成 | 残余同步 IO 审计与收口 | 贴纸 fallback、图片附件预处理和 Direct 工具同步 IO 守卫均已落地，路线项 2 已完成收口 | `8ce5210` / `d96e7cd` / `c7e91a9` / `641d080` / `0489bac` / `b3d27f5` |
 | P1-8 | 已完成 | 模型能力校验 | registry、直接 New API、Bridge 主回复、payload guard、无视觉候选降级和 `model_routing` eval 覆盖均已接入 `supports_image` / `supports_tools` / `supports_stream` | `ded7213` / `d4748d2` / `388c00f` / `d907a98` / `66fdfd9` / `d2a7a1f` / `e1d3bef` |
-| P2-1 | 待执行 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform | `feat(工具): 支持平台维度配置` |
+| P2-1 | 设计中 | 工具配置增加 platform 维度 | 工具解析支持 platform scope，运行时审计带 platform；已完成只读审计，待写设计文档和实现计划 | `docs(工具): 设计平台维度配置` / `feat(工具): 支持平台维度配置` |
 | P2-2 | 待执行 | 标准化请求 / 响应信封 | `/chat`、流式 done、`/group/message`、push 共享响应结构，私聊也返回 `reply_meta` | `refactor(消息): 统一响应信封` |
 | P2-3 | 待执行 | QQ 出站渲染契约 | 输出结构化 segments，图片和 HTML 渲染集中在出口层 | `feat(渲染): 定义 QQ 出站消息契约` |
 | P2-4 | 待执行 | Prompt platform × chat_type 二维适配 | V2 模板按平台和会话类型拆分，QQ 专属约定下沉到 platform 分支 | `feat(提示词): 支持平台化模板分支` |
@@ -75,7 +75,68 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-2 | 运营项 | TimingGate 持续评估 | 用更多人工标注样本复跑审计，接入外部 CI / PR gate | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 待执行 | 评测体系扩展 | 扩 per-capability 数据集，打通 `candidates → labeled` 标注闭环 | `feat(评测): 扩展能力评测数据集` |
 
-## 当前详细计划：P1-8 模型能力校验
+## 当前详细计划：P2-1 工具配置增加 platform 维度
+
+状态：P2-1 已进入设计阶段。`docs/todo.md` 路线项 4 明确当前痛点是工具策略缺少 platform 维度：现有工具裁剪已经有 `chat_type`、`group`、`user` 和 `runtime_preset`，但无法表达「某个平台全局禁用 / 启用某工具」。本文件上一版仍把 P1-8 作为「当前详细计划」，口径已经滞后；本次更新把当前焦点切换到 P2-1。
+
+目标：
+
+- 工具解析支持 platform scope，默认兼容 QQ 主通道，未来可表达 `qq`、`web`、`synergy` 等平台级工具策略。
+- `ToolOverride` 优先复用现有泛化结构，新增 `scope_type="platform"`、`scope_id="<platform>"`，不为 P2-1 首版引入 platform + group/user 复合 scope。
+- 解析顺序固定为 `chat_type -> platform -> group -> user`，并保持 `runtime_preset=none`、`force_enabled`、群聊 `force_disabled_group` 这些硬约束不可被 platform override 绕过。
+- 运行时审计记录 platform，让 `/tools/decisions` 能解释平台策略导致的工具启停结果。
+- 真实入口显式透传 platform：私聊 `/chat` 从 `client_meta.platform` 读取，群聊入口把已解析的 platform 继续传给 bridge，保留旧 QQ 流量的 `qq` fallback。
+
+只读审计结论：
+
+- 当前真实链路是 `NanobotBridge.handle_message()` → `build_tool_plan()` → `resolve_effective_tools()` → `record_runtime_tool_decision()`；出口侧 `resolve_final_tools()` 也复用 `resolve_effective_tools()`。
+- `resolve_effective_tools()` 现有合并顺序为：`TOOL_METADATA` 默认值 → 初始硬约束 → `runtime_preset` → DB `ToolOverride` 覆盖 → 最终硬约束兜底。DB 覆盖只支持 `chat_type`、`group`、`user`，排序为 `chat_type -> group -> user`。
+- `ToolOverride` 当前字段是 `tool_name`、`scope_type`、`scope_id`、`enabled`、`reason`、`created_at`、`updated_at`，唯一约束是 `(tool_name, scope_type, scope_id)`；该结构可以直接承载 `scope_type="platform"`。
+- `RuntimeToolDecision` 当前没有 `platform` 列；如果只改解析不改审计，平台策略生效后无法从运行记录解释原因，因此需要补列迁移。
+- 群聊入口已经把 `client_meta.platform` 传给 TimingGate，但 `_continue_to_bridge` 的 `bridge_meta` 没有带 platform；只改工具解析函数会导致真实生成阶段仍拿不到平台。
+- Admin API 目前 `/tools`、`/tools/effective`、`/tools/decisions` 和 `PUT /tools/{tool}/override` 都没有完整 platform 口径；WebUI 工具配置页也只有 group/user 指定覆盖。
+- `PromptRuntimeInput` 当前没有 platform；P2-1 首版不做 prompt 模板 platform 化，避免把路线项 4 扩成路线项 9。
+
+阶段拆分：
+
+- [x] 已从 `docs/todo.md` 确认 P1 收敛去债完成后，下一优先级是 P2 多平台底座，首项为路线项 4「工具配置增加 platform 维度」。
+- [x] 已完成后端运行时只读审计：工具解析顺序、`ToolOverride` scope 结构、`RuntimeToolDecision` 审计字段、Bridge / final tools 调用链均已梳理。
+- [x] 已完成 Admin / WebUI 只读审计：`ToolOverrideBody`、`/tools`、`/tools/effective`、`/tools/decisions`、`/tools/targets` 和 `webui/src/features/tools/ToolsPage.jsx` 的 platform 缺口已梳理。
+- [ ] 写入设计文档：`docs/superpowers/specs/2026-06-18-tool-platform-scope-design.md`，明确推荐方案、非目标、迁移策略、Admin/API 口径和测试计划。
+- [ ] 写入实现计划：`.Codex/plans/tool-platform-scope.md`，按 TDD 拆分红灯、绿灯、重构和阶段提交。
+- [ ] 任务 1：后端解析函数接入 platform 参数，覆盖 `resolve_effective_tools()`、`build_tool_plan()`、`resolve_final_tools()` 的 precedence 测试。
+- [ ] 任务 2：`RuntimeToolDecision` 增加 `platform` 字段、迁移和 `/tools/decisions` 输出，并补写入测试。
+- [ ] 任务 3：真实入口透传 platform 到 Bridge / ToolPlan，覆盖 `/chat`、群聊 `_continue_to_bridge` 和仍保留的 timer 回调路径。
+- [ ] 任务 4：Admin API 支持 platform override / effective preview / tools preview，`PUT /tools/{tool}/override` 允许 `scope_type="platform"`。
+- [ ] 任务 5：WebUI 工具配置页补最小 platform selector 和指定平台覆盖入口；如本阶段后端先行，则文档明确 WebUI 后置范围。
+- [ ] 任务 6：同步 `docs/todo.md`、`docs/message-field-standard.md`、本文件和实现计划状态，运行定向与全量验证后单独提交。
+
+建议测试与验证：
+
+- `tests/test_tool_plan.py`：platform override 启停工具、`chat_type < platform < group < user` precedence、platform 放开 lightweight 禁用工具、`runtime_preset=none` 不可被 override 放开。
+- `tests/test_admin_api.py`：platform override 写入、`/tools/effective?platform=web` 生效、`/tools` 预览展示平台覆盖、`/tools/decisions` 返回 platform。
+- 群入口 / Bridge 测试：`client_meta.platform` 不只进入 TimingGate，也进入 bridge metadata 并最终影响 `build_tool_plan()`。
+- 迁移验证：已有库通过 `core/schema_migrations.py` 补 `runtime_tool_decisions.platform` 列，避免线上旧库写入失败。
+- 收尾验证：相关定向回归、`python -B -m pytest tests/ -v -p no:cacheprovider` 全量回归、`git diff --check`、文档过时措辞扫描。
+
+风险与边界：
+
+- `platform=""` 不应匹配空 `scope_id` 脏数据；函数默认空值用于兼容直接调用方，真实运行入口负责显式给出 `qq` fallback。
+- 复用 `scope_type="platform"` 只能表达平台全局策略，不能表达「某平台下某群 / 某用户」的组合策略；组合策略不纳入 P2-1 首版。
+- platform override 不能绕过 `force_enabled`、群聊 `force_disabled_group` 和 `runtime_preset=none`。
+- Prompt Runtime platform 模板拆分属于 P2-4，不在本阶段实现。
+
+建议阶段性提交：
+
+- 设计文档：`docs(工具): 设计平台维度配置`
+- 实现计划：`docs(计划): 记录工具平台配置计划`
+- 后端解析：`feat(工具): 支持平台维度解析`
+- 审计迁移：`feat(工具): 记录平台维度决策`
+- 入口透传：`feat(消息): 透传客户端平台`
+- Admin / WebUI：`feat(工具): 配置平台覆盖`
+- 文档收口：`docs(计划): 同步工具平台配置状态`
+
+## 已完成阶段详情：P1-8 模型能力校验
 
 状态：P1-8 已完成。`docs/todo.md` 路线项 3 已从早期「尚未接入能力校验」口径同步为已落地口径；后续只保留 base64 data URL、图片数量 / 大小上限、platform 出站契约等相邻路线项。`docs/TODO_LIST.md` 仍是历史清单，不能作为当前优先级来源。
 
