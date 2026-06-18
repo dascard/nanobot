@@ -2,6 +2,8 @@
 
 > 2026-06-17 · P1-6 目标是在 P1-5 已完成 legacy 收口后，迁移仍依赖旧模板的后台任务，删除 V1 / legacy 冗余资产，并为后续无版本命名收敛铺路。
 
+> 2026-06-18 更新：P1-6 任务 1-7 已完成。旧任务 prompt 已迁移到 task template，V1 live 分支、legacy 管理面和旧资产已下线或删除；主输出、配置默认值、admin API、WebUI 主入口和 trace 口径已收敛到无版本 `prompt` / `Prompt Runtime`。物理目录 `prompts.v2.default`、`data/prompts_v2`、内部包名 `core.prompt_v2`、旧 `/prompt-v2/*` API、`v2_code_retry` / `v2_prompt_only` variant 与 `prompt_v2_audit_failed` 作为兼容边界保留。
+
 ---
 
 ## 背景
@@ -58,6 +60,26 @@ P1-5 已把默认 live 主回复、reply-test / reply-eval 和 legacy / managed 
 
 ## 设计
 
+### 0. 2026-06-18 实施状态
+
+已完成：
+
+- 后台任务 prompt 来源已迁移到 task template：`classifier_legacy`、`private_decision`、`timing_gate`、`memory_extract` 不再走旧 `core.prompt_runtime`。
+- 主回复 live 路径不再构造或回退到 V1 / legacy prompt；旧 `v1` 和 `v2` engine 输入会归一到 canonical `prompt`。
+- 已删除旧 live tree 中的 V1 / legacy 模块、旧模板目录、`creatures/nanobot/prompt.md` 和旧构建脚本。
+- 已新增 canonical admin API：`/api/v1/admin/prompt/templates`、`/prompt/flow`、`/prompt/variables`；旧 `/prompt-v2/*` 继续作为兼容 alias。
+- WebUI 主入口已切到 `/prompt-templates`，旧 `/prompt-v2-templates` 作为 redirect alias。
+- 新写入的 engine、prompt mode、prompt source 使用 `prompt` / `Prompt Runtime`；历史 trace / eval 仍兼容旧 `v1` / `v2` 值。
+- 默认模板 frontmatter 用户可见标题和描述已去掉 `V2` 主标签。
+
+本阶段特意保留：
+
+- 物理目录 `prompts.v2.default`、`data/prompts_v2`、`data/prompts_v2_history`。
+- 内部包名与测试命名中的 `core.prompt_v2` / `PromptV2*`。
+- 兼容 API `/prompt-v2/*`、兼容输入 `engine=v2` / `prompt_engine=v2`。
+- 兼容 variant `v2_code_retry`、`v2_prompt_only`。
+- 历史字段 / 哨兵 `prompt_v2_audit_failed` 和旧 trace 中已有的 `prompt_mode=v2`。
+
 ### 1. 后台任务 prompt 迁移
 
 `core.prompt_runtime.render_model_messages()` 和 `render_prompt_content()` 继续从 `core.prompts.PromptManager` 读取 `prompts.default/`。P1-6 应先消除 live 调用方：
@@ -102,10 +124,10 @@ P1-5 已把 legacy / managed 写接口返回 410，且 WebUI legacy 页面只读
 
 去版本化是兼容迁移，不是简单搜索替换。建议分两层：
 
-- 内部 canonical 名称：新增无版本命名，例如默认模板目录 `prompts.default.next` 或直接 `prompts.default`（需先释放旧目录），runtime 目录 `data/prompts`（需先删除旧 PromptManager runtime），API 语义称为 `prompt/templates`。
-- 兼容别名：旧 `prompts.v2.default`、`data/prompts_v2`、`/prompt-v2/*`、`v2_code_retry`、`prompt_engine=v2` 在过渡期继续可读，但新写入和文档使用无版本名称。
+- 对外 canonical 名称：engine、prompt mode、trace source、admin API 和 WebUI 主入口使用无版本 `prompt` / `Prompt Runtime` / `/prompt/*` / `/prompt-templates`。
+- 兼容别名：旧 `prompts.v2.default`、`data/prompts_v2`、`/prompt-v2/*`、`v2_code_retry`、`v2_prompt_only`、`prompt_engine=v2` 在过渡期继续可读；新写入的运行时输出使用无版本名称。
 
-由于旧 `prompts.default/` 已被 V1 PromptManager 占用，目录重命名必须排在旧 PromptManager 删除之后。
+由于旧 `prompts.default/` / `data/prompts/` 仍有历史运行时数据语义，本阶段不物理重命名目录。若后续要迁移到 `prompts.default` / `data/prompts`，必须单独设计、导出旧运行时覆盖并单独验证。
 
 ### 6. 历史兼容
 
@@ -119,14 +141,25 @@ P1-5 已把 legacy / managed 写接口返回 410，且 WebUI legacy 页面只读
 
 ## 验收标准
 
-- [ ] `classifier_legacy` 和 `memory_extract` 不再调用 `core.prompt_runtime` 或 `core.prompts.PromptManager`。
-- [ ] 主回复 live 路径不再调用 `PromptAssembler` 或 `core.legacy_prompt_runtime`。
-- [ ] `creatures/nanobot/config.yaml` 不再要求 `prompt.md` 存在。
-- [ ] 删除旧资产后，`rg` 守卫证明剩余 V1 / legacy 引用只在历史兼容、迁移说明或测试 fixture 白名单内。
-- [ ] 新主路径使用无版本 canonical 命名；旧 `v2` 名称仅作为兼容别名存在。
-- [ ] Admin / WebUI 不暴露旧 PromptManager 或 legacy fragment 写入口。
-- [ ] 旧 trace 和旧 eval 报告仍可展示，不因字段改名崩溃。
-- [ ] P1-6 定向测试、prompt runtime / reply admin 回归、WebUI 构建和全量测试通过。
+- [x] `classifier_legacy` 和 `memory_extract` 不再调用 `core.prompt_runtime` 或 `core.prompts.PromptManager`。
+- [x] 主回复 live 路径不再调用 `PromptAssembler` 或 `core.legacy_prompt_runtime`。
+- [x] `creatures/nanobot/config.yaml` 不再要求 `prompt.md` 存在。
+- [x] 删除旧资产后，`rg` 守卫证明剩余 V1 / legacy 引用只在历史兼容、迁移说明或测试 fixture 白名单内。
+- [x] 新主路径使用无版本 canonical 命名；旧 `v2` 名称仅作为兼容别名存在。
+- [x] Admin / WebUI 不暴露旧 PromptManager 或 legacy fragment 写入口。
+- [x] 旧 trace 和旧 eval 报告仍可展示，不因字段改名崩溃。
+- [x] P1-6 定向测试、prompt runtime / reply admin 回归、WebUI 构建和全量测试通过。
+
+验证结果：
+
+- P1-6 任务 7 红灯集合绿灯：`16 passed, 20 warnings`。
+- P1-6 任务 7 相关回归：`126 passed, 20 warnings`。
+- WebUI 构建：`npm run build` 通过，Vite 仅提示大 chunk 与插件耗时 warning。
+- 全量测试：`1219 passed, 6 skipped, 113 warnings in 81.05s`。
+- P1-6 任务 8 文档守卫：`git diff --check` 无输出；旧 prompt 引用扫描仅命中测试守卫 / 负向断言。
+- P1-6 任务 8 定向回归：`71 passed, 1 warning`、`42 passed, 20 warnings`、`79 passed, 20 warnings`。
+- P1-6 任务 8 WebUI 构建：`npm run build` 通过，Vite 仅提示大 chunk 与插件耗时 warning。
+- P1-6 任务 8 全量测试：`1219 passed, 6 skipped, 113 warnings in 82.12s`。
 
 ## 测试计划
 

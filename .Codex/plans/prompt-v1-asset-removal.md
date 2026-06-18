@@ -70,7 +70,8 @@
 - 旧后台任务入口已迁移：`clients/classifier_client.call_model_route()` 的分类器 route 已改用 V2 task template；`core/legacy_adapter.py` 的 `memory_extract` 已改用 V2 task template。
 - V1 live 入口已封存：`NanobotBridge` 会忽略 `v1` override 并统一进入 V2 canonical runtime；`build_prompt_runtime()` 不再调用 `PromptAssembler`。
 - 任务 6 当前状态：`creatures/nanobot/config.yaml` 已移除 `system_prompt_file: prompt.md`，旧 prompt 模块、旧模板目录、`prompt.md` 和构建脚本已从 live tree 删除，并通过引用扫描、相关回归、WebUI 构建和全量测试。
-- 任务 7 当前状态（2026-06-18）：红灯测试已写入并确认失败；实现、相关回归、WebUI 构建、禁止项扫描和全量测试已完成，随本阶段提交归档。
+- 任务 7 当前状态（2026-06-18）：红灯测试已写入并确认失败；实现、相关回归、WebUI 构建、禁止项扫描和全量测试已完成，随 `4fe00bb refactor(提示词): 建立无版本运行时命名` 归档。
+- 任务 8 当前状态（2026-06-18）：`AGENTS.md` 和 `README.md` 已核对，无旧 `prompt.md` / builder 当前态要求；`docs/plan_walkthrough.md`、`docs/todo.md`、设计文档和本计划已按任务 7 提交后的事实校准，文档守卫、P1-6 定向回归、WebUI 构建和全量测试均已通过。
 
 ## 任务 1：新增 V2 task template 渲染边界
 
@@ -1155,11 +1156,11 @@ git commit -m "refactor(提示词): 建立无版本运行时命名"
 **文件：**
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
-- 修改：`AGENTS.md`
-- 修改：`README.md`
+- 核对：`AGENTS.md`（已是 canonical Prompt Runtime 口径，本任务无需修改）
+- 核对：`README.md`（已是 canonical Prompt Runtime 口径，本任务无需修改）
 - 修改：`docs/superpowers/specs/2026-06-17-prompt-v1-asset-removal-design.md`
 
-- [ ] **步骤 1：同步当前态文档**
+- [x] **步骤 1：同步当前态文档**
 
 在 `docs/todo.md` 路线项 1 更新：
 
@@ -1170,9 +1171,9 @@ git commit -m "refactor(提示词): 建立无版本运行时命名"
 
 在 `docs/plan_walkthrough.md` 勾选 P1-6 任务，并记录每个阶段提交号和验证结果。
 
-在 `AGENTS.md` / `README.md` 中删除“修改 prompt 逻辑必须检查 `creatures/nanobot/prompt.md`”这类当前态要求，改为检查 canonical prompt templates。
+`AGENTS.md` / `README.md` 已核对：未发现“修改 prompt 逻辑必须检查 `creatures/nanobot/prompt.md`”这类当前态要求，本任务无需修改这两个文件。
 
-- [ ] **步骤 2：运行文档和引用守卫**
+- [x] **步骤 2：运行文档和引用守卫**
 
 运行：
 
@@ -1186,7 +1187,12 @@ rg -n "core.prompt_runtime|PromptAssembler|legacy_prompt_runtime|build_nanobot_p
 - `git diff --check` 无输出。
 - `rg` 在 live 源码中无命中；若测试 fixture 命中，测试名称必须显示历史兼容语义。
 
-- [ ] **步骤 3：运行 P1-6 定向测试**
+实际结果：
+
+- `git diff --check` 无输出。
+- `rg` 仅命中 `tests/test_prompt_legacy_removal.py` 和 `tests/test_prompt_v2.py` 的守卫 / 负向断言，live 源码无命中。
+
+- [x] **步骤 3：运行 P1-6 定向测试**
 
 运行：
 
@@ -1199,7 +1205,13 @@ python -B -m pytest tests/test_api.py tests/test_streaming_bridge.py -q -p no:ca
 
 预期：全部 PASS。
 
-- [ ] **步骤 4：运行 WebUI 构建**
+实际结果：
+
+- Prompt / manifest / bridge 定向：`71 passed, 1 warning in 4.00s`。
+- reply admin / trace / legacy readonly / WebUI 回归：`42 passed, 20 warnings in 9.36s`。
+- API / streaming 回归：`79 passed, 20 warnings in 14.91s`。
+
+- [x] **步骤 4：运行 WebUI 构建**
 
 运行：
 
@@ -1210,7 +1222,9 @@ npm run build
 
 预期：`✓ built`，无编译错误。
 
-- [ ] **步骤 5：运行全量测试**
+实际结果：`npm run build` 通过，Vite 仅提示大 chunk 与 `rolldown:vite-resolve` 插件耗时 warning。
+
+- [x] **步骤 5：运行全量测试**
 
 运行：
 
@@ -1221,14 +1235,18 @@ python -B -m pytest tests/ -q -p no:cacheprovider --durations=20
 
 预期：0 failures。
 
-- [ ] **步骤 6：提交文档收尾**
+实际结果：`1219 passed, 6 skipped, 113 warnings in 82.12s (0:01:22)`。
+
+- [x] **步骤 6：提交文档收尾**
 
 运行：
 
 ```bash
-git add docs/todo.md docs/plan_walkthrough.md AGENTS.md README.md docs/superpowers/specs/2026-06-17-prompt-v1-asset-removal-design.md
-git commit -m "docs(提示词): 同步旧版资产删除状态"
+git add .Codex/plans/prompt-v1-asset-removal.md docs/todo.md docs/plan_walkthrough.md docs/superpowers/specs/2026-06-17-prompt-v1-asset-removal-design.md
+git commit -m "docs(计划): 同步提示词收口最终状态"
 ```
+
+实际结果：按上述文件范围显式暂存，并使用 `docs(计划): 同步提示词收口最终状态` 作为阶段提交消息。
 
 ## 执行顺序
 
