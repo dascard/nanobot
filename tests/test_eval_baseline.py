@@ -239,6 +239,25 @@ def test_timing_gate_gate_script_uses_stable_baseline():
     assert "NANOBOT_ADMIN_TOKEN" in text
 
 
+def test_eval_pr_gate_script_runs_stable_suites():
+    script = Path("scripts/run_eval_pr_gate.sh")
+
+    assert script.exists()
+    text = script.read_text(encoding="utf-8")
+    assert "scripts/run_timing_gate_gate.sh" in text
+    assert "--suite capability_model_routing" in text
+    assert "evals/baselines/capability_model_routing.json" in text
+    assert "--suite capability_reply_contract" in text
+    assert "evals/baselines/capability_reply_contract.json" in text
+    assert "--suite capability_rendering_contract" in text
+    assert "evals/baselines/capability_rendering_contract.json" in text
+    assert "evals.rag_benchmark.run" in text
+    assert "--provider-mode deterministic" in text
+    assert "--manual-only" in text
+    assert "evals/baselines/rag_benchmark.json" in text
+    assert "max-unexpected-source-rate" in text
+
+
 def test_timing_gate_workflow_runs_gate_script():
     workflow = Path(".github/workflows/timing-gate-eval.yml")
 
