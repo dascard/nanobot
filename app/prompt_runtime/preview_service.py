@@ -38,7 +38,7 @@ def _recent_prompt_preview_logs(db: Session, body: Any) -> tuple[str, list[dict]
 
 
 async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
-    """构建 Prompt Runtime V2 有效预览。"""
+    """构建 canonical Prompt Runtime 有效预览。"""
     from core.context_builder import build_chat_context
     from core.database import Persona
     from core.prompt_v2 import compiler as prompt_compiler
@@ -130,14 +130,14 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         for name in sorted(enabled.keys())
     ]
     return {
-        "engine": "v2",
+        "engine": "prompt",
         "chat_type": chat_type,
         "session_id": session_id,
         "user_id": user_id,
         "group_id": group_id,
         "prompt_key": plan.prompt_key,
-        "prompt_mode": "v2",
-        "prompt_source": "Prompt Runtime V2",
+        "prompt_mode": "prompt",
+        "prompt_source": "Prompt Runtime",
         "prompt_runtime_path": plan.debug.get("template_path", ""),
         "prompt_default_path": plan.debug.get("template_path", ""),
         "prompt_sha256": plan.prompt_sha256,

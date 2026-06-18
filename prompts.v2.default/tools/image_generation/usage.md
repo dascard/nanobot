@@ -1,5 +1,5 @@
 ---
-name: 图片生成工具 V2
+name: 图片生成工具
 version: 1
 kind: tool
 tool_name: image_generation

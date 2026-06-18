@@ -1,5 +1,5 @@
 ---
-name: Python 数据分析工具 V2
+name: Python 数据分析工具
 version: 1
 kind: tool
 tool_name: python_sandbox

@@ -1,5 +1,5 @@
 ---
-name: 不回复工具 V2
+name: 不回复工具
 version: 1
 kind: tool
 tool_name: no_reply

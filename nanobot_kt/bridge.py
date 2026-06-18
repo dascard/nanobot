@@ -464,12 +464,12 @@ class NanobotBridge:
         try:
             from core.settings_service import settings
 
-            engine = str(settings.get("prompt_runtime.engine", "v2") or "v2").strip().lower()
+            engine = str(settings.get("prompt_runtime.engine", "prompt") or "prompt").strip().lower()
         except Exception:
-            engine = "v2"
+            engine = "prompt"
         if engine == "v1":
             logger.warning("[PromptRuntime] engine=v1 is removed from live path; using canonical runtime")
-        return "v2"
+        return "prompt"
 
     def _resolve_prompt_runtime_engine(self, meta: dict[str, Any]) -> str:
         prompt_engine = str(
@@ -479,7 +479,7 @@ class NanobotBridge:
         ).strip().lower()
         if prompt_engine == "v1":
             logger.warning("[PromptRuntime] v1 metadata override ignored after P1-6")
-        return "v2"
+        return "prompt"
 
     def _prompt_v2_audit_failure_policy(self) -> str:
         try:
@@ -492,7 +492,7 @@ class NanobotBridge:
         except Exception:
             policy = "fail_fast"
         if policy == "fallback_v1":
-            logger.warning("[PromptV2] fallback_v1 audit policy is deprecated; using fail_fast")
+            logger.warning("[PromptRuntime] fallback_v1 audit policy is deprecated; using fail_fast")
         return "fail_fast"
 
     def _build_prompt_runtime_input(
@@ -509,16 +509,16 @@ class NanobotBridge:
         try:
             tool_schemas = list(context.tool_plan.sent_tool_schemas)
         except Exception as e:
-            logger.warning("[PromptV2] failed to read tool schemas: %s", e)
+            logger.warning("[PromptRuntime] failed to read tool schemas: %s", e)
             tool_schemas = []
 
         prompt_key = context.prompt_key
-        if context.prompt_engine != "v2" or prompt_key in {"group_chat", "private_chat"}:
+        if context.prompt_engine not in {"v2", "prompt", "canonical"} or prompt_key in {"group_chat", "private_chat"}:
             prompt_key = "chat_group" if context.is_group else "chat_private"
 
         return PromptRuntimeInput(
-            prompt_engine="v2",
-            prompt_mode="v2",
+            prompt_engine="prompt",
+            prompt_mode="prompt",
             prompt_key=prompt_key,
             chat_type=context.chat_type,
             runtime_chat_type=context.runtime_chat_type,
@@ -897,7 +897,7 @@ class NanobotBridge:
             meta = dict(metadata or {})
             meta["stream"] = bool(stream or meta.get("stream"))
             prompt_engine = self._resolve_prompt_runtime_engine(meta)
-            prompt_mode = "v2"
+            prompt_mode = "prompt"
             prompt_key = "chat_group" if meta.get("is_group", False) else "chat_private"
             from core.tracing import RunTracer, new_trace_id
             from core.tracing_context import reset_trace_context, set_trace_context
@@ -919,7 +919,7 @@ class NanobotBridge:
                 run_type="chat",
                 prompt_mode=prompt_mode,
                 prompt_key=prompt_key,
-                prompt_source="Prompt Runtime V2",
+                prompt_source="Prompt Runtime",
                 prompt_runtime_path="",
                 prompt_default_path="",
                 prompt_sha256="",
@@ -1096,7 +1096,7 @@ class NanobotBridge:
             try:
                 prompt_build = await build_prompt_runtime(prompt_input)
             except PromptRuntimeAuditFailure as e:
-                logger.error("[PromptV2] live audit failed: %s", e)
+                logger.error("[PromptRuntime] live audit failed: %s", e)
                 run_meta.update(e.meta_update)
                 self._log_agent_result(session_id, "prompt_v2_audit_failed")
                 self._restore_saved_tools()

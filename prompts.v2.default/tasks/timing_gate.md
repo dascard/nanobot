@@ -1,9 +1,9 @@
 ---
-name: 发言时机 V2
+name: 发言时机
 version: 1
 kind: task
 tool_name: timing_gate
-description: V2 发言时机规则占位模板。
+description: 发言时机规则占位模板。
 ---
 你是 Maibot 风格的群聊发言时机判定器，只负责判断 bot 是否进入完整回复流程。
 

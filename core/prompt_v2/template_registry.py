@@ -69,14 +69,19 @@ def _repo_root() -> Path:
 
 def default_template_dir() -> Path:
     return Path(
-        os.environ.get("NANOBOT_PROMPT_V2_DIR")
+        os.environ.get("NANOBOT_PROMPT_DEFAULT_DIR")
+        or os.environ.get("NANOBOT_PROMPT_V2_DIR")
         or os.environ.get("NANOBOT_PROMPT_V2_DEFAULT_DIR")
         or (_repo_root() / "prompts.v2.default")
     )
 
 
 def runtime_template_dir() -> Path:
-    return Path(os.environ.get("NANOBOT_PROMPT_V2_RUNTIME_DIR") or (_repo_root() / "data" / "prompts_v2"))
+    return Path(
+        os.environ.get("NANOBOT_PROMPT_RUNTIME_DIR")
+        or os.environ.get("NANOBOT_PROMPT_V2_RUNTIME_DIR")
+        or (_repo_root() / "data" / "prompts_v2")
+    )
 
 
 def init_prompt_v2_runtime_dir() -> dict[str, Any]:

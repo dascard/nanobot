@@ -1,9 +1,9 @@
 ---
-name: SQL 分析 V2
+name: SQL 分析
 version: 1
 kind: tool
 tool_name: sql_analysis
-description: V2 SQL 分析模板占位。
+description: SQL 分析模板占位。
 ---
 ## sql_analysis 工具边界
 

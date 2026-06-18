@@ -573,7 +573,7 @@ class TestNanobotBridge:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_handle_message_passes_runtime_context_to_prompt_v2(self, MockAgent, mock_load, monkeypatch):
+    def test_handle_message_passes_runtime_context_to_prompt_runtime(self, MockAgent, mock_load, monkeypatch):
         from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
         from nanobot_kt.prompt_runtime import PromptRuntimeResult
@@ -629,7 +629,7 @@ class TestNanobotBridge:
                 prompt_sha256="test-sha",
                 pre_event_messages=[{"role": "system", "content": "base"}],
                 event_content=prompt_input.user_input,
-                meta_update={"prompt_engine": "v2"},
+                meta_update={"prompt_engine": "prompt"},
             )
 
         monkeypatch.setattr("nanobot_kt.prompt_runtime.build_prompt_runtime", fake_build_prompt_runtime)
@@ -655,8 +655,8 @@ class TestNanobotBridge:
 
         assert result == "ok"
         prompt_input = captured["prompt_input"]
-        assert prompt_input.prompt_engine == "v2"
-        assert prompt_input.prompt_mode == "v2"
+        assert prompt_input.prompt_engine == "prompt"
+        assert prompt_input.prompt_mode == "prompt"
         assert prompt_input.prompt_key == "chat_private"
         assert prompt_input.chat_type == "private"
         assert prompt_input.runtime_chat_type == "private"

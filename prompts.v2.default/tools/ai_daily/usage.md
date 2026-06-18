@@ -1,5 +1,5 @@
 ---
-name: AI 日报工具 V2
+name: AI 日报工具
 version: 1
 kind: tool
 tool_name: ai_daily

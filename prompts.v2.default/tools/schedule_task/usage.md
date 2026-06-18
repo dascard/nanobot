@@ -1,5 +1,5 @@
 ---
-name: 定时任务工具 V2
+name: 定时任务工具
 version: 1
 kind: tool
 tool_name: schedule_task

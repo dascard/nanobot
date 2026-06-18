@@ -1,5 +1,5 @@
 ---
-name: 群聊日报系统提示词 V2
+name: 群聊日报系统提示词
 version: 1
 kind: tool
 tool_name: group_analysis

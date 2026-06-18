@@ -1,5 +1,5 @@
 ---
-name: AI 日报摘要证据卡片 V2
+name: AI 日报摘要证据卡片
 version: 1
 kind: tool
 tool_name: ai_daily

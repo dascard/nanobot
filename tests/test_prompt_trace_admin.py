@@ -17,12 +17,12 @@ def auth_header(monkeypatch):
     return {"Authorization": "Bearer test-token"}
 
 
-def test_effective_prompt_preview_request_defaults_to_v2():
+def test_effective_prompt_preview_request_defaults_to_canonical_prompt():
     from api.admin_routes import EffectivePromptPreviewRequest
 
     body = EffectivePromptPreviewRequest()
 
-    assert body.engine == "v2"
+    assert body.engine == "prompt"
 
 
 def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
@@ -199,7 +199,7 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     )
     assert effective_v2.status_code == 200, effective_v2.text
     effective_v2_json = effective_v2.json()
-    assert effective_v2_json["engine"] == "v2"
+    assert effective_v2_json["engine"] == "prompt"
     assert effective_v2_json["prompt_key"] == "chat_group"
     assert effective_v2_json["request_json"]["messages"] == effective_v2_json["messages"]
     assert effective_v2_json["request_json"]["tools"] == effective_v2_json["tool_schemas"]

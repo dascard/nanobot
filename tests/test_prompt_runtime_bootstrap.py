@@ -1,7 +1,7 @@
 import logging
 
 
-def test_init_prompt_runtimes_initializes_prompt_v2(monkeypatch, caplog):
+def test_init_prompt_runtimes_initializes_canonical_prompt_runtime(monkeypatch, caplog):
     from bootstrap import prompt_runtime
 
     called = {}
@@ -18,7 +18,8 @@ def test_init_prompt_runtimes_initializes_prompt_v2(monkeypatch, caplog):
         prompt_runtime.init_prompt_runtimes(logger)
 
     assert called["v2"]["copied"] == ["chat/main.md"]
-    assert "[PromptV2] initialized 1 templates" in caplog.text
+    assert "[PromptRuntime] initialized 1 templates" in caplog.text
+    assert "[PromptV2]" not in caplog.text
 
 
 def test_init_prompt_runtimes_warns_when_effective_engine_is_v1(monkeypatch, caplog):

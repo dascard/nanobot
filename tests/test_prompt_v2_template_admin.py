@@ -52,6 +52,45 @@ def _write_flow(path: Path) -> None:
     )
 
 
+def test_prompt_template_admin_exposes_canonical_and_v2_compat_routes(tmp_path, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    default_dir.mkdir()
+    _write_template(default_dir / "chat" / "main.md", "主回复", "默认主规则 {{ chat_type }}")
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'canonical.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(bind=engine)
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = override_get_db
+    try:
+        client = TestClient(app)
+
+        canonical = client.get("/api/v1/admin/prompt/templates", headers=_auth_header())
+        compat = client.get("/api/v1/admin/prompt-v2/templates", headers=_auth_header())
+    finally:
+        app.dependency_overrides.clear()
+
+    assert canonical.status_code == 200, canonical.text
+    assert compat.status_code == 200, compat.text
+    assert canonical.json()["items"] == compat.json()["items"]
+    assert canonical.json()["default_dir"] == str(default_dir)
+    assert canonical.json()["runtime_dir"] == str(runtime_dir)
+
+
 def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     default_dir = tmp_path / "defaults"
@@ -247,7 +286,7 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
     async def fake_compile(request, *, strict_audit=False):
         captured.append((request, strict_audit))
         return PromptPlan(
-            engine="v2",
+            engine="prompt",
             chat_type="private",
             prompt_key="chat_private",
             messages=plan_messages,
@@ -282,6 +321,10 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
     data = response.json()
     assert captured
     assert captured[0][1] is False
+    assert data["engine"] == "prompt"
+    assert data["prompt_plan"]["engine"] == "prompt"
+    assert data["compiled_prompt"]["engine"] == "prompt"
+    assert data["prompt_build"]["engine"] == "prompt"
     assert data["request_json"]["messages"] == plan_messages
     assert data["messages"] == plan_messages
     assert data["request_json"]["tools"] == plan_tool_schemas

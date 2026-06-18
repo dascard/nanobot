@@ -159,7 +159,7 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
     with pytest.raises(dataclasses.FrozenInstanceError):
         plan.engine = "v1"
     assert isinstance(plan, PromptPlan)
-    assert plan.engine == "v2"
+    assert plan.engine == "prompt"
     assert plan.chat_type == "group"
     assert plan.prompt_key == "chat_group"
     assert plan.messages_without_current_user == plan.messages[:-1]
@@ -196,7 +196,7 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
     assert sum("<persona_reference" in c for c in contents) == 1
     assert "当前问题" in plan.current_user_content
     assert "当前问题" not in "\n".join(contents[:-1])
-    assert json.loads(json.dumps(plan.to_dict(), ensure_ascii=False))["engine"] == "v2"
+    assert json.loads(json.dumps(plan.to_dict(), ensure_ascii=False))["engine"] == "prompt"
 
 
 @pytest.mark.asyncio

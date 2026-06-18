@@ -1,5 +1,5 @@
 ---
-name: 表情包搜索工具 V2
+name: 表情包搜索工具
 version: 1
 kind: tool
 tool_name: sticker_search

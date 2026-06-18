@@ -53,20 +53,20 @@ def _prompt_tool_plan(**overrides):
     return SimpleNamespace(**defaults)
 
 
-def test_bridge_prompt_runtime_engine_defaults_to_v2_and_invalid_falls_back(monkeypatch):
+def test_bridge_prompt_runtime_engine_defaults_to_prompt_and_invalid_falls_back(monkeypatch):
     from core.settings_service import settings
     from nanobot_kt.bridge import NanobotBridge
 
     bridge = NanobotBridge.__new__(NanobotBridge)
 
     monkeypatch.setattr(settings, "get", lambda _key, _default=None: None)
-    assert bridge._prompt_runtime_engine() == "v2"
+    assert bridge._prompt_runtime_engine() == "prompt"
 
     monkeypatch.setattr(settings, "get", lambda _key, _default=None: "bad-engine")
-    assert bridge._prompt_runtime_engine() == "v2"
+    assert bridge._prompt_runtime_engine() == "prompt"
 
     monkeypatch.setattr(settings, "get", lambda _key, _default=None: "v1")
-    assert bridge._prompt_runtime_engine() == "v2"
+    assert bridge._prompt_runtime_engine() == "prompt"
 
 
 def test_bridge_resolve_prompt_runtime_engine_treats_v1_as_canonical_runtime(monkeypatch):
@@ -76,13 +76,13 @@ def test_bridge_resolve_prompt_runtime_engine_treats_v1_as_canonical_runtime(mon
     bridge = NanobotBridge.__new__(NanobotBridge)
     monkeypatch.setattr(settings, "get", lambda _key, _default=None: "v1")
 
-    assert bridge._prompt_runtime_engine() == "v2"
-    assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "v1"}) == "v2"
-    assert bridge._resolve_prompt_runtime_engine({"prompt_engine_override": "v1"}) == "v2"
-    assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "bad"}) == "v2"
+    assert bridge._prompt_runtime_engine() == "prompt"
+    assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "v1"}) == "prompt"
+    assert bridge._resolve_prompt_runtime_engine({"prompt_engine_override": "v1"}) == "prompt"
+    assert bridge._resolve_prompt_runtime_engine({"prompt_runtime_engine_override": "bad"}) == "prompt"
 
 
-def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
+def test_bridge_build_prompt_runtime_input_maps_v2_alias_to_prompt(monkeypatch):
     from nanobot_kt.bridge import NanobotBridge, PromptRuntimeAssemblyContext
 
     bridge = NanobotBridge.__new__(NanobotBridge)
@@ -128,8 +128,8 @@ def test_bridge_build_prompt_runtime_input_for_v2(monkeypatch):
         )
     )
 
-    assert prompt_input.prompt_engine == "v2"
-    assert prompt_input.prompt_mode == "v2"
+    assert prompt_input.prompt_engine == "prompt"
+    assert prompt_input.prompt_mode == "prompt"
     assert prompt_input.prompt_key == "chat_group"
     assert prompt_input.chat_type == "group"
     assert prompt_input.runtime_chat_type == "group"
@@ -180,8 +180,8 @@ def test_bridge_build_prompt_runtime_input_coerces_v1_to_canonical_runtime(monke
         )
     )
 
-    assert prompt_input.prompt_engine == "v2"
-    assert prompt_input.prompt_mode == "v2"
+    assert prompt_input.prompt_engine == "prompt"
+    assert prompt_input.prompt_mode == "prompt"
     assert prompt_input.prompt_key == "chat_group"
     assert prompt_input.persona_text == "无已存储画像"
 
@@ -259,7 +259,7 @@ def test_bridge_build_prompt_runtime_input_falls_back_when_tool_schemas_unavaila
         )
     )
 
-    assert prompt_input.prompt_mode == "v2"
+    assert prompt_input.prompt_mode == "prompt"
     assert prompt_input.runtime_chat_type == "private_superuser"
     assert prompt_input.bot_name == "七濑"
     assert prompt_input.tool_schemas == []

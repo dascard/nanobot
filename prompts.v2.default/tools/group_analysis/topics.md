@@ -1,5 +1,5 @@
 ---
-name: 群聊日报话题提取 V2
+name: 群聊日报话题提取
 version: 1
 kind: tool
 tool_name: group_analysis

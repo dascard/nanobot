@@ -1,5 +1,5 @@
 ---
-name: 画像更新工具 V2
+name: 画像更新工具
 version: 1
 kind: tool
 tool_name: persona_update

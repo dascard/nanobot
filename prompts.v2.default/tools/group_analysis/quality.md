@@ -1,5 +1,5 @@
 ---
-name: 群聊日报质量锐评 V2
+name: 群聊日报质量锐评
 version: 1
 kind: tool
 tool_name: group_analysis

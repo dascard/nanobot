@@ -1,5 +1,5 @@
 ---
-name: 群聊日报工具 V2
+name: 群聊日报工具
 version: 1
 kind: tool
 tool_name: group_analysis
@@ -26,7 +26,7 @@ description: group_analysis 工具的使用边界。
 
 `group_analysis` 会自行完成群解析、消息读取、清洗去重、统计聚合、LLM 分支分析和 HTML 日报渲染。
 
-内部 LLM 分支使用同目录下这些 V2 模板，而不是代码里的旧硬编码文本：
+内部 LLM 分支使用同目录下这些模板，而不是代码里的旧硬编码文本：
 
 - `tools/group_analysis/system`：共用 system prompt。
 - `tools/group_analysis/topics`：话题总结。

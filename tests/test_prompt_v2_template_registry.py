@@ -66,6 +66,63 @@ def test_prompt_v2_init_runtime_dir_copies_missing_files_without_overwrite(tmp_p
     assert (runtime_dir / "chat" / "flow.json").read_text(encoding="utf-8") == '{"nodes": [], "edges": []}\n'
 
 
+def test_prompt_template_registry_prefers_canonical_env_names(tmp_path, monkeypatch):
+    default_dir = tmp_path / "prompt_defaults"
+    runtime_dir = tmp_path / "prompt_runtime"
+    legacy_default_dir = tmp_path / "legacy_defaults"
+    legacy_runtime_dir = tmp_path / "legacy_runtime"
+    default_dir.mkdir()
+    runtime_dir.mkdir()
+    legacy_default_dir.mkdir()
+    legacy_runtime_dir.mkdir()
+
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(legacy_default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(legacy_runtime_dir))
+
+    from core.prompt_v2.template_registry import default_template_dir, runtime_template_dir
+
+    assert default_template_dir() == default_dir
+    assert runtime_template_dir() == runtime_dir
+
+
+def test_prompt_template_registry_keeps_v2_env_names_as_compat_fallback(tmp_path, monkeypatch):
+    default_dir = tmp_path / "legacy_defaults"
+    runtime_dir = tmp_path / "legacy_runtime"
+    default_dir.mkdir()
+    runtime_dir.mkdir()
+
+    monkeypatch.delenv("NANOBOT_PROMPT_DEFAULT_DIR", raising=False)
+    monkeypatch.delenv("NANOBOT_PROMPT_RUNTIME_DIR", raising=False)
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.template_registry import default_template_dir, runtime_template_dir
+
+    assert default_template_dir() == default_dir
+    assert runtime_template_dir() == runtime_dir
+
+
+def test_prompt_template_frontmatter_uses_canonical_prompt_names():
+    roots = [Path("prompts.v2.default"), Path("data/prompts_v2")]
+    bad_entries: list[str] = []
+
+    for root in roots:
+        for path in sorted(root.rglob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            if not text.startswith("---\n"):
+                continue
+            try:
+                frontmatter = text.split("---\n", 2)[1]
+            except IndexError:
+                continue
+            if "V2" in frontmatter or "Prompt Runtime V2" in frontmatter:
+                bad_entries.append(str(path))
+
+    assert bad_entries == []
+
+
 @pytest.mark.parametrize("bad_key", ["../secret", "/abs/path", "tools\\bad", "tools//bad", ""])
 def test_prompt_v2_registry_rejects_unsafe_template_keys(bad_key):
     from core.prompt_v2.template_registry import resolve_template_key

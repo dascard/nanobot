@@ -182,7 +182,7 @@ class EffectivePromptPreviewRequest(BaseModel):
     group_id: str = ""
     sender_name: str = ""
     prompt_key: str = ""
-    engine: Literal["v1", "v2"] = "v2"
+    engine: Literal["v1", "v2", "prompt"] = "prompt"
     mode: Literal["legacy", "shadow", "managed"] = "shadow"
     user_input: str = ""
     runtime_preset: str = "full"
@@ -2115,20 +2115,20 @@ async def preview_effective_prompt(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    if body.engine == "v2":
+    if body.engine in {"prompt", "v2"}:
         from app.prompt_runtime.preview_service import preview_effective_prompt_v2
 
         return await preview_effective_prompt_v2(body, db)
     raise HTTPException(
         status_code=410,
-        detail="Prompt V1 effective preview 已降级为只读迁移入口；请使用 engine=v2",
+        detail="Prompt V1 effective preview 已降级为只读迁移入口；请使用 engine=prompt",
     )
 
 
 def _legacy_prompt_routes_removed() -> HTTPException:
     return HTTPException(
         status_code=410,
-        detail="Legacy prompt 管理入口已降级为只读迁移入口；请使用 Prompt Runtime V2 模板页面",
+        detail="Legacy prompt 管理入口已降级为只读迁移入口；请使用 Prompt Runtime 模板页面",
     )
 
 
@@ -4468,7 +4468,7 @@ class ReplyTestRunRequest(BaseModel):
     message: str
     recent_context: str = ""
     persona_text: str = ""
-    prompt_engine: Literal["v1", "v2"] = "v2"
+    prompt_engine: Literal["v1", "v2", "prompt"] = "prompt"
     variant: Literal[
         "baseline",
         "prompt_only",
@@ -4570,8 +4570,8 @@ def _safe_rate(numerator: int, denominator: int) -> float:
 
 def _resolve_reply_test_prompt_settings(body: ReplyTestRunRequest) -> tuple[str, str, bool]:
     variant = str(body.variant or "v2_code_retry")
-    engine = "v2"
-    prompt_mode = "v2"
+    engine = "prompt"
+    prompt_mode = "prompt"
     enable_retry = bool(body.enable_reply_contract_retry)
 
     if variant == "prompt_only":

@@ -1,8 +1,8 @@
 ---
-name: 群聊分支规则 V2
+name: 群聊分支规则
 version: 1
 kind: chat
-description: Prompt Runtime V2 群聊差异规则；由编排图在 group chat_type 下接入。
+description: Prompt Runtime 群聊差异规则；由编排图在 group chat_type 下接入。
 ---
 ## 群聊行为
 

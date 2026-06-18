@@ -68,7 +68,7 @@ class PromptRuntimeAuditFailure(RuntimeError):
 
 
 async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult:
-    prompt_engine = str(input.prompt_engine or "v2").strip().lower()
+    prompt_engine = str(input.prompt_engine or "prompt").strip().lower()
     if prompt_engine not in {"v2", "canonical", "prompt"}:
         raise ValueError(f"unsupported prompt engine for live runtime: {input.prompt_engine}")
 
@@ -111,12 +111,12 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
     except PromptAuditError as exc:
         audit_issues = list(getattr(exc, "issues", []) or [str(exc)])
         meta_update = {
-            "prompt_engine": "v2",
+            "prompt_engine": "prompt",
             "prompt_v2_audit_failed": True,
             "audit_issues": audit_issues,
         }
         raise PromptRuntimeAuditFailure(
-            f"Prompt Runtime V2 审计失败: {exc}",
+            f"Prompt Runtime 审计失败: {exc}",
             meta_update=meta_update,
         ) from exc
 
@@ -124,19 +124,19 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         trace_id=input.trace_id,
         run_id=input.run_id,
         prompt_key=prompt_plan.prompt_key,
-        mode="v2",
+        mode="prompt",
         variables=prompt_plan.debug,
         rendered_content=json.dumps(prompt_plan.request_json, ensure_ascii=False),
         token_estimate=prompt_plan.token_estimate,
         warnings=prompt_plan.warnings,
-        prompt_source="Prompt Runtime V2",
+        prompt_source="Prompt Runtime",
         prompt_runtime_path=str(prompt_plan.debug.get("template_path", "")),
         prompt_default_path=str(prompt_plan.debug.get("template_path", "")),
         prompt_sha256=prompt_plan.prompt_sha256,
     )
     context_debug = dict(prompt_plan.debug.get("context_debug", {}) or {})
     meta_update = {
-        "prompt_engine": "v2",
+        "prompt_engine": "prompt",
         "group_memory": context_debug,
     }
     if context_debug.get("group_memory_injected") and context_debug.get("group_memory_ids"):
@@ -193,8 +193,8 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
 
     return PromptRuntimeResult(
         prompt_key=prompt_plan.prompt_key,
-        prompt_mode="v2",
-        prompt_source="Prompt Runtime V2",
+        prompt_mode="prompt",
+        prompt_source="Prompt Runtime",
         prompt_runtime_path=str(prompt_plan.debug.get("template_path", "")),
         prompt_default_path=str(prompt_plan.debug.get("template_path", "")),
         prompt_sha256=prompt_plan.prompt_sha256,

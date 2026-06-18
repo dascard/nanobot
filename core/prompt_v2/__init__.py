@@ -1,6 +1,6 @@
-"""Prompt Runtime V2.
+"""Prompt Runtime 编译系统。
 
-V2 是独立的主回复提示词编译系统。旧 runtime 只作为 v1 回滚路径存在。
+当前包名保留 v2 兼容路径；对外运行时使用无版本 canonical prompt 命名。
 """
 
 from core.prompt_v2.compiler import compile_prompt_plan

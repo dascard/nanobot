@@ -4,30 +4,43 @@ from pathlib import Path
 APP_JS = Path("webui/src/App.jsx")
 PROMPT_JS = Path("webui/src/features/prompt/PromptPages.jsx")
 CSS = Path("webui/src/index.css")
+DIST = Path("webui/dist")
 
 
 def read_prompt_sources() -> str:
     return APP_JS.read_text(encoding="utf-8") + "\n" + PROMPT_JS.read_text(encoding="utf-8")
 
 
-def test_prompt_runtime_v2_is_primary_prompt_nav_entry():
+def read_dist_sources() -> str:
+    parts = [DIST.joinpath("index.html").read_text(encoding="utf-8")]
+    for path in sorted(DIST.joinpath("assets").glob("*.js")):
+        parts.append(path.read_text(encoding="utf-8"))
+    for path in sorted(DIST.joinpath("assets").glob("*.css")):
+        parts.append(path.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
+def test_prompt_runtime_is_primary_prompt_nav_entry():
     source = APP_JS.read_text(encoding="utf-8")
 
-    assert "{ to: '/prompt-preview', label: 'V2 运行预览' }" in source
-    assert "{ to: '/prompt-v2-templates', label: 'V2 模板' }" in source
+    assert "{ to: '/prompt-preview', label: '运行预览' }" in source
+    assert "{ to: '/prompt-templates', label: '模板' }" in source
+    assert "label: 'V2 运行预览'" not in source
+    assert "label: 'V2 模板'" not in source
     assert "{ to: '/prompts', label: 'V1 模板 / 对比' }" not in source
     assert "to: '/prompt-legacy'" not in source
     assert "{ to: '/prompt', label: '旧版 Prompt 构建' }" not in source
 
 
-def test_prompt_preview_defaults_to_v2_and_prompt_path_redirects():
+def test_prompt_preview_defaults_to_canonical_prompt_and_prompt_path_redirects():
     source = read_prompt_sources()
 
-    assert "engine: 'v2'" in source
+    assert "engine: 'prompt'" in source
     assert '<Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />' in source
     assert '<Route path="/prompt-legacy"' not in source
     assert '<Route path="/prompts"' not in source
-    assert '<Route path="/prompt-v2-templates" element={<PromptV2TemplatesPage />} />' in source
+    assert '<Route path="/prompt-templates" element={<PromptV2TemplatesPage />} />' in source
+    assert '<Route path="/prompt-v2-templates" element={<Navigate to="/prompt-templates" replace />} />' in source
 
 
 def test_legacy_prompt_pages_are_removed_from_webui():
@@ -60,7 +73,9 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "entryNodeIds" in source
     assert "拓扑入口" in source
     assert "多个入口" not in source
-    assert "Prompt V2 模板" in source
+    assert "Prompt 模板" in source
+    assert "Prompt V2 模板" not in source
+    assert "Prompt Runtime V2" not in source
     assert "Canvas 编排" in source
     assert "data-testid=\"prompt-flow-canvas\"" in source
     assert "data-testid=\"prompt-flow-viewport\"" in source
@@ -149,14 +164,15 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "selectedToolTemplateKey" in source
     assert ">runtime_key<" not in source
     assert "运行时数据" in source
-    assert "api.get('/prompt-v2/templates')" in source
-    assert "api.get('/prompt-v2/flow')" in source
-    assert "api.put(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`" in source
-    assert "api.post('/prompt-v2/templates'" in source
-    assert "api.delete(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`" in source
-    assert "api.post(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}/reset`" in source
-    assert "api.put('/prompt-v2/flow'" in source
-    assert "保存 V2 模板" in source
+    assert "api.get('/prompt/templates')" in source
+    assert "api.get('/prompt/flow')" in source
+    assert "api.put(`/prompt/templates/${promptV2Path(activeTemplateKey)}`" in source
+    assert "api.post('/prompt/templates'" in source
+    assert "api.delete(`/prompt/templates/${promptV2Path(activeTemplateKey)}`" in source
+    assert "api.post(`/prompt/templates/${promptV2Path(activeTemplateKey)}/reset`" in source
+    assert "api.put('/prompt/flow'" in source
+    assert "保存模板" in source
+    assert "保存 V2 模板" not in source
     assert "保存编排图" in source
     assert "运行时模板目录" in source
     assert "V2 模板编辑" not in preview_source
@@ -171,3 +187,19 @@ def test_prompt_v2_workbench_uses_contained_custom_scrollbars():
     assert ".prompt-v2-canvas" in css
     assert "overscroll-behavior: contain;" in css
     assert "touch-action: none;" in css
+
+
+def test_prompt_runtime_dist_bundle_matches_canonical_prompt_routes():
+    source = read_dist_sources()
+
+    assert "/prompt/templates" in source
+    assert "/prompt/flow" in source
+    assert "/prompt/variables" in source
+    assert "/prompt-v2/templates" not in source
+    assert "/prompt-v2/flow" not in source
+    assert "/prompt-v2/variables" not in source
+    assert "V2 运行预览" not in source
+    assert "V2 模板" not in source
+    assert "Prompt Runtime V2" not in source
+    assert "Prompt V2 模板" not in source
+    assert "保存 V2 模板" not in source

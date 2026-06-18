@@ -180,7 +180,7 @@ async def compile_prompt_plan(
         **dict(request.debug or {}),
     }
     plan = PromptPlan(
-        engine="v2",
+        engine="prompt",
         chat_type=chat_type,
         prompt_key=prompt_key,
         messages=messages,

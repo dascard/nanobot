@@ -132,8 +132,8 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
     "prompt_runtime.engine": SettingDef(
         key="prompt_runtime.engine", env_name="NANOBOT_PROMPT_ENGINE",
-        default="v2", value_type="str",
-        category="prompt", description="提示词运行引擎；旧 v1 值会被迁移兼容层归一到 canonical runtime",
+        default="prompt", value_type="str",
+        category="prompt", description="提示词运行引擎；旧 v1/v2 值会被迁移兼容层归一到 canonical runtime",
     ),
     "prompt_runtime.v2_audit_failure_policy": SettingDef(
         key="prompt_runtime.v2_audit_failure_policy",
@@ -141,7 +141,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
         default="fail_fast",
         value_type="str",
         category="prompt",
-        description="Prompt Runtime V2 live audit 失败策略；fallback_v1 已废弃，运行时固定 fail_fast",
+        description="Prompt Runtime live audit 失败策略；fallback_v1 已废弃，运行时固定 fail_fast",
     ),
     "model.smart": SettingDef(
         key="model.smart", env_name="LLM_MODEL_SMART",

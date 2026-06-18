@@ -1,5 +1,5 @@
 ---
-name: 长期记忆摘要输入提示词 V2
+name: 长期记忆摘要输入提示词
 version: 1
 kind: task
 tool_name: memory_digest

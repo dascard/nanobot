@@ -1,5 +1,5 @@
 ---
-name: 摘要记忆查询工具 V2
+name: 摘要记忆查询工具
 version: 1
 kind: tool
 tool_name: memory_query

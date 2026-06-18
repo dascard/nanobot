@@ -1,12 +1,15 @@
 {
-  "version": 1,
-  "active_engine": "v2",
+  "version": 2,
+  "active_engine": "prompt",
   "engines": {
-    "v2": {
+    "prompt": {
       "status": "active",
       "default_dir": "prompts.v2.default",
       "runtime_dir": "data/prompts_v2",
       "backup_dir": "data/prompts_v2_history"
     }
+  },
+  "compat_aliases": {
+    "v2": "prompt"
   }
 }

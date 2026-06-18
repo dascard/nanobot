@@ -1,5 +1,5 @@
 ---
-name: 群聊日报金句提取 V2
+name: 群聊日报金句提取
 version: 1
 kind: tool
 tool_name: group_analysis

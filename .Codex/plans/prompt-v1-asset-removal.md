@@ -70,7 +70,7 @@
 - 旧后台任务入口已迁移：`clients/classifier_client.call_model_route()` 的分类器 route 已改用 V2 task template；`core/legacy_adapter.py` 的 `memory_extract` 已改用 V2 task template。
 - V1 live 入口已封存：`NanobotBridge` 会忽略 `v1` override 并统一进入 V2 canonical runtime；`build_prompt_runtime()` 不再调用 `PromptAssembler`。
 - 任务 6 当前状态：`creatures/nanobot/config.yaml` 已移除 `system_prompt_file: prompt.md`，旧 prompt 模块、旧模板目录、`prompt.md` 和构建脚本已从 live tree 删除，并通过引用扫描、相关回归、WebUI 构建和全量测试。
-- 任务 7 当前状态（2026-06-18）：红灯测试已写入并确认失败；实现修正进行中，尚未完成绿灯、WebUI 构建、全量测试和阶段提交。
+- 任务 7 当前状态（2026-06-18）：红灯测试已写入并确认失败；实现、相关回归、WebUI 构建、禁止项扫描和全量测试已完成，随本阶段提交归档。
 
 ## 任务 1：新增 V2 task template 渲染边界
 
@@ -971,6 +971,7 @@ git commit -m "refactor(提示词): 删除旧版提示词资产"
 **文件：**
 - 修改：`core/prompt_v2/template_registry.py`
 - 修改：`core/config_registry.py`
+- 修改：`core/prompt_v2/__init__.py`
 - 修改：`core/prompt_v2/compiler.py`
 - 修改：`bootstrap/prompt_runtime.py`
 - 修改：`nanobot_kt/bridge.py`
@@ -984,8 +985,15 @@ git commit -m "refactor(提示词): 删除旧版提示词资产"
 - 修改：`tests/test_prompt_manifest.py`
 - 修改：`tests/test_prompt_v2_template_registry.py`
 - 修改：`tests/test_prompt_v2_template_admin.py`
+- 修改：`tests/test_prompt_trace_admin.py`
+- 修改：`tests/test_bridge_prompt_v2.py`
+- 修改：`tests/test_prompt_runtime_bootstrap.py`
+- 修改：`tests/test_prompt_v2.py`
+- 修改：`tests/test_kt_framework.py`
 - 修改：`tests/test_webui_prompt_runtime_ui.py`
 - 修改：`tests/test_reply_admin.py`
+- 修改：`prompts.v2.default/**/*.md`
+- 修改：`data/prompts_v2/**/*.md`
 
 - [x] **步骤 1：写红灯测试**
 
@@ -1045,7 +1053,7 @@ python -B -m pytest \
 
 已确认红灯：`15 failed, 1 passed, 20 warnings`。失败点覆盖 manifest / config 仍输出 `v2`、registry env 优先级仍为旧名、canonical admin route 尚不可用、WebUI 主入口和 reply-test 仍使用 `v2`。
 
-- [ ] **步骤 3：修改 registry env 兼容层**
+- [x] **步骤 3：修改 registry env 兼容层**
 
 在 `core/prompt_v2/template_registry.py` 中让无版本 env 优先、旧 env 作为 fallback：
 
@@ -1069,7 +1077,7 @@ def runtime_template_dir() -> Path:
 
 任务 7 只建立 canonical 命名兼容层，不物理重命名目录。`prompts.v2.default`、`data/prompts_v2` 和 `data/prompts_v2_history` 暂时保留为兼容物理路径；后续如需迁移目录，应单独设计并单独验证。
 
-- [ ] **步骤 4：更新 manifest 和 API/UI 文案**
+- [x] **步骤 4：更新 manifest 和 API/UI 文案**
 
 将 `prompt_manifest.json` 改为：
 
@@ -1095,7 +1103,7 @@ def runtime_template_dir() -> Path:
 
 WebUI 新主路由使用 `/prompt-templates`，旧 `/prompt-v2-templates` redirect 到新路由。
 
-- [ ] **步骤 5：保留行为语义字段兼容**
+- [x] **步骤 5：保留行为语义字段兼容**
 
 暂不重命名以下字段：
 
@@ -1106,7 +1114,7 @@ WebUI 新主路由使用 `/prompt-templates`，旧 `/prompt-v2-templates` redire
 
 live 新输出应使用 `prompt_engine="prompt"`、`prompt_mode="prompt"` 和 `prompt_source="Prompt Runtime"`；旧字段仅作兼容读取，避免一次性破坏 API / trace / eval。
 
-- [ ] **步骤 6：运行任务 7 回归**
+- [x] **步骤 6：运行任务 7 回归**
 
 运行：
 
@@ -1125,9 +1133,15 @@ python -B -m pytest \
 cd webui && npm run build
 ```
 
-预期：PASS。
+实际结果：
 
-- [ ] **步骤 7：提交任务 7**
+- 红灯集合绿灯：`16 passed, 20 warnings`。
+- 相关回归：`126 passed, 20 warnings`。
+- WebUI 构建：`npm run build` 通过，Vite 仅提示大 chunk 与插件耗时 warning。
+- 禁止项扫描：主路径未再输出 `Prompt Runtime V2`、`engine: 'v2'`、`/prompt-v2/templates` 等；命中仅剩兼容 route、兼容输入测试和负向断言。
+- 全量测试：`1219 passed, 6 skipped, 113 warnings in 81.05s`。
+
+- [x] **步骤 7：提交任务 7**
 
 运行：
 

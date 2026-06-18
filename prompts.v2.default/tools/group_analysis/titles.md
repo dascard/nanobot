@@ -1,5 +1,5 @@
 ---
-name: 群聊日报用户称号 V2
+name: 群聊日报用户称号
 version: 1
 kind: tool
 tool_name: group_analysis

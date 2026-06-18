@@ -1,5 +1,5 @@
 ---
-name: 外部知识库查询工具 V2
+name: 外部知识库查询工具
 version: 1
 kind: tool
 tool_name: knowledge_query

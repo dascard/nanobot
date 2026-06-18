@@ -646,7 +646,7 @@ export function PromptV2TemplatesPage() {
   const selectedEdge = selectedEdgeIndex >= 0 ? (flow.edges || [])[selectedEdgeIndex] : null
 
   const loadTemplates = useCallback(() => {
-    api.get('/prompt-v2/templates').then(r => {
+    api.get('/prompt/templates').then(r => {
       const list = r.data.items || []
       setTemplates(list)
       setTemplateTree(r.data.tree || { chat: [], tools: {}, tasks: [] })
@@ -658,15 +658,15 @@ export function PromptV2TemplatesPage() {
       setSelected(prev => chatKeys.includes(prev) ? prev : (chatKeys.includes('chat/main') ? 'chat/main' : chatKeys[0] || ''))
       setSelectedToolTemplateKey(prev => toolKeys.includes(prev) ? prev : (toolKeys[0] || ''))
       setSelectedTaskTemplateKey(prev => taskKeys.includes(prev) ? prev : (taskKeys[0] || ''))
-    }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
+    }).catch(e => alert(e.response?.data?.detail || '加载模板失败'))
   }, [])
 
   const loadFlow = useCallback(() => {
-    api.get('/prompt-v2/flow').then(r => {
+    api.get('/prompt/flow').then(r => {
       setFlow(r.data.flow || { version: 1, nodes: [], edges: [] })
       setFlowSource(r.data.source || '')
       setFlowPath(r.data.path || '')
-    }).catch(e => alert(e.response?.data?.detail || '加载 V2 编排图失败'))
+    }).catch(e => alert(e.response?.data?.detail || '加载编排图失败'))
   }, [])
 
   const loadIdentitySettings = useCallback(() => {
@@ -694,7 +694,7 @@ export function PromptV2TemplatesPage() {
     loadTemplates()
     loadFlow()
     loadIdentitySettings()
-    api.get('/prompt-v2/variables')
+    api.get('/prompt/variables')
       .then(r => setVariables(r.data.items || []))
       .catch(() => setVariables([]))
   }, [loadTemplates, loadFlow, loadIdentitySettings])
@@ -719,10 +719,10 @@ export function PromptV2TemplatesPage() {
 
   useEffect(() => {
     if (!activeTemplateKey) return
-    api.get(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`).then(r => {
+    api.get(`/prompt/templates/${promptV2Path(activeTemplateKey)}`).then(r => {
       setDetail(r.data)
       setContent(r.data.content || '')
-    }).catch(e => alert(e.response?.data?.detail || '加载 V2 模板失败'))
+    }).catch(e => alert(e.response?.data?.detail || '加载模板失败'))
   }, [activeTemplateKey])
 
   useEffect(() => {
@@ -733,10 +733,10 @@ export function PromptV2TemplatesPage() {
 
   const save = () => {
     if (!activeTemplateKey) return
-    api.put(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`, { content }).then(r => {
+    api.put(`/prompt/templates/${promptV2Path(activeTemplateKey)}`, { content }).then(r => {
       setToast(`已保存 ${activeTemplateKey} · ${r.data.after_hash?.slice(0, 12) || ''}`)
       loadTemplates()
-    }).catch(e => alert(e.response?.data?.detail || '保存 V2 模板失败'))
+    }).catch(e => alert(e.response?.data?.detail || '保存模板失败'))
   }
 
   const createRuntimeTemplate = () => {
@@ -745,7 +745,7 @@ export function PromptV2TemplatesPage() {
     const parts = key.split('/')
     const kind = parts[0] === 'chat' ? 'chat' : parts[0] === 'tasks' ? 'task' : 'tool'
     const toolName = parts[0] === 'tools' ? parts[1] || '' : ''
-    api.post('/prompt-v2/templates', {
+    api.post('/prompt/templates', {
       template_key: key,
       kind,
       tool_name: toolName,
@@ -758,12 +758,12 @@ export function PromptV2TemplatesPage() {
       if (kind === 'task') setSelectedTaskTemplateKey(key)
       if (kind === 'tool') setSelectedToolTemplateKey(key)
       loadTemplates()
-    }).catch(e => alert(e.response?.data?.detail || '新建 V2 模板失败'))
+    }).catch(e => alert(e.response?.data?.detail || '新建模板失败'))
   }
 
   const deleteRuntimeOverride = () => {
     if (!activeTemplateKey) return
-    api.delete(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}`).then(() => {
+    api.delete(`/prompt/templates/${promptV2Path(activeTemplateKey)}`).then(() => {
       setToast(`已删除运行时覆盖 ${activeTemplateKey}`)
       loadTemplates()
     }).catch(e => alert(e.response?.data?.detail || '删除运行时覆盖失败'))
@@ -771,17 +771,17 @@ export function PromptV2TemplatesPage() {
 
   const resetRuntimeOverride = () => {
     if (!activeTemplateKey) return
-    api.post(`/prompt-v2/templates/${promptV2Path(activeTemplateKey)}/reset`).then(() => {
+    api.post(`/prompt/templates/${promptV2Path(activeTemplateKey)}/reset`).then(() => {
       setToast(`已重置覆盖 ${activeTemplateKey}`)
       loadTemplates()
     }).catch(e => alert(e.response?.data?.detail || '重置覆盖失败'))
   }
 
   const saveFlow = () => {
-    api.put('/prompt-v2/flow', { flow }).then(r => {
+    api.put('/prompt/flow', { flow }).then(r => {
       setToast(`已保存编排图 · ${r.data.runtime_path || ''}`)
       loadFlow()
-    }).catch(e => alert(e.response?.data?.detail || '保存 V2 编排图失败'))
+    }).catch(e => alert(e.response?.data?.detail || '保存编排图失败'))
   }
 
   const saveToolSchema = () => {
@@ -970,7 +970,7 @@ export function PromptV2TemplatesPage() {
       {toast && <div className="mb-3 px-4 py-2 bg-emerald-500/15 border border-emerald-500/30 rounded-lg text-sm text-emerald-400">{toast}</div>}
       <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold mb-1 text-slate-50">Prompt V2 模板</h1>
+          <h1 className="text-xl font-semibold mb-1 text-slate-50">Prompt 模板</h1>
           <p className="max-w-5xl text-slate-500 text-xs leading-5">聊天主流程用画布编排；工具提示词按工具拆分成独立模板。变量是全局白名单，当前输入仍只作为 user event 注入一次</p>
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[10px] text-slate-600">
             <span>默认模板目录: <span className="font-mono text-slate-500">{defaultDir || '-'}</span></span>
@@ -981,7 +981,7 @@ export function PromptV2TemplatesPage() {
         <div className="flex w-full flex-wrap gap-2 md:w-auto md:justify-end">
           <NavLink to="/prompt-preview" className="whitespace-nowrap rounded-lg bg-slate-800 px-3 py-2 text-xs text-slate-300 hover:bg-slate-700">运行预览</NavLink>
           <button onClick={saveFlow} disabled={templateWorkspace !== 'chat'} className="whitespace-nowrap rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium hover:bg-blue-500 disabled:opacity-50">保存编排图</button>
-          <button onClick={save} disabled={!activeTemplateKey} className="whitespace-nowrap rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium hover:bg-emerald-500 disabled:opacity-50">保存 V2 模板</button>
+          <button onClick={save} disabled={!activeTemplateKey} className="whitespace-nowrap rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium hover:bg-emerald-500 disabled:opacity-50">保存模板</button>
         </div>
       </div>
 
@@ -1402,7 +1402,7 @@ export function PromptV2TemplatesPage() {
                 <Badge tone="blue">{detail?.sha256?.slice(0, 12) || '-'}</Badge>
                 <button onClick={save} disabled={!activeTemplateKey}
                   className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-50">
-                  保存 V2 模板
+                  保存模板
                 </button>
                 <button onClick={() => setIsLargeTemplateEditorOpen(false)}
                   className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-700">
@@ -1424,7 +1424,7 @@ export function PromptV2TemplatesPage() {
 
 export function EffectivePromptPreviewPage() {
   const [form, setForm] = useState({
-    engine: 'v2',
+    engine: 'prompt',
     chat_type: 'private',
     session_id: '',
     user_id: '',
@@ -1453,20 +1453,20 @@ export function EffectivePromptPreviewPage() {
       <div className="flex items-start justify-between gap-4 mb-4">
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-2xl font-bold">Prompt Runtime V2</h1>
+            <h1 className="text-2xl font-bold">Prompt Runtime</h1>
             <Badge tone="emerald">primary</Badge>
           </div>
           <p className="text-slate-500 text-sm">按 chat/session 调用真实 compiler，还原本轮实际发给模型的 messages、tools schema、section hash 和审计信息</p>
         </div>
-        <NavLink to="/prompt-v2-templates" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-300">
-          V2 模板
+        <NavLink to="/prompt-templates" className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs text-slate-300">
+          模板
         </NavLink>
       </div>
       <Card className="p-4 mb-4 border-emerald-500/20 bg-emerald-500/5">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <MiniStat label="线上模式" value="v1 / v2" tone="emerald" />
-          <MiniStat label="当前页面默认" value="v2" tone="emerald" />
-          <MiniStat label="shadow / managed" value="仅 v1 对比" tone="amber" />
+          <MiniStat label="线上模式" value="prompt" tone="emerald" />
+          <MiniStat label="当前页面默认" value="prompt" tone="emerald" />
+          <MiniStat label="shadow / managed" value="已下线" tone="amber" />
           <MiniStat label="当前输入" value="只作为 user event" />
         </div>
       </Card>
@@ -1474,8 +1474,9 @@ export function EffectivePromptPreviewPage() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
           <label className="text-xs text-slate-500">engine
             <select value={form.engine} onChange={e => update('engine', e.target.value)} className="mt-1 w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200">
-              <option value="v2">v2 - 当前运行时</option>
-              <option value="v1">v1 - 回滚/对比</option>
+              <option value="prompt">prompt - 当前运行时</option>
+              <option value="v2">v2 - 兼容别名</option>
+              <option value="v1">v1 - 已下线</option>
             </select>
           </label>
           <label className="text-xs text-slate-500">chat_type
@@ -1494,7 +1495,7 @@ export function EffectivePromptPreviewPage() {
             </label>
           ) : (
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3 py-2">
-              <div className="text-xs text-slate-500">v2 mode</div>
+              <div className="text-xs text-slate-500">prompt mode</div>
               <div className="text-sm text-emerald-300 mt-1">无 shadow / managed</div>
             </div>
           )}

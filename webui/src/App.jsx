@@ -175,8 +175,8 @@ const NAV_SECTIONS = [
   {
     title: 'Prompt',
     items: [
-      { to: '/prompt-preview', label: 'V2 运行预览' },
-      { to: '/prompt-v2-templates', label: 'V2 模板' },
+      { to: '/prompt-preview', label: '运行预览' },
+      { to: '/prompt-templates', label: '模板' },
     ],
   },
   {
@@ -2952,7 +2952,8 @@ export default function App() {
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/prompt" element={<Navigate to="/prompt-preview" replace />} />
           <Route path="/prompt-preview" element={<EffectivePromptPreviewPage />} />
-          <Route path="/prompt-v2-templates" element={<PromptV2TemplatesPage />} />
+          <Route path="/prompt-v2-templates" element={<Navigate to="/prompt-templates" replace />} />
+          <Route path="/prompt-templates" element={<PromptV2TemplatesPage />} />
           <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />
           <Route path="/agent-runs" element={<AgentRunsPage />} />
           <Route path="/llm-api-logs" element={<LLMApiLogsPage />} />
