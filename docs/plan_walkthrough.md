@@ -6,11 +6,11 @@
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
-P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计、阶段拆分、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate。P4-1「评测数据集与标注闭环」已完成 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集；P4-2「Admin 标注工作台契约化与 promote 预检 UI」已完成后端 expected contract schema/API、WebUI 契约化标注和 promote 预检流程；P4-3「能力契约评测数据集扩展」已完成 reply / rendering 两个能力数据集、baseline gate 和最终回归。当前下一步进入 P4-4「RAG 标注闭环与 RAG baseline gate」。
+P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计、阶段拆分、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate。P4-1「评测数据集与标注闭环」已完成 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集；P4-2「Admin 标注工作台契约化与 promote 预检 UI」已完成后端 expected contract schema/API、WebUI 契约化标注和 promote 预检流程；P4-3「能力契约评测数据集扩展」已完成 reply / rendering 两个能力数据集、baseline gate 和最终回归；P4-4「RAG baseline 门禁」已完成 RAG benchmark 专用 baseline diff、CLI gate、稳定 baseline、Admin API 和 WebUI 展示。当前下一步进入 P4-5「更多 suite PR gate、周期性复跑和 RAG manual 样本扩充」。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」、P4-1「评测数据集与标注闭环」、P4-2「Admin 标注工作台契约化与 promote 预检 UI」和 P4-3「能力契约评测数据集扩展」均已完成验证。下一步默认进入 P4-4，做 RAG 标注闭环与 RAG baseline gate。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」、P4-1「评测数据集与标注闭环」、P4-2「Admin 标注工作台契约化与 promote 预检 UI」、P4-3「能力契约评测数据集扩展」和 P4-4「RAG baseline 门禁」均已完成验证。下一步默认进入 P4-5，做更多 suite PR gate、周期性复跑和 RAG manual 样本扩充。
 
 ## 文档口径
 
@@ -82,9 +82,63 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P4-1 | 已完成 | 评测体系扩展 | expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界、首个 `capability_model_routing` 能力数据集、文档收口和最终验证均已完成 | `e4fb70a` / `8b892a8` / `4f4cce7` / `b84cbf1` / `7a84084` / `71c3a53` / `a494f3b` / `5a8b601` |
 | P4-2 | 已完成 | Admin 标注工作台契约化与 promote 预检 UI | 后端 expected 契约、WebUI 契约化标注、`note` / `expected` 分离、promote dry-run → apply 预检 UI、WebUI build 和全量回归均已完成 | `docs(评测): 设计标注工作台契约` / `feat(评测): 暴露期望契约校验` / `feat(评测): 契约化标注工作台` |
 | P4-3 | 已完成 | 能力契约评测数据集扩展 | `capability_reply_contract` 与 `capability_rendering_contract` 数据集、baseline、离线 gate、渲染相邻回归和全量回归均已完成 | `docs(评测): 设计能力数据集扩展` / `docs(计划): 记录能力数据集扩展计划` / `feat(评测): 扩展回复契约数据集` / `feat(评测): 扩展渲染契约数据集` / `docs(评测): 收口能力数据集状态` |
-| P4-4 | 下一步 | RAG 标注闭环与 RAG baseline gate | 基于既有 RAG benchmark / candidates 闭环设计可复跑标注与 baseline 门禁 | 待设计 |
+| P4-4 | 已完成 | RAG baseline 门禁 | 为 `evals.rag_benchmark` 增加专用 baseline diff、CLI gate、稳定 baseline、Admin API 和 WebUI 展示 | `docs(评测): 设计 RAG baseline 门禁` / `docs(计划): 记录 RAG baseline 门禁计划` / `feat(评测): 增加 RAG baseline 计算` / `feat(评测): 支持 RAG baseline 门禁` / `test(评测): 固化 RAG baseline` / `feat(评测): 展示 RAG 门禁结果` |
+| P4-5 | 下一步 | 更多 suite PR gate 与周期性复跑 | 在已有 TimingGate / capability / RAG 门禁基础上扩展 CI 覆盖、周期性复跑和 RAG manual 样本扩充 | 待设计 |
 
-## 当前详细计划：P4-3 能力契约评测数据集扩展
+## 已完成阶段详情：P4-4 RAG baseline 门禁
+
+状态：P4-4 已完成。设计文档为 `docs/superpowers/specs/2026-06-18-rag-labeling-baseline-gate-design.md`，实现计划为 `.Codex/plans/rag-baseline-gate.md`。本阶段保留 `evals.rag_benchmark` 专用体系，不并入通用 `EvalCase`；generated case 仍只作为本地 DB 采样候选，仓库稳定 gate 只纳入 manual deterministic case。
+
+目标：
+
+- 新增 RAG benchmark 专用 baseline diff 和 gate 纯函数。
+- CLI 支持 `--manual-only`、`--baseline`、`--min-pass-rate`、`--max-new-failures`、`--max-degraded-rate` 和 `--max-unexpected-source-rate`。
+- 报告 JSON / Markdown 写入 `provider_mode`、`case_scope`、`case_scores`、`failed_cases`、`baseline_diff` 和 `gate`。
+- 固化 `evals/baselines/rag_benchmark.json`，当前覆盖 3 个 manual safe constraint case。
+- Admin RAG Benchmark run 支持 gate 参数，响应和 latest report 透传 `baseline_diff` / `gate`。
+- WebUI RAG Benchmark 页面展示 `Gate passed` / `Gate failed`、gate errors、`new_failed_cases`、`fixed_cases` 和 `still_failed_cases`。
+
+计划项：
+
+- [x] P4-4 设计：写入 `docs/superpowers/specs/2026-06-18-rag-labeling-baseline-gate-design.md`。提交：`0e06cdb docs(评测): 设计 RAG baseline 门禁`。
+- [x] P4-4 实现计划：写入 `.Codex/plans/rag-baseline-gate.md`。提交：`d425828 docs(计划): 记录 RAG baseline 门禁计划`。
+- [x] 任务 1：新增 `evals/rag_benchmark/baseline.py` 和纯函数测试。提交：`798ae33 feat(评测): 增加 RAG baseline 计算`。
+- [x] 任务 2：CLI gate 与报告输出。提交：`7fe0171 feat(评测): 支持 RAG baseline 门禁`。
+- [x] 任务 3：稳定 RAG baseline 文件。提交：`3695027 test(评测): 固化 RAG baseline`。
+- [x] 任务 4：Admin API 和 WebUI 展示 gate 结果。提交：`eae32b4 feat(评测): 展示 RAG 门禁结果`。
+- [x] 任务 5：文档收口，同步 `docs/evals.md`、`docs/todo.md`、本文件和 `.Codex/plans/rag-baseline-gate.md`。
+
+验证记录：
+
+- 任务 1 红灯：`tests/test_rag_benchmark.py::test_rag_baseline_diff_reports_new_fixed_and_metric_deltas` 失败于 `ModuleNotFoundError: No module named 'evals.rag_benchmark.baseline'`。
+- 任务 1 绿灯：同一测试结果 `1 passed, 1 warning in 0.75s`。
+- 任务 2 红灯：`tests/test_rag_benchmark.py::test_rag_benchmark_cli_fails_gate_on_new_failure` 失败于 `TypeError: main() takes 0 positional arguments but 1 was given`。
+- 任务 2 绿灯：CLI gate 三个定向测试结果 `3 passed, 1 warning in 0.87s`。
+- 任务 3 红灯：`tests/test_rag_benchmark.py::test_rag_benchmark_baseline_file_matches_manual_gate_contract` 失败于缺少 `evals/baselines/rag_benchmark.json`。
+- 任务 3 绿灯：同一测试结果 `1 passed, 1 warning in 0.74s`；正式 RAG gate 输出 `cases=3 passed=3 failed=0` 和 `Gate passed`；`tests/test_rag_benchmark.py` 结果 `13 passed, 1 warning in 1.07s`。
+- 任务 4 Admin 红灯：`tests/test_rag_benchmark_admin.py::test_benchmark_run_returns_gate_when_baseline_requested` 失败于缺少 `BENCHMARK_BASELINE_PATH`。
+- 任务 4 Admin 绿灯：同一测试结果 `1 passed, 21 warnings in 1.09s`；`tests/test_rag_benchmark_admin.py` 结果 `12 passed, 21 warnings in 4.88s`。
+- 任务 4 WebUI 红灯：`tests/test_rag_benchmark_webui.py` 结果 `1 failed, 3 passed, 1 warning`，失败点为页面源码缺少 `baseline_path`。
+- 任务 4 WebUI 绿灯：`tests/test_rag_benchmark_webui.py` 结果 `4 passed, 1 warning in 0.54s`。
+- P4-4B 集成回归：`tests/test_rag_benchmark_admin.py tests/test_rag_benchmark_webui.py` 结果 `16 passed, 21 warnings in 5.45s`；`tests/test_rag_benchmark.py tests/test_rag_benchmark_admin.py tests/test_rag_benchmark_webui.py` 结果 `29 passed, 21 warnings in 6.15s`。
+- WebUI build：`npm --prefix webui run build` 退出码为 0，保留 Vite 既有 chunk size 和 plugin timing 警告。
+- P4-4C 全量回归：`python -B -m pytest tests/ -v -p no:cacheprovider` 结果 `1359 passed, 6 skipped, 139 warnings in 99.40s`。
+
+提交边界：
+
+- 设计阶段：`docs(评测): 设计 RAG baseline 门禁`。
+- 实现计划：`docs(计划): 记录 RAG baseline 门禁计划`。
+- P4-4A-1 baseline 纯函数：`feat(评测): 增加 RAG baseline 计算`。
+- P4-4A-2 CLI gate 与报告输出：`feat(评测): 支持 RAG baseline 门禁`。
+- P4-4A-3 稳定 baseline：`test(评测): 固化 RAG baseline`。
+- P4-4B Admin / WebUI 展示：`feat(评测): 展示 RAG 门禁结果`。
+- P4-4C 文档收口：`docs(评测): 收口 RAG 门禁状态`。
+
+下一步：
+
+- P4-5 继续推进更多 suite PR gate、周期性复跑和 RAG manual 样本扩充。
+
+## 已完成阶段详情：P4-3 能力契约评测数据集扩展
 
 状态：P4-3 已完成。P4-3A Reply Contract 数据集、P4-3B Rendering Contract runner / 数据集、两个能力数据集 baseline gate、渲染相邻回归和全量回归均已完成。P4-3 采用「数据集优先 + 最小 runner」方案，设计文档为 `docs/superpowers/specs/2026-06-18-capability-contract-eval-datasets-design.md`，实现计划为 `.Codex/plans/capability-contract-eval-datasets.md`。本阶段未做 RAG 标注闭环、未接入更多 suite PR gate、未修改生产 QQ renderer 或真实 QQ push。
 

@@ -1,12 +1,26 @@
 # P4-4 RAG baseline 门禁实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框语法来跟踪进度。
 
 **目标：** 为现有 `evals.rag_benchmark` 专用评测体系增加稳定 baseline、命令行 gate、Admin 展示和文档收口。
 
 **架构：** 保留 `BenchmarkCase` / `BenchmarkResult` / `CaseScore` 模型，不并入通用 `EvalCase`。新增 `evals/rag_benchmark/baseline.py` 负责 baseline report、diff 和 gate 纯函数；`evals/rag_benchmark/run.py` 负责 CLI 参数和退出码；Admin route 与 WebUI 只消费 gate 结果。
 
 **技术栈：** Python、Pydantic、pytest、FastAPI、React、SQLite readonly URI。
+
+**状态（2026-06-18）：** 已完成。设计提交 `0e06cdb`，实现计划提交 `d425828`，任务提交依次为 `798ae33`、`7fe0171`、`3695027`、`eae32b4`；本文档收口随 `docs(评测): 收口 RAG 门禁状态` 提交。
+
+**实际验证摘要：**
+
+- baseline 纯函数：`tests/test_rag_benchmark.py::test_rag_baseline_diff_reports_new_fixed_and_metric_deltas` 结果 `1 passed, 1 warning in 0.75s`。
+- CLI gate：3 个定向测试结果 `3 passed, 1 warning in 0.87s`。
+- baseline 文件：结构测试结果 `1 passed, 1 warning in 0.74s`；正式 gate 输出 `cases=3 passed=3 failed=0` 和 `Gate passed`。
+- RAG benchmark 单文件回归：`tests/test_rag_benchmark.py` 结果 `13 passed, 1 warning in 1.07s`。
+- Admin gate：`tests/test_rag_benchmark_admin.py` 结果 `12 passed, 21 warnings in 4.88s`。
+- Admin / WebUI 集成：`tests/test_rag_benchmark_admin.py tests/test_rag_benchmark_webui.py` 结果 `16 passed, 21 warnings in 5.45s`。
+- P4-4 三件套：`tests/test_rag_benchmark.py tests/test_rag_benchmark_admin.py tests/test_rag_benchmark_webui.py` 结果 `29 passed, 21 warnings in 6.15s`。
+- WebUI build：`npm --prefix webui run build` 退出码为 0，保留 Vite 既有 chunk size 和 plugin timing 警告。
+- 全量回归：`python -B -m pytest tests/ -v -p no:cacheprovider` 结果 `1359 passed, 6 skipped, 139 warnings in 99.40s`。
 
 ---
 
@@ -43,7 +57,7 @@
 - 创建：`evals/rag_benchmark/baseline.py`
 - 修改：`tests/test_rag_benchmark.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_rag_benchmark.py` 末尾追加：
 
@@ -120,7 +134,7 @@ def test_rag_baseline_diff_reports_new_fixed_and_metric_deltas():
     assert "new_failed_cases exceeds threshold" in gate["errors"]
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -130,7 +144,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_baseline_diff_reports_
 
 预期：FAIL，报错包含 `ModuleNotFoundError: No module named 'evals.rag_benchmark.baseline'`。
 
-- [ ] **步骤 3：实现 baseline 纯函数**
+- [x] **步骤 3：实现 baseline 纯函数**
 
 创建 `evals/rag_benchmark/baseline.py`：
 
@@ -253,7 +267,7 @@ def evaluate_rag_gate(
     return {"passed": not errors, "errors": errors}
 ```
 
-- [ ] **步骤 4：运行绿灯测试**
+- [x] **步骤 4：运行绿灯测试**
 
 运行：
 
@@ -263,7 +277,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_baseline_diff_reports_
 
 预期：PASS，`1 passed`。
 
-- [ ] **步骤 5：提交任务 1**
+- [x] **步骤 5：提交任务 1**
 
 运行：
 
@@ -279,7 +293,7 @@ git commit -m "feat(评测): 增加 RAG baseline 计算"
 - 修改：`evals/rag_benchmark/report.py`
 - 修改：`tests/test_rag_benchmark.py`
 
-- [ ] **步骤 1：编写 CLI 红灯测试**
+- [x] **步骤 1：编写 CLI 红灯测试**
 
 在 `tests/test_rag_benchmark.py` 追加：
 
@@ -331,7 +345,7 @@ def test_rag_benchmark_cli_fails_gate_on_new_failure(tmp_path, monkeypatch, caps
     assert "new_failed_cases exceeds threshold" in captured.out
 ```
 
-- [ ] **步骤 2：运行 CLI 红灯测试**
+- [x] **步骤 2：运行 CLI 红灯测试**
 
 运行：
 
@@ -341,7 +355,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_fails_ga
 
 预期：FAIL，报错包含 `main() takes 0 positional arguments` 或 `unrecognized arguments: --baseline`。
 
-- [ ] **步骤 3：修改 `run.py` 支持 argv 和 gate 参数**
+- [x] **步骤 3：修改 `run.py` 支持 argv 和 gate 参数**
 
 在 `evals/rag_benchmark/run.py` 中：
 
@@ -396,7 +410,7 @@ report_payload = build_rag_report_payload(
 
 `build_rag_report_payload()` 可以放在 `report.py`，也可以先放在 `run.py`，但后续报告输出必须复用同一结构。
 
-- [ ] **步骤 4：修改 `report.py` 支持 gate 字段**
+- [x] **步骤 4：修改 `report.py` 支持 gate 字段**
 
 在 `evals/rag_benchmark/report.py` 中让 `write_reports()` 接收可选参数：
 
@@ -445,7 +459,7 @@ if gate:
         lines.append(f"- error: {error}")
 ```
 
-- [ ] **步骤 5：运行 CLI 绿灯测试**
+- [x] **步骤 5：运行 CLI 绿灯测试**
 
 运行：
 
@@ -455,7 +469,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_fails_ga
 
 预期：PASS，`1 passed`。
 
-- [ ] **步骤 6：补通过路径测试**
+- [x] **步骤 6：补通过路径测试**
 
 在 `tests/test_rag_benchmark.py` 追加：
 
@@ -522,7 +536,7 @@ def test_rag_benchmark_cli_passes_manual_deterministic_gate(tmp_path, capsys):
     assert report["baseline_diff"]["new_failed_cases"] == []
 ```
 
-- [ ] **步骤 7：运行任务 2 全部测试**
+- [x] **步骤 7：运行任务 2 全部测试**
 
 运行：
 
@@ -536,7 +550,7 @@ tests/test_rag_benchmark.py::test_rag_benchmark_cli_passes_manual_deterministic_
 
 预期：PASS，`3 passed`。
 
-- [ ] **步骤 8：提交任务 2**
+- [x] **步骤 8：提交任务 2**
 
 运行：
 
@@ -551,7 +565,7 @@ git commit -m "feat(评测): 支持 RAG baseline 门禁"
 - 创建：`evals/baselines/rag_benchmark.json`
 - 修改：`tests/test_rag_benchmark.py`
 
-- [ ] **步骤 1：编写 baseline 文件结构测试**
+- [x] **步骤 1：编写 baseline 文件结构测试**
 
 在 `tests/test_rag_benchmark.py` 追加：
 
@@ -569,7 +583,7 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     assert all("case_id" in item and "ok" in item for item in baseline["case_scores"])
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -579,7 +593,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：FAIL，报错包含 `No such file or directory: 'evals/baselines/rag_benchmark.json'`。
 
-- [ ] **步骤 3：创建 baseline 文件**
+- [x] **步骤 3：创建 baseline 文件**
 
 创建 `evals/baselines/rag_benchmark.json`，首版使用仓库内 manual safe cases。若本地 DB 不可用，先用当前 manual constraint-only case 的确定性结果构造 baseline：
 
@@ -619,7 +633,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 实现后用实际 gate 结果校准 metrics。若 gate 运行产生非 0 latency，baseline 可以保留 latency 字段，但 gate 阈值不依赖精确 latency。
 
-- [ ] **步骤 4：运行 baseline 文件测试**
+- [x] **步骤 4：运行 baseline 文件测试**
 
 运行：
 
@@ -629,7 +643,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：PASS，`1 passed`。
 
-- [ ] **步骤 5：运行 RAG gate 命令**
+- [x] **步骤 5：运行 RAG gate 命令**
 
 运行：
 
@@ -648,7 +662,7 @@ python -B -m evals.rag_benchmark.run \
 
 预期：退出码 0，输出包含 `Gate passed`。
 
-- [ ] **步骤 6：提交任务 3**
+- [x] **步骤 6：提交任务 3**
 
 运行：
 
@@ -665,7 +679,7 @@ git commit -m "test(评测): 固化 RAG baseline"
 - 修改：`tests/test_rag_benchmark_admin.py`
 - 修改：`tests/test_rag_benchmark_webui.py`
 
-- [ ] **步骤 1：编写 Admin 红灯测试**
+- [x] **步骤 1：编写 Admin 红灯测试**
 
 在 `tests/test_rag_benchmark_admin.py` 追加：
 
@@ -715,7 +729,7 @@ def test_benchmark_run_returns_gate_when_baseline_requested(client, tmp_path, mo
     assert json.loads((reports / "latest.json").read_text(encoding="utf-8"))["gate"]["passed"] is True
 ```
 
-- [ ] **步骤 2：运行 Admin 红灯测试**
+- [x] **步骤 2：运行 Admin 红灯测试**
 
 运行：
 
@@ -725,7 +739,7 @@ python -B -m pytest tests/test_rag_benchmark_admin.py::test_benchmark_run_return
 
 预期：FAIL，响应缺少 `gate` 或请求模型拒绝未知字段。
 
-- [ ] **步骤 3：扩展 Admin 请求模型**
+- [x] **步骤 3：扩展 Admin 请求模型**
 
 在 `api/admin/rag_benchmark_routes.py` 中新增常量：
 
@@ -791,7 +805,7 @@ if baseline_path.exists() and (
 
 `write_reports()` 调用传入 `provider_mode`、`case_scope`、`baseline_diff` 和 `gate`。
 
-- [ ] **步骤 4：运行 Admin 绿灯测试**
+- [x] **步骤 4：运行 Admin 绿灯测试**
 
 运行：
 
@@ -801,7 +815,7 @@ python -B -m pytest tests/test_rag_benchmark_admin.py::test_benchmark_run_return
 
 预期：PASS，`1 passed`。
 
-- [ ] **步骤 5：编写 WebUI 静态测试**
+- [x] **步骤 5：编写 WebUI 静态测试**
 
 在 `tests/test_rag_benchmark_webui.py` 追加：
 
@@ -819,7 +833,7 @@ def test_rag_benchmark_page_exposes_gate_status_and_baseline_diff():
     assert "new_failed_cases" in source
 ```
 
-- [ ] **步骤 6：运行 WebUI 红灯测试**
+- [x] **步骤 6：运行 WebUI 红灯测试**
 
 运行：
 
@@ -829,7 +843,7 @@ python -B -m pytest tests/test_rag_benchmark_webui.py::test_rag_benchmark_page_e
 
 预期：FAIL，缺少 gate 相关字段或文案。
 
-- [ ] **步骤 7：修改 WebUI 页面**
+- [x] **步骤 7：修改 WebUI 页面**
 
 在 `webui/src/features/rag/RagBenchmarkPage.jsx` 中：
 
@@ -838,7 +852,7 @@ python -B -m pytest tests/test_rag_benchmark_webui.py::test_rag_benchmark_page_e
 - 页面展示 `latestRun.baseline_diff?.new_failed_cases`、`fixed_cases`、`still_failed_cases`。
 - 门禁失败时在失败明细附近展示 `gate.errors`。
 
-- [ ] **步骤 8：运行 Admin / WebUI 回归**
+- [x] **步骤 8：运行 Admin / WebUI 回归**
 
 运行：
 
@@ -848,7 +862,7 @@ python -B -m pytest tests/test_rag_benchmark_admin.py tests/test_rag_benchmark_w
 
 预期：PASS。
 
-- [ ] **步骤 9：提交任务 4**
+- [x] **步骤 9：提交任务 4**
 
 运行：
 
@@ -865,7 +879,7 @@ git commit -m "feat(评测): 展示 RAG 门禁结果"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/rag-baseline-gate.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 在 `RAG Benchmark 边界` 后追加 RAG gate 命令：
 
@@ -889,19 +903,19 @@ Generated case 只作为本地 DB 采样候选，不进入仓库稳定 baseline�
 人工确认后的样本应保存为 manual case，再纳入 gate。
 ```
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 把 P4 现状改为 P4-4 已完成，并说明下一阶段进入 P4-5 更多 suite PR gate 和周期性复跑。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 在进度总览中把 P4-4 标记为已完成，新增 P4-5 下一步。记录 P4-4 设计、计划、P4-4A、P4-4B、P4-4C 的提交边界和验证命令。
 
-- [ ] **步骤 4：勾选本计划已完成步骤**
+- [x] **步骤 4：勾选本计划已完成步骤**
 
 在 `.Codex/plans/rag-baseline-gate.md` 中把已完成任务复选框改为 `[x]`，并记录实际测试输出。
 
-- [ ] **步骤 5：运行文档自检**
+- [x] **步骤 5：运行文档自检**
 
 运行：
 
@@ -942,7 +956,7 @@ docs/evals.md docs/todo.md docs/plan_walkthrough.md
 
 预期：无输出。
 
-- [ ] **步骤 6：提交任务 5**
+- [x] **步骤 6：提交任务 5**
 
 运行：
 

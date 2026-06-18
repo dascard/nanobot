@@ -129,6 +129,25 @@ python -B -m evals.run --suite capability_rendering_contract --baseline evals/ba
 
 `evals/rag_benchmark/` 保持独立 benchmark 入口，不并入通用 `EvalCase`。原因是 RAG benchmark 需要独立的召回样本、索引上下文和评分口径；通用 candidates 闭环只负责把可评分的用户交互样本沉淀为稳定 case。
 
+P4-4 已为 RAG benchmark 增加专用 baseline diff 和 gate。稳定门禁只运行 manual case 和 deterministic provider：
+
+```bash
+python -B -m evals.rag_benchmark.run \
+--manual evals/cases/rag_benchmark/manual \
+--generated tmp/rag_benchmark/empty \
+--provider-mode deterministic \
+--manual-only \
+--baseline evals/baselines/rag_benchmark.json \
+--min-pass-rate 1.0 \
+--max-new-failures 0 \
+--max-degraded-rate 0.0 \
+--max-unexpected-source-rate 0.0
+```
+
+门禁输出写入 `tmp/rag_benchmark/reports/latest.json` 和 `latest.md`，报告顶层包含 `provider_mode`、`case_scope`、`case_scores`、`failed_cases`、`baseline_diff` 和 `gate`。Admin RAG Benchmark 页面可以在运行时传入 `baseline_path`、`min_pass_rate`、`max_new_failures`、`max_degraded_rate` 和 `max_unexpected_source_rate`，并展示 `Gate passed` / `Gate failed`、新增失败、已修复失败和仍失败 case。
+
+Generated case 只作为本地 DB 采样候选，不进入仓库稳定 baseline。人工确认后的样本应保存为 manual case，再纳入 `evals/baselines/rag_benchmark.json` 对应的 gate。
+
 ## 失败处理
 
 - `pass_rate below threshold`：当前 suite 有失败。先看 `Failed:` 列表，修 case 或修实现。
@@ -138,4 +157,4 @@ python -B -m evals.run --suite capability_rendering_contract --baseline evals/ba
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate。RAG 标注闭环和更多 suite 的 PR gate 留在 P4-4 / P4-5 推进。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示。更多 suite 的 PR gate、周期性复跑和 RAG manual 样本扩充留到 P4-5 继续推进。
