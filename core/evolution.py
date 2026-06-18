@@ -101,7 +101,7 @@ def model_scout_task() -> None:
         controller = NanobotKTController(provider, memory)
         
         scout_info = "搜集最新的 AI 大模型（LLM）版本发布动态"
-        _run_async(controller.model_scout.run(scout_info, provider))
+        run_awaitable_sync(controller.model_scout.run(scout_info, provider))
         
         logger.info("══════ System Model Scout SUCCESS ══════")
 

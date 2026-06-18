@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from core.database import ChatLog, Persona, SystemPrompt
-from core.evolution import evolution_task
+from core.evolution import evolution_task, model_scout_task
 
 def test_evolution_task_not_triggered(db_session):
     """测试日志没有达到阈值时不触发进化"""
@@ -47,6 +47,25 @@ def test_evolution_task_triggered(db_session):
         
     # 验证 evolve 被调用（实际的 DB 标记由 controller.evolve 内部完成，此处为 mock）
     mock_controller.evolve.assert_awaited_once_with("evo_user_2")
+
+
+def test_model_scout_task_runs_with_async_bridge():
+    with patch("core.evolution.SQLiteMemory") as mock_memory_cls, \
+         patch("core.evolution.NanobotKTController") as mock_controller_cls, \
+         patch("core.evolution._build_provider", return_value=object()):
+        mock_memory = MagicMock()
+        mock_memory_cls.return_value = mock_memory
+
+        mock_controller = MagicMock()
+        mock_controller.model_scout.run = AsyncMock(return_value=None)
+        mock_controller_cls.return_value = mock_controller
+
+        model_scout_task()
+
+    mock_controller.model_scout.run.assert_awaited_once()
+    args = mock_controller.model_scout.run.await_args.args
+    assert args[0] == "搜集最新的 AI 大模型（LLM）版本发布动态"
+    mock_memory.close.assert_called_once_with()
 
 
 @pytest.mark.asyncio
