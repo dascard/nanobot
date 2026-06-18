@@ -72,11 +72,38 @@ def test_reply_eval_case_editor_controls_are_labelled():
     assert "aria-label=\"选择测试用例\"" in source
 
 
-def test_eval_candidate_label_posts_expected_field():
+def test_eval_candidate_label_uses_expected_contract_and_scoreable_fields():
     source = EVALS_JS.read_text(encoding="utf-8")
 
     assert "expected_json: expectedJson" not in source
-    assert "{ expected: expectedJson }" in source
+    assert "api.get('/evals/expected-contract')" in source
+    assert "expectedContract" in source
+    assert "labelError" in source
+    assert "note: labelNote" in source
+    assert "timing_action" in source
+    assert "should_create_jargon" in source
+    assert "should_create_expression" in source
+    assert "forbidden_terms" in source
+
+    assert "expected_action" not in source
+    assert "should_learn" not in source
+    assert "quality" not in source
+    assert "category" not in source
+    assert "meaning" not in source
+    assert "delay_seconds" not in source
+
+
+def test_eval_candidate_promote_uses_dry_run_modal():
+    source = EVALS_JS.read_text(encoding="utf-8")
+
+    assert "promotePlan" in source
+    assert "promoteError" in source
+    assert "target_dataset" in source
+    assert "dry_run: true" in source
+    assert "dry_run: false" in source
+    assert "confirmPromote" in source
+    assert "已提升到 regression" not in source
+    assert "api.post(`/evals/candidates/${encodeURIComponent(caseId)}/promote`)" not in source
 
 
 def test_sticker_duplicate_actions_do_not_use_emoji_buttons():

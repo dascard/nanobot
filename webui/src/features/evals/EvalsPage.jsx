@@ -16,6 +16,15 @@ export function EvalsPage() {
   const [labelSuite, setLabelSuite] = useState('')
   const [labelFields, setLabelFields] = useState({})
   const [labelShowJson, setLabelShowJson] = useState(false)
+  const [labelNote, setLabelNote] = useState('')
+  const [labelError, setLabelError] = useState('')
+  const [expectedContract, setExpectedContract] = useState(null)
+  const [contractError, setContractError] = useState('')
+  const [promoteCaseId, setPromoteCaseId] = useState(null)
+  const [promoteTargetDataset, setPromoteTargetDataset] = useState('regression')
+  const [promotePlan, setPromotePlan] = useState(null)
+  const [promoteError, setPromoteError] = useState('')
+  const [promoteBusy, setPromoteBusy] = useState(false)
   const [runs, setRuns] = useState([])
   const [runDetail, setRunDetail] = useState(null)
   const [running, setRunning] = useState(false)
@@ -38,6 +47,88 @@ export function EvalsPage() {
     if (tab === 'runs') loadRuns()
   }, [tab, loadCandidates, loadRuns])
 
+  useEffect(() => {
+    api.get('/evals/expected-contract')
+      .then(r => { setExpectedContract(r.data); setContractError('') })
+      .catch(e => setContractError(e.response?.data?.detail || e.message))
+  }, [])
+
+  const setLabelField = (key, value) => {
+    setLabelError('')
+    setLabelFields(prev => ({ ...prev, [key]: value }))
+  }
+
+  const fieldValue = (key) => labelFields[key] ?? ''
+
+  const fieldSchema = (key) => expectedContract?.field_schema?.[key] || {}
+
+  const fieldsForSuite = (suite) => (
+    expectedContract?.suite_presets?.[suite]?.fields
+    || expectedContract?.suite_presets?.reply_contract?.fields
+    || []
+  ).filter(key => !fieldSchema(key).advanced)
+
+  const parseFieldValue = (key, value) => {
+    const schema = fieldSchema(key)
+    if (value === '' || value === undefined || value === null) return undefined
+    if (schema.type === 'boolean') return value === true || value === 'true'
+    if (schema.type === 'integer') {
+      const parsed = Number.parseInt(value, 10)
+      if (Number.isNaN(parsed)) throw new Error(`${schema.label || key} 必须是整数`)
+      return parsed
+    }
+    if (schema.type === 'string_list') {
+      return String(value).split(',').map(item => item.trim()).filter(Boolean)
+    }
+    if (schema.type === 'array' || schema.type === 'object') {
+      try { return JSON.parse(value) } catch { throw new Error(`${schema.label || key} 必须是合法 JSON`) }
+    }
+    if (schema.type === 'string_or_number') {
+      const text = String(value).trim()
+      if (text === '') return undefined
+      const numberValue = Number(text)
+      return Number.isNaN(numberValue) ? text : numberValue
+    }
+    return value
+  }
+
+  const buildExpectedFromLabelForm = () => {
+    if (!expectedContract) throw new Error('期望字段契约尚未加载')
+    if (labelShowJson && labelFields._rawJson) {
+      try { return JSON.parse(labelFields._rawJson) } catch { throw new Error('JSON 格式错误') }
+    }
+    const expectedJson = {}
+    for (const key of fieldsForSuite(labelSuite)) {
+      const parsed = parseFieldValue(key, labelFields[key])
+      if (parsed !== undefined && !(Array.isArray(parsed) && parsed.length === 0)) {
+        expectedJson[key] = parsed
+      }
+    }
+    return expectedJson
+  }
+
+  const validateExpectedJson = (expectedJson) => {
+    if (!expectedContract) return '期望字段契约尚未加载'
+    const keys = Object.keys(expectedJson)
+    if (keys.length === 0) return '请至少填写一个可评分期望字段'
+    if (expectedJson.needs_label === true) return 'expected 不能包含 needs_label=true'
+    const deprecated = keys.filter(key => (expectedContract.deprecated_keys || []).includes(key))
+    if (deprecated.length > 0) return `以下字段已废弃，不能提交到 expected：${deprecated.join(', ')}`
+    const scoreable = new Set(expectedContract.scoreable_keys || [])
+    const unknown = keys.filter(key => !scoreable.has(key))
+    if (unknown.length > 0) return `以下字段不是 scorer 可评分字段：${unknown.join(', ')}`
+    return ''
+  }
+
+  const openLabel = (candidate) => {
+    setShowLabel(candidate.case_id)
+    setLabelSuite(candidate.suite)
+    setLabelFields({})
+    setLabelNote('')
+    setLabelError('')
+    setLabelShowJson(false)
+  }
+
   const runEval = () => {
     setRunning(true)
     api.post('/evals/run', { suite: 'regression' })
@@ -59,19 +150,21 @@ export function EvalsPage() {
   }
 
   const doLabel = (caseId) => {
-    // 从表单构建 expected
-    let expectedJson = { ...labelFields }
-    delete expectedJson._rawJson
-    if (labelShowJson && labelFields._rawJson) {
-      try { expectedJson = JSON.parse(labelFields._rawJson) } catch { alert('JSON 格式错误'); return }
-    }
-    if (Object.keys(expectedJson).length === 0 || expectedJson.needs_label) {
-      alert('请先选择期望值')
+    let expectedJson
+    try {
+      expectedJson = buildExpectedFromLabelForm()
+    } catch (e) {
+      setLabelError(e.message)
       return
     }
-    api.post(`/evals/candidates/${encodeURIComponent(caseId)}/label`, { expected: expectedJson })
-      .then(() => { setShowLabel(null); loadCandidates() })
-      .catch(e => alert(e.response?.data?.detail || e.message))
+    const error = validateExpectedJson(expectedJson)
+    if (error) {
+      setLabelError(error)
+      return
+    }
+    api.post(`/evals/candidates/${encodeURIComponent(caseId)}/label`, { expected: expectedJson, note: labelNote })
+      .then(() => { setShowLabel(null); setLabelError(''); loadCandidates() })
+      .catch(e => setLabelError(e.response?.data?.detail || e.message))
   }
 
   const doIgnore = (caseId) => {
@@ -80,10 +173,41 @@ export function EvalsPage() {
       .catch(e => alert(e.response?.data?.detail || e.message))
   }
 
-  const doPromote = (caseId) => {
-    api.post(`/evals/candidates/${encodeURIComponent(caseId)}/promote`)
-      .then(r => { alert(`已提升到 regression: ${r.data.path}`); loadCandidates() })
-      .catch(e => alert(e.response?.data?.detail || e.message))
+  const openPromote = (candidate) => {
+    setPromoteCaseId(candidate.case_id)
+    setPromoteTargetDataset(candidate.suite || 'regression')
+    setPromotePlan(null)
+    setPromoteError('')
+  }
+
+  const previewPromote = () => {
+    if (!promoteCaseId) return
+    const target = promoteTargetDataset.trim()
+    if (!target) {
+      setPromoteError('请填写目标数据集')
+      return
+    }
+    setPromoteBusy(true)
+    setPromoteError('')
+    api.post(`/evals/candidates/${encodeURIComponent(promoteCaseId)}/promote`, { dry_run: true, target_dataset: target })
+      .then(r => setPromotePlan(r.data))
+      .catch(e => { setPromotePlan(null); setPromoteError(e.response?.data?.detail || e.message) })
+      .finally(() => setPromoteBusy(false))
+  }
+
+  const confirmPromote = () => {
+    if (!promoteCaseId) return
+    const target = promoteTargetDataset.trim()
+    if (!target) {
+      setPromoteError('请填写目标数据集')
+      return
+    }
+    setPromoteBusy(true)
+    setPromoteError('')
+    api.post(`/evals/candidates/${encodeURIComponent(promoteCaseId)}/promote`, { dry_run: false, target_dataset: target })
+      .then(() => { setPromoteCaseId(null); setPromotePlan(null); loadCandidates() })
+      .catch(e => setPromoteError(e.response?.data?.detail || e.message))
+      .finally(() => setPromoteBusy(false))
   }
 
   const loadRunDetail = (runId) => {
@@ -164,13 +288,13 @@ export function EvalsPage() {
                         <button onClick={() => loadDetail(c.case_id)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">详情</button>
                         {c.status === 'candidate' && (
                           <>
-                            <button onClick={() => { setShowLabel(c.case_id); setLabelSuite(c.suite); setLabelFields({}); setLabelShowJson(false) }}
+                            <button onClick={() => openLabel(c)}
                               className="px-2 py-1 bg-indigo-700/50 hover:bg-indigo-700 text-indigo-300 rounded text-xs">标记</button>
                             <button onClick={() => doIgnore(c.case_id)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">忽略</button>
                           </>
                         )}
                         {c.status === 'labeled' && (
-                          <button onClick={() => doPromote(c.case_id)}
+                          <button onClick={() => openPromote(c)}
                             className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 text-emerald-300 rounded text-xs">提升</button>
                         )}
                       </div>
@@ -205,79 +329,126 @@ export function EvalsPage() {
                 <h2 className="text-lg font-bold mb-2">标记期望值</h2>
                 <p className="text-xs text-slate-500 mb-2">{showLabel}</p>
                 <Badge className="mb-4">{labelSuite || 'unknown'}</Badge>
+                {contractError && (
+                  <div className="mb-3 px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10 text-xs text-red-300">
+                    契约加载失败：{contractError}
+                  </div>
+                )}
+                {labelError && (
+                  <div className="mb-3 px-3 py-2 rounded-lg border border-amber-500/40 bg-amber-500/10 text-xs text-amber-200">
+                    {labelError}
+                  </div>
+                )}
 
                 {labelSuite === 'memory_learning' && (
                   <div className="space-y-3">
-                    <div><div className="text-xs text-slate-400 mb-1">是否应该学习</div>
-                      <select value={labelFields.should_learn || ''} onChange={e => setLabelFields({...labelFields, should_learn: e.target.value})}
+                    <div><div className="text-xs text-slate-400 mb-1">不应学习</div>
+                      <select value={fieldValue('no_learn')} onChange={e => setLabelField('no_learn', e.target.value)}
                         className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
                         <option value="">选择...</option>
-                        <option value="true">应该学习</option>
-                        <option value="false">不应学习</option>
-                        <option value="uncertain">不确定</option>
+                        <option value="true">是</option>
+                        <option value="false">否</option>
                       </select></div>
-                    <div><div className="text-xs text-slate-400 mb-1">分类</div>
-                      <input value={labelFields.category || ''} onChange={e => setLabelFields({...labelFields, category: e.target.value})}
-                        placeholder="stock_formula, spam_symbol..."
+                    <div><div className="text-xs text-slate-400 mb-1">应创建黑话</div>
+                      <select value={fieldValue('should_create_jargon')} onChange={e => setLabelField('should_create_jargon', e.target.value)}
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
+                        <option value="">选择...</option>
+                        <option value="true">是</option>
+                        <option value="false">否</option>
+                      </select></div>
+                    <div><div className="text-xs text-slate-400 mb-1">应创建表达</div>
+                      <select value={fieldValue('should_create_expression')} onChange={e => setLabelField('should_create_expression', e.target.value)}
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
+                        <option value="">选择...</option>
+                        <option value="true">是</option>
+                        <option value="false">否</option>
+                      </select></div>
+                    <div><div className="text-xs text-slate-400 mb-1">禁止学习词</div>
+                      <input value={fieldValue('forbidden_terms')} onChange={e => setLabelField('forbidden_terms', e.target.value)}
+                        placeholder="逗号分隔"
                         className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
-                    <div><div className="text-xs text-slate-400 mb-1">原因</div>
-                      <input value={labelFields.reason || ''} onChange={e => setLabelFields({...labelFields, reason: e.target.value})}
-                        placeholder="× 不应被学成黑话"
-                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
-                    <div><div className="text-xs text-slate-400 mb-1">含义（可选）</div>
-                      <textarea value={labelFields.meaning || ''} onChange={e => setLabelFields({...labelFields, meaning: e.target.value})}
-                        rows={2} className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
                   </div>
                 )}
 
                 {labelSuite === 'timing_gate' && (
                   <div className="space-y-3">
                     <div><div className="text-xs text-slate-400 mb-1">期望动作</div>
-                      <select value={labelFields.expected_action || ''} onChange={e => setLabelFields({...labelFields, expected_action: e.target.value})}
+                      <select value={fieldValue('timing_action')} onChange={e => setLabelField('timing_action', e.target.value)}
                         className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
                         <option value="">选择...</option>
                         <option value="continue">continue</option>
                         <option value="wait">wait</option>
                         <option value="no_reply">no_reply</option>
                       </select></div>
-                    <div><div className="text-xs text-slate-400 mb-1">延迟（秒）</div>
-                      <input type="number" value={labelFields.delay_seconds || ''} onChange={e => setLabelFields({...labelFields, delay_seconds: e.target.value})}
-                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
-                    <div><div className="text-xs text-slate-400 mb-1">原因</div>
-                      <input value={labelFields.reason || ''} onChange={e => setLabelFields({...labelFields, reason: e.target.value})}
-                        placeholder="应该继续回复"
-                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                    <div><div className="text-xs text-slate-400 mb-1">是否应该回复</div>
+                      <select value={fieldValue('should_reply')} onChange={e => setLabelField('should_reply', e.target.value)}
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
+                        <option value="">选择...</option>
+                        <option value="true">是</option>
+                        <option value="false">否</option>
+                      </select></div>
                   </div>
                 )}
 
                 {labelSuite === 'group_reply' && (
                   <div className="space-y-3">
-                    <div><div className="text-xs text-slate-400 mb-1">质量评价</div>
-                      <select value={labelFields.quality || ''} onChange={e => setLabelFields({...labelFields, quality: e.target.value})}
+                    <div><div className="text-xs text-slate-400 mb-1">是否应该回复</div>
+                      <select value={fieldValue('should_reply')} onChange={e => setLabelField('should_reply', e.target.value)}
                         className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
                         <option value="">选择...</option>
-                        <option value="good">合适</option>
-                        <option value="bad">不合适</option>
-                        <option value="interrupt">过度插话</option>
-                        <option value="tone">语气不对</option>
-                        <option value="context_error">上下文错误</option>
-                        <option value="permission_error">权限错误</option>
+                        <option value="true">是</option>
+                        <option value="false">否</option>
                       </select></div>
-                    <div><div className="text-xs text-slate-400 mb-1">原因</div>
-                      <input value={labelFields.reason || ''} onChange={e => setLabelFields({...labelFields, reason: e.target.value})}
-                        placeholder="描述问题"
+                    <div><div className="text-xs text-slate-400 mb-1">必需工具</div>
+                      <input value={fieldValue('required_tools')} onChange={e => setLabelField('required_tools', e.target.value)}
+                        placeholder="逗号分隔"
                         className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                    <div><div className="text-xs text-slate-400 mb-1">禁止工具</div>
+                      <input value={fieldValue('forbidden_tools')} onChange={e => setLabelField('forbidden_tools', e.target.value)}
+                        placeholder="逗号分隔"
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div><div className="text-xs text-slate-400 mb-1">必须包含文本</div>
+                        <input value={fieldValue('must_contain')} onChange={e => setLabelField('must_contain', e.target.value)}
+                          placeholder="逗号分隔"
+                          className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                      <div><div className="text-xs text-slate-400 mb-1">禁止包含文本</div>
+                        <input value={fieldValue('must_not_contain')} onChange={e => setLabelField('must_not_contain', e.target.value)}
+                          placeholder="逗号分隔"
+                          className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div><div className="text-xs text-slate-400 mb-1">发送方式</div>
+                        <select value={fieldValue('send_mode')} onChange={e => setLabelField('send_mode', e.target.value)}
+                          className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm">
+                          <option value="">选择...</option>
+                          <option value="normal">normal</option>
+                          <option value="quote">quote</option>
+                          <option value="mention">mention</option>
+                        </select></div>
+                      <div><div className="text-xs text-slate-400 mb-1">引用消息 ID</div>
+                        <input value={fieldValue('reply_to_message_id')} onChange={e => setLabelField('reply_to_message_id', e.target.value)}
+                          className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" /></div>
+                    </div>
+                    <div><div className="text-xs text-slate-400 mb-1">提及目标 JSON</div>
+                      <textarea value={fieldValue('mentions')} onChange={e => setLabelField('mentions', e.target.value)}
+                        rows={2} placeholder='[{"user_id":"123"}]'
+                        className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 font-mono text-xs" /></div>
                   </div>
                 )}
 
                 {/* 其他 suite：默认表单 + JSON 高级模式 */}
                 {!['memory_learning','timing_gate','group_reply'].includes(labelSuite) && (
                   <div className="space-y-3">
-                    <p className="text-xs text-slate-500">此 suite 暂无专用表单，请使用高级 JSON 模式或直接在下方编辑。</p>
-                    <textarea value={labelFields._rawJson || JSON.stringify({needs_label: true}, null, 2)} onChange={e => setLabelFields({...labelFields, _rawJson: e.target.value})}
-                      rows={8} className="w-full p-3 rounded-xl bg-slate-900 border border-slate-700 font-mono text-xs" />
+                    <p className="text-xs text-slate-500">此 suite 暂无专用表单，请使用高级 JSON 模式填写 scorer 字段。</p>
                   </div>
                 )}
+
+                <div className="mt-4">
+                  <div className="text-xs text-slate-400 mb-1">人工说明</div>
+                  <textarea value={labelNote} onChange={e => setLabelNote(e.target.value)}
+                    rows={2} className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" />
+                </div>
 
                 {/* 高级 JSON 模式（所有 suite 都有） */}
                 <div className="mt-4">
@@ -294,6 +465,43 @@ export function EvalsPage() {
                   <button onClick={() => setShowLabel(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">取消</button>
                   <button onClick={() => doLabel(showLabel)}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">保存标记</button>
+                </div>
+              </div>
+            </Modal>
+          )}
+
+          {/* Promote modal */}
+          {promoteCaseId && (
+            <Modal onClose={() => setPromoteCaseId(null)}>
+              <div className="p-6">
+                <h2 className="text-lg font-bold mb-2">提升候选用例</h2>
+                <p className="text-xs text-slate-500 mb-4">{promoteCaseId}</p>
+                {promoteError && (
+                  <div className="mb-3 px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10 text-xs text-red-300">
+                    {promoteError}
+                  </div>
+                )}
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-xs text-slate-400 mb-1">目标数据集</div>
+                    <input value={promoteTargetDataset} onChange={e => { setPromoteTargetDataset(e.target.value); setPromotePlan(null); setPromoteError('') }}
+                      className="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm" />
+                  </div>
+                  {promotePlan && (
+                    <div className="rounded-xl border border-slate-700 bg-slate-950 p-3 text-xs space-y-2">
+                      <div><span className="text-slate-500">target_dataset: </span>{promotePlan.target_dataset}</div>
+                      <div><span className="text-slate-500">path: </span><code>{promotePlan.path}</code></div>
+                      <div><span className="text-slate-500">case: </span>{promotePlan.case_id || promoteCaseId}</div>
+                      <JsonBlock value={promotePlan.case || promotePlan} className="max-h-56" />
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-2 justify-end mt-4">
+                  <button onClick={() => setPromoteCaseId(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">取消</button>
+                  <button onClick={previewPromote} disabled={promoteBusy}
+                    className="px-4 py-2 bg-indigo-700/70 hover:bg-indigo-700 disabled:opacity-50 rounded-xl text-sm">生成计划</button>
+                  <button onClick={confirmPromote} disabled={promoteBusy || !promotePlan}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium">确认提升</button>
                 </div>
               </div>
             </Modal>

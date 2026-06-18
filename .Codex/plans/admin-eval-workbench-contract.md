@@ -500,7 +500,7 @@ git commit -m "feat(评测): 对齐候选晋升响应"
 - 修改：`webui/src/features/evals/EvalsPage.jsx`
 - 测试：`tests/test_webui_admin_redesign.py`
 
-- [ ] **步骤 1：编写 WebUI 标注契约红灯测试**
+- [x] **步骤 1：编写 WebUI 标注契约红灯测试**
 
 在 `tests/test_webui_admin_redesign.py` 新增：
 
@@ -521,7 +521,7 @@ def test_eval_label_workbench_uses_expected_contract_keys():
         assert old_key not in source
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -534,7 +534,7 @@ tests/test_webui_admin_redesign.py::test_eval_label_workbench_uses_expected_cont
 
 预期：失败于未加载 expected contract，且源码仍包含旧字段。
 
-- [ ] **步骤 3：新增契约状态和加载逻辑**
+- [x] **步骤 3：新增契约状态和加载逻辑**
 
 在 `EvalsPage.jsx` state 区域新增：
 
@@ -564,7 +564,7 @@ tests/test_webui_admin_redesign.py::test_eval_label_workbench_uses_expected_cont
     }
 ```
 
-- [ ] **步骤 4：新增 expected 构造 helper**
+- [x] **步骤 4：新增 expected 构造 helper**
 
 在 `EvalsPage.jsx` 的 `doLabel` 前新增：
 
@@ -615,7 +615,7 @@ tests/test_webui_admin_redesign.py::test_eval_label_workbench_uses_expected_cont
   }
 ```
 
-- [ ] **步骤 5：替换 suite 表单字段**
+- [x] **步骤 5：替换 suite 表单字段**
 
 将旧的 `memory_learning`、`timing_gate`、`group_reply` 表单替换为契约字段：
 
@@ -648,7 +648,7 @@ tests/test_webui_admin_redesign.py::test_eval_label_workbench_uses_expected_cont
                 </div>
 ```
 
-- [ ] **步骤 6：运行 WebUI 标注静态绿灯测试**
+- [x] **步骤 6：运行 WebUI 标注静态绿灯测试**
 
 运行：
 
@@ -661,11 +661,11 @@ tests/test_webui_admin_redesign.py::test_eval_label_workbench_uses_expected_cont
 
 预期：该测试通过。
 
-- [ ] **步骤 7：Commit P4-2B 第一个前端切片**
+- [x] **步骤 7：纳入 P4-2B 工作台阶段提交**
 
 ```bash
 git add webui/src/features/evals/EvalsPage.jsx tests/test_webui_admin_redesign.py
-git commit -m "feat(评测): 契约化候选标注表单"
+git commit -m "feat(评测): 契约化标注工作台"
 ```
 
 ## 任务 5：WebUI promote dry-run / apply 两阶段
@@ -674,7 +674,7 @@ git commit -m "feat(评测): 契约化候选标注表单"
 - 修改：`webui/src/features/evals/EvalsPage.jsx`
 - 测试：`tests/test_webui_admin_redesign.py`
 
-- [ ] **步骤 1：编写 promote 两阶段红灯测试**
+- [x] **步骤 1：编写 promote 两阶段红灯测试**
 
 在 `tests/test_webui_admin_redesign.py` 新增：
 
@@ -701,7 +701,7 @@ def test_eval_promote_apply_uses_previewed_target_dataset():
     assert "确认提升" in source
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -715,7 +715,7 @@ tests/test_webui_admin_redesign.py::test_eval_promote_apply_uses_previewed_targe
 
 预期：失败于当前 `doPromote()` 直接裸 `POST /promote`。
 
-- [ ] **步骤 3：新增 promote modal 状态**
+- [x] **步骤 3：新增 promote modal 状态**
 
 在 `EvalsPage.jsx` state 区域新增：
 
@@ -738,7 +738,7 @@ tests/test_webui_admin_redesign.py::test_eval_promote_apply_uses_previewed_targe
   }
 ```
 
-- [ ] **步骤 4：替换 doPromote 为 dry-run 和 apply**
+- [x] **步骤 4：替换 doPromote 为 dry-run 和 apply**
 
 替换旧 `doPromote`：
 
@@ -779,7 +779,7 @@ tests/test_webui_admin_redesign.py::test_eval_promote_apply_uses_previewed_targe
                             className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 text-emerald-300 rounded text-xs">提升</button>
 ```
 
-- [ ] **步骤 5：新增 promote modal UI**
+- [x] **步骤 5：新增 promote modal UI**
 
 在 label modal 之后新增：
 
@@ -818,7 +818,7 @@ tests/test_webui_admin_redesign.py::test_eval_promote_apply_uses_previewed_targe
           )}
 ```
 
-- [ ] **步骤 6：运行 promote 静态绿灯测试**
+- [x] **步骤 6：运行 promote 静态绿灯测试**
 
 运行：
 
@@ -832,11 +832,11 @@ tests/test_webui_admin_redesign.py::test_eval_promote_apply_uses_previewed_targe
 
 预期：两条静态测试通过。
 
-- [ ] **步骤 7：Commit P4-2B 第二个前端切片**
+- [x] **步骤 7：纳入 P4-2B 工作台阶段提交**
 
 ```bash
 git add webui/src/features/evals/EvalsPage.jsx tests/test_webui_admin_redesign.py
-git commit -m "feat(评测): 增加候选提升预检"
+git commit -m "feat(评测): 契约化标注工作台"
 ```
 
 ## 任务 6：WebUI 构建与前后端集成回归
@@ -845,7 +845,7 @@ git commit -m "feat(评测): 增加候选提升预检"
 - 修改：`webui/src/features/evals/EvalsPage.jsx`
 - 测试：`tests/test_webui_admin_redesign.py`
 
-- [ ] **步骤 1：运行 WebUI 静态测试**
+- [x] **步骤 1：运行 WebUI 静态测试**
 
 运行：
 
@@ -856,7 +856,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_webui_admin_redesign.py
 
 预期：WebUI 静态测试全部通过。
 
-- [ ] **步骤 2：运行候选闭环回归**
+- [x] **步骤 2：运行候选闭环回归**
 
 运行：
 
@@ -869,7 +869,7 @@ tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py \
 
 预期：P4-1 候选闭环和 P4-2 后端契约测试全部通过。
 
-- [ ] **步骤 3：运行 WebUI build**
+- [x] **步骤 3：运行 WebUI build**
 
 运行：
 
@@ -879,13 +879,13 @@ npm --prefix webui run build
 
 预期：Vite build 退出码为 0。
 
-- [ ] **步骤 4：Commit P4-2B 集成验证记录**
+- [x] **步骤 4：纳入 P4-2B 工作台阶段提交**
 
 如果步骤 1 到步骤 3 需要同步文档状态，提交相关文档；如果没有文档变化，不单独提交空 commit。
 
 ```bash
 git add docs/evals.md docs/todo.md docs/plan_walkthrough.md
-git commit -m "docs(评测): 同步标注工作台状态"
+git commit -m "feat(评测): 契约化标注工作台"
 ```
 
 ## 任务 7：文档收口与最终验证
@@ -895,7 +895,7 @@ git commit -m "docs(评测): 同步标注工作台状态"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：同步操作文档**
+- [x] **步骤 1：同步操作文档**
 
 在 `docs/evals.md` 记录实现后的 WebUI 操作流：
 
@@ -907,15 +907,15 @@ WebUI 从 `/api/v1/admin/evals/expected-contract` 读取 expected 契约。
 Promote 必须先 dry-run，确认 `target_dataset` 与 `path` 后再 apply。
 ```
 
-- [ ] **步骤 2：同步路线状态**
+- [x] **步骤 2：同步路线状态**
 
-在 `docs/todo.md` 的路线项 8 中，把 P4-2 从「计划中」更新为「已完成」时必须同时写明实际验证结果。未跑完全量验证时保持「进行中」。
+在 `docs/todo.md` 的路线项 8 中，已把 P4-2 更新为「已完成」，并写明 WebUI 静态测试、候选闭环回归、WebUI build 和全量回归的实际结果。
 
-- [ ] **步骤 3：同步 walkthrough**
+- [x] **步骤 3：同步 walkthrough**
 
 在 `docs/plan_walkthrough.md` 的 P4-2 详细计划中记录每个提交、每条验证命令和结果。只把已经提交并验证的任务标为 `[x]`。
 
-- [ ] **步骤 4：运行文档扫描**
+- [x] **步骤 4：运行文档扫描**
 
 运行：
 
@@ -928,7 +928,7 @@ docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md
 
 预期：无输出。
 
-- [ ] **步骤 5：运行 U+FFFD 扫描**
+- [x] **步骤 5：运行 U+FFFD 扫描**
 
 运行：
 
@@ -951,7 +951,7 @@ PY
 
 预期：输出 `U+FFFD check passed`。
 
-- [ ] **步骤 6：运行 diff whitespace 检查**
+- [x] **步骤 6：运行 diff whitespace 检查**
 
 运行：
 
@@ -967,7 +967,7 @@ tests/test_eval_candidate_contract.py tests/test_webui_admin_redesign.py
 
 预期：无输出。
 
-- [ ] **步骤 7：运行全量 pytest**
+- [x] **步骤 7：运行全量 pytest**
 
 运行：
 
@@ -978,7 +978,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider
 
 预期：0 failures。
 
-- [ ] **步骤 8：最终 Commit**
+- [x] **步骤 8：最终 Commit**
 
 只暂存本阶段文档状态文件：
 
@@ -1022,6 +1022,5 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider
 - P4-2A-1：`feat(评测): 暴露期望字段契约`
 - P4-2A-2：`fix(评测): 校验期望字段类型`
 - P4-2A-3：`feat(评测): 对齐候选晋升响应`
-- P4-2B-1：`feat(评测): 契约化候选标注表单`
-- P4-2B-2：`feat(评测): 增加候选提升预检`
-- 文档收口：`docs(评测): 收口标注工作台状态`
+- P4-2B：`feat(评测): 契约化标注工作台`
+- 文档收口：随 P4-2B 提交同步阶段状态；若全量验证后仍需单独调整，再使用 `docs(评测): 收口标注工作台状态`

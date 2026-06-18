@@ -10,7 +10,7 @@ P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并�
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」和 P4-1「评测数据集与标注闭环」均已完成验证。当前执行重点进入 P4-2「Admin 标注工作台契约化与 promote 预检 UI」：先补后端 expected schema / API，再改 WebUI 标注和 promote 两阶段工作流。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」、P4-1「评测数据集与标注闭环」和 P4-2「Admin 标注工作台契约化与 promote 预检 UI」均已完成验证。下一步默认进入 P4-3，扩展 `capability_reply_contract` / `capability_rendering_contract` 等更多 per-capability 数据集。
 
 ## 文档口径
 
@@ -80,11 +80,11 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-3A | 已完成 | TimingGate 标注审计复跑 | `timing_signal_audit` 已支持离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
 | P3-3B | 已完成 | TimingGate CI / PR gate | 已新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
 | P4-1 | 已完成 | 评测体系扩展 | expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界、首个 `capability_model_routing` 能力数据集、文档收口和最终验证均已完成 | `e4fb70a` / `8b892a8` / `4f4cce7` / `b84cbf1` / `7a84084` / `71c3a53` / `a494f3b` / `5a8b601` |
-| P4-2 | 进行中 | Admin 标注工作台契约化与 promote 预检 UI | 设计文档和实现计划已写入，P4-2A 后端契约 schema/API 已完成定向回归，P4-2B WebUI 工作台待实现 | `docs(评测): 设计标注工作台契约` / `feat(评测): 暴露期望契约校验` |
+| P4-2 | 已完成 | Admin 标注工作台契约化与 promote 预检 UI | 后端 expected 契约、WebUI 契约化标注、`note` / `expected` 分离、promote dry-run → apply 预检 UI、WebUI build 和全量回归均已完成 | `docs(评测): 设计标注工作台契约` / `feat(评测): 暴露期望契约校验` / `feat(评测): 契约化标注工作台` |
 
 ## 当前详细计划：P4-2 Admin 标注工作台契约化与 promote 预检 UI
 
-状态：P4-2A 后端契约已完成红灯、实现、定向回归和提交前全量验证；P4-2B WebUI 工作台待实现。设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`；实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。本阶段不重复 P4-1 的 store / CLI / runner，不新增 RAG benchmark，也不扩更多 suite gate。
+状态：P4-2 已完成。P4-2A 后端契约已完成红灯、实现、定向回归和提交前全量验证；P4-2B WebUI 工作台已完成 label modal 契约化、promote modal 两阶段预检、WebUI build、候选闭环回归和全量回归。设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`；实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。本阶段不重复 P4-1 的 store / CLI / runner，不新增 RAG benchmark，也不扩更多 suite gate。
 
 目标：
 
@@ -107,10 +107,10 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - [x] P4-2A-1：新增 expected contract endpoint，返回 `scoreable_keys`、`field_schema`、`suite_presets` 和 `deprecated_keys`。
 - [x] P4-2A-2：收紧 expected 类型 / 枚举校验，并拒绝 `expected` / `expected_json` 冲突。
 - [x] P4-2A-3：对齐 promote apply 响应字段，保持 dry-run / apply 契约一致。
-- [ ] P4-2B-1：WebUI label modal 加载 expected contract，移除旧 expected 字段，`note` 与 `expected` 分离。
-- [ ] P4-2B-2：WebUI promote modal 支持 `target_dataset`、dry-run 预检、预检结果展示和 apply 二次确认。
-- [ ] P4-2B-3：运行 WebUI 静态测试、候选闭环回归和 `npm --prefix webui run build`。
-- [ ] P4-2 收口：同步 `docs/evals.md`、`docs/todo.md`、本文件和最终验证记录。
+- [x] P4-2B-1：WebUI label modal 加载 expected contract，移除旧 expected 字段，`note` 与 `expected` 分离。
+- [x] P4-2B-2：WebUI promote modal 支持 `target_dataset`、dry-run 预检、预检结果展示和 apply 二次确认。
+- [x] P4-2B-3：运行 WebUI 静态测试、候选闭环回归和 `npm --prefix webui run build`。
+- [x] P4-2 收口：同步 `docs/evals.md`、`docs/todo.md`、本文件和最终验证记录，并完成本轮全量回归。
 
 子 agent 分配：
 
@@ -132,12 +132,20 @@ P4-2A 验证记录：
 - 后端定向回归：`tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py`，结果 `24 passed, 21 warnings in 3.30s`。
 - 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1349 passed, 6 skipped, 139 warnings in 103.57s`。
 
+P4-2B 验证记录：
+
+- 红灯：WebUI 工作台新增静态守卫后，`tests/test_webui_admin_redesign.py` 结果为 `2 failed, 16 passed, 1 warning`；失败点为未加载 expected contract 和 promote 仍直接裸 `POST /promote`。
+- 绿灯：`tests/test_webui_admin_redesign.py` 结果为 `18 passed, 1 warning in 0.70s`。
+- WebUI build：`npm --prefix webui run build` 退出码为 0，构建耗时 `9.76s`；保留 Vite 既有 chunk size 和 plugin timing 警告。
+- 候选闭环回归：`tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py`，结果 `24 passed, 21 warnings in 3.29s`。
+- 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1350 passed, 6 skipped, 139 warnings in 96.82s`。
+
 提交边界：
 
 - 计划阶段：`docs(评测): 设计标注工作台契约`。
 - P4-2A 后端契约：`feat(评测): 暴露期望契约校验`。
-- P4-2B WebUI 工作台：按 label modal 和 promote modal 拆成 2 个提交。
-- 文档收口：`docs(评测): 收口标注工作台状态`。
+- P4-2B WebUI 工作台：`feat(评测): 契约化标注工作台`。
+- 文档收口：随 P4-2B 提交同步阶段状态；若全量验证后仍需单独调整，再使用 `docs(评测): 收口标注工作台状态`。
 
 ## 已完成阶段详情：P3-2 私聊 TimingGate 可观测补齐
 
