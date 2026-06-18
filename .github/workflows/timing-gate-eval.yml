@@ -2,6 +2,9 @@ name: Eval PR Gate
 
 on:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 20 * * 0"
   push:
     branches:
       - main
@@ -31,4 +34,21 @@ jobs:
           python -m pip install -r requirements.txt
 
       - name: Run eval PR gate
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         run: bash scripts/run_eval_pr_gate.sh
+
+      - name: Run periodic eval gate
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: bash scripts/run_eval_periodic.sh
+
+      - name: Upload eval reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            evals/reports/*.json
+            tmp/rag_benchmark/reports/*.json
+            tmp/rag_benchmark/reports/*.md

@@ -299,6 +299,35 @@ def test_eval_pr_gate_workflow_runs_unified_script():
     assert "scripts/run_eval_pr_gate.sh" in text
 
 
+def test_eval_workflow_has_periodic_schedule_and_manual_dispatch():
+    workflow = Path(".github/workflows/timing-gate-eval.yml")
+
+    text = workflow.read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in text
+    assert "schedule:" in text
+    assert 'cron: "20 20 * * 0"' in text
+    assert "scripts/run_eval_periodic.sh" in text
+
+
+def test_eval_workflow_uploads_report_artifacts():
+    workflow = Path(".github/workflows/timing-gate-eval.yml")
+
+    text = workflow.read_text(encoding="utf-8")
+    assert "actions/upload-artifact@v4" in text
+    assert "if: always()" in text
+    assert "evals/reports/*.json" in text
+    assert "tmp/rag_benchmark/reports/*.json" in text
+    assert "tmp/rag_benchmark/reports/*.md" in text
+    assert "if-no-files-found: warn" in text
+
+
+def test_eval_workflow_artifact_retention_is_bounded():
+    workflow = Path(".github/workflows/timing-gate-eval.yml")
+
+    text = workflow.read_text(encoding="utf-8")
+    assert "retention-days: 14" in text
+
+
 def test_model_routing_eval_filters_required_capabilities_for_image_case():
     from evals.run import run_case
 
