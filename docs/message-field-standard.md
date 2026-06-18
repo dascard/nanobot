@@ -258,6 +258,49 @@
 }
 ```
 
+## 响应信封
+
+P2-2 起，`/chat`、`/chat` SSE done、`/group/message` 和 QQ push 适配共享标准响应信封。当前阶段采用兼容双写：旧字段继续保留，新字段并行新增，调用方可以逐步迁移到 `reply` / `messages` / `reply_meta` / `meta`。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `status` | string | 客户端状态。推荐值：`ok`、`silent`、`no_reply`、`wait`、`error`、`done`。`/chat` SSE 完成事件继续使用 `done`。 |
+| `action` | string | 群聊 TimingGate / 出站动作。`/group/message` 继续保留 `continue`、`wait`、`no_reply`。 |
+| `reply` | string | 传输层正文，等价于旧 `/chat.answer` 或旧 `/group/message.reply`。 |
+| `messages` | list[object] | 标准化输出消息数组。P2-2 首版只生成 `text` 和 `html`。 |
+| `reply_meta` | object | 发送意图元数据。对外只允许 `send_mode`、`reply_to_message_id`、`mentions`、`quote`、`at_sender`。 |
+| `meta` | object | 平台、会话、路由、调度、诊断和追踪信息。 |
+
+P2-2 首版 `messages` 文本结构：
+
+```json
+[
+  {
+    "type": "text",
+    "text": "正文"
+  }
+]
+```
+
+HTML 正文结构：
+
+```json
+[
+  {
+    "type": "html",
+    "text": "<article>...</article>"
+  }
+]
+```
+
+`/chat` 非流式响应继续保留 `answer`、`answer_chunks`、`status`、`user_id` 和 `unprocessed_logs`。`/chat` SSE 仍使用 `data: {...}` framing，`done` 事件继续保留 `answer`，同时增加 `reply`、`messages`、`reply_meta` 和 `meta`。
+
+`/group/message` 响应继续保留 `action`、`reply`、`reply_meta`、`generation`、`reason`、`delay_seconds`、`diagnostics` 等旧字段，同时增加 `status`、`messages` 和 `meta`。群聊 `action="continue"` 在标准信封中映射为 `status="ok"`。
+
+QQ push 仍保留旧 helper 签名 `push_to_qq(target_type, target_id, message) -> bool`。新代码应优先构造标准信封，再通过 `push_envelope_to_qq(target_type, target_id, envelope)` 派生旧 QQbot `message` 字段；若 `reply` 为空，则只拼接 `messages` 中 `type` 为 `text` 或 `html` 的 `text`，忽略图片等未定义类型。
+
+图片、@、引用和完整出站 `segments` 协议由 P2-3「QQ 出站渲染契约」负责，不在 P2-2 定义。面向 QQbot 的传输路径仍必须避免 base64 大负载；流式断连后台 push 在构造信封前继续使用 `expand_generated_image_refs_in_content(..., allow_base64=False)`。
+
 ## `client_meta` 标准结构
 
 `client_meta` 允许按需扩展，但推荐使用以下顶层 key：

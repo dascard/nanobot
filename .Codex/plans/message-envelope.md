@@ -14,7 +14,7 @@
 
 - 设计文档：`docs/superpowers/specs/2026-06-18-message-envelope-design.md`，提交 `c984036 docs(消息): 设计响应信封标准`。
 - 当前计划文件路径按项目约定使用 `.Codex/plans/message-envelope.md`。
-- `docs/todo.md` 路线项 5 正在代码落地阶段；共享 builder、`/chat`、`/group/message`、push 适配和 route push 集成已完成，响应侧文档仍待推进。
+- `docs/todo.md` 路线项 5 的 P2-2 响应信封兼容双写已完成；共享 builder、`/chat`、`/group/message`、push 适配、route push 集成和响应侧文档均已落地，client_meta 边界层解析 / 校验作为后续小任务保留。
 - `/chat` 非流式成功响应已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status`、`user_id`、`answer`、`answer_chunks` 和 `unprocessed_logs`。
 - `/chat` SSE done 已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status="done"` 与 `answer`；SSE framing 仍是 `data: {...}`，不要改成 `event: done`。
 - `/chat` 已把过滤后的 `private_reply_meta` 写入非流式成功响应和 SSE done 响应。
@@ -22,6 +22,7 @@
 - `push_to_qq(target_type, target_id, message) -> bool` 的旧签名必须保持。
 - `push_envelope_to_qq(target_type, target_id, envelope) -> bool` 已在 `core/daily_digest.py` 中作为旧 QQbot push 适配层落地；定时任务推送已先构造标准信封，再通过适配层派生旧 `message` 字段。
 - `api/routes.py` 中手动定时任务运行和流式断连后台 push 已改用 `push_envelope_to_qq()`；流式断连路径仍在构造信封前执行 `expand_generated_image_refs_in_content(..., allow_base64=False)`。
+- `docs/message-field-standard.md` 已新增响应信封章节，记录兼容双写字段、`messages` 首版结构、旧字段保留规则和 P2-2 / P2-3 边界。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
 ## 并行执行策略
@@ -1293,7 +1294,7 @@ git commit -m "feat(推送): 接入路由信封推送"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/message-envelope.md`
 
-- [ ] **步骤 1：补充响应信封文档**
+- [x] **步骤 1：补充响应信封文档**
 
 在 `docs/message-field-standard.md` 的入口章节后新增：
 
@@ -1336,7 +1337,7 @@ HTML 正文使用：
 图片、@、引用和完整出站 `segments` 协议由 P2-3「QQ 出站渲染契约」负责，不在 P2-2 定义。
 ```
 
-- [ ] **步骤 2：同步路线文档状态**
+- [x] **步骤 2：同步路线文档状态**
 
 更新：
 
@@ -1344,7 +1345,7 @@ HTML 正文使用：
 - `docs/plan_walkthrough.md`：把 P2-2 任务 1-6 勾选，记录每个阶段提交号和最终验证输出。
 - `.Codex/plans/message-envelope.md`：勾选已执行任务，记录最终验证输出。
 
-- [ ] **步骤 3：运行文档占位词扫描**
+- [x] **步骤 3：运行文档占位词扫描**
 
 运行：
 
@@ -1377,7 +1378,9 @@ PY
 
 预期：无输出，退出码 0。
 
-- [ ] **步骤 4：运行格式检查**
+结果：无输出，退出码 0。
+
+- [x] **步骤 4：运行格式检查**
 
 运行：
 
@@ -1387,7 +1390,9 @@ git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkth
 
 预期：无输出，退出码 0。
 
-- [ ] **步骤 5：运行 P2-2 定向回归**
+结果：无输出，退出码 0。
+
+- [x] **步骤 5：运行 P2-2 定向回归**
 
 运行：
 
@@ -1409,7 +1414,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 6：运行全量测试**
+结果：`130 passed, 21 warnings in 23.94s`。
+
+- [x] **步骤 6：运行全量测试**
 
 运行：
 
@@ -1420,7 +1427,9 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 
 预期：0 failures。
 
-- [ ] **步骤 7：提交文档收口**
+结果：`1263 passed, 6 skipped, 139 warnings in 90.13s`。
+
+- [x] **步骤 7：提交文档收口**
 
 ```bash
 git add docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/message-envelope.md
@@ -1437,5 +1446,5 @@ git commit -m "docs(计划): 同步响应信封状态"
 - [x] `push_to_qq(target_type, target_id, message) -> bool` 旧签名保持不变。
 - [x] `push_envelope_to_qq(target_type, target_id, envelope) -> bool` 可从 `reply` 或 `messages` 派生旧 `message`。
 - [x] `api/routes.py` 中 push call site 由单一 owner 集成，没有与群聊 / push worker 发生写冲突。
-- [ ] `docs/message-field-standard.md` 记录响应信封标准和 P2-2 / P2-3 边界。
-- [ ] 定向测试和全量测试通过。
+- [x] `docs/message-field-standard.md` 记录响应信封标准和 P2-2 / P2-3 边界。
+- [x] 定向测试和全量测试通过。
