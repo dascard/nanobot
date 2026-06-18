@@ -1,0 +1,23 @@
+{
+  "id": "memory_manual_empty_user_session_constraint_001",
+  "suite": "rag_benchmark",
+  "source_type": "memory",
+  "case_type": "constraint_only",
+  "query": "RAG benchmark",
+  "filters": {
+    "source": "all",
+    "user_id": "__rag_benchmark_empty_user__",
+    "session_id": "__rag_benchmark_empty_session__"
+  },
+  "expected": {
+    "candidate_ids": [],
+    "allow_empty": true,
+    "max_merged_candidates": 0,
+    "max_reranker_candidates": 0
+  },
+  "meta": {
+    "origin": "manual_hard",
+    "sensitivity": "safe",
+    "notes": "sentinel user/session 不应召回任何记忆候选。"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "group_memory_manual_empty_group_filter_constraint_001",
+  "suite": "rag_benchmark",
+  "source_type": "group_memory",
+  "case_type": "constraint_only",
+  "query": "RAG benchmark",
+  "filters": {
+    "group_id": "group_rag_benchmark_empty"
+  },
+  "expected": {
+    "candidate_ids": [],
+    "allow_empty": true,
+    "expected_source_type": "group_memory",
+    "requires_group_id": true,
+    "max_merged_candidates": 0,
+    "max_reranker_candidates": 0
+  },
+  "meta": {
+    "origin": "manual_hard",
+    "sensitivity": "safe",
+    "notes": "不存在 group 时不应泄漏其他群记忆。"
+  }
+}

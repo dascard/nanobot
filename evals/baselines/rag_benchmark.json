@@ -4,9 +4,9 @@
   "case_scope": "manual",
   "metrics": {
     "overall": {
-      "total_cases": 3,
+      "total_cases": 9,
       "positive_cases": 0,
-      "passed_cases": 3,
+      "passed_cases": 9,
       "pass_rate": 1.0,
       "hit@1": 0.0,
       "hit@3": 0.0,
@@ -25,6 +25,13 @@
   "failed_cases": [],
   "case_scores": [
     {
+      "case_id": "group_memory_manual_empty_group_filter_constraint_001",
+      "source_type": "group_memory",
+      "case_type": "constraint_only",
+      "ok": true,
+      "errors": []
+    },
+    {
       "case_id": "group_memory_manual_filter_constraint_001",
       "source_type": "group_memory",
       "case_type": "constraint_only",
@@ -34,6 +41,41 @@
     {
       "case_id": "knowledge_manual_citation_constraint_001",
       "source_type": "knowledge",
+      "case_type": "constraint_only",
+      "ok": true,
+      "errors": []
+    },
+    {
+      "case_id": "knowledge_manual_future_publish_filter_constraint_001",
+      "source_type": "knowledge",
+      "case_type": "constraint_only",
+      "ok": true,
+      "errors": []
+    },
+    {
+      "case_id": "knowledge_manual_high_trust_citation_constraint_001",
+      "source_type": "knowledge",
+      "case_type": "constraint_only",
+      "ok": true,
+      "errors": []
+    },
+    {
+      "case_id": "memory_manual_digest_source_constraint_001",
+      "source_type": "memory",
+      "case_type": "constraint_only",
+      "ok": true,
+      "errors": []
+    },
+    {
+      "case_id": "memory_manual_empty_user_session_constraint_001",
+      "source_type": "memory",
+      "case_type": "constraint_only",
+      "ok": true,
+      "errors": []
+    },
+    {
+      "case_id": "sticker_manual_empty_scope_constraint_001",
+      "source_type": "sticker",
       "case_type": "constraint_only",
       "ok": true,
       "errors": []

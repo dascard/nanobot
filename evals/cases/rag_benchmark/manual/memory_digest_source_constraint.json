@@ -1,0 +1,21 @@
+{
+  "id": "memory_manual_digest_source_constraint_001",
+  "suite": "rag_benchmark",
+  "source_type": "memory",
+  "case_type": "constraint_only",
+  "query": "RAG benchmark",
+  "filters": {
+    "source": "digest"
+  },
+  "expected": {
+    "candidate_ids": [],
+    "allow_empty": true,
+    "expected_source_type": "memory_digest",
+    "max_reranker_candidates": 100
+  },
+  "meta": {
+    "origin": "manual_hard",
+    "sensitivity": "safe",
+    "notes": "source=digest 时不应混入 session_summary 候选。"
+  }
+}

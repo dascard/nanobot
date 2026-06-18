@@ -1,0 +1,24 @@
+{
+  "id": "sticker_manual_empty_scope_constraint_001",
+  "suite": "rag_benchmark",
+  "source_type": "sticker",
+  "case_type": "constraint_only",
+  "query": "开心 表情包",
+  "filters": {
+    "chat_stream_id": "__rag_benchmark_empty_stream__",
+    "include_global": false
+  },
+  "expected": {
+    "candidate_ids": [],
+    "allow_empty": true,
+    "expected_source_type": "sticker",
+    "requires_sendable": true,
+    "max_merged_candidates": 0,
+    "max_reranker_candidates": 0
+  },
+  "meta": {
+    "origin": "manual_hard",
+    "sensitivity": "safe",
+    "notes": "不存在 stream 且不含 global 时不应泄漏表情候选。"
+  }
+}

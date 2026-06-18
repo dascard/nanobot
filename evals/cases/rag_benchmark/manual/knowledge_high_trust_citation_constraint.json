@@ -1,0 +1,22 @@
+{
+  "id": "knowledge_manual_high_trust_citation_constraint_001",
+  "suite": "rag_benchmark",
+  "source_type": "knowledge",
+  "case_type": "constraint_only",
+  "query": "RAG benchmark citation",
+  "filters": {
+    "min_trust_level": "high"
+  },
+  "expected": {
+    "candidate_ids": [],
+    "allow_empty": true,
+    "expected_source_type": "knowledge",
+    "requires_citation": true,
+    "max_reranker_candidates": 100
+  },
+  "meta": {
+    "origin": "manual_hard",
+    "sensitivity": "safe",
+    "notes": "高信任知识库结果仍必须携带 citation。"
+  }
+}
