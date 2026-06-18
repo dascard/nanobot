@@ -660,10 +660,19 @@ async def push_envelope_to_qq(
     target_id: str,
     envelope: Mapping[str, Any] | None,
 ) -> bool:
-    """从标准响应信封派生旧 QQbot push message。"""
-    from core.message_envelope import envelope_to_message
+    """通过 QQ 出站渲染器派生旧 QQbot push message。"""
+    from core.qq_outbound_renderer import render_qq_outbound_envelope
 
-    message = envelope_to_message(envelope)
+    rendered = render_qq_outbound_envelope(envelope, allow_base64=False)
+    if rendered.warnings:
+        logger.warning(
+            "QQ outbound render warnings target_type=%s target_id=%s warnings=%s",
+            target_type,
+            target_id,
+            rendered.warnings,
+        )
+
+    message = rendered.message
     if not message.strip():
         logger.warning(
             "Skip empty QQ push envelope target_type=%s target_id=%s",
