@@ -208,11 +208,11 @@
 
 #### 路线项 6 — SSE 真 token 流式重构（stream 参数全链路贯穿）  ·〔关联 H30〕
 
-- **现状（2026-06-17 已部分落地）**：API 层已有 stream 开关（`ChatProxyRequest.stream`）与 SSE 出口 `_stream_chat`，`stream` 已贯穿 API → BridgePool → Bridge → KT `Message`。`BufferedOutput.write_stream()` 会向 SSE 队列发送 `delta` 事件，`done.answer` 仍作为最终业务权威结果。`/chat-step` 也已接入 `run_agent_step_stream()`，通过 `NewAPIClient.chat_completion_stream()` 下发 final-answer delta，并在工具选择阶段拼合流式 tool call 后发送最终 `tool_call` 事件（`2369081 feat(agent): 支持 step 流式输出`）。生产 reply 链路仍通过 KT OpenAI provider 的 streaming 迭代输出进入 `BufferedOutput`。
-- **痛点**：多工具回合下，增量文本可能先于最终 `reply()` 工具合同出现，前端必须把 `done.answer` 视为权威结果；chunk 粒度目前直接跟随 provider，尚未做小窗口合并或 backpressure；`/group/message` 与 QQbot 出站渲染仍不是同一套响应信封。
-- **目标**：保持 `stream` 参数全链路贯穿，SSE 稳定下发增量 token；继续收敛 chunk 合并、工具回合语义和响应信封，使 Web SSE、QQbot 推送与最终持久化共享同一套输出契约（兼顾 QQbot 单 chunk 大小限制与 base64 禁用约定）。
+- **现状（2026-06-18 已落地）**：API 层已有 stream 开关（`ChatProxyRequest.stream`）与 SSE 出口 `_stream_chat`，`stream` 已贯穿 API → BridgePool → Bridge → KT `Message`。`BufferedOutput.write_stream()` 会向 SSE 队列发送 `delta` 事件，生产 reply 链路仍通过 KT OpenAI provider 的 streaming 迭代输出进入 `BufferedOutput`；`/chat-step` 也已接入 `run_agent_step_stream()`，通过 `NewAPIClient.chat_completion_stream()` 下发 final-answer delta，并在工具选择阶段拼合流式 tool call 后发送最终 `tool_call` 事件（`2369081 feat(agent): 支持 step 流式输出`）。P3-1 已完成 SSE 收敛设计和实现计划；`/chat` API 层已对队列事件做规范化，连续 `delta.text` 会在当前可用队列窗口内合并，非 delta 事件前强制 flush。Bridge 成功路径已在最终 response 确定后发送 `final.replace` 收敛事件，`done.answer` / `done.reply` 仍是最终业务权威结果。`/chat` stream queue 已设置上限，文本 delta / final 采用自然 backpressure；progress 满队列可丢弃，error 仍保留排队；断连后台路径会 drain bounded queue，避免 runner 因无人消费 SSE 草稿事件而卡住。`docs/message-field-standard.md` 已记录 `/chat` SSE 事件、`/chat-step` 的 `delta.content` 差异、图片 token 不在增量事件展开以及 `done` 权威语义。
+- **痛点**：多工具回合的展示收敛已有 `final.replace`，但前端仍必须以 `done` 信封更新最终业务状态；当前合并窗口以 API 消费时队列中已可用的连续 delta 为边界，不做时间窗口等待；SSE 单事件字节数暂未引入独立硬上限。
+- **目标**：保持 `stream` 参数全链路贯穿，SSE 稳定下发增量 token；继续收敛 chunk 大小上限、前端展示规则和响应信封，使 Web SSE、QQbot 推送与最终持久化共享同一套输出契约（兼顾 QQbot 单 chunk 大小限制与 base64 禁用约定）。
 - **关联**：H30（RAG `query()` 巨函数拆分，便于流式分段）；依赖项 2 连接池；与项 5 响应信封、项 7 渲染（增量 chunk 如何渲染）协同。
-- **粗略路径**：① 已完成 API / Bridge / KT Message / BufferedOutput 的 stream 贯穿 → ② 已完成 `/chat-step` SSE 增量输出与流式 tool call 拼合 → ③ 为 provider chunk 增加可选合并窗口与 backpressure 策略 → ④ 明确工具回合 / reply 合同与增量事件的前端展示规则 → ⑤ 与路线项 5/7 合并响应信封和出站渲染契约 → ⑥ 约定 chunk 大小与图片 token 展开时机。
+- **粗略路径**：① 已完成 API / Bridge / KT Message / BufferedOutput 的 stream 贯穿 → ② 已完成 `/chat-step` SSE 增量输出与流式 tool call 拼合 → ③ 已完成 `/chat` API 层连续 delta 合并、bounded queue 和 progress backpressure 策略 → ④ 已完成 Bridge `final.replace` 收敛事件与 `done` 权威语义文档 → ⑤ 已与路线项 5/7 的响应信封和出站渲染契约合流，增量事件不展开图片 token，最终 `done` / push 保持 `allow_base64=False` → ⑥ 可继续评估 SSE 单事件字节硬上限和更细的时间窗口合并。
 
 #### 路线项 10 — TimingGate 引入「规则信号 + 模型」混合决策  ·〔关联 H2〕
 

@@ -295,6 +295,23 @@ HTML 正文结构：
 
 `/chat` 非流式响应继续保留 `answer`、`answer_chunks`、`status`、`user_id` 和 `unprocessed_logs`。`/chat` SSE 仍使用 `data: {...}` framing，`done` 事件继续保留 `answer`，同时增加 `reply`、`messages`、`reply_meta` 和 `meta`。
 
+### `/chat` SSE 事件
+
+`/chat` 流式响应使用 `data: <json>\n\n` framing。事件对象通过 `status` 区分：
+
+| status | 字段 | 语义 |
+| --- | --- | --- |
+| `delta` | `text` | 草稿增量文本。服务端可合并连续 provider chunk，客户端只用于提前展示。 |
+| `progress` | `text` 或 `message` | 工具或处理进度，不代表最终回复。队列满时可丢弃较旧或较新的进度提示。 |
+| `final` | `text`、`replace`、`source` | 展示收敛信号。`replace=true` 表示客户端可用该文本替换草稿展示区。 |
+| `done` | 标准响应信封字段 | 最终业务结果。`answer` / `reply` 是权威回复，`messages` 是最终出站内容数组。 |
+| `error` | `message` | 安全错误信息，不暴露内部异常细节。 |
+| `heartbeat` | 无 | 服务端心跳，不改变展示内容。 |
+
+客户端必须以 `done.answer` / `done.reply` 更新最终业务状态。`delta` 和 `final` 只影响流式展示区，不写入聊天持久化结果。`/chat-step` 的 final-answer 增量事件继续使用 `delta.content`，不与 `/chat` 的 `delta.text` 强行统一。
+
+增量 `delta` 和 `final` 不展开图片 token，也不发送 base64。最终 `done.answer` 继续按 `allow_base64=False` 展开公开 URL 或保留短 token，避免单个 SSE data 过大。
+
 `/group/message` 响应继续保留 `action`、`reply`、`reply_meta`、`generation`、`reason`、`delay_seconds`、`diagnostics` 等旧字段，同时增加 `status`、`messages` 和 `meta`。群聊 `action="continue"` 在标准信封中映射为 `status="ok"`。
 
 ### 响应出站渲染契约

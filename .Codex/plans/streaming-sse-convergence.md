@@ -16,7 +16,9 @@
 - [x] `/chat-step` 已支持 SSE 增量输出和流式 tool call 拼合。
 - [x] SSE done 已接入标准响应信封，保留 `answer`，并新增 `reply`、`messages`、`reply_meta`、`meta`。
 - [x] 第一阶段设计文档已提交：`bca50b8 docs(流式): 设计 SSE 收敛方案`。
-- [ ] 本计划提交后开始执行任务 1。
+- [x] 实现计划已提交：`e56a406 docs(计划): 记录 SSE 收敛计划`。
+- [x] 任务 1 至任务 5 已完成，提交为 `d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`。
+- [x] 任务 6 文档收口已完成，任务 7 最终验证待执行。
 
 ## 关键事实
 
@@ -70,7 +72,7 @@
 - 修改：`tests/test_streaming_api.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：把现有 delta 转发测试改成合并红灯**
+- [x] **步骤 1：把现有 delta 转发测试改成合并红灯**
 
 修改 `tests/test_streaming_api.py::test_stream_chat_forwards_delta_events` 的断言：
 
@@ -86,7 +88,7 @@
     assert {"status": "delta", "text": "好"} in events
 ```
 
-- [ ] **步骤 2：新增 progress 打断合并红灯测试**
+- [x] **步骤 2：新增 progress 打断合并红灯测试**
 
 在 `tests/test_streaming_api.py` 增加：
 
@@ -136,7 +138,7 @@ def test_stream_chat_flushes_delta_before_progress(client):
     ]
 ```
 
-- [ ] **步骤 3：新增 done 前 flush 红灯测试**
+- [x] **步骤 3：新增 done 前 flush 红灯测试**
 
 在 `tests/test_streaming_api.py` 增加：
 
@@ -178,7 +180,7 @@ def test_stream_chat_flushes_pending_delta_before_done(client):
     assert events[statuses.index("done")]["answer"] == "最后答案"
 ```
 
-- [ ] **步骤 4：运行红灯测试**
+- [x] **步骤 4：运行红灯测试**
 
 运行：
 
@@ -188,7 +190,7 @@ python -m pytest tests/test_streaming_api.py -v
 
 预期：至少 `test_stream_chat_forwards_delta_events` 失败，因为当前实现仍发送 `{"text": "你"}` 和 `{"text": "好"}` 两个独立 delta。
 
-- [ ] **步骤 5：在 `api/routes.py` 增加事件规范化 helper**
+- [x] **步骤 5：在 `api/routes.py` 增加事件规范化 helper**
 
 在 `SAFE_STREAM_ERROR_MESSAGE` 附近或 `_stream_chat()` 之前增加：
 
@@ -215,7 +217,7 @@ def _normalize_chat_stream_event(event: Any) -> dict[str, Any] | None:
     return None
 ```
 
-- [ ] **步骤 6：在 `_stream_chat()` 中合并连续 delta**
+- [x] **步骤 6：在 `_stream_chat()` 中合并连续 delta**
 
 在 `_stream_chat()` 内增加局部 pending buffer：
 
@@ -287,7 +289,7 @@ def _normalize_chat_stream_event(event: Any) -> dict[str, Any] | None:
                 yield chunk
 ```
 
-- [ ] **步骤 7：运行任务 1 绿灯测试**
+- [x] **步骤 7：运行任务 1 绿灯测试**
 
 运行：
 
@@ -297,7 +299,7 @@ python -m pytest tests/test_streaming_api.py -v
 
 预期：`3 passed` 或更多，取决于文件内测试数量；失败数为 0。
 
-- [ ] **步骤 8：运行 API 相关回归**
+- [x] **步骤 8：运行 API 相关回归**
 
 运行：
 
@@ -307,7 +309,7 @@ python -m pytest tests/test_streaming_api.py tests/test_streaming_response_envel
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 9：提交任务 1**
+- [x] **步骤 9：提交任务 1**
 
 运行：
 
@@ -322,7 +324,7 @@ git commit -m "refactor(流式): 合并聊天增量事件"
 - 修改：`tests/test_streaming_response_envelope.py`
 - 修改：`tests/test_agent_step_api.py`
 
-- [ ] **步骤 1：新增草稿 delta 与最终 done 不一致的保护测试**
+- [x] **步骤 1：新增草稿 delta 与最终 done 不一致的保护测试**
 
 在 `tests/test_streaming_response_envelope.py` 增加：
 
@@ -369,7 +371,7 @@ def test_stream_chat_done_answer_remains_authoritative_when_delta_differs(client
     assert done_event["messages"] == [{"type": "text", "text": "最终回复"}]
 ```
 
-- [ ] **步骤 2：新增 `/chat-step` 字段保护测试**
+- [x] **步骤 2：新增 `/chat-step` 字段保护测试**
 
 如果 `tests/test_agent_step_api.py::test_chat_step_stream_emits_final_answer_deltas` 已断言 `content`，只补充显式反向断言：
 
@@ -379,7 +381,7 @@ def test_stream_chat_done_answer_remains_authoritative_when_delta_differs(client
     assert "text" not in delta_events[0]
 ```
 
-- [ ] **步骤 3：运行保护测试**
+- [x] **步骤 3：运行保护测试**
 
 运行：
 
@@ -389,7 +391,7 @@ python -m pytest tests/test_streaming_response_envelope.py tests/test_agent_step
 
 预期：全部通过，失败数为 0。这里允许没有红灯，因为任务目标是固化当前兼容行为。
 
-- [ ] **步骤 4：提交任务 2**
+- [x] **步骤 4：提交任务 2**
 
 运行：
 
@@ -406,7 +408,7 @@ git commit -m "test(流式): 固化完成信封权威性"
 - 修改：`nanobot_kt/output.py`
 - 修改：`nanobot_kt/bridge.py`
 
-- [ ] **步骤 1：新增 `BufferedOutput.write_final()` 红灯测试**
+- [x] **步骤 1：新增 `BufferedOutput.write_final()` 红灯测试**
 
 在 `tests/test_streaming_output.py` 增加：
 
@@ -435,7 +437,7 @@ async def test_buffered_output_write_final_emits_replace_event_without_mutating_
     }
 ```
 
-- [ ] **步骤 2：新增 Bridge 事件顺序红灯测试**
+- [x] **步骤 2：新增 Bridge 事件顺序红灯测试**
 
 修改 `tests/test_streaming_bridge.py::test_bridge_handle_message_streams_controller_text_deltas` 的事件断言为：
 
@@ -447,7 +449,7 @@ async def test_buffered_output_write_final_emits_replace_event_without_mutating_
     ]
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -457,7 +459,7 @@ python -m pytest tests/test_streaming_output.py tests/test_streaming_bridge.py::
 
 预期：`BufferedOutput` 测试因 `write_final` 不存在失败；Bridge 测试因缺少 `final` 事件失败。
 
-- [ ] **步骤 4：实现 `BufferedOutput.write_final()`**
+- [x] **步骤 4：实现 `BufferedOutput.write_final()`**
 
 在 `nanobot_kt/output.py` 的 `write_stream()` 下方增加：
 
@@ -483,7 +485,7 @@ python -m pytest tests/test_streaming_output.py tests/test_streaming_bridge.py::
 
 该方法不修改 `_buffer`。最终持久化仍由 Bridge 返回值和 API `done` 信封负责。
 
-- [ ] **步骤 5：Bridge 返回前发送 final**
+- [x] **步骤 5：Bridge 返回前发送 final**
 
 在 `nanobot_kt/bridge.py` 的 `NanobotBridge.handle_message()` 中，找到最终 `response` 已确定且即将 `return response` 的位置，加入：
 
@@ -496,7 +498,7 @@ python -m pytest tests/test_streaming_output.py tests/test_streaming_bridge.py::
 
 确保这段逻辑在 error fallback 之外执行，不改变非流式路径。
 
-- [ ] **步骤 6：运行任务 3 绿灯测试**
+- [x] **步骤 6：运行任务 3 绿灯测试**
 
 运行：
 
@@ -506,7 +508,7 @@ python -m pytest tests/test_streaming_output.py tests/test_streaming_bridge.py -
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 7：提交任务 3**
+- [x] **步骤 7：提交任务 3**
 
 运行：
 
@@ -521,7 +523,7 @@ git commit -m "feat(流式): 发送最终收敛事件"
 - 修改：`tests/test_streaming_api.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：新增 final 透传测试**
+- [x] **步骤 1：新增 final 透传测试**
 
 在 `tests/test_streaming_api.py` 增加：
 
@@ -569,7 +571,7 @@ def test_stream_chat_forwards_final_replace_before_done(client):
     assert events[done_index]["answer"] == "最终"
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -579,7 +581,7 @@ python -m pytest tests/test_streaming_api.py::test_stream_chat_forwards_final_re
 
 预期：如果任务 1 helper 会透传未知事件，该测试可能直接通过；如果 helper 丢弃或改写 `final`，测试失败。直接通过时仍继续步骤 3，把规范化规则显式写清楚。
 
-- [ ] **步骤 3：扩展 `_normalize_chat_stream_event()` 的 final 分支**
+- [x] **步骤 3：扩展 `_normalize_chat_stream_event()` 的 final 分支**
 
 在 `api/routes.py` 中加入明确分支：
 
@@ -601,7 +603,7 @@ python -m pytest tests/test_streaming_api.py::test_stream_chat_forwards_final_re
 
 保持非 delta / final 事件的兼容透传。
 
-- [ ] **步骤 4：运行任务 4 绿灯测试**
+- [x] **步骤 4：运行任务 4 绿灯测试**
 
 运行：
 
@@ -611,7 +613,7 @@ python -m pytest tests/test_streaming_api.py tests/test_streaming_response_envel
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 5：提交任务 4**
+- [x] **步骤 5：提交任务 4**
 
 运行：
 
@@ -628,7 +630,7 @@ git commit -m "refactor(流式): 规范化最终收敛事件"
 - 修改：`api/routes.py`
 - 修改：`nanobot_kt/output.py`
 
-- [ ] **步骤 1：新增 `/chat` 使用 bounded queue 的红灯测试**
+- [x] **步骤 1：新增 `/chat` 使用 bounded queue 的红灯测试**
 
 在 `tests/test_streaming_api.py` 增加：
 
@@ -663,7 +665,7 @@ def test_stream_chat_uses_bounded_stream_queue(client):
     assert captured["maxsize"] > 0
 ```
 
-- [ ] **步骤 2：新增进度事件满队列策略测试**
+- [x] **步骤 2：新增进度事件满队列策略测试**
 
 在 `tests/test_streaming_output.py` 增加：
 
@@ -700,7 +702,7 @@ async def test_buffered_output_keeps_error_when_stream_queue_is_full():
     assert await asyncio.wait_for(queue.get(), timeout=1) == {"status": "error", "message": "boom"}
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -710,7 +712,7 @@ python -m pytest tests/test_streaming_api.py::test_stream_chat_uses_bounded_stre
 
 预期：bounded queue 测试因 `queue.maxsize == 0` 失败；进度策略测试可能因满队列上创建 pending task 而失败。
 
-- [ ] **步骤 4：给 API stream queue 增加上限常量**
+- [x] **步骤 4：给 API stream queue 增加上限常量**
 
 在 `api/routes.py` 顶层增加：
 
@@ -724,7 +726,7 @@ CHAT_STREAM_QUEUE_MAXSIZE = 128
         stream_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=CHAT_STREAM_QUEUE_MAXSIZE)
 ```
 
-- [ ] **步骤 5：调整 `BufferedOutput._schedule_stream_event()`**
+- [x] **步骤 5：调整 `BufferedOutput._schedule_stream_event()`**
 
 在 `nanobot_kt/output.py` 中把 progress 事件改为满队列时丢弃，error 仍排队：
 
@@ -749,7 +751,7 @@ CHAT_STREAM_QUEUE_MAXSIZE = 128
 
 `write_stream()` 和 `write_final()` 继续 `await queue.put(...)`，让文本 delta 和 final 在慢消费者场景下自然 backpressure。
 
-- [ ] **步骤 6：运行任务 5 绿灯测试**
+- [x] **步骤 6：运行任务 5 绿灯测试**
 
 运行：
 
@@ -759,12 +761,12 @@ python -m pytest tests/test_streaming_api.py tests/test_streaming_output.py -v
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 7：提交任务 5**
+- [x] **步骤 7：提交任务 5**
 
 运行：
 
 ```bash
-git add api/routes.py nanobot_kt/output.py tests/test_streaming_api.py tests/test_streaming_output.py
+git add api/routes.py nanobot_kt/output.py tests/test_streaming_api.py tests/test_streaming_output.py tests/test_api.py
 git commit -m "perf(流式): 限制聊天流队列增长"
 ```
 
@@ -776,7 +778,7 @@ git commit -m "perf(流式): 限制聊天流队列增长"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/streaming-sse-convergence.md`
 
-- [ ] **步骤 1：更新消息字段标准**
+- [x] **步骤 1：更新消息字段标准**
 
 在 `docs/message-field-standard.md` 的响应 / stream 相关章节补充：
 
@@ -794,7 +796,7 @@ git commit -m "perf(流式): 限制聊天流队列增长"
 客户端必须以 `done.answer` / `done.reply` 更新最终业务状态。`delta` 与 `final` 只影响流式展示区。
 ```
 
-- [ ] **步骤 2：更新 `docs/todo.md` 路线项 6**
+- [x] **步骤 2：更新 `docs/todo.md` 路线项 6**
 
 把路线项 6 的现状改为包含：
 
@@ -804,15 +806,15 @@ git commit -m "perf(流式): 限制聊天流队列增长"
 - `/chat` stream queue 已设置上限，文本 delta / final 采用自然 backpressure，progress 满队列可丢弃。
 ```
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 在 P3-1 行和阶段记录中补充每个任务的提交号与验证命令。提交号以实际提交为准，格式保持现有表格风格。
 
-- [ ] **步骤 4：标记本计划任务状态**
+- [x] **步骤 4：标记本计划任务状态**
 
 把本计划中已经完成的任务复选框从 `[ ]` 改成 `[x]`，并在「当前状态」中写入实际提交号。
 
-- [ ] **步骤 5：运行文档自检**
+- [x] **步骤 5：运行文档自检**
 
 运行：
 
@@ -838,7 +840,7 @@ git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkth
 
 预期：占位符扫描无输出；`git diff --check` 无输出。
 
-- [ ] **步骤 6：运行 P3-1 定向回归**
+- [x] **步骤 6：运行 P3-1 定向回归**
 
 运行：
 
@@ -848,7 +850,7 @@ python -m pytest tests/test_streaming_api.py tests/test_streaming_response_envel
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 7：提交任务 6**
+- [x] **步骤 7：提交任务 6**
 
 运行：
 
