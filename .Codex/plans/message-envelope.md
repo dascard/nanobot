@@ -14,13 +14,14 @@
 
 - 设计文档：`docs/superpowers/specs/2026-06-18-message-envelope-design.md`，提交 `c984036 docs(消息): 设计响应信封标准`。
 - 当前计划文件路径按项目约定使用 `.Codex/plans/message-envelope.md`。
-- `docs/todo.md` 路线项 5 正在代码落地阶段；共享 builder、`/chat`、`/group/message` 和 push 适配已完成，route push 集成与响应侧文档仍待推进。
+- `docs/todo.md` 路线项 5 正在代码落地阶段；共享 builder、`/chat`、`/group/message`、push 适配和 route push 集成已完成，响应侧文档仍待推进。
 - `/chat` 非流式成功响应已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status`、`user_id`、`answer`、`answer_chunks` 和 `unprocessed_logs`。
 - `/chat` SSE done 已兼容返回 `reply`、`messages`、`reply_meta` 和 `meta`，并保留 `status="done"` 与 `answer`；SSE framing 仍是 `data: {...}`，不要改成 `event: done`。
 - `/chat` 已把过滤后的 `private_reply_meta` 写入非流式成功响应和 SSE done 响应。
 - `/group/message` route 只返回 `GroupIngressService.handle(req)` 的 dict；群聊响应包装已放在 `app/group_ingress/service.py`，route 层无需改动。
 - `push_to_qq(target_type, target_id, message) -> bool` 的旧签名必须保持。
 - `push_envelope_to_qq(target_type, target_id, envelope) -> bool` 已在 `core/daily_digest.py` 中作为旧 QQbot push 适配层落地；定时任务推送已先构造标准信封，再通过适配层派生旧 `message` 字段。
+- `api/routes.py` 中手动定时任务运行和流式断连后台 push 已改用 `push_envelope_to_qq()`；流式断连路径仍在构造信封前执行 `expand_generated_image_refs_in_content(..., allow_base64=False)`。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
 ## 并行执行策略
@@ -1173,7 +1174,7 @@ git commit -m "feat(推送): 支持信封推送适配"
 
 **并行约束：** 任务 2 和任务 4 完成并提交后再执行本任务。本任务由主线程或 API owner 执行，不分派给群聊 / push worker。
 
-- [ ] **步骤 1：编写 route push 红灯测试**
+- [x] **步骤 1：编写 route push 红灯测试**
 
 创建 `tests/test_api_push_envelope.py`，覆盖手动定时任务运行使用 `push_envelope_to_qq()`，并确认流式断连 push 仍保留 `expand_generated_image_refs_in_content(..., allow_base64=False)` 的边界。
 
@@ -1218,7 +1219,7 @@ def test_run_scheduled_task_now_uses_push_envelope(client, db_session, monkeypat
     assert calls[0][2]["meta"]["chat_type"] == "scheduled_task"
 ```
 
-- [ ] **步骤 2：运行 route push 红灯**
+- [x] **步骤 2：运行 route push 红灯**
 
 运行：
 
@@ -1228,7 +1229,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_api_push_envelope.py -v
 
 预期：失败，原因是 route 仍调用 `push_to_qq()` 或 monkeypatch 没有被触发。
 
-- [ ] **步骤 3：改造 `api/routes.py` push call site**
+- [x] **步骤 3：改造 `api/routes.py` push call site**
 
 在 `run_scheduled_task_now` 中将 import 改为：
 
@@ -1263,7 +1264,7 @@ expanded = await expand_generated_image_refs_in_content(content, allow_base64=Fa
 
 再用 `build_chat_response_envelope(..., answer=expanded, meta={...})` 包装后调用 `push_envelope_to_qq()`。
 
-- [ ] **步骤 4：运行 route push 绿灯和 API 回归**
+- [x] **步骤 4：运行 route push 绿灯和 API 回归**
 
 运行：
 
@@ -1277,7 +1278,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 5：提交 route push 集成**
+- [x] **步骤 5：提交 route push 集成**
 
 ```bash
 git add api/routes.py tests/test_api_push_envelope.py
@@ -1435,6 +1436,6 @@ git commit -m "docs(计划): 同步响应信封状态"
 - [x] 对外 `reply_meta` 不暴露 `_agent_result`、`_no_reply` 和 `_no_reply_reason`。
 - [x] `push_to_qq(target_type, target_id, message) -> bool` 旧签名保持不变。
 - [x] `push_envelope_to_qq(target_type, target_id, envelope) -> bool` 可从 `reply` 或 `messages` 派生旧 `message`。
-- [ ] `api/routes.py` 中 push call site 由单一 owner 集成，没有与群聊 / push worker 发生写冲突。
+- [x] `api/routes.py` 中 push call site 由单一 owner 集成，没有与群聊 / push worker 发生写冲突。
 - [ ] `docs/message-field-standard.md` 记录响应信封标准和 P2-2 / P2-3 边界。
 - [ ] 定向测试和全量测试通过。

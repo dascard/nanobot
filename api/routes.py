@@ -2685,7 +2685,8 @@ async def proxy_chat(
                         _write(uow.db)
 
                 if should_push:
-                    from core.daily_digest import push_to_qq
+                    from core.daily_digest import push_envelope_to_qq
+                    from core.message_envelope import build_chat_response_envelope
 
                     # 推送前展开图片 token（禁用 base64，避免推送大负载）
                     push_answer = final_answer
@@ -2695,11 +2696,21 @@ async def proxy_chat(
                     except Exception:
                         pass
 
-                    ok = await push_to_qq(
-                        "private" if not bridge_meta.get("is_group") else "group",
-                        _resolve_push_target_id(req, bool(bridge_meta.get("is_group"))),
-                        push_answer,
+                    target_type = "private" if not bridge_meta.get("is_group") else "group"
+                    target_id = _resolve_push_target_id(req, bool(bridge_meta.get("is_group")))
+                    envelope = build_chat_response_envelope(
+                        status="ok",
+                        answer=push_answer,
+                        meta={
+                            "platform": platform,
+                            "chat_type": str(bridge_meta.get("chat_type") or ""),
+                            "user_id": req.user_id,
+                            "session_id": req.session_id,
+                            "target_type": target_type,
+                            "target_id": target_id,
+                        },
                     )
+                    ok = await push_envelope_to_qq(target_type, target_id, envelope)
                     if ok:
                         logger.info(
                             f"[/chat] Stream-aborted result pushed: "
@@ -3162,7 +3173,8 @@ def toggle_scheduled_task(task_id: int, db: Session = Depends(get_db), _auth=Dep
 async def run_scheduled_task_now(task_id: int, db: Session = Depends(get_db), _auth=Depends(verify_token)):
     """立即执行指定定时任务（生成内容并推送）。"""
     from core.database import ScheduledTask as ST
-    from core.daily_digest import _generate_task_message, push_to_qq
+    from core.daily_digest import _generate_task_message, push_envelope_to_qq
+    from core.message_envelope import build_chat_response_envelope
 
     t = db.query(ST).filter(ST.id == task_id).first()
     if not t:
@@ -3173,7 +3185,19 @@ async def run_scheduled_task_now(task_id: int, db: Session = Depends(get_db), _a
     if not content:
         raise HTTPException(status_code=500, detail="LLM returned no content")
 
-    ok = await push_to_qq(t.target_type, t.target_id, content)
+    envelope = build_chat_response_envelope(
+        status="ok",
+        answer=content,
+        meta={
+            "platform": "qq",
+            "chat_type": "scheduled_task",
+            "task_id": t.id,
+            "task_name": t.name,
+            "target_type": t.target_type,
+            "target_id": t.target_id,
+        },
+    )
+    ok = await push_envelope_to_qq(t.target_type, t.target_id, envelope)
     if ok:
         t.last_run_at = datetime.now()
         db.commit()
