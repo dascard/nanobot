@@ -400,7 +400,7 @@ git commit -m "feat(渲染): 添加 QQ 出站渲染器"
 - 修改：`core/daily_digest.py`
 - 修改：`tests/test_push_envelope.py`
 
-- [ ] **步骤 1：编写 push 红灯测试**
+- [x] **步骤 1：编写 push 红灯测试**
 
 在 `tests/test_push_envelope.py` 增加：
 
@@ -461,7 +461,7 @@ async def test_push_envelope_never_sends_base64_when_public_url_missing(monkeypa
     assert "base64://" not in sent["message"]
 ```
 
-- [ ] **步骤 2：运行 push 红灯**
+- [x] **步骤 2：运行 push 红灯**
 
 运行：
 
@@ -471,7 +471,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_push_envelope.py -v -p 
 
 预期：FAIL，新测试收到的 `message` 仍是 `[generated_image:img_1]` 或非 renderer 输出。
 
-- [ ] **步骤 3：修改 `push_envelope_to_qq()`**
+- [x] **步骤 3：修改 `push_envelope_to_qq()`**
 
 在 `core/daily_digest.py` 中把 `envelope_to_message()` 调用改为：
 
@@ -496,7 +496,7 @@ async def push_envelope_to_qq(
 
 保留现有函数的参数名和返回 bool 语义。不要修改 `push_to_qq()` 签名。
 
-- [ ] **步骤 4：运行 push 绿灯与定时任务回归**
+- [x] **步骤 4：运行 push 绿灯与定时任务回归**
 
 运行：
 
@@ -509,7 +509,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：PASS。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 运行：
 
@@ -524,7 +524,7 @@ git commit -m "feat(推送): 使用 QQ 出站渲染器"
 - 修改：`creatures/nanobot/prompts/skills/schedule_task/tool.py`
 - 修改：`tests/test_schedule_task_tool.py`
 
-- [ ] **步骤 1：编写 schedule run 红灯测试**
+- [x] **步骤 1：编写 schedule run 红灯测试**
 
 在 `tests/test_schedule_task_tool.py` 增加或调整测试，核心断言如下：
 
@@ -567,7 +567,7 @@ async def test_schedule_task_run_uses_push_envelope(monkeypatch, db_session):
 
 如果测试文件没有 `run_schedule_tool_action` helper，按现有 fixture 调用真实 `ScheduleTaskTool._execute()`；不要新增与生产代码脱节的 fake 工具入口。
 
-- [ ] **步骤 2：运行 schedule 红灯**
+- [x] **步骤 2：运行 schedule 红灯**
 
 运行：
 
@@ -577,7 +577,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_schedule_task_tool.py -
 
 预期：FAIL，失败原因是直接调用了被禁止的 `push_to_qq()`，或模块没有导入 `push_envelope_to_qq`。
 
-- [ ] **步骤 3：修改 schedule task run 分支**
+- [x] **步骤 3：修改 schedule task run 分支**
 
 在 `creatures/nanobot/prompts/skills/schedule_task/tool.py` 中引入：
 
@@ -604,7 +604,7 @@ ok = await push_envelope_to_qq(target_type, target_id, envelope)
 
 如果该工具当前运行在同步 `_execute()` 中，不要新增 `asyncio.run()`。应保持现有 async 调用链，必要时把工具方法改为 `async def` 并更新测试，避免在同步函数里强行跑 awaitable。
 
-- [ ] **步骤 4：运行 schedule 绿灯与 push 回归**
+- [x] **步骤 4：运行 schedule 绿灯与 push 回归**
 
 运行：
 
@@ -618,7 +618,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：PASS。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 运行：
 
@@ -634,7 +634,9 @@ git commit -m "fix(定时任务): 统一运行推送出口"
 - 修改：`tests/test_api_push_envelope.py`
 - 修改：`tests/test_group_response_envelope.py`
 
-- [ ] **步骤 1：补 route push 回归测试**
+- [x] **步骤 1：补 route push 回归测试**
+
+现有 `tests/test_api_push_envelope.py` 已覆盖手动任务 run 和 SSE 断连后台 push 不直连旧 `push_to_qq()`，本阶段无需新增测试。
 
 在 `tests/test_api_push_envelope.py` 增加断言：route 手动任务 run 和 SSE 断连后台 push 不直接调用 `push_to_qq()`。
 
@@ -662,7 +664,7 @@ async def test_route_background_push_uses_envelope_renderer(monkeypatch, async_c
 
 如果现有测试已有相同行为覆盖，只把断言扩展为检查 renderer 入口，不复制一套新的大 fixture。
 
-- [ ] **步骤 2：运行 route 红灯或确认既有覆盖**
+- [x] **步骤 2：运行 route 红灯或确认既有覆盖**
 
 运行：
 
@@ -672,7 +674,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/test_api_push_envelope.py -v
 
 预期：在修改生产代码前，新增测试能证明当前 route 依赖信封入口；如果已经 PASS，记录为「既有 route 已满足，保留回归测试」。
 
-- [ ] **步骤 3：按测试结果调整 route**
+- [x] **步骤 3：按测试结果调整 route**
+
+既有 route 实现已满足测试，未修改 `api/routes.py`。
 
 如果测试失败，仅修改 `api/routes.py` 中仍直连旧 push 或仍提前展开 generated image 的 call site：
 
@@ -692,7 +696,7 @@ await push_envelope_to_qq(target_type, target_id, envelope)
 
 如果测试已经 PASS，不做生产代码改动，只提交回归测试。
 
-- [ ] **步骤 4：运行 API / 群聊相关回归**
+- [x] **步骤 4：运行 API / 群聊相关回归**
 
 运行：
 
@@ -709,7 +713,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest \
 
 预期：PASS。
 
-- [ ] **步骤 5：Commit**
+- [x] **步骤 5：Commit**
 
 如果改了生产代码：
 
