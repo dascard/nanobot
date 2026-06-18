@@ -503,3 +503,171 @@ def test_rag_baseline_diff_reports_new_fixed_and_metric_deltas():
     assert gate["passed"] is False
     assert "pass_rate below threshold" in gate["errors"]
     assert "new_failed_cases exceeds threshold" in gate["errors"]
+
+
+def test_rag_benchmark_cli_fails_gate_on_new_failure(tmp_path, capsys):
+    from evals.rag_benchmark import run as rag_run
+
+    manual = tmp_path / "manual"
+    generated = tmp_path / "generated"
+    reports = tmp_path / "reports"
+    manual.mkdir()
+    generated.mkdir()
+    db_path = tmp_path / "rag.db"
+    db = _session_for(db_path)
+    db.close()
+    (manual / "empty_not_allowed.json").write_text(
+        json.dumps(
+            {
+                "id": "empty_not_allowed",
+                "suite": "rag_benchmark",
+                "source_type": "sticker",
+                "case_type": "positive",
+                "query": "no result",
+                "expected": {
+                    "candidate_ids": ["sticker:missing:sticker"],
+                    "hit_at": 5,
+                },
+                "meta": {"origin": "manual_hard"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "suite": "rag_benchmark",
+                "provider_mode": "deterministic",
+                "case_scope": "manual",
+                "metrics": {
+                    "overall": {
+                        "total_cases": 0,
+                        "passed_cases": 0,
+                        "pass_rate": 0.0,
+                    }
+                },
+                "case_scores": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = rag_run.main(
+        [
+            "--db",
+            str(db_path),
+            "--manual",
+            str(manual),
+            "--generated",
+            str(generated),
+            "--report-out",
+            str(reports),
+            "--provider-mode",
+            "deterministic",
+            "--manual-only",
+            "--baseline",
+            str(baseline),
+            "--min-pass-rate",
+            "1.0",
+            "--max-new-failures",
+            "0",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Gate failed" in captured.out
+    assert "new_failed_cases exceeds threshold" in captured.out
+
+
+def test_rag_benchmark_cli_passes_manual_deterministic_gate(tmp_path, capsys):
+    from evals.rag_benchmark import run as rag_run
+
+    manual = tmp_path / "manual"
+    generated = tmp_path / "generated"
+    reports = tmp_path / "reports"
+    manual.mkdir()
+    generated.mkdir()
+    db_path = tmp_path / "rag.db"
+    db = _session_for(db_path)
+    db.close()
+    (manual / "constraint.json").write_text(
+        json.dumps(
+            {
+                "id": "constraint",
+                "suite": "rag_benchmark",
+                "source_type": "sticker",
+                "case_type": "constraint_only",
+                "query": "表情包",
+                "expected": {
+                    "candidate_ids": [],
+                    "allow_empty": True,
+                    "max_reranker_candidates": 10,
+                },
+                "meta": {"origin": "manual_hard"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "suite": "rag_benchmark",
+                "provider_mode": "deterministic",
+                "case_scope": "manual",
+                "metrics": {
+                    "overall": {
+                        "total_cases": 1,
+                        "passed_cases": 1,
+                        "pass_rate": 1.0,
+                        "hit@5": 0.0,
+                        "mrr": 0.0,
+                        "degraded_rate": 0.0,
+                        "case_false_positive_rate": 0.0,
+                        "unexpected_source_rate": 0.0,
+                    }
+                },
+                "case_scores": [{"case_id": "constraint", "ok": True, "errors": []}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = rag_run.main(
+        [
+            "--db",
+            str(db_path),
+            "--manual",
+            str(manual),
+            "--generated",
+            str(generated),
+            "--report-out",
+            str(reports),
+            "--provider-mode",
+            "deterministic",
+            "--manual-only",
+            "--baseline",
+            str(baseline),
+            "--min-pass-rate",
+            "1.0",
+            "--max-new-failures",
+            "0",
+            "--max-degraded-rate",
+            "0.0",
+            "--max-unexpected-source-rate",
+            "0.0",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Gate passed" in captured.out
+    report = json.loads((reports / "latest.json").read_text(encoding="utf-8"))
+    assert report["gate"]["passed"] is True
+    assert report["baseline_diff"]["new_failed_cases"] == []
