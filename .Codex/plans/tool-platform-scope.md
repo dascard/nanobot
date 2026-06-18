@@ -18,6 +18,7 @@
 - 任务 1 已完成并提交：`bb7489c feat(工具): 支持平台维度解析`。
 - 任务 2 已完成并提交：`295e3f7 feat(工具): 记录平台维度决策`。
 - 任务 3 已完成并提交：`73bbe8a feat(消息): 透传客户端平台`。真实入口已透传 platform 到 Bridge 和 ToolPlan。
+- 任务 4 已完成并提交：`d9a1bae feat(工具): 支持平台覆盖接口`。Admin API 已支持 platform 覆盖写入、预览和 targets。
 - 当前下一步：任务 5「WebUI 工具页增加 platform selector」。
 - 现有无关脏文件包括 pycache、`docs/goal.md`、`tests/conftest.py`、`.codex/` 历史计划、`docs/TODO_LIST.md` 等。执行本计划时不要回滚、删除或暂存这些文件。
 
