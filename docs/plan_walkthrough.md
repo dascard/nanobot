@@ -1431,6 +1431,6 @@ P1-6 验收重点：
 
 ## 下一步
 
-P4-5C「RAG manual 样本扩充」已完成收口。下一步默认进入 fixture-backed positive RAG case：为 RAG benchmark 准备稳定 fixture 数据，使 `hit@5`、`mrr` 等正例召回指标成为有意义的门禁；如果暂不进入 fixture，则继续从真实样本运营流程中人工确认更多稳定 manual case。
+P4-5D「RAG fixture 正例门禁」已完成收口。下一步默认扩展更多 fixture source 覆盖，例如 knowledge fixture positive case 和固定 citation 断言；如果暂不继续 fixture，则从真实样本运营流程中人工确认更多稳定 manual case。
 
-TimingGate 真实日志标注、周期复跑报告调参和更多真实样本仲裁属于运营延续项，不抢占当前默认执行顺序。Prompt V2、P2-4 和 P3-1 均已完成，历史章节中保留的旧阶段说明仅作为执行记录，不再作为下一步来源。
+TimingGate 真实日志标注、周期复跑报告调参和更多真实样本仲裁属于运营延续项，不抢占当前默认执行顺序。Prompt V2、P2-4、P3-1 和 P4-5D 均已完成，历史章节中保留的旧阶段说明仅作为执行记录，不再作为下一步来源。
