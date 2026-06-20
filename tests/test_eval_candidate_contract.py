@@ -261,6 +261,98 @@ def test_eval_list_candidates_returns_summary_and_readiness(client, db_session, 
     assert payload["items"][0]["readiness"]["blocking_reasons"]
 
 
+def test_candidate_trend_report_groups_current_snapshot_by_created_date(db_session):
+    from datetime import datetime, timedelta
+
+    from core.eval_sampling.store import candidate_trend_report
+
+    today = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+    old_day = today - timedelta(days=1)
+    rows = [
+        EvalCandidate(
+            case_id="cand_trend_blocked",
+            suite="timing_gate",
+            source="db",
+            status="candidate",
+            expected_json=json.dumps({"needs_label": True}, ensure_ascii=False),
+            created_at=old_day,
+            updated_at=old_day,
+        ),
+        EvalCandidate(
+            case_id="cand_trend_ready",
+            suite="timing_gate",
+            source="db",
+            status="labeled",
+            expected_json=json.dumps({"timing_action": "continue"}, ensure_ascii=False),
+            created_at=today,
+            updated_at=today,
+        ),
+    ]
+    db_session.add_all(rows)
+    db_session.commit()
+
+    report = candidate_trend_report(
+        db_session,
+        days=2,
+        suite="timing_gate",
+        source="db",
+        target_dataset="trend_target",
+    )
+
+    assert report["ok"] is True
+    assert report["filters"]["bucket"] == "day"
+    assert report["summary"]["total"] == 2
+    assert report["summary"]["by_status"] == {"candidate": 1, "labeled": 1}
+    assert report["summary"]["readiness"] == {"ready": 1, "blocked": 1}
+    assert len(report["buckets"]) == 2
+    by_date = {bucket["date"]: bucket for bucket in report["buckets"]}
+    old_bucket = by_date[old_day.date().isoformat()]
+    today_bucket = by_date[today.date().isoformat()]
+    assert old_bucket["created"] == 1
+    assert old_bucket["by_status"]["candidate"] == 1
+    assert old_bucket["readiness"] == {"ready": 0, "blocked": 1}
+    assert {reason["code"] for reason in old_bucket["top_blocking_reasons"]} == {
+        "expected_invalid",
+        "invalid_status",
+    }
+    assert today_bucket["created"] == 1
+    assert today_bucket["by_status"]["labeled"] == 1
+    assert today_bucket["readiness"] == {"ready": 1, "blocked": 0}
+
+
+def test_candidates_trend_api_is_read_only(client, db_session, monkeypatch):
+    from datetime import datetime
+
+    from core.database import AdminAuditLog
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_session.add(
+        EvalCandidate(
+            case_id="cand_trend_api",
+            suite="timing_gate",
+            source="api",
+            status="candidate",
+            created_at=datetime.now(),
+            updated_at=datetime.now(),
+        )
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/api/v1/admin/evals/candidates/trend",
+        headers=_auth_header(),
+        params={"days": 30, "suite": "timing_gate", "source": "api"},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["summary"]["total"] == 1
+    assert payload["buckets"][0]["by_source"]["api"] == 1
+    assert db_session.query(AdminAuditLog).count() == 0
+    assert db_session.query(EvalCandidate).filter_by(case_id="cand_trend_api").one().status == "candidate"
+
+
 def test_eval_patch_candidate_rejects_direct_labeled_promoted_and_unknown_status(
     client,
     db_session,

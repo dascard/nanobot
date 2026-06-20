@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -405,6 +405,112 @@ def candidate_queue_summary(
                 key=lambda item: (-item[1], item[0]),
             )
         ],
+    }
+
+
+def _candidate_trend_bucket_key(value: Any) -> str:
+    if hasattr(value, "date"):
+        return value.date().isoformat()
+    return str(value or "")[:10]
+
+
+def _top_counts(values: list[str]) -> list[dict[str, Any]]:
+    return [
+        {"code": code, "count": count}
+        for code, count in sorted(
+            _count_values(values).items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+    ]
+
+
+def candidate_trend_report(
+    db,
+    *,
+    days: int = 30,
+    suite: str = "",
+    status: str = "",
+    source: str = "",
+    target_dataset: str = "",
+) -> dict[str, Any]:
+    """按候选创建日期分桶，返回当前候选状态与 readiness 快照。"""
+    capped_days = max(1, min(int(days or 30), 90))
+    start_date = datetime.now().date() - timedelta(days=capped_days - 1)
+    start_at = datetime.combine(start_date, datetime.min.time())
+    rows = (
+        _candidate_query(db, suite=suite, status=status, source=source)
+        .filter(EvalCandidate.created_at >= start_at)
+        .order_by(EvalCandidate.created_at.asc(), EvalCandidate.id.asc())
+        .all()
+    )
+
+    buckets: dict[str, dict[str, Any]] = {}
+    summary_statuses: list[str] = []
+    summary_suites: list[str] = []
+    summary_sources: list[str] = []
+    summary_readiness = {"ready": 0, "blocked": 0}
+    summary_blocking_reasons: list[str] = []
+
+    for row in rows:
+        bucket_key = _candidate_trend_bucket_key(row.created_at)
+        bucket = buckets.setdefault(
+            bucket_key,
+            {
+                "date": bucket_key,
+                "created": 0,
+                "by_status": {},
+                "by_suite": {},
+                "by_source": {},
+                "readiness": {"ready": 0, "blocked": 0},
+                "_blocking_reasons": [],
+            },
+        )
+        status_value = row.status or "unknown"
+        suite_value = row.suite or "unknown"
+        source_value = row.source or "unknown"
+        readiness = candidate_readiness(row, target_dataset=target_dataset or row.suite)
+        readiness_key = "ready" if readiness["ready"] else "blocked"
+
+        bucket["created"] += 1
+        bucket["by_status"][status_value] = bucket["by_status"].get(status_value, 0) + 1
+        bucket["by_suite"][suite_value] = bucket["by_suite"].get(suite_value, 0) + 1
+        bucket["by_source"][source_value] = bucket["by_source"].get(source_value, 0) + 1
+        bucket["readiness"][readiness_key] += 1
+        summary_readiness[readiness_key] += 1
+
+        summary_statuses.append(status_value)
+        summary_suites.append(suite_value)
+        summary_sources.append(source_value)
+        for reason in readiness.get("blocking_reasons", []):
+            code = str(reason.get("code") or "unknown")
+            bucket["_blocking_reasons"].append(code)
+            summary_blocking_reasons.append(code)
+
+    bucket_list: list[dict[str, Any]] = []
+    for bucket in buckets.values():
+        blocking_reasons = bucket.pop("_blocking_reasons")
+        bucket["top_blocking_reasons"] = _top_counts(blocking_reasons)
+        bucket_list.append(bucket)
+
+    return {
+        "ok": True,
+        "filters": {
+            "days": capped_days,
+            "bucket": "day",
+            "suite": suite,
+            "status": status,
+            "source": source,
+            "target_dataset": target_dataset,
+        },
+        "summary": {
+            "total": len(rows),
+            "by_status": _count_values(summary_statuses),
+            "by_suite": _count_values(summary_suites),
+            "by_source": _count_values(summary_sources),
+            "readiness": summary_readiness,
+            "top_blocking_reasons": _top_counts(summary_blocking_reasons),
+        },
+        "buckets": bucket_list,
     }
 
 

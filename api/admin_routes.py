@@ -5277,7 +5277,7 @@ from core.database import EvalCandidate, EvalRun, EvalRunResult
 from core.eval_sampling.store import (
     list_candidates, get_candidate, update_candidate,
     label_candidate, ignore_candidate, plan_candidate_promotion, promote_candidate,
-    candidate_queue_summary, preflight_candidate_promotions,
+    candidate_queue_summary, candidate_trend_report, preflight_candidate_promotions,
     plan_candidate_batch_audit, record_candidate_batch_audit,
     reject_candidate, defer_candidate, reopen_candidate,
     save_run, save_run_results, get_runs, get_run,
@@ -5387,6 +5387,29 @@ def eval_candidate_batch_audit(
             db,
             plan,
             ip_address=_client_ip(request),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/evals/candidates/trend")
+def eval_candidates_trend(
+    days: int = Query(30, ge=1, le=90),
+    suite: str = "",
+    status: str = "",
+    source: str = "",
+    target_dataset: str = "",
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    try:
+        return candidate_trend_report(
+            db,
+            days=days,
+            suite=suite,
+            status=status,
+            source=source,
+            target_dataset=target_dataset,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
