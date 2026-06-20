@@ -19,6 +19,13 @@ def _as_int(value: Any) -> int:
         return 0
 
 
+def _as_float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _reason(code: str, message: str, **extra: Any) -> dict[str, Any]:
     item = {"code": code, "message": message}
     item.update(extra)
@@ -88,6 +95,92 @@ def _summarize(recommendations: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
+def _label_coverage(labeled: int, total: int) -> float:
+    return round(labeled / total, 6) if total else 0.0
+
+
+def _samples_for_signal(
+    samples: list[dict[str, Any]],
+    signal_name: str,
+) -> list[dict[str, Any]]:
+    return [
+        item for item in samples
+        if str(item.get("signal_name") or "") == signal_name
+    ]
+
+
+def _evidence_samples(
+    samples: list[dict[str, Any]],
+    signal_name: str,
+) -> list[dict[str, Any]]:
+    selected = sorted(
+        _samples_for_signal(samples, signal_name),
+        key=lambda item: (
+            not bool(item.get("action_mismatch")),
+            str(item.get("label") or "") != "false_positive",
+            _as_int(item.get("log_id")),
+        ),
+    )[:3]
+    return [
+        {
+            "log_id": item.get("log_id"),
+            "signal_value": _as_float(item.get("signal_value")),
+            "runtime_action": str(item.get("runtime_action") or ""),
+            "scoring_action": str(item.get("scoring_action") or ""),
+            "action_mismatch": bool(item.get("action_mismatch")),
+            "text_preview": str(item.get("text_preview") or ""),
+        }
+        for item in selected
+    ]
+
+
+def _signal_items(timing_audit: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(timing_audit, dict):
+        return []
+    signals = (
+        timing_audit.get("signals")
+        if isinstance(timing_audit.get("signals"), dict)
+        else {}
+    )
+    shadow = (
+        timing_audit.get("shadow")
+        if isinstance(timing_audit.get("shadow"), dict)
+        else {}
+    )
+    mismatches = (
+        shadow.get("mismatches_by_signal")
+        if isinstance(shadow.get("mismatches_by_signal"), dict)
+        else {}
+    )
+    samples = (
+        timing_audit.get("samples")
+        if isinstance(timing_audit.get("samples"), list)
+        else []
+    )
+    items: list[dict[str, Any]] = []
+    for name, stats in sorted(signals.items()):
+        if not isinstance(stats, dict):
+            continue
+        total = _as_int(stats.get("samples"))
+        labeled = _as_int(stats.get("labeled_samples"))
+        items.append({
+            "name": str(name),
+            "samples": total,
+            "labeled_samples": labeled,
+            "label_coverage_rate": _label_coverage(labeled, total),
+            "false_positive_rate": _as_float(stats.get("false_positive_rate")),
+            "suggestion": str(stats.get("suggestion") or ""),
+            "runtime_actions": (
+                stats.get("actions")
+                if isinstance(stats.get("actions"), dict)
+                else {}
+            ),
+            "mismatch_count": _as_int(mismatches.get(name)),
+            "evidence_samples": _evidence_samples(samples, str(name)),
+        })
+    return items
+
+
 def build_tuning_analysis(
     trends: dict[str, Any],
     *,
@@ -100,8 +193,7 @@ def build_tuning_analysis(
     min_signal_labeled_samples: int = 5,
     high_false_positive_rate: float = 0.20,
 ) -> dict[str, Any]:
-    _ = manifest, min_total_samples, min_label_coverage
-    _ = min_signal_labeled_samples, high_false_positive_rate
+    _ = manifest, min_total_samples
     source_paths = source_paths or {}
     source = {
         **_trend_source(trends),
@@ -112,6 +204,7 @@ def build_tuning_analysis(
     }
     blocking: list[dict[str, Any]] = []
     recommendations: list[dict[str, Any]] = []
+    signal_items = _signal_items(timing_audit)
 
     if trends.get("trend_version") != 1:
         blocking.append(
@@ -183,6 +276,7 @@ def build_tuning_analysis(
                 )
             )
         total_samples = _as_int(timing_audit.get("total_samples"))
+        labeled_samples = _as_int(timing_audit.get("labeled_samples"))
         if total_samples <= 0:
             blocking.append(_reason("timing_zero_samples", "TimingSignal audit 样本数为 0"))
             recommendations.append(
@@ -195,6 +289,68 @@ def build_tuning_analysis(
                     {"total_samples": total_samples},
                 )
             )
+        elif _label_coverage(labeled_samples, total_samples) < min_label_coverage:
+            coverage = _label_coverage(labeled_samples, total_samples)
+            blocking.append(
+                _reason(
+                    "low_label_coverage",
+                    f"TimingSignal 标注覆盖率低于 {min_label_coverage:.0%}",
+                    label_coverage_rate=coverage,
+                )
+            )
+            recommendations.append(
+                _recommendation(
+                    "label_more_samples",
+                    "timing_signal",
+                    "medium",
+                    "low_label_coverage",
+                    "TimingSignal 标注覆盖不足，需要先补标注再讨论调参",
+                    {
+                        "labeled_samples": labeled_samples,
+                        "total_samples": total_samples,
+                        "label_coverage_rate": coverage,
+                        "min_label_coverage": min_label_coverage,
+                    },
+                )
+            )
+
+    for signal in signal_items:
+        if signal["labeled_samples"] < min_signal_labeled_samples:
+            recommendations.append(
+                _recommendation(
+                    "label_more_samples",
+                    "timing_signal",
+                    "low",
+                    "low_signal_label_count",
+                    f"{signal['name']} 标注样本不足，需要补充该信号样本",
+                    {
+                        "signal": signal["name"],
+                        "labeled_samples": signal["labeled_samples"],
+                        "min_signal_labeled_samples": min_signal_labeled_samples,
+                    },
+                )
+            )
+            continue
+        if signal["false_positive_rate"] >= high_false_positive_rate:
+            recommendations.append(
+                _recommendation(
+                    "manual_review",
+                    "timing_signal",
+                    "medium",
+                    "high_false_positive_rate",
+                    f"{signal['name']} 标注样本假阳率偏高，需要人工复核信号提取器",
+                    {
+                        "signal": signal["name"],
+                        "false_positive_rate": signal["false_positive_rate"],
+                        "labeled_samples": signal["labeled_samples"],
+                        "sample_log_ids": [
+                            item["log_id"]
+                            for item in signal["evidence_samples"]
+                            if item.get("log_id") is not None
+                        ],
+                    },
+                )
+            )
 
     return {
         "analysis_version": 1,
@@ -202,7 +358,7 @@ def build_tuning_analysis(
         "source": source,
         "readiness": {"ready": not blocking, "blocking_reasons": blocking},
         "summary": _summarize(recommendations),
-        "signals": [],
+        "signals": signal_items,
         "recommendations": recommendations,
         "regression_refs": [],
     }

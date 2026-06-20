@@ -113,3 +113,76 @@ def test_tuning_analysis_blocks_missing_skipped_and_zero_timing_audit():
     assert "timing_audit_skipped" in _reason_codes(skipped)
     assert "timing_zero_samples" in _reason_codes(zero)
     assert "db_not_found" in skipped["source"]["timing_audit_reason"]
+
+
+def test_tuning_analysis_recommends_labeling_for_low_label_coverage():
+    from evals.tuning_analysis import build_tuning_analysis
+
+    report = build_tuning_analysis(
+        _trends(),
+        timing_audit=_audit(total_samples=20, labeled_samples=2),
+    )
+
+    assert report["readiness"]["ready"] is False
+    assert "low_label_coverage" in _reason_codes(report)
+    assert "low_label_coverage" in _recommendation_codes(report)
+    assert report["summary"]["label_more_samples_count"] == 1
+
+
+def test_tuning_analysis_flags_high_signal_false_positive_rate_with_evidence():
+    from evals.tuning_analysis import build_tuning_analysis
+
+    signals = {
+        "s_ack": {
+            "samples": 10,
+            "labeled_samples": 6,
+            "false_positive_count": 2,
+            "true_positive_count": 4,
+            "unknown_count": 4,
+            "false_positive_rate": 0.333333,
+            "actions": {"no_reply": 8, "reply_now": 2},
+            "suggestion": "review_threshold",
+        }
+    }
+    samples = [
+        {
+            "log_id": 101,
+            "signal_name": "s_ack",
+            "signal_value": 0.85,
+            "label": "false_positive",
+            "runtime_action": "no_reply",
+            "scoring_action": "reply_now",
+            "action_mismatch": True,
+            "text_preview": "好的，再帮我查下昨天的新闻",
+        },
+        {
+            "log_id": 102,
+            "signal_name": "s_ack",
+            "signal_value": 0.85,
+            "label": "false_positive",
+            "runtime_action": "no_reply",
+            "scoring_action": "no_reply",
+            "action_mismatch": False,
+            "text_preview": "嗯，继续说",
+        },
+    ]
+
+    report = build_tuning_analysis(
+        _trends(),
+        timing_audit=_audit(signals=signals, samples=samples),
+    )
+
+    signal = report["signals"][0]
+    assert signal["name"] == "s_ack"
+    assert signal["label_coverage_rate"] == 0.6
+    assert signal["false_positive_rate"] == 0.333333
+    assert signal["mismatch_count"] == 0
+    assert signal["evidence_samples"][0]["log_id"] == 101
+    review = [
+        item for item in report["recommendations"]
+        if item["reason_code"] == "high_false_positive_rate"
+    ][0]
+    assert review["type"] == "manual_review"
+    assert review["area"] == "timing_signal"
+    assert review["evidence"]["signal"] == "s_ack"
+    assert review["evidence"]["sample_log_ids"] == [101, 102]
