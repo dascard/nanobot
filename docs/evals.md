@@ -81,6 +81,26 @@ manifest 记录一次周期运行的 `run_id`、触发来源、开始 / 结束�
 
 排查周期性失败时，优先打开 `periodic_manifest_latest.json` 或对应 `runs/<run_id>/manifest.json`。manifest 只负责索引和摘要，不代表调参结论；是否调整 TimingGate、RAG 或 capability gate 阈值必须另起只读分析和人工确认。
 
+### 跨 artifact 周期趋势
+
+周期运行 manifest 完成后，可以用只读趋势工具聚合多个 run：
+
+```bash
+python -B -m evals.artifact_trends \
+  --manifest-glob 'evals/reports/*-periodic_manifest.json' \
+  --manifest-glob 'evals/reports/runs/*/manifest.json' \
+  --out evals/reports/artifact_trends_latest.json
+```
+
+趋势报告输出 `series.runs`、`series.eval_suites`、`series.rag_benchmark`、`series.timing_signal_audit` 和 `regressions`。报告只读取 manifest 中已经固化的 summary，不回读历史 manifest 指向的可变 `latest.json`。`regressions` 是复盘提示，不改变 PR gate、周期 gate、baseline 或调参阈值。
+
+第一版覆盖：
+
+- run 状态、退出码、失败 step 数和运行时长。
+- 通用 eval suite 的 `pass_rate`、失败数、新增失败和 gate 状态。
+- RAG benchmark 的 `pass_rate`、`hit@5`、`mrr` 和 positive case 数。
+- TimingGate signal audit 的样本量、标注覆盖率和 action mismatch 趋势。
+
 周期性入口还会运行 TimingGate signal audit：
 
 ```bash
@@ -410,4 +430,4 @@ P4-5D 已新增 `evals/rag_benchmark/fixtures.py` 和 `positive_v1` fixture DB b
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入；P4-5B 已完成周期性复跑、手动触发和报告 artifact 归档；P4-5C 已完成第一轮 RAG manual 样本扩充；P4-5D 已完成 memory fixture-backed positive RAG case；P4-5E 已完成 knowledge fixture citation 正例；P4-5F 已完成 sticker fixture sendable 正例；P4-5G 已完成 group_memory fixture 正例；P4-5H 已完成 RAG 过滤约束 fixture。下一步转向真实样本运营动作。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入；P4-5B 已完成周期性复跑、手动触发和报告 artifact 归档；P4-5C 已完成第一轮 RAG manual 样本扩充；P4-5D 已完成 memory fixture-backed positive RAG case；P4-5E 已完成 knowledge fixture citation 正例；P4-5F 已完成 sticker fixture sendable 正例；P4-5G 已完成 group_memory fixture 正例；P4-5H 已完成 RAG 过滤约束 fixture。真实样本运营已完成 TimingGate signal audit 周期化、RAG generated → manual 仲裁入口、EvalCandidate 运营规则、候选 reject / defer 仲裁状态、人工仲裁批次审计、EvalCandidate 运营趋势报表、周期运行 manifest 和跨 artifact 周期趋势。后续可基于趋势报告做只读调参分析，或补充更厚的 TimingSignal 不可变 artifact。

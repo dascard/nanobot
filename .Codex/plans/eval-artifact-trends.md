@@ -1,6 +1,6 @@
 # 跨 artifact 周期趋势实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
 **目标：** 基于 periodic manifest 生成只读跨 artifact 周期趋势 JSON 报告。
 
@@ -19,9 +19,9 @@
   - 覆盖纯函数、latest 不回读、未知 step 容错和 CLI。
 - 修改：`docs/evals.md`
   - 增加“跨 artifact 周期趋势”说明和 CLI 示例。
-  - 修正末尾“下一步转向真实样本运营动作”的旧口径。
+  - 修正末尾旧口径，标明后续转向只读调参分析或更厚 TimingSignal artifact。
 - 修改：`docs/todo.md`
-  - 更新路线项 8 当前状态，标记周期运行 manifest 后的下一阶段为跨 artifact 趋势。
+  - 更新路线项 8 当前状态，标记跨 artifact 周期趋势已完成。
 - 修改：`docs/plan_walkthrough.md`
   - 新增真实样本运营 8 或独立“跨 artifact 周期趋势”阶段记录。
   - 同步当前目标和进度总览。
@@ -74,7 +74,7 @@
 - 创建：`tests/test_eval_artifact_trends.py`
 - 创建：`evals/artifact_trends.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_eval_artifact_trends.py` 中新增 fixture helper 和两个测试：
 
@@ -228,7 +228,7 @@ def test_artifact_trends_ignores_latest_report_paths(tmp_path):
     assert trends["series"]["rag_benchmark"][0]["hit@5"] == 1.0
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -238,7 +238,7 @@ python -B -m pytest tests/test_eval_artifact_trends.py::test_artifact_trends_bui
 
 预期：失败，报错 `ModuleNotFoundError: No module named 'evals.artifact_trends'`。
 
-- [ ] **步骤 3：编写最小实现**
+- [x] **步骤 3：编写最小实现**
 
 创建 `evals/artifact_trends.py`，实现：
 
@@ -283,7 +283,7 @@ def write_trend_report(payload: dict[str, Any], out_path: str | Path) -> Path:
 - delta 用 `round(current - previous, 10)`，第一条为 `None`。
 - `regressions` 只基于最新 run 和每个 series 最新 item。
 
-- [ ] **步骤 4：运行测试验证绿灯**
+- [x] **步骤 4：运行测试验证绿灯**
 
 运行：
 
@@ -293,7 +293,7 @@ python -B -m pytest tests/test_eval_artifact_trends.py::test_artifact_trends_bui
 
 预期：`2 passed`。
 
-- [ ] **步骤 5：补容错测试**
+- [x] **步骤 5：补容错测试**
 
 在 `tests/test_eval_artifact_trends.py` 新增：
 
@@ -327,7 +327,7 @@ def test_artifact_trends_keeps_unknown_steps_without_metrics():
     assert any(item["type"] == "report_missing" for item in trends["regressions"])
 ```
 
-- [ ] **步骤 6：运行容错测试验证红绿**
+- [x] **步骤 6：运行容错测试验证红绿**
 
 运行：
 
@@ -337,7 +337,7 @@ python -B -m pytest tests/test_eval_artifact_trends.py::test_artifact_trends_kee
 
 如果失败，补最小实现；最终预期：`1 passed`。
 
-- [ ] **步骤 7：运行任务 1 定向回归**
+- [x] **步骤 7：运行任务 1 定向回归**
 
 运行：
 
@@ -347,7 +347,7 @@ python -B -m pytest tests/test_eval_artifact_trends.py -q -p no:cacheprovider
 
 预期：本文件全部通过。
 
-- [ ] **步骤 8：提交任务 1**
+- [x] **步骤 8：提交任务 1**
 
 运行：
 
@@ -363,7 +363,7 @@ git commit -m "feat(评测): 聚合周期趋势报表"
 - 修改：`tests/test_eval_artifact_trends.py`
 - 修改：`evals/artifact_trends.py`
 
-- [ ] **步骤 1：编写失败测试**
+- [x] **步骤 1：编写失败测试**
 
 在 `tests/test_eval_artifact_trends.py` 新增：
 
@@ -403,7 +403,7 @@ def test_artifact_trends_cli_writes_report(tmp_path):
     assert payload["regressions"] == []
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -413,7 +413,7 @@ python -B -m pytest tests/test_eval_artifact_trends.py::test_artifact_trends_cli
 
 预期：失败，原因是 `main()` 尚未实现或 CLI 未写文件。
 
-- [ ] **步骤 3：实现 CLI**
+- [x] **步骤 3：实现 CLI**
 
 在 `evals/artifact_trends.py` 中补：
 
@@ -432,7 +432,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **步骤 4：运行 CLI 测试验证绿灯**
+- [x] **步骤 4：运行 CLI 测试验证绿灯**
 
 运行：
 
@@ -442,7 +442,7 @@ python -B -m pytest tests/test_eval_artifact_trends.py::test_artifact_trends_cli
 
 预期：`1 passed`。
 
-- [ ] **步骤 5：运行真实 CLI smoke**
+- [x] **步骤 5：运行真实 CLI smoke**
 
 运行：
 
@@ -452,7 +452,7 @@ python -B -m evals.artifact_trends --out tmp/artifact_trends_latest.json
 
 预期：退出码 0，输出 `artifact_trends=tmp/artifact_trends_latest.json`。
 
-- [ ] **步骤 6：运行任务 2 相邻回归**
+- [x] **步骤 6：运行任务 2 相邻回归**
 
 运行：
 
@@ -462,7 +462,7 @@ python -B -m pytest tests/test_eval_artifact_trends.py tests/test_eval_baseline.
 
 预期：全部通过。
 
-- [ ] **步骤 7：提交任务 2**
+- [x] **步骤 7：提交任务 2**
 
 运行：
 
@@ -480,7 +480,7 @@ git commit -m "feat(评测): 导出周期趋势报表"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/eval-artifact-trends.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 在 periodic manifest 说明附近新增“跨 artifact 周期趋势”：
 
@@ -499,9 +499,9 @@ python -B -m evals.artifact_trends \
 趋势报告输出 `series.runs`、`series.eval_suites`、`series.rag_benchmark`、`series.timing_signal_audit` 和 `regressions`。它只用于复盘，不改变 PR gate、周期 gate、baseline 或调参阈值。
 ````
 
-同时把文件末尾“下一步转向真实样本运营动作”改为“下一步可基于趋势报告做只读调参分析或补充更厚的 TimingSignal artifact”。
+同时把文件末尾旧口径改为“后续可基于趋势报告做只读调参分析，或补充更厚的 TimingSignal artifact”。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 将路线项 8 的“现状”标题从只写 P4-5H 改为包含真实样本运营 1-8。正文补一句：
 
@@ -509,7 +509,7 @@ python -B -m evals.artifact_trends \
 跨 artifact 周期趋势已基于 periodic manifest 落地，输出只读 `artifact_trends_latest.json`，用于观察 eval / RAG / TimingSignal 的跨 run 漂移，不自动调参。
 ```
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 新增或同步：
 
@@ -519,11 +519,11 @@ python -B -m evals.artifact_trends \
 
 该行应写成“真实样本运营 8 / 已完成 / 跨 artifact 周期趋势”，目标说明为“基于 periodic manifest 聚合 run、eval、RAG 和 TimingSignal 趋势，只读不调参”，提交列填入本阶段真实提交哈希。
 
-- [ ] **步骤 4：更新本计划**
+- [x] **步骤 4：更新本计划**
 
 把已完成任务勾选，补充实际验证命令和提交哈希。
 
-- [ ] **步骤 5：运行文档检查和定向回归**
+- [x] **步骤 5：运行文档检查和定向回归**
 
 运行：
 
@@ -534,7 +534,7 @@ python -B -m pytest tests/test_eval_artifact_trends.py tests/test_eval_baseline.
 
 预期：无空白错误，测试全部通过。
 
-- [ ] **步骤 6：运行最终全量回归**
+- [x] **步骤 6：运行最终全量回归**
 
 运行：
 
@@ -544,7 +544,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 
 预期：全部通过，允许既有 skipped 和 warnings。
 
-- [ ] **步骤 7：提交文档收口**
+- [x] **步骤 7：提交文档收口**
 
 运行：
 
@@ -553,11 +553,22 @@ git add docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/eval-ar
 git commit -m "docs(计划): 收口周期趋势报表"
 ```
 
-## 验证记录维护
+## 验证记录
 
 - 设计文档提交前验证：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1412 passed, 6 skipped, 139 warnings in 104.38s`。
-
-执行阶段每完成一个任务，都在文档收口前追加对应命令、退出码和 pytest 汇总。红灯记录必须说明失败原因，绿灯记录必须包含通过数量。
+- 计划文档提交前验证：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1412 passed, 6 skipped, 139 warnings in 107.94s`。
+- 任务 1 红灯：`python -B -m pytest tests/test_eval_artifact_trends.py -q -p no:cacheprovider`，结果 `3 failed, 1 warning in 5.78s`，失败点为 `ModuleNotFoundError: No module named 'evals.artifact_trends'`。
+- 任务 1 绿灯：同一新增测试文件结果 `3 passed, 1 warning in 0.65s`。
+- 任务 1 相邻回归：`python -B -m pytest tests/test_eval_artifact_trends.py tests/test_eval_baseline.py tests/test_timing_signal_audit_periodic.py -q -p no:cacheprovider`，结果 `28 passed, 1 warning in 2.07s`。
+- 任务 1 全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1415 passed, 6 skipped, 139 warnings in 106.08s`。
+- 任务 2 红灯：`python -B -m pytest tests/test_eval_artifact_trends.py::test_artifact_trends_cli_writes_report -q -p no:cacheprovider`，结果 `1 failed, 1 warning in 6.00s`，失败点为 `AttributeError: module 'evals.artifact_trends' has no attribute 'main'`。
+- 任务 2 绿灯：同一 CLI 测试结果 `1 passed, 1 warning in 0.68s`；新增测试文件整体结果 `4 passed, 1 warning in 0.68s`。
+- CLI smoke：`python -B -m evals.artifact_trends --out tmp/artifact_trends_latest.json` 退出码 0，输出 `artifact_trends=tmp/artifact_trends_latest.json`；临时报告已在提交前清理。
+- 任务 2 相邻回归：`python -B -m pytest tests/test_eval_artifact_trends.py tests/test_eval_baseline.py tests/test_timing_signal_audit_periodic.py -q -p no:cacheprovider`，结果 `29 passed, 1 warning in 2.06s`。
+- 任务 2 全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1416 passed, 6 skipped, 139 warnings in 107.26s`。
+- 文档收口检查：`git diff --check -- docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/eval-artifact-trends.md` 无输出；旧下一步口径扫描无命中。
+- 文档收口相邻回归：`python -B -m pytest tests/test_eval_artifact_trends.py tests/test_eval_baseline.py tests/test_timing_signal_audit_periodic.py -q -p no:cacheprovider`，结果 `29 passed, 1 warning in 1.93s`。
+- 文档收口全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1416 passed, 6 skipped, 139 warnings in 110.24s`。
 
 ## 执行边界
 
