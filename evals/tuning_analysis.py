@@ -1,6 +1,8 @@
 """周期趋势只读调参分析工具。"""
 from __future__ import annotations
 
+import argparse
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -225,6 +227,67 @@ def _regression_refs(trends: dict[str, Any]) -> list[dict[str, Any]]:
             ref["source"] = "artifact_trends"
             refs.append(ref)
     return refs
+
+
+def load_json_object(path: str | Path) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"JSON object expected: {path}")
+    return payload
+
+
+def resolve_timing_audit_path(
+    manifest: dict[str, Any] | None,
+    explicit_path: str | Path | None,
+) -> Path | None:
+    if explicit_path:
+        path = Path(explicit_path)
+        if path.exists():
+            return path
+    if not isinstance(manifest, dict):
+        return None
+    steps = manifest.get("steps")
+    if not isinstance(steps, list):
+        return None
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("kind") or "") != "timing_signal_audit":
+            continue
+        paths = step.get("report_paths")
+        if not isinstance(paths, list):
+            continue
+        for item in paths:
+            path = Path(str(item))
+            if path.exists() and path.suffix.lower() == ".json":
+                return path
+    return None
+
+
+def write_tuning_analysis(payload: dict[str, Any], out_path: str | Path) -> Path:
+    path = Path(out_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _empty_trends() -> dict[str, Any]:
+    return {
+        "trend_version": None,
+        "source": {},
+        "summary": {},
+        "series": {},
+        "regressions": [],
+    }
+
+
+def _load_optional(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    src = Path(path)
+    if not src.exists():
+        return None
+    return load_json_object(src)
 
 
 def build_tuning_analysis(
@@ -488,3 +551,36 @@ def build_tuning_analysis(
         "recommendations": recommendations,
         "regression_refs": _regression_refs(trends),
     }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--trends", default=str(DEFAULT_TRENDS))
+    parser.add_argument("--timing-audit", default=str(DEFAULT_TIMING_AUDIT))
+    parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
+    parser.add_argument("--out", default=str(DEFAULT_OUT))
+    args = parser.parse_args(argv)
+
+    trends_path = Path(args.trends)
+    trends = load_json_object(trends_path) if trends_path.exists() else _empty_trends()
+    manifest_path = Path(args.manifest)
+    manifest = _load_optional(manifest_path)
+    timing_path = resolve_timing_audit_path(manifest, args.timing_audit)
+    timing_audit = load_json_object(timing_path) if timing_path is not None else None
+    payload = build_tuning_analysis(
+        trends,
+        timing_audit=timing_audit,
+        manifest=manifest,
+        source_paths={
+            "trends": str(trends_path),
+            "timing_audit": str(timing_path) if timing_path is not None else "",
+            "manifest": str(manifest_path) if manifest_path.exists() else "",
+        },
+    )
+    path = write_tuning_analysis(payload, args.out)
+    print(f"tuning_analysis={path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,3 +1,6 @@
+import json
+
+
 def _trends(
     *,
     trend_version: int = 1,
@@ -251,3 +254,56 @@ def test_tuning_analysis_emits_no_change_when_ready_and_stable():
         "evidence": {"run_count": 3},
     }]
     assert report["summary"]["no_change_count"] == 1
+
+
+def test_resolve_timing_audit_path_prefers_explicit_then_manifest(tmp_path):
+    from evals.tuning_analysis import resolve_timing_audit_path
+
+    explicit = tmp_path / "explicit.json"
+    explicit.write_text("{}", encoding="utf-8")
+    manifest_report = tmp_path / "manifest-audit.json"
+    manifest_report.write_text("{}", encoding="utf-8")
+    manifest = {
+        "steps": [{
+            "kind": "timing_signal_audit",
+            "suite": "timing_signal_audit",
+            "report_paths": [str(manifest_report)],
+        }]
+    }
+
+    assert resolve_timing_audit_path(manifest, explicit) == explicit
+    assert resolve_timing_audit_path(manifest, None) == manifest_report
+    assert resolve_timing_audit_path({"steps": []}, None) is None
+
+
+def test_tuning_analysis_cli_writes_report(tmp_path, capsys):
+    from evals import tuning_analysis
+
+    trends_path = tmp_path / "artifact_trends_latest.json"
+    audit_path = tmp_path / "timing_signal_audit_latest.json"
+    manifest_path = tmp_path / "periodic_manifest_latest.json"
+    out_path = tmp_path / "tuning_analysis_latest.json"
+    trends_path.write_text(json.dumps(_trends(), ensure_ascii=False), encoding="utf-8")
+    audit_path.write_text(json.dumps(_audit(), ensure_ascii=False), encoding="utf-8")
+    manifest_path.write_text(json.dumps({"steps": []}, ensure_ascii=False), encoding="utf-8")
+
+    exit_code = tuning_analysis.main([
+        "--trends",
+        str(trends_path),
+        "--timing-audit",
+        str(audit_path),
+        "--manifest",
+        str(manifest_path),
+        "--out",
+        str(out_path),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert captured.out.strip() == f"tuning_analysis={out_path}"
+    assert payload["analysis_version"] == 1
+    assert payload["source"]["trends_path"] == str(trends_path)
+    assert payload["source"]["timing_audit_path"] == str(audit_path)
+    assert payload["source"]["manifest_path"] == str(manifest_path)
+    assert payload["readiness"]["ready"] is True
