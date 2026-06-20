@@ -721,6 +721,18 @@ function TimingEventDetail({ event, onUseAsTest }) {
                 <div className="text-slate-500">band</div>
                 <div className="font-mono text-slate-200">{scoreValue(scoring.low_threshold)} / {scoreValue(scoring.high_threshold)}</div>
               </div>
+              <div className="rounded border border-slate-800 bg-slate-900 px-2 py-1.5">
+                <div className="text-slate-500">conflict</div>
+                <div className="font-mono text-slate-200">{scoreValue(scoring.conflict_score)}</div>
+              </div>
+              <div className="rounded border border-slate-800 bg-slate-900 px-2 py-1.5">
+                <div className="text-slate-500">soft_cap</div>
+                <div className="font-mono text-slate-200">{scoreValue(scoring.soft_reject_cap)}</div>
+              </div>
+              <div className="rounded border border-slate-800 bg-slate-900 px-2 py-1.5">
+                <div className="text-slate-500">delay</div>
+                <div className="font-mono text-slate-200">{scoreValue(scoring.delay_seconds)}</div>
+              </div>
             </div>
             <div>
               <div className="mb-1 text-xs text-slate-500">信号分解</div>
@@ -732,8 +744,12 @@ function TimingEventDetail({ event, onUseAsTest }) {
                 <div>s: <span className="font-mono text-slate-200">{scoreValue(signals.suppress_score)}</span></div>
                 <div>s_ack: <span className="font-mono text-slate-200">{scoreValue(subSignals.s_ack)}</span></div>
                 <div>s_transport: <span className="font-mono text-slate-200">{scoreValue(subSignals.s_transport)}</span></div>
+                <div>s_transport_tier: <span className="font-mono text-slate-200">{subSignals.s_transport_tier || '-'}</span></div>
                 <div>s_other: <span className="font-mono text-slate-200">{scoreValue(subSignals.s_other)}</span></div>
                 <div>s_bot: <span className="font-mono text-slate-200">{scoreValue(subSignals.s_bot)}</span></div>
+                <div>w_marker: <span className="font-mono text-slate-200">{scoreValue(subSignals.w_marker)}</span></div>
+                <div>w_file: <span className="font-mono text-slate-200">{scoreValue(subSignals.w_file)}</span></div>
+                <div>w_incomplete: <span className="font-mono text-slate-200">{scoreValue(subSignals.w_incomplete)}</span></div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-400">

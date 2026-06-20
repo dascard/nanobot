@@ -50,6 +50,13 @@ def test_timing_gate_detail_exposes_scoring_breakdown():
     assert "final_score" in source
     assert "s_ack" in source
     assert "s_transport" in source
+    assert "s_transport_tier" in source
+    assert "w_marker" in source
+    assert "w_file" in source
+    assert "w_incomplete" in source
+    assert "conflict_score" in source
+    assert "soft_reject_cap" in source
+    assert "scoring.delay_seconds" in source
     assert "model_weight" in source
 
 
