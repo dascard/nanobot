@@ -65,6 +65,17 @@ Artifact 名称为 `eval-reports-${{ github.run_id }}`，保留 14 天，包含�
 - `tmp/rag_benchmark/reports/*.json`
 - `tmp/rag_benchmark/reports/*.md`
 
+周期性入口还会运行 TimingGate signal audit：
+
+```bash
+bash scripts/run_timing_signal_audit_periodic.sh
+```
+
+默认读取 `data/nanobot.db`，可通过 `TIMING_SIGNAL_AUDIT_DB` 指向真实 SQLite DB。
+默认报告路径是 `evals/reports/timing_signal_audit_latest.json`，会被现有
+`evals/reports/*.json` artifact 规则归档。CI 或本地缺少真实 DB 时，脚本会写出
+`source.mode=skipped`、`source.reason=db_not_found` 的空报告并退出 0；这只表示本轮没有可审计真实库，不表示信号质量通过。
+
 排查失败时，先看 workflow 失败步骤，再下载 artifact。通用 suite 优先看 `evals/reports/YYYY-MM-DD-<suite>.json`，不要只看 `latest.json`；RAG benchmark 优先看 `tmp/rag_benchmark/reports/latest.md` 和对应 run-id JSON。
 
 ## Baseline 更新规则

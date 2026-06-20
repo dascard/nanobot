@@ -71,4 +71,7 @@ run_step "rag benchmark manual fixture deterministic gate" \
     --max-degraded-rate 0.0 \
     --max-unexpected-source-rate 0.0
 
+run_step "timing signal audit" \
+  bash scripts/run_timing_signal_audit_periodic.sh
+
 exit "$status"
