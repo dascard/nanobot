@@ -3,6 +3,36 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api'
 import { Badge, Card, JsonBlock, MiniStat, Modal, Pagination } from '../../components/ui'
 
+const TRIAGE_REASON_OPTIONS = {
+  reject: [
+    ['low_value', 'low_value'],
+    ['duplicate', 'duplicate'],
+    ['unsafe_or_sensitive', 'unsafe_or_sensitive'],
+    ['not_reproducible', 'not_reproducible'],
+    ['out_of_scope', 'out_of_scope'],
+    ['bad_sample', 'bad_sample'],
+  ],
+  defer: [
+    ['needs_more_context', 'needs_more_context'],
+    ['needs_batch_review', 'needs_batch_review'],
+    ['waiting_for_baseline', 'waiting_for_baseline'],
+    ['needs_product_decision', 'needs_product_decision'],
+    ['temporary_blocker', 'temporary_blocker'],
+  ],
+  reopen: [
+    ['new_evidence', 'new_evidence'],
+    ['operator_correction', 'operator_correction'],
+    ['defer_expired', 'defer_expired'],
+    ['needs_relabel', 'needs_relabel'],
+  ],
+}
+
+const TRIAGE_ACTION_ENDPOINTS = {
+  reject: '/reject',
+  defer: '/defer',
+  reopen: '/reopen',
+}
+
 // ── Eval ──
 export function EvalsPage() {
   const [tab, setTab] = useState('candidates')
@@ -30,6 +60,13 @@ export function EvalsPage() {
   const [promotePlan, setPromotePlan] = useState(null)
   const [promoteError, setPromoteError] = useState('')
   const [promoteBusy, setPromoteBusy] = useState(false)
+  const [triageAction, setTriageAction] = useState(null)
+  const [triageCandidate, setTriageCandidate] = useState(null)
+  const [triageReason, setTriageReason] = useState('')
+  const [triageNote, setTriageNote] = useState('')
+  const [triageDeferUntil, setTriageDeferUntil] = useState('')
+  const [triageError, setTriageError] = useState('')
+  const [triageBusy, setTriageBusy] = useState(false)
   const [runs, setRuns] = useState([])
   const [runDetail, setRunDetail] = useState(null)
   const [running, setRunning] = useState(false)
@@ -209,6 +246,33 @@ export function EvalsPage() {
       .catch(e => alert(e.response?.data?.detail || e.message))
   }
 
+  const openTriage = (candidate, action) => {
+    setTriageCandidate(candidate)
+    setTriageAction(action)
+    setTriageReason(TRIAGE_REASON_OPTIONS[action]?.[0]?.[0] || 'unspecified')
+    setTriageNote('')
+    setTriageDeferUntil('')
+    setTriageError('')
+  }
+
+  const submitTriage = () => {
+    if (!triageCandidate || !triageAction) return
+    setTriageBusy(true)
+    setTriageError('')
+    api.post(`/evals/candidates/${encodeURIComponent(triageCandidate.case_id)}${TRIAGE_ACTION_ENDPOINTS[triageAction] || ''}`, {
+      reason_code: triageReason,
+      note: triageNote,
+      defer_until: triageAction === 'defer' ? triageDeferUntil : '',
+    }).then(() => {
+      const caseId = triageCandidate.case_id
+      setTriageAction(null)
+      setTriageCandidate(null)
+      loadCandidates()
+      if (detail?.case_id === caseId) loadDetail(caseId)
+    }).catch(e => setTriageError(e.response?.data?.detail || e.message))
+      .finally(() => setTriageBusy(false))
+  }
+
   const openPromote = (candidate) => {
     setPromoteCaseId(candidate.case_id)
     setPromoteTargetDataset(candidate.suite || 'regression')
@@ -288,6 +352,8 @@ export function EvalsPage() {
               <option value="candidate">candidate</option>
               <option value="labeled">labeled</option>
               <option value="ignored">ignored</option>
+              <option value="deferred">deferred</option>
+              <option value="rejected">rejected</option>
               <option value="promoted">promoted</option>
             </select>
             <select value={sourceFilter} onChange={e => { setSourceFilter(e.target.value); setCandPage(1) }}
@@ -331,7 +397,7 @@ export function EvalsPage() {
                     <td className="px-3 py-2"><Badge>{candidate.suite}</Badge></td>
                     <td className="px-3 py-2 text-slate-400">{candidate.source}</td>
                     <td className="px-3 py-2">
-                      <Badge tone={candidate.status === 'promoted' ? 'emerald' : candidate.status === 'labeled' ? 'blue' : candidate.status === 'ignored' ? 'slate' : 'amber'}>{candidate.status}</Badge>
+                      <Badge tone={candidate.status === 'promoted' ? 'emerald' : candidate.status === 'labeled' ? 'blue' : candidate.status === 'rejected' ? 'red' : candidate.status === 'deferred' ? 'amber' : candidate.status === 'ignored' ? 'slate' : 'amber'}>{candidate.status}</Badge>
                     </td>
                     <td className="px-3 py-2">
                       <div className="flex max-w-[180px] flex-col gap-1">
@@ -357,11 +423,23 @@ export function EvalsPage() {
                             <button onClick={() => doIgnore(candidate.case_id)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">忽略</button>
                           </>
                         )}
+                        {['candidate', 'labeled'].includes(candidate.status) && (
+                          <>
+                            <button onClick={() => openTriage(candidate, 'defer')}
+                              className="px-2 py-1 bg-amber-700/40 hover:bg-amber-700 text-amber-200 rounded text-xs">暂缓</button>
+                            <button onClick={() => openTriage(candidate, 'reject')}
+                              className="px-2 py-1 bg-red-700/40 hover:bg-red-700 text-red-200 rounded text-xs">拒绝</button>
+                          </>
+                        )}
                         {candidate.status === 'labeled' && (
                           <button onClick={() => openPromote(candidate)}
                             disabled={candidate.status === 'labeled' && !candidate.readiness?.ready}
                             title={readinessReason(candidate)}
                             className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 text-emerald-300 rounded text-xs">提升</button>
+                        )}
+                        {['ignored', 'deferred', 'rejected'].includes(candidate.status) && (
+                          <button onClick={() => openTriage(candidate, 'reopen')}
+                            className="px-2 py-1 bg-sky-700/40 hover:bg-sky-700 text-sky-200 rounded text-xs">复开</button>
                         )}
                       </div>
                     </td>
@@ -569,6 +647,55 @@ export function EvalsPage() {
                     className="px-4 py-2 bg-indigo-700/70 hover:bg-indigo-700 disabled:opacity-50 rounded-xl text-sm">生成计划</button>
                   <button onClick={confirmPromote} disabled={promoteBusy || !promotePlan}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium">确认提升</button>
+                </div>
+              </div>
+            </Modal>
+          )}
+
+          {/* Triage modal */}
+          {triageAction && triageCandidate && (
+            <Modal onClose={() => setTriageAction(null)}>
+              <div className="p-6">
+                <h2 className="mb-2 text-lg font-bold">
+                  {triageAction === 'defer' ? '暂缓候选' : triageAction === 'reject' ? '拒绝候选' : '复开候选'}
+                </h2>
+                <p className="mb-4 text-xs text-slate-500">{triageCandidate.case_id}</p>
+                {triageError && (
+                  <div className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                    {triageError}
+                  </div>
+                )}
+                <div className="space-y-3">
+                  <label className="block text-xs">
+                    <span className="mb-1 block text-slate-400">reason_code</span>
+                    <select value={triageReason} onChange={e => setTriageReason(e.target.value)}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm">
+                      {(TRIAGE_REASON_OPTIONS[triageAction] || []).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {triageAction === 'defer' && (
+                    <label className="block text-xs">
+                      <span className="mb-1 block text-slate-400">defer_until</span>
+                      <input value={triageDeferUntil} onChange={e => setTriageDeferUntil(e.target.value)}
+                        placeholder="2026-06-30"
+                        className="w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm" />
+                    </label>
+                  )}
+                  <label className="block text-xs">
+                    <span className="mb-1 block text-slate-400">备注</span>
+                    <textarea value={triageNote} onChange={e => setTriageNote(e.target.value)}
+                      rows={4}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm" />
+                  </label>
+                </div>
+                <div className="mt-5 flex justify-end gap-2">
+                  <button onClick={() => setTriageAction(null)} className="rounded-xl bg-slate-700 px-4 py-2 text-sm hover:bg-slate-600">取消</button>
+                  <button onClick={submitTriage} disabled={triageBusy}
+                    className="rounded-xl bg-indigo-700 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-600 disabled:opacity-50">
+                    {triageBusy ? '提交中...' : '确认'}
+                  </button>
                 </div>
               </div>
             </Modal>

@@ -119,6 +119,21 @@ def test_evals_candidates_page_shows_summary_readiness_and_preflight():
     assert "提升" in source
 
 
+def test_evals_candidates_page_exposes_triage_actions():
+    source = EVALS_JS.read_text(encoding="utf-8")
+
+    assert '<option value="deferred">deferred</option>' in source
+    assert '<option value="rejected">rejected</option>' in source
+    assert "/reject" in source
+    assert "/defer" in source
+    assert "/reopen" in source
+    assert "reason_code" in source
+    assert "defer_until" in source
+    assert "暂缓" in source
+    assert "拒绝" in source
+    assert "复开" in source
+
+
 def test_sticker_duplicate_actions_do_not_use_emoji_buttons():
     source = read_app()
 

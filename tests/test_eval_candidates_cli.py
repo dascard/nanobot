@@ -28,6 +28,24 @@ def test_export_candidates_writes_jsonl(db_session, tmp_path):
     assert row["expected"] == {"needs_label": True}
 
 
+def test_export_candidates_supports_deferred_and_rejected_statuses(db_session, tmp_path):
+    from core.eval_sampling.store import defer_candidate, reject_candidate
+    from evals.candidates import export_candidates
+
+    _insert_candidate(db_session, case_id="cand_deferred")
+    defer_candidate(db_session, "cand_deferred", reason_code="needs_more_context")
+    _insert_candidate(db_session, case_id="cand_rejected")
+    reject_candidate(db_session, "cand_rejected", reason_code="low_value")
+
+    deferred_path = tmp_path / "deferred.jsonl"
+    rejected_path = tmp_path / "rejected.jsonl"
+
+    assert export_candidates(db_session, deferred_path, status="deferred") == 1
+    assert export_candidates(db_session, rejected_path, status="rejected") == 1
+    assert json.loads(deferred_path.read_text(encoding="utf-8"))["status"] == "deferred"
+    assert json.loads(rejected_path.read_text(encoding="utf-8"))["status"] == "rejected"
+
+
 def test_import_labels_updates_expected_and_note(db_session, tmp_path):
     from core.eval_sampling.store import get_candidate
     from evals.candidates import import_labels
