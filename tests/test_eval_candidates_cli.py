@@ -215,6 +215,37 @@ def test_candidates_cli_audit_writes_read_only_batch_report(db_session, tmp_path
     assert get_candidate(db_session, "cand_cli_audit").status == "labeled"
 
 
+def test_candidates_cli_trend_writes_read_only_report(db_session, tmp_path, monkeypatch, capsys):
+    from core.database import AdminAuditLog
+    from core.eval_sampling.store import get_candidate
+    from evals import candidates
+
+    _insert_candidate(db_session, case_id="cand_cli_trend")
+    monkeypatch.setattr(candidates, "_open_db", lambda: _SessionWrapper(db_session))
+
+    out = tmp_path / "candidate-trend.json"
+    exit_code = candidates.main([
+        "trend",
+        "--days",
+        "30",
+        "--suite",
+        "timing_gate",
+        "--source",
+        "db",
+        "--out",
+        str(out),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert payload["summary"]["total"] == 1
+    assert payload["summary"]["readiness"]["blocked"] == 1
+    assert "ready=" in capsys.readouterr().out
+    assert db_session.query(AdminAuditLog).count() == 0
+    assert get_candidate(db_session, "cand_cli_trend").status == "candidate"
+
+
 def test_candidates_cli_main_exports_candidates(db_session, tmp_path, monkeypatch, capsys):
     from evals import candidates
 

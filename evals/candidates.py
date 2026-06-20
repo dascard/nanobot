@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from core.eval_sampling.store import (
+    candidate_trend_report,
     label_candidate,
     list_candidates,
     plan_candidate_batch_audit,
@@ -131,6 +132,25 @@ def audit_candidates(
     )
 
 
+def trend_candidates(
+    db,
+    *,
+    days: int = 30,
+    suite: str = "",
+    status: str = "",
+    source: str = "",
+    target_dataset: str = "",
+) -> dict[str, Any]:
+    return candidate_trend_report(
+        db,
+        days=days,
+        suite=suite,
+        status=status,
+        source=source,
+        target_dataset=target_dataset,
+    )
+
+
 def _open_db():
     from core.database import SessionLocal
 
@@ -162,6 +182,14 @@ def main(argv: list[str] | None = None) -> int:
     audit_p.add_argument("--target-dataset", default="")
     audit_p.add_argument("--limit", type=int, default=200)
     audit_p.add_argument("--out", default="")
+
+    trend_p = sub.add_parser("trend")
+    trend_p.add_argument("--days", type=int, default=30)
+    trend_p.add_argument("--suite", default="")
+    trend_p.add_argument("--status", default="")
+    trend_p.add_argument("--source", default="")
+    trend_p.add_argument("--target-dataset", default="")
+    trend_p.add_argument("--out", default="")
 
     args = parser.parse_args(argv)
     db = _open_db()
@@ -199,6 +227,30 @@ def main(argv: list[str] | None = None) -> int:
                 out.write_text(text + "\n", encoding="utf-8")
             else:
                 print(text)
+            return 0
+        if args.command == "trend":
+            result = trend_candidates(
+                db,
+                days=args.days,
+                suite=args.suite,
+                status=args.status,
+                source=args.source,
+                target_dataset=args.target_dataset,
+            )
+            text = json.dumps(result, ensure_ascii=False, indent=2)
+            if args.out:
+                out = Path(args.out)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(text + "\n", encoding="utf-8")
+            else:
+                print(text)
+            readiness = result["summary"]["readiness"]
+            print(
+                "trend: "
+                f"total={result['summary']['total']} "
+                f"ready={readiness.get('ready', 0)} "
+                f"blocked={readiness.get('blocked', 0)}"
+            )
             return 0
     finally:
         db.close()
