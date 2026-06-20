@@ -163,6 +163,50 @@ python -m evals.candidates promote --suite timing_gate --target-dataset timing_g
 
 `PATCH /api/v1/admin/evals/candidates/{case_id}` 不能直接把候选改为 `labeled` 或 `promoted`。标注必须走 `/label`，晋升必须走 `/promote`。
 
+### 候选仲裁状态
+
+通用 `EvalCandidate` 支持显式运营动作：
+
+- `reject`：人工确认不进入稳定样本，状态变为 `rejected`。
+- `defer`：暂缓处理，状态变为 `deferred`。
+- `reopen`：从 `ignored`、`deferred` 或 `rejected` 复开为 `candidate`。
+
+这些动作必须走专用端点：
+
+```http
+POST /api/v1/admin/evals/candidates/{case_id}/reject
+POST /api/v1/admin/evals/candidates/{case_id}/defer
+POST /api/v1/admin/evals/candidates/{case_id}/reopen
+```
+
+请求体使用 `reason_code`、`note` 和可选 `defer_until`：
+
+```json
+{
+  "reason_code": "needs_more_context",
+  "note": "缺少后续上下文，等待批次复核",
+  "defer_until": "2026-06-30"
+}
+```
+
+每次动作都会记录统一 Admin audit detail：
+
+- `before_status`：动作前状态。
+- `after_status`：动作后状态。
+- `reason_code`：固定原因码。
+- `note`：人工备注，后端最多保留 1000 字符。
+- `defer_until`：暂缓复核时间，仅 `defer` 使用。
+
+当前固定原因码：
+
+- Reject：`duplicate`、`low_value`、`unsafe_or_sensitive`、`not_reproducible`、`out_of_scope`、`bad_sample`。
+- Defer：`needs_more_context`、`needs_batch_review`、`waiting_for_baseline`、`needs_product_decision`、`temporary_blocker`。
+- Reopen：`new_evidence`、`operator_correction`、`defer_expired`、`needs_relabel`。
+
+`PATCH /api/v1/admin/evals/candidates/{case_id}` 仍不能直接写入 `deferred` 或 `rejected`。WebUI 候选页提供单条「暂缓」「拒绝」「复开」操作，不提供批量仲裁。
+
+RAG benchmark 的 generated / manual case 仍是独立体系，不并入通用 `EvalCandidate`。generated case 的单条提升继续使用 RAG Admin 的 `promote-manual` 接口；如需记录 RAG generated 的 reject / defer，后续应设计 sidecar 或批次审计。
+
 ## Admin WebUI 标注工作台
 
 P4-2 已将 Admin 标注工作台拆为后端契约和 WebUI 两个阶段，设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`，实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。P4-2A 后端契约 schema/API 已完成；P4-2B WebUI 工作台已接入契约化标注和 promote 预检流程，并通过本轮定向验证、WebUI build 和全量回归。

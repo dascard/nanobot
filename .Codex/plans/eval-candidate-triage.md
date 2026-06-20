@@ -1,6 +1,6 @@
 # EvalCandidate 候选仲裁状态实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:test-driven-development 执行实现步骤，并在提交前使用 superpowers:verification-before-completion 和 superpowers:chinese-commit-conventions。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:test-driven-development 执行实现步骤，并在提交前使用 superpowers:verification-before-completion 和 superpowers:chinese-commit-conventions。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
 **目标：** 为通用 `EvalCandidate` 候选队列增加 `reject / defer / reopen` 运营状态和统一审计，让真实样本可以被明确拒绝、暂缓和复开。
 
@@ -14,10 +14,22 @@
 
 - [x] 设计阶段：写入 `docs/superpowers/specs/2026-06-20-eval-candidate-triage-design.md`。
 - [x] 设计提交：`d53ba55 docs(评测): 设计候选仲裁状态`。
-- [ ] 计划阶段：写入 `.Codex/plans/eval-candidate-triage.md` 并提交。
-- [ ] 后端状态机与 Admin API：按 TDD 增加 `reject / defer / reopen`。
-- [ ] CLI 与 WebUI：按 TDD 增加新状态导出守卫和单条仲裁入口。
-- [ ] 文档收口：同步 `docs/evals.md`、`docs/plan_walkthrough.md` 和本计划验证记录。
+- [x] 计划阶段：写入 `.Codex/plans/eval-candidate-triage.md` 并提交。提交：`343ccef docs(计划): 记录候选仲裁计划`。
+- [x] 后端状态机与 Admin API：按 TDD 增加 `reject / defer / reopen`。提交：`7859ac8 feat(评测): 增加候选仲裁状态`。
+- [x] CLI 与 WebUI：按 TDD 增加新状态导出守卫和单条仲裁入口。提交：`cf9bddc feat(评测): 增加候选仲裁入口`。
+- [x] 文档收口：同步 `docs/evals.md`、`docs/plan_walkthrough.md`、`docs/todo.md` 和本计划验证记录。
+
+## 验证记录
+
+- 后端红灯：`python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_triage_transitions_return_audit_payload tests/test_eval_candidate_contract.py::test_candidate_triage_rejects_invalid_transitions_and_reason_codes tests/test_eval_candidate_contract.py::test_eval_candidate_triage_endpoints_write_audit_detail -q -p no:cacheprovider` 结果 `3 failed, 21 warnings in 6.45s`，失败点为缺少 store triage 函数和 API 返回 `405 Method Not Allowed`。
+- 后端定向绿灯：同一命令结果 `3 passed, 21 warnings in 1.29s`。
+- 后端相邻回归：`python -B -m pytest tests/test_eval_candidate_contract.py -q -p no:cacheprovider` 结果 `29 passed, 21 warnings in 3.92s`。
+- CLI / WebUI 红灯：`python -B -m pytest tests/test_eval_candidates_cli.py::test_export_candidates_supports_deferred_and_rejected_statuses tests/test_webui_admin_redesign.py::test_evals_candidates_page_exposes_triage_actions -q -p no:cacheprovider` 结果 `1 failed, 1 passed, 1 warning in 6.23s`，失败点为 WebUI 缺少 `deferred` / `rejected` 和仲裁入口。
+- CLI / WebUI 定向绿灯：同一命令结果 `2 passed, 1 warning in 0.94s`。
+- CLI / WebUI 相邻回归：`python -B -m pytest tests/test_eval_candidates_cli.py tests/test_webui_admin_redesign.py -q -p no:cacheprovider` 结果 `27 passed, 1 warning in 1.75s`。
+- WebUI build：`npm --prefix webui run build` 退出码 0，仅有现有 Vite chunk size 和 plugin timing warning。
+- 最终组合回归：`python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py tests/test_webui_admin_redesign.py -q -p no:cacheprovider` 结果 `56 passed, 21 warnings in 5.89s`。
+- 最终全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider` 结果 `1399 passed, 6 skipped, 139 warnings in 106.06s`。
 
 ## 文件结构
 
@@ -142,7 +154,7 @@ REOPEN_REASON_CODES = frozenset({
 
 - 修改：`tests/test_eval_candidate_contract.py`
 
-- [ ] **步骤 1：新增 store 状态转换测试**
+- [x] **步骤 1：新增 store 状态转换测试**
 
 在 `test_eval_patch_candidate_rejects_direct_labeled_promoted_and_unknown_status` 后新增：
 
@@ -201,7 +213,7 @@ def test_candidate_triage_transitions_return_audit_payload(db_session):
     assert reopened["audit"]["reason_code"] == "defer_expired"
 ```
 
-- [ ] **步骤 2：新增非法转换测试**
+- [x] **步骤 2：新增非法转换测试**
 
 在同一区域新增：
 
@@ -244,7 +256,7 @@ def test_candidate_triage_rejects_invalid_transitions_and_reason_codes(
         label_candidate(db_session, "cand_rejected", {"timing_action": "continue"})
 ```
 
-- [ ] **步骤 3：运行红灯**
+- [x] **步骤 3：运行红灯**
 
 运行：
 
@@ -260,7 +272,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_triage
 
 - 修改：`core/eval_sampling/store.py`
 
-- [ ] **步骤 1：新增状态和原因码常量**
+- [x] **步骤 1：新增状态和原因码常量**
 
 在 `RUNNABLE_EVAL_SUITES` 后新增：
 
@@ -337,7 +349,7 @@ REOPEN_REASON_CODES = frozenset({
 })
 ```
 
-- [ ] **步骤 2：新增归一化 helper**
+- [x] **步骤 2：新增归一化 helper**
 
 在 `_readiness_reason()` 后新增：
 
@@ -377,7 +389,7 @@ def _triage_payload(
     }
 ```
 
-- [ ] **步骤 3：收紧现有状态转换**
+- [x] **步骤 3：收紧现有状态转换**
 
 把 `update_candidate()` 中的状态集合替换为 `PATCHABLE_CANDIDATE_STATUSES`，保持 PATCH 只能做旧的轻量 `candidate/ignored` 转换。
 
@@ -395,7 +407,7 @@ if row.status not in IGNORABLE_CANDIDATE_STATUSES:
     raise ValueError(f"invalid status transition: {row.status} -> ignored")
 ```
 
-- [ ] **步骤 4：新增 triage 函数**
+- [x] **步骤 4：新增 triage 函数**
 
 在 `ignore_candidate()` 后新增：
 
@@ -490,7 +502,7 @@ def reopen_candidate(
     )
 ```
 
-- [ ] **步骤 5：运行后端状态机绿灯**
+- [x] **步骤 5：运行后端状态机绿灯**
 
 运行：
 
@@ -507,7 +519,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_triage
 - 修改：`tests/test_eval_candidate_contract.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：新增 API 审计红灯测试**
+- [x] **步骤 1：新增 API 审计红灯测试**
 
 在 `test_eval_candidates_preflight_returns_ready_and_blocked_items` 前新增：
 
@@ -566,7 +578,7 @@ def test_eval_candidate_triage_endpoints_write_audit_detail(
     assert reopened.json()["status"] == "candidate"
 ```
 
-- [ ] **步骤 2：运行 API 红灯**
+- [x] **步骤 2：运行 API 红灯**
 
 运行：
 
@@ -576,7 +588,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py::test_eval_candidate_t
 
 预期：失败，接口返回 405 或 404。
 
-- [ ] **步骤 3：实现 API 端点**
+- [x] **步骤 3：实现 API 端点**
 
 在 `core.eval_sampling.store` import 列表加入：
 
@@ -629,7 +641,7 @@ def eval_reject_candidate(
 
 按同样结构实现 `eval_defer_candidate()` 和 `eval_reopen_candidate()`。`defer` 需要传入 `defer_until=body.defer_until`。
 
-- [ ] **步骤 4：运行 API 绿灯与后端相邻回归**
+- [x] **步骤 4：运行 API 绿灯与后端相邻回归**
 
 运行：
 
@@ -640,7 +652,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py -q -p no:cacheprovider
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit 后端阶段**
+- [x] **步骤 5：Commit 后端阶段**
 
 ```bash
 git add core/eval_sampling/store.py api/admin_routes.py tests/test_eval_candidate_contract.py
@@ -654,7 +666,7 @@ git commit -m "feat(评测): 增加候选仲裁状态"
 - 修改：`tests/test_eval_candidates_cli.py`
 - 修改：`tests/test_webui_admin_redesign.py`
 
-- [ ] **步骤 1：新增 CLI 新状态导出测试**
+- [x] **步骤 1：新增 CLI 新状态导出测试**
 
 在 `test_export_candidates_writes_jsonl` 后新增：
 
@@ -679,7 +691,7 @@ def test_export_candidates_supports_deferred_and_rejected_statuses(db_session, t
 
 这个测试依赖任务 2 的 store 函数，通常会直接通过；如果失败，修 CLI 导出路径。
 
-- [ ] **步骤 2：新增 WebUI 静态红灯测试**
+- [x] **步骤 2：新增 WebUI 静态红灯测试**
 
 在 `test_evals_candidates_page_shows_summary_readiness_and_preflight` 后新增：
 
@@ -699,7 +711,7 @@ def test_evals_candidates_page_exposes_triage_actions():
     assert "复开" in source
 ```
 
-- [ ] **步骤 3：运行红灯**
+- [x] **步骤 3：运行红灯**
 
 运行：
 
@@ -715,7 +727,7 @@ python -B -m pytest tests/test_eval_candidates_cli.py::test_export_candidates_su
 
 - 修改：`webui/src/features/evals/EvalsPage.jsx`
 
-- [ ] **步骤 1：新增状态和 helper**
+- [x] **步骤 1：新增状态和 helper**
 
 在组件顶部 state 区新增：
 
@@ -786,7 +798,7 @@ const TRIAGE_REASON_OPTIONS = {
   }
 ```
 
-- [ ] **步骤 2：扩展筛选与按钮**
+- [x] **步骤 2：扩展筛选与按钮**
 
 状态下拉增加：
 
@@ -818,7 +830,7 @@ candidate.status === 'deferred' ? 'amber' : candidate.status === 'rejected' ? 'r
 )}
 ```
 
-- [ ] **步骤 3：新增 modal**
+- [x] **步骤 3：新增 modal**
 
 在 promote modal 后新增：
 
@@ -873,7 +885,7 @@ candidate.status === 'deferred' ? 'amber' : candidate.status === 'rejected' ? 'r
 )}
 ```
 
-- [ ] **步骤 4：运行 WebUI 绿灯**
+- [x] **步骤 4：运行 WebUI 绿灯**
 
 运行：
 
@@ -885,7 +897,7 @@ npm --prefix webui run build
 
 预期：全部通过，build 退出码 0。
 
-- [ ] **步骤 5：Commit CLI / WebUI 阶段**
+- [x] **步骤 5：Commit CLI / WebUI 阶段**
 
 ```bash
 git add evals/candidates.py tests/test_eval_candidates_cli.py webui/src/features/evals/EvalsPage.jsx tests/test_webui_admin_redesign.py
@@ -902,7 +914,7 @@ git commit -m "feat(评测): 增加候选仲裁入口"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/eval-candidate-triage.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 在「候选 readiness 与批量预检」后新增一节「候选仲裁状态」，内容包括：
 
@@ -915,15 +927,15 @@ git commit -m "feat(评测): 增加候选仲裁入口"
 - `PATCH` 不能直接写入 `deferred` 或 `rejected`。
 - RAG benchmark 的 generated / manual case 仍是独立体系，不并入通用 `EvalCandidate`；generated case 的单条提升继续使用 RAG Admin 的 `promote-manual` 接口。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 在真实样本运营进度中新增「真实样本运营 4」行，状态为已完成或执行中，按实际提交号和验证结果记录。
 
-- [ ] **步骤 3：更新本计划执行记录和验证记录**
+- [x] **步骤 3：更新本计划执行记录和验证记录**
 
 勾选已完成任务，写入红灯、绿灯、build、全量回归结果。
 
-- [ ] **步骤 4：运行最终验证**
+- [x] **步骤 4：运行最终验证**
 
 运行：
 
@@ -935,7 +947,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 
 预期：全部通过；若全量失败，先定位是否与本阶段有关，不得提交收口文档。
 
-- [ ] **步骤 5：Commit 文档收口**
+- [x] **步骤 5：Commit 文档收口**
 
 ```bash
 git add docs/evals.md docs/plan_walkthrough.md .Codex/plans/eval-candidate-triage.md
@@ -944,11 +956,11 @@ git commit -m "docs(计划): 收口候选仲裁状态"
 
 ## 最终核对清单
 
-- [ ] `reject / defer / reopen` 只能走显式端点，不能通过 PATCH 绕过。
-- [ ] `promoted` 保持终态。
-- [ ] `label_candidate()` 不再允许从 `ignored/rejected/promoted` 直接打标。
-- [ ] Admin audit detail 包含 `before_status`、`after_status`、`reason_code`、`note`、`defer_until`。
-- [ ] WebUI 不做批量操作，不改 promote 和 preflight 的既有语义。
-- [ ] CLI 可以导出 `deferred` 和 `rejected` 状态候选。
-- [ ] RAG benchmark 边界在文档中保持独立。
-- [ ] 每个阶段都有独立 commit，且只暂存本阶段文件。
+- [x] `reject / defer / reopen` 只能走显式端点，不能通过 PATCH 绕过。
+- [x] `promoted` 保持终态。
+- [x] `label_candidate()` 不再允许从 `ignored/rejected/promoted` 直接打标。
+- [x] Admin audit detail 包含 `before_status`、`after_status`、`reason_code`、`note`、`defer_until`。
+- [x] WebUI 不做批量操作，不改 promote 和 preflight 的既有语义。
+- [x] CLI 可以导出 `deferred` 和 `rejected` 状态候选。
+- [x] RAG benchmark 边界在文档中保持独立。
+- [x] 每个阶段都有独立 commit，且只暂存本阶段文件。
