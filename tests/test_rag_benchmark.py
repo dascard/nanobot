@@ -59,6 +59,24 @@ def test_case_loader_merges_manual_and_generated(tmp_path):
     assert cases[1].meta["origin"] == "generated_exact"
 
 
+def test_rag_benchmark_fixture_db_supports_memory_positive_case(tmp_path):
+    from evals.rag_benchmark.fixtures import build_fixture_db
+    from evals.rag_benchmark.run import run_benchmark
+
+    fixture_db = tmp_path / "positive.db"
+
+    cases = build_fixture_db(fixture_db, preset="positive_v1")
+    results, scores = run_benchmark(fixture_db, cases, provider_mode="deterministic")
+
+    assert [case.id for case in cases] == ["memory_fixture_positive_001"]
+    assert results[0].case_id == "memory_fixture_positive_001"
+    assert results[0].candidate_ids[0] == "memory_digest:fixture-memory-positive-001:card:0"
+    assert scores[0].ok is True
+    assert scores[0].rank == 1
+    assert scores[0].hit_at["5"] is True
+    assert scores[0].mrr == 1.0
+
+
 def test_scorer_supports_positive_negative_and_constraint_only():
     from evals.rag_benchmark.schema import BenchmarkCandidate, BenchmarkCase, BenchmarkResult
     from evals.rag_benchmark.scoring import score_case
@@ -154,6 +172,36 @@ def test_aggregate_metrics_separates_exact_weak_and_manual():
     assert report["overall"]["total_cases"] == 2
     assert report["overall_exact"]["positive_cases"] == 1
     assert report["overall_manual"]["total_cases"] == 1
+
+
+def test_rag_aggregate_scores_tracks_fixture_origin():
+    from evals.rag_benchmark.schema import BenchmarkCase, CaseScore
+    from evals.rag_benchmark.scoring import aggregate_scores
+
+    case = BenchmarkCase(
+        id="memory_fixture_positive_001",
+        source_type="memory",
+        case_type="positive",
+        query="KohakuVQ 端口冲突",
+        expected={"candidate_ids": ["memory_digest:fixture-memory-positive-001:card:0"]},
+        meta={"origin": "fixture_exact"},
+    )
+    score = CaseScore(
+        case_id=case.id,
+        source_type="memory",
+        case_type="positive",
+        ok=True,
+        rank=1,
+        hit_at={"1": True, "3": True, "5": True},
+        mrr=1.0,
+    )
+
+    metrics = aggregate_scores([case], [score])
+
+    assert metrics["overall_fixture"]["total_cases"] == 1
+    assert metrics["overall_fixture"]["positive_cases"] == 1
+    assert metrics["overall_fixture"]["hit@5"] == 1.0
+    assert metrics["overall_fixture"]["mrr"] == 1.0
 
 
 def test_sampler_uses_readonly_db_and_filters_real_gates(tmp_path):

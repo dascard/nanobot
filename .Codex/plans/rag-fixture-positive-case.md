@@ -17,6 +17,13 @@
 - 当前范围：fixture DB builder、fixture positive case、runner CLI、baseline 合同、PR / periodic gate、文档收口。
 - 不纳入本计划：runtime provider、真实 DB 采样、Admin / WebUI 默认行为切换、三路 RAG 主链路重构。
 
+## 实际执行记录
+
+- 设计提交：`6cbce35 docs(评测): 设计 RAG fixture 正例门禁`。
+- 计划提交：`375b9b3 docs(计划): 记录 RAG fixture 正例计划`。
+- 任务 1 红灯：fixture DB 测试失败于 `ModuleNotFoundError: No module named 'evals.rag_benchmark.fixtures'`；fixture origin 聚合测试失败于 `KeyError: 'overall_fixture'`。
+- 任务 1 绿灯：两个新增定向测试结果 `2 passed, 1 warning in 0.92s`；`tests/test_rag_benchmark.py` 结果 `15 passed, 1 warning in 1.22s`。
+
 ## 子 agent 分工建议
 
 本计划可拆分，但不能让多个 worker 同时修改同一文件。
@@ -61,7 +68,7 @@
 - 修改：`evals/rag_benchmark/scoring.py`
 - 修改：`tests/test_rag_benchmark.py`
 
-- [ ] **步骤 1：编写 fixture DB 红灯测试**
+- [x] **步骤 1：编写 fixture DB 红灯测试**
 
 在 `tests/test_rag_benchmark.py` 中新增测试：
 
@@ -84,7 +91,7 @@ def test_rag_benchmark_fixture_db_supports_memory_positive_case(tmp_path):
     assert scores[0].mrr == 1.0
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -94,7 +101,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_fixture_db_s
 
 预期：FAIL，失败原因包含 `ModuleNotFoundError: No module named 'evals.rag_benchmark.fixtures'`。
 
-- [ ] **步骤 3：编写 fixture origin 聚合红灯测试**
+- [x] **步骤 3：编写 fixture origin 聚合红灯测试**
 
 在 `tests/test_rag_benchmark.py` 中新增测试：
 
@@ -129,7 +136,7 @@ def test_rag_aggregate_scores_tracks_fixture_origin():
     assert metrics["overall_fixture"]["mrr"] == 1.0
 ```
 
-- [ ] **步骤 4：运行聚合红灯测试**
+- [x] **步骤 4：运行聚合红灯测试**
 
 运行：
 
@@ -139,7 +146,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_aggregate_scores_track
 
 预期：FAIL，失败原因包含 `KeyError: 'overall_fixture'`。
 
-- [ ] **步骤 5：新增 fixture builder**
+- [x] **步骤 5：新增 fixture builder**
 
 创建 `evals/rag_benchmark/fixtures.py`：
 
@@ -266,7 +273,7 @@ def build_fixture_db(path: str | Path, *, preset: str = FIXTURE_PRESET) -> list[
         engine.dispose()
 ```
 
-- [ ] **步骤 6：增加 fixture origin 指标分组**
+- [x] **步骤 6：增加 fixture origin 指标分组**
 
 修改 `evals/rag_benchmark/scoring.py`：
 
@@ -291,7 +298,7 @@ for group in ("overall_exact", "overall_weak", "overall_manual", "overall_fixtur
     report[group] = _metric_block(group_cases, group_scores)
 ```
 
-- [ ] **步骤 7：运行任务 1 绿灯**
+- [x] **步骤 7：运行任务 1 绿灯**
 
 运行：
 
@@ -301,7 +308,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_fixture_db_s
 
 预期：2 passed。
 
-- [ ] **步骤 8：运行 RAG 单文件回归**
+- [x] **步骤 8：运行 RAG 单文件回归**
 
 运行：
 
@@ -311,7 +318,7 @@ python -B -m pytest tests/test_rag_benchmark.py -v -p no:cacheprovider
 
 预期：现有 RAG benchmark 测试全部通过。
 
-- [ ] **步骤 9：提交任务 1**
+- [x] **步骤 9：提交任务 1**
 
 运行：
 

@@ -164,6 +164,8 @@ def _origin_group(case: BenchmarkCase) -> str:
         return "overall_exact"
     if origin == "generated_weak":
         return "overall_weak"
+    if origin == "fixture_exact":
+        return "overall_fixture"
     return "overall_manual"
 
 
@@ -172,7 +174,7 @@ def aggregate_scores(cases: Iterable[BenchmarkCase], scores: Iterable[CaseScore]
     score_list = list(scores)
     by_id = {score.case_id: score for score in score_list}
     report = {"overall": _metric_block(case_list, score_list)}
-    for group in ("overall_exact", "overall_weak", "overall_manual"):
+    for group in ("overall_exact", "overall_weak", "overall_manual", "overall_fixture"):
         group_cases = [case for case in case_list if _origin_group(case) == group]
         group_scores = [by_id[case.id] for case in group_cases if case.id in by_id]
         report[group] = _metric_block(group_cases, group_scores)
