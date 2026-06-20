@@ -12,6 +12,7 @@ from evals.rag_benchmark.baseline import (
     load_rag_baseline,
 )
 from evals.rag_benchmark.cases import load_cases
+from evals.rag_benchmark.fixtures import FIXTURE_PRESET, build_fixture_db
 from evals.rag_benchmark.report import build_rag_report_payload, write_reports
 from evals.rag_benchmark.sample import _readonly_session
 from evals.rag_benchmark.schema import BenchmarkCase, BenchmarkResult, CaseScore
@@ -50,7 +51,20 @@ def _effective_provider_mode(args: argparse.Namespace) -> str:
 
 
 def _case_scope(args: argparse.Namespace) -> str:
-    return "manual" if args.manual_only else "manual+generated"
+    parts = ["manual"] if args.manual_only else ["manual", "generated"]
+    if _fixture_enabled(args):
+        parts.append("fixture")
+    return "+".join(parts)
+
+
+def _fixture_enabled(args: argparse.Namespace) -> bool:
+    return str(args.fixture or "none") != "none"
+
+
+def _benchmark_db_path(args: argparse.Namespace) -> str | Path:
+    if _fixture_enabled(args):
+        return args.fixture_db
+    return args.db
 
 
 def _generated_dir(args: argparse.Namespace) -> Path:
@@ -72,6 +86,11 @@ def main(argv: list[str] | None = None) -> int:
         default="deterministic",
     )
     parser.add_argument("--manual-only", action="store_true")
+    parser.add_argument("--fixture", choices=["none", FIXTURE_PRESET], default="none")
+    parser.add_argument(
+        "--fixture-db",
+        default=f"tmp/rag_benchmark/fixtures/{FIXTURE_PRESET}.db",
+    )
     parser.add_argument("--baseline", default=None)
     parser.add_argument("--min-pass-rate", type=float, default=None)
     parser.add_argument("--min-hit-at-5", type=float, default=None)
@@ -84,8 +103,10 @@ def main(argv: list[str] | None = None) -> int:
     provider_mode = _effective_provider_mode(args)
     case_scope = _case_scope(args)
     cases = load_cases(manual_dir=args.manual, generated_dir=_generated_dir(args))
+    if _fixture_enabled(args):
+        cases.extend(build_fixture_db(args.fixture_db, preset=str(args.fixture)))
     results, scores = run_benchmark(
-        args.db,
+        _benchmark_db_path(args),
         cases,
         use_runtime_providers=not args.no_runtime_providers,
         provider_mode=provider_mode,

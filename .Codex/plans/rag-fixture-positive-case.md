@@ -23,6 +23,9 @@
 - 计划提交：`375b9b3 docs(计划): 记录 RAG fixture 正例计划`。
 - 任务 1 红灯：fixture DB 测试失败于 `ModuleNotFoundError: No module named 'evals.rag_benchmark.fixtures'`；fixture origin 聚合测试失败于 `KeyError: 'overall_fixture'`。
 - 任务 1 绿灯：两个新增定向测试结果 `2 passed, 1 warning in 0.92s`；`tests/test_rag_benchmark.py` 结果 `15 passed, 1 warning in 1.22s`。
+- 任务 1 提交：`dcf45e5 feat(评测): 增加 RAG fixture 正例数据`。
+- 任务 2 红灯：CLI fixture 测试失败于 argparse `unrecognized arguments: --fixture positive_v1 --fixture-db`。
+- 任务 2 绿灯：CLI fixture 定向测试结果 `1 passed, 1 warning in 0.93s`；`tests/test_rag_benchmark.py` 结果 `16 passed, 1 warning in 1.19s`。
 
 ## 子 agent 分工建议
 
@@ -333,7 +336,7 @@ git commit -m "feat(评测): 增加 RAG fixture 正例数据"
 - 修改：`evals/rag_benchmark/run.py`
 - 修改：`tests/test_rag_benchmark.py`
 
-- [ ] **步骤 1：编写 CLI fixture 红灯测试**
+- [x] **步骤 1：编写 CLI fixture 红灯测试**
 
 在 `tests/test_rag_benchmark.py` 中新增测试：
 
@@ -445,7 +448,7 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
     assert report["metrics"]["overall"]["mrr"] == 1.0
 ```
 
-- [ ] **步骤 2：运行 CLI 红灯测试**
+- [x] **步骤 2：运行 CLI 红灯测试**
 
 运行：
 
@@ -455,7 +458,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_runs_man
 
 预期：FAIL，失败原因包含 `unrecognized arguments: --fixture positive_v1 --fixture-db`。
 
-- [ ] **步骤 3：实现 runner 参数和 case 合并**
+- [x] **步骤 3：实现 runner 参数和 case 合并**
 
 修改 `evals/rag_benchmark/run.py`，新增 import：
 
@@ -507,7 +510,7 @@ results, scores = run_benchmark(
 )
 ```
 
-- [ ] **步骤 4：运行任务 2 绿灯**
+- [x] **步骤 4：运行任务 2 绿灯**
 
 运行：
 
@@ -517,7 +520,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_runs_man
 
 预期：1 passed。
 
-- [ ] **步骤 5：运行 RAG 单文件回归**
+- [x] **步骤 5：运行 RAG 单文件回归**
 
 运行：
 
@@ -527,7 +530,7 @@ python -B -m pytest tests/test_rag_benchmark.py -v -p no:cacheprovider
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交任务 2**
+- [x] **步骤 6：提交任务 2**
 
 运行：
 

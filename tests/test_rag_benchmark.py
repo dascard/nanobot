@@ -721,6 +721,113 @@ def test_rag_benchmark_cli_passes_manual_deterministic_gate(tmp_path, capsys):
     assert report["baseline_diff"]["new_failed_cases"] == []
 
 
+def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
+    from evals.rag_benchmark import run as rag_run
+
+    manual = tmp_path / "manual"
+    generated = tmp_path / "generated"
+    reports = tmp_path / "reports"
+    fixture_db = tmp_path / "fixture.db"
+    manual.mkdir()
+    generated.mkdir()
+    (manual / "constraint.json").write_text(
+        json.dumps(
+            {
+                "id": "constraint",
+                "suite": "rag_benchmark",
+                "source_type": "sticker",
+                "case_type": "constraint_only",
+                "query": "表情包",
+                "expected": {
+                    "candidate_ids": [],
+                    "allow_empty": True,
+                    "max_reranker_candidates": 10,
+                },
+                "meta": {"origin": "manual_hard"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "suite": "rag_benchmark",
+                "provider_mode": "deterministic",
+                "case_scope": "manual+fixture",
+                "metrics": {
+                    "overall": {
+                        "total_cases": 2,
+                        "positive_cases": 1,
+                        "passed_cases": 2,
+                        "pass_rate": 1.0,
+                        "hit@5": 1.0,
+                        "mrr": 1.0,
+                        "degraded_rate": 0.0,
+                        "case_false_positive_rate": 0.0,
+                        "unexpected_source_rate": 0.0,
+                    }
+                },
+                "case_scores": [
+                    {"case_id": "constraint", "ok": True, "errors": []},
+                    {
+                        "case_id": "memory_fixture_positive_001",
+                        "ok": True,
+                        "rank": 1,
+                        "hit_at": {"1": True, "3": True, "5": True},
+                        "errors": [],
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = rag_run.main(
+        [
+            "--manual",
+            str(manual),
+            "--generated",
+            str(generated),
+            "--report-out",
+            str(reports),
+            "--provider-mode",
+            "deterministic",
+            "--manual-only",
+            "--fixture",
+            "positive_v1",
+            "--fixture-db",
+            str(fixture_db),
+            "--baseline",
+            str(baseline),
+            "--min-pass-rate",
+            "1.0",
+            "--min-hit-at-5",
+            "1.0",
+            "--min-mrr",
+            "1.0",
+            "--max-new-failures",
+            "0",
+            "--max-degraded-rate",
+            "0.0",
+            "--max-unexpected-source-rate",
+            "0.0",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads((reports / "latest.json").read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert "Gate passed" in captured.out
+    assert report["case_scope"] == "manual+fixture"
+    assert report["metrics"]["overall"]["positive_cases"] == 1
+    assert report["metrics"]["overall"]["hit@5"] == 1.0
+    assert report["metrics"]["overall"]["mrr"] == 1.0
+
+
 def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     from evals.rag_benchmark.baseline import load_rag_baseline
     from evals.rag_benchmark.cases import load_cases
