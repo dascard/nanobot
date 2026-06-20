@@ -627,7 +627,7 @@ git commit -m "feat(评测): 增加 sticker fixture 发送正例"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/rag-fixture-sticker-sendable.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 记录 RAG stable gate 当前 scope：
 
@@ -635,7 +635,7 @@ git commit -m "feat(评测): 增加 sticker fixture 发送正例"
 RAG stable gate 当前使用 `manual+fixture` scope：仓库内 manual `constraint_only` cases 加 `positive_v1` fixture cases。`positive_v1` 现在包含 memory、knowledge 与 sticker 三个正例，其中 knowledge fixture 固定验证 `requires_citation=true`，sticker fixture 固定验证 `requires_sendable=true` 的可发送候选。
 ```
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在路线项 8 的 P4-5E 之后追加 P4-5F 状态：
 
@@ -645,7 +645,7 @@ RAG stable gate 当前使用 `manual+fixture` scope：仓库内 manual `constrai
 
 同步路线下一步：sticker sendable 正例完成后，后续可继续 group_memory fixture 正例或真实样本运营动作。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 在 P4-5E 后新增 P4-5F 阶段记录：
 
@@ -657,7 +657,7 @@ RAG stable gate 当前使用 `manual+fixture` scope：仓库内 manual `constrai
 
 同时记录任务提交 SHA、红灯、绿灯、RAG stable gate 和全量测试结果。
 
-- [ ] **步骤 4：更新本计划执行记录**
+- [x] **步骤 4：更新本计划执行记录**
 
 把任务 1 到任务 3 的真实命令输出摘要写回本计划，包括：
 
@@ -668,7 +668,14 @@ RAG stable gate 当前使用 `manual+fixture` scope：仓库内 manual `constrai
 - 全量测试输出。
 - 各任务提交短 SHA。
 
-- [ ] **步骤 5：文档自检**
+实际：
+
+- 任务 1 红灯已记录：sticker fixture 测试失败于缺少 `STICKER_CANDIDATE_ID`，CLI gate 与 baseline 合同红灯均失败于 `positive_cases` 仍为 2。
+- 任务 2 绿灯已记录：定向 fixture 组合 `4 passed, 1 warning in 1.09s`，sticker 相邻回归 `23 passed, 21 warnings in 3.26s`。
+- 任务 3 绿灯已记录：RAG stable gate 输出 `cases=12 passed=12 failed=0` 和 `Gate passed`，RAG 相邻回归 `39 passed, 1 warning in 2.27s`，全量回归 `1377 passed, 6 skipped, 139 warnings in 105.89s`。
+- 任务 1-3 绿色代码阶段提交：`1538459 feat(评测): 增加 sticker fixture 发送正例`。
+
+- [x] **步骤 5：文档自检**
 
 运行：
 
@@ -680,7 +687,9 @@ git diff --check -- docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/p
 
 预期：前两个命令无匹配，`git diff --check` 无输出。
 
-- [ ] **步骤 6：运行最终相邻验证**
+实际：占位词扫描无匹配，U+FFFD 扫描无匹配，`git diff --check` 无输出。
+
+- [x] **步骤 6：运行最终相邻验证**
 
 运行：
 
@@ -698,7 +707,9 @@ python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 7：运行统一评测脚本**
+实际：`82 passed, 21 warnings in 8.15s`。
+
+- [x] **步骤 7：运行统一评测脚本**
 
 运行：
 
@@ -710,7 +721,9 @@ bash scripts/run_eval_periodic.sh
 
 预期：两个脚本均退出码 0。RAG gate 子项继续通过 `--fixture positive_v1` 自动覆盖新增 sticker fixture。
 
-- [ ] **步骤 8：提交文档收口阶段**
+实际：`bash scripts/run_eval_pr_gate.sh` 退出码 0，评测守卫 `27 passed, 1 warning in 1.72s`，TimingGate、capability gates 和 RAG gate 均 `Gate passed`，RAG 输出 `cases=12 passed=12 failed=0`；`bash scripts/run_eval_periodic.sh` 退出码 0，评测守卫 `27 passed, 1 warning in 1.73s`，各子 gate 均 `passed`，RAG 输出 `cases=12 passed=12 failed=0`。
+
+- [x] **步骤 8：提交文档收口阶段**
 
 提交前运行全量测试：
 
@@ -720,6 +733,8 @@ python -m pytest tests/ -v -p no:cacheprovider
 ```
 
 预期：0 failures。
+
+实际：`1377 passed, 6 skipped, 139 warnings in 102.72s`。
 
 提交：
 
