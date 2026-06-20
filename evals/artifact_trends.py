@@ -1,8 +1,18 @@
 """跨周期 artifact 趋势聚合工具。"""
 from __future__ import annotations
 
+import argparse
+import glob
+import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any
+
+
+DEFAULT_MANIFEST_GLOBS = [
+    "evals/reports/*-periodic_manifest.json",
+    "evals/reports/runs/*/manifest.json",
+]
 
 
 def _as_int(value: Any) -> int:
@@ -83,6 +93,23 @@ def dedupe_manifests(manifests: list[dict[str, Any]]) -> list[dict[str, Any]]:
         (item[2] for item in selected.values()),
         key=lambda manifest: str(manifest.get("started_at") or ""),
     )
+
+
+def load_periodic_manifests(globs: list[str]) -> list[dict[str, Any]]:
+    manifests: list[dict[str, Any]] = []
+    seen_paths: set[Path] = set()
+    for pattern in globs:
+        for item in sorted(glob.glob(pattern)):
+            path = Path(item)
+            resolved = path.resolve()
+            if resolved in seen_paths:
+                continue
+            seen_paths.add(resolved)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError(f"manifest must be a JSON object: {path}")
+            manifests.append(payload)
+    return manifests
 
 
 def _run_item(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -359,3 +386,33 @@ def build_artifact_trends(
         },
         "regressions": regressions,
     }
+
+
+def write_trend_report(payload: dict[str, Any], out_path: str | Path) -> Path:
+    path = Path(out_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--manifest-glob",
+        action="append",
+        default=[],
+        help="periodic manifest glob; can be passed multiple times",
+    )
+    parser.add_argument("--out", default="evals/reports/artifact_trends_latest.json")
+    args = parser.parse_args(argv)
+
+    manifest_globs = args.manifest_glob or list(DEFAULT_MANIFEST_GLOBS)
+    manifests = load_periodic_manifests(manifest_globs)
+    payload = build_artifact_trends(manifests, manifest_globs=manifest_globs)
+    path = write_trend_report(payload, args.out)
+    print(f"artifact_trends={path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

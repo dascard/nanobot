@@ -211,3 +211,40 @@ def test_artifact_trends_keeps_unknown_steps_without_metrics():
     assert trends["series"]["rag_benchmark"] == []
     assert trends["series"]["timing_signal_audit"] == []
     assert any(item["type"] == "report_missing" for item in trends["regressions"])
+
+
+def test_artifact_trends_cli_writes_report(tmp_path, capsys):
+    from evals import artifact_trends
+
+    manifest_path = tmp_path / "2026-06-20-periodic_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            _manifest(
+                "run_1",
+                started_at="2026-06-20T10:00:00+08:00",
+                steps=[_eval_step("timing_gate", pass_rate=1.0)],
+            ),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "artifact_trends_latest.json"
+
+    exit_code = artifact_trends.main(
+        [
+            "--manifest-glob",
+            str(tmp_path / "*-periodic_manifest.json"),
+            "--out",
+            str(out),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert captured.out.strip() == f"artifact_trends={out}"
+    assert payload["trend_version"] == 1
+    assert payload["source"]["manifest_count"] == 1
+    assert payload["source"]["run_count"] == 1
+    assert payload["series"]["eval_suites"]["timing_gate"][0]["pass_rate"] == 1.0
+    assert payload["regressions"] == []
