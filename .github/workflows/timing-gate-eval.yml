@@ -52,5 +52,6 @@ jobs:
             evals/reports/*.json
             evals/reports/periodic_manifest_*.json
             evals/reports/runs/**/manifest.json
+            evals/reports/runs/**/timing_signal_audit.json
             tmp/rag_benchmark/reports/*.json
             tmp/rag_benchmark/reports/*.md
