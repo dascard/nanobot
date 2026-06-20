@@ -8,7 +8,7 @@
 
 核心 TimingGate 混合决策主线已完成。已落地 shared timing scoring、群聊 / 私聊统一公式、ambient / legacy / timer cooldown 软化、模型失败规则兜底、session / platform 级模型策略、真实日志信号审计 CLI，以及 `timing_gate` eval baseline diff / 阈值门禁。
 
-P3-3「持续评估」已完成拆分设计、离线 labeled report / sidecar labels 复跑入口，以及仓库自包含 CI / PR gate。群聊 `s_bot` live path 已接入 scoring 软抑制；私聊分类器失败 / 非法输出已按 `c=0` 进入 `rule_fallback`，旧格式兼容仍保留 `c=0.5`。P4-1 已完成通用 `candidates → labeled` 标注闭环和首个 `capability_model_routing` 能力数据集，P4-2 已完成 Admin 标注工作台契约化与 promote 预检 UI，P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` per-capability 数据集，P4-4 已完成 RAG baseline 门禁，P4-5A / P4-5B 已完成统一 PR gate 与周期性复跑归档，P4-5C 已完成第一轮 RAG manual 样本扩充，P4-5D / P4-5E / P4-5F 已完成 memory、knowledge 和 sticker 三类 fixture-backed positive RAG case。下一阶段优先补 `group_memory` fixture 正例；过滤约束 fixture、更多真实样本选择、标注仲裁、定期复跑和按报告调参仍按后续阶段推进。
+P3-3「持续评估」已完成拆分设计、离线 labeled report / sidecar labels 复跑入口，以及仓库自包含 CI / PR gate。群聊 `s_bot` live path 已接入 scoring 软抑制；私聊分类器失败 / 非法输出已按 `c=0` 进入 `rule_fallback`，旧格式兼容仍保留 `c=0.5`。P4-1 已完成通用 `candidates → labeled` 标注闭环和首个 `capability_model_routing` 能力数据集，P4-2 已完成 Admin 标注工作台契约化与 promote 预检 UI，P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` per-capability 数据集，P4-4 已完成 RAG baseline 门禁，P4-5A / P4-5B 已完成统一 PR gate 与周期性复跑归档，P4-5C 已完成第一轮 RAG manual 样本扩充，P4-5D / P4-5E / P4-5F / P4-5G 已完成 memory、knowledge、sticker 和 group_memory 四类 fixture-backed positive RAG case，P4-5H 已完成 RAG 过滤约束 fixture。下一阶段不再继续补 fixture，优先转向真实样本运营动作：选择更多真实样本、人工标注仲裁、定期复跑，并根据周期报告决定是否调参；TimingGate scoring 可观测性补字段可作为独立小阶段推进。
 
 ---
 
