@@ -55,14 +55,18 @@ run_step "capability rendering contract" \
     --min-pass-rate 1.0 \
     --max-new-failures 0
 
-run_step "rag benchmark manual deterministic gate" \
+run_step "rag benchmark manual fixture deterministic gate" \
   python -B -m evals.rag_benchmark.run \
     --manual evals/cases/rag_benchmark/manual \
     --generated tmp/rag_benchmark/empty \
     --provider-mode deterministic \
     --manual-only \
+    --fixture positive_v1 \
+    --fixture-db tmp/rag_benchmark/fixtures/positive_v1.db \
     --baseline evals/baselines/rag_benchmark.json \
     --min-pass-rate 1.0 \
+    --min-hit-at-5 1.0 \
+    --min-mrr 1.0 \
     --max-new-failures 0 \
     --max-degraded-rate 0.0 \
     --max-unexpected-source-rate 0.0

@@ -26,6 +26,9 @@
 - 任务 1 提交：`dcf45e5 feat(评测): 增加 RAG fixture 正例数据`。
 - 任务 2 红灯：CLI fixture 测试失败于 argparse `unrecognized arguments: --fixture positive_v1 --fixture-db`。
 - 任务 2 绿灯：CLI fixture 定向测试结果 `1 passed, 1 warning in 0.93s`；`tests/test_rag_benchmark.py` 结果 `16 passed, 1 warning in 1.19s`。
+- 任务 2 提交：`5b967b4 feat(评测): 支持 RAG fixture 门禁入口`。
+- 任务 3 红灯：baseline 合同测试失败于 `assert 'manual' == 'manual+fixture'`；脚本守卫测试失败于缺少 `--fixture positive_v1`。
+- 任务 3 绿灯：脚本守卫结果 `2 passed, 1 warning in 0.75s`；RAG fixture gate 输出 `cases=10 passed=10 failed=0` 和 `Gate passed`；相邻回归结果 `35 passed, 1 warning in 2.61s`。
 
 ## 子 agent 分工建议
 
@@ -548,7 +551,7 @@ git commit -m "feat(评测): 支持 RAG fixture 门禁入口"
 - 修改：`scripts/run_eval_periodic.sh`
 - 修改：`evals/baselines/rag_benchmark.json`
 
-- [ ] **步骤 1：更新 baseline 合同红灯测试**
+- [x] **步骤 1：更新 baseline 合同红灯测试**
 
 替换 `tests/test_rag_benchmark.py::test_rag_benchmark_baseline_file_matches_manual_gate_contract`：
 
@@ -590,7 +593,7 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     assert fixture_score["hit_at"]["5"] is True
 ```
 
-- [ ] **步骤 2：运行 baseline 合同红灯**
+- [x] **步骤 2：运行 baseline 合同红灯**
 
 运行：
 
@@ -600,7 +603,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：FAIL，失败原因包含 `assert 'manual' == 'manual+fixture'` 或 `positive_cases` 仍为 0。
 
-- [ ] **步骤 3：更新脚本守卫红灯测试**
+- [x] **步骤 3：更新脚本守卫红灯测试**
 
 在 `tests/test_eval_baseline.py::test_eval_pr_gate_script_runs_stable_suites` 中增加断言：
 
@@ -613,7 +616,7 @@ assert "--min-mrr 1.0" in text
 
 在 `tests/test_eval_baseline.py::test_eval_periodic_script_runs_stable_suites` 中增加同样断言。
 
-- [ ] **步骤 4：运行脚本守卫红灯**
+- [x] **步骤 4：运行脚本守卫红灯**
 
 运行：
 
@@ -623,7 +626,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_pr_gate_script_runs_s
 
 预期：FAIL，失败原因是脚本尚未包含 `--fixture positive_v1`。
 
-- [ ] **步骤 5：更新 PR gate 脚本**
+- [x] **步骤 5：更新 PR gate 脚本**
 
 修改 `scripts/run_eval_pr_gate.sh` 的 RAG benchmark 命令，加入 fixture 和 positive 指标阈值：
 
@@ -644,7 +647,7 @@ python -B -m evals.rag_benchmark.run \
   --max-unexpected-source-rate 0.0
 ```
 
-- [ ] **步骤 6：更新 periodic gate 脚本**
+- [x] **步骤 6：更新 periodic gate 脚本**
 
 修改 `scripts/run_eval_periodic.sh` 的 RAG benchmark 命令，保持和 PR gate 同样的 fixture 参数与阈值：
 
@@ -666,7 +669,7 @@ run_step "rag benchmark manual fixture deterministic gate" \
     --max-unexpected-source-rate 0.0
 ```
 
-- [ ] **步骤 7：运行脚本守卫绿灯**
+- [x] **步骤 7：运行脚本守卫绿灯**
 
 运行：
 
@@ -676,7 +679,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_pr_gate_script_runs_s
 
 预期：2 passed。
 
-- [ ] **步骤 8：运行 RAG fixture gate 生成报告**
+- [x] **步骤 8：运行 RAG fixture gate 生成报告**
 
 运行：
 
@@ -699,7 +702,7 @@ python -B -m evals.rag_benchmark.run \
 
 第一次运行在 baseline 更新前预期失败，原因是 baseline `case_scope` 或 positive metrics 仍旧。失败报告仍会写入 `tmp/rag_benchmark/reports/latest.json`，用于刷新 baseline 前核对实际输出。
 
-- [ ] **步骤 9：更新 `evals/baselines/rag_benchmark.json`**
+- [x] **步骤 9：更新 `evals/baselines/rag_benchmark.json`**
 
 用 `tmp/rag_benchmark/reports/latest.json` 中以下字段刷新 baseline：
 
@@ -709,9 +712,6 @@ python -B -m evals.rag_benchmark.run \
 - `metrics`
 - `failed_cases`
 - `case_scores`
-- `cases`
-- `results`
-- `scores`
 
 刷新后确认：
 
@@ -722,7 +722,7 @@ python -B -m evals.rag_benchmark.run \
 - `metrics.overall.mrr == 1.0`
 - `memory_fixture_positive_001` 在 `case_scores` 中 `ok=true`
 
-- [ ] **步骤 10：运行 baseline 合同绿灯**
+- [x] **步骤 10：运行 baseline 合同绿灯**
 
 运行：
 
@@ -732,7 +732,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：1 passed。
 
-- [ ] **步骤 11：运行 RAG fixture gate 绿灯**
+- [x] **步骤 11：运行 RAG fixture gate 绿灯**
 
 运行步骤 8 的同一命令。
 
@@ -743,7 +743,7 @@ cases=10 passed=10 failed=0
 Gate passed
 ```
 
-- [ ] **步骤 12：运行相邻回归**
+- [x] **步骤 12：运行相邻回归**
 
 运行：
 
@@ -753,7 +753,7 @@ python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -v -
 
 预期：全部通过。
 
-- [ ] **步骤 13：提交任务 3**
+- [x] **步骤 13：提交任务 3**
 
 运行：
 

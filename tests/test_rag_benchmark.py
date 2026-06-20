@@ -831,6 +831,7 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
 def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     from evals.rag_benchmark.baseline import load_rag_baseline
     from evals.rag_benchmark.cases import load_cases
+    from evals.rag_benchmark.fixtures import fixture_cases
 
     baseline = load_rag_baseline("evals/baselines/rag_benchmark.json")
     manual_cases = [
@@ -841,13 +842,24 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
         )
         if case.status == "enabled"
     ]
-    baseline_case_ids = {str(item.get("case_id") or "") for item in baseline["case_scores"]}
-    manual_case_ids = {case.id for case in manual_cases}
+    fixture = fixture_cases("positive_v1")
+    stable_cases = manual_cases + fixture
+    baseline_scores = {
+        str(item.get("case_id") or ""): item
+        for item in baseline["case_scores"]
+    }
+    stable_case_ids = {case.id for case in stable_cases}
 
     assert baseline["suite"] == "rag_benchmark"
     assert baseline["provider_mode"] == "deterministic"
-    assert baseline["case_scope"] == "manual"
-    assert baseline["metrics"]["overall"]["total_cases"] == len(manual_cases)
-    assert baseline_case_ids == manual_case_ids
+    assert baseline["case_scope"] == "manual+fixture"
+    assert baseline["metrics"]["overall"]["total_cases"] == len(stable_cases)
+    assert baseline["metrics"]["overall"]["positive_cases"] >= 1
+    assert baseline["metrics"]["overall"]["hit@5"] > 0
+    assert baseline["metrics"]["overall"]["mrr"] > 0
+    assert set(baseline_scores) == stable_case_ids
     assert "case_scores" in baseline
     assert all("case_id" in item and "ok" in item for item in baseline["case_scores"])
+    fixture_score = baseline_scores["memory_fixture_positive_001"]
+    assert fixture_score["ok"] is True
+    assert fixture_score["hit_at"]["5"] is True

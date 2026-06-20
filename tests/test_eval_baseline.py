@@ -254,7 +254,11 @@ def test_eval_pr_gate_script_runs_stable_suites():
     assert "evals.rag_benchmark.run" in text
     assert "--provider-mode deterministic" in text
     assert "--manual-only" in text
+    assert "--fixture positive_v1" in text
+    assert "--fixture-db tmp/rag_benchmark/fixtures/positive_v1.db" in text
     assert "evals/baselines/rag_benchmark.json" in text
+    assert "--min-hit-at-5 1.0" in text
+    assert "--min-mrr 1.0" in text
     assert "max-unexpected-source-rate" in text
 
 
@@ -274,7 +278,11 @@ def test_eval_periodic_script_runs_stable_suites():
     assert "evals.rag_benchmark.run" in text
     assert "--provider-mode deterministic" in text
     assert "--manual-only" in text
+    assert "--fixture positive_v1" in text
+    assert "--fixture-db tmp/rag_benchmark/fixtures/positive_v1.db" in text
     assert "evals/baselines/rag_benchmark.json" in text
+    assert "--min-hit-at-5 1.0" in text
+    assert "--min-mrr 1.0" in text
     assert "--max-unexpected-source-rate 0.0" in text
 
 
