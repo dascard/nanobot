@@ -47,3 +47,11 @@ def test_eval_periodic_script_runs_timing_signal_audit_step():
 
     assert "timing signal audit" in text
     assert "scripts/run_timing_signal_audit_periodic.sh" in text
+
+
+def test_periodic_script_indexes_timing_signal_audit_report():
+    text = Path("scripts/run_eval_periodic.sh").read_text(encoding="utf-8")
+
+    assert "timing signal audit" in text
+    assert "timing_signal_audit" in text
+    assert "evals/reports/timing_signal_audit_latest.json" in text

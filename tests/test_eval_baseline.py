@@ -412,6 +412,18 @@ def test_eval_periodic_script_keeps_going_for_archival_reports():
     assert "exit \"$status\"" in text
 
 
+def test_eval_periodic_script_writes_manifest():
+    script = Path("scripts/run_eval_periodic.sh")
+
+    text = script.read_text(encoding="utf-8")
+    assert "PERIODIC_RUN_ID" in text
+    assert "PERIODIC_STEPS_JSONL" in text
+    assert "record_step" in text
+    assert "python -B -m evals.periodic_manifest" in text
+    assert "periodic_manifest_latest.json" in text
+    assert "runs/${PERIODIC_RUN_ID}/manifest.json" in text
+
+
 def test_eval_pr_gate_workflow_runs_unified_script():
     workflow = Path(".github/workflows/timing-gate-eval.yml")
 
