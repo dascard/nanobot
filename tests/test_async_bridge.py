@@ -34,6 +34,18 @@ def test_run_awaitable_sync_runs_when_asyncio_runner_is_unavailable(monkeypatch)
     assert run_awaitable_sync(_return_value("ok-without-runner")) == "ok-without-runner"
 
 
+def test_run_awaitable_sync_does_not_depend_on_asyncio_runner(monkeypatch):
+    import asyncio
+
+    class ExplodingRunner:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("asyncio_runner_should_not_be_used")
+
+    monkeypatch.setattr(asyncio, "Runner", ExplodingRunner, raising=False)
+
+    assert run_awaitable_sync(_return_value("ok-with-manual-loop")) == "ok-with-manual-loop"
+
+
 def test_run_awaitable_sync_propagates_exceptions():
     with pytest.raises(RuntimeError, match="boom"):
         run_awaitable_sync(_raise_error())

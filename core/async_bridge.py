@@ -28,11 +28,7 @@ def _run_in_manual_loop(coro: Coroutine[Any, Any, T]) -> T:
 
 
 def _run_in_fresh_loop(coro: Coroutine[Any, Any, T]) -> T:
-    runner_cls = getattr(asyncio, "Runner", None)
-    if runner_cls is None:
-        return _run_in_manual_loop(coro)
-    with runner_cls() as runner:
-        return runner.run(coro)
+    return _run_in_manual_loop(coro)
 
 
 def run_awaitable_sync(coro: Coroutine[Any, Any, T]) -> T:
