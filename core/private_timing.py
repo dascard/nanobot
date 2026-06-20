@@ -187,7 +187,7 @@ class PrivateTimingGate:
             complexity = int(result.get("complexity", 0) or 0)
             self.stats[action] += 1
             d = PrivateDecision(action=action, reason=result.get("reason", ""),
-                                confidence=scoring.model_confidence or 1.0, raw_label=result.get("raw", ""),
+                                confidence=scoring.model_confidence, raw_label=result.get("raw", ""),
                                 complexity=complexity, effort=effort, runtime_preset=runtime_preset,
                                 timing_scoring=asdict(scoring))
             logger.info("[PrivateDecision] result user=%s action=%s effort=%s tool=%s complexity=%s",
@@ -278,7 +278,7 @@ def _score_private_timing(
 
 def _model_hint_from_private_result(result: dict) -> TimingModelHint:
     reason = str(result.get("reason", ""))
-    confidence = 0.5 if _is_low_confidence_private_parse(reason) else 0.8
+    confidence = _private_model_confidence(reason)
     return TimingModelHint(
         action=str(result.get("action", "reply_now")),
         confidence=confidence,
@@ -287,9 +287,18 @@ def _model_hint_from_private_result(result: dict) -> TimingModelHint:
     )
 
 
+def _private_model_confidence(reason: str) -> float:
+    lowered = str(reason or "").lower()
+    if any(marker in lowered for marker in ("invalid output fallback", "classifier fallback", "parse_error")):
+        return 0.0
+    if _is_low_confidence_private_parse(reason):
+        return 0.5
+    return 0.8
+
+
 def _is_low_confidence_private_parse(reason: str) -> bool:
     lowered = str(reason or "").lower()
-    return any(marker in lowered for marker in ("fallback", "invalid", "legacy"))
+    return any(marker in lowered for marker in ("fallback parse", "legacy"))
 
 
 def _private_action_from_timing(action: str) -> str:
