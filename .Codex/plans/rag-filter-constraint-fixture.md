@@ -609,7 +609,7 @@ git commit -m "feat(评测): 强化 sticker fixture 过滤约束"
 - 修改：`evals/baselines/rag_benchmark.json`
 - 更新：`.Codex/plans/rag-filter-constraint-fixture.md`
 
-- [ ] **步骤 1：扩展 CLI fixture gate 断言**
+- [x] **步骤 1：扩展 CLI fixture gate 断言**
 
 在 `test_rag_benchmark_cli_runs_manual_fixture_positive_gate` 的 `scores` 断言后补充：
 
@@ -627,7 +627,7 @@ assert report["metrics"]["overall"]["hit@5"] == 1.0
 assert report["metrics"]["overall"]["mrr"] == 1.0
 ```
 
-- [ ] **步骤 2：扩展 baseline contract 断言**
+- [x] **步骤 2：扩展 baseline contract 断言**
 
 在 `test_rag_benchmark_baseline_file_matches_manual_gate_contract` 中补充：
 
@@ -644,7 +644,7 @@ assert baseline["metrics"]["overall"]["positive_cases"] == 4
 assert set(baseline_scores) == stable_case_ids
 ```
 
-- [ ] **步骤 3：运行合同测试验证失败或通过**
+- [x] **步骤 3：运行合同测试验证失败或通过**
 
 运行：
 
@@ -657,7 +657,9 @@ python -B -m pytest \
 
 预期：如果 baseline 已含空 `forbidden_hits`，测试可能直接 PASS；如果真实报告统计变化导致 baseline 不一致，先记录输出，再进入步骤 4 更新 baseline。
 
-- [ ] **步骤 4：运行 stable gate**
+实际：PASS，`2 passed, 1 warning in 1.08s`。
+
+- [x] **步骤 4：运行 stable gate**
 
 运行：
 
@@ -686,7 +688,9 @@ cases=13 passed=13 failed=0
 Gate passed
 ```
 
-- [ ] **步骤 5：更新 baseline**
+实际：`cases=13 passed=13 failed=0`，`Gate passed`。
+
+- [x] **步骤 5：更新 baseline**
 
 如果 `tmp/rag_benchmark/reports/latest.json` 里的 stable report 与 `evals/baselines/rag_benchmark.json` 有差异，使用真实报告更新 baseline。
 
@@ -698,7 +702,9 @@ python -m json.tool tmp/rag_benchmark/reports/latest.json > /tmp/rag_benchmark_l
 
 然后用编辑工具把 `/tmp/rag_benchmark_latest.json` 内容同步到 `evals/baselines/rag_benchmark.json`。若只存在 latency 噪声，仍以真实 gate 输出为准。
 
-- [ ] **步骤 6：运行相邻回归**
+实际：使用 `tmp/rag_benchmark/reports/latest.json` 更新 `evals/baselines/rag_benchmark.json`，并仅保留 baseline 合同字段，移除运行态 `baseline_diff` / `gate` / `cases` / `results` / `scores` 字段；重新运行合同测试与 stable gate 均通过。
+
+- [x] **步骤 6：运行相邻回归**
 
 运行：
 
@@ -708,7 +714,9 @@ python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -v -
 
 预期：全部 PASS。
 
-- [ ] **步骤 7：提交 baseline 阶段**
+实际：`40 passed, 1 warning in 2.33s`。
+
+- [x] **步骤 7：提交 baseline 阶段**
 
 运行：
 

@@ -16,10 +16,10 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 7,
+      "avg_latency_ms": 7.461538461538462,
       "p95_latency_ms": 14,
-      "avg_reranker_candidates": 0.46153846153846156,
-      "max_reranker_candidates": 1,
+      "avg_reranker_candidates": 1.0769230769230769,
+      "max_reranker_candidates": 4,
       "avg_reranker_latency_ms": 0,
       "missing_reranker_latency_rate": 0.7692307692307693
     },
@@ -76,10 +76,10 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 7.444444444444445,
-      "p95_latency_ms": 14,
-      "avg_reranker_candidates": 0.2222222222222222,
-      "max_reranker_candidates": 1,
+      "avg_latency_ms": 8,
+      "p95_latency_ms": 18,
+      "avg_reranker_candidates": 1.1111111111111112,
+      "max_reranker_candidates": 4,
       "avg_reranker_latency_ms": 0,
       "missing_reranker_latency_rate": 0.7777777777777778
     },
@@ -96,8 +96,8 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 6,
-      "p95_latency_ms": 7,
+      "avg_latency_ms": 6.25,
+      "p95_latency_ms": 8,
       "avg_reranker_candidates": 1,
       "max_reranker_candidates": 1,
       "avg_reranker_latency_ms": 0,
@@ -116,7 +116,7 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 7.333333333333333,
+      "avg_latency_ms": 7.666666666666667,
       "p95_latency_ms": 14,
       "avg_reranker_candidates": 0.3333333333333333,
       "max_reranker_candidates": 1,
@@ -136,10 +136,10 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 8,
-      "p95_latency_ms": 14,
-      "avg_reranker_candidates": 0.5,
-      "max_reranker_candidates": 1,
+      "avg_latency_ms": 9,
+      "p95_latency_ms": 18,
+      "avg_reranker_candidates": 2,
+      "max_reranker_candidates": 4,
       "avg_reranker_latency_ms": null,
       "missing_reranker_latency_rate": 1
     },
@@ -176,10 +176,10 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 7,
+      "avg_latency_ms": 7.333333333333333,
       "p95_latency_ms": 8,
-      "avg_reranker_candidates": 0.6666666666666666,
-      "max_reranker_candidates": 1,
+      "avg_reranker_candidates": 1.3333333333333333,
+      "max_reranker_candidates": 3,
       "avg_reranker_latency_ms": null,
       "missing_reranker_latency_rate": 1
     }
@@ -256,8 +256,8 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 14,
-      "reranker_candidates": 1,
+      "latency_ms": 18,
+      "reranker_candidates": 4,
       "degraded": false,
       "reranker_latency_ms": null
     },
@@ -307,7 +307,7 @@
       },
       "errors": [],
       "latency_ms": 6,
-      "reranker_candidates": 0,
+      "reranker_candidates": 3,
       "degraded": false,
       "reranker_latency_ms": null
     },
@@ -331,7 +331,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 4,
+      "latency_ms": 5,
       "reranker_candidates": 0,
       "degraded": false,
       "reranker_latency_ms": 0
@@ -407,7 +407,7 @@
       },
       "errors": [],
       "latency_ms": 8,
-      "reranker_candidates": 1,
+      "reranker_candidates": 3,
       "degraded": false,
       "reranker_latency_ms": null
     },
@@ -431,7 +431,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 6,
+      "latency_ms": 5,
       "reranker_candidates": 1,
       "degraded": false,
       "reranker_latency_ms": 0
@@ -481,7 +481,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 5,
+      "latency_ms": 6,
       "reranker_candidates": 1,
       "degraded": false,
       "reranker_latency_ms": null
@@ -506,7 +506,7 @@
         "group_filter": true
       },
       "errors": [],
-      "latency_ms": 7,
+      "latency_ms": 8,
       "reranker_candidates": 1,
       "degraded": false,
       "reranker_latency_ms": null

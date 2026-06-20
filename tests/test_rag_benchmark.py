@@ -1087,10 +1087,13 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
     assert report["metrics"]["source:group_memory"]["positive_cases"] == 1
     assert report["metrics"]["overall"]["hit@5"] == 1.0
     assert report["metrics"]["overall"]["mrr"] == 1.0
+    assert scores["memory_fixture_positive_001"].get("forbidden_hits", []) == []
     assert scores["knowledge_fixture_positive_001"]["ok"] is True
     assert scores["knowledge_fixture_positive_001"]["checks"]["citation"] is True
+    assert scores["knowledge_fixture_positive_001"].get("forbidden_hits", []) == []
     assert scores["sticker_fixture_positive_001"]["ok"] is True
     assert scores["sticker_fixture_positive_001"]["checks"]["sendable"] is True
+    assert scores["sticker_fixture_positive_001"].get("forbidden_hits", []) == []
     assert scores["group_memory_fixture_positive_001"]["ok"] is True
     assert scores["group_memory_fixture_positive_001"]["checks"]["group_filter"] is True
     assert scores["group_memory_fixture_positive_001"].get("forbidden_hits", []) == []
@@ -1131,15 +1134,18 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     fixture_score = baseline_scores["memory_fixture_positive_001"]
     assert fixture_score["ok"] is True
     assert fixture_score["hit_at"]["5"] is True
+    assert fixture_score.get("forbidden_hits", []) == []
     knowledge_fixture_score = baseline_scores["knowledge_fixture_positive_001"]
     assert knowledge_fixture_score["ok"] is True
     assert knowledge_fixture_score["hit_at"]["5"] is True
     assert knowledge_fixture_score["checks"]["citation"] is True
+    assert knowledge_fixture_score.get("forbidden_hits", []) == []
     assert baseline["metrics"]["source:knowledge"]["positive_cases"] == 1
     sticker_fixture_score = baseline_scores["sticker_fixture_positive_001"]
     assert sticker_fixture_score["ok"] is True
     assert sticker_fixture_score["hit_at"]["5"] is True
     assert sticker_fixture_score["checks"]["sendable"] is True
+    assert sticker_fixture_score.get("forbidden_hits", []) == []
     assert baseline["metrics"]["source:sticker"]["positive_cases"] == 1
     group_memory_fixture_score = baseline_scores["group_memory_fixture_positive_001"]
     assert group_memory_fixture_score["ok"] is True
