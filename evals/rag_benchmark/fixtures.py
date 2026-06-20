@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from core.database import Base, GroupMemory, KnowledgeChunk, KnowledgeDocument, StickerMemory
 from core.semantic.adapters import SemanticChunk, chunk_from_knowledge_chunk, chunk_from_sticker
 from core.semantic.indexer import upsert_semantic_chunks
-from core.sticker_memory import normalize_sticker_stream_id
+from core.sticker_memory import GLOBAL_STICKER_STREAM_ID, normalize_sticker_stream_id
 from evals.rag_benchmark.schema import BenchmarkCase
 
 
@@ -50,8 +50,13 @@ KNOWLEDGE_QUERY = "RAG 引用门禁"
 KNOWLEDGE_INDEX_VERSION = "fixture:v1:knowledge"
 STICKER_CASE_ID = "sticker_fixture_positive_001"
 STICKER_ID = 9101
+STICKER_OTHER_STREAM_ID = 9102
+STICKER_GLOBAL_ID = 9103
 STICKER_CANDIDATE_ID = f"sticker:{STICKER_ID}:sticker"
+STICKER_OTHER_STREAM_CANDIDATE_ID = f"sticker:{STICKER_OTHER_STREAM_ID}:sticker"
+STICKER_GLOBAL_CANDIDATE_ID = f"sticker:{STICKER_GLOBAL_ID}:sticker"
 STICKER_CHAT_STREAM_ID = "group:rag-fixture-sticker"
+STICKER_OTHER_STREAM_CHAT_STREAM_ID = "group:rag-fixture-sticker-other"
 STICKER_QUERY = "开心拍桌表情包"
 STICKER_INDEX_VERSION = "fixture:v1:sticker"
 GROUP_MEMORY_CASE_ID = "group_memory_fixture_positive_001"
@@ -143,6 +148,10 @@ def _sticker_positive_case() -> BenchmarkCase:
         },
         expected={
             "candidate_ids": [STICKER_CANDIDATE_ID],
+            "forbidden_candidate_ids": [
+                STICKER_OTHER_STREAM_CANDIDATE_ID,
+                STICKER_GLOBAL_CANDIDATE_ID,
+            ],
             "hit_at": 5,
             "expected_source_type": "sticker",
             "requires_sendable": True,
@@ -288,40 +297,68 @@ def _seed_knowledge_positive_fixture(db: Session) -> None:
 
 def _seed_sticker_positive_fixture(db: Session) -> None:
     now = datetime(2026, 6, 20, 0, 0, 0)
-    sticker = StickerMemory(
-        id=STICKER_ID,
-        chat_stream_id=normalize_sticker_stream_id(chat_stream_id=STICKER_CHAT_STREAM_ID),
+    semantic_chunks: list[SemanticChunk] = []
+
+    def add_sticker(
+        *,
+        sticker_id: int,
+        chat_stream_id: str,
+        sticker_hash: str,
+        name: str,
+        description: str,
+    ) -> None:
+        sticker = StickerMemory(
+            id=sticker_id,
+            chat_stream_id=normalize_sticker_stream_id(chat_stream_id=chat_stream_id),
+            sticker_hash=sticker_hash,
+            file_ref=f"https://example.com/{sticker_hash}.png",
+            send_code=f"[CQ:image,file=https://example.com/{sticker_hash}.png]",
+            name=name,
+            description=description,
+            tags_json=json.dumps(["开心", "拍桌", "表情包"], ensure_ascii=False),
+            emotions_json=json.dumps(["happy"], ensure_ascii=False),
+            source_type="fixture",
+            source_count=1,
+            status="active",
+            usage_count=0,
+            first_seen=now,
+            last_seen=now,
+            meta_json=json.dumps({"fixture": FIXTURE_PRESET}, ensure_ascii=False, sort_keys=True),
+            preview_status="pending",
+            content_hash=sticker_hash,
+            dedupe_status="unique",
+            describe_status="ok",
+            described_at=now,
+            created_at=now,
+        )
+        db.add(sticker)
+        db.flush()
+        semantic_chunk = chunk_from_sticker(sticker)
+        assert semantic_chunk is not None
+        semantic_chunks.append(semantic_chunk)
+
+    add_sticker(
+        sticker_id=STICKER_ID,
+        chat_stream_id=STICKER_CHAT_STREAM_ID,
         sticker_hash="fixture-sticker-positive-001",
-        file_ref="https://example.com/fixture-sticker-positive-001.png",
-        send_code="[CQ:image,file=https://example.com/fixture-sticker-positive-001.png]",
         name="开心拍桌",
         description="开心拍桌表情包，适合表达高兴、赞同和突然兴奋。",
-        tags_json=json.dumps(["开心", "拍桌", "表情包"], ensure_ascii=False),
-        emotions_json=json.dumps(["happy"], ensure_ascii=False),
-        source_type="fixture",
-        source_count=1,
-        status="active",
-        usage_count=0,
-        first_seen=now,
-        last_seen=now,
-        meta_json=json.dumps({"fixture": FIXTURE_PRESET}, ensure_ascii=False, sort_keys=True),
-        preview_status="pending",
-        content_hash="fixture-sticker-positive-001",
-        dedupe_status="unique",
-        describe_status="ok",
-        described_at=now,
-        created_at=now,
     )
-    db.add(sticker)
-    db.flush()
-
-    semantic_chunk = chunk_from_sticker(sticker)
-    assert semantic_chunk is not None
-    upsert_semantic_chunks(
-        db,
-        [semantic_chunk],
-        index_version=STICKER_INDEX_VERSION,
+    add_sticker(
+        sticker_id=STICKER_OTHER_STREAM_ID,
+        chat_stream_id=STICKER_OTHER_STREAM_CHAT_STREAM_ID,
+        sticker_hash="fixture-sticker-decoy-other-stream-001",
+        name="开心拍桌其他群",
+        description="开心拍桌表情包 decoy：其他 stream 不应在目标 stream 查询中返回。",
     )
+    add_sticker(
+        sticker_id=STICKER_GLOBAL_ID,
+        chat_stream_id=GLOBAL_STICKER_STREAM_ID,
+        sticker_hash="fixture-sticker-decoy-global-001",
+        name="开心拍桌全局",
+        description="开心拍桌表情包 decoy：include_global=false 时全局表情不应返回。",
+    )
+    upsert_semantic_chunks(db, semantic_chunks, index_version=STICKER_INDEX_VERSION)
 
 
 def _seed_group_memory_positive_fixture(db: Session) -> None:

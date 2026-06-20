@@ -453,7 +453,7 @@ git commit -m "feat(评测): 强化 knowledge fixture 过滤约束"
 - 修改：`evals/rag_benchmark/fixtures.py`
 - 更新：`.Codex/plans/rag-filter-constraint-fixture.md`
 
-- [ ] **步骤 1：写 sticker 红灯测试**
+- [x] **步骤 1：写 sticker 红灯测试**
 
 在 `test_rag_benchmark_fixture_db_supports_sticker_positive_case` 的 import 中增加：
 
@@ -472,7 +472,7 @@ assert sticker_decoys.isdisjoint(sticker_result.candidate_ids)
 assert sticker_score.forbidden_hits == []
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -484,7 +484,9 @@ python -B -m pytest \
 
 预期：FAIL，原因是新 decoy 常量尚未定义。
 
-- [ ] **步骤 3：实现 sticker fixture decoy**
+实际：FAIL，失败于 `ImportError: cannot import name 'STICKER_GLOBAL_CANDIDATE_ID'`。
+
+- [x] **步骤 3：实现 sticker fixture decoy**
 
 在 sticker 常量附近增加：
 
@@ -575,7 +577,7 @@ add_sticker(
 upsert_semantic_chunks(db, semantic_chunks, index_version=STICKER_INDEX_VERSION)
 ```
 
-- [ ] **步骤 4：运行 sticker 绿灯**
+- [x] **步骤 4：运行 sticker 绿灯**
 
 运行：
 
@@ -587,7 +589,9 @@ python -B -m pytest \
 
 预期：PASS。
 
-- [ ] **步骤 5：提交 sticker 阶段**
+实际：PASS，`1 passed, 1 warning in 0.94s`；四个 fixture 正例回归结果为 `4 passed, 1 warning in 1.13s`。
+
+- [x] **步骤 5：提交 sticker 阶段**
 
 运行：
 

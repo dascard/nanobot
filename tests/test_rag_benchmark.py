@@ -152,6 +152,8 @@ def test_rag_benchmark_fixture_db_supports_sticker_positive_case(tmp_path):
         STICKER_CANDIDATE_ID,
         STICKER_CASE_ID,
         STICKER_CHAT_STREAM_ID,
+        STICKER_GLOBAL_CANDIDATE_ID,
+        STICKER_OTHER_STREAM_CANDIDATE_ID,
         build_fixture_db,
     )
     from evals.rag_benchmark.run import run_benchmark
@@ -164,6 +166,7 @@ def test_rag_benchmark_fixture_db_supports_sticker_positive_case(tmp_path):
     by_case = {case.id: case for case in cases}
     by_result = {result.case_id: result for result in results}
     by_score = {score.case_id: score for score in scores}
+    sticker_decoys = {STICKER_OTHER_STREAM_CANDIDATE_ID, STICKER_GLOBAL_CANDIDATE_ID}
 
     assert STICKER_CASE_ID in by_case
     assert by_case[STICKER_CASE_ID].source_type == "sticker"
@@ -171,10 +174,12 @@ def test_rag_benchmark_fixture_db_supports_sticker_positive_case(tmp_path):
     assert by_case[STICKER_CASE_ID].filters["include_global"] is False
     assert by_case[STICKER_CASE_ID].expected.requires_sendable is True
     assert by_case[STICKER_CASE_ID].expected.candidate_ids == [STICKER_CANDIDATE_ID]
+    assert set(by_case[STICKER_CASE_ID].expected.forbidden_candidate_ids) == sticker_decoys
 
     sticker_result = by_result[STICKER_CASE_ID]
     sticker_score = by_score[STICKER_CASE_ID]
     assert sticker_result.candidate_ids[0] == STICKER_CANDIDATE_ID
+    assert sticker_decoys.isdisjoint(sticker_result.candidate_ids)
     assert any(
         candidate.candidate_id == STICKER_CANDIDATE_ID and candidate.sendable is True
         for candidate in sticker_result.candidates
@@ -183,6 +188,7 @@ def test_rag_benchmark_fixture_db_supports_sticker_positive_case(tmp_path):
     assert sticker_score.rank == 1
     assert sticker_score.hit_at["5"] is True
     assert sticker_score.checks["sendable"] is True
+    assert sticker_score.forbidden_hits == []
 
 
 def test_rag_benchmark_fixture_db_supports_group_memory_positive_case(tmp_path):
