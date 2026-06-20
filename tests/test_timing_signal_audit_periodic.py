@@ -10,12 +10,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_timing_signal_audit_periodic_script_skips_missing_db(tmp_path):
-    out = tmp_path / "reports" / "timing_signal_audit_latest.json"
+    latest = tmp_path / "reports" / "timing_signal_audit_latest.json"
+    dated = tmp_path / "reports" / "2026-06-20-timing_signal_audit.json"
+    run_scoped = tmp_path / "reports" / "runs" / "unit_run" / "timing_signal_audit.json"
     missing_db = tmp_path / "missing.db"
     env = {
         **os.environ,
         "TIMING_SIGNAL_AUDIT_DB": str(missing_db),
-        "TIMING_SIGNAL_AUDIT_OUT": str(out),
+        "TIMING_SIGNAL_AUDIT_OUT": str(latest),
+        "TIMING_SIGNAL_AUDIT_EXTRA_OUTS": f"{run_scoped}:{dated}",
         "TIMING_SIGNAL_AUDIT_LIMIT": "17",
         "TIMING_SIGNAL_AUDIT_AFTER_ID": "5",
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -31,8 +34,13 @@ def test_timing_signal_audit_periodic_script_skips_missing_db(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert out.exists()
-    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert latest.exists()
+    assert dated.exists()
+    assert run_scoped.exists()
+
+    payload = json.loads(latest.read_text(encoding="utf-8"))
+    assert json.loads(dated.read_text(encoding="utf-8")) == payload
+    assert json.loads(run_scoped.read_text(encoding="utf-8")) == payload
     assert payload["total_samples"] == 0
     assert payload["samples"] == []
     assert payload["source"]["mode"] == "skipped"

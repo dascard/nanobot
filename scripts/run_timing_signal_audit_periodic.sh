@@ -10,6 +10,30 @@ OUT="${TIMING_SIGNAL_AUDIT_OUT:-evals/reports/timing_signal_audit_latest.json}"
 LIMIT="${TIMING_SIGNAL_AUDIT_LIMIT:-200}"
 AFTER_ID="${TIMING_SIGNAL_AUDIT_AFTER_ID:-0}"
 SIGNALS="${TIMING_SIGNAL_AUDIT_SIGNALS:-}"
+EXTRA_OUTS="${TIMING_SIGNAL_AUDIT_EXTRA_OUTS:-}"
+
+copy_extra_outputs() {
+  if [[ -z "$EXTRA_OUTS" ]]; then
+    return 0
+  fi
+  python - "$OUT" "$EXTRA_OUTS" <<'PY'
+import shutil
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+for raw in sys.argv[2].split(":"):
+    item = raw.strip()
+    if not item:
+        continue
+    dst = Path(item)
+    if dst.resolve() == src.resolve():
+        continue
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+    print(f"Timing signal audit copied: out={dst}")
+PY
+}
 
 if [[ ! -f "$DB" ]]; then
   python - "$OUT" "$DB" "$LIMIT" "$AFTER_ID" "$SIGNALS" <<'PY'
@@ -43,6 +67,7 @@ out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 print(f"Timing signal audit skipped: db_not_found db={db} out={out}")
 PY
+  copy_extra_outputs
   exit 0
 fi
 
@@ -59,3 +84,4 @@ if [[ -n "$SIGNALS" ]]; then
 fi
 
 "${args[@]}"
+copy_extra_outputs
