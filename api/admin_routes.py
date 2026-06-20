@@ -5278,6 +5278,7 @@ from core.eval_sampling.store import (
     list_candidates, get_candidate, update_candidate,
     label_candidate, ignore_candidate, plan_candidate_promotion, promote_candidate,
     candidate_queue_summary, preflight_candidate_promotions,
+    reject_candidate, defer_candidate, reopen_candidate,
     save_run, save_run_results, get_runs, get_run,
 )
 from evals.expected_contract import expected_contract_payload
@@ -5390,6 +5391,18 @@ class PromoteRequest(BaseModel):
     dry_run: bool = False
 
 
+class CandidateTriageRequest(BaseModel):
+    reason_code: str = ""
+    note: str = ""
+    defer_until: str = ""
+
+
+def _triage_response_or_404(result):
+    if not result:
+        raise HTTPException(404, "candidate not found")
+    return result
+
+
 @router.post("/evals/candidates/{case_id}/label")
 def eval_label_candidate(
     case_id: str, body: LabelRequest,
@@ -5408,12 +5421,82 @@ def eval_label_candidate(
     return result
 
 
+@router.post("/evals/candidates/{case_id}/reject")
+def eval_reject_candidate(
+    case_id: str,
+    body: CandidateTriageRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    try:
+        result = reject_candidate(
+            db,
+            case_id,
+            reason_code=body.reason_code,
+            note=body.note,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    result = _triage_response_or_404(result)
+    _audit_request(db, request, "reject_candidate", "eval_candidate", case_id, result["audit"])
+    return result["candidate"]
+
+
+@router.post("/evals/candidates/{case_id}/defer")
+def eval_defer_candidate(
+    case_id: str,
+    body: CandidateTriageRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    try:
+        result = defer_candidate(
+            db,
+            case_id,
+            reason_code=body.reason_code,
+            note=body.note,
+            defer_until=body.defer_until,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    result = _triage_response_or_404(result)
+    _audit_request(db, request, "defer_candidate", "eval_candidate", case_id, result["audit"])
+    return result["candidate"]
+
+
+@router.post("/evals/candidates/{case_id}/reopen")
+def eval_reopen_candidate(
+    case_id: str,
+    body: CandidateTriageRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    try:
+        result = reopen_candidate(
+            db,
+            case_id,
+            reason_code=body.reason_code,
+            note=body.note,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    result = _triage_response_or_404(result)
+    _audit_request(db, request, "reopen_candidate", "eval_candidate", case_id, result["audit"])
+    return result["candidate"]
+
+
 @router.post("/evals/candidates/{case_id}/ignore")
 def eval_ignore_candidate(
     case_id: str, request: Request, db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    result = ignore_candidate(db, case_id)
+    try:
+        result = ignore_candidate(db, case_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not result:
         raise HTTPException(404, "candidate not found")
     _audit_request(db, request, "ignore_candidate", "eval_candidate", case_id)

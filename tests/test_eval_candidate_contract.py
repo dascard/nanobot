@@ -288,6 +288,98 @@ def test_eval_patch_candidate_rejects_direct_labeled_promoted_and_unknown_status
     assert ok.json()["note"] == "优先处理"
 
 
+def test_candidate_triage_transitions_return_audit_payload(db_session):
+    from core.eval_sampling.store import (
+        defer_candidate,
+        get_candidate,
+        reject_candidate,
+        reopen_candidate,
+    )
+
+    _insert_candidate(db_session, case_id="cand_reject")
+    rejected = reject_candidate(
+        db_session,
+        "cand_reject",
+        reason_code="low_value",
+        note="普通寒暄，不进入稳定集",
+    )
+
+    assert rejected["candidate"]["status"] == "rejected"
+    assert rejected["audit"] == {
+        "before_status": "candidate",
+        "after_status": "rejected",
+        "reason_code": "low_value",
+        "note": "普通寒暄，不进入稳定集",
+        "defer_until": "",
+    }
+    assert get_candidate(db_session, "cand_reject").status == "rejected"
+
+    _insert_candidate(db_session, case_id="cand_defer")
+    deferred = defer_candidate(
+        db_session,
+        "cand_defer",
+        reason_code="needs_more_context",
+        note="等后续对话补齐上下文",
+        defer_until="2026-06-30",
+    )
+
+    assert deferred["candidate"]["status"] == "deferred"
+    assert deferred["audit"]["before_status"] == "candidate"
+    assert deferred["audit"]["after_status"] == "deferred"
+    assert deferred["audit"]["reason_code"] == "needs_more_context"
+    assert deferred["audit"]["defer_until"] == "2026-06-30"
+
+    reopened = reopen_candidate(
+        db_session,
+        "cand_defer",
+        reason_code="defer_expired",
+        note="到期复核",
+    )
+
+    assert reopened["candidate"]["status"] == "candidate"
+    assert reopened["audit"]["before_status"] == "deferred"
+    assert reopened["audit"]["after_status"] == "candidate"
+    assert reopened["audit"]["reason_code"] == "defer_expired"
+
+
+def test_candidate_triage_rejects_invalid_transitions_and_reason_codes(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    from core.eval_sampling.store import (
+        defer_candidate,
+        get_candidate,
+        label_candidate,
+        promote_candidate,
+        reject_candidate,
+        reopen_candidate,
+    )
+
+    _insert_candidate(db_session, case_id="cand_promoted")
+    label_candidate(db_session, "cand_promoted", {"timing_action": "continue"})
+    promote_candidate(db_session, "cand_promoted")
+
+    for action in (
+        lambda: reject_candidate(db_session, "cand_promoted", reason_code="low_value"),
+        lambda: defer_candidate(db_session, "cand_promoted", reason_code="needs_more_context"),
+        lambda: reopen_candidate(db_session, "cand_promoted", reason_code="new_evidence"),
+    ):
+        with pytest.raises(ValueError, match="invalid status transition"):
+            action()
+
+    _insert_candidate(db_session, case_id="cand_bad_reason")
+    with pytest.raises(ValueError, match="invalid reason_code"):
+        reject_candidate(db_session, "cand_bad_reason", reason_code="unknown_reason")
+
+    _insert_candidate(db_session, case_id="cand_rejected")
+    reject_candidate(db_session, "cand_rejected", reason_code="low_value")
+    assert get_candidate(db_session, "cand_rejected").status == "rejected"
+    with pytest.raises(ValueError, match="candidate status"):
+        label_candidate(db_session, "cand_rejected", {"timing_action": "continue"})
+
+
 def test_candidate_readiness_blocks_status_error_suite_invalid_expected_and_existing_target(
     db_session,
     tmp_path,
@@ -400,6 +492,60 @@ def test_eval_candidates_preflight_returns_ready_and_blocked_items(
     assert by_id["cand_ready"]["readiness"]["ready"] is True
     assert by_id["cand_error"]["readiness"]["blocking_reasons"][0]["code"] == "suite_not_runnable"
     assert by_id["missing_case"]["readiness"]["blocking_reasons"][0]["code"] == "candidate_not_found"
+
+
+def test_eval_candidate_triage_endpoints_write_audit_detail(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import AdminAuditLog
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    _insert_candidate(db_session, case_id="cand_defer_api")
+
+    response = client.post(
+        "/api/v1/admin/evals/candidates/cand_defer_api/defer",
+        headers=_auth_header(),
+        json={
+            "reason_code": "needs_more_context",
+            "note": "缺少后续上下文",
+            "defer_until": "2026-06-30",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "deferred"
+
+    audit = (
+        db_session.query(AdminAuditLog)
+        .filter(AdminAuditLog.action == "defer_candidate")
+        .order_by(AdminAuditLog.id.desc())
+        .first()
+    )
+    assert audit is not None
+    detail = json.loads(audit.detail_json)
+    assert detail["before_status"] == "candidate"
+    assert detail["after_status"] == "deferred"
+    assert detail["reason_code"] == "needs_more_context"
+    assert detail["note"] == "缺少后续上下文"
+    assert detail["defer_until"] == "2026-06-30"
+
+    rejected = client.post(
+        "/api/v1/admin/evals/candidates/cand_defer_api/reject",
+        headers=_auth_header(),
+        json={"reason_code": "low_value", "note": "复核后拒绝"},
+    )
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["status"] == "rejected"
+
+    reopened = client.post(
+        "/api/v1/admin/evals/candidates/cand_defer_api/reopen",
+        headers=_auth_header(),
+        json={"reason_code": "operator_correction", "note": "恢复到候选"},
+    )
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["status"] == "candidate"
 
 
 def test_promote_candidate_dry_run_does_not_write_or_change_status(

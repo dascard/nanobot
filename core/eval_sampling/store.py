@@ -27,11 +27,113 @@ RUNNABLE_EVAL_SUITES = frozenset({
     "timing_gate",
 })
 
+CANDIDATE_STATUS_CANDIDATE = "candidate"
+CANDIDATE_STATUS_LABELED = "labeled"
+CANDIDATE_STATUS_IGNORED = "ignored"
+CANDIDATE_STATUS_DEFERRED = "deferred"
+CANDIDATE_STATUS_REJECTED = "rejected"
+CANDIDATE_STATUS_PROMOTED = "promoted"
+
+PATCHABLE_CANDIDATE_STATUSES = {
+    CANDIDATE_STATUS_CANDIDATE,
+    CANDIDATE_STATUS_IGNORED,
+}
+
+LABELABLE_CANDIDATE_STATUSES = {
+    CANDIDATE_STATUS_CANDIDATE,
+    CANDIDATE_STATUS_DEFERRED,
+}
+
+IGNORABLE_CANDIDATE_STATUSES = {
+    CANDIDATE_STATUS_CANDIDATE,
+    CANDIDATE_STATUS_LABELED,
+}
+
+REJECTABLE_CANDIDATE_STATUSES = {
+    CANDIDATE_STATUS_CANDIDATE,
+    CANDIDATE_STATUS_LABELED,
+    CANDIDATE_STATUS_DEFERRED,
+    CANDIDATE_STATUS_IGNORED,
+}
+
+DEFERABLE_CANDIDATE_STATUSES = {
+    CANDIDATE_STATUS_CANDIDATE,
+    CANDIDATE_STATUS_LABELED,
+}
+
+REOPENABLE_CANDIDATE_STATUSES = {
+    CANDIDATE_STATUS_IGNORED,
+    CANDIDATE_STATUS_DEFERRED,
+    CANDIDATE_STATUS_REJECTED,
+}
+
+REJECT_REASON_CODES = frozenset({
+    "unspecified",
+    "duplicate",
+    "low_value",
+    "unsafe_or_sensitive",
+    "not_reproducible",
+    "out_of_scope",
+    "bad_sample",
+})
+
+DEFER_REASON_CODES = frozenset({
+    "unspecified",
+    "needs_more_context",
+    "needs_batch_review",
+    "waiting_for_baseline",
+    "needs_product_decision",
+    "temporary_blocker",
+})
+
+REOPEN_REASON_CODES = frozenset({
+    "unspecified",
+    "new_evidence",
+    "operator_correction",
+    "defer_expired",
+    "needs_relabel",
+})
+
 
 def _readiness_reason(code: str, message: str, **extra: Any) -> dict[str, Any]:
     reason: dict[str, Any] = {"code": code, "message": message}
     reason.update(extra)
     return reason
+
+
+def _normalize_reason_code(value: str | None, allowed: frozenset[str]) -> str:
+    code = str(value or "unspecified").strip() or "unspecified"
+    if len(code) > 64 or code not in allowed:
+        raise ValueError(f"invalid reason_code: {value}")
+    return code
+
+
+def _normalize_note(value: str | None) -> str:
+    return str(value or "").strip()[:1000]
+
+
+def _normalize_defer_until(value: str | None) -> str:
+    return str(value or "").strip()[:64]
+
+
+def _triage_payload(
+    row: EvalCandidate,
+    *,
+    before_status: str,
+    reason_code: str,
+    note: str,
+    defer_until: str = "",
+) -> dict[str, Any]:
+    return {
+        "candidate": _candidate_dict(row),
+        "audit": {
+            "before_status": before_status,
+            "after_status": row.status,
+            "reason_code": reason_code,
+            "note": note,
+            "defer_until": defer_until,
+        },
+    }
 
 
 # ── Cursor ──
@@ -270,12 +372,15 @@ def update_candidate(db, case_id: str, **fields):
         return None
     next_status = fields.get("status")
     if next_status is not None:
-        if next_status not in {"candidate", "ignored"}:
+        if next_status not in PATCHABLE_CANDIDATE_STATUSES:
             raise ValueError(f"invalid status transition: {next_status}")
-        if row.status == "ignored" and next_status == "candidate":
-            row.status = "candidate"
-        elif row.status in {"candidate", "labeled"} and next_status == "ignored":
-            row.status = "ignored"
+        if row.status == CANDIDATE_STATUS_IGNORED and next_status == CANDIDATE_STATUS_CANDIDATE:
+            row.status = CANDIDATE_STATUS_CANDIDATE
+        elif (
+            row.status in {CANDIDATE_STATUS_CANDIDATE, CANDIDATE_STATUS_LABELED}
+            and next_status == CANDIDATE_STATUS_IGNORED
+        ):
+            row.status = CANDIDATE_STATUS_IGNORED
         elif row.status != next_status:
             raise ValueError(f"invalid status transition: {row.status} -> {next_status}")
         fields = {key: value for key, value in fields.items() if key != "status"}
@@ -292,9 +397,11 @@ def label_candidate(db, case_id: str, expected_dict: dict, *, note: str | None =
     row = get_candidate(db, case_id)
     if not row:
         return None
+    if row.status not in LABELABLE_CANDIDATE_STATUSES:
+        raise ValueError(f"candidate status must be candidate or deferred before label: {row.status}")
     validate_expected_contract(row.suite, expected_dict)
     row.expected_json = json.dumps(expected_dict, ensure_ascii=False)
-    row.status = "labeled"
+    row.status = CANDIDATE_STATUS_LABELED
     if note is not None:
         row.note = note
     row.updated_at = datetime.now()
@@ -307,10 +414,102 @@ def ignore_candidate(db, case_id: str):
     row = get_candidate(db, case_id)
     if not row:
         return None
-    row.status = "ignored"
+    if row.status not in IGNORABLE_CANDIDATE_STATUSES:
+        raise ValueError(f"invalid status transition: {row.status} -> ignored")
+    row.status = CANDIDATE_STATUS_IGNORED
     row.updated_at = datetime.now()
     db.commit()
     return _candidate_dict(row)
+
+
+def reject_candidate(
+    db,
+    case_id: str,
+    *,
+    reason_code: str | None = None,
+    note: str | None = None,
+):
+    """拒绝候选：status=rejected，并返回候选和审计 payload。"""
+    row = get_candidate(db, case_id)
+    if not row:
+        return None
+    if row.status not in REJECTABLE_CANDIDATE_STATUSES:
+        raise ValueError(f"invalid status transition: {row.status} -> rejected")
+    before = row.status
+    reason = _normalize_reason_code(reason_code, REJECT_REASON_CODES)
+    normalized_note = _normalize_note(note)
+    row.status = CANDIDATE_STATUS_REJECTED
+    if normalized_note:
+        row.note = normalized_note
+    row.updated_at = datetime.now()
+    db.commit()
+    return _triage_payload(
+        row,
+        before_status=before,
+        reason_code=reason,
+        note=normalized_note,
+    )
+
+
+def defer_candidate(
+    db,
+    case_id: str,
+    *,
+    reason_code: str | None = None,
+    note: str | None = None,
+    defer_until: str | None = None,
+):
+    """暂缓候选：status=deferred，并返回候选和审计 payload。"""
+    row = get_candidate(db, case_id)
+    if not row:
+        return None
+    if row.status not in DEFERABLE_CANDIDATE_STATUSES:
+        raise ValueError(f"invalid status transition: {row.status} -> deferred")
+    before = row.status
+    reason = _normalize_reason_code(reason_code, DEFER_REASON_CODES)
+    normalized_note = _normalize_note(note)
+    normalized_defer_until = _normalize_defer_until(defer_until)
+    row.status = CANDIDATE_STATUS_DEFERRED
+    if normalized_note:
+        row.note = normalized_note
+    row.updated_at = datetime.now()
+    db.commit()
+    return _triage_payload(
+        row,
+        before_status=before,
+        reason_code=reason,
+        note=normalized_note,
+        defer_until=normalized_defer_until,
+    )
+
+
+def reopen_candidate(
+    db,
+    case_id: str,
+    *,
+    reason_code: str | None = None,
+    note: str | None = None,
+):
+    """复开候选：从 ignored/deferred/rejected 回到 candidate。"""
+    row = get_candidate(db, case_id)
+    if not row:
+        return None
+    if row.status not in REOPENABLE_CANDIDATE_STATUSES:
+        raise ValueError(f"invalid status transition: {row.status} -> candidate")
+    before = row.status
+    reason = _normalize_reason_code(reason_code, REOPEN_REASON_CODES)
+    normalized_note = _normalize_note(note)
+    row.status = CANDIDATE_STATUS_CANDIDATE
+    if normalized_note:
+        row.note = normalized_note
+    row.updated_at = datetime.now()
+    db.commit()
+    return _triage_payload(
+        row,
+        before_status=before,
+        reason_code=reason,
+        note=normalized_note,
+    )
 
 
 def _validate_dataset_name(value: str) -> tuple[str, dict[str, Any] | None]:
