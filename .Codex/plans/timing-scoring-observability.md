@@ -22,7 +22,7 @@
 **文件：**
 - 修改：`tests/test_webui_observability.py`
 
-- [ ] **步骤 1：编写失败的静态测试**
+- [x] **步骤 1：编写失败的静态测试**
 
 在 `test_timing_gate_detail_exposes_scoring_breakdown()` 末尾增加断言：
 
@@ -36,7 +36,7 @@
     assert "w_incomplete" in source
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -44,7 +44,7 @@
 python -B -m pytest tests/test_webui_observability.py::test_timing_gate_detail_exposes_scoring_breakdown -q -p no:cacheprovider
 ```
 
-预期：失败，至少报缺少 `"conflict_score"` 或其他新增字段。
+结果：失败，报缺少 `"s_transport_tier"`，红灯符合预期。
 
 ## 任务 2：补 TimingEventDetail 展示
 
@@ -52,7 +52,7 @@ python -B -m pytest tests/test_webui_observability.py::test_timing_gate_detail_e
 - 修改：`webui/src/App.jsx`
 - 测试：`tests/test_webui_observability.py`
 
-- [ ] **步骤 1：在规则评分网格展示决策调试字段**
+- [x] **步骤 1：在规则评分网格展示决策调试字段**
 
 在 `TimingEventDetail` 的规则评分网格里，在 `band` 卡片后增加：
 
@@ -71,7 +71,7 @@ python -B -m pytest tests/test_webui_observability.py::test_timing_gate_detail_e
               </div>
 ```
 
-- [ ] **步骤 2：在信号分解展示 transport tier 和 wait 子信号**
+- [x] **步骤 2：在信号分解展示 transport tier 和 wait 子信号**
 
 在 `s_transport` 后补充 tier，并在 `s_bot` 后补充 wait 子信号：
 
@@ -82,7 +82,7 @@ python -B -m pytest tests/test_webui_observability.py::test_timing_gate_detail_e
                 <div>w_incomplete: <span className="font-mono text-slate-200">{scoreValue(subSignals.w_incomplete)}</span></div>
 ```
 
-- [ ] **步骤 3：运行绿灯测试**
+- [x] **步骤 3：运行绿灯测试**
 
 运行：
 
@@ -90,7 +90,7 @@ python -B -m pytest tests/test_webui_observability.py::test_timing_gate_detail_e
 python -B -m pytest tests/test_webui_observability.py::test_timing_gate_detail_exposes_scoring_breakdown -q -p no:cacheprovider
 ```
 
-预期：通过。
+结果：`1 passed, 1 warning in 0.67s`。
 
 ## 任务 3：回归验证与提交
 
@@ -98,7 +98,7 @@ python -B -m pytest tests/test_webui_observability.py::test_timing_gate_detail_e
 - 修改：`webui/src/App.jsx`
 - 修改：`tests/test_webui_observability.py`
 
-- [ ] **步骤 1：运行相邻回归**
+- [x] **步骤 1：运行相邻回归**
 
 运行：
 
@@ -110,9 +110,9 @@ python -B -m pytest \
   -q -p no:cacheprovider
 ```
 
-预期：全部通过。
+结果：`7 passed, 1 warning in 1.12s`。
 
-- [ ] **步骤 2：运行全量回归**
+- [x] **步骤 2：运行全量回归**
 
 运行：
 
@@ -122,9 +122,9 @@ PYTHONDONTWRITEBYTECODE=1 NANOBOT_TESTING=1 DATABASE_URL=sqlite:///:memory: NEW_
 python -B -m pytest tests/ -q -p no:cacheprovider
 ```
 
-预期：全部通过，允许既有 warnings。
+结果：`1380 passed, 6 skipped, 139 warnings in 103.22s`。
 
-- [ ] **步骤 3：检查 diff**
+- [x] **步骤 3：检查 diff**
 
 运行：
 
@@ -132,9 +132,9 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 git diff --check -- webui/src/App.jsx tests/test_webui_observability.py
 ```
 
-预期：无输出。
+结果：无输出。
 
-- [ ] **步骤 4：提交本阶段代码**
+- [x] **步骤 4：提交本阶段代码**
 
 运行：
 
@@ -143,4 +143,8 @@ git add webui/src/App.jsx tests/test_webui_observability.py
 git commit -m "feat(时机): 补齐评分可观测字段"
 ```
 
-提交前确认不要暂存无关文件。
+提交：`9d5817c feat(时机): 补齐评分可观测字段`。
+
+## 额外验证
+
+- WebUI build：`npm --prefix webui run build` 退出码 0，Vite 仅输出 chunk size / plugin timing 警告。
