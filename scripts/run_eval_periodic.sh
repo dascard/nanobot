@@ -22,7 +22,12 @@ else
   PERIODIC_RUN_ID="${PERIODIC_RUN_ID:-$(date +%Y%m%d_%H%M%S)_local}"
 fi
 PERIODIC_STEPS_JSONL="${PERIODIC_STEPS_JSONL:-tmp/eval_periodic/${PERIODIC_RUN_ID}/steps.jsonl}"
-TIMING_SIGNAL_AUDIT_OUT="${TIMING_SIGNAL_AUDIT_OUT:-evals/reports/timing_signal_audit_latest.json}"
+TIMING_SIGNAL_AUDIT_LATEST_OUT="${TIMING_SIGNAL_AUDIT_OUT:-evals/reports/timing_signal_audit_latest.json}"
+TIMING_SIGNAL_AUDIT_DATED_OUT="evals/reports/${PERIODIC_REPORT_DATE}-timing_signal_audit.json"
+TIMING_SIGNAL_AUDIT_RUN_OUT="evals/reports/runs/${PERIODIC_RUN_ID}/timing_signal_audit.json"
+TIMING_SIGNAL_AUDIT_EXTRA_OUTS_PREFIX="${TIMING_SIGNAL_AUDIT_RUN_OUT}:${TIMING_SIGNAL_AUDIT_DATED_OUT}"
+export TIMING_SIGNAL_AUDIT_OUT="$TIMING_SIGNAL_AUDIT_LATEST_OUT"
+export TIMING_SIGNAL_AUDIT_EXTRA_OUTS="${TIMING_SIGNAL_AUDIT_EXTRA_OUTS_PREFIX}${TIMING_SIGNAL_AUDIT_EXTRA_OUTS:+:${TIMING_SIGNAL_AUDIT_EXTRA_OUTS}}"
 mkdir -p "$(dirname "$PERIODIC_STEPS_JSONL")"
 : > "$PERIODIC_STEPS_JSONL"
 
@@ -132,7 +137,7 @@ run_step "rag benchmark manual fixture deterministic gate" "rag_benchmark" "rag_
 
 run_step "timing signal audit" "timing_signal_audit" "timing_signal_audit" \
   "" \
-  "$TIMING_SIGNAL_AUDIT_OUT" \
+  "$TIMING_SIGNAL_AUDIT_RUN_OUT|$TIMING_SIGNAL_AUDIT_DATED_OUT|$TIMING_SIGNAL_AUDIT_LATEST_OUT" \
   bash scripts/run_timing_signal_audit_periodic.sh
 
 PERIODIC_FINISHED_AT="$(python - <<'PY'

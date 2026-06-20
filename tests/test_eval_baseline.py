@@ -424,6 +424,36 @@ def test_eval_periodic_script_writes_manifest():
     assert "runs/${PERIODIC_RUN_ID}/manifest.json" in text
 
 
+def test_eval_periodic_script_indexes_immutable_timing_signal_audit_reports():
+    text = Path("scripts/run_eval_periodic.sh").read_text(encoding="utf-8")
+
+    assert (
+        'TIMING_SIGNAL_AUDIT_LATEST_OUT="${TIMING_SIGNAL_AUDIT_OUT:-evals/reports/timing_signal_audit_latest.json}"'
+        in text
+    )
+    assert (
+        'TIMING_SIGNAL_AUDIT_DATED_OUT="evals/reports/${PERIODIC_REPORT_DATE}-timing_signal_audit.json"'
+        in text
+    )
+    assert (
+        'TIMING_SIGNAL_AUDIT_RUN_OUT="evals/reports/runs/${PERIODIC_RUN_ID}/timing_signal_audit.json"'
+        in text
+    )
+    assert 'export TIMING_SIGNAL_AUDIT_OUT="$TIMING_SIGNAL_AUDIT_LATEST_OUT"' in text
+    assert (
+        'TIMING_SIGNAL_AUDIT_EXTRA_OUTS_PREFIX="${TIMING_SIGNAL_AUDIT_RUN_OUT}:${TIMING_SIGNAL_AUDIT_DATED_OUT}"'
+        in text
+    )
+    assert (
+        'export TIMING_SIGNAL_AUDIT_EXTRA_OUTS="${TIMING_SIGNAL_AUDIT_EXTRA_OUTS_PREFIX}${TIMING_SIGNAL_AUDIT_EXTRA_OUTS:+:${TIMING_SIGNAL_AUDIT_EXTRA_OUTS}}"'
+        in text
+    )
+    assert (
+        '"$TIMING_SIGNAL_AUDIT_RUN_OUT|$TIMING_SIGNAL_AUDIT_DATED_OUT|$TIMING_SIGNAL_AUDIT_LATEST_OUT"'
+        in text
+    )
+
+
 def test_eval_pr_gate_workflow_runs_unified_script():
     workflow = Path(".github/workflows/timing-gate-eval.yml")
 
