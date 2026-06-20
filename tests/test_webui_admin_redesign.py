@@ -106,6 +106,19 @@ def test_eval_candidate_promote_uses_dry_run_modal():
     assert "api.post(`/evals/candidates/${encodeURIComponent(caseId)}/promote`)" not in source
 
 
+def test_evals_candidates_page_shows_summary_readiness_and_preflight():
+    source = EVALS_JS.read_text(encoding="utf-8")
+
+    assert "summary" in source
+    assert "readiness" in source
+    assert "blocking_reasons" in source
+    assert "预检当前页" in source
+    assert "/evals/candidates/preflight" in source
+    assert "candidate.readiness?.ready" in source
+    assert "disabled" in source
+    assert "提升" in source
+
+
 def test_sticker_duplicate_actions_do_not_use_emoji_buttons():
     source = read_app()
 

@@ -7,10 +7,15 @@ import { Badge, Card, JsonBlock, MiniStat, Modal, Pagination } from '../../compo
 export function EvalsPage() {
   const [tab, setTab] = useState('candidates')
   const [candidates, setCandidates] = useState({ items: [], total: 0 })
+  const [candidateSummary, setCandidateSummary] = useState(null)
   const [candPage, setCandPage] = useState(1)
   const [suiteFilter, setSuiteFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
+  const [preflightOpen, setPreflightOpen] = useState(false)
+  const [preflightResult, setPreflightResult] = useState(null)
+  const [preflightError, setPreflightError] = useState('')
+  const [preflightLoading, setPreflightLoading] = useState(false)
   const [detail, setDetail] = useState(null)
   const [showLabel, setShowLabel] = useState(null)
   const [labelSuite, setLabelSuite] = useState('')
@@ -35,7 +40,11 @@ export function EvalsPage() {
     if (suiteFilter) params.suite = suiteFilter
     if (statusFilter) params.status = statusFilter
     if (sourceFilter) params.source = sourceFilter
-    api.get('/evals/candidates', { params }).then(r => setCandidates(r.data))
+    api.get('/evals/candidates', { params }).then(r => {
+      const payload = r.data || { items: [], total: 0 }
+      setCandidates(payload)
+      setCandidateSummary(payload.summary || null)
+    })
   }, [candPage, suiteFilter, statusFilter, sourceFilter])
 
   const loadRuns = useCallback(() => {
@@ -61,6 +70,14 @@ export function EvalsPage() {
   const fieldValue = (key) => labelFields[key] ?? ''
 
   const fieldSchema = (key) => expectedContract?.field_schema?.[key] || {}
+
+  const readinessReason = (candidate) => {
+    const reasons = candidate.readiness?.blocking_reasons || []
+    const first = reasons[0]
+    if (!first) return ''
+    if (first.code && first.message) return `${first.code}: ${first.message}`
+    return first.code || first.message || ''
+  }
 
   const fieldsForSuite = (suite) => (
     expectedContract?.suite_presets?.[suite]?.fields
@@ -141,6 +158,25 @@ export function EvalsPage() {
     api.post('/evals/sample/run')
       .then(r => { setSampleInfo(r.data); loadCandidates() })
       .catch(e => alert(e.response?.data?.detail || e.message))
+  }
+
+  const preflightCurrentPage = () => {
+    const caseIds = (candidates.items || []).map(candidate => candidate.case_id).filter(Boolean)
+    if (caseIds.length === 0) return
+    setPreflightLoading(true)
+    setPreflightResult(null)
+    setPreflightError('')
+    api.post('/evals/candidates/preflight', {
+      case_ids: caseIds,
+      target_dataset: suiteFilter.trim() || 'regression',
+      suite: suiteFilter || undefined,
+      status: statusFilter || undefined,
+      source: sourceFilter || undefined,
+      limit: caseIds.length,
+    })
+      .then(r => { setPreflightResult(r.data); setPreflightOpen(true) })
+      .catch(e => { setPreflightError(e.response?.data?.detail || e.message); setPreflightOpen(true) })
+      .finally(() => setPreflightLoading(false))
   }
 
   const loadDetail = (caseId) => {
@@ -261,6 +297,21 @@ export function EvalsPage() {
               <option value="db">db</option>
             </select>
           </div>
+          {candidateSummary && (
+            <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-8">
+              <MiniStat label="summary 总数" value={candidateSummary.total ?? candidates.total} />
+              <MiniStat label="待标记" value={candidateSummary.by_status?.candidate || 0} tone="amber" />
+              <MiniStat label="已标记" value={candidateSummary.by_status?.labeled || 0} tone="blue" />
+              <MiniStat label="可提升" value={candidateSummary.readiness?.ready || 0} tone="emerald" />
+              <MiniStat label="阻断" value={candidateSummary.readiness?.blocked || 0} tone="red" />
+              <MiniStat label="已忽略" value={candidateSummary.by_status?.ignored || 0} />
+              <MiniStat label="已提升" value={candidateSummary.by_status?.promoted || 0} tone="emerald" />
+              <button onClick={preflightCurrentPage} disabled={preflightLoading || !(candidates.items || []).length}
+                className="min-h-[72px] rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-xs font-medium text-indigo-200 transition-colors hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-50">
+                {preflightLoading ? '预检中...' : '预检当前页'}
+              </button>
+            </div>
+          )}
           <Card>
             <table className="w-full text-xs">
               <thead><tr className="text-left text-slate-500 border-b border-slate-800">
@@ -268,34 +319,49 @@ export function EvalsPage() {
                 <th className="px-3 py-2">suite</th>
                 <th className="px-3 py-2">来源</th>
                 <th className="px-3 py-2">状态</th>
+                <th className="px-3 py-2">资格</th>
                 <th className="px-3 py-2">描述</th>
                 <th className="px-3 py-2">创建时间</th>
                 <th className="px-3 py-2">操作</th>
               </tr></thead>
               <tbody>
-                {candidates.items.map(c => (
-                  <tr key={c.case_id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
-                    <td className="px-3 py-2 font-mono max-w-[200px] truncate">{c.case_id}</td>
-                    <td className="px-3 py-2"><Badge>{c.suite}</Badge></td>
-                    <td className="px-3 py-2 text-slate-400">{c.source}</td>
+                {(candidates.items || []).map(candidate => (
+                  <tr key={candidate.case_id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                    <td className="px-3 py-2 font-mono max-w-[200px] truncate">{candidate.case_id}</td>
+                    <td className="px-3 py-2"><Badge>{candidate.suite}</Badge></td>
+                    <td className="px-3 py-2 text-slate-400">{candidate.source}</td>
                     <td className="px-3 py-2">
-                      <Badge tone={c.status === 'promoted' ? 'emerald' : c.status === 'labeled' ? 'blue' : c.status === 'ignored' ? 'slate' : 'amber'}>{c.status}</Badge>
+                      <Badge tone={candidate.status === 'promoted' ? 'emerald' : candidate.status === 'labeled' ? 'blue' : candidate.status === 'ignored' ? 'slate' : 'amber'}>{candidate.status}</Badge>
                     </td>
-                    <td className="px-3 py-2 max-w-[300px] truncate text-slate-400">{c.description}</td>
-                    <td className="px-3 py-2 text-slate-500">{c.created_at}</td>
+                    <td className="px-3 py-2">
+                      <div className="flex max-w-[180px] flex-col gap-1">
+                        <Badge tone={candidate.readiness?.ready ? 'emerald' : 'red'}>
+                          {candidate.readiness?.ready ? 'ready' : 'blocked'}
+                        </Badge>
+                        {!candidate.readiness?.ready && (
+                          <span className="truncate text-[11px] text-slate-500" title={readinessReason(candidate)}>
+                            {readinessReason(candidate) || '-'}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 max-w-[300px] truncate text-slate-400">{candidate.description}</td>
+                    <td className="px-3 py-2 text-slate-500">{candidate.created_at}</td>
                     <td className="px-3 py-2">
                       <div className="flex gap-1">
-                        <button onClick={() => loadDetail(c.case_id)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">详情</button>
-                        {c.status === 'candidate' && (
+                        <button onClick={() => loadDetail(candidate.case_id)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">详情</button>
+                        {candidate.status === 'candidate' && (
                           <>
-                            <button onClick={() => openLabel(c)}
+                            <button onClick={() => openLabel(candidate)}
                               className="px-2 py-1 bg-indigo-700/50 hover:bg-indigo-700 text-indigo-300 rounded text-xs">标记</button>
-                            <button onClick={() => doIgnore(c.case_id)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">忽略</button>
+                            <button onClick={() => doIgnore(candidate.case_id)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded text-xs">忽略</button>
                           </>
                         )}
-                        {c.status === 'labeled' && (
-                          <button onClick={() => openPromote(c)}
-                            className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 text-emerald-300 rounded text-xs">提升</button>
+                        {candidate.status === 'labeled' && (
+                          <button onClick={() => openPromote(candidate)}
+                            disabled={candidate.status === 'labeled' && !candidate.readiness?.ready}
+                            title={readinessReason(candidate)}
+                            className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50 text-emerald-300 rounded text-xs">提升</button>
                         )}
                       </div>
                     </td>
@@ -315,6 +381,7 @@ export function EvalsPage() {
                 <div className="space-y-3">
                   <div><div className="text-xs text-slate-500 mb-1">input</div><JsonBlock value={detail.input} className="max-h-48" /></div>
                   <div><div className="text-xs text-slate-500 mb-1">expected</div><JsonBlock value={detail.expected} className="max-h-32" /></div>
+                  <div><div className="text-xs text-slate-500 mb-1">readiness</div><JsonBlock value={detail.readiness || {}} className="max-h-40" /></div>
                   <div><div className="text-xs text-slate-500 mb-1">来源</div><span className="text-sm">{detail.source}: {detail.source_ref}</span></div>
                   <div><div className="text-xs text-slate-500 mb-1">指纹</div><code className="text-xs bg-slate-950 px-2 py-0.5 rounded">{detail.fingerprint}</code></div>
                 </div>
@@ -502,6 +569,37 @@ export function EvalsPage() {
                     className="px-4 py-2 bg-indigo-700/70 hover:bg-indigo-700 disabled:opacity-50 rounded-xl text-sm">生成计划</button>
                   <button onClick={confirmPromote} disabled={promoteBusy || !promotePlan}
                     className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 rounded-xl text-sm font-medium">确认提升</button>
+                </div>
+              </div>
+            </Modal>
+          )}
+
+          {/* 预检弹窗 */}
+          {preflightOpen && (
+            <Modal onClose={() => setPreflightOpen(false)} wide>
+              <div className="p-6">
+                <h2 className="text-lg font-bold mb-2">预检当前页</h2>
+                {preflightError && (
+                  <div className="mb-3 px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10 text-xs text-red-300">
+                    {preflightError}
+                  </div>
+                )}
+                {preflightResult && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                      <MiniStat label="total" value={preflightResult.total || 0} />
+                      <MiniStat label="ready" value={preflightResult.ready || 0} tone="emerald" />
+                      <MiniStat label="blocked" value={preflightResult.blocked || 0} tone="red" />
+                      <MiniStat label="target" value={preflightResult.target_dataset || '-'} tone={preflightResult.ok ? 'emerald' : 'amber'} />
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">items</div>
+                      <JsonBlock value={preflightResult.items || []} className="max-h-96" />
+                    </div>
+                  </div>
+                )}
+                <div className="flex justify-end mt-4">
+                  <button onClick={() => setPreflightOpen(false)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">关闭</button>
                 </div>
               </div>
             </Modal>
