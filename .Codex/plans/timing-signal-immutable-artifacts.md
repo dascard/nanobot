@@ -28,6 +28,8 @@
   - 职责：静态守卫周期脚本的三类 TimingSignal audit 路径、`report_paths` 顺序和 workflow artifact glob。
 - 修改：`.github/workflows/timing-gate-eval.yml`
   - 职责：上传 `evals/reports/runs/**/timing_signal_audit.json`。
+- 修改：`.gitignore`
+  - 职责：忽略本地周期 smoke 生成的 run-scoped eval 报告目录。
 - 修改：`docs/evals.md`
   - 职责：记录 TimingSignal audit 三类输出、缺 DB skipped 语义和排查入口。
 - 修改：`docs/todo.md`
@@ -64,7 +66,7 @@
 - 修改：`tests/test_timing_signal_audit_periodic.py`
 - 修改：`scripts/run_timing_signal_audit_periodic.sh`
 
-- [ ] **步骤 1：编写失败的缺 DB 三输出测试**
+- [x] **步骤 1：编写失败的缺 DB 三输出测试**
 
 在 `tests/test_timing_signal_audit_periodic.py` 中把 `test_timing_signal_audit_periodic_script_skips_missing_db` 扩展为：
 
@@ -110,7 +112,7 @@ def test_timing_signal_audit_periodic_script_skips_missing_db(tmp_path):
     assert payload["source"]["limit"] == 17
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -120,7 +122,7 @@ python -B -m pytest tests/test_timing_signal_audit_periodic.py::test_timing_sign
 
 预期：失败，`dated.exists()` 或 `run_scoped.exists()` 为 `False`。
 
-- [ ] **步骤 3：实现 `TIMING_SIGNAL_AUDIT_EXTRA_OUTS` 复制**
+- [x] **步骤 3：实现 `TIMING_SIGNAL_AUDIT_EXTRA_OUTS` 复制**
 
 在 `scripts/run_timing_signal_audit_periodic.sh` 的变量区新增：
 
@@ -169,7 +171,7 @@ PY
 copy_extra_outputs
 ```
 
-- [ ] **步骤 4：运行绿灯测试**
+- [x] **步骤 4：运行绿灯测试**
 
 运行：
 
@@ -179,7 +181,7 @@ python -B -m pytest tests/test_timing_signal_audit_periodic.py::test_timing_sign
 
 预期：`1 passed`。
 
-- [ ] **步骤 5：运行脚本文件回归**
+- [x] **步骤 5：运行脚本文件回归**
 
 运行：
 
@@ -189,7 +191,7 @@ python -B -m pytest tests/test_timing_signal_audit_periodic.py -q -p no:cachepro
 
 预期：所有 `tests/test_timing_signal_audit_periodic.py` 测试通过。
 
-- [ ] **步骤 6：提交任务 1**
+- [x] **步骤 6：提交任务 1**
 
 运行：
 
@@ -205,7 +207,7 @@ git commit -m "fix(评测): 复制时机信号审计报告"
 - 修改：`tests/test_eval_baseline.py`
 - 修改：`scripts/run_eval_periodic.sh`
 
-- [ ] **步骤 1：编写失败的周期脚本路径守卫**
+- [x] **步骤 1：编写失败的周期脚本路径守卫**
 
 在 `tests/test_eval_baseline.py` 中新增：
 
@@ -221,7 +223,7 @@ def test_eval_periodic_script_indexes_immutable_timing_signal_audit_reports():
     assert '"$TIMING_SIGNAL_AUDIT_RUN_OUT|$TIMING_SIGNAL_AUDIT_DATED_OUT|$TIMING_SIGNAL_AUDIT_LATEST_OUT"' in text
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -231,7 +233,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_periodic_script_index
 
 预期：失败，周期脚本还没有三类 TimingSignal audit 路径变量。
 
-- [ ] **步骤 3：修改周期脚本输出变量**
+- [x] **步骤 3：修改周期脚本输出变量**
 
 在 `scripts/run_eval_periodic.sh` 生成 `PERIODIC_STEPS_JSONL` 之后替换当前单一路径变量：
 
@@ -250,7 +252,7 @@ export TIMING_SIGNAL_AUDIT_EXTRA_OUTS="${TIMING_SIGNAL_AUDIT_EXTRA_OUTS_PREFIX}$
 "$TIMING_SIGNAL_AUDIT_RUN_OUT|$TIMING_SIGNAL_AUDIT_DATED_OUT|$TIMING_SIGNAL_AUDIT_LATEST_OUT"
 ```
 
-- [ ] **步骤 4：运行绿灯测试**
+- [x] **步骤 4：运行绿灯测试**
 
 运行：
 
@@ -260,7 +262,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_periodic_script_index
 
 预期：`1 passed`。
 
-- [ ] **步骤 5：运行周期脚本与 manifest 相邻回归**
+- [x] **步骤 5：运行周期脚本与 manifest 相邻回归**
 
 运行：
 
@@ -270,7 +272,7 @@ python -B -m pytest tests/test_eval_baseline.py tests/test_timing_signal_audit_p
 
 预期：两个测试文件全部通过。
 
-- [ ] **步骤 6：提交任务 2**
+- [x] **步骤 6：提交任务 2**
 
 运行：
 
@@ -286,7 +288,7 @@ git commit -m "ci(评测): 索引时机信号不可变报告"
 - 修改：`tests/test_eval_baseline.py`
 - 修改：`.github/workflows/timing-gate-eval.yml`
 
-- [ ] **步骤 1：编写失败的 workflow artifact 守卫**
+- [x] **步骤 1：编写失败的 workflow artifact 守卫**
 
 在 `tests/test_eval_baseline.py` 中新增：
 
@@ -298,7 +300,7 @@ def test_eval_workflow_uploads_run_scoped_timing_signal_audit():
     assert "evals/reports/runs/**/timing_signal_audit.json" in text
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -308,7 +310,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_workflow_uploads_run_
 
 预期：失败，workflow artifact 路径尚未包含 run-scoped TimingSignal audit。
 
-- [ ] **步骤 3：追加 workflow artifact glob**
+- [x] **步骤 3：追加 workflow artifact glob**
 
 在 `.github/workflows/timing-gate-eval.yml` 的上传路径中加入：
 
@@ -324,7 +326,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_workflow_uploads_run_
             evals/reports/runs/**/manifest.json
 ```
 
-- [ ] **步骤 4：运行绿灯测试**
+- [x] **步骤 4：运行绿灯测试**
 
 运行：
 
@@ -334,7 +336,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_workflow_uploads_run_
 
 预期：`1 passed`。
 
-- [ ] **步骤 5：运行 workflow 相邻回归**
+- [x] **步骤 5：运行 workflow 相邻回归**
 
 运行：
 
@@ -344,7 +346,7 @@ python -B -m pytest tests/test_eval_baseline.py -q -p no:cacheprovider
 
 预期：`tests/test_eval_baseline.py` 全部通过。
 
-- [ ] **步骤 6：提交任务 3**
+- [x] **步骤 6：提交任务 3**
 
 运行：
 
@@ -352,6 +354,67 @@ python -B -m pytest tests/test_eval_baseline.py -q -p no:cacheprovider
 git add tests/test_eval_baseline.py .github/workflows/timing-gate-eval.yml
 git commit -m "ci(评测): 归档时机信号运行报告"
 ```
+
+## 任务 3.5：忽略 run-scoped 评测运行产物
+
+**文件：**
+
+- 修改：`tests/test_eval_baseline.py`
+- 修改：`.gitignore`
+
+- [x] **步骤 1：编写失败的忽略规则守卫**
+
+在 `tests/test_eval_baseline.py` 中新增：
+
+```python
+def test_eval_run_scoped_reports_are_gitignored():
+    text = Path(".gitignore").read_text(encoding="utf-8")
+
+    assert "evals/reports/runs/" in text
+```
+
+- [x] **步骤 2：运行红灯测试**
+
+运行：
+
+```bash
+python -B -m pytest tests/test_eval_baseline.py::test_eval_run_scoped_reports_are_gitignored -q -p no:cacheprovider
+```
+
+结果：`1 failed, 1 warning in 6.22s`，失败点为 `.gitignore` 缺少 `evals/reports/runs/`。
+
+- [x] **步骤 3：追加忽略规则**
+
+在 `.gitignore` 的 eval 报告段落加入：
+
+```gitignore
+evals/reports/runs/
+```
+
+- [x] **步骤 4：运行绿灯和相邻回归**
+
+运行：
+
+```bash
+python -B -m pytest tests/test_eval_baseline.py::test_eval_run_scoped_reports_are_gitignored -q -p no:cacheprovider
+python -B -m pytest tests/test_eval_baseline.py -q -p no:cacheprovider
+```
+
+结果：
+
+- 单条测试 `1 passed, 1 warning in 0.52s`。
+- `tests/test_eval_baseline.py` 为 `25 passed, 1 warning in 1.04s`。
+
+- [x] **步骤 5：提交任务 3.5**
+
+运行：
+
+```bash
+git add .gitignore tests/test_eval_baseline.py
+git commit -m "chore(评测): 忽略运行级评测报告"
+```
+
+提交：`95c88fe chore(评测): 忽略运行级评测报告`。
 
 ## 任务 4：文档收口与端到端验证
 
@@ -362,7 +425,7 @@ git commit -m "ci(评测): 归档时机信号运行报告"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/timing-signal-immutable-artifacts.md`
 
-- [ ] **步骤 1：更新评测文档**
+- [x] **步骤 1：更新评测文档**
 
 在 `docs/evals.md` 的 TimingSignal audit 周期审计段落中记录：
 
@@ -379,7 +442,7 @@ manifest 写入。排查周期性失败时，优先查看
 `evals/reports/runs/<run_id>/timing_signal_audit.json`，再查看 dated 和 latest。
 ```
 
-- [ ] **步骤 2：更新路线文档**
+- [x] **步骤 2：更新路线文档**
 
 在 `docs/todo.md` 和 `docs/plan_walkthrough.md` 中把“补充更厚的 TimingSignal 不可变 artifact”更新为本阶段已进入执行，并记录：
 
@@ -387,13 +450,13 @@ manifest 写入。排查周期性失败时，优先查看
 TimingSignal 不可变 artifact 加厚阶段已将周期审计报告扩展为 latest、dated 和 run-scoped 三类输出，manifest 优先索引 run-scoped 报告，workflow artifact 归档 run-scoped TimingSignal audit。
 ```
 
-- [ ] **步骤 3：勾选计划并写入验证记录**
+- [x] **步骤 3：勾选计划并写入验证记录**
 
 在 `.Codex/plans/timing-signal-immutable-artifacts.md` 中把已完成步骤从 `- [ ]` 改为 `- [x]`，并在文末追加实际执行记录：
 
 执行记录必须包含设计提交、计划提交、每个实现阶段的提交、红灯命令、绿灯命令和结果统计。记录中只写已经发生的真实提交号与真实命令输出摘要。
 
-- [ ] **步骤 4：运行文档与定向回归验证**
+- [x] **步骤 4：运行文档与定向回归验证**
 
 运行：
 
@@ -423,7 +486,7 @@ python -B -m pytest tests/test_timing_signal_audit_periodic.py tests/test_eval_b
 - 前三个检查命令无输出。
 - pytest 命令全部通过。
 
-- [ ] **步骤 5：运行周期脚本 smoke**
+- [x] **步骤 5：运行周期脚本 smoke**
 
 运行：
 
@@ -441,7 +504,7 @@ bash scripts/run_eval_periodic.sh
 - `evals/reports/runs/immutable_artifact_smoke/timing_signal_audit.json` 存在。
 - `evals/reports/runs/immutable_artifact_smoke/manifest.json` 的 TimingSignal step `report_paths` 以 run-scoped 报告开头。
 
-- [ ] **步骤 6：运行全量回归**
+- [x] **步骤 6：运行全量回归**
 
 运行：
 
@@ -451,7 +514,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 
 预期：0 failures。
 
-- [ ] **步骤 7：提交任务 4**
+- [x] **步骤 7：提交任务 4**
 
 运行：
 
@@ -462,10 +525,24 @@ git commit -m "docs(评测): 收口时机信号不可变报告"
 
 ## 最终核对
 
-- [ ] `TIMING_SIGNAL_AUDIT_OUT` 默认值保持 `evals/reports/timing_signal_audit_latest.json`。
-- [ ] 缺 DB skipped 报告复制到 latest、dated、run-scoped 三类路径。
-- [ ] 正常 DB 审计报告复制到 latest、dated、run-scoped 三类路径。
-- [ ] 周期 manifest 的 TimingSignal step 优先索引 run-scoped 报告。
-- [ ] Workflow artifact 包含 `evals/reports/runs/**/timing_signal_audit.json`。
-- [ ] 文档说明 latest 兼容入口和 run-scoped 优先证据的区别。
-- [ ] 每个阶段都有独立提交，且没有暂存无关文件。
+- [x] `TIMING_SIGNAL_AUDIT_OUT` 默认值保持 `evals/reports/timing_signal_audit_latest.json`。
+- [x] 缺 DB skipped 报告复制到 latest、dated、run-scoped 三类路径。
+- [x] 正常 DB 审计报告复制到 latest、dated、run-scoped 三类路径。
+- [x] 周期 manifest 的 TimingSignal step 优先索引 run-scoped 报告。
+- [x] Workflow artifact 包含 `evals/reports/runs/**/timing_signal_audit.json`。
+- [x] 文档说明 latest 兼容入口和 run-scoped 优先证据的区别。
+- [x] 每个阶段都有独立提交，且没有暂存无关文件。
+
+## 执行记录
+
+- 设计提交：`712cb0f docs(评测): 设计时机信号不可变报告`。
+- 计划提交：`59d7e60 docs(计划): 记录时机信号不可变报告计划`。
+- 任务 1 审计脚本复制：红灯 `1 failed, 1 warning in 6.18s`；绿灯单条 `1 passed, 1 warning in 0.84s`；文件回归 `3 passed, 1 warning in 0.74s`；提交 `ca2a90c fix(评测): 复制时机信号审计报告`。
+- 任务 2 周期入口索引：红灯 `1 failed, 1 warning in 6.03s`；绿灯单条 `1 passed, 1 warning in 0.84s`；相邻回归 `26 passed, 1 warning in 1.83s`；提交 `df78dfd ci(评测): 索引时机信号不可变报告`。
+- 任务 3 workflow 归档：红灯 `1 failed, 1 warning in 6.05s`；绿灯单条 `1 passed, 1 warning in 0.48s`；文件回归 `24 passed, 1 warning in 1.00s`；提交 `bad632b ci(评测): 归档时机信号运行报告`。
+- 任务 3.5 忽略运行级产物：红灯 `1 failed, 1 warning in 6.22s`；绿灯单条 `1 passed, 1 warning in 0.52s`；文件回归 `25 passed, 1 warning in 1.04s`；提交 `95c88fe chore(评测): 忽略运行级评测报告`。
+- 文档扫描：红旗词扫描无输出，U+FFFD 扫描无输出，`git diff --check` 无输出。
+- 定向回归：`python -B -m pytest tests/test_timing_signal_audit_periodic.py tests/test_eval_baseline.py tests/test_periodic_tuning_analysis.py tests/test_eval_artifact_trends.py -q -p no:cacheprovider` 结果 `42 passed, 1 warning in 2.65s`。
+- 周期脚本 smoke：`TIMING_SIGNAL_AUDIT_DB=tmp/missing-timing-audit.db PERIODIC_RUN_ID=immutable_artifact_smoke bash scripts/run_eval_periodic.sh` 退出码 0；内部 eval guard `32 passed, 1 warning in 1.90s`；所有子 gate 通过；TimingSignal audit 写出 latest、dated、run-scoped 三类 skipped 报告。
+- Smoke JSON 校验：三类 TimingSignal audit payload 完全一致，`source.mode=skipped`；`evals/reports/runs/immutable_artifact_smoke/manifest.json` 的 TimingSignal step `report_paths` 顺序为 run-scoped、dated、latest。
+- 全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider` 结果 `1431 passed, 6 skipped, 139 warnings in 106.38s`。

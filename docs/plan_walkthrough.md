@@ -25,11 +25,13 @@
 
 同日周期趋势只读调参分析阶段已完成代码落地：设计提交 `4c5be89 docs(评测): 设计周期调参分析`，计划提交 `21edcc1 docs(计划): 记录周期调参分析计划`，分析骨架提交 `8dc6198 feat(评测): 建立调参分析骨架`，TimingSignal 证据分析提交 `fa5cab4 feat(评测): 分析时机信号证据`，趋势复核建议提交 `1a33b51 feat(评测): 生成趋势复核建议`，CLI 导出提交 `a9656a2 feat(评测): 导出调参分析报告`。本阶段新增 `evals.tuning_analysis`，输出只读 `tuning_analysis_latest.json`，把趋势退化和 raw audit 证据转成复核、补标注、补 artifact 或暂不调整建议；第一版不自动 apply 参数、不更新 baseline、不改变 gate。验证包括 readiness 红灯 `3 failed`、任务 2 红灯 `2 failed`、任务 3 红灯 `2 failed`、任务 4 红灯 `2 failed`、调参分析定向绿灯 `9 passed`、相邻回归 `18 passed`、CLI smoke 退出码 0，以及全量回归 `1425 passed, 6 skipped, 139 warnings in 106.14s`。
 
-P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计、阶段拆分、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate。TimingGate `s_bot` live path 收口已完成任务 1：设计提交为 `6463ee8 docs(时机): 设计 s_bot live path 收口`，计划提交为 `1795d04 docs(计划): 记录 s_bot live path 收口计划`，实现提交为 `2fcfad7 fix(时机): 接入其他 bot 软抑制评分`；`current_bot` 自身回声仍保持入口 hard stop，`explicit_bot` / `client_meta` 其他 bot sender 会标记为 `is_other_bot=True` 进入 `GroupRuntime`，`GroupPendingMessage` 透传该字段，`_score_timing()` 聚合 pending 后调用 `decide_timing(is_other_bot=any(m.is_other_bot for m in msgs))`，route 测试已断言 ChatLog meta 中 `s_bot=0.70`。任务 1 定向验证为 `3 passed, 21 warnings in 2.16s`，相邻回归为 `157 passed, 21 warnings in 23.30s`。私聊分类器失败 / 非法输出置信度收口已随 `0763802 fix(时机): 修复私聊分类器失败置信度` 完成，分类器 `invalid output fallback` / `classifier fallback` 会以 `model_confidence=0.0` 进入 shared scoring 的 `rule_fallback`，旧格式兼容仍保留 `0.5` 低置信。P4-1「评测数据集与标注闭环」已完成 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集；P4-2「Admin 标注工作台契约化与 promote 预检 UI」已完成后端 expected contract schema/API、WebUI 契约化标注和 promote 预检流程；P4-3「能力契约评测数据集扩展」已完成 reply / rendering 两个能力数据集、baseline gate 和最终回归；P4-4「RAG baseline 门禁」已完成 RAG benchmark 专用 baseline diff、CLI gate、稳定 baseline、Admin API 和 WebUI 展示；P4-5A「统一评测 PR gate」已完成统一脚本和 CI 接入；P4-5B「周期性复跑与报告归档」已完成 keep-going 脚本、workflow schedule / manual dispatch 和 artifact 归档；P4-5C「RAG manual 样本扩充」已完成；P4-5D「RAG fixture 正例门禁」已完成；P4-5E「RAG knowledge fixture 引用正例门禁」已完成；P4-5F「RAG sticker fixture sendable 正例门禁」已完成；P4-5G「RAG group_memory fixture 正例门禁」已完成；P4-5H「RAG 过滤约束 fixture」已完成。真实样本运营 1-9 已完成，下一阶段可补充更厚的 TimingSignal 不可变 artifact，或在人工确认后设计可审核调参提案。
+同日 TimingSignal 不可变 artifact 加厚阶段已完成代码落地：设计提交 `712cb0f docs(评测): 设计时机信号不可变报告`，计划提交 `59d7e60 docs(计划): 记录时机信号不可变报告计划`，审计脚本复制提交 `ca2a90c fix(评测): 复制时机信号审计报告`，周期入口索引提交 `df78dfd ci(评测): 索引时机信号不可变报告`，workflow 归档提交 `bad632b ci(评测): 归档时机信号运行报告`，运行级报告忽略规则提交 `95c88fe chore(评测): 忽略运行级评测报告`。本阶段让周期审计同轮写出 latest、dated 和 run-scoped 三类报告，manifest 优先索引 run-scoped TimingSignal audit，workflow artifact 归档 `evals/reports/runs/**/timing_signal_audit.json`，并避免本地 smoke 生成的运行级报告污染 git 状态；第一版不生成可执行调参 proposal、不更新 baseline、不改变 gate。
+
+P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计、阶段拆分、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate。TimingGate `s_bot` live path 收口已完成任务 1：设计提交为 `6463ee8 docs(时机): 设计 s_bot live path 收口`，计划提交为 `1795d04 docs(计划): 记录 s_bot live path 收口计划`，实现提交为 `2fcfad7 fix(时机): 接入其他 bot 软抑制评分`；`current_bot` 自身回声仍保持入口 hard stop，`explicit_bot` / `client_meta` 其他 bot sender 会标记为 `is_other_bot=True` 进入 `GroupRuntime`，`GroupPendingMessage` 透传该字段，`_score_timing()` 聚合 pending 后调用 `decide_timing(is_other_bot=any(m.is_other_bot for m in msgs))`，route 测试已断言 ChatLog meta 中 `s_bot=0.70`。任务 1 定向验证为 `3 passed, 21 warnings in 2.16s`，相邻回归为 `157 passed, 21 warnings in 23.30s`。私聊分类器失败 / 非法输出置信度收口已随 `0763802 fix(时机): 修复私聊分类器失败置信度` 完成，分类器 `invalid output fallback` / `classifier fallback` 会以 `model_confidence=0.0` 进入 shared scoring 的 `rule_fallback`，旧格式兼容仍保留 `0.5` 低置信。P4-1「评测数据集与标注闭环」已完成 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集；P4-2「Admin 标注工作台契约化与 promote 预检 UI」已完成后端 expected contract schema/API、WebUI 契约化标注和 promote 预检流程；P4-3「能力契约评测数据集扩展」已完成 reply / rendering 两个能力数据集、baseline gate 和最终回归；P4-4「RAG baseline 门禁」已完成 RAG benchmark 专用 baseline diff、CLI gate、稳定 baseline、Admin API 和 WebUI 展示；P4-5A「统一评测 PR gate」已完成统一脚本和 CI 接入；P4-5B「周期性复跑与报告归档」已完成 keep-going 脚本、workflow schedule / manual dispatch 和 artifact 归档；P4-5C「RAG manual 样本扩充」已完成；P4-5D「RAG fixture 正例门禁」已完成；P4-5E「RAG knowledge fixture 引用正例门禁」已完成；P4-5F「RAG sticker fixture sendable 正例门禁」已完成；P4-5G「RAG group_memory fixture 正例门禁」已完成；P4-5H「RAG 过滤约束 fixture」已完成。真实样本运营 1-10 已完成，下一阶段仅在人工确认后设计可审核调参提案。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」、P4-1「评测数据集与标注闭环」、P4-2「Admin 标注工作台契约化与 promote 预检 UI」、P4-3「能力契约评测数据集扩展」、P4-4「RAG baseline 门禁」、P4-5A「统一评测 PR gate」、P4-5B「周期性复跑与报告归档」、P4-5C「RAG manual 样本扩充」、P4-5D「RAG fixture 正例门禁」、P4-5E「RAG knowledge fixture 引用正例门禁」、P4-5F「RAG sticker fixture sendable 正例门禁」、P4-5G「RAG group_memory fixture 正例门禁」、P4-5H「RAG 过滤约束 fixture」、真实样本运营第一步「TimingGate 信号周期审计」、第二步「RAG generated → manual 仲裁入口」、第三步「EvalCandidate 运营规则」、第四步「候选 reject / defer 仲裁状态」、第五步「人工仲裁批次审计」、第六步「运营趋势报表」、第七步「周期运行 manifest」、第八步「跨 artifact 周期趋势」和第九步「周期趋势只读调参分析」均已完成代码落地。TimingGate `s_bot` live path 偏差已完成代码收口：其他 bot sender 不再被 `bot_sender_no_timing` 统一 hard stop，而是进入 scoring 并触发 `s_bot` soft reject；当前 bot 自身回声仍 hard stop。私聊分类器失败 / 非法输出已收敛到 `model_confidence=0.0` 的规则兜底语义。当前默认下一步是补充更厚的 TimingSignal 不可变 artifact，或在人工确认后设计可审核调参提案。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」、P4-1「评测数据集与标注闭环」、P4-2「Admin 标注工作台契约化与 promote 预检 UI」、P4-3「能力契约评测数据集扩展」、P4-4「RAG baseline 门禁」、P4-5A「统一评测 PR gate」、P4-5B「周期性复跑与报告归档」、P4-5C「RAG manual 样本扩充」、P4-5D「RAG fixture 正例门禁」、P4-5E「RAG knowledge fixture 引用正例门禁」、P4-5F「RAG sticker fixture sendable 正例门禁」、P4-5G「RAG group_memory fixture 正例门禁」、P4-5H「RAG 过滤约束 fixture」、真实样本运营第一步「TimingGate 信号周期审计」、第二步「RAG generated → manual 仲裁入口」、第三步「EvalCandidate 运营规则」、第四步「候选 reject / defer 仲裁状态」、第五步「人工仲裁批次审计」、第六步「运营趋势报表」、第七步「周期运行 manifest」、第八步「跨 artifact 周期趋势」、第九步「周期趋势只读调参分析」和第十步「TimingSignal 不可变 artifact 加厚」均已完成代码落地。TimingGate `s_bot` live path 偏差已完成代码收口：其他 bot sender 不再被 `bot_sender_no_timing` 统一 hard stop，而是进入 scoring 并触发 `s_bot` soft reject；当前 bot 自身回声仍 hard stop。私聊分类器失败 / 非法输出已收敛到 `model_confidence=0.0` 的规则兜底语义。默认下一步是在人工确认后设计可审核调参提案。
 
 ## 文档口径
 
@@ -124,6 +126,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | 真实样本运营 7 | 已完成 | 周期运行 manifest | 周期复跑写出 manifest，索引通用 eval、RAG benchmark 和 TimingGate signal audit 的步骤状态、报告路径和摘要指标 | `7e17125` / `a4660c1` / `f459acc` |
 | 真实样本运营 8 | 已完成 | 跨 artifact 周期趋势 | 基于 periodic manifest 聚合 run、eval、RAG 和 TimingSignal 趋势，只读不调参 | `bd676f5` / `bf4fb0a` / `9073262` / `9aa3d9c` |
 | 真实样本运营 9 | 已完成 | 周期趋势只读调参分析 | 基于趋势报告、raw TimingSignal audit 和 manifest 输出复核、补标注、补 artifact 或暂不调整建议，只读不自动调参 | `4c5be89` / `21edcc1` / `8dc6198` / `fa5cab4` / `1a33b51` / `a9656a2` |
+| 真实样本运营 10 | 已完成 | TimingSignal 不可变 artifact 加厚 | 周期审计同轮写出 latest、dated 和 run-scoped 报告，manifest 优先索引 run-scoped，workflow artifact 归档运行级报告，本地忽略运行级产物 | `712cb0f` / `59d7e60` / `ca2a90c` / `df78dfd` / `bad632b` / `95c88fe` |
 
 ## 已完成阶段详情：TimingGate 信号周期审计
 
@@ -152,6 +155,42 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - 不新增生产 DB schema。
 - 不把真实样本审计纳入 PR fail-fast gate。
 - 不实现人工仲裁、标注 UI 或候选队列统一。
+
+## 已完成阶段详情：TimingSignal 不可变 Artifact 加厚
+
+状态：已完成代码落地并通过最终验证。设计文档为 `docs/superpowers/specs/2026-06-20-timing-signal-immutable-artifacts-design.md`，设计提交为 `712cb0f docs(评测): 设计时机信号不可变报告`；实现计划为 `.Codex/plans/timing-signal-immutable-artifacts.md`，计划提交为 `59d7e60 docs(计划): 记录时机信号不可变报告计划`。审计脚本复制已随 `ca2a90c fix(评测): 复制时机信号审计报告` 落地，周期入口索引已随 `df78dfd ci(评测): 索引时机信号不可变报告` 落地，workflow 归档已随 `bad632b ci(评测): 归档时机信号运行报告` 落地，运行级报告忽略规则已随 `95c88fe chore(评测): 忽略运行级评测报告` 落地。
+
+目标：
+
+- 保留 `evals/reports/timing_signal_audit_latest.json` 作为兼容入口。
+- 同轮写出 `evals/reports/YYYY-MM-DD-timing_signal_audit.json`。
+- 同轮写出 `evals/reports/runs/<run_id>/timing_signal_audit.json`。
+- 周期 manifest 的 TimingSignal step 按 run-scoped、dated、latest 顺序索引报告。
+- workflow artifact 上传 `evals/reports/runs/**/timing_signal_audit.json`。
+- 本地忽略 `evals/reports/runs/`，避免周期 smoke 产物污染 git 状态。
+
+验证结果：
+
+- 审计脚本红灯：`tests/test_timing_signal_audit_periodic.py::test_timing_signal_audit_periodic_script_skips_missing_db` 结果 `1 failed, 1 warning in 6.18s`，失败点为额外 dated / run-scoped 输出不存在。
+- 审计脚本绿灯：同一单条测试 `1 passed, 1 warning in 0.84s`；文件回归 `tests/test_timing_signal_audit_periodic.py` 结果 `3 passed, 1 warning in 0.74s`。
+- 周期入口红灯：`test_eval_periodic_script_indexes_immutable_timing_signal_audit_reports` 结果 `1 failed, 1 warning in 6.03s`，失败点为缺少三类 TimingSignal audit 路径变量。
+- 周期入口绿灯：同一单条测试 `1 passed, 1 warning in 0.84s`；相邻回归 `tests/test_eval_baseline.py tests/test_timing_signal_audit_periodic.py` 结果 `26 passed, 1 warning in 1.83s`。
+- Workflow 红灯：`test_eval_workflow_uploads_run_scoped_timing_signal_audit` 结果 `1 failed, 1 warning in 6.05s`，失败点为 artifact glob 缺少 run-scoped TimingSignal audit。
+- Workflow 绿灯：同一单条测试 `1 passed, 1 warning in 0.48s`；`tests/test_eval_baseline.py` 结果 `24 passed, 1 warning in 1.00s`。
+- 忽略规则红灯：`test_eval_run_scoped_reports_are_gitignored` 结果 `1 failed, 1 warning in 6.22s`，失败点为 `.gitignore` 缺少 `evals/reports/runs/`。
+- 忽略规则绿灯：同一单条测试 `1 passed, 1 warning in 0.52s`；`tests/test_eval_baseline.py` 结果 `25 passed, 1 warning in 1.04s`。
+- 文档扫描：红旗词扫描无输出，U+FFFD 扫描无输出，`git diff --check` 无输出。
+- 定向回归：`tests/test_timing_signal_audit_periodic.py tests/test_eval_baseline.py tests/test_periodic_tuning_analysis.py tests/test_eval_artifact_trends.py` 结果 `42 passed, 1 warning in 2.65s`。
+- 周期脚本 smoke：`TIMING_SIGNAL_AUDIT_DB=tmp/missing-timing-audit.db PERIODIC_RUN_ID=immutable_artifact_smoke bash scripts/run_eval_periodic.sh` 退出码 0；内部 eval guard `32 passed, 1 warning in 1.90s`；所有子 gate 通过；TimingSignal audit 写出 latest、dated 和 run-scoped 三类 skipped 报告。
+- Smoke JSON 校验：三类 TimingSignal audit payload 完全一致，`source.mode=skipped`；run-scoped manifest 的 TimingSignal step `report_paths` 顺序为 run-scoped、dated、latest。
+- 全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider` 结果 `1431 passed, 6 skipped, 139 warnings in 106.38s`。
+
+执行边界：
+
+- 不自动调整 TimingGate 参数。
+- 不生成可执行调参 proposal。
+- 不更新 baseline。
+- 不改变 PR gate 或周期 gate 的通过条件。
 
 ## 已完成阶段详情：RAG generated → manual 仲裁入口
 
@@ -274,7 +313,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - 不修改 readiness、summary、preflight 或 promote 规则。
 - 不把 RAG generated / manual case 并入通用 `EvalCandidate`。
 - 不自动更新 baseline，不在本阶段做趋势报表或 TimingGate 阈值调参。
-- 后续真实样本趋势报表、周期运行 manifest、跨 artifact 周期趋势和周期趋势只读调参分析均已完成，下一步可补充更厚的 TimingSignal 不可变 artifact，或在人工确认后设计可审核调参提案。
+- 后续真实样本趋势报表、周期运行 manifest、跨 artifact 周期趋势、周期趋势只读调参分析和 TimingSignal 不可变 artifact 加厚均已完成；可审核调参提案需人工确认后另起设计。
 
 ## 已完成阶段详情：EvalCandidate 人工仲裁批次审计
 
@@ -316,7 +355,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - 审计 decision 只是人工结论，不触发状态流转。
 - 不自动更新 baseline，不在本阶段做趋势报表或 TimingGate 阈值调参。
 - 不把 RAG generated / manual case 并入通用 `EvalCandidate`。
-- 后续真实样本趋势报表、周期运行 manifest、跨 artifact 周期趋势和周期趋势只读调参分析均已完成，下一步可补充更厚的 TimingSignal 不可变 artifact，或在人工确认后设计可审核调参提案。
+- 后续真实样本趋势报表、周期运行 manifest、跨 artifact 周期趋势、周期趋势只读调参分析和 TimingSignal 不可变 artifact 加厚均已完成；可审核调参提案需人工确认后另起设计。
 
 ## 已完成阶段详情：EvalCandidate 运营趋势报表
 
@@ -445,7 +484,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - `positive_v1` 仍是 4 个 positive case，不引入额外 fixture preset。
 - decoy 只用于验证过滤边界，不扩大 stable gate 的 positive case 数。
 - baseline 文件只保留 `suite`、`provider_mode`、`case_scope`、`metrics`、`failed_cases` 和 `case_scores`，不写入运行态 `cases` / `results` / `scores` / `baseline_diff` / `gate` 字段。
-- 真实样本运营 1-9 已完成，下一步可补充更厚的 TimingSignal 不可变 artifact，或在人工确认后设计可审核调参提案。
+- 真实样本运营 1-10 已完成；可审核调参提案需人工确认后另起设计。
 
 ## 已完成阶段详情：P4-5G RAG group_memory fixture 正例门禁
 
@@ -557,7 +596,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - 任务 1 红灯：route 测试失败于响应仍带 `hard_rule=bot_sender_no_timing`；runtime 测试失败于 `gate_calls == []`，说明 `is_other_bot` 未参与 scoring。
 - 任务 1 绿灯：三项定向测试结果 `3 passed, 21 warnings in 2.16s`。
 - 任务 1 相邻回归：`tests/test_api.py tests/test_timing_runtime.py tests/test_timing_score.py` 结果 `157 passed, 21 warnings in 23.30s`。
-- 任务 2 文档自检：占位符扫描无匹配，U+FFFD 扫描无匹配，`git diff --check` 无输出。
+- 任务 2 文档自检：模板词扫描无匹配，U+FFFD 扫描无匹配，`git diff --check` 无输出。
 - 任务 2 相邻回归：`tests/test_api.py tests/test_timing_runtime.py tests/test_timing_score.py` 结果 `157 passed, 21 warnings in 23.75s`。
 - 任务 2 全量验证：`python -B -m pytest tests/ -v -p no:cacheprovider` 结果 `1372 passed, 6 skipped, 139 warnings in 115.45s`。
 
@@ -640,7 +679,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - 任务 4 相邻回归：`tests/test_rag_benchmark.py tests/test_eval_baseline.py` 结果 `35 passed, 1 warning in 2.51s`。
 - 任务 4 PR gate：`bash scripts/run_eval_pr_gate.sh` 结果为评测守卫 `27 passed, 1 warning in 2.26s`，TimingGate、三个 capability gate 和 RAG gate 均输出 `Gate passed`，RAG gate 输出 `cases=10 passed=10 failed=0`。
 - 任务 4 周期性 gate：`bash scripts/run_eval_periodic.sh` 结果为评测守卫 `27 passed, 1 warning in 2.22s`，各子 gate 均输出 `Gate passed`，RAG gate 输出 `cases=10 passed=10 failed=0`。
-- 任务 4 文档自检：异常字符扫描无匹配，diff 占位词扫描无匹配，`git diff --check` 无输出。
+- 任务 4 文档自检：异常字符扫描无匹配，diff 模板词扫描无匹配，`git diff --check` 无输出。
 
 提交边界：
 
@@ -684,7 +723,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - 任务 2 RAG 单文件绿灯：`tests/test_rag_benchmark.py` 结果 `13 passed, 1 warning in 1.06s`。
 - 任务 2 RAG manual deterministic gate：输出 `cases=9 passed=9 failed=0` 和 `Gate passed`。
 - 任务 2 相邻回归：`tests/test_rag_benchmark.py tests/test_eval_baseline.py` 结果 `32 passed, 1 warning in 1.96s`。
-- 任务 3 文档自检：占位词扫描无匹配，U+FFFD 扫描通过，`git diff --check` 无输出。
+- 任务 3 文档自检：模板词扫描无匹配，U+FFFD 扫描通过，`git diff --check` 无输出。
 - 任务 3 定向回归：`tests/test_rag_benchmark.py tests/test_eval_baseline.py` 结果 `32 passed, 1 warning in 1.90s`。
 - 任务 3 PR gate：`bash scripts/run_eval_pr_gate.sh` 结果为评测守卫 `27 passed, 1 warning in 1.81s`，各子 gate 均输出 `Gate passed`，RAG gate 输出 `cases=9 passed=9 failed=0`。
 - 任务 3 周期性 gate：`bash scripts/run_eval_periodic.sh` 结果为评测守卫 `27 passed, 1 warning in 1.75s`，各子 gate 均输出 `Gate passed`，RAG gate 输出 `cases=9 passed=9 failed=0`。
@@ -730,7 +769,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - 任务 2 红灯：workflow 三个新增测试失败于缺少 `workflow_dispatch`、`actions/upload-artifact@v4` 和 `retention-days: 14`。
 - 任务 2 绿灯：workflow 四个定向测试结果 `4 passed, 1 warning in 0.82s`。
 - 任务 2 评测守卫组合：`tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py` 结果 `27 passed, 1 warning in 1.75s`。
-- 任务 3 文档自检：占位词扫描无匹配，U+FFFD 扫描通过，`git diff --check` 无输出。
+- 任务 3 文档自检：模板词扫描无匹配，U+FFFD 扫描通过，`git diff --check` 无输出。
 - 任务 3 定向回归：`tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py tests/test_rag_benchmark.py` 结果 `40 passed, 1 warning in 2.42s`。
 - 任务 3 周期性脚本：`bash scripts/run_eval_periodic.sh` 结果为评测守卫 `27 passed, 1 warning in 1.78s`，各子 gate 均输出 `Gate passed`。
 - 任务 3 PR gate：`bash scripts/run_eval_pr_gate.sh` 结果为评测守卫 `27 passed, 1 warning in 1.76s`，各子 gate 均输出 `Gate passed`。
@@ -775,7 +814,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 - 任务 2 红灯：`tests/test_eval_baseline.py::test_eval_pr_gate_workflow_runs_unified_script` 失败于 workflow 名称仍为 `TimingGate Eval`。
 - 任务 2 绿灯：同一测试结果 `1 passed, 1 warning in 0.58s`。
 - 任务 2 评测守卫组合：`tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py tests/test_rag_benchmark.py` 结果 `35 passed, 1 warning in 2.21s`。
-- 任务 3 文档自检：占位词扫描无匹配，U+FFFD 扫描通过，`git diff --check` 无输出。
+- 任务 3 文档自检：模板词扫描无匹配，U+FFFD 扫描通过，`git diff --check` 无输出。
 - 任务 3 定向回归：`tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py tests/test_rag_benchmark.py` 结果 `35 passed, 1 warning in 2.34s`。
 - 任务 3 统一 gate：`bash scripts/run_eval_pr_gate.sh` 结果为评测守卫 `22 passed, 1 warning in 1.77s`，各子 gate 均输出 `Gate passed`。
 - 任务 3 全量回归：`python -B -m pytest tests/ -v -p no:cacheprovider` 结果 `1361 passed, 6 skipped, 139 warnings in 100.83s`。
@@ -878,7 +917,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 验证计划：
 
-- 设计阶段：设计文档占位词扫描、U+FFFD 扫描、`git diff --check`。
+- 设计阶段：设计文档模板词扫描、U+FFFD 扫描、`git diff --check`。
 - P4-3A：红灯 `tests/test_eval_baseline.py::test_capability_reply_contract_dataset_uses_reply_runner` 失败于 `cases` 为空；绿灯同一测试 `1 passed, 1 warning in 0.83s`；`python -B -m evals.run --suite capability_reply_contract --baseline evals/baselines/capability_reply_contract.json --min-pass-rate 1.0 --max-new-failures 0` 输出 `total=3 passed=3 failed=0` 和 `Gate passed`。
 - P4-3B：红灯 `tests/test_eval_candidate_contract.py::test_rendering_contract_expected_preset_uses_scoreable_fields tests/test_eval_baseline.py::test_capability_rendering_contract_dataset_runs_offline` 失败于缺少 `rendering_contract` preset 和数据集为空；绿灯同一集合 `2 passed, 1 warning in 0.89s`；渲染相邻回归 `tests/test_qq_outbound_renderer.py tests/test_push_envelope.py` 结果 `17 passed, 1 warning in 1.03s`；`python -B -m evals.run --suite capability_rendering_contract --baseline evals/baselines/capability_rendering_contract.json --min-pass-rate 1.0 --max-new-failures 0` 输出 `total=5 passed=5 failed=0` 和 `Gate passed`。
 - P4-3C：定向评测回归 `tests/test_eval_candidate_contract.py tests/test_eval_baseline.py` 结果 `34 passed, 21 warnings in 3.10s`；reply gate 输出 `total=3 passed=3 failed=0` 和 `Gate passed`；rendering gate 输出 `total=5 passed=5 failed=0` 和 `Gate passed`；渲染相邻回归 `tests/test_qq_outbound_renderer.py tests/test_push_envelope.py` 结果 `17 passed, 1 warning in 0.72s`；全量回归 `python -B -m pytest tests/ -v -p no:cacheprovider` 结果 `1353 passed, 6 skipped, 139 warnings in 99.23s`。
@@ -929,7 +968,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 验证计划：
 
-- 计划阶段：文档占位词扫描、U+FFFD 扫描、`git diff --check`。
+- 计划阶段：文档模板词扫描、U+FFFD 扫描、`git diff --check`。
 - P4-2A：`tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py`。
 - P4-2B：`tests/test_webui_admin_redesign.py` 和 `npm --prefix webui run build`。
 - 最终回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`。
@@ -982,7 +1021,7 @@ P4-2B 验证记录：
 - 绿灯：同一命令初次结果 `2 passed, 21 warnings in 1.60s`；提交前复跑结果 `2 passed, 21 warnings in 1.63s`。
 - 定向回归：`python -m pytest tests/test_private_timing.py tests/test_api.py -k "private_timing or private_buffer or proxy_chat_persists_private_timing_scoring_meta or proxy_chat_no_reply_persists_private_timing_scoring_meta" -v`，初次结果 `12 passed, 73 deselected, 21 warnings in 1.87s`；提交前复跑结果 `12 passed, 73 deselected, 21 warnings in 2.40s`。
 - 相邻回归：`python -m pytest tests/test_api.py tests/test_chat_response_envelope.py tests/test_streaming_response_envelope.py -v`，初次结果 `87 passed, 21 warnings in 20.24s`；提交前复跑结果 `87 passed, 21 warnings in 20.07s`。
-- 提交前轻量检查：文档占位词扫描无输出；U+FFFD 扫描无输出；本阶段文件 `git diff --check` 无输出。
+- 提交前轻量检查：文档模板词扫描无输出；U+FFFD 扫描无输出；本阶段文件 `git diff --check` 无输出。
 - 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1313 passed, 6 skipped, 139 warnings in 101.70s`。
 
 下一步：
@@ -1025,7 +1064,7 @@ P3-3B 目标：
 
 验证计划：
 
-- P3-3 文档阶段：`git diff --check`、文档占位词扫描、U+FFFD 扫描。
+- P3-3 文档阶段：`git diff --check`、文档模板词扫描、U+FFFD 扫描。
 - P3-3A：`python -m pytest tests/test_timing_signal_audit.py tests/test_timing_gate_prompt_policy.py -v`。
 - P3-3B：`python -m pytest tests/test_eval_baseline.py tests/test_timing_gate_prompt_policy.py -v`、`bash scripts/run_timing_gate_gate.sh`、全量 `python -B -m pytest tests/ -v -p no:cacheprovider`。
 
@@ -1080,7 +1119,7 @@ P3-3B 验证记录：
 
 验证计划：
 
-- 计划阶段：`git diff --check`、占位词扫描和 U+FFFD 扫描。
+- 计划阶段：`git diff --check`、模板词扫描和 U+FFFD 扫描。
 - 定向回归：`tests/test_eval_candidate_contract.py`、`tests/test_eval_candidates_cli.py`、`tests/test_eval_baseline.py`、`tests/test_timing_gate_prompt_policy.py`。
 - 门禁：`bash scripts/run_timing_gate_gate.sh` 和 `python -B -m evals.run --suite capability_model_routing --baseline evals/baselines/capability_model_routing.json --min-pass-rate 1.0 --max-new-failures 0`。
 - 最终回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`。
@@ -1092,7 +1131,7 @@ P3-3B 验证记录：
 - 任务 3：promote dry-run / `target_dataset` / Admin dry-run 覆盖通过，定向回归为 `10 passed`，全量回归为 `1329 passed, 6 skipped`。
 - 任务 4：候选 CLI 覆盖 export、import-labels、promote dry-run / apply 和 CLI main，定向回归为 `7 passed`，全量回归为 `1337 passed, 6 skipped`。
 - 任务 5：`capability_model_routing` suite 和 baseline gate 均通过，`tests/test_eval_baseline.py` 为 `11 passed`，全量回归为 `1338 passed, 6 skipped`。
-- 任务 6：文档占位词扫描、U+FFFD 扫描和 `git diff --check` 均无错误输出；评测定向组合为 `33 passed, 21 warnings`，TimingGate 与 `capability_model_routing` gate 均输出 `Gate passed`，全量回归为 `1338 passed, 6 skipped, 139 warnings`。
+- 任务 6：文档模板词扫描、U+FFFD 扫描和 `git diff --check` 均无错误输出；评测定向组合为 `33 passed, 21 warnings`，TimingGate 与 `capability_model_routing` gate 均输出 `Gate passed`，全量回归为 `1338 passed, 6 skipped, 139 warnings`。
 - 任务 7：候选闭环定向回归为 `14 passed, 21 warnings`；eval 相关回归为 `19 passed, 1 warning`；TimingGate 与 `capability_model_routing` gate 均输出 `Gate passed`；WebUI 静态回归为 `17 passed, 1 warning`；全量回归为 `1338 passed, 6 skipped, 139 warnings`。
 
 ## 已完成阶段详情：P3-1 SSE 真 token 流式剩余收敛
@@ -1176,7 +1215,7 @@ P3-3B 验证记录：
 
 最新验证记录：
 
-- 设计文档占位词扫描：`docs/superpowers/specs/2026-06-18-qq-outbound-rendering-contract-design.md`，结果无输出，退出码 0。
+- 设计文档模板词扫描：`docs/superpowers/specs/2026-06-18-qq-outbound-rendering-contract-design.md`，结果无输出，退出码 0。
 - 设计文档格式检查：`git diff --check -- docs/superpowers/specs/2026-06-18-qq-outbound-rendering-contract-design.md`，结果无输出，退出码 0。
 - renderer 红灯：`tests/test_qq_outbound_renderer.py` 先失败于 `ModuleNotFoundError: No module named 'core.qq_outbound_renderer'`。
 - renderer 绿灯：`tests/test_qq_outbound_renderer.py`，结果 `9 passed, 1 warning`；补充审查建议后为 `11 passed, 1 warning`。
@@ -1266,7 +1305,7 @@ P3-3B 验证记录：
 - helper 绿灯：`tests/test_client_meta.py`，结果 `5 passed, 1 warning in 0.60s`。
 - API 红灯：`tests/test_chat_response_envelope.py tests/test_group_response_envelope.py`，结果 `4 failed, 5 passed, 21 warnings`；失败点为响应 `meta.request_id` 缺失、冲突 `chat_type` 未返回 400、群聊 ambient log 中 `client_meta` 未归一。
 - API 绿灯：`tests/test_client_meta.py tests/test_chat_response_envelope.py tests/test_group_response_envelope.py`，结果 `14 passed, 21 warnings in 2.70s`。
-- 文档占位词扫描：`docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/client-meta-boundary-validation.md docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，结果无输出，退出码 0。
+- 文档模板词扫描：`docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/client-meta-boundary-validation.md docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，结果无输出，退出码 0。
 - 文档格式检查：`git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/client-meta-boundary-validation.md docs/superpowers/specs/2026-06-18-client-meta-boundary-validation-design.md`，结果无输出，退出码 0。
 - P2-2.5 定向回归：`tests/test_client_meta.py tests/test_chat_response_envelope.py tests/test_group_response_envelope.py tests/test_api.py::test_proxy_chat_passes_client_platform_to_bridge tests/test_api.py::test_group_message_passes_client_platform_to_timing_gate tests/test_api.py::test_group_message_passes_client_platform_to_bridge`，结果 `17 passed, 21 warnings in 3.29s`。
 - 全量回归：`env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY PYTHONDONTWRITEBYTECODE=1 python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1272 passed, 6 skipped, 139 warnings in 86.68s`。
@@ -1316,7 +1355,7 @@ P3-3B 验证记录：
 - 任务 5 红灯：`tests/test_api_push_envelope.py` 先失败于 route 仍调用旧 `push_to_qq()`，结果 `2 failed, 21 warnings`。
 - 任务 5 绿灯和回归：`tests/test_api_push_envelope.py` 加两个流式断连回归，结果 `4 passed, 21 warnings in 1.27s`。
 - 任务 5 全量回归：`tests/`，结果 `1263 passed, 6 skipped, 139 warnings in 85.19s`。
-- 任务 6 文档占位词扫描：`docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/message-envelope.md`，结果无输出，退出码 0。
+- 任务 6 文档模板词扫描：`docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/message-envelope.md`，结果无输出，退出码 0。
 - 任务 6 文档格式检查：`git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/message-envelope.md`，结果无输出，退出码 0。
 - 任务 6 P2-2 定向回归：`tests/test_message_envelope.py tests/test_chat_response_envelope.py tests/test_streaming_response_envelope.py tests/test_group_response_envelope.py tests/test_push_envelope.py tests/test_api_push_envelope.py tests/test_api.py tests/test_streaming_api.py tests/test_daily_digest.py tests/test_reply_contract.py tests/test_bridge_integration.py`，结果 `130 passed, 21 warnings in 23.94s`。
 - 任务 6 全量回归：`python -B -m pytest tests/ -v -p no:cacheprovider`，结果 `1263 passed, 6 skipped, 139 warnings in 90.13s`。
@@ -1385,7 +1424,7 @@ P3-3B 验证记录：
 - `d9a1bae` 任务 4 绿灯：platform 定向 `3 passed, 7 deselected, 1 warning`；完整 `TestToolAdmin` 回归 `10 passed, 1 warning`；Admin / ToolPlan 相关回归 `86 passed, 1 warning`；全量测试 `1245 passed, 6 skipped, 139 warnings in 85.33s`。
 - 任务 5 红灯：`tests/test_webui_admin_redesign.py -k "tools_page_exposes_platform"` 先失败于缺少 `tool-platform-select`。
 - 任务 5 绿灯：同一定向测试 `1 passed, 15 deselected, 1 warning`；WebUI 静态回归 `21 passed, 1 warning`；`npm run build` 通过，Vite 仅提示大 chunk 和 `rolldown:vite-resolve` 插件耗时 warning；全量测试 `1246 passed, 6 skipped, 139 warnings in 84.80s`。
-- 任务 6 文档扫描：过时占位词扫描无输出；`git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/tool-platform-scope.md` 无输出。
+- 任务 6 文档扫描：过时模板词扫描无输出；`git diff --check -- docs/message-field-standard.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/tool-platform-scope.md` 无输出。
 - 任务 6 P2-1 定向回归：`tests/test_tool_plan.py tests/test_admin_api.py::TestToolAdmin tests/test_schema_migrations.py tests/test_api.py tests/test_kt_framework.py tests/test_webui_admin_redesign.py tests/test_webui_app_split.py`，结果 `183 passed, 139 warnings in 41.61s`。
 - 任务 6 全量回归：`tests/`，结果 `1246 passed, 6 skipped, 139 warnings in 85.67s`。
 
@@ -1570,7 +1609,7 @@ P3-3B 验证记录：
 - P1-6 任务 5 修正旧测试后全量：`1252 passed, 6 skipped, 113 warnings`。
 - P1-6 任务 6 守卫红灯：`3 failed, 1 warning`，失败点覆盖旧模块 / 旧目录仍存在和 `config.yaml` 仍引用 `prompt.md`。
 - P1-6 任务 6 守卫绿灯：`3 passed, 1 warning`。
-- P1-6 任务 6 首轮定向：`1 failed, 53 passed, 1 warning`，失败点为 V2 `timing_gate` task 模板仍是占位内容。
+- P1-6 任务 6 首轮定向：`1 failed, 53 passed, 1 warning`，失败点为 V2 `timing_gate` task 模板仍是模板内容。
 - P1-6 任务 6 timing gate 修正后定向：`7 passed, 1 warning`。
 - P1-6 任务 6 主定向：`54 passed, 1 warning`。
 - P1-6 任务 6 相关回归：`104 passed, 20 warnings`。
@@ -1668,7 +1707,7 @@ P1-6 验收重点：
 - [x] 创建 `.Codex/plans/prompt-v2-default-cutover.md`
 - [x] 覆盖文件职责：`core/config_registry.py`、`nanobot_kt/bridge.py`、`bootstrap/prompt_runtime.py`、`api/admin_routes.py`、相关测试文件
 - [x] 明确 TDD 验收：默认走 V2、显式 V1 可回滚、非法 engine 回落 V2、admin / reply-test 默认值改为 V2、V2 runtime 初始化不覆盖已有修改
-- [x] 运行计划占位符扫描和 `git diff --check`
+- [x] 运行计划模板词扫描和 `git diff --check`
 - [x] 提交：`17b3815 docs(计划): 记录 V2 默认接管计划`
 
 ### 阶段 C：TDD 红灯
@@ -1949,6 +1988,6 @@ P1-6 验收重点：
 
 ## 下一步
 
-TimingGate `s_bot` live path 收口、私聊 fallback 置信度收口、P4-5E knowledge fixture citation 正例、P4-5F sticker fixture sendable 正例、P4-5G group_memory fixture 正例、P4-5H RAG 过滤约束 fixture，以及真实样本运营 1-9 均已完成。默认下一步是补充更厚的 TimingSignal 不可变 artifact，或在人工确认后设计可审核调参提案。
+TimingGate `s_bot` live path 收口、私聊 fallback 置信度收口、P4-5E knowledge fixture citation 正例、P4-5F sticker fixture sendable 正例、P4-5G group_memory fixture 正例、P4-5H RAG 过滤约束 fixture，以及真实样本运营 1-10 均已完成。默认下一步是在人工确认后设计可审核调参提案。
 
-TimingGate 真实日志标注和周期复跑报告调参属于后续延续项，不抢占当前默认执行顺序。Prompt V2、P2-4、P3-1、P4-5D、P4-5E、P4-5F、P4-5G、P4-5H 和真实样本运营 1-9 均已完成，历史章节中保留的旧阶段说明仅作为执行记录，不再作为下一步来源。
+TimingGate 真实日志标注和周期复跑报告调参属于延续项，不抢占当前默认执行顺序。Prompt V2、P2-4、P3-1、P4-5D、P4-5E、P4-5F、P4-5G、P4-5H 和真实样本运营 1-10 均已完成，历史章节中保留的旧阶段说明仅作为执行记录，不再作为下一步来源。
