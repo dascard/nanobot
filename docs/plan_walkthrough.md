@@ -1,10 +1,11 @@
 # Nanobot Server 阶段计划 Walkthrough
 
 计划日期：2026-06-17
-更新日期：2026-06-18
+更新日期：2026-06-20
 本轮计划写入日期：2026-06-18
+状态校准日期：2026-06-20
 
-本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。本次校准日期为 2026-06-18，基于当前工作区、最近提交和 `docs/todo.md` 重新核对：P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
+本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
 P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计、阶段拆分、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate。P4-1「评测数据集与标注闭环」已完成 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集；P4-2「Admin 标注工作台契约化与 promote 预检 UI」已完成后端 expected contract schema/API、WebUI 契约化标注和 promote 预检流程；P4-3「能力契约评测数据集扩展」已完成 reply / rendering 两个能力数据集、baseline gate 和最终回归；P4-4「RAG baseline 门禁」已完成 RAG benchmark 专用 baseline diff、CLI gate、稳定 baseline、Admin API 和 WebUI 展示；P4-5A「统一评测 PR gate」已完成统一脚本和 CI 接入；P4-5B「周期性复跑与报告归档」已完成 keep-going 脚本、workflow schedule / manual dispatch 和 artifact 归档。P4-5C「RAG manual 样本扩充」已完成，下一步转向 fixture-backed positive RAG case 或更多真实样本运营动作。
 
@@ -625,7 +626,7 @@ P3-3B 验证记录：
 
 后续事项：
 
-- P2-4「Prompt platform × chat_type 二维适配」已完成。下一步默认进入 P3-1「SSE 真 token 流式剩余收敛」，除非用户另行指定。
+- 历史执行记录：P2-4「Prompt platform × chat_type 二维适配」完成后曾转入 P3-1「SSE 真 token 流式剩余收敛」；P3-1 当前已完成，当前下一步以文末「下一步」章节为准。
 
 ## 已完成阶段详情：P2-4 Prompt platform × chat_type 二维适配
 
@@ -1381,6 +1382,6 @@ P1-6 验收重点：
 
 ## 下一步
 
-P2-4「Prompt platform × chat_type 二维适配」已完成收口。下一步默认进入 P3-1「SSE 真 token 流式剩余收敛」：继续补齐 chunk 合并窗口、backpressure、工具回合语义和统一信封展示规则。
+P4-5C「RAG manual 样本扩充」已完成收口。下一步默认进入 fixture-backed positive RAG case：为 RAG benchmark 准备稳定 fixture 数据，使 `hit@5`、`mrr` 等正例召回指标成为有意义的门禁；如果暂不进入 fixture，则继续从真实样本运营流程中人工确认更多稳定 manual case。
 
-TimingGate 真实日志标注 / CI 接入属于运营延续项，不抢占当前执行顺序。
+TimingGate 真实日志标注、周期复跑报告调参和更多真实样本仲裁属于运营延续项，不抢占当前默认执行顺序。Prompt V2、P2-4 和 P3-1 均已完成，历史章节中保留的旧阶段说明仅作为执行记录，不再作为下一步来源。

@@ -2,6 +2,8 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
+> **状态校准（2026-06-20）：** 本文件是 P1-3「Prompt V2 默认接管」的历史执行计划。实际实现、文档同步和验收均已完成；权威当前状态见 `docs/plan_walkthrough.md` 的 P1-3 进度表和「已完成阶段详情：Prompt V2 默认接管」。下方未勾选复选框保留为原始计划文本，不再表示当前待办。
+
 **目标：** 让 Prompt V2 成为默认 live prompt 路径，同时保留显式 V1 回滚入口，并让启动初始化、admin preview、reply-test 与默认运行路径一致。
 
 **架构：** 配置层把 `prompt_runtime.engine` 默认值切到 `v2`；bridge 层统一把缺省值、异常值和非法值回落到 V2，但 metadata / DB / env 显式 `v1` 仍走旧路径。启动层初始化 `data/prompts_v2`，只复制缺失模板，不覆盖运行时修改；admin 层把 preview 和 reply-test 默认入口切到 V2。

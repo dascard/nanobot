@@ -8,7 +8,7 @@
 
 核心 TimingGate 混合决策主线已完成。已落地 shared timing scoring、群聊 / 私聊统一公式、ambient / legacy / timer cooldown 软化、模型失败规则兜底、session / platform 级模型策略、真实日志信号审计 CLI，以及 `timing_gate` eval baseline diff / 阈值门禁。
 
-P3-3「持续评估」已完成拆分设计、离线 labeled report / sidecar labels 复跑入口，以及仓库自包含 CI / PR gate。P4-1 已完成通用 `candidates → labeled` 标注闭环和首个 `capability_model_routing` 能力数据集，P4-2 已完成 Admin 标注工作台契约化与 promote 预检 UI。当前评测体系推进到 P4-3：扩展 `capability_reply_contract` / `capability_rendering_contract` 等 per-capability 数据集；更多真实样本选择、标注仲裁、定期复跑和按报告调参仍按运营动作推进。
+P3-3「持续评估」已完成拆分设计、离线 labeled report / sidecar labels 复跑入口，以及仓库自包含 CI / PR gate。P4-1 已完成通用 `candidates → labeled` 标注闭环和首个 `capability_model_routing` 能力数据集，P4-2 已完成 Admin 标注工作台契约化与 promote 预检 UI，P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` per-capability 数据集，P4-4 已完成 RAG baseline 门禁，P4-5A / P4-5B 已完成统一 PR gate 与周期性复跑归档，P4-5C 已完成第一轮 RAG manual 样本扩充。下一阶段转向 fixture-backed positive RAG case；更多真实样本选择、标注仲裁、定期复跑和按报告调参仍按运营动作推进。
 
 ---
 
