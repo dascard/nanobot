@@ -4,9 +4,9 @@
   "case_scope": "manual+fixture",
   "metrics": {
     "overall": {
-      "total_cases": 12,
-      "positive_cases": 3,
-      "passed_cases": 12,
+      "total_cases": 13,
+      "positive_cases": 4,
+      "passed_cases": 13,
       "pass_rate": 1,
       "hit@1": 1,
       "hit@3": 1,
@@ -16,12 +16,12 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 8.416666666666666,
-      "p95_latency_ms": 16,
-      "avg_reranker_candidates": 0.4166666666666667,
+      "avg_latency_ms": 7,
+      "p95_latency_ms": 14,
+      "avg_reranker_candidates": 0.46153846153846156,
       "max_reranker_candidates": 1,
       "avg_reranker_latency_ms": 0,
-      "missing_reranker_latency_rate": 0.75
+      "missing_reranker_latency_rate": 0.7692307692307693
     },
     "overall_exact": {
       "total_cases": 0,
@@ -76,16 +76,36 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 9.11111111111111,
-      "p95_latency_ms": 18,
+      "avg_latency_ms": 7.444444444444445,
+      "p95_latency_ms": 14,
       "avg_reranker_candidates": 0.2222222222222222,
       "max_reranker_candidates": 1,
       "avg_reranker_latency_ms": 0,
       "missing_reranker_latency_rate": 0.7777777777777778
     },
     "overall_fixture": {
+      "total_cases": 4,
+      "positive_cases": 4,
+      "passed_cases": 4,
+      "pass_rate": 1,
+      "hit@1": 1,
+      "hit@3": 1,
+      "hit@5": 1,
+      "mrr": 1,
+      "case_false_positive_rate": 0,
+      "forbidden_hit_rate@5": 0,
+      "unexpected_source_rate": 0,
+      "degraded_rate": 0,
+      "avg_latency_ms": 6,
+      "p95_latency_ms": 7,
+      "avg_reranker_candidates": 1,
+      "max_reranker_candidates": 1,
+      "avg_reranker_latency_ms": 0,
+      "missing_reranker_latency_rate": 0.75
+    },
+    "source:group_memory": {
       "total_cases": 3,
-      "positive_cases": 3,
+      "positive_cases": 1,
       "passed_cases": 3,
       "pass_rate": 1,
       "hit@1": 1,
@@ -96,30 +116,10 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 6.333333333333333,
-      "p95_latency_ms": 7,
-      "avg_reranker_candidates": 1,
+      "avg_latency_ms": 7.333333333333333,
+      "p95_latency_ms": 14,
+      "avg_reranker_candidates": 0.3333333333333333,
       "max_reranker_candidates": 1,
-      "avg_reranker_latency_ms": 0,
-      "missing_reranker_latency_rate": 0.6666666666666666
-    },
-    "source:group_memory": {
-      "total_cases": 2,
-      "positive_cases": 0,
-      "passed_cases": 2,
-      "pass_rate": 1,
-      "hit@1": 0,
-      "hit@3": 0,
-      "hit@5": 0,
-      "mrr": 0,
-      "case_false_positive_rate": 0,
-      "forbidden_hit_rate@5": 0,
-      "unexpected_source_rate": 0,
-      "degraded_rate": 0,
-      "avg_latency_ms": 8.5,
-      "p95_latency_ms": 16,
-      "avg_reranker_candidates": 0,
-      "max_reranker_candidates": 0,
       "avg_reranker_latency_ms": null,
       "missing_reranker_latency_rate": 1
     },
@@ -136,8 +136,8 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 10.25,
-      "p95_latency_ms": 18,
+      "avg_latency_ms": 8,
+      "p95_latency_ms": 14,
       "avg_reranker_candidates": 0.5,
       "max_reranker_candidates": 1,
       "avg_reranker_latency_ms": null,
@@ -156,8 +156,8 @@
       "forbidden_hit_rate@5": 0,
       "unexpected_source_rate": 0,
       "degraded_rate": 0,
-      "avg_latency_ms": 7.333333333333333,
-      "p95_latency_ms": 9,
+      "avg_latency_ms": 5.333333333333333,
+      "p95_latency_ms": 6,
       "avg_reranker_candidates": 0.3333333333333333,
       "max_reranker_candidates": 1,
       "avg_reranker_latency_ms": 0,
@@ -206,7 +206,7 @@
         "group_filter": true
       },
       "errors": [],
-      "latency_ms": 16,
+      "latency_ms": 14,
       "reranker_candidates": 0,
       "degraded": false,
       "reranker_latency_ms": null
@@ -256,7 +256,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 18,
+      "latency_ms": 14,
       "reranker_candidates": 1,
       "degraded": false,
       "reranker_latency_ms": null
@@ -281,7 +281,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 8,
+      "latency_ms": 6,
       "reranker_candidates": 0,
       "degraded": false,
       "reranker_latency_ms": null
@@ -306,7 +306,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 8,
+      "latency_ms": 6,
       "reranker_candidates": 0,
       "degraded": false,
       "reranker_latency_ms": null
@@ -331,7 +331,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 8,
+      "latency_ms": 4,
       "reranker_candidates": 0,
       "degraded": false,
       "reranker_latency_ms": 0
@@ -356,7 +356,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 9,
+      "latency_ms": 6,
       "reranker_candidates": 0,
       "degraded": false,
       "reranker_latency_ms": 0
@@ -406,7 +406,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 6,
+      "latency_ms": 8,
       "reranker_candidates": 1,
       "degraded": false,
       "reranker_latency_ms": null
@@ -431,7 +431,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 5,
+      "latency_ms": 6,
       "reranker_candidates": 1,
       "degraded": false,
       "reranker_latency_ms": 0
@@ -456,7 +456,7 @@
         "group_filter": null
       },
       "errors": [],
-      "latency_ms": 7,
+      "latency_ms": 6,
       "reranker_candidates": 1,
       "degraded": false,
       "reranker_latency_ms": null
@@ -479,6 +479,31 @@
         "citation": null,
         "sendable": true,
         "group_filter": null
+      },
+      "errors": [],
+      "latency_ms": 5,
+      "reranker_candidates": 1,
+      "degraded": false,
+      "reranker_latency_ms": null
+    },
+    {
+      "case_id": "group_memory_fixture_positive_001",
+      "source_type": "group_memory",
+      "case_type": "positive",
+      "ok": true,
+      "rank": 1,
+      "hit_at": {
+        "1": true,
+        "3": true,
+        "5": true
+      },
+      "mrr": 1,
+      "forbidden_hits": [],
+      "unexpected_source": false,
+      "checks": {
+        "citation": null,
+        "sendable": null,
+        "group_filter": true
       },
       "errors": [],
       "latency_ms": 7,

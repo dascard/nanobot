@@ -153,6 +153,49 @@ def test_rag_benchmark_fixture_db_supports_sticker_positive_case(tmp_path):
     assert sticker_score.checks["sendable"] is True
 
 
+def test_rag_benchmark_fixture_db_supports_group_memory_positive_case(tmp_path):
+    from evals.rag_benchmark.fixtures import (
+        GROUP_MEMORY_CANDIDATE_ID,
+        GROUP_MEMORY_CASE_ID,
+        GROUP_MEMORY_DECOY_CANDIDATE_ID,
+        GROUP_MEMORY_GROUP_ID,
+        build_fixture_db,
+    )
+    from evals.rag_benchmark.run import run_benchmark
+
+    fixture_db = tmp_path / "positive.db"
+
+    cases = build_fixture_db(fixture_db, preset="positive_v1")
+    results, scores = run_benchmark(fixture_db, cases, provider_mode="deterministic")
+
+    by_case = {case.id: case for case in cases}
+    by_result = {result.case_id: result for result in results}
+    by_score = {score.case_id: score for score in scores}
+
+    assert GROUP_MEMORY_CASE_ID in by_case
+    assert by_case[GROUP_MEMORY_CASE_ID].source_type == "group_memory"
+    assert by_case[GROUP_MEMORY_CASE_ID].filters["group_id"] == GROUP_MEMORY_GROUP_ID
+    assert by_case[GROUP_MEMORY_CASE_ID].expected.requires_group_id is True
+    assert by_case[GROUP_MEMORY_CASE_ID].expected.candidate_ids == [GROUP_MEMORY_CANDIDATE_ID]
+    assert by_case[GROUP_MEMORY_CASE_ID].expected.forbidden_candidate_ids == [
+        GROUP_MEMORY_DECOY_CANDIDATE_ID
+    ]
+
+    group_memory_result = by_result[GROUP_MEMORY_CASE_ID]
+    group_memory_score = by_score[GROUP_MEMORY_CASE_ID]
+    assert GROUP_MEMORY_CANDIDATE_ID in group_memory_result.candidate_ids
+    assert GROUP_MEMORY_DECOY_CANDIDATE_ID not in group_memory_result.candidate_ids
+    assert any(
+        candidate.candidate_id == GROUP_MEMORY_CANDIDATE_ID
+        and candidate.group_id == GROUP_MEMORY_GROUP_ID
+        for candidate in group_memory_result.candidates
+    )
+    assert group_memory_score.ok is True
+    assert group_memory_score.hit_at["5"] is True
+    assert group_memory_score.forbidden_hits == []
+    assert group_memory_score.checks["group_filter"] is True
+
+
 def test_scorer_supports_positive_negative_and_constraint_only():
     from evals.rag_benchmark.schema import BenchmarkCandidate, BenchmarkCase, BenchmarkResult
     from evals.rag_benchmark.scoring import score_case
@@ -906,9 +949,9 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
                 "case_scope": "manual+fixture",
                 "metrics": {
                     "overall": {
-                        "total_cases": 4,
-                        "positive_cases": 3,
-                        "passed_cases": 4,
+                        "total_cases": 5,
+                        "positive_cases": 4,
+                        "passed_cases": 5,
                         "pass_rate": 1.0,
                         "hit@5": 1.0,
                         "mrr": 1.0,
@@ -940,6 +983,15 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
                         "rank": 1,
                         "hit_at": {"1": True, "3": True, "5": True},
                         "checks": {"citation": None, "sendable": True, "group_filter": None},
+                        "errors": [],
+                    },
+                    {
+                        "case_id": "group_memory_fixture_positive_001",
+                        "ok": True,
+                        "rank": 1,
+                        "hit_at": {"1": True, "3": True, "5": True},
+                        "checks": {"citation": None, "sendable": None, "group_filter": True},
+                        "forbidden_hits": [],
                         "errors": [],
                     },
                 ],
@@ -991,15 +1043,19 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
         str(item.get("case_id") or ""): item
         for item in report["case_scores"]
     }
-    assert report["metrics"]["overall"]["positive_cases"] == 3
+    assert report["metrics"]["overall"]["positive_cases"] == 4
     assert report["metrics"]["source:knowledge"]["positive_cases"] == 1
     assert report["metrics"]["source:sticker"]["positive_cases"] == 1
+    assert report["metrics"]["source:group_memory"]["positive_cases"] == 1
     assert report["metrics"]["overall"]["hit@5"] == 1.0
     assert report["metrics"]["overall"]["mrr"] == 1.0
     assert scores["knowledge_fixture_positive_001"]["ok"] is True
     assert scores["knowledge_fixture_positive_001"]["checks"]["citation"] is True
     assert scores["sticker_fixture_positive_001"]["ok"] is True
     assert scores["sticker_fixture_positive_001"]["checks"]["sendable"] is True
+    assert scores["group_memory_fixture_positive_001"]["ok"] is True
+    assert scores["group_memory_fixture_positive_001"]["checks"]["group_filter"] is True
+    assert scores["group_memory_fixture_positive_001"].get("forbidden_hits", []) == []
 
 
 def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
@@ -1028,7 +1084,7 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     assert baseline["provider_mode"] == "deterministic"
     assert baseline["case_scope"] == "manual+fixture"
     assert baseline["metrics"]["overall"]["total_cases"] == len(stable_cases)
-    assert baseline["metrics"]["overall"]["positive_cases"] == 3
+    assert baseline["metrics"]["overall"]["positive_cases"] == 4
     assert baseline["metrics"]["overall"]["hit@5"] > 0
     assert baseline["metrics"]["overall"]["mrr"] > 0
     assert set(baseline_scores) == stable_case_ids
@@ -1047,3 +1103,9 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     assert sticker_fixture_score["hit_at"]["5"] is True
     assert sticker_fixture_score["checks"]["sendable"] is True
     assert baseline["metrics"]["source:sticker"]["positive_cases"] == 1
+    group_memory_fixture_score = baseline_scores["group_memory_fixture_positive_001"]
+    assert group_memory_fixture_score["ok"] is True
+    assert group_memory_fixture_score["hit_at"]["5"] is True
+    assert group_memory_fixture_score["checks"]["group_filter"] is True
+    assert group_memory_fixture_score.get("forbidden_hits", []) == []
+    assert baseline["metrics"]["source:group_memory"]["positive_cases"] == 1

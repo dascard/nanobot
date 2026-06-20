@@ -9,7 +9,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from core.database import Base, KnowledgeChunk, KnowledgeDocument, StickerMemory
+from core.database import Base, GroupMemory, KnowledgeChunk, KnowledgeDocument, StickerMemory
 from core.semantic.adapters import SemanticChunk, chunk_from_knowledge_chunk, chunk_from_sticker
 from core.semantic.indexer import upsert_semantic_chunks
 from core.sticker_memory import normalize_sticker_stream_id
@@ -37,6 +37,14 @@ STICKER_CANDIDATE_ID = f"sticker:{STICKER_ID}:sticker"
 STICKER_CHAT_STREAM_ID = "group:rag-fixture-sticker"
 STICKER_QUERY = "开心拍桌表情包"
 STICKER_INDEX_VERSION = "fixture:v1:sticker"
+GROUP_MEMORY_CASE_ID = "group_memory_fixture_positive_001"
+GROUP_MEMORY_ID = 9201
+GROUP_MEMORY_DECOY_ID = 9202
+GROUP_MEMORY_CANDIDATE_ID = f"group_memory:{GROUP_MEMORY_ID}:memory"
+GROUP_MEMORY_DECOY_CANDIDATE_ID = f"group_memory:{GROUP_MEMORY_DECOY_ID}:memory"
+GROUP_MEMORY_GROUP_ID = "group_rag_fixture_memory"
+GROUP_MEMORY_DECOY_GROUP_ID = "group_rag_fixture_other"
+GROUP_MEMORY_QUERY = "群体记忆 RAG fixture 正例"
 
 
 def _ensure_supported_preset(preset: str) -> None:
@@ -119,11 +127,43 @@ def _sticker_positive_case() -> BenchmarkCase:
     )
 
 
+def _group_memory_positive_case() -> BenchmarkCase:
+    return BenchmarkCase(
+        id=GROUP_MEMORY_CASE_ID,
+        suite="rag_benchmark",
+        source_type="group_memory",
+        case_type="positive",
+        query=GROUP_MEMORY_QUERY,
+        filters={
+            "group_id": GROUP_MEMORY_GROUP_ID,
+            "recent_messages": [],
+            "max_chars": 1200,
+        },
+        expected={
+            "candidate_ids": [GROUP_MEMORY_CANDIDATE_ID],
+            "forbidden_candidate_ids": [GROUP_MEMORY_DECOY_CANDIDATE_ID],
+            "hit_at": 5,
+            "expected_source_type": "group_memory",
+            "requires_group_id": True,
+        },
+        meta={
+            "origin": "fixture_exact",
+            "sensitivity": "safe",
+            "fixture": FIXTURE_PRESET,
+        },
+    )
+
+
 def fixture_cases(preset: str = FIXTURE_PRESET) -> list[BenchmarkCase]:
     """返回 fixture preset 对应的 case 描述，不写数据库。"""
 
     _ensure_supported_preset(str(preset))
-    return [_memory_positive_case(), _knowledge_positive_case(), _sticker_positive_case()]
+    return [
+        _memory_positive_case(),
+        _knowledge_positive_case(),
+        _sticker_positive_case(),
+        _group_memory_positive_case(),
+    ]
 
 
 def _seed_knowledge_positive_fixture(db: Session) -> None:
@@ -217,6 +257,55 @@ def _seed_sticker_positive_fixture(db: Session) -> None:
     )
 
 
+def _seed_group_memory_positive_fixture(db: Session) -> None:
+    now = datetime(2026, 6, 20, 0, 0, 0)
+    meta = {"fixture": FIXTURE_PRESET, "evidence_short_summary": GROUP_MEMORY_QUERY}
+    rows = [
+        GroupMemory(
+            id=GROUP_MEMORY_ID,
+            group_id=GROUP_MEMORY_GROUP_ID,
+            memory_type="topic",
+            content="群体记忆 RAG fixture 正例：本群固定用来验证 group_memory 检索命中。",
+            content_hash="fixture-group-memory-positive-001",
+            cluster_key="rag fixture group memory",
+            evidence_log_ids_json=json.dumps([920101, 920102]),
+            confidence=0.9,
+            evidence_count=2,
+            first_seen=now,
+            last_seen=now,
+            updated_at=now,
+            decay_score=1.0,
+            status="active",
+            inject_policy="auto",
+            source="fixture",
+            meta_json=json.dumps(meta, ensure_ascii=False, sort_keys=True),
+            created_at=now,
+        ),
+        GroupMemory(
+            id=GROUP_MEMORY_DECOY_ID,
+            group_id=GROUP_MEMORY_DECOY_GROUP_ID,
+            memory_type="topic",
+            content="群体记忆 RAG fixture 正例：其他群的 decoy 用来验证 group filter 不泄漏。",
+            content_hash="fixture-group-memory-decoy-001",
+            cluster_key="rag fixture group memory decoy",
+            evidence_log_ids_json=json.dumps([920201, 920202, 920203]),
+            confidence=0.95,
+            evidence_count=3,
+            first_seen=now,
+            last_seen=now,
+            updated_at=now,
+            decay_score=1.0,
+            status="active",
+            inject_policy="auto",
+            source="fixture",
+            meta_json=json.dumps(meta, ensure_ascii=False, sort_keys=True),
+            created_at=now,
+        ),
+    ]
+    db.add_all(rows)
+    db.flush()
+
+
 def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
     """向已创建 schema 的数据库写入 positive fixture 数据。"""
 
@@ -246,6 +335,8 @@ def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
     upsert_semantic_chunks(db, [chunk], index_version=MEMORY_INDEX_VERSION)
     _seed_knowledge_positive_fixture(db)
     _seed_sticker_positive_fixture(db)
+    _seed_group_memory_positive_fixture(db)
+    db.commit()
     return fixture_cases(FIXTURE_PRESET)
 
 

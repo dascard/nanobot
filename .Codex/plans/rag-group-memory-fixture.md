@@ -69,7 +69,7 @@ P4-5G 只验证 group memory positive case，并在同一 seed 中加入跨群 d
 - 修改：`tests/test_rag_benchmark.py`
 - 修改：`.Codex/plans/rag-group-memory-fixture.md`
 
-- [ ] **步骤 1：新增 group memory fixture 红灯测试**
+- [x] **步骤 1：新增 group memory fixture 红灯测试**
 
 在 `tests/test_rag_benchmark.py` 中新增测试，放在现有 `test_rag_benchmark_fixture_db_supports_sticker_positive_case` 后面：
 
@@ -117,7 +117,7 @@ def test_rag_benchmark_fixture_db_supports_group_memory_positive_case(tmp_path):
     assert group_memory_score.checks["group_filter"] is True
 ```
 
-- [ ] **步骤 2：运行 group memory fixture 红灯**
+- [x] **步骤 2：运行 group memory fixture 红灯**
 
 运行：
 
@@ -128,7 +128,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_fixture_db_s
 
 预期：FAIL，失败原因包含 `ImportError`，因为 `GROUP_MEMORY_CASE_ID` 或 `GROUP_MEMORY_CANDIDATE_ID` 尚未定义。
 
-- [ ] **步骤 3：更新 CLI fixture gate 测试红灯**
+实际：FAIL，`ImportError: cannot import name 'GROUP_MEMORY_CANDIDATE_ID'`。
+
+- [x] **步骤 3：更新 CLI fixture gate 测试红灯**
 
 在 `test_rag_benchmark_cli_runs_manual_fixture_positive_gate` 中，把临时 baseline 的 `overall.total_cases` 改为 `5`、`overall.positive_cases` 改为 `4`，并在 `case_scores` 中新增 group memory fixture：
 
@@ -162,7 +164,7 @@ assert scores["group_memory_fixture_positive_001"]["checks"]["group_filter"] is 
 assert scores["group_memory_fixture_positive_001"].get("forbidden_hits", []) == []
 ```
 
-- [ ] **步骤 4：运行 CLI fixture gate 红灯**
+- [x] **步骤 4：运行 CLI fixture gate 红灯**
 
 运行：
 
@@ -173,7 +175,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_runs_man
 
 预期：FAIL，失败原因是当前 fixture preset 只有 3 个 positive case，report 中没有 `group_memory_fixture_positive_001`，或 `overall.positive_cases` 仍为 `3`。
 
-- [ ] **步骤 5：更新 baseline 合同红灯**
+实际：FAIL，`report["metrics"]["overall"]["positive_cases"] == 3`，新合同期望为 `4`。
+
+- [x] **步骤 5：更新 baseline 合同红灯**
 
 在 `test_rag_benchmark_baseline_file_matches_manual_gate_contract` 末尾增加：
 
@@ -192,7 +196,7 @@ assert baseline["metrics"]["source:group_memory"]["positive_cases"] == 1
 assert baseline["metrics"]["overall"]["positive_cases"] == 4
 ```
 
-- [ ] **步骤 6：运行 baseline 合同红灯**
+- [x] **步骤 6：运行 baseline 合同红灯**
 
 运行：
 
@@ -203,7 +207,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：FAIL，失败原因是 baseline 还没有 `group_memory_fixture_positive_001`。
 
-- [ ] **步骤 7：记录红灯结果并延后提交**
+实际：FAIL，`baseline["metrics"]["overall"]["positive_cases"] == 3`，新合同期望为 `4`。
+
+- [x] **步骤 7：记录红灯结果并延后提交**
 
 任务 1 的红灯测试会让仓库处于 failing 状态。本阶段不单独提交红灯测试；测试变更将与任务 2 的最小实现一起提交，保证提交点为绿色状态。
 
@@ -213,7 +219,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 - 修改：`evals/rag_benchmark/fixtures.py`
 - 修改：`.Codex/plans/rag-group-memory-fixture.md`
 
-- [ ] **步骤 1：扩展 imports 和常量**
+- [x] **步骤 1：扩展 imports 和常量**
 
 修改 `evals/rag_benchmark/fixtures.py` 顶部业务 import：
 
@@ -234,7 +240,7 @@ GROUP_MEMORY_DECOY_GROUP_ID = "group_rag_fixture_other"
 GROUP_MEMORY_QUERY = "群体记忆 RAG fixture 正例"
 ```
 
-- [ ] **步骤 2：新增 `_group_memory_positive_case()`**
+- [x] **步骤 2：新增 `_group_memory_positive_case()`**
 
 在 `_sticker_positive_case()` 后新增：
 
@@ -266,7 +272,7 @@ def _group_memory_positive_case() -> BenchmarkCase:
     )
 ```
 
-- [ ] **步骤 3：把 fixture case 顺序扩为四类**
+- [x] **步骤 3：把 fixture case 顺序扩为四类**
 
 修改 `fixture_cases()`：
 
@@ -281,7 +287,7 @@ return [
 
 顺序固定为 memory、knowledge、sticker、group memory，减少 baseline diff 噪声。
 
-- [ ] **步骤 4：新增 `_seed_group_memory_positive_fixture()`**
+- [x] **步骤 4：新增 `_seed_group_memory_positive_fixture()`**
 
 在 `_seed_sticker_positive_fixture()` 后新增：
 
@@ -337,7 +343,7 @@ def _seed_group_memory_positive_fixture(db: Session) -> None:
 
 说明：`GROUP_MEMORY_GROUP_ID` 已是 `group_` 前缀形式，`GroupMemoryRetrievalService.select()` 再调用 `normalize_group_session_id()` 时保持不变。
 
-- [ ] **步骤 5：接入 seed 流程**
+- [x] **步骤 5：接入 seed 流程**
 
 修改 `seed_positive_fixture_db()`，在 `_seed_sticker_positive_fixture(db)` 后追加：
 
@@ -345,7 +351,7 @@ def _seed_group_memory_positive_fixture(db: Session) -> None:
 _seed_group_memory_positive_fixture(db)
 ```
 
-- [ ] **步骤 6：运行 group memory fixture 绿灯**
+- [x] **步骤 6：运行 group memory fixture 绿灯**
 
 运行：
 
@@ -356,7 +362,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_fixture_db_s
 
 预期：PASS。若失败于 `low_relevance`，优先调整 fixture `content` 和 `GROUP_MEMORY_QUERY` 的词面重叠，不降低生产阈值。
 
-- [ ] **步骤 7：运行全部 fixture 定向测试**
+实际：PASS，`test_rag_benchmark_fixture_db_supports_group_memory_positive_case` 1 passed。
+
+- [x] **步骤 7：运行全部 fixture 定向测试**
 
 运行：
 
@@ -372,6 +380,8 @@ python -B -m pytest \
 
 预期：4 个 fixture 正例全部 PASS。
 
+实际：PASS，4 个 fixture 正例全部通过。
+
 ## 任务 3：更新 baseline 并验证 stable gate
 
 **文件：**
@@ -379,7 +389,7 @@ python -B -m pytest \
 - 修改：`tests/test_rag_benchmark.py`
 - 修改：`.Codex/plans/rag-group-memory-fixture.md`
 
-- [ ] **步骤 1：运行 RAG stable gate 生成新报告**
+- [x] **步骤 1：运行 RAG stable gate 生成新报告**
 
 运行：
 
@@ -404,7 +414,9 @@ python -B -m evals.rag_benchmark.run \
 
 预期：当前 baseline 尚未更新时会 FAIL，报告里应显示新增 fixed case 或 metric delta。
 
-- [ ] **步骤 2：用真实报告更新 baseline**
+实际：PASS，旧 baseline 仅产生 `total_delta=1` 且无新增失败；报告输出 `cases=13 passed=13 failed=0` 和 `Gate passed`。
+
+- [x] **步骤 2：用真实报告更新 baseline**
 
 从 `tmp/rag_benchmark/reports/latest.json` 复制稳定字段到 `evals/baselines/rag_benchmark.json`：
 
@@ -420,7 +432,7 @@ python -B -m evals.rag_benchmark.run \
 
 如果报告结构和当前 baseline 顺序不同，保留报告生成顺序，不手工重排无关字段。
 
-- [ ] **步骤 3：运行 CLI fixture gate 绿灯**
+- [x] **步骤 3：运行 CLI fixture gate 绿灯**
 
 运行：
 
@@ -431,7 +443,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_runs_man
 
 预期：PASS。
 
-- [ ] **步骤 4：运行 baseline 合同绿灯**
+实际：PASS，`test_rag_benchmark_cli_runs_manual_fixture_positive_gate` 通过。
+
+- [x] **步骤 4：运行 baseline 合同绿灯**
 
 运行：
 
@@ -442,11 +456,15 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：PASS。
 
-- [ ] **步骤 5：重新运行 RAG stable gate**
+实际：PASS，`test_rag_benchmark_baseline_file_matches_manual_gate_contract` 通过。
+
+- [x] **步骤 5：重新运行 RAG stable gate**
 
 运行任务 3 步骤 1 的 gate 命令。
 
 预期：`cases=13 passed=13 failed=0`，并输出 `Gate passed`。
+
+实际：PASS，输出 `cases=13 passed=13 failed=0` 和 `Gate passed`。
 
 ## 任务 4：相邻回归、全量验证和代码阶段提交
 
@@ -456,7 +474,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 - 修改：`evals/baselines/rag_benchmark.json`
 - 修改：`.Codex/plans/rag-group-memory-fixture.md`
 
-- [ ] **步骤 1：运行 RAG 相邻回归**
+- [x] **步骤 1：运行 RAG 相邻回归**
 
 运行：
 
@@ -467,7 +485,9 @@ python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -v -
 
 预期：全部 PASS。
 
-- [ ] **步骤 2：运行 group memory 相邻回归**
+实际：PASS，`tests/test_rag_benchmark.py tests/test_eval_baseline.py` 共 40 passed。
+
+- [x] **步骤 2：运行 group memory 相邻回归**
 
 运行：
 
@@ -483,7 +503,9 @@ python -B -m pytest \
 
 预期：全部 PASS。
 
-- [ ] **步骤 3：运行 PR gate**
+实际：PASS，group memory 相邻回归共 16 passed。
+
+- [x] **步骤 3：运行 PR gate**
 
 运行：
 
@@ -494,7 +516,9 @@ bash scripts/run_eval_pr_gate.sh
 
 预期：TimingGate、capability gates 和 RAG stable gate 全部 `Gate passed`；RAG 输出 `cases=13 passed=13 failed=0`。
 
-- [ ] **步骤 4：运行 periodic gate**
+实际：PASS，RAG 输出 `cases=13 passed=13 failed=0` 和 `Gate passed`。
+
+- [x] **步骤 4：运行 periodic gate**
 
 运行：
 
@@ -505,7 +529,9 @@ bash scripts/run_eval_periodic.sh
 
 预期：稳定 gate 全部通过；RAG 输出 `cases=13 passed=13 failed=0`。
 
-- [ ] **步骤 5：运行全量测试**
+实际：PASS，RAG 输出 `cases=13 passed=13 failed=0` 和 `Gate passed`。
+
+- [x] **步骤 5：运行全量测试**
 
 运行：
 
@@ -516,7 +542,9 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 6：运行 diff 检查**
+实际：PASS，`1380 passed, 6 skipped, 139 warnings in 105.13s`。
+
+- [x] **步骤 6：运行 diff 检查**
 
 运行：
 
@@ -525,6 +553,8 @@ git diff --check -- tests/test_rag_benchmark.py evals/rag_benchmark/fixtures.py 
 ```
 
 预期：无输出，退出码 0。
+
+实际：PASS，无输出，退出码 0。
 
 - [ ] **步骤 7：提交绿色代码阶段**
 
