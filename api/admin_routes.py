@@ -5277,7 +5277,7 @@ from core.database import EvalCandidate, EvalRun, EvalRunResult
 from core.eval_sampling.store import (
     list_candidates, get_candidate, update_candidate,
     label_candidate, ignore_candidate, plan_candidate_promotion, promote_candidate,
-    candidate_queue_summary,
+    candidate_queue_summary, preflight_candidate_promotions,
     save_run, save_run_results, get_runs, get_run,
 )
 from evals.expected_contract import expected_contract_payload
@@ -5305,6 +5305,35 @@ def eval_list_candidates(
     )
     summary = candidate_queue_summary(db, suite=suite, status=status, source=source)
     return {"items": items, "total": total, "page": page, "summary": summary}
+
+
+class CandidatePreflightRequest(BaseModel):
+    case_ids: list[str] = Field(default_factory=list)
+    suite: str = ""
+    status: str = "labeled"
+    source: str = ""
+    target_dataset: str = ""
+    limit: int = 200
+
+
+@router.post("/evals/candidates/preflight")
+def eval_preflight_candidates(
+    body: CandidatePreflightRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    try:
+        return preflight_candidate_promotions(
+            db,
+            case_ids=body.case_ids,
+            suite=body.suite,
+            status=body.status,
+            source=body.source,
+            target_dataset=body.target_dataset,
+            limit=body.limit,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/evals/candidates/{case_id}")

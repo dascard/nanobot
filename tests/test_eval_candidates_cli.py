@@ -72,6 +72,10 @@ def test_promote_labeled_dry_run_and_apply(db_session, tmp_path, monkeypatch):
     )
 
     assert dry_run["count"] == 1
+    assert dry_run["ready"] == 1
+    assert dry_run["blocked"] == 0
+    assert dry_run["applied"] == 0
+    assert dry_run["ok"] is True
     assert dry_run["items"][0]["case_id"] == "cand_timing_gate_1"
     assert dry_run["items"][0]["target_dataset"] == "timing_gate"
     assert not target.exists()
@@ -84,9 +88,80 @@ def test_promote_labeled_dry_run_and_apply(db_session, tmp_path, monkeypatch):
         apply=True,
     )
 
-    assert applied == {"count": 1, "items": [{"case_id": "cand_timing_gate_1", "path": str(target)}]}
+    assert applied == {
+        "ok": True,
+        "count": 1,
+        "ready": 1,
+        "blocked": 0,
+        "applied": 1,
+        "items": [{"case_id": "cand_timing_gate_1", "path": str(target)}],
+    }
     assert target.exists()
     assert get_candidate(db_session, "cand_timing_gate_1").status == "promoted"
+
+
+def test_promote_labeled_dry_run_reports_ready_and_blocked_without_writing(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    from core.eval_sampling.store import get_candidate, label_candidate
+    from evals.candidates import promote_labeled
+
+    _insert_candidate(db_session, case_id="cand_ready")
+    label_candidate(db_session, "cand_ready", {"timing_action": "continue"})
+    _insert_candidate(db_session, case_id="cand_error", suite="error")
+    label_candidate(db_session, "cand_error", {"timing_action": "continue"})
+    target = tmp_path / "evals" / "cases" / "timing_gate" / "cand_ready.json"
+
+    dry_run = promote_labeled(
+        db_session,
+        target_dataset="timing_gate",
+        apply=False,
+    )
+
+    assert dry_run["count"] == 2
+    assert dry_run["ready"] == 1
+    assert dry_run["blocked"] == 1
+    assert dry_run["applied"] == 0
+    assert dry_run["ok"] is False
+    by_id = {item["case_id"]: item for item in dry_run["items"]}
+    assert by_id["cand_ready"]["ready"] is True
+    assert by_id["cand_error"]["ready"] is False
+    assert by_id["cand_error"]["error"] == "suite_not_runnable"
+    assert not target.exists()
+    assert get_candidate(db_session, "cand_ready").status == "labeled"
+
+
+def test_promote_labeled_apply_rejects_blocked_batch_without_partial_write(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    from core.eval_sampling.store import get_candidate, label_candidate
+    from evals.candidates import promote_labeled
+
+    _insert_candidate(db_session, case_id="cand_ready")
+    label_candidate(db_session, "cand_ready", {"timing_action": "continue"})
+    _insert_candidate(db_session, case_id="cand_error", suite="error")
+    label_candidate(db_session, "cand_error", {"timing_action": "continue"})
+    target = tmp_path / "evals" / "cases" / "timing_gate" / "cand_ready.json"
+
+    result = promote_labeled(
+        db_session,
+        target_dataset="timing_gate",
+        apply=True,
+    )
+
+    assert result["count"] == 2
+    assert result["ready"] == 1
+    assert result["blocked"] == 1
+    assert result["applied"] == 0
+    assert result["ok"] is False
+    assert not target.exists()
+    assert get_candidate(db_session, "cand_ready").status == "labeled"
 
 
 def test_candidates_cli_main_exports_candidates(db_session, tmp_path, monkeypatch, capsys):

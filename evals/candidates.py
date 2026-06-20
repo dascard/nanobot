@@ -10,7 +10,7 @@ from typing import Any
 from core.eval_sampling.store import (
     label_candidate,
     list_candidates,
-    plan_candidate_promotion,
+    preflight_candidate_promotions,
     promote_candidate,
 )
 
@@ -62,21 +62,53 @@ def promote_labeled(
     target_dataset: str = "regression",
     apply: bool = False,
 ) -> dict[str, Any]:
-    items, _ = list_candidates(db, suite=suite, status="labeled", limit=10000, offset=0)
-    plans = []
-    for item in items:
-        if apply:
-            path = promote_candidate(db, item["case_id"], target_dataset=target_dataset)
-            plans.append({"case_id": item["case_id"], "path": path})
-        else:
-            plans.append(
-                plan_candidate_promotion(
-                    db,
-                    item["case_id"],
-                    target_dataset=target_dataset,
-                )
-            )
-    return {"count": len(plans), "items": plans}
+    preflight = preflight_candidate_promotions(
+        db,
+        suite=suite,
+        status="labeled",
+        target_dataset=target_dataset,
+        limit=10000,
+    )
+    items = []
+    for item in preflight["items"]:
+        readiness = item["readiness"]
+        blocking_reasons = readiness["blocking_reasons"]
+        first_reason = blocking_reasons[0]["code"] if blocking_reasons else ""
+        items.append(
+            {
+                "case_id": item["case_id"],
+                "ready": readiness["ready"],
+                "path": item["path"],
+                "target_dataset": item["target_dataset"],
+                "error": first_reason,
+                "readiness": readiness,
+            }
+        )
+
+    result = {
+        "ok": preflight["ok"],
+        "count": preflight["total"],
+        "ready": preflight["ready"],
+        "blocked": preflight["blocked"],
+        "applied": 0,
+        "items": items,
+    }
+    if not apply:
+        return result
+    if preflight["blocked"]:
+        result["ok"] = False
+        return result
+
+    applied_items = []
+    for item in preflight["items"]:
+        if not item["readiness"]["ready"]:
+            continue
+        path = promote_candidate(db, item["case_id"], target_dataset=target_dataset)
+        applied_items.append({"case_id": item["case_id"], "path": path})
+    result["ok"] = True
+    result["applied"] = len(applied_items)
+    result["items"] = applied_items
+    return result
 
 
 def _open_db():

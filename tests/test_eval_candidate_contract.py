@@ -366,6 +366,42 @@ def test_promote_candidate_rejects_non_runnable_suite(db_session, tmp_path, monk
     assert not (tmp_path / "evals" / "cases" / "timing_gate" / "cand_error.json").exists()
 
 
+def test_eval_candidates_preflight_returns_ready_and_blocked_items(
+    client,
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    _redirect_promote_root(monkeypatch, tmp_path)
+    from core.eval_sampling.store import label_candidate
+
+    _insert_candidate(db_session, case_id="cand_ready")
+    label_candidate(db_session, "cand_ready", {"timing_action": "continue"})
+    _insert_candidate(db_session, case_id="cand_error", suite="error")
+    label_candidate(db_session, "cand_error", {"timing_action": "continue"})
+
+    response = client.post(
+        "/api/v1/admin/evals/candidates/preflight",
+        headers=_auth_header(),
+        json={
+            "case_ids": ["cand_ready", "cand_error", "missing_case"],
+            "target_dataset": "timing_gate",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["total"] == 3
+    assert payload["ready"] == 1
+    assert payload["blocked"] == 2
+    by_id = {item["case_id"]: item for item in payload["items"]}
+    assert by_id["cand_ready"]["readiness"]["ready"] is True
+    assert by_id["cand_error"]["readiness"]["blocking_reasons"][0]["code"] == "suite_not_runnable"
+    assert by_id["missing_case"]["readiness"]["blocking_reasons"][0]["code"] == "candidate_not_found"
+
+
 def test_promote_candidate_dry_run_does_not_write_or_change_status(
     db_session,
     tmp_path,

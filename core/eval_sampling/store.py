@@ -193,6 +193,71 @@ def candidate_queue_summary(
     }
 
 
+def preflight_candidate_promotions(
+    db,
+    *,
+    case_ids: list[str] | None = None,
+    suite: str = "",
+    status: str = "labeled",
+    source: str = "",
+    target_dataset: str = "",
+    limit: int = 200,
+) -> dict[str, Any]:
+    """批量预检候选晋升，不写文件、不改 DB。"""
+    capped_limit = max(1, min(int(limit or 200), 500))
+    rows_by_id: dict[str, EvalCandidate] = {}
+    ordered_ids: list[str] = []
+
+    if case_ids:
+        ordered_ids = [str(case_id) for case_id in case_ids][:capped_limit]
+        rows = (
+            db.query(EvalCandidate)
+            .filter(EvalCandidate.case_id.in_(ordered_ids))
+            .all()
+        )
+        rows_by_id = {row.case_id: row for row in rows}
+    else:
+        rows = (
+            _candidate_query(db, suite=suite, status=status or "labeled", source=source)
+            .order_by(EvalCandidate.priority.desc(), EvalCandidate.id.desc())
+            .limit(capped_limit)
+            .all()
+        )
+        ordered_ids = [row.case_id for row in rows]
+        rows_by_id = {row.case_id: row for row in rows}
+
+    items: list[dict[str, Any]] = []
+    ready_count = 0
+    blocked_count = 0
+    for case_id in ordered_ids:
+        row = rows_by_id.get(case_id)
+        readiness = candidate_readiness(
+            row,
+            target_dataset=target_dataset or (row.suite if row else "regression"),
+        )
+        if readiness["ready"]:
+            ready_count += 1
+        else:
+            blocked_count += 1
+        items.append({
+            "case_id": case_id,
+            "suite": row.suite if row else "",
+            "status": row.status if row else "",
+            "target_dataset": readiness["target_dataset"],
+            "path": readiness["target_path"],
+            "readiness": readiness,
+        })
+
+    return {
+        "ok": blocked_count == 0,
+        "total": len(items),
+        "ready": ready_count,
+        "blocked": blocked_count,
+        "target_dataset": target_dataset,
+        "items": items,
+    }
+
+
 def get_candidate(db, case_id: str) -> EvalCandidate | None:
     """按 case_id 获取候选。"""
     return db.query(EvalCandidate).filter(EvalCandidate.case_id == case_id).first()
