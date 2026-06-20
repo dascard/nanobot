@@ -501,6 +501,12 @@ def test_eval_workflow_uploads_run_scoped_timing_signal_audit():
     assert "evals/reports/runs/**/timing_signal_audit.json" in text
 
 
+def test_eval_run_scoped_reports_are_gitignored():
+    text = Path(".gitignore").read_text(encoding="utf-8")
+
+    assert "evals/reports/runs/" in text
+
+
 def test_eval_workflow_artifact_retention_is_bounded():
     workflow = Path(".github/workflows/timing-gate-eval.yml")
 
