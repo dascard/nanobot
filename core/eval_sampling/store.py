@@ -16,6 +16,23 @@ from evals.expected_contract import validate_expected_contract
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
+RUNNABLE_EVAL_SUITES = frozenset({
+    "sticker",
+    "memory_learning",
+    "moderation",
+    "model_routing",
+    "group_reply",
+    "reply_contract",
+    "rendering_contract",
+    "timing_gate",
+})
+
+
+def _readiness_reason(code: str, message: str, **extra: Any) -> dict[str, Any]:
+    reason: dict[str, Any] = {"code": code, "message": message}
+    reason.update(extra)
+    return reason
+
 
 # ── Cursor ──
 
@@ -93,6 +110,17 @@ def upsert_candidate(db, case_dict: dict) -> bool:
     return True
 
 
+def _candidate_query(db, *, suite: str = "", status: str = "", source: str = ""):
+    q = db.query(EvalCandidate)
+    if suite:
+        q = q.filter(EvalCandidate.suite == suite)
+    if status:
+        q = q.filter(EvalCandidate.status == status)
+    if source:
+        q = q.filter(EvalCandidate.source == source)
+    return q
+
+
 def list_candidates(
     db,
     suite: str = "",
@@ -102,17 +130,67 @@ def list_candidates(
     offset: int = 0,
 ) -> tuple[list[dict], int]:
     """列出候选。返回 (items, total)。"""
-    q = db.query(EvalCandidate)
-    if suite:
-        q = q.filter(EvalCandidate.suite == suite)
-    if status:
-        q = q.filter(EvalCandidate.status == status)
-    if source:
-        q = q.filter(EvalCandidate.source == source)
+    q = _candidate_query(db, suite=suite, status=status, source=source)
     total = q.count()
-    rows = q.order_by(EvalCandidate.id.desc()).offset(offset).limit(limit).all()
+    rows = (
+        q.order_by(EvalCandidate.priority.desc(), EvalCandidate.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     items = [_candidate_dict(r) for r in rows]
     return items, total
+
+
+def candidate_queue_summary(
+    db,
+    *,
+    suite: str = "",
+    status: str = "",
+    source: str = "",
+    target_dataset: str = "",
+) -> dict[str, Any]:
+    """返回当前过滤范围内的候选队列摘要。"""
+    rows = _candidate_query(db, suite=suite, status=status, source=source).all()
+    by_status: dict[str, int] = {}
+    by_suite: dict[str, int] = {}
+    by_source: dict[str, int] = {}
+    readiness_counts = {"ready": 0, "blocked": 0}
+    reason_counts: dict[str, int] = {}
+
+    for row in rows:
+        by_status[row.status] = by_status.get(row.status, 0) + 1
+        by_suite[row.suite] = by_suite.get(row.suite, 0) + 1
+        by_source[row.source] = by_source.get(row.source, 0) + 1
+        readiness = candidate_readiness(row, target_dataset=target_dataset or row.suite)
+        if readiness["ready"]:
+            readiness_counts["ready"] += 1
+        else:
+            readiness_counts["blocked"] += 1
+        for reason in readiness["blocking_reasons"]:
+            code = str(reason.get("code", "unknown"))
+            reason_counts[code] = reason_counts.get(code, 0) + 1
+
+    return {
+        "total": len(rows),
+        "filters": {
+            "suite": suite,
+            "status": status,
+            "source": source,
+            "target_dataset": target_dataset,
+        },
+        "by_status": by_status,
+        "by_suite": by_suite,
+        "by_source": by_source,
+        "readiness": readiness_counts,
+        "top_blocking_reasons": [
+            {"code": code, "count": count}
+            for code, count in sorted(
+                reason_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            )
+        ],
+    }
 
 
 def get_candidate(db, case_id: str) -> EvalCandidate | None:
@@ -125,6 +203,17 @@ def update_candidate(db, case_id: str, **fields):
     row = get_candidate(db, case_id)
     if not row:
         return None
+    next_status = fields.get("status")
+    if next_status is not None:
+        if next_status not in {"candidate", "ignored"}:
+            raise ValueError(f"invalid status transition: {next_status}")
+        if row.status == "ignored" and next_status == "candidate":
+            row.status = "candidate"
+        elif row.status in {"candidate", "labeled"} and next_status == "ignored":
+            row.status = "ignored"
+        elif row.status != next_status:
+            raise ValueError(f"invalid status transition: {row.status} -> {next_status}")
+        fields = {key: value for key, value in fields.items() if key != "status"}
     for key, val in fields.items():
         if hasattr(row, key):
             setattr(row, key, val)
@@ -159,11 +248,99 @@ def ignore_candidate(db, case_id: str):
     return _candidate_dict(row)
 
 
-def _safe_dataset_name(value: str) -> str:
+def _validate_dataset_name(value: str) -> tuple[str, dict[str, Any] | None]:
     name = str(value or "regression").strip()
     if not name or not re.fullmatch(r"[A-Za-z0-9_-]+", name):
-        raise ValueError(f"invalid target_dataset: {value}")
+        return name, _readiness_reason(
+            "target_dataset_invalid",
+            f"invalid target_dataset: {value}",
+            field="target_dataset",
+        )
+    return name, None
+
+
+def _safe_dataset_name(value: str) -> str:
+    name, reason = _validate_dataset_name(value)
+    if reason:
+        raise ValueError(reason["message"])
     return name
+
+
+def candidate_readiness(
+    row: EvalCandidate | None,
+    *,
+    target_dataset: str | None = None,
+) -> dict[str, Any]:
+    """返回候选当前是否可晋升，以及阻断原因。"""
+    dataset, dataset_reason = _validate_dataset_name(
+        target_dataset or (row.suite if row is not None else "regression")
+    )
+    target_path = ""
+    blocking_reasons: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    if row is None:
+        blocking_reasons.append(_readiness_reason("candidate_not_found", "candidate not found"))
+        return {
+            "ready": False,
+            "can_label": False,
+            "can_promote": False,
+            "status": "blocked",
+            "suite": "",
+            "target_dataset": dataset,
+            "target_path": "",
+            "blocking_reasons": blocking_reasons,
+            "warnings": warnings,
+        }
+
+    if dataset_reason:
+        blocking_reasons.append(dataset_reason)
+    else:
+        target_path = str(REPO_ROOT / "evals" / "cases" / dataset / f"{row.case_id}.json")
+
+    if row.status != "labeled":
+        blocking_reasons.append(_readiness_reason(
+            "invalid_status",
+            "candidate status must be labeled before promote",
+            status=row.status,
+        ))
+
+    if row.suite not in RUNNABLE_EVAL_SUITES:
+        blocking_reasons.append(_readiness_reason(
+            "suite_not_runnable",
+            "suite is not runnable",
+            suite=row.suite,
+        ))
+
+    expected = _safe_json(row.expected_json, {})
+    try:
+        validate_expected_contract(row.suite, expected)
+    except ValueError as exc:
+        blocking_reasons.append(_readiness_reason(
+            "expected_invalid",
+            str(exc),
+            suite=row.suite,
+        ))
+
+    if target_path and Path(target_path).exists():
+        blocking_reasons.append(_readiness_reason(
+            "target_case_exists",
+            f"target case already exists: {target_path}",
+            path=target_path,
+        ))
+
+    ready = not blocking_reasons
+    return {
+        "ready": ready,
+        "can_label": row.status == "candidate",
+        "can_promote": ready,
+        "status": "ready" if ready else "blocked",
+        "suite": row.suite,
+        "target_dataset": dataset,
+        "target_path": target_path,
+        "blocking_reasons": blocking_reasons,
+        "warnings": warnings,
+    }
 
 
 def plan_candidate_promotion(db, case_id: str, *, target_dataset: str = "regression") -> dict:
@@ -171,16 +348,14 @@ def plan_candidate_promotion(db, case_id: str, *, target_dataset: str = "regress
     row = get_candidate(db, case_id)
     if not row:
         raise ValueError("candidate not found")
-    if row.status != "labeled":
-        raise ValueError("candidate must be labeled before promote")
+    readiness = candidate_readiness(row, target_dataset=target_dataset)
+    if not readiness["ready"]:
+        reason = readiness["blocking_reasons"][0]
+        raise ValueError(f"{reason['code']}: {reason['message']}")
     expected = _safe_json(row.expected_json, {})
-    validate_expected_contract(row.suite, expected)
 
-    dataset = _safe_dataset_name(target_dataset)
-    target_dir = REPO_ROOT / "evals" / "cases" / dataset
-    out_path = target_dir / f"{case_id}.json"
-    if out_path.exists():
-        raise ValueError(f"target case already exists: {out_path}")
+    dataset = readiness["target_dataset"]
+    out_path = Path(readiness["target_path"])
 
     tags = _safe_json(row.tags_json, [])
     if not isinstance(tags, list):
@@ -359,6 +534,7 @@ def _candidate_dict(r: EvalCandidate) -> dict:
         "note": r.note or "",
         "created_at": str(r.created_at) if r.created_at else "",
         "updated_at": str(r.updated_at) if r.updated_at else "",
+        "readiness": candidate_readiness(r),
     }
 
 

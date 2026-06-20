@@ -5277,6 +5277,7 @@ from core.database import EvalCandidate, EvalRun, EvalRunResult
 from core.eval_sampling.store import (
     list_candidates, get_candidate, update_candidate,
     label_candidate, ignore_candidate, plan_candidate_promotion, promote_candidate,
+    candidate_queue_summary,
     save_run, save_run_results, get_runs, get_run,
 )
 from evals.expected_contract import expected_contract_payload
@@ -5302,7 +5303,8 @@ def eval_list_candidates(
         limit=max(1, min(limit, 200)),
         offset=(max(page, 1) - 1) * limit,
     )
-    return {"items": items, "total": total, "page": page}
+    summary = candidate_queue_summary(db, suite=suite, status=status, source=source)
+    return {"items": items, "total": total, "page": page, "summary": summary}
 
 
 @router.get("/evals/candidates/{case_id}")
@@ -5333,7 +5335,10 @@ def eval_patch_candidate(
         updates["note"] = body.note
     if body.status is not None:
         updates["status"] = body.status
-    result = update_candidate(db, case_id, **updates)
+    try:
+        result = update_candidate(db, case_id, **updates)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not result:
         raise HTTPException(404, "candidate not found")
     _audit_request(db, request, "update_candidate", "eval_candidate", case_id, updates)

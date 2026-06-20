@@ -239,6 +239,101 @@ def test_eval_label_candidate_rejects_conflicting_expected_fields(
     assert "expected" in response.json()["detail"]
 
 
+def test_eval_list_candidates_returns_summary_and_readiness(client, db_session, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    _insert_candidate(db_session, case_id="cand_a")
+    _insert_candidate(db_session, case_id="cand_b")
+
+    response = client.get(
+        "/api/v1/admin/evals/candidates",
+        headers=_auth_header(),
+        params={"suite": "timing_gate", "limit": 20},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["summary"]["total"] == 2
+    assert payload["summary"]["by_status"]["candidate"] == 2
+    assert payload["summary"]["by_suite"]["timing_gate"] == 2
+    assert payload["summary"]["readiness"]["blocked"] == 2
+    assert payload["items"][0]["readiness"]["ready"] is False
+    assert payload["items"][0]["readiness"]["blocking_reasons"]
+
+
+def test_eval_patch_candidate_rejects_direct_labeled_promoted_and_unknown_status(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    _insert_candidate(db_session)
+
+    for status in ("labeled", "promoted", "invalid"):
+        response = client.patch(
+            "/api/v1/admin/evals/candidates/cand_timing_gate_1",
+            headers=_auth_header(),
+            json={"status": status},
+        )
+        assert response.status_code == 400
+        assert status in response.text
+
+    ok = client.patch(
+        "/api/v1/admin/evals/candidates/cand_timing_gate_1",
+        headers=_auth_header(),
+        json={"priority": 10, "note": "优先处理"},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["priority"] == 10
+    assert ok.json()["note"] == "优先处理"
+
+
+def test_candidate_readiness_blocks_status_error_suite_invalid_expected_and_existing_target(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    from core.eval_sampling.store import candidate_readiness, get_candidate, label_candidate
+
+    _insert_candidate(db_session, case_id="cand_needs_label")
+    needs_label = get_candidate(db_session, "cand_needs_label")
+    readiness = candidate_readiness(needs_label, target_dataset="timing_gate")
+    assert readiness["ready"] is False
+    assert readiness["can_label"] is True
+    assert [reason["code"] for reason in readiness["blocking_reasons"]] == [
+        "invalid_status",
+        "expected_invalid",
+    ]
+
+    _insert_candidate(db_session, case_id="cand_error", suite="error")
+    label_candidate(db_session, "cand_error", {"timing_action": "continue"})
+    error_readiness = candidate_readiness(
+        get_candidate(db_session, "cand_error"),
+        target_dataset="timing_gate",
+    )
+    assert error_readiness["ready"] is False
+    assert any(
+        reason["code"] == "suite_not_runnable"
+        for reason in error_readiness["blocking_reasons"]
+    )
+
+    _insert_candidate(db_session, case_id="cand_ready")
+    label_candidate(db_session, "cand_ready", {"timing_action": "continue"})
+    target = tmp_path / "evals" / "cases" / "timing_gate" / "cand_ready.json"
+    target.parent.mkdir(parents=True)
+    target.write_text("{}", encoding="utf-8")
+    conflict = candidate_readiness(
+        get_candidate(db_session, "cand_ready"),
+        target_dataset="timing_gate",
+    )
+    assert conflict["ready"] is False
+    assert any(
+        reason["code"] == "target_case_exists"
+        for reason in conflict["blocking_reasons"]
+    )
+
+
 def test_promote_candidate_rejects_unlabeled_and_file_conflict(db_session, tmp_path, monkeypatch):
     _redirect_promote_root(monkeypatch, tmp_path)
     from core.eval_sampling.store import label_candidate, promote_candidate
@@ -255,6 +350,20 @@ def test_promote_candidate_rejects_unlabeled_and_file_conflict(db_session, tmp_p
 
     with pytest.raises(ValueError, match="already exists"):
         promote_candidate(db_session, "cand_timing_gate_1")
+
+
+def test_promote_candidate_rejects_non_runnable_suite(db_session, tmp_path, monkeypatch):
+    _redirect_promote_root(monkeypatch, tmp_path)
+    from core.eval_sampling.store import get_candidate, label_candidate, promote_candidate
+
+    _insert_candidate(db_session, case_id="cand_error", suite="error")
+    label_candidate(db_session, "cand_error", {"timing_action": "continue"})
+
+    with pytest.raises(ValueError, match="suite_not_runnable"):
+        promote_candidate(db_session, "cand_error", target_dataset="timing_gate")
+
+    assert get_candidate(db_session, "cand_error").status == "labeled"
+    assert not (tmp_path / "evals" / "cases" / "timing_gate" / "cand_error.json").exists()
 
 
 def test_promote_candidate_dry_run_does_not_write_or_change_status(
