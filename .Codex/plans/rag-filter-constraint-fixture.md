@@ -735,7 +735,7 @@ git commit -m "test(评测): 固化 RAG 过滤约束 fixture"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/rag-filter-constraint-fixture.md`
 
-- [ ] **步骤 1：同步 `docs/evals.md`**
+- [x] **步骤 1：同步 `docs/evals.md`**
 
 更新 RAG benchmark 小节：
 
@@ -746,7 +746,9 @@ git commit -m "test(评测): 固化 RAG 过滤约束 fixture"
 - sticker 覆盖 stream/global decoy。
 - group_memory 保留跨群 decoy。
 
-- [ ] **步骤 2：同步 `docs/todo.md`**
+实际：已同步 RAG benchmark 小节，记录 P4-5H 后 stable gate 仍为 `9 manual + 4 fixture positive`，并补充 memory / knowledge / sticker / group_memory 的 decoy 过滤边界。
+
+- [x] **步骤 2：同步 `docs/todo.md`**
 
 在 P4 路线项 8 的 P4-5G 后增加 P4-5H 验证状态：
 
@@ -756,7 +758,9 @@ git commit -m "test(评测): 固化 RAG 过滤约束 fixture"
 
 同时把「下一阶段」更新为真实样本运营动作或下一条路线，不再把过滤约束 fixture 作为未完成项。
 
-- [ ] **步骤 3：同步 `docs/plan_walkthrough.md`**
+实际：已新增 P4-5H 验证状态，并把后续重点更新为真实样本运营动作。
+
+- [x] **步骤 3：同步 `docs/plan_walkthrough.md`**
 
 在进度总览增加：
 
@@ -776,7 +780,9 @@ git commit -m "test(评测): 固化 RAG 过滤约束 fixture"
 - 相邻回归、PR gate、周期性 gate、全量回归输出。
 - 提交边界。
 
-- [ ] **步骤 4：运行文档自检**
+实际：已新增 P4-5H 进度总览行和「已完成阶段详情：P4-5H RAG 过滤约束 fixture」小节，记录设计、计划、分阶段提交、验证结果和执行边界。
+
+- [x] **步骤 4：运行文档自检**
 
 运行：
 
@@ -794,7 +800,9 @@ git diff --check -- \
 
 预期：三条命令均无问题输出。`rg` 无匹配时退出码为 1，这是可接受结果。
 
-- [ ] **步骤 5：运行 PR gate**
+实际：宽泛 placeholder 扫描命中 `docs/plan_walkthrough.md` 历史记录中的旧检查描述；新增行专项扫描无匹配。U+FFFD 扫描无匹配，`git diff --check` 无输出，过时「下一阶段转向过滤约束」状态扫描无匹配。
+
+- [x] **步骤 5：运行 PR gate**
 
 运行：
 
@@ -804,7 +812,9 @@ bash scripts/run_eval_pr_gate.sh
 
 预期：TimingGate、三个 capability gate 和 RAG gate 均输出 `Gate passed`，RAG gate 输出 `cases=13 passed=13 failed=0`。
 
-- [ ] **步骤 6：运行周期性 gate**
+实际：`bash scripts/run_eval_pr_gate.sh` 输出评测守卫 `27 passed, 1 warning in 1.82s`；TimingGate、三个 capability gate 和 RAG gate 均输出 `Gate passed`；RAG gate 输出 `cases=13 passed=13 failed=0`。
+
+- [x] **步骤 6：运行周期性 gate**
 
 运行：
 
@@ -814,7 +824,9 @@ bash scripts/run_eval_periodic.sh
 
 预期：各子 gate 均完成，RAG gate 输出 `cases=13 passed=13 failed=0`。
 
-- [ ] **步骤 7：运行全量测试**
+实际：`bash scripts/run_eval_periodic.sh` 输出评测守卫 `27 passed, 1 warning in 1.71s`；各子 gate 均输出 `Gate passed`；RAG gate 输出 `cases=13 passed=13 failed=0`。
+
+- [x] **步骤 7：运行全量测试**
 
 运行：
 
@@ -824,7 +836,9 @@ python -B -m pytest tests/ -v -p no:cacheprovider
 
 预期：0 failures。
 
-- [ ] **步骤 8：提交文档收口**
+实际：`python -B -m pytest tests/ -v -p no:cacheprovider` 输出 `1380 passed, 6 skipped, 139 warnings in 104.70s`。
+
+- [x] **步骤 8：提交文档收口**
 
 运行：
 
@@ -834,6 +848,8 @@ git commit -m "docs(评测): 收口 RAG 过滤约束 fixture 状态"
 ```
 
 提交前只允许暂存上述 4 个文件。
+
+实际：按本步骤只暂存 `docs/evals.md`、`docs/todo.md`、`docs/plan_walkthrough.md` 和 `.Codex/plans/rag-filter-constraint-fixture.md`，提交信息使用 `docs(评测): 收口 RAG 过滤约束 fixture 状态`。
 
 ## 最终完成标准
 
