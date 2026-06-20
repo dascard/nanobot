@@ -227,6 +227,121 @@ def test_eval_run_cli_returns_success_when_gate_passes(monkeypatch, tmp_path, ca
     assert "Gate passed" in captured.out
 
 
+def test_periodic_manifest_builds_step_summaries(tmp_path):
+    from evals.periodic_manifest import build_periodic_manifest, write_steps_jsonl
+
+    eval_report = tmp_path / "eval.json"
+    eval_report.write_text(
+        json.dumps(
+            {
+                "suite": "capability_reply_contract",
+                "total": 3,
+                "passed": 3,
+                "failed": 0,
+                "pass_rate": 1.0,
+                "failed_cases": [],
+                "baseline_diff": {"new_failed_cases": []},
+                "gate": {"passed": True, "errors": []},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    rag_report = tmp_path / "rag.json"
+    rag_report.write_text(
+        json.dumps(
+            {
+                "suite": "rag_benchmark",
+                "metrics": {
+                    "overall": {
+                        "total_cases": 2,
+                        "pass_rate": 1.0,
+                        "hit@5": 1.0,
+                        "mrr": 1.0,
+                        "positive_cases": 1,
+                    }
+                },
+                "failed_cases": [],
+                "baseline_diff": {"new_failed_cases": []},
+                "gate": {"passed": True, "errors": []},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    timing_report = tmp_path / "timing_signal.json"
+    timing_report.write_text(
+        json.dumps(
+            {
+                "total_samples": 0,
+                "labeled_samples": 0,
+                "shadow": {
+                    "action_mismatch_count": 0,
+                    "action_mismatch_rate": 0.0,
+                },
+                "source": {
+                    "mode": "skipped",
+                    "reason": "db_not_found",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    steps_path = tmp_path / "steps.jsonl"
+    write_steps_jsonl(
+        steps_path,
+        [
+            {
+                "name": "capability reply contract",
+                "kind": "eval_suite",
+                "suite": "capability_reply_contract",
+                "exit_code": 0,
+                "report_paths": [str(eval_report)],
+                "baseline_path": "evals/baselines/capability_reply_contract.json",
+            },
+            {
+                "name": "rag benchmark manual fixture deterministic gate",
+                "kind": "rag_benchmark",
+                "suite": "rag_benchmark",
+                "exit_code": 0,
+                "report_paths": [str(rag_report)],
+                "baseline_path": "evals/baselines/rag_benchmark.json",
+            },
+            {
+                "name": "timing signal audit",
+                "kind": "timing_signal_audit",
+                "suite": "timing_signal_audit",
+                "exit_code": 0,
+                "report_paths": [str(timing_report)],
+            },
+        ],
+    )
+
+    manifest = build_periodic_manifest(
+        steps_path=steps_path,
+        run_id="unit_run",
+        started_at="2026-06-20T10:00:00+08:00",
+        finished_at="2026-06-20T10:05:00+08:00",
+        exit_code=0,
+        trigger="local",
+    )
+
+    assert manifest["manifest_version"] == 1
+    assert manifest["run_id"] == "unit_run"
+    assert manifest["status"] == "passed"
+    assert [step["kind"] for step in manifest["steps"]] == [
+        "eval_suite",
+        "rag_benchmark",
+        "timing_signal_audit",
+    ]
+    assert manifest["steps"][0]["summary"]["pass_rate"] == 1.0
+    assert manifest["steps"][0]["gate_passed"] is True
+    assert manifest["steps"][1]["summary"]["hit@5"] == 1.0
+    assert manifest["steps"][2]["summary"]["total_samples"] == 0
+    assert manifest["steps"][2]["notes"]["reason"] == "db_not_found"
+
+
 def test_timing_gate_gate_script_uses_stable_baseline():
     script = Path("scripts/run_timing_gate_gate.sh")
 
