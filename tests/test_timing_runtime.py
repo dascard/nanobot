@@ -1176,9 +1176,19 @@ class TestProcessMessageDirected:
         assert result["timing_scoring"]["stage"] == "model_assisted_conflict"
 
     @pytest.mark.asyncio
-    async def test_process_message_at_bot_not_suppressed(self):
+    async def test_process_message_at_bot_with_other_mention_reaches_model(self, monkeypatch):
         from core.group_runtime.runtime import GroupRuntime
         runtime = GroupRuntime()
+        captured = {}
+
+        async def fake_gate(group_id, pending, _ctx, trigger_reason):
+            captured["group_id"] = group_id
+            captured["trigger_reason"] = trigger_reason
+            captured["pending_count"] = len(pending)
+            return {"action": "continue", "reason": "同时点名 bot 和他人"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
         result = await runtime.process_message(
             "group_123",
             {
@@ -1193,3 +1203,8 @@ class TestProcessMessageDirected:
             trigger_reason="at_bot", talk_value=1.0,
         )
         assert result["action"] == "continue"
+        assert captured["group_id"] == "group_123"
+        assert captured["trigger_reason"] == "at_bot"
+        assert captured["pending_count"] == 1
+        assert result["timing_scoring"]["stage"] == "model_assisted_conflict"
+        assert result["timing_scoring"]["signals"]["sub_signals"]["s_other"] == 0.75

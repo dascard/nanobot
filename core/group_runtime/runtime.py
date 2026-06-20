@@ -184,6 +184,14 @@ def _has_directed_to_other_signal(pending: list[GroupPendingMessage]) -> bool:
     return any(msg.is_directed_to_other for msg in pending)
 
 
+def _has_other_recipient_signal(pending: list[GroupPendingMessage]) -> bool:
+    return any(
+        bool((msg.directed or {}).get("at_others"))
+        or bool((msg.directed or {}).get("reply_to_others"))
+        for msg in pending
+    )
+
+
 @dataclass
 class GroupChatState:
     """单个群的运行时状态——per-group stateful runtime。"""
@@ -526,6 +534,7 @@ class GroupRuntime:
             bot_name_mentioned=tr in {"bot_name_mentioned", "mentioned"},
             direct_call=tr == "direct_call" or is_direct,
             is_directed_to_other=_has_directed_to_other_signal(msgs),
+            has_other_recipient=_has_other_recipient_signal(msgs),
             is_other_bot=any(m.is_other_bot for m in msgs),
             has_files=_has_file_segments(msgs),
             linger_score=linger_score,

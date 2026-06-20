@@ -237,6 +237,7 @@ def extract_signals(
     bot_name_mentioned: bool = False,
     direct_call: bool = False,
     is_directed_to_other: bool = False,
+    has_other_recipient: bool = False,
     is_other_bot: bool = False,
     has_files: bool = False,
     linger_score: float = 0.0,
@@ -257,7 +258,7 @@ def extract_signals(
 
     s_ack = 0.85 if _is_pure_ack(text, has_files=has_files) else 0.0
     s_transport, transport_tier = _transport_signal(text, has_files=has_files)
-    s_other = 0.75 if is_directed_to_other and not (is_at_bot or is_reply_to_bot) else 0.0
+    s_other = 0.75 if (is_directed_to_other or has_other_recipient) else 0.0
     s_bot = 0.70 if is_other_bot else 0.0
     suppress = _noisy_or(s_ack, s_transport, s_other, s_bot)
 
@@ -380,6 +381,7 @@ def decide_timing(
     bot_name_mentioned: bool = False,
     direct_call: bool = False,
     is_directed_to_other: bool = False,
+    has_other_recipient: bool = False,
     is_other_bot: bool = False,
     has_files: bool = False,
     linger_score: float = 0.0,
@@ -398,6 +400,7 @@ def decide_timing(
         bot_name_mentioned=bot_name_mentioned,
         direct_call=direct_call,
         is_directed_to_other=is_directed_to_other,
+        has_other_recipient=has_other_recipient,
         is_other_bot=is_other_bot,
         has_files=has_files,
         linger_score=linger_score,

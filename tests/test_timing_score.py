@@ -122,6 +122,27 @@ def test_at_bot_url_conflict_uses_model_instead_of_rule_shortcut():
     assert decision.action == "no_reply"
 
 
+def test_at_bot_with_other_mention_escalates_to_model_without_soft_reject():
+    decision = decide_timing(
+        text="@bot @张三 你看下",
+        is_group=True,
+        is_at_bot=True,
+        has_other_recipient=True,
+        model_hint=TimingModelHint(
+            action="continue",
+            confidence=0.8,
+            raw="{}",
+            reason="同时点名 bot 和他人，需要模型判断",
+        ),
+    )
+
+    assert decision.stage == "model_assisted_conflict"
+    assert decision.model_used is True
+    assert decision.signals.sub_signals["s_other"] == 0.75
+    assert decision.soft_reject_cap == 1.0
+    assert decision.action == "continue"
+
+
 def test_model_failure_in_fuzzy_band_falls_back_to_rule_side():
     decision = decide_timing(
         text="接着呢",
