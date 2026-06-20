@@ -1,6 +1,6 @@
 # RAG 样本仲裁入口实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:test-driven-development 执行实现步骤，并在提交前使用 superpowers:verification-before-completion 和 superpowers:chinese-commit-conventions。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:test-driven-development 执行实现步骤，并在提交前使用 superpowers:verification-before-completion 和 superpowers:chinese-commit-conventions。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
 **目标：** 为 RAG benchmark 增加单条 generated case 提升为 manual case 的 dry-run/apply 仲裁入口，并在 WebUI 中提供人工确认流程。
 
@@ -13,10 +13,19 @@
 ## 执行记录
 
 - 设计提交：`e0d537d docs(评测): 设计 RAG 样本仲裁入口`。
-- 计划提交：待本计划提交后补记。
-- 后端实现提交：待实现后补记。
-- WebUI / 文档实现提交：待实现后补记。
-- 收口提交：待最终验证后补记。
+- 计划提交：`bd51e31 docs(计划): 记录 RAG 样本仲裁计划`。
+- 后端红灯验证：`python -B -m pytest tests/test_rag_benchmark_admin.py::test_generated_case_promote_manual_dry_run_and_apply tests/test_rag_benchmark_admin.py::test_generated_case_promote_manual_rejects_stale_existing_manual_source_and_unsafe_target tests/test_rag_benchmark_admin.py::test_generated_case_promote_manual_overwrite_backs_up_existing_case -q -p no:cacheprovider`，结果 `3 failed, 21 warnings in 7.25s`；失败原因是 `POST /cases/{case_id}/promote-manual` 尚未实现，返回 `405 Method Not Allowed`。
+- 后端绿灯验证：同一命令结果 `3 passed, 21 warnings in 2.15s`。
+- 后端相邻回归：`python -B -m pytest tests/test_rag_benchmark_admin.py -q -p no:cacheprovider`，结果 `15 passed, 21 warnings in 6.58s`。
+- 后端实现提交：`6567c99 feat(评测): 支持 RAG 样本提升接口`。
+- WebUI 红灯验证：WebUI worker 运行 `python -m pytest tests/test_rag_benchmark_webui.py -v`，结果 `1 failed, 4 passed, 1 warning`；失败断言为缺少「提升为 Manual」。
+- WebUI 静态绿灯：`python -B -m pytest tests/test_rag_benchmark_webui.py -q -p no:cacheprovider`，结果 `5 passed, 1 warning in 0.74s`。
+- 实现阶段定向验证：`python -B -m pytest tests/test_rag_benchmark_admin.py tests/test_rag_benchmark_webui.py -q -p no:cacheprovider`，结果 `20 passed, 21 warnings in 7.10s`。
+- RAG 相邻回归：`python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -q -p no:cacheprovider`，结果 `40 passed, 1 warning in 2.26s`。
+- WebUI build：`npm --prefix webui run build`，退出码 0，输出 Vite chunk size 和 plugin timing warning；生成新 bundle `webui/dist/assets/index-D-28-xc-.js`，删除旧 bundle `webui/dist/assets/index-Dfi5Up28.js`。
+- WebUI 实现提交：`7dfdce7 feat(评测): 增加 RAG 样本仲裁入口`。
+- 全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1386 passed, 6 skipped, 139 warnings in 103.04s`。
+- 收口提交：本次文档收口提交记录最终验证与计划状态。
 
 ## 文件结构
 
@@ -63,7 +72,7 @@
 
 - 修改：`tests/test_rag_benchmark_admin.py`
 
-- [ ] **步骤 1：新增 dry-run 与 apply 测试**
+- [x] **步骤 1：新增 dry-run 与 apply 测试**
 
 在 `test_benchmark_sample_marks_fingerprint_and_run_skips_stale_generated_without_overwriting_latest` 后面新增测试。测试先通过 `/sample` 生成 generated case，再调用 promote API。
 
@@ -130,7 +139,7 @@ def test_generated_case_promote_manual_dry_run_and_apply(client, db_session, tmp
     assert actions == ["promote_rag_benchmark_generated_case"]
 ```
 
-- [ ] **步骤 2：新增 stale、冲突、manual 源和 unsafe id 测试**
+- [x] **步骤 2：新增 stale、冲突、manual 源和 unsafe id 测试**
 
 在同一区域继续追加：
 
@@ -201,7 +210,7 @@ def test_generated_case_promote_manual_rejects_stale_existing_manual_source_and_
     assert "stale" in stale.json()["detail"].lower()
 ```
 
-- [ ] **步骤 3：新增 overwrite 备份测试**
+- [x] **步骤 3：新增 overwrite 备份测试**
 
 追加覆盖 apply 覆盖已有 manual case 的备份语义：
 
@@ -242,7 +251,7 @@ def test_generated_case_promote_manual_overwrite_backs_up_existing_case(client, 
     assert persisted["query"] != "old"
 ```
 
-- [ ] **步骤 4：运行红灯测试**
+- [x] **步骤 4：运行红灯测试**
 
 运行：
 
@@ -259,7 +268,7 @@ python -B -m pytest tests/test_rag_benchmark_admin.py::test_generated_case_promo
 - 修改：`api/admin/rag_benchmark_routes.py`
 - 测试：`tests/test_rag_benchmark_admin.py`
 
-- [ ] **步骤 1：新增请求模型**
+- [x] **步骤 1：新增请求模型**
 
 在 `BenchmarkCaseSaveRequest` 后新增：
 
@@ -271,7 +280,7 @@ class BenchmarkCasePromoteRequest(BaseModel):
     overwrite: bool = False
 ```
 
-- [ ] **步骤 2：新增查找和转换 helper**
+- [x] **步骤 2：新增查找和转换 helper**
 
 在 `_load_cases_with_origin()` 后新增：
 
@@ -311,7 +320,7 @@ def _manual_case_from_generated(
 
 如果本地 Pydantic 版本不支持 `model_copy(..., deep=True)` 的现有行为，使用已在项目内兼容的写法，不引入新依赖。
 
-- [ ] **步骤 3：新增 promote route**
+- [x] **步骤 3：新增 promote route**
 
 在 `get_benchmark_case()` 和 `save_benchmark_case()` 之间增加 route，确保 `/cases/{case_id}/promote-manual` 在路径上明确。
 
@@ -373,7 +382,7 @@ def promote_generated_case_to_manual(
     return payload
 ```
 
-- [ ] **步骤 4：运行后端绿灯测试**
+- [x] **步骤 4：运行后端绿灯测试**
 
 运行：
 
@@ -383,7 +392,7 @@ python -B -m pytest tests/test_rag_benchmark_admin.py::test_generated_case_promo
 
 预期：3 个测试通过。
 
-- [ ] **步骤 5：运行后端相邻回归**
+- [x] **步骤 5：运行后端相邻回归**
 
 运行：
 
@@ -399,7 +408,7 @@ python -B -m pytest tests/test_rag_benchmark_admin.py -q -p no:cacheprovider
 
 - 修改：`tests/test_rag_benchmark_webui.py`
 
-- [ ] **步骤 1：新增静态守卫**
+- [x] **步骤 1：新增静态守卫**
 
 在 `test_rag_benchmark_page_exposes_provider_modes_and_case_controls()` 后新增：
 
@@ -420,7 +429,7 @@ def test_rag_benchmark_page_exposes_generated_promote_manual_flow():
     assert "manual case 目录不可写，无法提升 generated case。" in source
 ```
 
-- [ ] **步骤 2：运行 WebUI 红灯测试**
+- [x] **步骤 2：运行 WebUI 红灯测试**
 
 运行：
 
@@ -437,7 +446,7 @@ python -B -m pytest tests/test_rag_benchmark_webui.py::test_rag_benchmark_page_e
 - 修改：`webui/src/features/rag/RagBenchmarkPage.jsx`
 - 测试：`tests/test_rag_benchmark_webui.py`
 
-- [ ] **步骤 1：在 `CaseEditor` 中新增 promote 状态**
+- [x] **步骤 1：在 `CaseEditor` 中新增 promote 状态**
 
 在 `saving` state 后新增：
 
@@ -461,7 +470,7 @@ python -B -m pytest tests/test_rag_benchmark_webui.py::test_rag_benchmark_page_e
       : ''
 ```
 
-- [ ] **步骤 2：新增 dry-run/apply 方法**
+- [x] **步骤 2：新增 dry-run/apply 方法**
 
 在 `remove` 函数后新增：
 
@@ -492,7 +501,7 @@ python -B -m pytest tests/test_rag_benchmark_webui.py::test_rag_benchmark_page_e
   }
 ```
 
-- [ ] **步骤 3：新增 generated 提升 UI**
+- [x] **步骤 3：新增 generated 提升 UI**
 
 在 `高级 JSON` details 后、manual writable 提示前插入：
 
@@ -544,7 +553,7 @@ python -B -m pytest tests/test_rag_benchmark_webui.py::test_rag_benchmark_page_e
 
 如果 JSX 中 `ActionButton` 的 `tone="emerald"` 样式已存在则复用；若不存在，沿用当前保存按钮风格。
 
-- [ ] **步骤 4：确保 `openCase` 保留 stale 字段**
+- [x] **步骤 4：确保 `openCase` 保留 stale 字段**
 
 确认 `openCase(item)` 的 `setEditing` 把列表 `item.stale` 合并进详情对象。若当前实现已经 `setEditing({ ...item, ...r.data })`，无需修改；否则改为：
 
@@ -556,7 +565,7 @@ python -B -m pytest tests/test_rag_benchmark_webui.py::test_rag_benchmark_page_e
   }
 ```
 
-- [ ] **步骤 5：运行 WebUI 静态绿灯测试**
+- [x] **步骤 5：运行 WebUI 静态绿灯测试**
 
 运行：
 
@@ -572,7 +581,7 @@ python -B -m pytest tests/test_rag_benchmark_webui.py -q -p no:cacheprovider
 
 - 修改：`docs/evals.md`
 
-- [ ] **步骤 1：补充 RAG Benchmark 边界**
+- [x] **步骤 1：补充 RAG Benchmark 边界**
 
 在 `Generated case 只作为本地 DB 采样候选` 段落后追加：
 
@@ -582,7 +591,7 @@ Admin API 提供 `POST /api/v1/admin/rag/benchmark/cases/{case_id}/promote-manua
 Promote 不会自动更新 `evals/baselines/rag_benchmark.json`，也不代表样本已进入稳定 gate。只有人工确认 manual case 应纳入稳定门禁时，才同步 baseline 并运行 RAG stable gate。`tmp/rag_benchmark/generated/*` 仍是本地派生产物，不应提交。
 ```
 
-- [ ] **步骤 2：运行文档 diff 检查**
+- [x] **步骤 2：运行文档 diff 检查**
 
 运行：
 
@@ -598,7 +607,7 @@ git diff --check -- docs/evals.md
 
 - 读取：后端、前端、文档 diff。
 
-- [ ] **步骤 1：运行核心定向测试**
+- [x] **步骤 1：运行核心定向测试**
 
 运行：
 
@@ -608,7 +617,7 @@ python -B -m pytest tests/test_rag_benchmark_admin.py tests/test_rag_benchmark_w
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行 RAG 相邻回归**
+- [x] **步骤 2：运行 RAG 相邻回归**
 
 运行：
 
@@ -618,7 +627,7 @@ python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -q -
 
 预期：全部通过，确认未改变 stable gate、baseline 合同或 fixture 语义。
 
-- [ ] **步骤 3：运行 WebUI build**
+- [x] **步骤 3：运行 WebUI build**
 
 运行：
 
@@ -628,7 +637,7 @@ npm --prefix webui run build
 
 预期：退出码 0。允许现有 Vite chunk size warning，但不能有编译错误。
 
-- [ ] **步骤 4：检查 diff 边界**
+- [x] **步骤 4：检查 diff 边界**
 
 运行：
 
@@ -652,7 +661,7 @@ git status --short
 - 暂存：实际生成的 `webui/dist/assets/index-*.js`
 - 不暂存：`tmp/`、`evals/reports/`、`evals/baselines/rag_benchmark.json`。
 
-- [ ] **步骤 1：按文件暂存**
+- [x] **步骤 1：按文件暂存**
 
 运行：
 
@@ -666,7 +675,7 @@ git add api/admin/rag_benchmark_routes.py tests/test_rag_benchmark_admin.py webu
 git add webui/dist/index.html webui/dist/assets/<actual-index-bundle>.js
 ```
 
-- [ ] **步骤 2：提交实现**
+- [x] **步骤 2：提交实现**
 
 运行：
 
@@ -683,7 +692,7 @@ git commit -m "feat(评测): 支持 RAG 样本提升为 manual"
 - 修改：`.Codex/plans/rag-generated-manual-promotion.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行全量测试**
+- [x] **步骤 1：运行全量测试**
 
 运行：
 
@@ -693,7 +702,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 
 预期：0 failures。记录通过数、skip 数、warning 数和耗时。
 
-- [ ] **步骤 2：更新计划执行记录**
+- [x] **步骤 2：更新计划执行记录**
 
 在本文件 `执行记录` 写入：
 
@@ -706,7 +715,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 - 全量回归结果。
 - 实现提交号。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 在真实样本运营动作之后新增 RAG 样本仲裁入口状态，记录：
 
@@ -716,7 +725,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 - 验证命令与结果。
 - 明确下一步候选：通用 EvalCandidate 运营规则或 RAG 仲裁批量化，不在本阶段实现。
 
-- [ ] **步骤 4：检查文档 diff**
+- [x] **步骤 4：检查文档 diff**
 
 运行：
 
@@ -726,7 +735,7 @@ git diff --check -- .Codex/plans/rag-generated-manual-promotion.md docs/plan_wal
 
 预期：无输出。
 
-- [ ] **步骤 5：提交收口文档**
+- [x] **步骤 5：提交收口文档**
 
 运行：
 
@@ -739,16 +748,16 @@ git commit -m "docs(计划): 收口 RAG 样本仲裁状态"
 
 ## 验收清单
 
-- [ ] `POST /api/v1/admin/rag/benchmark/cases/{case_id}/promote-manual` 支持 dry-run 和 apply。
-- [ ] 只允许 generated case 提升，manual 源返回 `409`。
-- [ ] stale generated case 返回 `409`，提示刷新 generated。
-- [ ] unsafe `target_case_id` 返回 `400`。
-- [ ] 目标 manual 已存在且 `overwrite=false` 返回 `409`。
-- [ ] `overwrite=true` apply 会备份旧 manual 文件。
-- [ ] apply 写入 manual JSON，保留 query、filters、expected 和 generated provenance。
-- [ ] apply 写 `promote_rag_benchmark_generated_case` audit。
-- [ ] WebUI generated case 详情提供「提升为 Manual」二阶段流程。
-- [ ] manual 目录不可写或 stale generated 时 WebUI 禁用入口并显示原因。
-- [ ] 文档说明 promote 不自动更新 baseline，不提交 `tmp/` generated 产物。
-- [ ] 未修改 sampler、runner、scoring、fixture、baseline 和 gate 脚本。
-- [ ] 定向测试、相邻回归、WebUI build 和全量测试都有新鲜验证结果。
+- [x] `POST /api/v1/admin/rag/benchmark/cases/{case_id}/promote-manual` 支持 dry-run 和 apply。
+- [x] 只允许 generated case 提升，manual 源返回 `409`。
+- [x] stale generated case 返回 `409`，提示刷新 generated。
+- [x] unsafe `target_case_id` 返回 `400`。
+- [x] 目标 manual 已存在且 `overwrite=false` 返回 `409`。
+- [x] `overwrite=true` apply 会备份旧 manual 文件。
+- [x] apply 写入 manual JSON，保留 query、filters、expected 和 generated provenance。
+- [x] apply 写 `promote_rag_benchmark_generated_case` audit。
+- [x] WebUI generated case 详情提供「提升为 Manual」二阶段流程。
+- [x] manual 目录不可写或 stale generated 时 WebUI 禁用入口并显示原因。
+- [x] 文档说明 promote 不自动更新 baseline，不提交 `tmp/` generated 产物。
+- [x] 未修改 sampler、runner、scoring、fixture、baseline 和 gate 脚本。
+- [x] 定向测试、相邻回归、WebUI build 和全量测试都有新鲜验证结果。

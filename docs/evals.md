@@ -199,6 +199,10 @@ python -B -m evals.rag_benchmark.run \
 
 Generated case 只作为本地 DB 采样候选，不进入仓库稳定 baseline。人工确认后的样本应保存为 manual case，再纳入 `evals/baselines/rag_benchmark.json` 对应的 gate。
 
+Admin API 提供 `POST /api/v1/admin/rag/benchmark/cases/{case_id}/promote-manual` 作为单条 generated → manual 仲裁入口。该接口支持 `dry_run=true` 预检目标 `target_case_id`、目标路径和转换后的 case JSON；`dry_run=false` 才会写入 `evals/cases/rag_benchmark/manual/{target_case_id}.json`，并记录 `promote_rag_benchmark_generated_case` 审计。stale generated case 必须先重新刷新 generated，避免把已过期 DB fingerprint 的样本提升为稳定样本。
+
+Promote 不会自动更新 `evals/baselines/rag_benchmark.json`，也不代表样本已进入稳定 gate。只有人工确认 manual case 应纳入稳定门禁时，才同步 baseline 并运行 RAG stable gate。`tmp/rag_benchmark/generated/*` 仍是本地派生产物，不应提交。
+
 P4-5C 已将 manual deterministic gate 的样本从 3 个扩充到 9 个。新增样本仍全部是 `constraint_only`，用于覆盖 memory、knowledge、sticker 和 group_memory 的过滤、scope、citation、sendable 约束。
 
 P4-5D 已新增 `evals/rag_benchmark/fixtures.py` 和 `positive_v1` fixture DB builder。P4-5G 已把 `positive_v1` 从单一 memory 正例扩展为 memory + knowledge + sticker + group_memory 四正例；P4-5H 在保持四个正例不变的基础上补强同 query decoy 和 forbidden 断言：memory 覆盖跨 user、跨 session、跨 source decoy；knowledge 覆盖 `trust_level`、`source_type`、`published_after` decoy；sticker 覆盖其他 stream 和 global decoy；group_memory 保留跨群 decoy。baseline 包含 `memory_fixture_positive_001`、`knowledge_fixture_positive_001`、`sticker_fixture_positive_001` 和 `group_memory_fixture_positive_001`，`metrics.overall.positive_cases=4`、`metrics.source:knowledge.positive_cases=1`、`metrics.source:sticker.positive_cases=1`、`metrics.source:group_memory.positive_cases=1`、`hit@5=1.0`、`mrr=1.0`。knowledge fixture 固定命中 `knowledge:9001:chunk:0`，并通过 `requires_citation=true` 的 `checks.citation=true`；sticker fixture 固定命中 `sticker:9101:sticker`，并通过 `requires_sendable=true` 的 `checks.sendable=true`；group_memory fixture 固定命中 `group_memory:9201:memory`，通过 `requires_group_id=true` 的 `checks.group_filter=true`，并用跨群 decoy `group_memory:9202:memory` 验证 forbidden check 不泄漏。PR gate 使用 `--min-hit-at-5 1.0` 和 `--min-mrr 1.0`，防止正例召回退化。
