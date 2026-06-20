@@ -1,6 +1,6 @@
 # EvalCandidate 运营趋势报表实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
 **目标：** 增加只读 EvalCandidate 运营趋势报表，按候选创建日期展示当前状态、readiness 和阻断原因趋势。
 
@@ -42,7 +42,7 @@
 - 修改：`core/eval_sampling/store.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：编写失败的 store / API 测试**
+- [x] **步骤 1：编写失败的 store / API 测试**
 
 在 `tests/test_eval_candidate_contract.py` 增加测试：
 
@@ -126,7 +126,7 @@ def test_candidates_trend_api_is_read_only(client, db_session, admin_headers):
     assert db_session.query(EvalCandidate).filter_by(case_id="cand_trend_api").one().status == "candidate"
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -136,7 +136,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_trend_
 
 预期：失败，错误包含 `ImportError` 或 `405 Method Not Allowed`，因为函数和路由尚未实现。
 
-- [ ] **步骤 3：实现最小后端代码**
+- [x] **步骤 3：实现最小后端代码**
 
 在 `core/eval_sampling/store.py` 增加：
 
@@ -265,7 +265,7 @@ def eval_candidates_trend(
         raise HTTPException(400, str(exc))
 ```
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：
 
@@ -275,7 +275,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_trend_
 
 预期：`2 passed`。
 
-- [ ] **步骤 5：运行后端相邻回归**
+- [x] **步骤 5：运行后端相邻回归**
 
 运行：
 
@@ -285,7 +285,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py -q -p no:cacheprovider
 
 预期：全部通过。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add core/eval_sampling/store.py api/admin_routes.py tests/test_eval_candidate_contract.py
@@ -298,7 +298,7 @@ git commit -m "feat(评测): 增加候选趋势接口"
 - 修改：`tests/test_eval_candidates_cli.py`
 - 修改：`evals/candidates.py`
 
-- [ ] **步骤 1：编写失败的 CLI 测试**
+- [x] **步骤 1：编写失败的 CLI 测试**
 
 在 `tests/test_eval_candidates_cli.py` 增加：
 
@@ -337,7 +337,7 @@ def test_candidates_cli_trend_writes_read_only_report(tmp_path, db_session, monk
     assert db_session.query(AdminAuditLog).count() == 0
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -347,7 +347,7 @@ python -B -m pytest tests/test_eval_candidates_cli.py::test_candidates_cli_trend
 
 预期：失败，提示 `invalid choice: 'trend'`。
 
-- [ ] **步骤 3：实现 CLI 子命令**
+- [x] **步骤 3：实现 CLI 子命令**
 
 在 `evals/candidates.py` 中 import `candidate_trend_report`，新增 `trend_candidates(args)`：
 
@@ -393,7 +393,7 @@ trend.add_argument("--out", default="")
 trend.set_defaults(func=trend_candidates)
 ```
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：
 
@@ -403,7 +403,7 @@ python -B -m pytest tests/test_eval_candidates_cli.py::test_candidates_cli_trend
 
 预期：`1 passed`。
 
-- [ ] **步骤 5：运行 CLI 相邻回归**
+- [x] **步骤 5：运行 CLI 相邻回归**
 
 运行：
 
@@ -413,7 +413,7 @@ python -B -m pytest tests/test_eval_candidates_cli.py -q -p no:cacheprovider
 
 预期：全部通过。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add evals/candidates.py tests/test_eval_candidates_cli.py
@@ -429,7 +429,7 @@ git commit -m "feat(评测): 增加候选趋势导出"
 - 删除 / 新增：`webui/dist/assets/index-*.js`
 - 删除 / 新增：`webui/dist/assets/index-*.css`
 
-- [ ] **步骤 1：编写失败的 WebUI 静态测试**
+- [x] **步骤 1：编写失败的 WebUI 静态测试**
 
 在 `tests/test_webui_admin_redesign.py` 增加：
 
@@ -446,7 +446,7 @@ def test_evals_page_exposes_candidate_trend_report():
     assert "批量应用" not in src
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -456,7 +456,7 @@ python -B -m pytest tests/test_webui_admin_redesign.py::test_evals_page_exposes_
 
 预期：失败，缺少「趋势报表」。
 
-- [ ] **步骤 3：实现 WebUI 最小入口**
+- [x] **步骤 3：实现 WebUI 最小入口**
 
 在 `EvalsPage.jsx` 中：
 
@@ -479,7 +479,7 @@ api.get('/evals/candidates/trend', {
 - 趋势 tab 展示 `MiniStat`、days 输入、刷新按钮、bucket 表格和 `JsonBlock`。
 - 不添加批量状态变更按钮。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：
 
@@ -489,7 +489,7 @@ python -B -m pytest tests/test_webui_admin_redesign.py::test_evals_page_exposes_
 
 预期：`1 passed`。
 
-- [ ] **步骤 5：运行 WebUI 静态回归和构建**
+- [x] **步骤 5：运行 WebUI 静态回归和构建**
 
 运行：
 
@@ -500,7 +500,7 @@ npm --prefix webui run build
 
 预期：测试全部通过；build 退出码为 0。若 Vite 输出现有 chunk size warning，可记录为既有 warning。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add webui/src/features/evals/EvalsPage.jsx tests/test_webui_admin_redesign.py webui/dist/index.html
@@ -521,7 +521,7 @@ git commit -m "feat(评测): 展示候选趋势报表"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/eval-operations-trend-report.md`
 
-- [ ] **步骤 1：更新用户文档**
+- [x] **步骤 1：更新用户文档**
 
 在 `docs/evals.md` 的“候选批次审计”之后新增“真实样本趋势报表”：
 
@@ -543,7 +543,7 @@ python -m evals.candidates trend --days 30 --suite timing_gate --out /tmp/candid
 该报表按 `EvalCandidate.created_at` 分桶，但桶内 `status` 和 `readiness` 都是当前快照，不代表历史状态迁移。
 ````
 
-- [ ] **步骤 2：同步路线文档**
+- [x] **步骤 2：同步路线文档**
 
 在 `docs/todo.md` 和 `docs/plan_walkthrough.md` 中新增真实样本运营 6：
 
@@ -551,24 +551,11 @@ python -m evals.candidates trend --days 30 --suite timing_gate --out /tmp/candid
 | 真实样本运营 6 | 已完成 | EvalCandidate 运营趋势报表 | 按创建日期分桶展示当前候选状态、readiness 和阻断原因，只读不调参 | 写入本阶段实际提交哈希 |
 ```
 
-- [ ] **步骤 3：勾选本计划完成项并写入验证记录**
+- [x] **步骤 3：勾选本计划完成项并写入验证记录**
 
-在本计划底部新增验证记录：
+验证记录已写入本文底部。
 
-```markdown
-## 验证记录
-
-- 后端红灯：记录命令、失败数量和首个失败原因。
-- 后端绿灯：记录命令、通过数量和耗时。
-- CLI 红灯：记录命令、失败数量和首个失败原因。
-- CLI 绿灯：记录命令、通过数量和耗时。
-- WebUI 红灯：记录命令、失败数量和首个失败原因。
-- WebUI 绿灯：记录命令、通过数量和耗时。
-- 最终组合回归：记录命令、通过数量和耗时。
-- 全量回归：记录命令、通过 / skipped / warning 数量和耗时。
-```
-
-- [ ] **步骤 4：运行最终组合回归**
+- [x] **步骤 4：运行最终组合回归**
 
 运行：
 
@@ -578,7 +565,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candid
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行全量回归**
+- [x] **步骤 5：运行全量回归**
 
 运行：
 
@@ -588,9 +575,24 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 
 预期：全部通过。若存在 skip / warning，记录实际数量。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/eval-operations-trend-report.md
 git commit -m "docs(计划): 收口候选趋势报表"
 ```
+
+## 验证记录
+
+- 后端红灯：`python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_trend_report_groups_current_snapshot_by_created_date tests/test_eval_candidate_contract.py::test_candidates_trend_api_is_read_only -q -p no:cacheprovider`，结果 `2 failed, 21 warnings in 6.19s`；失败点为缺少 `candidate_trend_report` 和 `/trend` 被动态 `{case_id}` 路由解析为 `candidate not found`。
+- 后端绿灯：同一命令，结果 `2 passed, 21 warnings in 1.27s`。
+- 后端相邻回归：`python -B -m pytest tests/test_eval_candidate_contract.py -q -p no:cacheprovider`，结果 `34 passed, 21 warnings in 5.10s`。
+- CLI 红灯：`python -B -m pytest tests/test_eval_candidates_cli.py::test_candidates_cli_trend_writes_read_only_report -q -p no:cacheprovider`，结果 `1 failed, 1 warning in 6.04s`；失败点为 `invalid choice: 'trend'`。
+- CLI 绿灯：同一命令，结果 `1 passed, 1 warning in 0.87s`。
+- CLI 相邻回归：`python -B -m pytest tests/test_eval_candidates_cli.py -q -p no:cacheprovider`，结果 `9 passed, 1 warning in 1.12s`。
+- WebUI 红灯：`python -B -m pytest tests/test_webui_admin_redesign.py::test_evals_page_exposes_candidate_trend_report -q -p no:cacheprovider`，结果 `1 failed, 1 warning in 6.10s`；失败点为缺少「趋势报表」。
+- WebUI 绿灯：同一命令，结果 `1 passed, 1 warning in 0.80s`。
+- WebUI 相邻回归：`python -B -m pytest tests/test_webui_admin_redesign.py -q -p no:cacheprovider`，结果 `22 passed, 1 warning in 0.97s`。
+- WebUI build：`npm --prefix webui run build`，退出码 0；仅有现有 Vite chunk size 和 plugin timing warning。
+- 最终组合回归：`python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py tests/test_webui_admin_redesign.py -q -p no:cacheprovider`，结果 `65 passed, 21 warnings in 6.52s`。
+- 全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1408 passed, 6 skipped, 139 warnings in 108.30s`。

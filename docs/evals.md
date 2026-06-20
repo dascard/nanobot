@@ -266,6 +266,42 @@ python -m evals.candidates audit --suite timing_gate --status labeled --target-d
 
 WebUI「Eval 评测」候选页提供「批次审计」按钮，基于当前页候选调用只读 preflight，并展示 `counts`、`top_blocking_reasons` 和 `items`。WebUI 第一版不提供批量 apply、批量拒绝或批量暂缓。
 
+### 真实样本趋势报表
+
+通用 `EvalCandidate` 支持只读运营趋势报表。报表按候选创建日期分桶，展示当前状态、readiness 和阻断原因分布。
+
+Admin API：
+
+```http
+GET /api/v1/admin/evals/candidates/trend?days=30&suite=timing_gate
+```
+
+查询参数：
+
+- `days`：统计窗口，默认 30，范围 1 到 90。
+- `suite`：可选，按候选 suite 过滤。
+- `status`：可选，按当前候选状态过滤。
+- `source`：可选，按候选来源过滤。
+- `target_dataset`：可选，用于 readiness 目标文件冲突检查；为空时按候选自身 suite 计算。
+
+CLI 只读导出：
+
+```bash
+python -m evals.candidates trend --days 30 --suite timing_gate --out /tmp/candidate-trend.json
+```
+
+响应结构包含：
+
+- `summary.total`：当前过滤范围内的候选数量。
+- `summary.by_status`、`summary.by_suite`、`summary.by_source`：当前快照分布。
+- `summary.readiness.ready` / `summary.readiness.blocked`：按当前 readiness 规则重新计算的可晋升和阻断数量。
+- `summary.top_blocking_reasons`：当前主要阻断原因。
+- `buckets[]`：按 `EvalCandidate.created_at` 日期分桶的同口径聚合。
+
+注意：趋势报表的日期桶来自 `EvalCandidate.created_at`，但桶内 `status` 和 `readiness` 都是当前快照，不代表历史状态迁移。例如某候选在 6 月 18 日创建、6 月 20 日被拒绝，它仍会落在 6 月 18 日桶内，并计入该桶的 `by_status.rejected`。
+
+WebUI「Eval 评测」页提供「趋势报表」tab，可按 suite、status、source 和 days 刷新报表，并展示完整 JSON payload。该页面不提供调参、批量拒绝、批量暂缓、批量复开或批量晋升。
+
 ## Admin WebUI 标注工作台
 
 P4-2 已将 Admin 标注工作台拆为后端契约和 WebUI 两个阶段，设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`，实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。P4-2A 后端契约 schema/API 已完成；P4-2B WebUI 工作台已接入契约化标注和 promote 预检流程，并通过本轮定向验证、WebUI build 和全量回归。
