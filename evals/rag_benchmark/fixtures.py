@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from core.database import Base
-from core.semantic.adapters import SemanticChunk
+from core.database import Base, KnowledgeChunk, KnowledgeDocument
+from core.semantic.adapters import SemanticChunk, chunk_from_knowledge_chunk
 from core.semantic.indexer import upsert_semantic_chunks
 from evals.rag_benchmark.schema import BenchmarkCase
 
@@ -22,6 +24,12 @@ MEMORY_USER_ID = "rag_fixture_user"
 MEMORY_SESSION_ID = "rag_fixture_session"
 MEMORY_QUERY = "KohakuVQ 端口冲突"
 MEMORY_INDEX_VERSION = "fixture:v1:memory"
+KNOWLEDGE_CASE_ID = "knowledge_fixture_positive_001"
+KNOWLEDGE_DOCUMENT_ID = 9001
+KNOWLEDGE_CHUNK_ID = "chunk:0"
+KNOWLEDGE_CANDIDATE_ID = f"knowledge:{KNOWLEDGE_DOCUMENT_ID}:{KNOWLEDGE_CHUNK_ID}"
+KNOWLEDGE_QUERY = "RAG 引用门禁"
+KNOWLEDGE_INDEX_VERSION = "fixture:v1:knowledge"
 
 
 def _ensure_supported_preset(preset: str) -> None:
@@ -54,11 +62,89 @@ def _memory_positive_case() -> BenchmarkCase:
     )
 
 
+def _knowledge_positive_case() -> BenchmarkCase:
+    return BenchmarkCase(
+        id=KNOWLEDGE_CASE_ID,
+        suite="rag_benchmark",
+        source_type="knowledge",
+        case_type="positive",
+        query=KNOWLEDGE_QUERY,
+        filters={
+            "min_trust_level": "low",
+            "source_type": "manual_file",
+        },
+        expected={
+            "candidate_ids": [KNOWLEDGE_CANDIDATE_ID],
+            "hit_at": 5,
+            "expected_source_type": "knowledge",
+            "requires_citation": True,
+        },
+        meta={
+            "origin": "fixture_exact",
+            "sensitivity": "safe",
+            "fixture": FIXTURE_PRESET,
+        },
+    )
+
+
 def fixture_cases(preset: str = FIXTURE_PRESET) -> list[BenchmarkCase]:
     """返回 fixture preset 对应的 case 描述，不写数据库。"""
 
     _ensure_supported_preset(str(preset))
-    return [_memory_positive_case()]
+    return [_memory_positive_case(), _knowledge_positive_case()]
+
+
+def _seed_knowledge_positive_fixture(db: Session) -> None:
+    now = datetime(2026, 6, 20, 0, 0, 0)
+    document = KnowledgeDocument(
+        id=KNOWLEDGE_DOCUMENT_ID,
+        document_kind="manual_file",
+        title="RAG 引用门禁说明",
+        published_at="2026-06-20",
+        status="active",
+        trust_level="medium",
+        created_by="fixture",
+        updated_by="fixture",
+        latest_seen=now,
+        meta_json=json.dumps({"fixture": FIXTURE_PRESET}, ensure_ascii=False, sort_keys=True),
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(document)
+    db.flush()
+
+    citation = {
+        "document_id": str(KNOWLEDGE_DOCUMENT_ID),
+        "chunk_id": KNOWLEDGE_CHUNK_ID,
+        "title": "RAG 引用门禁说明",
+        "trust_level": "medium",
+        "published_at": "2026-06-20",
+    }
+    chunk = KnowledgeChunk(
+        document_id=KNOWLEDGE_DOCUMENT_ID,
+        chunk_id=KNOWLEDGE_CHUNK_ID,
+        order_index=0,
+        title="RAG 引用门禁说明",
+        text=(
+            "RAG 引用门禁要求 knowledge 检索返回项必须携带 citation。"
+            "固定 fixture 用于验证 requires_citation 评分不会被空结果绕过。"
+        ),
+        citation_json=json.dumps(citation, ensure_ascii=False, sort_keys=True),
+        status="active",
+        trust_level="medium",
+        meta_json=json.dumps({"fixture": FIXTURE_PRESET}, ensure_ascii=False, sort_keys=True),
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(chunk)
+    db.flush()
+
+    semantic_chunk = chunk_from_knowledge_chunk(chunk, document=document)
+    upsert_semantic_chunks(
+        db,
+        [semantic_chunk],
+        index_version=KNOWLEDGE_INDEX_VERSION,
+    )
 
 
 def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
@@ -88,6 +174,7 @@ def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
         source_prior=0.65,
     )
     upsert_semantic_chunks(db, [chunk], index_version=MEMORY_INDEX_VERSION)
+    _seed_knowledge_positive_fixture(db)
     return fixture_cases(FIXTURE_PRESET)
 
 

@@ -68,13 +68,51 @@ def test_rag_benchmark_fixture_db_supports_memory_positive_case(tmp_path):
     cases = build_fixture_db(fixture_db, preset="positive_v1")
     results, scores = run_benchmark(fixture_db, cases, provider_mode="deterministic")
 
-    assert [case.id for case in cases] == ["memory_fixture_positive_001"]
-    assert results[0].case_id == "memory_fixture_positive_001"
-    assert results[0].candidate_ids[0] == "memory_digest:fixture-memory-positive-001:card:0"
-    assert scores[0].ok is True
-    assert scores[0].rank == 1
-    assert scores[0].hit_at["5"] is True
-    assert scores[0].mrr == 1.0
+    by_result = {result.case_id: result for result in results}
+    by_score = {score.case_id: score for score in scores}
+    result = by_result["memory_fixture_positive_001"]
+    score = by_score["memory_fixture_positive_001"]
+
+    assert [case.id for case in cases][:1] == ["memory_fixture_positive_001"]
+    assert result.candidate_ids[0] == "memory_digest:fixture-memory-positive-001:card:0"
+    assert score.ok is True
+    assert score.rank == 1
+    assert score.hit_at["5"] is True
+    assert score.mrr == 1.0
+
+
+def test_rag_benchmark_fixture_db_supports_knowledge_positive_case(tmp_path):
+    from evals.rag_benchmark.fixtures import (
+        KNOWLEDGE_CANDIDATE_ID,
+        KNOWLEDGE_CASE_ID,
+        build_fixture_db,
+    )
+    from evals.rag_benchmark.run import run_benchmark
+
+    fixture_db = tmp_path / "positive.db"
+
+    cases = build_fixture_db(fixture_db, preset="positive_v1")
+    results, scores = run_benchmark(fixture_db, cases, provider_mode="deterministic")
+
+    by_case = {case.id: case for case in cases}
+    by_result = {result.case_id: result for result in results}
+    by_score = {score.case_id: score for score in scores}
+
+    assert KNOWLEDGE_CASE_ID in by_case
+    assert by_case[KNOWLEDGE_CASE_ID].expected.requires_citation is True
+    assert by_case[KNOWLEDGE_CASE_ID].expected.candidate_ids == [KNOWLEDGE_CANDIDATE_ID]
+
+    knowledge_result = by_result[KNOWLEDGE_CASE_ID]
+    knowledge_score = by_score[KNOWLEDGE_CASE_ID]
+    assert knowledge_result.candidate_ids[0] == KNOWLEDGE_CANDIDATE_ID
+    assert any(
+        candidate.candidate_id == KNOWLEDGE_CANDIDATE_ID and candidate.citation is True
+        for candidate in knowledge_result.candidates
+    )
+    assert knowledge_score.ok is True
+    assert knowledge_score.rank == 1
+    assert knowledge_score.hit_at["5"] is True
+    assert knowledge_score.checks["citation"] is True
 
 
 def test_scorer_supports_positive_negative_and_constraint_only():
@@ -137,6 +175,42 @@ def test_scorer_supports_positive_negative_and_constraint_only():
         reranker_candidates_count=8,
     )
     assert score_case(constraint, constraint_result).ok is True
+
+
+def test_scorer_fails_requires_citation_when_candidate_lacks_citation():
+    from evals.rag_benchmark.schema import BenchmarkCandidate, BenchmarkCase, BenchmarkResult
+    from evals.rag_benchmark.scoring import score_case
+
+    case = BenchmarkCase(
+        id="knowledge_requires_citation",
+        source_type="knowledge",
+        case_type="positive",
+        query="RAG 引用",
+        expected={
+            "candidate_ids": ["knowledge:9001:chunk:0"],
+            "requires_citation": True,
+            "expected_source_type": "knowledge",
+        },
+    )
+    result = BenchmarkResult(
+        case_id=case.id,
+        source_type="knowledge",
+        candidate_ids=["knowledge:9001:chunk:0"],
+        candidates=[
+            BenchmarkCandidate(
+                candidate_id="knowledge:9001:chunk:0",
+                source_type="knowledge",
+                rank=1,
+                citation=False,
+            )
+        ],
+    )
+
+    score = score_case(case, result)
+
+    assert score.ok is False
+    assert score.checks["citation"] is False
+    assert "citation check failed" in score.errors
 
 
 def test_aggregate_metrics_separates_exact_weak_and_manual():
@@ -758,9 +832,9 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
                 "case_scope": "manual+fixture",
                 "metrics": {
                     "overall": {
-                        "total_cases": 2,
-                        "positive_cases": 1,
-                        "passed_cases": 2,
+                        "total_cases": 3,
+                        "positive_cases": 2,
+                        "passed_cases": 3,
                         "pass_rate": 1.0,
                         "hit@5": 1.0,
                         "mrr": 1.0,
@@ -776,6 +850,14 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
                         "ok": True,
                         "rank": 1,
                         "hit_at": {"1": True, "3": True, "5": True},
+                        "errors": [],
+                    },
+                    {
+                        "case_id": "knowledge_fixture_positive_001",
+                        "ok": True,
+                        "rank": 1,
+                        "hit_at": {"1": True, "3": True, "5": True},
+                        "checks": {"citation": True, "sendable": None, "group_filter": None},
                         "errors": [],
                     },
                 ],
@@ -823,9 +905,16 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
     assert exit_code == 0
     assert "Gate passed" in captured.out
     assert report["case_scope"] == "manual+fixture"
-    assert report["metrics"]["overall"]["positive_cases"] == 1
+    scores = {
+        str(item.get("case_id") or ""): item
+        for item in report["case_scores"]
+    }
+    assert report["metrics"]["overall"]["positive_cases"] == 2
+    assert report["metrics"]["source:knowledge"]["positive_cases"] == 1
     assert report["metrics"]["overall"]["hit@5"] == 1.0
     assert report["metrics"]["overall"]["mrr"] == 1.0
+    assert scores["knowledge_fixture_positive_001"]["ok"] is True
+    assert scores["knowledge_fixture_positive_001"]["checks"]["citation"] is True
 
 
 def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
@@ -863,3 +952,8 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     fixture_score = baseline_scores["memory_fixture_positive_001"]
     assert fixture_score["ok"] is True
     assert fixture_score["hit_at"]["5"] is True
+    knowledge_fixture_score = baseline_scores["knowledge_fixture_positive_001"]
+    assert knowledge_fixture_score["ok"] is True
+    assert knowledge_fixture_score["hit_at"]["5"] is True
+    assert knowledge_fixture_score["checks"]["citation"] is True
+    assert baseline["metrics"]["source:knowledge"]["positive_cases"] == 1

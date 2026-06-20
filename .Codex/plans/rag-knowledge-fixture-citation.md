@@ -48,7 +48,7 @@
 - 修改：`tests/test_rag_benchmark.py`
 - 修改：`.Codex/plans/rag-knowledge-fixture-citation.md`
 
-- [ ] **步骤 1：新增 knowledge fixture 红灯测试**
+- [x] **步骤 1：新增 knowledge fixture 红灯测试**
 
 在 `tests/test_rag_benchmark.py` 中新增测试，放在现有 `test_rag_benchmark_fixture_db_supports_memory_positive_case` 后面：
 
@@ -87,7 +87,7 @@ def test_rag_benchmark_fixture_db_supports_knowledge_positive_case(tmp_path):
     assert knowledge_score.checks["citation"] is True
 ```
 
-- [ ] **步骤 2：运行 knowledge fixture 红灯**
+- [x] **步骤 2：运行 knowledge fixture 红灯**
 
 运行：
 
@@ -98,7 +98,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_fixture_db_s
 
 预期：FAIL，失败原因包含 `ImportError`，因为 `KNOWLEDGE_CASE_ID` 或 `KNOWLEDGE_CANDIDATE_ID` 尚未定义。
 
-- [ ] **步骤 3：补 scorer citation 守卫测试**
+实际：FAIL，`ImportError: cannot import name 'KNOWLEDGE_CANDIDATE_ID' from 'evals.rag_benchmark.fixtures'`，符合红灯预期。
+
+- [x] **步骤 3：补 scorer citation 守卫测试**
 
 在 `tests/test_rag_benchmark.py` 的 scoring 测试区域新增：
 
@@ -139,7 +141,7 @@ def test_scorer_fails_requires_citation_when_candidate_lacks_citation():
     assert "citation check failed" in score.errors
 ```
 
-- [ ] **步骤 4：运行 scorer 守卫测试**
+- [x] **步骤 4：运行 scorer 守卫测试**
 
 运行：
 
@@ -150,7 +152,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_scorer_fails_requires_cita
 
 预期：PASS。该测试固定已有评分边界，若失败说明 scoring 已偏离设计，需要先修评分器。
 
-- [ ] **步骤 5：更新 CLI fixture gate 测试红灯**
+实际：PASS，`1 passed, 1 warning in 0.76s`。
+
+- [x] **步骤 5：更新 CLI fixture gate 测试红灯**
 
 在 `test_rag_benchmark_cli_runs_manual_fixture_positive_gate` 中，把临时 baseline 的 `overall.total_cases` 改为 `3`、`overall.positive_cases` 改为 `2`，并在 `case_scores` 中新增 knowledge fixture：
 
@@ -178,7 +182,7 @@ assert scores["knowledge_fixture_positive_001"]["ok"] is True
 assert scores["knowledge_fixture_positive_001"]["checks"]["citation"] is True
 ```
 
-- [ ] **步骤 6：运行 CLI fixture gate 红灯**
+- [x] **步骤 6：运行 CLI fixture gate 红灯**
 
 运行：
 
@@ -189,7 +193,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_runs_man
 
 预期：FAIL，失败原因是当前 fixture preset 只返回 1 个 positive case，report 中没有 `knowledge_fixture_positive_001`。
 
-- [ ] **步骤 7：更新 baseline 合同红灯**
+实际：FAIL，断言失败于 `assert 1 == 2`，当前 report 的 `metrics.overall.positive_cases` 仍为 1，符合红灯预期。
+
+- [x] **步骤 7：更新 baseline 合同红灯**
 
 在 `test_rag_benchmark_baseline_file_matches_manual_gate_contract` 末尾增加：
 
@@ -201,7 +207,7 @@ assert knowledge_fixture_score["checks"]["citation"] is True
 assert baseline["metrics"]["source:knowledge"]["positive_cases"] == 1
 ```
 
-- [ ] **步骤 8：运行 baseline 合同红灯**
+- [x] **步骤 8：运行 baseline 合同红灯**
 
 运行：
 
@@ -212,16 +218,11 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：FAIL，失败原因是 baseline 还没有 `knowledge_fixture_positive_001`。
 
-- [ ] **步骤 9：提交任务 1**
+实际：FAIL，`KeyError: 'knowledge_fixture_positive_001'`，符合红灯预期。
 
-运行：
+- [x] **步骤 9：记录红灯结果并延后提交**
 
-```bash
-git add tests/test_rag_benchmark.py .Codex/plans/rag-knowledge-fixture-citation.md
-git commit -m "test(评测): 固定 knowledge fixture 引用门禁"
-```
-
-提交前确认任务 1 的红灯和 scorer 守卫结果已记录到本计划。
+任务 1 已记录红灯和 scorer 守卫结果。由于这些测试在生产代码实现前会让仓库处于 failing 状态，本阶段不单独提交红灯测试；测试变更将与任务 2 的最小实现一起提交，保证提交点为绿色状态。
 
 ## 任务 2：实现 knowledge fixture seed 与 case
 
@@ -229,7 +230,7 @@ git commit -m "test(评测): 固定 knowledge fixture 引用门禁"
 - 修改：`evals/rag_benchmark/fixtures.py`
 - 修改：`.Codex/plans/rag-knowledge-fixture-citation.md`
 
-- [ ] **步骤 1：扩展 imports 和常量**
+- [x] **步骤 1：扩展 imports 和常量**
 
 修改 `evals/rag_benchmark/fixtures.py` 顶部 import：
 
@@ -257,7 +258,7 @@ KNOWLEDGE_QUERY = "RAG 引用门禁"
 KNOWLEDGE_INDEX_VERSION = "fixture:v1:knowledge"
 ```
 
-- [ ] **步骤 2：新增 knowledge case builder**
+- [x] **步骤 2：新增 knowledge case builder**
 
 在 `_memory_positive_case()` 后新增：
 
@@ -293,7 +294,7 @@ def _knowledge_positive_case() -> BenchmarkCase:
 return [_memory_positive_case(), _knowledge_positive_case()]
 ```
 
-- [ ] **步骤 3：新增 knowledge seed helper**
+- [x] **步骤 3：新增 knowledge seed helper**
 
 在 `seed_positive_fixture_db()` 前新增：
 
@@ -351,7 +352,7 @@ def _seed_knowledge_positive_fixture(db: Session) -> None:
     )
 ```
 
-- [ ] **步骤 4：接入 seed helper**
+- [x] **步骤 4：接入 seed helper**
 
 在 `seed_positive_fixture_db()` 中，memory `upsert_semantic_chunks()` 后新增：
 
@@ -365,7 +366,7 @@ _seed_knowledge_positive_fixture(db)
 return fixture_cases(FIXTURE_PRESET)
 ```
 
-- [ ] **步骤 5：运行任务 2 定向绿灯**
+- [x] **步骤 5：运行任务 2 定向绿灯**
 
 运行：
 
@@ -380,7 +381,9 @@ python -B -m pytest \
 
 预期：全部通过，knowledge fixture score 的 `checks.citation` 为 `True`。
 
-- [ ] **步骤 6：运行 citation 相邻回归**
+实际：第一次运行中 knowledge 新测试和 scorer 守卫通过，旧 memory 测试失败于仍假设 fixture preset 只有 1 个 case；修正为按 case id 查找 memory 结果后重跑，结果 `3 passed, 1 warning in 1.29s`。
+
+- [x] **步骤 6：运行 citation 相邻回归**
 
 运行：
 
@@ -395,16 +398,11 @@ python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 7：提交任务 2**
+实际：`3 passed, 21 warnings in 1.84s`。
 
-运行：
+- [x] **步骤 7：延后任务 2 提交**
 
-```bash
-git add evals/rag_benchmark/fixtures.py .Codex/plans/rag-knowledge-fixture-citation.md
-git commit -m "feat(评测): 增加 knowledge fixture 引用正例"
-```
-
-提交前确认任务 2 的定向测试与 citation 相邻回归结果已记录到本计划。
+任务 2 已转绿，但 baseline 合同测试在 baseline 更新前仍会失败。为避免提交点包含 failing tests，任务 2 与任务 3 合并为一个绿色代码提交。
 
 ## 任务 3：更新 baseline 与 stable gate 合同
 
@@ -413,7 +411,7 @@ git commit -m "feat(评测): 增加 knowledge fixture 引用正例"
 - 修改：`evals/baselines/rag_benchmark.json`
 - 修改：`.Codex/plans/rag-knowledge-fixture-citation.md`
 
-- [ ] **步骤 1：运行 CLI fixture gate 测试确认当前状态**
+- [x] **步骤 1：运行 CLI fixture gate 测试确认当前状态**
 
 运行：
 
@@ -424,7 +422,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_runs_man
 
 预期：任务 2 后该测试通过。如果失败，优先检查临时 baseline 是否包含 memory 与 knowledge 两个 fixture score。
 
-- [ ] **步骤 2：运行 RAG stable gate 生成待更新报告**
+实际：PASS，`1 passed, 1 warning in 1.10s`。
+
+- [x] **步骤 2：运行 RAG stable gate 生成待更新报告**
 
 运行：
 
@@ -449,7 +449,9 @@ python -B -m evals.rag_benchmark.run \
 
 预期：baseline 更新前可能失败，原因是 `total_delta` 或 baseline case set 尚未同步。无论通过或失败，必须读取 `tmp/rag_benchmark/reports/latest.json`，只把真实 report 中的 `metrics` 与 `case_scores` 复制进 baseline。
 
-- [ ] **步骤 3：更新 baseline 文件**
+实际：旧 baseline 下 gate 仍通过，输出 `cases=11 passed=11 failed=0` 和 `Gate passed`；latest report 显示 `overall.total_cases=11`、`overall.positive_cases=2`、`overall_fixture.total_cases=2`、`source:knowledge.positive_cases=1`，`knowledge_fixture_positive_001` 的 `checks.citation=true`。
+
+- [x] **步骤 3：更新 baseline 文件**
 
 将 `evals/baselines/rag_benchmark.json` 更新为 latest report 的稳定字段：
 
@@ -478,7 +480,7 @@ python -B -m evals.rag_benchmark.run \
 
 实际文件必须保留完整 metrics 子字段和完整 `case_scores`，不得只写上面的摘录。
 
-- [ ] **步骤 4：运行 baseline 合同绿灯**
+- [x] **步骤 4：运行 baseline 合同绿灯**
 
 运行：
 
@@ -489,7 +491,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：PASS，baseline case set 与 manual + fixture cases 完全一致，并包含 `knowledge_fixture_positive_001`。
 
-- [ ] **步骤 5：运行 RAG stable gate 绿灯**
+实际：PASS，`1 passed, 1 warning in 1.11s`。
+
+- [x] **步骤 5：运行 RAG stable gate 绿灯**
 
 运行：
 
@@ -514,7 +518,9 @@ python -B -m evals.rag_benchmark.run \
 
 预期：输出 `cases=11 passed=11 failed=0` 和 `Gate passed`。
 
-- [ ] **步骤 6：运行 RAG benchmark 相邻回归**
+实际：输出 `cases=11 passed=11 failed=0` 和 `Gate passed`。
+
+- [x] **步骤 6：运行 RAG benchmark 相邻回归**
 
 运行：
 
@@ -525,16 +531,18 @@ python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -v -
 
 预期：全部通过。`tests/test_eval_baseline.py` 不需要修改，因为 PR gate 与 periodic gate 脚本参数保持 `--fixture positive_v1` 不变。
 
-- [ ] **步骤 7：提交任务 3**
+实际：`37 passed, 1 warning in 2.78s`。
+
+- [x] **步骤 7：提交任务 1-3 绿色代码阶段**
 
 运行：
 
 ```bash
-git add tests/test_rag_benchmark.py evals/baselines/rag_benchmark.json .Codex/plans/rag-knowledge-fixture-citation.md
-git commit -m "test(评测): 固化 knowledge fixture 引用门禁"
+git add tests/test_rag_benchmark.py evals/rag_benchmark/fixtures.py evals/baselines/rag_benchmark.json .Codex/plans/rag-knowledge-fixture-citation.md
+git commit -m "feat(评测): 增加 knowledge fixture 引用正例"
 ```
 
-提交前确认 RAG stable gate 和相邻回归结果已记录到本计划。
+提交前确认 RAG stable gate 和相邻回归结果已记录到本计划。额外全量验证已完成：`1374 passed, 6 skipped, 139 warnings in 113.51s`。
 
 ## 任务 4：文档收口与最终验证
 
@@ -648,7 +656,6 @@ git commit -m "docs(评测): 收口 knowledge fixture 引用状态"
 ## 提交边界
 
 - 计划提交：`docs(计划): 记录 knowledge fixture 引用计划`
-- 任务 1：`test(评测): 固定 knowledge fixture 引用门禁`
-- 任务 2：`feat(评测): 增加 knowledge fixture 引用正例`
+- 任务 1 + 任务 2：`feat(评测): 增加 knowledge fixture 引用正例`
 - 任务 3：`test(评测): 固化 knowledge fixture 引用门禁`
 - 任务 4：`docs(评测): 收口 knowledge fixture 引用状态`
