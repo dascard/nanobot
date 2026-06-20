@@ -207,6 +207,65 @@ POST /api/v1/admin/evals/candidates/{case_id}/reopen
 
 RAG benchmark 的 generated / manual case 仍是独立体系，不并入通用 `EvalCandidate`。generated case 的单条提升继续使用 RAG Admin 的 `promote-manual` 接口；如需记录 RAG generated 的 reject / defer，后续应设计 sidecar 或批次审计。
 
+### 候选批次审计
+
+通用 `EvalCandidate` 支持 record-only 人工仲裁批次审计。批次审计记录一次人工复核的输入范围、候选快照、readiness 阻断原因和人工 decision，不批量修改候选状态。
+
+Admin API：
+
+```http
+POST /api/v1/admin/evals/candidates/batch-audit
+```
+
+请求示例：
+
+```json
+{
+  "dry_run": true,
+  "case_ids": ["cand_timing_gate_1"],
+  "target_dataset": "timing_gate",
+  "batch_note": "2026-06-20 人工复核第一批",
+  "decisions": [
+    {
+      "case_id": "cand_timing_gate_1",
+      "decision": "needs_label",
+      "reason_code": "unspecified",
+      "note": "可进入后续标注"
+    }
+  ]
+}
+```
+
+`dry_run=true` 只返回批次计划，不写 `AdminAuditLog`，不修改 `EvalCandidate`。`dry_run=false` 会重新计算计划，若 `ok=true` 则写入一条审计日志：
+
+- `action`: `audit_eval_candidate_batch`
+- `target_type`: `eval_candidate_batch`
+- `target_id`: `batch_YYYYMMDD_xxxxxxxx` 格式的批次 ID
+- `detail_json`: `filters`、`batch_note`、`counts`、`items` 和 readiness 明细
+
+响应中的 `counts` 包含 `by_status`、`by_suite`、`by_source`、`by_decision`、`by_reason_code` 和 `by_blocking_reason`。`items[].errors` 非空时 `ok=false`；apply 模式会整体拒绝写审计。
+
+支持的审计 decision：
+
+- `noop`：已查看，无进一步动作。
+- `needs_label`：建议后续标注。
+- `promote_ready`：建议后续晋升，但仍必须走 promote dry-run / apply。
+- `reject`：建议单条拒绝。
+- `defer`：建议单条暂缓。
+- `reopen`：建议单条复开。
+
+这些 decision 只是人工审计结论，不会触发状态流转。单条状态变更仍必须走 `/reject`、`/defer`、`/reopen`、`/label` 或 `/promote`。
+
+CLI 只读导出：
+
+```bash
+python -m evals.candidates audit --suite timing_gate --status labeled --target-dataset timing_gate --out /tmp/candidate-audit.json
+```
+
+该命令只生成和 Admin dry-run 同结构的 JSON 报告，不写 `AdminAuditLog`，不写 eval case 文件。
+
+WebUI「Eval 评测」候选页提供「批次审计」按钮，基于当前页候选调用只读 preflight，并展示 `counts`、`top_blocking_reasons` 和 `items`。WebUI 第一版不提供批量 apply、批量拒绝或批量暂缓。
+
 ## Admin WebUI 标注工作台
 
 P4-2 已将 Admin 标注工作台拆为后端契约和 WebUI 两个阶段，设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`，实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。P4-2A 后端契约 schema/API 已完成；P4-2B WebUI 工作台已接入契约化标注和 promote 预检流程，并通过本轮定向验证、WebUI build 和全量回归。

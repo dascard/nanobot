@@ -1,6 +1,6 @@
 # EvalCandidate 人工仲裁批次审计实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框语法跟踪进度，当前已完成项标记为 `- [x]`。
 
 **目标：** 为通用 `EvalCandidate` 队列增加 record-only 人工仲裁批次审计能力，支持只读计划、Admin 审计落库、CLI 导出和 WebUI 当前页只读审计视图。
 
@@ -31,7 +31,7 @@
 - 修改：`core/eval_sampling/store.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：编写失败的后端测试**
+- [x] **步骤 1：编写失败的后端测试**
 
 在 `tests/test_eval_candidate_contract.py` 增加测试：
 
@@ -173,7 +173,7 @@ def test_candidate_batch_audit_rejects_invalid_scope_decision_and_stale_status(c
     assert db_session.query(AdminAuditLog).count() == 0
 ```
 
-- [ ] **步骤 2：运行后端红灯**
+- [x] **步骤 2：运行后端红灯**
 
 运行：
 
@@ -183,7 +183,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_batch_
 
 预期：失败。失败点应是 `/batch-audit` 端点不存在或 store 函数不存在。
 
-- [ ] **步骤 3：实现 store 层最小能力**
+- [x] **步骤 3：实现 store 层最小能力**
 
 在 `core/eval_sampling/store.py`：
 
@@ -214,7 +214,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_batch_
 - `note` 裁剪到 1000 字符。
 - `batch_id` 根据 case_ids、filters 和当前秒级时间生成，格式类似 `batch_20260620_ab12cd34`。
 
-- [ ] **步骤 4：实现 Admin API**
+- [x] **步骤 4：实现 Admin API**
 
 在 `api/admin_routes.py`：
 
@@ -237,7 +237,7 @@ def eval_candidate_batch_audit(...):
 - `dry_run=false` 调用 `record_candidate_batch_audit()`，返回带 `audit_log_id` 的结果。
 - 捕获 `ValueError` 返回 400。
 
-- [ ] **步骤 5：运行后端绿灯与相邻回归**
+- [x] **步骤 5：运行后端绿灯与相邻回归**
 
 运行：
 
@@ -248,7 +248,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py -q -p no:cacheprovider
 
 预期：新增测试通过；相邻回归 0 failures。
 
-- [ ] **步骤 6：Commit 后端阶段**
+- [x] **步骤 6：Commit 后端阶段**
 
 ```bash
 git add core/eval_sampling/store.py api/admin_routes.py tests/test_eval_candidate_contract.py
@@ -264,7 +264,7 @@ git commit -m "feat(评测): 增加候选批次审计接口"
 - 修改：`tests/test_webui_admin_redesign.py`
 - 修改：`webui/src/features/evals/EvalsPage.jsx`
 
-- [ ] **步骤 1：编写 CLI 红灯测试**
+- [x] **步骤 1：编写 CLI 红灯测试**
 
 在 `tests/test_eval_candidates_cli.py` 增加：
 
@@ -302,7 +302,7 @@ def test_candidates_cli_audit_writes_read_only_batch_report(db_session, tmp_path
     assert get_candidate(db_session, "cand_cli_audit").status == "labeled"
 ```
 
-- [ ] **步骤 2：编写 WebUI 静态红灯测试**
+- [x] **步骤 2：编写 WebUI 静态红灯测试**
 
 在 `tests/test_webui_admin_redesign.py` 增加：
 
@@ -321,7 +321,7 @@ def test_evals_candidates_page_exposes_read_only_batch_audit():
     assert "批量应用" not in source
 ```
 
-- [ ] **步骤 3：运行 CLI / WebUI 红灯**
+- [x] **步骤 3：运行 CLI / WebUI 红灯**
 
 运行：
 
@@ -331,7 +331,7 @@ python -B -m pytest tests/test_eval_candidates_cli.py::test_candidates_cli_audit
 
 预期：失败。失败点为 CLI `audit` 子命令不存在、WebUI 缺少批次审计入口。
 
-- [ ] **步骤 4：实现 CLI**
+- [x] **步骤 4：实现 CLI**
 
 在 `evals/candidates.py`：
 
@@ -347,7 +347,7 @@ python -B -m pytest tests/test_eval_candidates_cli.py::test_candidates_cli_audit
 - 输出 JSON；有 `--out` 写文件，无 `--out` 打印 stdout。
 - 不提供 `--apply`。
 
-- [ ] **步骤 5：实现 WebUI**
+- [x] **步骤 5：实现 WebUI**
 
 在 `webui/src/features/evals/EvalsPage.jsx`：
 
@@ -365,7 +365,7 @@ python -B -m pytest tests/test_eval_candidates_cli.py::test_candidates_cli_audit
 - 新增 modal 展示 `batchAuditResult.counts` 和 `batchAuditResult.items`。
 - 不加入任何批量 apply / 批量 triage 按钮。
 
-- [ ] **步骤 6：运行 CLI / WebUI 绿灯与构建**
+- [x] **步骤 6：运行 CLI / WebUI 绿灯与构建**
 
 运行：
 
@@ -377,7 +377,7 @@ npm --prefix webui run build
 
 预期：测试 0 failures；build 退出码 0，允许现有 Vite chunk size / plugin timing warning。
 
-- [ ] **步骤 7：Commit CLI / WebUI 阶段**
+- [x] **步骤 7：Commit CLI / WebUI 阶段**
 
 ```bash
 git status --short webui/dist
@@ -396,7 +396,7 @@ git commit -m "feat(评测): 增加候选批次审计入口"
 - 修改：`docs/todo.md`
 - 修改：`.Codex/plans/eval-candidate-batch-audit.md`
 
-- [ ] **步骤 1：同步文档**
+- [x] **步骤 1：同步文档**
 
 `docs/evals.md` 新增「候选批次审计」小节，记录：
 
@@ -418,11 +418,11 @@ git commit -m "feat(评测): 增加候选批次审计入口"
 - 路线项 8 现状 / 痛点 / 粗略路径追加批次审计完成状态。
 - 剩余重点移除「人工仲裁批次审计」。
 
-- [ ] **步骤 2：更新计划复选框与验证记录**
+- [x] **步骤 2：更新计划复选框与验证记录**
 
 在本文件中把已完成步骤勾选，并写入实际验证命令和结果。
 
-- [ ] **步骤 3：最终组合验证**
+- [x] **步骤 3：最终组合验证**
 
 运行：
 
@@ -433,9 +433,25 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 
 预期：0 failures。
 
-- [ ] **步骤 4：Commit 文档收口**
+- [x] **步骤 4：Commit 文档收口**
 
 ```bash
 git add docs/evals.md docs/plan_walkthrough.md docs/todo.md .Codex/plans/eval-candidate-batch-audit.md
 git commit -m "docs(计划): 收口候选批次审计"
 ```
+
+## 执行记录
+
+- 设计提交：`f95e67e docs(评测): 设计候选批次审计`。
+- 计划提交：`ba79917 docs(计划): 记录候选批次审计计划`。
+- 后端红灯：`python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_batch_audit_dry_run_is_read_only tests/test_eval_candidate_contract.py::test_candidate_batch_audit_apply_writes_single_audit_log tests/test_eval_candidate_contract.py::test_candidate_batch_audit_rejects_invalid_scope_decision_and_stale_status -q -p no:cacheprovider`，结果 `3 failed, 21 warnings in 7.00s`，失败点为 `/batch-audit` 返回 `405 Method Not Allowed`。
+- 后端绿灯：同一命令结果 `3 passed, 21 warnings in 1.89s`。
+- 后端相邻回归：`python -B -m pytest tests/test_eval_candidate_contract.py -q -p no:cacheprovider`，结果 `32 passed, 21 warnings in 4.86s`。
+- 后端提交：`c5eded7 feat(评测): 增加候选批次审计接口`。
+- CLI / WebUI 红灯：`python -B -m pytest tests/test_eval_candidates_cli.py::test_candidates_cli_audit_writes_read_only_batch_report tests/test_webui_admin_redesign.py::test_evals_candidates_page_exposes_read_only_batch_audit -q -p no:cacheprovider`，结果 `2 failed, 1 warning in 6.39s`，失败点为 CLI 缺少 `audit` 子命令、WebUI 缺少「批次审计」入口。
+- CLI / WebUI 绿灯：同一命令结果 `2 passed, 1 warning in 0.87s`。
+- CLI / WebUI 相邻回归：`python -B -m pytest tests/test_eval_candidates_cli.py tests/test_webui_admin_redesign.py -q -p no:cacheprovider`，结果 `29 passed, 1 warning in 1.66s`。
+- WebUI build：`npm --prefix webui run build` 退出码 0，仅有现有 Vite chunk size 和 plugin timing warning。
+- CLI / WebUI 提交：`97b0ab8 feat(评测): 增加候选批次审计入口`。
+- 最终组合回归：`python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py tests/test_webui_admin_redesign.py -q -p no:cacheprovider`，结果 `61 passed, 21 warnings in 6.24s`。
+- 全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1404 passed, 6 skipped, 139 warnings in 109.54s`。
