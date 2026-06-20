@@ -10,6 +10,21 @@
 
 ---
 
+## 执行记录
+
+- 设计提交：`8c7a563 docs(评测): 设计时机信号周期审计`。
+- 计划提交：`979639e docs(计划): 记录时机信号周期审计计划`。
+- 实现提交：`0980f22 ci(评测): 接入时机信号周期审计`。
+- 红灯验证：`python -B -m pytest tests/test_timing_signal_audit_periodic.py -q -p no:cacheprovider`，结果 `2 failed, 1 warning`；失败原因分别为脚本不存在和周期入口未引用脚本。
+- 中间红灯：新增脚本后同一命令结果 `1 failed, 1 passed, 1 warning`；缺库 skipped 行为已通过，周期入口仍未接入。
+- 绿灯验证：同一命令结果 `2 passed, 1 warning in 0.70s`。
+- 相邻回归：`python -B -m pytest tests/test_timing_signal_audit.py tests/test_eval_baseline.py -q -p no:cacheprovider`，结果 `24 passed, 1 warning in 1.67s`。
+- 独立脚本验证：`TIMING_SIGNAL_AUDIT_DB=tmp/missing-timing-audit.db TIMING_SIGNAL_AUDIT_OUT=tmp/timing_signal_audit_latest.json bash scripts/run_timing_signal_audit_periodic.sh`，输出 `Timing signal audit skipped: db_not_found db=tmp/missing-timing-audit.db out=tmp/timing_signal_audit_latest.json`，退出码为 0。
+- 周期脚本验证：`bash scripts/run_eval_periodic.sh`，结果所有稳定 gate 通过，最后 `timing signal audit: passed`；当前环境默认 `data/nanobot.db` 存在，审计输出 `samples=0 mismatch=0 out=evals/reports/timing_signal_audit_latest.json`。
+- 全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1382 passed, 6 skipped, 139 warnings in 107.45s`。
+- 生成报告检查：`evals/reports/*.json` 和 `tmp/*` 由 `.gitignore` 忽略，未纳入实现提交。
+- 文档收口验证：`git diff --check -- .Codex/plans/timing-signal-audit-periodic.md docs/plan_walkthrough.md` 无输出；`python -B -m pytest tests/test_timing_signal_audit_periodic.py -q -p no:cacheprovider` 结果 `2 passed, 1 warning in 0.71s`。
+
 ## 文件结构
 
 - 创建：`scripts/run_timing_signal_audit_periodic.sh`
@@ -42,7 +57,7 @@
 - 创建：`tests/test_timing_signal_audit_periodic.py`
 - 读取：`scripts/run_eval_periodic.sh`
 
-- [ ] **步骤 1：编写失败的脚本行为测试**
+- [x] **步骤 1：编写失败的脚本行为测试**
 
 写入测试：
 
@@ -87,7 +102,7 @@ def test_timing_signal_audit_periodic_script_skips_missing_db(tmp_path):
     assert payload["source"]["limit"] == 17
 ```
 
-- [ ] **步骤 2：编写失败的周期入口静态测试**
+- [x] **步骤 2：编写失败的周期入口静态测试**
 
 在同一文件追加：
 
@@ -99,7 +114,7 @@ def test_eval_periodic_script_runs_timing_signal_audit_step():
     assert "scripts/run_timing_signal_audit_periodic.sh" in text
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -115,7 +130,7 @@ python -B -m pytest tests/test_timing_signal_audit_periodic.py -q -p no:cachepro
 
 - 创建：`scripts/run_timing_signal_audit_periodic.sh`
 
-- [ ] **步骤 1：新增最小脚本**
+- [x] **步骤 1：新增最小脚本**
 
 创建脚本：
 
@@ -183,7 +198,7 @@ fi
 "${args[@]}"
 ```
 
-- [ ] **步骤 2：运行红灯测试确认仍有周期入口失败**
+- [x] **步骤 2：运行红灯测试确认仍有周期入口失败**
 
 运行：
 
@@ -199,7 +214,7 @@ python -B -m pytest tests/test_timing_signal_audit_periodic.py -q -p no:cachepro
 
 - 修改：`scripts/run_eval_periodic.sh`
 
-- [ ] **步骤 1：添加 keep-going 步骤**
+- [x] **步骤 1：添加 keep-going 步骤**
 
 在 RAG benchmark gate 之后、`exit "$status"` 之前增加：
 
@@ -208,7 +223,7 @@ run_step "timing signal audit" \
   bash scripts/run_timing_signal_audit_periodic.sh
 ```
 
-- [ ] **步骤 2：运行定向测试验证通过**
+- [x] **步骤 2：运行定向测试验证通过**
 
 运行：
 
@@ -218,7 +233,7 @@ python -B -m pytest tests/test_timing_signal_audit_periodic.py -q -p no:cachepro
 
 预期：`2 passed`。
 
-- [ ] **步骤 3：运行相邻测试**
+- [x] **步骤 3：运行相邻测试**
 
 运行：
 
@@ -234,7 +249,7 @@ python -B -m pytest tests/test_timing_signal_audit.py tests/test_eval_baseline.p
 
 - 修改：`docs/evals.md`
 
-- [ ] **步骤 1：补充周期审计说明**
+- [x] **步骤 1：补充周期审计说明**
 
 在「周期性复跑与报告归档」章节补充：
 
@@ -252,7 +267,7 @@ bash scripts/run_timing_signal_audit_periodic.sh
 本轮没有可审计真实库，不表示信号质量通过。
 ````
 
-- [ ] **步骤 2：检查文档空白**
+- [x] **步骤 2：检查文档空白**
 
 运行：
 
@@ -270,7 +285,7 @@ git diff --check -- docs/evals.md
 - 读取：`scripts/run_eval_periodic.sh`
 - 输出：`evals/reports/timing_signal_audit_latest.json`
 
-- [ ] **步骤 1：验证独立脚本缺库跳过**
+- [x] **步骤 1：验证独立脚本缺库跳过**
 
 运行：
 
@@ -282,7 +297,7 @@ bash scripts/run_timing_signal_audit_periodic.sh
 
 预期：退出码 `0`，输出包含 `Timing signal audit skipped`，并写入 `tmp/timing_signal_audit_latest.json`。
 
-- [ ] **步骤 2：验证周期脚本 keep-going**
+- [x] **步骤 2：验证周期脚本 keep-going**
 
 运行：
 
@@ -292,7 +307,7 @@ bash scripts/run_eval_periodic.sh
 
 预期：稳定 gate 继续通过，最后出现 `timing signal audit: passed`。如果默认 `data/nanobot.db` 不存在，应同时生成 skipped 报告并保持退出码 `0`。
 
-- [ ] **步骤 3：运行全量测试**
+- [x] **步骤 3：运行全量测试**
 
 运行：
 
@@ -311,7 +326,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 - 暂存：`tests/test_timing_signal_audit_periodic.py`
 - 暂存：`docs/evals.md`
 
-- [ ] **步骤 1：检查 diff**
+- [x] **步骤 1：检查 diff**
 
 运行：
 
@@ -322,7 +337,7 @@ git diff --stat -- scripts/run_timing_signal_audit_periodic.sh scripts/run_eval_
 
 预期：无空白错误，stat 只包含本阶段文件。
 
-- [ ] **步骤 2：按文件暂存并提交**
+- [x] **步骤 2：按文件暂存并提交**
 
 运行：
 
@@ -340,7 +355,7 @@ git commit -m "ci(评测): 接入时机信号周期审计"
 - 修改：`.Codex/plans/timing-signal-audit-periodic.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：勾选本计划任务并写入验证证据**
+- [x] **步骤 1：勾选本计划任务并写入验证证据**
 
 记录：
 
@@ -352,11 +367,11 @@ git commit -m "ci(评测): 接入时机信号周期审计"
 - 全量测试输出。
 - 实现提交号。
 
-- [ ] **步骤 2：更新 walkthrough**
+- [x] **步骤 2：更新 walkthrough**
 
 在 `docs/plan_walkthrough.md` 顶部追加本阶段设计、计划、实现和验证结果，并在已完成基线表新增「TimingGate 信号周期审计」。
 
-- [ ] **步骤 3：验证文档收口**
+- [x] **步骤 3：验证文档收口**
 
 运行：
 
@@ -367,7 +382,7 @@ python -B -m pytest tests/test_timing_signal_audit_periodic.py -q -p no:cachepro
 
 预期：无空白错误，定向测试通过。
 
-- [ ] **步骤 4：按文件暂存并提交**
+- [x] **步骤 4：按文件暂存并提交**
 
 运行：
 
