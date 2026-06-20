@@ -126,6 +126,43 @@ python -m evals.candidates promote --suite timing_gate --target-dataset timing_g
 
 Admin 接口兼容旧字段 `expected_json`，但新调用应统一发送 `expected`。WebUI 标注入口按 `{ expected: expectedJson, note }` 提交，避免把人工说明混入 `expected`。
 
+### 候选 readiness 与批量预检
+
+`GET /api/v1/admin/evals/candidates` 会返回 `summary` 和每条候选的 `readiness`。`readiness.ready=true` 表示当前候选可以晋升；blocked 时查看 `readiness.blocking_reasons[].code`。
+
+常见阻断原因：
+
+- `invalid_status`：候选还不是 `labeled`，或已经 `ignored` / `promoted`。
+- `expected_invalid`：`expected` 为空、仍包含 `needs_label`，或字段不符合 scorer 契约。
+- `suite_not_runnable`：候选 suite 不在当前 eval runner 可运行集合中，例如 `error`。
+- `target_dataset_invalid`：目标 dataset 不是安全目录名。
+- `target_case_exists`：目标 case 文件已存在。
+
+只读批量预检接口：
+
+```http
+POST /api/v1/admin/evals/candidates/preflight
+```
+
+请求示例：
+
+```json
+{
+  "case_ids": ["cand_timing_gate_1"],
+  "target_dataset": "timing_gate"
+}
+```
+
+CLI dry-run 现在也使用同一套 readiness 规则，输出 ready / blocked 聚合结果：
+
+```bash
+python -m evals.candidates promote --suite timing_gate --target-dataset timing_gate --dry-run
+```
+
+批量 apply 保持严格语义：只要批次存在 blocked candidate，就返回 `ok=false`、`applied=0`，不做部分写入。WebUI「Eval 评测」候选页提供「预检当前页」，该操作只读，不写入 case 文件。
+
+`PATCH /api/v1/admin/evals/candidates/{case_id}` 不能直接把候选改为 `labeled` 或 `promoted`。标注必须走 `/label`，晋升必须走 `/promote`。
+
 ## Admin WebUI 标注工作台
 
 P4-2 已将 Admin 标注工作台拆为后端契约和 WebUI 两个阶段，设计文档为 `docs/superpowers/specs/2026-06-18-admin-eval-workbench-contract-design.md`，实现计划为 `.Codex/plans/admin-eval-workbench-contract.md`。P4-2A 后端契约 schema/API 已完成；P4-2B WebUI 工作台已接入契约化标注和 promote 预检流程，并通过本轮定向验证、WebUI build 和全量回归。

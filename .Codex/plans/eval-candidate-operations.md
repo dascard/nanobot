@@ -1,6 +1,6 @@
 # EvalCandidate 运营规则实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:test-driven-development 执行实现步骤，并在提交前使用 superpowers:verification-before-completion 和 superpowers:chinese-commit-conventions。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:test-driven-development 执行实现步骤，并在提交前使用 superpowers:verification-before-completion 和 superpowers:chinese-commit-conventions。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
 **目标：** 为通用 `EvalCandidate` 候选队列增加 summary、readiness、批量 preflight 和安全晋升规则，避免不可运行 suite 或非法状态绕过进入正式 eval case。
 
@@ -14,11 +14,25 @@
 
 - [x] 设计阶段：写入 `docs/superpowers/specs/2026-06-20-eval-candidate-operations-design.md`。
 - [x] 设计提交：`8dc41f5 docs(评测): 设计候选运营规则`。
-- [ ] 计划阶段：写入 `.Codex/plans/eval-candidate-operations.md` 并提交。
-- [ ] 后端 readiness / summary / 状态约束。
-- [ ] 后端 preflight API 与 CLI 聚合 dry-run。
-- [ ] WebUI summary、资格列和当前页 preflight。
-- [ ] 文档收口、全量验证和 walkthrough 更新。
+- [x] 计划阶段：写入 `.Codex/plans/eval-candidate-operations.md`。提交：`aed5333 docs(计划): 记录候选运营规则计划`。
+- [x] 后端 readiness / summary / 状态约束。提交：`cbcc399 feat(评测): 增加候选晋升资格`。
+- [x] 后端 preflight API 与 CLI 聚合 dry-run。提交：`37ab830 feat(评测): 支持候选批量预检`。
+- [x] WebUI summary、资格列和当前页 preflight。提交：`376bffe feat(评测): 展示候选运营预检`。
+- [x] 文档收口、全量验证和 walkthrough 更新。
+
+## 验证记录
+
+- 后端 readiness 红灯：`python -B -m pytest tests/test_eval_candidate_contract.py::test_candidate_readiness_blocks_status_error_suite_invalid_expected_and_existing_target tests/test_eval_candidate_contract.py::test_eval_list_candidates_returns_summary_and_readiness tests/test_eval_candidate_contract.py::test_eval_patch_candidate_rejects_direct_labeled_promoted_and_unknown_status tests/test_eval_candidate_contract.py::test_promote_candidate_rejects_non_runnable_suite -q -p no:cacheprovider` 结果 `4 failed, 21 warnings`。
+- 后端 readiness 绿灯：同一命令结果 `4 passed, 21 warnings in 1.76s`。
+- 后端相邻回归：`python -B -m pytest tests/test_eval_candidate_contract.py -q -p no:cacheprovider` 结果 `25 passed, 21 warnings in 3.47s`。
+- Preflight 红灯：`python -B -m pytest tests/test_eval_candidate_contract.py::test_eval_candidates_preflight_returns_ready_and_blocked_items -q -p no:cacheprovider` 结果 `1 failed, 21 warnings`，失败点为 `405 Method Not Allowed`。
+- Preflight 绿灯：同一命令结果 `1 passed, 21 warnings in 1.21s`。
+- 后端 + CLI 集成：`python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py -q -p no:cacheprovider` 结果 `32 passed, 21 warnings in 4.20s`。
+- WebUI 静态测试：`python -B -m pytest tests/test_webui_admin_redesign.py -q -p no:cacheprovider` 结果 `19 passed, 1 warning in 0.93s`。
+- WebUI build：`npm --prefix webui run build` 退出码 0，仅有现有 Vite chunk size 和 plugin timing warning。
+- 最终组合验证：`python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py tests/test_webui_admin_redesign.py -q -p no:cacheprovider` 结果 `51 passed, 21 warnings in 4.88s`。
+- 最终 WebUI build：`npm --prefix webui run build` 退出码 0，仅有现有 Vite chunk size 和 plugin timing warning。
+- 最终全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider` 结果 `1394 passed, 6 skipped, 139 warnings in 105.77s`。
 
 ## 文件结构
 
@@ -159,7 +173,7 @@
 
 - 修改：`tests/test_eval_candidate_contract.py`
 
-- [ ] **步骤 1：新增 readiness 阻断测试**
+- [x] **步骤 1：新增 readiness 阻断测试**
 
 在 `test_promote_candidate_rejects_unlabeled_and_file_conflict` 前新增：
 
@@ -195,7 +209,7 @@ def test_candidate_readiness_blocks_status_error_suite_invalid_expected_and_exis
     assert any(reason["code"] == "target_case_exists" for reason in conflict["blocking_reasons"])
 ```
 
-- [ ] **步骤 2：新增列表 summary 与 readiness API 测试**
+- [x] **步骤 2：新增列表 summary 与 readiness API 测试**
 
 在 Admin API 测试区域新增：
 
@@ -222,7 +236,7 @@ def test_eval_list_candidates_returns_summary_and_readiness(client, db_session, 
     assert payload["items"][0]["readiness"]["blocking_reasons"]
 ```
 
-- [ ] **步骤 3：新增 PATCH 状态约束测试**
+- [x] **步骤 3：新增 PATCH 状态约束测试**
 
 在 `test_eval_label_candidate_rejects_conflicting_expected_fields` 后新增：
 
@@ -254,7 +268,7 @@ def test_eval_patch_candidate_rejects_direct_labeled_promoted_and_unknown_status
     assert ok.json()["note"] == "优先处理"
 ```
 
-- [ ] **步骤 4：新增不可运行 suite 晋升拒绝测试**
+- [x] **步骤 4：新增不可运行 suite 晋升拒绝测试**
 
 在 promote 测试区域新增：
 
@@ -273,7 +287,7 @@ def test_promote_candidate_rejects_non_runnable_suite(db_session, tmp_path, monk
     assert not (tmp_path / "evals" / "cases" / "timing_gate" / "cand_error.json").exists()
 ```
 
-- [ ] **步骤 5：运行红灯**
+- [x] **步骤 5：运行红灯**
 
 运行：
 
@@ -295,7 +309,7 @@ python -B -m pytest \
 - 修改：`core/eval_sampling/store.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：在 store 中新增常量和 reason helper**
+- [x] **步骤 1：在 store 中新增常量和 reason helper**
 
 在 `REPO_ROOT` 后新增：
 
@@ -320,7 +334,7 @@ def _readiness_reason(code: str, message: str, **extra: Any) -> dict[str, Any]:
     return reason
 ```
 
-- [ ] **步骤 2：新增 dataset 校验辅助**
+- [x] **步骤 2：新增 dataset 校验辅助**
 
 把 `_safe_dataset_name()` 改为复用一个不抛错 helper：
 
@@ -343,7 +357,7 @@ def _safe_dataset_name(value: str) -> str:
     return name
 ```
 
-- [ ] **步骤 3：新增 `candidate_readiness()`**
+- [x] **步骤 3：新增 `candidate_readiness()`**
 
 在 `_safe_dataset_name()` 后新增：
 
@@ -424,7 +438,7 @@ def candidate_readiness(
     }
 ```
 
-- [ ] **步骤 4：让 `_candidate_dict()` 附带 readiness**
+- [x] **步骤 4：让 `_candidate_dict()` 附带 readiness**
 
 把返回 dict 扩展为：
 
@@ -432,7 +446,7 @@ def candidate_readiness(
 "readiness": candidate_readiness(r),
 ```
 
-- [ ] **步骤 5：新增 summary 函数**
+- [x] **步骤 5：新增 summary 函数**
 
 在 `list_candidates()` 前后新增可复用查询 helper 与 summary：
 
@@ -495,7 +509,7 @@ def candidate_queue_summary(
     }
 ```
 
-- [ ] **步骤 6：调整列表排序**
+- [x] **步骤 6：调整列表排序**
 
 把 `list_candidates()` 查询改为：
 
@@ -505,7 +519,7 @@ total = q.count()
 rows = q.order_by(EvalCandidate.priority.desc(), EvalCandidate.id.desc()).offset(offset).limit(limit).all()
 ```
 
-- [ ] **步骤 7：让 promote 复用 readiness**
+- [x] **步骤 7：让 promote 复用 readiness**
 
 在 `plan_candidate_promotion()` 中，`row` 存在后替换状态、expected、dataset 和冲突检查为：
 
@@ -520,7 +534,7 @@ dataset = readiness["target_dataset"]
 out_path = Path(readiness["target_path"])
 ```
 
-- [ ] **步骤 8：收窄 `update_candidate()` 状态写入**
+- [x] **步骤 8：收窄 `update_candidate()` 状态写入**
 
 在 `update_candidate()` 的字段循环前处理 `status`：
 
@@ -538,7 +552,7 @@ if next_status is not None:
     fields = {key: value for key, value in fields.items() if key != "status"}
 ```
 
-- [ ] **步骤 9：扩展 Admin API 返回 summary 并捕获 PATCH 错误**
+- [x] **步骤 9：扩展 Admin API 返回 summary 并捕获 PATCH 错误**
 
 在 `api/admin_routes.py` import 中加入 `candidate_queue_summary`。
 
@@ -558,13 +572,13 @@ except ValueError as e:
     raise HTTPException(400, str(e))
 ```
 
-- [ ] **步骤 10：运行后端绿灯**
+- [x] **步骤 10：运行后端绿灯**
 
 运行任务 1 的同一 pytest 命令。
 
 预期：`4 passed`。
 
-- [ ] **步骤 11：运行后端相邻回归**
+- [x] **步骤 11：运行后端相邻回归**
 
 运行：
 
@@ -574,7 +588,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py -q -p no:cacheprovider
 
 预期：全部通过。
 
-- [ ] **步骤 12：提交后端 readiness 阶段**
+- [x] **步骤 12：提交后端 readiness 阶段**
 
 ```bash
 git add core/eval_sampling/store.py api/admin_routes.py tests/test_eval_candidate_contract.py
@@ -588,7 +602,7 @@ git commit -m "feat(评测): 增加候选晋升资格"
 - 修改：`tests/test_eval_candidate_contract.py`
 - 修改：`tests/test_eval_candidates_cli.py`
 
-- [ ] **步骤 1：新增 Admin preflight mixed 测试**
+- [x] **步骤 1：新增 Admin preflight mixed 测试**
 
 在 `tests/test_eval_candidate_contract.py` 新增：
 
@@ -629,7 +643,7 @@ def test_eval_candidates_preflight_returns_ready_and_blocked_items(
     assert by_id["missing_case"]["readiness"]["blocking_reasons"][0]["code"] == "candidate_not_found"
 ```
 
-- [ ] **步骤 2：新增 CLI dry-run 聚合和 apply 阻断测试**
+- [x] **步骤 2：新增 CLI dry-run 聚合和 apply 阻断测试**
 
 在 `tests/test_eval_candidates_cli.py` 新增：
 
@@ -694,7 +708,7 @@ def test_promote_labeled_apply_rejects_blocked_batch_without_partial_write(
     assert get_candidate(db_session, "cand_ready").status == "labeled"
 ```
 
-- [ ] **步骤 3：运行红灯**
+- [x] **步骤 3：运行红灯**
 
 运行：
 
@@ -716,7 +730,7 @@ python -B -m pytest \
 - 修改：`api/admin_routes.py`
 - 修改：`evals/candidates.py`
 
-- [ ] **步骤 1：在 store 中新增 preflight 函数**
+- [x] **步骤 1：在 store 中新增 preflight 函数**
 
 在 summary 后新增：
 
@@ -777,7 +791,7 @@ def preflight_candidate_promotions(
     }
 ```
 
-- [ ] **步骤 2：新增 Admin request model 与路由**
+- [x] **步骤 2：新增 Admin request model 与路由**
 
 在 `PromoteRequest` 后新增：
 
@@ -816,7 +830,7 @@ def eval_preflight_candidates(
 
 同时在 import 列表加入 `preflight_candidate_promotions`。
 
-- [ ] **步骤 3：改造 CLI `promote_labeled()`**
+- [x] **步骤 3：改造 CLI `promote_labeled()`**
 
 在 `evals/candidates.py` import 中加入 `preflight_candidate_promotions`。
 
@@ -872,13 +886,13 @@ result["ok"] = True
 return result
 ```
 
-- [ ] **步骤 4：运行绿灯**
+- [x] **步骤 4：运行绿灯**
 
 运行任务 3 的同一 pytest 命令。
 
 预期：`3 passed`。
 
-- [ ] **步骤 5：运行相邻回归**
+- [x] **步骤 5：运行相邻回归**
 
 运行：
 
@@ -888,7 +902,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candid
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交 preflight / CLI 阶段**
+- [x] **步骤 6：提交 preflight / CLI 阶段**
 
 ```bash
 git add core/eval_sampling/store.py api/admin_routes.py evals/candidates.py tests/test_eval_candidate_contract.py tests/test_eval_candidates_cli.py
@@ -901,7 +915,7 @@ git commit -m "feat(评测): 支持候选批量预检"
 
 - 修改：`tests/test_webui_admin_redesign.py`
 
-- [ ] **步骤 1：新增候选 readiness UI 静态守卫**
+- [x] **步骤 1：新增候选 readiness UI 静态守卫**
 
 在 evals 相关测试后新增：
 
@@ -919,7 +933,7 @@ def test_evals_candidates_page_shows_summary_readiness_and_preflight():
 
 如果 JSX 最终实现不适合完全相同的 `disabled={candidate.status === 'labeled' && !candidate.readiness?.ready}` 字符串，静态测试必须同时断言源码包含 `candidate.readiness?.ready`、`disabled` 和「提升」三个片段。
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -936,7 +950,7 @@ python -B -m pytest tests/test_webui_admin_redesign.py::test_evals_candidates_pa
 - 修改：`webui/src/features/evals/EvalsPage.jsx`
 - 修改：`tests/test_webui_admin_redesign.py`
 
-- [ ] **步骤 1：新增 state**
+- [x] **步骤 1：新增 state**
 
 在候选状态区域新增：
 
@@ -947,7 +961,7 @@ const [preflightResult, setPreflightResult] = useState(null)
 const [preflightLoading, setPreflightLoading] = useState(false)
 ```
 
-- [ ] **步骤 2：让 `loadCandidates()` 保存 summary**
+- [x] **步骤 2：让 `loadCandidates()` 保存 summary**
 
 在读取 candidates 后：
 
@@ -956,7 +970,7 @@ setCandidates(payload)
 setCandidateSummary(payload.summary || null)
 ```
 
-- [ ] **步骤 3：新增 readiness 文案 helper**
+- [x] **步骤 3：新增 readiness 文案 helper**
 
 在组件内新增：
 
@@ -967,7 +981,7 @@ const readinessReason = (candidate) => {
 }
 ```
 
-- [ ] **步骤 4：新增当前页 preflight 函数**
+- [x] **步骤 4：新增当前页 preflight 函数**
 
 ```javascript
 const preflightCurrentPage = async () => {
@@ -990,7 +1004,7 @@ const preflightCurrentPage = async () => {
 }
 ```
 
-- [ ] **步骤 5：候选页展示 summary 和按钮**
+- [x] **步骤 5：候选页展示 summary 和按钮**
 
 在候选页过滤器下方新增一行 summary：
 
@@ -1011,7 +1025,7 @@ const preflightCurrentPage = async () => {
 )}
 ```
 
-- [ ] **步骤 6：表格新增资格列并禁用 blocked 提升**
+- [x] **步骤 6：表格新增资格列并禁用 blocked 提升**
 
 表头新增：
 
@@ -1042,7 +1056,7 @@ const preflightCurrentPage = async () => {
 </button>
 ```
 
-- [ ] **步骤 7：详情弹窗展示 readiness JSON**
+- [x] **步骤 7：详情弹窗展示 readiness JSON**
 
 在详情 modal 中新增：
 
@@ -1051,7 +1065,7 @@ const preflightCurrentPage = async () => {
 <pre>{JSON.stringify(detail.readiness || {}, null, 2)}</pre>
 ```
 
-- [ ] **步骤 8：新增 preflight 结果弹窗**
+- [x] **步骤 8：新增 preflight 结果弹窗**
 
 在 JSX 末尾新增：
 
@@ -1066,7 +1080,7 @@ const preflightCurrentPage = async () => {
 )}
 ```
 
-- [ ] **步骤 9：运行 WebUI 静态绿灯**
+- [x] **步骤 9：运行 WebUI 静态绿灯**
 
 运行：
 
@@ -1076,7 +1090,7 @@ python -B -m pytest tests/test_webui_admin_redesign.py::test_evals_candidates_pa
 
 预期：`1 passed`。
 
-- [ ] **步骤 10：运行 WebUI 相邻静态回归**
+- [x] **步骤 10：运行 WebUI 相邻静态回归**
 
 运行：
 
@@ -1086,7 +1100,7 @@ python -B -m pytest tests/test_webui_admin_redesign.py -q -p no:cacheprovider
 
 预期：全部通过。
 
-- [ ] **步骤 11：运行 WebUI build**
+- [x] **步骤 11：运行 WebUI build**
 
 运行：
 
@@ -1096,7 +1110,7 @@ npm --prefix webui run build
 
 预期：退出码 0。允许现有 Vite chunk size / timing warning。
 
-- [ ] **步骤 12：提交 WebUI 阶段**
+- [x] **步骤 12：提交 WebUI 阶段**
 
 如果 build 更新 `webui/dist`，按实际文件名显式暂存。
 
@@ -1113,7 +1127,7 @@ git commit -m "feat(评测): 展示候选运营预检"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/eval-candidate-operations.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 在 Eval candidates 操作说明中补充：
 
@@ -1134,7 +1148,7 @@ WebUI「Eval 评测」候选页提供「预检当前页」，该操作只读，�
 批量 apply 当前保持严格语义：只要批次存在 blocked candidate，就不做部分写入。
 ````
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 在真实样本运营区域新增本阶段。提交号必须使用实际 `git log --oneline` 输出，不保留占位符。推荐文字结构如下：
 
@@ -1144,11 +1158,11 @@ WebUI「Eval 评测」候选页提供「预检当前页」，该操作只读，�
 
 写入后检查该段没有尖括号占位。
 
-- [ ] **步骤 3：更新本计划执行记录**
+- [x] **步骤 3：更新本计划执行记录**
 
 在「执行记录」填入实际红灯、绿灯、相邻回归、WebUI build 和全量测试结果，并把已完成任务勾选为 `[x]`。
 
-- [ ] **步骤 4：运行定向组合验证**
+- [x] **步骤 4：运行定向组合验证**
 
 运行：
 
@@ -1158,7 +1172,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py tests/test_eval_candid
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行 WebUI build**
+- [x] **步骤 5：运行 WebUI build**
 
 运行：
 
@@ -1168,7 +1182,7 @@ npm --prefix webui run build
 
 预期：退出码 0。允许现有 Vite chunk size / timing warning。
 
-- [ ] **步骤 6：运行全量回归**
+- [x] **步骤 6：运行全量回归**
 
 运行：
 
@@ -1178,7 +1192,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 
 预期：0 failures。
 
-- [ ] **步骤 7：提交文档收口**
+- [x] **步骤 7：提交文档收口**
 
 ```bash
 git add docs/evals.md docs/plan_walkthrough.md .Codex/plans/eval-candidate-operations.md
@@ -1187,10 +1201,10 @@ git commit -m "docs(计划): 收口候选运营规则"
 
 ## 最终验收清单
 
-- [ ] 不可运行 suite 不能晋升为正式 eval case。
-- [ ] PATCH 不能直接把候选改为 `labeled` 或 `promoted`。
-- [ ] 候选列表 API 保留旧字段，并新增 `summary` 和 `readiness`。
-- [ ] preflight 能返回 mixed ready / blocked，不因第一条错误中断。
-- [ ] CLI dry-run 可作为批量预检使用，apply 遇 blocked 不做部分写入。
-- [ ] WebUI 列表和详情能解释阻断原因。
-- [ ] 定向测试、相邻回归、WebUI build 和全量测试都有新鲜通过证据。
+- [x] 不可运行 suite 不能晋升为正式 eval case。
+- [x] PATCH 不能直接把候选改为 `labeled` 或 `promoted`。
+- [x] 候选列表 API 保留旧字段，并新增 `summary` 和 `readiness`。
+- [x] preflight 能返回 mixed ready / blocked，不因第一条错误中断。
+- [x] CLI dry-run 可作为批量预检使用，apply 遇 blocked 不做部分写入。
+- [x] WebUI 列表和详情能解释阻断原因。
+- [x] 定向测试、相邻回归、WebUI build 和全量测试都有新鲜通过证据。
