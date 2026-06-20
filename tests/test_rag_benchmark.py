@@ -60,7 +60,14 @@ def test_case_loader_merges_manual_and_generated(tmp_path):
 
 
 def test_rag_benchmark_fixture_db_supports_memory_positive_case(tmp_path):
-    from evals.rag_benchmark.fixtures import build_fixture_db
+    from evals.rag_benchmark.fixtures import (
+        MEMORY_CANDIDATE_ID,
+        MEMORY_CASE_ID,
+        MEMORY_OTHER_SESSION_CANDIDATE_ID,
+        MEMORY_OTHER_USER_CANDIDATE_ID,
+        MEMORY_SESSION_SUMMARY_CANDIDATE_ID,
+        build_fixture_db,
+    )
     from evals.rag_benchmark.run import run_benchmark
 
     fixture_db = tmp_path / "positive.db"
@@ -68,17 +75,28 @@ def test_rag_benchmark_fixture_db_supports_memory_positive_case(tmp_path):
     cases = build_fixture_db(fixture_db, preset="positive_v1")
     results, scores = run_benchmark(fixture_db, cases, provider_mode="deterministic")
 
+    by_case = {case.id: case for case in cases}
     by_result = {result.case_id: result for result in results}
     by_score = {score.case_id: score for score in scores}
-    result = by_result["memory_fixture_positive_001"]
-    score = by_score["memory_fixture_positive_001"]
+    result = by_result[MEMORY_CASE_ID]
+    score = by_score[MEMORY_CASE_ID]
+    decoy_ids = {
+        MEMORY_OTHER_USER_CANDIDATE_ID,
+        MEMORY_OTHER_SESSION_CANDIDATE_ID,
+        MEMORY_SESSION_SUMMARY_CANDIDATE_ID,
+    }
 
-    assert [case.id for case in cases][:1] == ["memory_fixture_positive_001"]
-    assert result.candidate_ids[0] == "memory_digest:fixture-memory-positive-001:card:0"
+    assert [case.id for case in cases][:1] == [MEMORY_CASE_ID]
+    assert by_case[MEMORY_CASE_ID].expected.candidate_ids == [MEMORY_CANDIDATE_ID]
+    assert set(by_case[MEMORY_CASE_ID].expected.forbidden_candidate_ids) == decoy_ids
+    assert result.candidate_ids[0] == MEMORY_CANDIDATE_ID
+    assert decoy_ids.isdisjoint(result.candidate_ids)
     assert score.ok is True
     assert score.rank == 1
     assert score.hit_at["5"] is True
     assert score.mrr == 1.0
+    assert score.forbidden_hits == []
+    assert score.unexpected_source is False
 
 
 def test_rag_benchmark_fixture_db_supports_knowledge_positive_case(tmp_path):

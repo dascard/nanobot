@@ -23,6 +23,17 @@ MEMORY_SOURCE_SUB_ID = "card:0"
 MEMORY_CANDIDATE_ID = f"memory_digest:{MEMORY_SOURCE_ID}:{MEMORY_SOURCE_SUB_ID}"
 MEMORY_USER_ID = "rag_fixture_user"
 MEMORY_SESSION_ID = "rag_fixture_session"
+MEMORY_OTHER_USER_ID = "rag_fixture_other_user"
+MEMORY_OTHER_SESSION_ID = "rag_fixture_other_session"
+MEMORY_OTHER_USER_SOURCE_ID = "fixture-memory-decoy-other-user"
+MEMORY_OTHER_SESSION_SOURCE_ID = "fixture-memory-decoy-other-session"
+MEMORY_SESSION_SUMMARY_SOURCE_ID = "fixture-memory-decoy-session-summary"
+MEMORY_OTHER_USER_CANDIDATE_ID = f"memory_digest:{MEMORY_OTHER_USER_SOURCE_ID}:{MEMORY_SOURCE_SUB_ID}"
+MEMORY_OTHER_SESSION_CANDIDATE_ID = f"memory_digest:{MEMORY_OTHER_SESSION_SOURCE_ID}:{MEMORY_SOURCE_SUB_ID}"
+MEMORY_SESSION_SUMMARY_SOURCE_SUB_ID = "digest:level2"
+MEMORY_SESSION_SUMMARY_CANDIDATE_ID = (
+    f"session_summary:{MEMORY_SESSION_SUMMARY_SOURCE_ID}:{MEMORY_SESSION_SUMMARY_SOURCE_SUB_ID}"
+)
 MEMORY_QUERY = "KohakuVQ 端口冲突"
 MEMORY_INDEX_VERSION = "fixture:v1:memory"
 KNOWLEDGE_CASE_ID = "knowledge_fixture_positive_001"
@@ -66,6 +77,11 @@ def _memory_positive_case() -> BenchmarkCase:
         },
         expected={
             "candidate_ids": [MEMORY_CANDIDATE_ID],
+            "forbidden_candidate_ids": [
+                MEMORY_OTHER_USER_CANDIDATE_ID,
+                MEMORY_OTHER_SESSION_CANDIDATE_ID,
+                MEMORY_SESSION_SUMMARY_CANDIDATE_ID,
+            ],
             "hit_at": 5,
             "expected_source_type": "memory_digest",
         },
@@ -314,25 +330,81 @@ def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
         "处理方式是检查占用进程、释放端口或切换启动端口。"
     )
     lexical = f"{MEMORY_QUERY} uvicorn 8000 端口占用 排查"
-    chunk = SemanticChunk(
-        source_type="memory_digest",
-        source_id=MEMORY_SOURCE_ID,
-        source_sub_id=MEMORY_SOURCE_SUB_ID,
-        title="KohakuVQ 端口冲突排查",
-        text=text,
-        lexical_text=lexical,
-        embedding_text=lexical,
-        metadata={
-            "user_id": MEMORY_USER_ID,
-            "session_id": MEMORY_SESSION_ID,
-            "fixture": FIXTURE_PRESET,
-        },
-        visibility="recall",
-        quality_score=0.9,
-        trust_level="medium",
-        source_prior=0.65,
-    )
-    upsert_semantic_chunks(db, [chunk], index_version=MEMORY_INDEX_VERSION)
+    memory_chunks = [
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id=MEMORY_SOURCE_ID,
+            source_sub_id=MEMORY_SOURCE_SUB_ID,
+            title="KohakuVQ 端口冲突排查",
+            text=text,
+            lexical_text=lexical,
+            embedding_text=lexical,
+            metadata={
+                "user_id": MEMORY_USER_ID,
+                "session_id": MEMORY_SESSION_ID,
+                "fixture": FIXTURE_PRESET,
+            },
+            visibility="recall",
+            quality_score=0.9,
+            trust_level="medium",
+            source_prior=0.65,
+        ),
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id=MEMORY_OTHER_USER_SOURCE_ID,
+            source_sub_id=MEMORY_SOURCE_SUB_ID,
+            title="KohakuVQ 其他用户端口冲突",
+            text=f"{text} 这是其他用户 decoy，不允许被目标用户召回。",
+            lexical_text=lexical,
+            embedding_text=lexical,
+            metadata={
+                "user_id": MEMORY_OTHER_USER_ID,
+                "session_id": MEMORY_SESSION_ID,
+                "fixture": FIXTURE_PRESET,
+            },
+            visibility="recall",
+            quality_score=0.95,
+            trust_level="medium",
+            source_prior=0.70,
+        ),
+        SemanticChunk(
+            source_type="memory_digest",
+            source_id=MEMORY_OTHER_SESSION_SOURCE_ID,
+            source_sub_id=MEMORY_SOURCE_SUB_ID,
+            title="KohakuVQ 其他会话端口冲突",
+            text=f"{text} 这是其他 session decoy，不允许被目标 session 召回。",
+            lexical_text=lexical,
+            embedding_text=lexical,
+            metadata={
+                "user_id": MEMORY_USER_ID,
+                "session_id": MEMORY_OTHER_SESSION_ID,
+                "fixture": FIXTURE_PRESET,
+            },
+            visibility="recall",
+            quality_score=0.95,
+            trust_level="medium",
+            source_prior=0.70,
+        ),
+        SemanticChunk(
+            source_type="session_summary",
+            source_id=MEMORY_SESSION_SUMMARY_SOURCE_ID,
+            source_sub_id=MEMORY_SESSION_SUMMARY_SOURCE_SUB_ID,
+            title="KohakuVQ session summary decoy",
+            text=f"{text} 这是 session_summary decoy，source=digest 时不允许返回。",
+            lexical_text=lexical,
+            embedding_text=lexical,
+            metadata={
+                "user_id": MEMORY_USER_ID,
+                "session_id": MEMORY_SESSION_ID,
+                "fixture": FIXTURE_PRESET,
+            },
+            visibility="recall",
+            quality_score=0.95,
+            trust_level="medium",
+            source_prior=0.70,
+        ),
+    ]
+    upsert_semantic_chunks(db, memory_chunks, index_version=MEMORY_INDEX_VERSION)
     _seed_knowledge_positive_fixture(db)
     _seed_sticker_positive_fixture(db)
     _seed_group_memory_positive_fixture(db)
