@@ -556,7 +556,7 @@ git diff --check -- tests/test_rag_benchmark.py evals/rag_benchmark/fixtures.py 
 
 实际：PASS，无输出，退出码 0。
 
-- [ ] **步骤 7：提交绿色代码阶段**
+- [x] **步骤 7：提交绿色代码阶段**
 
 显式暂存：
 
@@ -570,6 +570,8 @@ git add tests/test_rag_benchmark.py evals/rag_benchmark/fixtures.py evals/baseli
 git commit -m "feat(评测): 增加 group_memory fixture 正例"
 ```
 
+实际：提交 `7967caf feat(评测): 增加 group_memory fixture 正例`。
+
 ## 任务 5：文档收口
 
 **文件：**
@@ -578,7 +580,7 @@ git commit -m "feat(评测): 增加 group_memory fixture 正例"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/rag-group-memory-fixture.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 同步 RAG stable gate 说明：
 
@@ -587,7 +589,7 @@ git commit -m "feat(评测): 增加 group_memory fixture 正例"
 - 新增 `group_memory_fixture_positive_001`，固定命中 `group_memory:9201:memory`。
 - 记录 `requires_group_id=true` 与跨群 decoy forbidden check。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在路线项 8 中新增 P4-5G 验证状态：
 
@@ -597,7 +599,7 @@ git commit -m "feat(评测): 增加 group_memory fixture 正例"
 
 把下一步改为过滤约束 fixture 或真实样本运营动作。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 新增 P4-5G 完成记录：
 
@@ -606,11 +608,11 @@ git commit -m "feat(评测): 增加 group_memory fixture 正例"
 - 代码提交：`feat(评测): 增加 group_memory fixture 正例`。
 - 记录红灯、定向测试、RAG gate、PR gate、periodic gate 和全量测试结果。
 
-- [ ] **步骤 4：勾选本计划执行进度**
+- [x] **步骤 4：勾选本计划执行进度**
 
 在 `.Codex/plans/rag-group-memory-fixture.md` 中把已完成任务勾选，并记录真实验证输出。不要把未执行的后续运营动作标记完成。
 
-- [ ] **步骤 5：运行文档自检**
+- [x] **步骤 5：运行文档自检**
 
 运行：
 
@@ -622,7 +624,9 @@ git diff --check -- docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/p
 
 预期：除历史章节中描述「占位符扫描」的已有记录外，不出现新增占位内容；`git diff --check` 无输出。
 
-- [ ] **步骤 6：提交文档收口阶段**
+实际：占位符扫描无匹配，U+FFFD 扫描无匹配，`git diff --check` 无输出。
+
+- [x] **步骤 6：提交文档收口阶段**
 
 显式暂存：
 
@@ -635,3 +639,5 @@ git add docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/rag-gro
 ```bash
 git commit -m "docs(评测): 收口 group_memory fixture 状态"
 ```
+
+实际：提交 `docs(评测): 收口 group_memory fixture 状态`。
