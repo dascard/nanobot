@@ -14,6 +14,9 @@
 
 - 设计文档：`docs/superpowers/specs/2026-06-20-timing-gate-sbot-live-path-design.md`
 - 设计提交：`6463ee8 docs(时机): 设计 s_bot live path 收口`
+- 计划提交：`1795d04 docs(计划): 记录 s_bot live path 收口计划`
+- 任务 1 红灯：route 测试失败于响应仍带 `hard_rule=bot_sender_no_timing`；runtime 测试失败于 `gate_calls == []`，说明 `is_other_bot` 未参与 scoring。
+- 任务 1 绿灯：三项定向测试 `3 passed, 21 warnings in 2.16s`；相邻回归 `tests/test_api.py tests/test_timing_runtime.py tests/test_timing_score.py` 结果 `157 passed, 21 warnings in 23.30s`。
 - 当前范围：群聊 ingress 分流、runtime pending 字段、scoring 参数透传、route 级 scoring meta 断言、文档状态同步。
 - 不纳入本计划：TimingGate 阈值调参、Prompt Runtime 模板、Admin / WebUI、RAG fixture、生产 DB schema。
 
@@ -43,7 +46,7 @@
 - 修改：`app/group_ingress/service.py`
 - 修改：`.Codex/plans/timing-gate-sbot-live-path.md`
 
-- [ ] **步骤 1：编写 route 红灯测试**
+- [x] **步骤 1：编写 route 红灯测试**
 
 在 `tests/test_api.py::TestGroupMessageStructured` 中替换或调整 `test_explicit_other_bot_sender_archived_but_skips_timing`，保留当前 bot hard stop 测试，新增其他 bot 进入 runtime 的断言：
 
@@ -96,7 +99,7 @@ def test_explicit_other_bot_sender_enters_timing_with_s_bot_marker(self, client,
     assert meta["timing_gate"]["scoring"]["signals"]["sub_signals"]["s_bot"] == 0.70
 ```
 
-- [ ] **步骤 2：运行 route 红灯**
+- [x] **步骤 2：运行 route 红灯**
 
 运行：
 
@@ -106,7 +109,7 @@ python -B -m pytest tests/test_api.py::TestGroupMessageStructured::test_explicit
 
 预期：FAIL。当前代码会在 `bot_sender_no_timing` hard return，`calls` 为空或响应带 `hard_rule=bot_sender_no_timing`。
 
-- [ ] **步骤 3：编写 runtime 红灯测试**
+- [x] **步骤 3：编写 runtime 红灯测试**
 
 在 `tests/test_timing_runtime.py` 中新增测试：
 
@@ -143,17 +146,17 @@ async def test_other_bot_at_bot_uses_s_bot_scoring(monkeypatch):
     assert scoring["model_used"] is True
 ```
 
-- [ ] **步骤 4：运行 runtime 红灯**
+- [x] **步骤 4：运行 runtime 红灯**
 
 运行：
 
 ```bash
-python -B -m pytest tests/test_timing_runtime.py::test_other_bot_at_bot_uses_s_bot_scoring -v -p no:cacheprovider
+python -B -m pytest tests/test_timing_runtime.py::TestGroupRuntime::test_other_bot_at_bot_uses_s_bot_scoring -v -p no:cacheprovider
 ```
 
 预期：FAIL。当前 `GroupPendingMessage` 没有 `is_other_bot` 字段，或 scoring 中 `s_bot` 仍为 `0.0`。
 
-- [ ] **步骤 5：实现最小生产代码**
+- [x] **步骤 5：实现最小生产代码**
 
 修改 `core/group_runtime/runtime.py`：
 
@@ -172,7 +175,7 @@ python -B -m pytest tests/test_timing_runtime.py::test_other_bot_at_bot_uses_s_b
 "is_other_bot": bot_sender_kind in {"explicit_bot", "client_meta"},
 ```
 
-- [ ] **步骤 6：运行任务 1 绿灯**
+- [x] **步骤 6：运行任务 1 绿灯**
 
 运行：
 
@@ -180,13 +183,13 @@ python -B -m pytest tests/test_timing_runtime.py::test_other_bot_at_bot_uses_s_b
 python -B -m pytest \
   tests/test_api.py::TestGroupMessageStructured::test_current_bot_sender_archived_but_skips_timing \
   tests/test_api.py::TestGroupMessageStructured::test_explicit_other_bot_sender_enters_timing_with_s_bot_marker \
-  tests/test_timing_runtime.py::test_other_bot_at_bot_uses_s_bot_scoring \
+  tests/test_timing_runtime.py::TestGroupRuntime::test_other_bot_at_bot_uses_s_bot_scoring \
   -v -p no:cacheprovider
 ```
 
 预期：3 passed。
 
-- [ ] **步骤 7：运行相邻回归**
+- [x] **步骤 7：运行相邻回归**
 
 运行：
 
@@ -196,7 +199,7 @@ python -B -m pytest tests/test_api.py tests/test_timing_runtime.py tests/test_ti
 
 预期：全部通过。
 
-- [ ] **步骤 8：提交任务 1**
+- [x] **步骤 8：提交任务 1**
 
 运行：
 

@@ -2244,32 +2244,52 @@ class TestGroupMessageStructured:
         assert meta["sender"]["bot_sender_kind"] == "current_bot"
         assert meta["timing_gate"]["hard_rule"] == "bot_sender_no_timing"
 
-    def test_explicit_other_bot_sender_archived_but_skips_timing(self, client, db_session, monkeypatch):
-        class FailGroupRuntime:
-            async def process_message(self, *args, **kwargs):
-                raise AssertionError("other bot sender should not enter TimingGate")
+    def test_explicit_other_bot_sender_enters_timing_with_s_bot_marker(self, client, db_session, monkeypatch):
+        calls = []
 
-        monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FailGroupRuntime())
+        class FakeGroupRuntime:
+            async def process_message(self, *args, **kwargs):
+                calls.append((args, kwargs))
+                return {
+                    "action": "no_reply",
+                    "reason": "unit_test_other_bot_scoring",
+                    "generation": 0,
+                    "timing_scoring": {
+                        "stage": "rule_shortcut",
+                        "signals": {"sub_signals": {"s_bot": 0.70}},
+                    },
+                }
+
+            def note_bot_replied(self, *args, **kwargs):
+                raise AssertionError("no reply should be sent in this test")
+
+        monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FakeGroupRuntime())
 
         resp = client.post("/api/v1/group/message", json={
             "group_id": "123456",
             "sender_id": "alice-bot",
             "sender_name": "[BOT]Alice",
-            "message": "我正在思考如何回复你 (Agent模式)...",
+            "message": "@Nanobot 帮我确认一下",
             "self_id": "999888",
             "bot_id": "999888",
             "bot_name": "Nanobot",
             "sender_is_bot": True,
+            "is_at_bot": True,
+            "mentions": [{"user_id": "999888", "nickname": "Nanobot"}],
         })
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["action"] == "no_reply"
-        assert data["hard_rule"] == "bot_sender_no_timing"
-        assert data["reason"] == "bot_sender:explicit_bot"
+        assert data.get("hard_rule") != "bot_sender_no_timing"
+        assert calls
+        timing_message = calls[0][0][1]
+        assert timing_message["is_other_bot"] is True
+
         meta = self._meta(db_session)
         assert meta["sender"]["is_bot"] is True
         assert meta["sender"]["bot_sender_kind"] == "explicit_bot"
+        assert meta["timing_gate"]["scoring"]["signals"]["sub_signals"]["s_bot"] == 0.70
 
     def test_bot_like_name_without_explicit_marker_still_enters_timing(self, client, db_session, monkeypatch):
         calls = []

@@ -402,6 +402,38 @@ class TestGroupRuntime:
         assert r["timing_scoring"]["stage"] == "model_assisted_conflict"
 
     @pytest.mark.asyncio
+    async def test_other_bot_at_bot_uses_s_bot_scoring(self, monkeypatch):
+        """其他 bot sender 即使 @bot，也应通过 s_bot soft reject 进入 scoring。"""
+        runtime = GroupRuntime()
+        gate_calls = []
+
+        async def fake_gate(group_id, pending, _ctx, trigger_reason):
+            gate_calls.append((group_id, pending[0].is_other_bot, trigger_reason))
+            return {
+                "action": "continue",
+                "reason": "other bot explicitly asked",
+                "parse_quality": "json",
+                "model_confidence": 0.8,
+            }
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        result = await runtime.process_message("g1", {
+            "sender_id": "bot-a",
+            "sender_name": "BotA",
+            "message": "@bot 请确认",
+            "is_at_bot": True,
+            "is_other_bot": True,
+        }, trigger_reason="at_bot")
+
+        assert gate_calls == [("group_g1", True, "at_bot")]
+        scoring = result["timing_scoring"]
+        assert scoring["signals"]["sub_signals"]["s_bot"] == 0.70
+        assert scoring["soft_reject_cap"] == 0.44
+        assert scoring["stage"] == "model_assisted_conflict"
+        assert scoring["model_used"] is True
+
+    @pytest.mark.asyncio
     async def test_legacy_cooldown_scoring_reports_cooldown(self, monkeypatch):
         """legacy 空 trigger 的 cooldown scoring 返回也带正确 cooldown_ago。"""
         runtime = GroupRuntime()

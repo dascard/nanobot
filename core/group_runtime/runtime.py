@@ -82,6 +82,7 @@ class GroupPendingMessage:
     reply_to: dict | None = None
     directed: dict | None = None
     is_directed_to_other: bool = False
+    is_other_bot: bool = False
     self_id: str = ""
     bot_id: str = ""
     bot_name: str = ""
@@ -107,6 +108,7 @@ class GroupPendingMessage:
             "segments": self.segments or [], "mentions": self.mentions or [],
             "reply_to": self.reply_to, "directed": self.directed or {},
             "is_directed_to_other": self.is_directed_to_other,
+            "is_other_bot": self.is_other_bot,
             "self_id": self.self_id, "bot_id": self.bot_id,
             "bot_name": self.bot_name,
         }
@@ -524,6 +526,7 @@ class GroupRuntime:
             bot_name_mentioned=tr in {"bot_name_mentioned", "mentioned"},
             direct_call=tr == "direct_call" or is_direct,
             is_directed_to_other=_has_directed_to_other_signal(msgs),
+            is_other_bot=any(m.is_other_bot for m in msgs),
             has_files=_has_file_segments(msgs),
             linger_score=linger_score,
             force_direct_score=force_direct_score,
@@ -699,6 +702,7 @@ class GroupRuntime:
             reply_to=msg.get("reply_to") if isinstance(msg.get("reply_to"), dict) else None,
             directed=msg.get("directed") if isinstance(msg.get("directed"), dict) else None,
             is_directed_to_other=bool(msg.get("is_directed_to_other", False)),
+            is_other_bot=bool(msg.get("is_other_bot", False)),
             self_id=str(msg.get("self_id", "")),
             bot_id=str(msg.get("bot_id", "")),
             bot_name=str(msg.get("bot_name", "")),

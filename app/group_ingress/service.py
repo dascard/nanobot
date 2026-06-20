@@ -155,7 +155,7 @@ class GroupIngressService:
         logger.info("[GroupMsg] ambient_saved group=%s message_id=%s", group_user_id, req.message_id or "-")
 
         bot_sender_kind = str(meta.get("sender", {}).get("bot_sender_kind") or "")
-        if bot_sender_kind:
+        if bot_sender_kind == "current_bot":
             result = {
                 "action": "no_reply",
                 "reason": f"bot_sender:{bot_sender_kind}",
@@ -246,6 +246,7 @@ class GroupIngressService:
                 "self_id": ambient_meta.get("bot", {}).get("self_id", ""),
                 "bot_id": ambient_meta.get("bot", {}).get("bot_id", ""),
                 "bot_name": ambient_meta.get("bot", {}).get("bot_name", ""),
+                "is_other_bot": bot_sender_kind in {"explicit_bot", "client_meta"},
             }
             talk_value = h.get_group_talk_value(group_user_id)
             client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
