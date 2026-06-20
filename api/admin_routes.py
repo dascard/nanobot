@@ -5278,6 +5278,7 @@ from core.eval_sampling.store import (
     list_candidates, get_candidate, update_candidate,
     label_candidate, ignore_candidate, plan_candidate_promotion, promote_candidate,
     candidate_queue_summary, preflight_candidate_promotions,
+    plan_candidate_batch_audit, record_candidate_batch_audit,
     reject_candidate, defer_candidate, reopen_candidate,
     save_run, save_run_results, get_runs, get_run,
 )
@@ -5332,6 +5333,60 @@ def eval_preflight_candidates(
             source=body.source,
             target_dataset=body.target_dataset,
             limit=body.limit,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class CandidateBatchAuditDecision(BaseModel):
+    case_id: str
+    decision: str = "noop"
+    reason_code: str = ""
+    note: str = ""
+    defer_until: str = ""
+    expected_status: str = ""
+    expected_updated_at: str = ""
+
+
+class CandidateBatchAuditRequest(BaseModel):
+    dry_run: bool = True
+    case_ids: list[str] = Field(default_factory=list)
+    suite: str = ""
+    status: str = ""
+    source: str = ""
+    target_dataset: str = ""
+    limit: int = 200
+    batch_note: str = ""
+    decisions: list[CandidateBatchAuditDecision] = Field(default_factory=list)
+
+
+@router.post("/evals/candidates/batch-audit")
+def eval_candidate_batch_audit(
+    body: CandidateBatchAuditRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    try:
+        plan = plan_candidate_batch_audit(
+            db,
+            case_ids=body.case_ids,
+            suite=body.suite,
+            status=body.status,
+            source=body.source,
+            target_dataset=body.target_dataset,
+            limit=body.limit,
+            batch_note=body.batch_note,
+            decisions=[decision.model_dump() for decision in body.decisions],
+        )
+        if body.dry_run:
+            return plan
+        if not plan.get("ok"):
+            raise ValueError("candidate batch audit has item errors")
+        return record_candidate_batch_audit(
+            db,
+            plan,
+            ip_address=_client_ip(request),
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

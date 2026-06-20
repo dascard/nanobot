@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core.database import EvalCandidate, EvalRun, EvalRunResult
+from core.database import AdminAuditLog, EvalCandidate, EvalRun, EvalRunResult
 from evals.expected_contract import validate_expected_contract
 
 
@@ -94,6 +94,24 @@ REOPEN_REASON_CODES = frozenset({
     "needs_relabel",
 })
 
+BATCH_AUDIT_DECISIONS = frozenset({
+    "noop",
+    "needs_label",
+    "promote_ready",
+    "reject",
+    "defer",
+    "reopen",
+})
+
+BATCH_AUDIT_DECISION_REASON_CODES = {
+    "noop": frozenset({"unspecified"}),
+    "needs_label": frozenset({"unspecified"}),
+    "promote_ready": frozenset({"unspecified"}),
+    "reject": REJECT_REASON_CODES,
+    "defer": DEFER_REASON_CODES,
+    "reopen": REOPEN_REASON_CODES,
+}
+
 
 def _readiness_reason(code: str, message: str, **extra: Any) -> dict[str, Any]:
     reason: dict[str, Any] = {"code": code, "message": message}
@@ -114,6 +132,101 @@ def _normalize_note(value: str | None) -> str:
 
 def _normalize_defer_until(value: str | None) -> str:
     return str(value or "").strip()[:64]
+
+
+def _normalize_batch_note(value: str | None) -> str:
+    return str(value or "").strip()[:1000]
+
+
+def _validate_batch_audit_scope(
+    *,
+    case_ids: list[str] | None,
+    suite: str,
+    status: str,
+    source: str,
+    limit: int,
+) -> tuple[list[str], int]:
+    ids = [str(case_id).strip() for case_id in (case_ids or []) if str(case_id).strip()]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate case_ids are not allowed")
+    if len(ids) > 500:
+        raise ValueError("case_ids limit exceeded")
+    if not ids and not (suite or status or source):
+        raise ValueError("case_ids or at least one filter is required")
+    capped_limit = max(1, min(int(limit or 200), 500))
+    return ids, capped_limit
+
+
+def _normalize_batch_audit_decision(raw: dict[str, Any]) -> dict[str, Any]:
+    case_id = str(raw.get("case_id") or "").strip()
+    if not case_id:
+        raise ValueError("decision case_id is required")
+    decision = str(raw.get("decision") or "noop").strip() or "noop"
+    if decision not in BATCH_AUDIT_DECISIONS:
+        raise ValueError(f"invalid batch audit decision: {decision}")
+    reason_code = _normalize_reason_code(
+        raw.get("reason_code"),
+        BATCH_AUDIT_DECISION_REASON_CODES[decision],
+    )
+    note = _normalize_note(raw.get("note"))
+    defer_until = _normalize_defer_until(raw.get("defer_until"))
+    if decision != "defer" and defer_until:
+        raise ValueError("defer_until is only allowed for defer decision")
+    return {
+        "case_id": case_id,
+        "decision": decision,
+        "reason_code": reason_code,
+        "note": note,
+        "defer_until": defer_until,
+        "expected_status": str(raw.get("expected_status") or "").strip(),
+        "expected_updated_at": str(raw.get("expected_updated_at") or "").strip(),
+    }
+
+
+def _batch_audit_decision_by_case_id(
+    decisions: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    by_case_id: dict[str, dict[str, Any]] = {}
+    for raw in decisions or []:
+        normalized = _normalize_batch_audit_decision(raw)
+        case_id = normalized["case_id"]
+        if case_id in by_case_id:
+            raise ValueError(f"duplicate decision for case_id: {case_id}")
+        by_case_id[case_id] = normalized
+    return by_case_id
+
+
+def _count_values(values: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = value or "unknown"
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _candidate_batch_id(
+    *,
+    case_ids: list[str],
+    suite: str,
+    status: str,
+    source: str,
+    target_dataset: str,
+) -> str:
+    now = datetime.now()
+    raw = json.dumps(
+        {
+            "case_ids": case_ids,
+            "suite": suite,
+            "status": status,
+            "source": source,
+            "target_dataset": target_dataset,
+            "created_at": now.isoformat(timespec="seconds"),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    suffix = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return f"batch_{now:%Y%m%d}_{suffix}"
 
 
 def _triage_payload(
@@ -358,6 +471,211 @@ def preflight_candidate_promotions(
         "target_dataset": target_dataset,
         "items": items,
     }
+
+
+def plan_candidate_batch_audit(
+    db,
+    *,
+    case_ids: list[str] | None = None,
+    suite: str = "",
+    status: str = "",
+    source: str = "",
+    target_dataset: str = "",
+    limit: int = 200,
+    batch_note: str = "",
+    decisions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """生成人工仲裁批次审计快照，不写 DB。"""
+    ordered_ids, capped_limit = _validate_batch_audit_scope(
+        case_ids=case_ids,
+        suite=suite,
+        status=status,
+        source=source,
+        limit=limit,
+    )
+    decision_by_id = _batch_audit_decision_by_case_id(decisions)
+
+    rows_by_id: dict[str, EvalCandidate] = {}
+    if ordered_ids:
+        rows = (
+            db.query(EvalCandidate)
+            .filter(EvalCandidate.case_id.in_(ordered_ids))
+            .all()
+        )
+        rows_by_id = {row.case_id: row for row in rows}
+    else:
+        rows = (
+            _candidate_query(db, suite=suite, status=status, source=source)
+            .order_by(EvalCandidate.priority.desc(), EvalCandidate.id.desc())
+            .limit(capped_limit)
+            .all()
+        )
+        ordered_ids = [row.case_id for row in rows]
+        rows_by_id = {row.case_id: row for row in rows}
+
+    unknown_decision_ids = sorted(set(decision_by_id) - set(ordered_ids))
+    if unknown_decision_ids:
+        raise ValueError(f"decision case_id not in batch: {unknown_decision_ids[0]}")
+
+    batch_id = _candidate_batch_id(
+        case_ids=ordered_ids,
+        suite=suite,
+        status=status,
+        source=source,
+        target_dataset=target_dataset,
+    )
+    normalized_batch_note = _normalize_batch_note(batch_note)
+    filters = {
+        "case_ids": ordered_ids,
+        "suite": suite,
+        "status": status,
+        "source": source,
+        "target_dataset": target_dataset,
+        "limit": capped_limit,
+    }
+
+    items: list[dict[str, Any]] = []
+    ready_count = 0
+    blocked_count = 0
+    statuses: list[str] = []
+    suites: list[str] = []
+    sources: list[str] = []
+    decisions_seen: list[str] = []
+    reason_codes: list[str] = []
+    blocking_reasons: list[str] = []
+
+    for case_id in ordered_ids:
+        row = rows_by_id.get(case_id)
+        decision = decision_by_id.get(case_id) or {
+            "case_id": case_id,
+            "decision": "noop",
+            "reason_code": "unspecified",
+            "note": "",
+            "defer_until": "",
+            "expected_status": "",
+            "expected_updated_at": "",
+        }
+        readiness = candidate_readiness(
+            row,
+            target_dataset=target_dataset or (row.suite if row else "regression"),
+        )
+        if readiness["ready"]:
+            ready_count += 1
+        else:
+            blocked_count += 1
+
+        errors: list[dict[str, Any]] = []
+        before_status = row.status if row else ""
+        updated_at = str(row.updated_at) if row and row.updated_at else ""
+        if row is None:
+            errors.append(_readiness_reason("candidate_not_found", "candidate not found"))
+        if row is not None and decision["expected_status"] and decision["expected_status"] != row.status:
+            errors.append(
+                _readiness_reason(
+                    "expected_status_mismatch",
+                    "candidate status changed",
+                    expected_status=decision["expected_status"],
+                    actual_status=row.status,
+                )
+            )
+        if (
+            row is not None
+            and decision["expected_updated_at"]
+            and decision["expected_updated_at"] != updated_at
+        ):
+            errors.append(
+                _readiness_reason(
+                    "expected_updated_at_mismatch",
+                    "candidate updated_at changed",
+                    expected_updated_at=decision["expected_updated_at"],
+                    actual_updated_at=updated_at,
+                )
+            )
+        if decision["decision"] == "promote_ready" and not readiness["ready"]:
+            errors.append(
+                _readiness_reason(
+                    "promote_not_ready",
+                    "candidate is not ready for promotion",
+                )
+            )
+
+        for reason in readiness.get("blocking_reasons", []):
+            blocking_reasons.append(str(reason.get("code") or "unknown"))
+
+        status_value = before_status or "missing"
+        suite_value = row.suite if row else ""
+        source_value = row.source if row else ""
+        statuses.append(status_value)
+        if suite_value:
+            suites.append(suite_value)
+        if source_value:
+            sources.append(source_value)
+        decisions_seen.append(decision["decision"])
+        reason_codes.append(decision["reason_code"])
+        items.append({
+            "case_id": case_id,
+            "exists": row is not None,
+            "suite": suite_value,
+            "source": source_value,
+            "source_ref": row.source_ref if row else "",
+            "before_status": before_status,
+            "priority": row.priority if row else 0,
+            "decision": decision["decision"],
+            "reason_code": decision["reason_code"],
+            "note": decision["note"],
+            "defer_until": decision["defer_until"],
+            "target_dataset": readiness["target_dataset"],
+            "readiness": readiness,
+            "errors": errors,
+        })
+
+    counts = {
+        "by_status": _count_values(statuses),
+        "by_suite": _count_values(suites),
+        "by_source": _count_values(sources),
+        "by_decision": _count_values(decisions_seen),
+        "by_reason_code": _count_values(reason_codes),
+        "by_blocking_reason": _count_values(blocking_reasons),
+    }
+    ok = all(not item["errors"] for item in items)
+    return {
+        "ok": ok,
+        "dry_run": True,
+        "batch_id": batch_id,
+        "audit_log_id": None,
+        "filters": filters,
+        "batch_note": normalized_batch_note,
+        "total": len(items),
+        "ready": ready_count,
+        "blocked": blocked_count,
+        "counts": counts,
+        "items": items,
+    }
+
+
+def record_candidate_batch_audit(db, plan: dict[str, Any], *, ip_address: str = "") -> dict[str, Any]:
+    """写入一条批次审计日志，不修改候选状态。"""
+    if not plan.get("ok"):
+        raise ValueError("cannot record invalid candidate batch audit")
+    detail = {
+        key: value
+        for key, value in plan.items()
+        if key not in {"dry_run", "audit_log_id"}
+    }
+    row = AdminAuditLog(
+        action="audit_eval_candidate_batch",
+        target_type="eval_candidate_batch",
+        target_id=str(plan.get("batch_id") or ""),
+        detail_json=json.dumps(detail, ensure_ascii=False),
+        ip_address=(ip_address or "")[:45],
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    result = dict(plan)
+    result["dry_run"] = False
+    result["audit_log_id"] = row.id
+    return result
 
 
 def get_candidate(db, case_id: str) -> EvalCandidate | None:

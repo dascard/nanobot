@@ -548,6 +548,156 @@ def test_eval_candidate_triage_endpoints_write_audit_detail(
     assert reopened.json()["status"] == "candidate"
 
 
+def test_candidate_batch_audit_dry_run_is_read_only(client, db_session, monkeypatch):
+    from core.database import AdminAuditLog
+    from core.eval_sampling.store import get_candidate, label_candidate
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    _insert_candidate(db_session, case_id="cand_batch_ready")
+    label_candidate(db_session, "cand_batch_ready", {"timing_action": "continue"})
+    _insert_candidate(db_session, case_id="cand_batch_error", suite="error")
+    label_candidate(db_session, "cand_batch_error", {"timing_action": "continue"})
+
+    response = client.post(
+        "/api/v1/admin/evals/candidates/batch-audit",
+        headers=_auth_header(),
+        json={
+            "dry_run": True,
+            "case_ids": ["cand_batch_ready", "cand_batch_error"],
+            "target_dataset": "timing_gate",
+            "batch_note": "人工复核",
+            "decisions": [
+                {"case_id": "cand_batch_ready", "decision": "promote_ready"},
+                {
+                    "case_id": "cand_batch_error",
+                    "decision": "defer",
+                    "reason_code": "needs_batch_review",
+                    "defer_until": "2026-06-30",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["dry_run"] is True
+    assert payload["audit_log_id"] is None
+    assert payload["total"] == 2
+    assert payload["ready"] == 1
+    assert payload["blocked"] == 1
+    assert payload["counts"]["by_decision"]["promote_ready"] == 1
+    assert payload["counts"]["by_decision"]["defer"] == 1
+    assert payload["counts"]["by_blocking_reason"]["suite_not_runnable"] == 1
+    assert db_session.query(AdminAuditLog).count() == 0
+    assert get_candidate(db_session, "cand_batch_ready").status == "labeled"
+    assert get_candidate(db_session, "cand_batch_error").status == "labeled"
+
+
+def test_candidate_batch_audit_apply_writes_single_audit_log(client, db_session, monkeypatch):
+    from core.database import AdminAuditLog
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    _insert_candidate(db_session, case_id="cand_batch_audit_1")
+    _insert_candidate(db_session, case_id="cand_batch_audit_2")
+
+    response = client.post(
+        "/api/v1/admin/evals/candidates/batch-audit",
+        headers=_auth_header(),
+        json={
+            "dry_run": False,
+            "case_ids": ["cand_batch_audit_1", "cand_batch_audit_2"],
+            "target_dataset": "timing_gate",
+            "batch_note": "写入审计",
+            "decisions": [
+                {"case_id": "cand_batch_audit_1", "decision": "needs_label"},
+                {
+                    "case_id": "cand_batch_audit_2",
+                    "decision": "reject",
+                    "reason_code": "low_value",
+                    "note": "价值较低",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["dry_run"] is False
+    assert payload["audit_log_id"]
+
+    audit = db_session.query(AdminAuditLog).filter_by(action="audit_eval_candidate_batch").one()
+    assert audit.target_type == "eval_candidate_batch"
+    assert audit.target_id == payload["batch_id"]
+    detail = json.loads(audit.detail_json)
+    assert detail["batch_id"] == payload["batch_id"]
+    assert detail["batch_note"] == "写入审计"
+    assert detail["counts"]["by_decision"]["needs_label"] == 1
+    assert detail["counts"]["by_reason_code"]["low_value"] == 1
+    assert [item["case_id"] for item in detail["items"]] == [
+        "cand_batch_audit_1",
+        "cand_batch_audit_2",
+    ]
+
+
+def test_candidate_batch_audit_rejects_invalid_scope_decision_and_stale_status(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import AdminAuditLog
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    _insert_candidate(db_session, case_id="cand_batch_invalid")
+
+    cases = [
+        {"dry_run": True},
+        {"dry_run": True, "case_ids": ["cand_batch_invalid", "cand_batch_invalid"]},
+        {
+            "dry_run": True,
+            "case_ids": ["cand_batch_invalid"],
+            "decisions": [{"case_id": "cand_batch_invalid", "decision": "unknown"}],
+        },
+        {
+            "dry_run": True,
+            "case_ids": ["cand_batch_invalid"],
+            "decisions": [
+                {
+                    "case_id": "cand_batch_invalid",
+                    "decision": "reject",
+                    "reason_code": "needs_batch_review",
+                }
+            ],
+        },
+        {
+            "dry_run": False,
+            "case_ids": ["missing_case"],
+        },
+        {
+            "dry_run": False,
+            "case_ids": ["cand_batch_invalid"],
+            "decisions": [
+                {
+                    "case_id": "cand_batch_invalid",
+                    "decision": "noop",
+                    "expected_status": "labeled",
+                }
+            ],
+        },
+    ]
+
+    for body in cases:
+        response = client.post(
+            "/api/v1/admin/evals/candidates/batch-audit",
+            headers=_auth_header(),
+            json=body,
+        )
+        assert response.status_code == 400, response.text
+
+    assert db_session.query(AdminAuditLog).count() == 0
+
+
 def test_promote_candidate_dry_run_does_not_write_or_change_status(
     db_session,
     tmp_path,
