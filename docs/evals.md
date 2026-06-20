@@ -62,8 +62,24 @@ bash scripts/run_eval_periodic.sh
 Artifact 名称为 `eval-reports-${{ github.run_id }}`，保留 14 天，包含：
 
 - `evals/reports/*.json`
+- `evals/reports/periodic_manifest_*.json`
+- `evals/reports/runs/**/manifest.json`
 - `tmp/rag_benchmark/reports/*.json`
 - `tmp/rag_benchmark/reports/*.md`
+
+周期性入口会在结束前写出统一运行清单（manifest）：
+
+- `evals/reports/periodic_manifest_latest.json`
+- `evals/reports/YYYY-MM-DD-periodic_manifest.json`
+- `evals/reports/runs/<run_id>/manifest.json`
+
+manifest 记录一次周期运行的 `run_id`、触发来源、开始 / 结束时间、最终退出码、GitHub 环境信息和每个步骤的状态。`steps[]` 会索引通用 eval suite、RAG benchmark 和 TimingGate signal audit 的报告路径，并提取摘要指标：
+
+- 通用 eval suite：`total`、`passed`、`failed`、`pass_rate`、`gate_passed`、`new_failed_cases`。
+- RAG benchmark：`total_cases`、`pass_rate`、`hit@5`、`mrr`、`positive_cases`、`gate_passed`。
+- TimingGate signal audit：`total_samples`、`labeled_samples`、`action_mismatch_count`、`action_mismatch_rate`，缺库 skipped 时会记录 `notes.reason=db_not_found`。
+
+排查周期性失败时，优先打开 `periodic_manifest_latest.json` 或对应 `runs/<run_id>/manifest.json`。manifest 只负责索引和摘要，不代表调参结论；是否调整 TimingGate、RAG 或 capability gate 阈值必须另起只读分析和人工确认。
 
 周期性入口还会运行 TimingGate signal audit：
 

@@ -456,6 +456,14 @@ def test_eval_workflow_uploads_report_artifacts():
     assert "if-no-files-found: warn" in text
 
 
+def test_eval_workflow_uploads_periodic_manifest():
+    workflow = Path(".github/workflows/timing-gate-eval.yml")
+
+    text = workflow.read_text(encoding="utf-8")
+    assert "evals/reports/periodic_manifest_*.json" in text
+    assert "evals/reports/runs/**/manifest.json" in text
+
+
 def test_eval_workflow_artifact_retention_is_bounded():
     workflow = Path(".github/workflows/timing-gate-eval.yml")
 

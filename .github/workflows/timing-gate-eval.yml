@@ -50,5 +50,7 @@ jobs:
           retention-days: 14
           path: |
             evals/reports/*.json
+            evals/reports/periodic_manifest_*.json
+            evals/reports/runs/**/manifest.json
             tmp/rag_benchmark/reports/*.json
             tmp/rag_benchmark/reports/*.md

@@ -1,6 +1,6 @@
 # 周期运行 Manifest 实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
 **目标：** 为周期评测复跑生成统一 manifest，记录一次运行的步骤状态、报告路径和摘要指标。
 
@@ -44,7 +44,7 @@
 - 创建：`evals/periodic_manifest.py`
 - 修改：`tests/test_eval_baseline.py`
 
-- [ ] **步骤 1：编写失败的 helper 测试**
+- [x] **步骤 1：编写失败的 helper 测试**
 
 在 `tests/test_eval_baseline.py` 中新增：
 
@@ -164,7 +164,7 @@ def test_periodic_manifest_builds_step_summaries(tmp_path):
     assert manifest["steps"][2]["notes"]["reason"] == "db_not_found"
 ```
 
-- [ ] **步骤 2：运行 helper 红灯测试**
+- [x] **步骤 2：运行 helper 红灯测试**
 
 运行：
 
@@ -174,7 +174,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_periodic_manifest_builds_s
 
 预期：失败，错误为 `ModuleNotFoundError: No module named 'evals.periodic_manifest'`。
 
-- [ ] **步骤 3：实现 helper 最小代码**
+- [x] **步骤 3：实现 helper 最小代码**
 
 创建 `evals/periodic_manifest.py`，提供这些公开函数：
 
@@ -201,7 +201,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_periodic_manifest_builds_s
 - `timing_signal_audit`：读取 `total_samples`、`labeled_samples`、`shadow.action_mismatch_count`、`shadow.action_mismatch_rate`、`source.reason`。
 - 报告缺失时保留 step，写入 `report_missing: true` 和空 summary。
 
-- [ ] **步骤 4：运行 helper 绿灯测试**
+- [x] **步骤 4：运行 helper 绿灯测试**
 
 运行：
 
@@ -211,7 +211,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_periodic_manifest_builds_s
 
 预期：`1 passed`。
 
-- [ ] **步骤 5：提交任务 1**
+- [x] **步骤 5：提交任务 1**
 
 运行：
 
@@ -228,7 +228,7 @@ git commit -m "feat(评测): 构建周期运行清单"
 - 修改：`tests/test_eval_baseline.py`
 - 修改：`tests/test_timing_signal_audit_periodic.py`
 
-- [ ] **步骤 1：编写失败的脚本契约测试**
+- [x] **步骤 1：编写失败的脚本契约测试**
 
 在 `tests/test_eval_baseline.py` 中新增：
 
@@ -256,7 +256,7 @@ def test_periodic_script_indexes_timing_signal_audit_report():
     assert "evals/reports/timing_signal_audit_latest.json" in text
 ```
 
-- [ ] **步骤 2：运行脚本红灯测试**
+- [x] **步骤 2：运行脚本红灯测试**
 
 运行：
 
@@ -270,7 +270,7 @@ python -B -m pytest \
 
 预期：至少第一条失败，原因是周期脚本尚未写 manifest。
 
-- [ ] **步骤 3：改造周期脚本**
+- [x] **步骤 3：改造周期脚本**
 
 在 `scripts/run_eval_periodic.sh` 中：
 
@@ -292,7 +292,7 @@ python -B -m evals.periodic_manifest \
   --reports-dir evals/reports
 ```
 
-- [ ] **步骤 4：运行脚本绿灯测试**
+- [x] **步骤 4：运行脚本绿灯测试**
 
 运行：
 
@@ -306,7 +306,7 @@ python -B -m pytest \
 
 预期：`2 passed`。
 
-- [ ] **步骤 5：运行周期脚本验证 manifest**
+- [x] **步骤 5：运行周期脚本验证 manifest**
 
 运行：
 
@@ -327,7 +327,7 @@ PY
 
 预期：周期脚本退出码 0，manifest 断言通过。
 
-- [ ] **步骤 6：提交任务 2**
+- [x] **步骤 6：提交任务 2**
 
 运行：
 
@@ -347,7 +347,7 @@ git commit -m "ci(评测): 输出周期运行清单"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/eval-periodic-manifest.md`
 
-- [ ] **步骤 1：编写 workflow artifact 红灯测试**
+- [x] **步骤 1：编写 workflow artifact 红灯测试**
 
 在 `tests/test_eval_baseline.py` 中新增：
 
@@ -360,7 +360,7 @@ def test_eval_workflow_uploads_periodic_manifest():
     assert "evals/reports/runs/**/manifest.json" in text
 ```
 
-- [ ] **步骤 2：运行 workflow 红灯测试**
+- [x] **步骤 2：运行 workflow 红灯测试**
 
 运行：
 
@@ -370,7 +370,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_workflow_uploads_peri
 
 预期：失败，原因是 workflow 尚未上传 manifest glob。
 
-- [ ] **步骤 3：修改 workflow**
+- [x] **步骤 3：修改 workflow**
 
 在 `.github/workflows/timing-gate-eval.yml` 的 artifact `path` 中追加：
 
@@ -379,7 +379,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_workflow_uploads_peri
             evals/reports/runs/**/manifest.json
 ```
 
-- [ ] **步骤 4：运行 workflow 绿灯测试**
+- [x] **步骤 4：运行 workflow 绿灯测试**
 
 运行：
 
@@ -389,7 +389,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_workflow_uploads_peri
 
 预期：`1 passed`。
 
-- [ ] **步骤 5：更新文档**
+- [x] **步骤 5：更新文档**
 
 更新：
 
@@ -402,7 +402,7 @@ python -B -m pytest tests/test_eval_baseline.py::test_eval_workflow_uploads_peri
 - `.Codex/plans/eval-periodic-manifest.md`
   - 勾选已完成项并写入实际验证记录。
 
-- [ ] **步骤 6：运行最终验证**
+- [x] **步骤 6：运行最终验证**
 
 运行：
 
@@ -414,7 +414,7 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 
 预期：全部退出码为 0。
 
-- [ ] **步骤 7：提交任务 3**
+- [x] **步骤 7：提交任务 3**
 
 运行：
 
@@ -422,3 +422,21 @@ python -B -m pytest tests/ -q -p no:cacheprovider
 git add .github/workflows/timing-gate-eval.yml tests/test_eval_baseline.py docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/eval-periodic-manifest.md
 git commit -m "docs(计划): 收口周期运行清单"
 ```
+
+## 验证记录
+
+- 设计与计划提交：`7e17125 docs(评测): 设计周期运行清单`。
+- 任务 1 红灯：`python -B -m pytest tests/test_eval_baseline.py::test_periodic_manifest_builds_step_summaries -q -p no:cacheprovider`，结果 `1 failed, 1 warning in 5.88s`，失败点为 `ModuleNotFoundError: No module named 'evals.periodic_manifest'`。
+- 任务 1 绿灯：同一命令，结果 `1 passed, 1 warning in 0.83s`。
+- 任务 1 相邻回归：`python -B -m pytest tests/test_eval_baseline.py -q -p no:cacheprovider`，结果 `20 passed, 1 warning in 1.23s`。
+- 任务 1 提交：`a4660c1 feat(评测): 构建周期运行清单`。
+- 任务 2 红灯：`python -B -m pytest tests/test_eval_baseline.py::test_eval_periodic_script_writes_manifest tests/test_timing_signal_audit_periodic.py::test_periodic_script_indexes_timing_signal_audit_report -q -p no:cacheprovider`，结果 `2 failed, 1 warning in 5.92s`，失败点为周期脚本缺少 `PERIODIC_RUN_ID`、`record_step` 和 `evals/reports/timing_signal_audit_latest.json`。
+- 任务 2 绿灯：同一命令，结果 `2 passed, 1 warning in 0.81s`。
+- 任务 2 周期脚本验证：`bash scripts/run_eval_periodic.sh` 退出码 0，内部 eval guard `29 passed, 1 warning in 1.84s`，所有 gate passed，manifest 断言输出 `20260620_204359_local passed 7`。
+- 任务 2 相邻回归：`python -B -m pytest tests/test_eval_baseline.py tests/test_timing_signal_audit_periodic.py -q -p no:cacheprovider`，结果 `24 passed, 1 warning in 1.71s`。
+- 任务 2 提交：`f459acc ci(评测): 输出周期运行清单`。
+- 任务 3 红灯：`python -B -m pytest tests/test_eval_baseline.py::test_eval_workflow_uploads_periodic_manifest -q -p no:cacheprovider`，结果 `1 failed, 1 warning in 5.98s`，失败点为 workflow 缺少 `evals/reports/periodic_manifest_*.json`。
+- 任务 3 绿灯：同一命令，结果 `1 passed, 1 warning in 0.77s`。
+- 最终定向回归：`python -B -m pytest tests/test_eval_baseline.py tests/test_timing_signal_audit_periodic.py -q -p no:cacheprovider`，结果 `25 passed, 1 warning in 2.21s`。
+- 最终周期脚本：`bash scripts/run_eval_periodic.sh` 退出码 0，内部 eval guard `30 passed, 1 warning in 1.86s`，所有 gate passed，并写出 `periodic_manifest=evals/reports/periodic_manifest_latest.json`。
+- 全量回归：`python -B -m pytest tests/ -q -p no:cacheprovider`，结果 `1412 passed, 6 skipped, 139 warnings in 109.97s`。
