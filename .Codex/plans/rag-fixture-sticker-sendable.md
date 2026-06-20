@@ -69,7 +69,7 @@ P4-5F 只验证 sticker sendable 正例。group_memory source 覆盖保留为后
 - 修改：`tests/test_rag_benchmark.py`
 - 修改：`.Codex/plans/rag-fixture-sticker-sendable.md`
 
-- [ ] **步骤 1：新增 sticker fixture 红灯测试**
+- [x] **步骤 1：新增 sticker fixture 红灯测试**
 
 在 `tests/test_rag_benchmark.py` 中新增测试，放在现有 `test_rag_benchmark_fixture_db_supports_knowledge_positive_case` 后面：
 
@@ -112,7 +112,7 @@ def test_rag_benchmark_fixture_db_supports_sticker_positive_case(tmp_path):
     assert sticker_score.checks["sendable"] is True
 ```
 
-- [ ] **步骤 2：运行 sticker fixture 红灯**
+- [x] **步骤 2：运行 sticker fixture 红灯**
 
 运行：
 
@@ -123,7 +123,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_fixture_db_s
 
 预期：FAIL，失败原因包含 `ImportError`，因为 `STICKER_CASE_ID` 或 `STICKER_CANDIDATE_ID` 尚未定义。
 
-- [ ] **步骤 3：补 sendable scoring 守卫测试**
+实际：FAIL，`ImportError: cannot import name 'STICKER_CANDIDATE_ID' from 'evals.rag_benchmark.fixtures'`，符合红灯预期。
+
+- [x] **步骤 3：补 sendable scoring 守卫测试**
 
 在 `tests/test_rag_benchmark.py` 的 scoring 测试区域新增：
 
@@ -164,7 +166,7 @@ def test_scorer_fails_requires_sendable_when_candidate_lacks_sendable():
     assert "sendable check failed" in score.errors
 ```
 
-- [ ] **步骤 4：运行 sendable 守卫测试**
+- [x] **步骤 4：运行 sendable 守卫测试**
 
 运行：
 
@@ -175,7 +177,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_scorer_fails_requires_send
 
 预期：PASS。该测试固定已有评分边界；若失败，先修 `evals/rag_benchmark/scoring.py` 的 `requires_sendable` 检查。
 
-- [ ] **步骤 5：更新 CLI fixture gate 测试红灯**
+实际：PASS，`1 passed, 1 warning in 0.84s`。
+
+- [x] **步骤 5：更新 CLI fixture gate 测试红灯**
 
 在 `test_rag_benchmark_cli_runs_manual_fixture_positive_gate` 中，把临时 baseline 的 `overall.total_cases` 改为 `4`、`overall.positive_cases` 改为 `3`，并在 `case_scores` 中新增 sticker fixture：
 
@@ -205,7 +209,7 @@ assert scores["sticker_fixture_positive_001"]["ok"] is True
 assert scores["sticker_fixture_positive_001"]["checks"]["sendable"] is True
 ```
 
-- [ ] **步骤 6：运行 CLI fixture gate 红灯**
+- [x] **步骤 6：运行 CLI fixture gate 红灯**
 
 运行：
 
@@ -216,7 +220,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_runs_man
 
 预期：FAIL，失败原因是当前 fixture preset 只有 2 个 positive case，report 中没有 `sticker_fixture_positive_001`，或 `overall.positive_cases` 仍为 `2`。
 
-- [ ] **步骤 7：更新 baseline 合同红灯**
+实际：FAIL，断言失败于 `assert 2 == 3`，当前 report 的 `metrics.overall.positive_cases` 仍为 2，符合红灯预期。
+
+- [x] **步骤 7：更新 baseline 合同红灯**
 
 在 `test_rag_benchmark_baseline_file_matches_manual_gate_contract` 末尾增加：
 
@@ -234,7 +240,7 @@ assert baseline["metrics"]["source:sticker"]["positive_cases"] == 1
 assert baseline["metrics"]["overall"]["positive_cases"] == 3
 ```
 
-- [ ] **步骤 8：运行 baseline 合同红灯**
+- [x] **步骤 8：运行 baseline 合同红灯**
 
 运行：
 
@@ -245,7 +251,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：FAIL，失败原因是 baseline 还没有 `sticker_fixture_positive_001`。
 
-- [ ] **步骤 9：记录红灯结果并延后提交**
+实际：FAIL，断言失败于 `assert 2 == 3`，当前 baseline 的 `metrics.overall.positive_cases` 仍为 2，符合红灯预期。
+
+- [x] **步骤 9：记录红灯结果并延后提交**
 
 任务 1 的红灯测试会让仓库处于 failing 状态。本阶段不单独提交红灯测试；测试变更将与任务 2 的最小实现一起提交，保证提交点为绿色状态。
 
@@ -255,7 +263,7 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 - 修改：`evals/rag_benchmark/fixtures.py`
 - 修改：`.Codex/plans/rag-fixture-sticker-sendable.md`
 
-- [ ] **步骤 1：扩展 imports**
+- [x] **步骤 1：扩展 imports**
 
 修改 `evals/rag_benchmark/fixtures.py` 的业务 import：
 
@@ -264,7 +272,7 @@ from core.database import Base, KnowledgeChunk, KnowledgeDocument, StickerMemory
 from core.semantic.adapters import SemanticChunk, chunk_from_knowledge_chunk, chunk_from_sticker
 ```
 
-- [ ] **步骤 2：新增 sticker 常量**
+- [x] **步骤 2：新增 sticker 常量**
 
 在 knowledge 常量后新增：
 
@@ -277,7 +285,7 @@ STICKER_QUERY = "开心拍桌表情包"
 STICKER_INDEX_VERSION = "fixture:v1:sticker"
 ```
 
-- [ ] **步骤 3：新增 sticker case builder**
+- [x] **步骤 3：新增 sticker case builder**
 
 在 `_knowledge_positive_case()` 后新增：
 
@@ -313,7 +321,7 @@ def _sticker_positive_case() -> BenchmarkCase:
 return [_memory_positive_case(), _knowledge_positive_case(), _sticker_positive_case()]
 ```
 
-- [ ] **步骤 4：新增 sticker seed helper**
+- [x] **步骤 4：新增 sticker seed helper**
 
 在 `seed_positive_fixture_db()` 前新增：
 
@@ -365,7 +373,7 @@ def _seed_sticker_positive_fixture(db: Session) -> None:
 - `chunk_from_sticker(sticker)` 返回非空
 - `send_code` 可被 `is_sticker_replyable()` 识别
 
-- [ ] **步骤 5：接入 seed helper**
+- [x] **步骤 5：接入 seed helper**
 
 在 `seed_positive_fixture_db()` 中，knowledge seed 后新增：
 
@@ -379,7 +387,7 @@ _seed_sticker_positive_fixture(db)
 return fixture_cases(FIXTURE_PRESET)
 ```
 
-- [ ] **步骤 6：运行任务 2 定向绿灯**
+- [x] **步骤 6：运行任务 2 定向绿灯**
 
 运行：
 
@@ -395,7 +403,9 @@ python -B -m pytest \
 
 预期：全部通过，sticker fixture score 的 `checks.sendable` 为 `True`。
 
-- [ ] **步骤 7：运行 sticker 相邻回归**
+实际：第一次运行中 memory、knowledge 和 sendable 守卫通过，sticker fixture 失败于 `IndexError: list index out of range`。根因是 seed 写入未归一化 `chat_stream_id`，而 `StickerRagService` 查询 scope 会归一化；改为 seed 使用 `normalize_sticker_stream_id(chat_stream_id=STICKER_CHAT_STREAM_ID)` 后重跑，结果 `4 passed, 1 warning in 1.09s`。
+
+- [x] **步骤 7：运行 sticker 相邻回归**
 
 运行：
 
@@ -411,7 +421,9 @@ python -B -m pytest \
 
 预期：全部通过。若失败，优先检查 fixture seed 是否污染了 sticker hard gate 或 semantic chunk 合同。
 
-- [ ] **步骤 8：延后任务 2 提交**
+实际：`23 passed, 21 warnings in 3.26s`。
+
+- [x] **步骤 8：延后任务 2 提交**
 
 任务 2 已转绿后，baseline 合同测试在 baseline 更新前仍会失败。为避免提交点包含 failing tests，任务 1 与任务 2 跟任务 3 合并为一个绿色代码提交。
 
@@ -422,7 +434,7 @@ python -B -m pytest \
 - 修改：`evals/baselines/rag_benchmark.json`
 - 修改：`.Codex/plans/rag-fixture-sticker-sendable.md`
 
-- [ ] **步骤 1：运行 CLI fixture gate 测试确认当前状态**
+- [x] **步骤 1：运行 CLI fixture gate 测试确认当前状态**
 
 运行：
 
@@ -433,7 +445,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_cli_runs_man
 
 预期：任务 2 后该测试通过。如果失败，优先检查临时 baseline 是否包含 memory、knowledge 与 sticker 三个 fixture score。
 
-- [ ] **步骤 2：运行 RAG stable gate 生成待更新报告**
+实际：PASS，`1 passed, 1 warning in 0.97s`。
+
+- [x] **步骤 2：运行 RAG stable gate 生成待更新报告**
 
 运行：
 
@@ -458,7 +472,9 @@ python -B -m evals.rag_benchmark.run \
 
 预期：输出 `cases=12 passed=12 failed=0` 和 `Gate passed`。无论旧 baseline 是否已通过，都必须读取 `tmp/rag_benchmark/reports/latest.json`，只把真实 report 中的 `metrics` 与 `case_scores` 复制进 baseline。
 
-- [ ] **步骤 3：核对 latest report 的关键字段**
+实际：输出 `cases=12 passed=12 failed=0`、`Gate passed`，并写入 `tmp/rag_benchmark/reports/latest.json`。
+
+- [x] **步骤 3：核对 latest report 的关键字段**
 
 运行：
 
@@ -489,7 +505,9 @@ PY
 True
 ```
 
-- [ ] **步骤 4：更新 baseline 文件**
+实际：核对结果为 `overall.total_cases=12`、`overall.positive_cases=3`、`overall_fixture.total_cases=3`、`overall_fixture.positive_cases=3`、`source:sticker.positive_cases=1`、`sticker_fixture_positive_001.checks.sendable=True`。
+
+- [x] **步骤 4：更新 baseline 文件**
 
 将 `evals/baselines/rag_benchmark.json` 更新为 latest report 的稳定字段。必须保留完整 metrics 子字段和完整 `case_scores`，关键合同如下：
 
@@ -526,7 +544,9 @@ True
 
 实际文件不能只写上面的摘录；需要同步 `tmp/rag_benchmark/reports/latest.json` 中完整的 `metrics` 与 `case_scores`。
 
-- [ ] **步骤 5：运行 baseline 合同绿灯**
+实际：使用 `jq '{suite, provider_mode, case_scope, metrics, failed_cases, case_scores}' tmp/rag_benchmark/reports/latest.json` 机械更新 baseline。
+
+- [x] **步骤 5：运行 baseline 合同绿灯**
 
 运行：
 
@@ -537,7 +557,9 @@ python -B -m pytest tests/test_rag_benchmark.py::test_rag_benchmark_baseline_fil
 
 预期：PASS，baseline case set 与 manual + fixture cases 完全一致，并包含 `sticker_fixture_positive_001`。
 
-- [ ] **步骤 6：运行 RAG stable gate 绿灯**
+实际：PASS，`1 passed, 1 warning in 0.87s`。
+
+- [x] **步骤 6：运行 RAG stable gate 绿灯**
 
 运行：
 
@@ -562,7 +584,9 @@ python -B -m evals.rag_benchmark.run \
 
 预期：输出 `cases=12 passed=12 failed=0` 和 `Gate passed`。
 
-- [ ] **步骤 7：运行 RAG benchmark 相邻回归**
+实际：输出 `cases=12 passed=12 failed=0` 和 `Gate passed`。
+
+- [x] **步骤 7：运行 RAG benchmark 相邻回归**
 
 运行：
 
@@ -573,7 +597,9 @@ python -B -m pytest tests/test_rag_benchmark.py tests/test_eval_baseline.py -v -
 
 预期：全部通过。`tests/test_eval_baseline.py` 不需要修改，因为 PR gate 与 periodic gate 脚本参数保持 `--fixture positive_v1` 不变。
 
-- [ ] **步骤 8：提交任务 1-3 绿色代码阶段**
+实际：`39 passed, 1 warning in 2.27s`。
+
+- [x] **步骤 8：提交任务 1-3 绿色代码阶段**
 
 提交前确认 RAG stable gate 和相邻回归结果已记录到本计划。运行全量测试：
 
@@ -583,6 +609,8 @@ python -m pytest tests/ -v -p no:cacheprovider
 ```
 
 预期：0 failures。
+
+实际：`1377 passed, 6 skipped, 139 warnings in 105.89s`。
 
 提交：
 

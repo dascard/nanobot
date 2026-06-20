@@ -9,9 +9,10 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from core.database import Base, KnowledgeChunk, KnowledgeDocument
-from core.semantic.adapters import SemanticChunk, chunk_from_knowledge_chunk
+from core.database import Base, KnowledgeChunk, KnowledgeDocument, StickerMemory
+from core.semantic.adapters import SemanticChunk, chunk_from_knowledge_chunk, chunk_from_sticker
 from core.semantic.indexer import upsert_semantic_chunks
+from core.sticker_memory import normalize_sticker_stream_id
 from evals.rag_benchmark.schema import BenchmarkCase
 
 
@@ -30,6 +31,12 @@ KNOWLEDGE_CHUNK_ID = "chunk:0"
 KNOWLEDGE_CANDIDATE_ID = f"knowledge:{KNOWLEDGE_DOCUMENT_ID}:{KNOWLEDGE_CHUNK_ID}"
 KNOWLEDGE_QUERY = "RAG 引用门禁"
 KNOWLEDGE_INDEX_VERSION = "fixture:v1:knowledge"
+STICKER_CASE_ID = "sticker_fixture_positive_001"
+STICKER_ID = 9101
+STICKER_CANDIDATE_ID = f"sticker:{STICKER_ID}:sticker"
+STICKER_CHAT_STREAM_ID = "group:rag-fixture-sticker"
+STICKER_QUERY = "开心拍桌表情包"
+STICKER_INDEX_VERSION = "fixture:v1:sticker"
 
 
 def _ensure_supported_preset(preset: str) -> None:
@@ -87,11 +94,36 @@ def _knowledge_positive_case() -> BenchmarkCase:
     )
 
 
+def _sticker_positive_case() -> BenchmarkCase:
+    return BenchmarkCase(
+        id=STICKER_CASE_ID,
+        suite="rag_benchmark",
+        source_type="sticker",
+        case_type="positive",
+        query=STICKER_QUERY,
+        filters={
+            "chat_stream_id": STICKER_CHAT_STREAM_ID,
+            "include_global": False,
+        },
+        expected={
+            "candidate_ids": [STICKER_CANDIDATE_ID],
+            "hit_at": 5,
+            "expected_source_type": "sticker",
+            "requires_sendable": True,
+        },
+        meta={
+            "origin": "fixture_exact",
+            "sensitivity": "safe",
+            "fixture": FIXTURE_PRESET,
+        },
+    )
+
+
 def fixture_cases(preset: str = FIXTURE_PRESET) -> list[BenchmarkCase]:
     """返回 fixture preset 对应的 case 描述，不写数据库。"""
 
     _ensure_supported_preset(str(preset))
-    return [_memory_positive_case(), _knowledge_positive_case()]
+    return [_memory_positive_case(), _knowledge_positive_case(), _sticker_positive_case()]
 
 
 def _seed_knowledge_positive_fixture(db: Session) -> None:
@@ -147,6 +179,44 @@ def _seed_knowledge_positive_fixture(db: Session) -> None:
     )
 
 
+def _seed_sticker_positive_fixture(db: Session) -> None:
+    now = datetime(2026, 6, 20, 0, 0, 0)
+    sticker = StickerMemory(
+        id=STICKER_ID,
+        chat_stream_id=normalize_sticker_stream_id(chat_stream_id=STICKER_CHAT_STREAM_ID),
+        sticker_hash="fixture-sticker-positive-001",
+        file_ref="https://example.com/fixture-sticker-positive-001.png",
+        send_code="[CQ:image,file=https://example.com/fixture-sticker-positive-001.png]",
+        name="开心拍桌",
+        description="开心拍桌表情包，适合表达高兴、赞同和突然兴奋。",
+        tags_json=json.dumps(["开心", "拍桌", "表情包"], ensure_ascii=False),
+        emotions_json=json.dumps(["happy"], ensure_ascii=False),
+        source_type="fixture",
+        source_count=1,
+        status="active",
+        usage_count=0,
+        first_seen=now,
+        last_seen=now,
+        meta_json=json.dumps({"fixture": FIXTURE_PRESET}, ensure_ascii=False, sort_keys=True),
+        preview_status="pending",
+        content_hash="fixture-sticker-positive-001",
+        dedupe_status="unique",
+        describe_status="ok",
+        described_at=now,
+        created_at=now,
+    )
+    db.add(sticker)
+    db.flush()
+
+    semantic_chunk = chunk_from_sticker(sticker)
+    assert semantic_chunk is not None
+    upsert_semantic_chunks(
+        db,
+        [semantic_chunk],
+        index_version=STICKER_INDEX_VERSION,
+    )
+
+
 def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
     """向已创建 schema 的数据库写入 positive fixture 数据。"""
 
@@ -175,6 +245,7 @@ def seed_positive_fixture_db(db: Session) -> list[BenchmarkCase]:
     )
     upsert_semantic_chunks(db, [chunk], index_version=MEMORY_INDEX_VERSION)
     _seed_knowledge_positive_fixture(db)
+    _seed_sticker_positive_fixture(db)
     return fixture_cases(FIXTURE_PRESET)
 
 

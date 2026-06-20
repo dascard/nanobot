@@ -115,6 +115,44 @@ def test_rag_benchmark_fixture_db_supports_knowledge_positive_case(tmp_path):
     assert knowledge_score.checks["citation"] is True
 
 
+def test_rag_benchmark_fixture_db_supports_sticker_positive_case(tmp_path):
+    from evals.rag_benchmark.fixtures import (
+        STICKER_CANDIDATE_ID,
+        STICKER_CASE_ID,
+        STICKER_CHAT_STREAM_ID,
+        build_fixture_db,
+    )
+    from evals.rag_benchmark.run import run_benchmark
+
+    fixture_db = tmp_path / "positive.db"
+
+    cases = build_fixture_db(fixture_db, preset="positive_v1")
+    results, scores = run_benchmark(fixture_db, cases, provider_mode="deterministic")
+
+    by_case = {case.id: case for case in cases}
+    by_result = {result.case_id: result for result in results}
+    by_score = {score.case_id: score for score in scores}
+
+    assert STICKER_CASE_ID in by_case
+    assert by_case[STICKER_CASE_ID].source_type == "sticker"
+    assert by_case[STICKER_CASE_ID].filters["chat_stream_id"] == STICKER_CHAT_STREAM_ID
+    assert by_case[STICKER_CASE_ID].filters["include_global"] is False
+    assert by_case[STICKER_CASE_ID].expected.requires_sendable is True
+    assert by_case[STICKER_CASE_ID].expected.candidate_ids == [STICKER_CANDIDATE_ID]
+
+    sticker_result = by_result[STICKER_CASE_ID]
+    sticker_score = by_score[STICKER_CASE_ID]
+    assert sticker_result.candidate_ids[0] == STICKER_CANDIDATE_ID
+    assert any(
+        candidate.candidate_id == STICKER_CANDIDATE_ID and candidate.sendable is True
+        for candidate in sticker_result.candidates
+    )
+    assert sticker_score.ok is True
+    assert sticker_score.rank == 1
+    assert sticker_score.hit_at["5"] is True
+    assert sticker_score.checks["sendable"] is True
+
+
 def test_scorer_supports_positive_negative_and_constraint_only():
     from evals.rag_benchmark.schema import BenchmarkCandidate, BenchmarkCase, BenchmarkResult
     from evals.rag_benchmark.scoring import score_case
@@ -211,6 +249,42 @@ def test_scorer_fails_requires_citation_when_candidate_lacks_citation():
     assert score.ok is False
     assert score.checks["citation"] is False
     assert "citation check failed" in score.errors
+
+
+def test_scorer_fails_requires_sendable_when_candidate_lacks_sendable():
+    from evals.rag_benchmark.schema import BenchmarkCandidate, BenchmarkCase, BenchmarkResult
+    from evals.rag_benchmark.scoring import score_case
+
+    case = BenchmarkCase(
+        id="sticker_requires_sendable",
+        source_type="sticker",
+        case_type="positive",
+        query="开心拍桌表情包",
+        expected={
+            "candidate_ids": ["sticker:9101:sticker"],
+            "requires_sendable": True,
+            "expected_source_type": "sticker",
+        },
+    )
+    result = BenchmarkResult(
+        case_id=case.id,
+        source_type="sticker",
+        candidate_ids=["sticker:9101:sticker"],
+        candidates=[
+            BenchmarkCandidate(
+                candidate_id="sticker:9101:sticker",
+                source_type="sticker",
+                rank=1,
+                sendable=False,
+            )
+        ],
+    )
+
+    score = score_case(case, result)
+
+    assert score.ok is False
+    assert score.checks["sendable"] is False
+    assert "sendable check failed" in score.errors
 
 
 def test_aggregate_metrics_separates_exact_weak_and_manual():
@@ -832,9 +906,9 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
                 "case_scope": "manual+fixture",
                 "metrics": {
                     "overall": {
-                        "total_cases": 3,
-                        "positive_cases": 2,
-                        "passed_cases": 3,
+                        "total_cases": 4,
+                        "positive_cases": 3,
+                        "passed_cases": 4,
                         "pass_rate": 1.0,
                         "hit@5": 1.0,
                         "mrr": 1.0,
@@ -858,6 +932,14 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
                         "rank": 1,
                         "hit_at": {"1": True, "3": True, "5": True},
                         "checks": {"citation": True, "sendable": None, "group_filter": None},
+                        "errors": [],
+                    },
+                    {
+                        "case_id": "sticker_fixture_positive_001",
+                        "ok": True,
+                        "rank": 1,
+                        "hit_at": {"1": True, "3": True, "5": True},
+                        "checks": {"citation": None, "sendable": True, "group_filter": None},
                         "errors": [],
                     },
                 ],
@@ -909,12 +991,15 @@ def test_rag_benchmark_cli_runs_manual_fixture_positive_gate(tmp_path, capsys):
         str(item.get("case_id") or ""): item
         for item in report["case_scores"]
     }
-    assert report["metrics"]["overall"]["positive_cases"] == 2
+    assert report["metrics"]["overall"]["positive_cases"] == 3
     assert report["metrics"]["source:knowledge"]["positive_cases"] == 1
+    assert report["metrics"]["source:sticker"]["positive_cases"] == 1
     assert report["metrics"]["overall"]["hit@5"] == 1.0
     assert report["metrics"]["overall"]["mrr"] == 1.0
     assert scores["knowledge_fixture_positive_001"]["ok"] is True
     assert scores["knowledge_fixture_positive_001"]["checks"]["citation"] is True
+    assert scores["sticker_fixture_positive_001"]["ok"] is True
+    assert scores["sticker_fixture_positive_001"]["checks"]["sendable"] is True
 
 
 def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
@@ -943,7 +1028,7 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     assert baseline["provider_mode"] == "deterministic"
     assert baseline["case_scope"] == "manual+fixture"
     assert baseline["metrics"]["overall"]["total_cases"] == len(stable_cases)
-    assert baseline["metrics"]["overall"]["positive_cases"] >= 1
+    assert baseline["metrics"]["overall"]["positive_cases"] == 3
     assert baseline["metrics"]["overall"]["hit@5"] > 0
     assert baseline["metrics"]["overall"]["mrr"] > 0
     assert set(baseline_scores) == stable_case_ids
@@ -957,3 +1042,8 @@ def test_rag_benchmark_baseline_file_matches_manual_gate_contract():
     assert knowledge_fixture_score["hit_at"]["5"] is True
     assert knowledge_fixture_score["checks"]["citation"] is True
     assert baseline["metrics"]["source:knowledge"]["positive_cases"] == 1
+    sticker_fixture_score = baseline_scores["sticker_fixture_positive_001"]
+    assert sticker_fixture_score["ok"] is True
+    assert sticker_fixture_score["hit_at"]["5"] is True
+    assert sticker_fixture_score["checks"]["sendable"] is True
+    assert baseline["metrics"]["source:sticker"]["positive_cases"] == 1
