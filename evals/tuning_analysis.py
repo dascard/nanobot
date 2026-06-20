@@ -302,7 +302,7 @@ def build_tuning_analysis(
     min_signal_labeled_samples: int = 5,
     high_false_positive_rate: float = 0.20,
 ) -> dict[str, Any]:
-    _ = manifest, min_total_samples
+    _ = manifest
     source_paths = source_paths or {}
     source = {
         **_trend_source(trends),
@@ -396,6 +396,28 @@ def build_tuning_analysis(
                     "timing_zero_samples",
                     "TimingSignal audit 没有样本，不能推断信号质量",
                     {"total_samples": total_samples},
+                )
+            )
+        elif total_samples < min_total_samples:
+            blocking.append(
+                _reason(
+                    "insufficient_timing_samples",
+                    f"TimingSignal audit 样本数低于 {min_total_samples}",
+                    total_samples=total_samples,
+                    min_total_samples=min_total_samples,
+                )
+            )
+            recommendations.append(
+                _recommendation(
+                    "collect_more_artifact",
+                    "timing_signal",
+                    "medium",
+                    "insufficient_timing_samples",
+                    "TimingSignal audit 样本不足，需要先积累更厚的不可变样本 artifact",
+                    {
+                        "total_samples": total_samples,
+                        "min_total_samples": min_total_samples,
+                    },
                 )
             )
         elif _label_coverage(labeled_samples, total_samples) < min_label_coverage:

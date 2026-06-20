@@ -121,6 +121,29 @@ def test_tuning_analysis_blocks_missing_skipped_and_zero_timing_audit():
     assert "db_not_found" in skipped["source"]["timing_audit_reason"]
 
 
+def test_tuning_analysis_blocks_insufficient_timing_samples():
+    from evals.tuning_analysis import build_tuning_analysis
+
+    report = build_tuning_analysis(
+        _trends(),
+        timing_audit=_audit(total_samples=10, labeled_samples=5),
+        min_total_samples=20,
+    )
+
+    assert report["readiness"]["ready"] is False
+    assert "insufficient_timing_samples" in _reason_codes(report)
+    recommendation = [
+        item for item in report["recommendations"]
+        if item["reason_code"] == "insufficient_timing_samples"
+    ][0]
+    assert recommendation["type"] == "collect_more_artifact"
+    assert recommendation["area"] == "timing_signal"
+    assert recommendation["evidence"] == {
+        "total_samples": 10,
+        "min_total_samples": 20,
+    }
+
+
 def test_tuning_analysis_recommends_labeling_for_low_label_coverage():
     from evals.tuning_analysis import build_tuning_analysis
 
