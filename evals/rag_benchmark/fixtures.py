@@ -38,8 +38,14 @@ MEMORY_QUERY = "KohakuVQ 端口冲突"
 MEMORY_INDEX_VERSION = "fixture:v1:memory"
 KNOWLEDGE_CASE_ID = "knowledge_fixture_positive_001"
 KNOWLEDGE_DOCUMENT_ID = 9001
+KNOWLEDGE_LOW_TRUST_DOCUMENT_ID = 9002
+KNOWLEDGE_WRONG_SOURCE_DOCUMENT_ID = 9003
+KNOWLEDGE_OLD_PUBLISHED_DOCUMENT_ID = 9004
 KNOWLEDGE_CHUNK_ID = "chunk:0"
 KNOWLEDGE_CANDIDATE_ID = f"knowledge:{KNOWLEDGE_DOCUMENT_ID}:{KNOWLEDGE_CHUNK_ID}"
+KNOWLEDGE_LOW_TRUST_CANDIDATE_ID = f"knowledge:{KNOWLEDGE_LOW_TRUST_DOCUMENT_ID}:{KNOWLEDGE_CHUNK_ID}"
+KNOWLEDGE_WRONG_SOURCE_CANDIDATE_ID = f"knowledge:{KNOWLEDGE_WRONG_SOURCE_DOCUMENT_ID}:{KNOWLEDGE_CHUNK_ID}"
+KNOWLEDGE_OLD_PUBLISHED_CANDIDATE_ID = f"knowledge:{KNOWLEDGE_OLD_PUBLISHED_DOCUMENT_ID}:{KNOWLEDGE_CHUNK_ID}"
 KNOWLEDGE_QUERY = "RAG 引用门禁"
 KNOWLEDGE_INDEX_VERSION = "fixture:v1:knowledge"
 STICKER_CASE_ID = "sticker_fixture_positive_001"
@@ -101,11 +107,17 @@ def _knowledge_positive_case() -> BenchmarkCase:
         case_type="positive",
         query=KNOWLEDGE_QUERY,
         filters={
-            "min_trust_level": "low",
+            "min_trust_level": "high",
             "source_type": "manual_file",
+            "published_after": "2026-01-01",
         },
         expected={
             "candidate_ids": [KNOWLEDGE_CANDIDATE_ID],
+            "forbidden_candidate_ids": [
+                KNOWLEDGE_LOW_TRUST_CANDIDATE_ID,
+                KNOWLEDGE_WRONG_SOURCE_CANDIDATE_ID,
+                KNOWLEDGE_OLD_PUBLISHED_CANDIDATE_ID,
+            ],
             "hit_at": 5,
             "expected_source_type": "knowledge",
             "requires_citation": True,
@@ -184,55 +196,94 @@ def fixture_cases(preset: str = FIXTURE_PRESET) -> list[BenchmarkCase]:
 
 def _seed_knowledge_positive_fixture(db: Session) -> None:
     now = datetime(2026, 6, 20, 0, 0, 0)
-    document = KnowledgeDocument(
-        id=KNOWLEDGE_DOCUMENT_ID,
-        document_kind="manual_file",
-        title="RAG 引用门禁说明",
-        published_at="2026-06-20",
-        status="active",
-        trust_level="medium",
-        created_by="fixture",
-        updated_by="fixture",
-        latest_seen=now,
-        meta_json=json.dumps({"fixture": FIXTURE_PRESET}, ensure_ascii=False, sort_keys=True),
-        created_at=now,
-        updated_at=now,
-    )
-    db.add(document)
-    db.flush()
+    semantic_chunks: list[SemanticChunk] = []
 
-    citation = {
-        "document_id": str(KNOWLEDGE_DOCUMENT_ID),
-        "chunk_id": KNOWLEDGE_CHUNK_ID,
-        "title": "RAG 引用门禁说明",
-        "trust_level": "medium",
-        "published_at": "2026-06-20",
-    }
-    chunk = KnowledgeChunk(
+    def add_knowledge_doc(
+        *,
+        document_id: int,
+        title: str,
+        text: str,
+        document_kind: str,
+        trust_level: str,
+        published_at: str,
+    ) -> None:
+        document = KnowledgeDocument(
+            id=document_id,
+            document_kind=document_kind,
+            title=title,
+            published_at=published_at,
+            status="active",
+            trust_level=trust_level,
+            created_by="fixture",
+            updated_by="fixture",
+            latest_seen=now,
+            meta_json=json.dumps({"fixture": FIXTURE_PRESET}, ensure_ascii=False, sort_keys=True),
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(document)
+        db.flush()
+
+        citation = {
+            "document_id": str(document_id),
+            "chunk_id": KNOWLEDGE_CHUNK_ID,
+            "title": title,
+            "trust_level": trust_level,
+            "published_at": published_at,
+        }
+        chunk = KnowledgeChunk(
+            document_id=document_id,
+            chunk_id=KNOWLEDGE_CHUNK_ID,
+            order_index=0,
+            title=title,
+            text=text,
+            citation_json=json.dumps(citation, ensure_ascii=False, sort_keys=True),
+            status="active",
+            trust_level=trust_level,
+            meta_json=json.dumps({"fixture": FIXTURE_PRESET}, ensure_ascii=False, sort_keys=True),
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(chunk)
+        db.flush()
+        semantic_chunks.append(chunk_from_knowledge_chunk(chunk, document=document))
+
+    add_knowledge_doc(
         document_id=KNOWLEDGE_DOCUMENT_ID,
-        chunk_id=KNOWLEDGE_CHUNK_ID,
-        order_index=0,
         title="RAG 引用门禁说明",
         text=(
             "RAG 引用门禁要求 knowledge 检索返回项必须携带 citation。"
-            "固定 fixture 用于验证 requires_citation 评分不会被空结果绕过。"
+            "固定 fixture 用于验证 high trust 正例。"
         ),
-        citation_json=json.dumps(citation, ensure_ascii=False, sort_keys=True),
-        status="active",
-        trust_level="medium",
-        meta_json=json.dumps({"fixture": FIXTURE_PRESET}, ensure_ascii=False, sort_keys=True),
-        created_at=now,
-        updated_at=now,
+        document_kind="manual_file",
+        trust_level="high",
+        published_at="2026-06-20",
     )
-    db.add(chunk)
-    db.flush()
-
-    semantic_chunk = chunk_from_knowledge_chunk(chunk, document=document)
-    upsert_semantic_chunks(
-        db,
-        [semantic_chunk],
-        index_version=KNOWLEDGE_INDEX_VERSION,
+    add_knowledge_doc(
+        document_id=KNOWLEDGE_LOW_TRUST_DOCUMENT_ID,
+        title="RAG 低信任 decoy",
+        text="RAG 引用门禁 decoy：低 trust 文档不应通过 high trust 过滤。",
+        document_kind="manual_file",
+        trust_level="low",
+        published_at="2026-06-20",
     )
+    add_knowledge_doc(
+        document_id=KNOWLEDGE_WRONG_SOURCE_DOCUMENT_ID,
+        title="RAG 错误来源 decoy",
+        text="RAG 引用门禁 decoy：ai_daily 来源不应通过 manual_file 过滤。",
+        document_kind="ai_daily",
+        trust_level="high",
+        published_at="2026-06-20",
+    )
+    add_knowledge_doc(
+        document_id=KNOWLEDGE_OLD_PUBLISHED_DOCUMENT_ID,
+        title="RAG 旧发布时间 decoy",
+        text="RAG 引用门禁 decoy：旧发布时间不应通过 published_after 过滤。",
+        document_kind="manual_file",
+        trust_level="high",
+        published_at="2025-01-01",
+    )
+    upsert_semantic_chunks(db, semantic_chunks, index_version=KNOWLEDGE_INDEX_VERSION)
 
 
 def _seed_sticker_positive_fixture(db: Session) -> None:

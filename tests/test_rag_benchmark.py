@@ -103,6 +103,9 @@ def test_rag_benchmark_fixture_db_supports_knowledge_positive_case(tmp_path):
     from evals.rag_benchmark.fixtures import (
         KNOWLEDGE_CANDIDATE_ID,
         KNOWLEDGE_CASE_ID,
+        KNOWLEDGE_LOW_TRUST_CANDIDATE_ID,
+        KNOWLEDGE_OLD_PUBLISHED_CANDIDATE_ID,
+        KNOWLEDGE_WRONG_SOURCE_CANDIDATE_ID,
         build_fixture_db,
     )
     from evals.rag_benchmark.run import run_benchmark
@@ -115,14 +118,24 @@ def test_rag_benchmark_fixture_db_supports_knowledge_positive_case(tmp_path):
     by_case = {case.id: case for case in cases}
     by_result = {result.case_id: result for result in results}
     by_score = {score.case_id: score for score in scores}
+    knowledge_decoys = {
+        KNOWLEDGE_LOW_TRUST_CANDIDATE_ID,
+        KNOWLEDGE_WRONG_SOURCE_CANDIDATE_ID,
+        KNOWLEDGE_OLD_PUBLISHED_CANDIDATE_ID,
+    }
 
     assert KNOWLEDGE_CASE_ID in by_case
+    assert by_case[KNOWLEDGE_CASE_ID].filters["min_trust_level"] == "high"
+    assert by_case[KNOWLEDGE_CASE_ID].filters["source_type"] == "manual_file"
+    assert by_case[KNOWLEDGE_CASE_ID].filters["published_after"] == "2026-01-01"
     assert by_case[KNOWLEDGE_CASE_ID].expected.requires_citation is True
     assert by_case[KNOWLEDGE_CASE_ID].expected.candidate_ids == [KNOWLEDGE_CANDIDATE_ID]
+    assert set(by_case[KNOWLEDGE_CASE_ID].expected.forbidden_candidate_ids) == knowledge_decoys
 
     knowledge_result = by_result[KNOWLEDGE_CASE_ID]
     knowledge_score = by_score[KNOWLEDGE_CASE_ID]
     assert knowledge_result.candidate_ids[0] == KNOWLEDGE_CANDIDATE_ID
+    assert knowledge_decoys.isdisjoint(knowledge_result.candidate_ids)
     assert any(
         candidate.candidate_id == KNOWLEDGE_CANDIDATE_ID and candidate.citation is True
         for candidate in knowledge_result.candidates
@@ -131,6 +144,7 @@ def test_rag_benchmark_fixture_db_supports_knowledge_positive_case(tmp_path):
     assert knowledge_score.rank == 1
     assert knowledge_score.hit_at["5"] is True
     assert knowledge_score.checks["citation"] is True
+    assert knowledge_score.forbidden_hits == []
 
 
 def test_rag_benchmark_fixture_db_supports_sticker_positive_case(tmp_path):
