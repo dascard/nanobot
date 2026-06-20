@@ -668,6 +668,47 @@ class TestGroupRuntime:
         assert scoring["reason"].endswith("min_interval")
 
     @pytest.mark.asyncio
+    async def test_active_linger_ambient_followup_uses_linger_without_keyword(self, monkeypatch):
+        """已激活余韵的普通后续消息不依赖文本关键词才进入 scoring。"""
+        import core.group_runtime.runtime as runtime_module
+
+        now = 1000.0
+        monkeypatch.setattr(runtime_module._time, "time", lambda: now)
+        runtime = GroupRuntime()
+        captured = {}
+        state = runtime._states.setdefault("group_1", GateState(group_id="group_1"))
+        state.activate_linger("u1", "at_bot")
+        state.last_bot_reply_ts = now - 31
+
+        async def fake_gate(group_id, pending, _ctx, trigger_reason):
+            captured["group_id"] = group_id
+            captured["trigger_reason"] = trigger_reason
+            captured["pending_trigger"] = pending[0].trigger_reason
+            return {"action": "continue", "reason": "active linger followup"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        result = await runtime.process_message(
+            "group_1",
+            {
+                "sender_id": "u1",
+                "sender_name": "A",
+                "message": "然后",
+                "message_id": "m1",
+            },
+            trigger_reason="ambient",
+            talk_value=0.5,
+        )
+
+        assert result["action"] == "continue"
+        assert captured["trigger_reason"] == "ambient"
+        assert captured["pending_trigger"] == "ambient"
+        scoring = result["timing_scoring"]
+        assert scoring["signals"]["linger_score"] > 0
+        assert scoring["signals"]["direct_score"] >= scoring["signals"]["linger_score"]
+        assert scoring["stage"] == "model_assisted"
+
+    @pytest.mark.asyncio
     async def test_model_failure_uses_rule_fallback_action_not_raw_no_reply(self, monkeypatch):
         """模型失败时，runtime 应采用 scoring rule_fallback 的最终动作。"""
         runtime = GroupRuntime()
@@ -1179,6 +1220,50 @@ class TestProcessMessageDirected:
         assert captured["trigger_reason"] == "recent_bot_followup"
         assert captured["pending_trigger"] == "recent_bot_followup"
         assert result["timing_scoring"]["stage"] == "model_assisted_conflict"
+
+    @pytest.mark.asyncio
+    async def test_process_message_directed_to_other_with_active_linger_without_keyword_reaches_gate(self, monkeypatch):
+        """active linger + 指向他人即使不是关键词追问，也不应落回 directed hard no_reply。"""
+        from core.group_runtime.runtime import GroupRuntime
+
+        runtime = GroupRuntime()
+        state = runtime._states.setdefault("group_123", GateState(group_id="group_123"))
+        state.activate_linger("111", "at_bot")
+        state.last_bot_reply_ts = _time.time() - 31
+        captured = {}
+
+        async def fake_gate(group_id, pending, _ctx, trigger_reason):
+            captured["group_id"] = group_id
+            captured["trigger_reason"] = trigger_reason
+            captured["pending_trigger"] = pending[0].trigger_reason
+            return {"action": "continue", "reason": "active linger directed conflict"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        result = await runtime.process_message(
+            "group_123",
+            {
+                "sender_id": "111",
+                "sender_name": "A",
+                "message": "@B 然后",
+                "message_id": "m1",
+                "is_directed_to_other": True,
+                "directed": {"at_others": True, "directed_to_other": True},
+                "mentions": [{"user_id": "222", "nickname": "B"}],
+            },
+            trigger_reason="ambient",
+            talk_value=1.0,
+        )
+
+        assert result["action"] == "continue"
+        assert "hard_rule" not in result
+        assert result["reason"].startswith("scoring blend:")
+        assert captured["trigger_reason"] == "ambient"
+        assert captured["pending_trigger"] == "ambient"
+        scoring = result["timing_scoring"]
+        assert scoring["stage"] == "model_assisted_conflict"
+        assert scoring["signals"]["linger_score"] > 0
+        assert scoring["signals"]["sub_signals"]["s_other"] == 0.75
 
     @pytest.mark.asyncio
     async def test_process_message_at_bot_with_other_mention_reaches_model(self, monkeypatch):

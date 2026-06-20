@@ -416,11 +416,27 @@ class GroupRuntime:
         return normalize_group_session_id(group_id)
 
     @staticmethod
-    def _should_cooldown(state: GroupChatState, trigger_reason: str) -> bool:
+    def _active_linger_score(
+        state: GroupChatState,
+        pending: list[GroupPendingMessage] | None = None,
+    ) -> float:
+        msgs = pending if pending is not None else state.pending
+        latest_sender_id = msgs[-1].sender_id if msgs else ""
+        return state.linger_score_for(latest_sender_id)
+
+    @staticmethod
+    def _should_cooldown(
+        state: GroupChatState,
+        trigger_reason: str,
+        *,
+        has_active_linger: bool = False,
+    ) -> bool:
         ago = state.bot_reply_ago()
         if not (0 < ago < BOT_REPLY_COOLDOWN_SEC):
             return False
         if state.force_next_continue:
+            return False
+        if has_active_linger:
             return False
         is_direct = str(trigger_reason or "").strip() in _COOLDOWN_BYPASS_TRIGGERS
         return not is_direct
@@ -509,17 +525,22 @@ class GroupRuntime:
                     raw=str(model_result.get("raw") or ""),
                     reason=str(model_result.get("reason") or ""),
                 )
-        latest_sender_id = msgs[-1].sender_id if msgs else ""
-        linger_score = state.linger_score_for(latest_sender_id) if tr == "recent_bot_followup" else 0.0
+        linger_score = self._active_linger_score(state, msgs)
         if tr == "recent_bot_followup" and linger_score <= 0 and state.linger_active_until <= 0:
             linger_score = LINGER_BASE_WEIGHT
         ago = state.bot_reply_ago()
+        is_linger_followup = tr not in _DIRECT_TRIGGERS
         linger_interval_active = (
-            tr == "recent_bot_followup"
+            is_linger_followup
+            and force_direct_score <= 0
             and linger_score > 0
             and 0 < ago < LINGER_MIN_INTERVAL_SECS
         )
-        min_interval_active = linger_interval_active or self._should_cooldown(state, tr)
+        min_interval_active = linger_interval_active or self._should_cooldown(
+            state,
+            tr,
+            has_active_linger=linger_score > 0,
+        )
         min_interval_remaining = (
             LINGER_MIN_INTERVAL_SECS - ago
             if linger_interval_active
@@ -810,18 +831,10 @@ class GroupRuntime:
                         **payload,
                     })
                     return response
-                return self._attach_shadow_scoring({
-                    "action": "no_reply",
-                    "generation": state.generation,
-                    "reason": "directed_to_other scoring non_shortcut",
-                    "pending_count": len(snapshot),
-                    "trigger_reason": tr,
-                    "directed_to_other": True,
-                    **payload,
-                }, state, tr, pending=snapshot)
 
             # 硬 cooldown：bot 刚回复过且非直接互动 → wait
-            if self._should_cooldown(state, tr):
+            has_active_linger = self._active_linger_score(state) > 0
+            if self._should_cooldown(state, tr, has_active_linger=has_active_linger):
                 ago = state.bot_reply_ago()
                 if tr in {"", "ambient"}:
                     snapshot = state.take_snapshot()
@@ -887,7 +900,11 @@ class GroupRuntime:
 
             if not gate_prepared:
                 # talk_value gate：普通 ambient 消息按频率控制
-                if tr == "ambient" and not self._should_gate_by_frequency(state, talk_value):
+                if (
+                    tr == "ambient"
+                    and not has_active_linger
+                    and not self._should_gate_by_frequency(state, talk_value)
+                ):
                     threshold = max(1, round(1.0 / max(talk_value, 0.05)))
                     return self._attach_shadow_scoring({
                         "action": "wait",
