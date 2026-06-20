@@ -7,11 +7,11 @@
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
-P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计、阶段拆分、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate。P4-1「评测数据集与标注闭环」已完成 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集；P4-2「Admin 标注工作台契约化与 promote 预检 UI」已完成后端 expected contract schema/API、WebUI 契约化标注和 promote 预检流程；P4-3「能力契约评测数据集扩展」已完成 reply / rendering 两个能力数据集、baseline gate 和最终回归；P4-4「RAG baseline 门禁」已完成 RAG benchmark 专用 baseline diff、CLI gate、稳定 baseline、Admin API 和 WebUI 展示；P4-5A「统一评测 PR gate」已完成统一脚本和 CI 接入；P4-5B「周期性复跑与报告归档」已完成 keep-going 脚本、workflow schedule / manual dispatch 和 artifact 归档。P4-5C「RAG manual 样本扩充」已完成，下一步转向 fixture-backed positive RAG case 或更多真实样本运营动作。
+P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计、阶段拆分、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate。P4-1「评测数据集与标注闭环」已完成 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集；P4-2「Admin 标注工作台契约化与 promote 预检 UI」已完成后端 expected contract schema/API、WebUI 契约化标注和 promote 预检流程；P4-3「能力契约评测数据集扩展」已完成 reply / rendering 两个能力数据集、baseline gate 和最终回归；P4-4「RAG baseline 门禁」已完成 RAG benchmark 专用 baseline diff、CLI gate、稳定 baseline、Admin API 和 WebUI 展示；P4-5A「统一评测 PR gate」已完成统一脚本和 CI 接入；P4-5B「周期性复跑与报告归档」已完成 keep-going 脚本、workflow schedule / manual dispatch 和 artifact 归档；P4-5C「RAG manual 样本扩充」已完成；P4-5D「RAG fixture 正例门禁」已完成。下一步转向更多 fixture source 覆盖或真实样本运营动作。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」、P4-1「评测数据集与标注闭环」、P4-2「Admin 标注工作台契约化与 promote 预检 UI」、P4-3「能力契约评测数据集扩展」、P4-4「RAG baseline 门禁」、P4-5A「统一评测 PR gate」和 P4-5B「周期性复跑与报告归档」均已完成验证。P4-5C 已完成第一轮 RAG manual 样本扩充；下一步默认转向 fixture-backed positive RAG case 或更多真实样本运营动作。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」、P4-1「评测数据集与标注闭环」、P4-2「Admin 标注工作台契约化与 promote 预检 UI」、P4-3「能力契约评测数据集扩展」、P4-4「RAG baseline 门禁」、P4-5A「统一评测 PR gate」、P4-5B「周期性复跑与报告归档」、P4-5C「RAG manual 样本扩充」和 P4-5D「RAG fixture 正例门禁」均已完成验证。下一步默认转向更多 fixture source 覆盖或真实样本运营动作。
 
 ## 文档口径
 
@@ -87,6 +87,55 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P4-5A | 已完成 | 统一评测 PR gate | `scripts/run_eval_pr_gate.sh` 串联 TimingGate、capability 和 RAG manual gate，CI workflow 已接入统一入口 | `docs(评测): 设计统一评测门禁` / `docs(计划): 记录统一评测门禁计划` / `ci(评测): 增加统一评测门禁脚本` / `ci(评测): 接入统一评测门禁` / `docs(评测): 收口统一评测门禁状态` |
 | P4-5B | 已完成 | 周期性复跑与报告归档 | `scripts/run_eval_periodic.sh` 使用 keep-going 策略复跑稳定 gate，workflow 已支持 schedule / workflow_dispatch 并上传报告 artifact | `docs(评测): 设计周期复跑归档` / `docs(计划): 记录周期复跑计划` / `ci(评测): 增加周期评测脚本` / `ci(评测): 归档周期评测报告` / `docs(评测): 收口周期复跑状态` |
 | P4-5C | 已完成 | RAG manual 样本扩充 | manual case 已从 3 扩到 9，baseline 合同测试已收紧，稳定 gate 已通过 | `de97759` / `5511a50` / `2189391` / `93fe947` / `dcf492b` |
+| P4-5D | 已完成 | RAG fixture 正例门禁 | 新增固定 memory fixture DB、`manual+fixture` stable gate 和 positive metrics baseline | `6cbce35` / `375b9b3` / `dcf45e5` / `5b967b4` / `8b64ea0` / `docs(评测): 收口 RAG fixture 正例状态` |
+
+## 已完成阶段详情：P4-5D RAG fixture 正例门禁
+
+状态：P4-5D 已完成 fixture-backed positive RAG case。设计文档为 `docs/superpowers/specs/2026-06-20-rag-fixture-positive-case-design.md`，实现计划为 `.Codex/plans/rag-fixture-positive-case.md`。本阶段不改 Admin / WebUI，不启用 runtime provider，不从真实生产 DB 采样；稳定 gate 由 9 个 manual `constraint_only` case 加 1 个固定 memory fixture positive case 组成。
+
+目标：
+
+- 新增 `evals/rag_benchmark/fixtures.py`，构建固定 SQLite fixture DB。
+- 用 `memory_fixture_positive_001` 验证 deterministic provider 下能命中 `memory_digest:fixture-memory-positive-001:card:0`。
+- 让 `evals.rag_benchmark.run --fixture positive_v1` 先创建 fixture DB，再追加 fixture case 并以只读 runner 执行。
+- 将 `scripts/run_eval_pr_gate.sh` 和 `scripts/run_eval_periodic.sh` 的 RAG stable gate 切到 `manual+fixture`，并加入 `--min-hit-at-5 1.0` / `--min-mrr 1.0`。
+- 同步 `evals/baselines/rag_benchmark.json`，使 `positive_cases=1`、`hit@5=1.0`、`mrr=1.0`。
+
+计划项：
+
+- [x] P4-5D 设计：写入 `docs/superpowers/specs/2026-06-20-rag-fixture-positive-case-design.md`。提交：`6cbce35 docs(评测): 设计 RAG fixture 正例门禁`。
+- [x] P4-5D 实现计划：写入 `.Codex/plans/rag-fixture-positive-case.md`。提交：`375b9b3 docs(计划): 记录 RAG fixture 正例计划`。
+- [x] 任务 1：新增 fixture builder、fixture 正例直跑测试和 `overall_fixture` 聚合分组。提交：`dcf45e5 feat(评测): 增加 RAG fixture 正例数据`。
+- [x] 任务 2：runner CLI 接入 `--fixture` / `--fixture-db`，并覆盖 `manual+fixture` 报告。提交：`5b967b4 feat(评测): 支持 RAG fixture 门禁入口`。
+- [x] 任务 3：baseline 合同、PR gate、周期性 gate 和稳定 baseline 切到 `manual+fixture`。提交：`8b64ea0 test(评测): 固化 RAG fixture 正例门禁`。
+- [x] 任务 4：文档收口，同步 `docs/evals.md`、`docs/todo.md`、本文件和 `.Codex/plans/rag-fixture-positive-case.md`。
+
+验证记录：
+
+- 任务 1 红灯：`test_rag_benchmark_fixture_db_supports_memory_positive_case` 失败于 `ModuleNotFoundError: No module named 'evals.rag_benchmark.fixtures'`；`test_rag_aggregate_scores_tracks_fixture_origin` 失败于 `KeyError: 'overall_fixture'`。
+- 任务 1 绿灯：两个新增定向测试结果 `2 passed, 1 warning in 0.92s`；`tests/test_rag_benchmark.py` 结果 `15 passed, 1 warning in 1.22s`。
+- 任务 2 红灯：`test_rag_benchmark_cli_runs_manual_fixture_positive_gate` 失败于 argparse `unrecognized arguments: --fixture positive_v1 --fixture-db`。
+- 任务 2 绿灯：同一测试结果 `1 passed, 1 warning in 0.93s`；`tests/test_rag_benchmark.py` 结果 `16 passed, 1 warning in 1.19s`。
+- 任务 3 红灯：baseline 合同测试失败于 `assert 'manual' == 'manual+fixture'`；脚本守卫测试失败于缺少 `--fixture positive_v1`。
+- 任务 3 绿灯：脚本守卫结果 `2 passed, 1 warning in 0.75s`；RAG fixture gate 输出 `cases=10 passed=10 failed=0` 和 `Gate passed`；相邻回归 `tests/test_rag_benchmark.py tests/test_eval_baseline.py` 结果 `35 passed, 1 warning in 2.61s`。
+- 任务 4 相邻回归：`tests/test_rag_benchmark.py tests/test_eval_baseline.py` 结果 `35 passed, 1 warning in 2.51s`。
+- 任务 4 PR gate：`bash scripts/run_eval_pr_gate.sh` 结果为评测守卫 `27 passed, 1 warning in 2.26s`，TimingGate、三个 capability gate 和 RAG gate 均输出 `Gate passed`，RAG gate 输出 `cases=10 passed=10 failed=0`。
+- 任务 4 周期性 gate：`bash scripts/run_eval_periodic.sh` 结果为评测守卫 `27 passed, 1 warning in 2.22s`，各子 gate 均输出 `Gate passed`，RAG gate 输出 `cases=10 passed=10 failed=0`。
+- 任务 4 文档自检：异常字符扫描无匹配，diff 占位词扫描无匹配，`git diff --check` 无输出。
+
+提交边界：
+
+- 设计阶段：`docs(评测): 设计 RAG fixture 正例门禁`。
+- 实现计划：`docs(计划): 记录 RAG fixture 正例计划`。
+- P4-5D-1 fixture builder：`feat(评测): 增加 RAG fixture 正例数据`。
+- P4-5D-2 runner CLI：`feat(评测): 支持 RAG fixture 门禁入口`。
+- P4-5D-3 baseline 和脚本：`test(评测): 固化 RAG fixture 正例门禁`。
+- P4-5D-4 文档收口：`docs(评测): 收口 RAG fixture 正例状态`。
+
+下一步：
+
+- 优先扩展 knowledge fixture positive case，用固定 citation 覆盖 `requires_citation`。
+- 继续从真实样本运营流程中人工确认更多稳定 manual case。
 
 ## 已完成阶段详情：P4-5C RAG manual 样本扩充
 
@@ -134,7 +183,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 
 下一步：
 
-- 推进 fixture-backed positive RAG case，或继续从真实样本运营流程中人工确认更多稳定 manual case。
+- P4-5D fixture-backed positive RAG case 已完成；后续转向更多 fixture source 覆盖或真实样本运营动作。
 
 ## 已完成阶段详情：P4-5B 周期性评测复跑与报告归档
 

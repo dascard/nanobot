@@ -29,6 +29,11 @@
 - 任务 2 提交：`5b967b4 feat(评测): 支持 RAG fixture 门禁入口`。
 - 任务 3 红灯：baseline 合同测试失败于 `assert 'manual' == 'manual+fixture'`；脚本守卫测试失败于缺少 `--fixture positive_v1`。
 - 任务 3 绿灯：脚本守卫结果 `2 passed, 1 warning in 0.75s`；RAG fixture gate 输出 `cases=10 passed=10 failed=0` 和 `Gate passed`；相邻回归结果 `35 passed, 1 warning in 2.61s`。
+- 任务 3 提交：`8b64ea0 test(评测): 固化 RAG fixture 正例门禁`。
+- 任务 4 验证：PR gate `bash scripts/run_eval_pr_gate.sh` 结果为评测守卫 `27 passed, 1 warning in 2.26s`，所有子 gate 均通过，RAG gate 输出 `cases=10 passed=10 failed=0` 和 `Gate passed`。
+- 任务 4 验证：周期性 gate `bash scripts/run_eval_periodic.sh` 结果为评测守卫 `27 passed, 1 warning in 2.22s`，所有子 gate 均通过，RAG gate 输出 `cases=10 passed=10 failed=0` 和 `Gate passed`。
+- 任务 4 相邻回归：`tests/test_rag_benchmark.py tests/test_eval_baseline.py` 结果为 `35 passed, 1 warning in 2.51s`。
+- 任务 4 文档自检：异常字符扫描无匹配，diff 占位词扫描无匹配，`git diff --check` 无输出。
 
 ## 子 agent 分工建议
 
@@ -770,7 +775,7 @@ git commit -m "test(评测): 固化 RAG fixture 正例门禁"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/rag-fixture-positive-case.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 记录 RAG stable gate 的当前范围：
 
@@ -778,7 +783,7 @@ git commit -m "test(评测): 固化 RAG fixture 正例门禁"
 RAG stable gate 当前使用 `manual+fixture` scope：仓库内 9 个 manual `constraint_only` case 加 1 个 `positive_v1` memory fixture case。PR gate 使用 deterministic provider、固定 SQLite fixture DB 和 `--min-hit-at-5 1.0` / `--min-mrr 1.0`，用于防止正例召回退化。
 ```
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在 P4 路线项 8 的当前状态中补充：
 
@@ -786,7 +791,7 @@ RAG stable gate 当前使用 `manual+fixture` scope：仓库内 9 个 manual `co
 P4-5D 已完成 fixture-backed positive RAG case：`evals.rag_benchmark` stable gate 已从 `manual` 切到 `manual+fixture`，baseline 包含 `memory_fixture_positive_001`，`positive_cases` 从 0 提升到 1，`hit@5` / `mrr` 进入真实门禁。
 ```
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 在进度总览和 P4-5C 后新增 P4-5D 记录：
 
@@ -796,7 +801,7 @@ P4-5D 已完成 fixture-backed positive RAG case：`evals.rag_benchmark` stable 
 
 并记录实际验证命令和输出。
 
-- [ ] **步骤 4：更新本计划执行记录**
+- [x] **步骤 4：更新本计划执行记录**
 
 在本文顶部新增实际执行记录。执行记录只写已经发生的提交，不预先写空 SHA；每完成一个任务后追加一条真实记录，例如：
 
@@ -809,7 +814,7 @@ P4-5D 已完成 fixture-backed positive RAG case：`evals.rag_benchmark` stable 
 
 后续任务记录必须使用真实提交短 SHA 和真实 commit subject。
 
-- [ ] **步骤 5：文档自检**
+- [x] **步骤 5：文档自检**
 
 运行：
 
@@ -821,7 +826,7 @@ git diff --check -- docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/p
 
 预期：前两个命令无匹配，`git diff --check` 无输出。
 
-- [ ] **步骤 6：运行文档相邻回归**
+- [x] **步骤 6：运行文档相邻回归**
 
 运行：
 
@@ -833,7 +838,7 @@ bash scripts/run_eval_periodic.sh
 
 预期：全部通过，RAG gate 输出 `cases=10 passed=10 failed=0` 和 `Gate passed`。
 
-- [ ] **步骤 7：提交任务 4**
+- [x] **步骤 7：提交任务 4**
 
 运行：
 
