@@ -40,7 +40,7 @@ bash scripts/run_eval_pr_gate.sh
 
 `.github/workflows/timing-gate-eval.yml` 在 PR 和主分支 push 上调用同一个脚本。Workflow 显式设置 `NANOBOT_TESTING`、`DATABASE_URL`、`NEW_API_KEY` 和 `NANOBOT_ADMIN_TOKEN`，避免测试导入配置时写入 `.env`。
 
-该入口只运行稳定 baseline gate。P4-5B 已完成周期性复跑和报告归档；P4-5C 已完成第一轮 RAG manual 样本扩充；P4-5D 已完成 fixture-backed positive RAG case，RAG stable gate 当前包含 9 个 manual constraint case 和 1 个固定 memory fixture positive case。
+该入口只运行稳定 baseline gate。P4-5B 已完成周期性复跑和报告归档；P4-5C 已完成第一轮 RAG manual 样本扩充；P4-5D 已完成 memory fixture-backed positive RAG case；P4-5E 已补齐 knowledge fixture 引用正例。RAG stable gate 当前包含 9 个 manual constraint case 和 2 个固定 fixture positive case。
 
 ## 周期性复跑与报告归档
 
@@ -123,8 +123,8 @@ P4-2 已将 Admin 标注工作台拆为后端契约和 WebUI 两个阶段，设�
 
 - WebUI 从 `/api/v1/admin/evals/expected-contract` 读取 expected 契约，不再手写 `expected_action`、`should_learn`、`quality`、`reason`、`delay_seconds` 等不可评分字段。
 - 标注请求只提交 scorer 会读取的 `expected` 字段；人工解释写入 `note`，不写入 `expected.reason`。
-- Promote 操作必须先发送 `{ "dry_run": true, "target_dataset": "..." }`，展示后端返回的 `target_dataset`、`path` 和 case 摘要后，用户再二次确认 apply。
-- Apply 请求发送 `{ "dry_run": false, "target_dataset": "..." }`，成功后刷新候选列表；目标数据集默认使用候选 suite，并允许人工调整。
+- Promote 操作必须先发送 `{ "dry_run": true, "target_dataset": "timing_gate" }` 这类明确目标数据集的请求，展示后端返回的 `target_dataset`、`path` 和 case 摘要后，用户再二次确认 apply。
+- Apply 请求发送 `{ "dry_run": false, "target_dataset": "timing_gate" }` 这类明确目标数据集的请求，成功后刷新候选列表；目标数据集默认使用候选 suite，并允许人工调整。
 
 ## Dataset 与 Suite
 
@@ -165,7 +165,7 @@ python -B -m evals.run --suite capability_rendering_contract --baseline evals/ba
 
 `evals/rag_benchmark/` 保持独立 benchmark 入口，不并入通用 `EvalCase`。原因是 RAG benchmark 需要独立的召回样本、索引上下文和评分口径；通用 candidates 闭环只负责把可评分的用户交互样本沉淀为稳定 case。
 
-P4-4 已为 RAG benchmark 增加专用 baseline diff 和 gate。P4-5D 后，稳定门禁运行 manual case、固定 fixture positive case 和 deterministic provider：
+P4-4 已为 RAG benchmark 增加专用 baseline diff 和 gate。P4-5E 后，稳定门禁运行 manual case、固定 fixture positive cases 和 deterministic provider：
 
 ```bash
 python -B -m evals.rag_benchmark.run \
@@ -190,7 +190,7 @@ Generated case 只作为本地 DB 采样候选，不进入仓库稳定 baseline�
 
 P4-5C 已将 manual deterministic gate 的样本从 3 个扩充到 9 个。新增样本仍全部是 `constraint_only`，用于覆盖 memory、knowledge、sticker 和 group_memory 的过滤、scope、citation、sendable 约束。
 
-P4-5D 已新增 `evals/rag_benchmark/fixtures.py` 和 `positive_v1` fixture DB builder。当前 stable gate 的 `case_scope` 是 `manual+fixture`，baseline 包含 `memory_fixture_positive_001`，`metrics.overall.positive_cases=1`、`hit@5=1.0`、`mrr=1.0`。PR gate 使用 `--min-hit-at-5 1.0` 和 `--min-mrr 1.0`，防止正例召回退化。
+P4-5D 已新增 `evals/rag_benchmark/fixtures.py` 和 `positive_v1` fixture DB builder。P4-5E 已把 `positive_v1` 从单一 memory 正例扩展为 memory + knowledge 双正例：baseline 包含 `memory_fixture_positive_001` 和 `knowledge_fixture_positive_001`，`metrics.overall.positive_cases=2`、`metrics.source:knowledge.positive_cases=1`、`hit@5=1.0`、`mrr=1.0`。knowledge fixture 固定命中 `knowledge:9001:chunk:0`，并通过 `requires_citation=true` 的 `checks.citation=true`。PR gate 使用 `--min-hit-at-5 1.0` 和 `--min-mrr 1.0`，防止正例召回退化。
 
 更新 manual case 或 fixture case 时必须同步 `evals/baselines/rag_benchmark.json`，并保证 baseline 的 `case_scores[*].case_id` 集合与 enabled manual case 和 `fixture_cases("positive_v1")` 的并集一致。`tests/test_rag_benchmark.py::test_rag_benchmark_baseline_file_matches_manual_gate_contract` 会守住这个合同。
 
@@ -203,4 +203,4 @@ P4-5D 已新增 `evals/rag_benchmark/fixtures.py` 和 `positive_v1` fixture DB b
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入；P4-5B 已完成周期性复跑、手动触发和报告 artifact 归档；P4-5C 已完成第一轮 RAG manual 样本扩充；P4-5D 已完成 fixture-backed positive RAG case。下一步转向更多 fixture source 覆盖或真实样本运营动作。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入；P4-5B 已完成周期性复跑、手动触发和报告 artifact 归档；P4-5C 已完成第一轮 RAG manual 样本扩充；P4-5D 已完成 memory fixture-backed positive RAG case；P4-5E 已完成 knowledge fixture citation 正例。下一步转向更多 fixture source 覆盖或真实样本运营动作。

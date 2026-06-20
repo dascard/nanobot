@@ -542,7 +542,7 @@ git add tests/test_rag_benchmark.py evals/rag_benchmark/fixtures.py evals/baseli
 git commit -m "feat(评测): 增加 knowledge fixture 引用正例"
 ```
 
-提交前确认 RAG stable gate 和相邻回归结果已记录到本计划。额外全量验证已完成：`1374 passed, 6 skipped, 139 warnings in 113.51s`。
+提交前确认 RAG stable gate 和相邻回归结果已记录到本计划。额外全量验证已完成：`1374 passed, 6 skipped, 139 warnings in 113.51s`。提交：`1d19b95 feat(评测): 增加 knowledge fixture 引用正例`。
 
 ## 任务 4：文档收口与最终验证
 
@@ -552,7 +552,7 @@ git commit -m "feat(评测): 增加 knowledge fixture 引用正例"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/rag-knowledge-fixture-citation.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 记录 RAG stable gate 当前 scope：
 
@@ -560,7 +560,7 @@ git commit -m "feat(评测): 增加 knowledge fixture 引用正例"
 RAG stable gate 当前使用 `manual+fixture` scope：仓库内 manual `constraint_only` cases 加 `positive_v1` fixture cases。`positive_v1` 现在包含 memory 与 knowledge 两个正例，其中 knowledge fixture 固定验证 `requires_citation=true` 的非空候选。
 ```
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在路线项 8 的 P4-5D 之后追加 P4-5E 状态：
 
@@ -570,7 +570,7 @@ RAG stable gate 当前使用 `manual+fixture` scope：仓库内 manual `constrai
 
 同步路线下一步：更多 fixture source 覆盖可继续，但当前 knowledge citation 正例已完成。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 在 P4-5D 后新增 P4-5E 阶段记录：
 
@@ -582,7 +582,7 @@ RAG stable gate 当前使用 `manual+fixture` scope：仓库内 manual `constrai
 
 同时记录任务提交 SHA、红灯、绿灯、RAG stable gate 和全量测试结果。
 
-- [ ] **步骤 4：更新本计划执行记录**
+- [x] **步骤 4：更新本计划执行记录**
 
 把任务 1 到任务 3 的真实命令输出摘要写回本计划，包括：
 
@@ -592,7 +592,7 @@ RAG stable gate 当前使用 `manual+fixture` scope：仓库内 manual `constrai
 - 相邻回归输出。
 - 各任务提交短 SHA。
 
-- [ ] **步骤 5：文档自检**
+- [x] **步骤 5：文档自检**
 
 运行：
 
@@ -604,7 +604,9 @@ git diff --check -- docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/p
 
 预期：前两个命令无匹配，`git diff --check` 无输出。
 
-- [ ] **步骤 6：运行最终相邻验证**
+实际：占位符扫描无匹配，U+FFFD 扫描无匹配，`git diff --check` 无输出。
+
+- [x] **步骤 6：运行最终相邻验证**
 
 运行：
 
@@ -620,7 +622,9 @@ python -B -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 7：运行 PR gate**
+实际：文档相邻验证结果为 `61 passed, 21 warnings in 7.07s`。
+
+- [x] **步骤 7：运行 PR gate**
 
 运行：
 
@@ -631,16 +635,20 @@ bash scripts/run_eval_pr_gate.sh
 
 预期：所有子 gate 通过，RAG gate 输出 `cases=11 passed=11 failed=0` 和 `Gate passed`。
 
-- [ ] **步骤 8：运行全量测试**
+实际：评测守卫结果为 `27 passed, 1 warning in 1.83s`，TimingGate 和 capability gates 均输出 `Gate passed`；RAG gate 输出 `cases=11 passed=11 failed=0` 和 `Gate passed`。
+
+- [x] **步骤 8：运行全量测试**
 
 运行：
 
 ```bash
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
-python -m pytest tests/ -v
+python -m pytest tests/ -v -p no:cacheprovider
 ```
 
 预期：0 failures。
+
+实际：`1374 passed, 6 skipped, 139 warnings in 105.13s`。
 
 - [ ] **步骤 9：提交任务 4**
 
@@ -655,7 +663,6 @@ git commit -m "docs(评测): 收口 knowledge fixture 引用状态"
 
 ## 提交边界
 
-- 计划提交：`docs(计划): 记录 knowledge fixture 引用计划`
-- 任务 1 + 任务 2：`feat(评测): 增加 knowledge fixture 引用正例`
-- 任务 3：`test(评测): 固化 knowledge fixture 引用门禁`
+- 计划提交：`a8ab8b8 docs(计划): 记录 knowledge fixture 引用计划`
+- 任务 1-3：`1d19b95 feat(评测): 增加 knowledge fixture 引用正例`
 - 任务 4：`docs(评测): 收口 knowledge fixture 引用状态`
