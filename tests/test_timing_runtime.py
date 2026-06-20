@@ -913,12 +913,17 @@ class TestGroupRuntime:
         assert result["timing_scoring"]["model_used"] is False
 
     @pytest.mark.asyncio
-    async def test_group_id_normalized_in_state_key(self):
+    async def test_group_id_normalized_in_state_key(self, monkeypatch):
         """不同格式的 group_id 映射到同一个 runtime state。"""
         runtime = GroupRuntime()
+
+        async def fail_gate(*_args, **_kwargs):
+            raise AssertionError("group_id normalize 测试不应调用 TimingGate 模型")
+
+        monkeypatch.setattr(runtime, "_call_gate", fail_gate)
         await runtime.process_message("123456", {
             "sender_id": "u1", "sender_name": "A", "message": "hi",
-        })
+        }, trigger_reason="ambient")
         await runtime.process_message("group_123456", {
             "sender_id": "u2", "sender_name": "B", "message": "hello",
         }, trigger_reason="ambient")
