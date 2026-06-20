@@ -148,6 +148,19 @@ def test_evals_candidates_page_exposes_read_only_batch_audit():
     assert "批量应用" not in source
 
 
+def test_evals_page_exposes_candidate_trend_report():
+    source = EVALS_JS.read_text(encoding="utf-8")
+
+    assert "趋势报表" in source
+    assert "/evals/candidates/trend" in source
+    assert "candidateTrend" in source
+    assert "top_blocking_reasons" in source
+    assert "by_status" in source
+    assert "批量拒绝" not in source
+    assert "批量暂缓" not in source
+    assert "批量应用" not in source
+
+
 def test_sticker_duplicate_actions_do_not_use_emoji_buttons():
     source = read_app()
 

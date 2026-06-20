@@ -50,6 +50,10 @@ export function EvalsPage() {
   const [batchAuditResult, setBatchAuditResult] = useState(null)
   const [batchAuditError, setBatchAuditError] = useState('')
   const [batchAuditLoading, setBatchAuditLoading] = useState(false)
+  const [candidateTrend, setCandidateTrend] = useState(null)
+  const [trendDays, setTrendDays] = useState(30)
+  const [trendError, setTrendError] = useState('')
+  const [trendLoading, setTrendLoading] = useState(false)
   const [detail, setDetail] = useState(null)
   const [showLabel, setShowLabel] = useState(null)
   const [labelSuite, setLabelSuite] = useState('')
@@ -92,10 +96,28 @@ export function EvalsPage() {
     api.get('/evals/runs', { params: { limit: 20 } }).then(r => setRuns(r.data.items || []))
   }, [])
 
+  const loadCandidateTrend = useCallback(() => {
+    const days = Math.max(1, Math.min(Number.parseInt(trendDays, 10) || 30, 90))
+    const params = { days }
+    if (suiteFilter) {
+      params.suite = suiteFilter
+      params.target_dataset = suiteFilter
+    }
+    if (statusFilter) params.status = statusFilter
+    if (sourceFilter) params.source = sourceFilter
+    setTrendLoading(true)
+    setTrendError('')
+    api.get('/evals/candidates/trend', { params })
+      .then(r => setCandidateTrend(r.data))
+      .catch(e => setTrendError(e.response?.data?.detail || e.message))
+      .finally(() => setTrendLoading(false))
+  }, [trendDays, suiteFilter, statusFilter, sourceFilter])
+
   useEffect(() => {
     if (tab === 'candidates') loadCandidates()
+    if (tab === 'trend') loadCandidateTrend()
     if (tab === 'runs') loadRuns()
-  }, [tab, loadCandidates, loadRuns])
+  }, [tab, loadCandidates, loadCandidateTrend, loadRuns])
 
   useEffect(() => {
     api.get('/evals/expected-contract')
@@ -118,6 +140,12 @@ export function EvalsPage() {
     if (!first) return ''
     if (first.code && first.message) return `${first.code}: ${first.message}`
     return first.code || first.message || ''
+  }
+
+  const trendReasonText = (bucket) => {
+    const reasons = bucket?.top_blocking_reasons || []
+    if (!reasons.length) return '-'
+    return reasons.slice(0, 3).map(item => `${item.code}:${item.count}`).join(', ')
   }
 
   const fieldsForSuite = (suite) => (
@@ -382,6 +410,8 @@ export function EvalsPage() {
       <Card className="sticky top-0 z-10 p-2 mb-4 flex gap-1 flex-wrap bg-slate-950/95 backdrop-blur border border-slate-800">
         <button onClick={() => setTab('candidates')}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'candidates' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>候选列表</button>
+        <button onClick={() => setTab('trend')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'trend' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>趋势报表</button>
         <button onClick={() => setTab('runs')}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'runs' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>运行历史</button>
       </Card>
@@ -818,6 +848,90 @@ export function EvalsPage() {
                 </div>
               </div>
             </Modal>
+          )}
+        </div>
+      )}
+
+      {tab === 'trend' && (
+        <div className="space-y-4">
+          <Card className="p-4">
+            <div className="grid gap-2 md:grid-cols-5">
+              <input value={suiteFilter} onChange={e => setSuiteFilter(e.target.value)}
+                placeholder="suite 过滤" className="p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs" />
+              <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+                className="p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs">
+                <option value="">全部状态</option>
+                <option value="candidate">candidate</option>
+                <option value="labeled">labeled</option>
+                <option value="ignored">ignored</option>
+                <option value="deferred">deferred</option>
+                <option value="rejected">rejected</option>
+                <option value="promoted">promoted</option>
+              </select>
+              <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}
+                className="p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs">
+                <option value="">全部来源</option>
+                <option value="log">log</option>
+                <option value="db">db</option>
+              </select>
+              <input value={trendDays} onChange={e => setTrendDays(e.target.value)}
+                type="number" min="1" max="90"
+                className="p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs" />
+              <button onClick={loadCandidateTrend} disabled={trendLoading}
+                className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50">
+                {trendLoading ? '刷新中...' : '刷新'}
+              </button>
+            </div>
+            {trendError && (
+              <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                {trendError}
+              </div>
+            )}
+          </Card>
+
+          {candidateTrend && (
+            <>
+              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                <MiniStat label="候选总数" value={candidateTrend.summary?.total || 0} />
+                <MiniStat label="ready" value={candidateTrend.summary?.readiness?.ready || 0} tone="emerald" />
+                <MiniStat label="blocked" value={candidateTrend.summary?.readiness?.blocked || 0} tone="red" />
+                <MiniStat label="日期桶" value={(candidateTrend.buckets || []).length} tone="blue" />
+              </div>
+
+              <Card>
+                <div className="overflow-x-auto">
+                  <table className="min-w-[820px] w-full text-xs">
+                    <thead><tr className="text-left text-slate-500 border-b border-slate-800">
+                      <th className="px-3 py-2">日期</th>
+                      <th className="px-3 py-2">created</th>
+                      <th className="px-3 py-2">by_status</th>
+                      <th className="px-3 py-2">by_source</th>
+                      <th className="px-3 py-2">ready</th>
+                      <th className="px-3 py-2">blocked</th>
+                      <th className="px-3 py-2">top_blocking_reasons</th>
+                    </tr></thead>
+                    <tbody>
+                      {(candidateTrend.buckets || []).map(bucket => (
+                        <tr key={bucket.date} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                          <td className="px-3 py-2 font-mono">{bucket.date}</td>
+                          <td className="px-3 py-2">{bucket.created || 0}</td>
+                          <td className="px-3 py-2 font-mono text-[11px] text-slate-300">{JSON.stringify(bucket.by_status || {})}</td>
+                          <td className="px-3 py-2 font-mono text-[11px] text-slate-300">{JSON.stringify(bucket.by_source || {})}</td>
+                          <td className="px-3 py-2 text-emerald-300">{bucket.readiness?.ready || 0}</td>
+                          <td className="px-3 py-2 text-red-300">{bucket.readiness?.blocked || 0}</td>
+                          <td className="px-3 py-2 max-w-[260px] truncate" title={trendReasonText(bucket)}>{trendReasonText(bucket)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+
+              <Card className="p-4">
+                <div className="mb-2 text-xs text-slate-500">完整 payload</div>
+                <JsonBlock value={candidateTrend} className="max-h-96" />
+              </Card>
+            </>
           )}
         </div>
       )}
