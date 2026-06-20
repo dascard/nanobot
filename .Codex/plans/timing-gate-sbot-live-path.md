@@ -15,8 +15,11 @@
 - 设计文档：`docs/superpowers/specs/2026-06-20-timing-gate-sbot-live-path-design.md`
 - 设计提交：`6463ee8 docs(时机): 设计 s_bot live path 收口`
 - 计划提交：`1795d04 docs(计划): 记录 s_bot live path 收口计划`
+- 任务 1 实现提交：`2fcfad7 fix(时机): 接入其他 bot 软抑制评分`
 - 任务 1 红灯：route 测试失败于响应仍带 `hard_rule=bot_sender_no_timing`；runtime 测试失败于 `gate_calls == []`，说明 `is_other_bot` 未参与 scoring。
 - 任务 1 绿灯：三项定向测试 `3 passed, 21 warnings in 2.16s`；相邻回归 `tests/test_api.py tests/test_timing_runtime.py tests/test_timing_score.py` 结果 `157 passed, 21 warnings in 23.30s`。
+- 任务 2 文档自检：占位符扫描无匹配，U+FFFD 扫描无匹配，`git diff --check` 无输出。
+- 任务 2 最终验证：相邻回归 `157 passed, 21 warnings in 23.75s`；全量测试 `1372 passed, 6 skipped, 139 warnings in 115.45s`。
 - 当前范围：群聊 ingress 分流、runtime pending 字段、scoring 参数透传、route 级 scoring meta 断言、文档状态同步。
 - 不纳入本计划：TimingGate 阈值调参、Prompt Runtime 模板、Admin / WebUI、RAG fixture、生产 DB schema。
 
@@ -189,6 +192,8 @@ python -B -m pytest \
 
 预期：3 passed。
 
+实际：三项定向测试 `3 passed, 21 warnings in 2.16s`。
+
 - [x] **步骤 7：运行相邻回归**
 
 运行：
@@ -199,6 +204,8 @@ python -B -m pytest tests/test_api.py tests/test_timing_runtime.py tests/test_ti
 
 预期：全部通过。
 
+实际：相邻回归 `tests/test_api.py tests/test_timing_runtime.py tests/test_timing_score.py` 结果 `157 passed, 21 warnings in 23.30s`。
+
 - [x] **步骤 8：提交任务 1**
 
 运行：
@@ -208,6 +215,8 @@ git add tests/test_api.py tests/test_timing_runtime.py core/group_runtime/runtim
 git commit -m "fix(时机): 接入其他 bot 软抑制评分"
 ```
 
+已提交：`2fcfad7 fix(时机): 接入其他 bot 软抑制评分`。
+
 ## 任务 2：文档收口与最终验证
 
 **文件：**
@@ -215,19 +224,19 @@ git commit -m "fix(时机): 接入其他 bot 软抑制评分"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/timing-gate-sbot-live-path.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在路线项 10 的已完成列表中追加：其他 bot sender live path 已接入 `s_bot` soft reject，当前 bot 自身回声仍 hard stop。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 新增 “TimingGate s_bot live path 收口” 记录，写明设计提交、实现提交、红灯、绿灯和验证结果。
 
-- [ ] **步骤 3：更新本计划执行记录**
+- [x] **步骤 3：更新本计划执行记录**
 
 在本文顶部或对应任务中追加真实提交 SHA 和验证输出。
 
-- [ ] **步骤 4：文档自检**
+- [x] **步骤 4：文档自检**
 
 运行：
 
@@ -239,7 +248,9 @@ git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/timing-ga
 
 预期：前两个命令无匹配，`git diff --check` 无输出。
 
-- [ ] **步骤 5：运行最终验证**
+实际：占位符扫描无匹配，U+FFFD 扫描无匹配，`git diff --check` 无输出。
+
+- [x] **步骤 5：运行最终验证**
 
 运行：
 
@@ -250,7 +261,9 @@ python -B -m pytest tests/ -v -p no:cacheprovider
 
 预期：0 failures。
 
-- [ ] **步骤 6：提交任务 2**
+实际：相邻回归 `tests/test_api.py tests/test_timing_runtime.py tests/test_timing_score.py` 结果 `157 passed, 21 warnings in 23.75s`；全量测试 `tests/` 结果 `1372 passed, 6 skipped, 139 warnings in 115.45s`。
+
+- [x] **步骤 6：提交任务 2**
 
 运行：
 
@@ -262,6 +275,6 @@ git commit -m "docs(时机): 收口 s_bot live path 状态"
 ## 提交边界
 
 - 设计阶段：`docs(时机): 设计 s_bot live path 收口`（已完成：`6463ee8`）。
-- 计划阶段：`docs(计划): 记录 s_bot live path 收口计划`。
-- 任务 1：`fix(时机): 接入其他 bot 软抑制评分`。
+- 计划阶段：`docs(计划): 记录 s_bot live path 收口计划`（已完成：`1795d04`）。
+- 任务 1：`fix(时机): 接入其他 bot 软抑制评分`（已完成：`2fcfad7`）。
 - 任务 2：`docs(时机): 收口 s_bot live path 状态`。

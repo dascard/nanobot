@@ -7,11 +7,11 @@
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
-P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计、阶段拆分、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate。P4-1「评测数据集与标注闭环」已完成 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集；P4-2「Admin 标注工作台契约化与 promote 预检 UI」已完成后端 expected contract schema/API、WebUI 契约化标注和 promote 预检流程；P4-3「能力契约评测数据集扩展」已完成 reply / rendering 两个能力数据集、baseline gate 和最终回归；P4-4「RAG baseline 门禁」已完成 RAG benchmark 专用 baseline diff、CLI gate、稳定 baseline、Admin API 和 WebUI 展示；P4-5A「统一评测 PR gate」已完成统一脚本和 CI 接入；P4-5B「周期性复跑与报告归档」已完成 keep-going 脚本、workflow schedule / manual dispatch 和 artifact 归档；P4-5C「RAG manual 样本扩充」已完成；P4-5D「RAG fixture 正例门禁」已完成。下一步转向更多 fixture source 覆盖或真实样本运营动作。
+P2-2「标准化请求 / 响应信封」的响应信封兼容双写已完成并通过最终验证：只读审计已完成，设计文档已随 `c984036 docs(消息): 设计响应信封标准` 提交，实现计划已写入 `.Codex/plans/message-envelope.md`；任务 1 共享 builder 已随 `147421b feat(消息): 构建响应信封` 提交，任务 2 `/chat` 非流式与 SSE done 信封已随 `57006f3 feat(消息): 返回私聊响应信封` 提交，任务 3 `/group/message` 信封已随 `49b3104 feat(消息): 返回群聊响应信封` 提交，任务 4 push owner 信封适配已随 `fc0eeaf feat(推送): 支持信封推送适配` 提交，任务 5 route push 集成已随 `0c37a30 feat(推送): 接入路由信封推送` 提交，任务 6 响应侧文档和最终验证随 `617aa25 docs(计划): 同步响应信封状态` 收口。P2-2.5「client_meta 边界层校验」设计文档已随 `ce05b35 docs(计划): 设计客户端元信息校验` 提交，`core/client_meta.py` 已随 `d92b632 feat(消息): 校验客户端元信息边界` 接入 `/chat` 与 `/group/message`，把路线项 5 的剩余尾项收口。P2-3「QQ 出站渲染契约」已完成设计、计划、renderer、push、schedule、route 回归、富媒体边界、prompt usage 同步、文档收口和最终验证：设计提交为 `c72ddb3`，计划提交为 `1f4aa69`，实现与测试提交为 `72a9751`、`0c8c590`、`f19b09b`、`f0bfbdf`、`04ff6d3`、`6aea7f8`；文档收口提交为 `docs(计划): 收口 QQ 出站渲染状态`。P2-4「Prompt platform × chat_type 二维适配」已完成设计、计划、核心编排、Bridge / Admin 透传、QQ 模板迁移和集成回归，提交为 `27e632f`、`164b215`、`ca93dc2`、`18d0b0d`、`17a7bd8`、`fe2d81b`。P3-1「SSE 真 token 流式剩余收敛」已完成设计、实现、文档收口和最终验证，提交为 `bca50b8`、`e56a406`、`d8e8703`、`84cb0cb`、`a987d31`、`88268a1`、`a5f705a`、`87f3b40`；最终验证结果为流式定向回归 `23 passed`、API / Bridge 回归 `145 passed`、全量测试 `1311 passed, 6 skipped`。P3-2「私聊 TimingGate 可观测补齐」已完成代码实现和最终验证，提交为 `14b47a5 feat(时机): 持久化私聊评分元信息`；随后 `/models/status` 本地模型回退缺失 import 的独立小修已随 `5c69b7e fix(模型): 修复状态接口本地模型回退` 提交。P3-3「TimingGate 持续评估」已完成三路只读审计、阶段拆分、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate。TimingGate `s_bot` live path 收口已完成任务 1：设计提交为 `6463ee8 docs(时机): 设计 s_bot live path 收口`，计划提交为 `1795d04 docs(计划): 记录 s_bot live path 收口计划`，实现提交为 `2fcfad7 fix(时机): 接入其他 bot 软抑制评分`；`current_bot` 自身回声仍保持入口 hard stop，`explicit_bot` / `client_meta` 其他 bot sender 会标记为 `is_other_bot=True` 进入 `GroupRuntime`，`GroupPendingMessage` 透传该字段，`_score_timing()` 聚合 pending 后调用 `decide_timing(is_other_bot=any(m.is_other_bot for m in msgs))`，route 测试已断言 ChatLog meta 中 `s_bot=0.70`。任务 1 定向验证为 `3 passed, 21 warnings in 2.16s`，相邻回归为 `157 passed, 21 warnings in 23.30s`。P4-1「评测数据集与标注闭环」已完成 expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界和首个 `capability_model_routing` 能力数据集；P4-2「Admin 标注工作台契约化与 promote 预检 UI」已完成后端 expected contract schema/API、WebUI 契约化标注和 promote 预检流程；P4-3「能力契约评测数据集扩展」已完成 reply / rendering 两个能力数据集、baseline gate 和最终回归；P4-4「RAG baseline 门禁」已完成 RAG benchmark 专用 baseline diff、CLI gate、稳定 baseline、Admin API 和 WebUI 展示；P4-5A「统一评测 PR gate」已完成统一脚本和 CI 接入；P4-5B「周期性复跑与报告归档」已完成 keep-going 脚本、workflow schedule / manual dispatch 和 artifact 归档；P4-5C「RAG manual 样本扩充」已完成；P4-5D「RAG fixture 正例门禁」已完成。TimingGate `s_bot` 文档收口后，下一步转向更多 fixture source 覆盖或真实样本运营动作。
 
 ## 当前目标
 
-TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」、P4-1「评测数据集与标注闭环」、P4-2「Admin 标注工作台契约化与 promote 预检 UI」、P4-3「能力契约评测数据集扩展」、P4-4「RAG baseline 门禁」、P4-5A「统一评测 PR gate」、P4-5B「周期性复跑与报告归档」、P4-5C「RAG manual 样本扩充」和 P4-5D「RAG fixture 正例门禁」均已完成验证。下一步默认转向更多 fixture source 覆盖或真实样本运营动作。
+TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落地，Prompt V2 默认 live 接管、H29 第一刀、P1-5 Prompt legacy 收口、P1-6 旧提示词资产收敛、P1-7 残余同步 IO 审计与 async 热路径隔离、P1-8 模型能力校验，以及 P2-1 工具 platform 维度配置均已完成。当前 `docs/todo.md` 路线项 4 已落地：`ToolOverride(scope_type="platform")`、`RuntimeToolDecision.platform`、真实入口 platform 透传、Admin API 平台覆盖预览和 WebUI 平台覆盖入口都已具备。路线项 5 已完成响应信封兼容双写和 `client_meta` 关键字段边界校验；P2-3「QQ 出站渲染契约」、P2-4「Prompt platform × chat_type 二维适配」、P3-1「SSE 真 token 流式剩余收敛」、P3-2「私聊 TimingGate 可观测补齐」、P3-3A「标注审计复跑入口」、P3-3B「TimingGate CI / PR gate」、P4-1「评测数据集与标注闭环」、P4-2「Admin 标注工作台契约化与 promote 预检 UI」、P4-3「能力契约评测数据集扩展」、P4-4「RAG baseline 门禁」、P4-5A「统一评测 PR gate」、P4-5B「周期性复跑与报告归档」、P4-5C「RAG manual 样本扩充」和 P4-5D「RAG fixture 正例门禁」均已完成验证。TimingGate `s_bot` live path 偏差已完成代码收口：其他 bot sender 不再被 `bot_sender_no_timing` 统一 hard stop，而是进入 scoring 并触发 `s_bot` soft reject；当前 bot 自身回声仍 hard stop。下一步默认转向更多 fixture source 覆盖或真实样本运营动作。
 
 ## 文档口径
 
@@ -80,6 +80,7 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P3-2 | 已完成 | 私聊 TimingGate 可观测补齐 | 私聊 `timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化 | `feat(时机): 持久化私聊评分元信息` |
 | P3-3A | 已完成 | TimingGate 标注审计复跑 | `timing_signal_audit` 已支持离线 labeled report / sidecar labels 复跑入口 | `feat(评测): 支持时机信号标注复跑` |
 | P3-3B | 已完成 | TimingGate CI / PR gate | 已新增稳定 baseline、统一脚本、无 action scoring case 和 CI workflow | `ci(评测): 接入 timing gate 回归门禁` |
+| TimingGate s_bot live path 收口 | 已完成 | 其他 bot sender live path 接入 `s_bot` soft reject；`current_bot` 自身回声仍 hard stop | `6463ee8` / `1795d04` / `2fcfad7` / `docs(时机): 收口 s_bot live path 状态` |
 | P4-1 | 已完成 | 评测体系扩展 | expected 契约、候选标注、promote dry-run、离线 CLI、dataset / suite 边界、首个 `capability_model_routing` 能力数据集、文档收口和最终验证均已完成 | `e4fb70a` / `8b892a8` / `4f4cce7` / `b84cbf1` / `7a84084` / `71c3a53` / `a494f3b` / `5a8b601` |
 | P4-2 | 已完成 | Admin 标注工作台契约化与 promote 预检 UI | 后端 expected 契约、WebUI 契约化标注、`note` / `expected` 分离、promote dry-run → apply 预检 UI、WebUI build 和全量回归均已完成 | `docs(评测): 设计标注工作台契约` / `feat(评测): 暴露期望契约校验` / `feat(评测): 契约化标注工作台` |
 | P4-3 | 已完成 | 能力契约评测数据集扩展 | `capability_reply_contract` 与 `capability_rendering_contract` 数据集、baseline、离线 gate、渲染相邻回归和全量回归均已完成 | `docs(评测): 设计能力数据集扩展` / `docs(计划): 记录能力数据集扩展计划` / `feat(评测): 扩展回复契约数据集` / `feat(评测): 扩展渲染契约数据集` / `docs(评测): 收口能力数据集状态` |
@@ -88,6 +89,41 @@ TimingGate「规则信号 + 模型」混合决策主线已经完成阶段性落�
 | P4-5B | 已完成 | 周期性复跑与报告归档 | `scripts/run_eval_periodic.sh` 使用 keep-going 策略复跑稳定 gate，workflow 已支持 schedule / workflow_dispatch 并上传报告 artifact | `docs(评测): 设计周期复跑归档` / `docs(计划): 记录周期复跑计划` / `ci(评测): 增加周期评测脚本` / `ci(评测): 归档周期评测报告` / `docs(评测): 收口周期复跑状态` |
 | P4-5C | 已完成 | RAG manual 样本扩充 | manual case 已从 3 扩到 9，baseline 合同测试已收紧，稳定 gate 已通过 | `de97759` / `5511a50` / `2189391` / `93fe947` / `dcf492b` |
 | P4-5D | 已完成 | RAG fixture 正例门禁 | 新增固定 memory fixture DB、`manual+fixture` stable gate 和 positive metrics baseline | `6cbce35` / `375b9b3` / `dcf45e5` / `5b967b4` / `8b64ea0` / `docs(评测): 收口 RAG fixture 正例状态` |
+
+## 已完成阶段详情：TimingGate s_bot live path 收口
+
+状态：本阶段已完成设计、计划、任务 1 代码实现和任务 2 文档收口。设计文档为 `docs/superpowers/specs/2026-06-20-timing-gate-sbot-live-path-design.md`，实现计划为 `.Codex/plans/timing-gate-sbot-live-path.md`。本阶段只收口群聊 live ingress 到 TimingGate scoring 的偏差，不调整 TimingGate 阈值，不修改 Prompt Runtime 模板，不涉及 Admin / WebUI、RAG fixture 或生产 DB schema。
+
+目标：
+
+- 保留 `current_bot` 自身回声入口 hard stop，避免自回声进入 TimingGate。
+- 让 `explicit_bot` / `client_meta` 其他 bot sender 不再走 `bot_sender_no_timing` hard return，而是进入 `GroupRuntime`。
+- 在 `timing_message` 和 `GroupPendingMessage` 中透传 `is_other_bot`。
+- `_score_timing()` 使用 `any(m.is_other_bot for m in msgs)` 调用 `decide_timing(is_other_bot=<聚合结果>)`。
+- route 级测试覆盖 ChatLog meta 中 `timing_gate.scoring.signals.sub_signals.s_bot == 0.70`。
+
+计划项：
+
+- [x] 设计：提交 `6463ee8 docs(时机): 设计 s_bot live path 收口`。
+- [x] 实现计划：提交 `1795d04 docs(计划): 记录 s_bot live path 收口计划`。
+- [x] 任务 1：其他 bot sender 进入 runtime 并触发 `s_bot`，提交 `2fcfad7 fix(时机): 接入其他 bot 软抑制评分`。
+- [x] 任务 2：文档收口、文档自检和最终验证。
+
+验证记录：
+
+- 任务 1 红灯：route 测试失败于响应仍带 `hard_rule=bot_sender_no_timing`；runtime 测试失败于 `gate_calls == []`，说明 `is_other_bot` 未参与 scoring。
+- 任务 1 绿灯：三项定向测试结果 `3 passed, 21 warnings in 2.16s`。
+- 任务 1 相邻回归：`tests/test_api.py tests/test_timing_runtime.py tests/test_timing_score.py` 结果 `157 passed, 21 warnings in 23.30s`。
+- 任务 2 文档自检：占位符扫描无匹配，U+FFFD 扫描无匹配，`git diff --check` 无输出。
+- 任务 2 相邻回归：`tests/test_api.py tests/test_timing_runtime.py tests/test_timing_score.py` 结果 `157 passed, 21 warnings in 23.75s`。
+- 任务 2 全量验证：`python -B -m pytest tests/ -v -p no:cacheprovider` 结果 `1372 passed, 6 skipped, 139 warnings in 115.45s`。
+
+提交边界：
+
+- 设计阶段：`6463ee8 docs(时机): 设计 s_bot live path 收口`。
+- 计划阶段：`1795d04 docs(计划): 记录 s_bot live path 收口计划`。
+- 任务 1：`2fcfad7 fix(时机): 接入其他 bot 软抑制评分`。
+- 任务 2：`docs(时机): 收口 s_bot live path 状态`。
 
 ## 已完成阶段详情：P4-5D RAG fixture 正例门禁
 
@@ -775,7 +811,7 @@ P3-3B 验证记录：
 - `/chat` 非流式成功响应已接入兼容信封：返回 `reply`、`messages`、过滤后的 `reply_meta` 和 `meta`，并保留 `status`、`user_id`、`answer`、`answer_chunks` 和 `unprocessed_logs`。
 - `/chat` SSE done 已接入兼容信封：继续发送 `status="done"` 和 `answer`，同时新增 `reply`、`messages`、过滤后的 `reply_meta` 和 `meta`；`progress`、`delta`、`heartbeat`、`error` 事件结构未变。
 - `/group/message` continue / wait / no_reply 响应已接入兼容信封：新增 `status`、`messages`、过滤后的 `reply_meta` 和 `meta`，并保留 `action`、`reply`、`generation`、`reason`、`delay_seconds`、`diagnostics` 等旧字段。
-- `push_to_qq` 旧签名被调用方和测试依赖，P2-2 应新增 `push_envelope_to_qq(...)` 适配层，而不是破坏旧 helper。
+- `push_to_qq` 旧签名被调用方和测试依赖，P2-2 应新增 `push_envelope_to_qq(envelope)` 适配层，而不是破坏旧 helper。
 
 阶段拆分：
 
@@ -786,7 +822,7 @@ P3-3B 验证记录：
 - [x] 任务 1：新增 `core/message_envelope.py`，覆盖 `messages` 构造、`reply_meta` 过滤、`meta` 组装和信封 builder 的单元测试。提交：`147421b feat(消息): 构建响应信封`。
 - [x] 任务 2：API owner 在 `api/routes.py` 接入 `/chat` 非流式和 SSE done 响应信封，保留旧字段并返回过滤后的私聊 `reply_meta`。
 - [x] 任务 3：群聊 owner 在 `app/group_ingress/service.py` 接入 continue / wait / no_reply 响应信封，保留 `action` 调度语义。
-- [x] 任务 4：push owner 在 `core/daily_digest.py` 新增信封适配 helper，旧 `push_to_qq(...)` 签名不变。
+- [x] 任务 4：push owner 在 `core/daily_digest.py` 新增信封适配 helper，旧 `push_to_qq(target_type, target_id, message)` 签名不变。
 - [x] 任务 5：主线程集成 `api/routes.py` 中手动任务运行和流式断连 push call site，避免与 API / push worker 冲突。
 - [x] 任务 6：同步 `docs/message-field-standard.md`、`docs/todo.md`、本文件和实现计划状态，运行定向与全量验证后单独提交。
 
@@ -912,12 +948,12 @@ P3-3B 验证记录：
 只读审计结论：
 
 - 当前模型记录是普通 dict，没有强 schema；已存在字段主要是 `id`、`provider`、`intelligence`、`cost_input_1m`、`cost_output_1m`、`tier`、`tags`、`description`、`reasoning`、`context_window` 和 `enabled`。
-- 现有 `tags` 中的 `vision` / `multimodal` / `tool_use` 只能作为兼容推断来源；P1-8 不复用 `required_tags` 承载硬能力约束，因为旧 `ModelRegistry.select_model(required_tags=...)` 是软过滤语义。
+- 现有 `tags` 中的 `vision` / `multimodal` / `tool_use` 只能作为兼容推断来源；P1-8 不复用 `required_tags` 承载硬能力约束，因为旧 `ModelRegistry.select_model(required_tags=<标签>)` 是软过滤语义。
 - 能力字段采用顶层布尔字段，并兼容 overrides 中的嵌套 `capabilities` 输入；`supports_image` 缺失默认 false 或由 vision tag / 模型名推断，`supports_tools` 和 `supports_stream` 首版应保持兼容默认，至少先硬排除显式 false。
 - Bridge 带图主链路的数据流是 `metadata["files"]` → `prepare_image_parts()` → `ImagePart(data_url)` → KT `Message.to_dict()` → OpenAI `image_url` content part；当前模型选择发生在图片 event content 构造之后，因此候选过滤前已经能拿到 `has_image`。
 - KT controller 的生产 LLM 调用本身固定 streaming；`/chat?stream=true` 只控制 SSE 输出队列和用户 event stream 标记。因此 `supports_stream` 校验不能只覆盖直接 `NewAPIClient.chat_completion_stream()`，也要覆盖 Bridge / KT provider 的真实请求。
 - ToolPlan schema 会进入 Prompt Runtime；真实 OpenAI `tools` 只在直接 New API 路径或 KT native tool mode 的 SDK request 中出现。P1-8 要先保证候选过滤，再在 payload / SDK request 构造前加安全网。
-- 测试优先级以生产路径为准：先覆盖 `NanobotBridge.handle_message(files=...) -> get_ordered_candidates(required_capabilities=...)`，再覆盖 registry 归一化、直接 New API、stream / tools payload 和 eval runner。
+- 测试优先级以生产路径为准：先覆盖 `NanobotBridge.handle_message(files=<文件列表>) -> get_ordered_candidates(required_capabilities=<需求>)`，再覆盖 registry 归一化、直接 New API、stream / tools payload 和 eval runner。
 
 阶段拆分：
 
@@ -926,7 +962,7 @@ P3-3B 验证记录：
 - [x] 已完成 P1-8 只读审计：模型 registry / overrides、Bridge 图片和 stream 数据流、现有测试覆盖缺口均已梳理。
 - [x] 写入设计文档：`docs/superpowers/specs/2026-06-18-model-capability-validation-design.md`，覆盖能力字段、过滤策略、降级策略、手动模型策略和测试计划。提交：`ded7213 docs(模型能力): 设计请求能力校验`。
 - [x] 写入实现计划：`.Codex/plans/model-capability-validation.md`，按 TDD 拆分红灯、绿灯、重构和阶段提交。
-- [x] 任务 1-3：完成 registry 能力归一化、override `null` fallback、`get_ordered_candidates(required_capabilities=...)` 硬过滤和相关测试。提交：`388c00f feat(模型能力): 归一化能力并过滤候选`。说明：Bridge 带图候选要求已顺延到任务 5，不再归入任务 1。
+- [x] 任务 1-3：完成 registry 能力归一化、override `null` fallback、`get_ordered_candidates(required_capabilities=<需求>)` 硬过滤和相关测试。提交：`388c00f feat(模型能力): 归一化能力并过滤候选`。说明：Bridge 带图候选要求已顺延到任务 5，不再归入任务 1。
 - [x] 任务 4：直接 New API 请求已从 messages / tools / stream 自动推导能力需求，`chat_completion()` 和 `chat_completion_stream()` 均会把 `required_capabilities` 传给候选排序，手动模型能力不匹配会返回错误。提交：`d907a98 feat(模型能力): 推导直接请求能力需求`。
 - [x] 任务 5：让 `NanobotBridge` 主回复路由消费 `files`、ToolPlan schema 和 KT 固定 streaming 请求事实，手动模型同样执行能力校验。提交：`66fdfd9 feat(桥接): 接入回复模型能力校验`。
 - [x] 任务 6：实现 payload / SDK request 前安全网和无视觉候选时的降级策略，确保纯文本模型不会收到 `image_url` payload。提交：`d2a7a1f fix(模型能力): 防止发送不兼容请求`。
@@ -975,7 +1011,7 @@ P3-3B 验证记录：
 
 - [x] 共享 `aiohttp.ClientSession` 已随 `4550aca` 和 `2bf4ee7` 落地，核心 LLM 请求不再逐请求创建 session。
 - [x] P1-7 只读审计已完成，并随 `8ce5210` 写入设计文档。
-- [x] `nanobot_kt/image_pipeline.py` 主链路已由 `NanobotBridge.handle_message()` 使用 `await asyncio.to_thread(prepare_image_parts, ...)` 卸载。
+- [x] `nanobot_kt/image_pipeline.py` 主链路已由 `NanobotBridge.handle_message()` 使用 `await asyncio.to_thread(prepare_image_parts, *args)` 卸载。
 - [x] 私聊 / 群聊图片预缓存通过 Starlette `BackgroundTasks` 执行同步函数，不直接阻塞 ASGI event loop。
 - [x] `image_generation`、`image_summary` 和当前注册的 `ai_daily` 工具入口已在 `_execute()` 内使用 `asyncio.to_thread()` 包住同步 HTTP / 抓取逻辑。
 - [x] `daily_digest_scheduler()` 的 `time.sleep()` 运行在独立 daemon thread 中，不属于 ASGI event loop 阻塞。
@@ -991,7 +1027,7 @@ P3-3B 验证记录：
 
 - 任务 1 红灯：`test_group_message_sticker_preview_without_background_tasks_uses_to_thread` 失败，调用顺序第一项为 `direct_cache`。
 - 任务 1 绿灯：新增测试 `1 passed, 1 warning`；贴纸入口回归 `6 passed, 70 deselected, 20 warnings`；`tests/test_sticker_memory.py` `10 passed, 1 warning`。
-- 任务 2 红灯：临时直接调用 `prepare_image_parts(...)` 后，`test_handle_message_uses_multimodal_event_for_files` 失败于 `assert to_thread_calls`。
+- 任务 2 红灯：临时直接调用 `prepare_image_parts(parts)` 后，`test_handle_message_uses_multimodal_event_for_files` 失败于 `assert to_thread_calls`。
 - 任务 2 绿灯：守卫单测 `1 passed, 1 warning`；图片相关回归 `59 passed, 1 warning`。
 - 任务 3 红灯：临时把 3 个 Direct 工具改为直接同步调用后，3 个新增守卫全部失败，均未记录到 `asyncio.to_thread`。
 - 任务 3 绿灯：新增守卫 `3 passed, 1 warning`；Direct 工具回归 `41 passed, 1 warning`。
@@ -1431,6 +1467,6 @@ P1-6 验收重点：
 
 ## 下一步
 
-P4-5D「RAG fixture 正例门禁」已完成收口。下一步默认扩展更多 fixture source 覆盖，例如 knowledge fixture positive case 和固定 citation 断言；如果暂不继续 fixture，则从真实样本运营流程中人工确认更多稳定 manual case。
+TimingGate `s_bot` live path 收口完成后，默认下一步再回到更多 fixture source 覆盖，例如 knowledge fixture positive case 和固定 citation 断言；如果暂不继续 fixture，则从真实样本运营流程中人工确认更多稳定 manual case。
 
 TimingGate 真实日志标注、周期复跑报告调参和更多真实样本仲裁属于运营延续项，不抢占当前默认执行顺序。Prompt V2、P2-4、P3-1 和 P4-5D 均已完成，历史章节中保留的旧阶段说明仅作为执行记录，不再作为下一步来源。

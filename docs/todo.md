@@ -15,7 +15,7 @@
   `if not NANOBOT_API_TOKEN: return` —— 生产漏配 token 时，所有 `verify_token` 保护端点（`/search_logs`、`/recall` 等）对公网裸奔。admin 侧已正确改 503，主路由相反。
   **修**：启动时 fail-fast 断言 `NANOBOT_API_TOKEN` 非空；运行期未配置则 `raise HTTPException(503)`。
 
-- [x] **C2 ai_daily 兜底分支必崩（NameError）** · `creatures/.../news_search/tool.py:1822,1827` · CRITICAL · S
+- [x] **C2 ai_daily 兜底分支必崩（NameError）** · `creatures/<省略路径>/news_search/tool.py:1822,1827` · CRITICAL · S
   `render_html`/`FALLBACK_DIGEST` 仅在 `search_and_extract_news_v2` 内局部 import（1538-1542），`_execute` 未 import 即用。空结果/非 HTML 兜底一触发即 `NameError`——恰在「永不为空」保证最需要时崩溃。
   **修**：二者提升为模块级 import。
 
@@ -28,8 +28,8 @@
   **修**：回收前校验空闲（`session_lock.locked()` / 引用计数 / `is_busy`），或 `handle_message` 执行期周期回写 `last_used`；绝不 stop 正在服务的 bridge。
 
 - [x] **E4 熔断器记账 fire-and-forget 任务可被 GC** · `clients/new_api_client.py:320,641,662,690,708,817,835,867,884` · HIGH · S ·〔补漏新发现〕
-  所有 `record_success/record_failure` 用 `asyncio.create_task(...)` 启动却不保存返回 Task（无 `_bg_tasks`、无 `add_done_callback`）。事件循环仅持弱引用，任务可在完成前被 GC → 熔断记账丢失，CLAUDE.md 记载的「连续 3 次失败禁用 5min」机制被破坏，坏模型持续被选中。
-  **修**：维护类级 `set[asyncio.Task]` 强引用集合，`t=create_task(...); _bg.add(t); t.add_done_callback(_bg.discard)`；320 行持久化同理并记录异常。
+  所有 `record_success/record_failure` 用 `asyncio.create_task(coro)` 启动却不保存返回 Task（无 `_bg_tasks`、无 `add_done_callback`）。事件循环仅持弱引用，任务可在完成前被 GC → 熔断记账丢失，CLAUDE.md 记载的「连续 3 次失败禁用 5min」机制被破坏，坏模型持续被选中。
+  **修**：维护类级 `set[asyncio.Task]` 强引用集合，`t = create_task(coro); _bg.add(t); t.add_done_callback(_bg.discard)`；320 行持久化同理并记录异常。
 
 - [x] **E6 定时任务推送失败 → 每分钟重跑昂贵 Agent** · `core/daily_digest.py:573-585` · HIGH · S ·〔补漏新发现〕
   `task.last_run_at = now` 只在 `if ok:`（push 成功）内执行，而 `_should_run` 同分钟去重依赖 `last_run_at`。当 `_generate_task_message` 成功（完整跑 KT Agent，超时上限 600s）但 `push_to_qq` 失败时，`last_run_at` 不推进，下一分钟 cron 仍匹配 → 重复完整执行 Agent，形成重试风暴（窗口内无上限）。
@@ -47,11 +47,11 @@
 
 - [x] **H2 timing-gate/test 同步路由阻塞线程池** · `api/admin_routes.py:961` · HIGH · S
   同步 `def` 内 `for range(repeats)` 调用阻塞分类器（urllib，15s 超时），`repeats≤20` 单请求最多占线程 ~300s。
-  **修**：改 `async def` + `await asyncio.to_thread(gate.judge, ...)`，并收紧 repeats 上限。
+  **修**：改 `async def` + `await asyncio.to_thread(gate.judge, *args)`，并收紧 repeats 上限。
 
 - [x] **H17b /db/query 回显内部异常** · `api/admin_routes.py:2128,2144` · HIGH · S
   `raise HTTPException(500, str(e))` 泄露 SQL 片段/列名/SQLite 路径。
-  **修**：`logger.exception(...)` + 响应统一「内部错误」。
+  **修**：`logger.exception("内部错误")` + 响应统一「内部错误」。
 
 - [x] **C5 画像提取用户内容未净化** · `core/persona_preprocess.py:210-216` · HIGH · S
   候选日志 `content` 仅 `.strip()` 即拼入 system prompt 后，可伪造 JSON 结构。下游 `_validate_evidence_log_ids` 校验 log_id 归属 + role，限制为同用户自污染、无法跨用户伪造，故非 CRITICAL。
@@ -76,7 +76,7 @@
   **修**：取值后 `cost = 999 if cost is None else cost`；override 合并强制 None→默认；overrides schema 校验拒 null。
 
 - [x] **E3 b.stop() fire-and-forget 可被 GC** · `nanobot_kt/bridge.py:2006` · MEDIUM · S ·〔补漏新发现，同 E4 类〕
-  **修**：强引用集合 + `add_done_callback`，或 `await asyncio.gather(*(b.stop()...), return_exceptions=True)`（已持 `_create_lock`）。
+  **修**：强引用集合 + `add_done_callback`，或 `await asyncio.gather(*stop_tasks, return_exceptions=True)`（已持 `_create_lock`）。
 
 - [x] **H16 LIKE 通配符未转义** · `api/routes.py:1984-1996` · MEDIUM · S
   `.like(f"%{user_id}%")` / `content` 未转义 `%`/`_`；非经典注入（已参数化），但可强制全表扫描（配合 H15 放大 DoS）。
@@ -93,10 +93,10 @@
 - [x] **H17a /chat 端点回显异常** · `api/routes.py:825,868,912` · MEDIUM · S
   `HTTPException(500, str(e))` 泄露内部细节（上一行已有 `logger.error`）。**修**：detail 改通用消息 + `exc_info=True`。
 
-- [x] **H9 ai_daily 子线程丢 trace contextvars** · `creatures/.../news_search/tool.py:500,1647` · MEDIUM · M
+- [x] **H9 ai_daily 子线程丢 trace contextvars** · `creatures/<省略路径>/news_search/tool.py:500,1647` · MEDIUM · M
   `threading.Thread` 内 `asyncio.run(coro)` 不复制父 contextvars，`trace_id/run_id` 断链（功能正常，仅可观测性）。**修**：`contextvars.copy_context().run` 或 `run_coroutine_threadsafe`。
 
-- [x] **H32 analyzer inspect.signature 兼容层** · `creatures/.../group_analysis/analyzer.py:296-307` · MEDIUM · S
+- [x] **H32 analyzer inspect.signature 兼容层** · `creatures/<省略路径>/group_analysis/analyzer.py:296-307` · MEDIUM · S
   生产真实签名恒含 `prompt_key`，永走新路径无 bug；属测试耦合 + 每次分析 4 次 `inspect.signature` 异味。**修**：删兼容分支直接调用，统一两处测试 double 签名。
 
 - [x] **M7 RAG recency 恒为 0.5（维度失效）+ 三服务 ~60 行重复** · `core/knowledge_rag.py:475` / `memory_rag.py:373` / `sticker_rag.py:475` · MEDIUM · M
@@ -159,7 +159,7 @@
 
 #### 路线项 3 — 请求构造按模型能力校验（image_url / 多模态），能力声明入模型配置
 
-- **现状（2026-06-18 已落地）**：模型记录已归一到顶层 `supports_image` / `supports_tools` / `supports_stream` 字段，并兼容 `model_overrides.json` 的顶层字段和嵌套 `capabilities`；`get_ordered_candidates(required_capabilities=...)` 已支持硬过滤，显式不满足能力的候选不会进入排序。直接 `NewAPIClient.chat_completion()` / `chat_completion_stream()` 已能从 messages、tools 和 stream 推导能力需求；Bridge 主回复路由也已从 `metadata["files"]`、ToolPlan schema 和 KT 固定 streaming 请求事实生成能力需求，手动回复模型不满足能力时回退自动路由。payload / SDK request 前 guard 已防止绕过候选过滤；无视觉候选时会降级为纯文本说明并重新路由，不再把 `image_url` 发给纯文本模型。`model_routing` eval 已覆盖带图请求必须选 vision 候选，防止后续改动破坏能力硬过滤。
+- **现状（2026-06-18 已落地）**：模型记录已归一到顶层 `supports_image` / `supports_tools` / `supports_stream` 字段，并兼容 `model_overrides.json` 的顶层字段和嵌套 `capabilities`；`get_ordered_candidates(required_capabilities=<需求>)` 已支持硬过滤，显式不满足能力的候选不会进入排序。直接 `NewAPIClient.chat_completion()` / `chat_completion_stream()` 已能从 messages、tools 和 stream 推导能力需求；Bridge 主回复路由也已从 `metadata["files"]`、ToolPlan schema 和 KT 固定 streaming 请求事实生成能力需求，手动回复模型不满足能力时回退自动路由。payload / SDK request 前 guard 已防止绕过候选过滤；无视觉候选时会降级为纯文本说明并重新路由，不再把 `image_url` 发给纯文本模型。`model_routing` eval 已覆盖带图请求必须选 vision 候选，防止后续改动破坏能力硬过滤。
 - **剩余痛点**：路线项 3 的能力校验主链路已完成。base64 data URL 直入 payload 与 `docs/message-field-standard.md` 禁 base64 的长期方向仍需在后续出站 / 入站契约中继续收敛；图片数量 / 大小上限也应跟随多平台消息信封和出站渲染契约继续设计。
 - **目标**：模型能力（`supports_image` / `supports_tools` / `supports_stream`、单图大小 / 数量上限）结构化写入模型配置；构造阶段检测 messages 含 `image_url` 时，强制只在 vision 候选中选模型，并按能力校验图片格式 / 大小，不满足则降级（剥图 + 文本兜底）或换模型，而非无脑塞。
 - **关联**：呼应项 9（多模态行为描述需同步 canonical Prompt Runtime 模板）；与熔断器记账正确性（E4/E5）相关；主 reply 与 sticker_describe（走专用 vision provider）的能力口径需统一。
@@ -216,8 +216,9 @@
 
 #### 路线项 10 — TimingGate 引入「规则信号 + 模型」混合决策  ·〔关联 H2〕
 
-- **现状（2026-06-18 已落地）**：核心链路已从「纯 Qwen 三态判断」推进到 scoring 混合决策。已新增 `core/timing_score.py`，覆盖 `d0/linger/s_ack/s_transport/s_other/w_*` 信号、`E_rule/E_final`、冲突升级、模型权重和 `rule_fallback`；`GroupRuntime` 已接入 shadow scoring、普通 ambient 确定性短路、模型失败规则兜底、`directed_to_other` scoring 软化、ambient / legacy / timer cooldown scoring 短路，以及 session / platform 级模型层策略。私聊已接入同一套 shared timing scoring，分类器结果回灌为 `TimingModelHint`。群聊 `timing_scoring` 已写入 ChatLog meta 并由 admin events / WebUI 调试页透出；私聊 `PrivateDecision.timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化为 `timing_gate`，可回溯 action、reason、effort、runtime_preset 与 scoring 明细。`evals` 也能在 action 缺失时执行 scoring 并校验 `expected.scoring`。
-- **已完成**：`@bot + 图片` 规则 WAIT 不调模型；纯 ambient / 纯确认可规则 `no_reply`；`directed_to_other + linger` 进入冲突升级；正常模型返回路径已采用 scoring blend 的最终 `action/delay/reason`，不再只把 scoring 当 shadow 字段；TimingGate JSON / 旧格式 / 非法 / 网络错误解析已回灌 `parse_quality` 与 `model_confidence`，旧格式按 `0.5` 低置信参与模型融合；模型 `network_error/parse_error` 后使用规则侧 `rule_fallback`，不再全群哑火；`wait.delay_seconds` 上限已与设计收敛到 15 秒；`s_ack` 排除请求词、问号、URL、代码、文件；`s_transport` 已按 secret/blob/url/codeblock/long dump 分档；`force_next_continue` 已降级为 `d0=1.0` 后完整走 Stage 1-4；`enabled` / `rules_only` / `shadow` 模型策略已支持 default / platform / session 三级覆盖；真实 ChatLog 信号审计 CLI 已输出假阳率、shadow mismatch 和阈值建议；`timing_gate` eval 已支持 baseline diff 和阈值门禁；私聊评分已补齐 ChatLog meta 可观测闭环。
+- **现状（2026-06-20 已落地）**：核心链路已从「纯 Qwen 三态判断」推进到 scoring 混合决策。已新增 `core/timing_score.py`，覆盖 `d0/linger/s_ack/s_transport/s_other/s_bot/w_*` 信号、`E_rule/E_final`、冲突升级、模型权重和 `rule_fallback`；`GroupRuntime` 已接入 shadow scoring、普通 ambient 确定性短路、模型失败规则兜底、`directed_to_other` scoring 软化、ambient / legacy / timer cooldown scoring 短路，以及 session / platform 级模型层策略。私聊已接入同一套 shared timing scoring，分类器结果回灌为 `TimingModelHint`。群聊 `timing_scoring` 已写入 ChatLog meta 并由 admin events / WebUI 调试页透出；私聊 `PrivateDecision.timing_scoring` 已随 user ChatLog、assistant ChatLog 和 ConversationTurn meta 持久化为 `timing_gate`，可回溯 action、reason、effort、runtime_preset 与 scoring 明细。`evals` 也能在 action 缺失时执行 scoring 并校验 `expected.scoring`。群聊 `s_bot` live path 收口已完成设计与计划归档（`6463ee8`、`1795d04`），任务 1 已随 `2fcfad7` 落地：`current_bot` 仍保持 hard stop，其他 bot 通过 `is_other_bot` 进入 scoring 软抑制。
+- **已完成**：`@bot + 图片` 规则 WAIT 不调模型；纯 ambient / 纯确认可规则 `no_reply`；`directed_to_other + linger` 进入冲突升级；正常模型返回路径已采用 scoring blend 的最终 `action/delay/reason`，不再只把 scoring 当 shadow 字段；TimingGate JSON / 旧格式 / 非法 / 网络错误解析已回灌 `parse_quality` 与 `model_confidence`，旧格式按 `0.5` 低置信参与模型融合；模型 `network_error/parse_error` 后使用规则侧 `rule_fallback`，不再全群哑火；`wait.delay_seconds` 上限已与设计收敛到 15 秒；`s_ack` 排除请求词、问号、URL、代码、文件；`s_transport` 已按 secret/blob/url/codeblock/long dump 分档；`force_next_continue` 已降级为 `d0=1.0` 后完整走 Stage 1-4；`enabled` / `rules_only` / `shadow` 模型策略已支持 default / platform / session 三级覆盖；真实 ChatLog 信号审计 CLI 已输出假阳率、shadow mismatch 和阈值建议；`timing_gate` eval 已支持 baseline diff 和阈值门禁；私聊评分已补齐 ChatLog meta 可观测闭环；`explicit_bot` / `client_meta` 已进入 `GroupRuntime`，`timing_message` 和 `GroupPendingMessage` 已透传 `is_other_bot`，`_score_timing()` 会按 pending 窗口内 `is_other_bot=any(m.is_other_bot for m in msgs)` 调用 `decide_timing()`，并在 ChatLog meta 中记录 `s_bot=0.70`。
+- **s_bot 验证状态（2026-06-20）**：三项定向测试结果为 `3 passed, 21 warnings in 2.16s`；相邻回归 `tests/test_api.py tests/test_timing_runtime.py tests/test_timing_score.py` 结果为 `157 passed, 21 warnings in 23.30s`。
 - **剩余**：核心混合决策主线、私聊可观测闭环、P3-3A 标注审计复跑入口和 P3-3B 仓库自包含 CI / PR gate 均已完成。更多真实样本的选择、标注仲裁、定期复跑和是否按报告调参仍是运营动作；通用 `candidates → labeled` 产品化闭环留到路线项 8 / P4。
 - **关联**：H2 已完成 admin route 异步化和 repeats 收紧；后续与路线项 8（评测体系）、路线项 5/7（响应信封与调试可观测）继续协同。
 - **下一步**：路线项 8 / P4 已完成通用 `candidates → labeled` 标注闭环、Admin 契约化工作台、P4-3 per-capability 数据集扩展、P4-4 RAG baseline gate、P4-5A 统一 PR gate、P4-5B 周期性复跑与报告归档、P4-5C RAG manual 样本扩充，以及 P4-5D fixture-backed positive RAG case。下一阶段转向更多 fixture source 覆盖或真实样本运营动作。
