@@ -10,6 +10,7 @@ from typing import Any
 from core.eval_sampling.store import (
     label_candidate,
     list_candidates,
+    plan_candidate_batch_audit,
     preflight_candidate_promotions,
     promote_candidate,
 )
@@ -111,6 +112,25 @@ def promote_labeled(
     return result
 
 
+def audit_candidates(
+    db,
+    *,
+    suite: str = "",
+    status: str = "",
+    source: str = "",
+    target_dataset: str = "",
+    limit: int = 200,
+) -> dict[str, Any]:
+    return plan_candidate_batch_audit(
+        db,
+        suite=suite,
+        status=status,
+        source=source,
+        target_dataset=target_dataset,
+        limit=limit,
+    )
+
+
 def _open_db():
     from core.database import SessionLocal
 
@@ -135,6 +155,14 @@ def main(argv: list[str] | None = None) -> int:
     promote_p.add_argument("--apply", action="store_true")
     promote_p.add_argument("--dry-run", action="store_true")
 
+    audit_p = sub.add_parser("audit")
+    audit_p.add_argument("--suite", default="")
+    audit_p.add_argument("--status", default="")
+    audit_p.add_argument("--source", default="")
+    audit_p.add_argument("--target-dataset", default="")
+    audit_p.add_argument("--limit", type=int, default=200)
+    audit_p.add_argument("--out", default="")
+
     args = parser.parse_args(argv)
     db = _open_db()
     try:
@@ -154,6 +182,23 @@ def main(argv: list[str] | None = None) -> int:
                 apply=bool(args.apply and not args.dry_run),
             )
             print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.command == "audit":
+            result = audit_candidates(
+                db,
+                suite=args.suite,
+                status=args.status,
+                source=args.source,
+                target_dataset=args.target_dataset,
+                limit=args.limit,
+            )
+            text = json.dumps(result, ensure_ascii=False, indent=2)
+            if args.out:
+                out = Path(args.out)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text(text + "\n", encoding="utf-8")
+            else:
+                print(text)
             return 0
     finally:
         db.close()

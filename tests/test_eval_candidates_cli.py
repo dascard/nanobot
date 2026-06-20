@@ -182,6 +182,39 @@ def test_promote_labeled_apply_rejects_blocked_batch_without_partial_write(
     assert get_candidate(db_session, "cand_ready").status == "labeled"
 
 
+def test_candidates_cli_audit_writes_read_only_batch_report(db_session, tmp_path, monkeypatch):
+    from core.database import AdminAuditLog
+    from core.eval_sampling.store import get_candidate, label_candidate
+    from evals import candidates
+
+    _redirect_promote_root(monkeypatch, tmp_path)
+    _insert_candidate(db_session, case_id="cand_cli_audit")
+    label_candidate(db_session, "cand_cli_audit", {"timing_action": "continue"})
+    monkeypatch.setattr(candidates, "_open_db", lambda: _SessionWrapper(db_session))
+
+    out = tmp_path / "candidate-audit.json"
+    exit_code = candidates.main([
+        "audit",
+        "--suite",
+        "timing_gate",
+        "--status",
+        "labeled",
+        "--target-dataset",
+        "timing_gate",
+        "--out",
+        str(out),
+    ])
+
+    assert exit_code == 0
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert payload["ok"] is True
+    assert payload["total"] == 1
+    assert payload["counts"]["by_status"]["labeled"] == 1
+    assert payload["items"][0]["readiness"]["ready"] is True
+    assert db_session.query(AdminAuditLog).count() == 0
+    assert get_candidate(db_session, "cand_cli_audit").status == "labeled"
+
+
 def test_candidates_cli_main_exports_candidates(db_session, tmp_path, monkeypatch, capsys):
     from evals import candidates
 

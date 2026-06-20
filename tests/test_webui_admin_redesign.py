@@ -134,6 +134,20 @@ def test_evals_candidates_page_exposes_triage_actions():
     assert "复开" in source
 
 
+def test_evals_candidates_page_exposes_read_only_batch_audit():
+    source = EVALS_JS.read_text(encoding="utf-8")
+
+    assert "批次审计" in source
+    assert "batchAudit" in source
+    assert "/evals/candidates/preflight" in source
+    assert "top_blocking_reasons" in source
+    assert "blocking_reasons" in source
+    assert "/evals/candidates/batch-triage" not in source
+    assert "批量拒绝" not in source
+    assert "批量暂缓" not in source
+    assert "批量应用" not in source
+
+
 def test_sticker_duplicate_actions_do_not_use_emoji_buttons():
     source = read_app()
 

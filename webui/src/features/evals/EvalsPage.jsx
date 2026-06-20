@@ -46,6 +46,10 @@ export function EvalsPage() {
   const [preflightResult, setPreflightResult] = useState(null)
   const [preflightError, setPreflightError] = useState('')
   const [preflightLoading, setPreflightLoading] = useState(false)
+  const [batchAuditOpen, setBatchAuditOpen] = useState(false)
+  const [batchAuditResult, setBatchAuditResult] = useState(null)
+  const [batchAuditError, setBatchAuditError] = useState('')
+  const [batchAuditLoading, setBatchAuditLoading] = useState(false)
   const [detail, setDetail] = useState(null)
   const [showLabel, setShowLabel] = useState(null)
   const [labelSuite, setLabelSuite] = useState('')
@@ -216,6 +220,47 @@ export function EvalsPage() {
       .finally(() => setPreflightLoading(false))
   }
 
+  const runBatchAuditCurrentPage = () => {
+    const caseIds = (candidates.items || []).map(candidate => candidate.case_id).filter(Boolean)
+    if (caseIds.length === 0) return
+    setBatchAuditLoading(true)
+    setBatchAuditResult(null)
+    setBatchAuditError('')
+    api.post('/evals/candidates/preflight', {
+      case_ids: caseIds,
+      target_dataset: suiteFilter.trim() || 'regression',
+      suite: suiteFilter || undefined,
+      status: statusFilter || undefined,
+      source: sourceFilter || undefined,
+      limit: caseIds.length,
+    })
+      .then(r => {
+        const preflight = r.data || {}
+        const topBlockingReasons = candidateSummary?.top_blocking_reasons || []
+        const byBlockingReason = Object.fromEntries(
+          topBlockingReasons.map(item => [item.code, item.count])
+        )
+        setBatchAuditResult({
+          ok: preflight.ok,
+          total: preflight.total || 0,
+          ready: preflight.ready || 0,
+          blocked: preflight.blocked || 0,
+          top_blocking_reasons: topBlockingReasons,
+          counts: {
+            by_status: candidateSummary?.by_status || {},
+            by_suite: candidateSummary?.by_suite || {},
+            by_source: candidateSummary?.by_source || {},
+            by_blocking_reason: byBlockingReason,
+            by_decision: { noop: preflight.total || 0 },
+          },
+          items: preflight.items || [],
+        })
+        setBatchAuditOpen(true)
+      })
+      .catch(e => { setBatchAuditError(e.response?.data?.detail || e.message); setBatchAuditOpen(true) })
+      .finally(() => setBatchAuditLoading(false))
+  }
+
   const loadDetail = (caseId) => {
     api.get(`/evals/candidates/${encodeURIComponent(caseId)}`)
       .then(r => setDetail(r.data))
@@ -364,7 +409,7 @@ export function EvalsPage() {
             </select>
           </div>
           {candidateSummary && (
-            <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-8">
+            <div className="mb-4 grid grid-cols-2 gap-2 lg:grid-cols-9">
               <MiniStat label="summary 总数" value={candidateSummary.total ?? candidates.total} />
               <MiniStat label="待标记" value={candidateSummary.by_status?.candidate || 0} tone="amber" />
               <MiniStat label="已标记" value={candidateSummary.by_status?.labeled || 0} tone="blue" />
@@ -375,6 +420,10 @@ export function EvalsPage() {
               <button onClick={preflightCurrentPage} disabled={preflightLoading || !(candidates.items || []).length}
                 className="min-h-[72px] rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-xs font-medium text-indigo-200 transition-colors hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-50">
                 {preflightLoading ? '预检中...' : '预检当前页'}
+              </button>
+              <button onClick={runBatchAuditCurrentPage} disabled={batchAuditLoading || !(candidates.items || []).length}
+                className="min-h-[72px] rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs font-medium text-cyan-200 transition-colors hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-50">
+                {batchAuditLoading ? '审计中...' : '批次审计'}
               </button>
             </div>
           )}
@@ -727,6 +776,45 @@ export function EvalsPage() {
                 )}
                 <div className="flex justify-end mt-4">
                   <button onClick={() => setPreflightOpen(false)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">关闭</button>
+                </div>
+              </div>
+            </Modal>
+          )}
+
+          {/* 批次审计弹窗 */}
+          {batchAuditOpen && (
+            <Modal onClose={() => setBatchAuditOpen(false)} wide>
+              <div className="p-6">
+                <h2 className="text-lg font-bold mb-2">批次审计</h2>
+                {batchAuditError && (
+                  <div className="mb-3 px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10 text-xs text-red-300">
+                    {batchAuditError}
+                  </div>
+                )}
+                {batchAuditResult && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                      <MiniStat label="total" value={batchAuditResult.total || 0} />
+                      <MiniStat label="ready" value={batchAuditResult.ready || 0} tone="emerald" />
+                      <MiniStat label="blocked" value={batchAuditResult.blocked || 0} tone="red" />
+                      <MiniStat label="ok" value={batchAuditResult.ok ? 'true' : 'false'} tone={batchAuditResult.ok ? 'emerald' : 'amber'} />
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">counts</div>
+                      <JsonBlock value={batchAuditResult.counts || {}} className="max-h-48" />
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">top_blocking_reasons</div>
+                      <JsonBlock value={batchAuditResult.top_blocking_reasons || []} className="max-h-40" />
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">items</div>
+                      <JsonBlock value={batchAuditResult.items || []} className="max-h-96" />
+                    </div>
+                  </div>
+                )}
+                <div className="flex justify-end mt-4">
+                  <button onClick={() => setBatchAuditOpen(false)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">关闭</button>
                 </div>
               </div>
             </Modal>
