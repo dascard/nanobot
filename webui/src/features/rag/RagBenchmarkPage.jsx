@@ -158,8 +158,20 @@ function CaseEditor({ item, status, onClose, onSaved }) {
   const [filtersRaw, setFiltersRaw] = useState(() => jsonText(initialCase.filters))
   const [metaRaw, setMetaRaw] = useState(() => jsonText(initialCase.meta))
   const [saving, setSaving] = useState(false)
+  const [promoting, setPromoting] = useState(false)
+  const [promotePlan, setPromotePlan] = useState(null)
+  const [promoteTargetId, setPromoteTargetId] = useState(() => initialCase.id || item?.id || '')
+  const [promoteNote, setPromoteNote] = useState('')
+  const [promoteOverwrite, setPromoteOverwrite] = useState(false)
   const manualWritable = status?.manual_dir_writable !== false
   const canEdit = editable && manualWritable
+  const isGenerated = !editable
+  const sourceCaseId = initialCase.id || item?.id || form.id || ''
+  const promoteDisabledReason = !manualWritable
+    ? 'manual case 目录不可写，无法提升 generated case。'
+    : item?.stale
+      ? 'generated case 已 stale，请重新刷新 generated 后再提升。'
+      : ''
 
   const update = (patch) => setForm(current => ({ ...current, ...patch }))
   const updateExpected = (patch) => setForm(current => ({
@@ -214,6 +226,31 @@ function CaseEditor({ item, status, onClose, onSaved }) {
     api.delete(`/rag/benchmark/cases/${encodeURIComponent(caseId)}`)
       .then(() => { onSaved(); onClose() })
       .catch(e => alert(e.response?.data?.detail || e.message))
+  }
+
+  const promoteManual = (dryRun) => {
+    const targetCaseId = promoteTargetId.trim()
+    if (!sourceCaseId || !targetCaseId) {
+      alert('target_case_id 不能为空')
+      return
+    }
+    setPromoting(true)
+    api.post(`/rag/benchmark/cases/${encodeURIComponent(sourceCaseId)}/promote-manual`, {
+      target_case_id: targetCaseId,
+      note: promoteNote,
+      dry_run: dryRun,
+      overwrite: promoteOverwrite,
+    })
+      .then(r => {
+        if (dryRun) {
+          setPromotePlan(r.data)
+        } else {
+          onSaved()
+          onClose()
+        }
+      })
+      .catch(e => alert(e.response?.data?.detail || e.message))
+      .finally(() => setPromoting(false))
   }
 
   return (
@@ -305,6 +342,65 @@ function CaseEditor({ item, status, onClose, onSaved }) {
             {advancedJson}
           </pre>
         </details>
+        {isGenerated && (
+          <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
+            <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h3 className="text-sm font-medium text-slate-200">提升为 Manual</h3>
+                <div className="mt-1 text-[11px] text-slate-500">先 dry-run 生成计划，确认后写入 manual case。</div>
+              </div>
+              <Badge tone={promotePlan?.baseline_update_required ? 'amber' : 'slate'}>
+                baseline_update_required: {promotePlan?.baseline_update_required ? 'true' : 'false'}
+              </Badge>
+            </div>
+            {promoteDisabledReason && (
+              <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                {promoteDisabledReason}
+              </div>
+            )}
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
+              <Field id="benchmark-promote-target-case-id" label="target_case_id">
+                <input id="benchmark-promote-target-case-id" value={promoteTargetId}
+                  onChange={e => { setPromoteTargetId(e.target.value); setPromotePlan(null) }}
+                  disabled={Boolean(promoteDisabledReason)}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-xs text-slate-200" />
+              </Field>
+              <Field id="benchmark-promote-note" label="note">
+                <input id="benchmark-promote-note" value={promoteNote}
+                  onChange={e => setPromoteNote(e.target.value)}
+                  disabled={Boolean(promoteDisabledReason)}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
+              </Field>
+              <label className="flex h-9 items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 text-xs text-slate-300">
+                <input type="checkbox" checked={promoteOverwrite}
+                  onChange={e => { setPromoteOverwrite(e.target.checked); setPromotePlan(null) }}
+                  disabled={Boolean(promoteDisabledReason)} />
+                overwrite
+              </label>
+            </div>
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
+              <ActionButton onClick={() => promoteManual(true)} disabled={promoting || Boolean(promoteDisabledReason)}>
+                {promoting ? '处理中' : 'dry-run'}
+              </ActionButton>
+              <ActionButton onClick={() => promoteManual(false)} disabled={promoting || Boolean(promoteDisabledReason) || !promotePlan} tone="emerald">
+                确认提升
+              </ActionButton>
+            </div>
+            {promotePlan && (
+              <div className="mt-3 rounded-lg border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-300">
+                <div className="grid gap-2 md:grid-cols-3">
+                  <div><span className="text-slate-500">target: </span><span className="font-mono">{promotePlan.target_case_id || promoteTargetId}</span></div>
+                  <div><span className="text-slate-500">path: </span><span className="break-all font-mono">{promotePlan.path || '-'}</span></div>
+                  <div><span className="text-slate-500">baseline_update_required: </span>{promotePlan.baseline_update_required ? 'true' : 'false'}</div>
+                </div>
+                <div className="mt-3">
+                  <div className="mb-1 text-[11px] text-slate-500">case JSON</div>
+                  <JsonBlock value={promotePlan.case || promotePlan} className="max-h-72" />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {!manualWritable && <div className="text-xs text-amber-300">manual case 目录不可写，保存和删除已禁用。</div>}
         <div className="flex flex-wrap justify-end gap-2">
           {editable && (

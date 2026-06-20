@@ -66,6 +66,22 @@ def test_rag_benchmark_page_exposes_gate_and_baseline_diff():
     assert "still_failed_cases" in source
 
 
+def test_rag_benchmark_page_exposes_generated_promote_manual_flow():
+    source = PAGE.read_text(encoding="utf-8")
+
+    assert "提升为 Manual" in source
+    assert "promote-manual" in source
+    assert "dry_run" in source
+    assert "target_case_id" in source
+    assert "overwrite" in source
+    assert "promotePlan" in source
+    assert "promoteTargetId" in source
+    assert "promoteNote" in source
+    assert "baseline_update_required" in source
+    assert "generated case 已 stale，请重新刷新 generated 后再提升。" in source
+    assert "manual case 目录不可写，无法提升 generated case。" in source
+
+
 def test_rag_benchmark_markdown_report_is_plain_text():
     source = PAGE.read_text(encoding="utf-8")
 
