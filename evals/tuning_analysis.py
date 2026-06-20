@@ -181,6 +181,52 @@ def _signal_items(timing_audit: dict[str, Any] | None) -> list[dict[str, Any]]:
     return items
 
 
+def _series(trends: dict[str, Any]) -> dict[str, Any]:
+    return trends.get("series") if isinstance(trends.get("series"), dict) else {}
+
+
+def _latest_timing_item(trends: dict[str, Any]) -> dict[str, Any] | None:
+    items = _series(trends).get("timing_signal_audit")
+    if isinstance(items, list) and items and isinstance(items[-1], dict):
+        return items[-1]
+    return None
+
+
+def _latest_rag_item(trends: dict[str, Any]) -> dict[str, Any] | None:
+    items = _series(trends).get("rag_benchmark")
+    if isinstance(items, list) and items and isinstance(items[-1], dict):
+        return items[-1]
+    return None
+
+
+def _latest_eval_items(trends: dict[str, Any]) -> list[dict[str, Any]]:
+    suites = _series(trends).get("eval_suites")
+    if not isinstance(suites, dict):
+        return []
+    latest: list[dict[str, Any]] = []
+    for suite_items in suites.values():
+        if (
+            isinstance(suite_items, list)
+            and suite_items
+            and isinstance(suite_items[-1], dict)
+        ):
+            latest.append(suite_items[-1])
+    return latest
+
+
+def _regression_refs(trends: dict[str, Any]) -> list[dict[str, Any]]:
+    regressions = trends.get("regressions")
+    if not isinstance(regressions, list):
+        return []
+    refs: list[dict[str, Any]] = []
+    for item in regressions:
+        if isinstance(item, dict):
+            ref = dict(item)
+            ref["source"] = "artifact_trends"
+            refs.append(ref)
+    return refs
+
+
 def build_tuning_analysis(
     trends: dict[str, Any],
     *,
@@ -352,6 +398,86 @@ def build_tuning_analysis(
                 )
             )
 
+    timing_item = _latest_timing_item(trends)
+    if timing_item and (
+        _as_float(timing_item.get("action_mismatch_count_delta")) > 0
+        or _as_float(timing_item.get("action_mismatch_rate_delta")) > 0
+    ):
+        recommendations.append(
+            _recommendation(
+                "manual_review",
+                "timing_shadow",
+                "medium",
+                "timing_action_mismatch_increase",
+                "TimingSignal runtime / scoring action mismatch 上升，需要复核时机决策链路",
+                {
+                    "run_id": timing_item.get("run_id"),
+                    "action_mismatch_count_delta": timing_item.get(
+                        "action_mismatch_count_delta"
+                    ),
+                    "action_mismatch_rate_delta": timing_item.get(
+                        "action_mismatch_rate_delta"
+                    ),
+                },
+            )
+        )
+
+    rag_item = _latest_rag_item(trends)
+    if rag_item and any(
+        _as_float(rag_item.get(key)) < 0
+        for key in ("pass_rate_delta", "hit@5_delta", "mrr_delta")
+    ):
+        recommendations.append(
+            _recommendation(
+                "manual_review",
+                "rag_benchmark",
+                "medium",
+                "rag_metric_drop",
+                "RAG benchmark 指标下降，需要复核检索或样本变化",
+                {
+                    "run_id": rag_item.get("run_id"),
+                    "pass_rate_delta": rag_item.get("pass_rate_delta"),
+                    "hit@5_delta": rag_item.get("hit@5_delta"),
+                    "mrr_delta": rag_item.get("mrr_delta"),
+                },
+            )
+        )
+
+    for item in _latest_eval_items(trends):
+        if (
+            _as_float(item.get("pass_rate_delta")) < 0
+            or _as_float(item.get("failed_delta")) > 0
+            or _as_int(item.get("new_failed_count")) > 0
+        ):
+            recommendations.append(
+                _recommendation(
+                    "manual_review",
+                    "eval_suite",
+                    "medium",
+                    "eval_suite_regression",
+                    f"{item.get('suite') or 'eval suite'} 指标退化，需要复核失败样本",
+                    {
+                        "run_id": item.get("run_id"),
+                        "suite": item.get("suite"),
+                        "pass_rate_delta": item.get("pass_rate_delta"),
+                        "failed_delta": item.get("failed_delta"),
+                        "new_failed_count": item.get("new_failed_count"),
+                    },
+                )
+            )
+
+    if not blocking and not recommendations:
+        recommendations.append(
+            _recommendation(
+                "no_change",
+                "artifact_health",
+                "info",
+                "stable_metrics",
+                "周期趋势和 TimingSignal audit 未显示需要调参的退化信号",
+                {"run_count": run_count},
+            )
+        )
+
     return {
         "analysis_version": 1,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -360,5 +486,5 @@ def build_tuning_analysis(
         "summary": _summarize(recommendations),
         "signals": signal_items,
         "recommendations": recommendations,
-        "regression_refs": [],
+        "regression_refs": _regression_refs(trends),
     }

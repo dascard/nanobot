@@ -76,7 +76,10 @@ def test_tuning_analysis_blocks_unsupported_trend_version():
     assert report["readiness"]["ready"] is False
     assert "unsupported_trend_version" in _reason_codes(report)
     assert "unsupported_trend_version" in _recommendation_codes(report)
-    assert all(item["type"] != "candidate_adjustment" for item in report["recommendations"])
+    assert all(
+        item["type"] != "candidate_adjustment"
+        for item in report["recommendations"]
+    )
 
 
 def test_tuning_analysis_blocks_insufficient_runs():
@@ -186,3 +189,65 @@ def test_tuning_analysis_flags_high_signal_false_positive_rate_with_evidence():
     assert review["area"] == "timing_signal"
     assert review["evidence"]["signal"] == "s_ack"
     assert review["evidence"]["sample_log_ids"] == [101, 102]
+
+
+def test_tuning_analysis_recommends_review_for_timing_rag_and_eval_regressions():
+    from evals.tuning_analysis import build_tuning_analysis
+
+    trends = _trends(
+        timing_items=[{
+            "run_id": "run_3",
+            "action_mismatch_count_delta": 2,
+            "action_mismatch_rate_delta": 0.1,
+        }],
+        rag_items=[{
+            "run_id": "run_3",
+            "pass_rate_delta": -0.1,
+            "hit@5_delta": -0.25,
+            "mrr_delta": -0.3,
+        }],
+        eval_suites={
+            "timing_gate": [{
+                "run_id": "run_3",
+                "suite": "timing_gate",
+                "pass_rate_delta": -0.2,
+                "failed_delta": 2,
+                "new_failed_count": 1,
+            }]
+        },
+        regressions=[{"type": "rag_mrr_drop", "run_id": "run_3", "delta": -0.3}],
+    )
+
+    report = build_tuning_analysis(trends, timing_audit=_audit())
+    codes = _recommendation_codes(report)
+
+    assert "timing_action_mismatch_increase" in codes
+    assert "rag_metric_drop" in codes
+    assert "eval_suite_regression" in codes
+    assert report["summary"]["must_review_count"] == 3
+    assert report["regression_refs"] == [
+        {
+            "type": "rag_mrr_drop",
+            "run_id": "run_3",
+            "delta": -0.3,
+            "source": "artifact_trends",
+        }
+    ]
+    assert all(item["type"] != "candidate_adjustment" for item in report["recommendations"])
+
+
+def test_tuning_analysis_emits_no_change_when_ready_and_stable():
+    from evals.tuning_analysis import build_tuning_analysis
+
+    report = build_tuning_analysis(_trends(), timing_audit=_audit())
+
+    assert report["readiness"]["ready"] is True
+    assert report["recommendations"] == [{
+        "type": "no_change",
+        "area": "artifact_health",
+        "severity": "info",
+        "reason_code": "stable_metrics",
+        "message": "周期趋势和 TimingSignal audit 未显示需要调参的退化信号",
+        "evidence": {"run_count": 3},
+    }]
+    assert report["summary"]["no_change_count"] == 1
