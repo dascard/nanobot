@@ -87,6 +87,13 @@ class BenchmarkCaseSaveRequest(BaseModel):
     case: BenchmarkCase
 
 
+class BenchmarkCasePromoteRequest(BaseModel):
+    target_case_id: str = ""
+    dry_run: bool = True
+    note: str = ""
+    overwrite: bool = False
+
+
 def get_benchmark_db_path() -> Path | None:
     from config import DATABASE_URL
 
@@ -266,6 +273,39 @@ def _load_cases_with_origin() -> list[tuple[BenchmarkCase, str, bool]]:
     for case in load_cases(manual_dir=Path("__missing_manual__"), generated_dir=BENCHMARK_GENERATED_DIR):
         items.append((case, "generated", False))
     return items
+
+
+def _find_case_with_origin(case_id: str) -> tuple[BenchmarkCase, str, bool]:
+    case_id = _case_id_or_400(case_id)
+    for case, origin, editable in _load_cases_with_origin():
+        if case.id == case_id:
+            return case, origin, editable
+    raise HTTPException(404, "benchmark case not found")
+
+
+def _current_db_fingerprint() -> dict[str, Any]:
+    db_path = get_benchmark_db_path()
+    if not db_path or not db_path.exists():
+        return {}
+    return db_fingerprint(db_path)
+
+
+def _manual_case_from_generated(
+    source: BenchmarkCase,
+    *,
+    target_case_id: str,
+    note: str,
+    promoted_at: str,
+) -> BenchmarkCase:
+    meta = {
+        **source.meta,
+        "origin": "manual",
+        "promoted_from_case_id": source.id,
+        "promoted_from_origin": source.meta.get("origin") or "generated",
+        "promoted_at": promoted_at,
+        "review_note": note,
+    }
+    return source.model_copy(update={"id": target_case_id, "meta": meta}, deep=True)
 
 
 def _filtered_cases(
@@ -529,13 +569,67 @@ def list_benchmark_cases(
 
 @router.get("/cases/{case_id}")
 def get_benchmark_case(case_id: str, _auth=Depends(verify_admin)):
-    case_id = _case_id_or_400(case_id)
-    for case, origin, editable in _load_cases_with_origin():
-        if case.id == case_id:
-            data = case.model_dump()
-            data["query_preview"] = _preview(case.query, 200)
-            return {"case": data, "origin": origin, "editable": editable}
-    raise HTTPException(404, "benchmark case not found")
+    case, origin, editable = _find_case_with_origin(case_id)
+    data = case.model_dump()
+    data["query_preview"] = _preview(case.query, 200)
+    return {"case": data, "origin": origin, "editable": editable}
+
+
+@router.post("/cases/{case_id}/promote-manual")
+def promote_generated_case_to_manual(
+    case_id: str,
+    body: BenchmarkCasePromoteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    source_case, origin, _editable = _find_case_with_origin(case_id)
+    if origin != "generated":
+        raise HTTPException(409, "only generated benchmark cases can be promoted")
+
+    current_fp = _current_db_fingerprint()
+    if not _same_fingerprint(source_case.meta.get("db_fingerprint"), current_fp):
+        raise HTTPException(409, "generated benchmark case is stale; refresh generated cases before promoting")
+
+    target_case_id = _case_id_or_400(body.target_case_id or source_case.id)
+    path = _manual_case_path(target_case_id)
+    existed = path.exists()
+    if existed and not body.overwrite:
+        raise HTTPException(409, "manual benchmark case already exists")
+
+    promoted_at = datetime.now().isoformat(timespec="seconds")
+    case = _manual_case_from_generated(
+        source_case,
+        target_case_id=target_case_id,
+        note=body.note,
+        promoted_at=promoted_at,
+    )
+    payload = {
+        "ok": True,
+        "dry_run": body.dry_run,
+        "source_case_id": source_case.id,
+        "target_case_id": target_case_id,
+        "path": _safe_rel_path(path),
+        "baseline_update_required": True,
+        "case": case.model_dump(),
+    }
+    if body.dry_run:
+        return payload
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if existed:
+        BENCHMARK_CASE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        backup_path = BENCHMARK_CASE_BACKUP_DIR / f"{target_case_id}.{_now_id()}.json"
+        backup_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(case.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+    audit_request(db, request, "promote_rag_benchmark_generated_case", "rag_benchmark_case", target_case_id, {
+        "path": _safe_rel_path(path),
+        "source_case_id": source_case.id,
+        "overwrite": bool(existed),
+    })
+    return payload
 
 
 @router.put("/cases/{case_id}")

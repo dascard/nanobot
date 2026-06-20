@@ -503,6 +503,170 @@ def test_benchmark_sample_marks_fingerprint_and_run_skips_stale_generated_withou
     assert (reports / "latest.md").read_text(encoding="utf-8") == "keep markdown"
 
 
+def test_generated_case_promote_manual_dry_run_and_apply(client, db_session, tmp_path, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_path = tmp_path / "benchmark.db"
+    _engine, db = _file_db(db_path)
+    _seed_memory_case(db)
+    db.close()
+    _routes, manual, _generated, _reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+
+    sampled = client.post(
+        "/api/v1/admin/rag/benchmark/sample",
+        headers=_auth_header(),
+        json={"per_source": 1},
+    )
+    assert sampled.status_code == 200
+    items = client.get(
+        "/api/v1/admin/rag/benchmark/cases",
+        headers=_auth_header(),
+        params={"origin": "generated"},
+    ).json()["items"]
+    source_id = items[0]["id"]
+
+    dry_run = client.post(
+        f"/api/v1/admin/rag/benchmark/cases/{source_id}/promote-manual",
+        headers=_auth_header(),
+        json={"target_case_id": "memory_manual_promoted_001", "dry_run": True, "note": "人工确认"},
+    )
+
+    assert dry_run.status_code == 200
+    dry_payload = dry_run.json()
+    assert dry_payload["ok"] is True
+    assert dry_payload["dry_run"] is True
+    assert dry_payload["source_case_id"] == source_id
+    assert dry_payload["target_case_id"] == "memory_manual_promoted_001"
+    assert dry_payload["baseline_update_required"] is True
+    assert dry_payload["case"]["id"] == "memory_manual_promoted_001"
+    assert dry_payload["case"]["meta"]["origin"] == "manual"
+    assert dry_payload["case"]["meta"]["promoted_from_case_id"] == source_id
+    assert dry_payload["case"]["meta"]["review_note"] == "人工确认"
+    assert not (manual / "memory_manual_promoted_001.json").exists()
+    assert db_session.query(AdminAuditLog).count() == 0
+
+    applied = client.post(
+        f"/api/v1/admin/rag/benchmark/cases/{source_id}/promote-manual",
+        headers=_auth_header(),
+        json={"target_case_id": "memory_manual_promoted_001", "dry_run": False, "note": "人工确认"},
+    )
+
+    assert applied.status_code == 200
+    assert (manual / "memory_manual_promoted_001.json").exists()
+    persisted = json.loads((manual / "memory_manual_promoted_001.json").read_text(encoding="utf-8"))
+    assert persisted["id"] == "memory_manual_promoted_001"
+    assert persisted["query"] == dry_payload["case"]["query"]
+    assert persisted["expected"] == dry_payload["case"]["expected"]
+    assert persisted["meta"]["origin"] == "manual"
+    assert persisted["meta"]["promoted_from_case_id"] == source_id
+    assert persisted["meta"]["promoted_from_origin"].startswith("generated")
+    assert persisted["meta"]["review_note"] == "人工确认"
+    assert persisted["meta"]["db_fingerprint"]
+    actions = [row.action for row in db_session.query(AdminAuditLog).order_by(AdminAuditLog.id).all()]
+    assert actions == ["promote_rag_benchmark_generated_case"]
+
+
+def test_generated_case_promote_manual_rejects_stale_existing_manual_source_and_unsafe_target(
+    client, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_path = tmp_path / "benchmark.db"
+    engine, db = _file_db(db_path)
+    _seed_memory_case(db)
+    db.close()
+    _routes, manual, _generated, _reports, _backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+
+    sampled = client.post(
+        "/api/v1/admin/rag/benchmark/sample",
+        headers=_auth_header(),
+        json={"per_source": 1},
+    )
+    assert sampled.status_code == 200
+    source_id = client.get(
+        "/api/v1/admin/rag/benchmark/cases",
+        headers=_auth_header(),
+        params={"origin": "generated"},
+    ).json()["items"][0]["id"]
+
+    unsafe = client.post(
+        f"/api/v1/admin/rag/benchmark/cases/{source_id}/promote-manual",
+        headers=_auth_header(),
+        json={"target_case_id": ".hidden", "dry_run": True},
+    )
+    assert unsafe.status_code == 400
+
+    (manual / "memory_manual_existing.json").write_text(json.dumps({
+        "id": "memory_manual_existing",
+        "suite": "rag_benchmark",
+        "source_type": "memory",
+        "case_type": "positive",
+        "query": "existing",
+        "expected": {"candidate_ids": ["memory_digest:42:digest:level2"]},
+        "meta": {"origin": "manual"},
+    }, ensure_ascii=False), encoding="utf-8")
+    exists = client.post(
+        f"/api/v1/admin/rag/benchmark/cases/{source_id}/promote-manual",
+        headers=_auth_header(),
+        json={"target_case_id": "memory_manual_existing", "dry_run": True},
+    )
+    assert exists.status_code == 409
+
+    manual_source = client.post(
+        "/api/v1/admin/rag/benchmark/cases/memory_manual_existing/promote-manual",
+        headers=_auth_header(),
+        json={"target_case_id": "memory_manual_copy", "dry_run": True},
+    )
+    assert manual_source.status_code == 409
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO semantic_index_items(id, source_type, source_id, source_sub_id, status, visibility, title, text) "
+            "VALUES (999, 'memory_digest', '999', 'digest:level2', 'active', 'recall', 'new', 'new')"
+        ))
+    stale = client.post(
+        f"/api/v1/admin/rag/benchmark/cases/{source_id}/promote-manual",
+        headers=_auth_header(),
+        json={"target_case_id": "memory_manual_after_stale", "dry_run": True},
+    )
+    assert stale.status_code == 409
+    assert "stale" in stale.json()["detail"].lower()
+
+
+def test_generated_case_promote_manual_overwrite_backs_up_existing_case(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    db_path = tmp_path / "benchmark.db"
+    _engine, db = _file_db(db_path)
+    _seed_memory_case(db)
+    db.close()
+    _routes, manual, _generated, _reports, backups, _trash = _configure_paths(monkeypatch, tmp_path, db_path)
+
+    client.post("/api/v1/admin/rag/benchmark/sample", headers=_auth_header(), json={"per_source": 1})
+    source_id = client.get(
+        "/api/v1/admin/rag/benchmark/cases",
+        headers=_auth_header(),
+        params={"origin": "generated"},
+    ).json()["items"][0]["id"]
+    (manual / "memory_manual_replace.json").write_text(json.dumps({
+        "id": "memory_manual_replace",
+        "suite": "rag_benchmark",
+        "source_type": "memory",
+        "case_type": "positive",
+        "query": "old",
+        "expected": {"candidate_ids": ["memory_digest:42:digest:level2"]},
+        "meta": {"origin": "manual"},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    response = client.post(
+        f"/api/v1/admin/rag/benchmark/cases/{source_id}/promote-manual",
+        headers=_auth_header(),
+        json={"target_case_id": "memory_manual_replace", "dry_run": False, "overwrite": True},
+    )
+
+    assert response.status_code == 200
+    assert list(backups.glob("memory_manual_replace.*.json"))
+    persisted = json.loads((manual / "memory_manual_replace.json").read_text(encoding="utf-8"))
+    assert persisted["query"] != "old"
+
+
 def test_benchmark_run_clears_stale_lock(client, tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     db_path = tmp_path / "benchmark.db"
