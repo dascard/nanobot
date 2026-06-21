@@ -49,6 +49,18 @@ class _Candidate:
         return f"{self.row.source_type}:{self.row.source_id}:{self.row.source_sub_id}"
 
 
+@dataclass
+class _MemoryRecallResult:
+    rows: list[SemanticIndexItem]
+    rows_by_id: dict[int, SemanticIndexItem]
+    fts_hits: list[Any]
+    vector_hits: list[Any]
+    lexical_by_id: dict[int, float]
+    bm25_by_id: dict[int, float]
+    semantic_by_id: dict[int, float]
+    query_vector: list[float] | None
+
+
 def _source_types(source: str) -> set[str]:
     if source == "digest":
         return {"memory_digest"}
@@ -135,6 +147,62 @@ class MemoryRagService:
         include_debug: bool = False,
     ) -> dict[str, Any]:
         source_types = _source_types(source)
+        recall = self._recall(
+            query,
+            source_types=source_types,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        debug_trace = (
+            self._build_debug_trace(
+                recall=recall,
+                source_types=source_types,
+                user_id=user_id,
+                session_id=session_id,
+            )
+            if include_debug
+            else None
+        )
+        candidates, counters = self._filter_candidates(query, recall=recall)
+        self._update_candidate_debug(
+            debug_trace,
+            candidates=candidates,
+            bm25_by_id=recall.bm25_by_id,
+        )
+        degraded = self.reranker_provider is None
+        rerank_candidates = self._prepare_rerank_candidates(
+            candidates,
+            bm25_by_id=recall.bm25_by_id,
+        )
+        reranker_latency_ms = self._rerank(
+            query,
+            candidates=candidates,
+            rerank_candidates=rerank_candidates,
+            debug_trace=debug_trace,
+        )
+        gated = self._apply_relevance_gate(candidates, degraded=degraded, debug_trace=debug_trace)
+        parent_items = self._group_by_parent(gated, limit=limit)
+        return self._build_result(
+            query,
+            source=source,
+            parent_items=parent_items,
+            candidates=candidates,
+            recall=recall,
+            rerank_candidates=rerank_candidates,
+            reranker_latency_ms=reranker_latency_ms,
+            counters=counters,
+            degraded=degraded,
+            debug_trace=debug_trace,
+        )
+
+    def _recall(
+        self,
+        query: str,
+        *,
+        source_types: set[str],
+        user_id: str,
+        session_id: str,
+    ) -> _MemoryRecallResult:
         has_vector_rows = has_vector_recall_rows(
             self.db,
             source_types=source_types,
@@ -174,129 +242,187 @@ class MemoryRagService:
         )
         rows_by_id = {int(row.id): row for row in recent_rows}
         recall_ids = [hit.item_id for hit in fts_hits] + [hit.item_id for hit in vector_hits]
-        missing_fts_ids = [item_id for item_id in recall_ids if item_id not in rows_by_id]
+        missing_ids = [item_id for item_id in recall_ids if item_id not in rows_by_id]
         rows_by_id.update(load_recall_rows_by_ids(
             self.db,
-            missing_fts_ids,
+            missing_ids,
             ensure_schema=not self.readonly,
         ))
         fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
         vector_ordered = [rows_by_id[hit.item_id] for hit in vector_hits if hit.item_id in rows_by_id]
         rows = _merge_recall_rows(fts_ordered, vector_ordered, recent_rows)
-        debug_stages: dict[str, Any] | None = None
-        if include_debug:
-            debug_stages = {
-                "sql_filters": {
-                    "source_types": sorted(source_types),
-                    "user_id": user_id,
-                    "session_id": session_id,
-                    "status": "active",
-                    "visibility": "recall",
-                },
-                "fts_hits": [
-                    {
-                        "item_id": hit.item_id,
-                        "bm25_raw": hit.bm25_raw,
-                        "lexical_score": hit.lexical_score,
-                        "candidate_id": self._row_candidate_id(rows_by_id.get(hit.item_id)),
-                    }
-                    for hit in fts_hits
-                    if hit.item_id in rows_by_id
-                ],
-                "vector_hits": [
-                    {
-                        "item_id": hit.item_id,
-                        "semantic_score": hit.semantic_score,
-                        "candidate_id": self._row_candidate_id(rows_by_id.get(hit.item_id)),
-                    }
-                    for hit in vector_hits
-                    if hit.item_id in rows_by_id
-                ],
-                "embedding_hits": [],
-                "merged_candidates": [],
-                "reranker_input_pairs": [],
-                "final_candidates": [],
-                "relevance_gate": [],
-            }
+        return _MemoryRecallResult(
+            rows=rows,
+            rows_by_id=rows_by_id,
+            fts_hits=fts_hits,
+            vector_hits=vector_hits,
+            lexical_by_id=lexical_by_id,
+            bm25_by_id=bm25_by_id,
+            semantic_by_id=semantic_by_id,
+            query_vector=query_vector,
+        )
+
+    def _build_debug_trace(
+        self,
+        *,
+        recall: _MemoryRecallResult,
+        source_types: set[str],
+        user_id: str,
+        session_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "sql_filters": {
+                "source_types": sorted(source_types),
+                "user_id": user_id,
+                "session_id": session_id,
+                "status": "active",
+                "visibility": "recall",
+            },
+            "fts_hits": [
+                {
+                    "item_id": hit.item_id,
+                    "bm25_raw": hit.bm25_raw,
+                    "lexical_score": hit.lexical_score,
+                    "candidate_id": self._row_candidate_id(recall.rows_by_id.get(hit.item_id)),
+                }
+                for hit in recall.fts_hits
+                if hit.item_id in recall.rows_by_id
+            ],
+            "vector_hits": [
+                {
+                    "item_id": hit.item_id,
+                    "semantic_score": hit.semantic_score,
+                    "candidate_id": self._row_candidate_id(recall.rows_by_id.get(hit.item_id)),
+                }
+                for hit in recall.vector_hits
+                if hit.item_id in recall.rows_by_id
+            ],
+            "embedding_hits": [],
+            "merged_candidates": [],
+            "reranker_input_pairs": [],
+            "final_candidates": [],
+            "relevance_gate": [],
+        }
+
+    def _filter_candidates(
+        self,
+        query: str,
+        *,
+        recall: _MemoryRecallResult,
+    ) -> tuple[list[_Candidate], dict[str, int]]:
         candidates: list[_Candidate] = []
         fts_candidate_count = 0
         semantic_hits = 0
-        for row in rows:
-            lexical = lexical_by_id.get(int(row.id))
+        for row in recall.rows:
+            lexical = recall.lexical_by_id.get(int(row.id))
             if lexical is None:
                 lexical = lexical_overlap_score(query, row.lexical_text or row.text or "")
             if lexical > 0:
                 fts_candidate_count += 1
-            semantic = semantic_by_id.get(int(row.id))
+            semantic = recall.semantic_by_id.get(int(row.id))
             if semantic is None:
-                semantic = semantic_score_for_row(row, query_vector=query_vector, embedding_provider=None)
+                semantic = semantic_score_for_row(row, query_vector=recall.query_vector, embedding_provider=None)
             if semantic is not None and semantic > 0:
                 semantic_hits += 1
             if lexical > 0 or (semantic is not None and semantic >= 0.10):
                 candidates.append(_Candidate(row=row, lexical=lexical, semantic=semantic))
 
         candidates.sort(key=lambda item: self._pre_score(item), reverse=True)
-        candidates = candidates[:80]
-        if debug_stages is not None:
-            debug_stages["embedding_hits"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in candidates
-                if item.semantic is not None and item.semantic > 0
-            ]
-            debug_stages["merged_candidates"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in candidates
-            ]
-        degraded = self.reranker_provider is None
-        fallback_reason = "reranker_unavailable" if degraded else ""
+        return candidates[:80], {
+            "fts_candidate_count": fts_candidate_count,
+            "semantic_hits": semantic_hits,
+        }
 
-        reranker_latency_ms = 0
+    def _update_candidate_debug(
+        self,
+        debug_trace: dict[str, Any] | None,
+        *,
+        candidates: list[_Candidate],
+        bm25_by_id: dict[int, float],
+    ) -> None:
+        if debug_trace is None:
+            return
+        debug_trace["embedding_hits"] = [
+            self._debug_candidate(item, bm25_by_id=bm25_by_id)
+            for item in candidates
+            if item.semantic is not None and item.semantic > 0
+        ]
+        debug_trace["merged_candidates"] = [
+            self._debug_candidate(item, bm25_by_id=bm25_by_id)
+            for item in candidates
+        ]
+
+    def _prepare_rerank_candidates(
+        self,
+        candidates: list[_Candidate],
+        *,
+        bm25_by_id: dict[int, float],
+    ) -> list[_Candidate]:
         rerank_candidates: list[_Candidate] = []
-        if self.reranker_provider is not None:
-            for item in candidates:
-                item.reranker_skip_reason = self._reranker_skip_reason(item, bm25_by_id=bm25_by_id)
-                if not item.reranker_skip_reason:
-                    rerank_candidates.append(item)
-            if len(rerank_candidates) > 50:
-                for item in rerank_candidates[50:]:
-                    item.reranker_skip_reason = "reranker_budget"
-                rerank_candidates = rerank_candidates[:50]
+        if self.reranker_provider is None:
+            return rerank_candidates
+        for item in candidates:
+            item.reranker_skip_reason = self._reranker_skip_reason(item, bm25_by_id=bm25_by_id)
+            if not item.reranker_skip_reason:
+                rerank_candidates.append(item)
+        if len(rerank_candidates) > 50:
+            for item in rerank_candidates[50:]:
+                item.reranker_skip_reason = "reranker_budget"
+            rerank_candidates = rerank_candidates[:50]
+        return rerank_candidates
 
-        if self.reranker_provider is not None and rerank_candidates:
-            rerank_inputs = [
-                SemanticCandidate(
-                    candidate_id=item.candidate_id,
-                    source_type=item.row.source_type,
-                    title=item.row.title or "",
-                    text=item.row.embedding_text or item.row.text or "",
-                    metadata=_safe_json(item.row.meta_json),
-                )
-                for item in rerank_candidates
+    def _rerank(
+        self,
+        query: str,
+        *,
+        candidates: list[_Candidate],
+        rerank_candidates: list[_Candidate],
+        debug_trace: dict[str, Any] | None,
+    ) -> int:
+        if self.reranker_provider is None or not rerank_candidates:
+            return 0
+        rerank_inputs = [
+            SemanticCandidate(
+                candidate_id=item.candidate_id,
+                source_type=item.row.source_type,
+                title=item.row.title or "",
+                text=item.row.embedding_text or item.row.text or "",
+                metadata=_safe_json(item.row.meta_json),
+            )
+            for item in rerank_candidates
+        ]
+        if debug_trace is not None:
+            debug_trace["reranker_input_pairs"] = [
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "source_type": candidate.source_type,
+                    "query": query,
+                    "title": candidate.title,
+                    "text": candidate.text,
+                    "metadata": candidate.metadata,
+                }
+                for candidate in rerank_inputs
             ]
-            if debug_stages is not None:
-                debug_stages["reranker_input_pairs"] = [
-                    {
-                        "candidate_id": candidate.candidate_id,
-                        "source_type": candidate.source_type,
-                        "query": query,
-                        "title": candidate.title,
-                        "text": candidate.text,
-                        "metadata": candidate.metadata,
-                    }
-                    for candidate in rerank_inputs
-                ]
-            reranker_started = time.perf_counter()
-            reranked = self.reranker_provider.rerank(query, rerank_inputs, top_k=50)
-            reranker_latency_ms = int((time.perf_counter() - reranker_started) * 1000)
-            if debug_stages is not None:
-                debug_stages.setdefault("timings", {})["reranker_latency_ms"] = reranker_latency_ms
-            scores = {item.candidate_id: item for item in reranked}
-            for item in candidates:
-                score = scores.get(item.candidate_id)
-                if score is not None:
-                    item.reranker = score.score
-                    item.raw_reranker = score.raw_score
+        reranker_started = time.perf_counter()
+        reranked = self.reranker_provider.rerank(query, rerank_inputs, top_k=50)
+        reranker_latency_ms = int((time.perf_counter() - reranker_started) * 1000)
+        if debug_trace is not None:
+            debug_trace.setdefault("timings", {})["reranker_latency_ms"] = reranker_latency_ms
+        scores = {item.candidate_id: item for item in reranked}
+        for item in candidates:
+            score = scores.get(item.candidate_id)
+            if score is not None:
+                item.reranker = score.score
+                item.raw_reranker = score.raw_score
+        return reranker_latency_ms
 
+    def _apply_relevance_gate(
+        self,
+        candidates: list[_Candidate],
+        *,
+        degraded: bool,
+        debug_trace: dict[str, Any] | None,
+    ) -> list[_Candidate]:
         gated: list[_Candidate] = []
         gate_debug: list[dict[str, Any]] = []
         for item in candidates:
@@ -306,7 +432,7 @@ class MemoryRagService:
             )
             if passed:
                 gated.append(item)
-            if debug_stages is not None:
+            if debug_trace is not None:
                 gate_debug.append({
                     "candidate_id": item.candidate_id,
                     "passed": passed,
@@ -317,27 +443,49 @@ class MemoryRagService:
                         "lexical": item.lexical,
                     },
                 })
-        parent_items = self._group_by_parent(gated, limit=limit)
-        if debug_stages is not None:
-            debug_stages["merged_candidates"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
+        if debug_trace is not None:
+            debug_trace["relevance_gate"] = gate_debug
+        return gated
+
+    def _build_result(
+        self,
+        query: str,
+        *,
+        source: str,
+        parent_items: list[dict[str, Any]],
+        candidates: list[_Candidate],
+        recall: _MemoryRecallResult,
+        rerank_candidates: list[_Candidate],
+        reranker_latency_ms: int,
+        counters: dict[str, int],
+        degraded: bool,
+        debug_trace: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if debug_trace is not None:
+            debug_trace["merged_candidates"] = [
+                self._debug_candidate(item, bm25_by_id=recall.bm25_by_id)
                 for item in candidates
             ]
-            debug_stages["final_candidates"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in gated
+            final_candidate_ids = {
+                card["candidate_id"]
+                for parent in parent_items
+                for card in parent["matched_cards"]
+            }
+            debug_trace["final_candidates"] = [
+                self._debug_candidate(item, bm25_by_id=recall.bm25_by_id)
+                for item in candidates
+                if item.candidate_id in final_candidate_ids
             ]
-            debug_stages["relevance_gate"] = gate_debug
         result = {
             "query": query,
             "source": source,
             "degraded": degraded,
-            "fallback_reason": fallback_reason,
+            "fallback_reason": "reranker_unavailable" if degraded else "",
             "stats": {
-                "fts_candidates": len(fts_hits),
-                "vector_candidates": len(vector_hits),
-                "lexical_candidates": fts_candidate_count,
-                "embedding_candidates": semantic_hits,
+                "fts_candidates": len(recall.fts_hits),
+                "vector_candidates": len(recall.vector_hits),
+                "lexical_candidates": counters["fts_candidate_count"],
+                "embedding_candidates": counters["semantic_hits"],
                 "merged_candidates": len(candidates),
                 "reranker_candidates": len(rerank_candidates) if self.reranker_provider else 0,
                 "reranker_latency_ms": reranker_latency_ms,
@@ -345,8 +493,8 @@ class MemoryRagService:
             },
             "items": parent_items,
         }
-        if debug_stages is not None:
-            result["debug_trace"] = debug_stages
+        if debug_trace is not None:
+            result["debug_trace"] = debug_trace
         return result
 
     @staticmethod
