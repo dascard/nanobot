@@ -192,7 +192,7 @@ router = APIRouter(tags=["admin-runtime"])
 - `_timing_stats()`
 - `_runtime_snapshot()`
 
-随同迁移或在新模块内保留私有实现：
+在新模块内保留私有实现，但不要求父模块 legacy identity：
 
 - `_safe_dict()`
 - `_iso()`
@@ -203,8 +203,10 @@ router = APIRouter(tags=["admin-runtime"])
 
 `_block_dict()` 暂不迁移为公共 block 模块，因为 Block / ContentBlock CRUD 仍留在父模块。本阶段在
 `api/admin/runtime_routes.py` 内保留一份仅用于 `group_detail()` response 的私有 `_block_dict()`，
-并让 `api.admin_routes._block_dict` 继续服务父模块 block CRUD。该重复只限临时拆分过渡，后续拆
-Block 路由时再收敛。
+并让 `api.admin_routes._block_dict` 继续服务父模块 block CRUD。`_safe_dict()`、`_iso()`、
+`_raw_group_id()` 和 `_group_stream_id()` 也仍被父模块后续 Configs / ContentBlock /
+`/model-replies` 区块使用，因此父模块保留旧实现；新模块的同名 helper 作为 Runtime 私有副本。
+该重复只限临时拆分过渡，后续拆 Block / Configs 路由时再收敛。
 
 `_sticker_dict()` 已在 `api/admin/sticker_routes.py` 导出，`group_detail()` 继续复用该 helper，
 保持 sticker record response shape 不变。
@@ -215,7 +217,7 @@ Block 路由时再收敛。
 
 - 从 `api.admin.runtime_routes` 导入 `router as runtime_router`。
 - 在 `group_memory_router` 之后 include `runtime_router`，确保 group memory 子路由先注册。
-- re-export 迁移后的 `TimingGateTestRequest`、helper 和 endpoint。
+- re-export 迁移后的 `TimingGateTestRequest`、Runtime 专属 helper 和 endpoint。
 - 删除本地 `# Observability / Runtime` 区块中的迁移代码。
 - 保留父模块仍使用的 `_safe_json()`、`_block_dict()`、`_config_dict()`、`_safe_dict()`、
   `_iso()`、`_raw_group_id()`、`_group_stream_id()` 等 helper，除非引用扫描确认无用。
@@ -310,7 +312,8 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - **catch-all 吞路由：** include `runtime_router` 必须晚于 `group_memory_router`，新增测试比较
   route index。
 - **旧导入失效：** 父模块 re-export 迁移后的 request model、helper 和 endpoint，新增测试逐项比较
-  `api.admin_routes` 与 `api.admin.runtime_routes` 对象身份。
+  `api.admin_routes` 与 `api.admin.runtime_routes` 对象身份；仍被父模块其他区块使用的通用 helper
+  不纳入 identity 比较。
 - **鉴权 monkeypatch 失效：** 新模块使用 `api.admin.common.verify_admin`，该 helper 已优先读取
   `sys.modules["api.admin_routes"].NANOBOT_ADMIN_TOKEN`。
 - **同步阻塞回退：** `timing_gate_test()` 必须保持 `async def` 与 `asyncio.to_thread()`，
