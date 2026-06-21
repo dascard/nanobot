@@ -33,7 +33,7 @@
 **文件：**
 - 修改：`tests/test_group_memory.py`
 
-- [ ] **步骤 1：添加失败测试**
+- [x] **步骤 1：添加失败测试**
 
 在 `tests/test_group_memory.py` 中追加测试，放在现有 import 之后、测试类之前：
 
@@ -49,7 +49,7 @@ def test_legacy_context_module_exports_group_context_builders():
 
 这个测试验证新模块边界存在，并且 `core.context_builder` 继续保留 facade wrapper，而不是直接 re-export 同一个函数对象。
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -72,7 +72,7 @@ FAILED tests/test_group_memory.py::test_legacy_context_module_exports_group_cont
 - 创建：`core/context_legacy.py`
 - 修改：`core/context_builder.py`
 
-- [ ] **步骤 1：创建 `core/context_legacy.py`**
+- [x] **步骤 1：创建 `core/context_legacy.py`**
 
 将 `core/context_builder.py` 尾部以下函数的完整实现搬入新文件：
 
@@ -251,7 +251,7 @@ def _evidence_for(evidence_map: dict[str, list[str]], content: str, max_chars: i
     return safe if safe else ""
 ```
 
-- [ ] **步骤 2：把 `core.context_builder` 改成 wrapper**
+- [x] **步骤 2：把 `core.context_builder` 改成 wrapper**
 
 在 `core/context_builder.py` 中删除 `build_group_recent_context()`、`_lookup_evidence_snippets()`、`build_group_profile_context()` 和 `_evidence_for()` 的原实现，保留两个公开兼容函数：
 
@@ -300,7 +300,7 @@ from datetime import datetime
 
 如果 `timedelta` 在文件其他部分仍被使用，则保留 `timedelta`。
 
-- [ ] **步骤 3：运行红灯测试验证变绿**
+- [x] **步骤 3：运行红灯测试验证变绿**
 
 运行：
 
@@ -322,7 +322,7 @@ python -m pytest tests/test_group_memory.py::test_legacy_context_module_exports_
 - 创建：`core/context_legacy.py`
 - 修改：`tests/test_group_memory.py`
 
-- [ ] **步骤 1：运行 legacy group context 定向测试**
+- [x] **步骤 1：运行 legacy group context 定向测试**
 
 运行：
 
@@ -342,7 +342,7 @@ python -m pytest \
 4 passed
 ```
 
-- [ ] **步骤 2：核对文件体积**
+- [x] **步骤 2：核对文件体积**
 
 运行：
 
@@ -358,7 +358,7 @@ core/context_builder.py
 
 对应行数低于 800。`core/context_legacy.py` 行数不设硬性上限，但应只包含 legacy 兼容逻辑。
 
-- [ ] **步骤 3：检查 `asyncio.run()` 约束**
+- [x] **步骤 3：检查 `asyncio.run()` 约束**
 
 运行：
 
@@ -379,13 +379,13 @@ python -m pytest tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：标记本计划已完成步骤**
+- [x] **步骤 1：标记本计划已完成步骤**
 
 在 `.Codex/plans/context-builder-split.md` 中把已经完成的步骤复选框改成 `[x]`。
 
 保持未开始的后续拆分候选不在本计划内，避免把「超大文件 >800 行拆分」整项误判为完成。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在「超大文件 >800 行拆分」条目下补充状态说明：
 
@@ -397,7 +397,7 @@ python -m pytest tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears
 
 不要把该待办项改为 `[x]`。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加新小节：
 
@@ -425,7 +425,7 @@ deprecated 群聊上下文实现已迁移到 `core/context_legacy.py`。
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行全量测试**
+- [x] **步骤 1：运行全量测试**
 
 运行：
 
@@ -446,7 +446,7 @@ python -m pytest tests/ -v
 1478 passed, 6 skipped, 139 warnings
 ```
 
-- [ ] **步骤 2：检查 diff 格式**
+- [x] **步骤 2：检查 diff 格式**
 
 运行：
 
@@ -462,7 +462,7 @@ git diff --check -- \
 
 预期：无输出，退出码 0。
 
-- [ ] **步骤 3：只暂存本阶段文件**
+- [x] **步骤 3：只暂存本阶段文件**
 
 运行：
 
@@ -478,7 +478,7 @@ git add \
 
 禁止使用 `git add .` 或 `git add -A`。
 
-- [ ] **步骤 4：复查暂存区**
+- [x] **步骤 4：复查暂存区**
 
 运行：
 
@@ -489,7 +489,7 @@ git diff --cached --check
 
 预期暂存区只包含任务 5 步骤 3 的 6 个文件，且 diff check 无输出。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 运行：
 
@@ -504,9 +504,18 @@ git commit -m "refactor(上下文): 拆分旧群聊上下文构造" \
 
 ## 自检清单
 
-- [ ] 规格覆盖：对应 `2026-06-21-context-builder-split-design.md` 的目标、非目标、兼容性、测试和回滚策略。
-- [ ] TDD：先新增 `core.context_legacy` 模块边界测试并看到红灯，再写生产代码。
-- [ ] 兼容：`core.context_builder` 的 `build_group_recent_context()`、`build_group_profile_context()`、`estimate_tokens`、`_strip_speaker_prefix` 原路径可用。
-- [ ] 行数：`core/context_builder.py` 低于 800 行。
-- [ ] 约束：没有新增除 `main` guard 外的 `asyncio.run()`。
-- [ ] 提交：只用显式路径 `git add`，不暂存无关 pycache、数据库或既有脏项。
+- [x] 规格覆盖：对应 `2026-06-21-context-builder-split-design.md` 的目标、非目标、兼容性、测试和回滚策略。
+- [x] TDD：先新增 `core.context_legacy` 模块边界测试并看到红灯，再写生产代码。
+- [x] 兼容：`core.context_builder` 的 `build_group_recent_context()`、`build_group_profile_context()`、`estimate_tokens`、`_strip_speaker_prefix` 原路径可用。
+- [x] 行数：`core/context_builder.py` 低于 800 行。
+- [x] 约束：没有新增除 `main` guard 外的 `asyncio.run()`。
+- [x] 提交：只用显式路径 `git add`，不暂存无关 pycache、数据库或既有脏项。
+
+## 执行记录
+
+- 红灯：`python -m pytest tests/test_group_memory.py::test_legacy_context_module_exports_group_context_builders -v` -> `1 failed, 1 warning`，失败原因为 `core.context_legacy` 不存在。
+- 绿灯：同一测试 -> `1 passed, 1 warning`。
+- 定向兼容：legacy context / profile / recent context / token estimator 四个用例 -> `4 passed, 1 warning`。
+- 文件体积：`core/context_builder.py` 782 行，`core/context_legacy.py` 170 行。
+- `asyncio.run` 约束：`tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard` -> `1 passed, 1 warning`。
+- 全量回归：`python -m pytest tests/ -v` -> `1478 passed, 6 skipped, 139 warnings in 108.80s`。

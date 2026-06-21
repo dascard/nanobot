@@ -5,6 +5,15 @@ from core.group_memory import upsert, query_active, query_injectable, build_prof
 from core.context_builder import build_group_profile_context, build_group_recent_context
 
 
+def test_legacy_context_module_exports_group_context_builders():
+    from core import context_legacy
+
+    assert context_legacy.build_group_recent_context is not build_group_recent_context
+    assert context_legacy.build_group_profile_context is not build_group_profile_context
+    assert callable(context_legacy.build_group_recent_context)
+    assert callable(context_legacy.build_group_profile_context)
+
+
 @pytest.fixture(autouse=True)
 def _init_db():
     from core.database import Base, engine

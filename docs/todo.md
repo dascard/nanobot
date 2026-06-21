@@ -112,6 +112,7 @@
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
   `admin_routes.py`(5849)、`routes.py`(2966)、`news_search/tool.py`(1831)、`context_builder.py`(907)、`group_runtime/runtime.py`(829)、`persona_preprocess.py`(856)。按职责拆模块。
+  - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/admin_routes.py`、`api/routes.py`、`creatures/nanobot/prompts/skills/news_search/tool.py`、`core/group_runtime/runtime.py`、`core/persona_preprocess.py` 仍待继续拆分。
 
 - [ ] **静默吞异常补日志（best-effort 路径）** · LOW · S 批量
   `prompts/manager.py:435`(tracer)、`context_builder.py:895`(deprecated)、`admin/system_routes.py:46`(git)、`group_ingress/helpers.py:41,74`、`memory_digest/builder.py:65`。均非吞真错，补 `logger.debug` 提升可调试性即可；`H11 save_log`(legacy_adapter.py:223) 补 `except+rollback`（MEDIUM，聊天链路）。

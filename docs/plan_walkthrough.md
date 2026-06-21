@@ -2127,3 +2127,25 @@ H30 计划列表：
 下一步：
 
 默认回到 `docs/todo.md` 的剩余 P3/P4 项。H30 公共 recall helper 可在两个模块稳定运行后单独评估；不作为第一轮拆分阻塞项。
+
+## 2026-06-21 Context Builder 第一刀拆分
+
+状态：第一刀实现完成。`core/context_builder.py` 已保留真实上下文构造和兼容 facade，deprecated 群聊上下文实现已迁移到 `core/context_legacy.py`。
+
+已完成：
+
+- [x] 补充 `core.context_legacy` 模块边界红灯测试，确认新模块不存在时失败。
+- [x] 新增 `core/context_legacy.py`，迁移 `build_group_recent_context()`、`_lookup_evidence_snippets()`、`build_group_profile_context()` 和 `_evidence_for()`。
+- [x] 将 `core/context_builder.py` 的 deprecated 群聊 context 入口收敛为 wrapper，保持旧导入路径可用。
+- [x] 同步 `.Codex/plans/context-builder-split.md`、`docs/todo.md` 和本 walkthrough。
+
+验证：
+
+- 红灯：`python -m pytest tests/test_group_memory.py::test_legacy_context_module_exports_group_context_builders -v` -> `1 failed, 1 warning`，失败原因为 `core.context_legacy` 不存在。
+- 绿灯：同一测试 -> `1 passed, 1 warning`。
+- 定向兼容：`tests/test_group_memory.py::test_legacy_context_module_exports_group_context_builders`、`tests/test_group_memory.py::TestBuildProfile::test_profile_includes_relationships_in_context`、`tests/test_group_memory.py::TestGroupRecentContext::test_recent_context_uses_maibot_message_prefix`、`tests/test_token_utils.py::test_remaining_token_estimators_share_same_formula` -> `4 passed, 1 warning`。
+- 行数：`core/context_builder.py` 782 行，`core/context_legacy.py` 170 行。
+- `asyncio.run` 约束：`tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard` -> `1 passed, 1 warning`。
+- 全量：`python -m pytest tests/ -v` -> `1478 passed, 6 skipped, 139 warnings in 108.80s`。
+
+后续：继续按规格中的排序拆 `api/admin_routes.py` DB Browser。
