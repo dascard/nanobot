@@ -2046,7 +2046,7 @@ TimingGate 真实日志标注和周期复跑报告调参属于延续项，不抢
 
 ## 2026-06-21 H29 handle_message 拆分计划
 
-状态：设计阶段已完成并提交，计划阶段正在收口。本阶段不直接修改生产代码，先把 `NanobotBridge.handle_message()` 的拆分边界、测试缺口、外部契约和子 agent 分工固化到文档。
+状态：H29 第一轮拆分已完成。`NanobotBridge.handle_message()` 的外部签名、`metadata` 开放 dict、`stream_queue` 侧通道、空字符串语义和 `pop_last_reply_meta(session_id)` 弹出式语义保持不变；内部已按 request 准备、模型循环、reply contract 和 trace finalizer 拆出私有边界。
 
 已完成：
 
@@ -2056,16 +2056,16 @@ TimingGate 真实日志标注和周期复跑报告调参属于延续项，不抢
 - [x] 写入设计文档：`docs/superpowers/specs/2026-06-21-h29-handle-message-refactor-design.md`。
 - [x] 设计阶段验证：模板词扫描无输出，`git diff --check` 退出码 0，`python -m pytest tests/ -v` 结果 `1461 passed, 6 skipped, 139 warnings in 108.74s`。
 - [x] 设计阶段提交：`e6cd2b5 docs(桥接): 设计消息处理拆分`。
-- [x] 写入实现计划：`.Codex/plans/h29-handle-message-refactor.md`。
+- [x] 写入实现计划：`.Codex/plans/h29-handle-message-refactor.md`，提交 `a9f0dbb docs(计划): 记录消息处理拆分计划`。
 
 H29 计划列表：
 
 - [x] 阶段 0：只读审计、方案选择和设计文档。
-- [ ] 阶段 1：抽低风险 helper，包括 output 初始化、event payload 和 runtime tool state 边界。
-- [ ] 阶段 2：补模型 retry 回归，并拆 `_run_model_loop()`。
-- [ ] 阶段 3：补 structured `no_reply` 回归，并拆 `_check_reply_contract()`。
-- [ ] 阶段 4：补 trace cleanup 幂等回归，并收敛 `BridgeTraceFinalizer`。
-- [ ] 阶段 5：同步 `docs/todo.md`、`docs/plan_walkthrough.md` 和计划状态，运行最终验证。
+- [x] 阶段 1：抽低风险 helper，包括 output 初始化、event payload 和 runtime tool state 边界。提交 `e65575c refactor(桥接): 抽取消息准备辅助函数`；验证为定向 `8 passed, 1 warning`、相邻 `36 passed, 1 warning`、全量 `1464 passed, 6 skipped, 139 warnings in 108.57s`。
+- [x] 阶段 2：补模型 retry 回归，并拆 `_run_model_loop()`。提交 `1da43fb refactor(桥接): 拆分回复模型重试循环`；验证为模型门禁 `10 passed, 1 warning`、相邻 `98 passed, 1 warning`、全量 `1465 passed, 6 skipped, 139 warnings in 110.41s`。
+- [x] 阶段 3：补 structured `no_reply` 回归，并拆 `_check_reply_contract()`。提交 `786e707 refactor(桥接): 拆分回复合同检查`；验证为 reply contract 门禁 `9 passed, 1 warning`、Bridge 相邻 `57 passed, 1 warning`、全量 `1466 passed, 6 skipped, 139 warnings in 112.65s`。
+- [x] 阶段 4：补 trace cleanup 幂等回归，并收敛 `BridgeTraceFinalizer`。提交 `1612158 refactor(桥接): 收敛运行追踪收尾`；验证为 trace 与 stream 回归 `15 passed, 21 warnings`、Bridge 相邻 `67 passed, 1 warning`、全量 `1467 passed, 6 skipped, 139 warnings in 114.10s`。
+- [x] 阶段 5：同步 `docs/todo.md`、`docs/plan_walkthrough.md` 和计划状态。验证为文档扫描无输出、文档格式检查无输出、H29 定向回归 `80 passed, 1 warning in 21.03s`、最终全量 `1467 passed, 6 skipped, 139 warnings in 111.26s`。
 
 执行约束：
 
@@ -2077,13 +2077,11 @@ H29 计划列表：
 - 不新增 `asyncio.run()`，不新增同步函数包 awaitable。
 - 每个阶段完成后先运行指定定向回归和 `python -m pytest tests/ -v`，再按文件显式暂存并提交。
 
-子 agent 分工建议：
+子 agent 分工结论：
 
-- Agent A：只写模型 retry 新测试，范围限定 `tests/test_kt_framework.py` 中 `TestNanobotBridge`。
-- Agent B：只写 reply contract 新测试，范围限定 `tests/test_kt_framework.py::TestReplyContract`。
-- Agent C：只同步文档和计划状态，范围限定 `.Codex/plans/h29-handle-message-refactor.md`、`docs/todo.md`、`docs/plan_walkthrough.md`。
-- 主线程：持有 `nanobot_kt/bridge.py` 生产代码改动和最终集成验证。
+- H29 生产代码集中在 `nanobot_kt/bridge.py`，主线程串行持有生产改动，避免同文件冲突。
+- 测试和文档适合分派给子 agent；本轮实际执行中，前置只读 explorer 已用于职责切片、测试覆盖和外部契约审计。
 
 下一步：
 
-从 `.Codex/plans/h29-handle-message-refactor.md` 的任务 1 开始，先写 `_prepare_output_for_request()` 和 `_prepare_event_payload()` 的红灯测试，再抽低风险 helper。任务 1 完成并通过全量测试后，单独提交 `refactor(桥接): 抽取消息准备辅助函数`。
+H29 第一轮拆分已无未完成任务。默认回到 `docs/todo.md` 的剩余 P3/P4 项，优先级较高的是 H30 RAG query 拆分和超大文件职责拆分；如果继续沿 Bridge 深化，建议先基于新的 helper 边界做二次体积削减计划，而不是扩大本轮提交范围。

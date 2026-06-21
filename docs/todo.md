@@ -104,8 +104,8 @@
 
 ### P3 — 可维护性 / 代码质量
 
-- [ ] **H29 handle_message 1080 行 + 深嵌套** · `nanobot_kt/bridge.py:860-1940` · HIGH(可维护) · L ·〔呼应路线图 §1〕
-  单函数混模型路由/重试/合同检查/tracing/stream。**修**：拆 `_run_model_loop`/`_check_reply_contract`/`_close_trace`。
+- [x] **H29 handle_message 1080 行 + 深嵌套** · `nanobot_kt/bridge.py:860-1940` · HIGH(可维护) · L ·〔呼应路线图 §1〕
+  已完成第一轮拆分：低风险 request helper、模型重试循环、reply contract 出口治理和 trace cleanup 已拆成私有边界；public signature、metadata、stream 侧通道和 `pop_last_reply_meta()` 语义保持不变。阶段提交为 `e65575c`、`1da43fb`、`786e707`、`1612158`。
 
 - [ ] **H30 RAG query() ~337 行** · `core/knowledge_rag.py:122-459` / `core/memory_rag.py:126-349` · HIGH(可维护) · L ·〔呼应路线图 §6〕
   **修**：拆 `_recall`/`_filter_candidates`/`_rerank`/`_build_result`。

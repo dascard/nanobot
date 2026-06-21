@@ -16,11 +16,20 @@
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-h29-handle-message-refactor-design.md`。
 - [x] 设计阶段已提交：`e6cd2b5 docs(桥接): 设计消息处理拆分`。
 - [x] 设计阶段验证已运行：`python -m pytest tests/ -v`，结果 `1461 passed, 6 skipped, 139 warnings in 108.74s`。
-- [ ] 任务 1：抽低风险 helper。
-- [ ] 任务 2：补模型 retry 回归并拆 `_run_model_loop()`。
-- [ ] 任务 3：补 structured `no_reply` 回归并拆 `_check_reply_contract()`。
-- [ ] 任务 4：补 trace cleanup 幂等回归并收敛 finalizer。
-- [ ] 任务 5：同步文档状态、运行最终验证并提交。
+- [x] 计划阶段已提交：`a9f0dbb docs(计划): 记录消息处理拆分计划`。
+- [x] 任务 1：抽低风险 helper，提交 `e65575c refactor(桥接): 抽取消息准备辅助函数`。
+- [x] 任务 2：补模型 retry 回归并拆 `_run_model_loop()`，提交 `1da43fb refactor(桥接): 拆分回复模型重试循环`。
+- [x] 任务 3：补 structured `no_reply` 回归并拆 `_check_reply_contract()`，提交 `786e707 refactor(桥接): 拆分回复合同检查`。
+- [x] 任务 4：补 trace cleanup 幂等回归并收敛 finalizer，提交 `1612158 refactor(桥接): 收敛运行追踪收尾`。
+- [x] 任务 5：同步文档状态、运行最终验证并提交文档收口。
+
+## 阶段验证摘要
+
+- 任务 1：定向回归 `8 passed, 1 warning`，相邻回归 `36 passed, 1 warning`，全量回归 `1464 passed, 6 skipped, 139 warnings in 108.57s`。
+- 任务 2：模型门禁 `10 passed, 1 warning`，相邻回归 `98 passed, 1 warning`，全量回归 `1465 passed, 6 skipped, 139 warnings in 110.41s`。
+- 任务 3：reply contract 门禁 `9 passed, 1 warning`，Bridge 相邻回归 `57 passed, 1 warning`，全量回归 `1466 passed, 6 skipped, 139 warnings in 112.65s`。
+- 任务 4：trace 与 stream 回归 `15 passed, 21 warnings`，Bridge 相邻回归 `67 passed, 1 warning`，全量回归 `1467 passed, 6 skipped, 139 warnings in 114.10s`。
+- 任务 5：文档扫描无输出，文档格式检查无输出，H29 定向回归 `80 passed, 1 warning in 21.03s`，最终全量回归 `1467 passed, 6 skipped, 139 warnings in 111.26s`。
 
 ## 设计来源
 
@@ -79,7 +88,7 @@
 - 修改：`tests/test_streaming_bridge.py`
 - 修改：`tests/test_kt_framework.py`
 
-- [ ] **步骤 1：为 output 初始化 helper 写失败测试**
+- [x] **步骤 1：为 output 初始化 helper 写失败测试**
 
 在 `tests/test_streaming_bridge.py` 增加：
 
@@ -121,7 +130,7 @@ def test_prepare_output_for_request_disables_stream_when_not_streaming(monkeypat
     bridge._output.disable_stream.assert_called_once_with()
 ```
 
-- [ ] **步骤 2：为 event payload helper 写失败测试**
+- [x] **步骤 2：为 event payload helper 写失败测试**
 
 在 `tests/test_kt_framework.py::TestNanobotBridge` 增加：
 
@@ -167,7 +176,7 @@ async def test_prepare_event_payload_builds_multimodal_capabilities(self, monkey
     assert payload.event_content != "看看图"
 ```
 
-- [ ] **步骤 3：运行失败测试**
+- [x] **步骤 3：运行失败测试**
 
 运行：
 
@@ -181,7 +190,7 @@ python -m pytest \
 
 预期：失败，原因是 `NanobotBridge` 还没有 `_prepare_output_for_request()` 和 `_prepare_event_payload()`。
 
-- [ ] **步骤 4：新增 dataclass**
+- [x] **步骤 4：新增 dataclass**
 
 在 `nanobot_kt/bridge.py` 顶部已有 import 区确认存在 `dataclass`、`Any`。如果缺少，补齐：
 
@@ -220,7 +229,7 @@ class BridgeEventPayload:
     required_capabilities: dict[str, bool]
 ```
 
-- [ ] **步骤 5：实现 `_prepare_output_for_request()`**
+- [x] **步骤 5：实现 `_prepare_output_for_request()`**
 
 在 `NanobotBridge` 类中、`handle_message()` 之前新增：
 
@@ -246,7 +255,7 @@ class BridgeEventPayload:
             pass
 ```
 
-- [ ] **步骤 6：实现 `_prepare_event_payload()`**
+- [x] **步骤 6：实现 `_prepare_event_payload()`**
 
 在 `NanobotBridge` 类中、`handle_message()` 之前新增：
 
@@ -286,7 +295,7 @@ class BridgeEventPayload:
         )
 ```
 
-- [ ] **步骤 7：机械替换 `handle_message()` 中 output 和 event payload 代码**
+- [x] **步骤 7：机械替换 `handle_message()` 中 output 和 event payload 代码**
 
 把原 `self._output.clear()` 到 `clear_last_reply()` 的代码块替换为：
 
@@ -310,7 +319,7 @@ class BridgeEventPayload:
             required_capabilities = event_payload.required_capabilities
 ```
 
-- [ ] **步骤 8：运行任务 1 定向测试**
+- [x] **步骤 8：运行任务 1 定向测试**
 
 运行：
 
@@ -326,7 +335,7 @@ python -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 9：运行任务 1 相邻回归**
+- [x] **步骤 9：运行任务 1 相邻回归**
 
 运行：
 
@@ -341,7 +350,7 @@ python -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 10：提交任务 1**
+- [x] **步骤 10：提交任务 1**
 
 运行：
 
@@ -359,7 +368,7 @@ git commit -m "refactor(桥接): 抽取消息准备辅助函数"
 - 修改：`nanobot_kt/bridge.py`
 - 修改：`tests/test_kt_framework.py`
 
-- [ ] **步骤 1：新增 retry 行为测试**
+- [x] **步骤 1：新增 retry 行为测试**
 
 在 `tests/test_kt_framework.py::TestNanobotBridge` 增加一个测试，使用两个候选模型并让第一轮返回空响应：
 
@@ -437,7 +446,7 @@ def test_handle_message_retries_next_model_after_empty_response(
     assert mock_conv.truncate_from.called
 ```
 
-- [ ] **步骤 2：运行 retry 测试**
+- [x] **步骤 2：运行 retry 测试**
 
 运行：
 
@@ -447,7 +456,7 @@ python -m pytest tests/test_kt_framework.py::TestNanobotBridge::test_handle_mess
 
 预期：若当前行为已满足则通过，并作为 characterization guard；若失败，先修复当前行为再拆 helper。
 
-- [ ] **步骤 3：新增 `ModelLoopResult`**
+- [x] **步骤 3：新增 `ModelLoopResult`**
 
 在 `BridgeEventPayload` 后新增：
 
@@ -462,7 +471,7 @@ class ModelLoopResult:
     attempts: int
 ```
 
-- [ ] **步骤 4：抽 `_run_model_loop()`**
+- [x] **步骤 4：抽 `_run_model_loop()`**
 
 在 `NanobotBridge` 类中新增 async helper。第一版只做机械搬移，不改算法。输入必须显式传入 `event`、`next_event`、`candidate_models`、`route_plan`、`required_capabilities`、`prompt_build`、`run_handle`、`trace_id`、`route_client`、`failure_tracker`、`manual_reply_model` 和 `meta` 中当前 loop 使用的值。
 
@@ -504,7 +513,7 @@ helper 返回：
 
 如果某个变量还在主流程后续被使用，必须从 `ModelLoopResult` 补字段，而不是依赖闭包。
 
-- [ ] **步骤 5：运行模型路由和 retry 门禁**
+- [x] **步骤 5：运行模型路由和 retry 门禁**
 
 运行：
 
@@ -525,7 +534,7 @@ python -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交任务 2**
+- [x] **步骤 6：提交任务 2**
 
 运行：
 
@@ -543,7 +552,7 @@ git commit -m "refactor(桥接): 拆分回复模型重试循环"
 - 修改：`nanobot_kt/bridge.py`
 - 修改：`tests/test_kt_framework.py`
 
-- [ ] **步骤 1：新增 structured no_reply fallback 测试**
+- [x] **步骤 1：新增 structured no_reply fallback 测试**
 
 在 `tests/test_kt_framework.py::TestReplyContract` 增加：
 
@@ -597,7 +606,7 @@ def test_structured_final_action_no_reply_returns_empty(self, MockAgent, mock_lo
     assert reply_meta["_no_reply"] is True
 ```
 
-- [ ] **步骤 2：运行 structured no_reply 测试**
+- [x] **步骤 2：运行 structured no_reply 测试**
 
 运行：
 
@@ -607,7 +616,7 @@ python -m pytest tests/test_kt_framework.py::TestReplyContract::test_structured_
 
 预期：通过或暴露真实缺口。若失败，先修复 structured no_reply 语义，再抽 helper。
 
-- [ ] **步骤 3：新增 `ReplyResolution`**
+- [x] **步骤 3：新增 `ReplyResolution`**
 
 在 `ModelLoopResult` 后新增：
 
@@ -622,7 +631,7 @@ class ReplyResolution:
     finish_status: str
 ```
 
-- [ ] **步骤 4：抽 `_check_reply_contract()`**
+- [x] **步骤 4：抽 `_check_reply_contract()`**
 
 把 `# no_reply 优先` 到 reply contract retry 结束的出口治理代码抽为 async helper。helper 必须接收当前逻辑实际使用的状态，包括 `session_id`、`response`、`result`、`preserved_html`、`target_model`、`query`、`meta`、`event_content`、`create_user_event`、`process_event` 和 `enable_reply_contract_retry`。
 
@@ -646,7 +655,7 @@ class ReplyResolution:
 
 如果 helper 需要提前终止，使用 `ReplyResolution` 表达结果，不在 helper 内调用 `_finish_agent_trace()`。
 
-- [ ] **步骤 5：运行 reply contract 门禁**
+- [x] **步骤 5：运行 reply contract 门禁**
 
 运行：
 
@@ -656,7 +665,7 @@ python -m pytest tests/test_kt_framework.py::TestReplyContract -q
 
 预期：全部通过。
 
-- [ ] **步骤 6：运行 Bridge 相邻回归**
+- [x] **步骤 6：运行 Bridge 相邻回归**
 
 运行：
 
@@ -671,7 +680,7 @@ python -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 7：提交任务 3**
+- [x] **步骤 7：提交任务 3**
 
 运行：
 
@@ -689,7 +698,7 @@ git commit -m "refactor(桥接): 拆分回复合同检查"
 - 修改：`nanobot_kt/bridge.py`
 - 修改：`tests/test_kt_framework.py`
 
-- [ ] **步骤 1：新增 trace cleanup 幂等测试**
+- [x] **步骤 1：新增 trace cleanup 幂等测试**
 
 在 `tests/test_kt_framework.py::TestNanobotBridge` 增加：
 
@@ -743,7 +752,7 @@ def test_bridge_trace_finalizer_finishes_once(monkeypatch):
     assert reset_tool_plan_calls == ["tool-token"]
 ```
 
-- [ ] **步骤 2：运行失败测试**
+- [x] **步骤 2：运行失败测试**
 
 运行：
 
@@ -753,7 +762,7 @@ python -m pytest tests/test_kt_framework.py::TestNanobotBridge::test_bridge_trac
 
 预期：失败，原因是 `BridgeTraceFinalizer` 尚不存在。
 
-- [ ] **步骤 3：实现 `BridgeTraceFinalizer`**
+- [x] **步骤 3：实现 `BridgeTraceFinalizer`**
 
 在 `ReplyResolution` 后新增：
 
@@ -817,7 +826,7 @@ class BridgeTraceFinalizer:
         reset_trace_context(self.trace_tokens)
 ```
 
-- [ ] **步骤 4：替换内部 `_finish_agent_trace()` 闭包**
+- [x] **步骤 4：替换内部 `_finish_agent_trace()` 闭包**
 
 在 `handle_message()` 中创建 finalizer：
 
@@ -859,7 +868,7 @@ class BridgeTraceFinalizer:
 
 删除旧闭包和 `trace_closed` 变量。保留局部 `final_tools_token` / `tool_plan_token` 的后续引用时，必须确认不再被 reset 两次。
 
-- [ ] **步骤 5：运行 trace 与 stream 回归**
+- [x] **步骤 5：运行 trace 与 stream 回归**
 
 运行：
 
@@ -874,7 +883,7 @@ python -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交任务 4**
+- [x] **步骤 6：提交任务 4**
 
 运行：
 
@@ -893,7 +902,7 @@ git commit -m "refactor(桥接): 收敛运行追踪收尾"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/h29-handle-message-refactor.md`
 
-- [ ] **步骤 1：同步 `docs/todo.md` H29 状态**
+- [x] **步骤 1：同步 `docs/todo.md` H29 状态**
 
 如果任务 1-4 均完成，把 H29 条目从未完成改为已完成，并追加实施状态：
 
@@ -904,7 +913,7 @@ git commit -m "refactor(桥接): 收敛运行追踪收尾"
 
 如果只完成任务 1 或任务 2，不要把 H29 勾选为完成，只追加阶段状态。
 
-- [ ] **步骤 2：同步 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：同步 `docs/plan_walkthrough.md`**
 
 追加 2026-06-21 H29 章节，至少记录：
 
@@ -914,11 +923,11 @@ git commit -m "refactor(桥接): 收敛运行追踪收尾"
 - 每个阶段验证命令与结果。
 - 下一步从哪一个未完成任务继续。
 
-- [ ] **步骤 3：更新本计划状态**
+- [x] **步骤 3：更新本计划状态**
 
 把已完成任务的复选框改为 `[x]`，并在「当前状态」补充提交号。未执行任务保持 `[ ]`。
 
-- [ ] **步骤 4：文档扫描**
+- [x] **步骤 4：文档扫描**
 
 运行：
 
@@ -932,7 +941,7 @@ rg -n "T[O]DO|待[定]|后续[实]现|F[I]XME|占[位]|类似[任]务|添加[适
 
 预期：无输出，退出码 1。
 
-- [ ] **步骤 5：文档格式检查**
+- [x] **步骤 5：文档格式检查**
 
 运行：
 
@@ -946,7 +955,7 @@ git diff --check -- \
 
 预期：无输出，退出码 0。
 
-- [ ] **步骤 6：最终 H29 定向回归**
+- [x] **步骤 6：最终 H29 定向回归**
 
 运行：
 
@@ -962,7 +971,7 @@ python -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 7：全量测试**
+- [x] **步骤 7：全量测试**
 
 运行：
 
@@ -972,7 +981,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 8：提交任务 5**
+- [x] **步骤 8：提交任务 5**
 
 运行：
 
