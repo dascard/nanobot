@@ -2293,3 +2293,63 @@ H30 计划列表：
 
 完成 `legacy_report.py` 第一刀后，继续评估 `news_search/tool.py` 的缓存、搜索后端或
 AI 日报适配层拆分；`cache.py` 可作为低风险小步候选，但不替代当前第一刀的超大文件治理收益。
+
+## 2026-06-21 news_search/tool.py 运行时缓存拆分
+
+状态：设计和实现计划已写入，生产代码尚未修改。本阶段选择低风险第二刀，先拆
+`tool.py` 中的运行时缓存状态、缓存 key 计算、日期解析和日报查询识别；搜索后端、
+`WebTools`、`AiDailyTool`、`_run_news_daily_pipeline()` 和 `_summarize_news_layout()`
+继续留在旧文件，避免同时移动网络依赖和 KT 工具适配层。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-news-search-cache-split-design.md`。
+
+实现计划：
+`.Codex/plans/news-search-cache-split.md`。
+
+只读审计结论：
+
+- `docs/todo.md` 剩余硬项主要是「超大文件 >800 行拆分」「静默吞异常补日志」
+  和「ruff 批量清理」，其中 `news_search/tool.py` 第一刀后仍有 1149 行。
+- `news_search/tool.py` 的缓存边界集中在顶部状态、`_news_search_cache_key()`、
+  `_get_cached_news_result()`、`_store_cached_news_result()` 和 `AiDailyTool._execute()`。
+- 现有测试会直接清理 `news_tool._NEWS_SEARCH_CACHE`，因此新模块必须与旧符号共享同一个
+  dict / lock，不能只复制状态。
+- 搜索后端拆分涉及 `_urlopen`、`DDGS`、`trafilatura`、RSS 和 `WebTools` 的旧路径
+  monkeypatch，风险高于缓存拆分。
+
+计划列表：
+
+- [x] 阶段 0：确认 TODO、第一刀收口状态和缓存调用边界。
+- [x] 阶段 0.5：写入缓存拆分设计文档，明确 `runtime_cache.py` 与 `tool.py` facade。
+- [x] 阶段 0.6：写入 `.Codex/plans/news-search-cache-split.md`，列出 TDD 红灯、
+  实现、验证和阶段性提交步骤。
+- [ ] 阶段 1：新增 `tests/test_news_search_runtime_cache.py` 红灯测试，覆盖轻量导入、
+  key 形态、共享 dict / lock 和旧 TTL monkeypatch。
+- [ ] 阶段 2：新增 `news_search/runtime_cache.py`，迁移缓存状态、日期解析、日报识别、
+  缓存 key 和缓存读写。
+- [ ] 阶段 3：将 `tool.py` 缓存相关真实实现收敛为旧符号 facade，`AiDailyTool._execute()`
+  继续调用旧函数名。
+- [ ] 阶段 4：运行运行时缓存测试、AI 日报相邻回归、旧报告回归、`asyncio.run`
+  策略测试和全量 `python -m pytest tests/ -v`。
+- [ ] 阶段 5：同步 `.Codex/plans/news-search-cache-split.md`、`docs/todo.md` 和本
+  walkthrough，记录验证结果、行数变化和提交号。
+
+执行约束：
+
+- 不迁移 `AiDailyTool`、`WebTools`、RSS/DDG 搜索后端、`_run_news_daily_pipeline()` 或
+  `_summarize_news_layout()`。
+- 不改变缓存 key 版本号 `v2_20260503`、日报 key 形态、普通 query key 形态、TTL 默认值
+  或旧淘汰触发条件。
+- `tool.py` 必须保留 `NEWS_SEARCH_CACHE_TTL_SECONDS`、`_NEWS_SEARCH_CACHE`、
+  `_NEWS_SEARCH_CACHE_LOCK`、`_news_search_cache_key()`、`_get_cached_news_result()` 和
+  `_store_cached_news_result()`。
+- `runtime_cache.py` 不得导入 `news_search.tool`、`DDGS`、`trafilatura`、`BaseTool` 或
+  `run_awaitable_sync`。
+- 不新增 `asyncio.run()`，不新增同步函数包 awaitable。
+- 不改 prompt runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime 输入。
+
+下一步：
+
+按 `.Codex/plans/news-search-cache-split.md` 从红灯测试开始执行。实现完成后先运行定向回归
+和全量测试，再按文件显式暂存并提交 `refactor(新闻搜索): 拆分运行时缓存`。

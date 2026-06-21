@@ -119,6 +119,9 @@
   - 进展：`creatures/nanobot/prompts/skills/news_search/tool.py` 第一刀已拆出
     旧版新闻报告 helper 到 `news_search/legacy_report.py`；`tool.py` 从 1835 行降至
     1149 行，搜索后端、AI 日报工具、缓存和 `_summarize_news_layout()` 仍留在旧文件。
+  - 进展：`creatures/nanobot/prompts/skills/news_search/tool.py` 第二刀已进入
+    运行时缓存拆分设计/计划阶段；目标是抽出 `news_search/runtime_cache.py`，同时保留
+    旧 `tool.py` 缓存符号、同一 dict / lock 和 AI 日报缓存命中行为。
 
 - [ ] **静默吞异常补日志（best-effort 路径）** · LOW · S 批量
   `prompts/manager.py:435`(tracer)、`context_builder.py:895`(deprecated)、`admin/system_routes.py:46`(git)、`group_ingress/helpers.py:41,74`、`memory_digest/builder.py:65`。均非吞真错，补 `logger.debug` 提升可调试性即可；`H11 save_log`(legacy_adapter.py:223) 补 `except+rollback`（MEDIUM，聊天链路）。
