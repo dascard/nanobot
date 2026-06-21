@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `admin_routes.py`(5535)、`routes.py`(2966)、`news_search/tool.py`(1831)、`group_runtime/runtime.py`(829)、`persona_preprocess.py`(856)。按职责拆模块。
+  `admin_routes.py`(5535)、`routes.py`(2966)、`news_search/tool.py`(1149，原 1835)、`group_runtime/runtime.py`(829)、`persona_preprocess.py`(856)。按职责拆模块。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/admin_routes.py`、`api/routes.py`、`creatures/nanobot/prompts/skills/news_search/tool.py`、`core/group_runtime/runtime.py`、`core/persona_preprocess.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他

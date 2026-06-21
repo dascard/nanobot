@@ -2204,8 +2204,8 @@ H30 计划列表：
 - [x] 读取 `docs/todo.md` 的 P3 超大文件拆分条目，确认
   `creatures/nanobot/prompts/skills/news_search/tool.py` 仍在未完成列表中。
 - [x] 分派并收口三路只读子 agent：
-  - 职责边界审计：建议 `legacy_report.py` 作为第一刀，保持 `tool.py` facade 和
-    monkeypatch 路径兼容。
+  - 职责边界审计：建议 `legacy_report.py` 作为第一刀，保持 `tool.py` facade、
+    旧路径导入兼容和顶层运行入口 monkeypatch 兼容。
   - 测试覆盖审计：梳理 `tests/test_tools_package.py`、`tests/test_ai_daily_tool_and_sources.py`、
     `tests/test_ai_daily_ingest.py`、`tests/test_news_daily_pipeline.py`、KT/Bridge/schema 相邻回归。
   - 文档优先级审计：确认 TimingGate 不阻塞，下一阶段回到 P3 超大文件拆分。
@@ -2219,6 +2219,11 @@ H30 计划列表：
   `tool.py` re-export 兼容。
 - [x] 新增 `legacy_report.py`，迁移旧版新闻报告、评分、价值信号和 layout / HTML helper。
 - [x] `tool.py` 显式 re-export 迁移后的 helper，保持旧导入路径可用。
+- [x] 审查反馈修复：抽出轻量 `core.json_utils.json_repair()`，避免
+  `_parse_news_layout_payload()` 通过 `core.legacy_adapter` 反向加载 `news_search.tool`
+  及 runtime tool 依赖。
+- [x] 审查反馈修复：收窄兼容说明，明确 `tool.py` re-export 保证导入兼容；
+  迁移后的报告内部 helper 如需 monkeypatch，应使用 `legacy_report` 路径。
 
 计划列表：
 
@@ -2232,6 +2237,7 @@ H30 计划列表：
   全量 `python -m pytest tests/ -v`。
 - [x] 阶段 4：同步 `.Codex/plans/news-search-tool-split.md`、`docs/todo.md` 和本 walkthrough，
   记录行数变化、验证结果和提交号。
+- [x] 阶段 5：处理审查反馈，隔离 parser 轻量依赖、补回归测试并更新兼容边界文档。
 
 执行约束：
 
@@ -2240,6 +2246,8 @@ H30 计划列表：
 - 不恢复 `NewsSearchTool`，不重新暴露 `news_search` 工具名。
 - 不新增 `asyncio.run()`，不新增同步函数包 awaitable。
 - 不改 prompt runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime 输入。
+- 旧 `tool.py` 路径保证导入兼容和顶层运行入口 patch 兼容；迁移后的报告内部 helper
+  若要 monkeypatch 内部依赖，使用 `legacy_report` 路径。
 - 每个阶段完成后运行定向回归和 `python -m pytest tests/ -v`，再按文件显式暂存并提交。
 
 验证记录：
@@ -2256,10 +2264,30 @@ H30 计划列表：
   `tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v` ->
   `1 passed, 1 warning in 1.74s`。
 - `git diff --check`：无输出，退出码为 0。
-- 行数：`tool.py` 1149 行，`legacy_report.py` 724 行。
+- 行数：`tool.py` 1149 行，`legacy_report.py` 723 行。
 - 全量：`python -m pytest tests/ -v` ->
   `1484 passed, 6 skipped, 139 warnings in 107.20s`。
-- 提交：本阶段提交为 `refactor(新闻搜索): 拆分旧版报告渲染`。
+- 提交：本阶段提交为 `5493955 refactor(新闻搜索): 拆分旧版报告渲染`。
+
+审查修复验证记录：
+
+- 红灯：新增 parser 轻量依赖测试在修复前失败，失败时显示 `news_search.tool`、
+  `duckduckgo_search`、`trafilatura` 和 `BaseTool` 均被加载。
+- 绿灯：parser 轻量依赖单测 ->
+  `1 passed, 1 warning in 0.87s`。
+- 新模块测试：`tests/test_news_search_legacy_report.py -v` ->
+  `3 passed, 1 warning in 0.82s`。
+- 旧 API 兼容：`tests/test_audit_fixes.py::TestEvolutionUtils -v` ->
+  `5 passed, 1 warning in 0.46s`。
+- news / AI Daily 相邻回归 ->
+  `13 passed, 1 warning in 1.15s`。
+- `asyncio.run` 约束：
+  `tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v` ->
+  `1 passed, 1 warning in 2.02s`。
+- `git diff --check`：无输出，退出码为 0。
+- 全量：`python -m pytest tests/ -v` ->
+  `1485 passed, 6 skipped, 139 warnings in 116.15s`。
+- 提交信息：`fix(新闻搜索): 隔离报告解析轻量依赖`。
 
 后续：
 

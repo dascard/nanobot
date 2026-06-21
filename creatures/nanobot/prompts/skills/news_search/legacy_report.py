@@ -1,13 +1,14 @@
-"""Legacy news search report rendering helpers."""
+"""旧版新闻搜索报告渲染 helper。"""
 
 from __future__ import annotations
 
 import html
-import json
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any
 from urllib.parse import urlparse
+
+from core.json_utils import json_repair
 
 
 TRUSTED_NEWS_DOMAINS = {
@@ -38,7 +39,7 @@ def _domain(url: str) -> str:
         return ""
 
 
-def _source_score(item: Dict[str, Any]) -> int:
+def _source_score(item: dict[str, Any]) -> int:
     url = item.get("href", "") or ""
     title = item.get("title", "") or ""
     body = item.get("body", "") or ""
@@ -59,7 +60,7 @@ def _source_score(item: Dict[str, Any]) -> int:
     return score
 
 
-def _freshness_score(item: Dict[str, Any]) -> int:
+def _freshness_score(item: dict[str, Any]) -> int:
     raw_date = (item.get("date") or "").strip()
     if not raw_date:
         return 0
@@ -89,7 +90,7 @@ def _freshness_score(item: Dict[str, Any]) -> int:
     return 0
 
 
-def _combined_score(item: Dict[str, Any]) -> int:
+def _combined_score(item: dict[str, Any]) -> int:
     return _source_score(item) + _freshness_score(item)
 
 
@@ -102,7 +103,7 @@ def _value_signal_score(text: str) -> int:
     return score
 
 
-def _extract_model_hints(text: str) -> List[str]:
+def _extract_model_hints(text: str) -> list[str]:
     t = (text or "").lower()
     found = []
     for name in MODEL_NAME_HINTS:
@@ -111,7 +112,7 @@ def _extract_model_hints(text: str) -> List[str]:
     return sorted(set(found))
 
 
-def _build_value_alert(item: Dict[str, Any], content: str) -> Dict[str, Any]:
+def _build_value_alert(item: dict[str, Any], content: str) -> dict[str, Any]:
     title = item.get("title", "")
     body = item.get("body", "")
     url = item.get("href", "")
@@ -152,8 +153,8 @@ def _escape_html(text: str) -> str:
 
 def _build_news_conclusion(
     query: str,
-    search_results: List[Dict[str, Any]],
-    value_alerts: List[Dict[str, Any]],
+    search_results: list[dict[str, Any]],
+    value_alerts: list[dict[str, Any]],
 ) -> str:
     if value_alerts:
         top_alert = max(value_alerts, key=lambda x: int(x.get("signal", 0)))
@@ -175,12 +176,12 @@ def _build_news_conclusion(
 
 
 def _build_news_brief_items(
-    search_results: List[Dict[str, Any]],
-    extracted_contents: List[str],
+    search_results: list[dict[str, Any]],
+    extracted_contents: list[str],
     *,
     limit: int = 5,
-) -> List[Dict[str, str]]:
-    items: List[Dict[str, str]] = []
+) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
     for idx, (item, content) in enumerate(zip(search_results, extracted_contents), start=1):
         if idx > limit:
             break
@@ -260,10 +261,10 @@ def _coerce_layout_text(value: Any, max_chars: int) -> str:
     return _normalize_summary_text(value, max_chars)
 
 
-def _coerce_layout_list(value: Any, *, max_items: int, max_chars: int) -> List[str]:
+def _coerce_layout_list(value: Any, *, max_items: int, max_chars: int) -> list[str]:
     if not isinstance(value, list):
         return []
-    cleaned: List[str] = []
+    cleaned: list[str] = []
     for item in value:
         text = _coerce_layout_text(item, max_chars)
         if text:
@@ -273,10 +274,8 @@ def _coerce_layout_list(value: Any, *, max_items: int, max_chars: int) -> List[s
     return cleaned
 
 
-def _parse_news_layout_payload(raw: str) -> Dict[str, Any]:
-    from core.legacy_adapter import EvolutionUtils
-
-    parsed = EvolutionUtils.json_repair(raw or "")
+def _parse_news_layout_payload(raw: str) -> dict[str, Any]:
+    parsed = json_repair(raw or "")
     if not isinstance(parsed, dict) or parsed.get("parse_error"):
         return {}
 
@@ -308,14 +307,14 @@ def _specificity_score(text: str) -> int:
 
 
 def _merge_specific_items(
-    preferred: List[str],
-    fallback: List[str],
+    preferred: list[str],
+    fallback: list[str],
     *,
     min_items: int,
     max_items: int,
     specificity_floor: int,
-) -> List[str]:
-    merged: List[str] = []
+) -> list[str]:
+    merged: list[str] = []
     seen: set[str] = set()
 
     for item in preferred:
@@ -349,7 +348,7 @@ def _merge_specific_items(
     return merged[:max(min_items, len(merged))]
 
 
-def _merge_layout_with_fallback(parsed: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_layout_with_fallback(parsed: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
     merged = dict(fallback)
 
     title = _coerce_layout_text(parsed.get("title"), 28)
@@ -389,13 +388,13 @@ def _merge_layout_with_fallback(parsed: Dict[str, Any], fallback: Dict[str, Any]
 
 def _build_news_layout_fallback(
     query: str,
-    search_results: List[Dict[str, Any]],
-    extracted_contents: List[str],
+    search_results: list[dict[str, Any]],
+    extracted_contents: list[str],
     *,
     deepen: bool,
     decision_reason: str,
-    value_alerts: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    value_alerts: list[dict[str, Any]],
+) -> dict[str, Any]:
     conclusion = _build_news_conclusion(query, search_results, value_alerts)
     brief_items = _build_news_brief_items(search_results, extracted_contents, limit=4)
     highlights = [
@@ -439,13 +438,13 @@ def _build_news_layout_fallback(
 
 def _format_news_html_report(
     query: str,
-    search_results: List[Dict[str, Any]],
-    extracted_contents: List[str],
+    search_results: list[dict[str, Any]],
+    extracted_contents: list[str],
     *,
-    layout: Dict[str, Any],
+    layout: dict[str, Any],
     deepen: bool,
     decision_reason: str,
-    value_alerts: List[Dict[str, Any]],
+    value_alerts: list[dict[str, Any]],
 ) -> str:
     title = layout.get("title") or "AI 今日速报"
     subtitle = layout.get("subtitle") or _truncate_text(query, 36)

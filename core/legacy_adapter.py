@@ -11,6 +11,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from core.database import ChatLog, Persona, SystemPrompt, User, SessionLocal
+from core.json_utils import json_repair as _json_repair
 from core.token_utils import estimate_tokens as _shared_estimate_tokens
 from config import (
     ADMIN_USER_ID, OPENAI_API_KEY, OPENAI_BASE_URL,
@@ -685,34 +686,7 @@ class EvolutionUtils:
     @staticmethod
     def json_repair(raw: Any) -> Dict[str, Any]:
         """JSON 格式容错修补逻辑。"""
-        if raw is None:
-            return {"parse_error": True, "raw": ""}
-        raw = str(raw).strip()
-        if not raw:
-            return {"parse_error": True, "raw": ""}
-        # 1. 直接解析
-        try: return json.loads(raw)
-        except (json.JSONDecodeError, ValueError): pass
-        # 2. 提取 ```json ... ```
-        try:
-            m = re.search(r'```json\s*([\s\S]*?)```', raw)
-            if m: return json.loads(m.group(1).strip())
-        except (json.JSONDecodeError, ValueError): pass
-        # 3. 提取最外层 { ... }
-        try:
-            m = re.search(r'\{[\s\S]*\}', raw)
-            if m: return json.loads(m.group())
-        except (json.JSONDecodeError, ValueError): pass
-        # 4. 常见错误修补 (移除漏逗号等)
-        try:
-            m = re.search(r'\{[\s\S]*\}', raw)
-            if m:
-                fixed = m.group()
-                fixed = re.sub(r',\s*([}\]])', r'\1', fixed)
-                fixed = fixed.replace("'", '"')
-                return json.loads(fixed)
-        except (json.JSONDecodeError, ValueError): pass
-        return {"parse_error": True, "raw": str(raw)[:1000]}
+        return _json_repair(raw)
 
     @staticmethod
     def _read_log_field(log: Any, field: str, default: Any = "") -> Any:

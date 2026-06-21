@@ -5,7 +5,7 @@
 ## 背景
 
 `docs/todo.md` 的 P3「超大文件 >800 行拆分」仍包含
-`creatures/nanobot/prompts/skills/news_search/tool.py`。该文件当前约 1835 行，
+`creatures/nanobot/prompts/skills/news_search/tool.py`。该文件拆分前约 1835 行，
 同时承担代理感知 HTTP 访问、DuckDuckGo / RSS 搜索、旧版新闻 HTML 报告、LLM
 版式摘要、V2 evidence bridge、AI 日报缓存和 `AiDailyTool` KT 工具适配等职责。
 
@@ -21,7 +21,7 @@
 
 这些逻辑主要是纯函数，不直接依赖 `BaseTool`、`DDGS`、`trafilatura`、RSS 网络请求、
 缓存状态或 KT 工具注册。因此第一刀适合把旧版报告渲染边界迁移到独立模块，同时保持
-`tool.py` 的 public import 和 monkeypatch 路径兼容。
+`tool.py` 的 public import 兼容和顶层运行入口 monkeypatch 兼容。
 
 ## 目标
 
@@ -35,6 +35,8 @@
 5. 保持 `patch("creatures.nanobot.prompts.skills.news_search.tool._summarize_news_layout")`
    等现有测试 monkeypatch 入口可用。
 6. 用 characterization tests 锁住新模块轻量导入、旧路径 re-export 和旧 HTML 输出契约。
+7. `_parse_news_layout_payload()` 只允许依赖轻量 `core.json_utils`，不得通过
+   `core.legacy_adapter` 反向导入 `news_search.tool` 或 runtime tool 依赖。
 
 ## 非目标
 
@@ -66,7 +68,8 @@
 - 能一次移出约数百行纯函数，直接服务超大文件拆分目标。
 - 不触碰网络搜索、工具注册、缓存状态和新日报主 pipeline。
 - 现有 `tests/test_tools_package.py` 已覆盖主要 HTML 和 layout 行为。
-- 旧路径 re-export 后，测试和外部 monkeypatch 不需要改调用方。
+- 旧路径 re-export 后，导入调用方不需要改；顶层搜索流程里仍被 `tool.py`
+  直接引用的入口可以继续 patch 旧路径。
 
 缺点：
 
@@ -197,11 +200,9 @@ from .legacy_report import (
 - `from creatures.nanobot.prompts.skills.news_search.tool import _merge_layout_with_fallback`
 - `from creatures.nanobot.prompts.skills.news_search import tool as news_tool`
 
-现有 monkeypatch 路径必须保持有效：
+现有顶层流程 monkeypatch 路径必须保持有效：
 
 - `creatures.nanobot.prompts.skills.news_search.tool._summarize_news_layout`
-- `creatures.nanobot.prompts.skills.news_search.tool._parse_news_layout_payload`
-- `creatures.nanobot.prompts.skills.news_search.tool._merge_layout_with_fallback`
 - `creatures.nanobot.prompts.skills.news_search.tool.WebTools.search`
 - `creatures.nanobot.prompts.skills.news_search.tool.WebTools.extract_web_content`
 - `creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline`
@@ -210,6 +211,12 @@ from .legacy_report import (
 - `creatures.nanobot.prompts.skills.news_search.tool._urlopen`
 - `creatures.nanobot.prompts.skills.news_search.tool.DDGS`
 - `creatures.nanobot.prompts.skills.news_search.tool.trafilatura.fetch_url`
+
+迁移后的报告内部 helper 只承诺旧路径导入兼容，不承诺内部依赖的旧路径 monkeypatch
+语义。需要替换 `_parse_news_layout_payload()`、`_merge_layout_with_fallback()` 或
+`_format_news_html_report()` 等报告 helper 的内部行为时，应 patch
+`creatures.nanobot.prompts.skills.news_search.legacy_report` 路径；旧 `tool.py`
+re-export 用于兼容直接导入和直接调用。
 
 ## 行为契约
 
@@ -237,6 +244,13 @@ from .legacy_report import (
 4. 迁移前运行红灯命令，预期因模块不存在失败。
 5. 迁移 helper 到 `legacy_report.py`，在 `tool.py` 显式 import re-export。
 6. 跑新测试、legacy HTML 定向测试、AI 日报相邻测试、`asyncio.run` 策略测试和全量测试。
+
+审查修复补充：
+
+7. 红灯测试 `_parse_news_layout_payload()` 在全新 Python 进程中调用时，不导入
+   `news_search.tool`、`duckduckgo_search`、`trafilatura` 或 `BaseTool`。
+8. 抽出 `core.json_utils.json_repair()`，让 `EvolutionUtils.json_repair()` 代理到
+   轻量 helper；`legacy_report.py` 直接使用该 helper。
 
 ## 验证计划
 

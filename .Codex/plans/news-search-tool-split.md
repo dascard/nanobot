@@ -4,7 +4,7 @@
 
 **目标：** 将 `creatures/nanobot/prompts/skills/news_search/tool.py` 中旧版新闻报告、评分和 layout helper 拆到 `legacy_report.py`，保持搜索、AI 日报工具、旧导入路径和 HTML 输出契约不变。
 
-**架构：** `tool.py` 继续作为 legacy 搜索和 KT 工具 facade，持有 `WebTools`、`search_and_extract_news()`、`search_and_extract_news_v2()`、`AiDailyTool`、缓存和网络搜索后端。新增 `legacy_report.py` 只承接纯报告 helper；`tool.py` 显式 import re-export 这些 helper，以兼容现有测试和外部 monkeypatch。
+**架构：** `tool.py` 继续作为 legacy 搜索和 KT 工具 facade，持有 `WebTools`、`search_and_extract_news()`、`search_and_extract_news_v2()`、`AiDailyTool`、缓存和网络搜索后端。新增 `legacy_report.py` 只承接纯报告 helper；`tool.py` 显式 import re-export 这些 helper，以兼容旧路径导入。迁移后的报告内部 helper 若需要 monkeypatch，应使用 `legacy_report` 路径；`tool.py` 仅继续承诺顶层搜索流程和运行时依赖入口的 patch 兼容。
 
 **技术栈：** Python 3.12、pytest、KohakuTerrarium BaseTool、项目既有 news_search 工具模块。
 
@@ -14,7 +14,11 @@
 
 - 创建：`creatures/nanobot/prompts/skills/news_search/legacy_report.py`
   - 持有旧版新闻报告相关常量、评分 helper、价值信号 helper、layout fallback / merge / parse helper 和 `_format_news_html_report()`。
-  - 只依赖 Python 标准库，不导入 `DDGS`、`trafilatura`、`BaseTool`、`NewAPIClient` 或 `run_awaitable_sync`。
+  - 只依赖 Python 标准库和轻量 `core.json_utils`，不导入 `DDGS`、`trafilatura`、`BaseTool`、`NewAPIClient` 或 `run_awaitable_sync`。
+- 创建：`core/json_utils.py`
+  - 承接 `EvolutionUtils.json_repair()` 原有容错 JSON 解析逻辑，避免报告模块反向导入 `core.legacy_adapter`。
+- 修改：`core/legacy_adapter.py`
+  - `EvolutionUtils.json_repair()` 代理到 `core.json_utils.json_repair()`，保持旧 API 行为兼容。
 - 修改：`creatures/nanobot/prompts/skills/news_search/tool.py`
   - 删除迁移到 `legacy_report.py` 的真实实现。
   - 从 `legacy_report.py` 显式导入同名对象，保持旧路径 re-export。
@@ -40,7 +44,15 @@
 - `asyncio.run` 策略测试结果为 `1 passed, 1 warning in 1.74s`。
 - `git diff --check` 无输出，退出码为 0。
 - 全量测试结果为 `1484 passed, 6 skipped, 139 warnings in 107.20s`。
-- 行数变化：`tool.py` 从 1835 行降至 1149 行；新增 `legacy_report.py` 724 行。
+- 行数变化：`tool.py` 从 1835 行降至 1149 行；`legacy_report.py` 当前 723 行。
+- 审查修复：`_parse_news_layout_payload()` 已改为直接使用 `core.json_utils`；
+  `legacy_report.py` 导入和 parser 调用均不再加载 `news_search.tool`、`duckduckgo_search`、
+  `trafilatura` 或 `BaseTool`。
+- 审查修复验证：新模块测试 `3 passed, 1 warning in 0.82s`；`EvolutionUtils`
+  兼容测试 `5 passed, 1 warning in 0.46s`；news / AI Daily 相邻回归
+  `13 passed, 1 warning in 1.15s`；`asyncio.run` 策略测试
+  `1 passed, 1 warning in 2.02s`；`git diff --check` 无输出；全量测试
+  `1485 passed, 6 skipped, 139 warnings in 116.15s`。
 
 ## 任务 1：补 `legacy_report` 模块红灯测试
 
@@ -191,19 +203,20 @@ FAILED tests/test_news_search_legacy_report.py::test_tool_reexports_legacy_repor
 新建 `creatures/nanobot/prompts/skills/news_search/legacy_report.py`：
 
 ```python
-"""Legacy news search report rendering helpers."""
+"""旧版新闻搜索报告渲染 helper。"""
 
 from __future__ import annotations
 
 import html
-import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
+
+from core.json_utils import json_repair
 ```
 
-不要导入 `asyncio`、`DDGS`、`trafilatura`、`BaseTool`、`NewAPIClient`、`run_awaitable_sync` 或项目运行时工具模块。
+不要导入 `asyncio`、`DDGS`、`trafilatura`、`BaseTool`、`NewAPIClient`、`run_awaitable_sync` 或项目运行时工具模块；`core.json_utils` 是允许的轻量依赖。
 
 - [x] **步骤 2：迁移报告常量**
 
@@ -495,3 +508,53 @@ git commit -m "refactor(新闻搜索): 拆分旧版报告渲染"
 ```
 
 不要使用 `git add .` 或 `git add -A`。
+
+## 任务 5：审查反馈修复
+
+**文件：**
+- 创建：`core/json_utils.py`
+- 修改：`core/legacy_adapter.py`
+- 修改：`creatures/nanobot/prompts/skills/news_search/legacy_report.py`
+- 修改：`tests/test_news_search_legacy_report.py`
+- 修改：`docs/superpowers/specs/2026-06-21-news-search-tool-split-design.md`
+- 修改：`.Codex/plans/news-search-tool-split.md`
+- 修改：`docs/todo.md`
+- 修改：`docs/plan_walkthrough.md`
+
+- [x] **步骤 1：补 parser 轻量依赖红灯测试**
+
+新增 `test_parse_layout_payload_does_not_import_runtime_tool_dependencies`，在全新 Python
+进程中导入 `legacy_report` 并调用 `_parse_news_layout_payload()`，断言不会加载
+`news_search.tool`、`duckduckgo_search`、`trafilatura` 或 `BaseTool`。
+
+结果：实现修复前该测试失败，stdout 显示四个 runtime 模块均被加载。
+
+- [x] **步骤 2：抽出轻量 JSON helper**
+
+新增 `core/json_utils.py`，迁移 `EvolutionUtils.json_repair()` 原有容错 JSON 解析逻辑；
+`EvolutionUtils.json_repair()` 保持旧方法签名并代理到轻量 helper。
+
+- [x] **步骤 3：改造 `legacy_report.py` parser 依赖**
+
+`_parse_news_layout_payload()` 直接调用 `core.json_utils.json_repair()`，不再从
+`core.legacy_adapter` 导入 `EvolutionUtils`。同时清理迁移后未使用的 `json` 导入和
+旧式 `Dict/List` 标注。
+
+- [x] **步骤 4：收窄兼容说明**
+
+设计文档、实现计划和 walkthrough 明确：旧 `tool.py` 路径保证导入兼容和顶层运行入口
+patch 兼容；迁移后的报告内部 helper 如需替换内部依赖，应 patch `legacy_report` 路径。
+
+- [x] **步骤 5：验证审查修复**
+
+验证结果：
+
+- `tests/test_news_search_legacy_report.py -v`：`3 passed, 1 warning in 0.82s`。
+- `tests/test_audit_fixes.py::TestEvolutionUtils -v`：`5 passed, 1 warning in 0.46s`。
+- news / AI Daily 相邻回归：`13 passed, 1 warning in 1.15s`。
+- `tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v`：
+  `1 passed, 1 warning in 2.02s`。
+- `git diff --check`：无输出，退出码为 0。
+- `python -m pytest tests/ -v`：`1485 passed, 6 skipped, 139 warnings in 116.15s`。
+
+提交信息：`fix(新闻搜索): 隔离报告解析轻量依赖`。
