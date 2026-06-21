@@ -502,6 +502,7 @@ wc -l api/admin_routes.py api/admin/db_browser_routes.py
 - 行数：`api/admin_routes.py` 5535 行，`api/admin/db_browser_routes.py` 374 行。
 - 全量：`python -m pytest tests/ -v`
   -> `1482 passed, 6 skipped, 139 warnings in 105.96s`。
+- 提交：`65060a2 refactor(管理端): 拆分 DB Browser 路由`。
 
 ## 任务 4：同步计划状态文档
 
@@ -596,7 +597,7 @@ git diff --check -- \
 
 预期：无输出，退出码 0。
 
-- [ ] **步骤 3：只暂存本阶段文件**
+- [x] **步骤 3：只暂存本阶段文件**
 
 运行：
 
@@ -612,7 +613,7 @@ git add \
 
 禁止使用 `git add .` 或 `git add -A`。
 
-- [ ] **步骤 4：复查暂存区**
+- [x] **步骤 4：复查暂存区**
 
 运行：
 
@@ -623,7 +624,7 @@ git diff --cached --check
 
 预期暂存区只包含任务 5 步骤 3 的 6 个文件，且 diff check 无输出。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 运行：
 
@@ -645,4 +646,4 @@ git commit -m "refactor(管理端): 拆分 DB Browser 路由" \
 - [x] 兼容：`api.admin_routes.DbQuery` 和 DB Browser helper 旧导入路径可用。
 - [x] 边界：`/db/backup` 和 `/db/vacuum` 本阶段不迁移。
 - [x] 约束：没有新增除 `main` guard 外的 `asyncio.run()`。
-- [ ] 提交：只用显式路径 `git add`，不暂存无关 pycache、数据库或既有脏项。
+- [x] 提交：只用显式路径 `git add`，不暂存无关 pycache、数据库或既有脏项。

@@ -2188,5 +2188,6 @@ H30 计划列表：
 - 行数：`api/admin_routes.py` 5535 行，`api/admin/db_browser_routes.py` 374 行。
 - 全量：`python -m pytest tests/ -v` ->
   `1482 passed, 6 skipped, 139 warnings in 105.96s`。
+- 提交：`65060a2 refactor(管理端): 拆分 DB Browser 路由`。
 
 后续：继续按超大文件拆分排序处理 `news_search/tool.py` 或下一段 admin 子域。
