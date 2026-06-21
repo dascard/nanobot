@@ -230,6 +230,65 @@ class ReplyResolution:
     error: str = ""
 
 
+@dataclass
+class BridgeTraceFinalizer:
+    bridge: Any
+    run_id: str
+    trace_tokens: Any
+    run_meta: dict[str, Any]
+    started_at: float
+    now: Any
+    final_tools_token: Any = None
+    tool_plan_token: Any = None
+    closed: bool = False
+
+    def set_tool_tokens(self, *, final_tools_token: Any, tool_plan_token: Any) -> None:
+        self.final_tools_token = final_tools_token
+        self.tool_plan_token = tool_plan_token
+
+    def finish(
+        self,
+        status: str,
+        *,
+        output_preview: str = "",
+        error: str = "",
+        model: str = "",
+    ) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        self.bridge._restore_saved_tools()
+        from core.tracing import RunTracer
+        from core.tracing_context import reset_trace_context
+
+        RunTracer.finish_run(
+            self.run_id,
+            status=status,
+            output_preview=output_preview,
+            error=error,
+            latency_ms=int((self.now() - self.started_at) * 1000),
+            model=model,
+            meta=self.run_meta,
+        )
+        if self.final_tools_token is not None:
+            try:
+                from core.final_tools import reset_current_final_tools
+
+                reset_current_final_tools(self.final_tools_token)
+            except Exception:
+                pass
+            self.final_tools_token = None
+        if self.tool_plan_token is not None:
+            try:
+                from core.tool_plan import reset_current_tool_plan
+
+                reset_current_tool_plan(self.tool_plan_token)
+            except Exception:
+                pass
+            self.tool_plan_token = None
+        reset_trace_context(self.trace_tokens)
+
+
 class NanobotBridge:
     """
     Wraps a KT Agent for use as a request/response handler.
@@ -1615,7 +1674,7 @@ class NanobotBridge:
             prompt_mode = "prompt"
             prompt_key = "chat_group" if meta.get("is_group", False) else "chat_private"
             from core.tracing import RunTracer, new_trace_id
-            from core.tracing_context import reset_trace_context, set_trace_context
+            from core.tracing_context import set_trace_context
 
             trace_id = str(meta.get("trace_id") or new_trace_id())
             meta["trace_id"] = trace_id
@@ -1642,48 +1701,14 @@ class NanobotBridge:
                 meta=run_meta,
             )
             trace_tokens = set_trace_context(trace_id, run_handle.run_id)
-            trace_closed = False
-            final_tools_token = None
-            tool_plan_token = None
-
-            def _finish_agent_trace(
-                status: str,
-                *,
-                output_preview: str = "",
-                error: str = "",
-                model: str = "",
-            ) -> None:
-                nonlocal trace_closed, final_tools_token, tool_plan_token
-                if trace_closed:
-                    return
-                trace_closed = True
-                self._restore_saved_tools()
-                RunTracer.finish_run(
-                    run_handle.run_id,
-                    status=status,
-                    output_preview=output_preview,
-                    error=error,
-                    latency_ms=int((_time.time() - t_start) * 1000),
-                    model=model,
-                    meta=run_meta,
-                )
-                if final_tools_token is not None:
-                    try:
-                        from core.final_tools import reset_current_final_tools
-
-                        reset_current_final_tools(final_tools_token)
-                    except Exception:
-                        pass
-                    final_tools_token = None
-                if tool_plan_token is not None:
-                    try:
-                        from core.tool_plan import reset_current_tool_plan
-
-                        reset_current_tool_plan(tool_plan_token)
-                    except Exception:
-                        pass
-                    tool_plan_token = None
-                reset_trace_context(trace_tokens)
+            trace_finalizer = BridgeTraceFinalizer(
+                bridge=self,
+                run_id=run_handle.run_id,
+                trace_tokens=trace_tokens,
+                run_meta=run_meta,
+                started_at=t_start,
+                now=_time.time,
+            )
 
             self._prepare_output_for_request(
                 stream_queue=stream_queue,
@@ -1747,6 +1772,10 @@ class NanobotBridge:
                         logger.warning("[Bridge] failed to commit runtime tool decision: %s", e)
             final_tools_token = set_current_final_tools(tool_plan)
             tool_plan_token = set_current_tool_plan(tool_plan)
+            trace_finalizer.set_tool_tokens(
+                final_tools_token=final_tools_token,
+                tool_plan_token=tool_plan_token,
+            )
             enabled = dict(tool_plan.enabled or {})
             disabled = dict(tool_plan.disabled or {})
             runtime_tool_prompt = tool_plan.runtime_tool_prompt
@@ -1809,8 +1838,7 @@ class NanobotBridge:
                 logger.error("[PromptRuntime] live audit failed: %s", e)
                 run_meta.update(e.meta_update)
                 self._log_agent_result(session_id, "prompt_v2_audit_failed")
-                self._restore_saved_tools()
-                _finish_agent_trace("error", error=str(e))
+                trace_finalizer.finish("error", error=str(e))
                 return ""
             run_meta.update(prompt_build.meta_update)
             self._last_prompt_render_meta = {
@@ -1870,8 +1898,7 @@ class NanobotBridge:
                 )
             except RuntimeError as e:
                 logger.error("[Model Router] reply route disabled: %s", e)
-                self._restore_saved_tools()
-                _finish_agent_trace("error", error=str(e))
+                trace_finalizer.finish("error", error=str(e))
                 return f"[系统内部错误] {e}"
             _route_provider_id = route_plan.provider_id
             _route_registry_provider = route_plan.registry_provider
@@ -2100,8 +2127,7 @@ class NanobotBridge:
             response = reply_resolution.response
             reply_source = reply_resolution.agent_result
             if reply_resolution.finish_status in {"no_reply", "suppressed"}:
-                self._restore_saved_tools()
-                _finish_agent_trace(
+                trace_finalizer.finish(
                     reply_resolution.finish_status,
                     output_preview=reply_resolution.output_preview,
                     error=reply_resolution.error,
@@ -2111,8 +2137,7 @@ class NanobotBridge:
 
             if not response.strip():
                 logger.warning("[NanobotBridge] KT agent returned empty response after strip")
-                self._restore_saved_tools()
-                _finish_agent_trace("empty", model=locals().get("target_model", ""))
+                trace_finalizer.finish("empty", model=locals().get("target_model", ""))
                 return ""
 
             elapsed_ms = int((_time.time() - t_start) * 1000)
@@ -2142,8 +2167,7 @@ class NanobotBridge:
                 if writer is not None:
                     await writer(str(response), replace=True, source="bridge")
 
-            self._restore_saved_tools()
-            _finish_agent_trace(
+            trace_finalizer.finish(
                 "success",
                 output_preview=response,
                 model=locals().get("target_model", ""),

@@ -140,6 +140,54 @@ class TestAiDailyTool:
 class TestNanobotBridge:
     """Test the NanobotBridge lifecycle manager."""
 
+    def test_bridge_trace_finalizer_finishes_once(self, monkeypatch):
+        from nanobot_kt.bridge import BridgeTraceFinalizer, NanobotBridge
+
+        bridge = NanobotBridge.__new__(NanobotBridge)
+        restore_calls = []
+        bridge._restore_saved_tools = lambda: restore_calls.append(True)
+        finish_calls = []
+        reset_trace_calls = []
+        reset_final_tools_calls = []
+        reset_tool_plan_calls = []
+
+        monkeypatch.setattr(
+            "core.tracing.RunTracer.finish_run",
+            lambda *args, **kwargs: finish_calls.append((args, kwargs)),
+        )
+        monkeypatch.setattr(
+            "core.tracing_context.reset_trace_context",
+            lambda token: reset_trace_calls.append(token),
+        )
+        monkeypatch.setattr(
+            "core.final_tools.reset_current_final_tools",
+            lambda token: reset_final_tools_calls.append(token),
+        )
+        monkeypatch.setattr(
+            "core.tool_plan.reset_current_tool_plan",
+            lambda token: reset_tool_plan_calls.append(token),
+        )
+
+        finalizer = BridgeTraceFinalizer(
+            bridge=bridge,
+            run_id="run-1",
+            trace_tokens="trace-token",
+            run_meta={"message_id": "m1"},
+            started_at=100.0,
+            now=lambda: 100.2,
+            final_tools_token="final-token",
+            tool_plan_token="tool-token",
+        )
+
+        finalizer.finish(status="success", output_preview="ok", model="model-a")
+        finalizer.finish(status="error", error="late")
+
+        assert len(finish_calls) == 1
+        assert restore_calls == [True]
+        assert reset_trace_calls == ["trace-token"]
+        assert reset_final_tools_calls == ["final-token"]
+        assert reset_tool_plan_calls == ["tool-token"]
+
     def test_remove_system_contexts_cleans_effort_and_retry_prompts(self):
         from nanobot_kt.bridge import NanobotBridge
 
