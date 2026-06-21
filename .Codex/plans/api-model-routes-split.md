@@ -12,13 +12,17 @@
 
 ## 当前状态（2026-06-21）
 
-- [x] 已完成 memory 路由拆分，`api/routes.py` 当前 2523 行。
+- [x] 已完成 memory 路由拆分，`api/routes.py` 当时为 2523 行。
 - [x] 已完成 models / evolution 候选审计，确认 `models` 是当前最低风险下一刀。
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-api-model-routes-split-design.md`。
 - [x] 设计提交：`7887681 docs(普通API): 设计模型路由拆分`。
-- [ ] 任务 1：补普通 API model route split 红灯测试并提交。
-- [ ] 任务 2：拆出 `api/model_routes.py` 并由 `api.routes` include / re-export 后提交。
-- [ ] 任务 3：更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录后提交。
+- [x] 计划提交：`44d344d docs(计划): 记录模型路由拆分计划`。
+- [x] 任务 1：补普通 API model route split 红灯测试并提交。
+- [x] 红灯测试提交：`6e5291f test(普通API): 锁定模型路由拆分契约`。
+- [x] 任务 2：拆出 `api/model_routes.py` 并由 `api.routes` include / re-export 后提交。
+- [x] 实现提交：`6e1a2d4 refactor(普通API): 拆分模型路由`。
+- [x] 任务 3：更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录后提交。
+- [x] models 拆分后，`api/routes.py` 当前为 2484 行。
 
 ## 文件职责
 
@@ -52,7 +56,7 @@
 - 创建：`tests/test_api_model_routes_split.py`
 - 修改：`tests/test_api_memory_routes_split.py`
 
-- [ ] **步骤 1：创建测试文件**
+- [x] **步骤 1：创建测试文件**
 
 创建 `tests/test_api_model_routes_split.py`：
 
@@ -248,7 +252,7 @@ def test_non_model_tail_routes_stay_in_parent_routes():
         assert {route.endpoint.__module__ for route in routes} == {"api.routes"}
 ```
 
-- [ ] **步骤 2：更新 memory split 测试的父模块尾部路由列表**
+- [x] **步骤 2：更新 memory split 测试的父模块尾部路由列表**
 
 修改 `tests/test_api_memory_routes_split.py`：
 
@@ -259,7 +263,7 @@ _PARENT_ROUTE_SIGNATURES = (
 )
 ```
 
-- [ ] **步骤 3：运行测试验证红灯**
+- [x] **步骤 3：运行测试验证红灯**
 
 运行：
 
@@ -270,7 +274,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_model_routes_split.py 
 预期：FAIL。失败点应指向 `api.model_routes` 尚不存在、models endpoint module 仍为
 `api.routes`、`api/model_routes.py` 文件尚不存在。
 
-- [ ] **步骤 4：提交红灯测试**
+- [x] **步骤 4：提交红灯测试**
 
 运行：
 
@@ -285,7 +289,7 @@ git commit -m "test(普通API): 锁定模型路由拆分契约"
 - 创建：`api/model_routes.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：创建 `api/model_routes.py`**
+- [x] **步骤 1：创建 `api/model_routes.py`**
 
 创建 `api/model_routes.py`：
 
@@ -349,7 +353,7 @@ async def sync_models(
     }
 ```
 
-- [ ] **步骤 2：修改 `api/routes.py` import 与 re-export**
+- [x] **步骤 2：修改 `api/routes.py` import 与 re-export**
 
 删除：
 
@@ -369,7 +373,7 @@ from api.model_routes import (
 )
 ```
 
-- [ ] **步骤 3：删除父模块本地 models 定义并 include 子 router**
+- [x] **步骤 3：删除父模块本地 models 定义并 include 子 router**
 
 删除 `api/routes.py` 中本地 `ModelSyncRequest`、`list_models()` 和 `sync_models()`。
 
@@ -381,7 +385,7 @@ router.include_router(model_router)
 
 该 include 应位于 `memory_router` 之后、`task_router` 之前。
 
-- [ ] **步骤 4：运行 split 定向测试验证绿灯**
+- [x] **步骤 4：运行 split 定向测试验证绿灯**
 
 运行：
 
@@ -391,7 +395,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_model_routes_split.py 
 
 预期：PASS。
 
-- [ ] **步骤 5：运行相邻回归与静态检查**
+- [x] **步骤 5：运行相邻回归与静态检查**
 
 运行：
 
@@ -409,7 +413,7 @@ git diff --check -- api/routes.py api/model_routes.py tests/test_api_model_route
 - `rg` 无命中，退出码为 1。
 - `git diff --check` 无输出。
 
-- [ ] **步骤 6：提交 models 路由拆分**
+- [x] **步骤 6：提交 models 路由拆分**
 
 运行：
 
@@ -425,7 +429,7 @@ git commit -m "refactor(普通API): 拆分模型路由"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新计划执行记录**
+- [x] **步骤 1：更新计划执行记录**
 
 在本计划的「当前状态」中把任务 1 和任务 2 标记为完成，并新增「执行记录」章节，记录：
 
@@ -435,7 +439,7 @@ git commit -m "refactor(普通API): 拆分模型路由"
 - `wc -l api/routes.py api/model_routes.py tests/test_api_model_routes_split.py` 行数。
 - 全量回归结果。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在「超大文件 >800 行拆分」条目下记录：
 
@@ -444,7 +448,7 @@ git commit -m "refactor(普通API): 拆分模型路由"
 - `api/routes.py` 最新行数。
 - 下一候选为 evolution route-only 或其他更大低耦合边界。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-21 的 models 路由拆分执行记录，包含：
 
@@ -455,7 +459,7 @@ git commit -m "refactor(普通API): 拆分模型路由"
 - 验证命令和结果。
 - 下一步建议。
 
-- [ ] **步骤 4：运行全量测试**
+- [x] **步骤 4：运行全量测试**
 
 运行：
 
@@ -465,7 +469,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 5：文档格式与状态检查**
+- [x] **步骤 5：文档格式与状态检查**
 
 运行：
 
@@ -476,7 +480,7 @@ git status --short
 
 预期：`git diff --check` 无输出；`git status --short` 中本阶段只包含计划与文档相关改动，以及历史无关脏项。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 
@@ -485,14 +489,34 @@ git add .Codex/plans/api-model-routes-split.md docs/todo.md docs/plan_walkthroug
 git commit -m "docs(计划): 收口模型路由拆分"
 ```
 
+## 执行记录（2026-06-21）
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_model_routes_split.py tests/test_api_memory_routes_split.py`
+  -> `6 failed, 11 passed, 21 warnings in 7.79s`。失败点符合预期，分别指向
+  `api.model_routes` 尚不存在、models endpoint module 仍为 `api.routes`，以及
+  `api/model_routes.py` 文件尚不存在。
+- Split 绿灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_model_routes_split.py tests/test_api_memory_routes_split.py`
+  -> `17 passed, 21 warnings in 2.71s`。
+- 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_asyncio_run_policy.py tests/test_api_task_routes_split.py`
+  -> `13 passed, 21 warnings in 2.61s`。
+- 静态检查：`python -B -m compileall api/routes.py api/model_routes.py` 成功；
+  `rg -n "from api\.routes|import api\.routes|asyncio\.run|run_awaitable_sync" api/model_routes.py`
+  无命中，退出码为 1；`git diff --check -- api/routes.py api/model_routes.py tests/test_api_model_routes_split.py tests/test_api_memory_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 2484 行，`api/model_routes.py` 57 行，
+  `tests/test_api_model_routes_split.py` 189 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1594 passed, 6 skipped, 139 warnings in 114.82s`。
+
 ## 最终验收清单
 
-- [ ] `tests/test_api_model_routes_split.py` 经历红灯再绿灯。
-- [ ] `tests/test_api_memory_routes_split.py` 同步更新并通过。
-- [ ] `api.model_routes` 不导入 `api.routes`。
-- [ ] `api.routes` re-export `ModelSyncRequest`、`list_models()` 和 `sync_models()`。
-- [ ] `sync_models()` 保持 coroutine function。
-- [ ] `/evolution/trigger` 和 `/health` 仍留在 `api.routes`。
-- [ ] `tests/test_asyncio_run_policy.py` 通过。
-- [ ] 全量 `tests/` 回归 0 failures。
-- [ ] 每个阶段性改动都有独立 commit。
+- [x] `tests/test_api_model_routes_split.py` 经历红灯再绿灯。
+- [x] `tests/test_api_memory_routes_split.py` 同步更新并通过。
+- [x] `api.model_routes` 不导入 `api.routes`。
+- [x] `api.routes` re-export `ModelSyncRequest`、`list_models()` 和 `sync_models()`。
+- [x] `sync_models()` 保持 coroutine function。
+- [x] `/evolution/trigger` 和 `/health` 仍留在 `api.routes`。
+- [x] `tests/test_asyncio_run_policy.py` 通过。
+- [x] 全量 `tests/` 回归 0 failures。
+- [x] 每个阶段性改动都有独立 commit。
