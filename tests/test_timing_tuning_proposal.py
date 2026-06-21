@@ -323,3 +323,86 @@ def test_timing_tuning_proposal_cli_preserves_analysis_blocking(tmp_path):
             "upstream_reasons": [{"code": "low_label_coverage"}],
         }
     ]
+
+
+def test_timing_tuning_proposal_cli_includes_case_simulation(tmp_path):
+    from evals import timing_tuning_proposal
+
+    manifest = tmp_path / "periodic_manifest_latest.json"
+    trends = tmp_path / "artifact_trends_latest.json"
+    analysis = tmp_path / "tuning_analysis_latest.json"
+    audit = tmp_path / "runs" / "run_1" / "timing_signal_audit.json"
+    cases = tmp_path / "cases"
+    baseline = tmp_path / "timing_gate.json"
+    params = tmp_path / "param_candidates.json"
+    out = tmp_path / "timing_tuning_proposal_latest.json"
+    audit.parent.mkdir(parents=True)
+    cases.mkdir()
+    manifest.write_text(
+        json.dumps(_manifest(str(audit)), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    trends.write_text(json.dumps(_trends(), ensure_ascii=False), encoding="utf-8")
+    analysis.write_text(
+        json.dumps(_analysis(), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    audit.write_text(
+        json.dumps(
+            _audit(samples=[{"expected_action": "continue"}]),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (cases / "at_bot_ack_continue_001.json").write_text(
+        json.dumps(
+            {
+                "case_id": "at_bot_ack_continue_001",
+                "input": {
+                    "text": "好的",
+                    "is_group": True,
+                    "is_at_bot": True,
+                    "trigger_reason": "at_bot",
+                },
+                "expected": {"timing_action": "continue"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    baseline.write_text(
+        json.dumps({"suite": "timing_gate"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    candidate_params = _params()
+    candidate_params["candidates"][0]["param_diff"] = {"s_ack": 0.5}
+    params.write_text(
+        json.dumps(candidate_params, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    exit_code = timing_tuning_proposal.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--trends",
+            str(trends),
+            "--analysis",
+            str(analysis),
+            "--baseline",
+            str(baseline),
+            "--params",
+            str(params),
+            "--cases",
+            str(cases),
+            "--out",
+            str(out),
+        ]
+    )
+
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert payload["simulation"]["case_count"] == 1
+    assert payload["simulation"]["candidate_count"] == 1
+    assert payload["simulation"]["flip_count"] == 1
+    assert payload["simulation"]["flips"][0]["case_id"] == "at_bot_ack_continue_001"

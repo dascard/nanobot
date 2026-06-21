@@ -298,6 +298,7 @@ def build_timing_tuning_proposal(
             "timing_audit_path": source_paths.get("timing_audit", ""),
             "baseline_path": source_paths.get("baseline", ""),
             "params_path": source_paths.get("params", ""),
+            "cases_path": source_paths.get("cases", ""),
             "run_id": str((manifest or {}).get("run_id") or ""),
             "timing_audit_mode": _source_mode(timing_audit),
         },
@@ -363,6 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     analysis_path = Path(args.analysis)
     baseline_path = Path(args.baseline)
     params_path = Path(args.params) if args.params else None
+    cases_path = Path(args.cases)
 
     manifest = _load_optional(manifest_path)
     trends = _load_optional(trends_path)
@@ -374,6 +376,17 @@ def main(argv: list[str] | None = None) -> int:
         args.timing_audit or None,
     )
     timing_audit = load_json_object(audit_path) if audit_path else None
+    raw_candidates = (
+        params.get("candidates")
+        if isinstance(params, dict) and isinstance(params.get("candidates"), list)
+        else []
+    )
+    from evals.timing_score_simulation import load_timing_cases, simulate_timing_candidates
+
+    simulation = simulate_timing_candidates(
+        load_timing_cases(cases_path),
+        raw_candidates,
+    )
 
     payload = build_timing_tuning_proposal(
         manifest=manifest,
@@ -382,6 +395,7 @@ def main(argv: list[str] | None = None) -> int:
         timing_audit=timing_audit,
         baseline=baseline,
         params=params,
+        simulation=simulation,
         source_paths={
             "manifest": str(manifest_path) if manifest_path.exists() else "",
             "trends": str(trends_path) if trends_path.exists() else "",
@@ -389,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
             "timing_audit": str(audit_path) if audit_path else "",
             "baseline": str(baseline_path) if baseline_path.exists() else "",
             "params": str(params_path) if params_path and params_path.exists() else "",
-            "cases": str(Path(args.cases)),
+            "cases": str(cases_path) if cases_path.exists() else "",
         },
     )
     path = write_timing_tuning_proposal(payload, args.out)
