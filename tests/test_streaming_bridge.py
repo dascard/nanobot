@@ -89,6 +89,40 @@ async def test_bridge_pool_passes_stream_flag_to_child(monkeypatch):
     assert captured["stream_queue"] is not None
 
 
+def test_prepare_output_for_request_enables_stream_and_clears_reply_cache(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from nanobot_kt.bridge import NanobotBridge
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    bridge._output = MagicMock()
+    cleared = []
+    monkeypatch.setattr("core.reply_runtime_cache.clear_last_reply", lambda: cleared.append(True))
+    queue = asyncio.Queue()
+
+    bridge._prepare_output_for_request(stream_queue=queue, stream_enabled=True)
+
+    bridge._output.clear.assert_called_once_with()
+    bridge._output.enable_stream.assert_called_once_with(queue)
+    assert cleared == [True]
+
+
+def test_prepare_output_for_request_disables_stream_when_not_streaming(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from nanobot_kt.bridge import NanobotBridge
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    bridge._output = MagicMock()
+    monkeypatch.setattr("core.reply_runtime_cache.clear_last_reply", lambda: None)
+
+    bridge._prepare_output_for_request(stream_queue=None, stream_enabled=False)
+
+    bridge._output.clear.assert_called_once_with()
+    bridge._output.enable_stream.assert_not_called()
+    bridge._output.disable_stream.assert_called_once_with()
+
+
 @pytest.mark.asyncio
 async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch):
     from kohakuterrarium.core.agent_handlers import AgentHandlersMixin

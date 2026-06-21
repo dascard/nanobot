@@ -515,6 +515,46 @@ class TestNanobotBridge:
         result = run_async(bridge.handle_message("test"))
         assert "not initialized" in result.lower() or "Error" in result
 
+    @pytest.mark.asyncio
+    async def test_prepare_event_payload_builds_multimodal_capabilities(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from kohakuterrarium.llm.message import ImagePart
+        from nanobot_kt.bridge import NanobotBridge
+
+        image = ImagePart(
+            url="data:image/jpeg;base64,ZmFrZQ==",
+            detail="low",
+            source_type="qq",
+            source_name="attachment_1",
+        )
+
+        def fake_prepare_image_parts(files, **kwargs):
+            assert files == ["https://example.com/a.png"]
+            assert kwargs == {
+                "source_type": "qq",
+                "source_name_prefix": "attachment",
+                "detail": "low",
+            }
+            return [image]
+
+        monkeypatch.setattr("nanobot_kt.bridge.prepare_image_parts", fake_prepare_image_parts)
+
+        bridge = NanobotBridge.__new__(NanobotBridge)
+        payload = await bridge._prepare_event_payload(
+            prompt_event_content="看看图",
+            files=["https://example.com/a.png"],
+            tool_plan=SimpleNamespace(sent_tool_schemas=[{"name": "reply"}]),
+        )
+
+        assert payload.image_parts == [image]
+        assert payload.required_capabilities == {
+            "supports_stream": True,
+            "supports_image": True,
+            "supports_tools": True,
+        }
+        assert payload.event_content != "看看图"
+
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_uses_multimodal_event_for_files(self, MockAgent, mock_load):

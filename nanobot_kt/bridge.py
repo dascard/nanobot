@@ -182,6 +182,33 @@ class PromptRuntimeAssemblyContext:
     platform: str = "qq"
 
 
+@dataclass
+class BridgeRuntimeToolState:
+    persona_text: str
+    history_messages: Any
+    history_header: str
+    is_group: bool
+    effort_constraint: str
+    runtime_preset: str
+    chat_type: str
+    runtime_chat_type: str
+    group_id: str
+    user_id: str
+    platform: str
+    tool_plan: Any
+    runtime_tool_prompt: str
+    effective_tools: list[str]
+    final_tools_token: Any
+    tool_plan_token: Any
+
+
+@dataclass
+class BridgeEventPayload:
+    event_content: Any
+    image_parts: list[Any]
+    required_capabilities: dict[str, bool]
+
+
 class NanobotBridge:
     """
     Wraps a KT Agent for use as a request/response handler.
@@ -863,6 +890,61 @@ class NanobotBridge:
                 logger.debug(f"[NanobotBridge] group analysis cache fallback failed: {e}")
         return ""
 
+    def _prepare_output_for_request(
+        self,
+        *,
+        stream_queue: asyncio.Queue[dict[str, Any]] | None,
+        stream_enabled: bool,
+    ) -> None:
+        self._output.clear()
+        if stream_queue is not None and stream_enabled:
+            self._output.enable_stream(stream_queue)
+        else:
+            disable_stream = getattr(self._output, "disable_stream", None)
+            if callable(disable_stream):
+                disable_stream()
+
+        try:
+            from core.reply_runtime_cache import clear_last_reply
+
+            clear_last_reply()
+        except Exception:
+            pass
+
+    async def _prepare_event_payload(
+        self,
+        *,
+        prompt_event_content: str,
+        files: Any,
+        tool_plan: Any,
+    ) -> BridgeEventPayload:
+        image_parts: list[Any] = []
+        if files:
+            image_parts = await asyncio.to_thread(
+                prepare_image_parts,
+                files,
+                source_type="qq",
+                source_name_prefix="attachment",
+                detail="low",
+            )
+            event_content = make_multimodal_content(prompt_event_content, images=image_parts)
+        else:
+            event_content = prompt_event_content
+        try:
+            has_tool_schemas = bool(list(getattr(tool_plan, "sent_tool_schemas", []) or []))
+        except Exception:
+            has_tool_schemas = False
+        required_capabilities = {"supports_stream": True}
+        if image_parts:
+            required_capabilities["supports_image"] = True
+        if has_tool_schemas:
+            required_capabilities["supports_tools"] = True
+        return BridgeEventPayload(
+            event_content=event_content,
+            image_parts=image_parts,
+            required_capabilities=required_capabilities,
+        )
+
     async def handle_message(
         self,
         query: str,
@@ -972,20 +1054,10 @@ class NanobotBridge:
                     tool_plan_token = None
                 reset_trace_context(trace_tokens)
 
-            self._output.clear()
-            if stream_queue is not None and meta["stream"]:
-                self._output.enable_stream(stream_queue)
-            else:
-                disable_stream = getattr(self._output, "disable_stream", None)
-                if callable(disable_stream):
-                    disable_stream()
-
-            # 每轮清空 reply 运行时缓存
-            try:
-                from core.reply_runtime_cache import clear_last_reply
-                clear_last_reply()
-            except Exception:
-                pass
+            self._prepare_output_for_request(
+                stream_queue=stream_queue,
+                stream_enabled=meta["stream"],
+            )
             logger.info("[SessionRuntime] START session=%s user=%s query_len=%d",
                         session_id, user_id, len(query))
 
@@ -1141,28 +1213,14 @@ class NanobotBridge:
             logger.debug(f"[NanobotBridge] Agent output_module attr: {getattr(self._agent, '_output_module', 'NOT SET')}")
 
             # Create a user input event for the KT controller
-            files = meta.get("files")
-            image_parts = []
-            if files:
-                image_parts = await asyncio.to_thread(
-                    prepare_image_parts,
-                    files,
-                    source_type="qq",
-                    source_name_prefix="attachment",
-                    detail="low",
-                )
-                event_content = make_multimodal_content(prompt_build.event_content, images=image_parts)
-            else:
-                event_content = prompt_build.event_content
-            try:
-                has_tool_schemas = bool(list(getattr(tool_plan, "sent_tool_schemas", []) or []))
-            except Exception:
-                has_tool_schemas = False
-            required_capabilities = {"supports_stream": True}
-            if image_parts:
-                required_capabilities["supports_image"] = True
-            if has_tool_schemas:
-                required_capabilities["supports_tools"] = True
+            event_payload = await self._prepare_event_payload(
+                prompt_event_content=prompt_build.event_content,
+                files=meta.get("files"),
+                tool_plan=tool_plan,
+            )
+            image_parts = event_payload.image_parts
+            event_content = event_payload.event_content
+            required_capabilities = event_payload.required_capabilities
             event = create_user_event(event_content, stream=meta["stream"])
             logger.info(f"[NanobotBridge] Event created, about to call _process_event")
 
