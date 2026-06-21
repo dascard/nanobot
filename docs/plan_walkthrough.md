@@ -2874,3 +2874,78 @@ helper 和 endpoint，保持旧导入兼容。`api/admin_routes.py` 从 4979 行
 P3 超大文件队列仍剩 `api/admin_routes.py` 和 `api/routes.py`。继续沿管理端拆分时，
 下一刀可考虑 trace / observability 只读边界；切普通 API 前应先设计 `verify_token`
 共享兼容层。
+
+## 2026-06-21 Admin Observability 路由拆分
+
+状态：实现、验证、实现阶段提交和文档收口验证已完成。`api/admin_routes.py`
+已拆出 trace、工具调用、LLM API 日志、audit log、日志 viewer 和前端错误上报路由到
+`api/admin/trace_routes.py` 与 `api/admin/log_routes.py`；旧 `api.admin_routes`
+继续 include 新 router，并 re-export 迁移后的 endpoint、request model 和 helper，
+保持旧导入路径、HTTP 路径、admin token monkeypatch、日志读取语义和 audit log 过滤兼容。
+`api/admin_routes.py` 从 4731 行降至 4303 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-admin-observability-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/admin-observability-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`a305e28 docs(管理端): 设计观测路由拆分`。
+- 计划提交：`91da500 docs(计划): 记录观测路由拆分计划`。
+- 实现提交：`12f1548 refactor(管理端): 拆分观测路由`。
+
+已完成：
+
+- [x] 新增 `tests/test_admin_observability_routes_split.py`，锁定 endpoint module、
+  legacy import、token monkeypatch、重复注册和 `/logs/{name}` 动态路由顺序。
+- [x] 新增 `api/admin/trace_routes.py`，承载 AgentRun、ToolCall 和 LLM API log
+  查询接口。
+- [x] 新增 `api/admin/log_routes.py`，承载 AdminAuditLog、日志 viewer 和
+  frontend error 上报接口。
+- [x] `api/admin_routes.py` include `trace_router` 与 `log_router`，并 re-export
+  迁移符号。
+- [x] 新模块无反向导入 `api.admin_routes`，未新增 `asyncio.run()` 或
+  `run_awaitable_sync()`。
+
+验证记录：
+
+- 红灯：`tests/test_admin_observability_routes_split.py -q` ->
+  `4 failed, 2 passed, 21 warnings in 6.66s`；失败点为 endpoint module 仍是
+  `api.admin_routes`、新模块不存在，以及 `/logs/frontend-error` 顺序落后于
+  `/logs/{name}`。
+- 绿灯：`tests/test_admin_observability_routes_split.py -q` ->
+  `6 passed, 21 warnings in 1.36s`。
+- 行为回归：`tests/test_prompt_trace_admin.py tests/test_admin_logs_viewer.py tests/test_admin_api.py::TestObservabilityAPI -q`
+  -> `14 passed, 21 warnings in 3.65s`。
+- 鉴权与 asyncio 策略回归：`tests/test_admin_api.py::TestAuth tests/test_asyncio_run_policy.py -q`
+  -> `9 passed, 1 warning in 2.56s`。
+- Audit 烟测：`tests/test_admin_api.py::TestToolAdmin::test_tools_have_separate_superuser_private_default_template -q`
+  -> `1 passed, 1 warning in 1.14s`。
+- 静态检查：`python -m compileall api/admin_routes.py api/admin/trace_routes.py api/admin/log_routes.py -q`
+  无输出；`git diff --check -- api/admin_routes.py api/admin/trace_routes.py api/admin/log_routes.py tests/test_admin_observability_routes_split.py`
+  无输出；`rg -n "asyncio\.run|run_awaitable_sync|from api\.admin_routes|import api\.admin_routes" api/admin/trace_routes.py api/admin/log_routes.py`
+  无输出。
+- 行数检查：`api/admin_routes.py` 4303 行，`api/admin/trace_routes.py` 274 行，
+  `api/admin/log_routes.py` 218 行，`tests/test_admin_observability_routes_split.py`
+  144 行。
+- 全量：`python -m pytest tests/ -v` ->
+  `1523 passed, 6 skipped, 139 warnings in 108.28s`。
+- 文档收口提交前复跑：`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/admin-observability-routes-split.md`
+  无输出；`python -m pytest tests/ -v` ->
+  `1523 passed, 6 skipped, 139 warnings in 110.56s`。
+
+执行约束：
+
+- 不拆普通 `api/routes.py`。
+- 不迁移模型、工具、reply/eval、eval 工作台、`/db/backup` 或 `/db/vacuum`。
+- 不改变 Prompt Runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime
+  输入。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列仍剩 `api/admin_routes.py` 4303 行、`api/routes.py` 2822 行。继续沿
+管理端拆分时，下一刀可考虑 Tools 或 Models；推荐先 Tools，Models 需要单独设计配置写入、
+Prompt Runtime 间接调用和本地模型加载边界。

@@ -21,10 +21,30 @@
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-admin-observability-routes-split-design.md`。
 - [x] 设计提交：`a305e28 docs(管理端): 设计观测路由拆分`。
 - [x] 设计阶段全量验证：`python -m pytest tests/ -v` -> `1517 passed, 6 skipped, 139 warnings in 108.33s`。
-- [ ] 计划提交。
-- [ ] TDD 红灯测试提交前验证。
-- [ ] 实现拆分并提交。
-- [ ] 更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行结果并提交。
+- [x] 计划提交：`91da500 docs(计划): 记录观测路由拆分计划`。
+- [x] TDD 红灯测试提交前验证：`4 failed, 2 passed, 21 warnings in 6.66s`。
+- [x] 实现拆分并提交：`12f1548 refactor(管理端): 拆分观测路由`。
+- [x] 更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行结果并提交。
+
+执行结果摘要：
+
+- Split 绿灯：`tests/test_admin_observability_routes_split.py -q` ->
+  `6 passed, 21 warnings in 1.36s`。
+- 行为回归：`tests/test_prompt_trace_admin.py tests/test_admin_logs_viewer.py tests/test_admin_api.py::TestObservabilityAPI -q`
+  -> `14 passed, 21 warnings in 3.65s`。
+- 鉴权与 asyncio 策略：`tests/test_admin_api.py::TestAuth tests/test_asyncio_run_policy.py -q`
+  -> `9 passed, 1 warning in 2.56s`。
+- Audit 烟测：`tests/test_admin_api.py::TestToolAdmin::test_tools_have_separate_superuser_private_default_template -q`
+  -> `1 passed, 1 warning in 1.14s`。
+- 静态检查：`compileall`、`git diff --check` 和反向导入 / awaitable 扫描均无输出。
+- 行数：`api/admin_routes.py` 4303 行，`api/admin/trace_routes.py` 274 行，
+  `api/admin/log_routes.py` 218 行，`tests/test_admin_observability_routes_split.py`
+  144 行。
+- 实现阶段全量测试：`python -m pytest tests/ -v` ->
+  `1523 passed, 6 skipped, 139 warnings in 108.28s`。
+- 文档提交前验证：`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/admin-observability-routes-split.md`
+  无输出；`python -m pytest tests/ -v` ->
+  `1523 passed, 6 skipped, 139 warnings in 110.56s`。
 
 ## 子 agent 分工约定
 
@@ -84,7 +104,7 @@
 **文件：**
 - 创建：`tests/test_admin_observability_routes_split.py`
 
-- [ ] **步骤 1：创建 split 路由测试文件**
+- [x] **步骤 1：创建 split 路由测试文件**
 
 创建 `tests/test_admin_observability_routes_split.py`：
 
@@ -235,7 +255,7 @@ def test_admin_log_routes_keep_static_paths_before_dynamic_log_name():
     assert frontend_error_index < read_log_index
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -254,7 +274,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 - 创建：`api/admin/trace_routes.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：创建 `api/admin/trace_routes.py`**
+- [x] **步骤 1：创建 `api/admin/trace_routes.py`**
 
 创建模块头部和依赖：
 
@@ -299,7 +319,7 @@ router = APIRouter(tags=["admin-trace"])
 - `verify_admin` 使用 `api.admin.common.verify_admin`。
 - 不改变 query 参数、排序、分页、统计字段和 404 文案。
 
-- [ ] **步骤 2：集成 trace router**
+- [x] **步骤 2：集成 trace router**
 
 在 `api/admin_routes.py` 的已拆 router 导入区新增：
 
@@ -329,7 +349,7 @@ router.include_router(trace_router)
 
 保留 `core.tracing.row_to_dict` 顶层 import，因为 reply / eval 区域仍使用它。
 
-- [ ] **步骤 3：运行 trace 定向测试**
+- [x] **步骤 3：运行 trace 定向测试**
 
 运行：
 
@@ -350,7 +370,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 - 修改：`api/admin_routes.py`
 - 修改：`tests/test_admin_logs_viewer.py`（仅当旧 `__file__` monkeypatch 兼容 helper 仍无法满足测试时修改）
 
-- [ ] **步骤 1：创建 `api/admin/log_routes.py`**
+- [x] **步骤 1：创建 `api/admin/log_routes.py`**
 
 创建模块头部和依赖：
 
@@ -442,7 +462,7 @@ log_dir = os.path.abspath(_data_dir())
 - `POST /logs/frontend-error` 放在 `GET /logs/{name}` 之前定义。
 - 不改变 `read_log()` 的返回字段、过滤规则、非法 `lines` 400 和 404 文案。
 
-- [ ] **步骤 2：集成 log router**
+- [x] **步骤 2：集成 log router**
 
 在 `api/admin_routes.py` 的已拆 router 导入区新增：
 
@@ -478,7 +498,7 @@ router.include_router(log_router)
 
 保留 `AdminAuditLog` 顶层 import，因为 timing proposal / eval 路由仍使用它。
 
-- [ ] **步骤 3：运行 log 定向测试**
+- [x] **步骤 3：运行 log 定向测试**
 
 运行：
 
@@ -502,7 +522,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 - 修改：`api/admin/log_routes.py`
 - 修改：`tests/test_admin_observability_routes_split.py`
 
-- [ ] **步骤 1：运行 split 全量目标测试**
+- [x] **步骤 1：运行 split 全量目标测试**
 
 运行：
 
@@ -514,7 +534,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：所有 split 测试通过。
 
-- [ ] **步骤 2：运行观测行为回归**
+- [x] **步骤 2：运行观测行为回归**
 
 运行：
 
@@ -529,7 +549,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：trace、日志查看器和现有 Observability 行为回归通过。
 
-- [ ] **步骤 3：运行鉴权与 asyncio 策略回归**
+- [x] **步骤 3：运行鉴权与 asyncio 策略回归**
 
 运行：
 
@@ -543,7 +563,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：鉴权 monkeypatch 和 `asyncio.run()` 策略回归通过。
 
-- [ ] **步骤 4：运行静态检查**
+- [x] **步骤 4：运行静态检查**
 
 运行：
 
@@ -556,7 +576,7 @@ wc -l api/admin_routes.py api/admin/trace_routes.py api/admin/log_routes.py test
 预期：`compileall` 和 `git diff --check` 无输出；行数输出记录到本计划和
 `docs/plan_walkthrough.md`。
 
-- [ ] **步骤 5：运行反向导入与 awaitable 扫描**
+- [x] **步骤 5：运行反向导入与 awaitable 扫描**
 
 运行：
 
@@ -567,7 +587,7 @@ rg -n "api\\.admin_routes|asyncio\\.run|run_awaitable_sync" api/admin/trace_rout
 预期：无输出。新模块不反向导入 `api.admin_routes`，也不新增
 `asyncio.run()` 或同步 awaitable 包装。
 
-- [ ] **步骤 6：运行全量测试**
+- [x] **步骤 6：运行全量测试**
 
 运行：
 
@@ -578,7 +598,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 7：提交实现阶段**
+- [x] **步骤 7：提交实现阶段**
 
 只暂存目标文件：
 
@@ -594,7 +614,7 @@ git commit -m "refactor(管理端): 拆分观测路由"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-observability-routes-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下追加进展：
 
@@ -607,7 +627,7 @@ git commit -m "refactor(管理端): 拆分观测路由"
 
 同时更新 `admin_routes.py` 行数为实现后的 `wc -l` 结果。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加本阶段记录：
 
@@ -618,7 +638,7 @@ git commit -m "refactor(管理端): 拆分观测路由"
 - 行数变化。
 - 执行约束：不拆普通 API、不迁移模型/工具/eval、不新增 `asyncio.run()`。
 
-- [ ] **步骤 3：更新本计划执行结果**
+- [x] **步骤 3：更新本计划执行结果**
 
 在「当前状态」中记录：
 
@@ -631,7 +651,7 @@ git commit -m "refactor(管理端): 拆分观测路由"
 
 并勾选已完成步骤。
 
-- [ ] **步骤 4：文档提交前验证**
+- [x] **步骤 4：文档提交前验证**
 
 运行：
 
@@ -643,7 +663,7 @@ python -m pytest tests/ -v
 
 预期：`git diff --check` 无输出；全量测试 0 failures。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 只暂存目标文件：
 
