@@ -5,6 +5,8 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-21
 
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；本文件后续阶段记录以 `api/admin_routes.py` 和 `api/routes.py` 的模块边界收敛为主。
+
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。同日续跑补记：测试 helper 的 `asyncio.Runner` 兼容性问题已随 `cfdd9c2 test(异步): 移除 Runner 测试依赖` 收口，提交前全量回归结果为 `1380 passed, 6 skipped, 139 warnings in 100.75s`，非 vendor Python 代码中无 `asyncio.Runner` 命中。TimingGate scoring 可观测性收尾也已完成：设计提交 `4824036 docs(时机): 设计评分可观测收尾`，计划提交 `2820f7a docs(计划): 记录评分可观测收尾计划`，实现提交 `9d5817c feat(时机): 补齐评分可观测字段`；验证包括红灯 `s_transport_tier` 缺失、绿灯 `1 passed`、相邻回归 `7 passed`、WebUI build 退出码 0、全量回归 `1380 passed, 6 skipped, 139 warnings in 103.22s`。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
 同日真实样本运营第一步已完成：TimingGate 信号周期审计设计提交 `8c7a563 docs(评测): 设计时机信号周期审计`，计划提交 `979639e docs(计划): 记录时机信号周期审计计划`，实现提交 `0980f22 ci(评测): 接入时机信号周期审计`。本阶段新增 `scripts/run_timing_signal_audit_periodic.sh`，接入 `scripts/run_eval_periodic.sh` keep-going 流程，并在 `docs/evals.md` 记录 `TIMING_SIGNAL_AUDIT_DB`、skipped 报告和 artifact 归档语义；验证包括红灯 `2 failed`、中间红灯 `1 failed, 1 passed`、绿灯 `2 passed`、相邻回归 `24 passed`、周期脚本全部 gate 通过，以及全量回归 `1382 passed, 6 skipped, 139 warnings in 107.45s`。
@@ -2799,3 +2801,76 @@ HTTP 路径、审计动作和 admin token monkeypatch 兼容。`api/admin_routes
 P3 超大文件队列仍剩 `api/admin_routes.py` 和 `api/routes.py`。如果继续沿管理端拆分，
 下一刀可优先考虑 `group_memory` 或 trace / observability 只读边界；如果切回普通 API，
 可优先拆公开 media / sticker 端点，但要先设计 `api.routes.verify_token` monkeypatch 兼容。
+
+## 2026-06-21 Admin Group Memory 路由拆分
+
+状态：实现、定向验证和实现阶段提交准备已完成。`api/admin_routes.py` 已拆出
+Group Memory 管理端路由到 `api/admin/group_memory_routes.py`；旧
+`api.admin_routes` 继续 include 新 router，并 re-export 迁移后的 request model、
+helper 和 endpoint，保持旧导入兼容。`api/admin_routes.py` 从 4979 行降至
+4731 行，新模块 `api/admin/group_memory_routes.py` 为 281 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-admin-group-memory-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/admin-group-memory-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`0388314 docs(管理端): 设计群记忆路由拆分`。
+- 计划提交：`0f43e62 docs(计划): 记录群记忆路由拆分计划`。
+- 实现提交：`925c110 refactor(管理端): 拆分群记忆路由`。
+
+已完成：
+
+- [x] 新增 `tests/test_admin_group_memory_routes_split.py`，覆盖 endpoint module、
+  legacy import、token monkeypatch、重复注册和 group detail catch-all 顺序。
+- [x] 在 `tests/test_admin_api.py::TestObservabilityAPI` 补 legacy list 路由行为回归。
+- [x] 新增 `api/admin/group_memory_routes.py`，迁移 Group Memory request model、
+  helper 和 8 个路由；新模块使用 `api.admin.common.verify_admin` 和
+  `audit_request`，不反向导入 `api.admin_routes`。
+- [x] `api/admin_routes.py` include `group_memory_router`，并 re-export 迁移符号；
+  `/groups/{group_id:path}/memories` 系列路由注册顺序早于本地
+  `/groups/{group_id:path}` catch-all。
+
+验证记录：
+
+- 红灯：split 目标测试 ->
+  `2 failed, 1 warning in 5.66s`；失败点为 endpoint module 仍是
+  `api.admin_routes`，且 `api.admin.group_memory_routes` 尚不存在。
+- 绿灯：`tests/test_admin_group_memory_routes_split.py -q` ->
+  `5 passed, 21 warnings in 1.31s`。
+- Group Memory 行为回归：split 测试与 `TestObservabilityAPI` ->
+  `14 passed, 21 warnings in 1.71s`。
+- 鉴权与 asyncio 策略回归：`TestAuth` 与 `tests/test_asyncio_run_policy.py` ->
+  `9 passed, 1 warning in 2.49s`。
+- 语法检查：`python -m compileall api/admin_routes.py api/admin/group_memory_routes.py -q`
+  无输出，退出码为 0。
+- 格式检查：`git diff --check -- api/admin_routes.py api/admin/group_memory_routes.py tests/test_admin_group_memory_routes_split.py tests/test_admin_api.py`
+  无输出，退出码为 0。
+- 反向导入与旧 helper 精确扫描：token 级扫描确认新模块没有导入
+  `api.admin_routes`，没有使用 `_audit_request`、`_raw_group_id`、
+  `_group_session_id` 或 `_group_stream_id`，也没有新增 `asyncio.run()` 或
+  `run_awaitable_sync()`。
+- 行数检查：`api/admin_routes.py` 4731 行，`api/admin/group_memory_routes.py`
+  281 行，`tests/test_admin_group_memory_routes_split.py` 111 行。
+- 全量：`python -m pytest tests/ -v` ->
+  `1517 passed, 6 skipped, 139 warnings in 107.94s`。
+- 文档收口提交前复跑：`python -m pytest tests/ -v` ->
+  `1517 passed, 6 skipped, 139 warnings in 108.71s`。
+
+执行约束：
+
+- 不拆普通 `api/routes.py`。
+- 不迁移 admin 认证、审计 helper、`/overview`、`/groups`、`group_detail()`、
+  TimingGate、配置、模型、工具、reply/eval、eval 工作台、日志 viewer 或 settings。
+- 不改变 DB schema、HTTP 路径、response shape、状态码、审计 action、token
+  monkeypatch 或 group detail catch-all 兼容顺序。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列仍剩 `api/admin_routes.py` 和 `api/routes.py`。继续沿管理端拆分时，
+下一刀可考虑 trace / observability 只读边界；切普通 API 前应先设计 `verify_token`
+共享兼容层。

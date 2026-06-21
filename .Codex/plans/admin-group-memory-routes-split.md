@@ -18,6 +18,25 @@
 - 本阶段选择：继续拆 `api/admin_routes.py`，优先迁移 Group Memory 管理端路由。
 - 本阶段不切换到 `api/routes.py`，不拆 chat / stream / group message / public media。
 
+执行结果（2026-06-21）：
+
+- 红灯：split 目标测试 `2 failed, 1 warning in 5.66s`；失败点为 endpoint module
+  仍是 `api.admin_routes`，且 `api.admin.group_memory_routes` 尚不存在。
+- 绿灯：`tests/test_admin_group_memory_routes_split.py -q` ->
+  `5 passed, 21 warnings in 1.31s`。
+- 定向回归：Group Memory 行为回归 `14 passed, 21 warnings in 1.71s`；
+  鉴权与 asyncio 策略回归 `9 passed, 1 warning in 2.49s`。
+- 静态检查：`compileall`、`git diff --check`、facade 同一性检查和 token 级反向导入
+  / 旧 helper 扫描均通过。原纯子串扫描会把 `normalize_group_session_id()` 误报为
+  `_group_session_id`，实际收口改用 token 级精确扫描。
+- 行数：`api/admin_routes.py` 4731 行，`api/admin/group_memory_routes.py` 281 行，
+  `tests/test_admin_group_memory_routes_split.py` 111 行。
+- 全量测试：`python -m pytest tests/ -v` ->
+  `1517 passed, 6 skipped, 139 warnings in 107.94s`。
+- 文档收口提交前复跑：`python -m pytest tests/ -v` ->
+  `1517 passed, 6 skipped, 139 warnings in 108.71s`。
+- 实现提交：`925c110 refactor(管理端): 拆分群记忆路由`。
+
 ## 子 agent 分工约定
 
 - **Agent A：测试契约。** 只修改 `tests/test_admin_group_memory_routes_split.py` 和 `tests/test_admin_api.py` 中 `TestObservabilityAPI` 的新增 legacy list 行为测试，不改生产代码。输出红灯测试结果和失败原因。
@@ -67,7 +86,7 @@
 - 创建：`tests/test_admin_group_memory_routes_split.py`
 - 修改：`tests/test_admin_api.py`
 
-- [ ] **步骤 1：创建 split 路由测试文件**
+- [x] **步骤 1：创建 split 路由测试文件**
 
 创建 `tests/test_admin_group_memory_routes_split.py`：
 
@@ -185,7 +204,7 @@ def test_group_memory_routes_are_registered_before_group_detail_catchall():
     assert extract_index < detail_index
 ```
 
-- [ ] **步骤 2：补 legacy list 行为测试**
+- [x] **步骤 2：补 legacy list 行为测试**
 
 在 `tests/test_admin_api.py::TestObservabilityAPI` 的
 `test_group_memory_items_endpoint_returns_memories_without_group_route_shadow` 后添加：
@@ -216,7 +235,7 @@ def test_group_memory_routes_are_registered_before_group_detail_catchall():
         assert data["memories"][0]["content"].startswith("模型部署")
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -247,7 +266,7 @@ FAILED tests/test_admin_group_memory_routes_split.py::test_legacy_admin_routes_g
 **文件：**
 - 创建：`api/admin/group_memory_routes.py`
 
-- [ ] **步骤 1：创建新模块头部和 request model**
+- [x] **步骤 1：创建新模块头部和 request model**
 
 创建 `api/admin/group_memory_routes.py`，头部结构如下：
 
@@ -294,7 +313,7 @@ class GroupMemoryUpdateRequest(BaseModel):
 
 从 `api/admin_routes.py` 删除这 4 个 request model。
 
-- [ ] **步骤 2：迁移 helper**
+- [x] **步骤 2：迁移 helper**
 
 从 `api/admin_routes.py` 剪切以下 helper 到新模块，函数体保持现有语义：
 
@@ -308,7 +327,7 @@ class GroupMemoryUpdateRequest(BaseModel):
 - `_extract_group_memories_response()` 继续在函数内导入 `app.group_memory.extraction_service`。
 - `_extract_group_memories_response()` 内部把 `_audit_request(...)` 改为 `audit_request(...)`。
 
-- [ ] **步骤 3：迁移路由实现**
+- [x] **步骤 3：迁移路由实现**
 
 从 `api/admin_routes.py` 剪切以下路由到新模块，保持函数名、路径、参数、docstring、返回结构和异常状态码不变：
 
@@ -343,7 +362,7 @@ audit_request(
 - `group_detail()`
 - `timing_gate_events()`
 
-- [ ] **步骤 4：检查新模块没有循环依赖和禁止项**
+- [x] **步骤 4：检查新模块没有循环依赖和禁止项**
 
 运行：
 
@@ -374,7 +393,7 @@ PY
 **文件：**
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：导入 group memory router 和 re-export 符号**
+- [x] **步骤 1：导入 group memory router 和 re-export 符号**
 
 在既有 admin 子路由 import 附近添加：
 
@@ -407,7 +426,7 @@ router.include_router(group_memory_router)
 
 该 include 必须位于本地 `@router.get("/groups/{group_id:path}")` decorator 之前。
 
-- [ ] **步骤 2：删除旧模块中的迁移实现块**
+- [x] **步骤 2：删除旧模块中的迁移实现块**
 
 从 `api/admin_routes.py` 删除以下本地定义：
 
@@ -438,7 +457,7 @@ router.include_router(group_memory_router)
 - `group_detail()`
 - `timing_gate_events()`
 
-- [ ] **步骤 3：确认 facade helper 和 endpoint 同一性**
+- [x] **步骤 3：确认 facade helper 和 endpoint 同一性**
 
 运行：
 
@@ -479,7 +498,7 @@ PY
 - 验证：`tests/test_admin_api.py`
 - 验证：`tests/test_asyncio_run_policy.py`
 
-- [ ] **步骤 1：运行 split 绿灯测试**
+- [x] **步骤 1：运行 split 绿灯测试**
 
 运行：
 
@@ -495,7 +514,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 5 passed
 ```
 
-- [ ] **步骤 2：运行 Group Memory 行为回归**
+- [x] **步骤 2：运行 Group Memory 行为回归**
 
 运行：
 
@@ -515,7 +534,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 如果用例数量因新增测试或既有测试调整变化，以 `0 failed` 为硬门禁，并在计划收口时记录实际数量。
 
-- [ ] **步骤 3：运行鉴权与 asyncio 策略回归**
+- [x] **步骤 3：运行鉴权与 asyncio 策略回归**
 
 运行：
 
@@ -533,7 +552,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 9 passed
 ```
 
-- [ ] **步骤 4：运行静态检查**
+- [x] **步骤 4：运行静态检查**
 
 运行：
 
@@ -582,7 +601,7 @@ PY
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-group-memory-routes-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」的 `api/admin_routes.py` 进展下追加：
 
@@ -595,7 +614,7 @@ PY
 
 同时更新同段中的 `api/admin_routes.py` 行数为实现后的 `wc -l api/admin_routes.py` 实际结果。
 
-- [ ] **步骤 2：追加 `docs/plan_walkthrough.md` 阶段记录**
+- [x] **步骤 2：追加 `docs/plan_walkthrough.md` 阶段记录**
 
 在文末追加：
 
@@ -607,8 +626,8 @@ Group Memory 管理端路由到 `api/admin/group_memory_routes.py`；旧
 `api.admin_routes` 继续 include 新 router，并 re-export 迁移符号保持旧导入兼容。
 
 - 设计提交：`0388314 docs(管理端): 设计群记忆路由拆分`。
-- 计划提交：本阶段计划提交已在实现前完成。
-- 实现提交：实现阶段提交完成后记录。
+- 计划提交：`0f43e62 docs(计划): 记录群记忆路由拆分计划`。
+- 实现提交：`925c110 refactor(管理端): 拆分群记忆路由`。
 
 已完成：
 
@@ -622,11 +641,15 @@ Group Memory 管理端路由到 `api/admin/group_memory_routes.py`；旧
 
 验证：
 
-- 红灯：记录实际命令和失败摘要。
-- 绿灯：记录实际命令和通过摘要。
-- 定向回归：记录实际命令和通过摘要。
-- 静态检查：记录 `compileall`、`git diff --check`、反向导入扫描和行数结果。
-- 全量测试：记录实际全量结果。
+- 红灯：split 目标测试 `2 failed, 1 warning in 5.66s`。
+- 绿灯：split 测试 `5 passed, 21 warnings in 1.31s`。
+- 定向回归：Group Memory 行为回归 `14 passed, 21 warnings in 1.71s`；
+  鉴权与 asyncio 策略回归 `9 passed, 1 warning in 2.49s`。
+- 静态检查：`compileall`、`git diff --check`、facade 同一性检查和 token 级
+  反向导入 / 旧 helper 扫描均通过；行数为 `api/admin_routes.py` 4731 行、
+  `api/admin/group_memory_routes.py` 281 行。
+- 全量测试：`1517 passed, 6 skipped, 139 warnings in 107.94s`。
+- 文档收口提交前复跑：`1517 passed, 6 skipped, 139 warnings in 108.71s`。
 
 下一步：
 
@@ -637,7 +660,7 @@ P3 超大文件队列仍剩 `api/admin_routes.py` 和 `api/routes.py`。继续�
 
 执行时记录「计划提交」和「实现提交」的实际提交号，不保留泛化占位文本。
 
-- [ ] **步骤 3：更新本计划执行状态**
+- [x] **步骤 3：更新本计划执行状态**
 
 将已完成步骤勾选为 `[x]`，并在顶部「当前状态」后追加执行结果摘要，至少记录：
 
@@ -659,7 +682,7 @@ P3 超大文件队列仍剩 `api/admin_routes.py` 和 `api/routes.py`。继续�
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-group-memory-routes-split.md`
 
-- [ ] **步骤 1：运行全量测试**
+- [x] **步骤 1：运行全量测试**
 
 运行：
 
@@ -680,7 +703,7 @@ python -m pytest tests/ -v
 1512 passed, 6 skipped, 139 warnings in 110.00s
 ```
 
-- [ ] **步骤 2：检查暂存前 diff**
+- [x] **步骤 2：检查暂存前 diff**
 
 运行：
 
@@ -697,7 +720,7 @@ git diff --stat -- \
 
 确认 diff 只覆盖本阶段文件。不要暂存 pyc、数据库、快照文件或历史无关脏项。
 
-- [ ] **步骤 3：显式暂存目标文件**
+- [x] **步骤 3：显式暂存目标文件**
 
 运行：
 
@@ -715,7 +738,7 @@ git diff --cached --check
 
 预期暂存区只包含上述 7 个文件，`git diff --cached --check` 无输出。
 
-- [ ] **步骤 4：提交实现阶段**
+- [x] **步骤 4：提交实现阶段**
 
 运行：
 
