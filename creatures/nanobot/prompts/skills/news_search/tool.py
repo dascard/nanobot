@@ -10,8 +10,6 @@ import os
 import re
 import json
 import html
-import threading
-import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Dict
 import os as _os
@@ -23,6 +21,7 @@ import trafilatura
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from core.async_bridge import run_awaitable_sync
 from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
+from . import runtime_cache as _runtime_cache
 from .legacy_report import (
     MODEL_NAME_HINTS,
     TRUSTED_NEWS_DOMAINS,
@@ -64,10 +63,10 @@ def _urlopen(url, timeout=10):
 def _ddgs_kwargs():
     return {"proxy": _proxy_url} if _proxy_url else {}
 
-NEWS_SEARCH_CACHE_TTL_SECONDS = int(os.environ.get("NEWS_SEARCH_CACHE_TTL_SECONDS", "300"))
+NEWS_SEARCH_CACHE_TTL_SECONDS = _runtime_cache.NEWS_SEARCH_CACHE_TTL_SECONDS
 NEWS_SEARCH_DDG_ENABLED = os.environ.get("NEWS_SEARCH_DDG_ENABLED", "0") == "1"
-_NEWS_SEARCH_CACHE: dict[tuple[Any, ...], tuple[float, str]] = {}
-_NEWS_SEARCH_CACHE_LOCK = threading.Lock()
+_NEWS_SEARCH_CACHE = _runtime_cache._NEWS_SEARCH_CACHE
+_NEWS_SEARCH_CACHE_LOCK = _runtime_cache._NEWS_SEARCH_CACHE_LOCK
 
 JUYA_RSS_URL = "https://imjuya.github.io/juya-ai-daily/rss.xml"
 RSS_KEYWORDS = {
@@ -75,10 +74,7 @@ RSS_KEYWORDS = {
     "简报", "digest",
 }
 # 只有日报/早报/简报才用 Juya RSS 快路径（"最新/新闻/资讯"太宽泛）
-DAILY_DIGEST_KEYWORDS = {
-    "日报", "早报", "每日", "今日ai", "今天ai", "ai daily",
-    "morning briefing", "简报", "digest",
-}
+DAILY_DIGEST_KEYWORDS = _runtime_cache.DAILY_DIGEST_KEYWORDS
 
 RSS_SOURCES = [
     {
@@ -342,36 +338,15 @@ def _dedup_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def _coerce_date(year: int | str, month: int | str, day: int | str) -> str | None:
-    try:
-        return datetime(int(year), int(month), int(day)).strftime("%Y-%m-%d")
-    except ValueError:
-        return None
+    return _runtime_cache._coerce_date(year, month, day)
 
 
 def _extract_date(query: str) -> str | None:
-    text = query or ""
-
-    match = re.search(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b", text)
-    if match:
-        return _coerce_date(match.group(1), match.group(2), match.group(3))
-
-    match = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?", text)
-    if match:
-        return _coerce_date(match.group(1), match.group(2), match.group(3))
-
-    match = re.search(r"(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?", text)
-    if match:
-        return _coerce_date(datetime.now().year, match.group(1), match.group(2))
-
-    if re.search(r"\b(today)\b|今天|今日", text, flags=re.IGNORECASE):
-        return datetime.now().strftime("%Y-%m-%d")
-
-    return None
+    return _runtime_cache._extract_date(query, now=datetime.now())
 
 
 def _is_daily_digest_query(query: str) -> bool:
-    q = (query or "").lower()
-    return any(k in q for k in DAILY_DIGEST_KEYWORDS)
+    return _runtime_cache._is_daily_digest_query(query)
 
 def _is_rss_first_query(query: str) -> bool:
     q = (query or "").lower()
@@ -608,45 +583,31 @@ def _build_query_variants(query: str) -> List[str]:
     return variants
 
 
-def _is_daily_digest_query(query: str) -> bool:
-    q = (query or "").lower()
-    return any(k in q for k in [
-        "日报", "早报", "每日", "今日ai", "今天ai", "ai daily",
-        "morning briefing", "简报", "digest",
-    ])
-
 def _news_search_cache_key(
     query: str, max_results: int,
     mode: str = "fast", user_id: str = "", session_id: str = "",
 ) -> tuple[Any, ...]:
-    q = re.sub(r"\s+", " ", (query or "").lower()).strip()
-    target_date = _extract_date(query)
-    today = datetime.now().strftime("%Y-%m-%d")
-    ver = "v2_20260503"
-    if _is_daily_digest_query(q):
-        return (ver, "daily_ai", target_date or today, int(max_results), mode)
-    return (ver, "query", q, int(max_results), mode)
+    return _runtime_cache._news_search_cache_key(
+        query,
+        max_results,
+        mode=mode,
+        user_id=user_id,
+        session_id=session_id,
+        now=datetime.now(),
+        date_extractor=_extract_date,
+        daily_digest_detector=_is_daily_digest_query,
+    )
 
 
 def _get_cached_news_result(key: tuple[Any, ...]) -> str | None:
-    now = time.monotonic()
-    with _NEWS_SEARCH_CACHE_LOCK:
-        cached = _NEWS_SEARCH_CACHE.get(key)
-        if not cached:
-            return None
-        created_at, output = cached
-        if now - created_at > NEWS_SEARCH_CACHE_TTL_SECONDS:
-            _NEWS_SEARCH_CACHE.pop(key, None)
-            return None
-        return output
+    return _runtime_cache._get_cached_news_result(
+        key,
+        ttl_seconds=NEWS_SEARCH_CACHE_TTL_SECONDS,
+    )
 
 
 def _store_cached_news_result(key: tuple[Any, ...], output: str) -> None:
-    with _NEWS_SEARCH_CACHE_LOCK:
-        if len(_NEWS_SEARCH_CACHE) > 64:
-            oldest_key = min(_NEWS_SEARCH_CACHE, key=lambda k: _NEWS_SEARCH_CACHE[k][0])
-            _NEWS_SEARCH_CACHE.pop(oldest_key, None)
-        _NEWS_SEARCH_CACHE[key] = (time.monotonic(), output)
+    _runtime_cache._store_cached_news_result(key, output)
 
 
 def _rerank_with_domain_diversity(results: List[Dict[str, Any]], max_results: int) -> List[Dict[str, Any]]:
