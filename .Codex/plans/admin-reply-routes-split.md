@@ -23,7 +23,7 @@
   `4 failed, 3 passed, 21 warnings in 6.30s`。主要失败点符合预期：
   endpoint module 仍是 `api.admin_routes`、`api.admin.reply_routes` 尚不存在、
   `api/admin/reply_routes.py` 文件不存在。
-- [x] 实现提交：本提交 `refactor(管理端): 拆分回复评测路由`。
+- [x] 实现提交：`fb5186d refactor(管理端): 拆分回复评测路由`。
   - split 绿灯：`7 passed, 21 warnings in 1.27s`。
   - Reply 行为回归：`15 passed, 21 warnings in 2.78s`。
   - 拆分兼容回归：`48 passed, 21 warnings in 9.43s`。
@@ -34,7 +34,14 @@
   - 行数：`api/admin_routes.py` 1935 行、`api/admin/reply_routes.py` 754 行、
     `tests/test_admin_reply_routes_split.py` 151 行。
   - 全量测试：`1542 passed, 6 skipped, 139 warnings in 112.96s`。
-- [ ] 文档收口提交。
+- [x] 文档收口提交：本提交 `docs(计划): 收口回复评测路由拆分`。
+  - `docs/todo.md` 已同步 P3 超大文件队列行数、Admin Reply Eval 第七刀记录、
+    验证结果和下一刀候选。
+  - `docs/plan_walkthrough.md` 已追加 `2026-06-21 Admin Reply Eval 路由拆分`
+    小节，记录设计 / 计划 / 实现提交、验证结果、行数和执行约束。
+  - 文档格式检查：`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/admin-reply-routes-split.md`
+    无输出。
+  - 文档收口全量测试：`1542 passed, 6 skipped, 139 warnings in 112.18s`。
 
 ## 子 agent 分工约定
 
@@ -604,7 +611,7 @@ git commit -m "refactor(管理端): 拆分回复评测路由"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-reply-routes-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」当前状态中记录：
 
@@ -613,7 +620,7 @@ git commit -m "refactor(管理端): 拆分回复评测路由"
 - 验证命令和结果。
 - 下一刀候选仍为 Eval Workbench、Runtime / Overview、Settings 或普通 API common auth。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-21 Admin Reply Eval 路由拆分` 小节，记录：
 
@@ -624,11 +631,11 @@ git commit -m "refactor(管理端): 拆分回复评测路由"
 - 执行约束：不拆普通 API、不迁移 `/evals/*`、不改变 Prompt Runtime 模板、不新增
   `asyncio.run()` 或同步 awaitable 包装。
 
-- [ ] **步骤 3：更新本计划最终状态**
+- [x] **步骤 3：更新本计划最终状态**
 
 把本计划顶部状态改为已完成，并补充文档收口验证结果。
 
-- [ ] **步骤 4：验证文档收口**
+- [x] **步骤 4：验证文档收口**
 
 运行：
 
@@ -639,7 +646,7 @@ python -m pytest tests/ -v
 
 预期：`git diff --check` 无输出，全量测试 0 failures。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 只暂存本阶段文件：
 

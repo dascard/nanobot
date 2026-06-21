@@ -3105,3 +3105,81 @@ provider/catalog/route test、本地组件测试、TimingGate 稳定性测试和
 P3 超大文件队列仍剩 `api/admin_routes.py` 2647 行、`api/routes.py` 2822 行。继续沿
 管理端拆分时，下一刀可考虑 Settings / Reply Eval / Eval Workbench 等更小边界；
 切普通 API 前应先设计 `verify_token` 共享兼容层。
+
+## 2026-06-21 Admin Reply Eval 路由拆分
+
+状态：设计、计划、实现、验证和实现阶段提交已完成。`api/admin_routes.py` 已拆出
+Reply 手动测试与 Reply Eval 管理端路由到 `api/admin/reply_routes.py`；旧
+`api.admin_routes` 继续 include 新 router，并 re-export 迁移后的 request model、
+helper 和 endpoint，保持旧导入路径、HTTP 路径、admin token monkeypatch、
+Prompt Runtime metadata、评测 metrics、traffic 聚合和 `/reply-eval/runs`
+静态路由顺序兼容。`/model-replies`、`/evals/*`、`/settings/*` 和 `/db/*`
+仍留在父模块或既有子模块，不进入本阶段。`api/admin_routes.py` 从 2647 行降至
+1935 行，新模块 `api/admin/reply_routes.py` 为 754 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-admin-reply-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/admin-reply-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`73f6f81 docs(管理端): 设计回复评测路由拆分`。
+- 计划提交：`2996862 docs(计划): 记录回复评测路由拆分计划`。
+- 实现提交：`fb5186d refactor(管理端): 拆分回复评测路由`。
+
+已完成：
+
+- [x] 新增 `tests/test_admin_reply_routes_split.py`，锁定 11 个 Reply route 的
+  endpoint module、legacy import、token monkeypatch、重复注册、`/reply-eval/runs`
+  静态路由顺序、协程边界和反向导入 / awaitable 扫描。
+- [x] 新增 `api/admin/reply_routes.py`，承载 `ReplyTestRunRequest`、Reply Eval case /
+  run request model、Reply contract 聚合 helper、手动测试 endpoint、case CRUD、
+  generated preview / save、eval run、traffic 聚合和 run 查询。
+- [x] `api/admin_routes.py` include `reply_router`，并 re-export 迁移符号。
+- [x] 新模块使用 `api.admin.common.verify_admin` 和 `core.database.get_db`；不反向导入
+  `api.admin_routes`。
+- [x] 红灯测试未单独提交；按项目提交门禁，失败状态只作为 TDD 证据记录，
+  绿灯后与实现一起提交。
+
+验证记录：
+
+- 红灯：`tests/test_admin_reply_routes_split.py -q` ->
+  `4 failed, 3 passed, 21 warnings in 6.30s`；失败点为 endpoint module 仍是
+  `api.admin_routes`、`api.admin.reply_routes` 尚不存在，以及
+  `api/admin/reply_routes.py` 文件不存在。
+- 绿灯：`tests/test_admin_reply_routes_split.py -q` ->
+  `7 passed, 21 warnings in 1.27s`。
+- Reply 行为回归：
+  `tests/test_reply_admin.py tests/test_admin_model_routes_split.py::test_model_replies_stays_in_parent_admin_routes -q`
+  -> `15 passed, 21 warnings in 2.78s`。
+- 拆分兼容回归：
+  `tests/test_admin_reply_routes_split.py tests/test_admin_model_routes_split.py tests/test_admin_tool_routes_split.py tests/test_admin_sticker_routes_split.py tests/test_admin_group_memory_routes_split.py tests/test_admin_observability_routes_split.py tests/test_admin_db_browser.py -q`
+  -> `48 passed, 21 warnings in 9.43s`。
+- 鉴权与 asyncio 策略回归：
+  `tests/test_admin_api.py::TestAuth tests/test_asyncio_run_policy.py tests/test_admin_reply_routes_split.py::test_admin_reply_routes_do_not_import_parent_admin_routes_or_sync_awaitable -q`
+  -> `10 passed, 1 warning in 2.57s`。
+- 静态检查：`python -m compileall api/admin_routes.py api/admin/reply_routes.py -q`
+  无输出；`git diff --check -- api/admin_routes.py api/admin/reply_routes.py tests/test_admin_reply_routes_split.py .Codex/plans/admin-reply-routes-split.md`
+  无输出；`rg -n "from api\.admin_routes|import api\.admin_routes|asyncio\.run|run_awaitable_sync" api/admin/reply_routes.py`
+  无输出，退出码为 1。
+- 行数检查：`api/admin_routes.py` 1935 行，`api/admin/reply_routes.py` 754 行，
+  `tests/test_admin_reply_routes_split.py` 151 行。
+- 全量：`python -m pytest tests/ -v` ->
+  `1542 passed, 6 skipped, 139 warnings in 112.96s`。
+
+执行约束：
+
+- 不拆普通 `api/routes.py`。
+- 不迁移 `/model-replies`、`/evals/*`、`/settings/*`、`/db/*`、`/db/backup` 或
+  `/db/vacuum`。
+- 不改变 Prompt Runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime
+  输入。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列仍剩 `api/admin_routes.py` 1935 行、`api/routes.py` 2822 行。继续沿
+管理端拆分时，下一刀可考虑 Eval Workbench、Runtime / Overview 或 Settings；
+切普通 API 前应先设计 `verify_token` 共享兼容层。

@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `admin_routes.py`(2647)、`routes.py`(2822)。按职责拆模块；`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，三者不再属于当前 >800 行清单。
+  `admin_routes.py`(1935)、`routes.py`(2822)。按职责拆模块；`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，三者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/admin_routes.py`、`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -138,6 +138,18 @@
     request model、常量、helper 和 19 个 endpoint，保留 admin token monkeypatch、
     HTTP 路径、审计语义、provider/catalog/route test、本地组件测试、TimingGate
     稳定性测试和模型健康检查行为；`/model-replies` 仍留在父模块作为回复日志观测边界。
+  - 进展：`api/admin_routes.py` 第七刀已拆出 Reply 手动测试 / Reply Eval 管理端
+    路由到 `api/admin/reply_routes.py`；旧 `api.admin_routes` 继续 re-export
+    迁移后的 request model、helper 和 11 个 endpoint，保留 HTTP 路径、
+    admin token monkeypatch、Prompt Runtime metadata、评测 metrics、traffic 聚合
+    和 `/reply-eval/runs` 静态路由顺序。`/model-replies`、`/evals/*`、
+    `/settings/*`、`/db/*` 均未迁移；`api/admin_routes.py` 从 2647 行降至
+    1935 行，`api/admin/reply_routes.py` 为 754 行，拆分测试为 151 行。验证结果：
+    split 绿灯 `7 passed`，Reply 行为回归 `15 passed`，拆分兼容回归 `48 passed`，
+    鉴权与 asyncio 策略回归 `10 passed`，全量回归
+    `1542 passed, 6 skipped, 139 warnings in 112.96s`。下一刀候选为 Eval
+    Workbench、Runtime / Overview、Settings，或先为普通 API 拆分设计
+    `verify_token` common auth。
   - 进展：`creatures/nanobot/prompts/skills/news_search/tool.py` 第一刀已拆出
     旧版新闻报告 helper 到 `news_search/legacy_report.py`；`tool.py` 从 1835 行降至
     1149 行，搜索后端、AI 日报工具、缓存和 `_summarize_news_layout()` 当时仍留在旧文件。
