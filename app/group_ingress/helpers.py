@@ -38,7 +38,13 @@ def safe_meta(meta_json: str) -> dict:
     try:
         data = json.loads(meta_json or "{}")
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "[GroupIngress] invalid meta_json ignored len=%d: %s",
+            len(str(meta_json or "")),
+            exc,
+            exc_info=True,
+        )
         return {}
 
 
@@ -71,7 +77,13 @@ def get_group_talk_value(session_id: str) -> float:
         raw = session_id.removeprefix("group_")
         cfg = get_stream_config(normalize_chat_stream_id(raw, chat_type="group", platform="qq"))
         return float(cfg.get("talk_value", 0.5))
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "[GroupIngress] talk_value fallback session_id=%s fallback=0.5: %s",
+            session_id,
+            exc,
+            exc_info=True,
+        )
         return 0.5
 
 

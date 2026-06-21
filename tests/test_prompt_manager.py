@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 
@@ -186,3 +187,40 @@ required_vars:
     rendered_runtime = manager.render("group_chat", {"user_input": "你好"}, mode="managed")
     assert rendered_runtime.content.strip() == "运行时 你好"
     assert rendered_runtime.prompt_source == "PromptManager runtime template"
+
+
+def test_prompt_manager_logs_tracer_failure_without_failing_render(tmp_path, monkeypatch, caplog):
+    from core.prompts import PromptManager
+
+    prompt_dir = tmp_path / "prompts"
+    write_template(
+        prompt_dir,
+        "group_chat.md",
+        """---
+name: 群聊回复
+required_vars:
+  - user_input
+---
+用户: {{ user_input }}
+""",
+    )
+
+    def broken_record_render(**_kwargs):
+        raise RuntimeError("trace boom")
+
+    monkeypatch.setattr("core.tracing.PromptTracer.record_render", broken_record_render)
+    manager = PromptManager(prompt_dir=prompt_dir, backup_dir=tmp_path / "backups")
+
+    with caplog.at_level(logging.DEBUG, logger="nanobot.prompt_manager"):
+        rendered = manager.render(
+            "group_chat",
+            {"user_input": "你好"},
+            trace_id="trace-1",
+            run_id="run-1",
+            mode="shadow",
+        )
+
+    assert "用户: 你好" in rendered.content
+    assert "trace boom" in caplog.text
+    assert "trace-1" in caplog.text
+    assert "run-1" in caplog.text

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -11,6 +12,7 @@ from typing import Any
 from core.token_utils import estimate_tokens as _shared_estimate_tokens
 
 logger_name = "nanobot.prompt_manager"
+logger = logging.getLogger(logger_name)
 
 
 class PromptParseError(ValueError):
@@ -435,8 +437,16 @@ class PromptManager:
                     prompt_default_path=rendered.prompt_default_path,
                     prompt_sha256=rendered.prompt_sha256,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "[PromptManager] prompt trace skipped prompt_key=%s mode=%s trace_id=%s run_id=%s: %s",
+                    tmpl.prompt_key,
+                    mode or "preview",
+                    trace_id or "",
+                    run_id or "",
+                    exc,
+                    exc_info=True,
+                )
         return rendered
 
     def save_prompt(self, prompt_key: str, content: str, *, operator: str = "") -> dict[str, Any]:

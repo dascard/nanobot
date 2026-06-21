@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from datetime import datetime
@@ -13,6 +14,7 @@ from api.admin.common import verify_admin
 
 router = APIRouter()
 _VERSION_CACHE: dict | None = None
+logger = logging.getLogger("nanobot.admin")
 
 
 @router.get("/me")
@@ -43,7 +45,14 @@ def admin_version(_auth=Depends(verify_admin)):
                     stderr=subprocess.DEVNULL,
                     timeout=3,
                 ).strip()
-            except Exception:
+            except Exception as exc:
+                logger.debug(
+                    "[AdminVersion] git probe failed args=%s cwd=%s: %s",
+                    args,
+                    base,
+                    exc,
+                    exc_info=True,
+                )
                 return None
 
         commit = commit or _git(["rev-parse", "--short", "HEAD"]) or "unknown"

@@ -1,4 +1,6 @@
 """GroupMemory 表 + 逻辑测试。"""
+import logging
+
 import pytest
 from core.database import init_db
 from core.group_memory import upsert, query_active, query_injectable, build_profile, apply_decay
@@ -12,6 +14,25 @@ def test_legacy_context_module_exports_group_context_builders():
     assert context_legacy.build_group_profile_context is not build_group_profile_context
     assert callable(context_legacy.build_group_recent_context)
     assert callable(context_legacy.build_group_profile_context)
+
+
+def test_deprecated_group_profile_context_logs_build_failure(monkeypatch, caplog):
+    from core.context_legacy import build_group_profile_context
+
+    def broken_build_profile_with_evidence(*_args, **_kwargs):
+        raise RuntimeError("profile boom")
+
+    monkeypatch.setattr(
+        "core.group_memory.build_profile_with_evidence",
+        broken_build_profile_with_evidence,
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="nanobot.context_legacy"):
+        context = build_group_profile_context("g_fail")
+
+    assert context == ""
+    assert "g_fail" in caplog.text
+    assert "profile boom" in caplog.text
 
 
 @pytest.fixture(autouse=True)

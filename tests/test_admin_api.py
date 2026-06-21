@@ -1,5 +1,6 @@
 """Admin API 集成测试——Sticker CRUD + Block Rules + status 枚举 + 认证。"""
 import json
+import logging
 from datetime import datetime, timedelta
 
 import pytest
@@ -71,6 +72,32 @@ class TestAuth:
         data = _ok(r)
         assert data["commit"]
         assert "display" in data
+
+    def test_version_git_probe_failure_logs_debug(self, client, auth_header, monkeypatch, caplog):
+        from api.admin import system_routes
+
+        for key in (
+            "NANOBOT_GIT_COMMIT",
+            "NANOBOT_GIT_BRANCH",
+            "NANOBOT_GIT_COMMIT_DATE",
+            "NANOBOT_GIT_DIRTY",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(system_routes, "_VERSION_CACHE", None)
+
+        def broken_check_output(*_args, **_kwargs):
+            raise OSError("git missing")
+
+        monkeypatch.setattr(system_routes.subprocess, "check_output", broken_check_output)
+
+        with caplog.at_level(logging.DEBUG, logger="nanobot.admin"):
+            response = client.get("/api/v1/admin/version", headers=auth_header)
+
+        data = _ok(response)
+        assert data["commit"] == "unknown"
+        assert data["dirty"] is None
+        assert "git missing" in caplog.text
+        assert "rev-parse" in caplog.text
 
     def test_no_token_configured_returns_503(self, client, monkeypatch):
         monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "")

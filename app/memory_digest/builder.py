@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from core.database import ChatLog
 
 from .quality import build_quality
 from .renderer import render_digest_levels
+
+logger = logging.getLogger("nanobot.memory_digest.builder")
 
 
 @dataclass(frozen=True)
@@ -62,7 +65,13 @@ def _safe_meta(meta_json: str | None) -> dict[str, Any]:
     try:
         data = json.loads(meta_json or "{}")
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "[MemoryDigest] invalid meta_json ignored len=%d: %s",
+            len(str(meta_json or "")),
+            exc,
+            exc_info=True,
+        )
         return {}
 
 

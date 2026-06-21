@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 
 from app.memory_digest.builder import MemoryDigestBuilder
@@ -17,6 +18,25 @@ def _log(*, content: str, sender_name: str = "Alice", log_id: int = 1) -> ChatLo
         created_at=datetime(2026, 5, 28, 12, 0, 0),
         meta_json=json.dumps({"kind": "chat"}, ensure_ascii=False),
     )
+
+
+def test_memory_digest_builder_logs_invalid_meta_without_leaking_raw_meta(caplog):
+    bad_meta = "{bad json digest-secret}"
+    log = _log(content="[Alice]: 讨论 memory digest 调试日志", log_id=9)
+    log.meta_json = bad_meta
+
+    with caplog.at_level(logging.DEBUG, logger="nanobot.memory_digest.builder"):
+        result = MemoryDigestBuilder().build(
+            user_id="group_42",
+            session_id="group_42",
+            digest_date="2026-05-28",
+            logs=[log],
+        )
+
+    assert result.status in {"active", "skipped"}
+    assert "invalid meta_json" in caplog.text
+    assert "digest-secret" not in caplog.text
+    assert str(len(bad_meta)) in caplog.text
 
 
 def test_memory_digest_builder_filters_sender_prefixed_image_and_command_noise():

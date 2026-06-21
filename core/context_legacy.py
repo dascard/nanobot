@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from html import escape
 
@@ -15,6 +16,8 @@ from core.context_builder import (
     format_group_planner_message,
     sanitize_prompt_text,
 )
+
+logger = logging.getLogger("nanobot.context_legacy")
 
 
 def build_group_recent_context(
@@ -155,7 +158,13 @@ def build_group_profile_context(group_id: str) -> str:
             return "\n".join(parts)
         finally:
             db.close()
-    except Exception:
+    except Exception as exc:
+        logger.debug(
+            "[ContextLegacy] deprecated group profile context skipped group_id=%s: %s",
+            group_id,
+            exc,
+            exc_info=True,
+        )
         return ""
 
 
