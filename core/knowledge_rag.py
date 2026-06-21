@@ -49,6 +49,18 @@ class _KnowledgeCandidate:
         return f"{self.row.source_type}:{self.row.source_id}:{self.row.source_sub_id}"
 
 
+@dataclass
+class _KnowledgeRecallResult:
+    rows: list[SemanticIndexItem]
+    rows_by_id: dict[int, SemanticIndexItem]
+    fts_hits: list[Any]
+    vector_hits: list[Any]
+    lexical_by_id: dict[int, float]
+    bm25_by_id: dict[int, float]
+    semantic_by_id: dict[int, float]
+    query_vector: list[float] | None
+
+
 def _safe_json(raw: str | None) -> dict[str, Any]:
     try:
         data = json.loads(raw or "{}")
@@ -136,6 +148,52 @@ class KnowledgeRagService:
     ) -> dict[str, Any]:
         published_after = str(published_after or date_start or "")
         published_before = str(published_before or date_end or "")
+        recall = self._recall(query)
+        documents = self._load_documents(recall.rows)
+        debug_trace = (
+            self._build_debug_trace(
+                recall=recall,
+                min_trust_level=min_trust_level,
+                source_type=source_type,
+                domain=domain,
+                published_after=published_after,
+                published_before=published_before,
+            )
+            if include_debug
+            else None
+        )
+        candidates, skipped = self._filter_candidates(
+            query,
+            recall=recall,
+            documents=documents,
+            min_trust_level=min_trust_level,
+            published_after=published_after,
+            published_before=published_before,
+            source_type=source_type,
+            domain=domain,
+        )
+        self._update_candidate_debug(
+            debug_trace,
+            candidates=candidates,
+            bm25_by_id=recall.bm25_by_id,
+            skipped=skipped,
+        )
+        self._rerank(query, candidates, debug_trace)
+        degraded = self.reranker_provider is None
+        gated = self._apply_relevance_gate(candidates, degraded=degraded, debug_trace=debug_trace)
+        ranked = sorted(gated, key=self._final_score, reverse=True)
+        return self._build_result(
+            query,
+            ranked=ranked,
+            candidates=candidates,
+            recall=recall,
+            skipped=skipped,
+            limit=limit,
+            degraded=degraded,
+            debug_trace=debug_trace,
+        )
+
+    def _recall(self, query: str) -> _KnowledgeRecallResult:
         has_vector_rows = has_vector_recall_rows(
             self.db,
             source_types={"knowledge"},
@@ -167,61 +225,92 @@ class KnowledgeRagService:
         )
         rows_by_id = {int(row.id): row for row in recent_rows}
         recall_ids = [hit.item_id for hit in fts_hits] + [hit.item_id for hit in vector_hits]
-        missing_fts_ids = [item_id for item_id in recall_ids if item_id not in rows_by_id]
+        missing_ids = [item_id for item_id in recall_ids if item_id not in rows_by_id]
         rows_by_id.update(load_recall_rows_by_ids(
             self.db,
-            missing_fts_ids,
+            missing_ids,
             ensure_schema=not self.readonly,
         ))
         fts_ordered = [rows_by_id[hit.item_id] for hit in fts_hits if hit.item_id in rows_by_id]
         vector_ordered = [rows_by_id[hit.item_id] for hit in vector_hits if hit.item_id in rows_by_id]
         rows = _merge_recall_rows(fts_ordered, vector_ordered, recent_rows)
-        documents = self._load_documents(rows)
-        debug_stages: dict[str, Any] | None = None
-        if include_debug:
-            debug_stages = {
-                "sql_filters": {
-                    "source_types": ["knowledge"],
-                    "status": "active",
-                    "visibility": "recall",
-                    "min_trust_level": min_trust_level,
-                    "source_type": source_type,
-                    "domain": domain,
-                    "published_after": published_after,
-                    "published_before": published_before,
-                    "citation_required": True,
-                },
-                "fts_hits": [
-                    {
-                        "item_id": hit.item_id,
-                        "bm25_raw": hit.bm25_raw,
-                        "lexical_score": hit.lexical_score,
-                        "candidate_id": self._row_candidate_id(rows_by_id.get(hit.item_id)),
-                    }
-                    for hit in fts_hits
-                    if hit.item_id in rows_by_id
-                ],
-                "vector_hits": [
-                    {
-                        "item_id": hit.item_id,
-                        "semantic_score": hit.semantic_score,
-                        "candidate_id": self._row_candidate_id(rows_by_id.get(hit.item_id)),
-                    }
-                    for hit in vector_hits
-                    if hit.item_id in rows_by_id
-                ],
-                "embedding_hits": [],
-                "merged_candidates": [],
-                "reranker_input_pairs": [],
-                "final_candidates": [],
-                "relevance_gate": [],
-                "skipped": {"no_citation": 0, "filter": 0},
-            }
+        return _KnowledgeRecallResult(
+            rows=rows,
+            rows_by_id=rows_by_id,
+            fts_hits=fts_hits,
+            vector_hits=vector_hits,
+            lexical_by_id=lexical_by_id,
+            bm25_by_id=bm25_by_id,
+            semantic_by_id=semantic_by_id,
+            query_vector=query_vector,
+        )
+
+    def _build_debug_trace(
+        self,
+        *,
+        recall: _KnowledgeRecallResult,
+        min_trust_level: str,
+        source_type: str,
+        domain: str,
+        published_after: str,
+        published_before: str,
+    ) -> dict[str, Any]:
+        return {
+            "sql_filters": {
+                "source_types": ["knowledge"],
+                "status": "active",
+                "visibility": "recall",
+                "min_trust_level": min_trust_level,
+                "source_type": source_type,
+                "domain": domain,
+                "published_after": published_after,
+                "published_before": published_before,
+                "citation_required": True,
+            },
+            "fts_hits": [
+                {
+                    "item_id": hit.item_id,
+                    "bm25_raw": hit.bm25_raw,
+                    "lexical_score": hit.lexical_score,
+                    "candidate_id": self._row_candidate_id(recall.rows_by_id.get(hit.item_id)),
+                }
+                for hit in recall.fts_hits
+                if hit.item_id in recall.rows_by_id
+            ],
+            "vector_hits": [
+                {
+                    "item_id": hit.item_id,
+                    "semantic_score": hit.semantic_score,
+                    "candidate_id": self._row_candidate_id(recall.rows_by_id.get(hit.item_id)),
+                }
+                for hit in recall.vector_hits
+                if hit.item_id in recall.rows_by_id
+            ],
+            "embedding_hits": [],
+            "merged_candidates": [],
+            "reranker_input_pairs": [],
+            "final_candidates": [],
+            "relevance_gate": [],
+            "skipped": {"no_citation": 0, "filter": 0},
+        }
+
+    def _filter_candidates(
+        self,
+        query: str,
+        *,
+        recall: _KnowledgeRecallResult,
+        documents: dict[int, KnowledgeDocument],
+        min_trust_level: str,
+        published_after: str,
+        published_before: str,
+        source_type: str,
+        domain: str,
+    ) -> tuple[list[_KnowledgeCandidate], dict[str, int]]:
         candidates: list[_KnowledgeCandidate] = []
         skipped_no_citation = 0
         skipped_filter = 0
         semantic_hits = 0
-        for row in rows:
+        for row in recall.rows:
             meta = _safe_json(row.meta_json)
             citation = meta.get("citation") if isinstance(meta.get("citation"), dict) else {}
             if not _has_valid_citation(citation):
@@ -243,12 +332,12 @@ class KnowledgeRagService:
             ):
                 skipped_filter += 1
                 continue
-            lexical = lexical_by_id.get(int(row.id))
+            lexical = recall.lexical_by_id.get(int(row.id))
             if lexical is None:
                 lexical = lexical_overlap_score(query, row.lexical_text or row.text or "")
-            semantic = semantic_by_id.get(int(row.id))
+            semantic = recall.semantic_by_id.get(int(row.id))
             if semantic is None:
-                semantic = semantic_score_for_row(row, query_vector=query_vector, embedding_provider=None)
+                semantic = semantic_score_for_row(row, query_vector=recall.query_vector, embedding_provider=None)
             if semantic is not None and semantic > 0:
                 semantic_hits += 1
             if lexical > 0 or (semantic is not None and semantic >= 0.10):
@@ -261,24 +350,45 @@ class KnowledgeRagService:
                 ))
 
         candidates.sort(key=self._pre_score, reverse=True)
-        candidates = candidates[:100]
-        if debug_stages is not None:
-            debug_stages["embedding_hits"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in candidates
-                if item.semantic is not None and item.semantic > 0
-            ]
-            debug_stages["merged_candidates"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in candidates
-            ]
-            debug_stages["skipped"] = {
-                "no_citation": skipped_no_citation,
-                "filter": skipped_filter,
-            }
+        return candidates[:100], {
+            "skipped_no_citation": skipped_no_citation,
+            "skipped_filter": skipped_filter,
+            "semantic_hits": semantic_hits,
+        }
+
+    def _update_candidate_debug(
+        self,
+        debug_trace: dict[str, Any] | None,
+        *,
+        candidates: list[_KnowledgeCandidate],
+        bm25_by_id: dict[int, float],
+        skipped: dict[str, int],
+    ) -> None:
+        if debug_trace is None:
+            return
+        debug_trace["embedding_hits"] = [
+            self._debug_candidate(item, bm25_by_id=bm25_by_id)
+            for item in candidates
+            if item.semantic is not None and item.semantic > 0
+        ]
+        debug_trace["merged_candidates"] = [
+            self._debug_candidate(item, bm25_by_id=bm25_by_id)
+            for item in candidates
+        ]
+        debug_trace["skipped"] = {
+            "no_citation": skipped["skipped_no_citation"],
+            "filter": skipped["skipped_filter"],
+        }
+
+    def _rerank(
+        self,
+        query: str,
+        candidates: list[_KnowledgeCandidate],
+        debug_trace: dict[str, Any] | None,
+    ) -> None:
         rerank_inputs = self._apply_reranker(query, candidates)
-        if debug_stages is not None:
-            debug_stages["reranker_input_pairs"] = [
+        if debug_trace is not None:
+            debug_trace["reranker_input_pairs"] = [
                 {
                     "candidate_id": candidate.candidate_id,
                     "source_type": candidate.source_type,
@@ -289,7 +399,14 @@ class KnowledgeRagService:
                 }
                 for candidate in rerank_inputs
             ]
-        degraded = self.reranker_provider is None
+
+    def _apply_relevance_gate(
+        self,
+        candidates: list[_KnowledgeCandidate],
+        *,
+        degraded: bool,
+        debug_trace: dict[str, Any] | None,
+    ) -> list[_KnowledgeCandidate]:
         gated: list[_KnowledgeCandidate] = []
         gate_debug: list[dict[str, Any]] = []
         for item in candidates:
@@ -300,7 +417,7 @@ class KnowledgeRagService:
             )
             if passed:
                 gated.append(item)
-            if debug_stages is not None:
+            if debug_trace is not None:
                 gate_debug.append({
                     "candidate_id": item.candidate_id,
                     "passed": passed,
@@ -311,37 +428,52 @@ class KnowledgeRagService:
                         "lexical": item.lexical,
                     },
                 })
-        ranked = sorted(gated, key=self._final_score, reverse=True)
-        items = [self._result_item(item) for item in ranked[: max(1, int(limit))]]
-        if debug_stages is not None:
-            debug_stages["merged_candidates"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
+        if debug_trace is not None:
+            debug_trace["relevance_gate"] = gate_debug
+        return gated
+
+    def _build_result(
+        self,
+        query: str,
+        *,
+        ranked: list[_KnowledgeCandidate],
+        candidates: list[_KnowledgeCandidate],
+        recall: _KnowledgeRecallResult,
+        skipped: dict[str, int],
+        limit: int,
+        degraded: bool,
+        debug_trace: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        capped_limit = max(1, int(limit))
+        items = [self._result_item(item) for item in ranked[:capped_limit]]
+        if debug_trace is not None:
+            debug_trace["merged_candidates"] = [
+                self._debug_candidate(item, bm25_by_id=recall.bm25_by_id)
                 for item in candidates
             ]
-            debug_stages["final_candidates"] = [
-                self._debug_candidate(item, bm25_by_id=bm25_by_id)
-                for item in ranked[: max(1, int(limit))]
+            debug_trace["final_candidates"] = [
+                self._debug_candidate(item, bm25_by_id=recall.bm25_by_id)
+                for item in ranked[:capped_limit]
             ]
-            debug_stages["relevance_gate"] = gate_debug
         result = {
             "query": query,
             "source": "knowledge",
             "degraded": degraded,
             "fallback_reason": "reranker_unavailable" if degraded else "",
             "stats": {
-                "fts_candidates": len(fts_hits),
-                "vector_candidates": len(vector_hits),
-                "embedding_candidates": semantic_hits,
+                "fts_candidates": len(recall.fts_hits),
+                "vector_candidates": len(recall.vector_hits),
+                "embedding_candidates": skipped["semantic_hits"],
                 "merged_candidates": len(candidates),
                 "reranker_candidates": len(candidates[:100]) if self.reranker_provider else 0,
                 "final_items": len(items),
-                "skipped_no_citation": skipped_no_citation,
-                "skipped_filter": skipped_filter,
+                "skipped_no_citation": skipped["skipped_no_citation"],
+                "skipped_filter": skipped["skipped_filter"],
             },
             "items": items,
         }
-        if debug_stages is not None:
-            result["debug_trace"] = debug_stages
+        if debug_trace is not None:
+            result["debug_trace"] = debug_trace
         return result
 
     def expand(self, *, document_id: int | str, chunk_id: str, max_chars: int = 1200) -> dict[str, Any]:
