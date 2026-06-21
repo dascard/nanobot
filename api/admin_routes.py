@@ -5,7 +5,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import uuid
 from datetime import datetime, timedelta
 from hmac import compare_digest
@@ -14,7 +13,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import func, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from core.database import (
@@ -22,7 +21,6 @@ from core.database import (
     StickerMemory, ChatStreamConfig, UserBlockRule, ContentBlockRule,
     SystemSetting, AdminAuditLog,
     ChatLog, ConversationTurn, User,
-    AgentRun, ToolCall, PromptRenderLog,
 )
 from core.tracing import row_to_dict
 from config import NANOBOT_ADMIN_TOKEN
@@ -74,6 +72,17 @@ from api.admin.group_memory_routes import (
     group_memory_update_item,
     router as group_memory_router,
 )
+from api.admin.log_routes import (
+    FrontendErrorBody,
+    _group_log_level_events,
+    _is_allowed_log_name,
+    _log_level_of,
+    list_audit_logs,
+    list_log_files,
+    log_frontend_error,
+    read_log,
+    router as log_router,
+)
 from api.admin.prompt_v2_routes import router as prompt_v2_router
 from api.admin.persona_routes import router as persona_router
 from api.admin.rag_routes import router as rag_router
@@ -111,6 +120,15 @@ from api.admin.sticker_routes import (
     update_sticker,
 )
 from api.admin.system_routes import router as system_router
+from api.admin.trace_routes import (
+    get_agent_run,
+    get_llm_api_log,
+    get_tool_call,
+    list_agent_runs,
+    list_llm_api_logs,
+    list_tool_calls,
+    router as trace_router,
+)
 
 router.include_router(system_router)
 router.include_router(db_browser_router)
@@ -120,6 +138,8 @@ router.include_router(rag_router)
 router.include_router(session_memory_router)
 router.include_router(sticker_router)
 router.include_router(group_memory_router)
+router.include_router(trace_router)
+router.include_router(log_router)
 
 # ── Auth ──
 
@@ -1022,269 +1042,6 @@ def legacy_managed_prompt_routes_removed(path: str = "", _auth=Depends(verify_ad
 @router.api_route("/prompt/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
 def legacy_prompt_routes_removed(path: str = "", _auth=Depends(verify_admin)):
     raise _legacy_prompt_routes_removed()
-
-
-# ═══════════════════════════════════════════
-# Agent trace
-# ═══════════════════════════════════════════
-
-@router.get("/agent-runs")
-def list_agent_runs(
-    limit: int = Query(50, ge=1, le=200),
-    page: int = Query(1, ge=1),
-    offset: int | None = Query(None, ge=0),
-    status: str = "",
-    session_id: str = "",
-    group_id: str = "",
-    chat_type: str = "",
-    trace_id: str = "",
-    user_id: str = "",
-    prompt_key: str = "",
-    prompt_mode: str = "",
-    run_type: str = "",
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
-):
-    q = db.query(AgentRun)
-    if status:
-        q = q.filter(AgentRun.status == status)
-    if session_id:
-        q = q.filter(AgentRun.session_id == session_id)
-    if group_id:
-        q = q.filter(AgentRun.group_id == group_id)
-    if chat_type:
-        q = q.filter(AgentRun.chat_type == chat_type)
-    if trace_id:
-        q = q.filter(AgentRun.trace_id == trace_id)
-    if user_id:
-        q = q.filter(AgentRun.user_id == user_id)
-    if prompt_key:
-        q = q.filter(AgentRun.prompt_key == prompt_key)
-    if prompt_mode:
-        q = q.filter(AgentRun.prompt_mode == prompt_mode)
-    if run_type:
-        q = q.filter(AgentRun.run_type == run_type)
-    total = q.count()
-    row_offset = offset if offset is not None else (page - 1) * limit
-    rows = (
-        q.order_by(AgentRun.started_at.desc())
-        .offset(row_offset)
-        .limit(limit)
-        .all()
-    )
-    return {
-        "items": [row_to_dict(row) for row in rows],
-        "total": total,
-        "page": page,
-        "limit": limit,
-        "offset": row_offset,
-    }
-
-
-@router.get("/agent-runs/{run_id}")
-def get_agent_run(run_id: str, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    run = db.query(AgentRun).filter(AgentRun.run_id == run_id).first()
-    if not run:
-        raise HTTPException(404, "Agent run not found")
-    tool_calls = (
-        db.query(ToolCall)
-        .filter(ToolCall.run_id == run_id)
-        .order_by(ToolCall.started_at.asc())
-        .all()
-    )
-    prompt_logs = (
-        db.query(PromptRenderLog)
-        .filter(PromptRenderLog.run_id == run_id)
-        .order_by(PromptRenderLog.created_at.asc())
-        .all()
-    )
-    from core.database import LLMApiRequestLog, ReplyContractCheckLog
-    llm_logs = (
-        db.query(LLMApiRequestLog)
-        .filter(LLMApiRequestLog.run_id == run_id)
-        .order_by(LLMApiRequestLog.created_at.asc())
-        .all()
-    )
-    reply_contract_logs = (
-        db.query(ReplyContractCheckLog)
-        .filter(ReplyContractCheckLog.run_id == run_id)
-        .order_by(ReplyContractCheckLog.created_at.asc())
-        .all()
-    )
-    return {
-        "run": row_to_dict(run),
-        "tool_calls": [row_to_dict(row) for row in tool_calls],
-        "prompt_render_logs": [row_to_dict(row) for row in prompt_logs],
-        "llm_api_request_logs": [row_to_dict(x) for x in llm_logs],
-        "reply_contract_check_logs": [row_to_dict(x) for x in reply_contract_logs],
-    }
-
-
-@router.get("/tool-calls")
-def list_tool_calls(
-    limit: int = Query(50, ge=1, le=200),
-    page: int = Query(1, ge=1),
-    offset: int | None = Query(None, ge=0),
-    run_id: str = "",
-    trace_id: str = "",
-    tool_name: str = "",
-    status: str = "",
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
-):
-    q = db.query(ToolCall)
-    if run_id:
-        q = q.filter(ToolCall.run_id == run_id)
-    if trace_id:
-        q = q.filter(ToolCall.trace_id == trace_id)
-    if tool_name:
-        q = q.filter(ToolCall.tool_name == tool_name)
-    if status:
-        q = q.filter(ToolCall.status == status)
-    total = q.count()
-    row_offset = offset if offset is not None else (page - 1) * limit
-    rows = (
-        q.order_by(ToolCall.started_at.desc())
-        .offset(row_offset)
-        .limit(limit)
-        .all()
-    )
-    return {
-        "items": [row_to_dict(row) for row in rows],
-        "total": total,
-        "page": page,
-        "limit": limit,
-        "offset": row_offset,
-    }
-
-
-@router.get("/tool-calls/{tool_call_id}")
-def get_tool_call(tool_call_id: str, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    row = db.query(ToolCall).filter(ToolCall.tool_call_id == tool_call_id).first()
-    if not row:
-        raise HTTPException(404, "Tool call not found")
-    return row_to_dict(row)
-
-
-# ═══════════════════════════════════════════
-# LLM API 请求日志
-# ═══════════════════════════════════════════
-
-@router.get("/llm-api-logs")
-def list_llm_api_logs(
-    limit: int = Query(50, ge=1, le=200),
-    page: int = Query(1, ge=1),
-    offset: int | None = Query(None, ge=0),
-    include_payload: bool = False,
-    run_id: str = "",
-    trace_id: str = "",
-    source: str = "",
-    model: str = "",
-    status: str = "",
-    db: Session = Depends(get_db),
-    _auth=Depends(verify_admin),
-):
-    from core.database import LLMApiRequestLog
-    q = db.query(LLMApiRequestLog)
-    if run_id:
-        q = q.filter(LLMApiRequestLog.run_id == run_id)
-    if trace_id:
-        q = q.filter(LLMApiRequestLog.trace_id == trace_id)
-    if source:
-        q = q.filter(LLMApiRequestLog.source == source)
-    if model:
-        q = q.filter(LLMApiRequestLog.model == model)
-    if status:
-        q = q.filter(LLMApiRequestLog.status == status)
-    total = q.count()
-    by_status = {
-        str(row[0] or "created"): int(row[1] or 0)
-        for row in q.with_entities(LLMApiRequestLog.status, func.count(LLMApiRequestLog.id))
-        .group_by(LLMApiRequestLog.status)
-        .all()
-    }
-    success_count = sum(by_status.get(s, 0) for s in ("success", "stream_success"))
-    failed_error_count = sum(by_status.get(s, 0) for s in ("failed", "error", "stream_error"))
-    created_count = sum(by_status.get(s, 0) for s in ("created", "stream_created"))
-    avg_latency = (
-        q.filter(LLMApiRequestLog.latency_ms > 0)
-        .with_entities(func.avg(LLMApiRequestLog.latency_ms))
-        .scalar()
-    )
-    unbound_run_count = q.filter(
-        (LLMApiRequestLog.run_id.is_(None)) | (LLMApiRequestLog.run_id == "")
-    ).count()
-    row_offset = offset if offset is not None else (page - 1) * limit
-    if include_payload:
-        rows = (
-            q.order_by(LLMApiRequestLog.created_at.desc())
-            .offset(row_offset)
-            .limit(limit)
-            .all()
-        )
-        items = [row_to_dict(row) for row in rows]
-    else:
-        rows = (
-            q.with_entities(
-                LLMApiRequestLog.id,
-                LLMApiRequestLog.trace_id,
-                LLMApiRequestLog.run_id,
-                LLMApiRequestLog.source,
-                LLMApiRequestLog.provider,
-                LLMApiRequestLog.model,
-                LLMApiRequestLog.url,
-                LLMApiRequestLog.method,
-                LLMApiRequestLog.request_preview,
-                LLMApiRequestLog.response_preview,
-                LLMApiRequestLog.response_status,
-                LLMApiRequestLog.status,
-                LLMApiRequestLog.error,
-                LLMApiRequestLog.latency_ms,
-                LLMApiRequestLog.created_at,
-                LLMApiRequestLog.finished_at,
-            )
-            .order_by(LLMApiRequestLog.created_at.desc())
-            .offset(row_offset)
-            .limit(limit)
-            .all()
-        )
-        items = []
-        for row in rows:
-            item = dict(row._mapping)
-            for key in ("created_at", "finished_at"):
-                value = item.get(key)
-                if isinstance(value, datetime):
-                    item[key] = value.isoformat()
-            item["request_preview"] = str(item.get("request_preview") or "")[:240]
-            item["response_preview"] = str(item.get("response_preview") or "")[:240]
-            item["error"] = str(item.get("error") or "")[:240]
-            item["summary_only"] = True
-            items.append(item)
-    return {
-        "items": items,
-        "total": total,
-        "page": page,
-        "limit": limit,
-        "offset": row_offset,
-        "stats": {
-            "total": total,
-            "success": success_count,
-            "failed_error": failed_error_count,
-            "created": created_count,
-            "avg_latency_ms": int(avg_latency or 0),
-            "unbound_run_count": unbound_run_count,
-            "by_status": by_status,
-        },
-    }
-
-
-@router.get("/llm-api-logs/{log_id}")
-def get_llm_api_log(log_id: int, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    from core.database import LLMApiRequestLog
-    row = db.query(LLMApiRequestLog).filter(LLMApiRequestLog.id == log_id).first()
-    if not row:
-        raise HTTPException(404, "LLM API request log not found")
-    return row_to_dict(row)
 
 
 # ═══════════════════════════════════════════
@@ -2472,34 +2229,6 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
 # Audit logs + DB backup
 # ═══════════════════════════════════════════
 
-@router.get("/audit-logs")
-def list_audit_logs(
-    page: int = 1, limit: int = 50,
-    action: str = "", target_type: str = "", since: str = "",
-    db: Session = Depends(get_db), _auth=Depends(verify_admin),
-):
-    q = db.query(AdminAuditLog).order_by(AdminAuditLog.id.desc())
-    if action:
-        q = q.filter(AdminAuditLog.action == action)
-    if target_type:
-        q = q.filter(AdminAuditLog.target_type == target_type)
-    if since:
-        try:
-            since_dt = datetime.fromisoformat(since)
-            q = q.filter(AdminAuditLog.created_at >= since_dt)
-        except ValueError:
-            pass
-    total = q.count()
-    rows = q.offset((page - 1) * limit).limit(limit).all()
-    return {"total": total, "items": [{
-        "id": r.id, "admin_user": r.admin_user, "action": r.action,
-        "target_type": r.target_type, "target_id": r.target_id,
-        "detail_json": _safe_json(r.detail_json),
-        "ip_address": r.ip_address,
-        "created_at": str(r.created_at) if r.created_at else "",
-    } for r in rows]}
-
-
 @router.get("/db/backup")
 def download_backup(_auth=Depends(verify_admin)):
     from fastapi.responses import FileResponse
@@ -2524,163 +2253,6 @@ def db_vacuum(request: Request, db: Session = Depends(get_db), _auth=Depends(ver
     elapsed = int((_time.time() - t0) * 1000)
     _audit_request(db, request, "vacuum_db", "db", "main")
     return {"ok": True, "elapsed_ms": elapsed}
-
-
-# ═══════════════════════════════════════════
-# Log viewer
-# ═══════════════════════════════════════════
-
-@router.get("/logs")
-def list_log_files(_auth=Depends(verify_admin)):
-    import os as _os, glob
-    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    log_dir = _os.path.join(base, "data")
-    files = []
-    patterns = ["*.log", "*.log.*", "nanobot.log*"]
-    for pat in patterns:
-        for p in glob.glob(_os.path.join(log_dir, pat)):
-            fname = _os.path.basename(p)
-            if fname not in [f["name"] for f in files]:
-                size = _os.path.getsize(p)
-                files.append({"name": fname, "size": size, "mtime": _os.path.getmtime(p)})
-    files.sort(key=lambda x: -x["mtime"])
-    return {"files": files}
-
-
-def _is_allowed_log_name(name: str) -> bool:
-    n = os.path.basename(name)
-    return n == "nanobot.log" or n.startswith("nanobot.log.") or n.endswith(".log") or ".log." in n
-
-
-_LOG_START_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}\s+\[(?P<level>[A-Z]+)\]")
-
-
-def _log_level_of(line: str) -> str:
-    match = _LOG_START_RE.match(line or "")
-    return match.group("level") if match else ""
-
-
-def _group_log_level_events(lines: list[str], *, level: str, before: int, after: int) -> list[dict[str, Any]]:
-    target = str(level or "").upper()
-    events: list[dict[str, Any]] = []
-    idx = 0
-    while idx < len(lines):
-        line_level = _log_level_of(lines[idx])
-        if line_level != target:
-            idx += 1
-            continue
-        start = idx
-        end = idx + 1
-        while end < len(lines) and not _log_level_of(lines[end]):
-            end += 1
-        before_start = max(0, start - max(0, before))
-        after_end = min(len(lines), end + max(0, after))
-        events.append({
-            "level": target,
-            "line_start": start + 1,
-            "line_end": end,
-            "before_lines": [line.rstrip("\n") for line in lines[before_start:start]],
-            "event_lines": [line.rstrip("\n") for line in lines[start:end]],
-            "after_lines": [line.rstrip("\n") for line in lines[end:after_end]],
-        })
-        idx = end
-    return events
-
-
-@router.get("/logs/{name}")
-def read_log(name: str, lines: str = "200", level: str = "", q: str = "",
-             since_bytes: int = 0, group_errors: bool = False,
-             context_before: int = 5, context_after: int = 8,
-             _auth=Depends(verify_admin)):
-    from collections import deque
-
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    log_dir = os.path.abspath(os.path.join(base, "data"))
-    fname = os.path.basename(name)
-    if not _is_allowed_log_name(fname):
-        raise HTTPException(400, "Invalid log file name")
-    fpath = os.path.abspath(os.path.join(log_dir, fname))
-    if not fpath.startswith(log_dir + os.sep) or not os.path.isfile(fpath):
-        raise HTTPException(404, "Log not found")
-
-    file_size = os.path.getsize(fpath)
-
-    # tail 模式：从 since_bytes 增量读取
-    if since_bytes > 0:
-        if since_bytes >= file_size:
-            return {"name": fname, "content": "", "lines": 0,
-                    "raw_lines": 0, "file_size": file_size, "tail": True}
-        with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
-            fh.seek(since_bytes)
-            content = fh.read()
-        if level or q:
-            filtered = []
-            for line in content.splitlines(True):
-                if level and level.upper() not in line.upper():
-                    continue
-                if q and q.lower() not in line.lower():
-                    continue
-                filtered.append(line)
-            content = "".join(filtered)
-        return {"name": fname, "content": content, "lines": content.count("\n"),
-                "raw_lines": len(content.splitlines()), "file_size": file_size, "tail": True}
-
-    lines_text = str(lines or "200").strip().lower()
-    with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
-        if lines_text == "all":
-            tail = list(fh)
-        else:
-            try:
-                requested_lines = int(lines_text)
-            except ValueError:
-                raise HTTPException(400, "lines must be an integer or all")
-            max_lines = max(1, min(requested_lines, 5000))
-            tail = list(deque(fh, maxlen=max_lines))
-    if group_errors and str(level or "").upper() == "ERROR":
-        events = _group_log_level_events(
-            tail,
-            level="ERROR",
-            before=max(0, min(int(context_before or 0), 50)),
-            after=max(0, min(int(context_after or 0), 50)),
-        )
-        content = "\n\n".join(
-            "\n".join(event["before_lines"] + event["event_lines"] + event["after_lines"])
-            for event in events
-        )
-        return {
-            "name": fname,
-            "lines": content.count("\n"),
-            "content": content,
-            "raw_lines": len(tail),
-            "file_size": file_size,
-            "events": events,
-        }
-    content = "".join(tail)
-    if level or q:
-        filtered = []
-        for line in content.splitlines(True):
-            if level and level.upper() not in line.upper():
-                continue
-            if q and q.lower() not in line.lower():
-                continue
-            filtered.append(line)
-        content = "".join(filtered)
-    return {"name": fname, "lines": content.count("\n"), "content": content,
-            "raw_lines": len(tail), "file_size": file_size}
-
-
-class FrontendErrorBody(BaseModel):
-    message: str = Field(default="")
-    stack: str = Field(default="")
-    url: str = Field(default="")
-
-
-@router.post("/logs/frontend-error")
-def log_frontend_error(body: FrontendErrorBody, _auth=Depends(verify_admin)):
-    logger.warning(f"[FrontendError] url={body.url} message={body.message}")
-    if body.stack:
-        logger.warning(f"[FrontendError] stack: {body.stack[:2000]}")
-    return {"ok": True}
 
 
 # ═══════════════════════════════════════════
