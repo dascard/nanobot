@@ -2453,3 +2453,75 @@ rerank 和 trafilatura 正文提取已拆到
 `api/routes.py`、`core/group_runtime/runtime.py` 或 `core/persona_preprocess.py`。若继续做
 新闻搜索域内治理，优先评估 V2 evidence bridge 或 AI 日报适配层拆分，但这属于后续
 维护性优化，不再是 >800 行硬阻塞项。
+
+## 2026-06-21 GroupRuntime 状态与评分拆分
+
+状态：实现与文档收口已完成。`core/group_runtime/runtime.py` 已从 1385 行降至
+722 行，群运行时常量、状态模型、pending helper 和 scoring 私有方法分别拆到
+`core/group_runtime/constants.py`、`core/group_runtime/state.py` 与
+`core/group_runtime/scoring.py`；`runtime.py` 继续承载主状态机、模型调用、
+timing context 构造、快照和全局单例。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-group-runtime-state-scoring-split-design.md`。
+
+实现计划：
+`.Codex/plans/group-runtime-state-scoring-split.md`。
+
+阶段提交：
+
+- 设计提交：`b4ae8a5 docs(群运行时): 设计状态与评分拆分`。
+- 计划提交：`4d6614d docs(计划): 记录群运行时拆分计划`。
+- 测试稳定性提交：`4cbab07 test(画像预处理): 固定正交向量 mock`。
+- 实现提交：`0018d02 refactor(群运行时): 拆分状态与评分逻辑`。
+
+已完成：
+
+- [x] 新增 `tests/test_group_runtime_split_compat.py`，锁定旧导入路径、pending payload、
+  directed 优先级、helper 边界和 `_score_timing()` 入参映射。
+- [x] 新增 `constants.py`，迁移群运行时常量和 trigger 集合。
+- [x] 新增 `state.py`，迁移 `GroupPendingMessage`、`GroupChatState`、pending payload
+  helper、scoring 信号 helper、wait delay clip 和 model confidence 解析。
+- [x] 新增 `scoring.py`，以 `GroupRuntimeScoringMixin` 承载 timing scoring、policy、
+  cooldown、shadow scoring 和 recent follow-up 私有逻辑。
+- [x] `GroupRuntime` 改为继承 `GroupRuntimeScoringMixin`，旧
+  `core.group_runtime.runtime` 与 `core.timing_runtime` 导入路径继续兼容。
+- [x] `runtime.py` 行数降至 722 行，已移出 P3 超大文件 >800 行清单。
+
+验证记录：
+
+- 行为基线：`tests/test_group_runtime_split_compat.py -v` ->
+  `5 passed, 1 warning in 0.76s`。
+- 状态拆分定向：split compat、group runtime ids、`TestGateState`、
+  `TestGroupPendingMessageDirected`、`TestShouldSuppressDirected` ->
+  `26 passed, 1 warning in 1.24s`。
+- Scoring 定向：split compat、`tests/test_timing_runtime.py`、
+  `tests/test_timing_score.py`、group runtime ids ->
+  `89 passed, 1 warning in 2.35s`。
+- 相邻回归：群响应 envelope、group message structured、API timing gate 和 KT
+  note bot replied 相关测试 ->
+  `32 passed, 21 warnings in 11.04s`。
+- 语法检查：`python -m compileall core/group_runtime -q` 无输出，退出码为 0。
+- 格式检查：`git diff --check` 无输出，退出码为 0。
+- `asyncio.run` 约束：本次拆分范围内扫描无匹配。
+- 全量：`python -m pytest tests/ -v` ->
+  `1497 passed, 6 skipped, 139 warnings in 119.42s`。
+- 文档收口提交前验证：`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/group-runtime-state-scoring-split.md`
+  与占位符扫描脚本均无输出；随后全量 `python -m pytest tests/ -v` ->
+  `1497 passed, 6 skipped, 139 warnings in 111.55s`。
+- 行数：`runtime.py` 722 行，`constants.py` 19 行，`state.py` 397 行，
+  `scoring.py` 330 行，`tests/test_group_runtime_split_compat.py` 137 行。
+
+执行约束：
+
+- 不迁移 `process_message()`、`handle_timer_fired()`、`_apply_gate_result()`、
+  `_call_gate()`、`_build_timing_context()`、快照或全局单例。
+- 不改变群聊主状态机、timing policy 语义、pending payload 格式或旧导入路径。
+- 不新增 `asyncio.run()`，不新增同步函数包 awaitable。
+- 不改 prompt runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime 输入。
+
+下一步：
+
+P3 超大文件队列现在应优先继续拆 `api/routes.py`，其次是
+`core/persona_preprocess.py`。如果转向低风险质量项，则处理「静默吞异常补日志」更适合
+小步推进。

@@ -27,6 +27,12 @@
   `1497 passed, 6 skipped, 139 warnings in 119.42s`。
 - 子 agent 只读规格审查：未发现拆分结构、旧导入路径、循环依赖或
   `asyncio.run` 问题；其指出的计划摘要和暂存范围要求已在提交前处理。
+- 阶段提交：设计提交 `b4ae8a5`；计划提交 `4d6614d`；测试稳定性提交
+  `4cbab07`；实现提交 `0018d02`。
+- 文档收口：已同步 `docs/todo.md` 与 `docs/plan_walkthrough.md`；提交前
+  `git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/group-runtime-state-scoring-split.md`
+  和占位符扫描脚本均无输出，全量 `python -m pytest tests/ -v` 结果为
+  `1497 passed, 6 skipped, 139 warnings in 111.55s`。
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
@@ -469,7 +475,7 @@ git commit -m "refactor(群运行时): 拆分状态与评分逻辑"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/group-runtime-state-scoring-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下补充：
 
@@ -478,7 +484,7 @@ git commit -m "refactor(群运行时): 拆分状态与评分逻辑"
 - `runtime.py` 从 1385 行降至实际 `wc -l` 输出值。
 - 旧 `core.timing_runtime` 和 `core.group_runtime.runtime` 导入路径保留。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加本阶段完成记录，包含：
 
@@ -489,7 +495,7 @@ git commit -m "refactor(群运行时): 拆分状态与评分逻辑"
 - 行数变化。
 - 下一步建议：继续拆 `api/routes.py` 或处理静默吞异常补日志。
 
-- [ ] **步骤 3：验证文档**
+- [x] **步骤 3：验证文档**
 
 运行：
 
@@ -520,7 +526,7 @@ PY
 
 预期：两个命令均无输出，退出码均为 0。
 
-- [ ] **步骤 4：运行全量回归**
+- [x] **步骤 4：运行全量回归**
 
 运行：
 
@@ -531,7 +537,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
