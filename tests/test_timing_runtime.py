@@ -809,9 +809,13 @@ class TestGroupRuntime:
         }, trigger_reason="ambient", talk_value=0.5)
 
         assert r["action"] == "continue"
-        linger_score = r["timing_scoring"]["signals"]["linger_score"]
+        signals = r["timing_scoring"]["signals"]
+        linger_score = signals["linger_score"]
         assert 0 < linger_score < 0.70
         assert linger_score == pytest.approx(0.47, abs=0.02)
+        assert signals["linger_active"] is True
+        assert signals["linger_reply_count"] == 1
+        assert signals["linger_time_remaining"] == pytest.approx(90.0, abs=0.1)
 
     @pytest.mark.asyncio
     async def test_recent_followup_shadow_waits_during_linger_min_interval(self, monkeypatch):

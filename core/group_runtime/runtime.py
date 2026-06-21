@@ -491,10 +491,22 @@ class GroupRuntime:
                 model_result=model_result,
                 force_direct_score=force_direct_score,
             )
-            return asdict(decision)
+            return self._timing_scoring_payload(state, decision)
         except Exception as exc:
             logger.debug("[GroupRuntime] shadow scoring failed: %s", exc, exc_info=True)
             return {}
+
+    @staticmethod
+    def _timing_scoring_payload(state: GroupChatState, decision) -> dict:
+        payload = asdict(decision)
+        signals = payload.setdefault("signals", {})
+        linger_time_remaining = max(0.0, state.linger_active_until - _time.time())
+        signals["linger_active"] = bool(
+            linger_time_remaining > 0 and state.linger_reply_count < LINGER_MAX_MESSAGES
+        )
+        signals["linger_reply_count"] = state.linger_reply_count
+        signals["linger_time_remaining"] = round(linger_time_remaining, 1)
+        return payload
 
     def _score_timing(
         self,
@@ -595,7 +607,7 @@ class GroupRuntime:
             "generation": state.generation,
             "cooldown_ago": cooldown,
             "reason": f"{reason_prefix}: {decision.reason}",
-            "timing_scoring": asdict(decision),
+            "timing_scoring": self._timing_scoring_payload(state, decision),
         }
         if action == "continue":
             response.update(payload)

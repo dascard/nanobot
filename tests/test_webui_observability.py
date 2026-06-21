@@ -51,6 +51,9 @@ def test_timing_gate_detail_exposes_scoring_breakdown():
     assert "s_ack" in source
     assert "s_transport" in source
     assert "s_transport_tier" in source
+    assert "linger_active" in source
+    assert "linger_reply_count" in source
+    assert "linger_time_remaining" in source
     assert "w_marker" in source
     assert "w_file" in source
     assert "w_incomplete" in source

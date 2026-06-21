@@ -739,6 +739,9 @@ function TimingEventDetail({ event, onUseAsTest }) {
               <div className="grid grid-cols-3 gap-1.5 text-[11px] text-slate-400">
                 <div>d0: <span className="font-mono text-slate-200">{scoreValue(signals.explicit_direct_score)}</span></div>
                 <div>linger: <span className="font-mono text-slate-200">{scoreValue(signals.linger_score)}</span></div>
+                <div>linger_active: <span className="font-mono text-slate-200">{signals.linger_active === true ? 'yes' : signals.linger_active === false ? 'no' : '-'}</span></div>
+                <div>linger_reply_count: <span className="font-mono text-slate-200">{scoreValue(signals.linger_reply_count)}</span></div>
+                <div>linger_time_remaining: <span className="font-mono text-slate-200">{scoreValue(signals.linger_time_remaining)}</span></div>
                 <div>d: <span className="font-mono text-slate-200">{scoreValue(signals.direct_score)}</span></div>
                 <div>w: <span className="font-mono text-slate-200">{scoreValue(signals.wait_signal)}</span></div>
                 <div>s: <span className="font-mono text-slate-200">{scoreValue(signals.suppress_score)}</span></div>
