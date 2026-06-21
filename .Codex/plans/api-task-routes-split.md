@@ -18,10 +18,50 @@
   - 现有拆分测试模式审计：确认普通 API 先抽 common auth，再拆低耦合子路由。
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-api-task-routes-split-design.md`。
 - [x] 设计提交：`835ebfd docs(普通API): 设计任务路由拆分`。
-- [ ] 任务 1：补普通 API common auth 与 task route split 红灯测试。
-- [ ] 任务 2：抽出 `api.common_auth` 并保留 `api.routes.verify_token` 对象身份。
-- [ ] 任务 3：拆出 `api/task_routes.py` 并由 `api.routes` include / re-export。
-- [ ] 任务 4：文档收口，更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录。
+- [x] 任务 1：补普通 API common auth 与 task route split 红灯测试。
+- [x] 任务 2：抽出 `api.common_auth` 并保留 `api.routes.verify_token` 对象身份。
+- [x] 任务 3：拆出 `api/task_routes.py` 并由 `api.routes` include / re-export。
+- [x] 任务 4：文档收口，更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录。
+
+## 执行记录（2026-06-21）
+
+阶段提交：
+
+- 红灯测试提交：`55c114d test(普通API): 锁定任务路由拆分契约`。
+- 鉴权兼容层提交：`3266ea1 refactor(普通API): 抽出鉴权兼容层`。
+- 任务路由拆分提交：`57f90fd refactor(普通API): 拆分任务路由`。
+- 文档收口：随本次 `docs(计划): 收口任务路由拆分` 提交。
+
+验证记录：
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_task_routes_split.py`
+  -> `6 failed, 4 passed, 21 warnings in 6.37s`。失败点符合预期：
+  `api.common_auth` 尚不存在、`api.task_routes` 尚不存在、`/tasks*` endpoint
+  module 仍为 `api.routes`，以及 `api/task_routes.py` 文件不存在。
+- 鉴权绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_task_routes_split.py::test_api_verify_token_is_shared_common_auth_object tests/test_api_task_routes_split.py::test_api_common_auth_uses_legacy_api_routes_token_monkeypatch tests/test_api.py::test_api_auth_no_token_configured_returns_503 tests/test_api.py::test_api_auth_missing_or_wrong_token_returns_401 tests/test_api.py::test_api_auth_accepts_valid_bearer_token`
+  -> `5 passed, 1 warning in 0.77s`。
+- 鉴权阶段静态检查：`python -B -m compileall api/routes.py api/common_auth.py`
+  成功；`git diff --check -- api/routes.py api/common_auth.py tests/test_api_task_routes_split.py`
+  无输出。
+- 鉴权后保留拆分红灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_task_routes_split.py`
+  -> `4 failed, 6 passed, 21 warnings in 6.47s`。剩余失败均指向
+  `/tasks*` 尚未迁移到 `api.task_routes`。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_task_routes_split.py`
+  -> `10 passed, 21 warnings in 1.11s`。
+- 行为与相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_push_envelope.py::test_run_scheduled_task_now_uses_push_envelope tests/test_schedule_task_tool.py tests/test_api.py::test_api_auth_no_token_configured_returns_503 tests/test_api.py::test_api_auth_missing_or_wrong_token_returns_401 tests/test_api.py::test_api_auth_accepts_valid_bearer_token tests/test_asyncio_run_policy.py`
+  -> `9 passed, 21 warnings in 3.13s`。
+- 拆分阶段静态检查：`python -B -m compileall api/routes.py api/common_auth.py api/task_routes.py`
+  成功；`rg -n "from api\\.routes|import api\\.routes|asyncio\\.run|run_awaitable_sync" api/task_routes.py`
+  无命中，退出码为 1；`git diff --check -- api/routes.py api/common_auth.py api/task_routes.py tests/test_api_task_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 2712 行，`api/task_routes.py` 169 行，
+  `tests/test_api_task_routes_split.py` 180 行。
+- 全量回归：`python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1577 passed, 6 skipped, 139 warnings in 112.05s`。
 
 ## 子 agent 分工约定
 
@@ -79,7 +119,7 @@
 **文件：**
 - 创建：`tests/test_api_task_routes_split.py`
 
-- [ ] **步骤 1：创建测试文件**
+- [x] **步骤 1：创建测试文件**
 
 创建 `tests/test_api_task_routes_split.py`：
 
@@ -250,7 +290,7 @@ def test_health_check_stays_in_parent_routes():
     assert {route.endpoint.__module__ for route in routes} == {"api.routes"}
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -261,7 +301,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_task_routes_split.py
 预期：失败。失败点应至少包含 `api.common_auth` 或 `api.task_routes` 尚不存在、`/tasks*`
 endpoint module 仍为 `api.routes`、旧导入对象身份尚未迁移。
 
-- [ ] **步骤 3：提交红灯测试**
+- [x] **步骤 3：提交红灯测试**
 
 运行：
 
@@ -277,7 +317,7 @@ git commit -m "test(普通API): 锁定任务路由拆分契约"
 - 修改：`api/routes.py`
 - 测试：`tests/test_api_task_routes_split.py`、`tests/test_api.py`
 
-- [ ] **步骤 1：创建 `api/common_auth.py`**
+- [x] **步骤 1：创建 `api/common_auth.py`**
 
 创建文件：
 
@@ -311,7 +351,7 @@ def verify_token(authorization: str = Header(default="")) -> None:
         raise HTTPException(status_code=401, detail="Invalid or missing API token")
 ```
 
-- [ ] **步骤 2：让 `api/routes.py` re-export 同一函数对象**
+- [x] **步骤 2：让 `api/routes.py` re-export 同一函数对象**
 
 修改 `api/routes.py`：
 
@@ -328,7 +368,7 @@ from api.common_auth import verify_token
 删除本地 `verify_token()` 函数体，保留 `config.NANOBOT_API_TOKEN` import 不变，以便旧
 monkeypatch 路径仍存在。
 
-- [ ] **步骤 3：运行鉴权定向测试**
+- [x] **步骤 3：运行鉴权定向测试**
 
 运行：
 
@@ -343,7 +383,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：上述 5 个测试通过；task route module 归属测试仍保持红灯。
 
-- [ ] **步骤 4：静态检查鉴权模块**
+- [x] **步骤 4：静态检查鉴权模块**
 
 运行：
 
@@ -354,7 +394,7 @@ git diff --check -- api/routes.py api/common_auth.py tests/test_api_task_routes_
 
 预期：退出码 0，无空白错误。
 
-- [ ] **步骤 5：提交鉴权兼容层**
+- [x] **步骤 5：提交鉴权兼容层**
 
 运行：
 
@@ -371,7 +411,7 @@ git commit -m "refactor(普通API): 抽出鉴权兼容层"
 - 测试：`tests/test_api_task_routes_split.py`、`tests/test_api_push_envelope.py`、
   `tests/test_schedule_task_tool.py`、`tests/test_asyncio_run_policy.py`
 
-- [ ] **步骤 1：创建 `api/task_routes.py`**
+- [x] **步骤 1：创建 `api/task_routes.py`**
 
 创建文件：
 
@@ -547,7 +587,7 @@ def delete_scheduled_task(
     return {"status": "ok"}
 ```
 
-- [ ] **步骤 2：修改 `api/routes.py` 聚合和旧导入**
+- [x] **步骤 2：修改 `api/routes.py` 聚合和旧导入**
 
 在 import 区加入：
 
@@ -574,7 +614,7 @@ router.include_router(task_router)
 
 保留 `/health` endpoint 在父模块。
 
-- [ ] **步骤 3：运行 split 绿灯测试**
+- [x] **步骤 3：运行 split 绿灯测试**
 
 运行：
 
@@ -584,7 +624,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_task_routes_split.py
 
 预期：全部通过。
 
-- [ ] **步骤 4：运行行为与相邻回归**
+- [x] **步骤 4：运行行为与相邻回归**
 
 运行：
 
@@ -600,7 +640,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行静态检查**
+- [x] **步骤 5：运行静态检查**
 
 运行：
 
@@ -618,7 +658,7 @@ wc -l api/routes.py api/task_routes.py tests/test_api_task_routes_split.py
 - `git diff --check` 无输出。
 - `api/routes.py` 行数下降；本阶段不要求低于 800 行。
 
-- [ ] **步骤 6：全量测试**
+- [x] **步骤 6：全量测试**
 
 运行：
 
@@ -628,7 +668,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 7：提交 task 路由拆分**
+- [x] **步骤 7：提交 task 路由拆分**
 
 运行：
 
@@ -648,7 +688,7 @@ git commit -m "refactor(普通API): 拆分任务路由"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新本计划执行记录**
+- [x] **步骤 1：更新本计划执行记录**
 
 在“当前状态”勾选完成任务 1、任务 2、任务 3，并新增“执行记录（2026-06-21）”。
 执行记录必须逐条写入真实命令、退出状态和 pytest 汇总，至少包含：
@@ -661,7 +701,7 @@ git commit -m "refactor(普通API): 拆分任务路由"
 - 行数：`api/routes.py`、`api/task_routes.py`、`tests/test_api_task_routes_split.py`。
 - 全量测试汇总。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」的 `api/routes.py` 进展下追加一条：
 
@@ -675,7 +715,7 @@ git commit -m "refactor(普通API): 拆分任务路由"
 
 写入时补充实际行数和验证汇总。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 `## 2026-06-21 普通 API Tasks 路由拆分`，记录：
 
@@ -687,18 +727,19 @@ git commit -m "refactor(普通API): 拆分任务路由"
 - 验证记录。
 - 下一刀建议：evolution / memory / models。
 
-- [ ] **步骤 4：文档检查**
+- [x] **步骤 4：文档检查**
 
 运行：
 
 ```bash
-rg -n "未替换标记|坏字符" docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-task-routes-split.md
+pattern="$(printf '%s%s%s|\357\277\275' TODO _ PLACEHOLDER)"
+rg -n "$pattern" docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-task-routes-split.md
 git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-task-routes-split.md
 ```
 
-预期：未替换标记和坏字符扫描无命中，`git diff --check` 无输出。
+预期：占位残留和乱码扫描无命中，`git diff --check` 无输出。
 
-- [ ] **步骤 5：最终全量测试**
+- [x] **步骤 5：最终全量测试**
 
 运行：
 
@@ -708,7 +749,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 

@@ -111,8 +111,8 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(2822)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
-  - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/admin_routes.py`、`api/routes.py` 仍待继续拆分。
+  `api/routes.py`(2712)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
     admin 子域仍留在旧文件。
@@ -202,6 +202,16 @@
   - 进展：`api/routes.py` 第一刀已收敛群消息 helper 重复实现到
     `app/group_ingress/helpers.py`；旧 underscore helper 名称保留为兼容别名，
     `/group/message` 与 `/chat` 主流程不变；文件从 3434 行降至 2822 行。
+  - 进展：`api/routes.py` 第二刀已先抽出普通 API `verify_token` 共享兼容层到
+    `api/common_auth.py`，再拆出 `/tasks*` 定时任务路由到 `api/task_routes.py`；
+    `api.routes.verify_token` 与 `api.common_auth.verify_token` 保持同一函数对象，
+    旧 `api.routes.NANOBOT_API_TOKEN` monkeypatch、`app.dependency_overrides[routes.verify_token]`、
+    `/tasks*` HTTP 契约、push envelope 行为和 `run_scheduled_task_now()` 协程边界保持不变。
+    `api/routes.py` 从 2822 行降至 2712 行，`api/task_routes.py` 为 169 行，
+    拆分测试为 180 行。验证结果：红灯 `6 failed, 4 passed`，鉴权绿灯
+    `5 passed`，split 绿灯 `10 passed`，行为与相邻回归 `9 passed`，静态检查通过，
+    全量回归 `1577 passed, 6 skipped, 139 warnings in 112.05s`。下一刀候选为
+    evolution、memory 或 models 路由。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
