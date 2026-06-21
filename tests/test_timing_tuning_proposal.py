@@ -161,3 +161,165 @@ def test_proposal_blocks_skipped_zero_and_missing_action_truth():
     assert "timing_zero_samples" in _reason_codes(skipped)
     assert "missing_action_truth" in _reason_codes(no_truth)
     assert no_truth["candidate_sets"][0]["id"] == "ack_threshold_soften_v1"
+
+
+def test_proposal_rejects_unsupported_candidate_params():
+    from evals.timing_tuning_proposal import build_timing_tuning_proposal
+
+    params = _params()
+    params["candidates"][0]["param_diff"] = {"unknown_param": 1}
+
+    report = build_timing_tuning_proposal(
+        manifest=_manifest(),
+        trends=_trends(),
+        analysis=_analysis(),
+        timing_audit=_audit(samples=[{"expected_action": "continue"}]),
+        baseline={"suite": "timing_gate"},
+        params=params,
+        source_paths={
+            "timing_audit": "evals/reports/runs/run_1/timing_signal_audit.json",
+        },
+    )
+
+    assert "unsupported_proposal_input" in _reason_codes(report)
+    assert report["parameters"] == [
+        {
+            "candidate_id": "ack_threshold_soften_v1",
+            "name": "unknown_param",
+            "value": 1,
+        }
+    ]
+
+
+def test_timing_tuning_proposal_cli_writes_report(tmp_path, capsys):
+    from evals import timing_tuning_proposal
+
+    manifest = tmp_path / "periodic_manifest_latest.json"
+    trends = tmp_path / "artifact_trends_latest.json"
+    analysis = tmp_path / "tuning_analysis_latest.json"
+    audit = tmp_path / "runs" / "run_1" / "timing_signal_audit.json"
+    baseline = tmp_path / "timing_gate.json"
+    params = tmp_path / "param_candidates.json"
+    out = tmp_path / "timing_tuning_proposal_latest.json"
+    audit.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(_manifest(str(audit)), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    trends.write_text(json.dumps(_trends(), ensure_ascii=False), encoding="utf-8")
+    analysis.write_text(
+        json.dumps(_analysis(), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    audit.write_text(
+        json.dumps(
+            _audit(samples=[{"expected_action": "continue"}]),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    baseline.write_text(
+        json.dumps({"suite": "timing_gate"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    params.write_text(json.dumps(_params(), ensure_ascii=False), encoding="utf-8")
+
+    exit_code = timing_tuning_proposal.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--trends",
+            str(trends),
+            "--analysis",
+            str(analysis),
+            "--baseline",
+            str(baseline),
+            "--params",
+            str(params),
+            "--out",
+            str(out),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert captured.out.strip() == f"timing_tuning_proposal={out}"
+    assert payload["source"]["timing_audit_path"] == str(audit)
+    assert payload["source"]["params_path"] == str(params)
+    assert payload["readiness"]["ready"] is True
+
+
+def test_timing_tuning_proposal_cli_has_no_apply_modes():
+    import pytest
+    from evals import timing_tuning_proposal
+
+    for option in ("--apply", "--update-baseline", "--write-config", "--promote"):
+        with pytest.raises(SystemExit) as excinfo:
+            timing_tuning_proposal.main([option])
+
+        assert excinfo.value.code == 2
+
+
+def test_timing_tuning_proposal_cli_preserves_analysis_blocking(tmp_path):
+    from evals import timing_tuning_proposal
+
+    manifest = tmp_path / "periodic_manifest_latest.json"
+    trends = tmp_path / "artifact_trends_latest.json"
+    analysis = tmp_path / "tuning_analysis_latest.json"
+    audit = tmp_path / "runs" / "run_1" / "timing_signal_audit.json"
+    baseline = tmp_path / "timing_gate.json"
+    params = tmp_path / "param_candidates.json"
+    out = tmp_path / "timing_tuning_proposal_latest.json"
+    audit.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(_manifest(str(audit)), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    trends.write_text(json.dumps(_trends(), ensure_ascii=False), encoding="utf-8")
+    analysis.write_text(
+        json.dumps(_analysis(ready=False), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    audit.write_text(
+        json.dumps(
+            _audit(samples=[{"expected_action": "continue"}]),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    baseline.write_text(
+        json.dumps({"suite": "timing_gate"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    params.write_text(json.dumps(_params(), ensure_ascii=False), encoding="utf-8")
+
+    exit_code = timing_tuning_proposal.main(
+        [
+            "--manifest",
+            str(manifest),
+            "--trends",
+            str(trends),
+            "--analysis",
+            str(analysis),
+            "--baseline",
+            str(baseline),
+            "--params",
+            str(params),
+            "--out",
+            str(out),
+        ]
+    )
+
+    payload = json.loads(out.read_text(encoding="utf-8"))
+    reasons = payload["readiness"]["blocking_reasons"]
+    assert exit_code == 0
+    assert payload["readiness"]["ready"] is False
+    assert reasons == [
+        {
+            "code": "unsupported_proposal_input",
+            "message": "tuning analysis 未 ready",
+            "source": "tuning_analysis",
+            "upstream_reasons": [{"code": "low_label_coverage"}],
+        }
+    ]

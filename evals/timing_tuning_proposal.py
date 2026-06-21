@@ -1,6 +1,7 @@
 """TimingGate 可审核调参提案报告。"""
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 from datetime import datetime
@@ -56,6 +57,15 @@ def write_timing_tuning_proposal(
         encoding="utf-8",
     )
     return path
+
+
+def _load_optional(path: str | Path | None) -> dict[str, Any] | None:
+    if not path:
+        return None
+    src = Path(path)
+    if not src.exists():
+        return None
+    return load_json_object(src)
 
 
 def _git_sha() -> str:
@@ -299,3 +309,93 @@ def build_timing_tuning_proposal(
         "apply_policy": "manual_only",
         "blocked_actions": list(BLOCKED_ACTIONS),
     }
+
+
+def resolve_proposal_timing_audit_path(
+    manifest: dict[str, Any] | None,
+    explicit_path: str | Path | None,
+) -> Path | None:
+    if explicit_path:
+        explicit = Path(explicit_path)
+        if explicit.exists():
+            return explicit
+    if not isinstance(manifest, dict):
+        return None
+
+    steps = manifest.get("steps")
+    if not isinstance(steps, list):
+        return None
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("kind") or "") != "timing_signal_audit":
+            continue
+        report_paths = step.get("report_paths")
+        if not isinstance(report_paths, list):
+            continue
+        for item in report_paths:
+            path = Path(str(item))
+            if path.exists() and path.suffix.lower() == ".json":
+                return path
+    return None
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="生成只读 TimingGate 调参提案报告",
+    )
+    parser.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
+    parser.add_argument("--trends", default=str(DEFAULT_TRENDS))
+    parser.add_argument("--analysis", default=str(DEFAULT_ANALYSIS))
+    parser.add_argument("--timing-audit", default="")
+    parser.add_argument("--cases", default=str(DEFAULT_CASES_DIR))
+    parser.add_argument("--baseline", default=str(DEFAULT_BASELINE))
+    parser.add_argument("--params", default="")
+    parser.add_argument("--out", default=str(DEFAULT_OUT))
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+
+    manifest_path = Path(args.manifest)
+    trends_path = Path(args.trends)
+    analysis_path = Path(args.analysis)
+    baseline_path = Path(args.baseline)
+    params_path = Path(args.params) if args.params else None
+
+    manifest = _load_optional(manifest_path)
+    trends = _load_optional(trends_path)
+    analysis = _load_optional(analysis_path)
+    baseline = _load_optional(baseline_path)
+    params = _load_optional(params_path)
+    audit_path = resolve_proposal_timing_audit_path(
+        manifest,
+        args.timing_audit or None,
+    )
+    timing_audit = load_json_object(audit_path) if audit_path else None
+
+    payload = build_timing_tuning_proposal(
+        manifest=manifest,
+        trends=trends,
+        analysis=analysis,
+        timing_audit=timing_audit,
+        baseline=baseline,
+        params=params,
+        source_paths={
+            "manifest": str(manifest_path) if manifest_path.exists() else "",
+            "trends": str(trends_path) if trends_path.exists() else "",
+            "analysis": str(analysis_path) if analysis_path.exists() else "",
+            "timing_audit": str(audit_path) if audit_path else "",
+            "baseline": str(baseline_path) if baseline_path.exists() else "",
+            "params": str(params_path) if params_path and params_path.exists() else "",
+            "cases": str(Path(args.cases)),
+        },
+    )
+    path = write_timing_tuning_proposal(payload, args.out)
+    print(f"timing_tuning_proposal={path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
