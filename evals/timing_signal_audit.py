@@ -86,7 +86,6 @@ def run_audit(
     report = build_timing_signal_audit_report(samples)
     payload = {
         **report,
-        "samples": samples,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "source": {
             "db": db_path,
@@ -119,7 +118,6 @@ def run_labeled_audit(
     report = build_timing_signal_audit_report(filtered)
     payload = {
         **report,
-        "samples": filtered,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "source": {
             "mode": "input_report",

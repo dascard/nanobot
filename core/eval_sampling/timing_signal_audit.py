@@ -135,6 +135,7 @@ def build_timing_signal_audit_report(samples: list[dict]) -> dict:
     signals: dict[str, dict] = {}
     mismatch_count = 0
     mismatches_by_signal: dict[str, int] = {}
+    report_samples = [dict(sample) for sample in samples if isinstance(sample, dict)]
 
     for sample in samples:
         signal_name = str(sample.get("signal_name") or "")
@@ -185,4 +186,5 @@ def build_timing_signal_audit_report(samples: list[dict]) -> dict:
             "action_mismatch_rate": round(mismatch_rate, 6),
             "mismatches_by_signal": mismatches_by_signal,
         },
+        "samples": report_samples,
     }

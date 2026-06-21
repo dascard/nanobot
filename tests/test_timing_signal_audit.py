@@ -237,3 +237,32 @@ def test_timing_signal_audit_cli_writes_report(tmp_path, db_session):
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["signals"]["s_ack"]["samples"] == 1
     assert payload["shadow"]["action_mismatch_count"] == 1
+
+
+def test_timing_signal_audit_preserves_optional_proposal_evidence_fields():
+    from core.eval_sampling.timing_signal_audit import build_timing_signal_audit_report
+
+    samples = [
+        {
+            "log_id": 101,
+            "signal_name": "s_ack",
+            "signal_value": 0.85,
+            "runtime_action": "no_reply",
+            "scoring_action": "continue",
+            "label": "false_positive",
+            "scoring_stage": "rule_shortcut",
+            "threshold_band": "suppress_high",
+            "signal_context": {"trigger_reason": "ambient", "model_used": False},
+        }
+    ]
+
+    report = build_timing_signal_audit_report(samples)
+
+    sample = report["samples"][0]
+    assert sample["scoring_stage"] == "rule_shortcut"
+    assert sample["threshold_band"] == "suppress_high"
+    assert sample["signal_context"] == {
+        "trigger_reason": "ambient",
+        "model_used": False,
+    }
+    assert report["signals"]["s_ack"]["false_positive_count"] == 1
