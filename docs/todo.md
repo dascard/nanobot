@@ -131,8 +131,8 @@
     `scoring.py`；主状态机仍留在 `runtime.py`，旧 `core.group_runtime.runtime` 与
     `core.timing_runtime` 导入路径保留，拆分兼容、定向回归、相邻回归和全量回归均已通过。
 
-- [ ] **静默吞异常补日志（best-effort 路径）** · LOW · S 批量
-  `prompts/manager.py:435`(tracer)、`context_builder.py:895`(deprecated)、`admin/system_routes.py:46`(git)、`group_ingress/helpers.py:41,74`、`memory_digest/builder.py:65`。均非吞真错，补 `logger.debug` 提升可调试性即可；`H11 save_log`(legacy_adapter.py:223) 补 `except+rollback`（MEDIUM，聊天链路）。
+- [x] **静默吞异常补日志（best-effort 路径）** · LOW · S 批量
+  已在 `core/prompts/manager.py` 的 trace fallback、`core/context_legacy.py` 的 deprecated 群画像 fallback、`api/admin/system_routes.py` 的 git 探测 fallback、`app/group_ingress/helpers.py` 的 `safe_meta()` / `get_group_talk_value()` fallback，以及 `app/memory_digest/builder.py` 的 `_safe_meta()` fallback 补 `logger.debug`；日志只记录定位信息和异常摘要，不记录 prompt 正文、原始 `meta_json`、用户消息或群记忆 evidence。`core/legacy_adapter.py::SQLiteMemory.save_log()` 此前已完成 rollback + `logger.exception` + 回归测试，本次仅复验旧行为，未改业务语义。
 
 - [ ] **ruff 批量清理** · LOW · S
   F401 未用 import ×~24（`ruff check --fix`）；F841 死变量（`classifier_client.py:1164`、`persona_update/tool.py:53,139`）；E402/F811（`admin_routes.py:34-38,89`）；`__import__("datetime")`(`model_registry.py:418,459`)；`asyncio.ensure_future`→`create_task`(`new_api_client.py:320`，并入 E4)；旧式 `List/Dict/Optional`→内置泛型；`database.py` naive datetime（单机部署，低优先）。

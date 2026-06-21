@@ -2525,3 +2525,75 @@ timing context 构造、快照和全局单例。
 P3 超大文件队列现在应优先继续拆 `api/routes.py`，其次是
 `core/persona_preprocess.py`。如果转向低风险质量项，则处理「静默吞异常补日志」更适合
 小步推进。
+
+## 2026-06-21 Best-effort 吞异常补日志
+
+状态：实现、验证、实现阶段提交与文档收口已完成。该阶段聚焦 `docs/todo.md`
+中 P3 的 best-effort fallback 可观测性，不改变任何 fallback 返回值或业务流程。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-best-effort-debug-logging-design.md`。
+
+实现计划：
+`.Codex/plans/best-effort-debug-logging.md`。
+
+阶段提交：
+
+- 设计提交：`4074b60 docs(日志): 设计 best-effort 调试日志`。
+- 计划提交：`e210d7e docs(计划): 记录 best-effort 日志计划`。
+- 实现提交：`ab08701 fix(日志): 补齐 best-effort 调试记录`。
+
+已完成：
+
+- [x] `core/prompts/manager.py` 的 `PromptTracer.record_render()` fallback 补
+  `nanobot.prompt_manager` 的 `debug` 日志。
+- [x] `core/context_legacy.py` 的 deprecated 群画像 fallback 补
+  `nanobot.context_legacy` 的 `debug` 日志。
+- [x] `api/admin/system_routes.py` 的 git 探测 fallback 补 `nanobot.admin`
+  的 `debug` 日志。
+- [x] `app/group_ingress/helpers.py` 的 `safe_meta()` 与
+  `get_group_talk_value()` fallback 补 `nanobot.group_ingress` 的 `debug`
+  日志。
+- [x] `app/memory_digest/builder.py` 的 `_safe_meta()` fallback 补
+  `nanobot.memory_digest.builder` 的 `debug` 日志。
+- [x] `core/legacy_adapter.py::SQLiteMemory.save_log()` 已有 rollback +
+  `logger.exception` + 回归测试，本阶段仅复验旧行为，未改业务逻辑。
+- [x] 新增和扩展 caplog 测试，覆盖 trace、deprecated 群画像、git 探测、
+  group ingress helper 与 memory digest meta fallback。
+- [x] 同步 `docs/todo.md` 和 `.Codex/plans/best-effort-debug-logging.md`。
+
+验证记录：
+
+- 红灯：实现前运行新增日志测试 -> `6 failed, 1 warning in 6.62s`；失败点均为
+  缺少预期 `debug` 日志。
+- 绿灯：新增日志测试 -> `6 passed, 1 warning in 1.52s`。
+- 相邻回归：prompt manager、group memory、admin auth、group ingress helper、
+  memory digest builder 和 H11 `save_log` 回归 -> `35 passed, 1 warning in 3.24s`。
+- 语法检查：`python -m compileall core/prompts/manager.py core/context_legacy.py api/admin/system_routes.py app/group_ingress/helpers.py app/memory_digest/builder.py -q`
+  无输出，退出码为 0。
+- 静默吞异常扫描：目标文件中
+  `except Exception:\s*(pass|return \{\}|return None|return ""|return 0\.5)`
+  无匹配。
+- 格式检查：目标实现与测试文件 `git diff --check` 无输出。
+- 全量：`python -m pytest tests/ -v` ->
+  `1503 passed, 6 skipped, 139 warnings in 112.76s`。
+- 提交后检查：`git show --stat --oneline -1` 确认实现提交包含 10 个预期文件，
+  目标代码与测试文件提交后干净。
+- 文档门禁：`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/best-effort-debug-logging.md`
+  与占位符扫描脚本均无输出。
+- 文档提交前全量：`python -m pytest tests/ -v` ->
+  `1503 passed, 6 skipped, 139 warnings in 118.42s`。
+
+执行约束：
+
+- 日志级别统一为 `debug`，避免把可容错 fallback 升级成生产噪声。
+- 不记录 prompt 正文、用户输入、完整 `meta_json`、文件 URL 或群记忆 evidence。
+- 不改变 `/version`、群画像、meta 解析、talk value fallback 或 memory digest 构建结果。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+- 不改 prompt runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime 输入。
+
+下一步：
+
+`docs/todo.md` 当前剩余硬项主要是「超大文件 >800 行拆分」和「ruff 批量清理」。
+若继续做结构性治理，优先拆 `api/routes.py`，其次是 `core/persona_preprocess.py`；
+若转向低风险质量收尾，则可以先做 ruff 批量清理。

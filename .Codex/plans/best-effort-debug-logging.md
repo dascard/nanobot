@@ -1,6 +1,34 @@
 # Best-effort 调试日志实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]` / `- [x]`）语法来跟踪进度。
+
+## 执行结果摘要（2026-06-21）
+
+状态：实现、验证与实现阶段提交已完成。
+
+阶段提交：
+
+- 设计提交：`4074b60 docs(日志): 设计 best-effort 调试日志`。
+- 计划提交：`e210d7e docs(计划): 记录 best-effort 日志计划`。
+- 实现提交：`ab08701 fix(日志): 补齐 best-effort 调试记录`。
+
+验证记录：
+
+- 红灯：实现前运行新增日志测试，结果为 `6 failed, 1 warning in 6.62s`，失败点均指向缺少 `debug` 日志。
+- 绿灯：`6 passed, 1 warning in 1.52s`。
+- 相邻回归：`35 passed, 1 warning in 3.24s`。
+- 静态检查：`compileall` 无输出；目标文件裸吞异常扫描无匹配；`git diff --check` 无输出。
+- 全量回归：`1503 passed, 6 skipped, 139 warnings in 112.76s`。
+- 提交后检查：`git show --stat --oneline -1` 确认实现提交包含 10 个预期文件，目标代码与测试文件提交后干净。
+- 文档门禁：`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/best-effort-debug-logging.md` 与占位符扫描脚本均无输出。
+- 文档提交前全量回归：`1503 passed, 6 skipped, 139 warnings in 118.42s`。
+
+实现约束：
+
+- 所有新增日志均为 `debug` 级别，保持原 fallback 行为不变。
+- 不记录 prompt 正文、用户输入、完整 `meta_json`、文件 URL 或群记忆 evidence。
+- `core/legacy_adapter.py::SQLiteMemory.save_log()` 仅复验既有 rollback + `logger.exception` 行为，未改业务逻辑。
+- 未新增 `asyncio.run()`，未新增同步函数包装 awaitable。
 
 **目标：** 为 `docs/todo.md` 中仍然静默吞异常的 best-effort 路径补 `debug` 日志，同时保持 fallback 行为不变。
 
@@ -53,7 +81,7 @@
 - 创建：`tests/test_group_ingress_helpers.py`
 - 修改：`tests/test_memory_digest_builder_quality.py`
 
-- [ ] **步骤 1：新增 PromptManager trace fallback 日志测试**
+- [x] **步骤 1：新增 PromptManager trace fallback 日志测试**
 
 在 `tests/test_prompt_manager.py` 顶部添加：
 
@@ -101,7 +129,7 @@ required_vars:
     assert "run-1" in caplog.text
 ```
 
-- [ ] **步骤 2：新增 deprecated group profile fallback 日志测试**
+- [x] **步骤 2：新增 deprecated group profile fallback 日志测试**
 
 在 `tests/test_group_memory.py` 顶部添加：
 
@@ -131,7 +159,7 @@ def test_deprecated_group_profile_context_logs_build_failure(monkeypatch, caplog
     assert "profile boom" in caplog.text
 ```
 
-- [ ] **步骤 3：新增 admin version git 探测 fallback 日志测试**
+- [x] **步骤 3：新增 admin version git 探测 fallback 日志测试**
 
 在 `tests/test_admin_api.py` 顶部添加：
 
@@ -169,7 +197,7 @@ import logging
         assert "rev-parse" in caplog.text
 ```
 
-- [ ] **步骤 4：新增 group ingress helper fallback 日志测试**
+- [x] **步骤 4：新增 group ingress helper fallback 日志测试**
 
 创建 `tests/test_group_ingress_helpers.py`：
 
@@ -208,7 +236,7 @@ def test_get_group_talk_value_logs_fallback(monkeypatch, caplog):
     assert "config boom" in caplog.text
 ```
 
-- [ ] **步骤 5：新增 memory digest meta fallback 日志测试**
+- [x] **步骤 5：新增 memory digest meta fallback 日志测试**
 
 在 `tests/test_memory_digest_builder_quality.py` 顶部添加：
 
@@ -238,7 +266,7 @@ def test_memory_digest_builder_logs_invalid_meta_without_leaking_raw_meta(caplog
     assert str(len(bad_meta)) in caplog.text
 ```
 
-- [ ] **步骤 6：运行红灯测试**
+- [x] **步骤 6：运行红灯测试**
 
 运行：
 
@@ -264,7 +292,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 - 修改：`app/group_ingress/helpers.py`
 - 修改：`app/memory_digest/builder.py`
 
-- [ ] **步骤 1：修改 `core/prompts/manager.py`**
+- [x] **步骤 1：修改 `core/prompts/manager.py`**
 
 在导入区加入 `logging`，并在 `logger_name` 后创建 logger：
 
@@ -292,7 +320,7 @@ logger = logging.getLogger(logger_name)
                 )
 ```
 
-- [ ] **步骤 2：修改 `core/context_legacy.py`**
+- [x] **步骤 2：修改 `core/context_legacy.py`**
 
 在导入区加入：
 
@@ -319,7 +347,7 @@ logger = logging.getLogger("nanobot.context_legacy")
         return ""
 ```
 
-- [ ] **步骤 3：修改 `api/admin/system_routes.py`**
+- [x] **步骤 3：修改 `api/admin/system_routes.py`**
 
 在导入区加入：
 
@@ -347,7 +375,7 @@ logger = logging.getLogger("nanobot.admin")
                 return None
 ```
 
-- [ ] **步骤 4：修改 `app/group_ingress/helpers.py`**
+- [x] **步骤 4：修改 `app/group_ingress/helpers.py`**
 
 将 `safe_meta()` fallback 改为：
 
@@ -375,7 +403,7 @@ logger = logging.getLogger("nanobot.admin")
         return 0.5
 ```
 
-- [ ] **步骤 5：修改 `app/memory_digest/builder.py`**
+- [x] **步骤 5：修改 `app/memory_digest/builder.py`**
 
 在导入区加入：
 
@@ -402,7 +430,7 @@ logger = logging.getLogger("nanobot.memory_digest.builder")
         return {}
 ```
 
-- [ ] **步骤 6：运行绿灯测试**
+- [x] **步骤 6：运行绿灯测试**
 
 运行任务 1 的红灯命令。预期：全部通过。
 
@@ -413,7 +441,7 @@ logger = logging.getLogger("nanobot.memory_digest.builder")
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/best-effort-debug-logging.md`
 
-- [ ] **步骤 1：运行相邻回归**
+- [x] **步骤 1：运行相邻回归**
 
 运行：
 
@@ -433,7 +461,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行静态检查**
+- [x] **步骤 2：运行静态检查**
 
 运行：
 
@@ -445,7 +473,7 @@ git diff --check
 
 预期：`compileall` 和 `git diff --check` 无输出；`rg` 不再命中本阶段目标中的裸吞异常。
 
-- [ ] **步骤 3：运行全量回归**
+- [x] **步骤 3：运行全量回归**
 
 运行：
 
@@ -456,7 +484,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 4：更新 `docs/todo.md`**
+- [x] **步骤 4：更新 `docs/todo.md`**
 
 将 P3「静默吞异常补日志」标记为完成，记录：
 
@@ -467,15 +495,15 @@ python -m pytest tests/ -v
 - `app/memory_digest/builder.py` `_safe_meta()` fallback 已补 `debug`。
 - `core/legacy_adapter.py::SQLiteMemory.save_log()` 已有 rollback + `logger.exception` + 既有回归测试，本次未改业务行为。
 
-- [ ] **步骤 5：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 5：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-21 Best-effort 吞异常补日志` 章节，记录设计文档、计划文件、完成项、验证结果和提交号。
 
-- [ ] **步骤 6：更新本计划执行结果**
+- [x] **步骤 6：更新本计划执行结果**
 
 在本计划顶部追加 `执行结果摘要（2026-06-21）`，记录红灯、绿灯、相邻回归、静态检查、全量回归和提交号。
 
-- [ ] **步骤 7：文档门禁**
+- [x] **步骤 7：文档门禁**
 
 运行：
 
@@ -519,11 +547,8 @@ PY
 - 修改：`tests/test_admin_api.py`
 - 创建：`tests/test_group_ingress_helpers.py`
 - 修改：`tests/test_memory_digest_builder_quality.py`
-- 修改：`docs/todo.md`
-- 修改：`docs/plan_walkthrough.md`
-- 修改：`.Codex/plans/best-effort-debug-logging.md`
 
-- [ ] **步骤 1：按文件显式暂存**
+- [x] **步骤 1：按文件显式暂存**
 
 运行：
 
@@ -538,13 +563,10 @@ git add \
   tests/test_group_memory.py \
   tests/test_admin_api.py \
   tests/test_group_ingress_helpers.py \
-  tests/test_memory_digest_builder_quality.py \
-  docs/todo.md \
-  docs/plan_walkthrough.md \
-  .Codex/plans/best-effort-debug-logging.md
+  tests/test_memory_digest_builder_quality.py
 ```
 
-- [ ] **步骤 2：检查暂存区**
+- [x] **步骤 2：检查暂存区**
 
 运行：
 
@@ -553,9 +575,9 @@ git diff --cached --name-status
 git diff --cached --check
 ```
 
-预期：暂存区只包含本任务列出的文件；`--check` 无输出。
+预期：暂存区只包含本任务列出的 10 个实现与测试文件；`--check` 无输出。
 
-- [ ] **步骤 3：提交实现**
+- [x] **步骤 3：提交实现**
 
 运行：
 
@@ -563,7 +585,7 @@ git diff --cached --check
 git commit -m "fix(日志): 补齐 best-effort 调试记录"
 ```
 
-- [ ] **步骤 4：提交后检查**
+- [x] **步骤 4：提交后检查**
 
 运行：
 
@@ -579,10 +601,49 @@ git status --short -- \
   tests/test_group_memory.py \
   tests/test_admin_api.py \
   tests/test_group_ingress_helpers.py \
-  tests/test_memory_digest_builder_quality.py \
-  docs/todo.md \
-  docs/plan_walkthrough.md \
-  .Codex/plans/best-effort-debug-logging.md
+  tests/test_memory_digest_builder_quality.py
 ```
 
 预期：目标文件提交后干净。
+
+## 任务 5：提交文档收口
+
+**文件：**
+- 修改：`docs/todo.md`
+- 修改：`docs/plan_walkthrough.md`
+- 修改：`.Codex/plans/best-effort-debug-logging.md`
+
+- [x] **步骤 1：运行文档门禁**
+
+运行任务 3 的文档门禁命令，预期无输出，退出码为 0。
+
+- [x] **步骤 2：运行提交前全量回归**
+
+运行：
+
+```bash
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY \
+python -m pytest tests/ -v
+```
+
+预期：0 failures。
+
+- [x] **步骤 3：按文件显式暂存文档**
+
+运行：
+
+```bash
+git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/best-effort-debug-logging.md
+```
+
+- [x] **步骤 4：检查并提交文档收口**
+
+运行：
+
+```bash
+git diff --cached --name-status
+git diff --cached --check
+git commit -m "docs(计划): 收口 best-effort 日志状态"
+```
+
+预期：暂存区只包含 3 个文档文件；提交后目标文档文件干净。
