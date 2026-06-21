@@ -2043,3 +2043,47 @@ P1-6 验收重点：
 TimingGate `s_bot` live path 收口、私聊 fallback 置信度收口、P4-5E knowledge fixture citation 正例、P4-5F sticker fixture sendable 正例、P4-5G group_memory fixture 正例、P4-5H RAG 过滤约束 fixture、真实样本运营 1-10，以及 TimingGate 调参提案 record-only 审核运营链路均已完成。默认下一步是用真实 run-scoped audit、final action truth 和候选参数文件持续生成 proposal，并通过 record-only 审核沉淀人工结论。
 
 TimingGate 真实日志标注和周期复跑报告调参属于延续项，不抢占当前默认执行顺序。Prompt V2、P2-4、P3-1、P4-5D、P4-5E、P4-5F、P4-5G、P4-5H、真实样本运营 1-10 和 TimingGate 调参提案 record-only 审核运营链路均已完成，历史章节中保留的旧阶段说明仅作为执行记录，不再作为下一步来源。
+
+## 2026-06-21 H29 handle_message 拆分计划
+
+状态：设计阶段已完成并提交，计划阶段正在收口。本阶段不直接修改生产代码，先把 `NanobotBridge.handle_message()` 的拆分边界、测试缺口、外部契约和子 agent 分工固化到文档。
+
+已完成：
+
+- [x] 读取 `docs/todo.md` H29 条目，确认目标是拆分 `nanobot_kt/bridge.py:866-1947` 的巨型 `handle_message()`。
+- [x] 分派 3 个只读 explorer，分别审计职责切片、测试覆盖和外部调用契约。
+- [x] 汇总子 agent 结论，选择「模块内小步抽 helper」方案，避免第一阶段破坏 `nanobot_kt.bridge.NewAPIClient`、`registry`、`AsyncOpenAI` 等 monkeypatch 路径。
+- [x] 写入设计文档：`docs/superpowers/specs/2026-06-21-h29-handle-message-refactor-design.md`。
+- [x] 设计阶段验证：模板词扫描无输出，`git diff --check` 退出码 0，`python -m pytest tests/ -v` 结果 `1461 passed, 6 skipped, 139 warnings in 108.74s`。
+- [x] 设计阶段提交：`e6cd2b5 docs(桥接): 设计消息处理拆分`。
+- [x] 写入实现计划：`.Codex/plans/h29-handle-message-refactor.md`。
+
+H29 计划列表：
+
+- [x] 阶段 0：只读审计、方案选择和设计文档。
+- [ ] 阶段 1：抽低风险 helper，包括 output 初始化、event payload 和 runtime tool state 边界。
+- [ ] 阶段 2：补模型 retry 回归，并拆 `_run_model_loop()`。
+- [ ] 阶段 3：补 structured `no_reply` 回归，并拆 `_check_reply_contract()`。
+- [ ] 阶段 4：补 trace cleanup 幂等回归，并收敛 `BridgeTraceFinalizer`。
+- [ ] 阶段 5：同步 `docs/todo.md`、`docs/plan_walkthrough.md` 和计划状态，运行最终验证。
+
+执行约束：
+
+- `NanobotBridge.handle_message()` 和 `NanobotBridgePool.handle_message()` 的签名、默认值、keyword-only 参数和返回值保持不变。
+- `metadata` 继续作为开放 dict 使用，`files` 不提升为顶层参数。
+- `stream_queue` 仍是侧通道，不能替代最终字符串返回。
+- 空字符串返回继续表达 no-reply、suppressed、audit-failure 或 empty。
+- `pop_last_reply_meta(session_id)` 继续在 `handle_message()` 返回后可用，并保持弹出式语义。
+- 不新增 `asyncio.run()`，不新增同步函数包 awaitable。
+- 每个阶段完成后先运行指定定向回归和 `python -m pytest tests/ -v`，再按文件显式暂存并提交。
+
+子 agent 分工建议：
+
+- Agent A：只写模型 retry 新测试，范围限定 `tests/test_kt_framework.py` 中 `TestNanobotBridge`。
+- Agent B：只写 reply contract 新测试，范围限定 `tests/test_kt_framework.py::TestReplyContract`。
+- Agent C：只同步文档和计划状态，范围限定 `.Codex/plans/h29-handle-message-refactor.md`、`docs/todo.md`、`docs/plan_walkthrough.md`。
+- 主线程：持有 `nanobot_kt/bridge.py` 生产代码改动和最终集成验证。
+
+下一步：
+
+从 `.Codex/plans/h29-handle-message-refactor.md` 的任务 1 开始，先写 `_prepare_output_for_request()` 和 `_prepare_event_payload()` 的红灯测试，再抽低风险 helper。任务 1 完成并通过全量测试后，单独提交 `refactor(桥接): 抽取消息准备辅助函数`。
