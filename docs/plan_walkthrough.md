@@ -2728,3 +2728,74 @@ facade 导入，外部导入路径兼容。
 
 P3 超大文件队列当前只剩 `api/admin_routes.py` 和 `api/routes.py` 两个硬项；如果先做
 低风险质量收尾，则可以进入「ruff 批量清理」。
+
+## 2026-06-21 Admin Sticker 路由拆分
+
+状态：实现、验证和实现阶段提交准备已完成。
+`api/admin_routes.py` 已拆出 Sticker / Generated Images 管理边界到
+`api/admin/sticker_routes.py`；旧 `api.admin_routes` 继续 include 新 router，并
+re-export 迁移后的 request model、endpoint 和 `_sticker_dict()`，保持旧导入路径、
+HTTP 路径、审计动作和 admin token monkeypatch 兼容。`api/admin_routes.py` 从
+5535 行降至 4979 行，新模块 `api/admin/sticker_routes.py` 为 614 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-admin-sticker-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/admin-sticker-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`ab17cb4 docs(管理端): 设计贴纸路由拆分`。
+- 计划提交：`3162055 docs(计划): 记录贴纸路由拆分计划`。
+- 实现提交：本阶段提交 `refactor(管理端): 拆分贴纸管理路由`。
+
+已完成：
+
+- [x] 新增 `tests/test_admin_sticker_routes_split.py`，锁定路由来源、旧导入
+  facade、legacy token monkeypatch 和 method + path 级别的重复注册。
+- [x] 新增 `api/admin/sticker_routes.py`，承载 Sticker CRUD、Generated Images、
+  duplicate groups、near duplicate 治理、预览重试、phash / dedupe backfill 和批量删除。
+- [x] 新模块使用 `api.admin.common.verify_admin` 与 `audit_request`，不反向导入
+  `api.admin_routes`，不新增 `asyncio.run()` 或同步 awaitable 包装。
+- [x] `api/admin_routes.py` include `sticker_router`，并 re-export 迁移符号；
+  `group_detail()` 继续调用同名 `_sticker_dict()`。
+- [x] 保留父模块 `_safe_json()`、`_iso()`、`verify_admin()`、`_audit_request()`、
+  `NANOBOT_ADMIN_TOKEN`、`StickerMemory` 和 `get_db` 等其他 admin 子域仍需依赖的符号。
+
+验证记录：
+
+- 红灯：新增 split 目标测试 ->
+  `2 failed, 1 warning`；失败点为 endpoint module 仍是 `api.admin_routes`，
+  且 `api.admin.sticker_routes` 尚不存在。
+- 绿灯：`tests/test_admin_sticker_routes_split.py -q` ->
+  `4 passed, 21 warnings in 1.30s`。
+- sticker 行为回归：新增 split 测试、`TestGeneratedImagesAdmin` 和
+  `TestStickerCRUD` -> `19 passed, 21 warnings in 2.00s`。
+- 鉴权与 asyncio 策略回归：`TestAuth` 与 `tests/test_asyncio_run_policy.py` ->
+  `9 passed, 1 warning in 2.33s`。
+- WebUI duplicate 静态回归：`tests/test_webui_admin_redesign.py -k "sticker_duplicate"` ->
+  `2 passed, 21 deselected, 1 warning in 0.44s`。
+- 语法检查：`python -m compileall api/admin_routes.py api/admin/sticker_routes.py -q`
+  无输出，退出码为 0。
+- 行数检查：`api/admin_routes.py` 4979 行，`api/admin/sticker_routes.py` 614 行，
+  `tests/test_admin_sticker_routes_split.py` 119 行。
+- 格式检查：`git diff --check -- api/admin_routes.py api/admin/sticker_routes.py tests/test_admin_sticker_routes_split.py`
+  无输出。
+- 全量：`python -m pytest tests/ -v` ->
+  `1511 passed, 6 skipped, 139 warnings in 109.17s`。
+
+执行约束：
+
+- 不拆普通 `api/routes.py`。
+- 不迁移 admin 认证、审计 helper、`/overview`、`/groups`、群记忆、TimingGate、
+  配置、模型、工具、reply/eval、eval 工作台、日志 viewer 或 settings。
+- 不改变 DB schema、response shape、状态码、审计 action、预览缓存行为或
+  duplicate canonical 语义。
+- 不改 Prompt Runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime 输入。
+
+下一步：
+
+P3 超大文件队列仍剩 `api/admin_routes.py` 和 `api/routes.py`。如果继续沿管理端拆分，
+下一刀可优先考虑 `group_memory` 或 trace / observability 只读边界；如果切回普通 API，
+可优先拆公开 media / sticker 端点，但要先设计 `api.routes.verify_token` monkeypatch 兼容。

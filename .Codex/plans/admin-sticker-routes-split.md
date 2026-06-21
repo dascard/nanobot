@@ -2,6 +2,31 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
+## 执行结果摘要（2026-06-21）
+
+- 状态：实现、定向验证、文档更新和全量验证已完成。
+- 设计提交：`ab17cb4 docs(管理端): 设计贴纸路由拆分`。
+- 计划提交：`3162055 docs(计划): 记录贴纸路由拆分计划`。
+- 实现提交：本阶段提交 `refactor(管理端): 拆分贴纸管理路由`。
+- 结果：新增 `api/admin/sticker_routes.py`，迁移 Sticker / Generated Images
+  管理路由、request model、`_sticker_dict()` 和近重复扫描锁；`api.admin_routes`
+  include 新 router，并 re-export 旧符号保持兼容；`api/admin_routes.py` 从
+  5535 行降至 4979 行，新模块为 614 行。
+- 红灯：新增 split 目标测试 ->
+  `2 failed, 1 warning`；失败点为 endpoint module 仍来自 `api.admin_routes`，
+  且 `api.admin.sticker_routes` 尚不存在。
+- 绿灯：新增 split 测试 -> `4 passed, 21 warnings in 1.30s`。
+- sticker 行为回归：新增 split 测试、`TestGeneratedImagesAdmin` 和
+  `TestStickerCRUD` -> `19 passed, 21 warnings in 2.00s`。
+- 鉴权与 asyncio 策略回归：`TestAuth` 与 `tests/test_asyncio_run_policy.py` ->
+  `9 passed, 1 warning in 2.33s`。
+- WebUI duplicate 静态回归：`tests/test_webui_admin_redesign.py -k "sticker_duplicate"` ->
+  `2 passed, 21 deselected, 1 warning in 0.44s`。
+- 静态检查：`compileall`、行数检查、目标文件 `git diff --check`、facade 符号同一性和
+  新模块反向导入扫描均通过。
+- 全量：`python -m pytest tests/ -v` ->
+  `1511 passed, 6 skipped, 139 warnings in 109.17s`。
+
 **目标：** 将 `api/admin_routes.py` 中 Sticker / Generated Images 管理路由拆到 `api/admin/sticker_routes.py`，保持 HTTP 路径、响应契约、鉴权 monkeypatch、旧导入路径和审计动作不变。
 
 **架构：** `api.admin_routes` 继续作为 `/api/v1/admin` 顶层 router，并 include 新的 `api.admin.sticker_routes.router`。新模块承接 Sticker CRUD、生成图片管理、重复贴纸治理、预览重试、批量删除和相关 request model；`api.admin_routes` 通过 re-export 保留旧符号，并继续让 `group_detail()` 调用同名 `_sticker_dict()`。
@@ -54,7 +79,7 @@
 **文件：**
 - 创建：`tests/test_admin_sticker_routes_split.py`
 
-- [ ] **步骤 1：创建 split 路由测试文件**
+- [x] **步骤 1：创建 split 路由测试文件**
 
 创建 `tests/test_admin_sticker_routes_split.py`：
 
@@ -168,7 +193,7 @@ def test_admin_sticker_routes_are_not_registered_twice():
         assert len(_admin_routes_for(path)) == 1, path
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -199,7 +224,7 @@ FAILED tests/test_admin_sticker_routes_split.py::test_legacy_admin_routes_sticke
 **文件：**
 - 创建：`api/admin/sticker_routes.py`
 
-- [ ] **步骤 1：创建新模块头部和本地 helper**
+- [x] **步骤 1：创建新模块头部和本地 helper**
 
 创建 `api/admin/sticker_routes.py`，头部结构如下：
 
@@ -242,7 +267,7 @@ def _iso(v) -> str:
         return str(v)
 ```
 
-- [ ] **步骤 2：迁移 request model**
+- [x] **步骤 2：迁移 request model**
 
 从 `api/admin_routes.py` 剪切到新模块：
 
@@ -277,13 +302,13 @@ class GeneratedImageCreate(BaseModel):
 
 从原位置删除这三个 class。保留 `BlockRuleCreate` 及后续非 sticker 模型。
 
-- [ ] **步骤 3：迁移 `_sticker_dict()`**
+- [x] **步骤 3：迁移 `_sticker_dict()`**
 
 从 `api/admin_routes.py` 剪切 `_sticker_dict(r: StickerMemory) -> dict` 到新模块，函数体保持原样。新函数使用新模块内的 `_safe_json()`。
 
 不要从 `api.admin_routes` 导入 `_safe_json()`，旧模块的 `_safe_json()` 仍留给日志 viewer 使用。
 
-- [ ] **步骤 4：迁移 Sticker / Generated Images 路由实现**
+- [x] **步骤 4：迁移 Sticker / Generated Images 路由实现**
 
 从 `api/admin_routes.py` 剪切以下 route block 到新模块，保持函数名、路径、参数和返回结构不变：
 
@@ -328,7 +353,7 @@ audit_request(
 
 不要改变审计 action 字符串，例如 `create_sticker`、`sticker.near_duplicate.scan`、`soft_delete_sticker`。
 
-- [ ] **步骤 5：检查新模块没有循环依赖**
+- [x] **步骤 5：检查新模块没有循环依赖**
 
 运行：
 
@@ -355,7 +380,7 @@ PY
 **文件：**
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：导入 sticker router 和 re-export 符号**
+- [x] **步骤 1：导入 sticker router 和 re-export 符号**
 
 在既有 admin 子路由 import 附近添加：
 
@@ -400,7 +425,7 @@ from api.admin.sticker_routes import (
 router.include_router(sticker_router)
 ```
 
-- [ ] **步骤 2：删除旧模块中的迁移实现块**
+- [x] **步骤 2：删除旧模块中的迁移实现块**
 
 从 `api/admin_routes.py` 删除以下本地定义：
 
@@ -445,7 +470,7 @@ router.include_router(sticker_router)
 - `BlockRuleCreate` 及后续非 sticker 模型
 - `UserBlockRule CRUD` 及后续非 sticker 路由
 
-- [ ] **步骤 3：清理已无用 import**
+- [x] **步骤 3：清理已无用 import**
 
 运行：
 
@@ -461,7 +486,7 @@ PY
 
 如果输出 `threading`，从 `api/admin_routes.py` 删除 `import threading`。不要做 ruff 批量清理。
 
-- [ ] **步骤 4：确认 `group_detail()` 继续使用 facade helper**
+- [x] **步骤 4：确认 `group_detail()` 继续使用 facade helper**
 
 运行：
 
@@ -485,7 +510,7 @@ PY
 - 验证：`tests/test_webui_admin_redesign.py`
 - 验证：`tests/test_asyncio_run_policy.py`
 
-- [ ] **步骤 1：运行 split 绿灯测试**
+- [x] **步骤 1：运行 split 绿灯测试**
 
 运行：
 
@@ -497,7 +522,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行 admin sticker 行为回归**
+- [x] **步骤 2：运行 admin sticker 行为回归**
 
 运行：
 
@@ -512,7 +537,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 3：运行鉴权、路由 shadow 和 `asyncio.run` 策略回归**
+- [x] **步骤 3：运行鉴权、路由 shadow 和 `asyncio.run` 策略回归**
 
 运行：
 
@@ -527,7 +552,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 4：运行静态检查**
+- [x] **步骤 4：运行静态检查**
 
 运行：
 
@@ -550,7 +575,7 @@ git diff --check -- api/admin_routes.py api/admin/sticker_routes.py tests/test_a
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-sticker-routes-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」条目下记录：
 
@@ -558,7 +583,7 @@ git diff --check -- api/admin_routes.py api/admin/sticker_routes.py tests/test_a
 - 记录拆分后的 `wc -l api/admin_routes.py api/admin/sticker_routes.py` 实际行数。
 - 不勾选整个「超大文件 >800 行拆分」总项，除非 `api/admin_routes.py` 和 `api/routes.py` 都已低于 800 行。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加日期为 `2026-06-21` 的执行记录，包含：
 
@@ -569,11 +594,11 @@ git diff --check -- api/admin_routes.py api/admin/sticker_routes.py tests/test_a
 - 绿灯测试命令和通过摘要。
 - 定向回归、静态检查和全量回归结果。
 
-- [ ] **步骤 3：更新本计划勾选状态**
+- [x] **步骤 3：更新本计划勾选状态**
 
 把已完成步骤从 `- [ ]` 改为 `- [x]`，并在文件顶部追加执行结果摘要。摘要包含红灯、绿灯、定向回归、全量回归和提交号。
 
-- [ ] **步骤 4：运行全量测试**
+- [x] **步骤 4：运行全量测试**
 
 运行：
 
@@ -594,7 +619,7 @@ python -m pytest tests/ -v
 - 暂存：`docs/plan_walkthrough.md`
 - 暂存：`.Codex/plans/admin-sticker-routes-split.md`
 
-- [ ] **步骤 1：检查工作区**
+- [x] **步骤 1：检查工作区**
 
 运行：
 
@@ -604,7 +629,7 @@ git status --short
 
 只处理本阶段目标文件。不要暂存历史脏项、`__pycache__`、`nanobot.db`、`.agents/`、`.codex/` 或截图快照文件。
 
-- [ ] **步骤 2：显式暂存目标文件**
+- [x] **步骤 2：显式暂存目标文件**
 
 运行：
 
