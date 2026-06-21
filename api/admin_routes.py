@@ -9,6 +9,7 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 from hmac import compare_digest
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -5284,10 +5285,45 @@ from core.eval_sampling.store import (
 )
 from evals.expected_contract import expected_contract_payload
 
+TIMING_TUNING_PROPOSAL_REPORT = Path("evals/reports/timing_tuning_proposal_latest.json")
+
 
 @router.get("/evals/expected-contract")
 def eval_expected_contract(_auth=Depends(verify_admin)):
     return expected_contract_payload()
+
+
+@router.get("/evals/timing-tuning/proposal")
+def eval_timing_tuning_proposal(_auth=Depends(verify_admin)):
+    path = Path(TIMING_TUNING_PROPOSAL_REPORT)
+    if not path.exists():
+        return {
+            "exists": False,
+            "report_path": str(path),
+            "readiness": {
+                "ready": False,
+                "blocking_reasons": [
+                    {
+                        "code": "proposal_report_missing",
+                        "message": "调参提案报告不存在，请先运行 evals.timing_tuning_proposal",
+                    }
+                ],
+            },
+        }
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"invalid proposal report: {exc}",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=500,
+            detail="invalid proposal report: JSON object expected",
+        )
+    return {"exists": True, "report_path": str(path), "report": payload}
 
 
 @router.get("/evals/candidates")
