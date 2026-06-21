@@ -2597,3 +2597,72 @@ P3 超大文件队列现在应优先继续拆 `api/routes.py`，其次是
 `docs/todo.md` 当前剩余硬项主要是「超大文件 >800 行拆分」和「ruff 批量清理」。
 若继续做结构性治理，优先拆 `api/routes.py`，其次是 `core/persona_preprocess.py`；
 若转向低风险质量收尾，则可以先做 ruff 批量清理。
+
+## 2026-06-21 API Routes 群消息 Helper 去重
+
+状态：实现、验证和实现阶段提交已完成。`api/routes.py` 中与
+`app.group_ingress.helpers` 重复的群消息 helper 实现已删除，旧 underscore 私有
+helper 名称保留为兼容别名；`api/routes.py` 从 3434 行降至 2822 行，仍超过
+800 行，后续可继续拆其他路由职责。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-api-routes-group-helper-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-routes-group-helper-split.md`。
+
+阶段提交：
+
+- 设计提交：`0fd2da8 docs(路由): 设计群消息 helper 去重`。
+- 计划提交：`3a75ec4 docs(计划): 记录群消息 helper 去重计划`。
+- 实现提交：`c822177 refactor(路由): 收敛群消息 helper 实现`。
+
+已完成：
+
+- [x] 新增 `tests/test_api_routes_group_helper_facade.py`，锁定 `api.routes`
+  旧 underscore helper 指向 `app.group_ingress.helpers`。
+- [x] 新增行数守卫，要求 `api/routes.py` 低于 3000 行。
+- [x] `api/routes.py` 导入 `app.group_ingress.helpers` 并绑定旧私有 helper
+  兼容别名。
+- [x] 删除 route-local 的群回复持久化、复读检测、no-reply 日志 helper。
+- [x] 删除结构化群消息 helper、重复常量、sticker preview 背景缓存 helper 和
+  agent result / trigger reason helper 的 route-local 实现。
+- [x] 保留 `GroupMessageRequest`、`group_message()`、`GroupTimingRequest` 与
+  `group_timing_timer()` 的路由边界。
+
+验证记录：
+
+- 红灯：`tests/test_api_routes_group_helper_facade.py -q` ->
+  `2 failed, 1 warning in 5.44s`；失败点为旧 helper 仍是本地函数，
+  且 `api/routes.py` 仍为 3434 行。
+- 绿灯：`tests/test_api_routes_group_helper_facade.py -q` ->
+  `2 passed, 1 warning in 0.60s`。
+- 旧私有导入与 facade 定向回归：新增 facade 测试、group bridge reply 持久化、
+  duplicate reply 检测和 reply admin agent result 用例 ->
+  `7 passed, 1 warning in 0.93s`。
+- 相邻回归：`tests/test_api.py`、group / chat response envelope、push envelope、
+  streaming API 和 streaming response envelope ->
+  `102 passed, 21 warnings in 23.17s`。
+- 语法检查：`python -m compileall api/routes.py app/group_ingress/helpers.py -q`
+  无输出，退出码为 0。
+- 重复定义检查：目标 helper 定义 `rg` 无匹配，退出码为 1。
+- 行数检查：`wc -l api/routes.py` -> `2822 api/routes.py`。
+- 格式检查：`git diff --check -- api/routes.py tests/test_api_routes_group_helper_facade.py`
+  无输出。
+- 全量：`python -m pytest tests/ -v` ->
+  `1505 passed, 6 skipped, 139 warnings in 107.44s`。
+
+执行约束：
+
+- 不迁移 `GroupMessageRequest`、`group_message()`、`GroupTimingRequest` 或
+  `group_timing_timer()`。
+- 不改变 `/group/message` 主流程、不改变 `/chat` 主流程。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+- 不改 prompt runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime
+  输入。
+
+下一步：
+
+`api/routes.py` 仍超过 800 行，P3 超大文件队列可继续拆路由中与 `/chat`、群 timing
+timer 或 sticker 端点相关的独立职责；若转向较小范围，`core/persona_preprocess.py`
+第一刀也适合作为下一阶段。

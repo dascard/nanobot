@@ -1,12 +1,53 @@
 # API Routes 群消息 Helper 去重实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用 Markdown 复选框语法来跟踪进度。
 
 **目标：** 删除 `api/routes.py` 中与 `app.group_ingress.helpers` 重复的群消息 helper 实现，并保留旧 underscore 名称兼容导入。
 
 **架构：** `app/group_ingress/helpers.py` 作为唯一真实实现；`api/routes.py` 只保留 `GroupMessageRequest`、`group_message()` 路由壳和旧私有 helper 的兼容别名。`group_timing_timer()` 和私聊流式错误路径继续通过旧名调用，但旧名指向 app 层 helper。
 
 **技术栈：** Python 3.12、FastAPI、pytest、Pydantic、项目既有 `app.group_ingress` service/helper。
+
+---
+
+## 执行结果摘要（2026-06-21）
+
+状态：已完成实现、验证和实现阶段提交。`api/routes.py` 已删除与
+`app.group_ingress.helpers` 重复的群消息 helper 实现，旧 underscore 私有 helper
+名称保留为兼容别名；`GroupMessageRequest`、`group_message()`、`/chat` 主流程和
+`/group/message` 主流程均未迁移。
+
+阶段提交：
+
+- 设计提交：`0fd2da8 docs(路由): 设计群消息 helper 去重`。
+- 计划提交：`3a75ec4 docs(计划): 记录群消息 helper 去重计划`。
+- 实现提交：`c822177 refactor(路由): 收敛群消息 helper 实现`。
+
+验证记录：
+
+- 红灯：`tests/test_api_routes_group_helper_facade.py -q` ->
+  `2 failed, 1 warning in 5.44s`；失败点为旧 helper 仍是 route-local 函数，
+  且 `api/routes.py` 仍为 3434 行。
+- 绿灯：`tests/test_api_routes_group_helper_facade.py -q` ->
+  `2 passed, 1 warning in 0.60s`。
+- 旧私有导入与 facade 定向回归 ->
+  `7 passed, 1 warning in 0.93s`。
+- API / envelope / streaming 相邻回归 ->
+  `102 passed, 21 warnings in 23.17s`。
+- 静态检查：`compileall` 无输出，退出码为 0；重复 helper 定义 `rg`
+  无匹配，退出码为 1；`api/routes.py` 为 2822 行；`git diff --check`
+  无输出。
+- 全量：`python -m pytest tests/ -v` ->
+  `1505 passed, 6 skipped, 139 warnings in 107.44s`。
+
+执行约束：
+
+- 不迁移 `GroupMessageRequest`、`group_message()`、`GroupTimingRequest` 或
+  `group_timing_timer()`。
+- 不改变 `/group/message` 主流程、不改变 `/chat` 主流程。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+- 不改 prompt runtime 模板、工具 usage 文档、`enriched_query` 组装或
+  Prompt Runtime 输入。
 
 ---
 
@@ -31,7 +72,7 @@
 **文件：**
 - 创建：`tests/test_api_routes_group_helper_facade.py`
 
-- [ ] **步骤 1：创建 facade 兼容测试文件**
+- [x] **步骤 1：创建 facade 兼容测试文件**
 
 创建 `tests/test_api_routes_group_helper_facade.py`：
 
@@ -74,7 +115,7 @@ def test_api_routes_group_helper_split_keeps_routes_file_under_3000_lines():
     assert line_count < 3000
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -91,7 +132,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 **文件：**
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：在 `api/routes.py` 导入 app 层 helper**
+- [x] **步骤 1：在 `api/routes.py` 导入 app 层 helper**
 
 在现有 `from core.message_envelope import build_chat_response_envelope` 附近添加：
 
@@ -99,7 +140,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 from app.group_ingress import helpers as group_ingress_helpers
 ```
 
-- [ ] **步骤 2：添加旧 underscore helper 兼容别名**
+- [x] **步骤 2：添加旧 underscore helper 兼容别名**
 
 在 `GroupMessageRequest` 类定义之后添加：
 
@@ -127,7 +168,7 @@ _persist_group_bridge_reply = group_ingress_helpers.persist_group_bridge_reply
 _derive_group_trigger_reason = group_ingress_helpers.derive_group_trigger_reason
 ```
 
-- [ ] **步骤 3：删除重复群消息 helper 块**
+- [x] **步骤 3：删除重复群消息 helper 块**
 
 删除 `api/routes.py` 中 `# ── 结构化消息 helper（Batch 1）──` 到 `def _derive_group_trigger_reason(...)` 结束的重复实现，包括：
 
@@ -158,12 +199,12 @@ _derive_group_trigger_reason = group_ingress_helpers.derive_group_trigger_reason
 
 如果执行时再次搜索确认 `_read_client_meta_from_log()` 仍无引用，直接删除，不保留别名。
 
-- [ ] **步骤 4：删除重复群回复持久化 helper 块**
+- [x] **步骤 4：删除重复群回复持久化 helper 块**
 
 删除 `api/routes.py` 中 `_persist_group_bridge_reply()`、`_normalize_reply_for_duplicate()`、
 `_find_recent_duplicate_group_reply()` 和 `_log_group_no_reply()` 的 route-local 重复实现。
 
-- [ ] **步骤 5：清理不再需要的 import**
+- [x] **步骤 5：清理不再需要的 import**
 
 运行：
 
@@ -185,7 +226,7 @@ PY
 
 如果输出 `SequenceMatcher False`，删除 `from difflib import SequenceMatcher`。不要做无关 ruff 清理。
 
-- [ ] **步骤 6：运行绿灯测试**
+- [x] **步骤 6：运行绿灯测试**
 
 运行任务 1 的红灯命令。预期：全部通过。
 
@@ -195,7 +236,7 @@ PY
 - 修改：`api/routes.py`
 - 创建：`tests/test_api_routes_group_helper_facade.py`
 
-- [ ] **步骤 1：运行旧私有导入与 facade 定向回归**
+- [x] **步骤 1：运行旧私有导入与 facade 定向回归**
 
 运行：
 
@@ -213,7 +254,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行群消息与私聊相邻回归**
+- [x] **步骤 2：运行群消息与私聊相邻回归**
 
 运行：
 
@@ -231,7 +272,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 3：运行静态检查**
+- [x] **步骤 3：运行静态检查**
 
 运行：
 
@@ -249,7 +290,7 @@ git diff --check -- api/routes.py tests/test_api_routes_group_helper_facade.py
 - `wc -l` 显示 `api/routes.py` 低于 3000 行。
 - `git diff --check` 无输出。
 
-- [ ] **步骤 4：运行全量回归**
+- [x] **步骤 4：运行全量回归**
 
 运行：
 
@@ -266,7 +307,7 @@ python -m pytest tests/ -v
 - 修改：`api/routes.py`
 - 创建：`tests/test_api_routes_group_helper_facade.py`
 
-- [ ] **步骤 1：按文件显式暂存**
+- [x] **步骤 1：按文件显式暂存**
 
 运行：
 
@@ -274,7 +315,7 @@ python -m pytest tests/ -v
 git add api/routes.py tests/test_api_routes_group_helper_facade.py
 ```
 
-- [ ] **步骤 2：检查暂存区**
+- [x] **步骤 2：检查暂存区**
 
 运行：
 
@@ -285,7 +326,7 @@ git diff --cached --check
 
 预期：暂存区只包含本任务列出的 2 个文件；`--check` 无输出。
 
-- [ ] **步骤 3：提交实现**
+- [x] **步骤 3：提交实现**
 
 运行：
 
@@ -293,7 +334,7 @@ git diff --cached --check
 git commit -m "refactor(路由): 收敛群消息 helper 实现"
 ```
 
-- [ ] **步骤 4：提交后检查**
+- [x] **步骤 4：提交后检查**
 
 运行：
 
@@ -311,14 +352,14 @@ git status --short -- api/routes.py tests/test_api_routes_group_helper_facade.py
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-routes-group-helper-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下追加进展：
 
 - `api/routes.py` 第一刀已收敛群消息 helper 重复实现到 `app/group_ingress/helpers.py`；
   旧 underscore helper 名称保留为兼容别名；`api/routes.py` 行数低于 3000。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-21 API Routes 群消息 Helper 去重` 章节，记录：
 
@@ -329,11 +370,11 @@ git status --short -- api/routes.py tests/test_api_routes_group_helper_facade.py
 - 红灯、绿灯、相邻回归、静态检查、全量回归结果
 - 执行约束：不改 `/group/message` 主流程、不改 `/chat`、不新增 `asyncio.run()`
 
-- [ ] **步骤 3：更新本计划执行结果**
+- [x] **步骤 3：更新本计划执行结果**
 
 在本计划顶部追加 `执行结果摘要（2026-06-21）`，记录验证结果和提交号。
 
-- [ ] **步骤 4：文档门禁**
+- [x] **步骤 4：文档门禁**
 
 运行：
 
@@ -364,7 +405,7 @@ PY
 
 预期：两个命令均无输出，退出码为 0。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 

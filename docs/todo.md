@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `admin_routes.py`(5535)、`routes.py`(3434)、`persona_preprocess.py`(857)。按职责拆模块；`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，二者不再属于当前 >800 行清单。
+  `admin_routes.py`(5535)、`routes.py`(2822)、`persona_preprocess.py`(857)。按职责拆模块；`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，二者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/admin_routes.py`、`api/routes.py`、`core/persona_preprocess.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -130,6 +130,9 @@
     scoring 私有方法到 `core/group_runtime/constants.py`、`state.py` 与
     `scoring.py`；主状态机仍留在 `runtime.py`，旧 `core.group_runtime.runtime` 与
     `core.timing_runtime` 导入路径保留，拆分兼容、定向回归、相邻回归和全量回归均已通过。
+  - 进展：`api/routes.py` 第一刀已收敛群消息 helper 重复实现到
+    `app/group_ingress/helpers.py`；旧 underscore helper 名称保留为兼容别名，
+    `/group/message` 与 `/chat` 主流程不变；文件从 3434 行降至 2822 行。
 
 - [x] **静默吞异常补日志（best-effort 路径）** · LOW · S 批量
   已在 `core/prompts/manager.py` 的 trace fallback、`core/context_legacy.py` 的 deprecated 群画像 fallback、`api/admin/system_routes.py` 的 git 探测 fallback、`app/group_ingress/helpers.py` 的 `safe_meta()` / `get_group_talk_value()` fallback，以及 `app/memory_digest/builder.py` 的 `_safe_meta()` fallback 补 `logger.debug`；日志只记录定位信息和异常摘要，不记录 prompt 正文、原始 `meta_json`、用户消息或群记忆 evidence。`core/legacy_adapter.py::SQLiteMemory.save_log()` 此前已完成 rollback + `logger.exception` + 回归测试，本次仅复验旧行为，未改业务语义。
