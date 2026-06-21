@@ -154,7 +154,7 @@ def parse_structured_final_action(buffer_text: str) -> dict[str, Any] | None:
         return None
     if not isinstance(data, dict):
         return None
-    action = str(data.get("action", "")).strip().lower()
+    action = str(data.get("action") or data.get("final_action") or "").strip().lower()
     if action not in ("reply", "no_reply"):
         return None
     if action == "reply":

@@ -219,6 +219,17 @@ class ModelLoopResult:
     attempts: int
 
 
+@dataclass
+class ReplyResolution:
+    response: str
+    agent_result: str
+    no_reply: bool
+    no_tool_call: bool
+    output_preview: str
+    finish_status: str
+    error: str = ""
+
+
 class NanobotBridge:
     """
     Wraps a KT Agent for use as a request/response handler.
@@ -1136,6 +1147,435 @@ class NanobotBridge:
             attempts=attempts,
         )
 
+    async def _check_reply_contract(
+        self,
+        *,
+        session_id: str,
+        response: str,
+        result: Any,
+        preserved_html: str,
+        target_model: str,
+        query: str,
+        meta: dict[str, Any],
+        event_content: Any,
+        create_user_event: Any,
+        process_event: Any,
+        trace_id: str,
+        run_id: str,
+        reply_llm_source: str,
+    ) -> ReplyResolution:
+        def _mark_no_reply(agent_result: str, reason: str = "") -> None:
+            if session_id:
+                store = self._reply_meta_store()
+                entry = store.get(session_id, {})
+                entry["_no_reply"] = True
+                if reason:
+                    entry["_no_reply_reason"] = reason
+                store[session_id] = entry
+            self._log_agent_result(session_id, agent_result)
+
+        # Reply extraction: 优先从 reply() / no_reply() 工具输出提取
+        reply_text = self._extract_reply_from_tool_output(session_id)
+        reply_source = "reply_tool"
+        if self.is_no_reply_session(session_id):
+            self._record_reply_contract_check(
+                trace_id=trace_id,
+                run_id=run_id,
+                session_id=session_id,
+                attempt=0,
+                raw_output=response,
+                has_reply_tool=False,
+                has_no_reply_tool=True,
+                has_structured_fallback=False,
+                result="ok",
+            )
+            logger.info("[Reply] no_reply session=%s - skipping message send", session_id)
+            _mark_no_reply("no_reply_tool")
+            return ReplyResolution(
+                response="",
+                agent_result="no_reply_tool",
+                no_reply=True,
+                no_tool_call=False,
+                output_preview="",
+                finish_status="no_reply",
+            )
+        if reply_text:
+            self._record_reply_contract_check(
+                trace_id=trace_id,
+                run_id=run_id,
+                session_id=session_id,
+                attempt=0,
+                raw_output=response,
+                has_reply_tool=True,
+                has_no_reply_tool=False,
+                has_structured_fallback=False,
+                result="ok",
+            )
+            from core.reply_postprocess import strip_chat_end_punct
+            reply_text = reply_text.strip()
+            if not reply_text.lstrip().startswith("<"):
+                reply_text = strip_chat_end_punct(reply_text)
+            logger.info("[Reply] extracted from tool output len=%d", len(reply_text))
+            response = reply_text
+        else:
+            # 没有真实 tool call——尝试 structured JSON fallback
+            buffer_text = self._output.get_response() if hasattr(self._output, 'get_response') else ""
+            response_text = response.strip() if isinstance(response, str) else ""
+            response_lower = response_text.lower()
+            html_passthrough = False
+
+            if (
+                response_text
+                and (
+                    response_lower.startswith("<!doctype html")
+                    or response_lower.startswith("<html")
+                    or response_lower.startswith("<article")
+                    or "news-brief" in response_lower
+                    or "group-analysis-report" in response_lower
+                )
+            ):
+                logger.info("[Reply] using preserved HTML tool output as final reply len=%d",
+                            len(response_text))
+                reply_source = "html_tool_output"
+                response = response_text
+                html_passthrough = True
+                fallback = None
+            else:
+                fallback = self._parse_structured_final_action(buffer_text)
+
+            if html_passthrough:
+                self._record_reply_contract_check(
+                    trace_id=trace_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                    attempt=0,
+                    raw_output=response_text,
+                    has_reply_tool=False,
+                    has_no_reply_tool=False,
+                    has_structured_fallback=False,
+                    result="ok",
+                )
+            elif fallback and fallback["action"] == "reply":
+                self._record_reply_contract_check(
+                    trace_id=trace_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                    attempt=0,
+                    raw_output=buffer_text or response_text,
+                    has_reply_tool=False,
+                    has_no_reply_tool=False,
+                    has_structured_fallback=True,
+                    result="ok",
+                )
+                from core.reply_postprocess import strip_chat_end_punct
+                reply_text = strip_chat_end_punct(fallback["content"])
+                reply_source = "structured_buffer_reply"
+                # 保存 reply_meta 到 store（与真实 reply 一致）
+                if session_id:
+                    send_mode = fallback.get("send_mode", "normal")
+                    if send_mode not in self._ALLOWED_SEND_MODES:
+                        send_mode = "normal"
+                    self._reply_meta_store()[session_id] = {
+                        "reply_to_message_id": None,
+                        "mentions": fallback.get("mentions", []),
+                        "quote": bool(fallback.get("quote")),
+                        "at_sender": bool(fallback.get("at_sender")),
+                        "send_mode": send_mode,
+                    }
+                logger.info("[Reply] structured_buffer_reply session=%s len=%d", session_id, len(reply_text))
+                self._log_agent_result(session_id, "structured_buffer_reply")
+                response = reply_text
+            elif fallback and fallback["action"] == "no_reply":
+                self._record_reply_contract_check(
+                    trace_id=trace_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                    attempt=0,
+                    raw_output=buffer_text or response_text,
+                    has_reply_tool=False,
+                    has_no_reply_tool=False,
+                    has_structured_fallback=True,
+                    result="ok",
+                )
+                reason = str(fallback.get("reason", ""))
+                logger.info("[Reply] structured_buffer_no_reply session=%s reason=%s",
+                            session_id, reason)
+                _mark_no_reply("no_reply_structured", reason)
+                return ReplyResolution(
+                    response="",
+                    agent_result="no_reply_structured",
+                    no_reply=True,
+                    no_tool_call=False,
+                    output_preview="",
+                    finish_status="no_reply",
+                    error=reason,
+                )
+            else:
+                # 既无 real tool call 也无合法 fallback
+                agent_result = "no_tool_call"
+                if buffer_text and isinstance(buffer_text, str):
+                    from nanobot_kt.reply_contract import detect_no_tool_call_result
+
+                    agent_result = detect_no_tool_call_result(buffer_text)
+                    if agent_result == "fake_tool_call_claim":
+                        logger.warning("[Reply] fake_tool_call_claim session=%s buffer=%.200s",
+                                       session_id, buffer_text)
+
+                self._record_reply_contract_check(
+                    trace_id=trace_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                    attempt=0,
+                    raw_output=buffer_text or response_text,
+                    has_reply_tool=False,
+                    has_no_reply_tool=False,
+                    has_structured_fallback=False,
+                    result=agent_result,
+                )
+                retry_succeeded = False
+                retry_enabled = meta.get("enable_reply_contract_retry", True) is not False
+                if retry_enabled:
+                    try:
+                        logger.warning("[Reply] %s - retrying reply contract once session=%s",
+                                       agent_result, session_id)
+                        _, retry_response = await self._run_reply_contract_retry_once(
+                            raw_model_output=buffer_text or response_text,
+                            trace_id=trace_id,
+                            run_id=run_id,
+                            llm_source=reply_llm_source,
+                        )
+                        response = retry_response
+                        retry_buffer_text = (
+                            self._output.get_response()
+                            if hasattr(self._output, "get_response")
+                            else ""
+                        )
+                        retry_response_text = response.strip() if isinstance(response, str) else ""
+                        retry_reply_text = self._extract_reply_from_tool_output(session_id)
+                        if self.is_no_reply_session(session_id):
+                            self._record_reply_contract_check(
+                                trace_id=trace_id,
+                                run_id=run_id,
+                                session_id=session_id,
+                                attempt=1,
+                                raw_output=retry_buffer_text or retry_response_text,
+                                has_reply_tool=False,
+                                has_no_reply_tool=True,
+                                has_structured_fallback=False,
+                                result="retry_success",
+                            )
+                            logger.info("[Reply] retry produced no_reply session=%s", session_id)
+                            _mark_no_reply("retry_success")
+                            return ReplyResolution(
+                                response="",
+                                agent_result="retry_success",
+                                no_reply=True,
+                                no_tool_call=False,
+                                output_preview="",
+                                finish_status="no_reply",
+                            )
+                        if retry_reply_text:
+                            from core.reply_postprocess import strip_chat_end_punct
+                            retry_reply_text = retry_reply_text.strip()
+                            if not retry_reply_text.lstrip().startswith("<"):
+                                retry_reply_text = strip_chat_end_punct(retry_reply_text)
+                            self._record_reply_contract_check(
+                                trace_id=trace_id,
+                                run_id=run_id,
+                                session_id=session_id,
+                                attempt=1,
+                                raw_output=retry_buffer_text or retry_response_text,
+                                has_reply_tool=True,
+                                has_no_reply_tool=False,
+                                has_structured_fallback=False,
+                                result="retry_success",
+                            )
+                            response = retry_reply_text
+                            reply_source = "reply_tool"
+                            self._log_agent_result(session_id, "retry_success")
+                            retry_succeeded = True
+                        else:
+                            retry_lower = retry_response_text.lower()
+                            retry_html = (
+                                retry_response_text
+                                and (
+                                    retry_lower.startswith("<!doctype html")
+                                    or retry_lower.startswith("<html")
+                                    or retry_lower.startswith("<article")
+                                    or "news-brief" in retry_lower
+                                    or "group-analysis-report" in retry_lower
+                                )
+                            )
+                            retry_fallback = None if retry_html else self._parse_structured_final_action(retry_buffer_text)
+                            if retry_html:
+                                self._record_reply_contract_check(
+                                    trace_id=trace_id,
+                                    run_id=run_id,
+                                    session_id=session_id,
+                                    attempt=1,
+                                    raw_output=retry_response_text,
+                                    has_reply_tool=False,
+                                    has_no_reply_tool=False,
+                                    has_structured_fallback=False,
+                                    result="retry_success",
+                                )
+                                response = retry_response_text
+                                reply_source = "html_tool_output"
+                                self._log_agent_result(session_id, "retry_success")
+                                retry_succeeded = True
+                            elif retry_fallback and retry_fallback["action"] == "reply":
+                                from core.reply_postprocess import strip_chat_end_punct
+                                response = strip_chat_end_punct(retry_fallback["content"])
+                                reply_source = "structured_buffer_reply"
+                                self._record_reply_contract_check(
+                                    trace_id=trace_id,
+                                    run_id=run_id,
+                                    session_id=session_id,
+                                    attempt=1,
+                                    raw_output=retry_buffer_text or retry_response_text,
+                                    has_reply_tool=False,
+                                    has_no_reply_tool=False,
+                                    has_structured_fallback=True,
+                                    result="retry_success",
+                                )
+                                self._log_agent_result(session_id, "retry_success")
+                                retry_succeeded = True
+                            elif retry_fallback and retry_fallback["action"] == "no_reply":
+                                self._record_reply_contract_check(
+                                    trace_id=trace_id,
+                                    run_id=run_id,
+                                    session_id=session_id,
+                                    attempt=1,
+                                    raw_output=retry_buffer_text or retry_response_text,
+                                    has_reply_tool=False,
+                                    has_no_reply_tool=False,
+                                    has_structured_fallback=True,
+                                    result="retry_success",
+                                )
+                                reason = str(retry_fallback.get("reason", ""))
+                                _mark_no_reply("retry_success", reason)
+                                return ReplyResolution(
+                                    response="",
+                                    agent_result="retry_success",
+                                    no_reply=True,
+                                    no_tool_call=False,
+                                    output_preview="",
+                                    finish_status="no_reply",
+                                    error=reason,
+                                )
+                            else:
+                                from nanobot_kt.reply_contract import detect_no_tool_call_result
+
+                                retry_marker_reply_text = _extract_reply_contract_text(
+                                    retry_buffer_text or retry_response_text
+                                )
+                                if retry_marker_reply_text:
+                                    from core.reply_postprocess import strip_chat_end_punct
+
+                                    response = strip_chat_end_punct(retry_marker_reply_text)
+                                    reply_source = "retry_marker_json_repair"
+                                    self._record_reply_contract_check(
+                                        trace_id=trace_id,
+                                        run_id=run_id,
+                                        session_id=session_id,
+                                        attempt=1,
+                                        raw_output=retry_buffer_text or retry_response_text,
+                                        has_reply_tool=False,
+                                        has_no_reply_tool=False,
+                                        has_structured_fallback=False,
+                                        result="retry_marker_json_repair",
+                                    )
+                                    self._log_agent_result(session_id, "retry_marker_json_repair")
+                                    retry_succeeded = True
+                                else:
+                                    retry_agent_result = detect_no_tool_call_result(
+                                        retry_buffer_text or retry_response_text
+                                    )
+                                    plain_text_repair_allowed = (
+                                        retry_agent_result == "no_tool_call"
+                                        and bool(retry_response_text)
+                                        and "[系统内部错误]" not in retry_response_text
+                                        and "[工具错误]" not in retry_response_text
+                                        and "<reply_contract_retry>" not in retry_response_text
+                                        and "NANOBOT_REPLY_OUTPUT" not in retry_response_text
+                                        and not retry_response_text.lstrip().startswith(("<", "{", "["))
+                                    )
+                                    if plain_text_repair_allowed:
+                                        from core.reply_postprocess import strip_chat_end_punct
+
+                                        response = strip_chat_end_punct(retry_response_text)
+                                        reply_source = "retry_plain_text_repair"
+                                        self._record_reply_contract_check(
+                                            trace_id=trace_id,
+                                            run_id=run_id,
+                                            session_id=session_id,
+                                            attempt=1,
+                                            raw_output=retry_buffer_text or retry_response_text,
+                                            has_reply_tool=False,
+                                            has_no_reply_tool=False,
+                                            has_structured_fallback=False,
+                                            result="retry_plain_text_repair",
+                                        )
+                                        self._log_agent_result(session_id, "retry_plain_text_repair")
+                                        retry_succeeded = True
+                                    else:
+                                        self._record_reply_contract_check(
+                                            trace_id=trace_id,
+                                            run_id=run_id,
+                                            session_id=session_id,
+                                            attempt=1,
+                                            raw_output=retry_buffer_text or retry_response_text,
+                                            has_reply_tool=False,
+                                            has_no_reply_tool=False,
+                                            has_structured_fallback=False,
+                                            result="suppressed",
+                                        )
+                    except Exception as e:
+                        logger.error("[Reply] contract retry failed session=%s: %s", session_id, e, exc_info=True)
+                        self._record_reply_contract_check(
+                            trace_id=trace_id,
+                            run_id=run_id,
+                            session_id=session_id,
+                            attempt=1,
+                            raw_output=str(e),
+                            has_reply_tool=False,
+                            has_no_reply_tool=False,
+                            has_structured_fallback=False,
+                            result="suppressed",
+                        )
+
+                if retry_succeeded:
+                    logger.info("[Reply] contract retry succeeded session=%s source=%s", session_id, reply_source)
+                else:
+                    logger.warning("[Reply] NO TOOL CALLED - suppressing buffer output (session=%s agent_result=%s)",
+                                  session_id, agent_result)
+                    if session_id:
+                        store = self._reply_meta_store()
+                        entry = store.get(session_id, {})
+                        entry["_no_tool_call"] = True
+                        store[session_id] = entry
+                    self._log_agent_result(session_id, agent_result)
+                    return ReplyResolution(
+                        response="",
+                        agent_result=agent_result,
+                        no_reply=False,
+                        no_tool_call=True,
+                        output_preview="",
+                        finish_status="suppressed",
+                        error=agent_result,
+                    )
+
+                # retry 成功后继续走统一发送收尾
+
+        return ReplyResolution(
+            response=response,
+            agent_result=reply_source,
+            no_reply=False,
+            no_tool_call=False,
+            output_preview=response,
+            finish_status="success",
+        )
+
     async def handle_message(
         self,
         query: str,
@@ -1642,380 +2082,32 @@ class NanobotBridge:
                 logger.warning(f"[NanobotBridge] EMPTY RESPONSE!")
                 logger.warning(f"[NanobotBridge] buffer={buffer_list}, result={result}")
 
-            # Reply extraction: 优先从 reply() / no_reply() 工具输出提取
-            reply_text = self._extract_reply_from_tool_output(session_id)
-            reply_source = "reply_tool"
-            if self.is_no_reply_session(session_id):
-                self._record_reply_contract_check(
-                    trace_id=trace_id,
-                    run_id=run_handle.run_id,
-                    session_id=session_id,
-                    attempt=0,
-                    raw_output=response,
-                    has_reply_tool=False,
-                    has_no_reply_tool=True,
-                    has_structured_fallback=False,
-                    result="ok",
-                )
-                logger.info("[Reply] no_reply session=%s - skipping message send", session_id)
-                self._log_agent_result(session_id, "no_reply_tool")
+            reply_resolution = await self._check_reply_contract(
+                session_id=session_id,
+                response=response,
+                result=result,
+                preserved_html=preserved_html,
+                target_model=target_model,
+                query=query,
+                meta=meta,
+                event_content=event_content,
+                create_user_event=create_user_event,
+                process_event=process_event,
+                trace_id=trace_id,
+                run_id=run_handle.run_id,
+                reply_llm_source=reply_llm_source,
+            )
+            response = reply_resolution.response
+            reply_source = reply_resolution.agent_result
+            if reply_resolution.finish_status in {"no_reply", "suppressed"}:
                 self._restore_saved_tools()
-                _finish_agent_trace("no_reply", output_preview="", model=locals().get("target_model", ""))
-                return ""
-            if reply_text:
-                self._record_reply_contract_check(
-                    trace_id=trace_id,
-                    run_id=run_handle.run_id,
-                    session_id=session_id,
-                    attempt=0,
-                    raw_output=response,
-                    has_reply_tool=True,
-                    has_no_reply_tool=False,
-                    has_structured_fallback=False,
-                    result="ok",
+                _finish_agent_trace(
+                    reply_resolution.finish_status,
+                    output_preview=reply_resolution.output_preview,
+                    error=reply_resolution.error,
+                    model=target_model,
                 )
-                from core.reply_postprocess import strip_chat_end_punct
-                reply_text = reply_text.strip()
-                if not reply_text.lstrip().startswith("<"):
-                    reply_text = strip_chat_end_punct(reply_text)
-                logger.info("[Reply] extracted from tool output len=%d", len(reply_text))
-                response = reply_text
-            else:
-                # 没有真实 tool call——尝试 structured JSON fallback
-                buffer_text = self._output.get_response() if hasattr(self._output, 'get_response') else ""
-                response_text = response.strip() if isinstance(response, str) else ""
-                response_lower = response_text.lower()
-                html_passthrough = False
-
-                if (
-                    response_text
-                    and (
-                        response_lower.startswith("<!doctype html")
-                        or response_lower.startswith("<html")
-                        or response_lower.startswith("<article")
-                        or "news-brief" in response_lower
-                        or "group-analysis-report" in response_lower
-                    )
-                ):
-                    logger.info("[Reply] using preserved HTML tool output as final reply len=%d",
-                                len(response_text))
-                    reply_source = "html_tool_output"
-                    response = response_text
-                    html_passthrough = True
-                    fallback = None
-                else:
-                    fallback = self._parse_structured_final_action(buffer_text)
-
-                if html_passthrough:
-                    self._record_reply_contract_check(
-                        trace_id=trace_id,
-                        run_id=run_handle.run_id,
-                        session_id=session_id,
-                        attempt=0,
-                        raw_output=response_text,
-                        has_reply_tool=False,
-                        has_no_reply_tool=False,
-                        has_structured_fallback=False,
-                        result="ok",
-                    )
-                elif fallback and fallback["action"] == "reply":
-                    self._record_reply_contract_check(
-                        trace_id=trace_id,
-                        run_id=run_handle.run_id,
-                        session_id=session_id,
-                        attempt=0,
-                        raw_output=buffer_text or response_text,
-                        has_reply_tool=False,
-                        has_no_reply_tool=False,
-                        has_structured_fallback=True,
-                        result="ok",
-                    )
-                    from core.reply_postprocess import strip_chat_end_punct
-                    reply_text = strip_chat_end_punct(fallback["content"])
-                    reply_source = "structured_buffer_reply"
-                    # 保存 reply_meta 到 store（与真实 reply 一致）
-                    if session_id:
-                        send_mode = fallback.get("send_mode", "normal")
-                        if send_mode not in self._ALLOWED_SEND_MODES:
-                            send_mode = "normal"
-                        self._reply_meta_store()[session_id] = {
-                            "reply_to_message_id": None,
-                            "mentions": fallback.get("mentions", []),
-                            "quote": bool(fallback.get("quote")),
-                            "at_sender": bool(fallback.get("at_sender")),
-                            "send_mode": send_mode,
-                        }
-                    logger.info("[Reply] structured_buffer_reply session=%s len=%d", session_id, len(reply_text))
-                    self._log_agent_result(session_id, "structured_buffer_reply")
-                    response = reply_text
-                elif fallback and fallback["action"] == "no_reply":
-                    self._record_reply_contract_check(
-                        trace_id=trace_id,
-                        run_id=run_handle.run_id,
-                        session_id=session_id,
-                        attempt=0,
-                        raw_output=buffer_text or response_text,
-                        has_reply_tool=False,
-                        has_no_reply_tool=False,
-                        has_structured_fallback=True,
-                        result="ok",
-                    )
-                    logger.info("[Reply] structured_buffer_no_reply session=%s reason=%s",
-                                session_id, fallback.get("reason", ""))
-                    self._log_agent_result(session_id, "structured_buffer_no_reply")
-                    self._restore_saved_tools()
-                    _finish_agent_trace(
-                        "no_reply",
-                        error=str(fallback.get("reason", "")),
-                        model=locals().get("target_model", ""),
-                    )
-                    return ""
-                else:
-                    # 既无 real tool call 也无合法 fallback
-                    agent_result = "no_tool_call"
-                    if buffer_text and isinstance(buffer_text, str):
-                        from nanobot_kt.reply_contract import detect_no_tool_call_result
-
-                        agent_result = detect_no_tool_call_result(buffer_text)
-                        if agent_result == "fake_tool_call_claim":
-                            logger.warning("[Reply] fake_tool_call_claim session=%s buffer=%.200s",
-                                           session_id, buffer_text)
-
-                    self._record_reply_contract_check(
-                        trace_id=trace_id,
-                        run_id=run_handle.run_id,
-                        session_id=session_id,
-                        attempt=0,
-                        raw_output=buffer_text or response_text,
-                        has_reply_tool=False,
-                        has_no_reply_tool=False,
-                        has_structured_fallback=False,
-                        result=agent_result,
-                    )
-                    retry_succeeded = False
-                    retry_enabled = meta.get("enable_reply_contract_retry", True) is not False
-                    if retry_enabled:
-                        try:
-                            logger.warning("[Reply] %s - retrying reply contract once session=%s",
-                                           agent_result, session_id)
-                            _, retry_response = await self._run_reply_contract_retry_once(
-                                raw_model_output=buffer_text or response_text,
-                                trace_id=trace_id,
-                                run_id=run_handle.run_id,
-                                llm_source=reply_llm_source,
-                            )
-                            response = retry_response
-                            retry_buffer_text = (
-                                self._output.get_response()
-                                if hasattr(self._output, "get_response")
-                                else ""
-                            )
-                            retry_response_text = response.strip() if isinstance(response, str) else ""
-                            retry_reply_text = self._extract_reply_from_tool_output(session_id)
-                            if self.is_no_reply_session(session_id):
-                                self._record_reply_contract_check(
-                                    trace_id=trace_id,
-                                    run_id=run_handle.run_id,
-                                    session_id=session_id,
-                                    attempt=1,
-                                    raw_output=retry_buffer_text or retry_response_text,
-                                    has_reply_tool=False,
-                                    has_no_reply_tool=True,
-                                    has_structured_fallback=False,
-                                    result="retry_success",
-                                )
-                                logger.info("[Reply] retry produced no_reply session=%s", session_id)
-                                self._log_agent_result(session_id, "retry_success")
-                                self._restore_saved_tools()
-                                _finish_agent_trace("no_reply", output_preview="", model=locals().get("target_model", ""))
-                                return ""
-                            if retry_reply_text:
-                                from core.reply_postprocess import strip_chat_end_punct
-                                retry_reply_text = retry_reply_text.strip()
-                                if not retry_reply_text.lstrip().startswith("<"):
-                                    retry_reply_text = strip_chat_end_punct(retry_reply_text)
-                                self._record_reply_contract_check(
-                                    trace_id=trace_id,
-                                    run_id=run_handle.run_id,
-                                    session_id=session_id,
-                                    attempt=1,
-                                    raw_output=retry_buffer_text or retry_response_text,
-                                    has_reply_tool=True,
-                                    has_no_reply_tool=False,
-                                    has_structured_fallback=False,
-                                    result="retry_success",
-                                )
-                                response = retry_reply_text
-                                reply_source = "reply_tool"
-                                self._log_agent_result(session_id, "retry_success")
-                                retry_succeeded = True
-                            else:
-                                retry_lower = retry_response_text.lower()
-                                retry_html = (
-                                    retry_response_text
-                                    and (
-                                        retry_lower.startswith("<!doctype html")
-                                        or retry_lower.startswith("<html")
-                                        or retry_lower.startswith("<article")
-                                        or "news-brief" in retry_lower
-                                        or "group-analysis-report" in retry_lower
-                                    )
-                                )
-                                retry_fallback = None if retry_html else self._parse_structured_final_action(retry_buffer_text)
-                                if retry_html:
-                                    self._record_reply_contract_check(
-                                        trace_id=trace_id,
-                                        run_id=run_handle.run_id,
-                                        session_id=session_id,
-                                        attempt=1,
-                                        raw_output=retry_response_text,
-                                        has_reply_tool=False,
-                                        has_no_reply_tool=False,
-                                        has_structured_fallback=False,
-                                        result="retry_success",
-                                    )
-                                    response = retry_response_text
-                                    reply_source = "html_tool_output"
-                                    self._log_agent_result(session_id, "retry_success")
-                                    retry_succeeded = True
-                                elif retry_fallback and retry_fallback["action"] == "reply":
-                                    from core.reply_postprocess import strip_chat_end_punct
-                                    response = strip_chat_end_punct(retry_fallback["content"])
-                                    reply_source = "structured_buffer_reply"
-                                    self._record_reply_contract_check(
-                                        trace_id=trace_id,
-                                        run_id=run_handle.run_id,
-                                        session_id=session_id,
-                                        attempt=1,
-                                        raw_output=retry_buffer_text or retry_response_text,
-                                        has_reply_tool=False,
-                                        has_no_reply_tool=False,
-                                        has_structured_fallback=True,
-                                        result="retry_success",
-                                    )
-                                    self._log_agent_result(session_id, "retry_success")
-                                    retry_succeeded = True
-                                elif retry_fallback and retry_fallback["action"] == "no_reply":
-                                    self._record_reply_contract_check(
-                                        trace_id=trace_id,
-                                        run_id=run_handle.run_id,
-                                        session_id=session_id,
-                                        attempt=1,
-                                        raw_output=retry_buffer_text or retry_response_text,
-                                        has_reply_tool=False,
-                                        has_no_reply_tool=False,
-                                        has_structured_fallback=True,
-                                        result="retry_success",
-                                    )
-                                    self._log_agent_result(session_id, "retry_success")
-                                    self._restore_saved_tools()
-                                    _finish_agent_trace(
-                                        "no_reply",
-                                        error=str(retry_fallback.get("reason", "")),
-                                        model=locals().get("target_model", ""),
-                                    )
-                                    return ""
-                                else:
-                                    from nanobot_kt.reply_contract import detect_no_tool_call_result
-
-                                    retry_marker_reply_text = _extract_reply_contract_text(
-                                        retry_buffer_text or retry_response_text
-                                    )
-                                    if retry_marker_reply_text:
-                                        from core.reply_postprocess import strip_chat_end_punct
-
-                                        response = strip_chat_end_punct(retry_marker_reply_text)
-                                        reply_source = "retry_marker_json_repair"
-                                        self._record_reply_contract_check(
-                                            trace_id=trace_id,
-                                            run_id=run_handle.run_id,
-                                            session_id=session_id,
-                                            attempt=1,
-                                            raw_output=retry_buffer_text or retry_response_text,
-                                            has_reply_tool=False,
-                                            has_no_reply_tool=False,
-                                            has_structured_fallback=False,
-                                            result="retry_marker_json_repair",
-                                        )
-                                        self._log_agent_result(session_id, "retry_marker_json_repair")
-                                        retry_succeeded = True
-                                    else:
-                                        retry_agent_result = detect_no_tool_call_result(
-                                            retry_buffer_text or retry_response_text
-                                        )
-                                        plain_text_repair_allowed = (
-                                            retry_agent_result == "no_tool_call"
-                                            and bool(retry_response_text)
-                                            and "[系统内部错误]" not in retry_response_text
-                                            and "[工具错误]" not in retry_response_text
-                                            and "<reply_contract_retry>" not in retry_response_text
-                                            and "NANOBOT_REPLY_OUTPUT" not in retry_response_text
-                                            and not retry_response_text.lstrip().startswith(("<", "{", "["))
-                                        )
-                                        if plain_text_repair_allowed:
-                                            from core.reply_postprocess import strip_chat_end_punct
-
-                                            response = strip_chat_end_punct(retry_response_text)
-                                            reply_source = "retry_plain_text_repair"
-                                            self._record_reply_contract_check(
-                                                trace_id=trace_id,
-                                                run_id=run_handle.run_id,
-                                                session_id=session_id,
-                                                attempt=1,
-                                                raw_output=retry_buffer_text or retry_response_text,
-                                                has_reply_tool=False,
-                                                has_no_reply_tool=False,
-                                                has_structured_fallback=False,
-                                                result="retry_plain_text_repair",
-                                            )
-                                            self._log_agent_result(session_id, "retry_plain_text_repair")
-                                            retry_succeeded = True
-                                        else:
-                                            self._record_reply_contract_check(
-                                                trace_id=trace_id,
-                                                run_id=run_handle.run_id,
-                                                session_id=session_id,
-                                                attempt=1,
-                                                raw_output=retry_buffer_text or retry_response_text,
-                                                has_reply_tool=False,
-                                                has_no_reply_tool=False,
-                                                has_structured_fallback=False,
-                                                result="suppressed",
-                                            )
-                        except Exception as e:
-                            logger.error("[Reply] contract retry failed session=%s: %s", session_id, e, exc_info=True)
-                            self._record_reply_contract_check(
-                                trace_id=trace_id,
-                                run_id=run_handle.run_id,
-                                session_id=session_id,
-                                attempt=1,
-                                raw_output=str(e),
-                                has_reply_tool=False,
-                                has_no_reply_tool=False,
-                                has_structured_fallback=False,
-                                result="suppressed",
-                            )
-
-                    if retry_succeeded:
-                        logger.info("[Reply] contract retry succeeded session=%s source=%s", session_id, reply_source)
-                    else:
-                        logger.warning("[Reply] NO TOOL CALLED - suppressing buffer output (session=%s agent_result=%s)",
-                                      session_id, agent_result)
-                        if session_id:
-                            store = self._reply_meta_store()
-                            entry = store.get(session_id, {})
-                            entry["_no_tool_call"] = True
-                            store[session_id] = entry
-                        self._log_agent_result(session_id, agent_result)
-                        self._restore_saved_tools()
-                        _finish_agent_trace(
-                            "suppressed",
-                            error=agent_result,
-                            model=locals().get("target_model", ""),
-                        )
-                        return ""
-
-                    # retry 成功后继续走统一发送收尾
+                return response
 
             if not response.strip():
                 logger.warning("[NanobotBridge] KT agent returned empty response after strip")

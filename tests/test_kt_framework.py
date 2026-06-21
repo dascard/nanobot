@@ -2036,6 +2036,62 @@ class TestReplyContract:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
+    def test_structured_final_action_no_reply_returns_empty(self, MockAgent, mock_load, monkeypatch):
+        """严格结构化 no_reply fallback 应作为不发送处理。"""
+        import json
+
+        from nanobot_kt.bridge import NanobotBridge
+
+        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.get_failure_tracker", classmethod(lambda cls: None))
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        structured = json.dumps(
+            {"final_action": "no_reply", "reason": "not addressed to bot"},
+            ensure_ascii=False,
+        )
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.return_value = [{"role": "assistant", "content": structured}]
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = -1
+
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(
+            conversation=mock_conv,
+            llm=MagicMock(config=MagicMock(model="test-model")),
+        )
+
+        async def fake_process(_event):
+            bridge._output._buffer.append(structured)
+
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "ambient",
+                user_id="u1",
+                session_id="private_u1",
+                metadata={"enable_reply_contract_retry": False},
+            )
+
+        result = run_async(_run())
+
+        assert result == ""
+        reply_meta = bridge.pop_last_reply_meta("private_u1")
+        assert reply_meta["_agent_result"] == "no_reply_structured"
+        assert reply_meta["_no_reply"] is True
+
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
     def test_no_tool_call_retries_once_and_sends_reply(self, MockAgent, mock_load, db_session, monkeypatch):
         """第一次无 reply/no_reply → bridge 追加纠正 prompt 重试一次，成功后发送 reply。"""
         from core.database import ReplyContractCheckLog
