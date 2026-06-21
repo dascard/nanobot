@@ -25,6 +25,27 @@
 - [x] 已写设计文档：
   `docs/superpowers/specs/2026-06-21-admin-chat-config-routes-split-design.md`。
 - [x] 设计提交：`c3f2f7c docs(管理端): 设计聊天配置路由拆分`。
+- [x] 计划提交：`94606ec docs(计划): 记录聊天配置路由拆分计划`。
+- [x] 红灯测试提交：`ec9ef63 test(管理端): 锁定聊天配置路由拆分契约`。
+- [x] 实现提交：`06d8aa6 refactor(管理端): 拆分聊天配置路由`。
+- [x] 最终状态：`api/admin_routes.py` 已降至 632 行，低于 800 行；P3 超大文件队列
+  当前只剩 `api/routes.py`。
+
+## 执行记录（2026-06-21）
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_admin_chat_config_routes_split.py`
+  -> `4 failed, 3 passed, 21 warnings in 6.32s`。失败点为 endpoint module 仍是
+  `api.admin_routes`、新模块不存在、`/block-rules/test` 路由顺序仍错误，以及目标文件不存在。
+- Split 绿灯：同一命令 -> `7 passed, 21 warnings in 1.19s`。
+- 行为与相邻回归：计划中的 Block / Config / runtime / group-memory / tool / asyncio 组合
+  -> `30 passed, 21 warnings in 7.53s`。
+- 静态检查：`python -B -m compileall api/admin_routes.py api/admin/chat_config_routes.py`
+  成功；`git diff --check -- api/admin_routes.py api/admin/chat_config_routes.py` 无输出；
+  新模块反向导入 / `asyncio.run` / `run_awaitable_sync` 扫描无命中。
+- 行数：`api/admin_routes.py` 632 行，`api/admin/chat_config_routes.py` 396 行，
+  `tests/test_admin_chat_config_routes_split.py` 160 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1567 passed, 6 skipped, 139 warnings in 115.24s`。
 
 ## 子 agent 分工约定
 
@@ -86,7 +107,7 @@
 **文件：**
 - 创建：`tests/test_admin_chat_config_routes_split.py`
 
-- [ ] **步骤 1：创建 split 路由测试文件**
+- [x] **步骤 1：创建 split 路由测试文件**
 
 创建 `tests/test_admin_chat_config_routes_split.py`：
 
@@ -253,7 +274,7 @@ def test_admin_chat_config_routes_do_not_import_parent_admin_routes_or_sync_awai
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -264,7 +285,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_admin_chat_config_routes_s
 预期：FAIL。失败点应来自 endpoint module 仍是 `api.admin_routes`、`api.admin.chat_config_routes`
 尚不存在或 `api/admin/chat_config_routes.py` 文件尚不存在。
 
-- [ ] **步骤 3：提交红灯测试**
+- [x] **步骤 3：提交红灯测试**
 
 ```bash
 git add tests/test_admin_chat_config_routes_split.py
@@ -277,7 +298,7 @@ git commit -m "test(管理端): 锁定聊天配置路由拆分契约"
 - 创建：`api/admin/chat_config_routes.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：创建 `api/admin/chat_config_routes.py`**
+- [x] **步骤 1：创建 `api/admin/chat_config_routes.py`**
 
 从 `api/admin_routes.py` 迁移 `BlockRuleCreate` 至 `delete_config()` 的 Chat Config 区块。
 模块骨架如下：
@@ -319,7 +340,7 @@ router = APIRouter(tags=["admin-chat-config"])
 `/block-rules/test` 在新模块中放在动态 `/block-rules/{rule_id}` 路由声明之前。
 `GET /configs` 在新模块中放在 `/configs/{chat_stream_id:path}` 路由声明之前。
 
-- [ ] **步骤 2：修改父模块聚合和 re-export**
+- [x] **步骤 2：修改父模块聚合和 re-export**
 
 在 `api/admin_routes.py` 中导入：
 
@@ -373,7 +394,7 @@ router.include_router(runtime_router)
 确认父模块删除不再使用的 import：`ChatStreamConfig`、`UserBlockRule`、`ContentBlockRule`、
 `User`、`Optional`、`Field`。若引用扫描显示仍有使用，按扫描结果保留。
 
-- [ ] **步骤 3：运行 split 绿灯**
+- [x] **步骤 3：运行 split 绿灯**
 
 运行：
 
@@ -383,7 +404,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_admin_chat_config_routes_s
 
 预期：PASS，所有 Chat Config route endpoint module 均为 `api.admin.chat_config_routes`。
 
-- [ ] **步骤 4：运行行为回归**
+- [x] **步骤 4：运行行为回归**
 
 运行：
 
@@ -403,7 +424,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 5：静态验证**
+- [x] **步骤 5：静态验证**
 
 运行：
 
@@ -417,7 +438,7 @@ wc -l api/admin_routes.py api/admin/chat_config_routes.py tests/test_admin_chat_
 预期：`compileall` 和 `git diff --check` 退出码为 0；`rg` 无命中，退出码为 1；
 `api/admin_routes.py` 少于 800 行。
 
-- [ ] **步骤 6：提交实现**
+- [x] **步骤 6：提交实现**
 
 ```bash
 git add api/admin_routes.py api/admin/chat_config_routes.py
@@ -431,7 +452,7 @@ git commit -m "refactor(管理端): 拆分聊天配置路由"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-chat-config-routes-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下追加本阶段进展：
 
@@ -443,16 +464,16 @@ git commit -m "refactor(管理端): 拆分聊天配置路由"
     audit action/detail 和 `/configs` 静态路由顺序。
 ```
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-21 Admin Chat Config 路由拆分` 小节，记录设计提交、计划提交、红灯测试提交、
 实现提交、验证结果、行数变化和执行边界。
 
-- [ ] **步骤 3：勾选本计划当前任务状态**
+- [x] **步骤 3：勾选本计划当前任务状态**
 
 将已经完成的步骤由 `- [ ]` 改为 `- [x]`，并补充实际验证输出和提交 SHA。
 
-- [ ] **步骤 4：运行最终验证**
+- [x] **步骤 4：运行最终验证**
 
 运行：
 
@@ -476,7 +497,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：全部通过。若全量测试失败，先按失败信息修复并重新运行相关测试，不能只更新文档。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/admin-chat-config-routes-split.md

@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `admin_routes.py`(1009)、`routes.py`(2822)。按职责拆模块；`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，三者不再属于当前 >800 行清单。
+  `api/routes.py`(2822)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/admin_routes.py`、`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -175,6 +175,16 @@
     `1560 passed, 6 skipped, 139 warnings in 111.58s`。下一刀候选为 Settings，
     或先为普通 API 拆分设计 `verify_token` common auth；P3 队列仍剩
     `api/admin_routes.py` 1009 行、`api/routes.py` 2822 行。
+  - 进展：`api/admin_routes.py` 第十刀已拆出 Chat Config 管理端路由到
+    `api/admin/chat_config_routes.py`；旧 `api.admin_routes` 继续 re-export
+    迁移后的 request model、helper 和 15 个 endpoint，保留 HTTP 路径、
+    admin token monkeypatch、Block / ContentBlock / Config response shape、
+    audit action/detail、`/configs` 静态路由顺序和 `/block-rules/test` 静态路由顺序。
+    `api/admin_routes.py` 从 1009 行降至 632 行，已低于 800 行；新模块
+    `api/admin/chat_config_routes.py` 为 396 行，拆分测试为 160 行。验证结果：
+    红灯 `4 failed, 3 passed`，split 绿灯 `7 passed`，行为与相邻回归 `30 passed`，
+    静态检查通过，全量回归 `1567 passed, 6 skipped, 139 warnings in 115.24s`。
+    P3 超大文件队列当前只剩 `api/routes.py` 2822 行。
   - 进展：`creatures/nanobot/prompts/skills/news_search/tool.py` 第一刀已拆出
     旧版新闻报告 helper 到 `news_search/legacy_report.py`；`tool.py` 从 1835 行降至
     1149 行，搜索后端、AI 日报工具、缓存和 `_summarize_news_layout()` 当时仍留在旧文件。

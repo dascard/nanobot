@@ -5,7 +5,7 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-21
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；本文件后续阶段记录以 `api/admin_routes.py` 和 `api/routes.py` 的模块边界收敛为主。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。同日续跑补记：测试 helper 的 `asyncio.Runner` 兼容性问题已随 `cfdd9c2 test(异步): 移除 Runner 测试依赖` 收口，提交前全量回归结果为 `1380 passed, 6 skipped, 139 warnings in 100.75s`，非 vendor Python 代码中无 `asyncio.Runner` 命中。TimingGate scoring 可观测性收尾也已完成：设计提交 `4824036 docs(时机): 设计评分可观测收尾`，计划提交 `2820f7a docs(计划): 记录评分可观测收尾计划`，实现提交 `9d5817c feat(时机): 补齐评分可观测字段`；验证包括红灯 `s_transport_tier` 缺失、绿灯 `1 passed`、相邻回归 `7 passed`、WebUI build 退出码 0、全量回归 `1380 passed, 6 skipped, 139 warnings in 103.22s`。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
@@ -2728,7 +2728,7 @@ facade 导入，外部导入路径兼容。
 
 下一步：
 
-P3 超大文件队列当前只剩 `api/admin_routes.py` 和 `api/routes.py` 两个硬项；如果先做
+当时 P3 超大文件队列只剩 `api/admin_routes.py` 和 `api/routes.py` 两个硬项；如果先做
 低风险质量收尾，则可以进入「ruff 批量清理」。
 
 ## 2026-06-21 Admin Sticker 路由拆分
@@ -3338,3 +3338,82 @@ vacuum、`/model-replies` 和普通 `api/routes.py` 不进入本阶段。`api/ad
 
 P3 超大文件队列仍剩 `api/admin_routes.py` 1009 行、`api/routes.py` 2822 行。继续沿
 管理端拆分时，下一刀可考虑 Settings；切普通 API 前应先设计 `verify_token` 共享兼容层。
+
+## 2026-06-21 Admin Chat Config 路由拆分
+
+状态：设计、计划、红灯测试、实现、验证和实现阶段提交已完成。`api/admin_routes.py`
+已拆出 Block / ContentBlock / ChatStreamConfig 管理端路由到
+`api/admin/chat_config_routes.py`；旧 `api.admin_routes` 继续 include 新 router，并
+re-export 迁移后的 request model、helper 和 15 个 endpoint，保持旧导入路径、HTTP
+路径、admin token monkeypatch、Block / ContentBlock / Config response shape、audit
+action/detail、`/configs` 静态路由顺序和 `/block-rules/test` 静态路由顺序。
+Prompt effective preview、`/model-replies`、DB backup / vacuum、Settings 和普通
+`api/routes.py` 不进入本阶段。`api/admin_routes.py` 从 1009 行降至 632 行，新模块
+`api/admin/chat_config_routes.py` 为 396 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-admin-chat-config-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/admin-chat-config-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`c3f2f7c docs(管理端): 设计聊天配置路由拆分`。
+- 计划提交：`94606ec docs(计划): 记录聊天配置路由拆分计划`。
+- 红灯测试提交：`ec9ef63 test(管理端): 锁定聊天配置路由拆分契约`。
+- 实现提交：`06d8aa6 refactor(管理端): 拆分聊天配置路由`。
+
+已完成：
+
+- [x] 新增 `tests/test_admin_chat_config_routes_split.py`，锁定 15 个 Chat Config route
+  的 endpoint module、legacy import、token monkeypatch、重复注册、`/configs` 静态
+  路由顺序、`/block-rules/test` 静态路由顺序和反向导入 / awaitable 扫描。
+- [x] 新增 `api/admin/chat_config_routes.py`，承载 BlockRule、ContentBlockRule、
+  ChatStreamConfig 的 request model、response helper、chat stream 列表、配置默认值、
+  effective configs 合并和 CRUD endpoint。
+- [x] `api/admin_routes.py` include `chat_config_router`，并 re-export 迁移符号。
+- [x] 新模块使用 `api.admin.common.verify_admin`、`audit()`、`audit_request()` 和
+  `client_ip()`；不反向导入 `api.admin_routes`。
+- [x] `/block-rules/test` 已移动到动态 `/block-rules/{rule_id}` 前，避免被动态路由吞掉。
+- [x] 红灯测试单独提交，符合用户「每完成一个阶段性改动都 commit 一次」的要求。
+
+验证记录：
+
+- 红灯：`tests/test_admin_chat_config_routes_split.py -q` ->
+  `4 failed, 3 passed, 21 warnings in 6.32s`；失败点为 endpoint module 仍是
+  `api.admin_routes`、`api.admin.chat_config_routes` 尚不存在、`/block-rules/test`
+  仍排在动态路由后，以及 `api/admin/chat_config_routes.py` 文件不存在。
+- 绿灯：`tests/test_admin_chat_config_routes_split.py -q` ->
+  `7 passed, 21 warnings in 1.19s`。
+- 行为与相邻回归：
+  `tests/test_admin_api.py::TestBlockRule`、
+  `tests/test_admin_api.py::TestPrivateBlockFlow::test_blocked_user_chat_writes_log_with_files`、
+  `tests/test_api.py::test_effective_configs_*`、
+  `tests/test_admin_runtime_routes_split.py`、
+  `tests/test_admin_group_memory_routes_split.py`、
+  `tests/test_admin_tool_routes_split.py`、
+  `tests/test_asyncio_run_policy.py` ->
+  `30 passed, 21 warnings in 7.53s`。
+- 静态检查：`python -B -m compileall api/admin_routes.py api/admin/chat_config_routes.py`
+  成功；`git diff --check -- api/admin_routes.py api/admin/chat_config_routes.py` 无输出；
+  `rg -n "from api\.admin_routes|import api\.admin_routes|asyncio\.run|run_awaitable_sync" api/admin/chat_config_routes.py`
+  无命中，退出码为 1。
+- 行数检查：`api/admin_routes.py` 632 行，`api/admin/chat_config_routes.py` 396 行，
+  `tests/test_admin_chat_config_routes_split.py` 160 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1567 passed, 6 skipped, 139 warnings in 115.24s`。
+
+执行约束：
+
+- 不拆普通 `api/routes.py`。
+- 不抽 `verify_token` common auth。
+- 不迁移 Prompt effective preview、`/model-replies`、DB backup / vacuum 或 Settings。
+- 不改变 Prompt Runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime
+  输入。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前只剩 `api/routes.py` 2822 行。继续拆普通 API 前，应先设计
+`verify_token` 共享兼容层并明确 `/chat`、`/group/message`、搜索 / 回忆等端点的模块边界。
