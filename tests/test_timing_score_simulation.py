@@ -91,3 +91,53 @@ def test_simulation_does_not_mutate_live_timing_defaults():
     assert before.action == "no_reply"
     assert after.action == before.action
     assert after.signals.sub_signals["s_ack"] == before.signals.sub_signals["s_ack"]
+
+
+def test_simulation_replays_audit_sample_with_timing_input():
+    from evals.timing_score_simulation import simulate_timing_candidates
+
+    audit_samples = [
+        {
+            "log_id": 101,
+            "signal_name": "s_ack",
+            "final_timing_action": "continue",
+            "timing_input": {
+                "text": "好的",
+                "is_group": True,
+                "is_at_bot": True,
+                "trigger_reason": "at_bot",
+            },
+        }
+    ]
+
+    report = simulate_timing_candidates(
+        [],
+        [_candidate()],
+        audit_samples=audit_samples,
+    )
+
+    assert report["sources"]["audit_sample_count"] == 1
+    assert report["sources"]["skipped_audit_sample_count"] == 0
+    assert report["flip_count"] == 1
+    assert all(
+        item["source_type"] == "timing_signal_audit_sample"
+        for item in report["flips"]
+    )
+    assert report["flips"][0]["log_id"] == 101
+    assert report["flips"][0]["signal_name"] == "s_ack"
+
+
+def test_simulation_skips_audit_sample_without_timing_input():
+    from evals.timing_score_simulation import simulate_timing_candidates
+
+    report = simulate_timing_candidates(
+        [],
+        [_candidate()],
+        audit_samples=[
+            {"log_id": 101, "signal_name": "s_ack", "text_preview": "好的"}
+        ],
+    )
+
+    assert report["sources"]["audit_sample_count"] == 0
+    assert report["sources"]["skipped_audit_sample_count"] == 1
+    assert report["flip_count"] == 0

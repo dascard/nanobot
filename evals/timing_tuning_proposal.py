@@ -131,6 +131,29 @@ def _truth_stats(payload: dict[str, Any] | None) -> dict[str, int]:
     return stats
 
 
+def _missing_replay_input_count(payload: dict[str, Any] | None) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    samples = payload.get("samples")
+    if not isinstance(samples, list):
+        return 0
+    missing = 0
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        expected = ""
+        for field in ("final_timing_action", "timing_action_truth", "expected_action"):
+            value = str(sample.get(field) or "").strip()
+            if value:
+                expected = value
+                break
+        if expected not in FINAL_TIMING_ACTIONS:
+            continue
+        if not isinstance(sample.get("timing_input"), dict):
+            missing += 1
+    return missing
+
+
 def _is_latest_audit_path(path: Path) -> bool:
     return path.name == "timing_signal_audit_latest.json"
 
@@ -297,6 +320,11 @@ def _empty_simulation(candidate_count: int = 0) -> dict[str, Any]:
         "case_count": 0,
         "candidate_count": candidate_count,
         "flip_count": 0,
+        "sources": {
+            "eval_case_count": 0,
+            "audit_sample_count": 0,
+            "skipped_audit_sample_count": 0,
+        },
         "flips": [],
         "aggregates": [],
     }
@@ -375,6 +403,15 @@ def build_timing_tuning_proposal(
                     "invalid_action_truth",
                     "TimingSignal audit 包含非法 final_timing_action",
                     invalid_count=truth["invalid"],
+                )
+            )
+        missing_replay_input = _missing_replay_input_count(timing_audit)
+        if missing_replay_input > 0:
+            blocking.append(
+                _reason(
+                    "missing_replay_input",
+                    "TimingSignal audit truth 样本缺少 timing_input，无法重放模拟",
+                    missing_count=missing_replay_input,
                 )
             )
 
@@ -521,9 +558,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     from evals.timing_score_simulation import load_timing_cases, simulate_timing_candidates
 
+    audit_samples = (
+        timing_audit.get("samples")
+        if isinstance(timing_audit, dict)
+        and isinstance(timing_audit.get("samples"), list)
+        else []
+    )
     simulation = simulate_timing_candidates(
         load_timing_cases(cases_path),
         raw_candidates,
+        audit_samples=audit_samples,
     )
 
     payload = build_timing_tuning_proposal(

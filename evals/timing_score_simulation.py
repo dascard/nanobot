@@ -86,6 +86,27 @@ def _case_id(case: dict[str, Any]) -> str:
     return str(case.get("case_id") or case.get("id") or "unknown")
 
 
+def _sample_expected_action(sample: dict[str, Any]) -> str:
+    for field in ("final_timing_action", "timing_action_truth", "expected_action"):
+        value = str(sample.get(field) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _audit_sample_case(sample: dict[str, Any]) -> dict[str, Any] | None:
+    timing_input = sample.get("timing_input")
+    if not isinstance(timing_input, dict):
+        return None
+    log_id = sample.get("log_id")
+    signal_name = str(sample.get("signal_name") or "")
+    return {
+        "case_id": f"audit:{log_id or 'unknown'}:{signal_name or 'unknown'}",
+        "input": dict(timing_input),
+        "expected": {"timing_action": _sample_expected_action(sample)},
+    }
+
+
 def _last_message_text(messages: Any) -> str:
     if not isinstance(messages, list):
         return ""
@@ -527,9 +548,43 @@ def _risk_tag(expected: str, before: str, after: str) -> str:
 def simulate_timing_candidates(
     cases: list[dict[str, Any]],
     candidates: list[dict[str, Any]],
+    *,
+    audit_samples: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     flips: list[dict[str, Any]] = []
     aggregates: list[dict[str, Any]] = []
+    sources = {
+        "eval_case_count": len(cases),
+        "audit_sample_count": 0,
+        "skipped_audit_sample_count": 0,
+    }
+    replay_cases: list[dict[str, Any]] = [
+        {
+            "case": case,
+            "source_type": "eval_case",
+            "log_id": None,
+            "signal_name": "",
+        }
+        for case in cases
+        if isinstance(case, dict)
+    ]
+    for sample in audit_samples or []:
+        if not isinstance(sample, dict):
+            sources["skipped_audit_sample_count"] += 1
+            continue
+        sample_case = _audit_sample_case(sample)
+        if sample_case is None:
+            sources["skipped_audit_sample_count"] += 1
+            continue
+        sources["audit_sample_count"] += 1
+        replay_cases.append(
+            {
+                "case": sample_case,
+                "source_type": "timing_signal_audit_sample",
+                "log_id": sample.get("log_id"),
+                "signal_name": str(sample.get("signal_name") or ""),
+            }
+        )
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
@@ -544,9 +599,8 @@ def simulate_timing_candidates(
             "regression_risk": 0,
             "neutral_flip": 0,
         }
-        for case in cases:
-            if not isinstance(case, dict):
-                continue
+        for item in replay_cases:
+            case = item["case"]
             kwargs = _decision_kwargs(case)
             before = _public_decision(decide_timing(**kwargs))
             after = _simulate_decision(kwargs, param_diff)
@@ -559,6 +613,7 @@ def simulate_timing_candidates(
                 {
                     "candidate_id": candidate_id,
                     "case_id": _case_id(case),
+                    "source_type": item["source_type"],
                     "source_ref": str(case.get("source_ref") or ""),
                     "expected_action": expected,
                     "before": before,
@@ -575,13 +630,15 @@ def simulate_timing_candidates(
                         if isinstance(case.get("input"), dict)
                         else ""
                     ),
+                    "log_id": item["log_id"],
+                    "signal_name": item["signal_name"],
                 }
             )
         flip_count = sum(risk_counts.values())
         aggregates.append(
             {
                 "candidate_id": candidate_id,
-                "case_count": len(cases),
+                "case_count": len(replay_cases),
                 "flip_count": flip_count,
                 "expected_improved_count": risk_counts["expected_improved"],
                 "regression_risk_count": risk_counts["regression_risk"],
@@ -593,6 +650,7 @@ def simulate_timing_candidates(
         "case_count": len(cases),
         "candidate_count": len(candidates),
         "flip_count": len(flips),
+        "sources": sources,
         "flips": flips,
         "aggregates": aggregates,
     }

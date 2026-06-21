@@ -118,7 +118,9 @@ def test_proposal_blocks_audit_run_mismatch_and_invalid_truth():
         ),
         baseline={"suite": "timing_gate"},
         params=_params(),
-        source_paths={"timing_audit": "evals/reports/runs/run_1/timing_signal_audit.json"},
+        source_paths={
+            "timing_audit": "evals/reports/runs/run_1/timing_signal_audit.json",
+        },
     )
 
     assert "audit_run_mismatch" in _reason_codes(report)
@@ -166,6 +168,31 @@ def test_proposal_candidate_governance_blocks_duplicate_id_and_empty_diff():
     assert report["candidate_sets"][1]["evidence_refs"] == [
         {"type": "timing_signal_audit_sample", "log_id": 101}
     ]
+
+
+def test_proposal_blocks_truth_sample_without_replay_input():
+    from evals.timing_tuning_proposal import build_timing_tuning_proposal
+
+    report = build_timing_tuning_proposal(
+        manifest=_manifest(),
+        trends=_trends(),
+        analysis=_analysis(),
+        timing_audit=_audit(
+            samples=[
+                {
+                    "log_id": 101,
+                    "signal_name": "s_ack",
+                    "final_timing_action": "continue",
+                }
+            ],
+            source={"mode": "sampled", "run_id": "run_1"},
+        ),
+        baseline={"suite": "timing_gate"},
+        params=_params(),
+        source_paths={"timing_audit": "evals/reports/runs/run_1/timing_signal_audit.json"},
+    )
+
+    assert "missing_replay_input" in _reason_codes(report)
 
 
 def test_timing_tuning_proposal_parser_defaults_params_and_accepts_run_id():
@@ -301,7 +328,21 @@ def test_timing_tuning_proposal_cli_writes_report(tmp_path, capsys):
     )
     audit.write_text(
         json.dumps(
-            _audit(samples=[{"expected_action": "continue"}]),
+            _audit(
+                samples=[
+                    {
+                        "log_id": 101,
+                        "signal_name": "s_ack",
+                        "final_timing_action": "continue",
+                        "timing_input": {
+                            "text": "好的",
+                            "is_group": True,
+                            "is_at_bot": True,
+                            "trigger_reason": "at_bot",
+                        },
+                    }
+                ]
+            ),
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -371,7 +412,21 @@ def test_timing_tuning_proposal_cli_preserves_analysis_blocking(tmp_path):
     )
     audit.write_text(
         json.dumps(
-            _audit(samples=[{"expected_action": "continue"}]),
+            _audit(
+                samples=[
+                    {
+                        "log_id": 101,
+                        "signal_name": "s_ack",
+                        "final_timing_action": "continue",
+                        "timing_input": {
+                            "text": "好的",
+                            "is_group": True,
+                            "is_at_bot": True,
+                            "trigger_reason": "at_bot",
+                        },
+                    }
+                ]
+            ),
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -437,7 +492,21 @@ def test_timing_tuning_proposal_cli_includes_case_simulation(tmp_path):
     )
     audit.write_text(
         json.dumps(
-            _audit(samples=[{"expected_action": "continue"}]),
+            _audit(
+                samples=[
+                    {
+                        "log_id": 101,
+                        "signal_name": "s_ack",
+                        "final_timing_action": "continue",
+                        "timing_input": {
+                            "text": "好的",
+                            "is_group": True,
+                            "is_at_bot": True,
+                            "trigger_reason": "at_bot",
+                        },
+                    }
+                ]
+            ),
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -492,5 +561,10 @@ def test_timing_tuning_proposal_cli_includes_case_simulation(tmp_path):
     assert exit_code == 0
     assert payload["simulation"]["case_count"] == 1
     assert payload["simulation"]["candidate_count"] == 1
-    assert payload["simulation"]["flip_count"] == 1
+    assert payload["simulation"]["flip_count"] == 2
     assert payload["simulation"]["flips"][0]["case_id"] == "at_bot_ack_continue_001"
+    assert payload["simulation"]["sources"]["audit_sample_count"] == 1
+    assert {
+        item["source_type"]
+        for item in payload["simulation"]["flips"]
+    } == {"eval_case", "timing_signal_audit_sample"}

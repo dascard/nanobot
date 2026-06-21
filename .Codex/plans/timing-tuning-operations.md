@@ -26,7 +26,7 @@
 - [x] 设计：写入 `docs/superpowers/specs/2026-06-21-timing-tuning-operations-design.md`，提交 `4f7d13a docs(时机): 设计调参提案运营链路`。
 - [x] 任务 1：TimingSignal audit 支持 run source 与 `final_timing_action` 合同。
 - [x] 任务 2：proposal 收紧 run-scoped 输入与候选参数治理。
-- [ ] 任务 3：simulation 标识真实 audit 样本来源并守住 `timing_input`。
+- [x] 任务 3：simulation 标识真实 audit 样本来源并守住 `timing_input`。
 - [ ] 任务 4：Admin 增加 record-only proposal review API。
 - [ ] 任务 5：WebUI 展示审核状态并提供记录型审核入口。
 - [ ] 任务 6：文档收口、计划勾选和最终验证。
@@ -545,7 +545,7 @@ git commit -m "feat(评测): 收紧调参提案输入合同"
 - 测试：`tests/test_timing_score_simulation.py`
 - 测试：`tests/test_timing_tuning_proposal.py`
 
-- [ ] **步骤 1：编写 audit sample simulation 测试**
+- [x] **步骤 1：编写 audit sample simulation 测试**
 
 在 `tests/test_timing_score_simulation.py` 新增：
 
@@ -591,7 +591,7 @@ def test_simulation_skips_audit_sample_without_timing_input():
     assert report["sources"]["skipped_audit_sample_count"] == 1
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -601,7 +601,7 @@ python -B -m pytest tests/test_timing_score_simulation.py -q -p no:cacheprovider
 
 预期：新增测试失败，报错包含 `unexpected keyword argument 'audit_samples'` 或缺 `sources`。
 
-- [ ] **步骤 3：实现 audit sample 输入**
+- [x] **步骤 3：实现 audit sample 输入**
 
 在 `evals/timing_score_simulation.py` 中把函数签名改为：
 
@@ -632,7 +632,7 @@ sources = {
 "signal_name": sample.get("signal_name"),
 ```
 
-- [ ] **步骤 4：proposal 注入 audit samples**
+- [x] **步骤 4：proposal 注入 audit samples**
 
 在 `evals/timing_tuning_proposal.py` CLI 中：
 
@@ -651,7 +651,7 @@ simulation = simulate_timing_candidates(
 
 如果 `timing_audit["samples"]` 中存在合法 `final_timing_action` 但缺 `timing_input`，`build_timing_tuning_proposal()` 增加 `missing_replay_input` blocking。
 
-- [ ] **步骤 5：运行任务测试**
+- [x] **步骤 5：运行任务测试**
 
 运行：
 
@@ -661,7 +661,7 @@ python -B -m pytest tests/test_timing_score_simulation.py tests/test_timing_tuni
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交任务 3**
+- [x] **步骤 6：提交任务 3**
 
 运行：
 
