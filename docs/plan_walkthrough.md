@@ -2088,34 +2088,42 @@ H29 第一轮拆分已无未完成任务。默认回到 `docs/todo.md` 的剩余
 
 ## 2026-06-21 H30 RAG query 拆分计划
 
-状态：H30 设计与实现计划已完成，代码拆分尚未开始。当前边界是先用 characterization tests 锁住 `KnowledgeRagService.query()` 与 `MemoryRagService.query()` 的外部契约，再分别在两个模块内拆出 recall、filter、rerank、gate 和 result helper；第一轮不抽跨模块 RAG base。
+状态：H30 第一轮拆分已完成。`KnowledgeRagService.query()` 和 `MemoryRagService.query()` 的 public signature、result envelope、`stats`、`debug_trace`、degraded 语义、RAG benchmark adapter 和 Admin debug 消费契约保持不变；内部已按 recall、filter、rerank、gate 和 result 阶段拆出模块内私有边界。第一轮不抽跨模块 RAG base，避免 knowledge citation / document filter 与 memory parent grouping 过早绑定。
 
 已完成：
 
 - [x] 读取 `docs/todo.md` H30 条目，确认当前 HIGH 项是 `core/knowledge_rag.py` 与 `core/memory_rag.py` 中 `query()` 巨型流程拆分。
 - [x] 分派只读 explorer 审计 H30 范围、测试覆盖、public contract 与 TimingGate 余留风险。
 - [x] 收口 TimingGate cooldown fallback delay 补漏，提交 `69f2248 fix(TimingGate): 裁剪冷却回退等待时长`；验证为 `tests/test_timing_runtime.py` 63 passed、TimingGate 相关回归 124 passed、全量 `1469 passed, 6 skipped, 139 warnings in 115.50s`。
-- [x] 写入设计文档：`docs/superpowers/specs/2026-06-21-h30-rag-query-refactor-design.md`。
-- [x] 设计阶段提交：`417f09b docs(检索): 设计 RAG 查询拆分`。
-- [x] 写入实现计划：`.Codex/plans/h30-rag-query-refactor.md`。
+- [x] 写入设计文档：`docs/superpowers/specs/2026-06-21-h30-rag-query-refactor-design.md`，提交 `417f09b docs(检索): 设计 RAG 查询拆分`。
+- [x] 写入实现计划：`.Codex/plans/h30-rag-query-refactor.md`，提交 `9d4a58b docs(计划): 记录 RAG 查询拆分计划`。
+- [x] 任务 1：补 query contract characterization tests，提交 `c319b4f test(检索): 锁定 RAG 查询契约`。
+- [x] 任务 2：拆分 `KnowledgeRagService.query()`，提交 `ba512f6 refactor(检索): 拆分知识查询流程`。
+- [x] 任务 3：拆分 `MemoryRagService.query()`，提交 `5391274 refactor(检索): 拆分记忆查询流程`。
+- [x] 任务 4：同步 `docs/todo.md`、`docs/plan_walkthrough.md` 和计划状态。
 
 H30 计划列表：
 
 - [x] 阶段 0：只读审计、方案选择和设计文档。
 - [x] 阶段 0.5：实现计划写入 `.Codex/plans/h30-rag-query-refactor.md` 并同步 walkthrough。
-- [ ] 阶段 1：补 query contract characterization tests，覆盖 knowledge / memory 的 `stats`、`debug_trace`、`score_breakdown`、degraded、recall 越界和 skip reason。
-- [ ] 阶段 2：拆分 `KnowledgeRagService.query()`，保持 public signature、result envelope、citation 过滤和 benchmark / Admin debug 消费契约不变。
-- [ ] 阶段 3：拆分 `MemoryRagService.query()`，保持 source filter、parent grouping、reranker budget、weak fallback skip reason 和 degraded 语义不变。
-- [ ] 阶段 4：同步 `docs/todo.md`、`docs/plan_walkthrough.md` 和计划状态，记录提交号与验证结果。
+- [x] 阶段 1：补 query contract characterization tests，覆盖 knowledge / memory 的 `stats`、`debug_trace`、`score_breakdown`、degraded、recall 越界和 skip reason。
+- [x] 阶段 2：拆分 `KnowledgeRagService.query()`，保持 public signature、result envelope、citation 过滤和 benchmark / Admin debug 消费契约不变。
+- [x] 阶段 3：拆分 `MemoryRagService.query()`，保持 source filter、parent grouping、reranker budget、weak fallback skip reason 和 degraded 语义不变。
+- [x] 阶段 4：同步 `docs/todo.md`、`docs/plan_walkthrough.md` 和计划状态，记录提交号与验证结果。
 
 执行约束：
 
 - 不新增 `asyncio.run()`，不新增同步函数包 awaitable。
 - 第一轮只在 `core/knowledge_rag.py` 和 `core/memory_rag.py` 内抽私有 dataclass/helper。
-- 任务 1 的测试补强可以分派给两个子 agent，写入范围分别限制在 `tests/test_knowledge_rag.py` 与 `tests/test_memory_query_rag.py`。
 - 生产代码拆分由主线程串行持有，避免跨 agent 合并同类语义改动。
 - 每个阶段完成后运行定向回归和 `python -m pytest tests/ -v`，再按文件显式暂存并提交。
 
+验证记录：
+
+- 任务 1 目标用例：`10 passed, 1 warning in 1.67s`；RAG 相邻回归：`67 passed, 21 warnings in 8.14s`；全量回归：`1477 passed, 6 skipped, 139 warnings in 108.80s`。
+- 任务 2 knowledge 定向：`17 passed, 21 warnings in 2.70s`；RAG 相邻回归：`67 passed, 21 warnings in 8.06s`；提交前全量回归：`1477 passed, 6 skipped, 139 warnings in 111.94s`。
+- 任务 3 memory 定向：`19 passed, 21 warnings in 2.44s`；RAG 相邻回归：`67 passed, 21 warnings in 7.95s`；提交前全量回归：`1477 passed, 6 skipped, 139 warnings in 114.59s`。
+
 下一步：
 
-进入阶段 1，先按 TDD 补 query contract characterization tests；这一阶段只修改 `tests/test_knowledge_rag.py` 和 `tests/test_memory_query_rag.py`，提交建议为 `test(检索): 锁定 RAG 查询契约`。
+默认回到 `docs/todo.md` 的剩余 P3/P4 项。H30 公共 recall helper 可在两个模块稳定运行后单独评估；不作为第一轮拆分阻塞项。

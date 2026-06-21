@@ -107,8 +107,8 @@
 - [x] **H29 handle_message 1080 行 + 深嵌套** · `nanobot_kt/bridge.py:860-1940` · HIGH(可维护) · L ·〔呼应路线图 §1〕
   已完成第一轮拆分：低风险 request helper、模型重试循环、reply contract 出口治理和 trace cleanup 已拆成私有边界；public signature、metadata、stream 侧通道和 `pop_last_reply_meta()` 语义保持不变。阶段提交为 `e65575c`、`1da43fb`、`786e707`、`1612158`。
 
-- [ ] **H30 RAG query() ~337 行** · `core/knowledge_rag.py:122-459` / `core/memory_rag.py:126-349` · HIGH(可维护) · L ·〔呼应路线图 §6〕
-  **修**：拆 `_recall`/`_filter_candidates`/`_rerank`/`_build_result`。
+- [x] **H30 RAG query() ~337 行** · `core/knowledge_rag.py:122-459` / `core/memory_rag.py:126-349` · HIGH(可维护) · L ·〔呼应路线图 §6〕
+  已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
   `admin_routes.py`(5849)、`routes.py`(2966)、`news_search/tool.py`(1831)、`context_builder.py`(907)、`group_runtime/runtime.py`(829)、`persona_preprocess.py`(856)。按职责拆模块。

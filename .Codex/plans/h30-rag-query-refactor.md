@@ -16,10 +16,10 @@
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-h30-rag-query-refactor-design.md`。
 - [x] 设计阶段已提交：`417f09b docs(检索): 设计 RAG 查询拆分`。
 - [x] 设计阶段验证已运行：红旗词扫描无输出，`git diff --check` 无输出，`python -m pytest tests/ -v` 结果 `1469 passed, 6 skipped, 139 warnings in 114.20s`。
-- [ ] 任务 1：补 query contract characterization tests。
-- [ ] 任务 2：拆分 `KnowledgeRagService.query()`。
-- [ ] 任务 3：拆分 `MemoryRagService.query()`。
-- [ ] 任务 4：同步文档状态并收口。
+- [x] 任务 1：补 query contract characterization tests。提交 `c319b4f test(检索): 锁定 RAG 查询契约`；验证为目标用例 `10 passed`、RAG 相邻回归 `67 passed`、全量 `1477 passed, 6 skipped`。
+- [x] 任务 2：拆分 `KnowledgeRagService.query()`。提交 `ba512f6 refactor(检索): 拆分知识查询流程`；验证为 knowledge 定向 `17 passed`、RAG 相邻回归 `67 passed`、全量 `1477 passed, 6 skipped`。
+- [x] 任务 3：拆分 `MemoryRagService.query()`。提交 `5391274 refactor(检索): 拆分记忆查询流程`；验证为 memory 定向 `19 passed`、RAG 相邻回归 `67 passed`、全量 `1477 passed, 6 skipped`。
+- [x] 任务 4：同步文档状态并收口。
 
 ## 设计来源
 
@@ -81,7 +81,7 @@
 - 修改：`tests/test_knowledge_rag.py`
 - 修改：`tests/test_memory_query_rag.py`
 
-- [ ] **步骤 1：为 knowledge debug contract 写测试**
+- [x] **步骤 1：为 knowledge debug contract 写测试**
 
 在 `tests/test_knowledge_rag.py` 增加：
 
@@ -127,7 +127,7 @@ def test_knowledge_query_debug_contract_keys(db_session):
     assert result["debug_trace"]["reranker_input_pairs"][0]["metadata"]["document_id"] == str(doc.id)
 ```
 
-- [ ] **步骤 2：为 knowledge degraded contract 写测试**
+- [x] **步骤 2：为 knowledge degraded contract 写测试**
 
 在 `tests/test_knowledge_rag.py` 增加：
 
@@ -152,7 +152,7 @@ def test_knowledge_query_degraded_contract_without_reranker(db_session):
     assert result["debug_trace"]["reranker_input_pairs"] == []
 ```
 
-- [ ] **步骤 3：为 knowledge FTS 越界召回写测试**
+- [x] **步骤 3：为 knowledge FTS 越界召回写测试**
 
 在 `tests/test_knowledge_rag.py` 增加：
 
@@ -196,7 +196,7 @@ def test_knowledge_rag_uses_fts_recall_before_recent_row_limit(db_session):
     assert result["debug_trace"]["fts_hits"][0]["candidate_id"] == "knowledge:old-fts-doc:chunk:old-fts"
 ```
 
-- [ ] **步骤 4：为 knowledge 无向量行不调用 embedding provider 写测试**
+- [x] **步骤 4：为 knowledge 无向量行不调用 embedding provider 写测试**
 
 在 `tests/test_knowledge_rag.py` 增加：
 
@@ -227,7 +227,7 @@ def test_knowledge_rag_does_not_embed_when_index_has_no_vectors(db_session):
     assert result["stats"]["embedding_candidates"] == 0
 ```
 
-- [ ] **步骤 5：扩展 knowledge 无 citation debug 断言**
+- [x] **步骤 5：扩展 knowledge 无 citation debug 断言**
 
 修改 `test_knowledge_result_without_citation_is_dropped`，将查询改为 debug 模式并增加断言：
 
@@ -239,7 +239,7 @@ def test_knowledge_rag_does_not_embed_when_index_has_no_vectors(db_session):
     assert result["debug_trace"]["skipped"]["no_citation"] == 1
 ```
 
-- [ ] **步骤 6：为 memory debug contract 写测试**
+- [x] **步骤 6：为 memory debug contract 写测试**
 
 在 `tests/test_memory_query_rag.py` 增加：
 
@@ -282,7 +282,7 @@ def test_memory_query_debug_contract_keys(db_session):
     assert set(card["score_breakdown"]) == {"lexical", "semantic", "reranker", "recency", "final"}
 ```
 
-- [ ] **步骤 7：为 memory source all 写真实服务测试**
+- [x] **步骤 7：为 memory source all 写真实服务测试**
 
 在 `tests/test_memory_query_rag.py` 增加：
 
@@ -318,7 +318,7 @@ def test_memory_query_source_all_returns_digest_and_session_summary(db_session):
     assert {item["source_type"] for item in result["items"]} == {"memory_digest", "session_summary"}
 ```
 
-- [ ] **步骤 8：为 memory reranker budget 写测试**
+- [x] **步骤 8：为 memory reranker budget 写测试**
 
 在 `tests/test_memory_query_rag.py` 增加：
 
@@ -356,7 +356,7 @@ def test_memory_rag_marks_reranker_budget_skipped_candidates(db_session):
     assert len(skipped) == 5
 ```
 
-- [ ] **步骤 9：扩展 memory weak fallback skip reason 断言**
+- [x] **步骤 9：扩展 memory weak fallback skip reason 断言**
 
 修改 `test_memory_rag_skips_low_overlap_fallback_before_rerank`，增加：
 
@@ -368,7 +368,7 @@ def test_memory_rag_marks_reranker_budget_skipped_candidates(db_session):
     assert by_id["memory_digest:weak:card:0"]["skipped_reason"] == "weak_lexical_fallback"
 ```
 
-- [ ] **步骤 10：为 memory degraded contract 写测试**
+- [x] **步骤 10：为 memory degraded contract 写测试**
 
 在 `tests/test_memory_query_rag.py` 增加：
 
@@ -396,7 +396,7 @@ def test_memory_query_degraded_contract_without_reranker(db_session):
     assert result["debug_trace"]["reranker_input_pairs"] == []
 ```
 
-- [ ] **步骤 11：运行新增测试**
+- [x] **步骤 11：运行新增测试**
 
 运行：
 
@@ -417,7 +417,7 @@ python -m pytest \
 
 预期：新增 characterization guard 可以通过当前实现；如果某个新增断言失败，先判断是否是当前 contract 真实缺口，修正测试或记录为任务内生产修复，不进入大拆分。
 
-- [ ] **步骤 12：运行 RAG query 定向回归**
+- [x] **步骤 12：运行 RAG query 定向回归**
 
 运行：
 
@@ -427,7 +427,7 @@ python -m pytest tests/test_knowledge_rag.py tests/test_memory_query_rag.py test
 
 预期：全部通过。
 
-- [ ] **步骤 13：运行全量测试**
+- [x] **步骤 13：运行全量测试**
 
 运行：
 
@@ -437,7 +437,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 14：Commit**
+- [x] **步骤 14：Commit**
 
 ```bash
 git add tests/test_knowledge_rag.py tests/test_memory_query_rag.py
@@ -450,7 +450,7 @@ git commit -m "test(检索): 锁定 RAG 查询契约"
 - 修改：`core/knowledge_rag.py`
 - 修改：`tests/test_knowledge_rag.py`（仅当任务 1 暴露必要调整）
 
-- [ ] **步骤 1：新增 `_KnowledgeRecallResult`**
+- [x] **步骤 1：新增 `_KnowledgeRecallResult`**
 
 在 `_KnowledgeCandidate` 后新增：
 
@@ -469,7 +469,7 @@ class _KnowledgeRecallResult:
 
 如果类型检查不接受 `Any`，保留 `list[Any]`，不要为 retriever result 引入新公开类型。
 
-- [ ] **步骤 2：抽 `_recall()`**
+- [x] **步骤 2：抽 `_recall()`**
 
 在 `KnowledgeRagService` 内新增：
 
@@ -527,7 +527,7 @@ class _KnowledgeRecallResult:
         )
 ```
 
-- [ ] **步骤 3：抽 `_build_debug_trace()`**
+- [x] **步骤 3：抽 `_build_debug_trace()`**
 
 新增：
 
@@ -582,7 +582,7 @@ class _KnowledgeRecallResult:
         }
 ```
 
-- [ ] **步骤 4：抽 `_filter_candidates()`**
+- [x] **步骤 4：抽 `_filter_candidates()`**
 
 新增：
 
@@ -649,7 +649,7 @@ class _KnowledgeRecallResult:
         }
 ```
 
-- [ ] **步骤 5：抽 debug update helpers**
+- [x] **步骤 5：抽 debug update helpers**
 
 新增：
 
@@ -679,7 +679,7 @@ class _KnowledgeRecallResult:
         }
 ```
 
-- [ ] **步骤 6：抽 `_rerank()` 和 `_apply_relevance_gate()`**
+- [x] **步骤 6：抽 `_rerank()` 和 `_apply_relevance_gate()`**
 
 保留 `_apply_reranker()` 的现有逻辑，新增 query 阶段包装：
 
@@ -737,7 +737,7 @@ class _KnowledgeRecallResult:
         return gated
 ```
 
-- [ ] **步骤 7：抽 `_build_result()`**
+- [x] **步骤 7：抽 `_build_result()`**
 
 新增：
 
@@ -787,7 +787,7 @@ class _KnowledgeRecallResult:
         return result
 ```
 
-- [ ] **步骤 8：重写 `query()` 为阶段串联**
+- [x] **步骤 8：重写 `query()` 为阶段串联**
 
 将 `KnowledgeRagService.query()` 主体替换为：
 
@@ -840,7 +840,7 @@ class _KnowledgeRecallResult:
         )
 ```
 
-- [ ] **步骤 9：运行 knowledge 定向测试**
+- [x] **步骤 9：运行 knowledge 定向测试**
 
 运行：
 
@@ -850,7 +850,7 @@ python -m pytest tests/test_knowledge_rag.py tests/test_rag_debug.py::test_rag_d
 
 预期：全部通过。
 
-- [ ] **步骤 10：运行 RAG 相邻回归**
+- [x] **步骤 10：运行 RAG 相邻回归**
 
 运行：
 
@@ -860,7 +860,7 @@ python -m pytest tests/test_knowledge_rag.py tests/test_memory_query_rag.py test
 
 预期：全部通过。
 
-- [ ] **步骤 11：运行全量测试**
+- [x] **步骤 11：运行全量测试**
 
 运行：
 
@@ -870,7 +870,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 12：Commit**
+- [x] **步骤 12：Commit**
 
 ```bash
 git add core/knowledge_rag.py tests/test_knowledge_rag.py
@@ -883,7 +883,7 @@ git commit -m "refactor(检索): 拆分知识查询流程"
 - 修改：`core/memory_rag.py`
 - 修改：`tests/test_memory_query_rag.py`（仅当任务 1 暴露必要调整）
 
-- [ ] **步骤 1：新增 `_MemoryRecallResult`**
+- [x] **步骤 1：新增 `_MemoryRecallResult`**
 
 在 `_Candidate` 后新增：
 
@@ -900,7 +900,7 @@ class _MemoryRecallResult:
     query_vector: list[float] | None
 ```
 
-- [ ] **步骤 2：抽 `_recall()`**
+- [x] **步骤 2：抽 `_recall()`**
 
 在 `MemoryRagService` 内新增：
 
@@ -973,7 +973,7 @@ class _MemoryRecallResult:
         )
 ```
 
-- [ ] **步骤 3：抽 `_build_debug_trace()`**
+- [x] **步骤 3：抽 `_build_debug_trace()`**
 
 新增：
 
@@ -1021,7 +1021,7 @@ class _MemoryRecallResult:
         }
 ```
 
-- [ ] **步骤 4：抽 `_filter_candidates()`**
+- [x] **步骤 4：抽 `_filter_candidates()`**
 
 新增：
 
@@ -1055,7 +1055,7 @@ class _MemoryRecallResult:
         }
 ```
 
-- [ ] **步骤 5：抽 debug update helper**
+- [x] **步骤 5：抽 debug update helper**
 
 新增：
 
@@ -1080,7 +1080,7 @@ class _MemoryRecallResult:
         ]
 ```
 
-- [ ] **步骤 6：抽 `_prepare_rerank_candidates()`**
+- [x] **步骤 6：抽 `_prepare_rerank_candidates()`**
 
 新增：
 
@@ -1105,7 +1105,7 @@ class _MemoryRecallResult:
         return rerank_candidates
 ```
 
-- [ ] **步骤 7：抽 `_rerank()`**
+- [x] **步骤 7：抽 `_rerank()`**
 
 新增：
 
@@ -1156,7 +1156,7 @@ class _MemoryRecallResult:
         return reranker_latency_ms
 ```
 
-- [ ] **步骤 8：抽 `_apply_relevance_gate()` 与 `_build_result()`**
+- [x] **步骤 8：抽 `_apply_relevance_gate()` 与 `_build_result()`**
 
 新增：
 
@@ -1243,7 +1243,7 @@ class _MemoryRecallResult:
         return result
 ```
 
-- [ ] **步骤 9：重写 `query()` 为阶段串联**
+- [x] **步骤 9：重写 `query()` 为阶段串联**
 
 将 `MemoryRagService.query()` 主体替换为：
 
@@ -1291,7 +1291,7 @@ class _MemoryRecallResult:
         )
 ```
 
-- [ ] **步骤 10：运行 memory 定向测试**
+- [x] **步骤 10：运行 memory 定向测试**
 
 运行：
 
@@ -1301,7 +1301,7 @@ python -m pytest tests/test_memory_query_rag.py tests/test_rag_debug.py::test_ra
 
 预期：全部通过。
 
-- [ ] **步骤 11：运行 RAG 相邻回归**
+- [x] **步骤 11：运行 RAG 相邻回归**
 
 运行：
 
@@ -1311,7 +1311,7 @@ python -m pytest tests/test_knowledge_rag.py tests/test_memory_query_rag.py test
 
 预期：全部通过。
 
-- [ ] **步骤 12：运行全量测试**
+- [x] **步骤 12：运行全量测试**
 
 运行：
 
@@ -1321,7 +1321,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 13：Commit**
+- [x] **步骤 13：Commit**
 
 ```bash
 git add core/memory_rag.py tests/test_memory_query_rag.py
@@ -1335,7 +1335,7 @@ git commit -m "refactor(检索): 拆分记忆查询流程"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/h30-rag-query-refactor.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 将 H30 条目从未完成改为已完成，并保留第一轮边界说明：
 
@@ -1344,7 +1344,7 @@ git commit -m "refactor(检索): 拆分记忆查询流程"
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。跨模块公共 recall helper 暂不抽取，保留为第二阶段评估项。
 ```
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 在文件末尾追加 H30 章节，记录：
 
@@ -1382,11 +1382,11 @@ H30 计划列表：
 默认回到 `docs/todo.md` 的剩余 P3/P4 项。H30 公共 recall helper 可在两个模块稳定运行后单独评估；不作为第一轮拆分阻塞项。
 ```
 
-- [ ] **步骤 3：更新本计划当前状态**
+- [x] **步骤 3：更新本计划当前状态**
 
 将本计划顶部任务状态全部勾选，并补每个任务的提交号和验证摘要。
 
-- [ ] **步骤 4：运行文档扫描**
+- [x] **步骤 4：运行文档扫描**
 
 运行：
 
@@ -1397,7 +1397,7 @@ rg -n "T[O]DO|F[I]XME|待[定]|待[补]|占[位]|后续[实]现|类似[任]务" 
 
 预期：无输出。
 
-- [ ] **步骤 5：运行文档 diff 检查**
+- [x] **步骤 5：运行文档 diff 检查**
 
 运行：
 
@@ -1407,7 +1407,7 @@ git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/h30-rag-q
 
 预期：无输出。
 
-- [ ] **步骤 6：运行最终 RAG 回归**
+- [x] **步骤 6：运行最终 RAG 回归**
 
 运行：
 
@@ -1417,7 +1417,7 @@ python -m pytest tests/test_knowledge_rag.py tests/test_memory_query_rag.py test
 
 预期：全部通过。
 
-- [ ] **步骤 7：运行全量测试**
+- [x] **步骤 7：运行全量测试**
 
 运行：
 
@@ -1427,7 +1427,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 8：Commit**
+- [x] **步骤 8：Commit**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/h30-rag-query-refactor.md
