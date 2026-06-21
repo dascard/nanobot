@@ -2666,3 +2666,65 @@ helper 名称保留为兼容别名；`api/routes.py` 从 3434 行降至 2822 行
 `api/routes.py` 仍超过 800 行，P3 超大文件队列可继续拆路由中与 `/chat`、群 timing
 timer 或 sticker 端点相关的独立职责；若转向较小范围，`core/persona_preprocess.py`
 第一刀也适合作为下一阶段。
+
+## 2026-06-21 Persona 候选 Prompt 拆分
+
+状态：实现、验证和实现阶段提交已完成。`core/persona_preprocess.py` 已从 857 行降至
+773 行，候选提取 prompt、用户日志过滤、候选日志格式化和候选 prompt 构造已迁移到
+`core/persona_candidate_prompt.py`；旧 `core.persona_preprocess` 同名符号继续作为
+facade 导入，外部导入路径兼容。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-persona-candidate-prompt-split-design.md`。
+
+实现计划：
+`.Codex/plans/persona-candidate-prompt-split.md`。
+
+阶段提交：
+
+- 设计提交：`785bf26 docs(画像): 设计候选 prompt 拆分`。
+- 计划提交：`a7ebd3e docs(计划): 记录候选 prompt 拆分计划`。
+- 实现提交：`3e6d878 refactor(画像): 拆分候选 prompt helper`。
+
+已完成：
+
+- [x] 新增 `tests/test_persona_candidate_prompt_split.py`，锁定旧模块候选 prompt 符号
+  指向 `core.persona_candidate_prompt`。
+- [x] 新增行数守卫，要求 `core/persona_preprocess.py` 低于 800 行。
+- [x] 新增 `core/persona_candidate_prompt.py`，承载候选提取 prompt 和日志格式化纯函数。
+- [x] `core/persona_preprocess.py` 删除本地 prompt 常量和三个纯函数实现，并从新模块
+  导入同名符号保留兼容。
+- [x] 保留 `PersonaStateMachine`、embedding / NLI 懒加载、DB 写入和 monkeypatch 契约。
+
+验证记录：
+
+- 红灯：`tests/test_persona_candidate_prompt_split.py -q` ->
+  `2 failed, 1 warning in 5.79s`；失败点为新模块不存在且旧文件仍为 857 行。
+- 绿灯：`tests/test_persona_candidate_prompt_split.py -q` ->
+  `2 passed, 1 warning in 0.67s`。
+- Prompt 定向回归：新增 split 测试与 `tests/test_persona_preprocess.py::TestBuildPrompt` ->
+  `4 passed, 1 warning in 0.65s`。
+- 相邻回归：`tests/test_persona_preprocess.py -m "not slow"` 与
+  `tests/test_admin_api.py -k "persona_update_fact_rejects_duplicate"` ->
+  `2 passed, 111 deselected, 1 warning in 1.48s`。
+- 语法检查：`python -m compileall core/persona_preprocess.py core/persona_candidate_prompt.py -q`
+  无输出，退出码为 0。
+- 行数检查：`persona_preprocess.py` 773 行，`persona_candidate_prompt.py` 97 行，
+  `tests/test_persona_candidate_prompt_split.py` 20 行。
+- 格式检查：`git diff --check -- core/persona_preprocess.py core/persona_candidate_prompt.py tests/test_persona_candidate_prompt_split.py`
+  无输出。
+- 全量：`python -m pytest tests/ -v` ->
+  `1507 passed, 6 skipped, 139 warnings in 107.24s`。
+
+执行约束：
+
+- 不移动 `PersonaStateMachine`、`embed_text()`、`_get_embedder()`、`_get_nli()`、
+  `_EMBEDDER_MODEL`、`_NLI_MODEL`、`content_hash()`、blob helper 或置信度 helper。
+- 不改变画像候选 prompt 文案、JSON schema 示例、证据 ID 校验或状态机决策语义。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+- 不改 Prompt Runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime 输入。
+
+下一步：
+
+P3 超大文件队列当前只剩 `api/admin_routes.py` 和 `api/routes.py` 两个硬项；如果先做
+低风险质量收尾，则可以进入「ruff 批量清理」。

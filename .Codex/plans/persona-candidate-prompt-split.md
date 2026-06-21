@@ -2,6 +2,29 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
+## 执行结果摘要（2026-06-21）
+
+- 状态：实现、验证和实现阶段提交已完成；文档收口由本计划和
+  `docs/plan_walkthrough.md` 记录。
+- 设计提交：`785bf26 docs(画像): 设计候选 prompt 拆分`。
+- 计划提交：`a7ebd3e docs(计划): 记录候选 prompt 拆分计划`。
+- 实现提交：`3e6d878 refactor(画像): 拆分候选 prompt helper`。
+- 结果：新增 `core/persona_candidate_prompt.py`，迁移候选提取 prompt、
+  `filter_user_messages()`、`format_candidate_logs()` 和
+  `build_candidate_extraction_prompt()`；`core.persona_preprocess` 继续 re-export
+  同名符号；`core/persona_preprocess.py` 从 857 行降至 773 行。
+- 红灯：新增 split 测试 -> `2 failed, 1 warning in 5.79s`；失败点为新模块不存在
+  和旧文件仍超过 800 行。
+- 绿灯：新增 split 测试 -> `2 passed, 1 warning in 0.67s`。
+- Prompt 定向回归：新增 split 测试与 `TestBuildPrompt` ->
+  `4 passed, 1 warning in 0.65s`。
+- 相邻回归：画像预处理非 slow 用例与后台画像去重用例 ->
+  `2 passed, 111 deselected, 1 warning in 1.48s`。
+- 静态检查：`compileall`、行数检查和目标文件 `git diff --check` 均通过；
+  `core/persona_preprocess.py` 为 773 行。
+- 全量回归：`python -m pytest tests/ -v` ->
+  `1507 passed, 6 skipped, 139 warnings in 107.24s`。
+
 **目标：** 把 `core/persona_preprocess.py` 中的候选提取 prompt 和日志格式化纯函数拆到 `core/persona_candidate_prompt.py`，同时保留旧导入路径兼容，并让 `core/persona_preprocess.py` 低于 800 行。
 
 **架构：** `core/persona_candidate_prompt.py` 作为候选提取 prompt / 日志格式化的唯一实现；`core/persona_preprocess.py` 从新模块导入并 re-export 旧符号，状态机、embedding 懒加载、DB 写入和 monkeypatch 契约保持原位。
@@ -36,7 +59,7 @@
 **文件：**
 - 创建：`tests/test_persona_candidate_prompt_split.py`
 
-- [ ] **步骤 1：创建 facade 和行数测试**
+- [x] **步骤 1：创建 facade 和行数测试**
 
 创建 `tests/test_persona_candidate_prompt_split.py`：
 
@@ -63,7 +86,7 @@ def test_persona_preprocess_split_keeps_file_under_800_lines():
     assert line_count < 800
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -84,7 +107,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 - 创建：`core/persona_candidate_prompt.py`
 - 修改：`core/persona_preprocess.py`
 
-- [ ] **步骤 1：创建新模块**
+- [x] **步骤 1：创建新模块**
 
 创建 `core/persona_candidate_prompt.py`。文件头部、导入和函数骨架如下；其中
 `CANDIDATE_EXTRACTION_SYSTEM_PROMPT` 的字符串内容必须从当前
@@ -192,7 +215,7 @@ def build_candidate_extraction_prompt(
 
 注意：上方 prompt 字符串必须原样迁移，不要重写文案，不要改变 JSON schema 示例。
 
-- [ ] **步骤 2：在旧模块导入并 re-export**
+- [x] **步骤 2：在旧模块导入并 re-export**
 
 在 `core/persona_preprocess.py` 顶部 imports 后添加：
 
@@ -205,7 +228,7 @@ from core.persona_candidate_prompt import (
 )
 ```
 
-- [ ] **步骤 3：删除旧模块本地实现**
+- [x] **步骤 3：删除旧模块本地实现**
 
 从 `core/persona_preprocess.py` 删除以下本地定义：
 
@@ -226,11 +249,11 @@ from core.persona_candidate_prompt import (
 - `_to_blob()` / `_from_blob()`
 - `compute_confidence()` / `confidence_label()`
 
-- [ ] **步骤 4：清理 typing import**
+- [x] **步骤 4：清理 typing import**
 
 如果 `List`、`Dict`、`Any` 或 `Optional` 仍被旧模块使用，则保留；如果迁移后不再使用某个名字，删除对应 import。不要做无关 ruff 批量清理。
 
-- [ ] **步骤 5：运行绿灯测试**
+- [x] **步骤 5：运行绿灯测试**
 
 运行任务 1 的命令。预期：`2 passed`。
 
@@ -241,7 +264,7 @@ from core.persona_candidate_prompt import (
 - 修改：`core/persona_preprocess.py`
 - 创建：`tests/test_persona_candidate_prompt_split.py`
 
-- [ ] **步骤 1：运行 prompt 定向回归**
+- [x] **步骤 1：运行 prompt 定向回归**
 
 运行：
 
@@ -255,7 +278,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行 persona preprocess 相邻回归**
+- [x] **步骤 2：运行 persona preprocess 相邻回归**
 
 运行：
 
@@ -269,7 +292,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 3：运行静态检查**
+- [x] **步骤 3：运行静态检查**
 
 运行：
 
@@ -285,7 +308,7 @@ git diff --check -- core/persona_preprocess.py core/persona_candidate_prompt.py 
 - `core/persona_preprocess.py` 低于 800 行。
 - `git diff --check` 无输出。
 
-- [ ] **步骤 4：运行全量回归**
+- [x] **步骤 4：运行全量回归**
 
 运行：
 
@@ -303,7 +326,7 @@ python -m pytest tests/ -v
 - 修改：`core/persona_preprocess.py`
 - 创建：`tests/test_persona_candidate_prompt_split.py`
 
-- [ ] **步骤 1：按文件显式暂存**
+- [x] **步骤 1：按文件显式暂存**
 
 运行：
 
@@ -311,7 +334,7 @@ python -m pytest tests/ -v
 git add core/persona_candidate_prompt.py core/persona_preprocess.py tests/test_persona_candidate_prompt_split.py
 ```
 
-- [ ] **步骤 2：检查暂存区**
+- [x] **步骤 2：检查暂存区**
 
 运行：
 
@@ -322,7 +345,7 @@ git diff --cached --check
 
 预期：暂存区只包含本任务列出的 3 个文件；`--check` 无输出。
 
-- [ ] **步骤 3：提交实现**
+- [x] **步骤 3：提交实现**
 
 运行：
 
@@ -337,14 +360,14 @@ git commit -m "refactor(画像): 拆分候选 prompt helper"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/persona-candidate-prompt-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下追加进展：
 
 - `core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化 helper 到
   `core/persona_candidate_prompt.py`；旧导入路径保留兼容；原文件降至 800 行以下。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-21 Persona 候选 Prompt 拆分` 章节，记录：
 
@@ -354,11 +377,11 @@ git commit -m "refactor(画像): 拆分候选 prompt helper"
 - 红灯、绿灯、定向回归、静态检查、全量回归结果
 - 执行约束：不移动状态机、不移动 embedding、不新增 `asyncio.run()`
 
-- [ ] **步骤 3：更新本计划执行结果**
+- [x] **步骤 3：更新本计划执行结果**
 
 在本计划顶部追加 `执行结果摘要（2026-06-21）`，记录验证结果和提交号。
 
-- [ ] **步骤 4：文档门禁**
+- [x] **步骤 4：文档门禁**
 
 运行：
 
@@ -389,7 +412,7 @@ PY
 
 预期：两个命令均无输出，退出码为 0。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
