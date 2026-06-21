@@ -16,10 +16,25 @@
 - [x] 已完成只读子 agent 分析：普通 API 拆分前需要 `verify_token` common auth，管理端下一刀优先 Eval Workbench。
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-admin-eval-routes-split-design.md`。
 - [x] 设计提交：`febd9f6 docs(管理端): 设计评测工作台路由拆分`。
-- [ ] 计划提交。
-- [ ] 红灯测试。
-- [ ] 实现提交。
-- [ ] 文档收口提交。
+- [x] 计划提交：`7c94a00 docs(计划): 记录评测工作台路由拆分计划`。
+- [x] 红灯测试：`tests/test_admin_eval_routes_split.py -q` ->
+  `4 failed, 5 passed, 21 warnings in 6.89s`；失败点为 endpoint module 仍是
+  `api.admin_routes`、`api.admin.eval_routes` 尚不存在，以及
+  `api/admin/eval_routes.py` 文件不存在。
+- [x] 实现提交：`c2f042b refactor(管理端): 拆分评测工作台路由`。
+  - split 绿灯：`9 passed, 21 warnings in 1.53s`。
+  - Eval / Timing proposal 行为回归：`40 passed, 21 warnings in 7.05s`。
+  - WebUI 与 asyncio 策略回归：`26 passed, 1 warning in 1.87s`。
+  - 静态检查：`compileall` / `git diff --check` 无输出；反向导入与
+    `asyncio.run` / `run_awaitable_sync` 扫描无命中。
+  - 行数：`api/admin_routes.py` 1390 行、`api/admin/eval_routes.py` 614 行、
+    `tests/test_admin_eval_routes_split.py` 194 行。
+  - 全量测试：`1551 passed, 6 skipped, 139 warnings in 112.38s`。
+- [x] 文档收口提交：本提交 `docs(计划): 收口评测工作台路由拆分`。
+  - `docs/todo.md` 已同步 P3 超大文件队列行数、Admin Eval Workbench 第八刀记录、
+    验证结果和下一刀候选。
+  - `docs/plan_walkthrough.md` 已追加 `2026-06-21 Admin Eval Workbench 路由拆分`
+    小节，记录设计 / 计划 / 实现提交、验证结果、行数和执行约束。
 
 ## 子 agent 分工约定
 
@@ -63,7 +78,7 @@
   - 导入并 include `eval_router`。
   - re-export 迁移符号。
   - 删除本地 `# Eval 系统 API` 区块。
-  - 保留仍被其他子域使用的 `hashlib`、`json`、`Path`、`Any`、`Optional`、`AdminAuditLog`、`get_db`、`_client_ip()` 和 `_audit_request()`，只删除不再使用的 import。
+  - 保留仍被其他子域使用的 `json`、`Any`、`Optional`、`AdminAuditLog`、`get_db`、`_client_ip()` 和 `_audit_request()`，删除不再使用的 `hashlib`、`Path` 和 eval store import。
 - 实现收口阶段修改：`docs/todo.md`、`docs/plan_walkthrough.md`、`.Codex/plans/admin-eval-routes-split.md`。
 
 ## 任务 1：补 Admin Eval Workbench 路由拆分红灯测试
@@ -71,7 +86,7 @@
 **文件：**
 - 创建：`tests/test_admin_eval_routes_split.py`
 
-- [ ] **步骤 1：创建 split 路由测试文件**
+- [x] **步骤 1：创建 split 路由测试文件**
 
 创建 `tests/test_admin_eval_routes_split.py`：
 
@@ -272,7 +287,7 @@ def test_admin_eval_routes_do_not_import_parent_admin_routes_or_sync_awaitable()
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -290,7 +305,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 **文件：**
 - 创建：`api/admin/eval_routes.py`
 
-- [ ] **步骤 1：创建新模块并迁移 import / 常量 / request model**
+- [x] **步骤 1：创建新模块并迁移 import / 常量 / request model**
 
 创建 `api/admin/eval_routes.py`。模块头必须包含：
 
@@ -357,7 +372,7 @@ TIMING_TUNING_REVIEW_DECISIONS = {
 - `CandidateTriageRequest`
 - `EvalRunRequest`
 
-- [ ] **步骤 2：实现 proposal report 兼容 helper**
+- [x] **步骤 2：实现 proposal report 兼容 helper**
 
 新增 helper：
 
@@ -378,7 +393,7 @@ path = _current_timing_tuning_proposal_report()
 `_proposal_sha256()`、`_proposal_missing_response()`、`_proposal_review_from_audit()` 和
 `_triage_response_or_404()` 从父模块原样迁入。
 
-- [ ] **步骤 3：迁移 21 个 `/evals/*` endpoint**
+- [x] **步骤 3：迁移 21 个 `/evals/*` endpoint**
 
 从 `api/admin_routes.py` 的 `# Eval 系统 API` 区块原样迁入 21 个 endpoint。迁入时只做必要替换：
 
@@ -388,7 +403,7 @@ path = _current_timing_tuning_proposal_report()
 - 保留 `eval_run_sample()` 为 `async def` 并继续 `await run_sampling_cycle()`。
 - 保留 `eval_run_suite()` 的同步 `def` 形态，不引入 `asyncio.run()` 或 awaitable 包装。
 
-- [ ] **步骤 4：运行新模块语法检查**
+- [x] **步骤 4：运行新模块语法检查**
 
 运行：
 
@@ -403,7 +418,7 @@ python -m compileall api/admin/eval_routes.py -q
 **文件：**
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：导入新 eval 模块符号**
+- [x] **步骤 1：导入新 eval 模块符号**
 
 在 `api/admin_routes.py` 已拆模块 import 区增加：
 
@@ -450,7 +465,7 @@ from api.admin.eval_routes import (
 )
 ```
 
-- [ ] **步骤 2：include 新 router**
+- [x] **步骤 2：include 新 router**
 
 在 `reply_router` 附近加入：
 
@@ -461,7 +476,7 @@ router.include_router(eval_router)
 `eval_router` 与现有 `/groups/{group_id:path}` catch-all 没有路径冲突；放在 `reply_router`
 后、`trace_router` 前即可。
 
-- [ ] **步骤 3：删除父模块本地 Eval Workbench 区块**
+- [x] **步骤 3：删除父模块本地 Eval Workbench 区块**
 
 删除 `api/admin_routes.py` 中从：
 
@@ -477,7 +492,7 @@ router.include_router(eval_router)
 - `Path` 若仍被父模块其他区块使用则保留。
 - `Any`、`Optional` 若仍被父模块其他 request model 使用则保留。
 
-- [ ] **步骤 4：运行语法检查**
+- [x] **步骤 4：运行语法检查**
 
 运行：
 
@@ -496,7 +511,7 @@ python -m compileall api/admin_routes.py api/admin/eval_routes.py -q
 - 验证：`tests/test_webui_admin_redesign.py`
 - 验证：`tests/test_asyncio_run_policy.py`
 
-- [ ] **步骤 1：运行 split 测试绿灯**
+- [x] **步骤 1：运行 split 测试绿灯**
 
 运行：
 
@@ -508,7 +523,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 2：运行 Eval 行为回归**
+- [x] **步骤 2：运行 Eval 行为回归**
 
 运行：
 
@@ -520,7 +535,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 3：运行相邻回归**
+- [x] **步骤 3：运行相邻回归**
 
 运行：
 
@@ -532,7 +547,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 4：运行静态检查**
+- [x] **步骤 4：运行静态检查**
 
 运行：
 
@@ -544,7 +559,7 @@ rg -n "from api\.admin_routes|import api\.admin_routes|asyncio\.run|run_awaitabl
 
 预期：`compileall` 和 `git diff --check` exit 0 且无输出；`rg` 无命中，退出码为 1。
 
-- [ ] **步骤 5：运行全量测试**
+- [x] **步骤 5：运行全量测试**
 
 运行：
 
@@ -562,7 +577,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider tests/ -v
 - 暂存：`api/admin/eval_routes.py`
 - 暂存：`tests/test_admin_eval_routes_split.py`
 
-- [ ] **步骤 1：检查待提交差异**
+- [x] **步骤 1：检查待提交差异**
 
 运行：
 
@@ -573,7 +588,7 @@ git status --short -- api/admin_routes.py api/admin/eval_routes.py tests/test_ad
 
 预期：只包含本阶段三个实现相关文件。
 
-- [ ] **步骤 2：按文件暂存并提交**
+- [x] **步骤 2：按文件暂存并提交**
 
 运行：
 
@@ -591,7 +606,7 @@ git commit -m "refactor(管理端): 拆分评测工作台路由"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-eval-routes-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下追加 Admin Eval Workbench 拆分进展，记录：
 
@@ -600,15 +615,15 @@ git commit -m "refactor(管理端): 拆分评测工作台路由"
 - split 测试、行为回归、asyncio 策略回归和全量测试结果。
 - 下一刀候选：Runtime / Overview、Settings，或普通 API common auth。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-21 Admin Eval Workbench 路由拆分` 小节，记录设计提交、计划提交、实现提交、验证结果、行数和执行约束。
 
-- [ ] **步骤 3：更新本计划当前状态**
+- [x] **步骤 3：更新本计划当前状态**
 
 将本计划「当前状态」中的计划提交、红灯测试、实现提交、文档收口提交相关条目补齐实际 commit hash 和测试输出。
 
-- [ ] **步骤 4：验证文档格式和全量测试**
+- [x] **步骤 4：验证文档格式和全量测试**
 
 运行：
 
@@ -620,7 +635,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：`git diff --check` exit 0 且无输出；全量测试 0 failures。
 
-- [ ] **步骤 5：按文件暂存并提交文档收口**
+- [x] **步骤 5：按文件暂存并提交文档收口**
 
 运行：
 

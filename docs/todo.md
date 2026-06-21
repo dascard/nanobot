@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `admin_routes.py`(1935)、`routes.py`(2822)。按职责拆模块；`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，三者不再属于当前 >800 行清单。
+  `admin_routes.py`(1390)、`routes.py`(2822)。按职责拆模块；`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，三者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/admin_routes.py`、`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -150,6 +150,19 @@
     `1542 passed, 6 skipped, 139 warnings in 112.96s`。下一刀候选为 Eval
     Workbench、Runtime / Overview、Settings，或先为普通 API 拆分设计
     `verify_token` common auth。
+  - 进展：`api/admin_routes.py` 第八刀已拆出 Eval Workbench 管理端路由到
+    `api/admin/eval_routes.py`；旧 `api.admin_routes` 继续 re-export
+    迁移后的 request model、常量、helper 和 21 个 endpoint，保留 HTTP 路径、
+    admin token monkeypatch、TimingGate proposal report 旧父模块 monkeypatch、
+    candidate 静态路由顺序和 `/evals/runs` 静态路由顺序。`/model-replies`、
+    Runtime / Overview、`/settings/*`、Configs、Prompt effective preview、Block /
+    ContentBlock、DB backup / vacuum 均未迁移；`api/admin_routes.py` 从 1935 行
+    降至 1390 行，`api/admin/eval_routes.py` 为 614 行，拆分测试为 194 行。
+    验证结果：红灯 `4 failed, 5 passed`，split 绿灯 `9 passed`，Eval / Timing
+    proposal 行为回归 `40 passed`，WebUI / asyncio 策略回归 `26 passed`，
+    全量回归 `1551 passed, 6 skipped, 139 warnings in 112.38s`。下一刀候选为
+    Runtime / Overview、Settings，或先为普通 API 拆分设计 `verify_token`
+    common auth。
   - 进展：`creatures/nanobot/prompts/skills/news_search/tool.py` 第一刀已拆出
     旧版新闻报告 helper 到 `news_search/legacy_report.py`；`tool.py` 从 1835 行降至
     1149 行，搜索后端、AI 日报工具、缓存和 `_summarize_news_layout()` 当时仍留在旧文件。

@@ -3183,3 +3183,82 @@ Prompt Runtime metadata、评测 metrics、traffic 聚合和 `/reply-eval/runs`
 P3 超大文件队列仍剩 `api/admin_routes.py` 1935 行、`api/routes.py` 2822 行。继续沿
 管理端拆分时，下一刀可考虑 Eval Workbench、Runtime / Overview 或 Settings；
 切普通 API 前应先设计 `verify_token` 共享兼容层。
+
+## 2026-06-21 Admin Eval Workbench 路由拆分
+
+状态：设计、计划、实现、验证和实现阶段提交已完成。`api/admin_routes.py` 已拆出
+Eval Workbench 管理端路由到 `api/admin/eval_routes.py`；旧 `api.admin_routes`
+继续 include 新 router，并 re-export 迁移后的 request model、常量、helper 和
+endpoint，保持旧导入路径、HTTP 路径、admin token monkeypatch、
+`TIMING_TUNING_PROPOSAL_REPORT` 父模块 monkeypatch、candidate 静态路由顺序和
+`/evals/runs` 静态路由顺序兼容。`/model-replies`、Runtime / Overview、
+`/settings/*`、Configs、Prompt effective preview、Block / ContentBlock 和 DB 运维
+仍留在父模块或既有子模块，不进入本阶段。`api/admin_routes.py` 从 1935 行降至
+1390 行，新模块 `api/admin/eval_routes.py` 为 614 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-admin-eval-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/admin-eval-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`febd9f6 docs(管理端): 设计评测工作台路由拆分`。
+- 计划提交：`7c94a00 docs(计划): 记录评测工作台路由拆分计划`。
+- 实现提交：`c2f042b refactor(管理端): 拆分评测工作台路由`。
+
+已完成：
+
+- [x] 新增 `tests/test_admin_eval_routes_split.py`，锁定 21 个 Eval Workbench route
+  的 endpoint module、legacy import、token monkeypatch、proposal report monkeypatch、
+  重复注册、candidate 静态路由顺序、runs 静态路由顺序、协程边界和反向导入 /
+  awaitable 扫描。
+- [x] 新增 `api/admin/eval_routes.py`，承载 expected contract、TimingGate 调参提案、
+  proposal review、candidate list / preflight / batch audit / trend / get / patch /
+  label / triage / promote、sample run / status、suite run 和 run 查询。
+- [x] `api/admin_routes.py` include `eval_router`，并 re-export 迁移符号。
+- [x] 新模块使用 `api.admin.common.verify_admin`、`audit_request()` 和 `client_ip()`；
+  不反向导入 `api.admin_routes`。
+- [x] 红灯测试未单独提交；按项目提交门禁，失败状态只作为 TDD 证据记录，
+  绿灯后与实现一起提交。
+
+验证记录：
+
+- 红灯：`tests/test_admin_eval_routes_split.py -q` ->
+  `4 failed, 5 passed, 21 warnings in 6.89s`；失败点为 endpoint module 仍是
+  `api.admin_routes`、`api.admin.eval_routes` 尚不存在，以及
+  `api/admin/eval_routes.py` 文件不存在。
+- 绿灯：`tests/test_admin_eval_routes_split.py -q` ->
+  `9 passed, 21 warnings in 1.53s`。
+- Eval / Timing proposal 行为回归：
+  `tests/test_eval_candidate_contract.py tests/test_timing_tuning_proposal_admin.py -q`
+  -> `40 passed, 21 warnings in 7.05s`。
+- WebUI 与 asyncio 策略回归：
+  `tests/test_webui_admin_redesign.py tests/test_asyncio_run_policy.py -q`
+  -> `26 passed, 1 warning in 1.87s`。
+- 静态检查：`python -m compileall api/admin_routes.py api/admin/eval_routes.py -q`
+  无输出；`git diff --check -- api/admin_routes.py api/admin/eval_routes.py tests/test_admin_eval_routes_split.py .Codex/plans/admin-eval-routes-split.md docs/superpowers/specs/2026-06-21-admin-eval-routes-split-design.md`
+  无输出；`rg -n "from api\.admin_routes|import api\.admin_routes|asyncio\.run|run_awaitable_sync" api/admin/eval_routes.py`
+  无输出，退出码为 1。
+- 行数检查：`api/admin_routes.py` 1390 行，`api/admin/eval_routes.py` 614 行，
+  `tests/test_admin_eval_routes_split.py` 194 行。
+- 全量：`python -m pytest tests/ -v` ->
+  `1551 passed, 6 skipped, 139 warnings in 112.38s`。
+
+执行约束：
+
+- 不拆普通 `api/routes.py`。
+- 不抽 `verify_token` common auth。
+- 不迁移 `/model-replies`、Runtime / Overview、`/settings/*`、Configs、
+  Prompt effective preview、Block / ContentBlock、DB backup / vacuum。
+- 不改变 eval storage、scorer、runner、dataset 文件格式或 WebUI 页面。
+- 不改变 Prompt Runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime
+  输入。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列仍剩 `api/admin_routes.py` 1390 行、`api/routes.py` 2822 行。继续沿
+管理端拆分时，下一刀可考虑 Runtime / Overview 或 Settings；切普通 API 前应先设计
+`verify_token` 共享兼容层。
