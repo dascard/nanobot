@@ -112,6 +112,7 @@ def test_split_task_routes_use_legacy_api_token_monkeypatch(db_session, monkeypa
         finally:
             pass
 
+    previous_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[get_db] = override_get_db
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "split-token")
     try:
@@ -126,6 +127,7 @@ def test_split_task_routes_use_legacy_api_token_monkeypatch(db_session, monkeypa
             )
     finally:
         app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous_overrides)
 
     assert ok.status_code == 200
     assert wrong.status_code == 401
