@@ -21,6 +21,7 @@ def test_timing_signal_audit_periodic_script_skips_missing_db(tmp_path):
         "TIMING_SIGNAL_AUDIT_EXTRA_OUTS": f"{run_scoped}:{dated}",
         "TIMING_SIGNAL_AUDIT_LIMIT": "17",
         "TIMING_SIGNAL_AUDIT_AFTER_ID": "5",
+        "PERIODIC_RUN_ID": "unit_run",
         "PYTHONDONTWRITEBYTECODE": "1",
     }
 
@@ -48,6 +49,7 @@ def test_timing_signal_audit_periodic_script_skips_missing_db(tmp_path):
     assert payload["source"]["db"] == str(missing_db)
     assert payload["source"]["after_id"] == 5
     assert payload["source"]["limit"] == 17
+    assert payload["source"]["run_id"] == "unit_run"
 
 
 def test_eval_periodic_script_runs_timing_signal_audit_step():

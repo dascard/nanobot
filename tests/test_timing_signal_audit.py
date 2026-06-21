@@ -126,6 +126,80 @@ def test_merge_timing_signal_labels_overrides_by_log_id_and_signal():
     assert samples[0]["label"] == "true_positive"
 
 
+def test_timing_signal_audit_merges_final_action_truth_from_labels():
+    from core.eval_sampling.timing_signal_audit import merge_timing_signal_labels
+
+    samples = [{"log_id": 101, "signal_name": "s_ack", "label": "unknown"}]
+    labels = [
+        {
+            "log_id": 101,
+            "signal_name": "s_ack",
+            "final_timing_action": "continue",
+            "label": "false_positive",
+            "note": "后半句继续提出请求",
+            "annotator": "human-a",
+        }
+    ]
+
+    merged = merge_timing_signal_labels(samples, labels)
+
+    assert merged == [
+        {
+            "log_id": 101,
+            "signal_name": "s_ack",
+            "label": "false_positive",
+            "final_timing_action": "continue",
+            "note": "后半句继续提出请求",
+            "annotator": "human-a",
+        }
+    ]
+
+
+def test_timing_signal_audit_exposes_final_action_contract():
+    from core.eval_sampling.timing_signal_audit import (
+        FINAL_TIMING_ACTIONS,
+        is_valid_final_timing_action,
+    )
+
+    assert FINAL_TIMING_ACTIONS == {"continue", "wait", "no_reply"}
+    assert is_valid_final_timing_action("continue") is True
+    assert is_valid_final_timing_action(" wait ") is True
+    assert is_valid_final_timing_action("stop") is False
+    assert is_valid_final_timing_action("") is False
+
+
+def test_timing_signal_audit_run_labeled_audit_records_run_id(tmp_path):
+    from evals.timing_signal_audit import run_labeled_audit
+
+    src = tmp_path / "audit.json"
+    labels = tmp_path / "labels.jsonl"
+    out = tmp_path / "out.json"
+    src.write_text(
+        json.dumps(
+            {
+                "samples": [{"log_id": 101, "signal_name": "s_ack"}],
+                "source": {"run_id": "run_1"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    labels.write_text(
+        '{"log_id":101,"signal_name":"s_ack","final_timing_action":"continue"}\n',
+        encoding="utf-8",
+    )
+
+    report = run_labeled_audit(
+        input_report_path=src,
+        labels_path=labels,
+        output_path=out,
+        run_id="run_1",
+    )
+
+    assert report["source"]["run_id"] == "run_1"
+    assert report["samples"][0]["final_timing_action"] == "continue"
+
+
 def test_timing_signal_audit_cli_replays_input_report_with_jsonl_labels(tmp_path, capsys):
     from evals.timing_signal_audit import main
 
@@ -237,6 +311,40 @@ def test_timing_signal_audit_cli_writes_report(tmp_path, db_session):
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["signals"]["s_ack"]["samples"] == 1
     assert payload["shadow"]["action_mismatch_count"] == 1
+
+
+def test_timing_signal_audit_run_audit_records_run_id(tmp_path, db_session):
+    from core.database import ChatLog
+    from evals.timing_signal_audit import run_audit
+
+    db_session.add(ChatLog(
+        user_id="group_42",
+        session_id="group_42",
+        role="ambient",
+        content="[A]: 收到",
+        meta_json=json.dumps(
+            {
+                "timing_gate": {
+                    "action": "no_reply",
+                    "trigger_reason": "ambient",
+                    "scoring": {
+                        "stage": "rule_shortcut",
+                        "action": "no_reply",
+                        "model_used": False,
+                        "signals": {"sub_signals": {"s_ack": 0.85}},
+                    },
+                }
+            },
+            ensure_ascii=False,
+        ),
+    ))
+    db_session.commit()
+    out = tmp_path / "audit.json"
+
+    report = run_audit(db_session, output_path=out, limit=20, run_id="run_2")
+
+    assert report["source"]["run_id"] == "run_2"
+    assert json.loads(out.read_text(encoding="utf-8"))["source"]["run_id"] == "run_2"
 
 
 def test_timing_signal_audit_preserves_optional_proposal_evidence_fields():

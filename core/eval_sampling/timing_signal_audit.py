@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 
 SIGNAL_NAMES = ("s_ack", "s_transport", "w_marker")
+FINAL_TIMING_ACTIONS = {"continue", "wait", "no_reply"}
 FALSE_POSITIVE_LABELS = {"false_positive", "fp", "误判", "假阳性"}
 TRUE_POSITIVE_LABELS = {"true_positive", "tp", "正确"}
 
@@ -95,6 +96,10 @@ def normalize_label(value: str) -> str:
     if label in TRUE_POSITIVE_LABELS:
         return "true_positive"
     return "unknown"
+
+
+def is_valid_final_timing_action(value: Any) -> bool:
+    return str(value or "").strip() in FINAL_TIMING_ACTIONS
 
 
 def merge_timing_signal_labels(

@@ -24,7 +24,7 @@
 ## 进度总览
 
 - [x] 设计：写入 `docs/superpowers/specs/2026-06-21-timing-tuning-operations-design.md`，提交 `4f7d13a docs(时机): 设计调参提案运营链路`。
-- [ ] 任务 1：TimingSignal audit 支持 run source 与 `final_timing_action` 合同。
+- [x] 任务 1：TimingSignal audit 支持 run source 与 `final_timing_action` 合同。
 - [ ] 任务 2：proposal 收紧 run-scoped 输入与候选参数治理。
 - [ ] 任务 3：simulation 标识真实 audit 样本来源并守住 `timing_input`。
 - [ ] 任务 4：Admin 增加 record-only proposal review API。
@@ -172,7 +172,7 @@ python -B -m evals.timing_tuning_proposal \
 - 测试：`tests/test_timing_signal_audit.py`
 - 测试：`tests/test_timing_signal_audit_periodic.py`
 
-- [ ] **步骤 1：编写 sidecar truth 合并测试**
+- [x] **步骤 1：编写 sidecar truth 合并测试**
 
 在 `tests/test_timing_signal_audit.py` 新增：
 
@@ -206,7 +206,7 @@ def test_timing_signal_audit_merges_final_action_truth_from_labels():
     ]
 ```
 
-- [ ] **步骤 2：编写 run_id source 测试**
+- [x] **步骤 2：编写 run_id source 测试**
 
 在 `tests/test_timing_signal_audit.py` 新增：
 
@@ -244,7 +244,7 @@ def test_timing_signal_audit_run_labeled_audit_records_run_id(tmp_path):
     assert report["samples"][0]["final_timing_action"] == "continue"
 ```
 
-- [ ] **步骤 3：运行测试验证失败**
+- [x] **步骤 3：运行测试验证失败**
 
 运行：
 
@@ -254,7 +254,7 @@ python -B -m pytest tests/test_timing_signal_audit.py::test_timing_signal_audit_
 
 预期：第二个测试失败，报错包含 `unexpected keyword argument 'run_id'` 或 `KeyError: 'run_id'`。
 
-- [ ] **步骤 4：实现 run_id 参数和 source 字段**
+- [x] **步骤 4：实现 run_id 参数和 source 字段**
 
 在 `evals/timing_signal_audit.py` 中调整函数签名与 source：
 
@@ -287,7 +287,7 @@ def run_audit(
 
 其中 `safe_source` 从 input report 读取；如果不想重复读文件，可让 `_load_report_samples()` 返回 `(samples, source)`，并同步更新调用点。
 
-- [ ] **步骤 5：实现 CLI `--run-id`**
+- [x] **步骤 5：实现 CLI `--run-id`**
 
 在 `evals/timing_signal_audit.py` parser 增加：
 
@@ -297,7 +297,7 @@ parser.add_argument("--run-id", default="", help="周期运行 ID，写入 repor
 
 调用 `run_audit()` 和 `run_labeled_audit()` 时传入 `run_id=args.run_id`。
 
-- [ ] **步骤 6：让周期脚本传 run_id**
+- [x] **步骤 6：让周期脚本传 run_id**
 
 在 `scripts/run_timing_signal_audit_periodic.sh` 的 Python CLI 调用中加入：
 
@@ -311,7 +311,7 @@ parser.add_argument("--run-id", default="", help="周期运行 ID，写入 repor
 "run_id": os.environ.get("PERIODIC_RUN_ID", ""),
 ```
 
-- [ ] **步骤 7：运行任务测试**
+- [x] **步骤 7：运行任务测试**
 
 运行：
 
@@ -321,7 +321,7 @@ python -B -m pytest tests/test_timing_signal_audit.py tests/test_timing_signal_a
 
 预期：全部通过。
 
-- [ ] **步骤 8：提交任务 1**
+- [x] **步骤 8：提交任务 1**
 
 运行：
 

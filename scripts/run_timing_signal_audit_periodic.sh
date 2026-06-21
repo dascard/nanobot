@@ -11,6 +11,7 @@ LIMIT="${TIMING_SIGNAL_AUDIT_LIMIT:-200}"
 AFTER_ID="${TIMING_SIGNAL_AUDIT_AFTER_ID:-0}"
 SIGNALS="${TIMING_SIGNAL_AUDIT_SIGNALS:-}"
 EXTRA_OUTS="${TIMING_SIGNAL_AUDIT_EXTRA_OUTS:-}"
+RUN_ID="${PERIODIC_RUN_ID:-${TIMING_SIGNAL_AUDIT_RUN_ID:-}}"
 
 copy_extra_outputs() {
   if [[ -z "$EXTRA_OUTS" ]]; then
@@ -36,7 +37,7 @@ PY
 }
 
 if [[ ! -f "$DB" ]]; then
-  python - "$OUT" "$DB" "$LIMIT" "$AFTER_ID" "$SIGNALS" <<'PY'
+  python - "$OUT" "$DB" "$LIMIT" "$AFTER_ID" "$SIGNALS" "$RUN_ID" <<'PY'
 import json
 import sys
 from datetime import datetime
@@ -49,6 +50,7 @@ db = sys.argv[2]
 limit = int(sys.argv[3])
 after_id = int(sys.argv[4])
 signals = [item.strip() for item in sys.argv[5].split(",") if item.strip()]
+run_id = sys.argv[6]
 
 payload = {
     **build_timing_signal_audit_report([]),
@@ -61,6 +63,7 @@ payload = {
         "after_id": after_id,
         "limit": limit,
         "signals": signals,
+        "run_id": run_id,
     },
 }
 out.parent.mkdir(parents=True, exist_ok=True)
@@ -77,6 +80,7 @@ args=(
   --out "$OUT"
   --limit "$LIMIT"
   --after-id "$AFTER_ID"
+  --run-id "$RUN_ID"
 )
 
 if [[ -n "$SIGNALS" ]]; then

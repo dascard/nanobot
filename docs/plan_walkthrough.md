@@ -35,12 +35,12 @@
 
 同日 TimingGate `directed_to_other` prompt 语义补漏已完成实现：计划提交 `82ca651`，实现提交随本阶段最终提交收口。内嵌 `TIMING_GATE_PROMPT` 与默认 Prompt Runtime 模板已改为“仅指向其他人默认 no_reply；同时指向 bot、回复 bot 或处于 bot 对话余韵冲突时结合上下文裁量”；`timing_gate` eval 新增 `@bot + @其他人` 与 `directed_to_other + linger` 两个 model-assisted conflict case，baseline 从 18 更新到 20。阶段验证包括红灯 `2 failed, 7 passed`、prompt policy 绿灯 `9 passed`、TimingGate gate `total=20 passed=20`、Timing 相邻回归 `94 passed`、eval baseline 组合 `34 passed`，以及最终全量 `1447 passed, 6 skipped, 139 warnings in 108.22s`。
 
-2026-06-21 TimingGate 调参提案运营链路计划已启动：设计文档已写入 `docs/superpowers/specs/2026-06-21-timing-tuning-operations-design.md`，设计提交为 `4f7d13a docs(时机): 设计调参提案运营链路`；实现计划已写入 `.Codex/plans/timing-tuning-operations.md`。本阶段目标是把第一版只读 proposal 接入真实 run-scoped audit、`final_timing_action` 人工 truth、候选参数治理和 record-only 人工审核状态；仍不自动应用参数、不更新 baseline、不改变 PR gate 或周期 gate。
+2026-06-21 TimingGate 调参提案运营链路计划已启动：设计文档已写入 `docs/superpowers/specs/2026-06-21-timing-tuning-operations-design.md`，设计提交为 `4f7d13a docs(时机): 设计调参提案运营链路`；实现计划已写入 `.Codex/plans/timing-tuning-operations.md`。本阶段目标是把第一版只读 proposal 接入真实 run-scoped audit、`final_timing_action` 人工 truth、候选参数治理和 record-only 人工审核状态；仍不自动应用参数、不更新 baseline、不改变 PR gate 或周期 gate。任务 1 已完成：TimingSignal audit 现在公开 `FINAL_TIMING_ACTIONS` 与 truth 校验 helper，sidecar JSONL 合并会保留 `final_timing_action`，`run_audit()` / `run_labeled_audit()` 与周期脚本 skipped 报告都会写入 `source.run_id`；验证结果为红灯 `4 failed`、目标绿灯 `5 passed`、任务文件回归 `13 passed`、全量回归 `1451 passed, 6 skipped, 139 warnings in 113.43s`。
 
 计划列表：
 
 - [x] 设计：固定真实运营链路边界、输入合同、人工 truth sidecar、候选参数治理、review API / UI 语义和子 agent 分工。提交：`4f7d13a`。
-- [ ] 任务 1：TimingSignal audit 支持 `source.run_id` 与 `final_timing_action` 合同。
+- [x] 任务 1：TimingSignal audit 支持 `source.run_id` 与 `final_timing_action` 合同。
 - [ ] 任务 2：proposal 收紧 run-scoped 输入与候选参数治理。
 - [ ] 任务 3：simulation 标识真实 audit 样本来源并守住 `timing_input`。
 - [ ] 任务 4：Admin 增加 record-only proposal review API。
