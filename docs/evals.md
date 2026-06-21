@@ -149,9 +149,70 @@ python -B -m evals.timing_tuning_proposal \
 
 运营链路使用 run-scoped TimingSignal audit 作为原始证据。`--run-id`、`--manifest` 和 `--timing-audit` 必须指向同一次周期运行；显式传入 `latest` audit 会被 readiness 阻断，避免用可变 artifact 做人工审核依据。`evals/reports/runs/<run_id>/timing_signal_audit.json` 中的 `source.run_id` 是 proposal 校验运行归属的字段。
 
+单独生成 run-scoped TimingSignal audit 时，优先使用显式 `--run-id`：
+
+```bash
+RUN_ID=20260621_041418_local
+
+python -B -m evals.timing_signal_audit \
+  --db data/nanobot.db \
+  --out "evals/reports/runs/${RUN_ID}/timing_signal_audit.json" \
+  --run-id "${RUN_ID}" \
+  --limit 200 \
+  --after-id 0 \
+  --signals s_ack,s_transport,w_marker
+```
+
+通过周期入口生成三类报告时，`PERIODIC_RUN_ID` 会传给 TimingSignal audit 子脚本；如果单独调用子脚本，也可以显式设置 `TIMING_SIGNAL_AUDIT_RUN_ID`：
+
+```bash
+RUN_ID=20260621_041418_local
+
+TIMING_SIGNAL_AUDIT_DB=data/nanobot.db \
+TIMING_SIGNAL_AUDIT_OUT=evals/reports/timing_signal_audit_latest.json \
+TIMING_SIGNAL_AUDIT_EXTRA_OUTS="evals/reports/runs/${RUN_ID}/timing_signal_audit.json:evals/reports/$(date +%F)-timing_signal_audit.json" \
+TIMING_SIGNAL_AUDIT_LIMIT=200 \
+TIMING_SIGNAL_AUDIT_AFTER_ID=0 \
+TIMING_SIGNAL_AUDIT_RUN_ID="${RUN_ID}" \
+bash scripts/run_timing_signal_audit_periodic.sh
+```
+
 `final_timing_action` 是人工最终动作 truth 的 canonical 字段，合法值为 `continue`、`wait`、`no_reply`。proposal 会识别非法 truth、缺失 replay 输入的 truth 样本和 run mismatch；simulation 只使用 audit sample 中的 `timing_input` 重放，不从 `text_preview` 等展示字段推断运行时输入。
 
 候选参数默认读取 `tmp/timing_gate/param_candidates.json`。每个候选必须有唯一 `id` 和非空 `param_diff`；`expected_effect` 与 `evidence_refs` 会原样透传到报告，方便人工审核。缺失 ID、重复 ID 或空 diff 都会进入 blocking reasons，而不是被静默忽略。
+
+最小候选参数文件示例：
+
+```json
+{
+  "candidate_version": 1,
+  "source": {
+    "author": "manual",
+    "reason": "timing_signal_review"
+  },
+  "candidates": [
+    {
+      "id": "ack_threshold_soften_v1",
+      "description": "降低 s_ack 对简短确认句的抑制强度",
+      "scope": "timing_score",
+      "risk_level": "medium",
+      "param_diff": {
+        "s_ack": 0.75
+      },
+      "expected_effect": "减少被人工标为 continue 的确认式回复误杀",
+      "evidence_refs": [
+        {
+          "type": "timing_signal_audit_sample",
+          "log_id": 101,
+          "signal_name": "s_ack"
+        }
+      ]
+    }
+  ]
+}
+```
+
+2026-06-21 本地真实数据复核结论：`data/nanobot.db` 有 `chat_logs=47931`，其中 `ambient=47187`，含 `meta_json.timing_gate` 的记录为 `31582`；但全库没有 `scoring`、`sub_signals`、`final_timing_action` 或 `run_id` 字段命中。当前抽样器只接受 `meta_json.timing_gate.scoring.signals.sub_signals` 下的 `s_ack`、`s_transport`、`w_marker`，因此现有本地 DB 只能生成 `total_samples=0` 的 audit。这个状态应记录为 readiness 阻断证据，不能补造人工 truth、不能用旧 runtime 字段反推 `timing_input`，也不能把零样本报告解释为参数可上线。
 
 Admin 审核入口是 record-only：
 

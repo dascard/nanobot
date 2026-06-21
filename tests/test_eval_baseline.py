@@ -417,6 +417,7 @@ def test_eval_periodic_script_writes_manifest():
 
     text = script.read_text(encoding="utf-8")
     assert "PERIODIC_RUN_ID" in text
+    assert "export PERIODIC_RUN_ID" in text
     assert "PERIODIC_STEPS_JSONL" in text
     assert "record_step" in text
     assert "python -B -m evals.periodic_manifest" in text

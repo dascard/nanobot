@@ -21,6 +21,7 @@ if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
 else
   PERIODIC_RUN_ID="${PERIODIC_RUN_ID:-$(date +%Y%m%d_%H%M%S)_local}"
 fi
+export PERIODIC_RUN_ID
 PERIODIC_STEPS_JSONL="${PERIODIC_STEPS_JSONL:-tmp/eval_periodic/${PERIODIC_RUN_ID}/steps.jsonl}"
 TIMING_SIGNAL_AUDIT_LATEST_OUT="${TIMING_SIGNAL_AUDIT_OUT:-evals/reports/timing_signal_audit_latest.json}"
 TIMING_SIGNAL_AUDIT_DATED_OUT="evals/reports/${PERIODIC_REPORT_DATE}-timing_signal_audit.json"
