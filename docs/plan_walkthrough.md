@@ -2748,7 +2748,7 @@ HTTP 路径、审计动作和 admin token monkeypatch 兼容。`api/admin_routes
 
 - 设计提交：`ab17cb4 docs(管理端): 设计贴纸路由拆分`。
 - 计划提交：`3162055 docs(计划): 记录贴纸路由拆分计划`。
-- 实现提交：本阶段提交 `refactor(管理端): 拆分贴纸管理路由`。
+- 实现提交：`26f6112 refactor(管理端): 拆分贴纸管理路由`。
 
 已完成：
 

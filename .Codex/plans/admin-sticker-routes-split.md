@@ -7,7 +7,7 @@
 - 状态：实现、定向验证、文档更新和全量验证已完成。
 - 设计提交：`ab17cb4 docs(管理端): 设计贴纸路由拆分`。
 - 计划提交：`3162055 docs(计划): 记录贴纸路由拆分计划`。
-- 实现提交：本阶段提交 `refactor(管理端): 拆分贴纸管理路由`。
+- 实现提交：`26f6112 refactor(管理端): 拆分贴纸管理路由`。
 - 结果：新增 `api/admin/sticker_routes.py`，迁移 Sticker / Generated Images
   管理路由、request model、`_sticker_dict()` 和近重复扫描锁；`api.admin_routes`
   include 新 router，并 re-export 旧符号保持兼容；`api/admin_routes.py` 从
@@ -589,7 +589,7 @@ git diff --check -- api/admin_routes.py api/admin/sticker_routes.py tests/test_a
 
 - 设计提交：`ab17cb4 docs(管理端): 设计贴纸路由拆分`。
 - 计划提交：填入本计划提交号。
-- 实现提交：实现阶段提交后填入实际提交号。
+- 实现提交：`26f6112 refactor(管理端): 拆分贴纸管理路由`。
 - 红灯测试命令和失败摘要。
 - 绿灯测试命令和通过摘要。
 - 定向回归、静态检查和全量回归结果。
@@ -646,7 +646,7 @@ git diff --cached --check
 
 预期暂存区只包含上述 6 个文件，`git diff --cached --check` 无输出。
 
-- [ ] **步骤 3：提交**
+- [x] **步骤 3：提交**
 
 运行：
 
