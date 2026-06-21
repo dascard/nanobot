@@ -366,9 +366,9 @@ class TestProcessCandidatesWithMockEmbedder:
 
         def mock_embed(text: str) -> np.ndarray:
             if text not in _vec_cache:
-                # 为每个独特性文本分配固定维度上的正交向量
+                # 为每个独特性文本分配固定维度上的正交向量，避免 hash seed 碰撞。
                 vec = np.zeros(768, dtype=np.float32)
-                idx = abs(hash(text)) % 768
+                idx = len(_vec_cache) % 768
                 vec[idx] = 1.0
                 _vec_cache[text] = vec
             return _vec_cache[text]
