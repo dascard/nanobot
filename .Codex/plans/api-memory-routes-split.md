@@ -19,9 +19,43 @@
 - [x] 已选定本阶段采用 memory 路由拆分。
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-api-memory-routes-split-design.md`。
 - [x] 设计提交：`e322638 docs(普通API): 设计记忆路由拆分`。
-- [ ] 任务 1：补普通 API memory route split 红灯测试并提交。
-- [ ] 任务 2：拆出 `api/memory_routes.py` 并由 `api.routes` include / re-export 后提交。
-- [ ] 任务 3：更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录后提交。
+- [x] 任务 1：补普通 API memory route split 红灯测试并提交。
+- [x] 任务 2：拆出 `api/memory_routes.py` 并由 `api.routes` include / re-export 后提交。
+- [x] 任务 3：更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录后提交。
+
+## 执行记录（2026-06-21）
+
+阶段提交：
+
+- 设计提交：`e322638 docs(普通API): 设计记忆路由拆分`。
+- 计划提交：`6657a78 docs(计划): 记录记忆路由拆分计划`。
+- 红灯测试提交：`0052793 test(普通API): 锁定记忆路由拆分契约`。
+- 记忆路由拆分提交：`9536b18 refactor(普通API): 拆分记忆路由`。
+- 文档收口：随本次 `docs(计划): 收口记忆路由拆分` 提交。
+
+验证记录：
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_memory_routes_split.py`
+  -> `3 failed, 4 passed, 21 warnings in 6.87s`。失败点符合预期：
+  `/memory*` endpoint module 仍是 `api.routes`、`api.memory_routes` 尚不存在，
+  以及 `api/memory_routes.py` 文件不存在。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_memory_routes_split.py`
+  -> `7 passed, 21 warnings in 1.08s`。
+- Memory 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_memory_digest.py`
+  -> `32 passed, 21 warnings in 2.51s`。
+- 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_asyncio_run_policy.py tests/test_api_task_routes_split.py`
+  -> `13 passed, 21 warnings in 2.65s`。
+- 静态检查：`python -B -m compileall api/routes.py api/memory_routes.py`
+  成功；`rg -n "from api\\.routes|import api\\.routes|asyncio\\.run|run_awaitable_sync" api/memory_routes.py`
+  无命中，退出码为 1；`git diff --check -- api/routes.py api/memory_routes.py tests/test_api_memory_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 2523 行，`api/memory_routes.py` 216 行，
+  `tests/test_api_memory_routes_split.py` 139 行。
+- 全量回归：`python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1584 passed, 6 skipped, 139 warnings in 114.10s`。
 
 ## 子 agent 分工约定
 
@@ -71,7 +105,7 @@
 **文件：**
 - 创建：`tests/test_api_memory_routes_split.py`
 
-- [ ] **步骤 1：创建测试文件**
+- [x] **步骤 1：创建测试文件**
 
 创建 `tests/test_api_memory_routes_split.py`：
 
@@ -217,7 +251,7 @@ def test_safe_meta_stays_in_parent_routes():
     assert routes._safe_meta.__module__ == "api.routes"
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -228,7 +262,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_memory_routes_split.py
 预期：FAIL。失败点应指向 `api.memory_routes` 尚不存在、memory endpoint module 仍为
 `api.routes`、`api/memory_routes.py` 文件尚不存在。
 
-- [ ] **步骤 3：提交红灯测试**
+- [x] **步骤 3：提交红灯测试**
 
 运行：
 
@@ -243,7 +277,7 @@ git commit -m "test(普通API): 锁定记忆路由拆分契约"
 - 创建：`api/memory_routes.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：创建 `api/memory_routes.py`**
+- [x] **步骤 1：创建 `api/memory_routes.py`**
 
 创建 `api/memory_routes.py`，内容从 `api/routes.py` 当前 memory 区块搬迁，保持行为不变：
 
@@ -468,7 +502,7 @@ def recall_memory(
     }
 ```
 
-- [ ] **步骤 2：修改 `api/routes.py` import 与 re-export**
+- [x] **步骤 2：修改 `api/routes.py` import 与 re-export**
 
 将 `core.database` import 中的 `MemoryDigest` 删除；删除 `generate_daily_digest_for_date`、
 `MemoryDigestRetrievalService`、`validate_digest_date` import；把顶层
@@ -490,7 +524,7 @@ from api.memory_routes import (
 )
 ```
 
-- [ ] **步骤 3：删除父模块本地 memory 定义并 include 子 router**
+- [x] **步骤 3：删除父模块本地 memory 定义并 include 子 router**
 
 删除 `api/routes.py` 中本地 `MemoryDigestRunRequest`、四个 memory helper、三个 memory
 endpoint 的实现。保留 `_safe_meta()`。
@@ -503,7 +537,7 @@ router.include_router(memory_router)
 
 该 include 应位于 `/evolution/trigger` 之后、`/models/list` 之前，保持尾部路由顺序清晰。
 
-- [ ] **步骤 4：运行 split 定向测试验证绿灯**
+- [x] **步骤 4：运行 split 定向测试验证绿灯**
 
 运行：
 
@@ -513,7 +547,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_memory_routes_split.py
 
 预期：PASS。
 
-- [ ] **步骤 5：运行 memory 行为回归**
+- [x] **步骤 5：运行 memory 行为回归**
 
 运行：
 
@@ -523,7 +557,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_memory_digest.py
 
 预期：PASS。
 
-- [ ] **步骤 6：运行相邻回归与静态检查**
+- [x] **步骤 6：运行相邻回归与静态检查**
 
 运行：
 
@@ -541,7 +575,7 @@ git diff --check -- api/routes.py api/memory_routes.py tests/test_api_memory_rou
 - `rg` 无命中，退出码为 1。
 - `git diff --check` 无输出。
 
-- [ ] **步骤 7：提交 memory 路由拆分**
+- [x] **步骤 7：提交 memory 路由拆分**
 
 运行：
 
@@ -557,7 +591,7 @@ git commit -m "refactor(普通API): 拆分记忆路由"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新计划执行记录**
+- [x] **步骤 1：更新计划执行记录**
 
 在本计划的「当前状态」中把任务 1 和任务 2 标记为完成，并新增「执行记录」章节，记录：
 
@@ -567,7 +601,7 @@ git commit -m "refactor(普通API): 拆分记忆路由"
 - 静态检查结果。
 - `wc -l api/routes.py api/memory_routes.py tests/test_api_memory_routes_split.py` 行数。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在「超大文件 >800 行拆分」条目下记录：
 
@@ -576,7 +610,7 @@ git commit -m "refactor(普通API): 拆分记忆路由"
 - `api/routes.py` 最新行数。
 - 下一候选仍为 `models`、`evolution route-only` 或后续更大低耦合边界。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-21 的 memory 路由拆分执行记录，包含：
 
@@ -587,7 +621,7 @@ git commit -m "refactor(普通API): 拆分记忆路由"
 - 验证命令和结果。
 - 下一步建议。
 
-- [ ] **步骤 4：运行全量测试**
+- [x] **步骤 4：运行全量测试**
 
 运行：
 
@@ -597,7 +631,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 5：文档格式与状态检查**
+- [x] **步骤 5：文档格式与状态检查**
 
 运行：
 
@@ -608,7 +642,7 @@ git status --short
 
 预期：`git diff --check` 无输出；`git status --short` 中本阶段只包含计划与文档相关改动，以及历史无关脏项。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 
@@ -619,12 +653,12 @@ git commit -m "docs(计划): 收口记忆路由拆分"
 
 ## 最终验收清单
 
-- [ ] `tests/test_api_memory_routes_split.py` 经历红灯再绿灯。
-- [ ] `api.memory_routes` 不导入 `api.routes`。
-- [ ] `api.routes` re-export memory request model、endpoint 和 helper。
-- [ ] `_safe_meta` 留在 `api.routes`。
-- [ ] `/evolution/trigger`、`/models/list`、`/models/sync` 和 `/health` 仍留在 `api.routes`。
-- [ ] `tests/test_memory_digest.py` 通过。
-- [ ] `tests/test_asyncio_run_policy.py` 通过。
-- [ ] 全量 `tests/` 回归 0 failures。
-- [ ] 每个阶段性改动都有独立 commit。
+- [x] `tests/test_api_memory_routes_split.py` 经历红灯再绿灯。
+- [x] `api.memory_routes` 不导入 `api.routes`。
+- [x] `api.routes` re-export memory request model、endpoint 和 helper。
+- [x] `_safe_meta` 留在 `api.routes`。
+- [x] `/evolution/trigger`、`/models/list`、`/models/sync` 和 `/health` 仍留在 `api.routes`。
+- [x] `tests/test_memory_digest.py` 通过。
+- [x] `tests/test_asyncio_run_policy.py` 通过。
+- [x] 全量 `tests/` 回归 0 failures。
+- [x] 每个阶段性改动都有独立 commit。

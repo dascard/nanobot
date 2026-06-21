@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(2712)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(2523)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -212,6 +212,16 @@
     `5 passed`，split 绿灯 `10 passed`，行为与相邻回归 `9 passed`，静态检查通过，
     全量回归 `1577 passed, 6 skipped, 139 warnings in 112.05s`。下一刀候选为
     evolution、memory 或 models 路由。
+  - 进展：`api/routes.py` 第三刀已拆出 memory HTTP 层到 `api/memory_routes.py`；
+    旧 `api.routes` 继续 re-export `MemoryDigestRunRequest`、memory endpoint 和
+    legacy helper，`_safe_meta` 留在父模块以服务聊天落库路径；`/memory/digests`、
+    `/memory/digests/run`、`/memory/recall` HTTP 契约、日期过滤、AI daily tool log
+    召回、旧 token monkeypatch 和 dependency override 均保持兼容。`api/routes.py`
+    从 2712 行降至 2523 行，`api/memory_routes.py` 为 216 行，拆分测试为 139 行。
+    验证结果：红灯 `3 failed, 4 passed`，split 绿灯 `7 passed`，memory 行为回归
+    `32 passed`，相邻回归 `13 passed`，静态检查通过，全量回归
+    `1584 passed, 6 skipped, 139 warnings in 114.10s`。下一刀候选为 `models`
+    路由或 evolution route-only；继续避开 `/chat` 与 `/group/message` 主链路。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch

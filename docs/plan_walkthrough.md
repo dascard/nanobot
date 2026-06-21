@@ -3511,3 +3511,81 @@ auth 同一函数对象，再把低耦合 `/tasks*` 定时任务路由拆到 `ap
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 2712。下一刀建议优先从
 evolution、memory 或 models 路由中选择低耦合边界；继续避开 `/chat` 与
 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。
+
+## 2026-06-21 普通 API Memory 路由拆分
+
+状态：设计、计划、红灯测试、记忆路由拆分、验证和实现阶段提交均已完成。本阶段继续
+拆普通 `api/routes.py`，但没有触碰 `/chat` 或 `/group/message` 主链路。已把
+`/memory/digests`、`/memory/digests/run` 和 `/memory/recall` 迁移到
+`api/memory_routes.py`；旧 `api.routes` 继续 re-export `MemoryDigestRunRequest`、
+memory endpoint 和 legacy helper。`_safe_meta` 保留在父模块，因为聊天落库路径仍使用它。
+`/memory*` HTTP 契约、日期过滤 HTTP 400、AI daily tool log 召回、旧 token
+monkeypatch、dependency override 和禁止同步 awaitable 桥的约束均保持兼容。
+`api/routes.py` 从 2712 行降至 2523 行，新模块 `api/memory_routes.py` 为 216 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-api-memory-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-memory-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`e322638 docs(普通API): 设计记忆路由拆分`。
+- 计划提交：`6657a78 docs(计划): 记录记忆路由拆分计划`。
+- 红灯测试提交：`0052793 test(普通API): 锁定记忆路由拆分契约`。
+- 记忆路由拆分提交：`9536b18 refactor(普通API): 拆分记忆路由`。
+- 文档收口提交：随本次 `docs(计划): 收口记忆路由拆分` 完成。
+
+计划列表：
+
+- [x] 只读审计 memory、models、evolution 三个候选边界和旧导入 / monkeypatch 风险。
+- [x] 选择 memory 作为本阶段拆分目标，记录 `models` 风险最低但行数收益较小的取舍。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API memory route split 红灯测试并提交。
+- [x] 拆出 `api/memory_routes.py`，保持 `/memory*` HTTP 契约、旧导入兼容和
+  `_safe_meta` 父模块边界，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_memory_routes_split.py`
+  -> `3 failed, 4 passed, 21 warnings in 6.87s`；失败点为 `/memory*` endpoint module
+  仍是 `api.routes`、`api.memory_routes` 尚不存在，以及 `api/memory_routes.py`
+  文件不存在。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_memory_routes_split.py`
+  -> `7 passed, 21 warnings in 1.08s`。
+- Memory 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_memory_digest.py`
+  -> `32 passed, 21 warnings in 2.51s`。
+- 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_asyncio_run_policy.py tests/test_api_task_routes_split.py`
+  -> `13 passed, 21 warnings in 2.65s`。
+- 静态检查：`python -B -m compileall api/routes.py api/memory_routes.py` 成功；
+  `rg -n "from api\.routes|import api\.routes|asyncio\.run|run_awaitable_sync" api/memory_routes.py`
+  无命中，退出码为 1；`git diff --check -- api/routes.py api/memory_routes.py tests/test_api_memory_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 2523 行，`api/memory_routes.py` 216 行，
+  `tests/test_api_memory_routes_split.py` 139 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1584 passed, 6 skipped, 139 warnings in 114.10s`。
+
+执行约束：
+
+- 不拆 `/chat`。
+- 不拆 `/group/message`。
+- 不拆 history、context、log、sticker/media、group timing、search/render、agent step、
+  evolution route-only、models 或 `/health`。
+- 不修改 `server.py`。
+- 不改变 Prompt Runtime 模板、工具 usage 文档、`enriched_query`、conversation 结构、
+  Prompt Runtime 输入或工具输出契约。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 2523。下一刀可优先拆
+`models` 路由以获得最低风险的小步进展，或拆 evolution route-only 但必须保留父模块
+`init_legacy_memory`、`memory` 和 `/chat` / `/log` 自动触发 `evolution_task` 的导入边界。
+继续避开 `/chat` 与 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。
