@@ -4,11 +4,13 @@
 
 ---
 
-## 实施状态（2026-06-20）
+## 实施状态（2026-06-21）
 
 核心 TimingGate 混合决策主线已完成。已落地 shared timing scoring、群聊 / 私聊统一公式、ambient / legacy / timer cooldown 软化、模型失败规则兜底、session / platform 级模型策略、真实日志信号审计 CLI、scoring 可观测字段补齐（含 WebUI `linger_active` / `linger_reply_count` / `linger_time_remaining` 状态展示），以及 `timing_gate` eval baseline diff / 阈值门禁。
 
-P3-3「持续评估」已完成拆分设计、离线 labeled report / sidecar labels 复跑入口，以及仓库自包含 CI / PR gate。群聊 `s_bot` live path 已接入 scoring 软抑制；私聊分类器失败 / 非法输出已按 `c=0` 进入 `rule_fallback`，旧格式兼容仍保留 `c=0.5`。P4-1 已完成通用 `candidates → labeled` 标注闭环和首个 `capability_model_routing` 能力数据集，P4-2 已完成 Admin 标注工作台契约化与 promote 预检 UI，P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` per-capability 数据集，P4-4 已完成 RAG baseline 门禁，P4-5A / P4-5B 已完成统一 PR gate 与周期性复跑归档，P4-5C 已完成第一轮 RAG manual 样本扩充，P4-5D / P4-5E / P4-5F / P4-5G 已完成 memory、knowledge、sticker 和 group_memory 四类 fixture-backed positive RAG case，P4-5H 已完成 RAG 过滤约束 fixture。真实样本运营动作 1-10 已完成：TimingGate 信号周期审计、RAG generated → manual 仲裁入口、EvalCandidate 运营规则、候选 reject / defer 仲裁状态、人工仲裁批次审计、EvalCandidate 运营趋势报表、周期运行 manifest、跨 artifact 周期趋势、周期趋势只读调参分析和 TimingSignal 不可变 artifact 加厚均已进入运营闭环。可审核调参提案设计已完成，下一阶段是在审查设计后编写实现计划；第一版不自动应用参数、不更新 baseline、不改变 gate。
+P3-3「持续评估」已完成拆分设计、离线 labeled report / sidecar labels 复跑入口，以及仓库自包含 CI / PR gate。群聊 `s_bot` live path 已接入 scoring 软抑制；私聊分类器失败 / 非法输出已按 `c=0` 进入 `rule_fallback`，旧格式兼容仍保留 `c=0.5`。P4-1 已完成通用 `candidates → labeled` 标注闭环和首个 `capability_model_routing` 能力数据集，P4-2 已完成 Admin 标注工作台契约化与 promote 预检 UI，P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` per-capability 数据集，P4-4 已完成 RAG baseline 门禁，P4-5A / P4-5B 已完成统一 PR gate 与周期性复跑归档，P4-5C 已完成第一轮 RAG manual 样本扩充，P4-5D / P4-5E / P4-5F / P4-5G 已完成 memory、knowledge、sticker 和 group_memory 四类 fixture-backed positive RAG case，P4-5H 已完成 RAG 过滤约束 fixture。真实样本运营动作 1-10 已完成：TimingGate 信号周期审计、RAG generated → manual 仲裁入口、EvalCandidate 运营规则、候选 reject / defer 仲裁状态、人工仲裁批次审计、EvalCandidate 运营趋势报表、周期运行 manifest、跨 artifact 周期趋势、周期趋势只读调参分析和 TimingSignal 不可变 artifact 加厚均已进入运营闭环。TimingGate 调参提案 record-only 运营链路也已完成，覆盖 run-scoped audit、`final_timing_action` truth、候选参数治理、真实 audit 样本 simulation、Admin 审核 API 和 WebUI 审核入口；该链路只记录人工审核结论，不自动应用参数、不更新 baseline、不改变 gate。
+
+当前剩余工作不再是继续实现旧 scoring 计划，而是进入真实数据运营：使用真实 run-scoped audit、人工 `final_timing_action` truth 和候选参数文件持续生成可审查 proposal，并通过 record-only 审核沉淀人工结论。若本地 artifact 仍是零样本或缺人工 truth，应把 proposal readiness 阻断原因作为运营证据记录，不得伪造人工标注或自动改 gate。
 
 ---
 
