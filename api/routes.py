@@ -56,6 +56,7 @@ from core.client_meta import (
 )
 from core.message_envelope import build_chat_response_envelope
 from app.group_ingress import helpers as group_ingress_helpers
+from api.common_auth import verify_token
 
 logger = logging.getLogger("nanobot.routes")
 router = APIRouter(prefix="/api/v1")
@@ -250,20 +251,6 @@ def _format_persona_for_prompt(persona_data: dict, max_chars: int = MAX_PERSONA_
 
     return _sanitize_prompt_text("\n\n".join(parts), max_chars)
 
-
-
-# ── 认证中间件 ──
-
-def verify_token(authorization: str = Header(default="")):
-    """
-    简单 Bearer Token 校验。
-    若环境变量 NANOBOT_API_TOKEN 为空，则拒绝访问，避免生产漏配裸奔。
-    """
-    if not NANOBOT_API_TOKEN:
-        raise HTTPException(status_code=503, detail="API token not configured")
-    token = authorization.replace("Bearer ", "").strip()
-    if not token or not compare_digest(token, NANOBOT_API_TOKEN):
-        raise HTTPException(status_code=401, detail="Invalid or missing API token")
 
 
 # ── 请求模型 ──
