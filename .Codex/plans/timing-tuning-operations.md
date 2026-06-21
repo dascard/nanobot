@@ -28,7 +28,7 @@
 - [x] 任务 2：proposal 收紧 run-scoped 输入与候选参数治理。
 - [x] 任务 3：simulation 标识真实 audit 样本来源并守住 `timing_input`。
 - [x] 任务 4：Admin 增加 record-only proposal review API。
-- [ ] 任务 5：WebUI 展示审核状态并提供记录型审核入口。
+- [x] 任务 5：WebUI 展示审核状态并提供记录型审核入口。
 - [ ] 任务 6：文档收口、计划勾选和最终验证。
 
 ## 子 agent 分工
@@ -859,7 +859,7 @@ git commit -m "feat(评测): 记录调参提案人工审核"
 - 修改：`webui/src/features/evals/EvalsPage.jsx`
 - 测试：`tests/test_webui_admin_redesign.py`
 
-- [ ] **步骤 1：编写静态测试**
+- [x] **步骤 1：编写静态测试**
 
 在 `tests/test_webui_admin_redesign.py` 的 `test_evals_page_exposes_timing_tuning_proposal_report()` 中追加：
 
@@ -873,7 +873,7 @@ git commit -m "feat(评测): 记录调参提案人工审核"
     assert "写入配置" not in source
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -883,7 +883,7 @@ python -B -m pytest tests/test_webui_admin_redesign.py::test_evals_page_exposes_
 
 预期：测试失败，缺 review endpoint 字符串或人工实验文案。
 
-- [ ] **步骤 3：实现 state 和加载函数**
+- [x] **步骤 3：实现 state 和加载函数**
 
 在 `EvalsPage.jsx` 中增加 state：
 
@@ -909,7 +909,7 @@ const loadTimingProposalReview = async () => {
 
 在 `loadTimingProposal()` 成功后调用 `loadTimingProposalReview()`。
 
-- [ ] **步骤 4：实现 record-only 表单**
+- [x] **步骤 4：实现 record-only 表单**
 
 在 `timingProposal` tab 中增加一个 Card：
 
@@ -937,7 +937,7 @@ await loadTimingProposalReview()
 
 按钮文案使用「记录审核」，不要使用「应用」。
 
-- [ ] **步骤 5：运行 WebUI 静态测试和构建**
+- [x] **步骤 5：运行 WebUI 静态测试和构建**
 
 运行：
 
@@ -948,13 +948,21 @@ npm --prefix webui run build
 
 预期：测试通过，构建退出码 0。
 
-- [ ] **步骤 6：提交任务 5**
+实际验证：
+
+- 红灯：`python -B -m pytest tests/test_webui_admin_redesign.py::test_evals_page_exposes_timing_tuning_proposal_report -q -p no:cacheprovider`，结果 `1 failed, 1 warning`，失败点为页面缺少 review endpoint。
+- 定向绿灯：同一命令结果 `1 passed, 1 warning in 0.75s`。
+- WebUI 静态回归：`python -B -m pytest tests/test_webui_admin_redesign.py -q -p no:cacheprovider`，结果 `23 passed, 1 warning in 1.06s`。
+- WebUI 构建：`npm --prefix webui run build` 退出码 0，存在 Vite chunk size / plugin timing 警告。
+- 全量回归：`python -m pytest tests/ -v`，结果 `1461 passed, 6 skipped, 139 warnings in 112.60s`。
+
+- [x] **步骤 6：提交任务 5**
 
 运行：
 
 ```bash
 python -m pytest tests/ -v
-git add webui/src/features/evals/EvalsPage.jsx tests/test_webui_admin_redesign.py webui/dist
+git add webui/src/features/evals/EvalsPage.jsx tests/test_webui_admin_redesign.py .Codex/plans/timing-tuning-operations.md docs/plan_walkthrough.md webui/dist/index.html webui/dist/assets/index-BsxuqXU0.js webui/dist/assets/index-CD5vxnJh.js
 git commit -m "feat(评测): 展示调参提案审核状态"
 ```
 

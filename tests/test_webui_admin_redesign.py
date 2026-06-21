@@ -170,8 +170,13 @@ def test_evals_page_exposes_timing_tuning_proposal_report():
     assert "blocked_actions" in source
     assert "candidate_sets" in source
     assert "simulation" in source
+    assert "/evals/timing-tuning/proposal/review" in source
+    assert "/evals/timing-tuning/proposal/reviews" in source
+    assert "approved_for_manual_experiment" in source
+    assert "进入人工实验" in source
     assert "应用参数" not in source
     assert "更新 baseline" not in source
+    assert "写入配置" not in source
 
 
 def test_sticker_duplicate_actions_do_not_use_emoji_buttons():

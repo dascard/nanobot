@@ -82,6 +82,15 @@ export function EvalsPage() {
   const [timingProposal, setTimingProposal] = useState(null)
   const [timingProposalError, setTimingProposalError] = useState('')
   const [timingProposalLoading, setTimingProposalLoading] = useState(false)
+  const [timingProposalReview, setTimingProposalReview] = useState(null)
+  const [timingProposalReviewDraft, setTimingProposalReviewDraft] = useState({
+    decision: 'needs_data',
+    reason_code: '',
+    note: '',
+    reviewer: ''
+  })
+  const [timingProposalReviewError, setTimingProposalReviewError] = useState('')
+  const [timingProposalReviewSaving, setTimingProposalReviewSaving] = useState(false)
 
   const loadCandidates = useCallback(() => {
     const params = { page: candPage, limit: 20 }
@@ -116,14 +125,21 @@ export function EvalsPage() {
       .finally(() => setTrendLoading(false))
   }, [trendDays, suiteFilter, statusFilter, sourceFilter])
 
+  const loadTimingProposalReview = useCallback(() => {
+    setTimingProposalReviewError('')
+    return api.get('/evals/timing-tuning/proposal/review')
+      .then(r => setTimingProposalReview(r.data))
+      .catch(e => { setTimingProposalReview(null); setTimingProposalReviewError(e.response?.data?.detail || e.message) })
+  }, [])
+
   const loadTimingProposal = useCallback(() => {
     setTimingProposalLoading(true)
     setTimingProposalError('')
     api.get('/evals/timing-tuning/proposal')
-      .then(r => setTimingProposal(r.data))
+      .then(r => { setTimingProposal(r.data); loadTimingProposalReview() })
       .catch(e => { setTimingProposal(null); setTimingProposalError(e.response?.data?.detail || e.message) })
       .finally(() => setTimingProposalLoading(false))
-  }, [])
+  }, [loadTimingProposalReview])
 
   useEffect(() => {
     if (tab === 'candidates') loadCandidates()
@@ -400,6 +416,20 @@ export function EvalsPage() {
     api.get(`/evals/runs/${runId}`).then(r => setRunDetail(r.data)).catch(e => alert(e.message))
   }
 
+  const setTimingProposalReviewField = (key, value) => {
+    setTimingProposalReviewError('')
+    setTimingProposalReviewDraft(prev => ({ ...prev, [key]: value }))
+  }
+
+  const saveTimingProposalReview = () => {
+    setTimingProposalReviewSaving(true)
+    setTimingProposalReviewError('')
+    api.post('/evals/timing-tuning/proposal/reviews', timingProposalReviewDraft)
+      .then(() => loadTimingProposalReview())
+      .catch(e => setTimingProposalReviewError(e.response?.data?.detail || e.message))
+      .finally(() => setTimingProposalReviewSaving(false))
+  }
+
   const timingProposalReport = timingProposal?.report || null
   const timingProposalReadiness = timingProposalReport?.readiness || timingProposal?.readiness || {}
   const timingProposalStatus = timingProposal
@@ -418,6 +448,7 @@ export function EvalsPage() {
   const timingProposalBlockedActions = timingProposalReport?.blocked_actions || []
   const timingProposalCandidateSets = timingProposalReport?.candidate_sets || []
   const timingProposalSimulation = timingProposalReport?.simulation || {}
+  const timingProposalReviewItem = timingProposalReview?.review || null
 
   return (
     <div>
@@ -1030,6 +1061,94 @@ export function EvalsPage() {
                     <div className="mb-1 text-xs text-slate-500">simulation</div>
                     <JsonBlock value={timingProposalSimulation} className="max-h-64" />
                   </div>
+                </div>
+              </Card>
+
+              <Card className="p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-slate-200">人工审核记录</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      record-only 状态记录，不代表生产参数已变更。
+                    </div>
+                  </div>
+                  <Badge tone={timingProposalReviewItem ? 'emerald' : 'slate'}>
+                    {timingProposalReviewItem?.decision || '未记录'}
+                  </Badge>
+                </div>
+
+                <div className="mb-3 grid gap-3 md:grid-cols-2">
+                  <div>
+                    <div className="mb-1 text-xs text-slate-500">proposal_sha256</div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-slate-300 break-all">
+                      {timingProposalReview?.proposal_sha256 || '-'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs text-slate-500">最新审核</div>
+                    <JsonBlock value={timingProposalReviewItem || {}} className="max-h-36" />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <label className="block text-xs text-slate-500">
+                    <span className="mb-1 block">decision</span>
+                    <select
+                      value={timingProposalReviewDraft.decision}
+                      onChange={e => setTimingProposalReviewField('decision', e.target.value)}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-xs text-slate-200"
+                    >
+                      <option value="needs_data">needs_data</option>
+                      <option value="rejected">rejected</option>
+                      <option value="approved_for_manual_experiment">approved_for_manual_experiment</option>
+                      <option value="reviewed_no_change">reviewed_no_change</option>
+                    </select>
+                  </label>
+                  <label className="block text-xs text-slate-500">
+                    <span className="mb-1 block">reason_code</span>
+                    <input
+                      value={timingProposalReviewDraft.reason_code}
+                      onChange={e => setTimingProposalReviewField('reason_code', e.target.value)}
+                      placeholder="missing_action_truth"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-xs text-slate-200"
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-500">
+                    <span className="mb-1 block">reviewer</span>
+                    <input
+                      value={timingProposalReviewDraft.reviewer}
+                      onChange={e => setTimingProposalReviewField('reviewer', e.target.value)}
+                      placeholder="admin"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-xs text-slate-200"
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-500 md:col-span-2">
+                    <span className="mb-1 block">note</span>
+                    <textarea
+                      value={timingProposalReviewDraft.note}
+                      onChange={e => setTimingProposalReviewField('note', e.target.value)}
+                      rows={3}
+                      placeholder="记录补数据、拒绝或进入人工实验的原因"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-xs text-slate-200"
+                    />
+                  </label>
+                </div>
+                <p className="mt-3 text-xs text-slate-500">
+                  approved_for_manual_experiment 仅表示进入人工实验，不代表生产参数已变更。
+                </p>
+                {timingProposalReviewError && (
+                  <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                    {timingProposalReviewError}
+                  </div>
+                )}
+                <div className="mt-3 flex justify-end">
+                  <button
+                    onClick={saveTimingProposalReview}
+                    disabled={timingProposalReviewSaving || !timingProposal.exists}
+                    className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {timingProposalReviewSaving ? '记录中...' : '记录审核'}
+                  </button>
                 </div>
               </Card>
 
