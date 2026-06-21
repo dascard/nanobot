@@ -18,6 +18,27 @@
 - [x] 设计提交：`08be4d6 docs(管理端): 设计模型路由拆分`。
 - [x] 设计阶段全量验证：`python -m pytest tests/ -v` ->
   `1529 passed, 6 skipped, 139 warnings in 108.46s`。
+- [x] 计划提交：`f5ed550 docs(计划): 记录模型路由拆分计划`。
+- [x] 红灯测试：`tests/test_admin_model_routes_split.py -q` ->
+  `3 failed, 3 passed, 21 warnings in 6.63s`；失败点为 endpoint module 仍是
+  `api.admin_routes`、`api.admin.model_routes` 尚不存在，以及
+  `api/admin/model_routes.py` 文件不存在。
+- [x] 实现提交：`c2966c7 refactor(管理端): 拆分模型路由`。
+- [x] 实现阶段验证：
+  - split 绿灯：`6 passed, 21 warnings in 1.24s`。
+  - 模型行为回归：`22 passed, 1 warning in 1.95s`。
+  - 拆分兼容回归：`41 passed, 21 warnings in 8.18s`。
+  - 鉴权与 asyncio 策略回归：`10 passed, 1 warning in 2.63s`。
+  - 静态检查：`compileall` / `git diff --check` 无输出；反向导入与
+    `asyncio.run` / `run_awaitable_sync` 扫描无命中。
+  - 行数：`api/admin_routes.py` 2647 行，`api/admin/model_routes.py` 1178 行，
+    `tests/test_admin_model_routes_split.py` 159 行。
+  - 全量：`1535 passed, 6 skipped, 139 warnings in 109.68s`。
+- [x] 文档收口提交前验证：
+  - `git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/admin-model-routes-split.md`
+    无输出。
+  - `python -m pytest tests/ -v` ->
+    `1535 passed, 6 skipped, 139 warnings in 109.35s`。
 
 ## 子 agent 分工约定
 
@@ -63,7 +84,7 @@
 **文件：**
 - 创建：`tests/test_admin_model_routes_split.py`
 
-- [ ] **步骤 1：创建 split 路由测试文件**
+- [x] **步骤 1：创建 split 路由测试文件**
 
 创建 `tests/test_admin_model_routes_split.py`：
 
@@ -229,7 +250,7 @@ def test_admin_model_routes_do_not_import_parent_admin_routes_or_sync_awaitable(
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -242,7 +263,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 预期：失败。失败原因应包含 endpoint module 仍为 `api.admin_routes`、`api.admin.model_routes`
 不存在、或 `api/admin/model_routes.py` 不存在。
 
-- [ ] **步骤 3：记录红灯结果并进入实现**
+- [x] **步骤 3：记录红灯结果并进入实现**
 
 记录失败数量和主要失败原因。不要提交红灯状态；项目提交门禁要求失败数为 0。红灯测试文件会在实现转绿后与 `api/admin/model_routes.py` 和 `api/admin_routes.py` 一起提交。
 
@@ -252,7 +273,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 - 创建：`api/admin/model_routes.py`
 - 参考：`api/admin_routes.py` 中 `# Model status / tests` 到 `/models/timing-gate-stability-test` 结束，以及 `# ── Model Health Check ──` 区块。
 
-- [ ] **步骤 1：创建模块头和 router**
+- [x] **步骤 1：创建模块头和 router**
 
 创建 `api/admin/model_routes.py`，模块开头使用以下结构：
 
@@ -280,7 +301,7 @@ router = APIRouter(tags=["admin-models"])
 
 不得导入 `api.admin_routes`。不得使用 `prefix="/models"`。
 
-- [ ] **步骤 2：迁移模型状态和连通性测试**
+- [x] **步骤 2：迁移模型状态和连通性测试**
 
 从 `api/admin_routes.py` 迁移以下符号，保持函数体逻辑不变：
 
@@ -294,7 +315,7 @@ router = APIRouter(tags=["admin-models"])
 - `chat_model_test()` 保持 `async def`，继续 `await client.chat_completion(...)`。
 - 不改变 `/models/status` 返回字段。
 
-- [ ] **步骤 3：迁移 provider、catalog 和 legacy catalog**
+- [x] **步骤 3：迁移 provider、catalog 和 legacy catalog**
 
 迁移以下符号：
 
@@ -318,7 +339,7 @@ router = APIRouter(tags=["admin-models"])
 保持 `refresh_model_catalog()` 内的 `urllib.request`、`datetime`、`list_providers()` 和
 `build_provider_catalog()` 行为不变。
 
-- [ ] **步骤 4：迁移 legacy stage route 和 canonical route 编辑**
+- [x] **步骤 4：迁移 legacy stage route 和 canonical route 编辑**
 
 迁移以下符号：
 
@@ -348,7 +369,7 @@ router = APIRouter(tags=["admin-models"])
 - `db_key == "sticker_describe"` 时继续尝试清理 `_get_image_summary_route._cache`。
 - 任何 `api_key` 仍只返回 `api_key_configured`，不暴露原值。
 
-- [ ] **步骤 5：迁移 route test、resolved、available 和本地组件**
+- [x] **步骤 5：迁移 route test、resolved、available 和本地组件**
 
 迁移以下符号：
 
@@ -368,7 +389,7 @@ router = APIRouter(tags=["admin-models"])
 - `list_available_models()` 继续在同步 endpoint 内使用 `urllib.request`，本阶段不做异步化重构。
 - 本地组件 import 继续留在函数体内，避免模块 import 阶段加载模型。
 
-- [ ] **步骤 6：迁移 TimingGate 稳定性测试和模型健康检查**
+- [x] **步骤 6：迁移 TimingGate 稳定性测试和模型健康检查**
 
 迁移以下符号：
 
@@ -384,7 +405,7 @@ router = APIRouter(tags=["admin-models"])
   `image_summary` 三类 endpoint。
 - 不新增 `asyncio.run()` 或 `run_awaitable_sync()`。
 
-- [ ] **步骤 7：语法检查新模块**
+- [x] **步骤 7：语法检查新模块**
 
 运行：
 
@@ -399,7 +420,7 @@ python -m compileall api/admin/model_routes.py -q
 **文件：**
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：导入并 include model router**
+- [x] **步骤 1：导入并 include model router**
 
 在已拆模块 import 区新增：
 
@@ -453,7 +474,7 @@ router.include_router(model_router)
 
 推荐放在 `tool_router` 之后、`trace_router` 之前。模型路由不依赖 include 顺序，但这样保持当前已拆模块集中。
 
-- [ ] **步骤 2：删除父模块本地模型管理区块**
+- [x] **步骤 2：删除父模块本地模型管理区块**
 
 删除 `api/admin_routes.py` 中以下本地实现：
 
@@ -470,7 +491,7 @@ router.include_router(model_router)
 - `/settings/*`
 - `# Reply 手动测试 / A-B 评估` 之后的任何代码。
 
-- [ ] **步骤 3：保留父模块其他子域依赖**
+- [x] **步骤 3：保留父模块其他子域依赖**
 
 确认 `api/admin_routes.py` 中这些符号仍保留：
 
@@ -493,7 +514,7 @@ router.include_router(model_router)
 - `/settings/*` 仍使用 `SystemSetting`、`_audit()`、`_client_ip()`。
 - Reply / Eval 区块仍使用 `row_to_dict`、`AdminAuditLog`、`asyncio`。
 
-- [ ] **步骤 4：语法检查父模块和新模块**
+- [x] **步骤 4：语法检查父模块和新模块**
 
 运行：
 
@@ -509,7 +530,7 @@ python -m compileall api/admin_routes.py api/admin/model_routes.py -q
 - 验证：`tests/test_admin_model_routes_split.py`
 - 验证：`tests/test_admin_api.py`
 
-- [ ] **步骤 1：运行 split 绿灯测试**
+- [x] **步骤 1：运行 split 绿灯测试**
 
 运行：
 
@@ -521,7 +542,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行模型行为回归**
+- [x] **步骤 2：运行模型行为回归**
 
 运行：
 
@@ -537,7 +558,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。若出现真实网络或本地模型加载，先检查是否遗漏已有 monkeypatch，不要通过增加超时解决。
 
-- [ ] **步骤 3：运行拆分兼容回归**
+- [x] **步骤 3：运行拆分兼容回归**
 
 运行：
 
@@ -555,7 +576,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 4：运行鉴权与 asyncio 策略回归**
+- [x] **步骤 4：运行鉴权与 asyncio 策略回归**
 
 运行：
 
@@ -577,7 +598,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 - 检查：`api/admin/model_routes.py`
 - 检查：`tests/test_admin_model_routes_split.py`
 
-- [ ] **步骤 1：运行静态检查**
+- [x] **步骤 1：运行静态检查**
 
 运行：
 
@@ -593,7 +614,7 @@ rg -n "from api\.admin_routes|import api\.admin_routes|asyncio\.run|run_awaitabl
 - `git diff --check` 无输出。
 - `rg` 无输出，退出码为 1。
 
-- [ ] **步骤 2：检查行数**
+- [x] **步骤 2：检查行数**
 
 运行：
 
@@ -607,7 +628,7 @@ wc -l api/admin_routes.py api/admin/model_routes.py tests/test_admin_model_route
 - `api/admin/model_routes.py` 约 1100-1200 行。
 - `tests/test_admin_model_routes_split.py` 约 140 行。
 
-- [ ] **步骤 3：运行全量测试**
+- [x] **步骤 3：运行全量测试**
 
 运行：
 
@@ -618,7 +639,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 4：暂存实现文件**
+- [x] **步骤 4：暂存实现文件**
 
 运行：
 
@@ -634,7 +655,7 @@ git diff --cached --check -- api/admin_routes.py api/admin/model_routes.py tests
 - `api/admin/model_routes.py`
 - `tests/test_admin_model_routes_split.py`
 
-- [ ] **步骤 5：提交实现阶段**
+- [x] **步骤 5：提交实现阶段**
 
 运行：
 
@@ -649,7 +670,7 @@ git commit -m "refactor(管理端): 拆分模型路由"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-model-routes-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下更新：
 
@@ -658,7 +679,7 @@ git commit -m "refactor(管理端): 拆分模型路由"
 - 说明 `/model-replies` 仍保留在父模块，作为后续 Reply / Observability 边界处理。
 - 说明旧 `api.admin_routes` 继续 re-export 迁移符号。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加 `## 2026-06-21 Admin Models 路由拆分`，记录：
 
@@ -668,7 +689,7 @@ git commit -m "refactor(管理端): 拆分模型路由"
 - 红灯、绿灯、模型行为回归、拆分兼容回归、asyncio 策略、静态检查、行数和全量测试结果。
 - 执行约束：不拆 `/model-replies`、不改 Prompt Runtime 模板、不新增 `asyncio.run()`。
 
-- [ ] **步骤 3：更新本计划**
+- [x] **步骤 3：更新本计划**
 
 勾选已执行步骤，补充：
 
@@ -678,7 +699,7 @@ git commit -m "refactor(管理端): 拆分模型路由"
 - 全量测试输出。
 - 实现提交 hash。
 
-- [ ] **步骤 4：验证文档收口**
+- [x] **步骤 4：验证文档收口**
 
 运行：
 
@@ -690,7 +711,7 @@ python -m pytest tests/ -v
 
 预期：`git diff --check` 无输出，全量测试 0 failures。
 
-- [ ] **步骤 5：暂存并提交文档收口**
+- [x] **步骤 5：暂存并提交文档收口**
 
 运行：
 
@@ -703,10 +724,10 @@ git commit -m "docs(计划): 收口模型路由拆分"
 
 ## 完成定义
 
-- [ ] `api/admin_routes.py` 中不再定义迁移清单内的 19 个模型管理 endpoint。
-- [ ] `api/admin/model_routes.py` 不反向导入 `api.admin_routes`。
-- [ ] `/model-replies` 仍由 `api.admin_routes` 提供。
-- [ ] `api.admin_routes.NANOBOT_ADMIN_TOKEN` monkeypatch 仍影响模型管理路由。
-- [ ] `api.admin_routes` legacy re-export 与 `api.admin.model_routes` 对象 identity 一致。
-- [ ] 模型行为回归、拆分兼容回归、asyncio 策略回归、静态检查和全量测试均通过。
-- [ ] 阶段实现已提交，文档收口已提交。
+- [x] `api/admin_routes.py` 中不再定义迁移清单内的 19 个模型管理 endpoint。
+- [x] `api/admin/model_routes.py` 不反向导入 `api.admin_routes`。
+- [x] `/model-replies` 仍由 `api.admin_routes` 提供。
+- [x] `api.admin_routes.NANOBOT_ADMIN_TOKEN` monkeypatch 仍影响模型管理路由。
+- [x] `api.admin_routes` legacy re-export 与 `api.admin.model_routes` 对象 identity 一致。
+- [x] 模型行为回归、拆分兼容回归、asyncio 策略回归、静态检查和全量测试均通过。
+- [x] 阶段实现已提交，文档收口将在本次提交中归档。
