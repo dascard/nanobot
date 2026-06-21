@@ -2949,3 +2949,76 @@ P3 超大文件队列仍剩 `api/admin_routes.py` 和 `api/routes.py`。继续�
 P3 超大文件队列仍剩 `api/admin_routes.py` 4303 行、`api/routes.py` 2822 行。继续沿
 管理端拆分时，下一刀可考虑 Tools 或 Models；推荐先 Tools，Models 需要单独设计配置写入、
 Prompt Runtime 间接调用和本地模型加载边界。
+
+## 2026-06-21 Admin Tools 路由拆分
+
+状态：实现、验证和实现阶段提交已完成。`api/admin_routes.py` 已拆出
+Admin Tools 管理端路由到 `api/admin/tool_routes.py`；旧 `api.admin_routes`
+继续 include 新 router，并 re-export 迁移后的 request model、helper 和 endpoint，
+保持旧导入路径、HTTP 路径、admin token monkeypatch、audit action/detail、runtime
+preset、生效预览、schema override 和工具覆盖语义兼容。`api/admin_routes.py`
+从 4303 行降至 3761 行，新模块 `api/admin/tool_routes.py` 为 601 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-admin-tool-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/admin-tool-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`1b5d58b docs(管理端): 设计工具路由拆分`。
+- 计划提交：`0871bb9 docs(计划): 记录工具路由拆分计划`。
+- 实现提交：`75f0089 refactor(管理端): 拆分工具路由`。
+
+已完成：
+
+- [x] 新增 `tests/test_admin_tool_routes_split.py`，锁定 endpoint module、
+  legacy import、token monkeypatch、重复注册、静态路径顺序和反向导入 / awaitable
+  扫描。
+- [x] 新增 `api/admin/tool_routes.py`，承载 Tools request model、helper 和
+  10 个 `/tools*` 路由。
+- [x] `api/admin_routes.py` include `tool_router`，并 re-export 迁移符号。
+- [x] 新模块使用 `api.admin.common.verify_admin`、`audit()` 和 `client_ip()`；
+  不反向导入 `api.admin_routes`。
+- [x] 红灯测试未单独提交；按项目提交门禁，失败状态只作为 TDD 证据记录，
+  绿灯后与实现一起提交。
+
+验证记录：
+
+- 红灯：`tests/test_admin_tool_routes_split.py -q` ->
+  `4 failed, 2 passed, 21 warnings in 7.55s`；失败点为 endpoint module 仍是
+  `api.admin_routes`、新模块不存在，以及旧 `/tools/effective` 顺序落后于动态
+  `/{tool_name}` 系列。
+- 绿灯：`tests/test_admin_tool_routes_split.py -q` ->
+  `6 passed, 21 warnings in 2.17s`。
+- 工具行为回归：`tests/test_admin_api.py::TestToolAdmin tests/test_tool_plan.py tests/test_tool_schema_config.py tests/test_final_tools.py -q`
+  -> `36 passed, 1 warning in 7.09s`。
+- 鉴权与 asyncio 策略回归：`tests/test_admin_api.py::TestAuth tests/test_asyncio_run_policy.py -q`
+  -> `9 passed, 1 warning in 2.57s`。
+- 静态检查：`python -m compileall api/admin_routes.py api/admin/tool_routes.py -q`
+  无输出；`git diff --check -- api/admin_routes.py api/admin/tool_routes.py tests/test_admin_tool_routes_split.py .Codex/plans/admin-tool-routes-split.md`
+  无输出；`rg -n "from api\.admin_routes|import api\.admin_routes|asyncio\.run|run_awaitable_sync" api/admin/tool_routes.py`
+  无输出。
+- 行数检查：`api/admin_routes.py` 3761 行，`api/admin/tool_routes.py` 601 行，
+  `tests/test_admin_tool_routes_split.py` 136 行。
+- 全量：`python -m pytest tests/ -v` ->
+  `1529 passed, 6 skipped, 139 warnings in 109.75s`。
+
+执行约束：
+
+- 不拆普通 `api/routes.py`。
+- 不迁移 Admin Models、reply/eval、eval 工作台、settings、`/db/backup` 或
+  `/db/vacuum`。
+- 不重构 `core.runtime_tool_service`，不改变工具默认值、runtime preset、生效预览、
+  schema override、platform override 或 runtime tool decision 语义。
+- 不改变 Prompt Runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime
+  输入。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列仍剩 `api/admin_routes.py` 3761 行、`api/routes.py` 2822 行。继续沿
+管理端拆分时，下一刀可考虑 Models，但需要单独设计 provider 凭据、route test、
+Prompt Runtime 间接调用和本地模型加载边界；切普通 API 前应先设计 `verify_token`
+共享兼容层。

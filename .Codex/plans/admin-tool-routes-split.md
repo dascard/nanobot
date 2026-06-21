@@ -18,10 +18,24 @@
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-admin-tool-routes-split-design.md`。
 - [x] 设计提交：`1b5d58b docs(管理端): 设计工具路由拆分`。
 - [x] 设计阶段全量验证：`python -m pytest tests/ -v` -> `1523 passed, 6 skipped, 139 warnings in 110.42s`。
-- [ ] 计划提交：`docs(计划): 记录工具路由拆分计划`。
-- [ ] TDD 红灯测试提交前验证。
-- [ ] 实现拆分并提交：`refactor(管理端): 拆分工具路由`。
-- [ ] 更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行结果并提交。
+- [x] 计划提交：`0871bb9 docs(计划): 记录工具路由拆分计划`。
+- [x] TDD 红灯测试验证：`4 failed, 2 passed, 21 warnings in 7.55s`；红灯不单独提交，绿灯后与实现一起提交。
+- [x] 实现拆分并提交：`75f0089 refactor(管理端): 拆分工具路由`。
+- [x] 更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行结果并提交。
+
+执行结果摘要：
+
+- Split 绿灯：`tests/test_admin_tool_routes_split.py -q` ->
+  `6 passed, 21 warnings in 2.17s`。
+- 工具行为回归：`tests/test_admin_api.py::TestToolAdmin tests/test_tool_plan.py tests/test_tool_schema_config.py tests/test_final_tools.py -q`
+  -> `36 passed, 1 warning in 7.09s`。
+- 鉴权与 asyncio 策略回归：`tests/test_admin_api.py::TestAuth tests/test_asyncio_run_policy.py -q`
+  -> `9 passed, 1 warning in 2.57s`。
+- 静态检查：`compileall`、`git diff --check` 和反向导入 / awaitable 扫描均无输出。
+- 行数：`api/admin_routes.py` 3761 行，`api/admin/tool_routes.py` 601 行，
+  `tests/test_admin_tool_routes_split.py` 136 行。
+- 实现阶段全量测试：`python -m pytest tests/ -v` ->
+  `1529 passed, 6 skipped, 139 warnings in 109.75s`。
 
 ## 子 agent 分工约定
 
@@ -70,7 +84,7 @@
 **文件：**
 - 创建：`tests/test_admin_tool_routes_split.py`
 
-- [ ] **步骤 1：创建 split 路由测试文件**
+- [x] **步骤 1：创建 split 路由测试文件**
 
 创建 `tests/test_admin_tool_routes_split.py`：
 
@@ -213,7 +227,7 @@ def test_admin_tool_routes_do_not_import_parent_admin_routes_or_sync_awaitable()
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -225,14 +239,9 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：失败。失败原因应包含 endpoint module 仍为 `api.admin_routes`、`api.admin.tool_routes` 不存在或静态扫描找不到 `api/admin/tool_routes.py`。
 
-- [ ] **步骤 3：提交红灯测试**
+- [x] **步骤 3：记录红灯结果并进入实现**
 
-运行：
-
-```bash
-git add tests/test_admin_tool_routes_split.py
-git commit -m "test(管理端): 锁定工具路由拆分契约"
-```
+记录失败数量和主要失败原因。不要提交红灯状态；项目提交门禁要求失败数为 0。红灯测试文件会在实现转绿后与 `api/admin/tool_routes.py` 和 `api/admin_routes.py` 一起提交。
 
 ## 任务 2：创建 `api/admin/tool_routes.py`
 
@@ -240,7 +249,7 @@ git commit -m "test(管理端): 锁定工具路由拆分契约"
 - 创建：`api/admin/tool_routes.py`
 - 参考：`api/admin_routes.py` 中 `# ── 工具管理 ──` 到 `# ── Model Health Check ──` 前的区块
 
-- [ ] **步骤 1：创建模块头、router、request model 和 helper**
+- [x] **步骤 1：创建模块头、router、request model 和 helper**
 
 创建 `api/admin/tool_routes.py`，模块开头使用以下结构：
 
@@ -339,7 +348,7 @@ def _tool_target_label(name: str, target_id: str, fallback: str) -> str:
     return fallback or clean_id
 ```
 
-- [ ] **步骤 2：迁移 10 个 endpoint 并调整路由前缀**
+- [x] **步骤 2：迁移 10 个 endpoint 并调整路由前缀**
 
 从 `api/admin_routes.py` 迁移以下函数到新模块，函数体业务逻辑保持不变：
 
@@ -409,7 +418,7 @@ def delete_tool_override(...):
 
 必须保持静态路径 `""`、`"/targets"`、`"/effective"`、`"/decisions"` 在动态 `"/{tool_name}"` 系列之前。
 
-- [ ] **步骤 3：替换审计 helper 调用**
+- [x] **步骤 3：替换审计 helper 调用**
 
 迁移时把旧父模块 helper 替换为 `api.admin.common` helper：
 
@@ -433,7 +442,7 @@ audit(db, "tool_schema_override", "tool", tool_name, {"schema": result["editable
 - `tool_override`
 - `tool_override_delete`
 
-- [ ] **步骤 4：保持 lazy import 不外提**
+- [x] **步骤 4：保持 lazy import 不外提**
 
 确认以下 import 仍在函数体内：
 
@@ -456,7 +465,7 @@ from core.settings_service import settings
 **文件：**
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：导入新模块 router 和旧兼容符号**
+- [x] **步骤 1：导入新模块 router 和旧兼容符号**
 
 在现有 `api.admin.*_routes` import 区加入：
 
@@ -483,7 +492,7 @@ from api.admin.tool_routes import (
 )
 ```
 
-- [ ] **步骤 2：include `tool_router`**
+- [x] **步骤 2：include `tool_router`**
 
 在 router include 区加入：
 
@@ -493,7 +502,7 @@ router.include_router(tool_router)
 
 推荐放在 `router.include_router(group_memory_router)` 后、`router.include_router(trace_router)` 前，使管理端业务路由和观测路由继续分组清晰。
 
-- [ ] **步骤 3：删除父模块工具管理实现**
+- [x] **步骤 3：删除父模块工具管理实现**
 
 删除 `api/admin_routes.py` 中从以下注释开始的工具管理区块：
 
@@ -509,7 +518,7 @@ router.include_router(tool_router)
 
 保留 `# ── Model Health Check ──` 和之后的模型健康检查实现。
 
-- [ ] **步骤 4：确认父模块仍保留其他子域依赖**
+- [x] **步骤 4：确认父模块仍保留其他子域依赖**
 
 删除工具区块后，确认 `api/admin_routes.py` 内仍保留这些本地 helper，因为其他端点还在使用：
 
@@ -542,7 +551,7 @@ from core.database import ChatLog, ConversationTurn, SystemSetting, User
 - 生产：`api/admin_routes.py`
 - 生产：`api/admin/tool_routes.py`
 
-- [ ] **步骤 1：运行 split 测试**
+- [x] **步骤 1：运行 split 测试**
 
 运行：
 
@@ -554,7 +563,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：`6 passed`。
 
-- [ ] **步骤 2：如果路由顺序失败，移动 decorator 顺序**
+- [x] **步骤 2：如果路由顺序失败，移动 decorator 顺序**
 
 若 `test_admin_tool_static_routes_before_dynamic_tool_name_routes` 失败，只调整 `api/admin/tool_routes.py` 中 endpoint 定义顺序，使 `list_tool_targets()`、`get_effective_tools()`、`list_runtime_preset_decisions()` 位于 `get_tool_schema_override()` 之前。不要改 path、method 或函数名。
 
@@ -565,7 +574,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 - 生产：`api/admin/tool_routes.py`
 - 测试：`tests/test_admin_tool_routes_split.py`
 
-- [ ] **步骤 1：运行工具行为回归**
+- [x] **步骤 1：运行工具行为回归**
 
 运行：
 
@@ -581,7 +590,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 2：运行鉴权与 asyncio 策略回归**
+- [x] **步骤 2：运行鉴权与 asyncio 策略回归**
 
 运行：
 
@@ -595,7 +604,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 3：运行编译和 diff 检查**
+- [x] **步骤 3：运行编译和 diff 检查**
 
 运行：
 
@@ -606,7 +615,7 @@ git diff --check -- api/admin_routes.py api/admin/tool_routes.py tests/test_admi
 
 预期：两条命令退出码为 0，`git diff --check` 无输出。
 
-- [ ] **步骤 4：运行反向导入和 awaitable 扫描**
+- [x] **步骤 4：运行反向导入和 awaitable 扫描**
 
 运行：
 
@@ -616,7 +625,7 @@ rg -n "from api\.admin_routes|import api\.admin_routes|asyncio\.run|run_awaitabl
 
 预期：退出码为 1，无匹配输出。
 
-- [ ] **步骤 5：记录行数**
+- [x] **步骤 5：记录行数**
 
 运行：
 
@@ -633,7 +642,7 @@ wc -l api/admin_routes.py api/admin/tool_routes.py tests/test_admin_tool_routes_
 - 生产：`api/admin/tool_routes.py`
 - 测试：`tests/test_admin_tool_routes_split.py`
 
-- [ ] **步骤 1：运行全量测试**
+- [x] **步骤 1：运行全量测试**
 
 运行：
 
@@ -644,7 +653,7 @@ python -m pytest tests/ -v
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 2：暂存实现文件**
+- [x] **步骤 2：暂存实现文件**
 
 运行：
 
@@ -652,7 +661,7 @@ python -m pytest tests/ -v
 git add api/admin_routes.py api/admin/tool_routes.py tests/test_admin_tool_routes_split.py
 ```
 
-- [ ] **步骤 3：提交实现**
+- [x] **步骤 3：提交实现**
 
 运行：
 
@@ -667,7 +676,7 @@ git commit -m "refactor(管理端): 拆分工具路由"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-tool-routes-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下记录：
 
@@ -677,7 +686,7 @@ git commit -m "refactor(管理端): 拆分工具路由"
 
 并更新 `api/admin_routes.py` 当前行数。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-21 Admin Tools 阶段记录，包含：
 
@@ -690,11 +699,11 @@ git commit -m "refactor(管理端): 拆分工具路由"
 - 验证：记录 split 测试、定向回归、静态扫描、行数和全量 pytest 结果。
 ```
 
-- [ ] **步骤 3：更新本计划执行结果**
+- [x] **步骤 3：更新本计划执行结果**
 
 在「当前状态」中勾选已完成项，并记录实际测试输出、行数和提交 hash。
 
-- [ ] **步骤 4：验证文档**
+- [x] **步骤 4：验证文档**
 
 运行：
 
@@ -704,7 +713,7 @@ git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/admin-too
 
 预期：无输出。
 
-- [ ] **步骤 5：运行全量测试**
+- [x] **步骤 5：运行全量测试**
 
 运行：
 
@@ -715,7 +724,7 @@ python -m pytest tests/ -v
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 
