@@ -116,6 +116,9 @@
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
     admin 子域仍留在旧文件。
+  - 进展：`creatures/nanobot/prompts/skills/news_search/tool.py` 第一刀已完成
+    只读审计、设计文档和实现计划；实施目标是先拆出旧版新闻报告 helper 到
+    `news_search/legacy_report.py`，不触碰搜索后端、AI 日报工具和缓存。
 
 - [ ] **静默吞异常补日志（best-effort 路径）** · LOW · S 批量
   `prompts/manager.py:435`(tracer)、`context_builder.py:895`(deprecated)、`admin/system_routes.py:46`(git)、`group_ingress/helpers.py:41,74`、`memory_digest/builder.py:65`。均非吞真错，补 `logger.debug` 提升可调试性即可；`H11 save_log`(legacy_adapter.py:223) 补 `except+rollback`（MEDIUM，聊天链路）。

@@ -2191,3 +2191,57 @@ H30 计划列表：
 - 提交：`65060a2 refactor(管理端): 拆分 DB Browser 路由`。
 
 后续：继续按超大文件拆分排序处理 `news_search/tool.py` 或下一段 admin 子域。
+
+## 2026-06-21 news_search/tool.py 第一刀拆分
+
+状态：设计与实现计划阶段完成，生产代码尚未迁移。当前阶段已确认
+`docs/todo.md` 的 P3 超大文件拆分仍是默认主线；TimingGate scoring 主链路已进入
+真实数据运营/人工审核沉淀，不抢占本阶段开发顺序。
+
+已完成：
+
+- [x] 读取 `docs/todo.md` 的 P3 超大文件拆分条目，确认
+  `creatures/nanobot/prompts/skills/news_search/tool.py` 仍在未完成列表中。
+- [x] 分派并收口三路只读子 agent：
+  - 职责边界审计：建议 `legacy_report.py` 作为第一刀，保持 `tool.py` facade 和
+    monkeypatch 路径兼容。
+  - 测试覆盖审计：梳理 `tests/test_tools_package.py`、`tests/test_ai_daily_tool_and_sources.py`、
+    `tests/test_ai_daily_ingest.py`、`tests/test_news_daily_pipeline.py`、KT/Bridge/schema 相邻回归。
+  - 文档优先级审计：确认 TimingGate 不阻塞，下一阶段回到 P3 超大文件拆分。
+- [x] 主线程复核 `tool.py` 关键边界：报告/评分/layout helper 集中在 70-884 行；
+  `WebTools`、RSS/DDG、`search_and_extract_news_v2()`、`AiDailyTool` 和缓存暂不迁移。
+- [x] 写入设计文档：
+  `docs/superpowers/specs/2026-06-21-news-search-tool-split-design.md`。
+- [x] 写入实现计划：`.Codex/plans/news-search-tool-split.md`。
+- [x] 更新 `docs/todo.md`，记录 `news_search/tool.py` 第一刀已进入设计/计划阶段。
+
+计划列表：
+
+- [x] 阶段 0：只读审计、方案比较和边界选择。
+- [x] 阶段 0.5：写入设计文档和实现计划，记录日期与当前阶段状态。
+- [ ] 阶段 1：补 `tests/test_news_search_legacy_report.py` 红灯测试，锁住新模块轻量导入与
+  `tool.py` re-export 兼容。
+- [ ] 阶段 2：新增 `news_search/legacy_report.py`，迁移旧版新闻报告、评分、价值信号和
+  layout fallback / HTML 渲染 helper；`tool.py` 显式 re-export。
+- [ ] 阶段 3：运行新模块、legacy HTML、搜索/AI 日报相邻回归、`asyncio.run` 策略测试和
+  全量 `python -m pytest tests/ -v`。
+- [ ] 阶段 4：同步 `.Codex/plans/news-search-tool-split.md`、`docs/todo.md` 和本 walkthrough，
+  记录行数变化、验证结果和提交号。
+
+执行约束：
+
+- 不迁移 `AiDailyTool`、`WebTools`、RSS/DDG 搜索后端、缓存和 `_run_news_daily_pipeline()`。
+- 不改变 `search_and_extract_news()`、`search_and_extract_news_v2()`、`AiDailyTool` 的签名。
+- 不恢复 `NewsSearchTool`，不重新暴露 `news_search` 工具名。
+- 不新增 `asyncio.run()`，不新增同步函数包 awaitable。
+- 不改 prompt runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime 输入。
+- 每个阶段完成后运行定向回归和 `python -m pytest tests/ -v`，再按文件显式暂存并提交。
+
+验证记录：
+
+- 待阶段 1 红灯测试执行后填写。
+
+后续：
+
+完成 `legacy_report.py` 第一刀后，继续评估 `news_search/tool.py` 的缓存、搜索后端或
+AI 日报适配层拆分；`cache.py` 可作为低风险小步候选，但不替代当前第一刀的超大文件治理收益。
