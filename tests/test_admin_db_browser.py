@@ -5,6 +5,106 @@ def _auth_header():
     return {"Authorization": "Bearer test-token"}
 
 
+def _admin_routes_for(path: str):
+    from api.admin_routes import router
+
+    def _iter_routes(routes, prefix: str = ""):
+        for route in routes:
+            endpoint = getattr(route, "endpoint", None)
+            route_path = getattr(route, "path", None)
+            if endpoint is not None and route_path is not None:
+                yield prefix + route_path, route
+                continue
+
+            original_router = getattr(route, "original_router", None)
+            if original_router is None:
+                continue
+            include_context = getattr(route, "include_context", None)
+            include_prefix = getattr(include_context, "prefix", "")
+            yield from _iter_routes(original_router.routes, prefix + include_prefix)
+
+    return [
+        route
+        for route_path, route in _iter_routes(router.routes)
+        if route_path == path
+    ]
+
+
+def test_db_browser_routes_are_registered_from_split_module():
+    expected = {
+        "/api/v1/admin/db/tables",
+        "/api/v1/admin/db/tables/{table_name}",
+        "/api/v1/admin/db/query",
+    }
+
+    for path in expected:
+        routes = _admin_routes_for(path)
+        assert routes, f"missing route: {path}"
+        assert {route.endpoint.__module__ for route in routes} == {"api.admin.db_browser_routes"}
+
+
+def test_legacy_admin_routes_db_browser_imports_still_work():
+    from api import admin_routes
+    from api.admin import db_browser_routes
+
+    names = [
+        "DbQuery",
+        "DB_TABLE_GROUPS",
+        "READONLY_TABLES",
+        "READONLY_TABLE_SET",
+        "BLOCKED_DB_TABLES",
+        "GLOBAL_REDACT_COLUMNS",
+        "GLOBAL_PREVIEW_ONLY_COLUMNS",
+        "DEFAULT_DB_TABLE_POLICY",
+        "DB_TABLE_POLICIES",
+        "_db_table_policy",
+        "_db_table_meta",
+        "_quote_identifier",
+        "_table_columns",
+        "_safe_serialize_cell",
+        "_serialize_db_rows",
+        "_extract_query_table_names",
+        "_validate_query_tables_allowed",
+        "_validate_readonly_query",
+        "_available_readonly_tables",
+        "_available_db_groups",
+        "list_tables",
+        "query_table",
+        "execute_readonly_query",
+    ]
+
+    for name in names:
+        assert getattr(admin_routes, name) is getattr(db_browser_routes, name)
+    assert admin_routes.DbQuery(query="SELECT 1").query == "SELECT 1"
+
+
+def test_split_db_browser_uses_legacy_admin_token_monkeypatch(client, monkeypatch):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "split-token")
+
+    ok = client.get(
+        "/api/v1/admin/db/tables",
+        headers={"Authorization": "Bearer split-token"},
+    )
+    wrong = client.get(
+        "/api/v1/admin/db/tables",
+        headers=_auth_header(),
+    )
+
+    assert ok.status_code == 200
+    assert wrong.status_code == 401
+
+
+def test_db_browser_routes_are_not_registered_twice():
+    expected = {
+        "/api/v1/admin/db/tables",
+        "/api/v1/admin/db/tables/{table_name}",
+        "/api/v1/admin/db/query",
+    }
+
+    for path in expected:
+        assert len(_admin_routes_for(path)) == 1
+
+
 def test_db_tables_returns_groups_meta_and_hides_sensitive_data(client, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
 

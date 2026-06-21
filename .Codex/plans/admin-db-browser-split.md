@@ -36,7 +36,7 @@
 **文件：**
 - 修改：`tests/test_admin_db_browser.py`
 
-- [ ] **步骤 1：新增 route 检查 helper**
+- [x] **步骤 1：新增 route 检查 helper**
 
 在 `tests/test_admin_db_browser.py` 的 `_auth_header()` 后添加：
 
@@ -51,7 +51,7 @@ def _admin_routes_for(path: str):
     ]
 ```
 
-- [ ] **步骤 2：新增路由实现模块测试**
+- [x] **步骤 2：新增路由实现模块测试**
 
 在 helper 后添加：
 
@@ -71,7 +71,7 @@ def test_db_browser_routes_are_registered_from_split_module():
 
 实现前预期失败：endpoint 仍来自 `api.admin_routes`。
 
-- [ ] **步骤 3：新增旧导入兼容测试**
+- [x] **步骤 3：新增旧导入兼容测试**
 
 继续添加：
 
@@ -113,7 +113,7 @@ def test_legacy_admin_routes_db_browser_imports_still_work():
 
 实现前预期失败：`api.admin.db_browser_routes` 模块不存在。
 
-- [ ] **步骤 4：新增 token monkeypatch 回归测试**
+- [x] **步骤 4：新增 token monkeypatch 回归测试**
 
 继续添加：
 
@@ -136,7 +136,7 @@ def test_split_db_browser_uses_legacy_admin_token_monkeypatch(client, monkeypatc
 
 该测试在拆分前可能已通过，但拆分后用于防止新模块直接读取 `config.NANOBOT_ADMIN_TOKEN`。
 
-- [ ] **步骤 5：新增路由未重复注册测试**
+- [x] **步骤 5：新增路由未重复注册测试**
 
 继续添加：
 
@@ -154,7 +154,7 @@ def test_db_browser_routes_are_not_registered_twice():
 
 该测试在拆分前可能已通过，但拆分后用于防止旧路由未删、新 router 又 include。
 
-- [ ] **步骤 6：运行红灯测试**
+- [x] **步骤 6：运行红灯测试**
 
 运行：
 
@@ -175,7 +175,7 @@ FAILED tests/test_admin_db_browser.py::test_legacy_admin_routes_db_browser_impor
 
 如果这两个测试在生产代码迁移前直接通过，需要先检查当前分支是否已经存在新模块。
 
-- [ ] **步骤 7：提交红灯测试**
+- [x] **步骤 7：提交红灯测试**
 
 红灯测试可以和生产迁移放在同一最终实现提交中，不单独提交。若需要中途保存，只暂存：
 
@@ -189,7 +189,7 @@ git add tests/test_admin_db_browser.py
 - 创建：`api/admin/db_browser_routes.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：创建新模块头部**
+- [x] **步骤 1：创建新模块头部**
 
 新建 `api/admin/db_browser_routes.py`，头部结构如下：
 
@@ -216,7 +216,7 @@ router = APIRouter(prefix="/db", tags=["admin-db-browser"])
 
 不要从 `api.admin_routes` 导入 `verify_admin`、`router`、`logger` 或 `_audit_request`。
 
-- [ ] **步骤 2：迁移 `DbQuery`**
+- [x] **步骤 2：迁移 `DbQuery`**
 
 从 `api/admin_routes.py` 移出：
 
@@ -227,7 +227,7 @@ class DbQuery(BaseModel):
 
 放入 `api/admin/db_browser_routes.py`。
 
-- [ ] **步骤 3：迁移 DB Browser 常量**
+- [x] **步骤 3：迁移 DB Browser 常量**
 
 从 `api/admin_routes.py` 移出并原样放入新模块：
 
@@ -242,7 +242,7 @@ class DbQuery(BaseModel):
 
 迁移时保持列表顺序、表名、策略字段和字符串完全不变。
 
-- [ ] **步骤 4：迁移 DB Browser helper**
+- [x] **步骤 4：迁移 DB Browser helper**
 
 从 `api/admin_routes.py` 移出并原样放入新模块：
 
@@ -261,7 +261,7 @@ class DbQuery(BaseModel):
 确认 `_quote_identifier()` 仍使用 `HTTPException(400, ...)`，`_validate_readonly_query()`
 仍允许末尾单个分号，禁止词仍用单词边界匹配。
 
-- [ ] **步骤 5：迁移三条只读 Browser 路由**
+- [x] **步骤 5：迁移三条只读 Browser 路由**
 
 从 `api/admin_routes.py` 移出 `list_tables()`、`query_table()`、
 `execute_readonly_query()`，放入新模块并调整装饰器：
@@ -298,7 +298,7 @@ def execute_readonly_query(
 - 表浏览 `limit` 继续钳制到 200。
 - SQL 查询继续用 `SELECT * FROM ({q}) LIMIT 500`。
 
-- [ ] **步骤 6：在 `api/admin_routes.py` include 新 router**
+- [x] **步骤 6：在 `api/admin_routes.py` include 新 router**
 
 在现有 admin 子路由导入区加入：
 
@@ -314,7 +314,7 @@ router.include_router(db_browser_router)
 
 建议放在 `system_router` 之后或现有 include 列表中靠前位置。路径不能变化。
 
-- [ ] **步骤 7：在 `api/admin_routes.py` 保留兼容导出**
+- [x] **步骤 7：在 `api/admin_routes.py` 保留兼容导出**
 
 在新 router import 附近增加兼容导入：
 
@@ -348,7 +348,7 @@ from api.admin.db_browser_routes import (
 
 如果 lint 对下划线导入有意见，本项目当前没有强制 lint gate；优先保持兼容。
 
-- [ ] **步骤 8：不要迁移 `/db/backup` 和 `/db/vacuum`**
+- [x] **步骤 8：不要迁移 `/db/backup` 和 `/db/vacuum`**
 
 确认 `download_backup()` 和 `db_vacuum()` 仍留在 `api/admin_routes.py`，其装饰器仍为：
 
@@ -359,7 +359,7 @@ from api.admin.db_browser_routes import (
 
 不要顺手改路径解析或审计逻辑。
 
-- [ ] **步骤 9：运行红灯测试验证变绿**
+- [x] **步骤 9：运行红灯测试验证变绿**
 
 运行：
 
@@ -386,7 +386,7 @@ python -m pytest \
 - 修改：`api/admin_routes.py`
 - 修改：`tests/test_admin_db_browser.py`
 
-- [ ] **步骤 1：运行 DB Browser 全文件回归**
+- [x] **步骤 1：运行 DB Browser 全文件回归**
 
 运行：
 
@@ -403,7 +403,7 @@ python -m pytest tests/test_admin_db_browser.py -v
 
 实际数量以新增测试后的 pytest 输出为准，但必须是 0 failures。
 
-- [ ] **步骤 2：运行 admin auth 回归**
+- [x] **步骤 2：运行 admin auth 回归**
 
 运行：
 
@@ -418,7 +418,7 @@ python -m pytest tests/test_admin_api.py::TestAuth -v
 5 passed
 ```
 
-- [ ] **步骤 3：运行 private block 与 DB Browser 联动回归**
+- [x] **步骤 3：运行 private block 与 DB Browser 联动回归**
 
 运行：
 
@@ -436,7 +436,7 @@ python -m pytest \
 3 passed
 ```
 
-- [ ] **步骤 4：运行 WebUI DB 页面静态契约回归**
+- [x] **步骤 4：运行 WebUI DB 页面静态契约回归**
 
 运行：
 
@@ -451,7 +451,7 @@ python -m pytest tests/test_admin_web_debug.py::test_db_page_contains_grouped_se
 1 passed
 ```
 
-- [ ] **步骤 5：检查 `asyncio.run()` 约束**
+- [x] **步骤 5：检查 `asyncio.run()` 约束**
 
 运行：
 
@@ -466,7 +466,7 @@ python -m pytest tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears
 1 passed
 ```
 
-- [ ] **步骤 6：核对文件行数变化**
+- [x] **步骤 6：核对文件行数变化**
 
 运行：
 
@@ -477,6 +477,32 @@ wc -l api/admin_routes.py api/admin/db_browser_routes.py
 记录结果。`api/admin_routes.py` 应减少 DB Browser 代码体积；整项「超大文件 >800 行拆分」
 仍不能标记完成。
 
+### 已执行验证记录
+
+- 红灯：新增路由迁出和旧导入兼容测试在生产迁移前运行，结果为
+  `2 failed, 1 warning`；失败点分别是 DB Browser endpoint 仍来自
+  `api.admin_routes`、`api.admin.db_browser_routes` 模块不存在。
+- 绿灯首次运行：生产迁移后边界测试结果为 `2 failed, 2 passed, 21 warnings`；
+  失败原因是测试 helper 未展开 FastAPI `_IncludedRouter`，不是生产路由缺失。
+- 绿灯修正：递归展开 `api.admin_routes.router` 的 included router 后，新增边界
+  测试结果为 `4 passed, 21 warnings`。
+- DB Browser 回归：`python -m pytest tests/test_admin_db_browser.py -v`
+  -> `14 passed, 21 warnings in 4.30s`。
+- Admin auth 回归：`python -m pytest tests/test_admin_api.py::TestAuth -v`
+  -> `5 passed, 1 warning in 1.36s`。
+- Private block 联动：`python -m pytest tests/test_admin_api.py::TestBlockRule
+  tests/test_admin_api.py::TestPrivateBlockFlow::test_blocked_user_chat_writes_log_with_files -v`
+  -> `3 passed, 1 warning in 1.16s`。
+- WebUI DB 页面：`python -m pytest
+  tests/test_admin_web_debug.py::test_db_page_contains_grouped_search_pagination_and_preview_ui -v`
+  -> `1 passed, 1 warning in 0.72s`。
+- `asyncio.run` 约束：`python -m pytest
+  tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v`
+  -> `1 passed, 1 warning in 1.79s`。
+- 行数：`api/admin_routes.py` 5535 行，`api/admin/db_browser_routes.py` 374 行。
+- 全量：`python -m pytest tests/ -v`
+  -> `1482 passed, 6 skipped, 139 warnings in 105.96s`。
+
 ## 任务 4：同步计划状态文档
 
 **文件：**
@@ -484,12 +510,12 @@ wc -l api/admin_routes.py api/admin/db_browser_routes.py
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：标记本计划已完成步骤**
+- [x] **步骤 1：标记本计划已完成步骤**
 
 在 `.Codex/plans/admin-db-browser-split.md` 中把已经完成的步骤复选框改成 `[x]`。
 保持后续 `/db/backup`、`/db/vacuum` 和其他 admin 子域拆分不在本计划内。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在「超大文件 >800 行拆分」条目下补充状态说明：
 
@@ -500,7 +526,7 @@ wc -l api/admin_routes.py api/admin/db_browser_routes.py
 
 不要把该待办项改为 `[x]`。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加新小节：
 
@@ -533,7 +559,7 @@ wc -l api/admin_routes.py api/admin/db_browser_routes.py
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行全量测试**
+- [x] **步骤 1：运行全量测试**
 
 运行：
 
@@ -554,7 +580,7 @@ python -m pytest tests/ -v
 1478 passed, 6 skipped, 139 warnings
 ```
 
-- [ ] **步骤 2：检查 diff 格式**
+- [x] **步骤 2：检查 diff 格式**
 
 运行：
 
@@ -612,11 +638,11 @@ git commit -m "refactor(管理端): 拆分 DB Browser 路由" \
 
 ## 自检清单
 
-- [ ] 规格覆盖：对应 `2026-06-21-admin-db-browser-split-design.md` 的目标、非目标、兼容性、测试和回滚策略。
-- [ ] TDD：先新增路由迁出和旧导入兼容测试并看到红灯，再写生产代码。
-- [ ] 路径：`/api/v1/admin/db/tables`、`/api/v1/admin/db/tables/{table_name}`、`/api/v1/admin/db/query` 保持不变。
-- [ ] 兼容：`api.admin_routes.NANOBOT_ADMIN_TOKEN` monkeypatch 对新路由生效。
-- [ ] 兼容：`api.admin_routes.DbQuery` 和 DB Browser helper 旧导入路径可用。
-- [ ] 边界：`/db/backup` 和 `/db/vacuum` 本阶段不迁移。
-- [ ] 约束：没有新增除 `main` guard 外的 `asyncio.run()`。
+- [x] 规格覆盖：对应 `2026-06-21-admin-db-browser-split-design.md` 的目标、非目标、兼容性、测试和回滚策略。
+- [x] TDD：先新增路由迁出和旧导入兼容测试并看到红灯，再写生产代码。
+- [x] 路径：`/api/v1/admin/db/tables`、`/api/v1/admin/db/tables/{table_name}`、`/api/v1/admin/db/query` 保持不变。
+- [x] 兼容：`api.admin_routes.NANOBOT_ADMIN_TOKEN` monkeypatch 对新路由生效。
+- [x] 兼容：`api.admin_routes.DbQuery` 和 DB Browser helper 旧导入路径可用。
+- [x] 边界：`/db/backup` 和 `/db/vacuum` 本阶段不迁移。
+- [x] 约束：没有新增除 `main` guard 外的 `asyncio.run()`。
 - [ ] 提交：只用显式路径 `git add`，不暂存无关 pycache、数据库或既有脏项。

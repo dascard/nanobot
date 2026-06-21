@@ -2149,3 +2149,44 @@ H30 计划列表：
 - 全量：`python -m pytest tests/ -v` -> `1478 passed, 6 skipped, 139 warnings in 108.80s`。
 
 后续：继续按规格中的排序拆 `api/admin_routes.py` DB Browser。
+
+## 2026-06-21 Admin DB Browser 第一刀拆分
+
+状态：第一刀实现完成。只读 DB Browser 的三条路由已迁移到
+`api/admin/db_browser_routes.py`，`api/admin_routes.py` 保留顶层 include 和
+旧符号兼容导出。`/db/backup`、`/db/vacuum` 及其他 admin 子域仍留在旧文件。
+
+已完成：
+
+- [x] 补充路由迁出、旧导入兼容、legacy token monkeypatch 和路由不重复注册测试。
+- [x] 新增 `api/admin/db_browser_routes.py`，迁移 `DbQuery`、DB Browser 表策略、
+  SQL guard、序列化 helper 和三条只读 Browser 路由。
+- [x] `api/admin_routes.py` include 新 router，并通过 re-export 保持旧导入路径可用。
+- [x] 删除旧文件中的只读 DB Browser 真实实现块，保留 `/db/backup` 和 `/db/vacuum`。
+- [x] 同步 `.Codex/plans/admin-db-browser-split.md`、`docs/todo.md` 和本 walkthrough。
+
+验证：
+
+- 红灯：新增路由迁出和旧导入兼容测试在生产迁移前运行 -> `2 failed, 1 warning`。
+- 绿灯首次运行：生产迁移后边界测试 -> `2 failed, 2 passed, 21 warnings`；
+  原因是测试 helper 未展开 FastAPI `_IncludedRouter`。
+- 绿灯修正：递归展开 `api.admin_routes.router` 后，新增边界测试 ->
+  `4 passed, 21 warnings`。
+- DB Browser 回归：`tests/test_admin_db_browser.py -v` ->
+  `14 passed, 21 warnings in 4.30s`。
+- Admin auth 回归：`tests/test_admin_api.py::TestAuth -v` ->
+  `5 passed, 1 warning in 1.36s`。
+- Private block 联动：`tests/test_admin_api.py::TestBlockRule`
+  与 `tests/test_admin_api.py::TestPrivateBlockFlow::test_blocked_user_chat_writes_log_with_files`
+  -> `3 passed, 1 warning in 1.16s`。
+- WebUI DB 页面：
+  `tests/test_admin_web_debug.py::test_db_page_contains_grouped_search_pagination_and_preview_ui -v`
+  -> `1 passed, 1 warning in 0.72s`。
+- `asyncio.run` 约束：
+  `tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v`
+  -> `1 passed, 1 warning in 1.79s`。
+- 行数：`api/admin_routes.py` 5535 行，`api/admin/db_browser_routes.py` 374 行。
+- 全量：`python -m pytest tests/ -v` ->
+  `1482 passed, 6 skipped, 139 warnings in 105.96s`。
+
+后续：继续按超大文件拆分排序处理 `news_search/tool.py` 或下一段 admin 子域。
