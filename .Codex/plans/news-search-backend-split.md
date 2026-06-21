@@ -10,6 +10,36 @@
 
 ---
 
+## 执行结果摘要
+
+- 红灯验证：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -m pytest tests/test_news_search_backend_split.py -v`
+  首次运行结果为 `1 failed, 3 passed, 1 warning in 5.75s`；失败原因是
+  `ImportError: cannot import name 'search_backend'`，证明测试先于新模块实现。
+- 绿灯验证：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -m pytest tests/test_news_search_backend_split.py -v`
+  结果为 `4 passed, 1 warning in 0.68s`。
+- 搜索后端定向回归：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -m pytest tests/test_tools_package.py::test_web_search_mock tests/test_tools_package.py::test_web_extract_mock tests/test_tools_package.py::test_web_search_news_query_uses_daily_timelimit_and_merges_rss_with_web tests/test_tools_package.py::test_web_search_news_query_prefers_ddgs_news_results tests/test_tools_package.py::test_juya_rss_preserves_pubdate_for_freshness_filter tests/test_tools_package.py::test_web_search_latest_query_filters_out_obviously_stale_dated_results tests/test_tools_package.py::test_web_search_preserves_partial_results_when_later_variant_fails -v`
+  结果为 `7 passed, 1 warning in 0.64s`。
+- 相邻兼容回归：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -m pytest tests/test_news_search_legacy_report.py tests/test_news_search_runtime_cache.py tests/test_ai_daily_tool_and_sources.py tests/test_ai_daily_ingest.py tests/test_kt_framework.py::TestAiDailyTool tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v`
+  结果为 `30 passed, 1 warning in 4.16s`。
+- 语法和格式检查：
+  `python -m compileall creatures/nanobot/prompts/skills/news_search -q` 无输出，退出码为 0；
+  `git diff --check` 无输出，退出码为 0。
+- 全量回归：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -m pytest tests/ -v`
+  结果为 `1492 passed, 6 skipped, 139 warnings in 110.25s`。
+- 行数复核：
+  `creatures/nanobot/prompts/skills/news_search/tool.py` 为 798 行；
+  `creatures/nanobot/prompts/skills/news_search/search_backend.py` 为 482 行；
+  `tests/test_news_search_backend_split.py` 为 105 行。
+- 实现阶段提交：
+  本计划随 `refactor(新闻搜索): 拆分搜索后端` 一并提交；提交号将在文档收口阶段回填。
+
+---
+
 ## 文件职责
 
 - 创建：`creatures/nanobot/prompts/skills/news_search/search_backend.py`
@@ -42,7 +72,7 @@
 **文件：**
 - 创建：`tests/test_news_search_backend_split.py`
 
-- [ ] **步骤 1：新增测试文件头部和新模块导入契约测试**
+- [x] **步骤 1：新增测试文件头部和新模块导入契约测试**
 
 创建 `tests/test_news_search_backend_split.py`：
 
@@ -61,7 +91,7 @@ def test_search_backend_module_exposes_split_entrypoints():
     assert callable(search_backend._fetch_juya_rss)
 ```
 
-- [ ] **步骤 2：新增旧 `tool.WebTools.search` monkeypatch 兼容测试**
+- [x] **步骤 2：新增旧 `tool.WebTools.search` monkeypatch 兼容测试**
 
 在同一文件继续添加：
 
@@ -116,7 +146,7 @@ def test_tool_webtools_search_uses_legacy_patch_points(monkeypatch):
     assert news_tool.WebTools.last_error == ""
 ```
 
-- [ ] **步骤 3：新增旧 `_urlopen` monkeypatch 兼容测试**
+- [x] **步骤 3：新增旧 `_urlopen` monkeypatch 兼容测试**
 
 在同一文件继续添加：
 
@@ -151,7 +181,7 @@ def test_tool_fetch_juya_rss_uses_legacy_urlopen_patch(monkeypatch):
     assert results[0]["date"].startswith("2026-05-01T")
 ```
 
-- [ ] **步骤 4：新增旧 trafilatura monkeypatch 兼容测试**
+- [x] **步骤 4：新增旧 trafilatura monkeypatch 兼容测试**
 
 在同一文件继续添加：
 
@@ -169,7 +199,7 @@ def test_tool_extract_web_content_uses_legacy_trafilatura_patch(monkeypatch):
     assert news_tool.WebTools.extract_web_content("https://example.com/a") == "extracted:<html>ok</html>"
 ```
 
-- [ ] **步骤 5：运行红灯测试**
+- [x] **步骤 5：运行红灯测试**
 
 运行：
 
@@ -186,7 +216,7 @@ python -m pytest tests/test_news_search_backend_split.py -v
 **文件：**
 - 创建：`creatures/nanobot/prompts/skills/news_search/search_backend.py`
 
-- [ ] **步骤 1：新增模块导入、常量和代理 helper**
+- [x] **步骤 1：新增模块导入、常量和代理 helper**
 
 创建 `search_backend.py`，先写入头部、常量和代理函数：
 
@@ -260,7 +290,7 @@ RSS_SOURCES = [
 ]
 ```
 
-- [ ] **步骤 2：迁移 query 判定和日期 helper**
+- [x] **步骤 2：迁移 query 判定和日期 helper**
 
 继续写入 query 判定、日期解析和 stale 过滤 helper。代码从 `tool.py` 同名函数迁移，
 其中 `_extract_date()` 和 `_is_daily_digest_query()` 调用 `runtime_cache`：
@@ -293,7 +323,7 @@ def _is_rss_first_query(query: str) -> bool:
 - `_match_query()`
 - `_build_query_variants()`
 
-- [ ] **步骤 3：迁移 RSS/Juya 抓取 helper**
+- [x] **步骤 3：迁移 RSS/Juya 抓取 helper**
 
 继续写入 `_fetch_rss_source()`、`_fetch_multi_rss()` 和 `_fetch_juya_rss()`。三者保持旧逻辑，
 但增加 `urlopen_fn` 注入点：
@@ -332,7 +362,7 @@ def _fetch_juya_rss(
 - `_fetch_multi_rss()` 调用 `_fetch_rss_source(..., urlopen_fn=urlopen_fn)`。
 - 异常日志文本保持旧语义。
 
-- [ ] **步骤 4：迁移排序、搜索和正文提取入口**
+- [x] **步骤 4：迁移排序、搜索和正文提取入口**
 
 继续写入 `_rerank_with_domain_diversity()`、`search()` 和 `extract_web_content()`：
 
@@ -366,7 +396,7 @@ def extract_web_content(url: str, *, trafilatura_module: Any = trafilatura) -> s
 - `extract_web_content()` 使用 `trafilatura_module.fetch_url()` 和
   `trafilatura_module.extract()`。
 
-- [ ] **步骤 5：运行新模块语法检查**
+- [x] **步骤 5：运行新模块语法检查**
 
 运行：
 
@@ -381,7 +411,7 @@ python -m compileall creatures/nanobot/prompts/skills/news_search/search_backend
 **文件：**
 - 修改：`creatures/nanobot/prompts/skills/news_search/tool.py`
 
-- [ ] **步骤 1：替换搜索后端导入**
+- [x] **步骤 1：替换搜索后端导入**
 
 在 `tool.py` 顶部删除只由搜索后端使用的直接 import：
 
@@ -403,7 +433,7 @@ from . import search_backend as _search_backend
 保留 `datetime`、`timedelta`、`timezone` 和 `re`，因为 `tool.py` 的日期 wrapper、
 LLM layout 和旧入口仍会使用。
 
-- [ ] **步骤 2：替换代理、DDG、RSS 常量和 helper facade**
+- [x] **步骤 2：替换代理、DDG、RSS 常量和 helper facade**
 
 删除 `tool.py` 中 `_proxy_url`、`_proxy_opener` 的真实实现，替换为：
 
@@ -430,7 +460,7 @@ DAILY_DIGEST_KEYWORDS = _runtime_cache.DAILY_DIGEST_KEYWORDS
 RSS_SOURCES = _search_backend.RSS_SOURCES
 ```
 
-- [ ] **步骤 3：替换搜索 helper wrapper**
+- [x] **步骤 3：替换搜索 helper wrapper**
 
 删除 `tool.py` 中搜索后端 helper 的真实函数体，保留同名 wrapper：
 
@@ -499,7 +529,7 @@ def _fetch_juya_rss(max_results: int, target_date: str | None = None) -> list[di
     )
 ```
 
-- [ ] **步骤 4：替换 `WebTools` 真实实现**
+- [x] **步骤 4：替换 `WebTools` 真实实现**
 
 将 `WebTools.search()` 和 `WebTools.extract_web_content()` 改为：
 
@@ -535,7 +565,7 @@ class WebTools:
 **文件：**
 - 不修改文件
 
-- [ ] **步骤 1：运行红灯测试的绿灯结果**
+- [x] **步骤 1：运行红灯测试的绿灯结果**
 
 运行：
 
@@ -546,7 +576,7 @@ python -m pytest tests/test_news_search_backend_split.py -v
 
 预期：PASS，所有新增搜索后端拆分测试通过。
 
-- [ ] **步骤 2：运行搜索后端定向回归**
+- [x] **步骤 2：运行搜索后端定向回归**
 
 运行：
 
@@ -565,7 +595,7 @@ python -m pytest \
 
 预期：PASS，旧 DDG/RSS/Juya/trafilatura patch 语义不变。
 
-- [ ] **步骤 3：运行相邻兼容回归**
+- [x] **步骤 3：运行相邻兼容回归**
 
 运行：
 
@@ -583,7 +613,7 @@ python -m pytest \
 
 预期：PASS，legacy report/cache/AI 日报工具和 `asyncio.run` 约束不回归。
 
-- [ ] **步骤 4：运行语法和格式检查**
+- [x] **步骤 4：运行语法和格式检查**
 
 运行：
 
@@ -594,7 +624,7 @@ git diff --check
 
 预期：两个命令均无输出，退出码均为 0。
 
-- [ ] **步骤 5：运行全量回归**
+- [x] **步骤 5：运行全量回归**
 
 运行：
 
@@ -613,7 +643,7 @@ python -m pytest tests/ -v
 - 修改：`creatures/nanobot/prompts/skills/news_search/tool.py`
 - 修改：`.Codex/plans/news-search-backend-split.md`
 
-- [ ] **步骤 1：记录执行结果**
+- [x] **步骤 1：记录执行结果**
 
 在本计划顶部追加 `执行结果摘要`，记录：
 
@@ -625,7 +655,7 @@ python -m pytest tests/ -v
 - 全量回归结果。
 - `tool.py`、`search_backend.py` 和新增测试文件行数。
 
-- [ ] **步骤 2：按文件显式暂存**
+- [x] **步骤 2：按文件显式暂存**
 
 运行：
 
@@ -637,7 +667,7 @@ git add \
   .Codex/plans/news-search-backend-split.md
 ```
 
-- [ ] **步骤 3：检查暂存区**
+- [x] **步骤 3：检查暂存区**
 
 运行：
 
@@ -648,7 +678,7 @@ git diff --cached --check
 
 预期：暂存区只包含本任务 4 个文件；`--check` 无输出。
 
-- [ ] **步骤 4：提交实现**
+- [x] **步骤 4：提交实现**
 
 运行：
 

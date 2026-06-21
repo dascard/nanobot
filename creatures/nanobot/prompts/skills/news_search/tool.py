@@ -6,22 +6,16 @@ Uses DuckDuckGo for web search and trafilatura for high-quality article extracti
 
 import asyncio
 import logging
-import os
 import re
 import json
 import html
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, List, Dict
-import os as _os
-from urllib.request import urlopen, build_opener, ProxyHandler, Request
-import xml.etree.ElementTree as ET
-from email.utils import parsedate_to_datetime
-from duckduckgo_search import DDGS
-import trafilatura
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from core.async_bridge import run_awaitable_sync
 from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
 from . import runtime_cache as _runtime_cache
+from . import search_backend as _search_backend
 from .legacy_report import (
     MODEL_NAME_HINTS,
     TRUSTED_NEWS_DOMAINS,
@@ -53,41 +47,26 @@ from .legacy_report import (
 logger = logging.getLogger("nanobot.ai_daily")
 
 # ── 代理感知 ──
-_proxy_url = _os.environ.get("http_proxy") or _os.environ.get("HTTP_PROXY") or ""
-_proxy_opener = build_opener(ProxyHandler({"http": _proxy_url, "https": _proxy_url})) if _proxy_url else build_opener()
+DDGS = _search_backend.DDGS
+trafilatura = _search_backend.trafilatura
 
 def _urlopen(url, timeout=10):
-    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    return _proxy_opener.open(req, timeout=timeout) if _proxy_url else urlopen(url, timeout=timeout)
+    return _search_backend._urlopen(url, timeout=timeout)
 
 def _ddgs_kwargs():
-    return {"proxy": _proxy_url} if _proxy_url else {}
+    return _search_backend._ddgs_kwargs()
 
 NEWS_SEARCH_CACHE_TTL_SECONDS = _runtime_cache.NEWS_SEARCH_CACHE_TTL_SECONDS
-NEWS_SEARCH_DDG_ENABLED = os.environ.get("NEWS_SEARCH_DDG_ENABLED", "0") == "1"
+NEWS_SEARCH_DDG_ENABLED = _search_backend.NEWS_SEARCH_DDG_ENABLED
 _NEWS_SEARCH_CACHE = _runtime_cache._NEWS_SEARCH_CACHE
 _NEWS_SEARCH_CACHE_LOCK = _runtime_cache._NEWS_SEARCH_CACHE_LOCK
 
-JUYA_RSS_URL = "https://imjuya.github.io/juya-ai-daily/rss.xml"
-RSS_KEYWORDS = {
-    "juya", "ai daily", "morning briefing", "日报", "早报", "每日", "快讯", "newsletter",
-    "简报", "digest",
-}
+JUYA_RSS_URL = _search_backend.JUYA_RSS_URL
+RSS_KEYWORDS = _search_backend.RSS_KEYWORDS
 # 只有日报/早报/简报才用 Juya RSS 快路径（"最新/新闻/资讯"太宽泛）
 DAILY_DIGEST_KEYWORDS = _runtime_cache.DAILY_DIGEST_KEYWORDS
 
-RSS_SOURCES = [
-    {
-        "name": "juya_ai_daily",
-        "url": "https://imjuya.github.io/juya-ai-daily/rss.xml",
-        "weight": 3,
-    },
-    {
-        "name": "reddit_localllama",
-        "url": "https://www.reddit.com/r/LocalLLaMA/.rss",
-        "weight": 1,
-    },
-]
+RSS_SOURCES = _search_backend.RSS_SOURCES
 
 def _run_async_blocking(coro: Any) -> Any:
     return run_awaitable_sync(coro)
@@ -324,17 +303,7 @@ def _persist_news_artifacts(
 
 
 def _dedup_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    seen = set()
-    cleaned = []
-    for r in results:
-        url = (r.get("href") or "").strip()
-        title = (r.get("title") or "").strip().lower()
-        key = (url, title)
-        if not url or key in seen:
-            continue
-        seen.add(key)
-        cleaned.append(r)
-    return cleaned
+    return _search_backend._dedup_results(results)
 
 
 def _coerce_date(year: int | str, month: int | str, day: int | str) -> str | None:
@@ -348,239 +317,69 @@ def _extract_date(query: str) -> str | None:
 def _is_daily_digest_query(query: str) -> bool:
     return _runtime_cache._is_daily_digest_query(query)
 
+
 def _is_rss_first_query(query: str) -> bool:
-    q = (query or "").lower()
-    return any(k in q for k in RSS_KEYWORDS)
+    return _search_backend._is_rss_first_query(query)
+
 
 def _should_use_juya_direct(query: str) -> bool:
-    """Juya RSS 用于日报类 + 模型改写后的日报变体（如"今日 AI 新闻"）。"""
-    if _is_daily_digest_query(query):
-        return True
-    # 模型可能把"日报"改写为"今日 AI 新闻"等——检测日期+AI组合
-    q = (query or "").lower()
-    has_date = bool(re.search(r"(2026|2025|\d{4}-\d{2}-\d{2}|\d{1,2}月\d{1,2}日)", q))
-    has_ai = bool(re.search(r"(ai|人工智能|大模型|llm|模型|新闻|资讯)", q))
-    has_today = any(k in q for k in ("今日", "今天", "today"))
-    return (has_today or has_date) and has_ai
+    return _search_backend._should_use_juya_direct(query)
 
 
 def _is_news_query(query: str) -> bool:
-    q = (query or "").lower()
-    markers = ["news", "daily", "brief", "briefing", "最新", "快讯", "早报", "资讯", "日报", "发布"]
-    return any(m in q for m in markers)
+    return _search_backend._is_news_query(query)
 
 
 def _infer_timelimit(query: str) -> str | None:
-    q = (query or "").lower()
-    if any(k in q for k in ["today", "今日", "今天", "latest", "最新", "刚刚", "24h", "24小时"]):
-        return "d"
-    if any(k in q for k in ["this week", "本周", "一周", "7天", "7 days"]):
-        return "w"
-    if any(k in q for k in ["this month", "本月", "30天", "30 days"]):
-        return "m"
-    return None
+    return _search_backend._infer_timelimit(query)
 
 
 def _is_urgent_news_query(query: str) -> bool:
-    q = (query or "").lower()
-    markers = ["today", "今日", "今天", "latest", "最新", "刚刚", "breaking", "24h", "24小时"]
-    return any(k in q for k in markers)
+    return _search_backend._is_urgent_news_query(query)
 
 
 def _tokenize_query(query: str) -> List[str]:
-    q = (query or "").lower().strip()
-    if not q:
-        return []
-    tokens = re.findall(r"[a-z0-9\-\+\.]{2,}|[\u4e00-\u9fff]{2,}", q)
-    blacklist = {"news", "daily", "brief", "briefing", "最新", "快讯", "早报", "资讯", "日报", "发布"}
-    return [t for t in tokens if t not in blacklist]
+    return _search_backend._tokenize_query(query)
 
 
-def _extract_item_date(item: ET.Element) -> str:
-    pub = (item.findtext("pubDate") or item.findtext("published") or "").strip()
-    if not pub:
-        return ""
-    try:
-        dt = parsedate_to_datetime(pub)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
-    except Exception:
-        return ""
+def _extract_item_date(item: Any) -> str:
+    return _search_backend._extract_item_date(item)
 
 
 def _is_recent_enough(raw_date: str, hours: int = 72) -> bool:
-    if not raw_date:
-        return True
-    dt = None
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            dt = datetime.strptime(raw_date, fmt)
-            break
-        except Exception:
-            continue
-    if dt is None:
-        return True
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - dt) <= timedelta(hours=hours)
+    return _search_backend._is_recent_enough(raw_date, hours=hours)
 
 
 def _normalize_search_result(item: Dict[str, Any], *, strategy: str) -> Dict[str, Any]:
-    normalized = dict(item)
-    href = normalized.get("href") or normalized.get("url") or ""
-    normalized["href"] = href
-    normalized.setdefault("search_strategy", strategy)
-    return normalized
+    return _search_backend._normalize_search_result(item, strategy=strategy)
 
 
 def _filter_stale_news_results(results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
-    if not _is_news_query(query):
-        return results
-
-    hours = 36 if _is_urgent_news_query(query) else 72
-    filtered: List[Dict[str, Any]] = []
-    for item in results:
-        raw_date = (item.get("date") or "").strip()
-        if raw_date and not _is_recent_enough(raw_date, hours=hours):
-            continue
-        filtered.append(item)
-    return filtered
+    return _search_backend._filter_stale_news_results(results, query)
 
 
 def _match_query(item: Dict[str, Any], query: str) -> bool:
-    tokens = _tokenize_query(query)
-    if not tokens:
-        return True
-    text = f"{item.get('title', '')} {item.get('body', '')}".lower()
-    return any(t in text for t in tokens)
+    return _search_backend._match_query(item, query)
 
 
 def _fetch_rss_source(source: Dict[str, Any], max_results: int) -> List[Dict[str, Any]]:
-    try:
-        with _urlopen(source["url"], timeout=6) as resp:
-            xml_data = resp.read()
-
-        root = ET.fromstring(xml_data)
-        items = root.findall("./channel/item")
-        parsed: List[Dict[str, Any]] = []
-
-        for item in items:
-            title = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            description = (item.findtext("description") or "").strip()
-            content_encoded = ""
-
-            for child in list(item):
-                if child.tag.endswith("content") or child.tag.endswith("encoded"):
-                    content_encoded = (child.text or "").strip()
-                    if content_encoded:
-                        break
-
-            if not link:
-                continue
-
-            parsed.append(
-                {
-                    "title": title or source["name"],
-                    "href": link,
-                    "body": (description or content_encoded)[:800],
-                    "date": _extract_item_date(item),
-                    "source_weight": source.get("weight", 0),
-                    "search_strategy": f"rss:{source['name']}",
-                }
-            )
-
-        return parsed[:max_results]
-    except Exception as e:
-        logger.warning(f"RSS source fetch failed: {source.get('name')} {e}")
-        return []
+    return _search_backend._fetch_rss_source(source, max_results=max_results, urlopen_fn=_urlopen)
 
 
-def _fetch_multi_rss(query: str, max_results: int) -> List[Dict[str, Any]]:
-    target_date = _extract_date(query)
-    all_items: List[Dict[str, Any]] = []
-    for source in RSS_SOURCES:
-        all_items.extend(_fetch_rss_source(source, max_results=max_results * 2))
-
-    filtered: List[Dict[str, Any]] = []
-    for item in all_items:
-        title = (item.get("title") or "").strip()
-        raw_date = (item.get("date") or "").strip()
-        if target_date and target_date not in title and not raw_date.startswith(target_date):
-            continue
-        if not _is_recent_enough(raw_date, hours=72):
-            continue
-        if not _match_query(item, query):
-            continue
-        filtered.append(item)
-
-    filtered = _dedup_results(filtered)
-    filtered = _rerank_with_domain_diversity(filtered, max_results=max_results)
-    return filtered
+def _fetch_multi_rss(query: str | None = None, max_results: int = 5) -> List[Dict[str, Any]]:
+    return _search_backend._fetch_multi_rss(query=query, max_results=max_results, urlopen_fn=_urlopen)
 
 
 def _fetch_juya_rss(max_results: int, target_date: str | None = None) -> List[Dict[str, Any]]:
-    try:
-        with _urlopen(JUYA_RSS_URL, timeout=6) as resp:
-            xml_data = resp.read()
-
-        root = ET.fromstring(xml_data)
-        items = root.findall("./channel/item")
-        parsed: List[Dict[str, Any]] = []
-
-        for item in items:
-            title = (item.findtext("title") or "").strip()
-            link = (item.findtext("link") or "").strip()
-            description = (item.findtext("description") or "").strip()
-            content_encoded = ""
-
-            for child in list(item):
-                if child.tag.endswith("content") or child.tag.endswith("encoded"):
-                    content_encoded = (child.text or "").strip()
-                    if content_encoded:
-                        break
-
-            if not link:
-                continue
-
-            item_date = _extract_item_date(item)
-            if target_date and target_date not in title and not item_date.startswith(target_date):
-                continue
-
-            parsed.append(
-                {
-                    "title": title or "Juya AI Daily",
-                    "href": link,
-                    "body": (description or content_encoded)[:800],
-                    "date": item_date,
-                    "source_weight": 3,
-                    "search_strategy": "juya_rss",
-                }
-            )
-
-        return parsed[:max_results]
-    except Exception as e:
-        logger.warning(f"Juya RSS fetch failed: {e}")
-        return []
+    return _search_backend._fetch_juya_rss(
+        max_results=max_results,
+        target_date=target_date,
+        urlopen_fn=_urlopen,
+    )
 
 
 def _build_query_variants(query: str) -> List[str]:
-    q = (query or "").strip()
-    if not q:
-        return []
-    variants = [q]
-    if "news" not in q.lower() and "资讯" not in q and "日报" not in q:
-        variants.append(f"{q} AI news")
-    variants.append(f"{q} model pricing OR free tier OR api")
-    variants.append(f"{q} 开源 OR 免费 OR 低价 模型")
-    variants.append(f"{q} site:reuters.com OR site:techcrunch.com OR site:theverge.com")
-    if _is_news_query(q):
-        today = datetime.now().strftime("%Y-%m-%d")
-        variants.append(f"{today} {q}")
-        variants.append(f"{q} today breaking")
-        variants.append(f"{q} site:openai.com OR site:anthropic.com OR site:huggingface.co")
-    return variants
+    return _search_backend._build_query_variants(query)
 
 
 def _news_search_cache_key(
@@ -611,141 +410,30 @@ def _store_cached_news_result(key: tuple[Any, ...], output: str) -> None:
 
 
 def _rerank_with_domain_diversity(results: List[Dict[str, Any]], max_results: int) -> List[Dict[str, Any]]:
-    if not results:
-        return []
+    return _search_backend._rerank_with_domain_diversity(results, max_results=max_results)
 
-    ranked = sorted(results, key=_combined_score, reverse=True)
-    picked: List[Dict[str, Any]] = []
-    used_domains: set[str] = set()
-
-    # First pass: prioritize source diversity.
-    for item in ranked:
-        d = _domain(item.get("href", ""))
-        if d and d in used_domains:
-            continue
-        picked.append(item)
-        if d:
-            used_domains.add(d)
-        if len(picked) >= max_results:
-            return picked
-
-    # Second pass: fill remaining slots by score.
-    for item in ranked:
-        if item in picked:
-            continue
-        picked.append(item)
-        if len(picked) >= max_results:
-            break
-
-    return picked
 
 class WebTools:
     last_error: str = ""
 
     @staticmethod
     def search(query: str, max_results: int = 5, deep: bool = False) -> List[Dict]:
-        WebTools.last_error = ""
-        errors: list[str] = []
-
-        # Strategy 1: structured RSS sources.
-        rss_limit = max_results * (2 if deep else 1)
-        try:
-            rss_results = list(_fetch_multi_rss(query=query, max_results=rss_limit))
-        except Exception as e:
-            errors.append(f"rss:{e}")
-            logger.warning(f"RSS aggregate search failed: {e}")
-            rss_results = []
-
-        # Strategy 1b: Juya direct date match for briefing style queries.
-        target_date = _extract_date(query)
-        if _is_rss_first_query(query):
-            try:
-                rss_results.extend(_fetch_juya_rss(max_results=max_results, target_date=target_date))
-            except Exception as e:
-                errors.append(f"juya:{e}")
-                logger.warning(f"Juya RSS search failed: {e}")
-
-        # Strategy 2: multi-query web retrieval with per-source partial retention.
-        results: list[dict[str, Any]] = []
-        timelimit = _infer_timelimit(query)
-        if timelimit is None and _is_news_query(query):
-            timelimit = "d"
-        per_variant = max_results * (4 if deep else 2)
-        variants = _build_query_variants(query)
-        if deep:
-            variants.extend(
-                [
-                    f"{query} official blog release notes",
-                    f"{query} site:openai.com OR site:anthropic.com OR site:ai.googleblog.com",
-                    f"{query} benchmark price token cost",
-                ]
-            )
-
-        if not NEWS_SEARCH_DDG_ENABLED:
-            logger.info("[search] ddg disabled by NEWS_SEARCH_DDG_ENABLED=0")
-            return _filter_stale_news_results(rss_results, query)
-        try:
-            with DDGS(**_ddgs_kwargs()) as ddgs:
-                if _is_news_query(query):
-                    try:
-                        for r in ddgs.news(
-                            keywords=query,
-                            region='wt-wt',
-                            safesearch='moderate',
-                            timelimit=timelimit,
-                            max_results=per_variant,
-                        ):
-                            results.append(_normalize_search_result(dict(r), strategy="web_ddg_news"))
-                    except Exception as e:
-                        errors.append(f"ddg_news:{e}")
-                        logger.warning(f"DDG news search failed: {e}")
-
-                for variant in variants:
-                    try:
-                        for r in ddgs.text(
-                            variant,
-                            region='wt-wt',
-                            safesearch='moderate',
-                            timelimit=timelimit,
-                            max_results=per_variant,
-                        ):
-                            results.append(
-                                _normalize_search_result(
-                                    dict(r),
-                                    strategy="web_ddg_deep" if deep else "web_ddg_multi_variant",
-                                )
-                            )
-                    except Exception as e:
-                        errors.append(f"ddg_text:{variant}: {e}")
-                        logger.warning(f"DDG text search failed for variant={variant!r}: {e}")
-        except Exception as e:
-            errors.append(f"ddg:{e}")
-            logger.warning(f"DDG search session failed: {e}")
-
-        merged = _filter_stale_news_results(rss_results + results, query)
-        merged = _dedup_results(merged)
-        merged = _rerank_with_domain_diversity(merged, max_results=max_results)
-        if not merged and errors:
-            WebTools.last_error = " | ".join(errors[-4:])
-            logger.error(f"Search failed: {WebTools.last_error}")
-        return merged
+        results, last_error = _search_backend.search(
+            query,
+            max_results=max_results,
+            deep=deep,
+            ddg_enabled=NEWS_SEARCH_DDG_ENABLED,
+            ddgs_factory=DDGS,
+            ddgs_kwargs_fn=_ddgs_kwargs,
+            multi_rss_fetcher=_fetch_multi_rss,
+            juya_fetcher=_fetch_juya_rss,
+        )
+        WebTools.last_error = last_error
+        return results
 
     @staticmethod
     def extract_web_content(url: str) -> str:
-        try:
-            downloaded = trafilatura.fetch_url(url, timeout=5)
-            if downloaded:
-                result = trafilatura.extract(
-                    downloaded,
-                    include_comments=False,
-                    include_tables=False,
-                    favor_precision=True,
-                    with_metadata=False,
-                )
-                return result or "Failed to extract content"
-            return "Failed to download url"
-        except Exception as e:
-            return f"Error extracting {url}: {e}"
+        return _search_backend.extract_web_content(url, trafilatura_module=trafilatura)
 
 # ═══════════════════════════════════════
 #  V2 Pipeline: Evidence Cards + 结构化 JSON + Validator + 模板渲染
