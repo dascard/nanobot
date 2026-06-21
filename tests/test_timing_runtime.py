@@ -568,6 +568,38 @@ class TestGroupRuntime:
         assert r["timing_scoring"]["action"] == "no_reply"
         assert len(rt_calls) == 0  # gate 未被调用
 
+    @pytest.mark.asyncio
+    async def test_cooldown_fallback_delay_is_clipped_to_timing_bound(self):
+        """旧 cooldown fallback 的 wait delay 也必须遵守 15 秒上限。"""
+        runtime = GroupRuntime()
+        state = runtime._states.setdefault("group_g1", GateState(group_id="group_g1"))
+        state.last_bot_reply_ts = _time.time() - 1
+
+        result = await runtime.process_message("g1", {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "继续",
+        }, trigger_reason="topic_continue")
+
+        assert result["action"] == "wait"
+        assert result["delay_seconds"] == 15
+
+    @pytest.mark.asyncio
+    async def test_timer_cooldown_fallback_delay_is_clipped_to_timing_bound(self, monkeypatch):
+        """timer cooldown fallback 的 wait delay 也必须遵守 15 秒上限。"""
+        runtime = GroupRuntime()
+        state = runtime._states.setdefault("group_g1", GateState(group_id="group_g1"))
+        state.last_gate_completed_ts = 0
+        state.last_trigger_reason = "timer"
+        state.last_bot_reply_ts = _time.time() - 1
+        state.add_message(PendingMessage("u1", "A", "hi"))
+        monkeypatch.setattr(runtime, "_cooldown_scoring_shortcut", lambda *_a, **_kw: None)
+
+        result = await runtime.handle_timer_fired("g1", generation=1)
+
+        assert result["action"] == "wait"
+        assert result["delay_seconds"] == 15
+
     def test_build_timing_context_sanitizes_system_tags(self):
         """_build_timing_context 净化伪系统标签。"""
         pending = [

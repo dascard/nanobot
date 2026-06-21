@@ -21,6 +21,8 @@ MAX_RETRIES = 3
 MAX_AGE_SEC = 120
 IDLE_CLEANUP_SEC = 600
 BOT_REPLY_COOLDOWN_SEC = 30
+TIMING_WAIT_DELAY_MIN = 3
+TIMING_WAIT_DELAY_MAX = 15
 LINGER_TIMEOUT_SECONDS = 180
 LINGER_MAX_MESSAGES = 3
 LINGER_BASE_WEIGHT = 0.70
@@ -29,6 +31,14 @@ BOT_FOLLOWUP_WINDOW_SEC = LINGER_TIMEOUT_SECONDS
 _DIRECT_TRIGGERS = {"at_bot", "reply_to_bot", "bot_name_mentioned", "direct_call", "mentioned"}
 _COOLDOWN_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
 _DIRECTED_SUPPRESS_BYPASS_TRIGGERS = _DIRECT_TRIGGERS | {"recent_bot_followup"}
+
+
+def _clip_timing_wait_delay(value: object, *, default: int = 5) -> int:
+    try:
+        delay = int(value if value is not None else default)
+    except (TypeError, ValueError, OverflowError):
+        delay = default
+    return max(TIMING_WAIT_DELAY_MIN, min(TIMING_WAIT_DELAY_MAX, delay))
 
 
 def _model_confidence_from_gate_result(result: dict) -> float:
@@ -860,7 +870,7 @@ class GroupRuntime:
                         return scoring_response
                 return self._attach_shadow_scoring({
                     "action": "wait",
-                    "delay_seconds": max(1, math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),
+                    "delay_seconds": _clip_timing_wait_delay(math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),
                     "generation": state.generation,
                     "cooldown_ago": round(ago, 1),
                     "reason": "bot 刚回复过，冷却中",
@@ -1067,7 +1077,7 @@ class GroupRuntime:
                     return scoring_response
                 return self._attach_shadow_scoring({
                     "action": "wait",
-                    "delay_seconds": max(1, math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),
+                    "delay_seconds": _clip_timing_wait_delay(math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),
                     "generation": state.generation,
                     "cooldown_ago": round(ago, 1),
                     "reason": "bot 刚回复过，冷却中",
@@ -1194,7 +1204,7 @@ class GroupRuntime:
             state.handle_no_reply()
         elif action == "wait":
             delay_source = scoring_delay if scoring_delay is not None else result.get("delay_seconds", 5)
-            delay = max(3, min(15, int(delay_source or 5)))
+            delay = _clip_timing_wait_delay(delay_source or 5)
             # 防死循环：wait_count>=1 且无新消息 → force no_reply
             if state.wait_count >= 1 and not state.new_messages_during_wait:
                 logger.info("[GroupRuntime] anti-loop: wait_count=%d no_new_msgs → force no_reply",
