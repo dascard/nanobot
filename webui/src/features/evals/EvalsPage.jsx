@@ -79,6 +79,9 @@ export function EvalsPage() {
   const [runDetail, setRunDetail] = useState(null)
   const [running, setRunning] = useState(false)
   const [sampleInfo, setSampleInfo] = useState(null)
+  const [timingProposal, setTimingProposal] = useState(null)
+  const [timingProposalError, setTimingProposalError] = useState('')
+  const [timingProposalLoading, setTimingProposalLoading] = useState(false)
 
   const loadCandidates = useCallback(() => {
     const params = { page: candPage, limit: 20 }
@@ -113,11 +116,21 @@ export function EvalsPage() {
       .finally(() => setTrendLoading(false))
   }, [trendDays, suiteFilter, statusFilter, sourceFilter])
 
+  const loadTimingProposal = useCallback(() => {
+    setTimingProposalLoading(true)
+    setTimingProposalError('')
+    api.get('/evals/timing-tuning/proposal')
+      .then(r => setTimingProposal(r.data))
+      .catch(e => { setTimingProposal(null); setTimingProposalError(e.response?.data?.detail || e.message) })
+      .finally(() => setTimingProposalLoading(false))
+  }, [])
+
   useEffect(() => {
     if (tab === 'candidates') loadCandidates()
     if (tab === 'trend') loadCandidateTrend()
+    if (tab === 'timingProposal') loadTimingProposal()
     if (tab === 'runs') loadRuns()
-  }, [tab, loadCandidates, loadCandidateTrend, loadRuns])
+  }, [tab, loadCandidates, loadCandidateTrend, loadTimingProposal, loadRuns])
 
   useEffect(() => {
     api.get('/evals/expected-contract')
@@ -387,6 +400,25 @@ export function EvalsPage() {
     api.get(`/evals/runs/${runId}`).then(r => setRunDetail(r.data)).catch(e => alert(e.message))
   }
 
+  const timingProposalReport = timingProposal?.report || null
+  const timingProposalReadiness = timingProposalReport?.readiness || timingProposal?.readiness || {}
+  const timingProposalStatus = timingProposal
+    ? timingProposal.exists
+      ? timingProposalReadiness.ready ? 'ready' : 'blocked'
+      : 'missing'
+    : '-'
+  const timingProposalStatusTone = timingProposalStatus === 'ready'
+    ? 'emerald'
+    : timingProposalStatus === 'blocked'
+      ? 'red'
+      : timingProposalStatus === 'missing'
+        ? 'amber'
+        : 'slate'
+  const timingProposalBlockingReasons = timingProposalReadiness.blocking_reasons || []
+  const timingProposalBlockedActions = timingProposalReport?.blocked_actions || []
+  const timingProposalCandidateSets = timingProposalReport?.candidate_sets || []
+  const timingProposalSimulation = timingProposalReport?.simulation || {}
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
@@ -412,6 +444,8 @@ export function EvalsPage() {
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'candidates' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>候选列表</button>
         <button onClick={() => setTab('trend')}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'trend' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>趋势报表</button>
+        <button onClick={() => setTab('timingProposal')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'timingProposal' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>调参提案</button>
         <button onClick={() => setTab('runs')}
           className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${tab === 'runs' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>运行历史</button>
       </Card>
@@ -930,6 +964,78 @@ export function EvalsPage() {
               <Card className="p-4">
                 <div className="mb-2 text-xs text-slate-500">完整 payload</div>
                 <JsonBlock value={candidateTrend} className="max-h-96" />
+              </Card>
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === 'timingProposal' && (
+        <div className="space-y-4">
+          <Card className="p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="text-sm font-medium text-slate-200">TimingGate 调参提案</h2>
+                <p className="mt-1 text-xs text-slate-500">只读查看最新提案报告和模拟结果。</p>
+              </div>
+              <button onClick={loadTimingProposal} disabled={timingProposalLoading}
+                className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50">
+                {timingProposalLoading ? '刷新中...' : '刷新'}
+              </button>
+            </div>
+            {timingProposalError && (
+              <div className="mt-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                {timingProposalError}
+              </div>
+            )}
+          </Card>
+
+          {timingProposalLoading && !timingProposal && (
+            <Card className="p-4 text-sm text-slate-400">加载中...</Card>
+          )}
+
+          {timingProposal && (
+            <>
+              <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+                <MiniStat label="状态" value={timingProposalStatus} tone={timingProposalStatusTone} />
+                <MiniStat label="候选组数量" value={timingProposalCandidateSets.length} tone="blue" />
+                <MiniStat label="simulation flip_count" value={timingProposalSimulation.flip_count ?? 0} tone={(timingProposalSimulation.flip_count || 0) > 0 ? 'amber' : 'slate'} />
+                <MiniStat label="report_path" value={timingProposal.report_path || '-'} />
+              </div>
+
+              <Card className="p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-medium text-slate-200">提案状态</div>
+                    <div className="mt-1 text-xs text-slate-500">missing / blocked / ready</div>
+                  </div>
+                  <Badge tone={timingProposalStatusTone}>{timingProposalStatus}</Badge>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <div className="mb-1 text-xs text-slate-500">report_path</div>
+                    <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 font-mono text-xs text-slate-300 break-all">
+                      {timingProposal.report_path || '-'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs text-slate-500">blocking_reasons</div>
+                    <JsonBlock value={timingProposalBlockingReasons} className="max-h-48" />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs text-slate-500">blocked_actions</div>
+                    <JsonBlock value={timingProposalBlockedActions} className="max-h-48" />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs text-slate-500">simulation</div>
+                    <JsonBlock value={timingProposalSimulation} className="max-h-64" />
+                  </div>
+                </div>
+              </Card>
+
+              <Card className="p-4">
+                <div className="mb-2 text-xs text-slate-500">candidate_sets</div>
+                <JsonBlock value={timingProposalCandidateSets} className="max-h-96" />
               </Card>
             </>
           )}

@@ -161,6 +161,19 @@ def test_evals_page_exposes_candidate_trend_report():
     assert "批量应用" not in source
 
 
+def test_evals_page_exposes_timing_tuning_proposal_report():
+    source = EVALS_JS.read_text(encoding="utf-8")
+
+    assert "调参提案" in source
+    assert "/evals/timing-tuning/proposal" in source
+    assert "timingProposal" in source
+    assert "blocked_actions" in source
+    assert "candidate_sets" in source
+    assert "simulation" in source
+    assert "应用参数" not in source
+    assert "更新 baseline" not in source
+
+
 def test_sticker_duplicate_actions_do_not_use_emoji_buttons():
     source = read_app()
 
