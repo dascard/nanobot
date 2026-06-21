@@ -1562,6 +1562,92 @@ class TestNanobotBridge:
         MockAsyncOpenAI.assert_called_once()
         assert MockAsyncOpenAI.call_args.kwargs["timeout"] == 88
 
+    @patch("nanobot_kt.bridge.registry")
+    @patch("nanobot_kt.bridge.NewAPIClient")
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_handle_message_retries_next_model_after_empty_response(
+        self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
+    ):
+        from types import SimpleNamespace
+        import json
+
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.bridge import NanobotBridge
+
+        monkeypatch.setattr("core.settings_service.settings.get", lambda key, default=None: default)
+        monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "", raising=False)
+        mock_registry.get_models_by_provider.return_value = [{"id": "model-a"}, {"id": "model-b"}]
+
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+        route_client.get_ordered_candidates.return_value = [
+            {"id": "model-a", "intelligence": 10, "context_window": 128000},
+            {"id": "model-b", "intelligence": 10, "context_window": 128000},
+        ]
+        MockClient.return_value = route_client
+
+        failure_tracker = MagicMock(record_success=AsyncMock(), record_failure=AsyncMock())
+        MockClient.get_failure_tracker.return_value = failure_tracker
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        reply_output = json.dumps({REPLY_MARKER: {"content": "第二个模型回复"}}, ensure_ascii=False)
+        process_count = {"value": 0}
+        message_calls = []
+        user_msg = SimpleNamespace(role="user", content="你好")
+        assistant_msg = SimpleNamespace(role="assistant", content="")
+        reply_msg = {"role": "tool", "content": reply_output}
+
+        def fake_get_messages():
+            message_calls.append(len(message_calls) + 1)
+            if len(message_calls) == 3:
+                return [user_msg, assistant_msg]
+            if process_count["value"] >= 2:
+                return [reply_msg]
+            return []
+
+        mock_conv = MagicMock()
+        mock_conv._messages = []
+        mock_conv.get_messages.side_effect = fake_get_messages
+        mock_conv.to_messages.return_value = []
+        mock_conv.find_last_user_index.return_value = 0
+
+        async def fake_process(_event):
+            process_count["value"] += 1
+            return None
+
+        llm = MagicMock(config=MagicMock(model="old-model"))
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(conversation=mock_conv, llm=llm)
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+
+        async def _run():
+            await bridge.start()
+            return await bridge.handle_message(
+                "你好",
+                user_id="u1",
+                session_id="private_u1",
+                metadata={"complexity": 3},
+            )
+
+        result = run_async(_run())
+
+        assert result == "第二个模型回复"
+        assert mock_agent._process_event.await_count == 2
+        failure_tracker.record_failure.assert_awaited_once_with("model-a")
+        failure_tracker.record_success.assert_awaited_once_with("model-b")
+        assert llm.config.model == "model-b"
+        mock_conv.truncate_from.assert_called_once_with(0)
+
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_prefers_ai_daily_wrapped_html_over_plaintext_rewrite(self, MockAgent, mock_load):

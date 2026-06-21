@@ -209,6 +209,16 @@ class BridgeEventPayload:
     required_capabilities: dict[str, bool]
 
 
+@dataclass
+class ModelLoopResult:
+    response: str
+    result: Any
+    target_model: str
+    preserved_html: str
+    selected_candidate: dict[str, Any] | None
+    attempts: int
+
+
 class NanobotBridge:
     """
     Wraps a KT Agent for use as a request/response handler.
@@ -945,6 +955,187 @@ class NanobotBridge:
             required_capabilities=required_capabilities,
         )
 
+    async def _run_model_loop(
+        self,
+        *,
+        candidate_models: list[dict[str, Any]],
+        route_plan: Any,
+        event_content: Any,
+        query: str,
+        session_id: str,
+        meta: dict[str, Any],
+        tracker: Any,
+        trace_id: str,
+        run_id: str,
+        reply_llm_source: str,
+        create_user_event: Any,
+        process_event: Any,
+    ) -> ModelLoopResult:
+        model_iterator = iter(candidate_models)
+        max_attempts = min(len(candidate_models), 8) if candidate_models else 5
+        result = None
+        response = ""
+        target_model = ""
+        preserved_html = ""
+        selected_candidate = None
+        attempts = 0
+        next_event = create_user_event(event_content, stream=meta["stream"])
+
+        for attempt in range(max_attempts):
+            attempts = attempt + 1
+            self._output.clear()
+            event = next_event
+            next_event = create_user_event(event_content, stream=meta["stream"])
+
+            # Get next model from ordered list
+            try:
+                candidate = next(model_iterator)
+                selected_candidate = candidate
+                target_model = candidate["id"]
+            except StopIteration:
+                logger.warning(f"[Model Router] No more candidates after {attempt} attempts")
+                break
+
+            # Update KT agent's LLM model + provider base_url/api_key
+            if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
+                old_model = self._agent.controller.llm.config.model
+                self._agent.controller.llm.config.model = target_model
+                # 同步 route provider 的 base_url / api_key 到 controller
+                llm = self._agent.controller.llm
+                if hasattr(llm.config, 'temperature') and route_plan.temperature is not None:
+                    llm.config.temperature = float(route_plan.temperature)
+                if hasattr(llm.config, 'max_tokens'):
+                    llm.config.max_tokens = route_plan.max_tokens
+                if hasattr(llm, "extra_body"):
+                    from core.model_route_options import apply_enable_thinking_to_payload
+                    if getattr(llm, "extra_body", None) is None:
+                        llm.extra_body = {}
+                    apply_enable_thinking_to_payload(
+                        llm.extra_body,
+                        target_model,
+                        route_plan.enable_thinking,
+                    )
+                _target_base_url = str(route_plan.base_url or "").rstrip("/")
+                _target_api_key = str(route_plan.api_key or "")
+                _current_base_url = str(getattr(llm, 'base_url', '') or "").rstrip("/")
+                _current_api_key = str(getattr(llm, '_api_key', '') or "")
+                _current_timeout = float(getattr(llm, '_timeout', 120.0) or 120.0)
+                _base_url_changed = bool(_target_base_url and _current_base_url != _target_base_url)
+                _api_key_changed = _current_api_key != _target_api_key
+                _timeout_changed = _current_timeout != route_plan.timeout
+                if _base_url_changed or _api_key_changed or _timeout_changed:
+                    llm.base_url = _target_base_url
+                    llm._api_key = _target_api_key
+                    llm._timeout = route_plan.timeout
+                    llm._client = AsyncOpenAI(
+                        api_key=_target_api_key,
+                        base_url=_target_base_url,
+                        timeout=route_plan.timeout,
+                        max_retries=getattr(llm, '_max_retries', 3),
+                        default_headers=getattr(llm, '_extra_headers', {}),
+                    )
+                    logger.info(
+                        "[Model Router] Switched provider base_url=%s api_key_changed=%s timeout_changed=%s",
+                        _target_base_url[:80],
+                        _api_key_changed,
+                        _timeout_changed,
+                    )
+                llm.provider_name = route_plan.provider_id or route_plan.registry_provider
+                install_openai_chat_completion_tracer(
+                    llm,
+                    provider=llm.provider_name,
+                    base_url=_target_base_url,
+                )
+                logger.info(
+                    f"[Model Router] Attempt {attempt+1}: {target_model} "
+                    f"(intel={candidate.get('intelligence')}, "
+                    f"cost={candidate.get('cost_input_1m')})"
+                )
+
+            try:
+                logger.info(f"[NanobotBridge] Calling _process_event (Attempt {attempt+1})...")
+                from core.llm_trace_context import llm_trace_scope
+                with llm_trace_scope(trace_id=trace_id, run_id=run_id, source=reply_llm_source):
+                    result = await process_event(self._agent, event)
+                logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
+            except Exception as e:
+                logger.error(f"[NanobotBridge] Agent processing error: {e}", exc_info=True)
+                self._output._buffer.append(f"\n[系统内部错误] {str(e)}")
+
+            response = self._output.get_response()
+            logger.info(
+                f"[NanobotBridge] Attempt {attempt+1} response: "
+                f"len={len(response)}, empty={not response.strip()}, "
+                f"has_sys_err={'[系统内部错误]' in response}, "
+                f"has_tool_err={'[工具错误]' in response}, "
+                f"preview={response[:100] if response else '(EMPTY)'}"
+            )
+            # 从 conversation 提 tool HTML——不用缓存(避免跨 query 串结果)
+            preserved_html = self._extract_last_rich_tool_output(("news-brief", "group-analysis-report"))
+            if preserved_html:
+                logger.info("[NanobotBridge] Using preserved tool HTML output (replacing buffer)")
+                self._output._buffer = [preserved_html]
+                await _call_tracker_method(tracker, "record_success", target_model)
+                break
+
+            reply_text = self._extract_reply_from_tool_output(session_id)
+            if reply_text:
+                from core.reply_postprocess import strip_chat_end_punct
+                reply_text = strip_chat_end_punct(reply_text)
+                logger.info("[NanobotBridge] reply() called len=%d, stopping model loop", len(reply_text))
+                await _call_tracker_method(tracker, "record_success", target_model)
+                break
+
+            is_empty = not response.strip()
+            is_error = "[系统内部错误]" in response
+            if (is_empty or is_error) and attempt < max_attempts - 1:
+                logger.warning(f"[NanobotBridge] Framework error. Recording failure for {target_model}")
+                await _call_tracker_method(tracker, "record_failure", target_model)
+
+                # reasoning_content: 只 ban 出错的特定模型，不波及同厂商其他模型
+                if "reasoning_content" in response:
+                    logger.warning("[NanobotBridge] reasoning_content — banning %s only", target_model)
+
+                # Conversation rollback logic
+                tool_results_preserved = False
+                if hasattr(self._agent.controller, 'conversation'):
+                    msgs = self._agent.controller.conversation.get_messages()
+                    user_idx = self._agent.controller.conversation.find_last_user_index()
+                    last_tool_idx = -1
+                    if user_idx >= 0:
+                        for i in range(len(msgs) - 1, user_idx, -1):
+                            if msgs[i].role == "tool":
+                                last_tool_idx = i
+                                break
+                    if last_tool_idx >= 0:
+                        strip_from = last_tool_idx + 1
+                        if strip_from < len(msgs):
+                            self._agent.controller.conversation.truncate_from(strip_from)
+                            logger.info(f"[NanobotBridge] Preserved tool results (idx≤{last_tool_idx})")
+                        from kohakuterrarium.core.events import TriggerEvent
+                        next_event = TriggerEvent(type="user_input", content="")
+                        tool_results_preserved = True
+                    elif user_idx >= 0:
+                        content = msgs[user_idx].content
+                        if isinstance(content, str) and content == query:
+                            self._agent.controller.conversation.truncate_from(user_idx)
+                        next_event = create_user_event(event_content, stream=meta["stream"])
+                if not tool_results_preserved:
+                    next_event = create_user_event(event_content, stream=meta["stream"])
+                continue
+            else:
+                await _call_tracker_method(tracker, "record_success", target_model)
+                break
+
+        return ModelLoopResult(
+            response=response,
+            result=result,
+            target_model=target_model,
+            preserved_html=preserved_html,
+            selected_candidate=selected_candidate,
+            attempts=attempts,
+        )
+
     async def handle_message(
         self,
         query: str,
@@ -1403,159 +1594,29 @@ class NanobotBridge:
                 )
             # ----------------------------------
 
-            model_iterator = iter(candidates)
             try:
                 tracker = NewAPIClient.get_failure_tracker()
             except Exception as e:
                 tracker = None
                 logger.warning(f"[Model Router] Failure tracker unavailable: {e}")
-            max_attempts = min(len(candidates), 8) if candidates else 5
-            result = None
-            next_event = create_user_event(event_content, stream=meta["stream"])
-
-            for attempt in range(max_attempts):
-                self._output.clear()
-                event = next_event
-                next_event = create_user_event(event_content, stream=meta["stream"])
-
-                # Get next model from ordered list
-                try:
-                    candidate = next(model_iterator)
-                    target_model = candidate["id"]
-                except StopIteration:
-                    logger.warning(f"[Model Router] No more candidates after {attempt} attempts")
-                    break
-
-                # Update KT agent's LLM model + provider base_url/api_key
-                if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
-                    old_model = self._agent.controller.llm.config.model
-                    self._agent.controller.llm.config.model = target_model
-                    # 同步 route provider 的 base_url / api_key 到 controller
-                    llm = self._agent.controller.llm
-                    if hasattr(llm.config, 'temperature') and _route_temperature is not None:
-                        llm.config.temperature = float(_route_temperature)
-                    if hasattr(llm.config, 'max_tokens'):
-                        llm.config.max_tokens = _route_max_tokens
-                    if hasattr(llm, "extra_body"):
-                        from core.model_route_options import apply_enable_thinking_to_payload
-                        if getattr(llm, "extra_body", None) is None:
-                            llm.extra_body = {}
-                        apply_enable_thinking_to_payload(
-                            llm.extra_body,
-                            target_model,
-                            _route_enable_thinking,
-                        )
-                    _target_base_url = str(_client_base_url or "").rstrip("/")
-                    _target_api_key = str(_client_api_key or "")
-                    _current_base_url = str(getattr(llm, 'base_url', '') or "").rstrip("/")
-                    _current_api_key = str(getattr(llm, '_api_key', '') or "")
-                    _current_timeout = float(getattr(llm, '_timeout', 120.0) or 120.0)
-                    _base_url_changed = bool(_target_base_url and _current_base_url != _target_base_url)
-                    _api_key_changed = _current_api_key != _target_api_key
-                    _timeout_changed = _current_timeout != _route_timeout
-                    if _base_url_changed or _api_key_changed or _timeout_changed:
-                        llm.base_url = _target_base_url
-                        llm._api_key = _target_api_key
-                        llm._timeout = _route_timeout
-                        llm._client = AsyncOpenAI(
-                            api_key=_target_api_key,
-                            base_url=_target_base_url,
-                            timeout=_route_timeout,
-                            max_retries=getattr(llm, '_max_retries', 3),
-                            default_headers=getattr(llm, '_extra_headers', {}),
-                        )
-                        logger.info(
-                            "[Model Router] Switched provider base_url=%s api_key_changed=%s timeout_changed=%s",
-                            _target_base_url[:80],
-                            _api_key_changed,
-                            _timeout_changed,
-                        )
-                    llm.provider_name = _route_provider_id or _route_registry_provider
-                    install_openai_chat_completion_tracer(
-                        llm,
-                        provider=llm.provider_name,
-                        base_url=_target_base_url,
-                    )
-                    logger.info(
-                        f"[Model Router] Attempt {attempt+1}: {target_model} "
-                        f"(intel={candidate.get('intelligence')}, "
-                        f"cost={candidate.get('cost_input_1m')})"
-                    )
-
-                try:
-                    logger.info(f"[NanobotBridge] Calling _process_event (Attempt {attempt+1})...")
-                    from core.llm_trace_context import llm_trace_scope
-                    with llm_trace_scope(trace_id=trace_id, run_id=run_handle.run_id, source=reply_llm_source):
-                        result = await process_event(self._agent, event)
-                    logger.info(f"[NanobotBridge] _process_event returned: type={type(result)}, value={result}")
-                except Exception as e:
-                    logger.error(f"[NanobotBridge] Agent processing error: {e}", exc_info=True)
-                    self._output._buffer.append(f"\n[系统内部错误] {str(e)}")
-
-                response = self._output.get_response()
-                logger.info(
-                    f"[NanobotBridge] Attempt {attempt+1} response: "
-                    f"len={len(response)}, empty={not response.strip()}, "
-                    f"has_sys_err={'[系统内部错误]' in response}, "
-                    f"has_tool_err={'[工具错误]' in response}, "
-                    f"preview={response[:100] if response else '(EMPTY)'}"
-                )
-                # 从 conversation 提 tool HTML——不用缓存(避免跨 query 串结果)
-                preserved_html = self._extract_last_rich_tool_output(("news-brief", "group-analysis-report"))
-                if preserved_html:
-                    logger.info("[NanobotBridge] Using preserved tool HTML output (replacing buffer)")
-                    self._output._buffer = [preserved_html]
-                    await _call_tracker_method(tracker, "record_success", target_model)
-                    break
-
-                reply_text = self._extract_reply_from_tool_output(session_id)
-                if reply_text:
-                    from core.reply_postprocess import strip_chat_end_punct
-                    reply_text = strip_chat_end_punct(reply_text)
-                    logger.info("[NanobotBridge] reply() called len=%d, stopping model loop", len(reply_text))
-                    await _call_tracker_method(tracker, "record_success", target_model)
-                    break
-
-                is_empty = not response.strip()
-                is_error = "[系统内部错误]" in response
-                if (is_empty or is_error) and attempt < max_attempts - 1:
-                    logger.warning(f"[NanobotBridge] Framework error. Recording failure for {target_model}")
-                    await _call_tracker_method(tracker, "record_failure", target_model)
-
-                    # reasoning_content: 只 ban 出错的特定模型，不波及同厂商其他模型
-                    if "reasoning_content" in response:
-                        logger.warning("[NanobotBridge] reasoning_content — banning %s only", target_model)
-
-                    # Conversation rollback logic
-                    tool_results_preserved = False
-                    if hasattr(self._agent.controller, 'conversation'):
-                        msgs = self._agent.controller.conversation.get_messages()
-                        user_idx = self._agent.controller.conversation.find_last_user_index()
-                        last_tool_idx = -1
-                        if user_idx >= 0:
-                            for i in range(len(msgs) - 1, user_idx, -1):
-                                if msgs[i].role == "tool":
-                                    last_tool_idx = i
-                                    break
-                        if last_tool_idx >= 0:
-                            strip_from = last_tool_idx + 1
-                            if strip_from < len(msgs):
-                                self._agent.controller.conversation.truncate_from(strip_from)
-                                logger.info(f"[NanobotBridge] Preserved tool results (idx≤{last_tool_idx})")
-                            from kohakuterrarium.core.events import TriggerEvent
-                            next_event = TriggerEvent(type="user_input", content="")
-                            tool_results_preserved = True
-                        elif user_idx >= 0:
-                            content = msgs[user_idx].content
-                            if isinstance(content, str) and content == query:
-                                self._agent.controller.conversation.truncate_from(user_idx)
-                            next_event = create_user_event(event_content, stream=meta["stream"])
-                    if not tool_results_preserved:
-                        next_event = create_user_event(event_content, stream=meta["stream"])
-                    continue
-                else:
-                    await _call_tracker_method(tracker, "record_success", target_model)
-                    break
+            model_loop = await self._run_model_loop(
+                candidate_models=candidates,
+                route_plan=route_plan,
+                event_content=event_content,
+                query=query,
+                session_id=session_id,
+                meta=meta,
+                tracker=tracker,
+                trace_id=trace_id,
+                run_id=run_handle.run_id,
+                reply_llm_source=reply_llm_source,
+                create_user_event=create_user_event,
+                process_event=process_event,
+            )
+            response = model_loop.response
+            result = model_loop.result
+            target_model = model_loop.target_model
+            preserved_html = model_loop.preserved_html
 
             logger.info(f"[NanobotBridge] Checking output buffer...")
             response = self._output.get_response()
