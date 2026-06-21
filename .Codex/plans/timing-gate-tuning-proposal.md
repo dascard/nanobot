@@ -308,7 +308,7 @@ Owner：
 - 创建：`tests/test_timing_tuning_proposal.py`
 - 创建：`evals/timing_tuning_proposal.py`
 
-- [ ] **步骤 1：编写 readiness 红灯测试**
+- [x] **步骤 1：编写 readiness 红灯测试**
 
 在 `tests/test_timing_tuning_proposal.py` 中新增基础 helper 和 readiness 测试：
 
@@ -434,7 +434,7 @@ def test_proposal_blocks_skipped_zero_and_missing_action_truth():
     assert no_truth["candidate_sets"][0]["id"] == "ack_threshold_soften_v1"
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -447,7 +447,7 @@ python -B -m pytest \
 
 预期：失败，报错 `ModuleNotFoundError: No module named 'evals.timing_tuning_proposal'`。
 
-- [ ] **步骤 3：实现最小 report builder**
+- [x] **步骤 3：实现最小 report builder**
 
 创建 `evals/timing_tuning_proposal.py`：
 
@@ -687,7 +687,7 @@ def build_timing_tuning_proposal(
     }
 ```
 
-- [ ] **步骤 4：运行 readiness 绿灯测试**
+- [x] **步骤 4：运行 readiness 绿灯测试**
 
 运行：
 
@@ -700,7 +700,7 @@ python -B -m pytest \
 
 预期：`2 passed`。
 
-- [ ] **步骤 5：提交任务 1**
+- [x] **步骤 5：提交任务 1**
 
 运行：
 
@@ -716,7 +716,7 @@ git commit -m "feat(评测): 建立调参提案报告"
 - 修改：`tests/test_timing_tuning_proposal.py`
 - 修改：`evals/timing_tuning_proposal.py`
 
-- [ ] **步骤 1：编写候选参数和 CLI 测试**
+- [x] **步骤 1：编写候选参数和 CLI 测试**
 
 追加测试：
 
@@ -788,7 +788,7 @@ def test_timing_tuning_proposal_cli_has_no_apply_modes():
         assert excinfo.value.code == 2
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -802,7 +802,7 @@ python -B -m pytest \
 
 预期：CLI 测试失败，因为 `build_parser()` 和 `main()` 尚未实现。
 
-- [ ] **步骤 3：实现 parser、manifest audit 解析和 CLI**
+- [x] **步骤 3：实现 parser、manifest audit 解析和 CLI**
 
 在 `evals/timing_tuning_proposal.py` 中追加：
 
@@ -901,7 +901,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-- [ ] **步骤 4：运行 proposal 测试文件**
+- [x] **步骤 4：运行 proposal 测试文件**
 
 运行：
 
@@ -911,7 +911,7 @@ python -B -m pytest tests/test_timing_tuning_proposal.py -q -p no:cacheprovider
 
 预期：所有 `tests/test_timing_tuning_proposal.py` 测试通过。
 
-- [ ] **步骤 5：提交任务 2**
+- [x] **步骤 5：提交任务 2**
 
 运行：
 
@@ -929,7 +929,7 @@ git commit -m "feat(评测): 导出调参提案报告"
 - 修改：`evals/timing_tuning_proposal.py`
 - 修改：`tests/test_timing_tuning_proposal.py`
 
-- [ ] **步骤 1：编写模拟红灯测试**
+- [x] **步骤 1：编写模拟红灯测试**
 
 创建 `tests/test_timing_score_simulation.py`：
 
@@ -984,7 +984,7 @@ def test_simulation_reports_candidate_flip_with_score_breakdown():
     assert report["aggregates"][0]["candidate_id"] == "ack_threshold_soften_v1"
 ```
 
-- [ ] **步骤 2：运行模拟测试验证红灯**
+- [x] **步骤 2：运行模拟测试验证红灯**
 
 运行：
 
@@ -994,7 +994,7 @@ python -B -m pytest tests/test_timing_score_simulation.py -q -p no:cacheprovider
 
 预期：失败，报错 `ModuleNotFoundError: No module named 'evals.timing_score_simulation'`。
 
-- [ ] **步骤 3：实现最小模拟模块**
+- [x] **步骤 3：实现最小模拟模块**
 
 创建 `evals/timing_score_simulation.py`：
 
@@ -1075,7 +1075,7 @@ def simulate_timing_candidates(
     }
 ```
 
-- [ ] **步骤 4：运行模拟绿灯测试**
+- [x] **步骤 4：运行模拟绿灯测试**
 
 运行：
 
@@ -1085,7 +1085,7 @@ python -B -m pytest tests/test_timing_score_simulation.py -q -p no:cacheprovider
 
 预期：`2 passed`。
 
-- [ ] **步骤 5：把模拟结果接入 proposal builder**
+- [x] **步骤 5：把模拟结果接入 proposal builder**
 
 在 `tests/test_timing_tuning_proposal.py` 追加：
 
@@ -1123,7 +1123,7 @@ python -B -m pytest tests/test_timing_tuning_proposal.py tests/test_timing_score
 
 预期：两个测试文件全部通过。
 
-- [ ] **步骤 6：提交任务 3**
+- [x] **步骤 6：提交任务 3**
 
 运行：
 
@@ -1140,7 +1140,7 @@ git commit -m "feat(时机门控): 支持候选参数模拟"
 - 修改：`core/eval_sampling/timing_signal_audit.py`
 - 修改：`evals/timing_signal_audit.py`
 
-- [ ] **步骤 1：编写证据字段兼容测试**
+- [x] **步骤 1：编写证据字段兼容测试**
 
 在 `tests/test_timing_signal_audit.py` 追加：
 
@@ -1169,7 +1169,7 @@ def test_timing_signal_audit_preserves_optional_proposal_evidence_fields():
     assert report["signals"]["s_ack"]["false_positive_count"] == 1
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -1179,7 +1179,7 @@ python -B -m pytest tests/test_timing_signal_audit.py::test_timing_signal_audit_
 
 预期：失败，新增字段未透传。
 
-- [ ] **步骤 3：实现可选字段透传**
+- [x] **步骤 3：实现可选字段透传**
 
 在 `core/eval_sampling/timing_signal_audit.py` 的 sample 标准化位置增加：
 
@@ -1192,7 +1192,7 @@ for field in optional_fields:
 
 如果该文件当前使用 dataclass 或固定字典 builder，则在输出 sample dict 的同一处加入这段逻辑；不要改变 signals 聚合字段名。
 
-- [ ] **步骤 4：运行证据字段绿灯和相邻回归**
+- [x] **步骤 4：运行证据字段绿灯和相邻回归**
 
 运行：
 
@@ -1203,7 +1203,7 @@ python -B -m pytest tests/test_timing_tuning_proposal.py tests/test_timing_signa
 
 预期：全部通过。
 
-- [ ] **步骤 5：提交任务 4**
+- [x] **步骤 5：提交任务 4**
 
 运行：
 
@@ -1219,7 +1219,7 @@ git commit -m "feat(评测): 加厚时机信号提案证据"
 - 创建：`tests/test_timing_tuning_proposal_admin.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：编写 Admin API 红灯测试**
+- [x] **步骤 1：编写 Admin API 红灯测试**
 
 创建 `tests/test_timing_tuning_proposal_admin.py`：
 
@@ -1279,7 +1279,7 @@ def test_timing_tuning_proposal_admin_reports_invalid_json(client, monkeypatch, 
     assert "invalid proposal report" in response.json()["detail"]
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -1289,7 +1289,7 @@ python -B -m pytest tests/test_timing_tuning_proposal_admin.py -q -p no:cachepro
 
 预期：失败，endpoint 尚不存在。
 
-- [ ] **步骤 3：实现只读 endpoint**
+- [x] **步骤 3：实现只读 endpoint**
 
 在 `api/admin_routes.py` Eval 系统 API 附近增加：
 
@@ -1327,7 +1327,7 @@ def eval_timing_tuning_proposal(_auth=Depends(verify_admin)):
 from pathlib import Path
 ```
 
-- [ ] **步骤 4：运行 Admin 绿灯和相邻测试**
+- [x] **步骤 4：运行 Admin 绿灯和相邻测试**
 
 运行：
 
@@ -1338,7 +1338,7 @@ python -B -m pytest tests/test_eval_candidate_contract.py tests/test_timing_tuni
 
 预期：全部通过。
 
-- [ ] **步骤 5：提交任务 5**
+- [x] **步骤 5：提交任务 5**
 
 运行：
 
@@ -1354,7 +1354,7 @@ git commit -m "feat(评测): 提供调参提案只读接口"
 - 修改：`webui/src/features/evals/EvalsPage.jsx`
 - 修改：`tests/test_webui_admin_redesign.py`
 
-- [ ] **步骤 1：编写 WebUI 静态红灯测试**
+- [x] **步骤 1：编写 WebUI 静态红灯测试**
 
 在 `tests/test_webui_admin_redesign.py` 追加：
 
@@ -1372,7 +1372,7 @@ def test_evals_page_exposes_timing_tuning_proposal_report():
     assert "更新 baseline" not in source
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -1382,7 +1382,7 @@ python -B -m pytest tests/test_webui_admin_redesign.py::test_evals_page_exposes_
 
 预期：失败，WebUI 尚无 proposal 入口。
 
-- [ ] **步骤 3：实现 WebUI 只读 tab**
+- [x] **步骤 3：实现 WebUI 只读 tab**
 
 在 `EvalsPage.jsx` state 区加入：
 
@@ -1468,7 +1468,7 @@ if (tab === 'timingProposal') loadTimingProposal()
 )}
 ```
 
-- [ ] **步骤 4：运行 WebUI 静态测试和 build**
+- [x] **步骤 4：运行 WebUI 静态测试和 build**
 
 运行：
 
@@ -1479,7 +1479,7 @@ npm --prefix webui run build
 
 预期：静态测试通过，build 退出码 0。
 
-- [ ] **步骤 5：提交任务 6**
+- [x] **步骤 5：提交任务 6**
 
 运行：
 
@@ -1497,7 +1497,7 @@ git commit -m "feat(评测): 展示调参提案状态"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/timing-gate-tuning-proposal.md`
 
-- [ ] **步骤 1：更新 `docs/evals.md`**
+- [x] **步骤 1：更新 `docs/evals.md`**
 
 在“周期趋势只读调参分析”后增加：
 
@@ -1523,7 +1523,7 @@ python -B -m evals.timing_tuning_proposal \
 该入口不修改 `core/timing_score.py`，不更新 `evals/baselines/timing_gate.json`，不改变 PR gate 或周期 gate。WebUI 和 Admin 只展示报告，不提供应用参数入口。
 ```
 
-- [ ] **步骤 2：更新 `docs/todo.md` 与 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/todo.md` 与 `docs/plan_walkthrough.md`**
 
 同步内容：
 
@@ -1532,11 +1532,11 @@ python -B -m evals.timing_tuning_proposal \
 - `docs/plan_walkthrough.md` 顶部日期更新为实际执行日期。
 - 写入每个阶段的提交号和验证命令输出。
 
-- [ ] **步骤 3：勾选本计划已完成任务**
+- [x] **步骤 3：勾选本计划已完成任务**
 
 在 `.Codex/plans/timing-gate-tuning-proposal.md` 中把已完成任务步骤从 `- [ ]` 改为 `- [x]`，并在任务末尾写入真实验证摘要和提交号。
 
-- [ ] **步骤 4：运行文档自检**
+- [x] **步骤 4：运行文档自检**
 
 运行：
 
@@ -1550,7 +1550,7 @@ git diff --check -- \
 
 预期：`rg` 无输出，`git diff --check` 无输出。
 
-- [ ] **步骤 5：运行最终验证**
+- [x] **步骤 5：运行最终验证**
 
 运行：
 
@@ -1583,7 +1583,7 @@ npm --prefix webui run build
 
 预期：所有命令退出码为 0。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 
@@ -1591,6 +1591,18 @@ npm --prefix webui run build
 git add docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/timing-gate-tuning-proposal.md
 git commit -m "docs(评测): 收口调参提案状态"
 ```
+
+## 执行摘要
+
+- 设计：`4dcb849 docs(时机): 设计可审核调参提案`。
+- 计划：`42857f2 docs(计划): 记录调参提案实现计划`。
+- 任务 1：`0d3469d feat(评测): 建立调参提案报告`，建立 `proposal_version=1`、`source`、`readiness`、`candidate_sets`、`parameters`、`validation_plan`、`apply_policy` 和 `blocked_actions` 骨架。
+- 任务 2：`6d17d2e feat(评测): 导出调参提案报告`，接入 CLI、候选参数校验、manifest audit 路径解析和禁止 apply 类参数。
+- 任务 3：`32c104b feat(时机门控): 支持候选参数模拟`，新增离线 what-if 模拟，基于 timing_gate case 和显式候选参数 diff 输出 before / after 结果与翻转聚合。
+- 任务 4：`b52a13e feat(评测): 加厚时机信号提案证据`，透传 TimingSignal 样本证据字段并保持旧 report 字段兼容。全量验证结果为 `1442 passed, 6 skipped, 139 warnings in 107.66s`。
+- 任务 5：`04a026e feat(评测): 提供调参提案只读接口`，新增 `GET /api/v1/admin/evals/timing-tuning/proposal`，缺报告返回 `exists=false`，合法报告只读返回。全量验证结果为 `1445 passed, 6 skipped, 139 warnings in 108.98s`。
+- 任务 6：`fbb4cdb feat(评测): 展示调参提案状态`，WebUI「Eval 评测」新增「调参提案」tab，并随 build 更新 dist 产物。`npm --prefix webui run build` 退出码 0；全量验证结果为 `1446 passed, 6 skipped, 139 warnings in 107.54s`。
+- 任务 7：本提交执行文档收口，提交信息为 `docs(评测): 收口调参提案状态`。文档自检 `rg` 无输出，`git diff --check` 无输出；TimingGate / proposal 定向回归 `161 passed, 1 warning in 5.95s`；`bash scripts/run_timing_gate_gate.sh` 输出 `total=18 passed=18 failed=0` 和 `Gate passed`；WebUI 静态测试 `23 passed, 1 warning in 0.88s`；`npm --prefix webui run build` 退出码 0，仅有 Vite chunk size / plugin timing 警告；全量回归 `1446 passed, 6 skipped, 139 warnings in 107.65s`。
 
 ## 阶段验证命令清单
 
@@ -1644,10 +1656,10 @@ python -B -m pytest tests/ -v
 
 ## 完成前核对清单
 
-- [ ] Proposal report 包含 `proposal_version=1`、`source`、`readiness`、`candidate_sets`、`parameters`、`simulation`、`validation_plan`、`apply_policy` 和 `blocked_actions`。
-- [ ] 缺少 artifact、audit skipped、零样本、缺 final action truth、缺候选参数和缺 baseline 都稳定输出 `ready=false`。
-- [ ] CLI 没有 `--apply`、`--update-baseline`、`--write-config`、`--promote`。
-- [ ] `evals/baselines/timing_gate.json` 未被修改。
-- [ ] `scripts/run_timing_gate_gate.sh`、`scripts/run_eval_pr_gate.sh`、`scripts/run_eval_periodic.sh` 未被 proposal 阶段改变。
-- [ ] WebUI 没有“应用参数”或“更新 baseline”按钮。
-- [ ] 每个阶段提交只暂存本阶段文件，禁止 `git add .` 和 `git add -A`。
+- [x] Proposal report 包含 `proposal_version=1`、`source`、`readiness`、`candidate_sets`、`parameters`、`simulation`、`validation_plan`、`apply_policy` 和 `blocked_actions`。
+- [x] 缺少 artifact、audit skipped、零样本、缺 final action truth、缺候选参数和缺 baseline 都稳定输出 `ready=false`。
+- [x] CLI 没有 `--apply`、`--update-baseline`、`--write-config`、`--promote`。
+- [x] `evals/baselines/timing_gate.json` 未被修改。
+- [x] `scripts/run_timing_gate_gate.sh`、`scripts/run_eval_pr_gate.sh`、`scripts/run_eval_periodic.sh` 未被 proposal 阶段改变。
+- [x] WebUI 没有“应用参数”或“更新 baseline”按钮。
+- [x] 每个阶段提交只暂存本阶段文件，禁止 `git add .` 和 `git add -A`。
