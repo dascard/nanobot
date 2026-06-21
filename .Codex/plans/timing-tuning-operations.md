@@ -25,7 +25,7 @@
 
 - [x] 设计：写入 `docs/superpowers/specs/2026-06-21-timing-tuning-operations-design.md`，提交 `4f7d13a docs(时机): 设计调参提案运营链路`。
 - [x] 任务 1：TimingSignal audit 支持 run source 与 `final_timing_action` 合同。
-- [ ] 任务 2：proposal 收紧 run-scoped 输入与候选参数治理。
+- [x] 任务 2：proposal 收紧 run-scoped 输入与候选参数治理。
 - [ ] 任务 3：simulation 标识真实 audit 样本来源并守住 `timing_input`。
 - [ ] 任务 4：Admin 增加 record-only proposal review API。
 - [ ] 任务 5：WebUI 展示审核状态并提供记录型审核入口。
@@ -338,7 +338,7 @@ git commit -m "feat(评测): 记录时机审计运行来源"
 - 修改：`evals/timing_tuning_proposal.py`
 - 测试：`tests/test_timing_tuning_proposal.py`
 
-- [ ] **步骤 1：编写拒绝 explicit latest 的测试**
+- [x] **步骤 1：编写拒绝 explicit latest 的测试**
 
 在 `tests/test_timing_tuning_proposal.py` 新增：
 
@@ -361,7 +361,7 @@ def test_proposal_rejects_explicit_latest_timing_audit(tmp_path):
 
 调整 helper 预期：`resolve_proposal_timing_audit_path()` 从返回 `Path | None` 升级为 `(Path | None, list[dict])`。
 
-- [ ] **步骤 2：编写 run mismatch 与候选治理测试**
+- [x] **步骤 2：编写 run mismatch 与候选治理测试**
 
 在 `tests/test_timing_tuning_proposal.py` 新增：
 
@@ -421,7 +421,7 @@ def test_proposal_candidate_governance_blocks_duplicate_id_and_empty_diff():
     ]
 ```
 
-- [ ] **步骤 3：运行测试验证失败**
+- [x] **步骤 3：运行测试验证失败**
 
 运行：
 
@@ -431,7 +431,7 @@ python -B -m pytest tests/test_timing_tuning_proposal.py -q -p no:cacheprovider
 
 预期：新增测试失败，原因是函数签名、blocking code 和透传字段尚未实现。
 
-- [ ] **步骤 4：实现 path resolution 合同**
+- [x] **步骤 4：实现 path resolution 合同**
 
 在 `evals/timing_tuning_proposal.py` 中新增：
 
@@ -448,7 +448,7 @@ def _is_run_scoped_audit_path(path: Path, run_id: str) -> bool:
 
 把 `resolve_proposal_timing_audit_path()` 改为返回 `(path, blocking)`，显式 latest 返回 `None` 和 `explicit_latest_audit`，manifest 中非 run-scoped 返回 `audit_not_run_scoped`。
 
-- [ ] **步骤 5：实现 truth 和 run mismatch readiness**
+- [x] **步骤 5：实现 truth 和 run mismatch readiness**
 
 新增 helper：
 
@@ -472,7 +472,7 @@ if manifest_run_id and audit_run_id and manifest_run_id != audit_run_id:
 
 truth stats 为 `valid == 0` 时保留 `missing_action_truth`；`invalid > 0` 时增加 `invalid_action_truth`。
 
-- [ ] **步骤 6：实现候选治理**
+- [x] **步骤 6：实现候选治理**
 
 `parse_candidate_sets()` 增加：
 
@@ -495,7 +495,7 @@ if not param_diff:
 "evidence_refs": item.get("evidence_refs") if isinstance(item.get("evidence_refs"), list) else [],
 ```
 
-- [ ] **步骤 7：更新 CLI 默认 params 和调用点**
+- [x] **步骤 7：更新 CLI 默认 params 和调用点**
 
 `build_parser()` 中：
 
@@ -516,7 +516,7 @@ audit_path, path_blocking = resolve_proposal_timing_audit_path(
 
 把 `path_blocking` 传入 `build_timing_tuning_proposal(extra_blocking=path_blocking)`，或在构建前合并到 `source_paths` 后由 build 函数生成相同 blocking。推荐新增 `extra_blocking`，保持 path 解析和 readiness 归因清楚。
 
-- [ ] **步骤 8：运行任务测试**
+- [x] **步骤 8：运行任务测试**
 
 运行：
 
@@ -526,7 +526,7 @@ python -B -m pytest tests/test_timing_tuning_proposal.py tests/test_periodic_tun
 
 预期：全部通过。
 
-- [ ] **步骤 9：提交任务 2**
+- [x] **步骤 9：提交任务 2**
 
 运行：
 

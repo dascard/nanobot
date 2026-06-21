@@ -89,6 +89,94 @@ def _reason_codes(report: dict) -> set[str]:
     }
 
 
+def test_proposal_rejects_explicit_latest_timing_audit(tmp_path):
+    from evals.timing_tuning_proposal import resolve_proposal_timing_audit_path
+
+    latest = tmp_path / "timing_signal_audit_latest.json"
+    latest.write_text("{}", encoding="utf-8")
+
+    resolved, blocking = resolve_proposal_timing_audit_path(
+        _manifest(str(latest)),
+        latest,
+        run_id="run_1",
+    )
+
+    assert resolved is None
+    assert blocking[0]["code"] == "explicit_latest_audit"
+
+
+def test_proposal_blocks_audit_run_mismatch_and_invalid_truth():
+    from evals.timing_tuning_proposal import build_timing_tuning_proposal
+
+    report = build_timing_tuning_proposal(
+        manifest=_manifest(),
+        trends=_trends(),
+        analysis=_analysis(),
+        timing_audit=_audit(
+            samples=[{"log_id": 1, "signal_name": "s_ack", "final_timing_action": "maybe"}],
+            source={"mode": "sampled", "run_id": "other_run"},
+        ),
+        baseline={"suite": "timing_gate"},
+        params=_params(),
+        source_paths={"timing_audit": "evals/reports/runs/run_1/timing_signal_audit.json"},
+    )
+
+    assert "audit_run_mismatch" in _reason_codes(report)
+    assert "invalid_action_truth" in _reason_codes(report)
+
+
+def test_proposal_candidate_governance_blocks_duplicate_id_and_empty_diff():
+    from evals.timing_tuning_proposal import build_timing_tuning_proposal
+
+    params = _params()
+    params["candidates"].append({
+        "id": "ack_threshold_soften_v1",
+        "description": "重复候选",
+        "scope": "timing_score",
+        "param_diff": {},
+        "risk_level": "low",
+        "expected_effect": "无",
+        "evidence_refs": [{"type": "timing_signal_audit_sample", "log_id": 101}],
+    })
+    params["candidates"].append({
+        "description": "缺少 ID",
+        "scope": "timing_score",
+        "param_diff": {"s_ack": 0.65},
+        "risk_level": "low",
+    })
+
+    report = build_timing_tuning_proposal(
+        manifest=_manifest(),
+        trends=_trends(),
+        analysis=_analysis(),
+        timing_audit=_audit(
+            samples=[{"final_timing_action": "continue"}],
+            source={"mode": "sampled", "run_id": "run_1"},
+        ),
+        baseline={"suite": "timing_gate"},
+        params=params,
+        source_paths={"timing_audit": "evals/reports/runs/run_1/timing_signal_audit.json"},
+    )
+
+    codes = _reason_codes(report)
+    assert "duplicate_candidate_id" in codes
+    assert "empty_candidate_param_diff" in codes
+    assert "missing_candidate_id" in codes
+    assert report["candidate_sets"][1]["expected_effect"] == "无"
+    assert report["candidate_sets"][1]["evidence_refs"] == [
+        {"type": "timing_signal_audit_sample", "log_id": 101}
+    ]
+
+
+def test_timing_tuning_proposal_parser_defaults_params_and_accepts_run_id():
+    from evals.timing_tuning_proposal import DEFAULT_PARAMS, build_parser
+
+    args = build_parser().parse_args(["--run-id", "run_1"])
+
+    assert args.run_id == "run_1"
+    assert args.params == str(DEFAULT_PARAMS)
+
+
 def test_proposal_blocks_missing_inputs_and_does_not_crash():
     from evals.timing_tuning_proposal import build_timing_tuning_proposal
 
