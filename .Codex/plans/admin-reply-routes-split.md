@@ -18,9 +18,22 @@
 - [x] 设计提交：`73f6f81 docs(管理端): 设计回复评测路由拆分`。
 - [x] 设计阶段全量验证：`python -m pytest tests/ -v` ->
   `1535 passed, 6 skipped, 139 warnings in 109.99s`。
-- [ ] 计划提交。
-- [ ] 红灯测试。
-- [ ] 实现提交。
+- [x] 计划提交：`2996862 docs(计划): 记录回复评测路由拆分计划`。
+- [x] 红灯测试：`tests/test_admin_reply_routes_split.py -q` ->
+  `4 failed, 3 passed, 21 warnings in 6.30s`。主要失败点符合预期：
+  endpoint module 仍是 `api.admin_routes`、`api.admin.reply_routes` 尚不存在、
+  `api/admin/reply_routes.py` 文件不存在。
+- [x] 实现提交：本提交 `refactor(管理端): 拆分回复评测路由`。
+  - split 绿灯：`7 passed, 21 warnings in 1.27s`。
+  - Reply 行为回归：`15 passed, 21 warnings in 2.78s`。
+  - 拆分兼容回归：`48 passed, 21 warnings in 9.43s`。
+  - 鉴权与 asyncio 策略回归：`10 passed, 1 warning in 2.57s`。
+  - 静态检查：`compileall` 无输出；`git diff --check` 无输出；
+    `rg "from api\.admin_routes|import api\.admin_routes|asyncio\.run|run_awaitable_sync" api/admin/reply_routes.py`
+    无输出且退出码为 1。
+  - 行数：`api/admin_routes.py` 1935 行、`api/admin/reply_routes.py` 754 行、
+    `tests/test_admin_reply_routes_split.py` 151 行。
+  - 全量测试：`1542 passed, 6 skipped, 139 warnings in 112.96s`。
 - [ ] 文档收口提交。
 
 ## 子 agent 分工约定
@@ -59,7 +72,7 @@
   - 导入并 include `reply_router`。
   - re-export 迁移符号。
   - 删除本地 `# Reply 手动测试 / A-B 评估` 到 `# Eval 系统 API` 前的 Reply Eval 实现。
-  - 保留仍被其他子域使用的 `json`、`uuid`、`datetime`、`timedelta`、`Any`、`Literal`、`Optional`、`row_to_dict` 和数据库模型 import。
+  - 保留仍被其他子域使用的 `json`、`datetime`、`timedelta`、`Any`、`Literal`、`Optional`、`row_to_dict` 和数据库模型 import；删除父模块不再使用的 `uuid` import。
 - 后续文档收口阶段修改：`docs/todo.md`、`docs/plan_walkthrough.md`、`.Codex/plans/admin-reply-routes-split.md`。
 
 ## 任务 1：补 Admin Reply Eval 路由拆分红灯测试
@@ -67,7 +80,7 @@
 **文件：**
 - 创建：`tests/test_admin_reply_routes_split.py`
 
-- [ ] **步骤 1：创建 split 路由测试文件**
+- [x] **步骤 1：创建 split 路由测试文件**
 
 创建 `tests/test_admin_reply_routes_split.py`：
 
@@ -225,7 +238,7 @@ def test_admin_reply_routes_do_not_import_parent_admin_routes_or_sync_awaitable(
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 2：运行红灯测试**
+- [x] **步骤 2：运行红灯测试**
 
 运行：
 
@@ -238,7 +251,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 预期：FAIL。主要失败点应为 endpoint module 仍是 `api.admin_routes`、`api.admin.reply_routes`
 尚不存在或 `api/admin/reply_routes.py` 文件不存在。
 
-- [ ] **步骤 3：记录红灯结果**
+- [x] **步骤 3：记录红灯结果**
 
 在本计划「当前状态」中记录失败数量、失败用例和主要失败原因。红灯测试不单独提交；按项目门禁，
 失败状态只作为 TDD 证据，绿灯后与实现一起提交。
@@ -248,7 +261,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 **文件：**
 - 创建：`api/admin/reply_routes.py`
 
-- [ ] **步骤 1：创建新模块骨架**
+- [x] **步骤 1：创建新模块骨架**
 
 创建 `api/admin/reply_routes.py`，模块头使用：
 
@@ -273,7 +286,7 @@ from core.tracing import row_to_dict
 router = APIRouter(tags=["admin-reply"])
 ```
 
-- [ ] **步骤 2：迁移 request model**
+- [x] **步骤 2：迁移 request model**
 
 从 `api/admin_routes.py` 的 Reply Eval 区块移动以下类到新模块，类定义内容保持逐字一致：
 
@@ -303,7 +316,7 @@ class ReplyTestRunRequest(BaseModel):
 同时迁移 `ReplyEvalCaseIn`、`ReplyEvalCasePatch`、`ReplyEvalSaveGeneratedIn` 和
 `ReplyEvalRunIn`，字段、默认值、`Literal` 选项和 `Field(default_factory=...)` 保持一致。
 
-- [ ] **步骤 3：迁移 helper**
+- [x] **步骤 3：迁移 helper**
 
 移动以下 helper，函数体保持行为一致：
 
@@ -329,7 +342,7 @@ def _upsert_reply_eval_case(db: Session, item: ReplyEvalCaseIn): ...
 - 不从 `api.admin_routes` 导入 `_loads_json_list`、`row_to_dict` 或任何 helper。
 - 保持 `metadata` 字段、`reply_logs` 排序、`llm_logs` 排序、metrics key 和 response key 不变。
 
-- [ ] **步骤 4：迁移 endpoint**
+- [x] **步骤 4：迁移 endpoint**
 
 移动 11 个 endpoint，装饰器和函数体保持行为一致：
 
@@ -381,7 +394,7 @@ python -m compileall api/admin/reply_routes.py -q
 **文件：**
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：导入迁移符号**
+- [x] **步骤 1：导入迁移符号**
 
 在既有 admin 子路由 import 区加入：
 
@@ -418,7 +431,7 @@ from api.admin.reply_routes import (
 )
 ```
 
-- [ ] **步骤 2：include 新 router**
+- [x] **步骤 2：include 新 router**
 
 在 include 区加入：
 
@@ -428,7 +441,7 @@ router.include_router(reply_router)
 
 放在 `model_router` 之后、`trace_router` 之前即可；本模块没有和其他已拆模块冲突的 catch-all。
 
-- [ ] **步骤 3：删除父模块 Reply Eval 本地实现**
+- [x] **步骤 3：删除父模块 Reply Eval 本地实现**
 
 删除 `api/admin_routes.py` 中从：
 
@@ -444,7 +457,7 @@ router.include_router(reply_router)
 
 前一行之间的本地实现。保留 `# Eval 系统 API` 区块及其 imports。
 
-- [ ] **步骤 4：清理父模块 import**
+- [x] **步骤 4：清理父模块 import**
 
 检查 `api/admin_routes.py` 顶部 imports。只有在确认父模块其他区块不再使用时，才删除多余 import。
 
@@ -472,7 +485,7 @@ python -m compileall api/admin_routes.py api/admin/reply_routes.py -q
 - 修改：`api/admin_routes.py`
 - 修改：`.Codex/plans/admin-reply-routes-split.md`
 
-- [ ] **步骤 1：运行 split 测试绿灯**
+- [x] **步骤 1：运行 split 测试绿灯**
 
 运行：
 
@@ -484,7 +497,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：`7 passed`，允许已有 warnings。
 
-- [ ] **步骤 2：运行 Reply 行为回归**
+- [x] **步骤 2：运行 Reply 行为回归**
 
 运行：
 
@@ -499,7 +512,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 预期：全部通过，确认旧父模块导入、Prompt Runtime metadata、合约重试、case CRUD、run 和 traffic
 语义不变，且 `/model-replies` 仍留在父模块。
 
-- [ ] **步骤 3：运行拆分兼容回归**
+- [x] **步骤 3：运行拆分兼容回归**
 
 运行：
 
@@ -518,7 +531,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过，确认新 router 没有破坏既有管理端拆分合同。
 
-- [ ] **步骤 4：运行鉴权与 asyncio 策略回归**
+- [x] **步骤 4：运行鉴权与 asyncio 策略回归**
 
 运行：
 
@@ -533,7 +546,7 @@ PYTHONDONTWRITEBYTECODE=1 python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行静态检查**
+- [x] **步骤 5：运行静态检查**
 
 运行：
 
@@ -551,7 +564,7 @@ wc -l api/admin_routes.py api/admin/reply_routes.py tests/test_admin_reply_route
 - `rg` 无输出，退出码为 1。
 - `api/admin_routes.py` 行数明显低于 2647 行。
 
-- [ ] **步骤 6：运行全量测试**
+- [x] **步骤 6：运行全量测试**
 
 运行：
 
@@ -562,7 +575,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 7：更新计划执行结果**
+- [x] **步骤 7：更新计划执行结果**
 
 在本计划「当前状态」中记录：
 
@@ -575,7 +588,7 @@ python -m pytest tests/ -v
 - 行数检查输出。
 - 全量测试输出。
 
-- [ ] **步骤 8：提交实现**
+- [x] **步骤 8：提交实现**
 
 只暂存本阶段文件：
 
