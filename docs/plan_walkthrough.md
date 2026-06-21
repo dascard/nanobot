@@ -3262,3 +3262,79 @@ endpoint，保持旧导入路径、HTTP 路径、admin token monkeypatch、
 P3 超大文件队列仍剩 `api/admin_routes.py` 1390 行、`api/routes.py` 2822 行。继续沿
 管理端拆分时，下一刀可考虑 Runtime / Overview 或 Settings；切普通 API 前应先设计
 `verify_token` 共享兼容层。
+
+## 2026-06-21 Admin Runtime / Overview 路由拆分
+
+状态：设计、计划、红灯测试、实现、验证和实现阶段提交已完成。`api/admin_routes.py`
+已拆出 Runtime / Overview 管理端路由到 `api/admin/runtime_routes.py`；旧
+`api.admin_routes` 继续 include 新 router，并 re-export 迁移后的 request model、
+Runtime 专属 helper 和 endpoint，保持旧导入路径、HTTP 路径、admin token
+monkeypatch、Group Memory 子路由先于 `/groups/{group_id:path}` catch-all 的顺序、
+overview / groups / TimingGate events response shape 和 `timing_gate_test()` 协程边界。
+Settings、Configs、Prompt effective preview、Block / ContentBlock、DB backup /
+vacuum、`/model-replies` 和普通 `api/routes.py` 不进入本阶段。`api/admin_routes.py`
+从 1390 行降至 1009 行，新模块 `api/admin/runtime_routes.py` 为 462 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-admin-runtime-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/admin-runtime-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`1c2745c docs(管理端): 设计运行态路由拆分`。
+- 计划提交：`0ac3fa7 docs(计划): 记录运行态路由拆分计划`。
+- 红灯测试提交：`d394766 test(管理端): 锁定运行态路由拆分契约`。
+- 实现提交：`d6a05bf refactor(管理端): 拆分运行态路由`。
+
+已完成：
+
+- [x] 新增 `tests/test_admin_runtime_routes_split.py`，锁定 5 个 Runtime / Overview
+  route 的 endpoint module、legacy import、token monkeypatch、重复注册、
+  `/groups` 静态路由顺序、Group Memory 子路由顺序、协程边界、Pydantic 约束和
+  反向导入 / awaitable 扫描。
+- [x] 新增 `api/admin/runtime_routes.py`，承载 `TimingGateTestRequest`、Runtime
+  snapshot、TimingGate event / stats helper、overview、groups list / detail、
+  TimingGate events 和 TimingGate 手测 endpoint。
+- [x] `api/admin_routes.py` include `runtime_router`，并 re-export 迁移符号。
+- [x] 新模块使用 `api.admin.common.verify_admin` 和 `core.database.get_db`；不反向导入
+  `api.admin_routes`。
+- [x] `group_memory_router` 继续早于 `runtime_router` include，避免
+  `/groups/{group_id:path}` catch-all 吞掉 Group Memory 子路由。
+- [x] 红灯测试单独提交，符合用户「每完成一个阶段性改动都 commit 一次」的要求。
+
+验证记录：
+
+- 红灯：`tests/test_admin_runtime_routes_split.py -q` ->
+  `5 failed, 4 passed, 21 warnings in 6.57s`；失败点为 endpoint module 仍是
+  `api.admin_routes`、`api.admin.runtime_routes` 尚不存在，以及
+  `api/admin/runtime_routes.py` 文件不存在。
+- 绿灯：`tests/test_admin_runtime_routes_split.py -q` ->
+  `9 passed, 21 warnings in 1.15s`。
+- 管理端行为 / 顺序 / asyncio 策略回归：
+  `tests/test_admin_api.py tests/test_admin_group_memory_routes_split.py tests/test_asyncio_run_policy.py -q`
+  -> `86 passed, 21 warnings in 8.88s`。
+- 静态检查：`python -m compileall api/admin_routes.py api/admin/runtime_routes.py`
+  无输出；`git diff --check` 无输出；
+  `rg -n "from api\.admin_routes|import api\.admin_routes|asyncio\.run|run_awaitable_sync" api/admin/runtime_routes.py`
+  无命中，退出码为 1。
+- 行数检查：`api/admin_routes.py` 1009 行，`api/admin/runtime_routes.py` 462 行，
+  `tests/test_admin_runtime_routes_split.py` 143 行。
+- 全量：`python -m pytest tests/ -v` ->
+  `1560 passed, 6 skipped, 139 warnings in 111.58s`。
+
+执行约束：
+
+- 不拆普通 `api/routes.py`。
+- 不抽 `verify_token` common auth。
+- 不迁移 Settings、Configs、Prompt effective preview、Block / ContentBlock、
+  DB backup / vacuum 或 `/model-replies`。
+- 不改变 Prompt Runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime
+  输入。
+- 不新增 `asyncio.run()`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列仍剩 `api/admin_routes.py` 1009 行、`api/routes.py` 2822 行。继续沿
+管理端拆分时，下一刀可考虑 Settings；切普通 API 前应先设计 `verify_token` 共享兼容层。

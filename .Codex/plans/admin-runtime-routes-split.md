@@ -19,6 +19,16 @@
   `tests/test_admin_tool_routes_split.py`、`tests/test_admin_eval_routes_split.py`。
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-admin-runtime-routes-split-design.md`。
 - [x] 设计提交：`1c2745c docs(管理端): 设计运行态路由拆分`。
+- [x] 计划提交：`0ac3fa7 docs(计划): 记录运行态路由拆分计划`。
+- [x] 红灯测试提交：`d394766 test(管理端): 锁定运行态路由拆分契约`。
+- [x] 实现提交：`d6a05bf refactor(管理端): 拆分运行态路由`。
+- [x] 已验证 split 绿灯：`9 passed, 21 warnings in 1.14s`。
+- [x] 已验证管理端行为 / 顺序 / asyncio 策略回归：
+  `86 passed, 21 warnings in 8.91s`。
+- [x] 已验证全量回归：`1560 passed, 6 skipped, 139 warnings in 111.58s`。
+- [x] 已完成文档收口验证：文档关键词扫描无命中，文档 diff 空白检查无输出。
+- [x] 行数结果：`api/admin_routes.py` 1009 行，`api/admin/runtime_routes.py` 462 行，
+  `tests/test_admin_runtime_routes_split.py` 143 行。
 
 ## 子 agent 分工约定
 
@@ -75,7 +85,7 @@
 **文件：**
 - 创建：`tests/test_admin_runtime_routes_split.py`
 
-- [ ] **步骤 1：创建 split 路由测试文件**
+- [x] **步骤 1：创建 split 路由测试文件**
 
 创建 `tests/test_admin_runtime_routes_split.py`：
 
@@ -225,7 +235,7 @@ def test_admin_runtime_routes_do_not_import_parent_admin_routes_or_sync_awaitabl
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -236,12 +246,16 @@ python -B -m pytest -q -p no:cacheprovider tests/test_admin_runtime_routes_split
 预期：FAIL。失败点应来自 endpoint module 仍是 `api.admin_routes`、`api.admin.runtime_routes`
 尚不存在或 `api/admin/runtime_routes.py` 文件尚不存在。
 
-- [ ] **步骤 3：提交红灯测试**
+实际结果：`5 failed, 4 passed, 21 warnings in 6.57s`。
+
+- [x] **步骤 3：提交红灯测试**
 
 ```bash
 git add tests/test_admin_runtime_routes_split.py
 git commit -m "test(管理端): 锁定运行态路由拆分契约"
 ```
+
+实际提交：`d394766 test(管理端): 锁定运行态路由拆分契约`。
 
 ## 任务 2：迁移 Runtime / Overview 路由到新模块
 
@@ -249,7 +263,7 @@ git commit -m "test(管理端): 锁定运行态路由拆分契约"
 - 创建：`api/admin/runtime_routes.py`
 - 修改：`api/admin_routes.py`
 
-- [ ] **步骤 1：创建 `api/admin/runtime_routes.py`**
+- [x] **步骤 1：创建 `api/admin/runtime_routes.py`**
 
 从 `api/admin_routes.py` 迁移 Runtime / Overview 区块，模块骨架如下：
 
@@ -291,7 +305,7 @@ for idx in range(body.repeats):
     latency_ms = int((time.time() - t0) * 1000)
 ```
 
-- [ ] **步骤 2：修改父模块聚合和 re-export**
+- [x] **步骤 2：修改父模块聚合和 re-export**
 
 在 `api/admin_routes.py` 中导入：
 
@@ -324,7 +338,7 @@ router.include_router(tool_router)
 保留父模块本地 helper，不要把 `_safe_dict()`、`_iso()`、`_raw_group_id()`、
 `_group_stream_id()` 或 `_block_dict()` 改成 Runtime re-export。
 
-- [ ] **步骤 3：运行 split 绿灯**
+- [x] **步骤 3：运行 split 绿灯**
 
 运行：
 
@@ -334,7 +348,9 @@ python -B -m pytest -q -p no:cacheprovider tests/test_admin_runtime_routes_split
 
 预期：PASS，所有 Runtime / Overview route endpoint module 均为 `api.admin.runtime_routes`。
 
-- [ ] **步骤 4：运行行为回归**
+实际结果：`9 passed, 21 warnings in 1.14s`。
+
+- [x] **步骤 4：运行行为回归**
 
 运行：
 
@@ -347,7 +363,9 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 5：静态验证**
+实际结果：`86 passed, 21 warnings in 8.91s`。
+
+- [x] **步骤 5：静态验证**
 
 运行：
 
@@ -359,12 +377,16 @@ rg -n "from api\\.admin_routes|import api\\.admin_routes|asyncio\\.run|run_await
 
 预期：`compileall` 和 `git diff --check` 退出码为 0；`rg` 无命中，退出码为 1。
 
-- [ ] **步骤 6：提交实现**
+实际结果：`compileall` 无输出，`git diff --check` 无输出，`rg` 无命中且退出码为 1。
+
+- [x] **步骤 6：提交实现**
 
 ```bash
 git add api/admin_routes.py api/admin/runtime_routes.py
 git commit -m "refactor(管理端): 拆分运行态路由"
 ```
+
+实际提交：`d6a05bf refactor(管理端): 拆分运行态路由`。
 
 ## 任务 3：文档收口与最终验证
 
@@ -373,7 +395,7 @@ git commit -m "refactor(管理端): 拆分运行态路由"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/admin-runtime-routes-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下追加本阶段进展：
 
@@ -385,16 +407,16 @@ git commit -m "refactor(管理端): 拆分运行态路由"
     groups / TimingGate events response shape 和 `timing_gate_test()` 协程边界。
 ```
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-21 Admin Runtime / Overview 路由拆分` 小节，记录设计提交、计划提交、红灯、
 实现提交、验证结果、行数变化和执行边界。
 
-- [ ] **步骤 3：勾选本计划当前任务状态**
+- [x] **步骤 3：勾选本计划当前任务状态**
 
 将已经完成的步骤由 `- [ ]` 改为 `- [x]`，并补充实际验证输出和提交 SHA。
 
-- [ ] **步骤 4：运行最终验证**
+- [x] **步骤 4：运行最终验证**
 
 运行：
 
@@ -411,9 +433,25 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：全部通过。若全量测试失败，先按失败信息修复并重新运行相关测试，不能只更新文档。
 
-- [ ] **步骤 5：提交文档收口**
+实际结果：
+
+- 文档禁用词扫描：无命中，退出码为 1。
+- 文档空白检查：
+  `git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/admin-runtime-routes-split.md`
+  无输出，退出码为 0。
+- Runtime split 专项：`9 passed, 21 warnings in 1.15s`。
+- 管理端行为 / 顺序 / asyncio 策略回归：`86 passed, 21 warnings in 8.88s`。
+- 静态编译：`python -B -m compileall api/admin_routes.py api/admin/runtime_routes.py`
+  无输出，退出码为 0。
+- 行数检查：`api/admin_routes.py` 1009 行，`api/admin/runtime_routes.py` 462 行，
+  `tests/test_admin_runtime_routes_split.py` 143 行。
+- 全量回归：`1560 passed, 6 skipped, 139 warnings in 111.58s`。
+
+- [x] **步骤 5：提交文档收口**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/admin-runtime-routes-split.md
 git commit -m "docs(计划): 收口运行态路由拆分"
 ```
+
+实际提交：本文件随 `docs(计划): 收口运行态路由拆分` 提交。
