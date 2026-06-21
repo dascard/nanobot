@@ -2194,9 +2194,10 @@ H30 计划列表：
 
 ## 2026-06-21 news_search/tool.py 第一刀拆分
 
-状态：设计与实现计划阶段完成，生产代码尚未迁移。当前阶段已确认
-`docs/todo.md` 的 P3 超大文件拆分仍是默认主线；TimingGate scoring 主链路已进入
-真实数据运营/人工审核沉淀，不抢占本阶段开发顺序。
+状态：第一刀实现完成。旧版新闻报告、评分、价值信号和 layout fallback / HTML
+渲染 helper 已迁移到 `creatures/nanobot/prompts/skills/news_search/legacy_report.py`；
+`tool.py` 继续保留搜索后端、缓存、`_summarize_news_layout()`、`WebTools`、
+`search_and_extract_news*()` 和 `AiDailyTool` facade。
 
 已完成：
 
@@ -2214,18 +2215,22 @@ H30 计划列表：
   `docs/superpowers/specs/2026-06-21-news-search-tool-split-design.md`。
 - [x] 写入实现计划：`.Codex/plans/news-search-tool-split.md`。
 - [x] 更新 `docs/todo.md`，记录 `news_search/tool.py` 第一刀已进入设计/计划阶段。
+- [x] 补 `tests/test_news_search_legacy_report.py` 红灯测试，锁住新模块轻量导入与
+  `tool.py` re-export 兼容。
+- [x] 新增 `legacy_report.py`，迁移旧版新闻报告、评分、价值信号和 layout / HTML helper。
+- [x] `tool.py` 显式 re-export 迁移后的 helper，保持旧导入路径可用。
 
 计划列表：
 
 - [x] 阶段 0：只读审计、方案比较和边界选择。
 - [x] 阶段 0.5：写入设计文档和实现计划，记录日期与当前阶段状态。
-- [ ] 阶段 1：补 `tests/test_news_search_legacy_report.py` 红灯测试，锁住新模块轻量导入与
+- [x] 阶段 1：补 `tests/test_news_search_legacy_report.py` 红灯测试，锁住新模块轻量导入与
   `tool.py` re-export 兼容。
-- [ ] 阶段 2：新增 `news_search/legacy_report.py`，迁移旧版新闻报告、评分、价值信号和
+- [x] 阶段 2：新增 `news_search/legacy_report.py`，迁移旧版新闻报告、评分、价值信号和
   layout fallback / HTML 渲染 helper；`tool.py` 显式 re-export。
-- [ ] 阶段 3：运行新模块、legacy HTML、搜索/AI 日报相邻回归、`asyncio.run` 策略测试和
+- [x] 阶段 3：运行新模块、legacy HTML、搜索/AI 日报相邻回归、`asyncio.run` 策略测试和
   全量 `python -m pytest tests/ -v`。
-- [ ] 阶段 4：同步 `.Codex/plans/news-search-tool-split.md`、`docs/todo.md` 和本 walkthrough，
+- [x] 阶段 4：同步 `.Codex/plans/news-search-tool-split.md`、`docs/todo.md` 和本 walkthrough，
   记录行数变化、验证结果和提交号。
 
 执行约束：
@@ -2239,7 +2244,22 @@ H30 计划列表：
 
 验证记录：
 
-- 待阶段 1 红灯测试执行后填写。
+- 红灯：新增两个 `legacy_report` 测试在生产迁移前运行 ->
+  `2 failed, 1 warning in 5.63s`；失败原因为 `legacy_report` 模块不存在。
+- 绿灯：`tests/test_news_search_legacy_report.py -v` ->
+  `2 passed, 1 warning in 0.78s`。
+- legacy HTML / layout 定向回归 ->
+  `4 passed, 1 warning in 0.57s`。
+- 搜索与 AI 日报相邻回归 ->
+  `9 passed, 1 warning in 0.73s`。
+- `asyncio.run` 约束：
+  `tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v` ->
+  `1 passed, 1 warning in 1.74s`。
+- `git diff --check`：无输出，退出码为 0。
+- 行数：`tool.py` 1149 行，`legacy_report.py` 724 行。
+- 全量：`python -m pytest tests/ -v` ->
+  `1484 passed, 6 skipped, 139 warnings in 107.20s`。
+- 提交：本阶段提交为 `refactor(新闻搜索): 拆分旧版报告渲染`。
 
 后续：
 

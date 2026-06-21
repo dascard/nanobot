@@ -1,6 +1,6 @@
 # news_search/tool.py 拆分实现计划
 
-> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
+> **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [x]`）语法来跟踪进度。
 
 **目标：** 将 `creatures/nanobot/prompts/skills/news_search/tool.py` 中旧版新闻报告、评分和 layout helper 拆到 `legacy_report.py`，保持搜索、AI 日报工具、旧导入路径和 HTML 输出契约不变。
 
@@ -29,12 +29,25 @@
 - 修改：`docs/plan_walkthrough.md`
   - 追加设计、红灯、绿灯、定向回归、全量回归、提交号和后续任务。
 
+## 执行结果摘要
+
+- 红灯：新增两个 `legacy_report` 测试在生产迁移前运行，结果为
+  `2 failed, 1 warning in 5.63s`，失败原因是 `legacy_report` 模块不存在。
+- 绿灯：`tests/test_news_search_legacy_report.py -v` 结果为
+  `2 passed, 1 warning in 0.78s`。
+- legacy HTML / layout 定向回归结果为 `4 passed, 1 warning in 0.57s`。
+- 搜索与 AI 日报相邻回归结果为 `9 passed, 1 warning in 0.73s`。
+- `asyncio.run` 策略测试结果为 `1 passed, 1 warning in 1.74s`。
+- `git diff --check` 无输出，退出码为 0。
+- 全量测试结果为 `1484 passed, 6 skipped, 139 warnings in 107.20s`。
+- 行数变化：`tool.py` 从 1835 行降至 1149 行；新增 `legacy_report.py` 724 行。
+
 ## 任务 1：补 `legacy_report` 模块红灯测试
 
 **文件：**
 - 创建：`tests/test_news_search_legacy_report.py`
 
-- [ ] **步骤 1：新增测试文件头部**
+- [x] **步骤 1：新增测试文件头部**
 
 创建 `tests/test_news_search_legacy_report.py`：
 
@@ -48,7 +61,7 @@ import sys
 from pathlib import Path
 ```
 
-- [ ] **步骤 2：新增轻量导入红灯测试**
+- [x] **步骤 2：新增轻量导入红灯测试**
 
 继续写入：
 
@@ -100,7 +113,7 @@ if not payload["has_report"] or any(payload["loaded"].values()):
 
 实现前预期失败：`ModuleNotFoundError: No module named 'creatures.nanobot.prompts.skills.news_search.legacy_report'`。
 
-- [ ] **步骤 3：新增旧路径 re-export 红灯测试**
+- [x] **步骤 3：新增旧路径 re-export 红灯测试**
 
 继续写入：
 
@@ -143,7 +156,7 @@ def test_tool_reexports_legacy_report_helpers():
 
 实现前预期失败：`legacy_report` 模块不存在。
 
-- [ ] **步骤 4：运行红灯测试**
+- [x] **步骤 4：运行红灯测试**
 
 运行：
 
@@ -164,13 +177,16 @@ FAILED tests/test_news_search_legacy_report.py::test_tool_reexports_legacy_repor
 
 如果失败原因不是模块不存在或 re-export 不存在，先修正测试，不进入生产迁移。
 
+结果：按上述命令运行后得到 `2 failed, 1 warning in 5.63s`，失败原因为
+`legacy_report` 模块不存在，符合红灯预期。
+
 ## 任务 2：创建 `legacy_report.py` 并迁移纯报告 helper
 
 **文件：**
 - 创建：`creatures/nanobot/prompts/skills/news_search/legacy_report.py`
 - 修改：`creatures/nanobot/prompts/skills/news_search/tool.py`
 
-- [ ] **步骤 1：创建新模块头部**
+- [x] **步骤 1：创建新模块头部**
 
 新建 `creatures/nanobot/prompts/skills/news_search/legacy_report.py`：
 
@@ -189,7 +205,7 @@ from urllib.parse import urlparse
 
 不要导入 `asyncio`、`DDGS`、`trafilatura`、`BaseTool`、`NewAPIClient`、`run_awaitable_sync` 或项目运行时工具模块。
 
-- [ ] **步骤 2：迁移报告常量**
+- [x] **步骤 2：迁移报告常量**
 
 从 `tool.py` 移出并原样放入新模块：
 
@@ -213,7 +229,7 @@ MODEL_NAME_HINTS = {
 }
 ```
 
-- [ ] **步骤 3：迁移评分和价值信号 helper**
+- [x] **步骤 3：迁移评分和价值信号 helper**
 
 从 `tool.py` 移出并原样放入新模块：
 
@@ -227,7 +243,7 @@ MODEL_NAME_HINTS = {
 
 迁移后把类型标注统一为内置泛型，例如 `dict[str, Any]`、`list[str]`。不要改变函数体逻辑。
 
-- [ ] **步骤 4：迁移文本和 HTML helper**
+- [x] **步骤 4：迁移文本和 HTML helper**
 
 从 `tool.py` 移出并原样放入新模块：
 
@@ -241,7 +257,7 @@ MODEL_NAME_HINTS = {
 
 迁移时保持 HTML/CSS 字符串完全一致，不重排文案，不调整颜色或 class 名。
 
-- [ ] **步骤 5：迁移 layout 解析和 fallback helper**
+- [x] **步骤 5：迁移 layout 解析和 fallback helper**
 
 从 `tool.py` 移出并原样放入新模块：
 
@@ -255,7 +271,7 @@ MODEL_NAME_HINTS = {
 
 不要迁移 `_summarize_news_layout()`；它继续留在 `tool.py`，作为旧 monkeypatch 目标和 LLM 调用边界。
 
-- [ ] **步骤 6：迁移最终 HTML 渲染 helper**
+- [x] **步骤 6：迁移最终 HTML 渲染 helper**
 
 从 `tool.py` 移出并原样放入新模块：
 
@@ -263,7 +279,7 @@ MODEL_NAME_HINTS = {
 
 确保新模块已从 `datetime` 导入 `datetime`，因为该函数会渲染当前时间。
 
-- [ ] **步骤 7：在 `tool.py` re-export 迁移对象**
+- [x] **步骤 7：在 `tool.py` re-export 迁移对象**
 
 在 `tool.py` 的导入区加入：
 
@@ -299,7 +315,7 @@ from .legacy_report import (
 
 之后删除 `tool.py` 中被迁移对象的真实定义。不要删除 `_summarize_news_layout()`、`_heuristic_should_deepen()` 或 `_model_should_deepen()`。
 
-- [ ] **步骤 8：清理 `tool.py` 未用 import**
+- [x] **步骤 8：清理 `tool.py` 未用 import**
 
 迁移后检查 `tool.py` 的 import：
 
@@ -311,12 +327,14 @@ from .legacy_report import (
 
 用 `python -m compileall creatures/nanobot/prompts/skills/news_search -q` 检查语法。
 
+结果：已创建 `legacy_report.py` 并保留 `tool.py` facade；`compileall` 无输出，退出码为 0。
+
 ## 任务 3：验证红绿灯和相邻行为
 
 **文件：**
 - 修改：`.Codex/plans/news-search-tool-split.md`
 
-- [ ] **步骤 1：运行新模块绿灯测试**
+- [x] **步骤 1：运行新模块绿灯测试**
 
 运行：
 
@@ -331,7 +349,9 @@ python -m pytest tests/test_news_search_legacy_report.py -v
 2 passed
 ```
 
-- [ ] **步骤 2：运行 legacy HTML 和 layout 定向回归**
+结果：`2 passed, 1 warning in 0.78s`。
+
+- [x] **步骤 2：运行 legacy HTML 和 layout 定向回归**
 
 运行：
 
@@ -347,7 +367,9 @@ python -m pytest \
 
 预期：4 个用例全部通过。
 
-- [ ] **步骤 3：运行搜索和 AI 日报相邻回归**
+结果：`4 passed, 1 warning in 0.57s`。
+
+- [x] **步骤 3：运行搜索和 AI 日报相邻回归**
 
 运行：
 
@@ -367,7 +389,9 @@ python -m pytest \
 
 预期：所有列出的测试通过。
 
-- [ ] **步骤 4：运行 asyncio 策略测试**
+结果：`9 passed, 1 warning in 0.73s`。
+
+- [x] **步骤 4：运行 asyncio 策略测试**
 
 运行：
 
@@ -382,7 +406,9 @@ python -m pytest tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears
 1 passed
 ```
 
-- [ ] **步骤 5：运行全量测试**
+结果：`1 passed, 1 warning in 1.74s`。
+
+- [x] **步骤 5：运行全量测试**
 
 运行：
 
@@ -393,6 +419,8 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
+结果：`1484 passed, 6 skipped, 139 warnings in 107.20s`。
+
 ## 任务 4：同步文档并提交阶段
 
 **文件：**
@@ -400,7 +428,7 @@ python -m pytest tests/ -v
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新计划复选框**
+- [x] **步骤 1：更新计划复选框**
 
 把本计划中已经执行的步骤改为 `[x]`，并在每个验证步骤下补充实际输出摘要，例如：
 
@@ -408,7 +436,7 @@ python -m pytest tests/ -v
 结果：`2 passed, 1 warning in 0.42s`。
 ```
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在「超大文件 >800 行拆分」条目下追加一条进展：
 
@@ -420,7 +448,7 @@ python -m pytest tests/ -v
 
 不要勾选整个「超大文件 >800 行拆分」条目。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 在 `docs/plan_walkthrough.md` 末尾的
 `2026-06-21 news_search/tool.py 第一刀拆分` 小节中补充：
@@ -433,7 +461,7 @@ python -m pytest tests/ -v
 - 行数变化。
 - 提交号。
 
-- [ ] **步骤 4：检查格式和 diff**
+- [x] **步骤 4：检查格式和 diff**
 
 运行：
 
@@ -451,7 +479,7 @@ git status --short
 
 只暂存本阶段相关文件，不暂存 pycache、`nanobot.db`、`docs/goal.md` 或其他既有脏项。
 
-- [ ] **步骤 5：显式暂存并提交**
+- [x] **步骤 5：显式暂存并提交**
 
 运行：
 
