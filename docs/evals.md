@@ -114,7 +114,7 @@ python -B -m evals.tuning_analysis \
   --out evals/reports/tuning_analysis_latest.json
 ```
 
-报告输出 `readiness`、`signals`、`recommendations` 和 `regression_refs`。它只读现有 artifact，不读取生产 DB，不更新 baseline，不改变 PR gate 或周期 gate。`candidate_adjustment` 只表示可进入人工复核的方向，不包含可自动应用的参数值。
+报告输出 `readiness`、`signals`、`recommendations` 和 `regression_refs`。它只读现有 artifact，不读取生产 DB，不更新 baseline，不改变 PR gate 或周期 gate。`candidate_adjustment` 只表示可进入人工复核的方向，不包含可自动应用的参数值。该分析只给出调参讨论方向；进入 proposal 审核时必须切换到同一 `run_id` 的 run-scoped manifest 和 TimingSignal audit。
 
 第一版建议类型：
 
@@ -130,7 +130,8 @@ python -B -m evals.tuning_analysis \
 
 ```bash
 python -B -m evals.timing_tuning_proposal \
-  --manifest evals/reports/periodic_manifest_latest.json \
+  --run-id <run_id> \
+  --manifest evals/reports/runs/<run_id>/manifest.json \
   --trends evals/reports/artifact_trends_latest.json \
   --analysis evals/reports/tuning_analysis_latest.json \
   --timing-audit evals/reports/runs/<run_id>/timing_signal_audit.json \
@@ -140,9 +141,24 @@ python -B -m evals.timing_tuning_proposal \
   --out evals/reports/timing_tuning_proposal_latest.json
 ```
 
-报告只读输出 `readiness`、`candidate_sets`、`parameters`、`simulation`、`validation_plan` 和 `blocked_actions`。`ready=false` 表示证据不足或输入缺失，不表示工具失败。常见阻断包括缺 run-scoped / dated TimingSignal audit、audit skipped、零样本、缺 final action truth、缺候选参数和缺 baseline。
+报告只读输出 `readiness`、`candidate_sets`、`parameters`、`simulation`、`validation_plan` 和 `blocked_actions`。`ready=false` 表示证据不足或输入缺失，不表示工具失败。常见阻断包括缺 run-scoped TimingSignal audit、audit skipped、零样本、缺 `final_timing_action` truth、缺候选参数和缺 baseline；dated / latest audit 仅用于浏览或兼容，不作为 proposal 审核主证据。
 
-该入口不修改 `core/timing_score.py`，不更新 `evals/baselines/timing_gate.json`，不改变 PR gate 或周期 gate。Admin 和 WebUI 只展示报告，不提供应用参数入口。
+该入口不修改 `core/timing_score.py`，不更新 `evals/baselines/timing_gate.json`，不改变 PR gate 或周期 gate。Admin 和 WebUI 可以展示报告并记录审核结论，但不提供应用参数入口。
+
+### TimingGate 调参提案运营
+
+运营链路使用 run-scoped TimingSignal audit 作为原始证据。`--run-id`、`--manifest` 和 `--timing-audit` 必须指向同一次周期运行；显式传入 `latest` audit 会被 readiness 阻断，避免用可变 artifact 做人工审核依据。`evals/reports/runs/<run_id>/timing_signal_audit.json` 中的 `source.run_id` 是 proposal 校验运行归属的字段。
+
+`final_timing_action` 是人工最终动作 truth 的 canonical 字段，合法值为 `continue`、`wait`、`no_reply`。proposal 会识别非法 truth、缺失 replay 输入的 truth 样本和 run mismatch；simulation 只使用 audit sample 中的 `timing_input` 重放，不从 `text_preview` 等展示字段推断运行时输入。
+
+候选参数默认读取 `tmp/timing_gate/param_candidates.json`。每个候选必须有唯一 `id` 和非空 `param_diff`；`expected_effect` 与 `evidence_refs` 会原样透传到报告，方便人工审核。缺失 ID、重复 ID 或空 diff 都会进入 blocking reasons，而不是被静默忽略。
+
+Admin 审核入口是 record-only：
+
+- `GET /api/v1/admin/evals/timing-tuning/proposal/review`：按 proposal report 的 SHA256 读取最新人工审核记录。
+- `POST /api/v1/admin/evals/timing-tuning/proposal/reviews`：写入 `AdminAuditLog(action="review_timing_tuning_proposal")`。
+
+允许的审核结论为 `needs_data`、`rejected`、`approved_for_manual_experiment` 和 `reviewed_no_change`。其中 `approved_for_manual_experiment` 只表示进入人工实验，不代表生产参数已变更。WebUI「调参提案」页展示 review 状态并提供同一套 record-only 表单；该页面不提供应用参数、更新 baseline 或写入配置入口。
 
 周期性入口还会运行 TimingGate signal audit：
 
@@ -163,6 +179,8 @@ CI 或本地缺少真实 DB 时，三类路径都会写出同一份 `source.mode
 排查失败时，先看 workflow 失败步骤，再下载 artifact。通用 suite 优先看 `evals/reports/YYYY-MM-DD-<suite>.json`，不要只看 `latest.json`；TimingSignal audit 优先看 `evals/reports/runs/<run_id>/timing_signal_audit.json`；RAG benchmark 优先看 `tmp/rag_benchmark/reports/latest.md` 和对应 run-id JSON。
 
 ## Baseline 更新规则
+
+TimingGate proposal review 不触发 baseline 更新；baseline 更新仍只适用于人工确认后的正式 case 行为变化。
 
 只有同时满足以下条件时，才能更新 `evals/baselines/timing_gate.json`：
 
@@ -478,4 +496,4 @@ P4-5D 已新增 `evals/rag_benchmark/fixtures.py` 和 `positive_v1` fixture DB b
 
 ## 与 P4 的边界
 
-TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入；P4-5B 已完成周期性复跑、手动触发和报告 artifact 归档；P4-5C 已完成第一轮 RAG manual 样本扩充；P4-5D 已完成 memory fixture-backed positive RAG case；P4-5E 已完成 knowledge fixture citation 正例；P4-5F 已完成 sticker fixture sendable 正例；P4-5G 已完成 group_memory fixture 正例；P4-5H 已完成 RAG 过滤约束 fixture。真实样本运营已完成 TimingGate signal audit 周期化、RAG generated → manual 仲裁入口、EvalCandidate 运营规则、候选 reject / defer 仲裁状态、人工仲裁批次审计、EvalCandidate 运营趋势报表、周期运行 manifest、跨 artifact 周期趋势、周期趋势只读调参分析、TimingSignal 不可变 artifact 加厚和 TimingGate 可审核调参提案第一版只读链路。proposal 只生成人工审核证据，不自动应用参数、不更新 baseline、不改变 gate。
+TimingGate 门禁只负责固定 suite 的确定性回归。通用 `candidates → labeled` 标注闭环、per-capability 数据集扩展、Admin 标注导出和 promote 策略属于 P4 评测体系扩展。当前 P4-1 已先完成 expected 契约、候选标注、promote dry-run、离线 CLI 和首个 `capability_model_routing` 数据集；P4-2 已完成后端 expected 契约和 Admin 标注工作台契约化，并通过全量回归；P4-3 已完成 `capability_reply_contract` / `capability_rendering_contract` 数据集、baseline 和离线 gate；P4-4 已完成 RAG benchmark 专用 baseline、CLI gate、Admin API 和 WebUI 展示；P4-5A 已完成统一 PR gate 入口和 CI 接入；P4-5B 已完成周期性复跑、手动触发和报告 artifact 归档；P4-5C 已完成第一轮 RAG manual 样本扩充；P4-5D 已完成 memory fixture-backed positive RAG case；P4-5E 已完成 knowledge fixture citation 正例；P4-5F 已完成 sticker fixture sendable 正例；P4-5G 已完成 group_memory fixture 正例；P4-5H 已完成 RAG 过滤约束 fixture。真实样本运营已完成 TimingGate signal audit 周期化、RAG generated → manual 仲裁入口、EvalCandidate 运营规则、候选 reject / defer 仲裁状态、人工仲裁批次审计、EvalCandidate 运营趋势报表、周期运行 manifest、跨 artifact 周期趋势、周期趋势只读调参分析、TimingSignal 不可变 artifact 加厚和 TimingGate 调参提案 record-only 审核运营链路。proposal 只生成人工审核证据，不自动应用参数、不更新 baseline、不改变 gate。

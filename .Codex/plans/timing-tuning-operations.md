@@ -29,7 +29,7 @@
 - [x] 任务 3：simulation 标识真实 audit 样本来源并守住 `timing_input`。
 - [x] 任务 4：Admin 增加 record-only proposal review API。
 - [x] 任务 5：WebUI 展示审核状态并提供记录型审核入口。
-- [ ] 任务 6：文档收口、计划勾选和最终验证。
+- [x] 任务 6：文档收口、计划勾选和最终验证。
 
 ## 子 agent 分工
 
@@ -975,7 +975,7 @@ git commit -m "feat(评测): 展示调参提案审核状态"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/timing-tuning-operations.md`
 
-- [ ] **步骤 1：更新 docs/evals.md**
+- [x] **步骤 1：更新 docs/evals.md**
 
 新增「TimingGate 调参提案运营」小节，包含：
 
@@ -996,7 +996,7 @@ python -B -m evals.timing_tuning_proposal \
 `final_timing_action` 是人工最终动作 truth 的 canonical 字段，合法值为 `continue`、`wait`、`no_reply`。
 ```
 
-- [ ] **步骤 2：更新 docs/todo.md**
+- [x] **步骤 2：更新 docs/todo.md**
 
 在路线项 10 与路线项 8 的「下一步」中写明：
 
@@ -1004,15 +1004,15 @@ python -B -m evals.timing_tuning_proposal \
 TimingGate 调参提案运营链路已补齐 run-scoped audit、final action truth、候选参数治理和 record-only 人工审核；仍不自动应用参数、不更新 baseline、不改变 gate。
 ```
 
-- [ ] **步骤 3：更新 docs/plan_walkthrough.md**
+- [x] **步骤 3：更新 docs/plan_walkthrough.md**
 
 新增 2026-06-21 阶段记录，列出设计提交、各实现提交、验证结果和剩余边界。
 
-- [ ] **步骤 4：勾选本计划已完成任务**
+- [x] **步骤 4：勾选本计划已完成任务**
 
 把本计划「进度总览」和每个任务步骤按实际完成情况从 `[ ]` 改为 `[x]`。未执行的步骤保持 `[ ]`。
 
-- [ ] **步骤 5：文档自检**
+- [x] **步骤 5：文档自检**
 
 运行：
 
@@ -1021,9 +1021,9 @@ rg -n "TO[D]O|TB[D]|待[定]|后续实[现]|FIXM[E]|占[位]" docs/evals.md docs
 git diff --check -- docs/evals.md docs/todo.md docs/plan_walkthrough.md .Codex/plans/timing-tuning-operations.md
 ```
 
-预期：无输出。
+实际结果：红旗词扫描无输出，旧口径扫描无输出，`git diff --check` 无输出。
 
-- [ ] **步骤 6：最终验证**
+- [x] **步骤 6：最终验证**
 
 运行：
 
@@ -1034,9 +1034,14 @@ npm --prefix webui run build
 python -m pytest tests/ -v
 ```
 
-预期：所有命令退出码为 0。
+实际结果：
 
-- [ ] **步骤 7：提交任务 6**
+- `bash scripts/run_timing_gate_gate.sh`：`total=20 passed=20 failed=0`，`Gate passed`。
+- `bash scripts/run_eval_periodic.sh`：eval guard `34 passed, 1 warning`，TimingGate、capability model routing、capability reply contract、capability rendering contract 和 RAG benchmark 均 `Gate passed`；RAG `cases=13 passed=13 failed=0`；TimingSignal audit 写出 latest、dated 和 run-scoped 报告；退出码 0。本地日志中的 `no such table: system_settings` 为 DB fallback，不阻塞 gate。
+- `npm --prefix webui run build`：退出码 0，仅有 Vite chunk size / plugin timing 警告。
+- `python -m pytest tests/ -v`：`1461 passed, 6 skipped, 139 warnings in 109.55s`。
+
+- [x] **步骤 7：提交任务 6**
 
 运行：
 
