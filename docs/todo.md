@@ -111,8 +111,8 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `admin_routes.py`(5535)、`routes.py`(2966)、`news_search/tool.py`(1110，原 1835)、`group_runtime/runtime.py`(829)、`persona_preprocess.py`(856)。按职责拆模块。
-  - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/admin_routes.py`、`api/routes.py`、`creatures/nanobot/prompts/skills/news_search/tool.py`、`core/group_runtime/runtime.py`、`core/persona_preprocess.py` 仍待继续拆分。
+  `admin_routes.py`(5535)、`routes.py`(2966)、`group_runtime/runtime.py`(829)、`persona_preprocess.py`(856)。按职责拆模块；`news_search/tool.py` 已从原 1835 行拆至 798 行，不再属于当前 >800 行清单。
+  - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/admin_routes.py`、`api/routes.py`、`core/group_runtime/runtime.py`、`core/persona_preprocess.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
     admin 子域仍留在旧文件。
@@ -122,6 +122,10 @@
   - 进展：`creatures/nanobot/prompts/skills/news_search/tool.py` 第二刀已拆出
     运行时缓存到 `news_search/runtime_cache.py`；`tool.py` 从 1149 行降至 1110 行，
     旧缓存符号保留为同一 dict / lock 和薄 wrapper，AI 日报缓存命中行为不变。
+  - 进展：`creatures/nanobot/prompts/skills/news_search/tool.py` 第三刀已拆出
+    搜索后端到 `news_search/search_backend.py`；`tool.py` 从 1110 行降至 798 行，
+    旧 `WebTools`、RSS/Juya/DDG/trafilatura monkeypatch 入口保留为 `tool.py`
+    facade，搜索后端定向回归和全量回归均已通过。
 
 - [ ] **静默吞异常补日志（best-effort 路径）** · LOW · S 批量
   `prompts/manager.py:435`(tracer)、`context_builder.py:895`(deprecated)、`admin/system_routes.py:46`(git)、`group_ingress/helpers.py:41,74`、`memory_digest/builder.py:65`。均非吞真错，补 `logger.debug` 提升可调试性即可；`H11 save_log`(legacy_adapter.py:223) 补 `except+rollback`（MEDIUM，聊天链路）。

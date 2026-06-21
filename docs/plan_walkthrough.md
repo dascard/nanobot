@@ -2321,7 +2321,7 @@ AI 日报适配层拆分；`cache.py` 可作为低风险小步候选，但不替
 
 计划列表：
 
-- [x] 阶段 0：确认 TODO、第一刀收口状态和缓存调用边界。
+- [x] 阶段 0：确认待办、第一刀收口状态和缓存调用边界。
 - [x] 阶段 0.5：写入缓存拆分设计文档，明确 `runtime_cache.py` 与 `tool.py` facade。
 - [x] 阶段 0.6：写入 `.Codex/plans/news-search-cache-split.md`，列出 TDD 红灯、
   实现、验证和阶段性提交步骤。
@@ -2378,6 +2378,78 @@ AI 日报适配层拆分；`cache.py` 可作为低风险小步候选，但不替
 
 下一步：
 
-继续按 `docs/todo.md` 的 P3 队列推进。`news_search/tool.py` 仍超过 800 行，下一刀可在
-搜索后端 facade 或 AI 日报工具适配层之间二选一；搜索后端涉及旧路径 monkeypatch，
-需要先写更细的依赖注入或兼容 facade 计划。
+后续已执行搜索后端拆分，详见下一节。AI 日报工具适配层仍可按维护性继续评估，但
+`news_search/tool.py` 已不再阻塞 >800 行拆分子项。
+
+## 2026-06-21 news_search/tool.py 搜索后端拆分
+
+状态：第三刀实现完成。RSS、Juya、DDG、query 判定、stale 过滤、domain diversity
+rerank 和 trafilatura 正文提取已拆到
+`creatures/nanobot/prompts/skills/news_search/search_backend.py`；`tool.py` 保留旧符号、
+旧 monkeypatch 入口和 `WebTools` facade，调用新模块时显式注入 `DDGS`、`trafilatura`、
+`_fetch_multi_rss()`、`_fetch_juya_rss()` 和 `_urlopen()`。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-news-search-backend-split-design.md`。
+
+实现计划：
+`.Codex/plans/news-search-backend-split.md`。
+
+阶段提交：
+
+- 设计提交：`4ba9d95 docs(新闻搜索): 设计搜索后端拆分`。
+- 计划提交：`536305d docs(计划): 记录搜索后端拆分计划`。
+- 实现提交：`009af79 refactor(新闻搜索): 拆分搜索后端`。
+
+已完成：
+
+- [x] 新增 `tests/test_news_search_backend_split.py`，锁定新模块入口、旧
+  `tool.WebTools.search` monkeypatch、旧 `_urlopen` monkeypatch 和旧 trafilatura
+  monkeypatch 兼容。
+- [x] 新增 `search_backend.py`，迁移代理感知 `_urlopen()`、`_ddgs_kwargs()`、RSS/Juya
+  抓取、DDG 聚合搜索、query variants、去重、排序和正文提取。
+- [x] 将 `tool.py` 中搜索后端真实实现收敛为 facade，保留 `DDGS`、`trafilatura`、
+  `NEWS_SEARCH_DDG_ENABLED`、`RSS_*`、`JUYA_RSS_URL` 和同名 helper wrapper。
+- [x] `WebTools.search()` 改为接收 `search_backend.search()` 返回的
+  `(results, last_error)`，继续维护 `WebTools.last_error` 旧语义。
+- [x] `WebTools.extract_web_content()` 改为调用
+  `search_backend.extract_web_content(url, trafilatura_module=trafilatura)`，保留旧路径
+  patch 兼容。
+- [x] 同步 `.Codex/plans/news-search-backend-split.md`、`docs/todo.md` 和本 walkthrough。
+
+验证记录：
+
+- 红灯：`tests/test_news_search_backend_split.py -v` 在生产迁移前运行 ->
+  `1 failed, 3 passed, 1 warning in 5.75s`；失败原因是
+  `ImportError: cannot import name 'search_backend'`。
+- 绿灯：`tests/test_news_search_backend_split.py -v` ->
+  `4 passed, 1 warning in 0.68s`。
+- 搜索后端定向回归：`tests/test_tools_package.py` 中 7 个 WebTools / RSS / Juya / DDG
+  兼容用例 -> `7 passed, 1 warning in 0.64s`。
+- 相邻兼容回归：legacy report、runtime cache、AI 日报 ingest/source、KT
+  `TestAiDailyTool` 和 `asyncio.run` 策略测试 ->
+  `30 passed, 1 warning in 4.16s`。
+- 语法检查：`python -m compileall creatures/nanobot/prompts/skills/news_search -q`
+  无输出，退出码为 0。
+- 格式检查：`git diff --check` 无输出，退出码为 0。
+- 全量：`python -m pytest tests/ -v` ->
+  `1492 passed, 6 skipped, 139 warnings in 110.25s`。
+- 行数：`tool.py` 798 行，`search_backend.py` 482 行，
+  `tests/test_news_search_backend_split.py` 105 行。
+
+执行约束：
+
+- 不迁移 `AiDailyTool`、`search_and_extract_news*()`、`_run_news_daily_pipeline()` 或
+  `_summarize_news_layout()`。
+- 不改变 `WebTools.search()` / `WebTools.extract_web_content()` public signature。
+- 不破坏旧路径 monkeypatch：`news_tool.DDGS`、`news_tool.trafilatura`、
+  `news_tool._fetch_multi_rss()`、`news_tool._fetch_juya_rss()`、`news_tool._urlopen()`。
+- 不新增 `asyncio.run()`，不新增同步函数包 awaitable。
+- 不改 prompt runtime 模板、工具 usage 文档、`enriched_query` 组装或 Prompt Runtime 输入。
+
+下一步：
+
+`news_search/tool.py` 已降至 800 行以下，P3 超大文件队列应优先回到仍超过 800 行的
+`api/routes.py`、`core/group_runtime/runtime.py` 或 `core/persona_preprocess.py`。若继续做
+新闻搜索域内治理，优先评估 V2 evidence bridge 或 AI 日报适配层拆分，但这属于后续
+维护性优化，不再是 >800 行硬阻塞项。

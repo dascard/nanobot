@@ -36,7 +36,10 @@
   `creatures/nanobot/prompts/skills/news_search/search_backend.py` 为 482 行；
   `tests/test_news_search_backend_split.py` 为 105 行。
 - 实现阶段提交：
-  本计划随 `refactor(新闻搜索): 拆分搜索后端` 一并提交；提交号将在文档收口阶段回填。
+  `009af79 refactor(新闻搜索): 拆分搜索后端`。
+- 文档收口阶段：
+  `docs/todo.md` 已移除过时的 `news_search/tool.py` >800 行待拆状态；
+  `docs/plan_walkthrough.md` 已追加搜索后端拆分记录和下一步建议。
 
 ---
 
@@ -692,7 +695,7 @@ git commit -m "refactor(新闻搜索): 拆分搜索后端"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」下补充第三刀进展：
 
@@ -703,7 +706,7 @@ git commit -m "refactor(新闻搜索): 拆分搜索后端"
     `tool.py` facade。写入文档时必须填入具体数字。
 ```
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加本阶段完成记录，包含：
 
@@ -714,7 +717,7 @@ git commit -m "refactor(新闻搜索): 拆分搜索后端"
 - 行数变化。
 - 下一步建议：继续评估 V2 evidence bridge 或 AI 日报适配层拆分。
 
-- [ ] **步骤 3：验证文档**
+- [x] **步骤 3：验证文档**
 
 运行：
 
@@ -741,7 +744,7 @@ PY
 
 预期：两个命令均无输出，退出码均为 0。
 
-- [ ] **步骤 4：运行全量回归**
+- [x] **步骤 4：运行全量回归**
 
 运行：
 
@@ -752,7 +755,7 @@ python -m pytest tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
