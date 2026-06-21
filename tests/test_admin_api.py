@@ -468,6 +468,30 @@ class TestObservabilityAPI:
         assert data["memories"][0]["content"].startswith("模型部署")
         assert data["memories"][0]["source"] == "manual_group_memory_extract"
 
+    def test_group_memories_legacy_list_endpoint_returns_memories_without_group_route_shadow(self, client, auth_header):
+        with next(app.dependency_overrides[get_db]()) as db:
+            db.add(GroupMemory(
+                group_id="group_7788",
+                memory_type="topic",
+                content="模型部署: 群里经常讨论本地模型部署",
+                content_hash="legacy-list-hash",
+                confidence=0.65,
+                evidence_count=1,
+                evidence_log_ids_json="[1, 2]",
+                status="active",
+                source="manual_group_memory_extract",
+            ))
+            db.commit()
+
+        data = _ok(client.get(
+            "/api/v1/admin/groups/group_7788/memories",
+            headers=auth_header,
+        ))
+
+        assert data["group_id"] == "group_7788"
+        assert len(data["memories"]) == 1
+        assert data["memories"][0]["content"].startswith("模型部署")
+
     def test_group_memory_extract_endpoint_returns_service_stats(self, client, auth_header, monkeypatch):
         class FakeResult:
             def to_dict(self):
