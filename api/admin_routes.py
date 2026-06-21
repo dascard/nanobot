@@ -1,6 +1,7 @@
 """WebUI 管理 API——Sticker/Block/Config/DB 管理。prefix=/api/v1/admin，认证使用 NANOBOT_ADMIN_TOKEN。"""
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -5286,6 +5287,53 @@ from core.eval_sampling.store import (
 from evals.expected_contract import expected_contract_payload
 
 TIMING_TUNING_PROPOSAL_REPORT = Path("evals/reports/timing_tuning_proposal_latest.json")
+TIMING_TUNING_REVIEW_DECISIONS = {
+    "needs_data",
+    "rejected",
+    "approved_for_manual_experiment",
+    "reviewed_no_change",
+}
+
+
+class TimingTuningProposalReviewRequest(BaseModel):
+    decision: str = Field(..., min_length=1, max_length=64)
+    reason_code: str = Field(default="", max_length=128)
+    note: str = Field(default="", max_length=2000)
+    reviewer: str = Field(default="", max_length=128)
+
+
+def _proposal_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _proposal_missing_response(path: Path) -> dict[str, Any]:
+    return {
+        "exists": False,
+        "report_path": str(path),
+        "readiness": {
+            "ready": False,
+            "blocking_reasons": [
+                {
+                    "code": "proposal_report_missing",
+                    "message": "调参提案报告不存在，请先运行 evals.timing_tuning_proposal",
+                }
+            ],
+        },
+    }
+
+
+def _proposal_review_from_audit(row: AdminAuditLog | None) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    try:
+        detail = json.loads(row.detail_json or "{}")
+    except json.JSONDecodeError:
+        detail = {}
+    if not isinstance(detail, dict):
+        detail = {}
+    detail["audit_id"] = row.id
+    detail["created_at"] = row.created_at.isoformat() if row.created_at else ""
+    return detail
 
 
 @router.get("/evals/expected-contract")
@@ -5297,19 +5345,7 @@ def eval_expected_contract(_auth=Depends(verify_admin)):
 def eval_timing_tuning_proposal(_auth=Depends(verify_admin)):
     path = Path(TIMING_TUNING_PROPOSAL_REPORT)
     if not path.exists():
-        return {
-            "exists": False,
-            "report_path": str(path),
-            "readiness": {
-                "ready": False,
-                "blocking_reasons": [
-                    {
-                        "code": "proposal_report_missing",
-                        "message": "调参提案报告不存在，请先运行 evals.timing_tuning_proposal",
-                    }
-                ],
-            },
-        }
+        return _proposal_missing_response(path)
 
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -5324,6 +5360,74 @@ def eval_timing_tuning_proposal(_auth=Depends(verify_admin)):
             detail="invalid proposal report: JSON object expected",
         )
     return {"exists": True, "report_path": str(path), "report": payload}
+
+
+@router.get("/evals/timing-tuning/proposal/review")
+def eval_timing_tuning_proposal_review_state(
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    path = Path(TIMING_TUNING_PROPOSAL_REPORT)
+    if not path.exists():
+        payload = _proposal_missing_response(path)
+        payload["review"] = None
+        payload["proposal_sha256"] = ""
+        return payload
+
+    proposal_sha256 = _proposal_sha256(path)
+    row = (
+        db.query(AdminAuditLog)
+        .filter(
+            AdminAuditLog.action == "review_timing_tuning_proposal",
+            AdminAuditLog.target_type == "timing_tuning_proposal",
+            AdminAuditLog.target_id == proposal_sha256,
+        )
+        .order_by(AdminAuditLog.id.desc())
+        .first()
+    )
+    return {
+        "exists": True,
+        "report_path": str(path),
+        "proposal_sha256": proposal_sha256,
+        "review": _proposal_review_from_audit(row),
+    }
+
+
+@router.post("/evals/timing-tuning/proposal/reviews")
+def eval_timing_tuning_proposal_review(
+    payload: TimingTuningProposalReviewRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    decision = payload.decision.strip()
+    if decision not in TIMING_TUNING_REVIEW_DECISIONS:
+        raise HTTPException(status_code=422, detail="invalid review decision")
+
+    path = Path(TIMING_TUNING_PROPOSAL_REPORT)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="proposal report missing")
+
+    proposal_sha256 = _proposal_sha256(path)
+    detail = {
+        "decision": decision,
+        "reason_code": payload.reason_code.strip(),
+        "note": payload.note.strip(),
+        "reviewer": payload.reviewer.strip(),
+        "report_path": str(path),
+        "proposal_sha256": proposal_sha256,
+    }
+    row = AdminAuditLog(
+        action="review_timing_tuning_proposal",
+        target_type="timing_tuning_proposal",
+        target_id=proposal_sha256,
+        detail_json=json.dumps(detail, ensure_ascii=False),
+        ip_address=_client_ip(request),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _proposal_review_from_audit(row)
 
 
 @router.get("/evals/candidates")

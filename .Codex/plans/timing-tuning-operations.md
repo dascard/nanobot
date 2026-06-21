@@ -27,7 +27,7 @@
 - [x] 任务 1：TimingSignal audit 支持 run source 与 `final_timing_action` 合同。
 - [x] 任务 2：proposal 收紧 run-scoped 输入与候选参数治理。
 - [x] 任务 3：simulation 标识真实 audit 样本来源并守住 `timing_input`。
-- [ ] 任务 4：Admin 增加 record-only proposal review API。
+- [x] 任务 4：Admin 增加 record-only proposal review API。
 - [ ] 任务 5：WebUI 展示审核状态并提供记录型审核入口。
 - [ ] 任务 6：文档收口、计划勾选和最终验证。
 
@@ -678,7 +678,7 @@ git commit -m "feat(评测): 纳入时机审计样本模拟"
 - 修改：`api/admin_routes.py`
 - 测试：`tests/test_timing_tuning_proposal_admin.py`
 
-- [ ] **步骤 1：编写 review GET / POST 测试**
+- [x] **步骤 1：编写 review GET / POST 测试**
 
 在 `tests/test_timing_tuning_proposal_admin.py` 新增：
 
@@ -749,7 +749,7 @@ def test_timing_tuning_proposal_review_rejects_invalid_decision(client, monkeypa
     assert response.status_code == 422
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -759,7 +759,7 @@ python -B -m pytest tests/test_timing_tuning_proposal_admin.py -q -p no:cachepro
 
 预期：新增测试失败，POST 返回 404 或 405。
 
-- [ ] **步骤 3：实现 request model 和 hash helper**
+- [x] **步骤 3：实现 request model 和 hash helper**
 
 在 `api/admin_routes.py` 中新增：
 
@@ -786,7 +786,7 @@ def _proposal_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 ```
 
-- [ ] **步骤 4：实现 POST**
+- [x] **步骤 4：实现 POST**
 
 新增 endpoint：
 
@@ -817,7 +817,7 @@ db.add(row)
 db.commit()
 ```
 
-- [ ] **步骤 5：实现 GET**
+- [x] **步骤 5：实现 GET**
 
 GET 从 `AdminAuditLog` 查询最新 `action="review_timing_tuning_proposal"` 且 `target_id=proposal_sha256` 的记录：
 
@@ -832,7 +832,7 @@ def eval_timing_tuning_proposal_review_state(
 
 缺 proposal report 时返回 `exists=false` 和 `proposal_report_missing`。
 
-- [ ] **步骤 6：运行任务测试**
+- [x] **步骤 6：运行任务测试**
 
 运行：
 
@@ -842,7 +842,7 @@ python -B -m pytest tests/test_timing_tuning_proposal_admin.py tests/test_eval_c
 
 预期：全部通过。
 
-- [ ] **步骤 7：提交任务 4**
+- [x] **步骤 7：提交任务 4**
 
 运行：
 
