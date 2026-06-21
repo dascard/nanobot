@@ -1,5 +1,33 @@
 # GroupRuntime 状态与评分拆分实现计划
 
+## 执行结果摘要（2026-06-21）
+
+- 行为基线：新增 `tests/test_group_runtime_split_compat.py` 后运行
+  `python -m pytest tests/test_group_runtime_split_compat.py -v`，
+  结果为 `5 passed, 1 warning in 0.76s`。这些测试锁定拆分前已有兼容行为，
+  因此记录为行为基线绿灯。
+- 状态拆分定向：运行 `tests/test_group_runtime_split_compat.py`、
+  `tests/test_group_runtime_ids.py`、`TestGateState`、
+  `TestGroupPendingMessageDirected`、`TestShouldSuppressDirected`，
+  结果为 `26 passed, 1 warning in 1.24s`。
+- Scoring 定向：运行 `tests/test_group_runtime_split_compat.py`、
+  `tests/test_timing_runtime.py`、`tests/test_timing_score.py`、
+  `tests/test_group_runtime_ids.py`，结果为 `89 passed, 1 warning in 2.35s`。
+- 相邻回归：运行群响应 envelope、group message structured、API timing gate
+  和 KT note bot replied 相关测试，结果为 `32 passed, 21 warnings in 11.04s`。
+- 静态与行数检查：`python -m compileall core/group_runtime -q` 无输出；
+  相关文件 `git diff --check` 无输出；`asyncio.run` 在本次拆分范围内无匹配。
+  行数为 `runtime.py` 722 行、`constants.py` 19 行、`state.py` 397 行、
+  `scoring.py` 330 行、兼容测试 137 行。
+- 全量回归：首次全量在 `tests/test_persona_preprocess.py` 暴露既有测试
+  `hash()` seed 非确定性，固定 `PYTHONHASHSEED=135` 可稳定复现；已单独提交
+  `4cbab07 test(画像预处理): 固定正交向量 mock`。修复后固定 seed 单测通过，
+  `TestProcessCandidatesWithMockEmbedder` 结果为 `7 passed, 1 warning in 1.02s`。
+  最终提交前全量 `python -m pytest tests/ -v` 结果为
+  `1497 passed, 6 skipped, 139 warnings in 119.42s`。
+- 子 agent 只读规格审查：未发现拆分结构、旧导入路径、循环依赖或
+  `asyncio.run` 问题；其指出的计划摘要和暂存范围要求已在提交前处理。
+
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
 **目标：** 将 `core/group_runtime/runtime.py` 中的常量、状态模型、pending helper 和 scoring 私有方法拆到独立模块，让 `runtime.py` 降到 800 行以下，同时保持旧导入路径和主状态机行为不变。
@@ -42,7 +70,7 @@
 **文件：**
 - 创建：`tests/test_group_runtime_split_compat.py`
 
-- [ ] **步骤 1：新增旧导入路径兼容测试**
+- [x] **步骤 1：新增旧导入路径兼容测试**
 
 创建 `tests/test_group_runtime_split_compat.py`，写入：
 
@@ -68,7 +96,7 @@ def test_group_runtime_split_keeps_legacy_import_paths():
     assert callable(runtime_module.should_suppress_directed_to_other)
 ```
 
-- [ ] **步骤 2：新增 pending payload 方向格式测试**
+- [x] **步骤 2：新增 pending payload 方向格式测试**
 
 在同一文件追加：
 
@@ -108,7 +136,7 @@ def test_pending_payload_preserves_direction_reference_and_source_ids():
     assert "[引用] 小明: 上一条消息" in payload["pending_text"]
 ```
 
-- [ ] **步骤 3：新增 directed_to_other 派生优先级测试**
+- [x] **步骤 3：新增 directed_to_other 派生优先级测试**
 
 在同一文件追加：
 
@@ -127,7 +155,7 @@ def test_pending_message_does_not_derive_directed_to_other_when_at_bot():
     assert msg.is_directed_to_other is False
 ```
 
-- [ ] **步骤 4：新增纯 helper 边界测试**
+- [x] **步骤 4：新增纯 helper 边界测试**
 
 在同一文件追加：
 
@@ -151,7 +179,7 @@ def test_timing_wait_delay_and_model_confidence_helpers_keep_contract():
     assert _model_confidence_from_gate_result({}) == 0.8
 ```
 
-- [ ] **步骤 5：新增 `_score_timing()` 入参映射测试**
+- [x] **步骤 5：新增 `_score_timing()` 入参映射测试**
 
 在同一文件追加：
 
@@ -206,7 +234,7 @@ def test_score_timing_maps_pending_signals_to_decide_timing(monkeypatch):
     assert captured["model_hint"].confidence == 0.9
 ```
 
-- [ ] **步骤 6：运行红灯测试**
+- [x] **步骤 6：运行红灯测试**
 
 运行：
 
@@ -225,12 +253,12 @@ python -m pytest tests/test_group_runtime_split_compat.py -v
 - 创建：`core/group_runtime/state.py`
 - 修改：`core/group_runtime/runtime.py`
 
-- [ ] **步骤 1：创建 `constants.py`**
+- [x] **步骤 1：创建 `constants.py`**
 
 从 `runtime.py` 顶部迁移所有群运行时常量和 trigger 集合到
 `core/group_runtime/constants.py`。
 
-- [ ] **步骤 2：创建 `state.py`**
+- [x] **步骤 2：创建 `state.py`**
 
 从 `runtime.py` 迁移以下对象到 `core/group_runtime/state.py`：
 
@@ -252,12 +280,12 @@ python -m pytest tests/test_group_runtime_split_compat.py -v
 - 继续使用 `import time as _time`，不引入全局可变 clock 封装。
 - 不导入 `core.group_runtime.runtime`，避免循环依赖。
 
-- [ ] **步骤 3：收敛 `runtime.py` 顶部导入**
+- [x] **步骤 3：收敛 `runtime.py` 顶部导入**
 
 在 `runtime.py` 顶部从 `constants.py` 和 `state.py` 导入并重导出旧符号，删除原常量、
 数据类和 helper 真实实现。
 
-- [ ] **步骤 4：运行状态拆分定向测试**
+- [x] **步骤 4：运行状态拆分定向测试**
 
 运行：
 
@@ -280,7 +308,7 @@ python -m pytest \
 - 创建：`core/group_runtime/scoring.py`
 - 修改：`core/group_runtime/runtime.py`
 
-- [ ] **步骤 1：创建 `scoring.py`**
+- [x] **步骤 1：创建 `scoring.py`**
 
 新增 `GroupRuntimeScoringMixin`，从 `runtime.py` 迁移以下方法：
 
@@ -307,7 +335,7 @@ python -m pytest \
   和本类其他方法。
 - 不导入 `GroupRuntime`，避免循环依赖。
 
-- [ ] **步骤 2：让 `GroupRuntime` 继承 mixin**
+- [x] **步骤 2：让 `GroupRuntime` 继承 mixin**
 
 在 `runtime.py` 中导入 `GroupRuntimeScoringMixin`，将类定义改为：
 
@@ -318,7 +346,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
 
 删除已经迁移到 mixin 的方法真实实现。
 
-- [ ] **步骤 3：运行 scoring 定向测试**
+- [x] **步骤 3：运行 scoring 定向测试**
 
 运行：
 
@@ -339,7 +367,7 @@ python -m pytest \
 **文件：**
 - 不修改文件
 
-- [ ] **步骤 1：运行 API / 群响应相邻回归**
+- [x] **步骤 1：运行 API / 群响应相邻回归**
 
 运行：
 
@@ -357,7 +385,7 @@ python -m pytest \
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行语法和格式检查**
+- [x] **步骤 2：运行语法和格式检查**
 
 运行：
 
@@ -369,7 +397,7 @@ wc -l core/group_runtime/runtime.py core/group_runtime/constants.py core/group_r
 
 预期：`compileall` 和 `git diff --check` 无输出；`runtime.py` 小于 800 行。
 
-- [ ] **步骤 3：运行全量回归**
+- [x] **步骤 3：运行全量回归**
 
 运行：
 
@@ -390,7 +418,7 @@ python -m pytest tests/ -v
 - 修改：`core/group_runtime/runtime.py`
 - 修改：`.Codex/plans/group-runtime-state-scoring-split.md`
 
-- [ ] **步骤 1：记录执行结果**
+- [x] **步骤 1：记录执行结果**
 
 在本计划顶部追加 `执行结果摘要`，记录：
 
@@ -401,7 +429,7 @@ python -m pytest tests/ -v
 - `compileall`、`git diff --check` 和 `wc -l` 结果。
 - 全量回归结果。
 
-- [ ] **步骤 2：按文件显式暂存**
+- [x] **步骤 2：按文件显式暂存**
 
 运行：
 
@@ -415,7 +443,7 @@ git add \
   .Codex/plans/group-runtime-state-scoring-split.md
 ```
 
-- [ ] **步骤 3：检查暂存区**
+- [x] **步骤 3：检查暂存区**
 
 运行：
 
@@ -426,7 +454,7 @@ git diff --cached --check
 
 预期：暂存区只包含本任务 6 个文件；`--check` 无输出。
 
-- [ ] **步骤 4：提交实现**
+- [x] **步骤 4：提交实现**
 
 运行：
 
