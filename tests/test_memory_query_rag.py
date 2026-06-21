@@ -142,6 +142,152 @@ def test_memory_query_score_breakdown_uses_index_recency(db_session):
     assert cards["card:1"]["score_breakdown"]["recency"] > cards["card:0"]["score_breakdown"]["recency"]
 
 
+def test_memory_query_debug_contract_keys(db_session):
+    from core.memory_rag import MemoryRagService
+
+    digest = _digest_row(601, cards=[
+        {"title": "端口预算", "text": "KohakuVQ 端口预算需要固定。", "keywords": ["KohakuVQ", "端口", "预算"]},
+    ])
+    _index_chunks(db_session, chunks_from_memory_digest(digest))
+
+    service = MemoryRagService(
+        db_session,
+        embedding_provider=KeywordEmbeddingProvider(),
+        reranker_provider=FixedRerankerProvider({"memory_digest:601:card:0": 0.9}),
+    )
+    result = service.query("KohakuVQ 端口预算", source="digest", limit=5, include_debug=True)
+
+    assert set(result) == {"query", "source", "degraded", "fallback_reason", "stats", "items", "debug_trace"}
+    assert set(result["stats"]) == {
+        "fts_candidates",
+        "vector_candidates",
+        "lexical_candidates",
+        "embedding_candidates",
+        "merged_candidates",
+        "reranker_candidates",
+        "reranker_latency_ms",
+        "final_items",
+    }
+    assert set(result["debug_trace"]) >= {
+        "sql_filters",
+        "fts_hits",
+        "vector_hits",
+        "embedding_hits",
+        "merged_candidates",
+        "reranker_input_pairs",
+        "final_candidates",
+        "relevance_gate",
+        "timings",
+    }
+    assert set(result["debug_trace"]["sql_filters"]) == {
+        "source_types",
+        "user_id",
+        "session_id",
+        "status",
+        "visibility",
+    }
+
+    parent = result["items"][0]
+    assert set(parent) >= {
+        "source_type",
+        "source",
+        "source_id",
+        "parent_score",
+        "source_prior",
+        "matched_cards",
+        "score_breakdown",
+        "digest_id",
+        "digest_source_id",
+        "matched_digest_row_ids",
+    }
+    assert set(parent["score_breakdown"]) == {"best_card", "matched_cards"}
+
+    card = parent["matched_cards"][0]
+    assert set(card) == {
+        "candidate_id",
+        "source_type",
+        "source_id",
+        "source_sub_id",
+        "title",
+        "text",
+        "lexical",
+        "semantic",
+        "reranker",
+        "final_score",
+        "score_breakdown",
+    }
+    assert set(card["score_breakdown"]) == {"lexical", "semantic", "reranker", "recency", "final"}
+    assert set(parent["score_breakdown"]["best_card"]) == {"lexical", "semantic", "reranker", "recency", "final"}
+
+
+def test_memory_query_source_all_returns_digest_and_session_summary(db_session):
+    from core.memory_rag import MemoryRagService
+
+    digest = _digest_row(602, cards=[
+        {"title": "摘要端口预算", "text": "KohakuVQ 端口预算来自长期摘要。", "keywords": ["KohakuVQ", "端口", "预算"]},
+    ])
+    other_digest = MemoryDigest(
+        id=703,
+        user_id="u2",
+        session_id="s2",
+        digest_date="2026-05-26",
+        level=2,
+        content="KohakuVQ 端口预算来自其他用户摘要。",
+        meta_json=json.dumps({
+            "schema_version": 2,
+            "status": "active",
+            "recall_cards": [
+                {"title": "其他摘要", "text": "KohakuVQ 端口预算来自其他用户摘要。", "keywords": ["KohakuVQ", "端口", "预算"]},
+            ],
+        }, ensure_ascii=False),
+    )
+    summary = RollingSessionSummary(
+        id=702,
+        session_id="s1",
+        user_id="u1",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="KohakuVQ 端口预算来自会话摘要。",
+        summary_json=json.dumps({"summary": "KohakuVQ 端口预算来自会话摘要。"}, ensure_ascii=False),
+    )
+    other_summary = RollingSessionSummary(
+        id=704,
+        session_id="s2",
+        user_id="u2",
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text="KohakuVQ 端口预算来自其他用户会话摘要。",
+        summary_json=json.dumps({"summary": "KohakuVQ 端口预算来自其他用户会话摘要。"}, ensure_ascii=False),
+    )
+    _index_chunks(db_session, chunks_from_memory_digest(digest))
+    _index_chunks(db_session, chunks_from_memory_digest(other_digest))
+    _index_chunks(db_session, chunks_from_session_summary(summary))
+    _index_chunks(db_session, chunks_from_session_summary(other_summary))
+
+    service = MemoryRagService(
+        db_session,
+        embedding_provider=KeywordEmbeddingProvider(),
+        reranker_provider=FixedRerankerProvider({
+            "memory_digest:602:card:0": 0.9,
+            "session_summary:702:section:summary": 0.8,
+            "memory_digest:703:card:0": 0.95,
+            "session_summary:704:section:summary": 0.95,
+        }),
+    )
+    result = service.query(
+        "KohakuVQ 端口预算",
+        source="all",
+        user_id="u1",
+        session_id="s1",
+        limit=5,
+        include_debug=True,
+    )
+
+    assert result["debug_trace"]["sql_filters"]["source_types"] == ["memory_digest", "session_summary"]
+    assert {item["source_type"] for item in result["items"]} == {"memory_digest", "session_summary"}
+    assert {item["source_id"] for item in result["items"]} == {"602", "702"}
+
+
 def test_digest_semantic_recall_without_exact_keyword(db_session):
     from core.memory_rag import MemoryRagService
 
@@ -429,6 +575,39 @@ def test_memory_rag_does_not_rerank_generic_lexical_fallback(db_session):
     assert result["stats"]["reranker_candidates"] == 1
 
 
+def test_memory_rag_marks_reranker_budget_skipped_candidates(db_session):
+    from core.memory_rag import MemoryRagService
+
+    digest = _digest_row(603, cards=[
+        {
+            "title": f"KohakuVQ 端口预算 {idx}",
+            "text": f"KohakuVQ 端口预算候选 {idx}。",
+            "keywords": ["KohakuVQ", "端口", "预算"],
+        }
+        for idx in range(55)
+    ])
+    _index_chunks(db_session, chunks_from_memory_digest(digest))
+
+    service = MemoryRagService(
+        db_session,
+        embedding_provider=KeywordEmbeddingProvider(),
+        reranker_provider=FixedRerankerProvider({
+            f"memory_digest:603:card:{idx}": 0.9
+            for idx in range(50)
+        }),
+    )
+    result = service.query("KohakuVQ 端口预算", source="digest", limit=5, include_debug=True)
+    skipped = [
+        item
+        for item in result["debug_trace"]["merged_candidates"]
+        if item["skipped_reason"] == "reranker_budget"
+    ]
+
+    assert result["stats"]["merged_candidates"] == 55
+    assert result["stats"]["reranker_candidates"] == 50
+    assert len(skipped) == 5
+
+
 def test_memory_rag_skips_low_overlap_fallback_before_rerank(db_session, monkeypatch):
     from core.memory_rag import MemoryRagService
     from core.semantic.adapters import SemanticChunk
@@ -476,6 +655,31 @@ def test_memory_rag_skips_low_overlap_fallback_before_rerank(db_session, monkeyp
     assert "memory_digest:weak:card:0" not in reranker.seen_candidate_ids
     assert result["stats"]["merged_candidates"] == 2
     assert result["stats"]["reranker_candidates"] == 1
+    by_id = {
+        item["candidate_id"]: item
+        for item in result["debug_trace"]["merged_candidates"]
+    }
+    assert by_id["memory_digest:weak:card:0"]["skipped_reason"] == "weak_lexical_fallback"
+
+
+def test_memory_query_degraded_contract_without_reranker(db_session):
+    from core.memory_rag import MemoryRagService
+
+    digest = _digest_row(604, cards=[
+        {"title": "端口预算", "text": "KohakuVQ 端口预算在无 reranker 时退化查询。", "keywords": ["KohakuVQ", "端口", "预算"]},
+    ])
+    _index_chunks(db_session, chunks_from_memory_digest(digest))
+
+    service = MemoryRagService(
+        db_session,
+        embedding_provider=KeywordEmbeddingProvider(),
+    )
+    result = service.query("KohakuVQ 端口预算", source="digest", limit=5, include_debug=True)
+
+    assert result["degraded"] is True
+    assert result["fallback_reason"] == "reranker_unavailable"
+    assert result["stats"]["reranker_candidates"] == 0
+    assert result["debug_trace"]["reranker_input_pairs"] == []
 
 
 def test_memory_query_tool_schema_supports_all_source():

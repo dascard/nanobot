@@ -102,6 +102,100 @@ def test_knowledge_query_uses_reranker_before_final_score(db_session):
     assert result["items"][0]["score_breakdown"]["reranker"] == 0.9
 
 
+def test_knowledge_query_debug_contract_keys(db_session):
+    from core.knowledge_rag import KnowledgeRagService
+
+    doc = _manual_doc(
+        db_session,
+        "debug-contract.md",
+        "# KohakuVQ 调试契约\nKohakuVQ debug contract reranker citation metadata document_id。",
+        title="KohakuVQ 调试契约",
+        trust_level="medium",
+        published_at="2026-05-27",
+    )
+    _index_doc(db_session, doc)
+
+    result = KnowledgeRagService(
+        db_session,
+        reranker_provider=IdentityRerankerProvider({f"knowledge:{doc.id}:chunk:0": 0.9}),
+    ).query("KohakuVQ debug contract", limit=3, include_debug=True)
+
+    assert set(result) == {
+        "query",
+        "source",
+        "degraded",
+        "fallback_reason",
+        "stats",
+        "items",
+        "debug_trace",
+    }
+    assert set(result["stats"]) == {
+        "fts_candidates",
+        "vector_candidates",
+        "embedding_candidates",
+        "merged_candidates",
+        "reranker_candidates",
+        "final_items",
+        "skipped_no_citation",
+        "skipped_filter",
+    }
+    assert set(result["debug_trace"]) >= {
+        "sql_filters",
+        "fts_hits",
+        "vector_hits",
+        "embedding_hits",
+        "merged_candidates",
+        "reranker_input_pairs",
+        "final_candidates",
+        "relevance_gate",
+        "skipped",
+    }
+
+    item = result["items"][0]
+    assert set(item) == {
+        "candidate_id",
+        "document_id",
+        "chunk_id",
+        "title",
+        "text",
+        "citation",
+        "trust_level",
+        "score",
+        "score_breakdown",
+    }
+    assert set(item["score_breakdown"]) == {
+        "lexical",
+        "semantic",
+        "reranker",
+        "raw_reranker",
+        "trust",
+        "recency",
+        "final",
+    }
+    assert result["debug_trace"]["reranker_input_pairs"][0]["metadata"]["document_id"] == str(doc.id)
+
+
+def test_knowledge_query_degraded_contract_without_reranker(db_session):
+    from core.knowledge_rag import KnowledgeRagService
+
+    doc = _manual_doc(
+        db_session,
+        "degraded-contract.md",
+        "# KohakuVQ 降级契约\nKohakuVQ degraded fallback contract。",
+        title="KohakuVQ 降级契约",
+        trust_level="medium",
+        published_at="2026-05-27",
+    )
+    _index_doc(db_session, doc)
+
+    result = KnowledgeRagService(db_session).query("KohakuVQ degraded", limit=3, include_debug=True)
+
+    assert result["degraded"] is True
+    assert result["fallback_reason"] == "reranker_unavailable"
+    assert result["stats"]["reranker_candidates"] == 0
+    assert result["debug_trace"]["reranker_input_pairs"] == []
+
+
 def test_knowledge_query_score_breakdown_uses_document_recency(db_session):
     from core.database import SemanticIndexItem
     from core.knowledge_rag import KnowledgeRagService
@@ -224,6 +318,92 @@ def test_knowledge_rag_uses_vector_recall_before_recent_row_limit(db_session):
     assert result["debug_trace"]["vector_hits"][0]["candidate_id"] == "knowledge:old-vector-doc:chunk:old-vector"
 
 
+def test_knowledge_rag_uses_fts_recall_before_recent_row_limit(db_session):
+    from core.knowledge_rag import KnowledgeRagService
+    from core.semantic.adapters import SemanticChunk
+    from core.semantic.indexer import upsert_semantic_chunks
+
+    chunks = [
+        SemanticChunk(
+            source_type="knowledge",
+            source_id="old-fts-doc",
+            source_sub_id="chunk:old-fts",
+            title="旧 FTS 命中",
+            text="KohakuVQ FTS 召回必须早于 recent row limit。",
+            lexical_text="KohakuVQ FTS 召回必须早于 recent row limit。",
+            embedding_text="KohakuVQ FTS 召回必须早于 recent row limit。",
+            metadata={
+                "citation": {
+                    "url": "https://example.com/old-fts",
+                    "title": "旧 FTS 命中",
+                    "trust_level": "medium",
+                }
+            },
+        )
+    ]
+    chunks.extend(
+        SemanticChunk(
+            source_type="knowledge",
+            source_id=f"noise-fts-doc-{index}",
+            source_sub_id=f"chunk:noise-fts-{index}",
+            title=f"FTS 噪声知识 {index}",
+            text="午饭咖啡闲聊。",
+            lexical_text="午饭咖啡闲聊。",
+            embedding_text="午饭咖啡闲聊。",
+            metadata={
+                "citation": {
+                    "url": f"https://example.com/noise-fts-{index}",
+                    "title": f"FTS 噪声知识 {index}",
+                    "trust_level": "medium",
+                }
+            },
+        )
+        for index in range(605)
+    )
+    upsert_semantic_chunks(db_session, chunks, index_version="fake:v1:knowledge")
+
+    result = KnowledgeRagService(
+        db_session,
+        reranker_provider=IdentityRerankerProvider({"knowledge:old-fts-doc:chunk:old-fts": 0.9}),
+    ).query("KohakuVQ", limit=3, include_debug=True)
+
+    assert result["items"][0]["document_id"] == "old-fts-doc"
+    assert result["stats"]["fts_candidates"] >= 1
+    assert result["debug_trace"]["fts_hits"][0]["candidate_id"] == "knowledge:old-fts-doc:chunk:old-fts"
+
+
+def test_knowledge_rag_does_not_embed_when_index_has_no_vectors(db_session):
+    from core.knowledge_rag import KnowledgeRagService
+
+    class CountingEmbeddingProvider:
+        def __init__(self):
+            self.calls = 0
+
+        def embed(self, texts):
+            self.calls += 1
+            return [[1.0, 0.0, 0.0] for _ in texts]
+
+    doc = _manual_doc(
+        db_session,
+        "no-vector-index.md",
+        "# KohakuVQ 无向量索引\nKohakuVQ 查询不应在索引无向量时生成 query embedding。",
+        title="KohakuVQ 无向量索引",
+        trust_level="medium",
+        published_at="2026-05-27",
+    )
+    _index_doc(db_session, doc)
+
+    embedding_provider = CountingEmbeddingProvider()
+    result = KnowledgeRagService(db_session, embedding_provider=embedding_provider).query(
+        "KohakuVQ",
+        limit=3,
+        include_debug=True,
+    )
+
+    assert embedding_provider.calls == 0
+    assert result["stats"]["embedding_candidates"] == 0
+
+
 def test_knowledge_query_returns_citations(db_session):
     from core.knowledge_rag import KnowledgeRagService
 
@@ -344,10 +524,11 @@ def test_knowledge_result_without_citation_is_dropped(db_session):
     )
     upsert_semantic_chunks(db_session, [chunk], index_version="fake:v1:knowledge")
 
-    result = KnowledgeRagService(db_session).query("RAG", limit=5)
+    result = KnowledgeRagService(db_session).query("RAG", limit=5, include_debug=True)
 
     assert result["items"] == []
     assert result["stats"]["skipped_no_citation"] == 1
+    assert result["debug_trace"]["skipped"]["no_citation"] == 1
 
 
 def test_knowledge_query_filters_by_source_type_domain_and_date(db_session):
