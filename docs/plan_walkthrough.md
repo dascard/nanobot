@@ -3417,3 +3417,59 @@ Prompt effective preview、`/model-replies`、DB backup / vacuum、Settings 和�
 
 P3 超大文件队列当前只剩 `api/routes.py` 2822 行。继续拆普通 API 前，应先设计
 `verify_token` 共享兼容层并明确 `/chat`、`/group/message`、搜索 / 回忆等端点的模块边界。
+
+## 2026-06-21 普通 API Tasks 路由拆分
+
+状态：设计阶段已完成并提交，实现计划已写入 `.Codex/plans/api-task-routes-split.md`。
+本阶段开始切回普通 `api/routes.py`，但不直接拆 `/chat` 或 `/group/message` 主链路。
+两路只读子 agent 审计结论一致：普通 API 拆分前必须先抽 `verify_token` 共享兼容层，
+确保 `api.routes.verify_token` 与新 common auth 函数对象相同；第一刀业务边界采用
+低耦合 `/tasks*` 定时任务路由。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-api-task-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-task-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`835ebfd docs(普通API): 设计任务路由拆分`。
+
+计划列表：
+
+- [x] 只读审计 `api/routes.py` 路由 / helper 分组、旧 monkeypatch 和 route order 风险。
+- [x] 只读审计现有 admin split 测试模板与普通 API 鉴权兼容要求。
+- [x] 设计 common auth + `/tasks*` 第一刀拆分方案。
+- [x] 写入设计文档并完成全量验证后提交。
+- [ ] 写入实现计划并提交。
+- [ ] 补普通 API common auth 与 task route split 红灯测试并提交。
+- [ ] 抽出 `api/common_auth.py`，保持 `api.routes.verify_token` 对象身份与旧 token
+  monkeypatch 兼容，并提交。
+- [ ] 拆出 `api/task_routes.py`，保持 `/tasks*` HTTP 契约、push envelope 行为、
+  `run_scheduled_task_now()` 协程边界和旧导入兼容，并提交。
+- [ ] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+设计阶段验证记录：
+
+- 文档自检：未替换标记和坏字符扫描无命中。
+- 空白检查：`git diff --check -- docs/superpowers/specs/2026-06-21-api-task-routes-split-design.md`
+  无输出。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1567 passed, 6 skipped, 139 warnings in 112.06s`。
+
+执行约束：
+
+- 不拆 `/chat`。
+- 不拆 `/group/message`。
+- 不拆 history、context、log、sticker/media、group timing、search/render、agent step、
+  evolution、memory 或 model 路由。
+- 不迁移 `/health`。
+- 不修改 `server.py`。
+- 不改变 Prompt Runtime 模板、工具 usage 文档、`enriched_query`、conversation 结构、
+  Prompt Runtime 输入或工具输出契约。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+按 `.Codex/plans/api-task-routes-split.md` 执行任务 1，先补红灯测试并单独提交。
