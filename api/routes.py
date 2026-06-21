@@ -35,8 +35,6 @@ from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvi
 from core.moderation import check_message_moderation_db
 from nanobot_kt.bridge import get_bridge
 from core.compaction import run_autocompact_circuit_breaker
-from clients.model_registry import registry
-from clients.new_api_client import NewAPIClient
 from clients.classifier_client import get_guardrail, get_timing_gate
 from core.sqlite_retry import run_sqlite_locked_retry
 from core.agent_step import (
@@ -64,6 +62,12 @@ from api.memory_routes import (
     recall_memory,
     router as memory_router,
     run_memory_digests,
+)
+from api.model_routes import (
+    ModelSyncRequest,
+    list_models,
+    router as model_router,
+    sync_models,
 )
 from api.task_routes import (
     ScheduledTaskCreate,
@@ -296,10 +300,6 @@ class ChatProxyRequest(BaseModel):
 class EvolutionTriggerRequest(BaseModel):
     user_id: str
 
-
-
-class ModelSyncRequest(BaseModel):
-    force: bool = True
 
 
 def _safe_meta(meta_json: str) -> dict:
@@ -2473,46 +2473,7 @@ def trigger_evolution(
 
 
 router.include_router(memory_router)
-
-
-@router.get("/models/list")
-def list_models(
-    provider: str = "new-api",
-    tier: str = "",
-    _auth=Depends(verify_token),
-):
-    """查看本地模型注册表中的模型列表。"""
-    items = registry.get_models_by_provider(provider)
-    if tier:
-        items = [m for m in items if (m.get("tier") or "") == tier]
-    return {
-        "status": "ok",
-        "provider": provider,
-        "count": len(items),
-        "last_updated": registry.data.get("last_updated", "never"),
-        "models": items,
-    }
-
-
-@router.post("/models/sync")
-async def sync_models(
-    req: ModelSyncRequest,
-    _auth=Depends(verify_token),
-):
-    """从 new-api 拉取模型列表并同步至本地 registry。"""
-    from config import NEW_API_KEY, NEW_API_BASE_URL
-
-    if not NEW_API_KEY:
-        raise HTTPException(status_code=400, detail="NEW_API_KEY is missing")
-
-    client = NewAPIClient(api_key=NEW_API_KEY, base_url=NEW_API_BASE_URL)
-    updated = await client.sync_models_to_registry(force=req.force)
-
-    return {
-        "status": "ok",
-        "updated": updated,
-        "last_updated": registry.data.get("last_updated", "never"),
-    }
+router.include_router(model_router)
 
 
 router.include_router(task_router)
