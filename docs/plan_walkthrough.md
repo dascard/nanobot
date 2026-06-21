@@ -2296,10 +2296,11 @@ AI 日报适配层拆分；`cache.py` 可作为低风险小步候选，但不替
 
 ## 2026-06-21 news_search/tool.py 运行时缓存拆分
 
-状态：设计和实现计划已写入，生产代码尚未修改。本阶段选择低风险第二刀，先拆
-`tool.py` 中的运行时缓存状态、缓存 key 计算、日期解析和日报查询识别；搜索后端、
+状态：第二刀实现完成。运行时缓存状态、缓存 key 计算、日期解析和日报查询识别已拆到
+`creatures/nanobot/prompts/skills/news_search/runtime_cache.py`；`tool.py` 保留旧缓存符号、
+同一 dict / lock 和薄 wrapper，`AiDailyTool._execute()` 继续调用旧函数名。搜索后端、
 `WebTools`、`AiDailyTool`、`_run_news_daily_pipeline()` 和 `_summarize_news_layout()`
-继续留在旧文件，避免同时移动网络依赖和 KT 工具适配层。
+仍留在旧文件，避免同时移动网络依赖和 KT 工具适配层。
 
 设计文档：
 `docs/superpowers/specs/2026-06-21-news-search-cache-split-design.md`。
@@ -2310,7 +2311,7 @@ AI 日报适配层拆分；`cache.py` 可作为低风险小步候选，但不替
 只读审计结论：
 
 - `docs/todo.md` 剩余硬项主要是「超大文件 >800 行拆分」「静默吞异常补日志」
-  和「ruff 批量清理」，其中 `news_search/tool.py` 第一刀后仍有 1149 行。
+  和「ruff 批量清理」，其中 `news_search/tool.py` 第二刀后仍有 1110 行。
 - `news_search/tool.py` 的缓存边界集中在顶部状态、`_news_search_cache_key()`、
   `_get_cached_news_result()`、`_store_cached_news_result()` 和 `AiDailyTool._execute()`。
 - 现有测试会直接清理 `news_tool._NEWS_SEARCH_CACHE`，因此新模块必须与旧符号共享同一个
@@ -2324,16 +2325,42 @@ AI 日报适配层拆分；`cache.py` 可作为低风险小步候选，但不替
 - [x] 阶段 0.5：写入缓存拆分设计文档，明确 `runtime_cache.py` 与 `tool.py` facade。
 - [x] 阶段 0.6：写入 `.Codex/plans/news-search-cache-split.md`，列出 TDD 红灯、
   实现、验证和阶段性提交步骤。
-- [ ] 阶段 1：新增 `tests/test_news_search_runtime_cache.py` 红灯测试，覆盖轻量导入、
+- [x] 阶段 1：新增 `tests/test_news_search_runtime_cache.py` 红灯测试，覆盖轻量导入、
   key 形态、共享 dict / lock 和旧 TTL monkeypatch。
-- [ ] 阶段 2：新增 `news_search/runtime_cache.py`，迁移缓存状态、日期解析、日报识别、
+- [x] 阶段 2：新增 `news_search/runtime_cache.py`，迁移缓存状态、日期解析、日报识别、
   缓存 key 和缓存读写。
-- [ ] 阶段 3：将 `tool.py` 缓存相关真实实现收敛为旧符号 facade，`AiDailyTool._execute()`
+- [x] 阶段 3：将 `tool.py` 缓存相关真实实现收敛为旧符号 facade，`AiDailyTool._execute()`
   继续调用旧函数名。
-- [ ] 阶段 4：运行运行时缓存测试、AI 日报相邻回归、旧报告回归、`asyncio.run`
+- [x] 阶段 4：运行运行时缓存测试、AI 日报相邻回归、旧报告回归、`asyncio.run`
   策略测试和全量 `python -m pytest tests/ -v`。
-- [ ] 阶段 5：同步 `.Codex/plans/news-search-cache-split.md`、`docs/todo.md` 和本
+- [x] 阶段 5：同步 `.Codex/plans/news-search-cache-split.md`、`docs/todo.md` 和本
   walkthrough，记录验证结果、行数变化和提交号。
+
+验证记录：
+
+- 红灯：`python -m pytest tests/test_news_search_runtime_cache.py -v` ->
+  `3 failed, 1 warning in 5.47s`，失败原因为 `runtime_cache` 模块不存在。
+- 语法检查：`python -m compileall creatures/nanobot/prompts/skills/news_search -q`
+  无输出，退出码为 0。
+- 绿灯：`tests/test_news_search_runtime_cache.py -v` ->
+  `3 passed, 1 warning in 0.78s`。
+- 旧日期与缓存兼容：`test_extract_date_accepts_chinese_date_and_today` 与
+  `test_ai_daily_tool_reuses_equivalent_daily_query_cache` ->
+  `2 passed, 1 warning in 0.62s`。
+- AI 日报相邻回归：`tests/test_ai_daily_ingest.py -v` ->
+  `7 passed, 1 warning in 1.04s`；`tests/test_ai_daily_tool_and_sources.py -v` ->
+  `14 passed, 1 warning in 1.03s`。
+- 旧报告相邻回归：`tests/test_news_search_legacy_report.py -v` ->
+  `3 passed, 1 warning in 0.73s`。
+- `asyncio.run` 约束：
+  `tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v` ->
+  `1 passed, 1 warning in 1.68s`。
+- `git diff --check`：无输出，退出码为 0。
+- 全量：`python -m pytest tests/ -v` ->
+  `1488 passed, 6 skipped, 139 warnings in 105.92s`。
+- 行数：`tool.py` 1110 行，`runtime_cache.py` 122 行，
+  `tests/test_news_search_runtime_cache.py` 66 行。
+- 实现提交：`f4bdfec refactor(新闻搜索): 拆分运行时缓存`。
 
 执行约束：
 
@@ -2351,5 +2378,6 @@ AI 日报适配层拆分；`cache.py` 可作为低风险小步候选，但不替
 
 下一步：
 
-按 `.Codex/plans/news-search-cache-split.md` 从红灯测试开始执行。实现完成后先运行定向回归
-和全量测试，再按文件显式暂存并提交 `refactor(新闻搜索): 拆分运行时缓存`。
+继续按 `docs/todo.md` 的 P3 队列推进。`news_search/tool.py` 仍超过 800 行，下一刀可在
+搜索后端 facade 或 AI 日报工具适配层之间二选一；搜索后端涉及旧路径 monkeypatch，
+需要先写更细的依赖注入或兼容 facade 计划。

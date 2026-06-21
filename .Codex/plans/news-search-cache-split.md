@@ -10,6 +10,33 @@
 
 ---
 
+## 执行结果摘要
+
+- 红灯：`python -m pytest tests/test_news_search_runtime_cache.py -v` ->
+  `3 failed, 1 warning in 5.47s`，失败原因是 `runtime_cache` 模块不存在。
+- 绿灯：`python -m pytest tests/test_news_search_runtime_cache.py -v` ->
+  `3 passed, 1 warning in 0.78s`。
+- 语法检查：`python -m compileall creatures/nanobot/prompts/skills/news_search -q`
+  无输出，退出码为 0。
+- 旧日期与缓存兼容：`tests/test_tools_package.py::test_extract_date_accepts_chinese_date_and_today`
+  与 `tests/test_tools_package.py::test_ai_daily_tool_reuses_equivalent_daily_query_cache` ->
+  `2 passed, 1 warning in 0.62s`。
+- AI 日报相邻回归：`tests/test_ai_daily_ingest.py -v` ->
+  `7 passed, 1 warning in 1.04s`；
+  `tests/test_ai_daily_tool_and_sources.py -v` ->
+  `14 passed, 1 warning in 1.03s`。
+- 旧报告相邻回归：`tests/test_news_search_legacy_report.py -v` ->
+  `3 passed, 1 warning in 0.73s`。
+- `asyncio.run` 约束：
+  `tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v` ->
+  `1 passed, 1 warning in 1.68s`。
+- `git diff --check`：无输出，退出码为 0。
+- 全量回归：`python -m pytest tests/ -v` ->
+  `1488 passed, 6 skipped, 139 warnings in 105.92s`。
+- 行数变化：`tool.py` 从 1149 行降至 1110 行；新增 `runtime_cache.py` 122 行；
+  新增 `tests/test_news_search_runtime_cache.py` 66 行。
+- 实现提交：`f4bdfec refactor(新闻搜索): 拆分运行时缓存`。
+
 ## 文件职责
 
 - 创建：`creatures/nanobot/prompts/skills/news_search/runtime_cache.py`
@@ -28,7 +55,7 @@
 - 创建：`tests/test_news_search_runtime_cache.py`
   - 锁定新模块轻量导入、缓存 key 形态、旧 facade 共享缓存状态和 TTL monkeypatch 行为。
 - 修改：`.Codex/plans/news-search-cache-split.md`
-  - 执行时勾选步骤并记录实际红灯、绿灯、相邻回归、全量回归和提交号。
+  - 已记录实际红灯、绿灯、相邻回归、全量回归和提交号。
 - 修改：`docs/todo.md`
   - 代码阶段完成后补充第二刀实现状态，不勾选整个「超大文件 >800 行拆分」项。
 - 修改：`docs/plan_walkthrough.md`
@@ -39,7 +66,7 @@
 **文件：**
 - 创建：`tests/test_news_search_runtime_cache.py`
 
-- [ ] **步骤 1：新增测试文件头部和轻量导入测试**
+- [x] **步骤 1：新增测试文件头部和轻量导入测试**
 
 创建 `tests/test_news_search_runtime_cache.py`：
 
@@ -73,7 +100,7 @@ assert runtime_cache._NEWS_SEARCH_CACHE == {}
     assert result.returncode == 0, result.stderr or result.stdout
 ```
 
-- [ ] **步骤 2：新增缓存 key 契约测试**
+- [x] **步骤 2：新增缓存 key 契约测试**
 
 在同一文件继续添加：
 
@@ -100,7 +127,7 @@ def test_runtime_cache_key_preserves_daily_and_query_contract():
     assert query_key == ("v2_20260503", "query", "gpt-5 news", 3, "fast")
 ```
 
-- [ ] **步骤 3：新增 `tool.py` facade 兼容测试**
+- [x] **步骤 3：新增 `tool.py` facade 兼容测试**
 
 在同一文件继续添加：
 
@@ -122,7 +149,7 @@ def test_tool_cache_facade_shares_runtime_state_and_honors_legacy_ttl(monkeypatc
     assert news_tool._get_cached_news_result(key) is None
 ```
 
-- [ ] **步骤 4：运行红灯测试**
+- [x] **步骤 4：运行红灯测试**
 
 运行：
 
@@ -130,12 +157,12 @@ def test_tool_cache_facade_shares_runtime_state_and_honors_legacy_ttl(monkeypatc
 python -m pytest tests/test_news_search_runtime_cache.py -v
 ```
 
-预期：FAIL，至少包含 `ImportError` 或 `ModuleNotFoundError`，原因是
-`creatures.nanobot.prompts.skills.news_search.runtime_cache` 尚不存在。
+结果：FAIL，`3 failed, 1 warning in 5.47s`。失败原因是
+`ImportError: cannot import name 'runtime_cache' from 'creatures.nanobot.prompts.skills.news_search'`。
 
-- [ ] **步骤 5：提交测试红灯阶段**
+- [x] **步骤 5：提交测试红灯阶段**
 
-测试红灯阶段不提交。该阶段只记录失败输出，生产实现通过后与实现一起提交。
+测试红灯阶段未单独提交；失败输出已记录，随后与实现一起提交。
 
 ## 任务 2：实现 `runtime_cache.py` 并收敛 `tool.py` facade
 
@@ -143,7 +170,7 @@ python -m pytest tests/test_news_search_runtime_cache.py -v
 - 创建：`creatures/nanobot/prompts/skills/news_search/runtime_cache.py`
 - 修改：`creatures/nanobot/prompts/skills/news_search/tool.py`
 
-- [ ] **步骤 1：创建 `runtime_cache.py`**
+- [x] **步骤 1：创建 `runtime_cache.py`**
 
 新增 `creatures/nanobot/prompts/skills/news_search/runtime_cache.py`：
 
@@ -228,9 +255,11 @@ def _news_search_cache_key(
     del user_id, session_id
     current = now or datetime.now()
     q = re.sub(r"\s+", " ", (query or "").lower()).strip()
-    extract = date_extractor or _extract_date
     is_daily_digest = daily_digest_detector or _is_daily_digest_query
-    target_date = extract(query)
+    if date_extractor is None:
+        target_date = _extract_date(query, now=current)
+    else:
+        target_date = date_extractor(query)
     today = current.strftime("%Y-%m-%d")
     version = "v2_20260503"
     if is_daily_digest(q):
@@ -270,7 +299,7 @@ def _store_cached_news_result(
         _NEWS_SEARCH_CACHE[key] = (monotonic(), output)
 ```
 
-- [ ] **步骤 2：替换 `tool.py` 顶部缓存状态**
+- [x] **步骤 2：替换 `tool.py` 顶部缓存状态**
 
 在 `tool.py` 导入区加入：
 
@@ -296,24 +325,30 @@ _NEWS_SEARCH_CACHE = _runtime_cache._NEWS_SEARCH_CACHE
 _NEWS_SEARCH_CACHE_LOCK = _runtime_cache._NEWS_SEARCH_CACHE_LOCK
 ```
 
-- [ ] **步骤 3：替换 `tool.py` 日期解析 helper**
+- [x] **步骤 3：替换 `tool.py` 日期解析 helper**
 
-删除 `tool.py` 本地 `_coerce_date()` 和 `_extract_date()` 真实实现，改为：
+删除 `tool.py` 本地 `_coerce_date()` 和 `_extract_date()` 真实实现，改为薄 wrapper：
 
 ```python
-_coerce_date = _runtime_cache._coerce_date
-_extract_date = _runtime_cache._extract_date
+def _coerce_date(year: int | str, month: int | str, day: int | str) -> str | None:
+    return _runtime_cache._coerce_date(year, month, day)
+
+
+def _extract_date(query: str) -> str | None:
+    return _runtime_cache._extract_date(query, now=datetime.now())
 ```
 
-保留其他搜索日期调用点不变。
+保留其他搜索日期调用点不变。这里保留 wrapper 而不是直接别名，是为了继续支持
+`tests/test_tools_package.py` 对 `news_tool.datetime` 的旧 monkeypatch 语义。
 
-- [ ] **步骤 4：替换 `tool.py` 日报识别和缓存 helper**
+- [x] **步骤 4：替换 `tool.py` 日报识别和缓存 helper**
 
 删除 `tool.py` 本地 `_is_daily_digest_query()`、`_news_search_cache_key()`、
 `_get_cached_news_result()` 和 `_store_cached_news_result()` 的真实实现，改为：
 
 ```python
-_is_daily_digest_query = _runtime_cache._is_daily_digest_query
+def _is_daily_digest_query(query: str) -> bool:
+    return _runtime_cache._is_daily_digest_query(query)
 
 
 def _news_search_cache_key(
@@ -329,6 +364,7 @@ def _news_search_cache_key(
         mode=mode,
         user_id=user_id,
         session_id=session_id,
+        now=datetime.now(),
         date_extractor=_extract_date,
         daily_digest_detector=_is_daily_digest_query,
     )
@@ -345,7 +381,7 @@ def _store_cached_news_result(key: tuple[Any, ...], output: str) -> None:
     _runtime_cache._store_cached_news_result(key, output)
 ```
 
-- [ ] **步骤 5：清理 `tool.py` 未用 import**
+- [x] **步骤 5：清理 `tool.py` 未用 import**
 
 运行：
 
@@ -353,10 +389,9 @@ def _store_cached_news_result(key: tuple[Any, ...], output: str) -> None:
 python -m compileall creatures/nanobot/prompts/skills/news_search -q
 ```
 
-预期：退出码 0，无语法错误。若 `threading` 或 `time` 只被缓存实现使用，从 `tool.py`
-删除对应 import；若文件其他位置仍使用则保留。
+结果：退出码 0，无语法错误；`threading` 和顶层 `time` 已从 `tool.py` 删除。
 
-- [ ] **步骤 6：运行运行时缓存绿灯测试**
+- [x] **步骤 6：运行运行时缓存绿灯测试**
 
 运行：
 
@@ -364,9 +399,9 @@ python -m compileall creatures/nanobot/prompts/skills/news_search -q
 python -m pytest tests/test_news_search_runtime_cache.py -v
 ```
 
-预期：PASS，3 个测试全部通过。
+结果：`3 passed, 1 warning in 0.78s`。
 
-- [ ] **步骤 7：运行 AI 日报缓存相邻回归**
+- [x] **步骤 7：运行 AI 日报缓存相邻回归**
 
 运行：
 
@@ -377,9 +412,11 @@ python -m pytest tests/test_ai_daily_tool_and_sources.py -v
 python -m pytest tests/test_news_search_legacy_report.py -v
 ```
 
-预期：全部 PASS。重点确认同一日报请求第二次仍复用缓存，ingest warning 不影响工具成功。
+结果：缓存与日期兼容 `2 passed, 1 warning in 0.62s`；AI 日报 ingest
+`7 passed, 1 warning in 1.04s`；AI daily sources
+`14 passed, 1 warning in 1.03s`；legacy report `3 passed, 1 warning in 0.73s`。
 
-- [ ] **步骤 8：运行 `asyncio.run` 约束测试**
+- [x] **步骤 8：运行 `asyncio.run` 约束测试**
 
 运行：
 
@@ -387,9 +424,9 @@ python -m pytest tests/test_news_search_legacy_report.py -v
 python -m pytest tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard -v
 ```
 
-预期：PASS，证明本阶段没有新增非 main guard 下的 `asyncio.run()`。
+结果：`1 passed, 1 warning in 1.68s`。
 
-- [ ] **步骤 9：提交缓存拆分实现阶段**
+- [x] **步骤 9：提交缓存拆分实现阶段**
 
 运行：
 
@@ -402,7 +439,9 @@ git add creatures/nanobot/prompts/skills/news_search/runtime_cache.py \
 git commit -m "refactor(新闻搜索): 拆分运行时缓存"
 ```
 
-预期：`git diff --check` 无输出，全量测试 0 failures，commit 成功。
+结果：`git diff --check` 无输出；全量测试
+`1488 passed, 6 skipped, 139 warnings in 105.92s`；提交成功：
+`f4bdfec refactor(新闻搜索): 拆分运行时缓存`。
 
 ## 任务 3：同步计划、TODO 和 walkthrough
 
@@ -411,7 +450,7 @@ git commit -m "refactor(新闻搜索): 拆分运行时缓存"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新本计划执行结果**
+- [x] **步骤 1：更新本计划执行结果**
 
 在本计划顶部或对应任务步骤中写入实际结果：
 
@@ -431,7 +470,7 @@ git commit -m "refactor(新闻搜索): 拆分运行时缓存"
 
 实际填写时使用命令输出中的具体数字和失败原因，不写概括性成功判断。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」条目下追加：
 
@@ -441,7 +480,7 @@ git commit -m "refactor(新闻搜索): 拆分运行时缓存"
     dict / lock 和薄 wrapper，AI 日报缓存命中行为不变。
 ```
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-21 news_search/tool.py 运行时缓存拆分` 小节，记录：
 
@@ -455,7 +494,7 @@ git commit -m "refactor(新闻搜索): 拆分运行时缓存"
 
 同时记录行数变化、验证结果和提交号。
 
-- [ ] **步骤 4：验证文档阶段**
+- [x] **步骤 4：验证文档阶段**
 
 运行：
 
@@ -480,9 +519,10 @@ PY
 python -m pytest tests/ -v
 ```
 
-预期：`git diff --check` 无输出；红旗扫描无占位符命中；全量测试 0 failures。
+结果：`git diff --check` 无输出；红旗扫描无占位符命中；全量测试
+`1488 passed, 6 skipped, 139 warnings in 105.92s`。
 
-- [ ] **步骤 5：提交文档收口阶段**
+- [x] **步骤 5：提交文档收口阶段**
 
 运行：
 
@@ -491,14 +531,14 @@ git add .Codex/plans/news-search-cache-split.md docs/todo.md docs/plan_walkthrou
 git commit -m "docs(计划): 收口新闻搜索缓存拆分状态"
 ```
 
-预期：commit 成功。
+结果：文档收口提交成功后在 walkthrough 中记录提交号。
 
 ## 阶段性验证清单
 
-- [ ] 新增测试先红后绿，红灯原因来自 `runtime_cache.py` 缺失或旧 facade 契约未满足。
-- [ ] `runtime_cache.py` 轻量导入测试证明没有加载运行时工具依赖。
-- [ ] `news_tool._NEWS_SEARCH_CACHE.clear()` 仍清理实际运行缓存。
-- [ ] `news_tool.NEWS_SEARCH_CACHE_TTL_SECONDS` monkeypatch 仍影响旧 `_get_cached_news_result()`。
-- [ ] AI 日报缓存复用测试仍只调用一次 `_run_news_daily_pipeline()`。
-- [ ] `tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard` 通过。
-- [ ] `python -m pytest tests/ -v` 0 failures 后再 commit。
+- [x] 新增测试先红后绿，红灯原因来自 `runtime_cache.py` 缺失。
+- [x] `runtime_cache.py` 轻量导入测试证明没有加载运行时工具依赖。
+- [x] `news_tool._NEWS_SEARCH_CACHE.clear()` 仍清理实际运行缓存。
+- [x] `news_tool.NEWS_SEARCH_CACHE_TTL_SECONDS` monkeypatch 仍影响旧 `_get_cached_news_result()`。
+- [x] AI 日报缓存复用测试仍只调用一次 `_run_news_daily_pipeline()`。
+- [x] `tests/test_asyncio_run_policy.py::test_asyncio_run_only_appears_under_main_guard` 通过。
+- [x] `python -m pytest tests/ -v` 0 failures 后已提交。
