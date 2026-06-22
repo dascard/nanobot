@@ -19,6 +19,36 @@
 - `tests/test_api_agent_step_routes_split.py` 和 `tests/test_api_sticker_media_routes_split.py` 当前仍断言 `group_message` 留在 `api.routes`，红灯阶段需要同步改为拆分后的 re-export 断言。
 - `group_message()` 当前调用父模块 `_normalize_request_client_meta(req, expected_chat_type="group")`，并把 `nanobot_kt.bridge.get_bridge` 直接传给 `GroupIngressService`。新模块不得反向导入 `api.routes`，需要在本地实现 client meta wrapper，并用 `sys.modules["api.routes"].get_bridge` 保留旧 monkeypatch 兼容。
 - 本阶段不碰 `/chat` 主链路，不迁移 `ChatProxyRequest`、`proxy_chat()`、`_persist_chat_turn()`、`_safe_meta()`、私聊 multimodal helper、Prompt Runtime 输入组装或 group ingress helper facade。
+- 计划提交：`60d69d6 docs(计划): 记录群消息路由拆分计划`。
+- 红灯测试提交：`2035f7c test(普通API): 锁定群消息路由拆分契约`。
+- 路由拆分提交：`d69808b refactor(普通API): 拆分群消息路由`。
+- `api/routes.py` 已从 1754 行降至 1709 行，`api/group_message_routes.py` 为 88 行。
+
+## 执行记录
+
+- 红灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_sticker_media_routes_split.py`
+  -> `8 failed, 24 passed, 21 warnings in 9.27s`；失败点为 `/group/message`
+  endpoint 仍注册在 `api.routes`、`api.group_message_routes` 尚不可导入、
+  `api/group_message_routes.py` 文件不存在，以及相邻 split 测试已期待
+  `routes.group_message` re-export 到新模块。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_sticker_media_routes_split.py tests/test_api_group_utility_routes_split.py`
+  -> `41 passed, 21 warnings in 4.69s`。
+- 群消息行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api.py::test_group_message_ambient_enters_timing_gate tests/test_api.py::test_group_message_passes_client_platform_to_timing_gate tests/test_api.py::test_group_message_passes_client_platform_to_bridge tests/test_api.py::test_group_message_returns_full_html_reply_without_truncation tests/test_api.py::test_group_message_prompt_v2_audit_failure_is_no_send tests/test_group_response_envelope.py tests/test_api_routes_group_helper_facade.py`
+  -> `13 passed, 1 warning in 2.18s`。
+- 普通 API split 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_group_message_routes_split.py tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_sticker_media_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py tests/test_api_task_routes_split.py tests/test_asyncio_run_policy.py`
+  -> `87 passed, 21 warnings in 10.78s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/group_message_routes.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_sticker_media_routes_split.py`
+  成功；`api/group_message_routes.py` 无 `from api.routes`、`import api.routes`、
+  `asyncio.run` 或 `run_awaitable_sync`；`git diff --check -- api/routes.py api/group_message_routes.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_sticker_media_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 1709 行，`api/group_message_routes.py` 88 行，
+  `tests/test_api_group_message_routes_split.py` 262 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1651 passed, 6 skipped, 139 warnings in 122.43s`。
 
 本阶段迁移：
 
@@ -75,7 +105,7 @@
 - 修改：`tests/test_api_agent_step_routes_split.py`
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 1：创建 group message split 测试文件**
+- [x] **步骤 1：创建 group message split 测试文件**
 
 创建 `tests/test_api_group_message_routes_split.py`：
 
@@ -342,7 +372,7 @@ def test_group_ingress_helper_facades_stay_in_parent_routes():
     assert routes._derive_group_trigger_reason is helpers.derive_group_trigger_reason
 ```
 
-- [ ] **步骤 2：调整 Agent Step split 父模块边界测试**
+- [x] **步骤 2：调整 Agent Step split 父模块边界测试**
 
 修改 `tests/test_api_agent_step_routes_split.py` 末尾测试：
 
@@ -359,7 +389,7 @@ def test_chat_boundaries_stay_in_parent_routes_after_group_message_split():
     assert routes.group_timing_timer is group_utility_routes.group_timing_timer
 ```
 
-- [ ] **步骤 3：调整 Sticker / Media split 父模块边界测试**
+- [x] **步骤 3：调整 Sticker / Media split 父模块边界测试**
 
 修改 `tests/test_api_sticker_media_routes_split.py` 的 `test_chat_and_group_boundaries_stay_in_parent_routes()`：
 
@@ -379,7 +409,7 @@ def test_chat_and_group_boundaries_stay_in_parent_routes():
     assert routes._build_conversation_user_content.__module__ == "api.routes"
 ```
 
-- [ ] **步骤 4：运行红灯测试**
+- [x] **步骤 4：运行红灯测试**
 
 运行：
 
@@ -392,7 +422,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：FAIL。关键失败点应包含 `api.group_message_routes` 不存在、`/group/message` endpoint 仍注册在 `api.routes`、`api/group_message_routes.py` 文件不存在，以及相邻 split 测试已期待 `routes.group_message` re-export 新模块对象。
 
-- [ ] **步骤 5：提交红灯测试**
+- [x] **步骤 5：提交红灯测试**
 
 运行：
 
@@ -409,7 +439,7 @@ git commit -m "test(普通API): 锁定群消息路由拆分契约"
 - 创建：`api/group_message_routes.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：创建 `api/group_message_routes.py`**
+- [x] **步骤 1：创建 `api/group_message_routes.py`**
 
 创建文件骨架：
 
@@ -432,7 +462,7 @@ from nanobot_kt.bridge import get_bridge as _default_get_bridge
 router = APIRouter(tags=["group-message"])
 ```
 
-- [ ] **步骤 2：添加旧 `get_bridge` monkeypatch provider**
+- [x] **步骤 2：添加旧 `get_bridge` monkeypatch provider**
 
 在 `api/group_message_routes.py` 中加入：
 
@@ -446,7 +476,7 @@ def _current_bridge_provider():
 
 `group_message()` 中只把 `_current_bridge_provider()` 的返回值传给 `GroupIngressService`，不直接传 `_default_get_bridge`。
 
-- [ ] **步骤 3：添加 client meta wrapper**
+- [x] **步骤 3：添加 client meta wrapper**
 
 在 `api/group_message_routes.py` 中加入：
 
@@ -465,7 +495,7 @@ def _normalize_request_client_meta(req: Any, *, expected_chat_type: str) -> dict
 
 该函数只服务新模块的 `/group/message`；父模块 `/chat` 继续使用 `api.routes._normalize_request_client_meta()`。
 
-- [ ] **步骤 4：迁移 request model**
+- [x] **步骤 4：迁移 request model**
 
 从 `api/routes.py` 搬入：
 
@@ -503,7 +533,7 @@ class GroupMessageRequest(BaseModel):
     is_directed_to_other: bool = False
 ```
 
-- [ ] **步骤 5：迁移 endpoint**
+- [x] **步骤 5：迁移 endpoint**
 
 从 `api/routes.py` 搬入并改写 bridge provider：
 
@@ -527,7 +557,7 @@ async def group_message(
     return await service.handle(req)
 ```
 
-- [ ] **步骤 6：修改父模块 import 与 re-export**
+- [x] **步骤 6：修改父模块 import 与 re-export**
 
 在 `api/routes.py` 的普通 API split import 区加入：
 
@@ -548,7 +578,7 @@ from api.group_message_routes import (
 
 父模块 `typing` import 仍可保留 `Optional` 和 `List`，因为 `ChatProxyRequest` 仍使用。
 
-- [ ] **步骤 7：在原位置 include 子 router**
+- [x] **步骤 7：在原位置 include 子 router**
 
 在 `api/routes.py` 中保持顺序：
 
@@ -563,7 +593,7 @@ router.include_router(agent_step_router)
 
 不要把 `group_message_router` 放到文件尾部 include 区，否则 route order 会变化。
 
-- [ ] **步骤 8：运行 split 绿灯测试**
+- [x] **步骤 8：运行 split 绿灯测试**
 
 运行：
 
@@ -577,7 +607,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS，确认 group message、group utility、Agent Step 和 Sticker / Media 边界均符合拆分后契约。
 
-- [ ] **步骤 9：运行群消息行为回归**
+- [x] **步骤 9：运行群消息行为回归**
 
 运行：
 
@@ -594,7 +624,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS，确认群消息 TimingGate、Bridge metadata、完整 HTML 回复、Prompt Runtime audit failure、响应信封和父模块 helper facade 均未回退。
 
-- [ ] **步骤 10：运行普通 API split 相邻回归与 async 策略**
+- [x] **步骤 10：运行普通 API split 相邻回归与 async 策略**
 
 运行：
 
@@ -614,7 +644,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS，确认普通 API 拆分边界与 `asyncio.run` 禁止策略保持有效。
 
-- [ ] **步骤 11：运行静态检查**
+- [x] **步骤 11：运行静态检查**
 
 运行：
 
@@ -632,7 +662,7 @@ wc -l api/routes.py api/group_message_routes.py tests/test_api_group_message_rou
 - `git diff --check` 无输出。
 - `api/routes.py` 行数下降。
 
-- [ ] **步骤 12：运行全量回归**
+- [x] **步骤 12：运行全量回归**
 
 运行：
 
@@ -642,7 +672,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。若失败集中在环境或历史脏项，记录完整失败测试名和错误摘要，不提交实现。
 
-- [ ] **步骤 13：提交拆分实现**
+- [x] **步骤 13：提交拆分实现**
 
 运行：
 
@@ -660,13 +690,13 @@ git commit -m "refactor(普通API): 拆分群消息路由"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新本计划执行记录**
+- [x] **步骤 1：更新本计划执行记录**
 
 在「当前状态」之后追加「执行记录」小节，写入红灯、Split 绿灯、群消息行为回归、普通 API split 相邻回归、静态检查、行数检查和全量回归的真实命令与真实输出摘要。每条记录必须包含命令、退出结论、通过或失败统计；红灯记录还要列出关键失败点。
 
 同时将已完成步骤的复选框从 `- [ ]` 改为 `- [x]`。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」记录中追加本阶段结果：
 
@@ -676,7 +706,7 @@ git commit -m "refactor(普通API): 拆分群消息路由"
 
 如果 `docs/todo.md` 已经使用不同编号，按现有编号顺延，不改写无关条目。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-22 记录，格式与文件现有条目一致，内容包含：
 
@@ -690,7 +720,7 @@ git commit -m "refactor(普通API): 拆分群消息路由"
 - 验证：记录本阶段实际通过的定向测试、相邻回归和全量回归结果。
 ```
 
-- [ ] **步骤 4：运行文档检查与定向回归**
+- [x] **步骤 4：运行文档检查与定向回归**
 
 运行：
 
@@ -710,7 +740,7 @@ python -B -m pytest -q -p no:cacheprovider \
 - `git diff --check` 无输出。
 - pytest 0 failures。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
@@ -722,16 +752,16 @@ git commit -m "docs(计划): 收口群消息路由拆分"
 
 ## 最终验收清单
 
-- [ ] `tests/test_api_group_message_routes_split.py` 经历红灯再绿灯。
-- [ ] `api/group_message_routes.py` 存在，并且不包含 `from api.routes`、`import api.routes`、`asyncio.run` 或 `run_awaitable_sync`。
-- [ ] `POST /api/v1/group/message` endpoint module 为 `api.group_message_routes`。
-- [ ] `POST /api/v1/group/message` 没有重复注册。
-- [ ] `api.routes` 继续 re-export `OneBotMessageSegmentPayload`、`GroupMessageRequest` 和 `group_message`，旧导入对象与新模块对象相同。
-- [ ] `api.routes.NANOBOT_API_TOKEN` monkeypatch 继续影响拆分后的 endpoint。
-- [ ] `api.routes.get_bridge` monkeypatch 继续影响拆分后的 `group_message()`。
-- [ ] `client_meta.chat_type` 与群聊入口冲突时继续返回 HTTP 400，且不会进入 `GroupIngressService`。
-- [ ] route order 保持 `/group/message` -> `/update_group_name` -> `/group_timing` -> `/group_timing/timer` -> `/render` -> `/chat-step` -> `/chat`。
-- [ ] `/chat`、`/health`、`proxy_chat()`、`_persist_chat_turn()`、`_safe_meta()`、`_build_multimodal_user_input_text()` 继续留在 `api.routes`。
-- [ ] group ingress helper facade 继续留在 `api.routes`，并与 `app.group_ingress.helpers` 中对象保持 identity alias。
-- [ ] 群消息行为回归、普通 API split 相邻回归、`tests/test_asyncio_run_policy.py` 与全量 `tests/` 均为 0 failures。
-- [ ] 每个阶段性改动均已独立 commit，且未暂存历史无关脏项。
+- [x] `tests/test_api_group_message_routes_split.py` 经历红灯再绿灯。
+- [x] `api/group_message_routes.py` 存在，并且不包含 `from api.routes`、`import api.routes`、`asyncio.run` 或 `run_awaitable_sync`。
+- [x] `POST /api/v1/group/message` endpoint module 为 `api.group_message_routes`。
+- [x] `POST /api/v1/group/message` 没有重复注册。
+- [x] `api.routes` 继续 re-export `OneBotMessageSegmentPayload`、`GroupMessageRequest` 和 `group_message`，旧导入对象与新模块对象相同。
+- [x] `api.routes.NANOBOT_API_TOKEN` monkeypatch 继续影响拆分后的 endpoint。
+- [x] `api.routes.get_bridge` monkeypatch 继续影响拆分后的 `group_message()`。
+- [x] `client_meta.chat_type` 与群聊入口冲突时继续返回 HTTP 400，且不会进入 `GroupIngressService`。
+- [x] route order 保持 `/group/message` -> `/update_group_name` -> `/group_timing` -> `/group_timing/timer` -> `/render` -> `/chat-step` -> `/chat`。
+- [x] `/chat`、`/health`、`proxy_chat()`、`_persist_chat_turn()`、`_safe_meta()`、`_build_multimodal_user_input_text()` 继续留在 `api.routes`。
+- [x] group ingress helper facade 继续留在 `api.routes`，并与 `app.group_ingress.helpers` 中对象保持 identity alias。
+- [x] 群消息行为回归、普通 API split 相邻回归、`tests/test_asyncio_run_policy.py` 与全量 `tests/` 均为 0 failures。
+- [x] 每个阶段性改动均已独立 commit，且未暂存历史无关脏项。
