@@ -34,11 +34,10 @@ from clients.classifier_client import get_guardrail, get_timing_gate
 from core.sqlite_retry import run_sqlite_locked_retry
 from core.client_meta import (
     ClientMetaValidationError,
-    client_meta_request_id,
     normalize_client_meta,
 )
-from core.message_envelope import build_chat_response_envelope
 from app.group_ingress import helpers as group_ingress_helpers
+from api import chat_content_helpers, chat_response_contract
 from api.common_auth import verify_token
 from api.evolution_routes import (
     EvolutionTriggerRequest,
@@ -128,42 +127,15 @@ CHAT_STREAM_QUEUE_MAXSIZE = 128
 
 
 def _normalize_chat_stream_event(event: Any) -> dict[str, Any] | None:
-    if not isinstance(event, dict):
-        return None
+    return chat_response_contract.normalize_chat_stream_event(event)
 
-    status = str(event.get("status") or "")
-    if status == "delta":
-        text = event.get("text", "")
-        if text is None:
-            text = ""
-        text = str(text)
-        if not text:
-            return None
-        normalized = dict(event)
-        normalized["status"] = "delta"
-        normalized["text"] = text
-        return normalized
 
-    if status == "final":
-        text = event.get("text", "")
-        if text is None:
-            text = ""
-        text = str(text)
-        if not text:
-            return None
-        return {
-            "status": "final",
-            "text": text,
-            "replace": bool(event.get("replace", True)),
-            "source": str(event.get("source") or "bridge"),
-        }
+def _chat_sse_data(event: dict[str, Any]) -> str:
+    return chat_response_contract.chat_sse_data(event)
 
-    if status:
-        normalized = dict(event)
-        normalized["status"] = status
-        return normalized
 
-    return None
+def _stream_error_event() -> dict[str, str]:
+    return chat_response_contract.stream_error_event(SAFE_STREAM_ERROR_MESSAGE)
 
 
 # 私聊缓冲：基础 5 秒窗口；只要有文件附件就延长到 10 秒
@@ -351,7 +323,7 @@ def _join_buffered_messages(messages: list[str]) -> str:
 
 
 def _normalize_files(files: Optional[List[str]]) -> list[str]:
-    return [file for file in (files or []) if isinstance(file, str) and file.strip()]
+    return chat_content_helpers.normalize_files(files)
 
 
 def _schedule_image_precache(
@@ -426,13 +398,7 @@ def _private_buffer_window_seconds(files: Optional[List[str]]) -> float:
 
 
 def _build_guardrail_input(query: str, files: Optional[List[str]]) -> str:
-    normalized_files = _normalize_files(files)
-    text = str(query or "").strip()
-    if normalized_files and text:
-        return f"{text}\n[附带图片 {len(normalized_files)} 张]"
-    if normalized_files:
-        return f"[图片消息，共 {len(normalized_files)} 张]"
-    return query
+    return chat_content_helpers.build_guardrail_input(query, files)
 
 
 def _detect_guardrail(guardrail, message: str, *, allow_passthrough: bool = False) -> dict:
@@ -461,53 +427,19 @@ def _detect_guardrail(guardrail, message: str, *, allow_passthrough: bool = Fals
 
 
 def _build_multimodal_user_input_text(query: str, files: Optional[List[str]], *, max_chars: int = 0) -> str:
-    text = _sanitize_prompt_text(query, max_chars) if query else ""
-    normalized_files = _normalize_files(files)
-    parts: list[str] = []
-    if text.strip():
-        parts.append(text)
-    if normalized_files:
-        parts.append(f"[用户附带了 {len(normalized_files)} 张图片，请结合图片内容理解并回答]")
-    return "\n".join(parts)
+    return chat_content_helpers.build_multimodal_user_input_text(query, files, max_chars=max_chars)
 
 
 def _build_file_archive_summary(files: Optional[List[str]], *, include_refs: bool) -> str:
-    normalized_files = _normalize_files(files)
-    if not normalized_files:
-        return ""
-
-    header = f"[图片附件 {len(normalized_files)} 张]"
-    if not include_refs:
-        return header
-
-    lines = [header]
-    preview_limit = 3
-    for idx, file_ref in enumerate(normalized_files[:preview_limit], start=1):
-        lines.append(f"[图片{idx}] {file_ref}")
-    remaining = len(normalized_files) - preview_limit
-    if remaining > 0:
-        lines.append(f"[其余 {remaining} 张图片地址省略]")
-    return "\n".join(lines)
+    return chat_content_helpers.build_file_archive_summary(files, include_refs=include_refs)
 
 
 def _build_chatlog_user_content(query: str, files: Optional[List[str]]) -> str:
-    text = str(query or "").strip()
-    file_summary = _build_file_archive_summary(files, include_refs=True)
-    if text and file_summary:
-        return f"{text}\n{file_summary}"
-    if file_summary:
-        return file_summary
-    return query
+    return chat_content_helpers.build_chatlog_user_content(query, files)
 
 
 def _build_conversation_user_content(query: str, files: Optional[List[str]]) -> str:
-    text = str(query or "").strip()
-    file_summary = _build_file_archive_summary(files, include_refs=False)
-    if text and file_summary:
-        return f"{text}\n{file_summary}"
-    if file_summary:
-        return file_summary
-    return query
+    return chat_content_helpers.build_conversation_user_content(query, files)
 
 
 def _resolve_push_target_id(req: ChatProxyRequest, is_group: bool) -> str:
@@ -548,16 +480,7 @@ def _normalize_request_client_meta(req: Any, *, expected_chat_type: str) -> dict
 
 
 def _split_chat_answer_chunks(answer: str) -> list[str]:
-    text = str(answer or "")
-    if text.lstrip().startswith("<article") or text.lstrip().startswith("<!doctype") or text.lstrip().startswith("<html"):
-        return [text]
-    if not text.strip():
-        return []
-    if "\n\n" in text:
-        return [c.strip() for c in text.split("\n\n") if c.strip()]
-    if "\n" in text:
-        return [c.strip() for c in text.split("\n") if c.strip()]
-    return [text]
+    return chat_response_contract.split_chat_answer_chunks(answer)
 
 
 def _chat_response_meta(
@@ -572,28 +495,17 @@ def _chat_response_meta(
     guardrail_status: str | None = None,
     extra_meta: dict | None = None,
 ) -> dict[str, Any]:
-    meta: dict[str, Any] = {
-        "user_id": req.user_id,
-        "session_id": req.session_id,
-        "platform": platform or _chat_request_platform(req),
-        "chat_type": chat_type or _chat_request_type(req),
-    }
-    request_id = client_meta_request_id(req.client_meta)
-    if request_id:
-        meta["request_id"] = request_id
-    if unprocessed_logs is not None:
-        meta["unprocessed_logs"] = unprocessed_logs
-    if reason:
-        meta["reason"] = reason
-    if source:
-        meta["source"] = source
-    if intent:
-        meta["intent"] = intent
-    if guardrail_status:
-        meta["guardrail_status"] = guardrail_status
-    if isinstance(extra_meta, dict):
-        meta.update(extra_meta)
-    return meta
+    return chat_response_contract.chat_response_meta(
+        req,
+        platform=platform,
+        chat_type=chat_type,
+        unprocessed_logs=unprocessed_logs,
+        reason=reason,
+        source=source,
+        intent=intent,
+        guardrail_status=guardrail_status,
+        extra_meta=extra_meta,
+    )
 
 
 def _chat_response_payload(
@@ -612,35 +524,21 @@ def _chat_response_payload(
     include_answer_chunks: bool = False,
     extra_meta: dict | None = None,
 ) -> dict[str, Any]:
-    payload = build_chat_response_envelope(
+    return chat_response_contract.chat_response_payload(
+        req,
         status=status,
         answer=answer,
         reply_meta=reply_meta,
-        meta=_chat_response_meta(
-            req,
-            platform=platform,
-            chat_type=chat_type,
-            unprocessed_logs=unprocessed_logs,
-            reason=reason,
-            source=source,
-            intent=intent,
-            guardrail_status=guardrail_status,
-            extra_meta=extra_meta,
-        ),
+        platform=platform,
+        chat_type=chat_type,
+        unprocessed_logs=unprocessed_logs,
+        reason=reason,
+        source=source,
+        intent=intent,
+        guardrail_status=guardrail_status,
+        include_answer_chunks=include_answer_chunks,
+        extra_meta=extra_meta,
     )
-    payload["user_id"] = req.user_id
-    payload["answer"] = payload["reply"]
-    if unprocessed_logs is not None:
-        payload["unprocessed_logs"] = unprocessed_logs
-    if reason:
-        payload["reason"] = reason
-    if source:
-        payload["source"] = source
-    if intent:
-        payload["intent"] = intent
-    if include_answer_chunks:
-        payload["answer_chunks"] = _split_chat_answer_chunks(payload["reply"])
-    return payload
 
 
 def _is_guardrail_superuser(user_id: str) -> bool:
@@ -1315,9 +1213,6 @@ async def proxy_chat(
         heartbeat_interval = 5
         pending_delta_parts: list[str] = []
 
-        def _encode_sse(event: dict[str, Any]) -> str:
-            return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-
         def _pop_pending_delta_event() -> dict[str, str] | None:
             if not pending_delta_parts:
                 return None
@@ -1347,18 +1242,18 @@ async def proxy_chat(
 
                     pending_delta = _pop_pending_delta_event()
                     if pending_delta is not None:
-                        yield _encode_sse(pending_delta)
-                    yield _encode_sse(next_event)
+                        yield _chat_sse_data(pending_delta)
+                    yield _chat_sse_data(next_event)
 
                 pending_delta = _pop_pending_delta_event()
                 if pending_delta is not None:
-                    yield _encode_sse(pending_delta)
+                    yield _chat_sse_data(pending_delta)
                 return
 
             pending_delta = _pop_pending_delta_event()
             if pending_delta is not None:
-                yield _encode_sse(pending_delta)
-            yield _encode_sse(event)
+                yield _chat_sse_data(pending_delta)
+            yield _chat_sse_data(event)
 
         async def _drain_stream_queue_until_runner_done() -> None:
             while True:
@@ -1496,7 +1391,7 @@ async def proxy_chat(
                     if pending:
                         await asyncio.gather(*pending, return_exceptions=True)
                     if not completed:
-                        yield f"data: {json.dumps({'status': 'heartbeat'}, ensure_ascii=False)}\n\n"
+                        yield _chat_sse_data({"status": "heartbeat"})
                         continue
 
                     if get_task in completed:
@@ -1523,7 +1418,7 @@ async def proxy_chat(
                     yield chunk
             pending_delta = _pop_pending_delta_event()
             if pending_delta is not None:
-                yield _encode_sse(pending_delta)
+                yield _chat_sse_data(pending_delta)
 
             if "error" in result_holder:
                 err_msg = str(result_holder.get("error") or "unknown")
@@ -1540,7 +1435,7 @@ async def proxy_chat(
                     persisted = True
                 except Exception as pe:
                     logger.error(f"[/chat] Stream persist failed on error path: {pe}")
-                yield f"data: {json.dumps({'status': 'error', 'message': SAFE_STREAM_ERROR_MESSAGE}, ensure_ascii=False)}\n\n"
+                yield _chat_sse_data(_stream_error_event())
             else:
                 answer = result_holder.get("answer", "")
                 private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
@@ -1566,7 +1461,7 @@ async def proxy_chat(
                         timing_meta=private_timing_meta,
                     )
                     persisted = True
-                    yield f"data: {json.dumps({'status': 'error', 'message': SAFE_STREAM_ERROR_MESSAGE}, ensure_ascii=False)}\n\n"
+                    yield _chat_sse_data(_stream_error_event())
                 else:
                     await _finalize_private_buffer(req.user_id, answer)
                     pending = _persist_chat_turn(
@@ -1590,7 +1485,7 @@ async def proxy_chat(
                         unprocessed_logs=pending,
                         guardrail_status=guardrail_status,
                     )
-                    yield f"data: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
+                    yield _chat_sse_data(done_payload)
         finally:
             if not persisted:
                 if runner_task.done():
