@@ -4002,3 +4002,91 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1954。下一�
 utility / legacy timing route，但该边界会接触 bridge、history context、runtime state、
 群回复持久化，风险高于本阶段；也可以继续寻找更低风险的 route-only 子域。继续避开
 `/chat` 与 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。
+
+## 2026-06-22 普通 API Group Utility / Legacy Timing 路由拆分
+
+状态：设计、计划、红灯测试、路由拆分、验证和实现阶段提交均已完成。本阶段继续拆
+普通 `api/routes.py`，迁移 `/update_group_name`、`/group_timing` 与
+`/group_timing/timer` 到 `api/group_utility_routes.py`，但没有迁移 `/chat` 或
+`/group/message` 主链路。选择该边界的原因是 Agent Step / Render 拆分后，剩余可拆
+小路由主要集中在 group utility / legacy timing；它比只拆 `update_group_name()` 的行数
+收益更高，又比直接拆 `/chat` 或 `/group/message` 风险可控。旧 `api.routes` 继续
+re-export `UpdateGroupNameRequest`、`GroupTimingRequest`、`GroupTimingTimerRequest`、
+`_build_group_timing_context()`、`update_group_name()`、`group_timing_deprecated()` 和
+`group_timing_timer()`。普通 API token monkeypatch、`api.routes.get_bridge`
+monkeypatch、group user id normalization、timer recent context、bridge 前事务释放、
+HTML 回复不截断、重复回复抑制、群回复持久化和 route order 均保持兼容。父模块继续保留
+`/chat`、`/group/message`、`/health`、聊天落库、Prompt Runtime、message envelope 和私聊
+multimodal helper。`api/routes.py` 从 1954 行降至 1754 行，新模块
+`api/group_utility_routes.py` 为 283 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-22-api-group-utility-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-group-utility-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`d7a68f0 docs(普通API): 设计群工具路由拆分`。
+- 计划提交：`f8f1ac0 docs(计划): 记录群工具路由拆分计划`。
+- 红灯测试提交：`9ae67ea test(普通API): 锁定群工具路由拆分契约`。
+- 路由拆分提交：`e6d4be5 refactor(普通API): 拆分群工具路由`。
+- 文档收口提交：随本次 `docs(计划): 收口群工具路由拆分` 完成。
+
+计划列表：
+
+- [x] 核对当前 todo 进度与工作区状态。
+- [x] 审计 `api/routes.py` 剩余可拆边界并选定 group utility / legacy timing。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API group utility route split 红灯测试并提交。
+- [x] 拆出 `api/group_utility_routes.py`，保持旧导入兼容、旧 token monkeypatch、
+  `get_bridge` monkeypatch、route 顺序和父模块聊天主链路边界，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py`
+  -> `7 failed, 13 passed, 21 warnings in 8.33s`；失败点为 group utility endpoint
+  仍注册在 `api.routes`、`api.group_utility_routes` 尚不可导入、
+  `api/group_utility_routes.py` 文件不存在，以及 Agent Step 边界测试已期待
+  `group_timing_timer` re-export 到新模块。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py`
+  -> `20 passed, 21 warnings in 2.88s`。
+- timing 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_timing_gate.py::TestRouteContext::test_group_timing_context_sanitizes_pending_messages tests/test_api.py::test_group_timer_returns_full_html_reply_without_truncation tests/test_api.py::test_group_message_returns_full_html_reply_without_truncation tests/test_api_routes_group_helper_facade.py`
+  -> `5 passed, 1 warning in 1.51s`。
+- 普通 API split 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_sticker_media_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py tests/test_api_task_routes_split.py tests/test_asyncio_run_policy.py`
+  -> `76 passed, 21 warnings in 10.01s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/group_utility_routes.py tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py`
+  成功；`api/group_utility_routes.py` 无 `from api.routes`、`import api.routes`、
+  `asyncio.run` 或 `run_awaitable_sync`；`git diff --check -- api/routes.py api/group_utility_routes.py tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 1754 行，`api/group_utility_routes.py` 283 行，
+  `tests/test_api_group_utility_routes_split.py` 211 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1640 passed, 6 skipped, 139 warnings in 120.42s`。
+- 文档收口定向回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_group_utility_routes_split.py tests/test_api.py::test_group_timer_returns_full_html_reply_without_truncation tests/test_asyncio_run_policy.py`
+  -> `13 passed, 21 warnings in 2.73s`。
+
+执行约束：
+
+- 不拆 `/chat`。
+- 不拆 `/group/message`。
+- 不迁移 `ChatProxyRequest`、`GroupMessageRequest`、OneBot segment model、
+  `_persist_chat_turn()`、`_safe_meta()`、私聊缓冲、guardrail、流式响应、
+  Prompt Runtime 输入组装、message envelope 或私聊 multimodal helper。
+- 不修改 `server.py` 或 `bootstrap/lifespan.py`。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或
+  message envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1754。剩余显式路由为
+`/group/message`、`/chat` 和 `/health`；`/health` 收益很低且承担父模块哨兵作用，
+`/chat` 与 `/group/message` 是主链路，继续拆分前需要重新设计更细的边界和红灯契约。

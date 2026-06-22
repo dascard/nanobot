@@ -18,6 +18,37 @@
 - `api/agent_step_routes.py` 已 include 在 `/group_timing/timer` 之后、`/chat` 之前；本阶段必须保持 `/render`、`/chat-step` 仍在 `/chat` 前。
 - `tests/test_api_agent_step_routes_split.py` 当前仍断言 `group_timing_timer` 留在 `api.routes`，本阶段红灯测试需要同步改为拆分后的预期。
 - `group_timing_timer()` 当前调用父模块私有 `_build_multimodal_user_input_text()` 和 `MAX_QUERY_CHARS`。由于 timer 路径传入 `files=None`，实现阶段改为在新模块中直接使用 `core.context_builder.sanitize_prompt_text()` 构造 `chat_query`，避免迁移 `/chat` 的 multimodal helper，也避免反向导入 `api.routes`。
+- 计划提交：`f8f1ac0 docs(计划): 记录群工具路由拆分计划`。
+- 红灯测试提交：`9ae67ea test(普通API): 锁定群工具路由拆分契约`。
+- 路由拆分提交：`e6d4be5 refactor(普通API): 拆分群工具路由`。
+
+## 执行记录
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py`
+  -> `7 failed, 13 passed, 21 warnings in 8.33s`；失败点为 group utility endpoint
+  仍注册在 `api.routes`、`api.group_utility_routes` 尚不可导入、
+  `api/group_utility_routes.py` 文件不存在，以及 Agent Step 边界测试已期待
+  `group_timing_timer` re-export 到新模块。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py`
+  -> `20 passed, 21 warnings in 2.88s`。
+- timing 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_timing_gate.py::TestRouteContext::test_group_timing_context_sanitizes_pending_messages tests/test_api.py::test_group_timer_returns_full_html_reply_without_truncation tests/test_api.py::test_group_message_returns_full_html_reply_without_truncation tests/test_api_routes_group_helper_facade.py`
+  -> `5 passed, 1 warning in 1.51s`。
+- 普通 API split 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_sticker_media_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py tests/test_api_task_routes_split.py tests/test_asyncio_run_policy.py`
+  -> `76 passed, 21 warnings in 10.01s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/group_utility_routes.py tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py`
+  成功；`api/group_utility_routes.py` 无 `from api.routes`、`import api.routes`、
+  `asyncio.run` 或 `run_awaitable_sync`；`git diff --check -- api/routes.py api/group_utility_routes.py tests/test_api_group_utility_routes_split.py tests/test_api_agent_step_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 1754 行，`api/group_utility_routes.py` 283 行，
+  `tests/test_api_group_utility_routes_split.py` 211 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1640 passed, 6 skipped, 139 warnings in 120.42s`。
+- 文档收口定向回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_group_utility_routes_split.py tests/test_api.py::test_group_timer_returns_full_html_reply_without_truncation tests/test_asyncio_run_policy.py`
+  -> `13 passed, 21 warnings in 2.73s`。
 
 本阶段迁移：
 
@@ -78,7 +109,7 @@
 - 创建：`tests/test_api_group_utility_routes_split.py`
 - 修改：`tests/test_api_agent_step_routes_split.py`
 
-- [ ] **步骤 1：创建 group utility split 测试文件**
+- [x] **步骤 1：创建 group utility split 测试文件**
 
 创建 `tests/test_api_group_utility_routes_split.py`：
 
@@ -296,7 +327,7 @@ async def test_group_timing_timer_uses_legacy_routes_get_bridge_monkeypatch(monk
     assert result["group_id"] == "123"
 ```
 
-- [ ] **步骤 2：调整 Agent Step split 父模块边界测试**
+- [x] **步骤 2：调整 Agent Step split 父模块边界测试**
 
 修改 `tests/test_api_agent_step_routes_split.py` 末尾测试：
 
@@ -312,7 +343,7 @@ def test_chat_and_group_boundaries_stay_in_parent_routes():
     assert routes.group_timing_timer is group_utility_routes.group_timing_timer
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -324,7 +355,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：FAIL。关键失败点应包含 `api.group_utility_routes` 不存在、group utility endpoint 仍注册在 `api.routes`，或 `api.routes.group_timing_timer` 尚未 re-export 新模块对象。
 
-- [ ] **步骤 4：提交红灯测试**
+- [x] **步骤 4：提交红灯测试**
 
 运行：
 
@@ -341,7 +372,7 @@ git commit -m "test(普通API): 锁定群工具路由拆分契约"
 - 创建：`api/group_utility_routes.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：创建 `api/group_utility_routes.py`**
+- [x] **步骤 1：创建 `api/group_utility_routes.py`**
 
 创建文件骨架：
 
@@ -375,7 +406,7 @@ router = APIRouter(tags=["group-utility"])
 MAX_QUERY_CHARS = 2000
 ```
 
-- [ ] **步骤 2：添加旧 `get_bridge` monkeypatch provider**
+- [x] **步骤 2：添加旧 `get_bridge` monkeypatch provider**
 
 在 `api/group_utility_routes.py` 中加入：
 
@@ -389,7 +420,7 @@ def _current_bridge_provider():
 
 `group_timing_timer()` 中只调用 `_current_bridge_provider()()`，不直接调用 `_default_get_bridge()`。
 
-- [ ] **步骤 3：迁移 request model 与 `update_group_name()`**
+- [x] **步骤 3：迁移 request model 与 `update_group_name()`**
 
 从 `api/routes.py` 搬入：
 
@@ -416,7 +447,7 @@ def update_group_name(
     return {"status": "ok"}
 ```
 
-- [ ] **步骤 4：迁移 `GroupTimingRequest` 与 `_build_group_timing_context()`**
+- [x] **步骤 4：迁移 `GroupTimingRequest` 与 `_build_group_timing_context()`**
 
 从 `api/routes.py` 搬入：
 
@@ -460,7 +491,7 @@ def _build_group_timing_context(
     return GroupRuntime._build_timing_context(**kwargs)
 ```
 
-- [ ] **步骤 5：迁移 `GroupTimingTimerRequest` 与 `group_timing_deprecated()`**
+- [x] **步骤 5：迁移 `GroupTimingTimerRequest` 与 `group_timing_deprecated()`**
 
 从 `api/routes.py` 搬入：
 
@@ -497,7 +528,7 @@ async def group_timing_deprecated(req: GroupTimingRequest, _auth=Depends(verify_
     return result
 ```
 
-- [ ] **步骤 6：迁移并改写 `group_timing_timer()` 的父模块私有依赖**
+- [x] **步骤 6：迁移并改写 `group_timing_timer()` 的父模块私有依赖**
 
 从 `api/routes.py` 搬入 `group_timing_timer()`，并执行以下替换：
 
@@ -545,7 +576,7 @@ agent_result = group_ingress_helpers.derive_group_agent_result(bridge, group_use
 - 非空且非重复回复后调用 `runtime.note_bot_replied(req.group_id)`。
 - bridge 异常时返回 `{"action": "no_reply"}` 语义。
 
-- [ ] **步骤 7：修改父模块 import 与 re-export**
+- [x] **步骤 7：修改父模块 import 与 re-export**
 
 在 `api/routes.py` 的 split router import 区加入：
 
@@ -564,7 +595,7 @@ from api.group_utility_routes import (
 
 删除父模块中本地 `UpdateGroupNameRequest` 到 `group_timing_timer()` 的定义块。
 
-- [ ] **步骤 8：在原位置 include 子 router**
+- [x] **步骤 8：在原位置 include 子 router**
 
 在 `api/routes.py` 中保持顺序：
 
@@ -579,7 +610,7 @@ async def proxy_chat(
 
 不要把 `group_utility_router` 放到文件尾部 include 区，否则 route order 会变化。
 
-- [ ] **步骤 9：运行拆分绿灯测试**
+- [x] **步骤 9：运行拆分绿灯测试**
 
 运行：
 
@@ -591,7 +622,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS，且输出包含 `tests/test_api_group_utility_routes_split.py` 与 `tests/test_api_agent_step_routes_split.py` 全部通过。
 
-- [ ] **步骤 10：运行 timing 行为回归**
+- [x] **步骤 10：运行 timing 行为回归**
 
 运行：
 
@@ -605,7 +636,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS，确认 legacy timing context、timer HTML 完整回复、群消息 HTML 完整回复和父模块 helper facade 均未回退。
 
-- [ ] **步骤 11：运行普通 API split 相邻回归与 async 策略**
+- [x] **步骤 11：运行普通 API split 相邻回归与 async 策略**
 
 运行：
 
@@ -624,7 +655,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS，确认普通 API 拆分边界与 `asyncio.run` 禁止策略保持有效。
 
-- [ ] **步骤 12：运行静态检查**
+- [x] **步骤 12：运行静态检查**
 
 运行：
 
@@ -642,7 +673,7 @@ wc -l api/routes.py api/group_utility_routes.py tests/test_api_group_utility_rou
 - `git diff --check` 无输出。
 - `api/routes.py` 行数下降。
 
-- [ ] **步骤 13：运行全量回归**
+- [x] **步骤 13：运行全量回归**
 
 运行：
 
@@ -652,7 +683,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。若失败集中在环境或历史脏项，记录完整失败测试名和错误摘要，不提交实现。
 
-- [ ] **步骤 14：提交拆分实现**
+- [x] **步骤 14：提交拆分实现**
 
 运行：
 
@@ -670,13 +701,13 @@ git commit -m "refactor(普通API): 拆分群工具路由"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新本计划执行记录**
+- [x] **步骤 1：更新本计划执行记录**
 
 在「当前状态」之后追加「执行记录」小节，写入红灯、Split 绿灯、timing 行为回归、普通 API split 相邻回归、静态检查、行数检查和全量回归的真实命令与真实输出摘要。每条记录必须包含命令、退出结论、通过或失败统计；红灯记录还要列出关键失败点。
 
 同时将已完成步骤的复选框从 `- [ ]` 改为 `- [x]`。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」记录中追加本阶段结果：
 
@@ -686,7 +717,7 @@ git commit -m "refactor(普通API): 拆分群工具路由"
 
 如果 `docs/todo.md` 已经使用不同编号，按现有编号顺延，不改写无关条目。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-22 记录，格式与文件现有条目一致，内容包含：
 
@@ -700,7 +731,7 @@ git commit -m "refactor(普通API): 拆分群工具路由"
 - 验证：记录本阶段实际通过的定向测试、相邻回归和全量回归结果。
 ```
 
-- [ ] **步骤 4：运行文档检查与定向回归**
+- [x] **步骤 4：运行文档检查与定向回归**
 
 运行：
 
@@ -719,7 +750,7 @@ python -B -m pytest -q -p no:cacheprovider \
 - `git diff --check` 无输出。
 - pytest 0 failures。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
@@ -731,13 +762,13 @@ git commit -m "docs(计划): 收口群工具路由拆分"
 
 ## 最终验收清单
 
-- [ ] `api/group_utility_routes.py` 存在，并且不包含 `from api.routes`、`import api.routes`、`asyncio.run` 或 `run_awaitable_sync`。
-- [ ] `POST /api/v1/update_group_name`、`POST /api/v1/group_timing` 与 `POST /api/v1/group_timing/timer` endpoint module 均为 `api.group_utility_routes`。
-- [ ] `api.routes` 继续 re-export 迁移符号，旧导入对象与新模块对象相同。
-- [ ] `api.routes.NANOBOT_API_TOKEN` monkeypatch 继续影响拆分后的 3 个 endpoint。
-- [ ] `api.routes.get_bridge` monkeypatch 继续影响 `group_timing_timer()`。
-- [ ] route order 保持 `/group/message` -> `/update_group_name` -> `/group_timing` -> `/group_timing/timer` -> `/render` -> `/chat-step` -> `/chat`。
-- [ ] `/chat`、`/group/message`、`/health`、`_persist_chat_turn()`、`_safe_meta()`、`_build_multimodal_user_input_text()` 继续留在 `api.routes`。
-- [ ] `update_group_name()` 继续规范化裸群号为 `group_<id>`，已带 `group_` 前缀时不重复添加。
-- [ ] timer 行为回归、普通 API split 相邻回归、`tests/test_asyncio_run_policy.py` 与全量 `tests/` 均为 0 failures。
-- [ ] 每个阶段性改动均已独立 commit，且未暂存历史无关脏项。
+- [x] `api/group_utility_routes.py` 存在，并且不包含 `from api.routes`、`import api.routes`、`asyncio.run` 或 `run_awaitable_sync`。
+- [x] `POST /api/v1/update_group_name`、`POST /api/v1/group_timing` 与 `POST /api/v1/group_timing/timer` endpoint module 均为 `api.group_utility_routes`。
+- [x] `api.routes` 继续 re-export 迁移符号，旧导入对象与新模块对象相同。
+- [x] `api.routes.NANOBOT_API_TOKEN` monkeypatch 继续影响拆分后的 3 个 endpoint。
+- [x] `api.routes.get_bridge` monkeypatch 继续影响 `group_timing_timer()`。
+- [x] route order 保持 `/group/message` -> `/update_group_name` -> `/group_timing` -> `/group_timing/timer` -> `/render` -> `/chat-step` -> `/chat`。
+- [x] `/chat`、`/group/message`、`/health`、`_persist_chat_turn()`、`_safe_meta()`、`_build_multimodal_user_input_text()` 继续留在 `api.routes`。
+- [x] `update_group_name()` 继续规范化裸群号为 `group_<id>`，已带 `group_` 前缀时不重复添加。
+- [x] timer 行为回归、普通 API split 相邻回归、`tests/test_asyncio_run_policy.py` 与全量 `tests/` 均为 0 failures。
+- [x] 每个阶段性改动均已独立 commit，且未暂存历史无关脏项。

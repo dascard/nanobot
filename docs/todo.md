@@ -298,6 +298,26 @@
     `1631 passed, 6 skipped, 139 warnings in 121.40s`，文档收口定向回归
     `20 passed`。下一刀候选为 group utility / legacy timing route，或继续审计
     更低风险 route-only 边界；继续避开 `/chat` 与 `/group/message` 主链路。
+  - 进展：`api/routes.py` 第九刀已拆出 group utility / legacy timing HTTP 层到
+    `api/group_utility_routes.py`；旧 `api.routes` 继续 re-export
+    `UpdateGroupNameRequest`、`GroupTimingRequest`、`GroupTimingTimerRequest`、
+    `_build_group_timing_context()`、`update_group_name()`、
+    `group_timing_deprecated()` 和 `group_timing_timer()`。本阶段迁移
+    `/update_group_name`、`/group_timing` 与 `/group_timing/timer`，保留普通 API
+    token monkeypatch、`api.routes.get_bridge` monkeypatch、group user id
+    normalization、timer recent context、bridge 前事务释放、HTML 回复不截断、
+    重复回复抑制、群回复持久化和
+    `/group/message` -> `/update_group_name` -> `/group_timing` ->
+    `/group_timing/timer` -> `/render` -> `/chat-step` -> `/chat` 路由顺序；
+    `/chat`、`/group/message`、`/health`、聊天落库、Prompt Runtime、
+    message envelope 和私聊 multimodal helper 仍留在父模块。`api/routes.py`
+    从 1954 行降至 1754 行，`api/group_utility_routes.py` 为 283 行，
+    拆分测试为 211 行。验证结果：红灯 `7 failed, 13 passed`，split 绿灯
+    `20 passed`，timing 行为回归 `5 passed`，普通 API split 相邻回归
+    `76 passed`，静态检查通过，全量回归
+    `1640 passed, 6 skipped, 139 warnings in 120.42s`。下一刀需要重新审计
+    `/chat`、`/group/message` 与 `/health` 的收益 / 风险比；继续避开主链路，
+    除非先完成更细的设计文档和红灯契约。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
