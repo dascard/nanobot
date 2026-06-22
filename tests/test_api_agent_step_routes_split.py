@@ -208,12 +208,13 @@ def test_api_agent_step_async_boundaries_remain_coroutines():
     assert inspect.iscoroutinefunction(routes.chat_step)
 
 
-def test_chat_and_group_boundaries_stay_in_parent_routes():
+def test_chat_boundaries_stay_in_parent_routes_after_group_message_split():
+    from api import group_message_routes
     from api import group_utility_routes
     from api import routes
 
     assert routes.proxy_chat.__module__ == "api.routes"
-    assert routes.group_message.__module__ == "api.routes"
     assert routes._persist_chat_turn.__module__ == "api.routes"
     assert routes._safe_meta.__module__ == "api.routes"
+    assert routes.group_message is group_message_routes.group_message
     assert routes.group_timing_timer is group_utility_routes.group_timing_timer

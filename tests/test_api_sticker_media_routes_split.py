@@ -158,10 +158,11 @@ def test_public_generated_image_keeps_env_token_boundary(monkeypatch):
 
 
 def test_chat_and_group_boundaries_stay_in_parent_routes():
+    from api import group_message_routes
     from api import routes
 
     assert routes.proxy_chat.__module__ == "api.routes"
-    assert routes.group_message.__module__ == "api.routes"
+    assert routes.group_message is group_message_routes.group_message
     assert routes._persist_chat_turn.__module__ == "api.routes"
     assert routes._safe_meta.__module__ == "api.routes"
     assert routes._normalize_files.__module__ == "api.routes"
