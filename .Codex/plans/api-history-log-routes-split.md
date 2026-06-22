@@ -16,9 +16,44 @@
 - [x] 已完成下一刀候选审计：`history_log_routes` 收益最大且仍避开 `/chat` 主链路；`media_routes` 风险更低但收益较小；`agent_step_routes` 收益太小。
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-api-history-log-routes-split-design.md`。
 - [x] 设计提交：`6f93c94 docs(普通API): 设计历史日志路由拆分`。
-- [ ] 任务 1：补普通 API history / log route split 红灯测试并提交。
-- [ ] 任务 2：拆出 `api/history_log_routes.py` 并由 `api.routes` include / re-export 后提交。
-- [ ] 任务 3：更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录后提交。
+- [x] 任务 1：补普通 API history / log route split 红灯测试并提交。
+- [x] 任务 2：拆出 `api/history_log_routes.py` 并由 `api.routes` include / re-export 后提交。
+- [x] 任务 3：更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录后提交。
+
+## 执行记录（2026-06-21）
+
+- 设计提交：`6f93c94 docs(普通API): 设计历史日志路由拆分`。
+- 计划提交：`f321d12 docs(计划): 记录历史日志路由拆分计划`。
+- 红灯测试提交：`360b099 test(普通API): 锁定历史日志路由拆分契约`。
+- 实现提交：`e6aa5f1 refactor(普通API): 拆分历史日志路由`。
+- 文档收口提交：随本阶段 `docs(计划): 收口历史日志路由拆分` 完成。
+
+验证记录：
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_history_log_routes_split.py`
+  -> `5 failed, 4 passed, 21 warnings in 6.46s`；失败点为 history / log endpoint
+  module 仍是 `api.routes`、`api.history_log_routes` 尚不存在，以及
+  `api/history_log_routes.py` 文件不存在。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_history_log_routes_split.py`
+  -> `9 passed, 21 warnings in 1.22s`。
+- 相邻 split / SQLite retry 回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_history_log_routes_split.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py tests/test_api_task_routes_split.py tests/test_tracing_sqlite_retry.py`
+  -> `51 passed, 21 warnings in 5.61s`。
+- 主 API 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api.py`
+  -> `81 passed, 21 warnings in 16.29s`。
+- asyncio 策略回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_asyncio_run_policy.py`
+  -> `3 passed, 1 warning in 1.70s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/history_log_routes.py tests/test_api_history_log_routes_split.py`
+  成功；`git diff --check -- api/routes.py api/history_log_routes.py tests/test_api_history_log_routes_split.py`
+  无输出；`api/history_log_routes.py` 无 `from api.routes`、`import api.routes`、
+  `asyncio.run` 或 `run_awaitable_sync`。
+- 行数检查：`api/routes.py` 2134 行，`api/history_log_routes.py` 367 行，
+  `tests/test_api_history_log_routes_split.py` 208 行。
+- 全量回归：`python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1610 passed, 6 skipped, 139 warnings in 119.08s`。
 
 ## 文件职责
 
@@ -48,7 +83,7 @@
 **文件：**
 - 创建：`tests/test_api_history_log_routes_split.py`
 
-- [ ] **步骤 1：创建测试文件**
+- [x] **步骤 1：创建测试文件**
 
 创建 `tests/test_api_history_log_routes_split.py`：
 
@@ -263,7 +298,7 @@ def test_health_check_stays_in_parent_routes():
     assert {route.endpoint.__module__ for route in routes} == {"api.routes"}
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -274,7 +309,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_history_log_routes_spl
 预期：FAIL。失败点应指向 `api.history_log_routes` 尚不存在、history / log endpoint
 module 仍为 `api.routes`、`api/history_log_routes.py` 文件尚不存在。`/health` 留在父模块的断言可以继续通过。
 
-- [ ] **步骤 3：提交红灯测试**
+- [x] **步骤 3：提交红灯测试**
 
 运行：
 
@@ -289,7 +324,7 @@ git commit -m "test(普通API): 锁定历史日志路由拆分契约"
 - 创建：`api/history_log_routes.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：创建 `api/history_log_routes.py`**
+- [x] **步骤 1：创建 `api/history_log_routes.py`**
 
 创建 `api/history_log_routes.py`，从父模块迁移 history / log 端点。模块骨架如下，函数体直接使用 `api/routes.py` 当前实现：
 
@@ -333,7 +368,7 @@ router = APIRouter(tags=["history-log"])
 - `submit_ambient_log()` 使用 `normalize_group_session_id()`。
 - `search_history_logs()` 的 LIKE 转义和同 session 上下文展开。
 
-- [ ] **步骤 2：修改 `api/routes.py` import 与 re-export**
+- [x] **步骤 2：修改 `api/routes.py` import 与 re-export**
 
 在 `api/routes.py` 中新增：
 
@@ -367,7 +402,7 @@ def _persist_chat_turn(...):
     ...
 ```
 
-- [ ] **步骤 3：删除父模块本地 history / log 定义并 include 子 router**
+- [x] **步骤 3：删除父模块本地 history / log 定义并 include 子 router**
 
 删除 `api/routes.py` 中本地：
 
@@ -397,7 +432,7 @@ router.include_router(model_router)
 router.include_router(task_router)
 ```
 
-- [ ] **步骤 4：运行 split 定向测试验证绿灯**
+- [x] **步骤 4：运行 split 定向测试验证绿灯**
 
 运行：
 
@@ -407,7 +442,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_history_log_routes_spl
 
 预期：PASS。
 
-- [ ] **步骤 5：运行行为回归与相邻回归**
+- [x] **步骤 5：运行行为回归与相邻回归**
 
 运行：
 
@@ -418,7 +453,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_task_routes_split.py t
 
 预期：PASS。
 
-- [ ] **步骤 6：运行静态检查**
+- [x] **步骤 6：运行静态检查**
 
 运行：
 
@@ -436,7 +471,7 @@ wc -l api/routes.py api/history_log_routes.py tests/test_api_history_log_routes_
 - `git diff --check` 无输出。
 - `api/routes.py` 行数低于 2469。
 
-- [ ] **步骤 7：运行全量测试**
+- [x] **步骤 7：运行全量测试**
 
 运行：
 
@@ -446,7 +481,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 8：提交 history / log 路由拆分**
+- [x] **步骤 8：提交 history / log 路由拆分**
 
 运行：
 
@@ -462,7 +497,7 @@ git commit -m "refactor(普通API): 拆分历史日志路由"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新计划执行记录**
+- [x] **步骤 1：更新计划执行记录**
 
 在本计划的「当前状态」中把任务 1 和任务 2 标记为完成，并新增「执行记录」章节，记录：
 
@@ -476,7 +511,7 @@ git commit -m "refactor(普通API): 拆分历史日志路由"
 - `wc -l api/routes.py api/history_log_routes.py tests/test_api_history_log_routes_split.py` 行数。
 - 全量回归结果。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在「超大文件 >800 行拆分」条目下记录：
 
@@ -485,7 +520,7 @@ git commit -m "refactor(普通API): 拆分历史日志路由"
 - `api/routes.py` 最新行数。
 - 下一候选为 media 路由或 agent-step / render；继续避开 `/chat` 与 `/group/message` 主链路。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-21 的 history / log route-only 拆分执行记录，包含：
 
@@ -496,7 +531,7 @@ git commit -m "refactor(普通API): 拆分历史日志路由"
 - 验证命令和结果。
 - 下一步建议。
 
-- [ ] **步骤 4：文档格式与状态检查**
+- [x] **步骤 4：文档格式与状态检查**
 
 运行：
 
@@ -508,7 +543,7 @@ git status --short
 
 预期：`rg` 无命中，`git diff --check` 无输出；`git status --short` 中本阶段只包含计划与文档相关改动，以及历史无关脏项。
 
-- [ ] **步骤 5：运行最终定向回归**
+- [x] **步骤 5：运行最终定向回归**
 
 运行：
 
@@ -518,7 +553,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_history_log_routes_spl
 
 预期：PASS。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 
@@ -529,18 +564,18 @@ git commit -m "docs(计划): 收口历史日志路由拆分"
 
 ## 最终验收清单
 
-- [ ] `tests/test_api_history_log_routes_split.py` 经历红灯再绿灯。
-- [ ] `api.history_log_routes` 不导入 `api.routes`。
-- [ ] `api.routes` re-export history / log request model 和 endpoint。
-- [ ] `submit_log()` 保持同步函数，只写 `ChatLog`，不写 `ConversationTurn`。
-- [ ] `submit_log()` 达到阈值时只向 `BackgroundTasks` 排队 evolution。
-- [ ] `submit_ambient_log()` 保持 `group_*` session、`ambient` role 和 `processed=1`。
-- [ ] `api.routes._persist_chat_turn` 继续留在父模块。
-- [ ] `api.routes._safe_meta` 继续留在父模块。
-- [ ] `api.routes.init_legacy_memory` 继续留在父模块。
-- [ ] `/health` 仍留在 `api.routes`。
-- [ ] `/chat` 与 `/group/message` 主链路未迁移。
-- [ ] `/search_logs` limit / context_size / LIKE 转义回归通过。
-- [ ] `tests/test_asyncio_run_policy.py` 通过。
-- [ ] 全量 `tests/` 回归 0 failures。
-- [ ] 每个阶段性改动都有独立 commit。
+- [x] `tests/test_api_history_log_routes_split.py` 经历红灯再绿灯。
+- [x] `api.history_log_routes` 不导入 `api.routes`。
+- [x] `api.routes` re-export history / log request model 和 endpoint。
+- [x] `submit_log()` 保持同步函数，只写 `ChatLog`，不写 `ConversationTurn`。
+- [x] `submit_log()` 达到阈值时只向 `BackgroundTasks` 排队 evolution。
+- [x] `submit_ambient_log()` 保持 `group_*` session、`ambient` role 和 `processed=1`。
+- [x] `api.routes._persist_chat_turn` 继续留在父模块。
+- [x] `api.routes._safe_meta` 继续留在父模块。
+- [x] `api.routes.init_legacy_memory` 继续留在父模块。
+- [x] `/health` 仍留在 `api.routes`。
+- [x] `/chat` 与 `/group/message` 主链路未迁移。
+- [x] `/search_logs` limit / context_size / LIKE 转义回归通过。
+- [x] `tests/test_asyncio_run_policy.py` 通过。
+- [x] 全量 `tests/` 回归 0 failures。
+- [x] 每个阶段性改动都有独立 commit。

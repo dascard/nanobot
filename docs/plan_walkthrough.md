@@ -5,7 +5,7 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-21
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成 history / log 路由拆分并降至 2134 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。同日续跑补记：测试 helper 的 `asyncio.Runner` 兼容性问题已随 `cfdd9c2 test(异步): 移除 Runner 测试依赖` 收口，提交前全量回归结果为 `1380 passed, 6 skipped, 139 warnings in 100.75s`，非 vendor Python 代码中无 `asyncio.Runner` 命中。TimingGate scoring 可观测性收尾也已完成：设计提交 `4824036 docs(时机): 设计评分可观测收尾`，计划提交 `2820f7a docs(计划): 记录评分可观测收尾计划`，实现提交 `9d5817c feat(时机): 补齐评分可观测字段`；验证包括红灯 `s_transport_tier` 缺失、绿灯 `1 passed`、相邻回归 `7 passed`、WebUI build 退出码 0、全量回归 `1380 passed, 6 skipped, 139 warnings in 103.22s`。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
@@ -2509,7 +2509,7 @@ timing context 构造、快照和全局单例。
 - 全量：`python -m pytest tests/ -v` ->
   `1497 passed, 6 skipped, 139 warnings in 119.42s`。
 - 文档收口提交前验证：`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/group-runtime-state-scoring-split.md`
-  与占位符扫描脚本均无输出；随后全量 `python -m pytest tests/ -v` ->
+  与残留扫描脚本均无输出；随后全量 `python -m pytest tests/ -v` ->
   `1497 passed, 6 skipped, 139 warnings in 111.55s`。
 - 行数：`runtime.py` 722 行，`constants.py` 19 行，`state.py` 397 行，
   `scoring.py` 330 行，`tests/test_group_runtime_split_compat.py` 137 行。
@@ -2582,7 +2582,7 @@ P3 超大文件队列现在应优先继续拆 `api/routes.py`，其次是
 - 提交后检查：`git show --stat --oneline -1` 确认实现提交包含 10 个预期文件，
   目标代码与测试文件提交后干净。
 - 文档门禁：`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/best-effort-debug-logging.md`
-  与占位符扫描脚本均无输出。
+  与残留扫描脚本均无输出。
 - 文档提交前全量：`python -m pytest tests/ -v` ->
   `1503 passed, 6 skipped, 139 warnings in 118.42s`。
 
@@ -3460,7 +3460,7 @@ auth 同一函数对象，再把低耦合 `/tasks*` 定时任务路由拆到 `ap
 
 设计阶段验证记录：
 
-- 文档自检：占位残留和乱码扫描无命中。
+- 文档自检：模板残留和乱码扫描无命中。
 - 空白检查：`git diff --check -- docs/superpowers/specs/2026-06-21-api-task-routes-split-design.md`
   无输出。
 - 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
@@ -3742,3 +3742,86 @@ memory 初始化链路。已把手动 `/evolution/trigger` HTTP 层迁移到
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 2469。下一刀建议优先审计
 stickers/media、history/context/log、agent-step/search/render 等更大但低耦合边界；
 继续避开 `/chat` 与 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。
+
+## 2026-06-21 普通 API History / Log 路由拆分
+
+状态：设计、计划、红灯测试、history / log 路由拆分、验证和实现阶段提交均已完成。
+本阶段继续拆普通 `api/routes.py`，但没有迁移 `/chat` 或 `/group/message` 主链路。
+已把 `/chat/mark-clear`、`/chat/history-summary`、`/chat/compact-history`、`/context`、
+`/log`、`/log_ambient` 和 `/search_logs` HTTP 层迁移到
+`api/history_log_routes.py`；旧 `api.routes` 继续 re-export `LogRequest`、
+`AmbientLogRequest` 和 7 个 endpoint。旧 token monkeypatch、dependency override、
+`/log` 同步 `BackgroundTasks.add_task()` evolution 排队边界、SQLite locked retry、
+`/log_ambient` 的 `group_*` session / `ambient` role / `processed=1` 合同，以及
+`/search_logs` 的 limit / context_size / LIKE 转义和同 session 上下文展开语义均保持兼容。
+父模块继续保留 `_persist_chat_turn()`、`_safe_meta()`、`init_legacy_memory()`、`memory`、
+`evolution_task`、`EVOLUTION_THRESHOLD`、`/chat`、`/group/message` 和 `/health`。
+`api/routes.py` 从 2469 行降至 2134 行，新模块 `api/history_log_routes.py` 为 367 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-api-history-log-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-history-log-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`6f93c94 docs(普通API): 设计历史日志路由拆分`。
+- 计划提交：`f321d12 docs(计划): 记录历史日志路由拆分计划`。
+- 红灯测试提交：`360b099 test(普通API): 锁定历史日志路由拆分契约`。
+- 路由拆分提交：`e6aa5f1 refactor(普通API): 拆分历史日志路由`。
+- 文档收口提交：随本次 `docs(计划): 收口历史日志路由拆分` 完成。
+
+计划列表：
+
+- [x] 并行审计 stickers/media、history/context/log 与 agent-step/search/render 候选。
+- [x] 选择 `history_log_routes` 作为下一刀边界，并写入设计文档。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API history / log route split 红灯测试并提交。
+- [x] 拆出 `api/history_log_routes.py`，保持旧导入兼容、旧 token monkeypatch、
+  手动日志 evolution 排队边界和父模块聊天主链路边界，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_history_log_routes_split.py`
+  -> `5 failed, 4 passed, 21 warnings in 6.46s`；失败点为 7 个 history / log endpoint
+  仍注册在 `api.routes`、`api.history_log_routes` 尚不存在，以及
+  `api/history_log_routes.py` 文件不存在。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_history_log_routes_split.py`
+  -> `9 passed, 21 warnings in 1.22s`。
+- 相邻 split / SQLite retry 回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_history_log_routes_split.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py tests/test_api_task_routes_split.py tests/test_tracing_sqlite_retry.py`
+  -> `51 passed, 21 warnings in 5.61s`。
+- 主 API 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api.py`
+  -> `81 passed, 21 warnings in 16.29s`。
+- asyncio 策略回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_asyncio_run_policy.py`
+  -> `3 passed, 1 warning in 1.70s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/history_log_routes.py tests/test_api_history_log_routes_split.py`
+  成功；`api/history_log_routes.py` 无 `from api.routes`、`import api.routes`、
+  `asyncio.run` 或 `run_awaitable_sync`；`git diff --check -- api/routes.py api/history_log_routes.py tests/test_api_history_log_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 2134 行，`api/history_log_routes.py` 367 行，
+  `tests/test_api_history_log_routes_split.py` 208 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1610 passed, 6 skipped, 139 warnings in 119.08s`。
+
+执行约束：
+
+- 不拆 `/chat`。
+- 不拆 `/group/message`。
+- 不迁移 `_persist_chat_turn()`、`_safe_meta()`、`init_legacy_memory()`、`memory`、
+  `evolution_task` 或 `EVOLUTION_THRESHOLD`。
+- 不修改 `server.py` 或 `bootstrap/lifespan.py`。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或
+  message envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 2134。下一刀可优先拆 media /
+stickers 路由，或拆 `chat-step` / `render` 这类 route-only 边界；继续避开 `/chat` 与
+`/group/message` 主链路，除非先完成更细的设计文档和红灯契约。

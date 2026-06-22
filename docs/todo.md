@@ -246,6 +246,24 @@
     `1601 passed, 6 skipped, 139 warnings in 115.11s`。下一刀候选为
     stickers/media、history/context/log、agent-step/search/render 等更大但低耦合
     边界；继续避开 `/chat` 与 `/group/message` 主链路，除非先完成更细设计和红灯契约。
+  - 进展：`api/routes.py` 第六刀已拆出 history / log HTTP 层到
+    `api/history_log_routes.py`；旧 `api.routes` 继续 re-export `LogRequest`、
+    `AmbientLogRequest`、`mark_clear()`、`get_history_summary()`、`compact_history()`、
+    `get_context()`、`submit_log()`、`submit_ambient_log()` 和
+    `search_history_logs()`。本阶段保留 `/chat/mark-clear`、`/chat/history-summary`、
+    `/chat/compact-history`、`/context`、`/log`、`/log_ambient` 和 `/search_logs`
+    的 HTTP 契约、旧 token monkeypatch、`/log` 同步 `BackgroundTasks.add_task()`
+    evolution 排队边界、SQLite locked retry、`/search_logs` limit / context_size /
+    LIKE 转义和同 session 上下文展开语义；`_persist_chat_turn()`、`_safe_meta()`、
+    `init_legacy_memory()`、`memory`、`evolution_task`、`EVOLUTION_THRESHOLD`、`/chat`、
+    `/group/message` 和 `/health` 仍留在父模块。`api/routes.py` 从 2469 行降至
+    2134 行，`api/history_log_routes.py` 为 367 行，拆分测试为 208 行。
+    验证结果：红灯 `5 failed, 4 passed`，split 绿灯 `9 passed`，相邻 split /
+    SQLite retry 回归 `51 passed`，主 API 行为回归 `81 passed`，asyncio 策略
+    回归 `3 passed`，静态检查通过，全量回归
+    `1610 passed, 6 skipped, 139 warnings in 119.08s`。下一刀候选为 media /
+    stickers 路由或 agent-step / render route-only 边界；继续避开 `/chat` 与
+    `/group/message` 主链路。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
