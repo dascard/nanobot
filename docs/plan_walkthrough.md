@@ -4177,3 +4177,94 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1709。剩余�
 chat helper / contract / persistence 抽取，把 `/chat` 主链路的私聊缓冲、SSE、guardrail、
 Prompt Runtime metadata、落库和断连 push 逐步拆成更小边界，再考虑迁移完整 `/chat`
 endpoint。
+
+## 2026-06-22 普通 API Chat Helper 拆分
+
+状态：设计、计划、红灯测试、helper 拆分、验证和实现阶段提交均已完成。本阶段继续拆
+普通 `api/routes.py`，新增 `api/chat_content_helpers.py` 与
+`api/chat_response_contract.py`，迁移聊天内容 helper 和响应契约 helper 的实现逻辑。
+`api.routes` 继续保留旧下划线 wrapper，`/chat` 路由本体、`ChatProxyRequest`、
+私聊缓冲、聊天落库、Prompt Runtime 输入组装、bridge/SSE runner、`get_bridge` /
+`get_guardrail` monkeypatch、`CHAT_STREAM_QUEUE_MAXSIZE` 和 `/health` 均保持在父模块。
+选择该边界的原因是完整搬迁 `/chat` 会同时触达私聊缓冲、SSE、断连后台 push、落库幂等和
+大量旧父模块 monkeypatch；而内容 helper 与 response contract 基本是纯函数，可先降低
+`api/routes.py` 的职责密度。`api/routes.py` 从 1709 行降至 1604 行；
+`api/chat_content_helpers.py` 为 76 行，`api/chat_response_contract.py` 为 163 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-22-api-chat-helper-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-helper-split.md`。
+
+阶段提交：
+
+- 设计提交：`7063415 docs(普通API): 设计聊天助手拆分`。
+- 计划提交：`6cfd183 docs(计划): 记录聊天助手拆分计划`。
+- 红灯测试提交：`b313580 test(普通API): 锁定聊天助手拆分契约`。
+- Helper 拆分提交：`dd34229 refactor(普通API): 拆分聊天助手契约`。
+- 文档收口提交：随本次 `docs(计划): 收口聊天助手拆分` 完成。
+
+计划列表：
+
+- [x] 汇总 `/chat` 拆分审计结论并确定 chat content / response contract 边界。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API chat helper split 红灯测试并提交。
+- [x] 新增 `api/chat_content_helpers.py` 与 `api/chat_response_contract.py`，把父模块
+  helper 改为 wrapper，保持旧 `__module__`、SSE 格式、response envelope 和图片归档契约，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 首次红灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_chat_helpers_split.py tests/test_api_sticker_media_routes_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py`
+  -> `8 failed, 35 passed, 21 warnings in 10.08s`；其中 7 个失败来自新模块缺失，
+  另 1 个失败暴露测试误用顶层 `request_id`，已按真实契约改为
+  `client_meta.trace.request_id`。
+- 修正后红灯：同一命令 ->
+  `7 failed, 36 passed, 21 warnings in 10.03s`；失败点集中在
+  `api/chat_content_helpers.py`、`api/chat_response_contract.py` 不存在或无法导入。
+- Helper split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_chat_helpers_split.py`
+  -> `8 passed, 1 warning in 0.89s`。
+- 普通 API split 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_chat_helpers_split.py tests/test_api_sticker_media_routes_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_memory_routes_split.py tests/test_asyncio_run_policy.py`
+  -> `62 passed, 21 warnings in 7.57s`。
+- `/chat` 流式与信封回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_streaming_api.py tests/test_streaming_response_envelope.py tests/test_api_push_envelope.py tests/test_chat_response_envelope.py tests/test_message_envelope.py`
+  -> `21 passed, 21 warnings in 7.21s`。
+- `/chat` 私聊缓冲和持久化关键 nodeid：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api.py::test_proxy_chat_kt_error_does_not_echo_internal_detail tests/test_api.py::test_stream_chat_emits_progress_and_done_events tests/test_api.py::test_stream_chat_passes_stream_flag_to_bridge tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send tests/test_api.py::test_proxy_chat_persists_private_timing_scoring_meta tests/test_api.py::test_proxy_chat_no_reply_persists_private_timing_scoring_meta tests/test_api.py::test_private_buffer_refreshes_window_and_persists_merged_messages tests/test_api.py::test_private_buffer_merges_files_for_final_bridge_request`
+  -> `11 passed, 21 warnings in 2.86s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/chat_content_helpers.py api/chat_response_contract.py tests/test_api_chat_helpers_split.py`
+  成功；`api/chat_content_helpers.py` 与 `api/chat_response_contract.py` 无
+  `from api.routes`、`import api.routes`、`asyncio.run` 或 `run_awaitable_sync`；
+  `git diff --check -- api/routes.py api/chat_content_helpers.py api/chat_response_contract.py tests/test_api_chat_helpers_split.py tests/test_api_sticker_media_routes_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 1604 行，`api/chat_content_helpers.py` 76 行，
+  `api/chat_response_contract.py` 163 行，`tests/test_api_chat_helpers_split.py` 144 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1662 passed, 6 skipped, 139 warnings in 125.10s`。
+- 文档收口定向回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_chat_helpers_split.py tests/test_streaming_response_envelope.py tests/test_asyncio_run_policy.py`
+  -> `13 passed, 21 warnings in 3.66s`。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移 `ChatProxyRequest`、`proxy_chat()`、`_private_buffers`、`_persist_chat_turn()`、
+  `_safe_meta()`、`get_bridge`、`get_guardrail` 或 `CHAT_STREAM_QUEUE_MAXSIZE`。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或
+  message envelope。
+- 不改变 ChatLog 完整图片归档和 ConversationTurn 图片摘要边界。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1604。剩余显式路由为 `/chat` 和
+`/health`；`/health` 收益很低且承担父模块哨兵作用，不优先拆。下一候选边界应继续围绕
+`/chat` 主链路做细粒度设计：优先评估聊天落库 writer、私聊缓冲状态机或 streaming
+finalizer / push envelope 构造，继续保留父模块 monkeypatch facade，避免一次性迁移完整
+`proxy_chat()`。

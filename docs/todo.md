@@ -331,8 +331,24 @@
     为 88 行，拆分测试为 262 行。验证结果：红灯 `8 failed, 24 passed`，
     split 绿灯 `41 passed`，群消息行为回归 `13 passed`，普通 API split
     相邻回归 `87 passed`，静态检查通过，全量回归
-    `1651 passed, 6 skipped, 139 warnings in 122.43s`。下一刀建议先做
-    chat helper / contract / persistence 抽取设计；`/health` 收益很低，不优先拆。
+    `1651 passed, 6 skipped, 139 warnings in 122.43s`。当时建议先做 chat helper /
+    contract / persistence 抽取设计；`/health` 收益很低，不优先拆。
+  - 进展：`api/routes.py` 第十一刀已拆出 chat content / response contract helper 到
+    `api/chat_content_helpers.py` 与 `api/chat_response_contract.py`；旧 `api.routes`
+    继续保留同名 wrapper，`/chat` 路由本体、`ChatProxyRequest`、私聊缓冲、
+    `_persist_chat_turn()`、`_safe_meta()`、`get_bridge` / `get_guardrail` monkeypatch、
+    `CHAT_STREAM_QUEUE_MAXSIZE` 和 `/health` 仍留在父模块。保留 SSE delta 合并、
+    安全错误事件、response envelope、`answer_chunks`、ChatLog 完整图片归档和
+    ConversationTurn 图片摘要语义；新模块不反向导入 `api.routes`，也没有
+    `asyncio.run` 或 `run_awaitable_sync`。`api/routes.py` 从 1709 行降至
+    1604 行，`api/chat_content_helpers.py` 为 76 行，
+    `api/chat_response_contract.py` 为 163 行，拆分测试为 144 行。验证结果：
+    红灯 `7 failed, 36 passed`（另一次初始红灯暴露并修正了测试侧 request_id 假设），
+    helper split 绿灯 `8 passed`，普通 API split 相邻回归 `62 passed`，
+    `/chat` 流式与信封回归 `21 passed`，私聊缓冲和持久化关键回归 `11 passed`，
+    静态检查通过，全量回归 `1662 passed, 6 skipped, 139 warnings in 125.10s`。
+    下一刀候选为聊天落库 writer、私聊缓冲状态机或 streaming finalizer 的进一步设计；
+    继续不优先拆 `/health`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
