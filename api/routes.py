@@ -52,6 +52,11 @@ from core.client_meta import (
 from core.message_envelope import build_chat_response_envelope
 from app.group_ingress import helpers as group_ingress_helpers
 from api.common_auth import verify_token
+from api.evolution_routes import (
+    EvolutionTriggerRequest,
+    router as evolution_router,
+    trigger_evolution,
+)
 from api.memory_routes import (
     MemoryDigestRunRequest,
     _build_expand_chain,
@@ -296,11 +301,6 @@ class ChatProxyRequest(BaseModel):
     message_id: str | None = None               # QQ 原始消息 ID
     source_message_ids: list[str] | None = None  # 合并消息的源 ID 列表
     client_meta: dict | None = None              # QQbot 侧元信息
-
-class EvolutionTriggerRequest(BaseModel):
-    user_id: str
-
-
 
 def _safe_meta(meta_json: str) -> dict:
     try:
@@ -2458,24 +2458,9 @@ async def proxy_chat(
         include_answer_chunks=True,
     )
 
-@router.post("/evolution/trigger")
-def trigger_evolution(
-    req: EvolutionTriggerRequest,
-    background_tasks: BackgroundTasks,
-    _auth=Depends(verify_token),
-):
-    """
-    手动触发自进化：通过 API 强制开启画像提炼与同步，不再依赖日志计数阈值。
-    """
-    logger.info(f"Manual evolution triggered for user [{req.user_id}]")
-    background_tasks.add_task(evolution_task, req.user_id)
-    return {"status": "ok", "message": f"Evolution task queued for {req.user_id}"}
-
-
+router.include_router(evolution_router)
 router.include_router(memory_router)
 router.include_router(model_router)
-
-
 router.include_router(task_router)
 
 @router.get("/health")
