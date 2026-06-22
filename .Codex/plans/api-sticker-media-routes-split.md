@@ -14,7 +14,10 @@
 
 - 设计文档：`docs/superpowers/specs/2026-06-22-api-sticker-media-routes-split-design.md`。
 - 设计提交：`0b02d3e docs(普通API): 设计贴纸媒体路由拆分`。
-- `api/routes.py` 当前 2134 行。
+- 计划提交：`9493c0c docs(计划): 记录贴纸媒体路由拆分计划`。
+- 红灯测试提交：`6ded608 test(普通API): 锁定贴纸媒体路由拆分契约`。
+- 实现提交：`8d3acbc refactor(普通API): 拆分贴纸媒体路由`。
+- `api/routes.py` 当前 1975 行，拆分前为 2134 行。
 - 本阶段迁移：
   - `StickerRegisterRequest`
   - `register_sticker_endpoint`
@@ -41,6 +44,33 @@
   - `evolution_task`
   - `/health`
 
+## 执行记录
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_split.py`
+  -> `3 failed, 7 passed, 21 warnings in 7.04s`；失败点为 5 个 sticker / media
+  endpoint 仍注册在 `api.routes`、`api.sticker_media_routes` 尚不可导入，以及
+  `api/sticker_media_routes.py` 文件不存在。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_split.py`
+  -> `10 passed, 21 warnings in 1.66s`。
+- 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api.py::test_sticker_register_search_and_disable_api tests/test_api.py::test_public_sticker_image_returns_cached_file tests/test_api.py::test_sticker_register_auto_describe_adds_background_task tests/test_sticker_memory.py tests/test_sticker_rag.py tests/test_sticker_tool.py tests/test_image_generation_tool.py tests/test_push_envelope.py tests/test_qq_outbound_renderer.py`
+  -> `67 passed, 21 warnings in 6.05s`。
+- 普通 API split 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py tests/test_api_task_routes_split.py tests/test_asyncio_run_policy.py`
+  -> `56 passed, 21 warnings in 7.67s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/sticker_media_routes.py tests/test_api_sticker_media_routes_split.py`
+  成功；`rg -n "from api\.routes|import api\.routes|asyncio\.run|run_awaitable_sync" api/sticker_media_routes.py`
+  无命中，退出码为 1；`git diff --check -- api/routes.py api/sticker_media_routes.py tests/test_api_sticker_media_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 1975 行，`api/sticker_media_routes.py` 185 行，
+  `tests/test_api_sticker_media_routes_split.py` 182 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1620 passed, 6 skipped, 139 warnings in 116.71s`。
+- 文档收口定向回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_split.py tests/test_api.py::test_sticker_register_search_and_disable_api tests/test_api.py::test_public_sticker_image_returns_cached_file tests/test_api.py::test_sticker_register_auto_describe_adds_background_task tests/test_asyncio_run_policy.py`
+  -> `16 passed, 21 warnings in 3.87s`。
+
 ## 文件职责
 
 - 创建：`tests/test_api_sticker_media_routes_split.py`
@@ -64,7 +94,7 @@
 
 - 创建：`tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 1：创建测试文件**
+- [x] **步骤 1：创建测试文件**
 
 创建 `tests/test_api_sticker_media_routes_split.py`：
 
@@ -250,7 +280,7 @@ def test_group_sticker_helpers_stay_group_ingress_facades():
     assert routes._register_group_stickers_from_message is helpers.register_group_stickers_from_message
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -261,7 +291,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_s
 预期：FAIL。失败点应指向 `api.sticker_media_routes` 尚不存在、5 个 endpoint 仍注册在
 `api.routes`，以及 `api/sticker_media_routes.py` 文件尚不存在。
 
-- [ ] **步骤 3：提交红灯测试**
+- [x] **步骤 3：提交红灯测试**
 
 运行：
 
@@ -278,7 +308,7 @@ git commit -m "test(普通API): 锁定贴纸媒体路由拆分契约"
 - 创建：`api/sticker_media_routes.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：创建 `api/sticker_media_routes.py`**
+- [x] **步骤 1：创建 `api/sticker_media_routes.py`**
 
 创建 `api/sticker_media_routes.py`，从 `api/routes.py` 当前实现迁移 request model 和
 5 个 endpoint。模块骨架如下：
@@ -330,7 +360,7 @@ router = APIRouter(tags=["sticker-media"])
   缺失图片返回 404。
 - `disable_sticker_endpoint()` 捕获 `ValueError` 并返回 404。
 
-- [ ] **步骤 2：修改 `api/routes.py` import 与 re-export**
+- [x] **步骤 2：修改 `api/routes.py` import 与 re-export**
 
 删除父模块中不再需要的 import：
 
@@ -355,7 +385,7 @@ from api.sticker_media_routes import (
 保留 `os`，因为父模块仍在 `_finalize_private_buffer()` 中使用 `os.getenv()`。
 保留 `Response`、`StreamingResponse`、`Header` 等父模块仍使用的 import。
 
-- [ ] **步骤 3：删除父模块本地 sticker / media 定义并 include 子 router**
+- [x] **步骤 3：删除父模块本地 sticker / media 定义并 include 子 router**
 
 删除 `api/routes.py` 中本地：
 
@@ -377,7 +407,7 @@ router.include_router(task_router)
 router.include_router(sticker_media_router)
 ```
 
-- [ ] **步骤 4：运行 split 定向测试验证绿灯**
+- [x] **步骤 4：运行 split 定向测试验证绿灯**
 
 运行：
 
@@ -387,7 +417,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_s
 
 预期：PASS。
 
-- [ ] **步骤 5：运行行为回归与相邻回归**
+- [x] **步骤 5：运行行为回归与相邻回归**
 
 运行：
 
@@ -406,7 +436,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 6：运行普通 API split 相邻回归**
+- [x] **步骤 6：运行普通 API split 相邻回归**
 
 运行：
 
@@ -423,7 +453,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 7：运行静态检查**
+- [x] **步骤 7：运行静态检查**
 
 运行：
 
@@ -441,7 +471,7 @@ wc -l api/routes.py api/sticker_media_routes.py tests/test_api_sticker_media_rou
 - `git diff --check` 无输出。
 - `api/routes.py` 行数低于 2134。
 
-- [ ] **步骤 8：运行全量测试**
+- [x] **步骤 8：运行全量测试**
 
 运行：
 
@@ -451,7 +481,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 9：提交 sticker / media 路由拆分**
+- [x] **步骤 9：提交 sticker / media 路由拆分**
 
 运行：
 
@@ -469,7 +499,7 @@ git commit -m "refactor(普通API): 拆分贴纸媒体路由"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新计划执行记录**
+- [x] **步骤 1：更新计划执行记录**
 
 在本计划的「当前状态」中把任务 1 和任务 2 标记为完成，并新增「执行记录」章节，
 记录：
@@ -485,7 +515,7 @@ git commit -m "refactor(普通API): 拆分贴纸媒体路由"
 - `wc -l api/routes.py api/sticker_media_routes.py tests/test_api_sticker_media_routes_split.py` 行数。
 - 全量回归结果。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在「超大文件 >800 行拆分」条目下记录：
 
@@ -495,7 +525,7 @@ git commit -m "refactor(普通API): 拆分贴纸媒体路由"
 - `api/routes.py` 最新行数。
 - 下一候选为 `chat-step / render` 小刀或继续审计更低风险 route-only 边界。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-22 的 sticker / media route-only 拆分执行记录，包含：
 
@@ -505,7 +535,7 @@ git commit -m "refactor(普通API): 拆分贴纸媒体路由"
 - 验证命令和结果。
 - 下一步建议。
 
-- [ ] **步骤 4：文档格式与状态检查**
+- [x] **步骤 4：文档格式与状态检查**
 
 运行：
 
@@ -519,7 +549,7 @@ git status --short
 预期：第一个 `rg` 在收口后无命中；第二个 `rg` 无命中；`git diff --check` 无输出；
 `git status --short` 中本阶段只包含计划与文档相关改动，以及历史无关脏项。
 
-- [ ] **步骤 5：运行最终定向回归**
+- [x] **步骤 5：运行最终定向回归**
 
 运行：
 
@@ -534,7 +564,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 
@@ -546,21 +576,21 @@ git commit -m "docs(计划): 收口贴纸媒体路由拆分"
 
 ## 最终验收清单
 
-- [ ] `tests/test_api_sticker_media_routes_split.py` 经历红灯再绿灯。
-- [ ] `api/sticker_media_routes.py` 已创建。
-- [ ] `api.sticker_media_routes` 不导入 `api.routes`。
-- [ ] `api.sticker_media_routes` 不包含 `asyncio.run` 或 `run_awaitable_sync`。
-- [ ] `api.routes` re-export `StickerRegisterRequest` 和 5 个 endpoint。
-- [ ] 5 个 sticker / media endpoint 注册来源均为 `api.sticker_media_routes`。
-- [ ] 5 个 sticker / media endpoint 没有重复注册。
-- [ ] `/stickers/register` 与 `/stickers/search` 早于动态 sticker 路由。
-- [ ] `/stickers/search` 继续兼容 `api.routes.NANOBOT_API_TOKEN` monkeypatch。
-- [ ] 公开图片代理端点没有增加 bearer 鉴权。
-- [ ] `NANOBOT_STICKER_IMAGE_TOKEN` 和 `NANOBOT_GENERATED_IMAGE_TOKEN` 行为不变。
-- [ ] `/chat` 与 `/group/message` 主链路未迁移。
-- [ ] `_persist_chat_turn()`、`_safe_meta()`、聊天图片 helper 和群聊 sticker facade
+- [x] `tests/test_api_sticker_media_routes_split.py` 经历红灯再绿灯。
+- [x] `api/sticker_media_routes.py` 已创建。
+- [x] `api.sticker_media_routes` 不导入 `api.routes`。
+- [x] `api.sticker_media_routes` 不包含 `asyncio.run` 或 `run_awaitable_sync`。
+- [x] `api.routes` re-export `StickerRegisterRequest` 和 5 个 endpoint。
+- [x] 5 个 sticker / media endpoint 注册来源均为 `api.sticker_media_routes`。
+- [x] 5 个 sticker / media endpoint 没有重复注册。
+- [x] `/stickers/register` 与 `/stickers/search` 早于动态 sticker 路由。
+- [x] `/stickers/search` 继续兼容 `api.routes.NANOBOT_API_TOKEN` monkeypatch。
+- [x] 公开图片代理端点没有增加 bearer 鉴权。
+- [x] `NANOBOT_STICKER_IMAGE_TOKEN` 和 `NANOBOT_GENERATED_IMAGE_TOKEN` 行为不变。
+- [x] `/chat` 与 `/group/message` 主链路未迁移。
+- [x] `_persist_chat_turn()`、`_safe_meta()`、聊天图片 helper 和群聊 sticker facade
   继续留在父模块。
-- [ ] 现有 sticker、generated image、push renderer 相关回归通过。
-- [ ] `tests/test_asyncio_run_policy.py` 通过。
-- [ ] 全量 `tests/` 回归 0 failures。
-- [ ] 每个阶段性改动都有独立 commit。
+- [x] 现有 sticker、generated image、push renderer 相关回归通过。
+- [x] `tests/test_asyncio_run_policy.py` 通过。
+- [x] 全量 `tests/` 回归 0 failures。
+- [x] 每个阶段性改动都有独立 commit。

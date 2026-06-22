@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(2469)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1975)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -264,6 +264,24 @@
     `1610 passed, 6 skipped, 139 warnings in 119.08s`。下一刀候选为 media /
     stickers 路由或 agent-step / render route-only 边界；继续避开 `/chat` 与
     `/group/message` 主链路。
+  - 进展：`api/routes.py` 第七刀已拆出 sticker / media HTTP 层到
+    `api/sticker_media_routes.py`；旧 `api.routes` 继续 re-export
+    `StickerRegisterRequest`、`register_sticker_endpoint()`、
+    `search_sticker_endpoint()`、`public_sticker_image()`、
+    `public_generated_image()` 和 `disable_sticker_endpoint()`。本阶段保留
+    `/stickers/register`、`/stickers/search`、`/stickers/{sticker_id}/image`、
+    `/generated-images/{image_id}/image` 和 `/stickers/{sticker_id}/disable`
+    的 HTTP 契约、旧 token monkeypatch、公开图片环境 token 边界、route 顺序、
+    duplicate canonical 跳转、active 状态判断、cache fallback 和生成图片 404
+    语义；`/chat`、`/group/message`、聊天图片 helper、群聊 sticker facade、
+    `init_legacy_memory()`、`memory`、`evolution_task` 和 `/health` 仍留在父模块。
+    `api/routes.py` 从 2134 行降至 1975 行，`api/sticker_media_routes.py` 为
+    185 行，拆分测试为 182 行。验证结果：红灯 `3 failed, 7 passed`，split
+    绿灯 `10 passed`，sticker / generated image / push renderer 行为回归
+    `67 passed`，普通 API split 相邻回归 `56 passed`，静态检查通过，全量回归
+    `1620 passed, 6 skipped, 139 warnings in 116.71s`。下一刀候选为
+    `chat-step` / `render` 小刀，或继续审计更低风险 route-only 边界；继续避开
+    `/chat` 与 `/group/message` 主链路。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch

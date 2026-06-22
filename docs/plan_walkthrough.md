@@ -3825,3 +3825,88 @@ stickers/media、history/context/log、agent-step/search/render 等更大但低�
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 2134。下一刀可优先拆 media /
 stickers 路由，或拆 `chat-step` / `render` 这类 route-only 边界；继续避开 `/chat` 与
 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。
+
+## 2026-06-22 普通 API Sticker / Media 路由拆分
+
+状态：设计、计划、红灯测试、sticker / media 路由拆分、验证和实现阶段提交均已完成。
+本阶段继续拆普通 `api/routes.py`，但没有迁移 `/chat` 或 `/group/message` 主链路。
+选择 sticker / media 的原因是它覆盖独立 HTTP 边界，能明显削减父模块行数，同时
+避免触碰聊天落库、Prompt Runtime、message envelope 和群聊入口。已把
+`/stickers/register`、`/stickers/search`、`/stickers/{sticker_id}/image`、
+`/generated-images/{image_id}/image` 和 `/stickers/{sticker_id}/disable` 迁移到
+`api/sticker_media_routes.py`；旧 `api.routes` 继续 re-export
+`StickerRegisterRequest` 和 5 个 endpoint。普通 API token monkeypatch、公开图片
+环境 token、collection route 先于动态 sticker route、duplicate canonical 跳转、
+active 状态判断、cache fallback、生成图片缺失 404 和禁用 sticker 404 语义均保持兼容。
+父模块继续保留 `/chat`、`/group/message`、聊天图片 helper、群聊 sticker facade、
+`init_legacy_memory()`、`memory`、`evolution_task` 和 `/health`。`api/routes.py`
+从 2134 行降至 1975 行，新模块 `api/sticker_media_routes.py` 为 185 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-22-api-sticker-media-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-sticker-media-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`0b02d3e docs(普通API): 设计贴纸媒体路由拆分`。
+- 计划提交：`9493c0c docs(计划): 记录贴纸媒体路由拆分计划`。
+- 红灯测试提交：`6ded608 test(普通API): 锁定贴纸媒体路由拆分契约`。
+- 路由拆分提交：`8d3acbc refactor(普通API): 拆分贴纸媒体路由`。
+- 文档收口提交：随本次 `docs(计划): 收口贴纸媒体路由拆分` 完成。
+
+计划列表：
+
+- [x] 审计 media / stickers 与 chat-step / render 候选，选择 sticker / media
+  作为下一刀 route-only 边界。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API sticker / media route split 红灯测试并提交。
+- [x] 拆出 `api/sticker_media_routes.py`，保持旧导入兼容、旧 token monkeypatch、
+  公开图片环境 token 边界、route 顺序和父模块聊天主链路边界，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_split.py`
+  -> `3 failed, 7 passed, 21 warnings in 7.04s`；失败点为 5 个 sticker / media endpoint
+  仍注册在 `api.routes`、`api.sticker_media_routes` 尚不可导入，以及
+  `api/sticker_media_routes.py` 文件不存在。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_split.py`
+  -> `10 passed, 21 warnings in 1.66s`。
+- sticker / generated image / push renderer 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api.py::test_sticker_register_search_and_disable_api tests/test_api.py::test_public_sticker_image_returns_cached_file tests/test_api.py::test_sticker_register_auto_describe_adds_background_task tests/test_sticker_memory.py tests/test_sticker_rag.py tests/test_sticker_tool.py tests/test_image_generation_tool.py tests/test_push_envelope.py tests/test_qq_outbound_renderer.py`
+  -> `67 passed, 21 warnings in 6.05s`。
+- 普通 API split 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py tests/test_api_task_routes_split.py tests/test_asyncio_run_policy.py`
+  -> `56 passed, 21 warnings in 7.67s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/sticker_media_routes.py tests/test_api_sticker_media_routes_split.py`
+  成功；`api/sticker_media_routes.py` 无 `from api.routes`、`import api.routes`、
+  `asyncio.run` 或 `run_awaitable_sync`；`git diff --check -- api/routes.py api/sticker_media_routes.py tests/test_api_sticker_media_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 1975 行，`api/sticker_media_routes.py` 185 行，
+  `tests/test_api_sticker_media_routes_split.py` 182 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1620 passed, 6 skipped, 139 warnings in 116.71s`。
+- 文档收口定向回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_sticker_media_routes_split.py tests/test_api.py::test_sticker_register_search_and_disable_api tests/test_api.py::test_public_sticker_image_returns_cached_file tests/test_api.py::test_sticker_register_auto_describe_adds_background_task tests/test_asyncio_run_policy.py`
+  -> `16 passed, 21 warnings in 3.87s`。
+
+执行约束：
+
+- 不拆 `/chat`。
+- 不拆 `/group/message`。
+- 不迁移 `_persist_chat_turn()`、`_safe_meta()`、聊天图片 helper、群聊 sticker facade、
+  `init_legacy_memory()`、`memory` 或 `evolution_task`。
+- 不修改 `server.py` 或 `bootstrap/lifespan.py`。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或
+  message envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1975。下一刀可拆 `chat-step` /
+`render` 这类小型 route-only 边界，或继续审计更低风险的独立 HTTP 子域；继续避开
+`/chat` 与 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。
