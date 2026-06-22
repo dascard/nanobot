@@ -15,7 +15,23 @@
 - 设计文档：`docs/superpowers/specs/2026-06-22-api-agent-step-routes-split-design.md`。
 - 设计提交：`66a4b83 docs(普通API): 设计 Agent Step 路由拆分`。
 - 设计勘误提交：`db83dfb docs(普通API): 修正 Agent Step 路由顺序设计`。
-- `api/routes.py` 当前 1975 行。
+- 计划提交：`51940fb docs(计划): 记录 Agent Step 路由拆分计划`。
+- 红灯测试提交：`eaab6ba test(普通API): 锁定 Agent Step 路由拆分契约`。
+- 路由拆分提交：`eb6981f refactor(普通API): 拆分 Agent Step 路由`。
+- 文档收口提交：随本次 `docs(计划): 收口 Agent Step 路由拆分` 完成。
+- `api/routes.py` 已从 1975 行降至 1954 行，`api/agent_step_routes.py` 为 42 行。
+- 红灯测试结果：`4 failed, 7 passed, 21 warnings in 7.14s`。
+- Split 绿灯结果：`11 passed, 21 warnings in 1.83s`；最终定向复验为
+  `11 passed, 21 warnings in 1.94s`。
+- Agent Step 行为回归：`6 passed, 21 warnings in 2.44s`。
+- 普通 API split 相邻回归：`67 passed, 21 warnings in 8.94s`。
+- `/chat` 流式相邻回归：`10 passed, 21 warnings in 4.84s`。
+- 静态检查：`py_compile` 成功，`api/agent_step_routes.py` 禁止模式扫描无命中，
+  `git diff --check` 无输出。
+- 行数检查：`api/routes.py` 1954 行，`api/agent_step_routes.py` 42 行，
+  `tests/test_api_agent_step_routes_split.py` 218 行。
+- 全量回归：`1631 passed, 6 skipped, 139 warnings in 121.40s`。
+- 文档收口定向回归：`20 passed, 21 warnings in 5.66s`。
 - 本阶段迁移：
   - `render_markdown`
   - `chat_step`
@@ -57,7 +73,7 @@
 
 - 创建：`tests/test_api_agent_step_routes_split.py`
 
-- [ ] **步骤 1：创建测试文件**
+- [x] **步骤 1：创建测试文件**
 
 创建 `tests/test_api_agent_step_routes_split.py`：
 
@@ -282,7 +298,7 @@ def test_chat_and_group_boundaries_stay_in_parent_routes():
     assert routes._safe_meta.__module__ == "api.routes"
 ```
 
-- [ ] **步骤 2：运行测试验证红灯**
+- [x] **步骤 2：运行测试验证红灯**
 
 运行：
 
@@ -293,7 +309,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_agent_step_routes_spli
 预期：FAIL。失败点应指向 `/render` 与 `/chat-step` endpoint 仍注册在 `api.routes`、
 `api.agent_step_routes` 尚不存在，以及 `api/agent_step_routes.py` 文件尚不存在。
 
-- [ ] **步骤 3：提交红灯测试**
+- [x] **步骤 3：提交红灯测试**
 
 运行：
 
@@ -310,7 +326,7 @@ git commit -m "test(普通API): 锁定 Agent Step 路由拆分契约"
 - 创建：`api/agent_step_routes.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：创建 `api/agent_step_routes.py`**
+- [x] **步骤 1：创建 `api/agent_step_routes.py`**
 
 创建 `api/agent_step_routes.py`：
 
@@ -359,7 +375,7 @@ async def chat_step(req: AgentStepRequest, accept: str = Header(default="")):
     return agent_step_event_payload(response)
 ```
 
-- [ ] **步骤 2：修改 `api/routes.py` imports 与 re-export**
+- [x] **步骤 2：修改 `api/routes.py` imports 与 re-export**
 
 删除父模块中不再直接使用的 import：
 
@@ -388,10 +404,10 @@ from api.agent_step_routes import (
 )
 ```
 
-保留 `StreamingResponse`，因为父模块 `/chat` 流式响应仍使用。保留 `Header`，因为父模块
-仍在 import 行中使用且后续可以由静态检查确认是否还需要。
+保留 `StreamingResponse`，因为父模块 `/chat` 流式响应仍使用。实现时已确认父模块不再
+直接使用 `Header`，因此从父模块 import 列表删除。
 
-- [ ] **步骤 3：删除父模块本地 `/render` 与 `/chat-step` 定义，并在原位置 include**
+- [x] **步骤 3：删除父模块本地 `/render` 与 `/chat-step` 定义，并在原位置 include**
 
 删除 `api/routes.py` 中本地：
 
@@ -406,7 +422,7 @@ router.include_router(agent_step_router)
 
 不要把该 include 移到文件尾部；需要保持 `/render` -> `/chat-step` -> `/chat` 的注册顺序。
 
-- [ ] **步骤 4：运行 split 定向测试验证绿灯**
+- [x] **步骤 4：运行 split 定向测试验证绿灯**
 
 运行：
 
@@ -416,7 +432,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_agent_step_routes_spli
 
 预期：PASS。
 
-- [ ] **步骤 5：运行 agent-step 行为回归**
+- [x] **步骤 5：运行 agent-step 行为回归**
 
 运行：
 
@@ -426,7 +442,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_agent_step_api.py
 
 预期：PASS。
 
-- [ ] **步骤 6：运行普通 API split 相邻回归**
+- [x] **步骤 6：运行普通 API split 相邻回归**
 
 运行：
 
@@ -444,7 +460,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 7：运行 `/chat` 流式相邻回归**
+- [x] **步骤 7：运行 `/chat` 流式相邻回归**
 
 运行：
 
@@ -457,7 +473,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 8：运行静态检查**
+- [x] **步骤 8：运行静态检查**
 
 运行：
 
@@ -475,7 +491,7 @@ wc -l api/routes.py api/agent_step_routes.py tests/test_api_agent_step_routes_sp
 - `git diff --check` 无输出。
 - `api/routes.py` 行数低于 1975。
 
-- [ ] **步骤 9：运行全量测试**
+- [x] **步骤 9：运行全量测试**
 
 运行：
 
@@ -485,7 +501,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 10：提交 Agent Step 路由拆分**
+- [x] **步骤 10：提交 Agent Step 路由拆分**
 
 运行：
 
@@ -503,7 +519,7 @@ git commit -m "refactor(普通API): 拆分 Agent Step 路由"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新计划执行记录**
+- [x] **步骤 1：更新计划执行记录**
 
 在本计划的「当前状态」中记录：
 
@@ -519,7 +535,7 @@ git commit -m "refactor(普通API): 拆分 Agent Step 路由"
 - `wc -l api/routes.py api/agent_step_routes.py tests/test_api_agent_step_routes_split.py` 行数。
 - 全量回归结果。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在「超大文件 >800 行拆分」条目下记录：
 
@@ -529,7 +545,7 @@ git commit -m "refactor(普通API): 拆分 Agent Step 路由"
 - `api/routes.py` 最新行数。
 - 下一候选为 group utility / legacy timing routes，或继续审计更低风险 route-only 边界。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-22 的 Agent Step route-only 拆分执行记录，包含：
 
@@ -539,7 +555,7 @@ git commit -m "refactor(普通API): 拆分 Agent Step 路由"
 - 验证命令和结果。
 - 下一步建议。
 
-- [ ] **步骤 4：文档格式与状态检查**
+- [x] **步骤 4：文档格式与状态检查**
 
 运行：
 
@@ -553,7 +569,7 @@ git status --short
 预期：第一个 `rg` 在收口后无命中；第二个 `rg` 无命中；`git diff --check` 无输出；
 `git status --short` 中本阶段只包含计划与文档相关改动，以及历史无关脏项。
 
-- [ ] **步骤 5：运行最终定向回归**
+- [x] **步骤 5：运行最终定向回归**
 
 运行：
 
@@ -566,7 +582,7 @@ python -B -m pytest -q -p no:cacheprovider \
 
 预期：PASS。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 
@@ -578,21 +594,21 @@ git commit -m "docs(计划): 收口 Agent Step 路由拆分"
 
 ## 最终验收清单
 
-- [ ] `tests/test_api_agent_step_routes_split.py` 经历红灯再绿灯。
-- [ ] `api/agent_step_routes.py` 已创建。
-- [ ] `api.agent_step_routes` 不导入 `api.routes`。
-- [ ] `api.agent_step_routes` 不包含 `asyncio.run` 或 `run_awaitable_sync`。
-- [ ] `api.routes` re-export `AgentStepRequest`、agent-step 执行/序列化对象和 2 个 endpoint。
-- [ ] `/render` 与 `/chat-step` endpoint 注册来源均为 `api.agent_step_routes`。
-- [ ] `/render` 与 `/chat-step` 没有重复注册。
-- [ ] `/render`、`/chat-step`、`/chat` 保持原注册顺序。
-- [ ] `/render` 继续无 bearer 鉴权并返回 deprecated 响应。
-- [ ] `/chat-step` 继续兼容 `api.routes.NANOBOT_API_TOKEN` monkeypatch。
-- [ ] `/chat-step` 继续支持 `Accept: text/event-stream` 和 body `stream=true` 两种 SSE 触发。
-- [ ] `/chat-step` SSE 首事件和 framing 不变。
-- [ ] `/chat` 与 `/group/message` 主链路未迁移。
-- [ ] group timing 与 `update_group_name()` 未迁移。
-- [ ] 现有 `tests/test_agent_step_api.py` 行为回归通过。
-- [ ] `tests/test_asyncio_run_policy.py` 通过。
-- [ ] 全量 `tests/` 回归 0 failures。
-- [ ] 每个阶段性改动都有独立 commit。
+- [x] `tests/test_api_agent_step_routes_split.py` 经历红灯再绿灯。
+- [x] `api/agent_step_routes.py` 已创建。
+- [x] `api.agent_step_routes` 不导入 `api.routes`。
+- [x] `api.agent_step_routes` 不包含 `asyncio.run` 或 `run_awaitable_sync`。
+- [x] `api.routes` re-export `AgentStepRequest`、agent-step 执行/序列化对象和 2 个 endpoint。
+- [x] `/render` 与 `/chat-step` endpoint 注册来源均为 `api.agent_step_routes`。
+- [x] `/render` 与 `/chat-step` 没有重复注册。
+- [x] `/render`、`/chat-step`、`/chat` 保持原注册顺序。
+- [x] `/render` 继续无 bearer 鉴权并返回 deprecated 响应。
+- [x] `/chat-step` 继续兼容 `api.routes.NANOBOT_API_TOKEN` monkeypatch。
+- [x] `/chat-step` 继续支持 `Accept: text/event-stream` 和 body `stream=true` 两种 SSE 触发。
+- [x] `/chat-step` SSE 首事件和 framing 不变。
+- [x] `/chat` 与 `/group/message` 主链路未迁移。
+- [x] group timing 与 `update_group_name()` 未迁移。
+- [x] 现有 `tests/test_agent_step_api.py` 行为回归通过。
+- [x] `tests/test_asyncio_run_policy.py` 通过。
+- [x] 全量 `tests/` 回归 0 failures。
+- [x] 每个阶段性改动都有独立 commit。

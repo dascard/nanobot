@@ -3910,3 +3910,95 @@ active 状态判断、cache fallback、生成图片缺失 404 和禁用 sticker 
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1975。下一刀可拆 `chat-step` /
 `render` 这类小型 route-only 边界，或继续审计更低风险的独立 HTTP 子域；继续避开
 `/chat` 与 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。
+
+## 2026-06-22 普通 API Agent Step / Render 路由拆分
+
+状态：设计、设计勘误、计划、红灯测试、Agent Step / Render 路由拆分、验证和
+实现阶段提交均已完成。本阶段继续拆普通 `api/routes.py`，但没有迁移 `/chat` 或
+`/group/message` 主链路。选择 Agent Step / Render 的原因是它是小型 route-only
+边界，能在保持风险可控的前提下继续削减父模块，并验证 `/chat-step` 的 SSE 语义、
+旧导入兼容和普通 API token monkeypatch 不被拆分破坏。已把 `/render` 与
+`/chat-step` HTTP 层迁移到 `api/agent_step_routes.py`；旧 `api.routes` 继续
+re-export `AgentStepRequest`、agent-step 执行 / 序列化对象和 2 个 endpoint。
+`/render` 无鉴权 deprecated 响应、`/chat-step` 普通 API token 鉴权、
+`Accept: text/event-stream` 与 body `stream=true` 两种 SSE 触发、SSE 首事件，以及
+`/render` -> `/chat-step` -> `/chat` 路由顺序均保持兼容。父模块继续保留 `/chat`、
+`/group/message`、group timing、`update_group_name()`、聊天落库、Prompt Runtime、
+message envelope 和 `/health`。`api/routes.py` 从 1975 行降至 1954 行，新模块
+`api/agent_step_routes.py` 为 42 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-22-api-agent-step-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-agent-step-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`66a4b83 docs(普通API): 设计 Agent Step 路由拆分`。
+- 设计勘误提交：`db83dfb docs(普通API): 修正 Agent Step 路由顺序设计`。
+- 计划提交：`51940fb docs(计划): 记录 Agent Step 路由拆分计划`。
+- 红灯测试提交：`eaab6ba test(普通API): 锁定 Agent Step 路由拆分契约`。
+- 路由拆分提交：`eb6981f refactor(普通API): 拆分 Agent Step 路由`。
+- 文档收口提交：随本次 `docs(计划): 收口 Agent Step 路由拆分` 完成。
+
+计划列表：
+
+- [x] 核对当前 todo 进度与工作区状态。
+- [x] 审计 `api/routes.py` 剩余可拆边界并选定 Agent Step / Render route-only 小刀。
+- [x] 写入设计文档并提交。
+- [x] 修正设计中的 route order 与旧导入兼容清单并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API Agent Step route split 红灯测试并提交。
+- [x] 拆出 `api/agent_step_routes.py`，保持旧导入兼容、旧 token monkeypatch、
+  SSE 触发、route 顺序和父模块聊天主链路边界，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_agent_step_routes_split.py`
+  -> `4 failed, 7 passed, 21 warnings in 7.14s`；失败点为 `/render` 与
+  `/chat-step` endpoint 仍注册在 `api.routes`、`api.agent_step_routes` 尚不可导入，
+  以及 `api/agent_step_routes.py` 文件不存在。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_agent_step_routes_split.py`
+  -> `11 passed, 21 warnings in 1.83s`；文档收口前复验为
+  `11 passed, 21 warnings in 1.94s`。
+- Agent Step 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_agent_step_api.py`
+  -> `6 passed, 21 warnings in 2.44s`。
+- 普通 API split 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_agent_step_routes_split.py tests/test_api_sticker_media_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py tests/test_api_task_routes_split.py tests/test_asyncio_run_policy.py`
+  -> `67 passed, 21 warnings in 8.94s`。
+- `/chat` 流式相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api.py::test_stream_chat_passes_stream_flag_to_bridge tests/test_streaming_api.py tests/test_streaming_response_envelope.py`
+  -> `10 passed, 21 warnings in 4.84s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/agent_step_routes.py tests/test_api_agent_step_routes_split.py`
+  成功；`api/agent_step_routes.py` 无 `from api.routes`、`import api.routes`、
+  `asyncio.run` 或 `run_awaitable_sync`；`git diff --check -- api/routes.py api/agent_step_routes.py tests/test_api_agent_step_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 1954 行，`api/agent_step_routes.py` 42 行，
+  `tests/test_api_agent_step_routes_split.py` 218 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1631 passed, 6 skipped, 139 warnings in 121.40s`。
+- 文档收口定向回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_agent_step_routes_split.py tests/test_agent_step_api.py tests/test_asyncio_run_policy.py`
+  -> `20 passed, 21 warnings in 5.66s`。
+
+执行约束：
+
+- 不拆 `/chat`。
+- 不拆 `/group/message`。
+- 不迁移 group timing、`update_group_name()`、`_persist_chat_turn()`、`_safe_meta()`、
+  `init_legacy_memory()`、`memory` 或 `evolution_task`。
+- 不修改 `server.py` 或 `bootstrap/lifespan.py`。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或
+  message envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1954。下一刀可以审计 group
+utility / legacy timing route，但该边界会接触 bridge、history context、runtime state、
+群回复持久化，风险高于本阶段；也可以继续寻找更低风险的 route-only 子域。继续避开
+`/chat` 与 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。

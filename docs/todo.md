@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1975)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1954)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -282,6 +282,22 @@
     `1620 passed, 6 skipped, 139 warnings in 116.71s`。下一刀候选为
     `chat-step` / `render` 小刀，或继续审计更低风险 route-only 边界；继续避开
     `/chat` 与 `/group/message` 主链路。
+  - 进展：`api/routes.py` 第八刀已拆出 Agent Step / Render route-only HTTP 层到
+    `api/agent_step_routes.py`；旧 `api.routes` 继续 re-export `AgentStepRequest`、
+    `agent_step_event_payload()`、`run_agent_step()`、`run_agent_step_stream()`、
+    `agent_step_sse_data()`、`render_markdown()` 和 `chat_step()`。本阶段保留
+    `/render` 与 `/chat-step` 的 HTTP 契约、旧 token monkeypatch、`/render`
+    无鉴权 deprecated 响应、`Accept: text/event-stream` 与 body `stream=true`
+    两种 SSE 触发、SSE 首事件和 `/render` -> `/chat-step` -> `/chat` 路由顺序；
+    `/chat`、`/group/message`、group timing、`update_group_name()`、聊天落库、
+    Prompt Runtime 和 message envelope 仍留在父模块或原边界。`api/routes.py`
+    从 1975 行降至 1954 行，`api/agent_step_routes.py` 为 42 行，拆分测试为
+    218 行。验证结果：红灯 `4 failed, 7 passed`，split 绿灯 `11 passed`，
+    Agent Step 行为回归 `6 passed`，普通 API split 相邻回归 `67 passed`，
+    `/chat` 流式相邻回归 `10 passed`，静态检查通过，全量回归
+    `1631 passed, 6 skipped, 139 warnings in 121.40s`，文档收口定向回归
+    `20 passed`。下一刀候选为 group utility / legacy timing route，或继续审计
+    更低风险 route-only 边界；继续避开 `/chat` 与 `/group/message` 主链路。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
