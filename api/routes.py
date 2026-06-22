@@ -7,7 +7,7 @@ import logging
 import json
 import asyncio
 import time as _time
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Header, Response
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
@@ -32,13 +32,6 @@ from core.moderation import check_message_moderation_db
 from nanobot_kt.bridge import get_bridge
 from clients.classifier_client import get_guardrail, get_timing_gate
 from core.sqlite_retry import run_sqlite_locked_retry
-from core.agent_step import (
-    AgentStepRequest,
-    agent_step_event_payload,
-    run_agent_step,
-    run_agent_step_stream,
-    sse_data as agent_step_sse_data,
-)
 from core.client_meta import (
     ClientMetaValidationError,
     client_meta_request_id,
@@ -99,6 +92,16 @@ from api.sticker_media_routes import (
     register_sticker_endpoint,
     router as sticker_media_router,
     search_sticker_endpoint,
+)
+from api.agent_step_routes import (
+    AgentStepRequest,
+    agent_step_event_payload,
+    agent_step_sse_data,
+    chat_step,
+    render_markdown,
+    router as agent_step_router,
+    run_agent_step,
+    run_agent_step_stream,
 )
 
 logger = logging.getLogger("nanobot.routes")
@@ -1072,31 +1075,7 @@ async def group_timing_timer(req: GroupTimingTimerRequest, db: Session = Depends
     return result
 
 
-@router.get("/render")
-async def render_markdown(text: str):
-    """遗留端点，已弃用。目前直接内嵌 base64 返回"""
-    return {"status": "deprecated"}
-
-
-@router.post("/chat-step", dependencies=[Depends(verify_token)])
-async def chat_step(req: AgentStepRequest, accept: str = Header(default="")):
-    """SynergyOpt 等外部编排方使用的 HTTP 半 ReAct step/resume 端点。"""
-    wants_stream = req.stream or "text/event-stream" in str(accept or "").lower()
-
-    if wants_stream:
-        async def _event_stream():
-            yield agent_step_sse_data({
-                "status": "progress",
-                "text": "正在判断需要的业务工具...",
-            })
-            async for event in run_agent_step_stream(req):
-                yield agent_step_sse_data(event)
-
-        return StreamingResponse(_event_stream(), media_type="text/event-stream")
-
-    response = await run_agent_step(req)
-    return agent_step_event_payload(response)
-
+router.include_router(agent_step_router)
 
 
 @router.post("/chat")
