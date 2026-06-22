@@ -3664,3 +3664,81 @@ evolution route-only，但必须保留父模块 `init_legacy_memory`、`memory` 
 `/log` 自动触发 `evolution_task` 的导入边界；也可以继续寻找 stickers/media、
 history/context/log、agent-step/search/render 等更大但低耦合的尾部边界。继续避开
 `/chat` 与 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。
+
+## 2026-06-21 普通 API Evolution 路由拆分
+
+状态：设计、计划、红灯测试、进化路由拆分、验证和实现阶段提交均已完成。本阶段继续
+拆普通 `api/routes.py`，但没有迁移 `/chat`、`/group/message`、`/log` 或 legacy
+memory 初始化链路。已把手动 `/evolution/trigger` HTTP 层迁移到
+`api/evolution_routes.py`；旧 `api.routes` 继续 re-export
+`EvolutionTriggerRequest` 和 `trigger_evolution()`。手动触发的 path、method、鉴权、
+请求体、response shape、旧 token monkeypatch 和同步 `BackgroundTasks.add_task()`
+排队边界均保持兼容。父模块继续保留 `evolution_task`、`EVOLUTION_THRESHOLD`、
+`SQLiteMemory`、`memory`、`init_legacy_memory()`、`_persist_chat_turn()` 和 `/health`，
+供 `/chat` / `/log` 自动触发与启动生命周期继续使用。`api/routes.py` 从 2484 行降至
+2469 行，新模块 `api/evolution_routes.py` 为 33 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-21-api-evolution-routes-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-evolution-routes-split.md`。
+
+阶段提交：
+
+- 设计提交：`a82e342 docs(普通API): 设计进化路由拆分`。
+- 设计勘误提交：`99581b7 docs(普通API): 修正进化路由验证引用`。
+- 计划提交：`1e95c88 docs(计划): 记录进化路由拆分计划`。
+- 红灯测试提交：`68b5c72 test(普通API): 锁定进化路由拆分契约`。
+- 进化路由拆分提交：`d29a462 refactor(普通API): 拆分进化路由`。
+- 文档收口提交：随本次 `docs(计划): 收口进化路由拆分` 完成。
+
+计划列表：
+
+- [x] 审计下一刀普通 API 拆分候选并选择 evolution route-only 边界。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API evolution route split 红灯测试并提交。
+- [x] 拆出 `api/evolution_routes.py`，保持旧导入兼容、旧 token monkeypatch、
+  同步后台排队边界和父模块自动触发边界，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py`
+  -> `5 failed, 19 passed, 21 warnings in 8.90s`；失败点为 `/evolution/trigger`
+  endpoint module 仍是 `api.routes`、`api.evolution_routes` 尚不存在，以及
+  `api/evolution_routes.py` 文件不存在。
+- Split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py`
+  -> `24 passed, 21 warnings in 3.27s`。
+- 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_task_routes_split.py tests/test_asyncio_run_policy.py tests/test_audit_fixes.py::TestLazyControllerInit::test_legacy_memory_init_exists`
+  -> `14 passed, 21 warnings in 2.53s`。
+- 静态检查：`python -B -m compileall api/routes.py api/evolution_routes.py` 成功；
+  `rg -n "from api\.routes|import api\.routes|asyncio\.run|run_awaitable_sync" api/evolution_routes.py`
+  无命中，退出码为 1；`git diff --check -- api/routes.py api/evolution_routes.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 2469 行，`api/evolution_routes.py` 33 行，
+  `tests/test_api_evolution_routes_split.py` 140 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1601 passed, 6 skipped, 139 warnings in 115.11s`。
+
+执行约束：
+
+- 不拆 `/chat`。
+- 不拆 `/group/message`。
+- 不拆 `/log`、`/log_ambient`、history、context、sticker/media、group timing、
+  search/render、agent step 或 `/health`。
+- 不迁移 `init_legacy_memory()`、`memory`、`SQLiteMemory`、`EVOLUTION_THRESHOLD`
+  或自动 evolution 触发路径。
+- 不修改 `server.py` 或 `bootstrap/lifespan.py`。
+- 不改变 Prompt Runtime 模板、工具 usage 文档、`enriched_query`、conversation 结构、
+  Prompt Runtime 输入或工具输出契约。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 2469。下一刀建议优先审计
+stickers/media、history/context/log、agent-step/search/render 等更大但低耦合边界；
+继续避开 `/chat` 与 `/group/message` 主链路，除非先完成更细的设计文档和红灯契约。

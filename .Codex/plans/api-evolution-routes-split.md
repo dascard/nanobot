@@ -17,9 +17,9 @@
 - [x] 已写设计文档：`docs/superpowers/specs/2026-06-21-api-evolution-routes-split-design.md`。
 - [x] 设计提交：`a82e342 docs(普通API): 设计进化路由拆分`。
 - [x] 设计勘误提交：`99581b7 docs(普通API): 修正进化路由验证引用`。
-- [ ] 任务 1：补普通 API evolution route split 红灯测试并提交。
-- [ ] 任务 2：拆出 `api/evolution_routes.py` 并由 `api.routes` include / re-export 后提交。
-- [ ] 任务 3：更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录后提交。
+- [x] 任务 1：补普通 API evolution route split 红灯测试并提交。提交：`68b5c72 test(普通API): 锁定进化路由拆分契约`。
+- [x] 任务 2：拆出 `api/evolution_routes.py` 并由 `api.routes` include / re-export 后提交。提交：`d29a462 refactor(普通API): 拆分进化路由`。
+- [x] 任务 3：更新 `docs/todo.md`、`docs/plan_walkthrough.md` 和本计划执行记录后提交。提交：随本次 `docs(计划): 收口进化路由拆分` 完成。
 
 ## 文件职责
 
@@ -55,7 +55,7 @@
 - 修改：`tests/test_api_memory_routes_split.py`
 - 修改：`tests/test_api_model_routes_split.py`
 
-- [ ] **步骤 1：创建测试文件**
+- [x] **步骤 1：创建测试文件**
 
 创建 `tests/test_api_evolution_routes_split.py`：
 
@@ -202,7 +202,7 @@ def test_health_check_stays_in_parent_routes():
     assert {route.endpoint.__module__ for route in routes} == {"api.routes"}
 ```
 
-- [ ] **步骤 2：更新 memory split 测试的父模块尾部路由列表**
+- [x] **步骤 2：更新 memory split 测试的父模块尾部路由列表**
 
 修改 `tests/test_api_memory_routes_split.py`：
 
@@ -212,7 +212,7 @@ _PARENT_ROUTE_SIGNATURES = (
 )
 ```
 
-- [ ] **步骤 3：更新 model split 测试的父模块尾部路由列表**
+- [x] **步骤 3：更新 model split 测试的父模块尾部路由列表**
 
 修改 `tests/test_api_model_routes_split.py`：
 
@@ -222,7 +222,7 @@ _PARENT_ROUTE_SIGNATURES = (
 )
 ```
 
-- [ ] **步骤 4：运行测试验证红灯**
+- [x] **步骤 4：运行测试验证红灯**
 
 运行：
 
@@ -234,7 +234,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_evolution_routes_split
 endpoint module 仍为 `api.routes`、`api/evolution_routes.py` 文件尚不存在。
 `/health` 仍在父模块的断言可以继续通过。
 
-- [ ] **步骤 5：提交红灯测试**
+- [x] **步骤 5：提交红灯测试**
 
 运行：
 
@@ -249,7 +249,7 @@ git commit -m "test(普通API): 锁定进化路由拆分契约"
 - 创建：`api/evolution_routes.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：创建 `api/evolution_routes.py`**
+- [x] **步骤 1：创建 `api/evolution_routes.py`**
 
 创建 `api/evolution_routes.py`：
 
@@ -289,7 +289,7 @@ def trigger_evolution(
     return {"status": "ok", "message": f"Evolution task queued for {req.user_id}"}
 ```
 
-- [ ] **步骤 2：修改 `api/routes.py` import 与 re-export**
+- [x] **步骤 2：修改 `api/routes.py` import 与 re-export**
 
 在 `api/routes.py` 中新增：
 
@@ -312,7 +312,7 @@ def init_legacy_memory():
     ...
 ```
 
-- [ ] **步骤 3：删除父模块本地手动 evolution 定义并 include 子 router**
+- [x] **步骤 3：删除父模块本地手动 evolution 定义并 include 子 router**
 
 删除 `api/routes.py` 中本地 `EvolutionTriggerRequest` 类。
 
@@ -334,7 +334,7 @@ router.include_router(model_router)
 router.include_router(task_router)
 ```
 
-- [ ] **步骤 4：运行 split 定向测试验证绿灯**
+- [x] **步骤 4：运行 split 定向测试验证绿灯**
 
 运行：
 
@@ -344,7 +344,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_evolution_routes_split
 
 预期：PASS。
 
-- [ ] **步骤 5：运行相邻回归与静态检查**
+- [x] **步骤 5：运行相邻回归与静态检查**
 
 运行：
 
@@ -362,7 +362,7 @@ git diff --check -- api/routes.py api/evolution_routes.py tests/test_api_evoluti
 - `rg` 无命中，退出码为 1。
 - `git diff --check` 无输出。
 
-- [ ] **步骤 6：提交 evolution 路由拆分**
+- [x] **步骤 6：提交 evolution 路由拆分**
 
 运行：
 
@@ -378,7 +378,7 @@ git commit -m "refactor(普通API): 拆分进化路由"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行全量测试**
+- [x] **步骤 1：运行全量测试**
 
 运行：
 
@@ -388,7 +388,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 2：更新计划执行记录**
+- [x] **步骤 2：更新计划执行记录**
 
 在本计划的「当前状态」中把任务 1 和任务 2 标记为完成，并新增「执行记录」章节，记录：
 
@@ -399,7 +399,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - `wc -l api/routes.py api/evolution_routes.py tests/test_api_evolution_routes_split.py` 行数。
 - 全量回归结果。
 
-- [ ] **步骤 3：更新 `docs/todo.md`**
+- [x] **步骤 3：更新 `docs/todo.md`**
 
 在「超大文件 >800 行拆分」条目下记录：
 
@@ -408,7 +408,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - `api/routes.py` 最新行数。
 - 下一候选为 stickers/media、history/context/log、agent-step/search/render 等更大但低耦合边界。
 
-- [ ] **步骤 4：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 4：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-21 的 evolution route-only 拆分执行记录，包含：
 
@@ -419,7 +419,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - 验证命令和结果。
 - 下一步建议。
 
-- [ ] **步骤 5：文档格式与状态检查**
+- [x] **步骤 5：文档格式与状态检查**
 
 运行：
 
@@ -430,7 +430,7 @@ git status --short
 
 预期：`git diff --check` 无输出；`git status --short` 中本阶段只包含计划与文档相关改动，以及历史无关脏项。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 
@@ -439,17 +439,41 @@ git add .Codex/plans/api-evolution-routes-split.md docs/todo.md docs/plan_walkth
 git commit -m "docs(计划): 收口进化路由拆分"
 ```
 
+## 执行记录
+
+- 设计提交：`a82e342 docs(普通API): 设计进化路由拆分`。
+- 设计勘误提交：`99581b7 docs(普通API): 修正进化路由验证引用`。
+- 计划提交：`1e95c88 docs(计划): 记录进化路由拆分计划`。
+- 红灯测试提交：`68b5c72 test(普通API): 锁定进化路由拆分契约`。
+- 实现提交：`d29a462 refactor(普通API): 拆分进化路由`。
+- 红灯：`python -B -m pytest -q -p no:cacheprovider tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py`
+  -> `5 failed, 19 passed, 21 warnings in 8.90s`；失败点为 endpoint module
+  仍是 `api.routes`、`api.evolution_routes` 尚不存在，以及
+  `api/evolution_routes.py` 文件不存在。
+- Split 绿灯：同一命令 -> `24 passed, 21 warnings in 3.27s`。
+- 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_task_routes_split.py tests/test_asyncio_run_policy.py tests/test_audit_fixes.py::TestLazyControllerInit::test_legacy_memory_init_exists`
+  -> `14 passed, 21 warnings in 2.53s`。
+- 静态检查：`python -B -m compileall api/routes.py api/evolution_routes.py` 成功；
+  `rg -n "from api\.routes|import api\.routes|asyncio\.run|run_awaitable_sync" api/evolution_routes.py`
+  无命中，退出码为 1；`git diff --check -- api/routes.py api/evolution_routes.py tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 2469 行，`api/evolution_routes.py` 33 行，
+  `tests/test_api_evolution_routes_split.py` 140 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1601 passed, 6 skipped, 139 warnings in 115.11s`。
+
 ## 最终验收清单
 
-- [ ] `tests/test_api_evolution_routes_split.py` 经历红灯再绿灯。
-- [ ] `tests/test_api_memory_routes_split.py` 和 `tests/test_api_model_routes_split.py` 同步更新并通过。
-- [ ] `api.evolution_routes` 不导入 `api.routes`。
-- [ ] `api.routes` re-export `EvolutionTriggerRequest` 和 `trigger_evolution()`。
-- [ ] `trigger_evolution()` 保持同步函数。
-- [ ] 手动 `/evolution/trigger` 只向 `BackgroundTasks` 排队，不直接执行 evolution。
-- [ ] `api.routes.evolution_task` 继续存在，供 `/log` 和 `/chat` 自动触发使用。
-- [ ] `api.routes.init_legacy_memory` 继续存在且可调用。
-- [ ] `/health` 仍留在 `api.routes`。
-- [ ] `tests/test_asyncio_run_policy.py` 通过。
-- [ ] 全量 `tests/` 回归 0 failures。
-- [ ] 每个阶段性改动都有独立 commit。
+- [x] `tests/test_api_evolution_routes_split.py` 经历红灯再绿灯。
+- [x] `tests/test_api_memory_routes_split.py` 和 `tests/test_api_model_routes_split.py` 同步更新并通过。
+- [x] `api.evolution_routes` 不导入 `api.routes`。
+- [x] `api.routes` re-export `EvolutionTriggerRequest` 和 `trigger_evolution()`。
+- [x] `trigger_evolution()` 保持同步函数。
+- [x] 手动 `/evolution/trigger` 只向 `BackgroundTasks` 排队，不直接执行 evolution。
+- [x] `api.routes.evolution_task` 继续存在，供 `/log` 和 `/chat` 自动触发使用。
+- [x] `api.routes.init_legacy_memory` 继续存在且可调用。
+- [x] `/health` 仍留在 `api.routes`。
+- [x] `tests/test_asyncio_run_policy.py` 通过。
+- [x] 全量 `tests/` 回归 0 failures。
+- [x] 每个阶段性改动都有独立 commit。

@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(2484)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(2469)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -233,6 +233,19 @@
     `1594 passed, 6 skipped, 139 warnings in 114.82s`。下一刀候选为 evolution
     route-only，或继续寻找 stickers/media、history/context/log、agent-step/search/render
     等更大但低耦合边界；继续避开 `/chat` 与 `/group/message` 主链路。
+  - 进展：`api/routes.py` 第五刀已拆出 evolution route-only HTTP 层到
+    `api/evolution_routes.py`；旧 `api.routes` 继续 re-export
+    `EvolutionTriggerRequest` 和 `trigger_evolution()`，保留手动
+    `/evolution/trigger` 的 HTTP 契约、旧 token monkeypatch、同步
+    `BackgroundTasks.add_task()` 排队边界和 `/health` 父模块边界。
+    `evolution_task`、`EVOLUTION_THRESHOLD`、`init_legacy_memory()`、`memory`、
+    `_persist_chat_turn()` 以及 `/chat` / `/log` 自动触发仍留在父模块。
+    `api/routes.py` 从 2484 行降至 2469 行，`api/evolution_routes.py` 为 33 行，
+    拆分测试为 140 行。验证结果：红灯 `5 failed, 19 passed`，split 绿灯
+    `24 passed`，相邻回归 `14 passed`，静态检查通过，全量回归
+    `1601 passed, 6 skipped, 139 warnings in 115.11s`。下一刀候选为
+    stickers/media、history/context/log、agent-step/search/render 等更大但低耦合
+    边界；继续避开 `/chat` 与 `/group/message` 主链路，除非先完成更细设计和红灯契约。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
