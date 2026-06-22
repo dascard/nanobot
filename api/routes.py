@@ -24,20 +24,18 @@ from core.database import (
     User,
     Persona,
     ChatLog,
-    ConversationTurn,
 )
 from core.evolution import evolution_task
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from core.moderation import check_message_moderation_db
 from nanobot_kt.bridge import get_bridge
 from clients.classifier_client import get_guardrail, get_timing_gate
-from core.sqlite_retry import run_sqlite_locked_retry
 from core.client_meta import (
     ClientMetaValidationError,
     normalize_client_meta,
 )
 from app.group_ingress import helpers as group_ingress_helpers
-from api import chat_content_helpers, chat_response_contract
+from api import chat_content_helpers, chat_persistence, chat_response_contract
 from api.common_auth import verify_token
 from api.evolution_routes import (
     EvolutionTriggerRequest,
@@ -302,11 +300,7 @@ class ChatProxyRequest(BaseModel):
     client_meta: dict | None = None              # QQbot 侧元信息
 
 def _safe_meta(meta_json: str) -> dict:
-    try:
-        data = json.loads(meta_json or "{}")
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    return chat_persistence.safe_meta(meta_json)
 
 
 def _clone_chat_request(req: ChatProxyRequest, **updates) -> ChatProxyRequest:
@@ -600,107 +594,25 @@ def _persist_chat_turn(
     timing_meta: dict | None = None,
 ) -> int:
     """Persist a chat turn to both ChatLog (evolution) and ConversationTurn (context)."""
-    is_injection = guardrail_status == "injection"
-    is_silent = guardrail_status == "silent"
-    processed_val = -1 if is_injection else 0
-    assistant_processed_val = processed_val if assistant_processed is None else int(assistant_processed)
-    archive_user_content = _build_chatlog_user_content(req.query, req.files)
-    context_user_content = _build_conversation_user_content(req.query, req.files)
-
-    # 敏感数据（Qwen 判定为否）：原始内容入 sensitive_data，chat_logs 用占位符
-    if is_silent:
-        archive_display_content = "[敏感数据]"
-        context_display_content = "[敏感数据]"
-    else:
-        archive_display_content = "[安全提示: 检测到注入已被拦截]" if is_injection else archive_user_content
-        context_display_content = "[安全提示: 检测到注入已被拦截]" if is_injection else context_user_content
-
-    # normalize source_message_ids: 确保包含 message_id
-    source_ids = list(req.source_message_ids or [])
-    if req.message_id and req.message_id not in source_ids:
-        source_ids.insert(0, req.message_id)
-    source_ids_json = json.dumps(source_ids, ensure_ascii=False) if source_ids else "[]"
-    meta = json.dumps(req.client_meta or {}, ensure_ascii=False)
-
-    turn_answer = answer
-    turn_answer_kind = "casual_template" if guardrail_status == "casual_template" else "chat"
-    if answer:
-        answer_lower = answer.lstrip()[:500].lower()
-        html_markers = ("<!doctype", "<html", "<head", "<body", "<article", "<style")
-        if any(answer_lower.startswith(m) for m in html_markers):
-            turn_answer = f"[HTML报告: 已渲染为图片/HTML，{len(answer)}字符]"
-            turn_answer_kind = "artifact_summary"
-        elif len(answer) > 2000:
-            turn_answer = answer[:2000] + "\n...[截断]"
-    user_meta = _safe_meta(meta)
-    user_meta["kind"] = "chat"
-    if timing_meta:
-        user_meta["timing_gate"] = timing_meta
-    assistant_turn_meta = {"kind": turn_answer_kind}
-    if timing_meta:
-        assistant_turn_meta["timing_gate"] = timing_meta
-    if assistant_meta:
-        assistant_turn_meta.update(assistant_meta)
-    assistant_chat_meta = dict(assistant_meta or {})
-    if timing_meta:
-        assistant_chat_meta["timing_gate"] = timing_meta
-
-    def operation() -> None:
-        if is_silent:
-            from core.database import SensitiveData
-
-            db.add(SensitiveData(
-                user_id=req.user_id,
-                session_id=req.session_id,
-                content=archive_user_content,
-                guardrail_status="silent",
-                sender_name=req.sender_name or "",
-                session_name=req.session_name or "",
-            ))
-        # ChatLog — 原始存档，进化/画像分析
-        db.add(ChatLog(
+    return chat_persistence.persist_chat_turn(
+        db,
+        chat_persistence.ChatTurnPersistenceInput(
             user_id=req.user_id,
             session_id=req.session_id,
-            role="user",
-            content=archive_display_content,
-            sender_name=req.sender_name or "",
-            session_name=req.session_name or "",
-            processed=processed_val,
+            query=req.query,
+            files=req.files,
+            sender_name=req.sender_name,
+            session_name=req.session_name,
             message_id=req.message_id,
-            source_message_ids_json=source_ids_json,
-            meta_json=json.dumps(user_meta, ensure_ascii=False),
-        ))
-        db.add(ChatLog(
-            user_id=req.user_id,
-            session_id=req.session_id,
-            role="assistant",
-            content=answer,
-            sender_name="nanobot",
-            session_name=req.session_name or "",
-            processed=assistant_processed_val,
-            meta_json=json.dumps(assistant_chat_meta, ensure_ascii=False),
-        ))
-        # ConversationTurn — 精简上下文，专用于历史注入
-        # HTML 报告只存摘要，避免污染下轮上下文；ChatLog 保留完整原文。
-        db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
-                                role="user", content=context_display_content,
-                                source_message_ids_json=source_ids_json,
-                                meta_json=json.dumps(user_meta, ensure_ascii=False)))
-        db.add(ConversationTurn(user_id=req.user_id, session_id=req.session_id,
-                                role="assistant", content=turn_answer,
-                                meta_json=json.dumps(assistant_turn_meta, ensure_ascii=False)))
-        db.commit()
-
-    run_sqlite_locked_retry(
-        operation,
-        rollback=db.rollback,
-        label="chat_turn_persist",
-        logger=logger,
+            source_message_ids=req.source_message_ids,
+            client_meta=req.client_meta,
+        ),
+        answer,
+        guardrail_status,
+        assistant_meta=assistant_meta,
+        assistant_processed=assistant_processed,
+        timing_meta=timing_meta,
     )
-    from core.evolution import _evolution_running
-    if req.user_id in _evolution_running:
-        return 0  # 进化正在跑，本轮不计入阈值
-    return db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
 
 
 # 旧群消息 helper 已收敛到 app.group_ingress.helpers；此处保留旧私有导入路径兼容。
