@@ -10,7 +10,6 @@ import time as _time
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 from typing import Any, Optional, List
 
 from config import (
@@ -30,12 +29,13 @@ from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvi
 from core.moderation import check_message_moderation_db
 from nanobot_kt.bridge import get_bridge
 from clients.classifier_client import get_guardrail, get_timing_gate
-from core.client_meta import (
-    ClientMetaValidationError,
-    normalize_client_meta,
-)
 from app.group_ingress import helpers as group_ingress_helpers
-from api import chat_content_helpers, chat_persistence, chat_response_contract
+from api import (
+    chat_content_helpers,
+    chat_persistence,
+    chat_request_contract,
+    chat_response_contract,
+)
 from api.common_auth import verify_token
 from api.evolution_routes import (
     EvolutionTriggerRequest,
@@ -285,31 +285,14 @@ def _format_persona_for_prompt(persona_data: dict, max_chars: int = MAX_PERSONA_
 
 
 
-class ChatProxyRequest(BaseModel):
-    user_id: str = "default_user"
-    session_id: str = "default_session"
-    query: str = ""
-    files: Optional[List[str]] = None
-    sender_name: Optional[str] = None
-    session_name: Optional[str] = None
-    stream: bool = False  # SSE streaming with heartbeats
-    classification_request: bool = False
-    merged_messages: list[str] | None = None
-    message_id: str | None = None               # QQ 原始消息 ID
-    source_message_ids: list[str] | None = None  # 合并消息的源 ID 列表
-    client_meta: dict | None = None              # QQbot 侧元信息
+ChatProxyRequest = chat_request_contract.ChatProxyRequest
 
 def _safe_meta(meta_json: str) -> dict:
     return chat_persistence.safe_meta(meta_json)
 
 
 def _clone_chat_request(req: ChatProxyRequest, **updates) -> ChatProxyRequest:
-    if hasattr(req, "model_dump"):
-        data = req.model_dump()
-    else:
-        data = req.dict()
-    data.update(updates)
-    return ChatProxyRequest(**data)
+    return chat_request_contract.clone_chat_request(req, **updates)
 
 
 def _join_buffered_messages(messages: list[str]) -> str:
@@ -437,40 +420,26 @@ def _build_conversation_user_content(query: str, files: Optional[List[str]]) -> 
 
 
 def _resolve_push_target_id(req: ChatProxyRequest, is_group: bool) -> str:
-    if not is_group:
-        return req.user_id
-    session_id = str(req.session_id or "")
-    if session_id.startswith("group_"):
-        return session_id[len("group_"):]
-    return session_id or req.user_id
+    return chat_request_contract.resolve_push_target_id(req, is_group)
 
 
 def _extract_group_id_from_chat_request(req: ChatProxyRequest) -> str:
-    session_id = str(req.session_id or "").strip()
-    if session_id.startswith("group_"):
-        return session_id[len("group_"):]
-    return session_id or str(req.user_id or "").strip()
+    return chat_request_contract.extract_group_id_from_chat_request(req)
 
 
 def _chat_request_platform(req: ChatProxyRequest) -> str:
-    client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
-    return str(client_meta.get("platform") or "qq").strip().lower() or "qq"
+    return chat_request_contract.chat_request_platform(req)
 
 
 def _chat_request_type(req: ChatProxyRequest) -> str:
-    return "private" if str(req.session_id).startswith("private_") else "group"
+    return chat_request_contract.chat_request_type(req)
 
 
 def _normalize_request_client_meta(req: Any, *, expected_chat_type: str) -> dict[str, Any]:
-    try:
-        normalized = normalize_client_meta(
-            getattr(req, "client_meta", None),
-            expected_chat_type=expected_chat_type,
-        )
-    except ClientMetaValidationError as exc:
-        raise HTTPException(400, f"invalid client_meta: {exc}") from exc
-    req.client_meta = normalized
-    return normalized
+    return chat_request_contract.normalize_request_client_meta(
+        req,
+        expected_chat_type=expected_chat_type,
+    )
 
 
 def _split_chat_answer_chunks(answer: str) -> list[str]:
@@ -559,28 +528,11 @@ async def _finalize_private_buffer(
 
 
 def _private_prompt_audit_failure_meta() -> dict:
-    return {
-        "kind": "empty_reply",
-        "no_context": True,
-        "no_send": True,
-        "agent_result": "prompt_v2_audit_failed",
-    }
+    return chat_request_contract.private_prompt_audit_failure_meta()
 
 
 def _private_timing_meta(decision: Any | None) -> dict[str, Any] | None:
-    if decision is None:
-        return None
-    scoring = getattr(decision, "timing_scoring", None)
-    if not isinstance(scoring, dict):
-        return None
-    return {
-        "mode": "private",
-        "action": str(getattr(decision, "action", "") or ""),
-        "reason": str(getattr(decision, "reason", "") or ""),
-        "effort": str(getattr(decision, "effort", "") or ""),
-        "runtime_preset": str(getattr(decision, "runtime_preset", "") or ""),
-        "scoring": scoring,
-    }
+    return chat_request_contract.private_timing_meta(decision)
 
 
 def _persist_chat_turn(
