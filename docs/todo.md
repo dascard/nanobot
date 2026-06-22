@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1468)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1470)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -383,6 +383,22 @@
     persistence 回归 `18 passed`，全量回归
     `1699 passed, 6 skipped, 139 warnings in 127.31s`。下一刀候选为
     runtime / guardrail facade、私聊缓冲状态机或 streaming finalizer；继续不优先拆
+    `/health`。
+  - 进展：`api/routes.py` 第十四刀已拆出 Chat Runtime Facade 到
+    `api/chat_runtime_facade.py`；旧 `/chat` 路由本体、`get_bridge` patch point、
+    私聊缓冲、guardrail 预跑、streaming finalizer、聊天落库和 `/health` 仍留在父模块。
+    新模块承载 `ChatRuntimeInput`、`ChatRuntimePayload`、
+    `build_chat_runtime_payload()` 和 `call_bridge_non_streaming()`，不反向导入
+    `api.routes`，也没有 `asyncio.run` 或 `run_awaitable_sync`。Prompt Runtime
+    核查确认 `bridge_meta` 字段名、`<user_input>` 包裹、`raw_query`、
+    `history_header`、`history_messages`、`effort_constraint`、`runtime_preset`
+    和 `stream` 语义未改变，默认模板与运行时模板无需变更。`api/routes.py`
+    当前为 1470 行，`api/chat_runtime_facade.py` 为 156 行，拆分测试为 269 行。
+    验证结果：红灯 `6 failed, 2 passed`，相邻扫描红灯 `4 failed, 41 passed`，
+    新增 split 绿灯 `8 passed`，相邻 split 回归 `45 passed`，`/chat` /
+    streaming 回归 `90 passed`，聊天拆分与 asyncio 策略回归 `47 passed`，
+    全量回归 `1707 passed, 6 skipped, 139 warnings in 127.22s`。下一刀候选为
+    guardrail thin facade、私聊缓冲基础件或 streaming helper；继续不优先拆
     `/health`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`

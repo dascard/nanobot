@@ -5,7 +5,7 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-22
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成聊天请求契约拆分并降至 1468 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成 Chat Runtime Facade 拆分，当前为 1470 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。同日续跑补记：测试 helper 的 `asyncio.Runner` 兼容性问题已随 `cfdd9c2 test(异步): 移除 Runner 测试依赖` 收口，提交前全量回归结果为 `1380 passed, 6 skipped, 139 warnings in 100.75s`，非 vendor Python 代码中无 `asyncio.Runner` 命中。TimingGate scoring 可观测性收尾也已完成：设计提交 `4824036 docs(时机): 设计评分可观测收尾`，计划提交 `2820f7a docs(计划): 记录评分可观测收尾计划`，实现提交 `9d5817c feat(时机): 补齐评分可观测字段`；验证包括红灯 `s_transport_tier` 缺失、绿灯 `1 passed`、相邻回归 `7 passed`、WebUI build 退出码 0、全量回归 `1380 passed, 6 skipped, 139 warnings in 103.22s`。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
@@ -4434,4 +4434,95 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1468。剩余�
 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界应继续
 围绕 `/chat` 主链路做细粒度设计：优先评估 runtime / guardrail facade、私聊缓冲状态机
 或 streaming finalizer，继续保留父模块 monkeypatch facade，避免一次性迁移完整
+`proxy_chat()`。
+
+## 2026-06-22 普通 API Chat Runtime Facade 拆分
+
+状态：设计、计划、红灯测试、新模块拆分、父模块接入、Prompt Runtime 核查、验证和
+实现阶段提交均已完成。本阶段继续拆普通 `api/routes.py`，新增
+`api/chat_runtime_facade.py`，迁移 Bridge / Prompt Runtime 输入组装边界和非流式
+Bridge 调用小包装。`api.routes` 继续保留 `/chat` 路由本体、`get_bridge` patch point、
+私聊缓冲、guardrail 预跑、streaming finalizer、聊天落库、response envelope、
+`CHAT_STREAM_QUEUE_MAXSIZE` 和 `/health`。本阶段职责边界继续收敛；因父模块接入代码和
+import 增量，`api/routes.py` 当前为 1470 行，`api/chat_runtime_facade.py` 为 156 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-22-api-chat-runtime-facade-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-runtime-facade-split.md`。
+
+阶段提交：
+
+- 设计提交：`c162ae3 docs(普通API): 设计聊天运行时门面拆分`。
+- 计划提交：`bad938a docs(计划): 记录聊天运行时门面计划`。
+- 红灯测试提交：`918c311 test(普通API): 锁定聊天运行时门面契约`。
+- 新模块提交：`30beb56 refactor(普通API): 增加聊天运行时门面`。
+- 父模块接入提交：`3854c83 refactor(普通API): 接入聊天运行时门面`。
+- Prompt Runtime 核查提交：`98c719a docs(计划): 记录运行时门面模板核查`。
+- 文档收口提交：随本次 `docs(计划): 收口聊天运行时门面拆分` 完成。
+
+计划列表：
+
+- [x] 汇总 `/chat` 剩余边界审计结论并确定 Chat Runtime Facade 边界。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API chat runtime facade split 红灯测试并提交。
+- [x] 新增 `api/chat_runtime_facade.py`，把父模块 runtime payload 组装改为调用新模块，
+  保持 `get_bridge()` patch point、`bridge_meta` 字段、普通 / injection prompt 字符串、
+  `stream` metadata 和非流式 `bridge.handle_message(..., stream=False)` 契约，并提交。
+- [x] 核查 Prompt Runtime 模板，确认无需修改默认模板、运行时模板、
+  `core/prompt_v2/variables.py` 或 `core/prompt_v2/template_registry.py`。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+Prompt Runtime 核查结论：
+
+- `bridge_meta` 的 `persona_text`、`raw_query`、`history_header`、`history_messages`、
+  `effort_constraint`、`runtime_preset`、`platform`、`chat_type` 和 `stream` 字段名与语义未变。
+- 普通 `<user_input>` 包裹和 guardrail injection 安全提示未变。
+- `prompts.v2.default/chat` 与 `data/prompts_v2/chat` 内容一致，模板未引用过时变量。
+- 本阶段无需修改默认模板、运行时模板、`variables.py` 或 `template_registry.py`。
+
+验证记录：
+
+- 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_facade_split.py -v`
+  -> `6 failed, 2 passed`；失败原因为 `api/chat_runtime_facade.py` 尚不存在。
+- 相邻 split 扫描红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_group_message_routes_split.py tests/test_api_sticker_media_routes_split.py -v`
+  -> `4 failed, 41 passed`；失败原因同为新模块路径不存在。
+- 新模块绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_facade_split.py -v`
+  -> `8 passed, 21 warnings`。
+- 普通 API split 相邻回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_group_message_routes_split.py tests/test_api_sticker_media_routes_split.py -v`
+  -> `45 passed, 21 warnings`。
+- 父模块接入回归：先暴露并修复 `NameError: name 'platform' is not defined`；修复后
+  runtime facade split `8 passed`，`/chat` 与 streaming 回归 `90 passed`，
+  聊天拆分与 asyncio 策略回归 `47 passed`。
+- Prompt Runtime 核查：`diff -ru prompts.v2.default/chat data/prompts_v2/chat` 无输出；
+  变量扫描只命中 `identity_context.md` 中已注册的 identity 变量。
+- 行数检查：`api/routes.py` 1470 行，`api/chat_runtime_facade.py` 156 行，
+  `tests/test_api_chat_runtime_facade_split.py` 269 行。
+- 文档收口复验：红旗词扫描无输出，`git diff --check` 无输出。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1707 passed, 6 skipped, 139 warnings in 127.22s`。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移私聊缓冲、streaming runner / finalizer、聊天落库、response envelope、
+  `get_bridge`、`get_guardrail` 或 `CHAT_STREAM_QUEUE_MAXSIZE`。
+- 保持 `api.routes.get_bridge()` 作为 Bridge 实例 patch point。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或
+  message envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1470。剩余显式路由为 `/chat` 和
+`/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界应继续
+围绕 `/chat` 主链路做细粒度设计：可评估 guardrail thin facade、私聊缓冲基础件或
+streaming helper。下一刀仍应保留父模块 monkeypatch facade，避免一次性迁移完整
 `proxy_chat()`。

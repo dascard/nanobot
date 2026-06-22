@@ -19,9 +19,9 @@
 - [x] 新模块提交：`30beb56 refactor(普通API): 增加聊天运行时门面`。
 - [x] 父模块接入提交：`3854c83 refactor(普通API): 接入聊天运行时门面`。
 - [x] Prompt Runtime 模板核查：无需修改模板、`variables.py` 或 `template_registry.py`。
-- [ ] 文档收口提交。
+- [x] 文档收口提交：本提交 `docs(计划): 收口聊天运行时门面拆分`。
 
-当前 `api/routes.py` 为 1468 行，剩余显式 route 为 `/chat` 与 `/health`。
+当前 `api/routes.py` 为 1470 行，剩余显式 route 为 `/chat` 与 `/health`。
 本阶段只迁移 runtime input facade，不迁移私聊缓冲、streaming finalizer、guardrail facade、
 聊天落库、response envelope、请求契约或 `/health`。
 
@@ -45,6 +45,8 @@
 - Prompt Runtime 核查：`bridge_meta` 的 `persona_text`、`raw_query`、`history_header`、
   `history_messages`、`effort_constraint`、`runtime_preset`、`platform`、`chat_type` 和
   `stream` 字段名与语义未改变；默认模板和运行时模板一致，模板没有引用过时变量。
+- 文档收口复验：红旗词扫描无输出，`git diff --check` 无输出；全量回归
+  `1707 passed, 6 skipped, 139 warnings in 127.22s`。
 
 ## 文件职责
 
@@ -807,7 +809,7 @@ git commit -m "docs(提示词): 同步聊天运行时门面模板"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」的 `api/routes.py` 进展列表追加本阶段记录，包含：
 
@@ -816,7 +818,7 @@ git commit -m "docs(提示词): 同步聊天运行时门面模板"
 - `api/routes.py` 当前行数。
 - 红灯、定向、相邻和全量验证结果。
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-22 Chat Runtime Facade 拆分阶段记录，包含：
 
@@ -825,7 +827,7 @@ git commit -m "docs(提示词): 同步聊天运行时门面模板"
 - Prompt Runtime 模板核查结论。
 - 全量回归结果。
 
-- [ ] **步骤 3：执行文档红旗扫描**
+- [x] **步骤 3：执行文档红旗扫描**
 
 运行：
 
@@ -836,7 +838,7 @@ git diff --check -- .Codex/plans/api-chat-runtime-facade-split.md docs/todo.md d
 
 预期：无输出。
 
-- [ ] **步骤 4：执行全量验证**
+- [x] **步骤 4：执行全量验证**
 
 运行：
 
@@ -846,7 +848,9 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。记录 `passed / skipped / warnings / duration`。
 
-- [ ] **步骤 5：提交文档收口**
+实际结果：`1707 passed, 6 skipped, 139 warnings in 127.22s`。
+
+- [x] **步骤 5：提交文档收口**
 
 精确暂存：
 
