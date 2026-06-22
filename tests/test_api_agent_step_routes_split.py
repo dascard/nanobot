@@ -136,6 +136,16 @@ def test_api_agent_step_routes_do_not_import_parent_routes_or_sync_awaitable():
     assert "run_awaitable_sync" not in source
 
 
+def test_chat_helper_split_modules_do_not_import_parent_routes_or_sync_awaitable():
+    for path in ("api/chat_content_helpers.py", "api/chat_response_contract.py"):
+        source = Path(path).read_text(encoding="utf-8")
+
+        assert "from api.routes" not in source
+        assert "import api.routes" not in source
+        assert "asyncio.run" not in source
+        assert "run_awaitable_sync" not in source
+
+
 def test_agent_step_routes_keep_order_before_chat():
     render_index = _route_index("/api/v1/render", "GET")
     chat_step_index = _route_index("/api/v1/chat-step", "POST")

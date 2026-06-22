@@ -117,6 +117,16 @@ def test_api_sticker_media_routes_do_not_import_parent_routes_or_sync_awaitable(
     assert "run_awaitable_sync" not in source
 
 
+def test_chat_helper_split_modules_do_not_import_parent_routes_or_sync_awaitable():
+    for path in ("api/chat_content_helpers.py", "api/chat_response_contract.py"):
+        source = Path(path).read_text(encoding="utf-8")
+
+        assert "from api.routes" not in source
+        assert "import api.routes" not in source
+        assert "asyncio.run" not in source
+        assert "run_awaitable_sync" not in source
+
+
 def test_sticker_collection_routes_precede_dynamic_sticker_routes():
     register_index = _route_index("/api/v1/stickers/register", "POST")
     search_index = _route_index("/api/v1/stickers/search", "GET")

@@ -131,6 +131,16 @@ def test_api_group_message_route_does_not_import_parent_routes_or_sync_awaitable
     assert "run_awaitable_sync" not in source
 
 
+def test_chat_helper_split_modules_do_not_import_parent_routes_or_sync_awaitable():
+    for path in ("api/chat_content_helpers.py", "api/chat_response_contract.py"):
+        source = Path(path).read_text(encoding="utf-8")
+
+        assert "from api.routes" not in source
+        assert "import api.routes" not in source
+        assert "asyncio.run" not in source
+        assert "run_awaitable_sync" not in source
+
+
 def test_group_message_route_keeps_order_before_group_utility_and_chat():
     group_message_index = _route_index("/api/v1/group/message", "POST")
     update_index = _route_index("/api/v1/update_group_name", "POST")
