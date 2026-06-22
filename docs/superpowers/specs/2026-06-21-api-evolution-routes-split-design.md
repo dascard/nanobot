@@ -147,7 +147,7 @@ router.include_router(task_router)
 
 补充行为回归：
 
-- `tests/test_audit_fixes.py::TestAuditFixes::test_init_legacy_memory_exists`
+- `tests/test_audit_fixes.py::TestLazyControllerInit::test_legacy_memory_init_exists`
   或同等现有测试，确认 `api.routes.init_legacy_memory` 仍存在。
 - `/log` 自动触发已有覆盖不足时，至少通过静态和相邻测试确保父模块
   `evolution_task` import 未移除；如果新增行为测试，patch target 必须是
@@ -157,7 +157,7 @@ router.include_router(task_router)
 
 - `python -B -m pytest -q -p no:cacheprovider tests/test_api_evolution_routes_split.py`
 - `python -B -m pytest -q -p no:cacheprovider tests/test_api_evolution_routes_split.py tests/test_api_memory_routes_split.py tests/test_api_model_routes_split.py tests/test_api_task_routes_split.py`
-- `python -B -m pytest -q -p no:cacheprovider tests/test_asyncio_run_policy.py tests/test_audit_fixes.py::TestAuditFixes::test_init_legacy_memory_exists`
+- `python -B -m pytest -q -p no:cacheprovider tests/test_asyncio_run_policy.py tests/test_audit_fixes.py::TestLazyControllerInit::test_legacy_memory_init_exists`
 
 静态验证：
 
