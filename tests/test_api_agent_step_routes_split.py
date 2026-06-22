@@ -136,8 +136,12 @@ def test_api_agent_step_routes_do_not_import_parent_routes_or_sync_awaitable():
     assert "run_awaitable_sync" not in source
 
 
-def test_chat_helper_split_modules_do_not_import_parent_routes_or_sync_awaitable():
-    for path in ("api/chat_content_helpers.py", "api/chat_response_contract.py"):
+def test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable():
+    for path in (
+        "api/chat_content_helpers.py",
+        "api/chat_response_contract.py",
+        "api/chat_persistence.py",
+    ):
         source = Path(path).read_text(encoding="utf-8")
 
         assert "from api.routes" not in source
