@@ -14,12 +14,12 @@
 
 - [x] 设计文档已提交：`docs/superpowers/specs/2026-06-22-api-chat-request-contract-split-design.md`。
 - [x] 设计提交：`858ad07 docs(普通API): 设计聊天请求契约拆分`。
-- [x] 计划文档已撰写：`.Codex/plans/api-chat-request-contract-split.md`。
-- [ ] 红灯测试提交。
-- [ ] 实现提交。
-- [ ] 文档收口提交。
+- [x] 计划提交：`eb8d120 docs(计划): 记录聊天请求契约拆分计划`。
+- [x] 红灯测试提交：`fd0bb4b test(普通API): 锁定聊天请求契约拆分`。
+- [x] 实现提交：`fd311d6 refactor(普通API): 拆分聊天请求契约`。
+- [x] 文档收口提交：随本次 `docs(计划): 收口聊天请求契约拆分` 完成。
 
-当前 `api/routes.py` 为 1516 行，剩余显式 route 为 `/chat` 与 `/health`。
+当前 `api/routes.py` 为 1468 行，剩余显式 route 为 `/chat` 与 `/health`。
 本阶段只迁移请求契约和纯 helper，不迁移私聊缓冲、streaming finalizer、Prompt Runtime 输入组装、
 KT bridge 调用、数据库落库或 response envelope。
 
@@ -82,7 +82,7 @@ KT bridge 调用、数据库落库或 response envelope。
 - 修改：`tests/test_api_group_message_routes_split.py`
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 1：创建新增 split 测试文件**
+- [x] **步骤 1：创建新增 split 测试文件**
 
 创建 `tests/test_api_chat_request_contract_split.py`：
 
@@ -287,7 +287,7 @@ def test_private_timing_meta_extracts_expected_fields():
     }
 ```
 
-- [ ] **步骤 2：扩展相邻 split 测试的源码扫描**
+- [x] **步骤 2：扩展相邻 split 测试的源码扫描**
 
 在以下 4 个文件的 `test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable()` 路径元组中追加
 `"api/chat_request_contract.py"`：
@@ -309,7 +309,7 @@ for path in (
     source = Path(path).read_text(encoding="utf-8")
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -319,7 +319,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_request_contract_spl
 
 预期：失败，至少包含 `FileNotFoundError: ... api/chat_request_contract.py`，因为实现模块尚未创建。
 
-- [ ] **步骤 4：运行相邻扫描红灯**
+- [x] **步骤 4：运行相邻扫描红灯**
 
 运行：
 
@@ -334,7 +334,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：失败，原因同样是 `api/chat_request_contract.py` 尚未创建。
 
-- [ ] **步骤 5：红灯测试提交**
+- [x] **步骤 5：红灯测试提交**
 
 确认暂存区只包含测试文件：
 
@@ -348,6 +348,13 @@ git diff --cached --check
 git commit -m "test(普通API): 锁定聊天请求契约拆分"
 ```
 
+验收结果：
+
+- 新增 split 红灯：`1 failed, 25 passed, 1 warning in 6.36s`，失败点为
+  `FileNotFoundError: api/chat_request_contract.py`。
+- 相邻扫描红灯：`4 failed, 1 warning in 6.50s`，4 个失败均为新模块尚未创建。
+- 红灯测试提交：`fd0bb4b test(普通API): 锁定聊天请求契约拆分`。
+
 ## 任务 2：实现请求契约模块并提交
 
 **文件：**
@@ -355,7 +362,7 @@ git commit -m "test(普通API): 锁定聊天请求契约拆分"
 - 创建：`api/chat_request_contract.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：新增 `api/chat_request_contract.py`**
+- [x] **步骤 1：新增 `api/chat_request_contract.py`**
 
 创建文件：
 
@@ -458,7 +465,7 @@ def private_timing_meta(decision: Any | None) -> dict[str, Any] | None:
     }
 ```
 
-- [ ] **步骤 2：修改 `api/routes.py` 导入**
+- [x] **步骤 2：修改 `api/routes.py` 导入**
 
 将：
 
@@ -496,7 +503,7 @@ from api import (
 )
 ```
 
-- [ ] **步骤 3：修改 `api/routes.py` 请求模型与 helper**
+- [x] **步骤 3：修改 `api/routes.py` 请求模型与 helper**
 
 将父模块中的 `class ChatProxyRequest(BaseModel): ...` 替换为：
 
@@ -563,7 +570,7 @@ def _private_timing_meta(decision: Any | None) -> dict[str, Any] | None:
     return chat_request_contract.private_timing_meta(decision)
 ```
 
-- [ ] **步骤 4：运行定向绿灯测试**
+- [x] **步骤 4：运行定向绿灯测试**
 
 运行：
 
@@ -573,7 +580,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_request_contract_spl
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行相邻扫描绿灯**
+- [x] **步骤 5：运行相邻扫描绿灯**
 
 运行：
 
@@ -588,7 +595,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 6：运行 `/chat` 相邻回归**
+- [x] **步骤 6：运行 `/chat` 相邻回归**
 
 运行：
 
@@ -601,7 +608,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 7：实现提交**
+- [x] **步骤 7：实现提交**
 
 确认暂存区只包含实现相关文件：
 
@@ -611,6 +618,13 @@ git diff --cached --check
 git commit -m "refactor(普通API): 拆分聊天请求契约"
 ```
 
+验收结果：
+
+- 请求契约 split 绿灯：`26 passed, 1 warning in 0.94s`。
+- 相邻扫描绿灯：`4 passed, 1 warning in 1.01s`。
+- `/chat` helper / persistence 相邻回归：`18 passed, 1 warning in 1.62s`。
+- 实现提交：`fd311d6 refactor(普通API): 拆分聊天请求契约`。
+
 ## 任务 3：全量验证与文档收口
 
 **文件：**
@@ -619,7 +633,7 @@ git commit -m "refactor(普通API): 拆分聊天请求契约"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行全量测试**
+- [x] **步骤 1：运行全量测试**
 
 运行：
 
@@ -629,7 +643,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：全部通过，失败数为 0。
 
-- [ ] **步骤 2：更新执行计划状态**
+- [x] **步骤 2：更新执行计划状态**
 
 在本文件「当前状态」中填写提交哈希，并把已完成任务的复选框改为 `[x]`。
 在对应任务末尾追加实际验证结果，例如：
@@ -639,7 +653,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 `1673 passed, 6 skipped, ... warnings in ...s`。
 ```
 
-- [ ] **步骤 3：更新 `docs/todo.md`**
+- [x] **步骤 3：更新 `docs/todo.md`**
 
 在 P3 普通 API 超大文件拆分记录中补一条聊天请求契约拆分进展，说明：
 
@@ -648,7 +662,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
   父模块保留 `ChatProxyRequest` 与请求 helper wrapper，`/chat` 路由本体未迁移。
 ```
 
-- [ ] **步骤 4：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 4：更新 `docs/plan_walkthrough.md`**
 
 追加 2026-06-22 阶段记录，包含：
 
@@ -661,7 +675,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - 下一步：评估 runtime / guardrail facade 或私聊缓冲状态机，但先补齐对应状态机测试。
 ```
 
-- [ ] **步骤 5：运行文档红旗扫描与空白检查**
+- [x] **步骤 5：运行文档红旗扫描与空白检查**
 
 运行：
 
@@ -678,7 +692,7 @@ git diff --check -- \
 
 预期：`rg` 无匹配，`git diff --check` 退出码为 0。
 
-- [ ] **步骤 6：文档收口提交**
+- [x] **步骤 6：文档收口提交**
 
 确认暂存区只包含收口文档：
 
@@ -688,16 +702,22 @@ git diff --cached --check
 git commit -m "docs(计划): 收口聊天请求契约拆分"
 ```
 
+验收结果：
+
+- 全量回归：`1699 passed, 6 skipped, 139 warnings in 127.31s`。
+- 行数检查：`api/routes.py` 1468 行，`api/chat_request_contract.py` 96 行，
+  `tests/test_api_chat_request_contract_split.py` 196 行。
+
 ## 验收清单
 
-- [ ] `api/chat_request_contract.py` 不导入 `api.routes`。
-- [ ] `api/chat_request_contract.py` 不包含 `asyncio.run` 或 `run_awaitable_sync`。
-- [ ] `routes.ChatProxyRequest` 仍可导入，字段默认值保持不变。
-- [ ] 8 个父模块 wrapper 的 `__module__` 仍是 `"api.routes"`。
-- [ ] `_clone_chat_request()` 不丢 `client_meta`、`source_message_ids`、`merged_messages`、
+- [x] `api/chat_request_contract.py` 不导入 `api.routes`。
+- [x] `api/chat_request_contract.py` 不包含 `asyncio.run` 或 `run_awaitable_sync`。
+- [x] `routes.ChatProxyRequest` 仍可导入，字段默认值保持不变。
+- [x] 8 个父模块 wrapper 的 `__module__` 仍是 `"api.routes"`。
+- [x] `_clone_chat_request()` 不丢 `client_meta`、`source_message_ids`、`merged_messages`、
   `message_id` 和 `stream`。
-- [ ] `_normalize_request_client_meta()` 成功时回写 `req.client_meta`，失败时抛 HTTP 400。
-- [ ] `_private_prompt_audit_failure_meta()` 输出精确保持。
-- [ ] `_private_timing_meta()` 保持 `None` / 非 dict scoring / dict scoring 三类行为。
-- [ ] `proxy_chat()`、`_stream_chat()`、私聊缓冲和落库逻辑未迁移。
-- [ ] 全量 `python -B -m pytest -p no:cacheprovider tests/ -v` 失败数为 0。
+- [x] `_normalize_request_client_meta()` 成功时回写 `req.client_meta`，失败时抛 HTTP 400。
+- [x] `_private_prompt_audit_failure_meta()` 输出精确保持。
+- [x] `_private_timing_meta()` 保持 `None` / 非 dict scoring / dict scoring 三类行为。
+- [x] `proxy_chat()`、`_stream_chat()`、私聊缓冲和落库逻辑未迁移。
+- [x] 全量 `python -B -m pytest -p no:cacheprovider tests/ -v` 失败数为 0。

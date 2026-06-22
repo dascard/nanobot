@@ -1,6 +1,6 @@
 # Nanobot Server — 待办计划
 
-> 本文件分两部分：**一、缺陷修复清单**（来自 2026-06-16 全仓库 Python 代码审查 + 逐条对抗式核验）；**二、架构演进路线**（2026-06-16 读真实代码核实重写，后续状态已更新至 2026-06-21，每项含现状/痛点/目标/关联/粗略路径）。
+> 本文件分两部分：**一、缺陷修复清单**（来自 2026-06-16 全仓库 Python 代码审查 + 逐条对抗式核验）；**二、架构演进路线**（2026-06-16 读真实代码核实重写，后续状态已更新至 2026-06-22，每项含现状/痛点/目标/关联/粗略路径）。
 > 缺陷条目均经「读真实代码 + 引用行号」核验，已剔除 11 项误报（见附录）。严重度 = 真实可利用性，非原始审查给分。
 
 ---
@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1954)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1468)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -367,6 +367,23 @@
     `8 passed`，静态检查通过，全量回归
     `1673 passed, 6 skipped, 139 warnings in 126.35s`。下一刀候选为私聊缓冲
     状态机或 streaming finalizer / push envelope 构造；继续不优先拆 `/health`。
+  - 进展：`api/routes.py` 第十三刀已拆出聊天请求契约与请求元信息 helper 到
+    `api/chat_request_contract.py`；旧 `api.routes.ChatProxyRequest` 继续可导入，
+    `_clone_chat_request()`、`_resolve_push_target_id()`、
+    `_extract_group_id_from_chat_request()`、`_chat_request_platform()`、
+    `_chat_request_type()`、`_normalize_request_client_meta()`、
+    `_private_prompt_audit_failure_meta()` 和 `_private_timing_meta()` 均保留父模块
+    wrapper，`proxy_chat()` 仍通过父模块名称调用，保持既有 monkeypatch 入口。
+    本阶段没有迁移 `/chat` 路由本体、私聊缓冲、streaming finalizer、聊天落库、
+    Prompt Runtime 输入组装、response envelope 或 `/health`；新模块不反向导入
+    `api.routes`，也没有 `asyncio.run` 或 `run_awaitable_sync`。`api/routes.py`
+    从 1516 行降至 1468 行，`api/chat_request_contract.py` 为 96 行，拆分测试为
+    196 行。验证结果：红灯 `1 failed, 25 passed`，相邻扫描红灯 `4 failed`，
+    新增 split 绿灯 `26 passed`，相邻扫描绿灯 `4 passed`，`/chat` helper /
+    persistence 回归 `18 passed`，全量回归
+    `1699 passed, 6 skipped, 139 warnings in 127.31s`。下一刀候选为
+    runtime / guardrail facade、私聊缓冲状态机或 streaming finalizer；继续不优先拆
+    `/health`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
