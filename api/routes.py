@@ -10,7 +10,7 @@ import time as _time
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Any, Optional, List
 
 from config import (
@@ -102,6 +102,12 @@ from api.agent_step_routes import (
     router as agent_step_router,
     run_agent_step,
     run_agent_step_stream,
+)
+from api.group_message_routes import (
+    GroupMessageRequest,
+    OneBotMessageSegmentPayload,
+    group_message,
+    router as group_message_router,
 )
 from api.group_utility_routes import (
     GroupTimingRequest,
@@ -799,42 +805,6 @@ def _persist_chat_turn(
     return db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
 
 
-# ── 统一群聊入口 /group/message ──
-
-class OneBotMessageSegmentPayload(BaseModel):
-    """OneBot/NapCat 消息段——不要和 NoneBot MessageSegment 混淆。"""
-    type: str
-    data: dict[str, Any] = Field(default_factory=dict)
-
-
-class GroupMessageRequest(BaseModel):
-    group_id: str
-    sender_id: str = ""
-    sender_name: str = ""
-    message: str = ""
-    files: Optional[List[str]] = None
-    client_meta: dict | None = None
-    message_id: str | None = None
-    session_name: str | None = None
-    is_at_bot: bool = False
-    is_reply_to_bot: bool = False
-    bot_aliases: list[str] = Field(default_factory=list)
-    # ── 结构化消息字段（Batch 1）──
-    segments: list[dict] = Field(default_factory=list)
-    raw_message: str = ""
-    self_id: str = ""
-    bot_id: str = ""
-    bot_name: str = ""
-    sender_is_bot: bool = False
-    mentions: list[dict] = Field(default_factory=list)
-    reply_to: dict | None = None
-    reply_to_message_id: str | None = None
-    reply_to_sender_id: str | None = None
-    reply_to_sender_name: str | None = None
-    reply_to_content: str | None = None
-    is_directed_to_other: bool = False
-
-
 # 旧群消息 helper 已收敛到 app.group_ingress.helpers；此处保留旧私有导入路径兼容。
 _normalize_onebot_segments = group_ingress_helpers.normalize_onebot_segments
 _extract_mentions_from_segments = group_ingress_helpers.extract_mentions_from_segments
@@ -858,22 +828,7 @@ _persist_group_bridge_reply = group_ingress_helpers.persist_group_bridge_reply
 _derive_group_trigger_reason = group_ingress_helpers.derive_group_trigger_reason
 
 
-@router.post("/group/message")
-async def group_message(req: GroupMessageRequest, db: Session = Depends(get_db),
-                        background_tasks: BackgroundTasks = None,
-                        _auth=Depends(verify_token)):
-    """统一群聊入口：route 只做依赖注入，业务流程在 GroupIngressService。"""
-    from app.group_ingress.service import GroupIngressService
-
-    _normalize_request_client_meta(req, expected_chat_type="group")
-    service = GroupIngressService(
-        db=db,
-        background_tasks=background_tasks,
-        bridge_provider=get_bridge,
-    )
-    return await service.handle(req)
-
-
+router.include_router(group_message_router)
 router.include_router(group_utility_router)
 router.include_router(agent_step_router)
 
