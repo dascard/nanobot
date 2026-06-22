@@ -85,16 +85,19 @@ guardrail、Prompt V2 audit、generated image transport 和落库；需要更细
 
 - 删除本地 `render_markdown()` 和 `chat_step()`。
 - 删除不再直接使用的 `core.agent_step` import，但通过新模块 re-export
-  `AgentStepRequest`、`render_markdown` 和 `chat_step`。
+  `AgentStepRequest`、`agent_step_event_payload`、`run_agent_step`、
+  `run_agent_step_stream`、`agent_step_sse_data`、`render_markdown` 和 `chat_step`。
 - 保留 `StreamingResponse` import，因为 `/chat` SSE 仍在父模块使用。
-- `router.include_router(agent_step_router)`，建议放在已有普通 API split router 后、
-  `/health` 前。
+- `router.include_router(agent_step_router)` 放在原 `/render` 与 `/chat-step` 所在位置，
+  也就是 `/chat` 前，保持 route order 为 `/render` → `/chat-step` → `/chat`。
 
 ## 兼容性约束
 
 - `POST /api/v1/chat-step` 的 path、method、鉴权和 request / response shape 不变。
 - `GET /api/v1/render` 继续无 bearer 鉴权，保持 deprecated 响应。
-- `api.routes.AgentStepRequest`、`api.routes.chat_step` 和
+- `api.routes.AgentStepRequest`、`api.routes.agent_step_event_payload`、
+  `api.routes.run_agent_step`、`api.routes.run_agent_step_stream`、
+  `api.routes.agent_step_sse_data`、`api.routes.chat_step` 和
   `api.routes.render_markdown` 继续可用，并与 `api.agent_step_routes` 中对象相同。
 - `api.routes.NANOBOT_API_TOKEN` monkeypatch 继续影响 `/chat-step` 鉴权，依赖
   `api.common_auth.verify_token` 的兼容逻辑。
@@ -108,7 +111,10 @@ guardrail、Prompt V2 audit、generated image transport 和落库；需要更细
 - `/api/v1/render` 与 `/api/v1/chat-step` 注册来源为 `api.agent_step_routes`。
 - 旧 `api.routes` re-export 与新模块对象一致。
 - `/chat-step` 继续兼容 `api.routes.NANOBOT_API_TOKEN` monkeypatch。
+- `/api/v1/render` 仍早于 `/api/v1/chat-step`，且二者均早于 `/api/v1/chat`。
 - `/render` 不要求 bearer token，且返回 deprecated 响应。
+- `/chat-step` 在 `Accept: text/event-stream` 且 request body `stream=false` 时仍走
+  SSE；request body `stream=true` 且不带 `Accept` 时也仍走 SSE。
 - `/chat-step` endpoint 保持 coroutine。
 - 新模块源码不包含 `from api.routes`、`import api.routes`、`asyncio.run` 或
   `run_awaitable_sync`。
