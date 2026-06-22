@@ -14,9 +14,11 @@
 
 - [x] 设计文档已提交：`docs/superpowers/specs/2026-06-22-api-chat-runtime-facade-split-design.md`。
 - [x] 设计提交：`c162ae3 docs(普通API): 设计聊天运行时门面拆分`。
-- [ ] 计划提交。
-- [ ] 红灯测试提交。
-- [ ] 实现提交。
+- [x] 计划提交：`bad938a docs(计划): 记录聊天运行时门面计划`。
+- [x] 红灯测试提交：`918c311 test(普通API): 锁定聊天运行时门面契约`。
+- [x] 新模块提交：`30beb56 refactor(普通API): 增加聊天运行时门面`。
+- [x] 父模块接入提交：`3854c83 refactor(普通API): 接入聊天运行时门面`。
+- [x] Prompt Runtime 模板核查：无需修改模板、`variables.py` 或 `template_registry.py`。
 - [ ] 文档收口提交。
 
 当前 `api/routes.py` 为 1468 行，剩余显式 route 为 `/chat` 与 `/health`。
@@ -30,6 +32,19 @@
 - 同步函数包装 awaitable
 - `api/chat_runtime_facade.py` 对 `api.routes` 的反向导入
 - 新模块顶层绑定 `get_bridge()` 或 `get_guardrail()`
+
+已完成验证：
+
+- 红灯：`tests/test_api_chat_runtime_facade_split.py` 初次运行 `6 failed, 2 passed`，
+  失败原因为 `api/chat_runtime_facade.py` 尚不存在；相邻 split 扫描初次运行
+  `4 failed, 41 passed`，失败原因同为新模块路径不存在。
+- 新模块绿灯：`tests/test_api_chat_runtime_facade_split.py` 全文件 `8 passed`；
+  相邻 split 扫描 `45 passed`。
+- 父模块接入回归：`tests/test_api_chat_runtime_facade_split.py` 全文件 `8 passed`；
+  `/chat` 与 streaming 回归 `90 passed`；聊天拆分与 asyncio 策略回归 `47 passed`。
+- Prompt Runtime 核查：`bridge_meta` 的 `persona_text`、`raw_query`、`history_header`、
+  `history_messages`、`effort_constraint`、`runtime_preset`、`platform`、`chat_type` 和
+  `stream` 字段名与语义未改变；默认模板和运行时模板一致，模板没有引用过时变量。
 
 ## 文件职责
 
