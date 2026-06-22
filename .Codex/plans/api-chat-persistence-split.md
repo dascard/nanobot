@@ -14,12 +14,20 @@
 
 - 设计文档：`docs/superpowers/specs/2026-06-22-api-chat-persistence-split-design.md`。
 - 设计提交：`0e38393 docs(普通API): 设计聊天落库拆分`。
-- `api/routes.py` 当前约 1604 行，剩余显式 route 为 `/chat` 与 `/health`。
+- 计划提交：`237efa0 docs(计划): 记录聊天落库拆分计划`。
+- 红灯测试提交：`7d55196 test(普通API): 锁定聊天落库拆分契约`。
+- 实现提交：`ea7e834 refactor(普通API): 拆分聊天落库 writer`。
+- `api/routes.py` 已从 1604 行降至 1516 行，剩余显式 route 为 `/chat` 与 `/health`。
 - 上一阶段已拆出 `api/chat_content_helpers.py` 与 `api/chat_response_contract.py`。
 - 本阶段不迁移 `proxy_chat()`、`ChatProxyRequest`、`_private_buffers`、streaming runner、
   `get_bridge`、`get_guardrail`、`CHAT_STREAM_QUEUE_MAXSIZE` 或 `/health`。
 - 本阶段不修改 Prompt Runtime 模板、`enriched_query`、历史注入、conversation 结构或工具输出契约。
 - 本阶段不得新增 `asyncio.run()`、`run_awaitable_sync` 或同步函数包装 awaitable。
+- 验证结果：红灯 `6 failed, 49 passed, 21 warnings in 11.14s`；新增 split 绿灯
+  `10 passed, 1 warning in 1.07s`；相邻回归 `74 passed, 21 warnings in 8.49s`；
+  `/chat` 行为回归 `8 passed, 21 warnings in 2.15s`；全量回归
+  `1673 passed, 6 skipped, 139 warnings in 126.35s`；文档收口复验为红旗词扫描无输出、
+  `git diff --check` 无输出、全量回归 `1673 passed, 6 skipped, 139 warnings in 123.49s`。
 
 ## 文件职责
 
@@ -56,7 +64,7 @@
 - 修改：`tests/test_api_group_message_routes_split.py`
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 1：创建新增 split 测试文件**
+- [x] **步骤 1：创建新增 split 测试文件**
 
 创建 `tests/test_api_chat_persistence_split.py`，核心测试内容如下：
 
@@ -255,7 +263,7 @@ def test_persist_chat_turn_pending_count_returns_zero_when_evolution_running(db_
     assert db_session.query(ConversationTurn).filter_by(user_id="u-running").count() == 2
 ```
 
-- [ ] **步骤 2：扩展相邻 split 测试源码扫描**
+- [x] **步骤 2：扩展相邻 split 测试源码扫描**
 
 在这些文件的源码禁用模式测试中加入 `api/chat_persistence.py`：
 
@@ -279,7 +287,7 @@ for path in (
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 3：运行红灯测试**
+- [x] **步骤 3：运行红灯测试**
 
 运行：
 
@@ -295,7 +303,7 @@ python -B -m pytest -q -p no:cacheprovider \
 预期：FAIL。失败点应集中在 `api/chat_persistence.py` 文件不存在、`api.chat_persistence`
 无法导入或相邻 split 测试无法读取新模块源码。
 
-- [ ] **步骤 4：提交红灯测试**
+- [x] **步骤 4：提交红灯测试**
 
 运行：
 
@@ -316,7 +324,7 @@ git commit -m "test(普通API): 锁定聊天落库拆分契约"
 - 创建：`api/chat_persistence.py`
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：创建 `api/chat_persistence.py`**
+- [x] **步骤 1：创建 `api/chat_persistence.py`**
 
 创建文件并放入完整 writer 实现：
 
@@ -488,7 +496,7 @@ def persist_chat_turn(
     return db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
 ```
 
-- [ ] **步骤 2：修改 `api/routes.py` 导入**
+- [x] **步骤 2：修改 `api/routes.py` 导入**
 
 在现有 helper 导入附近加入：
 
@@ -504,7 +512,7 @@ from api import chat_content_helpers, chat_response_contract
 
 替换为包含 `chat_persistence` 的导入。
 
-- [ ] **步骤 3：替换 `_safe_meta()` 实现**
+- [x] **步骤 3：替换 `_safe_meta()` 实现**
 
 将父模块 `_safe_meta()` 改为 wrapper：
 
@@ -513,7 +521,7 @@ def _safe_meta(meta_json: str) -> dict:
     return chat_persistence.safe_meta(meta_json)
 ```
 
-- [ ] **步骤 4：替换 `_persist_chat_turn()` 实现**
+- [x] **步骤 4：替换 `_persist_chat_turn()` 实现**
 
 保留函数签名，将函数体改为适配 `ChatTurnPersistenceInput`：
 
@@ -552,7 +560,7 @@ def _persist_chat_turn(
 
 不要修改 `proxy_chat()` 的 `_persist_chat_turn(...)` 调用点。
 
-- [ ] **步骤 5：运行新增测试**
+- [x] **步骤 5：运行新增测试**
 
 运行：
 
@@ -562,7 +570,7 @@ python -B -m pytest -q -p no:cacheprovider tests/test_api_chat_persistence_split
 
 预期：PASS，新增 split 测试全部通过。
 
-- [ ] **步骤 6：运行相邻回归**
+- [x] **步骤 6：运行相邻回归**
 
 运行：
 
@@ -581,7 +589,7 @@ python -B -m pytest -q -p no:cacheprovider \
 预期：PASS。`tests/test_tracing_sqlite_retry.py::test_chat_turn_persist_retries_sqlite_locked_commit`
 必须继续覆盖 `chat_turn_persist` 的 SQLite locked retry。
 
-- [ ] **步骤 7：运行 `/chat` 行为回归**
+- [x] **步骤 7：运行 `/chat` 行为回归**
 
 运行：
 
@@ -600,7 +608,7 @@ python -B -m pytest -q -p no:cacheprovider \
 预期：PASS。该组验证父模块 `_persist_chat_turn()` spy、stream 后台落库、audit failure、
 timing meta 和 buffered request 仍保持原语义。
 
-- [ ] **步骤 8：运行静态检查**
+- [x] **步骤 8：运行静态检查**
 
 运行：
 
@@ -619,7 +627,7 @@ git diff --check -- \
 
 预期：`py_compile` 成功；`rg` 无匹配，退出码为 1；`git diff --check` 无输出。
 
-- [ ] **步骤 9：提交实现**
+- [x] **步骤 9：提交实现**
 
 运行：
 
@@ -643,11 +651,11 @@ git commit -m "refactor(普通API): 拆分聊天落库 writer"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：更新本计划执行状态**
+- [x] **步骤 1：更新本计划执行状态**
 
 在本文件「当前状态」中追加提交哈希和验证结果，勾选已完成步骤。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」的 `api/routes.py` 进展列表中追加聊天落库拆分记录，内容包含：
 
@@ -657,7 +665,7 @@ git commit -m "refactor(普通API): 拆分聊天落库 writer"
 - 新增测试覆盖 silent / injection / HTML / audit failure / timing meta / source ids / pending count。
 - `api/routes.py` 行数变化和验证结果。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-22 普通 API 聊天落库拆分` 小节，记录：
 
@@ -667,7 +675,7 @@ git commit -m "refactor(普通API): 拆分聊天落库 writer"
 - 红灯、绿灯、相邻回归、`/chat` 回归、静态检查和全量回归结果。
 - 仍不拆 `/chat` 路由本体、私聊缓冲、streaming runner 和 `/health`。
 
-- [ ] **步骤 4：运行文档检查与全量回归**
+- [x] **步骤 4：运行文档检查与全量回归**
 
 运行：
 
@@ -685,7 +693,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：红旗词扫描无输出；`git diff --check` 无输出；全量测试 PASS。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
@@ -697,11 +705,11 @@ git commit -m "docs(计划): 收口聊天落库拆分"
 
 ## 最终验收清单
 
-- [ ] `api/chat_persistence.py` 承载落库实现，且不反向导入父模块。
-- [ ] `api.routes._persist_chat_turn()` 和 `_safe_meta()` 仍是父模块 wrapper。
-- [ ] `proxy_chat()` 的调用点仍走父模块 wrapper。
-- [ ] silent / injection / HTML / audit failure / timing meta / source ids / pending count 契约均有测试。
-- [ ] SQLite locked retry 仍使用 `chat_turn_persist` label。
-- [ ] 新模块没有 `asyncio.run`、`run_awaitable_sync` 或同步函数包装 awaitable。
-- [ ] 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构或工具输出契约。
-- [ ] 定向回归、相邻回归、`/chat` 回归、静态检查和全量回归均通过。
+- [x] `api/chat_persistence.py` 承载落库实现，且不反向导入父模块。
+- [x] `api.routes._persist_chat_turn()` 和 `_safe_meta()` 仍是父模块 wrapper。
+- [x] `proxy_chat()` 的调用点仍走父模块 wrapper。
+- [x] silent / injection / HTML / audit failure / timing meta / source ids / pending count 契约均有测试。
+- [x] SQLite locked retry 仍使用 `chat_turn_persist` label。
+- [x] 新模块没有 `asyncio.run`、`run_awaitable_sync` 或同步函数包装 awaitable。
+- [x] 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构或工具输出契约。
+- [x] 定向回归、相邻回归、`/chat` 回归、静态检查和全量回归均通过。

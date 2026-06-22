@@ -4268,3 +4268,88 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1604。剩余�
 `/chat` 主链路做细粒度设计：优先评估聊天落库 writer、私聊缓冲状态机或 streaming
 finalizer / push envelope 构造，继续保留父模块 monkeypatch facade，避免一次性迁移完整
 `proxy_chat()`。
+
+## 2026-06-22 普通 API 聊天落库拆分
+
+状态：设计、计划、红灯测试、writer 拆分、验证和实现阶段提交均已完成。本阶段继续拆
+普通 `api/routes.py`，新增 `api/chat_persistence.py`，迁移 `_persist_chat_turn()` 的
+同步 DB writer、`ChatTurnPersistenceInput`、`safe_meta()` 和 writer 私有 helper。
+`api.routes` 继续保留 `_safe_meta()` 与 `_persist_chat_turn()` 父模块 wrapper，
+`proxy_chat()`、流式 finalizer 和非流式分支仍调用父模块名称，从而保留既有
+monkeypatch spy 契约。`/chat` 路由本体、`ChatProxyRequest`、私聊缓冲、
+streaming runner、Prompt Runtime 输入组装、bridge / guardrail monkeypatch、
+`CHAT_STREAM_QUEUE_MAXSIZE` 和 `/health` 均保持在父模块。`api/routes.py` 从
+1604 行降至 1516 行；`api/chat_persistence.py` 为 165 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-22-api-chat-persistence-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-persistence-split.md`。
+
+阶段提交：
+
+- 设计提交：`0e38393 docs(普通API): 设计聊天落库拆分`。
+- 计划提交：`237efa0 docs(计划): 记录聊天落库拆分计划`。
+- 红灯测试提交：`7d55196 test(普通API): 锁定聊天落库拆分契约`。
+- Writer 拆分提交：`ea7e834 refactor(普通API): 拆分聊天落库 writer`。
+- 文档收口提交：随本次 `docs(计划): 收口聊天落库拆分` 完成。
+
+计划列表：
+
+- [x] 汇总 `/chat` 剩余边界审计结论并确定聊天落库 writer 边界。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API chat persistence split 红灯测试并提交。
+- [x] 新增 `api/chat_persistence.py`，把父模块 `_safe_meta()` 和
+  `_persist_chat_turn()` 改为 wrapper，保持旧 `__module__`、落库时机、SQLite retry、
+  source ids、timing meta 和 Prompt audit failure 契约，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_chat_persistence_split.py tests/test_api_history_log_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_group_message_routes_split.py tests/test_api_sticker_media_routes_split.py`
+  -> `6 failed, 49 passed, 21 warnings in 11.14s`；失败点集中在
+  `api/chat_persistence.py` 不存在、`api.chat_persistence` 无法导入，或相邻 split 测试
+  无法读取新模块源码。
+- Chat persistence split 绿灯：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_chat_persistence_split.py`
+  -> `10 passed, 1 warning in 1.07s`。
+- 普通 API split 相邻回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api_chat_persistence_split.py tests/test_api_chat_helpers_split.py tests/test_api_history_log_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_group_message_routes_split.py tests/test_api_sticker_media_routes_split.py tests/test_tracing_sqlite_retry.py tests/test_asyncio_run_policy.py`
+  -> `74 passed, 21 warnings in 8.49s`。
+- `/chat` 行为回归：
+  `python -B -m pytest -q -p no:cacheprovider tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send tests/test_api.py::test_private_prompt_v2_audit_failure_is_not_context_chat tests/test_api.py::test_proxy_chat_persists_private_timing_scoring_meta tests/test_api.py::test_proxy_chat_no_reply_persists_private_timing_scoring_meta tests/test_api.py::test_private_buffer_refreshes_window_and_persists_merged_messages tests/test_api.py::test_private_buffer_merges_files_for_final_bridge_request`
+  -> `8 passed, 21 warnings in 2.15s`。
+- 静态检查：`python -B -m py_compile api/routes.py api/chat_persistence.py tests/test_api_chat_persistence_split.py`
+  成功；`api/chat_persistence.py` 无 `from api.routes`、`import api.routes`、
+  `asyncio.run` 或 `run_awaitable_sync`；`git diff --check -- api/routes.py api/chat_persistence.py tests/test_api_chat_persistence_split.py tests/test_api_history_log_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_group_message_routes_split.py tests/test_api_sticker_media_routes_split.py`
+  无输出。
+- 行数检查：`api/routes.py` 1516 行，`api/chat_persistence.py` 165 行，
+  `tests/test_api_chat_persistence_split.py` 194 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1673 passed, 6 skipped, 139 warnings in 126.35s`。
+- 文档收口复验：红旗词扫描无输出，`git diff --check` 无输出；
+  `python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1673 passed, 6 skipped, 139 warnings in 123.49s`。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移 `ChatProxyRequest`、`proxy_chat()`、`_private_buffers`、streaming runner、
+  Prompt Runtime 输入组装、`get_bridge`、`get_guardrail` 或 `CHAT_STREAM_QUEUE_MAXSIZE`。
+- 保持 `api.routes._persist_chat_turn()` 和 `_safe_meta()` 作为父模块 wrapper。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或
+  message envelope。
+- 不改变 ChatLog 原始归档和 ConversationTurn 精简上下文边界。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1516。剩余显式路由为 `/chat` 和
+`/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界应继续
+围绕 `/chat` 主链路做更细粒度设计：优先评估私聊缓冲状态机、streaming finalizer /
+push envelope 构造或 bridge / guardrail patch point 的 facade 收敛，继续保留父模块
+monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。

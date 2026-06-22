@@ -349,6 +349,24 @@
     静态检查通过，全量回归 `1662 passed, 6 skipped, 139 warnings in 125.10s`。
     下一刀候选为聊天落库 writer、私聊缓冲状态机或 streaming finalizer 的进一步设计；
     继续不优先拆 `/health`。
+  - 进展：`api/routes.py` 第十二刀已拆出聊天落库 writer 到
+    `api/chat_persistence.py`；旧 `api.routes._safe_meta()` 和
+    `api.routes._persist_chat_turn()` 继续保留父模块 wrapper，`proxy_chat()`、
+    流式 finalizer 和非流式分支仍通过父模块名称调用，保留既有 monkeypatch spy
+    契约。本阶段没有迁移 `/chat` 路由本体、`ChatProxyRequest`、私聊缓冲、
+    streaming runner、Prompt Runtime 输入组装、`get_bridge` / `get_guardrail`
+    monkeypatch、`CHAT_STREAM_QUEUE_MAXSIZE` 或 `/health`；新模块不反向导入
+    `api.routes`，也没有 `asyncio.run` 或 `run_awaitable_sync`。新增
+    `tests/test_api_chat_persistence_split.py` 覆盖 silent 遮罩、injection 安全提示、
+    HTML 全量归档 / 上下文摘要、Prompt audit failure meta、timing meta、source ids
+    去重、evolution running pending count 和 SQLite locked retry 相邻契约。
+    `api/routes.py` 从 1604 行降至 1516 行，`api/chat_persistence.py` 为
+    165 行，拆分测试为 194 行。验证结果：红灯
+    `6 failed, 49 passed, 21 warnings in 11.14s`，新增 split 绿灯
+    `10 passed`，普通 API split 相邻回归 `74 passed`，`/chat` 行为回归
+    `8 passed`，静态检查通过，全量回归
+    `1673 passed, 6 skipped, 139 warnings in 126.35s`。下一刀候选为私聊缓冲
+    状态机或 streaming finalizer / push envelope 构造；继续不优先拆 `/health`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
