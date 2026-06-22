@@ -12,7 +12,6 @@ _MEMORY_ROUTE_SIGNATURES = (
 )
 
 _PARENT_ROUTE_SIGNATURES = (
-    ("POST", "/api/v1/evolution/trigger"),
     ("GET", "/api/v1/health"),
 )
 
