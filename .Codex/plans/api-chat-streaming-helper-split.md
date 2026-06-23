@@ -489,7 +489,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 7：提交父模块接入**
+- [x] **步骤 7：提交父模块接入**
 
 运行：
 
@@ -508,7 +508,7 @@ git commit -m "refactor(普通API): 接入聊天流式助手"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：记录行数变化**
+- [x] **步骤 1：记录行数变化**
 
 运行：
 
@@ -518,7 +518,7 @@ wc -l api/routes.py api/chat_streaming_helpers.py tests/test_api_chat_streaming_
 
 将输出写入本计划、`docs/todo.md` 和 `docs/plan_walkthrough.md`。
 
-- [ ] **步骤 2：记录阶段提交与验证结果**
+- [x] **步骤 2：记录阶段提交与验证结果**
 
 在本计划和 `docs/plan_walkthrough.md` 中记录：
 
@@ -529,7 +529,7 @@ wc -l api/routes.py api/chat_streaming_helpers.py tests/test_api_chat_streaming_
 - 父模块接入提交
 - 各阶段 pytest 命令和结果
 
-- [ ] **步骤 3：运行文档自检**
+- [x] **步骤 3：运行文档自检**
 
 运行：
 
@@ -540,7 +540,7 @@ git diff --check -- .Codex/plans/api-chat-streaming-helper-split.md docs/todo.md
 
 预期：扫描无输出，diff 检查无输出。
 
-- [ ] **步骤 4：运行全量测试**
+- [x] **步骤 4：运行全量测试**
 
 运行：
 
@@ -550,7 +550,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：全部通过，跳过数量和警告数量记录到 `docs/plan_walkthrough.md`。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
@@ -564,6 +564,13 @@ git commit -m "docs(计划): 收口聊天流式助手拆分"
 
 ## 验证记录
 
+- 阶段提交：
+  - 设计提交：`d17b484 docs(普通API): 设计聊天流式助手拆分`。
+  - 计划提交：`4f4f0da docs(计划): 记录聊天流式助手计划`。
+  - 红灯测试提交：`e6554a0 test(普通API): 锁定聊天流式助手契约`。
+  - 新模块提交：`ff95753 refactor(普通API): 增加聊天流式助手`。
+  - 父模块接入提交：`a6d2a8b refactor(普通API): 接入聊天流式助手`。
+  - 文档收口提交：随本次 `docs(计划): 收口聊天流式助手拆分` 完成。
 - 红灯测试：
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_streaming_helpers_split.py -v`
   - 结果：6 failed、1 warning；失败原因是 `api/chat_streaming_helpers.py` 不存在，符合预期红灯。
@@ -582,8 +589,15 @@ git commit -m "docs(计划): 收口聊天流式助手拆分"
 - 断连后台与 asyncio 策略回归：
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send tests/test_asyncio_run_policy.py -v`
   - 结果：7 passed、1 warning。
+- 行数检查：
+  - 命令：`wc -l api/routes.py api/chat_streaming_helpers.py tests/test_api_chat_streaming_helpers_split.py`
+  - 结果：`api/routes.py` 1408 行，`api/chat_streaming_helpers.py` 81 行，
+    `tests/test_api_chat_streaming_helpers_split.py` 122 行。
+- 全量回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/ -v`
+  - 结果：`1722 passed, 6 skipped, 139 warnings in 131.90s`。
 - 计划文档自检：
-  - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-streaming-helper-split.md`
-  - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。
-  - 命令：`git diff --check -- .Codex/plans/api-chat-streaming-helper-split.md`
+  - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-streaming-helper-split.md docs/todo.md docs/plan_walkthrough.md`
+  - 结果：无输出，命令退出码为 1，表示未命中文档缺陷模式。
+  - 命令：`git diff --check -- .Codex/plans/api-chat-streaming-helper-split.md docs/todo.md docs/plan_walkthrough.md`
   - 结果：无输出，命令退出码为 0。

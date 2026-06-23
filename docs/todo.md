@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1449)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1408)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -414,6 +414,19 @@
     guardrail 与私聊缓冲邻近回归 `9 passed`，asyncio 策略回归 `3 passed`，
     全量回归 `1716 passed, 6 skipped, 139 warnings in 137.97s`。下一刀候选为
     私聊缓冲基础件或 streaming helper；继续不优先拆 `/health`。
+  - 进展：`api/routes.py` 第十六刀已拆出 Chat Streaming Helper 到
+    `api/chat_streaming_helpers.py`；旧 `_stream_chat()`、`StreamingResponse`、
+    `CHAT_STREAM_QUEUE_MAXSIZE`、断连后台落库、push envelope、private buffer
+    finalize 和父模块 SSE wrapper 仍留在 `api.routes`。新模块承载
+    `StreamEventCoalescer`、`collect_ready_stream_events()` 和
+    `drain_stream_queue_until_task_done()`，不反向导入 `api.routes`，也没有
+    `asyncio.run` 或 `run_awaitable_sync`。`api/routes.py` 从 1449 行降至
+    1408 行，`api/chat_streaming_helpers.py` 为 81 行，拆分测试为 122 行。
+    验证结果：红灯 `6 failed`，相邻扫描红灯 `4 failed`，新模块绿灯
+    `6 passed`，相邻扫描绿灯 `4 passed`，streaming 行为回归 `15 passed`，
+    断连后台与 asyncio 策略回归 `7 passed`，全量回归
+    `1722 passed, 6 skipped, 139 warnings in 131.90s`。下一刀候选为私聊缓冲
+    基础件；继续不优先拆 `/health`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
