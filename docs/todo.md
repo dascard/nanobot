@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1331)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1333)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -458,6 +458,20 @@
     接入组合 `13 passed, 21 warnings`，断连相邻回归 `4 passed, 1 warning`，
     扫描与 `asyncio.run` 策略回归 `7 passed, 1 warning`，全量回归
     `1732 passed, 6 skipped, 139 warnings in 124.30s`。
+  - 进展：`api/routes.py` 第十九刀修复私聊缓冲 Deadline 主动唤醒到
+    `api/chat_private_buffer.py`；每个 buffer 新增 `deadline_changed` 内部 signal，
+    owner deadline wait 改为 `PrivateBufferStore.wait_until_deadline()`，follower
+    在缩短 deadline 后会主动唤醒 owner 并取消旧 sleep，`finalize()` 也会唤醒
+    deadline waiter，避免 waiter 卡在过期 sleep 上。本阶段保留 `/chat` 路由本体、
+    PrivateTimingGate、guardrail、Bridge、落库、SSE、push envelope、response
+    envelope、`_private_buffers`、`_private_lock` 和父模块 monkeypatch facade；
+    未迁移完整私聊 flow，未迁移 stream finalizer，未引入 generation id，也没有
+    新增 `asyncio.run`、`run_awaitable_sync` 或同步函数包装 awaitable。
+    `api/routes.py` 从 1331 行变为 1333 行，`api/chat_private_buffer.py` 为
+    198 行，拆分测试为 311 行。验证结果：红灯 `4 passed / 3 failed` 与 route
+    超时红灯，store 阶段 `6 passed / 1 failed`，接入组合 `13 passed, 1 warning`，
+    asyncio 与断连流式回归 `7 passed, 1 warning`，全量回归
+    `1734 passed, 6 skipped, 139 warnings in 124.18s`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch

@@ -5,7 +5,7 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-23
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成 Chat Push Envelope 拆分，当前为 1331 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成私聊缓冲 Deadline 主动唤醒，当前为 1333 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。同日续跑补记：测试 helper 的 `asyncio.Runner` 兼容性问题已随 `cfdd9c2 test(异步): 移除 Runner 测试依赖` 收口，提交前全量回归结果为 `1380 passed, 6 skipped, 139 warnings in 100.75s`，非 vendor Python 代码中无 `asyncio.Runner` 命中。TimingGate scoring 可观测性收尾也已完成：设计提交 `4824036 docs(时机): 设计评分可观测收尾`，计划提交 `2820f7a docs(计划): 记录评分可观测收尾计划`，实现提交 `9d5817c feat(时机): 补齐评分可观测字段`；验证包括红灯 `s_transport_tier` 缺失、绿灯 `1 passed`、相邻回归 `7 passed`、WebUI build 退出码 0、全量回归 `1380 passed, 6 skipped, 139 warnings in 103.22s`。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
@@ -4809,3 +4809,72 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1351。剩余�
 下一步：
 
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1331。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界应继续围绕 `/chat` 主链路做细粒度设计：可评估 streaming finalizer 小内核或私聊 flow，但私聊 flow 需要先处理 deadline shrink 无主动唤醒的时序风险，继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
+
+## 2026-06-23 普通 API 私聊缓冲 Deadline 主动唤醒
+
+状态：设计、计划、红灯测试、store 实现、父模块接入、验证和阶段提交均已完成。本阶段没有迁移完整私聊 flow，而是修复私聊缓冲 owner 在 follower 缩短 deadline 后仍卡在旧 `asyncio.sleep(remaining)` 的时序问题。`api/chat_private_buffer.py` 现在为每个 buffer 管理 `deadline_changed` 内部 signal，并提供 `PrivateBufferStore.wait_until_deadline()`；`api.routes` 只新增 `_wait_private_buffer_deadline()` 薄 wrapper，保留 `/chat` 路由本体、PrivateTimingGate、guardrail、Bridge、落库、SSE、push envelope、response envelope、`_private_buffers`、`_private_lock` 和父模块 patch point。`api/routes.py` 从 1331 行变为 1333 行；`api/chat_private_buffer.py` 为 198 行，拆分测试为 311 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-23-api-chat-private-buffer-deadline-wakeup-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-private-buffer-deadline-wakeup.md`。
+
+阶段提交：
+
+- 设计提交：`90953f0 docs(普通API): 设计私聊缓冲唤醒`。
+- 计划提交：`925537f docs(计划): 记录私聊缓冲唤醒计划`。
+- 红灯测试提交：`153ba79 test(普通API): 锁定私聊缓冲唤醒契约`。
+- Store 实现提交：`5479d47 fix(普通API): 增加私聊缓冲唤醒`。
+- 父模块接入提交：`272fdf9 fix(普通API): 接入私聊缓冲唤醒`。
+- 文档收口提交：随本次 `docs(计划): 收口私聊缓冲唤醒` 完成。
+
+计划列表：
+
+- [x] 审计 Chat Push Envelope 后的剩余 `/chat` 边界，确认完整私聊 flow 暂不迁移。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API 私聊缓冲 Deadline 主动唤醒红灯测试并提交。
+- [x] 在 `PrivateBufferStore` 中新增 `deadline_changed` signal、`wait_until_deadline()` 和 finalize 唤醒，并提交。
+- [x] 在 `api.routes` 中新增 `_wait_private_buffer_deadline()` wrapper，替换 owner 手写 deadline / sleep loop，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- Store / wrapper 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py -v`
+  -> `4 passed / 3 failed`；失败点为 `api.routes._wait_private_buffer_deadline` 缺失和 `PrivateBufferStore.wait_until_deadline` 缺失，符合红灯预期。
+- Route 时序红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds -v`
+  -> 修正测试补丁位置后退出码为 1；失败原因为 `old_sleep_cancelled.wait()` 超时，证明当前实现不会主动取消旧 sleep。
+- Store 阶段验证：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py -v`
+  -> `6 passed / 1 failed`；新增 store 级 deadline shrink 与 finalize 唤醒测试通过，唯一失败为父模块 wrapper 尚未接入。
+- 私聊缓冲组合绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py tests/test_api.py::test_private_buffer_silent_releases_waiters tests/test_api.py::test_private_buffer_refreshes_window_and_persists_merged_messages tests/test_api.py::test_private_buffer_merges_files_for_final_bridge_request tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds tests/test_api.py::test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer tests/test_api.py::test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer -v`
+  -> `13 passed, 1 warning`。
+- asyncio 策略与断连流式回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_asyncio_run_policy.py tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send -v`
+  -> `7 passed, 1 warning`。
+- 行数检查：
+  `wc -l api/routes.py api/chat_private_buffer.py tests/test_api_chat_private_buffer_split.py`
+  -> `1333 api/routes.py`、`198 api/chat_private_buffer.py`、`311 tests/test_api_chat_private_buffer_split.py`。
+- 全量：
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1734 passed, 6 skipped, 139 warnings in 124.18s`。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移完整私聊 flow、stream finalizer、`_stream_chat()` 或 `StreamingResponse`。
+- 保持 `api.routes._private_buffers`、`api.routes._private_lock` 和 `_private_buffer_store` 作为 runtime 状态入口。
+- 保持 `_join_buffered_messages()`、`_merge_buffered_files()`、`_private_buffer_window_seconds()`、`_finalize_private_buffer()` 和 `_wait_private_buffer_deadline()` 为父模块 wrapper。
+- 保持 PrivateTimingGate、guardrail、Bridge、落库、SSE、push envelope 和 response envelope 均在父模块。
+- 不引入 generation id，不改变 `_finalize_private_buffer(user_id)` 的 user-level 语义。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或 message envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1333。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界应继续围绕 `/chat` 主链路做细粒度设计：可评估 streaming finalizer 小内核，或继续拆私聊 flow 中不触碰 Bridge / 落库 / SSE 的纯状态协调 helper。继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。

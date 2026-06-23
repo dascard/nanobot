@@ -461,7 +461,7 @@ git commit -m "fix(普通API): 接入私聊缓冲唤醒"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行全量测试**
+- [x] **步骤 1：运行全量测试**
 
 运行：
 
@@ -471,7 +471,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：全部通过，跳过数量和警告数量记录到本计划与 `docs/plan_walkthrough.md`。
 
-- [ ] **步骤 2：更新 P3 进度**
+- [x] **步骤 2：更新 P3 进度**
 
 在 `docs/todo.md` 的 P3 超大文件拆分条目中追加 `api/routes.py` 第十九刀进展，说明：
 
@@ -482,7 +482,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - `/chat` 路由本体、PrivateTimingGate、guardrail、Bridge、落库、SSE、push 和 response envelope 均保持父模块边界。
 - 全量回归结果。
 
-- [ ] **步骤 3：更新 walkthrough**
+- [x] **步骤 3：更新 walkthrough**
 
 在 `docs/plan_walkthrough.md` 追加 `2026-06-23 普通 API 私聊缓冲 Deadline 主动唤醒` 章节，记录：
 
@@ -494,7 +494,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - 执行约束。
 - 下一步候选。
 
-- [ ] **步骤 4：运行文档自检**
+- [x] **步骤 4：运行文档自检**
 
 运行：
 
@@ -505,7 +505,7 @@ git diff --check -- .Codex/plans/api-chat-private-buffer-deadline-wakeup.md docs
 
 预期：扫描无输出，diff 检查无输出。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
@@ -546,3 +546,11 @@ git commit -m "docs(计划): 收口私聊缓冲唤醒"
   `wc -l api/routes.py api/chat_private_buffer.py tests/test_api_chat_private_buffer_split.py`
   输出为 `1333 api/routes.py`、`198 api/chat_private_buffer.py`、
   `311 tests/test_api_chat_private_buffer_split.py`。
+- 2026-06-23 任务 4 全量验证：
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  退出码 0，`1734 passed, 6 skipped, 139 warnings in 124.18s`。
+- 2026-06-23 任务 4 文档自检：
+  `rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-private-buffer-deadline-wakeup.md docs/todo.md docs/plan_walkthrough.md`
+  无输出，退出码 1，表示未命中文档缺陷模式。
+  `git diff --check -- .Codex/plans/api-chat-private-buffer-deadline-wakeup.md docs/todo.md docs/plan_walkthrough.md`
+  无输出，退出码 0。
