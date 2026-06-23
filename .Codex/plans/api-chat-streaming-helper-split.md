@@ -386,7 +386,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 4：提交新模块**
+- [x] **步骤 4：提交新模块**
 
 运行：
 
@@ -403,7 +403,7 @@ git commit -m "refactor(普通API): 增加聊天流式助手"
 **文件：**
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：导入新模块**
+- [x] **步骤 1：导入新模块**
 
 在 `api/routes.py` 的 `from api import (...)` 列表中加入：
 
@@ -411,7 +411,7 @@ git commit -m "refactor(普通API): 增加聊天流式助手"
 chat_streaming_helpers,
 ```
 
-- [ ] **步骤 2：替换 pending delta 内联逻辑**
+- [x] **步骤 2：替换 pending delta 内联逻辑**
 
 在 `_stream_chat()` 中将 `pending_delta_parts`、`_pop_pending_delta_event()` 和 `_yield_queue_event()` 的内联实现替换为：
 
@@ -429,7 +429,7 @@ async def _yield_queue_event(raw_event: Any):
         yield _chat_sse_data(event)
 ```
 
-- [ ] **步骤 3：替换尾部 delta flush**
+- [x] **步骤 3：替换尾部 delta flush**
 
 将 `_stream_chat()` 尾部：
 
@@ -447,7 +447,7 @@ if pending_delta is not None:
     yield _chat_sse_data(pending_delta)
 ```
 
-- [ ] **步骤 4：替换 queue drain helper**
+- [x] **步骤 4：替换 queue drain helper**
 
 将 `_drain_stream_queue_until_runner_done()` 改为：
 
@@ -459,7 +459,7 @@ async def _drain_stream_queue_until_runner_done() -> None:
     )
 ```
 
-- [ ] **步骤 5：运行 streaming helper 与行为回归**
+- [x] **步骤 5：运行 streaming helper 与行为回归**
 
 运行：
 
@@ -473,7 +473,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 6：运行断连后台相邻回归**
+- [x] **步骤 6：运行断连后台相邻回归**
 
 运行：
 
@@ -576,6 +576,12 @@ git commit -m "docs(计划): 收口聊天流式助手拆分"
 - 扫描绿灯：
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
   - 结果：4 passed、1 warning。
+- 父模块 streaming 回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_streaming_helpers_split.py tests/test_streaming_api.py tests/test_streaming_response_envelope.py -v`
+  - 结果：15 passed、21 warnings。
+- 断连后台与 asyncio 策略回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send tests/test_asyncio_run_policy.py -v`
+  - 结果：7 passed、1 warning。
 - 计划文档自检：
   - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-streaming-helper-split.md`
   - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。

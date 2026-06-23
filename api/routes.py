@@ -37,6 +37,7 @@ from api import (
     chat_request_contract,
     chat_response_contract,
     chat_runtime_facade,
+    chat_streaming_helpers,
 )
 from api.common_auth import verify_token
 from api.evolution_routes import (
@@ -1056,65 +1057,23 @@ async def proxy_chat(
 
         runner_task = asyncio.create_task(runner())
         heartbeat_interval = 5
-        pending_delta_parts: list[str] = []
-
-        def _pop_pending_delta_event() -> dict[str, str] | None:
-            if not pending_delta_parts:
-                return None
-            text = "".join(pending_delta_parts)
-            pending_delta_parts.clear()
-            return {"status": "delta", "text": text}
+        coalescer = chat_streaming_helpers.StreamEventCoalescer()
 
         async def _yield_queue_event(raw_event: Any):
-            event = _normalize_chat_stream_event(raw_event)
-            if event is None:
-                return
-
-            if event.get("status") == "delta":
-                pending_delta_parts.append(str(event.get("text") or ""))
-                while True:
-                    try:
-                        next_raw = stream_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-
-                    next_event = _normalize_chat_stream_event(next_raw)
-                    if next_event is None:
-                        continue
-                    if next_event.get("status") == "delta":
-                        pending_delta_parts.append(str(next_event.get("text") or ""))
-                        continue
-
-                    pending_delta = _pop_pending_delta_event()
-                    if pending_delta is not None:
-                        yield _chat_sse_data(pending_delta)
-                    yield _chat_sse_data(next_event)
-
-                pending_delta = _pop_pending_delta_event()
-                if pending_delta is not None:
-                    yield _chat_sse_data(pending_delta)
-                return
-
-            pending_delta = _pop_pending_delta_event()
-            if pending_delta is not None:
-                yield _chat_sse_data(pending_delta)
-            yield _chat_sse_data(event)
+            events = chat_streaming_helpers.collect_ready_stream_events(
+                raw_event,
+                stream_queue,
+                normalize_event=_normalize_chat_stream_event,
+                coalescer=coalescer,
+            )
+            for event in events:
+                yield _chat_sse_data(event)
 
         async def _drain_stream_queue_until_runner_done() -> None:
-            while True:
-                while True:
-                    try:
-                        stream_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-
-                if runner_task.done():
-                    return
-
-                try:
-                    await asyncio.wait_for(stream_queue.get(), timeout=0.1)
-                except asyncio.TimeoutError:
-                    continue
+            await chat_streaming_helpers.drain_stream_queue_until_task_done(
+                stream_queue,
+                runner_task,
+            )
 
         async def _persist_stream_result_after_runner_done(
             *,
@@ -1261,7 +1220,7 @@ async def proxy_chat(
                     break
                 async for chunk in _yield_queue_event(event):
                     yield chunk
-            pending_delta = _pop_pending_delta_event()
+            pending_delta = coalescer.flush()
             if pending_delta is not None:
                 yield _chat_sse_data(pending_delta)
 
