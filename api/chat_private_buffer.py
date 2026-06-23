@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -80,6 +80,7 @@ class PrivateBufferStore:
                     "answer": None,
                     "deadline": now + window_seconds,
                     "window_seconds": window_seconds,
+                    "deadline_changed": asyncio.Event(),
                 }
                 return PrivateBufferOwnerStarted(buf)
 
@@ -93,6 +94,9 @@ class PrivateBufferStore:
             window_seconds = private_buffer_window_seconds(incoming_files, config)
             buf["window_seconds"] = window_seconds
             buf["deadline"] = now + window_seconds
+            changed = buf.get("deadline_changed")
+            if isinstance(changed, asyncio.Event):
+                changed.set()
             return PrivateBufferFollowerJoined(buf["done"])
 
     async def deadline(self, user_id: str) -> float | None:
@@ -101,6 +105,59 @@ class PrivateBufferStore:
             if buf is None:
                 return None
             return float(buf["deadline"])
+
+    async def wait_until_deadline(
+        self,
+        user_id: str,
+        *,
+        now: Callable[[], float],
+        sleep: Callable[[float], Awaitable[None]],
+    ) -> bool:
+        while True:
+            async with self._lock:
+                buf = self.buffers.get(user_id)
+                if buf is None or buf["done"].is_set():
+                    return False
+
+                deadline = float(buf["deadline"])
+                remaining = deadline - now()
+                if remaining <= 0:
+                    return True
+
+                changed = buf.get("deadline_changed")
+                if not isinstance(changed, asyncio.Event):
+                    changed = asyncio.Event()
+                    buf["deadline_changed"] = changed
+
+            sleep_task = asyncio.create_task(sleep(remaining))
+            changed_task = asyncio.create_task(changed.wait())
+            try:
+                done, pending = await asyncio.wait(
+                    {sleep_task, changed_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+
+                if sleep_task in done:
+                    sleep_task.result()
+
+                if changed_task in done:
+                    changed_task.result()
+                    async with self._lock:
+                        buf = self.buffers.get(user_id)
+                        if buf is not None and buf.get("deadline_changed") is changed:
+                            buf["deadline_changed"] = asyncio.Event()
+            finally:
+                pending_tasks = [
+                    task for task in (sleep_task, changed_task) if not task.done()
+                ]
+                for task in pending_tasks:
+                    task.cancel()
+                if pending_tasks:
+                    await asyncio.gather(*pending_tasks, return_exceptions=True)
 
     async def snapshot(self, user_id: str) -> PrivateBufferSnapshot | None:
         async with self._lock:
@@ -132,6 +189,9 @@ class PrivateBufferStore:
                 return
             if answer is not None:
                 buf["answer"] = answer
+            changed = buf.get("deadline_changed")
+            if isinstance(changed, asyncio.Event):
+                changed.set()
             if not buf["done"].is_set():
                 buf["done"].set()
             if clear_window:

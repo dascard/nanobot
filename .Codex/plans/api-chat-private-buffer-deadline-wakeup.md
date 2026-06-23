@@ -259,7 +259,7 @@ git commit -m "test(普通API): 锁定私聊缓冲唤醒契约"
 - 修改：`api/chat_private_buffer.py`
 - 修改：`.Codex/plans/api-chat-private-buffer-deadline-wakeup.md`
 
-- [ ] **步骤 1：补类型导入**
+- [x] **步骤 1：补类型导入**
 
 将 `api/chat_private_buffer.py` 的导入改为：
 
@@ -267,7 +267,7 @@ git commit -m "test(普通API): 锁定私聊缓冲唤醒契约"
 from collections.abc import Awaitable, Callable, Sequence
 ```
 
-- [ ] **步骤 2：owner 创建 deadline signal**
+- [x] **步骤 2：owner 创建 deadline signal**
 
 在 owner 创建 buffer dict 时加入：
 
@@ -275,7 +275,7 @@ from collections.abc import Awaitable, Callable, Sequence
 "deadline_changed": asyncio.Event(),
 ```
 
-- [ ] **步骤 3：follower append 唤醒 owner**
+- [x] **步骤 3：follower append 唤醒 owner**
 
 在 follower 更新 deadline 后加入：
 
@@ -285,7 +285,7 @@ if isinstance(changed, asyncio.Event):
     changed.set()
 ```
 
-- [ ] **步骤 4：新增 wait_until_deadline**
+- [x] **步骤 4：新增 wait_until_deadline**
 
 在 `PrivateBufferStore.deadline()` 后加入：
 
@@ -337,7 +337,7 @@ if isinstance(changed, asyncio.Event):
                         await asyncio.gather(task, return_exceptions=True)
 ```
 
-- [ ] **步骤 5：finalize 唤醒 deadline waiter**
+- [x] **步骤 5：finalize 唤醒 deadline waiter**
 
 在 `finalize()` 中 `done.set()` 前后加入：
 
@@ -347,7 +347,7 @@ if isinstance(changed, asyncio.Event):
     changed.set()
 ```
 
-- [ ] **步骤 6：运行 store 绿灯**
+- [x] **步骤 6：运行 store 绿灯**
 
 运行：
 
@@ -357,7 +357,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split
 
 预期：只剩父模块 `_wait_private_buffer_deadline` wrapper 相关断言失败；store 新增测试通过。
 
-- [ ] **步骤 7：提交 Store 实现**
+- [x] **步骤 7：提交 Store 实现**
 
 运行：
 
@@ -531,3 +531,8 @@ git commit -m "docs(计划): 收口私聊缓冲唤醒"
   首次运行暴露测试补丁变量位置错误，修正后重跑退出码 1；
   失败原因为 `old_sleep_cancelled.wait()` 超时，证明当前实现不会在 follower
   缩短 deadline 后主动取消旧 sleep。
+- 2026-06-23 任务 2 store 绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py -v`
+  退出码 1，7 项收集，6 passed / 1 failed；新增 store 级 deadline shrink
+  与 finalize 唤醒测试均通过，唯一失败为预期中的
+  `api.routes._wait_private_buffer_deadline` 尚未接入。
