@@ -68,7 +68,7 @@
 - 修改：`tests/test_api_group_message_routes_split.py`
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 1：编写新门面契约测试**
+- [x] **步骤 1：编写新门面契约测试**
 
 在 `tests/test_api_chat_guardrail_facade_split.py` 写入：
 
@@ -228,7 +228,7 @@ def test_parent_guardrail_wrapper_matches_new_module():
     )
 ```
 
-- [ ] **步骤 2：将新模块加入扫描测试清单**
+- [x] **步骤 2：将新模块加入扫描测试清单**
 
 在以下 4 个文件的 `module_path` 清单中追加 `"api/chat_guardrail_facade.py"`：
 
@@ -243,7 +243,7 @@ def test_parent_guardrail_wrapper_matches_new_module():
 - `tests/test_api_group_message_routes_split.py`
 - `tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 3：运行新门面测试验证红灯**
+- [x] **步骤 3：运行新门面测试验证红灯**
 
 运行：
 
@@ -253,7 +253,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_spl
 
 预期：失败，原因是 `api/chat_guardrail_facade.py` 尚不存在，至少出现 `FileNotFoundError` 或 `ModuleNotFoundError`。
 
-- [ ] **步骤 4：运行扫描测试验证红灯**
+- [x] **步骤 4：运行扫描测试验证红灯**
 
 运行：
 
@@ -547,6 +547,12 @@ git commit -m "docs(计划): 收口聊天安全门面拆分"
 
 ## 验证记录
 
+- 红灯测试：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_split.py -v`
+  - 结果：8 failed、1 passed、1 warning；失败原因是 `api/chat_guardrail_facade.py` 不存在，符合预期红灯。
+- 扫描红灯：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  - 结果：4 failed、1 warning；失败原因是扫描清单中的 `api/chat_guardrail_facade.py` 不存在，符合预期红灯。
 - 计划文档自检：
   - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-guardrail-facade-split.md`
   - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。

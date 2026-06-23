@@ -138,6 +138,7 @@ def test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable():
         "api/chat_persistence.py",
         "api/chat_request_contract.py",
         "api/chat_runtime_facade.py",
+        "api/chat_guardrail_facade.py",
     ):
         source = Path(path).read_text(encoding="utf-8")
 
