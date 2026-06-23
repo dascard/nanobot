@@ -14,6 +14,10 @@
 
 - [x] 设计文档：`docs/superpowers/specs/2026-06-23-api-chat-private-buffer-split-design.md`
 - [x] 设计提交：`1ae8aa7 docs(普通API): 设计私聊缓冲拆分`
+- [x] 计划提交：`d98a2f2 docs(计划): 记录私聊缓冲拆分计划`
+- [x] 红灯测试提交：`900ef52 test(普通API): 锁定私聊缓冲基础件契约`
+- [x] 新模块提交：`68fe6b8 refactor(普通API): 增加私聊缓冲基础件`
+- [x] 父模块接入提交：`393c178 refactor(普通API): 接入私聊缓冲基础件`
 
 ## 边界与禁止事项
 
@@ -692,7 +696,7 @@ git commit -m "refactor(普通API): 接入私聊缓冲基础件"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：记录阶段提交与验证结果**
+- [x] **步骤 1：记录阶段提交与验证结果**
 
 在本计划和 `docs/plan_walkthrough.md` 中记录：
 
@@ -704,7 +708,7 @@ git commit -m "refactor(普通API): 接入私聊缓冲基础件"
 - 各阶段 pytest 命令和结果
 - 行数检查结果
 
-- [ ] **步骤 2：更新 P3 进度**
+- [x] **步骤 2：更新 P3 进度**
 
 在 `docs/todo.md` 的 P3 超大文件拆分条目中追加 `api/routes.py` 第十七刀进展，说明：
 
@@ -713,7 +717,7 @@ git commit -m "refactor(普通API): 接入私聊缓冲基础件"
 - 本阶段不引入 generation id。
 - 全量回归结果。
 
-- [ ] **步骤 3：运行文档自检**
+- [x] **步骤 3：运行文档自检**
 
 运行：
 
@@ -724,7 +728,7 @@ git diff --check -- .Codex/plans/api-chat-private-buffer-split.md docs/todo.md d
 
 预期：扫描无输出，diff 检查无输出。
 
-- [ ] **步骤 4：运行全量测试**
+- [x] **步骤 4：运行全量测试**
 
 运行：
 
@@ -734,7 +738,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：全部通过，跳过数量和警告数量记录到 `docs/plan_walkthrough.md`。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
@@ -775,8 +779,17 @@ git commit -m "docs(计划): 收口私聊缓冲拆分"
   - 命令：`wc -l api/routes.py api/chat_private_buffer.py tests/test_api_chat_private_buffer_split.py`
   - 结果：`api/routes.py` 1351 行，`api/chat_private_buffer.py` 138 行，
     `tests/test_api_chat_private_buffer_split.py` 184 行。
-- 计划文档自检：
-  - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-private-buffer-split.md`
-  - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。
-  - 命令：`git diff --check -- .Codex/plans/api-chat-private-buffer-split.md`
+- 阶段提交：
+  - 设计提交：`1ae8aa7 docs(普通API): 设计私聊缓冲拆分`。
+  - 计划提交：`d98a2f2 docs(计划): 记录私聊缓冲拆分计划`。
+  - 红灯测试提交：`900ef52 test(普通API): 锁定私聊缓冲基础件契约`。
+  - 新模块提交：`68fe6b8 refactor(普通API): 增加私聊缓冲基础件`。
+  - 父模块接入提交：`393c178 refactor(普通API): 接入私聊缓冲基础件`。
+- 全量回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/ -v`
+  - 结果：`1727 passed, 6 skipped, 139 warnings in 129.45s`。
+- 文档收口自检：
+  - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-private-buffer-split.md docs/todo.md docs/plan_walkthrough.md`
+  - 结果：无输出，命令退出码为 1，表示未命中文档缺陷模式。
+  - 命令：`git diff --check -- .Codex/plans/api-chat-private-buffer-split.md docs/todo.md docs/plan_walkthrough.md`
   - 结果：无输出，命令退出码为 0。

@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1408)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1351)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -427,6 +427,21 @@
     断连后台与 asyncio 策略回归 `7 passed`，全量回归
     `1722 passed, 6 skipped, 139 warnings in 131.90s`。下一刀候选为私聊缓冲
     基础件；继续不优先拆 `/health`。
+  - 进展：`api/routes.py` 第十七刀已拆出 Chat Private Buffer 基础件到
+    `api/chat_private_buffer.py`；旧 `/chat` 路由本体、PrivateTimingGate、
+    guardrail provider、Bridge 调用、owner deadline sleep、聊天落库、SSE、
+    push envelope、response envelope 和 `/health` 仍留在 `api.routes`。新模块承载
+    `PrivateBufferConfig`、`PrivateBufferStore`、owner / follower 状态结果和私聊缓冲
+    纯 helper，不反向导入 `api.routes`，也没有 `asyncio.run` 或
+    `run_awaitable_sync`。父模块 `_private_buffers`、`_private_lock`、窗口常量、
+    `asyncio.sleep`、`_time.time`、`get_guardrail`、`_detect_guardrail`、
+    `get_bridge` 和 `_persist_chat_turn` patch point 均保持兼容。本阶段未引入
+    generation id，`_finalize_private_buffer(user_id)` 仍保持 user-level 语义。
+    `api/routes.py` 从 1408 行降至 1351 行，`api/chat_private_buffer.py` 为
+    138 行，拆分测试为 184 行。验证结果：红灯 `4 failed, 1 passed`，
+    相邻扫描红灯 `4 failed`，新模块绿灯 `5 passed`，相邻扫描绿灯 `4 passed`，
+    private buffer 行为回归 `11 passed`，asyncio 策略与相邻 `/chat` 回归
+    `9 passed`，全量回归 `1727 passed, 6 skipped, 139 warnings in 129.45s`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
