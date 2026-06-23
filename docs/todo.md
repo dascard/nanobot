@@ -472,6 +472,18 @@
     超时红灯，store 阶段 `6 passed / 1 failed`，接入组合 `13 passed, 1 warning`，
     asyncio 与断连流式回归 `7 passed, 1 warning`，全量回归
     `1734 passed, 6 skipped, 139 warnings in 124.18s`。
+  - 进展：`api/routes.py` 第二十刀已拆出 Chat Persona Context 格式化 helper 到
+    `api/chat_persona_context.py`；旧 `api.routes._format_persona_for_prompt()`
+    继续作为父模块 wrapper，`proxy_chat()` 调用点、DB persona lookup、
+    `PersonaInjectionService`、Prompt Runtime `persona_text` 字段、Bridge、落库、
+    SSE、push envelope 和 response envelope 均保持不变。新模块不反向导入
+    `api.routes`，也没有 `asyncio.run`、`run_awaitable_sync` 或同步函数包装
+    awaitable。`api/routes.py` 从 1333 行降至 1236 行，
+    `api/chat_persona_context.py` 为 114 行，拆分测试为 118 行。验证结果：
+    红灯 `4 failed, 1 warning`，新模块阶段 `1 failed, 3 passed, 1 warning`，
+    父模块接入定向绿灯 `5 passed, 1 warning`，相邻回归
+    `13 passed, 21 warnings`，静态检查通过，全量回归
+    `1738 passed, 6 skipped, 139 warnings in 122.53s`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch

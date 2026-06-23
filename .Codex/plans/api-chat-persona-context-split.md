@@ -440,7 +440,7 @@ git commit -m "refactor(普通API): 接入聊天画像格式化助手"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-chat-persona-context-split.md`
 
-- [ ] **步骤 1：更新计划执行记录**
+- [x] **步骤 1：更新计划执行记录**
 
 在本计划底部追加执行记录，至少包含：
 
@@ -451,7 +451,7 @@ git commit -m "refactor(普通API): 接入聊天画像格式化助手"
 - 全量测试结果。
 - 提交列表。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」中追加第二十刀进展：
 
@@ -467,7 +467,7 @@ git commit -m "refactor(普通API): 接入聊天画像格式化助手"
 
 将 `<实际行数>` 替换为 `wc -l` 的真实结果。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-23 普通 API Chat Persona Context 拆分` 小节，包含：
 
@@ -479,7 +479,7 @@ git commit -m "refactor(普通API): 接入聊天画像格式化助手"
 - 验证记录。
 - 执行约束和下一步建议。
 
-- [ ] **步骤 4：文档自检**
+- [x] **步骤 4：文档自检**
 
 运行：
 
@@ -493,7 +493,7 @@ git diff --check -- .Codex/plans/api-chat-persona-context-split.md docs/todo.md 
 - `rg` 无输出，退出码 1。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 5：最终全量验证**
+- [x] **步骤 5：最终全量验证**
 
 运行：
 
@@ -506,7 +506,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - 0 failures。
 - 记录 passed / skipped / warnings 和耗时。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-chat-persona-context-split.md
@@ -548,3 +548,18 @@ git commit -m "docs(计划): 收口聊天画像拆分"
   无输出，退出码 0。
 - 2026-06-23 任务 3 提交：
   随本次 `refactor(普通API): 接入聊天画像格式化助手` 提交。
+- 2026-06-23 任务 4 文档自检：
+  `rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-persona-context-split.md docs/todo.md docs/plan_walkthrough.md`
+  无输出，退出码 1，表示未命中文档缺陷模式。
+  `git diff --check -- .Codex/plans/api-chat-persona-context-split.md docs/todo.md docs/plan_walkthrough.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 4 全量验证：
+  `python -B -m pytest -p no:cacheprovider tests/ -v` 退出码 0，
+  `1738 passed, 6 skipped, 139 warnings in 122.53s`。
+- 2026-06-23 阶段提交列表：
+  设计提交 `0e7d1ba docs(普通API): 设计聊天画像拆分`；
+  计划提交 `4d3ace2 docs(计划): 记录聊天画像拆分计划`；
+  红灯测试提交 `e997874 test(普通API): 锁定聊天画像拆分契约`；
+  新模块提交 `d240341 refactor(普通API): 增加聊天画像格式化助手`；
+  父模块接入提交 `5381dfc refactor(普通API): 接入聊天画像格式化助手`；
+  文档收口提交随本次 `docs(计划): 收口聊天画像拆分` 完成。

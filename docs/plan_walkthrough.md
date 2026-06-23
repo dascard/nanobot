@@ -4895,3 +4895,75 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1331。剩余�
 下一步：
 
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1333。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界应继续围绕 `/chat` 主链路做细粒度设计：可评估 streaming finalizer 小内核，或继续拆私聊 flow 中不触碰 Bridge / 落库 / SSE 的纯状态协调 helper。继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
+
+## 2026-06-23 普通 API Chat Persona Context 拆分
+
+状态：设计、计划、红灯测试、新模块拆分、父模块接入和阶段提交均已完成。本阶段把 `api.routes._format_persona_for_prompt()` 的纯格式化实现拆到 `api/chat_persona_context.py`，父模块保留同名薄 wrapper。`proxy_chat()` 调用点、DB persona lookup、`PersonaInjectionService`、Prompt Runtime `persona_text` 字段、Bridge、落库、SSE、push envelope、response envelope、私聊缓冲、guardrail 和 `/health` 均保持原位。`api/routes.py` 从 1333 行降至 1236 行；`api/chat_persona_context.py` 为 114 行，拆分测试为 118 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-23-api-chat-persona-context-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-persona-context-split.md`。
+
+阶段提交：
+
+- 设计提交：`0e7d1ba docs(普通API): 设计聊天画像拆分`。
+- 计划提交：`4d3ace2 docs(计划): 记录聊天画像拆分计划`。
+- 红灯测试提交：`e997874 test(普通API): 锁定聊天画像拆分契约`。
+- 新模块提交：`d240341 refactor(普通API): 增加聊天画像格式化助手`。
+- 父模块接入提交：`5381dfc refactor(普通API): 接入聊天画像格式化助手`。
+- 文档收口提交：随本次 `docs(计划): 收口聊天画像拆分` 完成。
+
+计划列表：
+
+- [x] 确认 `/chat` persona 格式化拆分范围，排除 DB 查询、Prompt Runtime 和 response envelope 迁移。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API Chat Persona Context split 红灯测试并提交。
+- [x] 新增 `api/chat_persona_context.py`，锁定 `format_persona_for_prompt()`、结构化 persona、scalar fallback、sanitize 和不导入父模块约束，并提交。
+- [x] 将父模块 `_format_persona_for_prompt()` 改为委托新模块的薄 wrapper，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_context_split.py -v`
+  -> `4 failed, 1 warning`；失败点为 `api/chat_persona_context.py` 不存在或无法导入。
+- 新模块阶段：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_context_split.py -v`
+  -> `1 failed, 3 passed, 1 warning`；唯一失败为父模块 wrapper 尚未委托新模块。
+- 父模块接入定向绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_context_split.py tests/test_api.py::test_format_persona_facts_without_truncated_json -v`
+  -> `5 passed, 1 warning`。
+- 相邻回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_facade_split.py tests/test_api.py::test_proxy_chat tests/test_api.py::test_private_prompt_v2_audit_failure_is_not_context_chat tests/test_asyncio_run_policy.py -v`
+  -> `13 passed, 21 warnings`。
+- 静态检查：
+  `python -m compileall api/routes.py api/chat_persona_context.py -q` 退出码 0；
+  `wc -l api/routes.py api/chat_persona_context.py tests/test_api_chat_persona_context_split.py`
+  -> `1236 api/routes.py`、`114 api/chat_persona_context.py`、`118 tests/test_api_chat_persona_context_split.py`；
+  `git diff --check -- api/routes.py api/chat_persona_context.py tests/test_api_chat_persona_context_split.py .Codex/plans/api-chat-persona-context-split.md`
+  无输出，退出码 0。
+- 文档自检：
+  `rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-persona-context-split.md docs/todo.md docs/plan_walkthrough.md`
+  -> 无输出，命令退出码为 1，表示未命中文档缺陷模式。
+  `git diff --check -- .Codex/plans/api-chat-persona-context-split.md docs/todo.md docs/plan_walkthrough.md`
+  -> 无输出，命令退出码为 0。
+- 全量：
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1738 passed, 6 skipped, 139 warnings in 122.53s`。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移 `_find_persona()`、`PersonaInjectionService`、Prompt Runtime 输入、Bridge 调用、聊天落库、SSE、push envelope、response envelope、stream finalizer、guardrail 或私聊缓冲。
+- 保持 `api.routes._format_persona_for_prompt()` 为父模块 wrapper，保留旧 monkeypatch 与调用边界。
+- 新模块不导入 `api.routes`。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或 message envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1236。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界可评估 streaming finalizer 小内核、图片预缓存 helper、block helper 或 guardrail superuser 小刀；继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
