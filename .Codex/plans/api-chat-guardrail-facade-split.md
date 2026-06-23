@@ -374,7 +374,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：4 个扫描测试全部通过。
 
-- [ ] **步骤 4：提交新模块**
+- [x] **步骤 4：提交新模块**
 
 运行：
 
@@ -391,7 +391,7 @@ git commit -m "refactor(普通API): 增加聊天安全门面"
 **文件：**
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：导入新门面模块**
+- [x] **步骤 1：导入新门面模块**
 
 在 `api/routes.py` 的 `from api import (...)` 列表中加入：
 
@@ -399,7 +399,7 @@ git commit -m "refactor(普通API): 增加聊天安全门面"
 chat_guardrail_facade,
 ```
 
-- [ ] **步骤 2：保留父模块 wrapper 并委托新模块**
+- [x] **步骤 2：保留父模块 wrapper 并委托新模块**
 
 将 `api.routes._detect_guardrail()` 改为：
 
@@ -412,7 +412,7 @@ def _detect_guardrail(guardrail, message: str, *, allow_passthrough: bool = Fals
     )
 ```
 
-- [ ] **步骤 3：替换 `/chat` 内联状态映射**
+- [x] **步骤 3：替换 `/chat` 内联状态映射**
 
 将 `/chat` 中根据 `result["status"]` 手写设置 `guardrail_status` 的分支替换为：
 
@@ -420,7 +420,7 @@ def _detect_guardrail(guardrail, message: str, *, allow_passthrough: bool = Fals
 guardrail_status = chat_guardrail_facade.guardrail_status_from_result(result)
 ```
 
-- [ ] **步骤 4：运行门面测试**
+- [x] **步骤 4：运行门面测试**
 
 运行：
 
@@ -430,7 +430,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_spl
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行 guardrail 与私聊缓冲邻近回归**
+- [x] **步骤 5：运行 guardrail 与私聊缓冲邻近回归**
 
 运行：
 
@@ -450,7 +450,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 6：运行 asyncio 禁用策略回归**
+- [x] **步骤 6：运行 asyncio 禁用策略回归**
 
 运行：
 
@@ -558,6 +558,15 @@ git commit -m "docs(计划): 收口聊天安全门面拆分"
 - 扫描绿灯：
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
   - 结果：4 passed、1 warning。
+- 父模块门面回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_split.py -v`
+  - 结果：9 passed、1 warning。
+- guardrail 与私聊缓冲邻近回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api.py::test_superuser_bypasses_injection_guardrail tests/test_api.py::test_superuser_image_only_message_bypasses_injection_guardrail tests/test_api.py::test_image_only_message_uses_multimodal_prompt_placeholder tests/test_api.py::test_private_buffer_silent_releases_waiters tests/test_api.py::test_private_buffer_refreshes_window_and_persists_merged_messages tests/test_api.py::test_private_buffer_merges_files_for_final_bridge_request tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds tests/test_api.py::test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer tests/test_api.py::test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer -v`
+  - 结果：9 passed、21 warnings。
+- asyncio 策略回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_asyncio_run_policy.py -v`
+  - 结果：3 passed、1 warning。
 - 计划文档自检：
   - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-guardrail-facade-split.md`
   - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。

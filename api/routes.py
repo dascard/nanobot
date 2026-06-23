@@ -32,6 +32,7 @@ from clients.classifier_client import get_guardrail, get_timing_gate
 from app.group_ingress import helpers as group_ingress_helpers
 from api import (
     chat_content_helpers,
+    chat_guardrail_facade,
     chat_persistence,
     chat_request_contract,
     chat_response_contract,
@@ -380,28 +381,11 @@ def _build_guardrail_input(query: str, files: Optional[List[str]]) -> str:
 
 
 def _detect_guardrail(guardrail, message: str, *, allow_passthrough: bool = False) -> dict:
-    """兼容新 detect_injection 和旧 classify 测试桩。"""
-    if hasattr(guardrail, "detect_injection"):
-        return guardrail.detect_injection(message, allow_passthrough=allow_passthrough)
-
-    result = guardrail.classify(message, allow_injection_passthrough=allow_passthrough)
-    if not isinstance(result, dict):
-        result = {}
-    status = str(result.get("status") or "").strip()
-    if status == "silent":
-        return {
-            **result,
-            "status": "silent",
-            "injection": False,
-            "passthrough": bool(allow_passthrough),
-        }
-    injection = status == "injection"
-    return {
-        **result,
-        "status": "injection" if injection else "safe",
-        "injection": injection,
-        "passthrough": bool(allow_passthrough and not injection),
-    }
+    return chat_guardrail_facade.detect_guardrail(
+        guardrail,
+        message,
+        allow_passthrough=allow_passthrough,
+    )
 
 
 def _build_multimodal_user_input_text(query: str, files: Optional[List[str]], *, max_chars: int = 0) -> str:
@@ -926,12 +910,7 @@ async def proxy_chat(
                 if buf is not None:
                     buf["result"] = result
 
-            if result.get("status") == "injection":
-                guardrail_status = "injection"
-            elif result.get("status") == "silent":
-                guardrail_status = "silent"
-            else:
-                guardrail_status = "safe"
+            guardrail_status = chat_guardrail_facade.guardrail_status_from_result(result)
             logger.info(
                 "[/chat] Guardrail result: injection=%s, passthrough=%s, user=%s",
                 result.get("injection", False),
