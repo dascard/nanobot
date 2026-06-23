@@ -1837,6 +1837,57 @@ def test_group_ingress_service_does_not_import_api_routes():
 
 
 @pytest.mark.asyncio
+async def test_group_message_blocked_user_returns_no_reply_and_skips_runtime(db_session, monkeypatch):
+    from unittest.mock import AsyncMock
+    from api.routes import GroupMessageRequest, group_message
+    from core.database import UserBlockRule
+
+    db_session.add(UserBlockRule(
+        user_id="blocked-group-user",
+        target_type="group",
+        group_id="group_987",
+        enabled=1,
+    ))
+    db_session.commit()
+
+    async def fail_process(*args, **kwargs):
+        raise AssertionError("blocked group message must not enter TimingGate")
+
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(
+        side_effect=AssertionError("blocked group message must not enter Bridge")
+    )
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fail_process)
+    monkeypatch.setattr("api.routes.get_bridge", lambda: mock_bridge)
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="qq:987:group",
+            sender_id="blocked-group-user",
+            sender_name="屏蔽用户",
+            message="这条消息应该被屏蔽",
+            session_name="屏蔽测试群",
+            message_id="m-blocked-group-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "no_reply"
+    assert data["reason"] == "user_blocked"
+    assert data["generation"] == 0
+    ambient = (
+        db_session.query(ChatLog)
+        .filter_by(user_id="group_987", role="ambient")
+        .one()
+    )
+    assert ambient.processed == 1
+    assert ambient.sender_name == "屏蔽用户"
+    assert "user_blocked" in (ambient.meta_json or "")
+    mock_bridge.handle_message.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_group_message_wait_returns_generation(db_session, monkeypatch):
     """timing 返回 wait 时返回 delay + generation。"""
     from api.routes import GroupMessageRequest, group_message

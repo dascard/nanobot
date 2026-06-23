@@ -63,7 +63,7 @@
 - 创建：`tests/test_user_block_rules.py`
 - 修改：`tests/test_api.py`
 
-- [ ] **步骤 1：创建 core split 测试文件**
+- [x] **步骤 1：创建 core split 测试文件**
 
 创建 `tests/test_user_block_rules.py`，写入以下测试骨架和 fake 查询对象：
 
@@ -134,7 +134,7 @@ class FakeDb:
         return FakeQuery(self.rows)
 ```
 
-- [ ] **步骤 2：新增新模块源码约束红灯**
+- [x] **步骤 2：新增新模块源码约束红灯**
 
 在 `tests/test_user_block_rules.py` 中追加：
 
@@ -150,7 +150,7 @@ def test_user_block_rules_module_does_not_import_entrypoints_or_sync_awaitable()
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 3：新增 core helper 行为红灯**
+- [x] **步骤 3：新增 core helper 行为红灯**
 
 在 `tests/test_user_block_rules.py` 中追加：
 
@@ -252,7 +252,7 @@ def test_rule_mode_and_reason_do_not_affect_matching():
     assert is_user_blocked(db, "u1", target_type="private", rule_model=FakeRuleModel)
 ```
 
-- [ ] **步骤 4：新增 wrapper 委托与异常兜底红灯**
+- [x] **步骤 4：新增 wrapper 委托与异常兜底红灯**
 
 在 `tests/test_user_block_rules.py` 中追加：
 
@@ -309,7 +309,7 @@ def test_group_ingress_wrapper_delegates_and_fails_open_on_exception(monkeypatch
     assert not helpers.check_user_blocked(db, "u1", target_type="group", group_id="123")
 ```
 
-- [ ] **步骤 5：新增群聊行为回归红灯**
+- [x] **步骤 5：新增群聊行为回归红灯**
 
 在 `tests/test_api.py` 的 `/group/message` 测试区域追加：
 
@@ -364,7 +364,7 @@ async def test_group_message_blocked_user_returns_no_reply_and_skips_runtime(db_
     mock_bridge.handle_message.assert_not_called()
 ```
 
-- [ ] **步骤 6：运行红灯**
+- [x] **步骤 6：运行红灯**
 
 运行：
 
@@ -388,7 +388,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api.py::test_group_message_bl
 - 如果当前旧实现已经满足行为，允许通过；此测试作为迁移回归守卫。
 - 若失败，失败点必须来自群聊 block 行为缺失，而不是测试 setup 错误。
 
-- [ ] **步骤 7：提交红灯测试**
+- [x] **步骤 7：提交红灯测试**
 
 ```bash
 git add tests/test_user_block_rules.py tests/test_api.py .Codex/plans/api-user-block-rules-split.md
@@ -698,3 +698,14 @@ git commit -m "docs(计划): 收口用户屏蔽规则拆分"
 - 2026-06-23 设计阶段：
   写入 `docs/superpowers/specs/2026-06-23-api-user-block-rules-split-design.md`，
   并随 `f9309d7 docs(普通API): 设计用户屏蔽规则拆分` 提交。
+- 2026-06-23 任务 1 core split 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_user_block_rules.py -v`
+  退出码 1，`11 failed, 1 warning`。失败点为 `core/user_block_rules.py`
+  不存在、`core.user_block_rules` 无法导入，以及 wrapper 委托 monkeypatch
+  找不到目标模块，符合红灯预期。
+- 2026-06-23 任务 1 群聊行为回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api.py::test_group_message_blocked_user_returns_no_reply_and_skips_runtime -v`
+  退出码 0，`1 passed, 1 warning`。该测试锁定旧行为：群聊 user block
+  命中后返回 `no_reply/user_blocked`，不会进入 TimingGate 或 Bridge。
+- 2026-06-23 任务 1 提交：
+  随本次 `test(普通API): 锁定用户屏蔽规则契约` 提交。
