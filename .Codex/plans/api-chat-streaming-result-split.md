@@ -72,7 +72,7 @@
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 - 修改：`.Codex/plans/api-chat-streaming-result-split.md`
 
-- [ ] **步骤 1：创建 streaming result split 测试文件**
+- [x] **步骤 1：创建 streaming result split 测试文件**
 
 创建 `tests/test_api_chat_streaming_result_split.py`，写入：
 
@@ -205,7 +205,7 @@ def _context(
     )
 ```
 
-- [ ] **步骤 2：新增源码约束红灯**
+- [x] **步骤 2：新增源码约束红灯**
 
 在 `tests/test_api_chat_streaming_result_split.py` 中追加：
 
@@ -223,7 +223,7 @@ def test_chat_streaming_result_module_does_not_import_parent_routes_or_sync_awai
     assert "import core.daily_digest" not in source
 ```
 
-- [ ] **步骤 3：新增成功持久化红灯**
+- [x] **步骤 3：新增成功持久化红灯**
 
 在同一文件追加：
 
@@ -258,7 +258,7 @@ async def test_persist_stream_result_success_uses_result_holder_and_request_db()
     assert calls.get("push") is None
 ```
 
-- [ ] **步骤 4：新增 Prompt V2 audit no-send 红灯**
+- [x] **步骤 4：新增 Prompt V2 audit no-send 红灯**
 
 在同一文件追加：
 
@@ -295,7 +295,7 @@ async def test_persist_stream_result_prompt_audit_failure_uses_meta_and_skips_pu
     assert calls.get("push") is None
 ```
 
-- [ ] **步骤 5：新增后台 push / UnitOfWork / drain 红灯**
+- [x] **步骤 5：新增后台 push / UnitOfWork / drain 红灯**
 
 在同一文件追加：
 
@@ -336,7 +336,7 @@ async def test_persist_stream_result_background_push_uses_unit_of_work_and_drain
     ]
 ```
 
-- [ ] **步骤 6：更新 split module 扫描清单**
+- [x] **步骤 6：更新 split module 扫描清单**
 
 在以下文件的 `test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable()` 路径列表中追加：
 
@@ -351,7 +351,7 @@ async def test_persist_stream_result_background_push_uses_unit_of_work_and_drain
 - `tests/test_api_history_log_routes_split.py`
 - `tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 7：运行红灯**
+- [x] **步骤 7：运行红灯**
 
 运行：
 
@@ -371,7 +371,7 @@ python -B -m pytest -p no:cacheprovider \
 - 失败。
 - 失败点为 `api/chat_streaming_result.py` 不存在，或 `api.chat_streaming_result` 无法导入。
 
-- [ ] **步骤 8：提交红灯测试**
+- [x] **步骤 8：提交红灯测试**
 
 ```bash
 git add tests/test_api_chat_streaming_result_split.py \
@@ -843,3 +843,10 @@ git commit -m "docs(计划): 收口流式结果收尾拆分"
 - 2026-06-23 设计阶段：
   写入 `docs/superpowers/specs/2026-06-23-api-chat-streaming-result-split-design.md`，
   并随 `7b003e2 docs(普通API): 设计流式结果收尾拆分` 提交。
+- 2026-06-23 任务 1 红灯：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/test_api_chat_streaming_result_split.py tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  退出码 1，`8 failed, 1 warning`。失败点均为
+  `api/chat_streaming_result.py` 不存在或 `api.chat_streaming_result`
+  无法导入，符合红灯预期。
+- 2026-06-23 任务 1 提交：
+  随本次 `test(普通API): 锁定流式结果收尾契约` 提交。
