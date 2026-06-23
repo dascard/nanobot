@@ -360,7 +360,7 @@ git commit -m "refactor(普通API): 增加聊天推送信封助手"
 - 修改：`api/routes.py`
 - 修改：`.Codex/plans/api-chat-push-envelope-split.md`
 
-- [ ] **步骤 1：导入新模块**
+- [x] **步骤 1：导入新模块**
 
 在 `api/routes.py` 的 `from api import (` 导入列表中加入：
 
@@ -368,7 +368,7 @@ git commit -m "refactor(普通API): 增加聊天推送信封助手"
     chat_push_envelope,
 ```
 
-- [ ] **步骤 2：增加父模块 wrapper**
+- [x] **步骤 2：增加父模块 wrapper**
 
 在 `_chat_response_payload()` 后增加：
 
@@ -379,28 +379,12 @@ def _expand_chat_transport_answer(answer: str) -> str:
 
 def _build_chat_push_envelope(
     req: ChatProxyRequest,
-    *,
-    answer: str,
-    platform: str,
-    chat_type: str,
-    is_group: bool,
-    status: str = "ok",
-    reply_meta: dict | None = None,
-    extra_meta: dict | None = None,
+    **kwargs: Any,
 ) -> chat_push_envelope.ChatPushEnvelope:
-    return chat_push_envelope.build_chat_push_envelope(
-        req,
-        answer=answer,
-        platform=platform,
-        chat_type=chat_type,
-        is_group=is_group,
-        status=status,
-        reply_meta=reply_meta,
-        extra_meta=extra_meta,
-    )
+    return chat_push_envelope.build_chat_push_envelope(req, **kwargs)
 ```
 
-- [ ] **步骤 3：替换断连后台 push 组装**
+- [x] **步骤 3：替换断连后台 push 组装**
 
 将 `_persist_stream_result_after_runner_done()` 中的：
 
@@ -456,12 +440,12 @@ def _build_chat_push_envelope(
                     )
 ```
 
-- [ ] **步骤 4：替换正常流式和非流式传输展开**
+- [x] **步骤 4：替换正常流式和非流式传输展开**
 
 将流式 done 分支和非流式分支中的 `expand_generated_image_refs_in_content(answer, allow_base64=False)`
 调用改为 `_expand_chat_transport_answer(answer)`，保留 `try/except` 和现有 warning 日志。
 
-- [ ] **步骤 5：运行接入绿灯**
+- [x] **步骤 5：运行接入绿灯**
 
 运行：
 
@@ -476,7 +460,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 6：运行相邻断连回归**
+- [x] **步骤 6：运行相邻断连回归**
 
 运行：
 
@@ -491,7 +475,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 7：运行扫描绿灯**
+- [x] **步骤 7：运行扫描绿灯**
 
 运行：
 
@@ -507,7 +491,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 8：记录行数并提交父模块接入**
+- [x] **步骤 8：记录行数并提交父模块接入**
 
 运行：
 
@@ -596,3 +580,19 @@ git commit -m "docs(计划): 收口聊天推送信封拆分"
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_push_envelope_split.py -v`
   - 结果：`4 passed, 1 failed, 1 warning`；失败原因只剩
     `api.routes._expand_chat_transport_answer` wrapper 不存在，符合新模块阶段边界。
+- 父模块接入组合验证：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_push_envelope_split.py tests/test_api_push_envelope.py tests/test_chat_response_envelope.py tests/test_streaming_response_envelope.py -v`
+  - 结果：`13 passed, 21 warnings`。
+- 断连相邻回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send -v`
+  - 结果：`4 passed, 1 warning`。
+- 扫描与 `asyncio.run` 策略验证：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_asyncio_run_policy.py -v`
+  - 结果：`7 passed, 1 warning`。
+- 行数记录：
+  - 命令：`wc -l api/routes.py api/chat_push_envelope.py tests/test_api_chat_push_envelope_split.py`
+  - 结果：`api/routes.py` 为 1331 行，`api/chat_push_envelope.py`
+    为 68 行，`tests/test_api_chat_push_envelope_split.py` 为 120 行。
+- 死 facade 清理证据：
+  - 命令：`rg -n "_chat_response_meta" api tests docs/superpowers/specs/2026-06-23-api-chat-push-envelope-split-design.md .Codex/plans/api-chat-push-envelope-split.md`
+  - 结果：无命中；未使用的 `_chat_response_meta()` 父模块 facade 已删除。

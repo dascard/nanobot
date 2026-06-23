@@ -35,6 +35,7 @@ from api import (
     chat_guardrail_facade,
     chat_persistence,
     chat_private_buffer,
+    chat_push_envelope,
     chat_request_contract,
     chat_response_contract,
     chat_runtime_facade,
@@ -441,31 +442,6 @@ def _split_chat_answer_chunks(answer: str) -> list[str]:
     return chat_response_contract.split_chat_answer_chunks(answer)
 
 
-def _chat_response_meta(
-    req: ChatProxyRequest,
-    *,
-    platform: str = "",
-    chat_type: str = "",
-    unprocessed_logs: int | None = None,
-    reason: str = "",
-    source: str = "",
-    intent: str = "",
-    guardrail_status: str | None = None,
-    extra_meta: dict | None = None,
-) -> dict[str, Any]:
-    return chat_response_contract.chat_response_meta(
-        req,
-        platform=platform,
-        chat_type=chat_type,
-        unprocessed_logs=unprocessed_logs,
-        reason=reason,
-        source=source,
-        intent=intent,
-        guardrail_status=guardrail_status,
-        extra_meta=extra_meta,
-    )
-
-
 def _chat_response_payload(
     req: ChatProxyRequest,
     *,
@@ -497,6 +473,17 @@ def _chat_response_payload(
         include_answer_chunks=include_answer_chunks,
         extra_meta=extra_meta,
     )
+
+
+def _expand_chat_transport_answer(answer: str) -> str:
+    return chat_push_envelope.expand_chat_transport_answer(answer)
+
+
+def _build_chat_push_envelope(
+    req: ChatProxyRequest,
+    **kwargs: Any,
+) -> chat_push_envelope.ChatPushEnvelope:
+    return chat_push_envelope.build_chat_push_envelope(req, **kwargs)
 
 
 def _is_guardrail_superuser(user_id: str) -> bool:
@@ -1079,31 +1066,26 @@ async def proxy_chat(
 
                 if should_push:
                     from core.daily_digest import push_envelope_to_qq
-                    from core.message_envelope import build_chat_response_envelope
 
                     # 推送前展开图片 token（禁用 base64，避免推送大负载）
                     push_answer = final_answer
                     try:
-                        from core.generated_images import expand_generated_image_refs_in_content
-                        push_answer = expand_generated_image_refs_in_content(final_answer, allow_base64=False)
+                        push_answer = _expand_chat_transport_answer(final_answer)
                     except Exception:
                         pass
 
-                    target_type = "private" if not bridge_meta.get("is_group") else "group"
-                    target_id = _resolve_push_target_id(req, bool(bridge_meta.get("is_group")))
-                    envelope = build_chat_response_envelope(
-                        status="ok",
+                    push_payload = _build_chat_push_envelope(
+                        req,
                         answer=push_answer,
-                        meta={
-                            "platform": platform,
-                            "chat_type": str(bridge_meta.get("chat_type") or ""),
-                            "user_id": req.user_id,
-                            "session_id": req.session_id,
-                            "target_type": target_type,
-                            "target_id": target_id,
-                        },
+                        platform=platform,
+                        chat_type=str(bridge_meta.get("chat_type") or ""),
+                        is_group=bool(bridge_meta.get("is_group")),
                     )
-                    ok = await push_envelope_to_qq(target_type, target_id, envelope)
+                    ok = await push_envelope_to_qq(
+                        push_payload.target_type,
+                        push_payload.target_id,
+                        push_payload.envelope,
+                    )
                     if ok:
                         logger.info(
                             f"[/chat] Stream-aborted result pushed: "
@@ -1191,8 +1173,7 @@ async def proxy_chat(
                 # 有 public URL 时展开为短 CQ URL，否则保留短 token。
                 transport_answer = answer
                 try:
-                    from core.generated_images import expand_generated_image_refs_in_content
-                    transport_answer = expand_generated_image_refs_in_content(answer, allow_base64=False)
+                    transport_answer = _expand_chat_transport_answer(answer)
                 except Exception:
                     logger.warning("[/chat] stream generated image ref expansion failed", exc_info=True)
 
@@ -1303,8 +1284,7 @@ async def proxy_chat(
     # 禁用 base64——所有面向 QQbot 的响应都不应返回大 base64
     transport_answer = answer
     try:
-        from core.generated_images import expand_generated_image_refs_in_content
-        transport_answer = expand_generated_image_refs_in_content(answer, allow_base64=False)
+        transport_answer = _expand_chat_transport_answer(answer)
     except Exception:
         logger.warning("[/chat] generated image ref expansion failed", exc_info=True)
 
