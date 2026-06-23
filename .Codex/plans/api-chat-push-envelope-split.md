@@ -70,7 +70,7 @@
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 - 修改：`tests/test_api_push_envelope.py`
 
-- [ ] **步骤 1：编写新模块契约测试**
+- [x] **步骤 1：编写新模块契约测试**
 
 创建 `tests/test_api_chat_push_envelope_split.py`：
 
@@ -194,7 +194,7 @@ def test_parent_chat_push_envelope_wrappers_remain_in_routes():
     assert routes._chat_response_payload.__module__ == "api.routes"
 ```
 
-- [ ] **步骤 2：将新模块加入普通 API split 扫描清单**
+- [x] **步骤 2：将新模块加入普通 API split 扫描清单**
 
 在以下 4 个文件的 `chat_split_modules` 元组中加入
 `"api/chat_push_envelope.py"`：
@@ -204,7 +204,7 @@ def test_parent_chat_push_envelope_wrappers_remain_in_routes():
 - `tests/test_api_group_message_routes_split.py`
 - `tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 3：加厚断连 push envelope 集成断言**
+- [x] **步骤 3：加厚断连 push envelope 集成断言**
 
 在 `tests/test_api_push_envelope.py::test_stream_disconnect_background_push_uses_envelope_and_no_base64`
 末尾补充：
@@ -216,7 +216,7 @@ def test_parent_chat_push_envelope_wrappers_remain_in_routes():
     assert envelope["meta"]["target_id"] == "u-stream-envelope"
 ```
 
-- [ ] **步骤 4：运行红灯测试**
+- [x] **步骤 4：运行红灯测试**
 
 运行：
 
@@ -226,7 +226,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_push_envelope_split.
 
 预期：失败原因是 `api/chat_push_envelope.py` 不存在或父模块 wrapper 不存在。
 
-- [ ] **步骤 5：运行扫描红灯**
+- [x] **步骤 5：运行扫描红灯**
 
 运行：
 
@@ -241,7 +241,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：失败原因是扫描清单中的 `api/chat_push_envelope.py` 不存在。
 
-- [ ] **步骤 6：提交红灯测试**
+- [x] **步骤 6：提交红灯测试**
 
 运行：
 
@@ -265,7 +265,7 @@ git commit -m "test(普通API): 锁定聊天推送信封契约"
 - 创建：`api/chat_push_envelope.py`
 - 修改：`.Codex/plans/api-chat-push-envelope-split.md`
 
-- [ ] **步骤 1：创建新模块**
+- [x] **步骤 1：创建新模块**
 
 写入 `api/chat_push_envelope.py`：
 
@@ -332,7 +332,7 @@ def expand_chat_transport_answer(answer: str) -> str:
     return expand_generated_image_refs_in_content(answer, allow_base64=False)
 ```
 
-- [ ] **步骤 2：运行新模块绿灯**
+- [x] **步骤 2：运行新模块绿灯**
 
 运行：
 
@@ -342,7 +342,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_push_envelope_split.
 
 预期：父模块 wrapper 相关断言仍失败，新模块自身测试通过。
 
-- [ ] **步骤 3：提交新模块**
+- [x] **步骤 3：提交新模块**
 
 运行：
 
@@ -584,4 +584,15 @@ git commit -m "docs(计划): 收口聊天推送信封拆分"
 
 ## 验证记录
 
-执行时按任务追加真实命令输出，不用推测结果。
+- 红灯测试：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_push_envelope_split.py -v`
+  - 结果：`5 failed, 1 warning`；失败原因是 `api/chat_push_envelope.py`
+    和父模块 wrapper 不存在，符合预期红灯。
+- 扫描红灯：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  - 结果：`4 failed, 1 warning`；失败原因是扫描清单中的
+    `api/chat_push_envelope.py` 不存在，符合预期红灯。
+- 新模块阶段验证：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_push_envelope_split.py -v`
+  - 结果：`4 passed, 1 failed, 1 warning`；失败原因只剩
+    `api.routes._expand_chat_transport_answer` wrapper 不存在，符合新模块阶段边界。
