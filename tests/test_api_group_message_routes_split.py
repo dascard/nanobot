@@ -140,6 +140,7 @@ def test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable():
         "api/chat_runtime_facade.py",
         "api/chat_guardrail_facade.py",
         "api/chat_streaming_helpers.py",
+        "api/chat_sse_loop.py",
         "api/chat_streaming_result.py",
         "api/chat_private_buffer.py",
         "api/chat_push_envelope.py",

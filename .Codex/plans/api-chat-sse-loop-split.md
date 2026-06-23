@@ -66,7 +66,7 @@
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 - 修改：`.Codex/plans/api-chat-sse-loop-split.md`
 
-- [ ] **步骤 1：创建 SSE loop split 测试文件**
+- [x] **步骤 1：创建 SSE loop split 测试文件**
 
 创建 `tests/test_api_chat_sse_loop_split.py`，写入：
 
@@ -96,7 +96,7 @@ def _normalize(raw: Any) -> dict[str, Any] | None:
     return None
 ```
 
-- [ ] **步骤 2：新增源码约束红灯**
+- [x] **步骤 2：新增源码约束红灯**
 
 在同一文件追加：
 
@@ -117,7 +117,7 @@ def test_chat_sse_loop_module_does_not_import_parent_routes_or_runtime_side_effe
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 3：新增 heartbeat 红灯**
+- [x] **步骤 3：新增 heartbeat 红灯**
 
 在同一文件追加：
 
@@ -144,7 +144,7 @@ async def test_iter_chat_stream_events_emits_heartbeat_when_idle():
     assert event == {"status": "heartbeat"}
 ```
 
-- [ ] **步骤 4：新增 done 快速结束红灯**
+- [x] **步骤 4：新增 done 快速结束红灯**
 
 在同一文件追加：
 
@@ -175,7 +175,7 @@ async def test_iter_chat_stream_events_stops_after_done_without_waiting_for_hear
     assert elapsed < 0.2
 ```
 
-- [ ] **步骤 5：新增 delta / progress 和 tail flush 红灯**
+- [x] **步骤 5：新增 delta / progress 和 tail flush 红灯**
 
 在同一文件追加：
 
@@ -212,7 +212,7 @@ async def test_iter_chat_stream_events_coalesces_delta_before_progress_and_flush
     ]
 ```
 
-- [ ] **步骤 6：新增父模块接入红灯**
+- [x] **步骤 6：新增父模块接入红灯**
 
 在同一文件追加：
 
@@ -226,7 +226,7 @@ def test_parent_stream_chat_delegates_sse_loop_and_keeps_streaming_response_boun
     assert "asyncio.wait(\n                        {get_task, done_task}," not in source
 ```
 
-- [ ] **步骤 7：更新 split module 扫描清单**
+- [x] **步骤 7：更新 split module 扫描清单**
 
 在以下文件的 `test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable()` 路径列表中追加：
 
@@ -241,7 +241,7 @@ def test_parent_stream_chat_delegates_sse_loop_and_keeps_streaming_response_boun
 - `tests/test_api_history_log_routes_split.py`
 - `tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 8：运行红灯**
+- [x] **步骤 8：运行红灯**
 
 运行：
 
@@ -261,7 +261,7 @@ python -B -m pytest -p no:cacheprovider \
 - 失败。
 - 失败点为 `api/chat_sse_loop.py` 不存在，或 `api.chat_sse_loop` 无法导入，父模块尚未委托新 loop。
 
-- [ ] **步骤 9：提交红灯测试**
+- [x] **步骤 9：提交红灯测试**
 
 ```bash
 git add tests/test_api_chat_sse_loop_split.py \
@@ -650,3 +650,9 @@ git commit -m "docs(计划): 收口聊天 SSE 循环拆分"
 - 2026-06-23 设计阶段：
   写入 `docs/superpowers/specs/2026-06-23-api-chat-sse-loop-split-design.md`，
   并随 `da2f761 docs(普通API): 设计聊天 SSE 循环拆分` 提交。
+- 2026-06-23 任务 1 红灯：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/test_api_chat_sse_loop_split.py tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  退出码 1，`9 failed, 1 warning`。失败点为 `api/chat_sse_loop.py` 不存在、
+  `api.chat_sse_loop` 无法导入，以及父模块尚未委托新 loop，符合红灯预期。
+- 2026-06-23 任务 1 提交：
+  随本次 `test(普通API): 锁定聊天 SSE 循环契约` 提交。
