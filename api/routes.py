@@ -387,6 +387,14 @@ def _private_buffer_window_seconds(files: Optional[List[str]]) -> float:
     )
 
 
+async def _wait_private_buffer_deadline(user_id: str) -> bool:
+    return await _private_buffer_store.wait_until_deadline(
+        user_id,
+        now=_time.time,
+        sleep=asyncio.sleep,
+    )
+
+
 def _build_guardrail_input(query: str, files: Optional[List[str]]) -> str:
     return chat_content_helpers.build_guardrail_input(query, files)
 
@@ -801,19 +809,13 @@ async def proxy_chat(
                 )
 
             # 第一条消息负责等待“最后一条消息后的 5 秒静默期”
-            while True:
-                deadline = await _private_buffer_store.deadline(req.user_id)
-                if deadline is None:
-                    return _chat_response_payload(
-                        req,
-                        status="silent",
-                        reason="private_buffer_missing",
-                        include_answer_chunks=True,
-                    )
-                remaining = deadline - _time.time()
-                if remaining <= 0:
-                    break
-                await asyncio.sleep(remaining)
+            if not await _wait_private_buffer_deadline(req.user_id):
+                return _chat_response_payload(
+                    req,
+                    status="silent",
+                    reason="private_buffer_missing",
+                    include_answer_chunks=True,
+                )
 
             snapshot = await _private_buffer_store.snapshot(req.user_id)
             if snapshot is None:

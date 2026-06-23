@@ -376,7 +376,7 @@ git commit -m "fix(普通API): 增加私聊缓冲唤醒"
 - 修改：`tests/test_api.py`
 - 修改：`.Codex/plans/api-chat-private-buffer-deadline-wakeup.md`
 
-- [ ] **步骤 1：增加父模块 wrapper**
+- [x] **步骤 1：增加父模块 wrapper**
 
 在 `_private_buffer_window_seconds()` 后加入：
 
@@ -389,7 +389,7 @@ async def _wait_private_buffer_deadline(user_id: str) -> bool:
     )
 ```
 
-- [ ] **步骤 2：替换 owner 手写 loop**
+- [x] **步骤 2：替换 owner 手写 loop**
 
 将 `proxy_chat()` 中 owner 等待 deadline 的 `while True` 手写 loop 替换为：
 
@@ -403,11 +403,11 @@ async def _wait_private_buffer_deadline(user_id: str) -> bool:
                 )
 ```
 
-- [ ] **步骤 3：收紧 route 级红灯测试**
+- [x] **步骤 3：收紧 route 级红灯测试**
 
 如果任务 1 为了让当前实现完成测试收尾保留了 `release_first_sleep.set()`，在接入后删除对旧 sleep 的手动释放依赖，保留 `old_sleep_cancelled` 断言，让测试只依赖 deadline change 主动唤醒。
 
-- [ ] **步骤 4：运行私聊缓冲组合绿灯**
+- [x] **步骤 4：运行私聊缓冲组合绿灯**
 
 运行：
 
@@ -425,7 +425,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行断连与 asyncio 策略回归**
+- [x] **步骤 5：运行断连与 asyncio 策略回归**
 
 运行：
 
@@ -441,7 +441,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 6：记录行数并提交父模块接入**
+- [x] **步骤 6：记录行数并提交父模块接入**
 
 运行：
 
@@ -536,3 +536,13 @@ git commit -m "docs(计划): 收口私聊缓冲唤醒"
   退出码 1，7 项收集，6 passed / 1 failed；新增 store 级 deadline shrink
   与 finalize 唤醒测试均通过，唯一失败为预期中的
   `api.routes._wait_private_buffer_deadline` 尚未接入。
+- 2026-06-23 任务 3 私聊缓冲组合绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py tests/test_api.py::test_private_buffer_silent_releases_waiters tests/test_api.py::test_private_buffer_refreshes_window_and_persists_merged_messages tests/test_api.py::test_private_buffer_merges_files_for_final_bridge_request tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds tests/test_api.py::test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer tests/test_api.py::test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer -v`
+  退出码 0，13 passed / 1 warning。
+- 2026-06-23 任务 3 asyncio 与断连流式回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_asyncio_run_policy.py tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send -v`
+  退出码 0，7 passed / 1 warning。
+- 2026-06-23 任务 3 行数：
+  `wc -l api/routes.py api/chat_private_buffer.py tests/test_api_chat_private_buffer_split.py`
+  输出为 `1333 api/routes.py`、`198 api/chat_private_buffer.py`、
+  `311 tests/test_api_chat_private_buffer_split.py`。
