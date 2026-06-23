@@ -5,7 +5,7 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-23
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成 Chat Streaming Result 收尾拆分，当前为 1163 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成 Chat SSE Loop queue pump 拆分，当前为 1121 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。同日续跑补记：测试 helper 的 `asyncio.Runner` 兼容性问题已随 `cfdd9c2 test(异步): 移除 Runner 测试依赖` 收口，提交前全量回归结果为 `1380 passed, 6 skipped, 139 warnings in 100.75s`，非 vendor Python 代码中无 `asyncio.Runner` 命中。TimingGate scoring 可观测性收尾也已完成：设计提交 `4824036 docs(时机): 设计评分可观测收尾`，计划提交 `2820f7a docs(计划): 记录评分可观测收尾计划`，实现提交 `9d5817c feat(时机): 补齐评分可观测字段`；验证包括红灯 `s_transport_tier` 缺失、绿灯 `1 passed`、相邻回归 `7 passed`、WebUI build 退出码 0、全量回归 `1380 passed, 6 skipped, 139 warnings in 103.22s`。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
@@ -5181,3 +5181,68 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1227。剩余�
 下一步：
 
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1163。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界建议先评估完整 SSE runtime 生成器能否独立成低耦合 helper；如果风险偏高，则改拆私聊 pre-bridge 决策、guardrail superuser 或 buffer flow 中不触碰 Bridge / 落库 / SSE 的纯状态协调 helper。继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
+
+## 2026-06-23 普通 API Chat SSE Loop 拆分
+
+状态：设计、计划、红灯测试、新模块拆分、父模块接入、最终验证和阶段提交均已完成。本阶段把 `_stream_chat()` 中纯 SSE queue pump 拆到 `api/chat_sse_loop.py`，负责等待 `stream_queue` / `done`、heartbeat、delta coalescing、tail drain 和 pending delta flush。父模块继续保留 `/chat` route、`StreamingResponse`、`CHAT_STREAM_QUEUE_MAXSIZE`、queue 创建、runner task、`bridge.handle_message(..., stream_queue=..., stream=True)`、业务收尾、Prompt V2 audit、success done payload、evolution trigger 和断连后台调度。`api/routes.py` 从 1163 行降至 1121 行；`api/chat_sse_loop.py` 为 100 行，拆分测试为 128 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-23-api-chat-sse-loop-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-sse-loop-split.md`。
+
+阶段提交：
+
+- 设计提交：`da2f761 docs(普通API): 设计聊天 SSE 循环拆分`。
+- 计划提交：`7be601d docs(计划): 记录聊天 SSE 循环计划`。
+- 红灯测试提交：`ac3fe70 test(普通API): 锁定聊天 SSE 循环契约`。
+- 新模块提交：`5696b15 refactor(普通API): 增加聊天 SSE 循环助手`。
+- 父模块接入提交：`265f1c9 refactor(普通API): 接入聊天 SSE 循环助手`。
+- 文档收口提交：随本次 `docs(计划): 收口聊天 SSE 循环拆分` 完成。
+
+计划列表：
+
+- [x] 确认 Chat SSE Loop 拆分范围，排除完整 `_stream_chat()`、`proxy_chat()`、`StreamingResponse`、业务收尾、message envelope 和 push envelope 迁移。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API Chat SSE Loop split 红灯测试和 chat split module 扫描约束，并提交。
+- [x] 新增 `api/chat_sse_loop.py`，锁定 heartbeat、done 快速结束、delta / progress 顺序、tail flush 和不导入父模块约束，并提交。
+- [x] 将父模块 `_stream_chat()` 的手写 SSE 主循环改为委托 `chat_sse_loop.iter_chat_stream_events()`，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_sse_loop_split.py tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  -> `9 failed, 1 warning`；失败点为 `api/chat_sse_loop.py` 不存在或无法导入，父模块尚未委托新 loop。
+- 新模块阶段：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_sse_loop_split.py -v`
+  -> `1 failed, 4 passed, 1 warning`；4 个新模块行为测试通过，唯一失败为父模块尚未导入并委托 `chat_sse_loop`。
+- 父模块接入组合回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_sse_loop_split.py tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_streaming_api.py tests/test_streaming_response_envelope.py tests/test_api_chat_streaming_helpers_split.py tests/test_api_chat_streaming_result_split.py tests/test_chat_response_envelope.py tests/test_asyncio_run_policy.py tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send -v`
+  -> `39 passed, 21 warnings in 9.63s`。
+- 静态检查：
+  `python -m compileall api/routes.py api/chat_sse_loop.py -q` 退出码 0；
+  `wc -l api/routes.py api/chat_sse_loop.py tests/test_api_chat_sse_loop_split.py`
+  -> `1121 api/routes.py`、`100 api/chat_sse_loop.py`、`128 tests/test_api_chat_sse_loop_split.py`；
+  `git diff --check -- api/routes.py api/chat_sse_loop.py tests/test_api_chat_sse_loop_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_sticker_media_routes_split.py .Codex/plans/api-chat-sse-loop-split.md`
+  无输出，退出码 0。
+- 全量：
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1763 passed, 6 skipped, 139 warnings in 122.15s (0:02:02)`。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移完整 `_stream_chat()`、`proxy_chat()`、`StreamingResponse`、`CHAT_STREAM_QUEUE_MAXSIZE`、queue 创建、runner task、Bridge 调用、业务收尾、Prompt V2 audit、done / error event、evolution trigger 或断连后台调度。
+- 保持 `_normalize_chat_stream_event()`、`_chat_sse_data()`、`_stream_error_event()`、`_chat_response_payload()`、`_persist_chat_turn()`、`_finalize_private_buffer()` 和 `_pop_bridge_reply_meta()` 等父模块 facade。
+- 新模块只把 queue raw event 转换为规范化 event dict，不产生 SSE 字符串。
+- 新模块不导入 `api.routes`、FastAPI、DB、`core.daily_digest`、`get_bridge()` 或 `get_guardrail()`。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约、message envelope、push envelope 或 response envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1121。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界建议优先评估私聊 pre-bridge 决策、guardrail superuser、或 buffer flow 中不触碰 Bridge / 落库 / SSE 的纯状态协调 helper；继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。

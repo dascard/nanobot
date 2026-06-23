@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1163)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1121)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -528,6 +528,22 @@
     split 扫描 `4 passed, 1 warning`，父模块接入定向 `8 passed, 1 warning`，
     streaming 相邻回归 `27 passed, 21 warnings in 8.81s`，静态检查通过，
     全量回归 `1758 passed, 6 skipped, 139 warnings in 122.37s (0:02:02)`。
+  - 进展：`api/routes.py` 第二十四刀已拆出 Chat SSE Loop queue pump helper 到
+    `api/chat_sse_loop.py`；旧 `_stream_chat()` 内等待 `stream_queue` / `done`、
+    heartbeat、delta coalescing、tail drain 和 pending delta flush 的循环改为通过
+    `ChatSseLoopCallbacks` 委托新模块。父模块继续保留 `/chat` route、
+    `StreamingResponse`、`CHAT_STREAM_QUEUE_MAXSIZE`、queue 创建、runner task、
+    `bridge.handle_message(..., stream_queue=..., stream=True)`、业务收尾、Prompt V2
+    audit、success done payload、evolution trigger 和断连后台调度。本阶段未迁移
+    `proxy_chat()`、完整 `_stream_chat()`、message envelope、push envelope、
+    Prompt Runtime 输入或模板；新模块不反向导入 `api.routes`、FastAPI、DB、
+    `core.daily_digest`、`get_bridge()` 或 `get_guardrail()`，也没有 `asyncio.run`、
+    `run_awaitable_sync` 或同步函数包装 awaitable。`api/routes.py` 从
+    1163 行降至 1121 行，`api/chat_sse_loop.py` 为 100 行，拆分测试为 128 行。
+    验证结果：红灯 `9 failed, 1 warning`，新模块阶段
+    `1 failed, 4 passed, 1 warning`，父模块接入组合回归
+    `39 passed, 21 warnings in 9.63s`，静态检查通过，全量回归
+    `1763 passed, 6 skipped, 139 warnings in 122.15s (0:02:02)`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
