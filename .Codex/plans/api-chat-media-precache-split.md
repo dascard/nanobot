@@ -54,7 +54,7 @@
 **文件：**
 - 创建：`tests/test_api_chat_media_precache_split.py`
 
-- [ ] **步骤 1：创建 split 测试文件**
+- [x] **步骤 1：创建 split 测试文件**
 
 创建 `tests/test_api_chat_media_precache_split.py`：
 
@@ -79,7 +79,7 @@ def test_chat_media_precache_module_does_not_import_parent_routes_or_sync_awaita
     assert "from nanobot_kt.image_pipeline import precache_image_sources" not in source.splitlines()[:20]
 ```
 
-- [ ] **步骤 2：补父模块 wrapper 委托测试**
+- [x] **步骤 2：补父模块 wrapper 委托测试**
 
 在同一文件追加：
 
@@ -111,7 +111,7 @@ def test_parent_media_precache_wrapper_remains_in_routes_and_delegates(monkeypat
     assert calls[0][2]["normalize_files"] is routes._normalize_files
 ```
 
-- [ ] **步骤 3：补新模块行为测试**
+- [x] **步骤 3：补新模块行为测试**
 
 在同一文件追加：
 
@@ -183,7 +183,7 @@ def test_schedule_image_precache_adds_precache_task_with_normalized_files():
     ]
 ```
 
-- [ ] **步骤 4：运行红灯**
+- [x] **步骤 4：运行红灯**
 
 运行：
 
@@ -196,7 +196,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_media_precache_split
 - 失败。
 - 失败原因为 `api/chat_media_precache.py` 不存在，或父模块尚未委托新模块。
 
-- [ ] **步骤 5：提交红灯测试**
+- [x] **步骤 5：提交红灯测试**
 
 ```bash
 git add tests/test_api_chat_media_precache_split.py .Codex/plans/api-chat-media-precache-split.md
@@ -440,3 +440,11 @@ git commit -m "docs(计划): 收口聊天图片预缓存拆分"
 ---
 
 ## 执行记录
+
+- 2026-06-23 任务 1 红灯测试：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_media_precache_split.py -v`
+  退出码 1，`4 failed, 1 warning`。失败点为 `api/chat_media_precache.py`
+  不存在、`api.chat_media_precache` 无法导入和
+  `ModuleNotFoundError: No module named 'api.chat_media_precache'`，符合红灯预期。
+- 2026-06-23 任务 1 提交：
+  随本次 `test(普通API): 锁定聊天图片预缓存契约` 提交。
