@@ -319,7 +319,7 @@ git commit -m "test(普通API): 锁定私聊缓冲基础件契约"
 **文件：**
 - 创建：`api/chat_private_buffer.py`
 
-- [ ] **步骤 1：编写新模块实现**
+- [x] **步骤 1：编写新模块实现**
 
 在 `api/chat_private_buffer.py` 写入：
 
@@ -464,7 +464,7 @@ class PrivateBufferStore:
                 self.buffers.pop(user_id, None)
 ```
 
-- [ ] **步骤 2：运行新模块测试验证绿灯**
+- [x] **步骤 2：运行新模块测试验证绿灯**
 
 运行：
 
@@ -474,7 +474,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split
 
 预期：全部通过。
 
-- [ ] **步骤 3：运行扫描测试验证绿灯**
+- [x] **步骤 3：运行扫描测试验证绿灯**
 
 运行：
 
@@ -489,7 +489,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 4：提交新模块**
+- [x] **步骤 4：提交新模块**
 
 运行：
 
@@ -756,6 +756,12 @@ git commit -m "docs(计划): 收口私聊缓冲拆分"
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
   - 结果：`4 failed, 1 warning`；失败原因是扫描清单中的
     `api/chat_private_buffer.py` 不存在，符合预期红灯。
+- 新模块绿灯：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py -v`
+  - 结果：`5 passed, 1 warning`。
+- 扫描绿灯：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  - 结果：`4 passed, 1 warning`。
 - 计划文档自检：
   - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-private-buffer-split.md`
   - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。
