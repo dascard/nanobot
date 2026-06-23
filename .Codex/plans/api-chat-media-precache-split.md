@@ -14,6 +14,10 @@
 
 - [x] 设计文档：`docs/superpowers/specs/2026-06-23-api-chat-media-precache-split-design.md`
 - [x] 设计提交：`b2a0660 docs(普通API): 设计聊天图片预缓存拆分`
+- [x] 计划提交：`b5df01e docs(计划): 记录聊天图片预缓存计划`
+- [x] 红灯测试提交：`e1b3141 test(普通API): 锁定聊天图片预缓存契约`
+- [x] 新模块提交：`a82bc18 refactor(普通API): 增加聊天图片预缓存助手`
+- [x] 父模块接入提交：`73af90f refactor(普通API): 接入聊天图片预缓存助手`
 
 ## 边界与禁止事项
 
@@ -370,7 +374,7 @@ git commit -m "refactor(普通API): 接入聊天图片预缓存助手"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-chat-media-precache-split.md`
 
-- [ ] **步骤 1：更新计划执行记录**
+- [x] **步骤 1：更新计划执行记录**
 
 在本计划底部追加执行记录，至少包含：
 
@@ -381,7 +385,7 @@ git commit -m "refactor(普通API): 接入聊天图片预缓存助手"
 - 全量测试结果。
 - 提交列表。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」中追加第二十一刀进展，记录：
 
@@ -391,7 +395,7 @@ git commit -m "refactor(普通API): 接入聊天图片预缓存助手"
 - 新模块没有反向导入父模块，也没有同步包装 awaitable。
 - `api/routes.py` 的真实行数变化和验证结果。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-23 普通 API Chat Media Precache 拆分` 小节，包含：
 
@@ -403,7 +407,7 @@ git commit -m "refactor(普通API): 接入聊天图片预缓存助手"
 - 验证记录。
 - 执行约束和下一步建议。
 
-- [ ] **步骤 4：文档自检**
+- [x] **步骤 4：文档自检**
 
 运行：
 
@@ -417,7 +421,7 @@ git diff --check -- .Codex/plans/api-chat-media-precache-split.md docs/todo.md d
 - `rg` 无输出，退出码 1。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 5：最终全量验证**
+- [x] **步骤 5：最终全量验证**
 
 运行：
 
@@ -430,7 +434,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - 0 failures。
 - 记录 passed / skipped / warnings 和耗时。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-chat-media-precache-split.md
@@ -477,3 +481,16 @@ git commit -m "docs(计划): 收口聊天图片预缓存拆分"
   无输出，退出码 0。
 - 2026-06-23 任务 3 提交：
   随本次 `refactor(普通API): 接入聊天图片预缓存助手` 提交。
+- 2026-06-23 任务 4 文档更新：
+  已更新 `docs/todo.md` 的 P3 第二十一刀进展、本 walkthrough 的
+  `2026-06-23 普通 API Chat Media Precache 拆分` 小节，以及本计划的执行记录。
+- 2026-06-23 任务 4 全量回归：
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  退出码 0，`1742 passed, 6 skipped, 139 warnings in 124.31s`。
+- 2026-06-23 任务 4 文档自检：
+  `rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-media-precache-split.md docs/todo.md docs/plan_walkthrough.md`
+  无输出，退出码 1。
+  `git diff --check -- .Codex/plans/api-chat-media-precache-split.md docs/todo.md docs/plan_walkthrough.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 4 提交：
+  随本次 `docs(计划): 收口聊天图片预缓存拆分` 提交。

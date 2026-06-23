@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1333)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1233)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -484,6 +484,18 @@
     父模块接入定向绿灯 `5 passed, 1 warning`，相邻回归
     `13 passed, 21 warnings`，静态检查通过，全量回归
     `1738 passed, 6 skipped, 139 warnings in 122.53s`。
+  - 进展：`api/routes.py` 第二十一刀已拆出 Chat Media Precache 调度 helper 到
+    `api/chat_media_precache.py`；旧 `api.routes._schedule_image_precache()`
+    继续作为父模块 wrapper，`proxy_chat()` 调用点、`_normalize_files` patch
+    point、`BackgroundTasks.add_task()` 语义、图片预缓存懒加载、Bridge、私聊
+    缓冲、guardrail、落库、SSE、push envelope 和 response envelope 均保持不变。
+    新模块不反向导入 `api.routes`，也没有 `asyncio.run`、`run_awaitable_sync`
+    或同步函数包装 awaitable。`api/routes.py` 从 1236 行降至 1233 行，
+    `api/chat_media_precache.py` 为 34 行，拆分测试为 115 行。验证结果：
+    红灯 `4 failed, 1 warning`，新模块阶段 `1 failed, 3 passed, 1 warning`，
+    父模块接入定向绿灯 `4 passed, 1 warning`，相邻回归
+    `6 passed, 21 warnings`，静态检查通过，全量回归
+    `1742 passed, 6 skipped, 139 warnings in 124.31s`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
