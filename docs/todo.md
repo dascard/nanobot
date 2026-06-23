@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1351)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1331)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -442,6 +442,22 @@
     相邻扫描红灯 `4 failed`，新模块绿灯 `5 passed`，相邻扫描绿灯 `4 passed`，
     private buffer 行为回归 `11 passed`，asyncio 策略与相邻 `/chat` 回归
     `9 passed`，全量回归 `1727 passed, 6 skipped, 139 warnings in 129.45s`。
+  - 进展：`api/routes.py` 第十八刀已拆出 Chat Push Envelope 辅助件到
+    `api/chat_push_envelope.py`；断连后台 push envelope 手写 meta 已迁移到
+    `build_chat_push_envelope()`，非流式和流式 done 的图片 token 传输展开已复用
+    `expand_chat_transport_answer()`，并固定 `allow_base64=False`。本阶段保留
+    `/chat` 路由本体、SSE 主循环、stream finalizer、`push_envelope_to_qq()`
+    调用点、DB 持久化、`_chat_response_payload()`、`get_bridge()`、
+    `BackgroundTasks.add_task()` 和父模块 patch point；未迁移完整 `_stream_chat()`、
+    `StreamingResponse` 或 `_persist_stream_result_after_runner_done()`。新模块不反向
+    导入 `api.routes`，也没有 `asyncio.run`、`run_awaitable_sync` 或同步函数包装
+    awaitable；未使用的 `_chat_response_meta()` 父模块 dead facade 已删除。
+    `api/routes.py` 从 1351 行降至 1331 行，`api/chat_push_envelope.py` 为
+    68 行，拆分测试为 120 行。验证结果：红灯 `5 failed, 1 warning`，
+    相邻扫描红灯 `4 failed, 1 warning`，新模块阶段 `4 passed, 1 failed`，
+    接入组合 `13 passed, 21 warnings`，断连相邻回归 `4 passed, 1 warning`，
+    扫描与 `asyncio.run` 策略回归 `7 passed, 1 warning`，全量回归
+    `1732 passed, 6 skipped, 139 warnings in 124.30s`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch

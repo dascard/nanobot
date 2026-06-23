@@ -511,7 +511,7 @@ git commit -m "refactor(普通API): 接入聊天推送信封助手"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：运行全量测试**
+- [x] **步骤 1：运行全量测试**
 
 运行：
 
@@ -521,7 +521,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：全部通过，跳过数量和警告数量记录到本计划与 `docs/plan_walkthrough.md`。
 
-- [ ] **步骤 2：更新 P3 进度**
+- [x] **步骤 2：更新 P3 进度**
 
 在 `docs/todo.md` 的 P3 超大文件拆分条目中追加 `api/routes.py` 第十八刀进展，说明：
 
@@ -531,7 +531,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - `/chat` 路由本体、SSE 主循环、stream finalizer、push 调用点、DB 持久化和父模块 patch point 均保持不变。
 - 全量回归结果。
 
-- [ ] **步骤 3：更新 walkthrough**
+- [x] **步骤 3：更新 walkthrough**
 
 在 `docs/plan_walkthrough.md` 追加 `2026-06-23 普通 API Chat Push Envelope 拆分` 章节，记录：
 
@@ -543,7 +543,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - 执行约束。
 - 下一步候选。
 
-- [ ] **步骤 4：运行文档自检**
+- [x] **步骤 4：运行文档自检**
 
 运行：
 
@@ -554,7 +554,7 @@ git diff --check -- .Codex/plans/api-chat-push-envelope-split.md docs/todo.md do
 
 预期：扫描无输出，diff 检查无输出。
 
-- [ ] **步骤 5：提交文档收口**
+- [x] **步骤 5：提交文档收口**
 
 运行：
 
@@ -596,3 +596,12 @@ git commit -m "docs(计划): 收口聊天推送信封拆分"
 - 死 facade 清理证据：
   - 命令：`rg -n "_chat_response_meta" api tests docs/superpowers/specs/2026-06-23-api-chat-push-envelope-split-design.md .Codex/plans/api-chat-push-envelope-split.md`
   - 结果：无命中；未使用的 `_chat_response_meta()` 父模块 facade 已删除。
+- 全量测试：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/ -v`
+  - 结果：`1732 passed, 6 skipped, 139 warnings in 124.30s`。
+- 文档红旗词扫描：
+  - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-push-envelope-split.md docs/todo.md docs/plan_walkthrough.md`
+  - 结果：无输出，命令退出码为 1，表示未命中文档缺陷模式。
+- 文档 diff 检查：
+  - 命令：`git diff --check -- .Codex/plans/api-chat-push-envelope-split.md docs/todo.md docs/plan_walkthrough.md`
+  - 结果：无输出，命令退出码为 0。
