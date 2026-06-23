@@ -506,7 +506,7 @@ git commit -m "refactor(普通API): 增加私聊缓冲基础件"
 **文件：**
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：导入新模块并创建 store**
+- [x] **步骤 1：导入新模块并创建 store**
 
 在 `api/routes.py` 的 `from api import (...)` 列表中加入：
 
@@ -523,7 +523,7 @@ _private_buffer_store = chat_private_buffer.PrivateBufferStore(
 )
 ```
 
-- [ ] **步骤 2：保留父模块 wrapper 并委托新模块**
+- [x] **步骤 2：保留父模块 wrapper 并委托新模块**
 
 将 helper 改为：
 
@@ -565,7 +565,7 @@ async def _finalize_private_buffer(
     )
 ```
 
-- [ ] **步骤 3：替换 `proxy_chat()` 私聊缓冲原子字典操作**
+- [x] **步骤 3：替换 `proxy_chat()` 私聊缓冲原子字典操作**
 
 在 guardrail 分支中保留父模块 task factory：
 
@@ -636,7 +636,7 @@ guardrail result 写回：
 await _private_buffer_store.store_guardrail_result(req.user_id, result)
 ```
 
-- [ ] **步骤 4：运行 split 与 private buffer 回归**
+- [x] **步骤 4：运行 split 与 private buffer 回归**
 
 运行：
 
@@ -654,7 +654,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行 asyncio 策略与相邻 `/chat` 回归**
+- [x] **步骤 5：运行 asyncio 策略与相邻 `/chat` 回归**
 
 运行：
 
@@ -672,7 +672,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：全部通过。
 
-- [ ] **步骤 6：记录行数并提交父模块接入**
+- [x] **步骤 6：记录行数并提交父模块接入**
 
 运行：
 
@@ -762,6 +762,19 @@ git commit -m "docs(计划): 收口私聊缓冲拆分"
 - 扫描绿灯：
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
   - 结果：`4 passed, 1 warning`。
+- 父模块接入回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py tests/test_api.py::test_private_buffer_silent_releases_waiters tests/test_api.py::test_private_buffer_refreshes_window_and_persists_merged_messages tests/test_api.py::test_private_buffer_merges_files_for_final_bridge_request tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds tests/test_api.py::test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer tests/test_api.py::test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer -v`
+  - 结果：`11 passed, 1 warning`。
+- asyncio 策略与相邻 `/chat` 回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_asyncio_run_policy.py tests/test_api.py::test_proxy_chat_persists_private_timing_scoring_meta tests/test_api.py::test_proxy_chat_no_reply_persists_private_timing_scoring_meta tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send -v`
+  - 结果：`9 passed, 21 warnings`。
+- 接入后扫描绿灯：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  - 结果：`4 passed, 1 warning`。
+- 行数检查：
+  - 命令：`wc -l api/routes.py api/chat_private_buffer.py tests/test_api_chat_private_buffer_split.py`
+  - 结果：`api/routes.py` 1351 行，`api/chat_private_buffer.py` 138 行，
+    `tests/test_api_chat_private_buffer_split.py` 184 行。
 - 计划文档自检：
   - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-private-buffer-split.md`
   - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。

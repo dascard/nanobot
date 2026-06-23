@@ -34,6 +34,7 @@ from api import (
     chat_content_helpers,
     chat_guardrail_facade,
     chat_persistence,
+    chat_private_buffer,
     chat_request_contract,
     chat_response_contract,
     chat_runtime_facade,
@@ -142,6 +143,10 @@ def _stream_error_event() -> dict[str, str]:
 # 私聊缓冲：基础 5 秒窗口；只要有文件附件就延长到 10 秒
 _private_buffers: dict[str, dict] = {}
 _private_lock = asyncio.Lock()
+_private_buffer_store = chat_private_buffer.PrivateBufferStore(
+    _private_buffers,
+    _private_lock,
+)
 MAX_BUFFERED_MESSAGES = 10  # 单用户 5s 窗口内最多收集条数
 PRIVATE_BUFFER_WINDOW_SECONDS = 5.0
 PRIVATE_BUFFER_WINDOW_WITH_FILES_SECONDS = 10.0
@@ -298,8 +303,17 @@ def _clone_chat_request(req: ChatProxyRequest, **updates) -> ChatProxyRequest:
     return chat_request_contract.clone_chat_request(req, **updates)
 
 
+def _private_buffer_config() -> chat_private_buffer.PrivateBufferConfig:
+    return chat_private_buffer.PrivateBufferConfig(
+        max_messages=MAX_BUFFERED_MESSAGES,
+        window_seconds=PRIVATE_BUFFER_WINDOW_SECONDS,
+        window_with_files_seconds=PRIVATE_BUFFER_WINDOW_WITH_FILES_SECONDS,
+        follower_timeout_seconds=PRIVATE_BUFFER_FOLLOWER_TIMEOUT_SECONDS,
+    )
+
+
 def _join_buffered_messages(messages: list[str]) -> str:
-    return "\n---\n".join(msg for msg in messages if msg)
+    return chat_private_buffer.join_buffered_messages(messages)
 
 
 def _normalize_files(files: Optional[List[str]]) -> list[str]:
@@ -362,18 +376,13 @@ def _check_user_blocked(db, user_id: str, target_type: str = "private", group_id
 
 
 def _merge_buffered_files(existing: list[str], incoming: Optional[List[str]]) -> list[str]:
-    merged = list(existing)
-    for file in _normalize_files(incoming):
-        if file not in merged:
-            merged.append(file)
-    return merged
+    return chat_private_buffer.merge_buffered_files(existing, _normalize_files(incoming))
 
 
 def _private_buffer_window_seconds(files: Optional[List[str]]) -> float:
-    return (
-        PRIVATE_BUFFER_WINDOW_WITH_FILES_SECONDS
-        if _normalize_files(files)
-        else PRIVATE_BUFFER_WINDOW_SECONDS
+    return chat_private_buffer.private_buffer_window_seconds(
+        _normalize_files(files),
+        _private_buffer_config(),
     )
 
 
@@ -501,16 +510,11 @@ async def _finalize_private_buffer(
     *,
     clear_window: bool = True,
 ) -> None:
-    async with _private_lock:
-        buf = _private_buffers.get(user_id)
-        if not buf:
-            return
-        if answer is not None:
-            buf["answer"] = answer
-        if not buf["done"].is_set():
-            buf["done"].set()
-        if clear_window:
-            _private_buffers.pop(user_id, None)
+    await _private_buffer_store.finalize(
+        user_id,
+        answer,
+        clear_window=clear_window,
+    )
 
 
 def _private_prompt_audit_failure_meta() -> dict:
@@ -769,78 +773,31 @@ async def proxy_chat(
             merged = _join_buffered_messages(messages)
             guardrail_input = _build_guardrail_input(merged, req.files)
 
-            # 锁内只做原子字典操作，await/sleep/分类 全在锁外
-            done_event: asyncio.Event | None = None
-            is_first = False
-            async with _private_lock:
-                buf = _private_buffers.get(req.user_id)
-                now = _time.time()
-                if buf is None:
-                    # 新缓冲窗口
-                    is_first = True
-                    window_seconds = _private_buffer_window_seconds(req.files)
-                    buf = _private_buffers[req.user_id] = {
-                        "queries": [merged],
-                        "files": _normalize_files(req.files),
-                        "qwen_task": asyncio.create_task(
-                            asyncio.to_thread(
-                                _detect_guardrail,
-                                guardrail,
-                                guardrail_input,
-                                allow_passthrough=_is_guardrail_superuser(req.user_id),
-                            )
-                        ),
-                        "done": asyncio.Event(),
-                        "result": None,
-                        "answer": None,
-                        "deadline": now + window_seconds,
-                        "window_seconds": window_seconds,
-                    }
-                elif not buf["done"].is_set():
-                    # 缓冲窗口内——追加消息（超上限时并入最后一条，避免静默丢弃）
-                    if len(buf["queries"]) < MAX_BUFFERED_MESSAGES:
-                        buf["queries"].append(merged)
-                    else:
-                        logger.warning(
-                            "[/chat] Private buffer overflow: user=%s max=%s, coalescing latest message",
-                            req.user_id,
-                            MAX_BUFFERED_MESSAGES,
-                        )
-                        buf["queries"][-1] = _join_buffered_messages([buf["queries"][-1], merged])
-                    buf["files"] = _merge_buffered_files(buf.get("files", []), req.files)
-                    window_seconds = _private_buffer_window_seconds(req.files)
-                    buf["window_seconds"] = window_seconds
-                    buf["deadline"] = now + window_seconds
-                    done_event = buf["done"]
-                else:
-                    # 旧缓冲已结束——开新窗口
-                    _private_buffers.pop(req.user_id, None)
-                    is_first = True
-                    window_seconds = _private_buffer_window_seconds(req.files)
-                    buf = _private_buffers[req.user_id] = {
-                        "queries": [merged],
-                        "files": _normalize_files(req.files),
-                        "qwen_task": asyncio.create_task(
-                            asyncio.to_thread(
-                                _detect_guardrail,
-                                guardrail,
-                                guardrail_input,
-                                allow_passthrough=_is_guardrail_superuser(req.user_id),
-                            )
-                        ),
-                        "done": asyncio.Event(),
-                        "result": None,
-                        "answer": None,
-                        "deadline": now + window_seconds,
-                        "window_seconds": window_seconds,
-                    }
+            def _guardrail_task_factory() -> asyncio.Task[Any]:
+                return asyncio.create_task(
+                    asyncio.to_thread(
+                        _detect_guardrail,
+                        guardrail,
+                        guardrail_input,
+                        allow_passthrough=_is_guardrail_superuser(req.user_id),
+                    )
+                )
 
-            if done_event is not None:
+            buffer_result = await _private_buffer_store.begin_or_append(
+                req.user_id,
+                merged_query=merged,
+                files=_normalize_files(req.files),
+                guardrail_task_factory=_guardrail_task_factory,
+                now=_time.time(),
+                config=_private_buffer_config(),
+            )
+
+            if isinstance(buffer_result, chat_private_buffer.PrivateBufferFollowerJoined):
                 # 缓冲期内后续消息：等待第一条完成，但不返回 answer
                 # 第一条消息已通过 HTTP 响应返回了 answer，后续消息只静默消费
                 try:
                     await asyncio.wait_for(
-                        done_event.wait(),
+                        buffer_result.done_event.wait(),
                         timeout=PRIVATE_BUFFER_FOLLOWER_TIMEOUT_SECONDS,
                     )
                 except asyncio.TimeoutError:
@@ -856,43 +813,32 @@ async def proxy_chat(
                     include_answer_chunks=True,
                 )
 
-            if not is_first:
-                return _chat_response_payload(
-                    req,
-                    status="silent",
-                    reason="private_buffer_not_first",
-                    include_answer_chunks=True,
-                )
-
             # 第一条消息负责等待“最后一条消息后的 5 秒静默期”
             while True:
-                async with _private_lock:
-                    buf = _private_buffers.get(req.user_id)
-                    if buf is None:
-                        return _chat_response_payload(
-                            req,
-                            status="silent",
-                            reason="private_buffer_missing",
-                            include_answer_chunks=True,
-                        )
-                    deadline = float(buf["deadline"])
-                remaining = deadline - _time.time()
-                if remaining <= 0:
-                    break
-                await asyncio.sleep(remaining)
-
-            async with _private_lock:
-                buf = _private_buffers.get(req.user_id)
-                if buf is None:
+                deadline = await _private_buffer_store.deadline(req.user_id)
+                if deadline is None:
                     return _chat_response_payload(
                         req,
                         status="silent",
                         reason="private_buffer_missing",
                         include_answer_chunks=True,
                     )
-                buffered_messages = list(buf["queries"])
-                buffered_files = list(buf.get("files", []))
-                qwen_task = buf["qwen_task"]
+                remaining = deadline - _time.time()
+                if remaining <= 0:
+                    break
+                await asyncio.sleep(remaining)
+
+            snapshot = await _private_buffer_store.snapshot(req.user_id)
+            if snapshot is None:
+                return _chat_response_payload(
+                    req,
+                    status="silent",
+                    reason="private_buffer_missing",
+                    include_answer_chunks=True,
+                )
+            buffered_messages = snapshot.messages
+            buffered_files = snapshot.files
+            qwen_task = snapshot.guardrail_task
 
             buffered_query = _join_buffered_messages(buffered_messages)
             buffered_guardrail_input = _build_guardrail_input(buffered_query, buffered_files)
@@ -906,10 +852,7 @@ async def proxy_chat(
             else:
                 result = await qwen_task
 
-            async with _private_lock:
-                buf = _private_buffers.get(req.user_id)
-                if buf is not None:
-                    buf["result"] = result
+            await _private_buffer_store.store_guardrail_result(req.user_id, result)
 
             guardrail_status = chat_guardrail_facade.guardrail_status_from_result(result)
             logger.info(
