@@ -403,7 +403,7 @@ git commit -m "test(普通API): 锁定用户屏蔽规则契约"
 - 创建：`core/user_block_rules.py`
 - 修改：`.Codex/plans/api-user-block-rules-split.md`
 
-- [ ] **步骤 1：创建新模块**
+- [x] **步骤 1：创建新模块**
 
 创建 `core/user_block_rules.py`：
 
@@ -461,7 +461,7 @@ def is_user_blocked(
     )
 ```
 
-- [ ] **步骤 2：运行 core 定向测试**
+- [x] **步骤 2：运行 core 定向测试**
 
 运行：
 
@@ -474,7 +474,7 @@ python -B -m pytest -p no:cacheprovider tests/test_user_block_rules.py -v
 - core helper 行为测试通过。
 - wrapper 委托测试仍失败，失败原因为父模块尚未委托 `core.user_block_rules.is_user_blocked()`。
 
-- [ ] **步骤 3：静态检查**
+- [x] **步骤 3：静态检查**
 
 运行：
 
@@ -488,7 +488,7 @@ git diff --check -- core/user_block_rules.py tests/test_user_block_rules.py test
 - `compileall` 退出码 0。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 4：提交 core helper**
+- [x] **步骤 4：提交 core helper**
 
 ```bash
 git add core/user_block_rules.py .Codex/plans/api-user-block-rules-split.md
@@ -709,3 +709,15 @@ git commit -m "docs(计划): 收口用户屏蔽规则拆分"
   命中后返回 `no_reply/user_blocked`，不会进入 TimingGate 或 Bridge。
 - 2026-06-23 任务 1 提交：
   随本次 `test(普通API): 锁定用户屏蔽规则契约` 提交。
+- 2026-06-23 任务 2 core helper 阶段验证：
+  `python -B -m pytest -p no:cacheprovider tests/test_user_block_rules.py -v`
+  退出码 1，`2 failed, 9 passed, 1 warning`。core helper 行为和源码约束测试通过；
+  两个失败均为 wrapper 尚未委托 `core.user_block_rules.is_user_blocked()`，符合阶段预期。
+- 2026-06-23 任务 2 静态检查：
+  `python -m compileall core/user_block_rules.py -q` 退出码 0。
+  `git diff --check -- core/user_block_rules.py tests/test_user_block_rules.py tests/test_api.py .Codex/plans/api-user-block-rules-split.md`
+  无输出，退出码 0。
+  `wc -l core/user_block_rules.py tests/test_user_block_rules.py`
+  输出 `53 core/user_block_rules.py`、`224 tests/test_user_block_rules.py`。
+- 2026-06-23 任务 2 提交：
+  随本次 `refactor(普通API): 增加用户屏蔽规则助手` 提交。
