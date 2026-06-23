@@ -54,6 +54,7 @@ def test_parent_private_buffer_wrappers_remain_in_routes_and_patchable(monkeypat
     assert routes._join_buffered_messages.__module__ == "api.routes"
     assert routes._merge_buffered_files.__module__ == "api.routes"
     assert routes._private_buffer_window_seconds.__module__ == "api.routes"
+    assert routes._wait_private_buffer_deadline.__module__ == "api.routes"
     assert routes._finalize_private_buffer.__module__ == "api.routes"
 
     monkeypatch.setattr(routes, "PRIVATE_BUFFER_WINDOW_SECONDS", 0.25)
@@ -182,3 +183,129 @@ async def test_private_buffer_store_overflow_coalesces_latest_message():
 
     assert buffers["u-overflow"]["queries"] == ["第一句", "第二句\n---\n第三句"]
     await store.finalize("u-overflow")
+
+
+@pytest.mark.asyncio
+async def test_private_buffer_store_wakes_owner_when_deadline_shrinks():
+    from api.chat_private_buffer import PrivateBufferConfig, PrivateBufferStore
+
+    buffers: dict[str, dict] = {}
+    store = PrivateBufferStore(buffers, asyncio.Lock())
+    config = PrivateBufferConfig(
+        max_messages=3,
+        window_seconds=5.0,
+        window_with_files_seconds=10.0,
+        follower_timeout_seconds=900.0,
+    )
+    fake_now = {"value": 0.0}
+    old_sleep_started = asyncio.Event()
+    old_sleep_cancelled = asyncio.Event()
+    second_sleep_started = asyncio.Event()
+    release_second_sleep = asyncio.Event()
+    sleep_delays: list[float] = []
+
+    def task_factory() -> asyncio.Task[dict[str, str]]:
+        return asyncio.create_task(asyncio.sleep(0, result={"status": "reply"}))
+
+    async def controlled_sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+        if len(sleep_delays) == 1:
+            assert delay == 10.0
+            old_sleep_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                old_sleep_cancelled.set()
+                raise
+            return
+
+        assert delay == 5.0
+        second_sleep_started.set()
+        await release_second_sleep.wait()
+
+    await store.begin_or_append(
+        "u-wakeup",
+        merged_query="先看图片",
+        files=["a.png"],
+        guardrail_task_factory=task_factory,
+        now=0.0,
+        config=config,
+    )
+
+    waiter = asyncio.create_task(
+        store.wait_until_deadline(
+            "u-wakeup",
+            now=lambda: fake_now["value"],
+            sleep=controlled_sleep,
+        )
+    )
+    await asyncio.wait_for(old_sleep_started.wait(), timeout=1)
+
+    fake_now["value"] = 3.0
+    await store.begin_or_append(
+        "u-wakeup",
+        merged_query="然后看文本",
+        files=[],
+        guardrail_task_factory=task_factory,
+        now=3.0,
+        config=config,
+    )
+
+    await asyncio.wait_for(old_sleep_cancelled.wait(), timeout=1)
+    assert not waiter.done()
+
+    await asyncio.wait_for(second_sleep_started.wait(), timeout=1)
+    fake_now["value"] = 8.0
+    release_second_sleep.set()
+    assert await asyncio.wait_for(waiter, timeout=1) is True
+    await store.finalize("u-wakeup")
+
+
+@pytest.mark.asyncio
+async def test_private_buffer_store_finalize_wakes_deadline_waiter():
+    from api.chat_private_buffer import PrivateBufferConfig, PrivateBufferStore
+
+    buffers: dict[str, dict] = {}
+    store = PrivateBufferStore(buffers, asyncio.Lock())
+    config = PrivateBufferConfig(
+        max_messages=3,
+        window_seconds=5.0,
+        window_with_files_seconds=10.0,
+        follower_timeout_seconds=900.0,
+    )
+    old_sleep_started = asyncio.Event()
+    old_sleep_cancelled = asyncio.Event()
+
+    def task_factory() -> asyncio.Task[dict[str, str]]:
+        return asyncio.create_task(asyncio.sleep(0, result={"status": "reply"}))
+
+    async def controlled_sleep(delay: float) -> None:
+        assert delay == 5.0
+        old_sleep_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            old_sleep_cancelled.set()
+            raise
+
+    await store.begin_or_append(
+        "u-finalize-wakeup",
+        merged_query="第一句",
+        files=[],
+        guardrail_task_factory=task_factory,
+        now=0.0,
+        config=config,
+    )
+    waiter = asyncio.create_task(
+        store.wait_until_deadline(
+            "u-finalize-wakeup",
+            now=lambda: 0.0,
+            sleep=controlled_sleep,
+        )
+    )
+    await asyncio.wait_for(old_sleep_started.wait(), timeout=1)
+
+    await store.finalize("u-finalize-wakeup")
+
+    await asyncio.wait_for(old_sleep_cancelled.wait(), timeout=1)
+    assert await asyncio.wait_for(waiter, timeout=1) is False

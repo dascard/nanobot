@@ -60,7 +60,7 @@
 - 修改：`tests/test_api_chat_private_buffer_split.py`
 - 修改：`tests/test_api.py`
 
-- [ ] **步骤 1：新增 store 级 deadline shrink 红灯**
+- [x] **步骤 1：新增 store 级 deadline shrink 红灯**
 
 在 `tests/test_api_chat_private_buffer_split.py` 追加：
 
@@ -129,7 +129,7 @@ async def test_private_buffer_store_wakes_owner_when_deadline_shrinks():
     assert await asyncio.wait_for(waiter, timeout=1) is True
 ```
 
-- [ ] **步骤 2：新增 finalize 唤醒红灯**
+- [x] **步骤 2：新增 finalize 唤醒红灯**
 
 在 `tests/test_api_chat_private_buffer_split.py` 追加：
 
@@ -184,7 +184,7 @@ async def test_private_buffer_store_finalize_wakes_deadline_waiter():
     assert await asyncio.wait_for(waiter, timeout=1) is False
 ```
 
-- [ ] **步骤 3：加厚父模块 wrapper 契约**
+- [x] **步骤 3：加厚父模块 wrapper 契约**
 
 在 `test_parent_private_buffer_wrappers_remain_in_routes_and_patchable()` 中加入：
 
@@ -192,7 +192,7 @@ async def test_private_buffer_store_finalize_wakes_deadline_waiter():
     assert routes._wait_private_buffer_deadline.__module__ == "api.routes"
 ```
 
-- [ ] **步骤 4：加厚 route 级 shrink 测试**
+- [x] **步骤 4：加厚 route 级 shrink 测试**
 
 在 `tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds`
 中把第一段 fake sleep 的手动释放改成由 deadline change 主动取消旧 sleep。红灯阶段只需要加入断言：
@@ -219,7 +219,7 @@ async def test_private_buffer_store_finalize_wakes_deadline_waiter():
 
 红灯阶段保留 `release_first_sleep.set()` 之后的旧测试收尾，保证当前实现会因为没有主动取消旧 sleep 而失败。
 
-- [ ] **步骤 5：运行红灯测试**
+- [x] **步骤 5：运行红灯测试**
 
 运行：
 
@@ -229,7 +229,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split
 
 预期：失败原因是 `PrivateBufferStore.wait_until_deadline` 和父模块 `_wait_private_buffer_deadline` 不存在。
 
-- [ ] **步骤 6：运行 route 红灯**
+- [x] **步骤 6：运行 route 红灯**
 
 运行：
 
@@ -241,7 +241,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：当前实现不会主动取消旧 sleep，测试失败。
 
-- [ ] **步骤 7：提交红灯测试**
+- [x] **步骤 7：提交红灯测试**
 
 运行：
 
@@ -520,3 +520,14 @@ git commit -m "docs(计划): 收口私聊缓冲唤醒"
 ## 验证记录
 
 执行过程中把每条命令、退出状态和结果摘要记录在这里。
+
+- 2026-06-23 任务 1 红灯测试：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py -v`
+  退出码 1，7 项收集，4 passed / 3 failed；失败均为预期红灯：
+  `api.routes._wait_private_buffer_deadline` 缺失、
+  `PrivateBufferStore.wait_until_deadline` 缺失。
+- 2026-06-23 任务 1 route 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds -v`
+  首次运行暴露测试补丁变量位置错误，修正后重跑退出码 1；
+  失败原因为 `old_sleep_cancelled.wait()` 超时，证明当前实现不会在 follower
+  缩短 deadline 后主动取消旧 sleep。

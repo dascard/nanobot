@@ -1222,6 +1222,7 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
     second_sleep_started = asyncio.Event()
     release_first_sleep = asyncio.Event()
     release_second_sleep = asyncio.Event()
+    old_sleep_cancelled = asyncio.Event()
     real_sleep = asyncio.sleep
 
     async def fake_sleep(_delay):
@@ -1229,7 +1230,11 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
         if not first_sleep_started.is_set():
             first_sleep_started.set()
             await real_sleep(0)
-            await release_first_sleep.wait()
+            try:
+                await release_first_sleep.wait()
+            except asyncio.CancelledError:
+                old_sleep_cancelled.set()
+                raise
             # 第一轮被外部提前释放——不推进时间，让 while 循环以当前 fake_now 重新计算 remaining
         else:
             second_sleep_started.set()
@@ -1263,6 +1268,13 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
     await real_sleep(0)
     assert _private_buffers["u-shrink"]["window_seconds"] == 5.0
     assert _private_buffers["u-shrink"]["deadline"] == 8.0
+    try:
+        await asyncio.wait_for(old_sleep_cancelled.wait(), timeout=1)
+    except Exception:
+        release_first_sleep.set()
+        release_second_sleep.set()
+        await asyncio.gather(task1, task2, return_exceptions=True)
+        raise
     release_first_sleep.set()
 
     await second_sleep_started.wait()
