@@ -43,6 +43,7 @@ from api import (
     chat_response_contract,
     chat_runtime_facade,
     chat_streaming_helpers,
+    chat_streaming_result,
 )
 from api.common_auth import verify_token
 from api.evolution_routes import (
@@ -884,6 +885,32 @@ async def proxy_chat(
         runner_task = asyncio.create_task(runner())
         heartbeat_interval = 5
         coalescer = chat_streaming_helpers.StreamEventCoalescer()
+        from core.daily_digest import push_envelope_to_qq
+
+        stream_result_callbacks = chat_streaming_result.ChatStreamResultCallbacks(
+            drain_stream_queue_until_task_done=chat_streaming_helpers.drain_stream_queue_until_task_done,
+            pop_bridge_reply_meta=_pop_bridge_reply_meta,
+            private_prompt_audit_failure_meta=_private_prompt_audit_failure_meta,
+            finalize_private_buffer=_finalize_private_buffer,
+            persist_chat_turn=_persist_chat_turn,
+            expand_chat_transport_answer=_expand_chat_transport_answer,
+            build_chat_push_envelope=_build_chat_push_envelope,
+            push_envelope_to_qq=push_envelope_to_qq,
+        )
+        stream_result_context = chat_streaming_result.ChatStreamResultContext(
+            req=req,
+            persist_req=persist_req,
+            bridge=bridge,
+            result_holder=result_holder,
+            runner_task=runner_task,
+            stream_queue=stream_queue,
+            platform=platform,
+            bridge_meta=bridge_meta,
+            guardrail_status=guardrail_status,
+            private_timing_meta=private_timing_meta,
+            empty_assistant_placeholder=EMPTY_ASSISTANT_PLACEHOLDER,
+            callbacks=stream_result_callbacks,
+        )
 
         async def _yield_queue_event(raw_event: Any):
             events = chat_streaming_helpers.collect_ready_stream_events(
@@ -895,109 +922,18 @@ async def proxy_chat(
             for event in events:
                 yield _chat_sse_data(event)
 
-        async def _drain_stream_queue_until_runner_done() -> None:
-            await chat_streaming_helpers.drain_stream_queue_until_task_done(
-                stream_queue,
-                runner_task,
-            )
-
         async def _persist_stream_result_after_runner_done(
             *,
             push: bool,
             persist_db: Session | None = None,
             drain_stream: bool = False,
         ) -> None:
-            drain_task = (
-                asyncio.create_task(_drain_stream_queue_until_runner_done())
-                if drain_stream else None
+            await chat_streaming_result.persist_stream_result_after_runner_done(
+                stream_result_context,
+                push=push,
+                persist_db=persist_db,
+                drain_stream=drain_stream,
             )
-            try:
-                await runner_task
-                if drain_task is not None:
-                    await drain_task
-                final_answer = EMPTY_ASSISTANT_PLACEHOLDER
-                assistant_meta = None
-                assistant_processed = None
-                should_push = False
-
-                if "error" in result_holder:
-                    err_msg = str(result_holder.get("error") or "unknown")
-                    logger.error(
-                        f"[/chat] Stream-aborted runner failed: "
-                        f"user={req.user_id}, session={req.session_id}, error={err_msg}"
-                    )
-                else:
-                    private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
-                    if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
-                        assistant_meta = _private_prompt_audit_failure_meta()
-                        assistant_processed = 1
-                    else:
-                        answer = str(result_holder.get("answer") or "")
-                        if answer.strip():
-                            final_answer = answer
-                            should_push = push
-
-                await _finalize_private_buffer(req.user_id, final_answer)
-
-                def _write(db_for_write: Session) -> None:
-                    _persist_chat_turn(
-                        db_for_write,
-                        persist_req,
-                        final_answer,
-                        guardrail_status,
-                        assistant_meta=assistant_meta,
-                        assistant_processed=assistant_processed,
-                        timing_meta=private_timing_meta,
-                    )
-
-                if persist_db is not None:
-                    _write(persist_db)
-                else:
-                    from core.uow import UnitOfWork
-
-                    with UnitOfWork() as uow:
-                        if uow.db is None:
-                            raise RuntimeError("UnitOfWork session is not open")
-                        _write(uow.db)
-
-                if should_push:
-                    from core.daily_digest import push_envelope_to_qq
-
-                    # 推送前展开图片 token（禁用 base64，避免推送大负载）
-                    push_answer = final_answer
-                    try:
-                        push_answer = _expand_chat_transport_answer(final_answer)
-                    except Exception:
-                        pass
-
-                    push_payload = _build_chat_push_envelope(
-                        req,
-                        answer=push_answer,
-                        platform=platform,
-                        chat_type=str(bridge_meta.get("chat_type") or ""),
-                        is_group=bool(bridge_meta.get("is_group")),
-                    )
-                    ok = await push_envelope_to_qq(
-                        push_payload.target_type,
-                        push_payload.target_id,
-                        push_payload.envelope,
-                    )
-                    if ok:
-                        logger.info(
-                            f"[/chat] Stream-aborted result pushed: "
-                            f"user={req.user_id}, len={len(final_answer)}"
-                        )
-                    else:
-                        logger.error(
-                            f"[/chat] Stream-aborted result push failed: "
-                            f"user={req.user_id}, session={req.session_id}, len={len(final_answer)}"
-                        )
-            except Exception as e:
-                logger.error(f"[/chat] Background finish failed: {e}")
-            finally:
-                if drain_task is not None and not drain_task.done():
-                    drain_task.cancel()
-                    await asyncio.gather(drain_task, return_exceptions=True)
 
         try:
             while True:

@@ -626,7 +626,7 @@ git commit -m "refactor(普通API): 增加流式结果收尾助手"
 - 修改：`api/routes.py`
 - 修改：`.Codex/plans/api-chat-streaming-result-split.md`
 
-- [ ] **步骤 1：导入新模块**
+- [x] **步骤 1：导入新模块**
 
 在 `api/routes.py` 的 `from api import (...)` 导入列表中加入：
 
@@ -634,7 +634,7 @@ git commit -m "refactor(普通API): 增加流式结果收尾助手"
 chat_streaming_result,
 ```
 
-- [ ] **步骤 2：构造 callbacks 与 context**
+- [x] **步骤 2：构造 callbacks 与 context**
 
 在 `_stream_chat()` 创建 `runner_task`、`heartbeat_interval` 和 `coalescer` 后，增加：
 
@@ -672,7 +672,7 @@ chat_streaming_result,
 - late import `push_envelope_to_qq` 保持与旧逻辑相同的导入时机。
 - `_persist_chat_turn` 和其他父模块 facade 在请求执行时注入，继续兼容 monkeypatch。
 
-- [ ] **步骤 3：替换局部收尾函数**
+- [x] **步骤 3：替换局部收尾函数**
 
 将 `_persist_stream_result_after_runner_done()` 的主体替换为委托：
 
@@ -693,7 +693,7 @@ chat_streaming_result,
 
 删除旧局部函数中的落库、`UnitOfWork`、push envelope、异常吞吐和 drain task cleanup 代码。
 
-- [ ] **步骤 4：运行 streaming result 定向绿灯**
+- [x] **步骤 4：运行 streaming result 定向绿灯**
 
 运行：
 
@@ -712,7 +712,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 5：运行 streaming 相邻回归**
+- [x] **步骤 5：运行 streaming 相邻回归**
 
 运行：
 
@@ -732,7 +732,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 6：静态检查和行数记录**
+- [x] **步骤 6：静态检查和行数记录**
 
 运行：
 
@@ -751,7 +751,7 @@ git diff --check -- api/routes.py api/chat_streaming_result.py tests/test_api_ch
 - `api/routes.py` 行数下降。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 7：提交父模块接入**
+- [x] **步骤 7：提交父模块接入**
 
 ```bash
 git add api/routes.py .Codex/plans/api-chat-streaming-result-split.md
@@ -862,3 +862,18 @@ git commit -m "docs(计划): 收口流式结果收尾拆分"
   无输出，退出码 0。
 - 2026-06-23 任务 2 提交：
   随本次 `refactor(普通API): 增加流式结果收尾助手` 提交。
+- 2026-06-23 任务 3 streaming result 定向：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/test_api_chat_streaming_result_split.py tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send -v`
+  退出码 0，`8 passed, 1 warning`。
+- 2026-06-23 任务 3 streaming 相邻回归：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/test_streaming_api.py tests/test_streaming_response_envelope.py tests/test_api_chat_streaming_helpers_split.py tests/test_api_chat_push_envelope_split.py tests/test_chat_response_envelope.py tests/test_asyncio_run_policy.py -v`
+  退出码 0，`27 passed, 21 warnings in 8.81s`。
+- 2026-06-23 任务 3 静态检查：
+  `python -m compileall api/routes.py api/chat_streaming_result.py -q` 退出码 0。
+  `wc -l api/routes.py api/chat_streaming_result.py tests/test_api_chat_streaming_result_split.py`
+  输出 `1163 api/routes.py`、`164 api/chat_streaming_result.py`、
+  `237 tests/test_api_chat_streaming_result_split.py`。
+  `git diff --check -- api/routes.py api/chat_streaming_result.py tests/test_api_chat_streaming_result_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_sticker_media_routes_split.py .Codex/plans/api-chat-streaming-result-split.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 3 提交：
+  随本次 `refactor(普通API): 接入流式结果收尾助手` 提交。
