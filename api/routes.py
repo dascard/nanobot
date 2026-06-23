@@ -27,6 +27,7 @@ from core.database import (
 from core.evolution import evolution_task
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from core.moderation import check_message_moderation_db
+from core import user_block_rules
 from nanobot_kt.bridge import get_bridge
 from clients.classifier_client import get_guardrail, get_timing_gate
 from app.group_ingress import helpers as group_ingress_helpers
@@ -258,19 +259,12 @@ def _get_group_talk_value(session_id: str) -> float:
 def _check_user_blocked(db, user_id: str, target_type: str = "private", group_id: str = "") -> bool:
     """检查用户是否被屏蔽——命中规则时返回 True。"""
     try:
-        from core.database import UserBlockRule
-        from core.group_runtime.ids import normalize_group_session_id
-        rules = db.query(UserBlockRule).filter(
-            UserBlockRule.user_id == user_id,
-            UserBlockRule.enabled == 1,
-        ).all()
-        norm_group = normalize_group_session_id(group_id) if group_id else ""
-        for r in rules:
-            if r.target_type in (target_type, "all"):
-                if r.target_type == "group" and r.group_id:
-                    if norm_group and normalize_group_session_id(r.group_id) != norm_group:
-                        continue
-                return True
+        return user_block_rules.is_user_blocked(
+            db,
+            user_id,
+            target_type=target_type,
+            group_id=group_id,
+        )
     except Exception as e:
         logger.warning("[BlockRule] check failed user=%s group=%s: %s", user_id, group_id, e)
     return False

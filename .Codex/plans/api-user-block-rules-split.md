@@ -504,7 +504,7 @@ git commit -m "refactor(普通API): 增加用户屏蔽规则助手"
 - 修改：`app/group_ingress/helpers.py`
 - 修改：`.Codex/plans/api-user-block-rules-split.md`
 
-- [ ] **步骤 1：接入 `api.routes` wrapper**
+- [x] **步骤 1：接入 `api.routes` wrapper**
 
 在 `api/routes.py` 的 `from api import (...)` 后增加：
 
@@ -531,7 +531,7 @@ def _check_user_blocked(db, user_id: str, target_type: str = "private", group_id
 
 保留函数名、参数、日志和返回值。
 
-- [ ] **步骤 2：接入群聊 helper wrapper**
+- [x] **步骤 2：接入群聊 helper wrapper**
 
 在 `app/group_ingress/helpers.py` 顶部导入区增加：
 
@@ -557,7 +557,7 @@ def check_user_blocked(db, user_id: str, target_type: str = "private", group_id:
 
 同时删除该函数内部不再需要的局部 `UserBlockRule` 导入。
 
-- [ ] **步骤 3：运行定向绿灯**
+- [x] **步骤 3：运行定向绿灯**
 
 运行：
 
@@ -572,7 +572,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 4：运行相邻回归**
+- [x] **步骤 4：运行相邻回归**
 
 运行：
 
@@ -592,7 +592,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 5：静态检查和行数记录**
+- [x] **步骤 5：静态检查和行数记录**
 
 运行：
 
@@ -608,7 +608,7 @@ git diff --check -- api/routes.py app/group_ingress/helpers.py core/user_block_r
 - `api/routes.py` 行数下降。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 6：提交 wrapper 接入**
+- [x] **步骤 6：提交 wrapper 接入**
 
 ```bash
 git add api/routes.py app/group_ingress/helpers.py .Codex/plans/api-user-block-rules-split.md
@@ -721,3 +721,19 @@ git commit -m "docs(计划): 收口用户屏蔽规则拆分"
   输出 `53 core/user_block_rules.py`、`224 tests/test_user_block_rules.py`。
 - 2026-06-23 任务 2 提交：
   随本次 `refactor(普通API): 增加用户屏蔽规则助手` 提交。
+- 2026-06-23 任务 3 定向绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_user_block_rules.py tests/test_api.py::test_group_message_blocked_user_returns_no_reply_and_skips_runtime -v`
+  退出码 0，`12 passed, 1 warning`。
+- 2026-06-23 任务 3 相邻回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_admin_api.py::TestBlockRule::test_create_and_list tests/test_admin_api.py::TestBlockRule::test_toggle_enabled tests/test_admin_api.py::TestPrivateBlockFlow::test_blocked_user_chat_writes_log_with_files tests/test_api_group_message_routes_split.py::test_api_group_message_route_does_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api.py::test_group_ingress_service_does_not_import_api_routes tests/test_asyncio_run_policy.py -v`
+  退出码 0，`9 passed, 1 warning`。
+- 2026-06-23 任务 3 静态检查：
+  `python -m compileall api/routes.py app/group_ingress/helpers.py core/user_block_rules.py -q`
+  退出码 0。
+  `wc -l api/routes.py app/group_ingress/helpers.py core/user_block_rules.py tests/test_user_block_rules.py`
+  输出 `1227 api/routes.py`、`644 app/group_ingress/helpers.py`、
+  `53 core/user_block_rules.py`、`224 tests/test_user_block_rules.py`。
+  `git diff --check -- api/routes.py app/group_ingress/helpers.py core/user_block_rules.py tests/test_user_block_rules.py tests/test_api.py .Codex/plans/api-user-block-rules-split.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 3 提交：
+  随本次 `refactor(普通API): 接入用户屏蔽规则助手` 提交。
