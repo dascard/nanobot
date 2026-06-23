@@ -33,6 +33,7 @@ from app.group_ingress import helpers as group_ingress_helpers
 from api import (
     chat_content_helpers,
     chat_guardrail_facade,
+    chat_media_precache,
     chat_persistence,
     chat_persona_context,
     chat_private_buffer,
@@ -231,16 +232,12 @@ def _schedule_image_precache(
     source_type: str,
     source_name_prefix: str,
 ) -> None:
-    normalized_files = _normalize_files(files)
-    if not normalized_files or background_tasks is None:
-        return
-    from nanobot_kt.image_pipeline import precache_image_sources
-
-    background_tasks.add_task(
-        precache_image_sources,
-        normalized_files,
+    return chat_media_precache.schedule_image_precache(
+        background_tasks,
+        files,
         source_type=source_type,
         source_name_prefix=source_name_prefix,
+        normalize_files=_normalize_files,
     )
 
 

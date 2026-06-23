@@ -278,7 +278,7 @@ git commit -m "refactor(普通API): 增加聊天图片预缓存助手"
 **文件：**
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：导入新模块**
+- [x] **步骤 1：导入新模块**
 
 在 `from api import (...)` 中加入：
 
@@ -286,7 +286,7 @@ git commit -m "refactor(普通API): 增加聊天图片预缓存助手"
     chat_media_precache,
 ```
 
-- [ ] **步骤 2：替换 `_schedule_image_precache()` 实现**
+- [x] **步骤 2：替换 `_schedule_image_precache()` 实现**
 
 把原函数体替换为：
 
@@ -309,7 +309,7 @@ def _schedule_image_precache(
 
 保留函数名、参数和 `proxy_chat()` 调用点。
 
-- [ ] **步骤 3：运行定向绿灯**
+- [x] **步骤 3：运行定向绿灯**
 
 运行：
 
@@ -321,7 +321,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_media_precache_split
 
 - 全部通过。
 
-- [ ] **步骤 4：运行相邻回归**
+- [x] **步骤 4：运行相邻回归**
 
 运行：
 
@@ -329,7 +329,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_media_precache_split
 python -B -m pytest -p no:cacheprovider \
   tests/test_api_chat_helpers_split.py::test_legacy_parent_chat_helper_wrappers_keep_api_routes_module \
   tests/test_api_chat_runtime_facade_split.py::test_chat_runtime_facade_uses_api_routes_get_bridge_patch_point \
-  tests/test_api_chat_runtime_facade_split.py::test_chat_runtime_facade_split_keeps_proxy_chat_in_parent_routes \
+  tests/test_api_chat_runtime_facade_split.py::test_chat_runtime_facade_uses_routes_multimodal_wrapper \
   tests/test_asyncio_run_policy.py \
   -v
 ```
@@ -338,7 +338,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 5：静态检查**
+- [x] **步骤 5：静态检查**
 
 运行：
 
@@ -354,7 +354,7 @@ git diff --check -- api/routes.py api/chat_media_precache.py tests/test_api_chat
 - `api/routes.py` 行数下降。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 6：提交父模块接入**
+- [x] **步骤 6：提交父模块接入**
 
 ```bash
 git add api/routes.py .Codex/plans/api-chat-media-precache-split.md
@@ -456,3 +456,24 @@ git commit -m "docs(计划): 收口聊天图片预缓存拆分"
   父模块 `_schedule_image_precache()` 仍执行旧实现，符合新模块已实现但父模块尚未接入的阶段预期。
 - 2026-06-23 任务 2 提交：
   随本次 `refactor(普通API): 增加聊天图片预缓存助手` 提交。
+- 2026-06-23 任务 3 定向绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_media_precache_split.py -v`
+  退出码 0，`4 passed, 1 warning`。
+- 2026-06-23 任务 3 相邻回归命令修正：
+  计划原命令中的
+  `tests/test_api_chat_runtime_facade_split.py::test_chat_runtime_facade_split_keeps_proxy_chat_in_parent_routes`
+  在当前测试文件中不存在，pytest 收集阶段退出码 4。实际相邻回归改用同文件真实存在的
+  `test_chat_runtime_facade_uses_routes_multimodal_wrapper`，覆盖父模块 `/chat`
+  wrapper patch point。
+- 2026-06-23 任务 3 相邻回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_helpers_split.py::test_legacy_parent_chat_helper_wrappers_keep_api_routes_module tests/test_api_chat_runtime_facade_split.py::test_chat_runtime_facade_uses_api_routes_get_bridge_patch_point tests/test_api_chat_runtime_facade_split.py::test_chat_runtime_facade_uses_routes_multimodal_wrapper tests/test_asyncio_run_policy.py -v`
+  退出码 0，`6 passed, 21 warnings`。
+- 2026-06-23 任务 3 静态检查：
+  `python -m compileall api/routes.py api/chat_media_precache.py -q` 退出码 0。
+  `wc -l api/routes.py api/chat_media_precache.py tests/test_api_chat_media_precache_split.py`
+  输出 `1233 api/routes.py`、`34 api/chat_media_precache.py`、
+  `115 tests/test_api_chat_media_precache_split.py`。
+  `git diff --check -- api/routes.py api/chat_media_precache.py tests/test_api_chat_media_precache_split.py .Codex/plans/api-chat-media-precache-split.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 3 提交：
+  随本次 `refactor(普通API): 接入聊天图片预缓存助手` 提交。
