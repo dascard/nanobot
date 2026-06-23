@@ -210,7 +210,7 @@ git commit -m "test(普通API): 锁定聊天图片预缓存契约"
 **文件：**
 - 创建：`api/chat_media_precache.py`
 
-- [ ] **步骤 1：创建新模块**
+- [x] **步骤 1：创建新模块**
 
 创建 `api/chat_media_precache.py`：
 
@@ -251,7 +251,7 @@ def schedule_image_precache(
     )
 ```
 
-- [ ] **步骤 2：运行新模块阶段测试**
+- [x] **步骤 2：运行新模块阶段测试**
 
 运行：
 
@@ -264,7 +264,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_media_precache_split
 - 新模块源码扫描和行为测试通过。
 - 父模块 wrapper 委托测试仍失败，因为 `api.routes` 尚未导入并委托新模块。
 
-- [ ] **步骤 3：提交新模块**
+- [x] **步骤 3：提交新模块**
 
 ```bash
 git add api/chat_media_precache.py .Codex/plans/api-chat-media-precache-split.md
@@ -448,3 +448,11 @@ git commit -m "docs(计划): 收口聊天图片预缓存拆分"
   `ModuleNotFoundError: No module named 'api.chat_media_precache'`，符合红灯预期。
 - 2026-06-23 任务 1 提交：
   随本次 `test(普通API): 锁定聊天图片预缓存契约` 提交。
+- 2026-06-23 任务 2 新模块阶段验证：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_media_precache_split.py -v`
+  退出码 1，`1 failed, 3 passed, 1 warning`。新模块源码扫描、no-op
+  和 `add_task()` 行为测试通过；唯一失败为
+  `test_parent_media_precache_wrapper_remains_in_routes_and_delegates`，
+  父模块 `_schedule_image_precache()` 仍执行旧实现，符合新模块已实现但父模块尚未接入的阶段预期。
+- 2026-06-23 任务 2 提交：
+  随本次 `refactor(普通API): 增加聊天图片预缓存助手` 提交。
