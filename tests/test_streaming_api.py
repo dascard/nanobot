@@ -227,9 +227,12 @@ def test_stream_chat_normalizes_final_replace_before_done(client):
     assert events[done_index]["answer"] == "最终"
 
 
-def test_stream_chat_uses_bounded_stream_queue(client):
+def test_stream_chat_uses_bounded_stream_queue(client, monkeypatch):
     from unittest.mock import patch
 
+    from api import routes
+
+    monkeypatch.setattr(routes, "CHAT_STREAM_QUEUE_MAXSIZE", 7, raising=False)
     captured = {}
 
     async def fake_handle_message(*args, **kwargs):
@@ -254,4 +257,4 @@ def test_stream_chat_uses_bounded_stream_queue(client):
 
     assert response.status_code == 200
     assert '"status": "done"' in body
-    assert captured["maxsize"] > 0
+    assert captured["maxsize"] == 7

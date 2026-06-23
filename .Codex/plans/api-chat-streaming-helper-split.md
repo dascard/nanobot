@@ -65,7 +65,7 @@
 - 修改：`tests/test_api_group_message_routes_split.py`
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 1：编写 helper 契约测试**
+- [x] **步骤 1：编写 helper 契约测试**
 
 在 `tests/test_api_chat_streaming_helpers_split.py` 写入：
 
@@ -194,7 +194,7 @@ async def test_drain_stream_queue_until_task_done_drains_bounded_queue():
     assert queue.empty()
 ```
 
-- [ ] **步骤 2：将新模块加入普通 API split 扫描清单**
+- [x] **步骤 2：将新模块加入普通 API split 扫描清单**
 
 在以下 4 个文件的 `path` tuple 中追加：
 
@@ -209,7 +209,7 @@ async def test_drain_stream_queue_until_task_done_drains_bounded_queue():
 - `tests/test_api_group_message_routes_split.py`
 - `tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 3：收紧 streaming queue maxsize 行为测试**
+- [x] **步骤 3：收紧 streaming queue maxsize 行为测试**
 
 在 `tests/test_streaming_api.py::test_stream_chat_uses_bounded_stream_queue` 中加入 `monkeypatch` 参数，导入 `api.routes`，并把断言改为精确值：
 
@@ -225,7 +225,7 @@ def test_stream_chat_uses_bounded_stream_queue(client, monkeypatch):
     assert captured["maxsize"] == 7
 ```
 
-- [ ] **步骤 4：运行 helper 红灯测试**
+- [x] **步骤 4：运行 helper 红灯测试**
 
 运行：
 
@@ -235,7 +235,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_streaming_helpers_sp
 
 预期：失败，原因是 `api/chat_streaming_helpers.py` 尚不存在。
 
-- [ ] **步骤 5：运行扫描红灯测试**
+- [x] **步骤 5：运行扫描红灯测试**
 
 运行：
 
@@ -564,6 +564,12 @@ git commit -m "docs(计划): 收口聊天流式助手拆分"
 
 ## 验证记录
 
+- 红灯测试：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_streaming_helpers_split.py -v`
+  - 结果：6 failed、1 warning；失败原因是 `api/chat_streaming_helpers.py` 不存在，符合预期红灯。
+- 扫描红灯：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  - 结果：4 failed、1 warning；失败原因是扫描清单中的 `api/chat_streaming_helpers.py` 不存在，符合预期红灯。
 - 计划文档自检：
   - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-streaming-helper-split.md`
   - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。
