@@ -281,7 +281,7 @@ git commit -m "test(普通API): 锁定聊天 SSE 循环契约"
 - 创建：`api/chat_sse_loop.py`
 - 修改：`.Codex/plans/api-chat-sse-loop-split.md`
 
-- [ ] **步骤 1：创建新模块**
+- [x] **步骤 1：创建新模块**
 
 创建 `api/chat_sse_loop.py`：
 
@@ -388,7 +388,7 @@ async def iter_chat_stream_events(
         yield pending_delta
 ```
 
-- [ ] **步骤 2：运行新模块定向测试**
+- [x] **步骤 2：运行新模块定向测试**
 
 运行：
 
@@ -402,7 +402,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_sse_loop_split.py -v
 - 新模块行为测试通过。
 - 父模块接入测试仍失败，因为 `api/routes.py` 尚未委托新 loop。
 
-- [ ] **步骤 3：静态检查**
+- [x] **步骤 3：静态检查**
 
 运行：
 
@@ -419,7 +419,7 @@ git diff --check -- api/chat_sse_loop.py tests/test_api_chat_sse_loop_split.py \
 - `compileall` 退出码 0。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 4：提交新模块**
+- [x] **步骤 4：提交新模块**
 
 ```bash
 git add api/chat_sse_loop.py .Codex/plans/api-chat-sse-loop-split.md
@@ -656,3 +656,13 @@ git commit -m "docs(计划): 收口聊天 SSE 循环拆分"
   `api.chat_sse_loop` 无法导入，以及父模块尚未委托新 loop，符合红灯预期。
 - 2026-06-23 任务 1 提交：
   随本次 `test(普通API): 锁定聊天 SSE 循环契约` 提交。
+- 2026-06-23 任务 2 新模块定向：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/test_api_chat_sse_loop_split.py -v`
+  退出码 1，`1 failed, 4 passed, 1 warning`。4 个新模块行为测试通过，
+  唯一失败为父模块尚未导入并委托 `chat_sse_loop`，符合本阶段预期。
+- 2026-06-23 任务 2 静态检查：
+  `python -m compileall api/chat_sse_loop.py -q` 退出码 0。
+  `git diff --check -- api/chat_sse_loop.py tests/test_api_chat_sse_loop_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_sticker_media_routes_split.py .Codex/plans/api-chat-sse-loop-split.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 2 提交：
+  随本次 `refactor(普通API): 增加聊天 SSE 循环助手` 提交。
