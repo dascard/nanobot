@@ -391,7 +391,7 @@ git commit -m "test(普通API): 锁定流式结果收尾契约"
 - 创建：`api/chat_streaming_result.py`
 - 修改：`.Codex/plans/api-chat-streaming-result-split.md`
 
-- [ ] **步骤 1：创建新模块**
+- [x] **步骤 1：创建新模块**
 
 创建 `api/chat_streaming_result.py`：
 
@@ -562,7 +562,7 @@ async def persist_stream_result_after_runner_done(
             await asyncio.gather(drain_task, return_exceptions=True)
 ```
 
-- [ ] **步骤 2：运行新模块定向测试**
+- [x] **步骤 2：运行新模块定向测试**
 
 运行：
 
@@ -576,7 +576,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_streaming_result_spl
 - 新模块单测通过。
 - split 扫描修改后的跨文件测试也应在下一步单独运行。
 
-- [ ] **步骤 3：运行 split 扫描绿灯**
+- [x] **步骤 3：运行 split 扫描绿灯**
 
 运行：
 
@@ -594,7 +594,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 4：静态检查**
+- [x] **步骤 4：静态检查**
 
 运行：
 
@@ -611,7 +611,7 @@ git diff --check -- api/chat_streaming_result.py tests/test_api_chat_streaming_r
 - `compileall` 退出码 0。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 5：提交新模块**
+- [x] **步骤 5：提交新模块**
 
 ```bash
 git add api/chat_streaming_result.py .Codex/plans/api-chat-streaming-result-split.md
@@ -850,3 +850,15 @@ git commit -m "docs(计划): 收口流式结果收尾拆分"
   无法导入，符合红灯预期。
 - 2026-06-23 任务 1 提交：
   随本次 `test(普通API): 锁定流式结果收尾契约` 提交。
+- 2026-06-23 任务 2 新模块定向：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/test_api_chat_streaming_result_split.py -v`
+  退出码 0，`4 passed, 1 warning`。
+- 2026-06-23 任务 2 split 扫描：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  退出码 0，`4 passed, 1 warning`。
+- 2026-06-23 任务 2 静态检查：
+  `python -m compileall api/chat_streaming_result.py -q` 退出码 0。
+  `git diff --check -- api/chat_streaming_result.py tests/test_api_chat_streaming_result_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_sticker_media_routes_split.py .Codex/plans/api-chat-streaming-result-split.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 2 提交：
+  随本次 `refactor(普通API): 增加流式结果收尾助手` 提交。
