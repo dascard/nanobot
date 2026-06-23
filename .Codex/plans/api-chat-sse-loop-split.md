@@ -434,7 +434,7 @@ git commit -m "refactor(普通API): 增加聊天 SSE 循环助手"
 - 修改：`api/routes.py`
 - 修改：`.Codex/plans/api-chat-sse-loop-split.md`
 
-- [ ] **步骤 1：导入新模块**
+- [x] **步骤 1：导入新模块**
 
 在 `api/routes.py` 的 `from api import (...)` 导入列表中加入：
 
@@ -442,7 +442,7 @@ git commit -m "refactor(普通API): 增加聊天 SSE 循环助手"
 chat_sse_loop,
 ```
 
-- [ ] **步骤 2：构造 SSE callbacks**
+- [x] **步骤 2：构造 SSE callbacks**
 
 在 `_stream_chat()` 内创建 `coalescer` 后增加：
 
@@ -452,7 +452,7 @@ sse_loop_callbacks = chat_sse_loop.ChatSseLoopCallbacks(
 )
 ```
 
-- [ ] **步骤 3：替换手写 SSE 主循环**
+- [x] **步骤 3：替换手写 SSE 主循环**
 
 删除 `_yield_queue_event()` 局部函数，以及从 `while True:` 到 `pending_delta` flush 的手写 loop，替换为：
 
@@ -469,7 +469,7 @@ sse_loop_callbacks = chat_sse_loop.ChatSseLoopCallbacks(
 
 保留后续 `if "error" in result_holder:`、success done、audit、error 和 `finally` 分支不变。
 
-- [ ] **步骤 4：运行 SSE loop split 绿灯**
+- [x] **步骤 4：运行 SSE loop split 绿灯**
 
 运行：
 
@@ -482,7 +482,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_sse_loop_split.py -v
 
 - 全部通过。
 
-- [ ] **步骤 5：运行 split 扫描绿灯**
+- [x] **步骤 5：运行 split 扫描绿灯**
 
 运行：
 
@@ -500,7 +500,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 6：运行 streaming 相邻回归**
+- [x] **步骤 6：运行 streaming 相邻回归**
 
 运行：
 
@@ -520,7 +520,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 7：运行断连路径回归**
+- [x] **步骤 7：运行断连路径回归**
 
 运行：
 
@@ -538,7 +538,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 8：静态检查和行数记录**
+- [x] **步骤 8：静态检查和行数记录**
 
 运行：
 
@@ -557,7 +557,7 @@ git diff --check -- api/routes.py api/chat_sse_loop.py tests/test_api_chat_sse_l
 - `api/routes.py` 行数下降。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 9：提交父模块接入**
+- [x] **步骤 9：提交父模块接入**
 
 ```bash
 git add api/routes.py .Codex/plans/api-chat-sse-loop-split.md
@@ -666,3 +666,17 @@ git commit -m "docs(计划): 收口聊天 SSE 循环拆分"
   无输出，退出码 0。
 - 2026-06-23 任务 2 提交：
   随本次 `refactor(普通API): 增加聊天 SSE 循环助手` 提交。
+- 2026-06-23 任务 3 父模块接入组合回归：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/test_api_chat_sse_loop_split.py tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_streaming_api.py tests/test_streaming_response_envelope.py tests/test_api_chat_streaming_helpers_split.py tests/test_api_chat_streaming_result_split.py tests/test_chat_response_envelope.py tests/test_asyncio_run_policy.py tests/test_api.py::test_stream_disconnect_background_push_uses_result_holder tests/test_api.py::test_stream_disconnect_drains_bounded_queue_for_background_runner tests/test_api.py::test_stream_disconnect_after_runner_done_persists_result_holder tests/test_api.py::test_stream_disconnect_prompt_v2_audit_failure_is_no_send -v`
+  退出码 0，`39 passed, 21 warnings in 9.63s`。覆盖 SSE loop split、
+  split 模块扫描、streaming 相邻回归、`asyncio.run` 策略和断连路径回归。
+- 2026-06-23 任务 3 静态检查和行数：
+  `python -m compileall api/routes.py api/chat_sse_loop.py -q` 退出码 0。
+  `wc -l api/routes.py api/chat_sse_loop.py tests/test_api_chat_sse_loop_split.py`
+  输出 `1121 api/routes.py`、`100 api/chat_sse_loop.py`、
+  `128 tests/test_api_chat_sse_loop_split.py`。上一提交版本
+  `api/routes.py` 为 1163 行，本阶段减少 42 行。
+  `git diff --check -- api/routes.py api/chat_sse_loop.py tests/test_api_chat_sse_loop_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_sticker_media_routes_split.py .Codex/plans/api-chat-sse-loop-split.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 3 提交：
+  随本次 `refactor(普通API): 接入聊天 SSE 循环助手` 提交。

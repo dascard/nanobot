@@ -42,6 +42,7 @@ from api import (
     chat_request_contract,
     chat_response_contract,
     chat_runtime_facade,
+    chat_sse_loop,
     chat_streaming_helpers,
     chat_streaming_result,
 )
@@ -885,6 +886,9 @@ async def proxy_chat(
         runner_task = asyncio.create_task(runner())
         heartbeat_interval = 5
         coalescer = chat_streaming_helpers.StreamEventCoalescer()
+        sse_loop_callbacks = chat_sse_loop.ChatSseLoopCallbacks(
+            normalize_event=_normalize_chat_stream_event,
+        )
         from core.daily_digest import push_envelope_to_qq
 
         stream_result_callbacks = chat_streaming_result.ChatStreamResultCallbacks(
@@ -912,16 +916,6 @@ async def proxy_chat(
             callbacks=stream_result_callbacks,
         )
 
-        async def _yield_queue_event(raw_event: Any):
-            events = chat_streaming_helpers.collect_ready_stream_events(
-                raw_event,
-                stream_queue,
-                normalize_event=_normalize_chat_stream_event,
-                coalescer=coalescer,
-            )
-            for event in events:
-                yield _chat_sse_data(event)
-
         async def _persist_stream_result_after_runner_done(
             *,
             push: bool,
@@ -936,50 +930,14 @@ async def proxy_chat(
             )
 
         try:
-            while True:
-                if done.is_set() and stream_queue.empty():
-                    break
-                get_task = asyncio.create_task(stream_queue.get())
-                done_task = asyncio.create_task(done.wait())
-                try:
-                    completed, pending = await asyncio.wait(
-                        {get_task, done_task},
-                        timeout=heartbeat_interval,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for pending_task in pending:
-                        pending_task.cancel()
-                    if pending:
-                        await asyncio.gather(*pending, return_exceptions=True)
-                    if not completed:
-                        yield _chat_sse_data({"status": "heartbeat"})
-                        continue
-
-                    if get_task in completed:
-                        async for chunk in _yield_queue_event(get_task.result()):
-                            yield chunk
-                        continue
-
-                    # runner 已完成但没有新事件时，不再等 heartbeat 超时。
-                    if done_task in completed:
-                        break
-                finally:
-                    for task in (get_task, done_task):
-                        if not task.done():
-                            task.cancel()
-                            await asyncio.gather(task, return_exceptions=True)
-
-            await asyncio.sleep(0)
-            while True:
-                try:
-                    event = stream_queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
-                async for chunk in _yield_queue_event(event):
-                    yield chunk
-            pending_delta = coalescer.flush()
-            if pending_delta is not None:
-                yield _chat_sse_data(pending_delta)
+            async for event in chat_sse_loop.iter_chat_stream_events(
+                stream_queue,
+                done,
+                heartbeat_interval=heartbeat_interval,
+                coalescer=coalescer,
+                callbacks=sse_loop_callbacks,
+            ):
+                yield _chat_sse_data(event)
 
             if "error" in result_holder:
                 err_msg = str(result_holder.get("error") or "unknown")
