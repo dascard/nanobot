@@ -354,7 +354,7 @@ git commit -m "refactor(普通API): 增加聊天画像格式化助手"
 **文件：**
 - 修改：`api/routes.py`
 
-- [ ] **步骤 1：导入新模块**
+- [x] **步骤 1：导入新模块**
 
 在 `from api import (...)` 中加入：
 
@@ -362,7 +362,7 @@ git commit -m "refactor(普通API): 增加聊天画像格式化助手"
     chat_persona_context,
 ```
 
-- [ ] **步骤 2：替换 `_format_persona_for_prompt()` 实现**
+- [x] **步骤 2：替换 `_format_persona_for_prompt()` 实现**
 
 把原函数体替换为：
 
@@ -376,7 +376,7 @@ def _format_persona_for_prompt(persona_data: dict, max_chars: int = MAX_PERSONA_
 
 保留函数名和默认参数。不要改 `proxy_chat()` 的调用点。
 
-- [ ] **步骤 3：运行定向绿灯**
+- [x] **步骤 3：运行定向绿灯**
 
 运行：
 
@@ -391,7 +391,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 4：运行相邻回归**
+- [x] **步骤 4：运行相邻回归**
 
 运行：
 
@@ -408,7 +408,7 @@ python -B -m pytest -p no:cacheprovider \
 
 - 全部通过。
 
-- [ ] **步骤 5：静态检查**
+- [x] **步骤 5：静态检查**
 
 运行：
 
@@ -424,7 +424,7 @@ git diff --check -- api/routes.py api/chat_persona_context.py tests/test_api_cha
 - `api/routes.py` 行数下降。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 6：提交父模块接入**
+- [x] **步骤 6：提交父模块接入**
 
 ```bash
 git add api/routes.py .Codex/plans/api-chat-persona-context-split.md
@@ -533,3 +533,18 @@ git commit -m "docs(计划): 收口聊天画像拆分"
   新模块已实现但父模块尚未接入的阶段预期。
 - 2026-06-23 任务 2 提交：
   随本次 `refactor(普通API): 增加聊天画像格式化助手` 提交。
+- 2026-06-23 任务 3 定向绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_context_split.py tests/test_api.py::test_format_persona_facts_without_truncated_json -v`
+  退出码 0，`5 passed, 1 warning`。
+- 2026-06-23 任务 3 相邻回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_facade_split.py tests/test_api.py::test_proxy_chat tests/test_api.py::test_private_prompt_v2_audit_failure_is_not_context_chat tests/test_asyncio_run_policy.py -v`
+  退出码 0，`13 passed, 21 warnings`。
+- 2026-06-23 任务 3 静态检查：
+  `python -m compileall api/routes.py api/chat_persona_context.py -q` 退出码 0。
+  `wc -l api/routes.py api/chat_persona_context.py tests/test_api_chat_persona_context_split.py`
+  输出 `1236 api/routes.py`、`114 api/chat_persona_context.py`、
+  `118 tests/test_api_chat_persona_context_split.py`。
+  `git diff --check -- api/routes.py api/chat_persona_context.py tests/test_api_chat_persona_context_split.py .Codex/plans/api-chat-persona-context-split.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 3 提交：
+  随本次 `refactor(普通API): 接入聊天画像格式化助手` 提交。
