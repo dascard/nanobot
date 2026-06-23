@@ -624,7 +624,7 @@ git commit -m "refactor(普通API): 接入用户屏蔽规则助手"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-user-block-rules-split.md`
 
-- [ ] **步骤 1：更新计划执行记录**
+- [x] **步骤 1：更新计划执行记录**
 
 在本计划底部追加执行记录，至少包含：
 
@@ -635,7 +635,7 @@ git commit -m "refactor(普通API): 接入用户屏蔽规则助手"
 - 全量测试结果。
 - 提交列表。
 
-- [ ] **步骤 2：更新 `docs/todo.md`**
+- [x] **步骤 2：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」中追加第二十二刀进展，记录：
 
@@ -645,7 +645,7 @@ git commit -m "refactor(普通API): 接入用户屏蔽规则助手"
 - 新模块没有反向导入入口模块，也没有同步包装 awaitable。
 - `api/routes.py` 的真实行数变化和验证结果。
 
-- [ ] **步骤 3：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 3：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-23 普通 API 用户屏蔽规则拆分` 小节，包含：
 
@@ -657,7 +657,7 @@ git commit -m "refactor(普通API): 接入用户屏蔽规则助手"
 - 验证记录。
 - 执行约束和下一步建议。
 
-- [ ] **步骤 4：文档自检**
+- [x] **步骤 4：文档自检**
 
 运行：
 
@@ -671,7 +671,7 @@ git diff --check -- .Codex/plans/api-user-block-rules-split.md docs/todo.md docs
 - `rg` 无输出，退出码 1。
 - `git diff --check` 无输出，退出码 0。
 
-- [ ] **步骤 5：最终全量验证**
+- [x] **步骤 5：最终全量验证**
 
 运行：
 
@@ -684,7 +684,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - 0 failures。
 - 记录 passed / skipped / warnings 和耗时。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-user-block-rules-split.md
@@ -737,3 +737,19 @@ git commit -m "docs(计划): 收口用户屏蔽规则拆分"
   无输出，退出码 0。
 - 2026-06-23 任务 3 提交：
   随本次 `refactor(普通API): 接入用户屏蔽规则助手` 提交。
+- 2026-06-23 任务 4 文档更新：
+  已更新 `docs/todo.md`，把 P3 超大文件清单中的 `api/routes.py` 当前行数
+  调整为 1227，并追加第二十二刀用户屏蔽规则拆分进展、行为边界、
+  同步 awaitable 禁止项和验证摘要。已更新 `docs/plan_walkthrough.md`，
+  将当前推进焦点改为用户屏蔽规则拆分完成，并追加本阶段状态、设计文档、
+  实现计划、阶段提交、计划列表、验证记录、执行约束和下一步建议。
+- 2026-06-23 任务 4 最终全量验证：
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  退出码 0，`1754 passed, 6 skipped, 139 warnings in 122.64s`。
+- 2026-06-23 任务 4 文档自检：
+  `rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-user-block-rules-split.md docs/todo.md docs/plan_walkthrough.md`
+  无输出，退出码 1。
+  `git diff --check -- .Codex/plans/api-user-block-rules-split.md docs/todo.md docs/plan_walkthrough.md`
+  无输出，退出码 0。
+- 2026-06-23 任务 4 提交：
+  随本次 `docs(计划): 收口用户屏蔽规则拆分` 提交。

@@ -5,7 +5,7 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-23
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成 Chat Media Precache 拆分，当前为 1233 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成用户屏蔽规则拆分，当前为 1227 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。同日续跑补记：测试 helper 的 `asyncio.Runner` 兼容性问题已随 `cfdd9c2 test(异步): 移除 Runner 测试依赖` 收口，提交前全量回归结果为 `1380 passed, 6 skipped, 139 warnings in 100.75s`，非 vendor Python 代码中无 `asyncio.Runner` 命中。TimingGate scoring 可观测性收尾也已完成：设计提交 `4824036 docs(时机): 设计评分可观测收尾`，计划提交 `2820f7a docs(计划): 记录评分可观测收尾计划`，实现提交 `9d5817c feat(时机): 补齐评分可观测字段`；验证包括红灯 `s_transport_tier` 缺失、绿灯 `1 passed`、相邻回归 `7 passed`、WebUI build 退出码 0、全量回归 `1380 passed, 6 skipped, 139 warnings in 103.22s`。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
@@ -5035,3 +5035,77 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1236。剩余�
 下一步：
 
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1233。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界建议优先评估 block helper（可沉到 `core/user_block_rules.py` 并让私聊和群聊 wrapper 共享），或保守拆 streaming finalizer 小内核；继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
+
+## 2026-06-23 普通 API 用户屏蔽规则拆分
+
+状态：设计、计划、红灯测试、core helper、新旧 wrapper 接入、最终验证和阶段提交均已完成。本阶段把私聊和群聊重复的 `UserBlockRule` 匹配逻辑拆到 `core/user_block_rules.py`，父模块 `api.routes._check_user_blocked()` 和群聊 `app.group_ingress.helpers.check_user_blocked()` 继续作为薄 wrapper。`/chat` block 后只写 ChatLog 并 silent 返回、群聊 block 后 annotate timing event 并返回 `no_reply/user_blocked`、Admin CRUD、DB schema、`rule_mode` / `reason`、Bridge、SSE、push envelope、response envelope 和 `/health` 均保持原位。`api/routes.py` 从 1233 行降至 1227 行；`app/group_ingress/helpers.py` 从 650 行降至 644 行；`core/user_block_rules.py` 为 53 行，拆分测试为 224 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-23-api-user-block-rules-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-user-block-rules-split.md`。
+
+阶段提交：
+
+- 设计提交：`f9309d7 docs(普通API): 设计用户屏蔽规则拆分`。
+- 计划提交：`59c8997 docs(计划): 记录用户屏蔽规则计划`。
+- 红灯测试提交：`8c1a099 test(普通API): 锁定用户屏蔽规则契约`。
+- Core helper 提交：`0e216d9 refactor(普通API): 增加用户屏蔽规则助手`。
+- Wrapper 接入提交：`24b220c refactor(普通API): 接入用户屏蔽规则助手`。
+- 文档收口提交：随本次 `docs(计划): 收口用户屏蔽规则拆分` 完成。
+
+计划列表：
+
+- [x] 确认用户屏蔽规则拆分范围，排除 `/chat` 路由本体、`GroupIngressService` 主流程、Admin CRUD、DB schema、Bridge、SSE、push envelope 和 response envelope 迁移。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API 用户屏蔽规则 split 红灯测试和群聊行为回归并提交。
+- [x] 新增 `core/user_block_rules.py`，锁定 private、group、all、disabled、legacy missing group 和不导入入口模块约束，并提交。
+- [x] 将私聊 `_check_user_blocked()` 与群聊 `check_user_blocked()` 改为委托 core helper 的薄 wrapper，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- Core split 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_user_block_rules.py -v`
+  -> `11 failed, 1 warning`；失败点为 `core/user_block_rules.py` 不存在或无法导入。
+- 群聊行为回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api.py::test_group_message_blocked_user_returns_no_reply_and_skips_runtime -v`
+  -> `1 passed, 1 warning`；旧行为已满足，作为迁移守卫保留。
+- Core helper 阶段：
+  `python -B -m pytest -p no:cacheprovider tests/test_user_block_rules.py -v`
+  -> `2 failed, 9 passed, 1 warning`；core helper 行为通过，两个失败为 wrapper 尚未委托新模块。
+- Wrapper 接入定向绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_user_block_rules.py tests/test_api.py::test_group_message_blocked_user_returns_no_reply_and_skips_runtime -v`
+  -> `12 passed, 1 warning`。
+- 相邻回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_admin_api.py::TestBlockRule::test_create_and_list tests/test_admin_api.py::TestBlockRule::test_toggle_enabled tests/test_admin_api.py::TestPrivateBlockFlow::test_blocked_user_chat_writes_log_with_files tests/test_api_group_message_routes_split.py::test_api_group_message_route_does_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api.py::test_group_ingress_service_does_not_import_api_routes tests/test_asyncio_run_policy.py -v`
+  -> `9 passed, 1 warning`。
+- 静态检查：
+  `python -m compileall api/routes.py app/group_ingress/helpers.py core/user_block_rules.py -q` 退出码 0；
+  `wc -l api/routes.py app/group_ingress/helpers.py core/user_block_rules.py tests/test_user_block_rules.py`
+  -> `1227 api/routes.py`、`644 app/group_ingress/helpers.py`、`53 core/user_block_rules.py`、`224 tests/test_user_block_rules.py`；
+  `git diff --check -- api/routes.py app/group_ingress/helpers.py core/user_block_rules.py tests/test_user_block_rules.py tests/test_api.py .Codex/plans/api-user-block-rules-split.md`
+  无输出，退出码 0。
+- 全量：
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1754 passed, 6 skipped, 139 warnings in 122.64s`。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移 `GroupIngressService` 主流程、Admin block rule CRUD、DB schema、WebUI 或 JS。
+- 不改变 `rule_mode` / `reason` 语义，不新增动作或枚举校验。
+- 不归一化 `user_id`，不改变 `target_type` 精确匹配。
+- 保持 `api.routes._check_user_blocked()` 为父模块 wrapper，并保持 `evals/runners/moderation_runner.py` 兼容导入。
+- 保持 `app.group_ingress.helpers.check_user_blocked()` 为群聊 wrapper。
+- 保持 group 规则带 `group_id` 但请求未传 `group_id` 时仍命中的旧语义。
+- 新模块不导入 `api.routes` 或 `app.group_ingress.helpers`。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或 message envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1227。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界可继续评估 streaming finalizer 小内核，或拆出 guardrail superuser / health 之外的 `/chat` 纯 helper；继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
