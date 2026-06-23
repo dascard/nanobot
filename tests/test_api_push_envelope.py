@@ -124,3 +124,7 @@ async def test_stream_disconnect_background_push_uses_envelope_and_no_base64(
     assert envelope["messages"] == [{"type": "text", "text": "展开后 CQ 图片"}]
     assert envelope["meta"]["platform"] == "qq"
     assert envelope["meta"]["chat_type"] == "private"
+    assert envelope["meta"]["user_id"] == "u-stream-envelope"
+    assert envelope["meta"]["session_id"] == "private_u-stream-envelope"
+    assert envelope["meta"]["target_type"] == "private"
+    assert envelope["meta"]["target_id"] == "u-stream-envelope"
