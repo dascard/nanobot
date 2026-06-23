@@ -554,3 +554,17 @@ git commit -m "docs(计划): 收口私聊缓冲唤醒"
   无输出，退出码 1，表示未命中文档缺陷模式。
   `git diff --check -- .Codex/plans/api-chat-private-buffer-deadline-wakeup.md docs/todo.md docs/plan_walkthrough.md`
   无输出，退出码 0。
+- 2026-06-23 独立审查处理：
+  审查代理 `Erdos the 3rd` 对 `7c0863e..80a3406` 做只读审查，
+  Critical 无；Important 指出 route 级 shrink 测试的
+  `first_sleep_started.wait()` 和 `second_sleep_started.wait()` 缺少超时，失败时
+  可能挂住测试进程；Minor 指出取消旧 sleep 后仍调用 `release_first_sleep.set()`
+  已无实际意义。已采纳：两个 wait 均改为 `asyncio.wait_for(..., timeout=1)`，
+  失败分支释放事件并回收任务，同时删除无效的 `release_first_sleep.set()`。
+- 2026-06-23 审查处理验证：
+  `python -B -m pytest -p no:cacheprovider tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds -v`
+  退出码 0，`1 passed, 1 warning`。
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py tests/test_api.py::test_private_buffer_silent_releases_waiters tests/test_api.py::test_private_buffer_refreshes_window_and_persists_merged_messages tests/test_api.py::test_private_buffer_merges_files_for_final_bridge_request tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds tests/test_api.py::test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer tests/test_api.py::test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer -v`
+  退出码 0，`13 passed, 1 warning`。
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  退出码 0，`1734 passed, 6 skipped, 139 warnings in 126.39s`。

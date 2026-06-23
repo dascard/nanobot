@@ -4828,6 +4828,7 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1331。剩余�
 - Store 实现提交：`5479d47 fix(普通API): 增加私聊缓冲唤醒`。
 - 父模块接入提交：`272fdf9 fix(普通API): 接入私聊缓冲唤醒`。
 - 文档收口提交：随本次 `docs(计划): 收口私聊缓冲唤醒` 完成。
+- 审查加固提交：随本次 `test(普通API): 加固私聊缓冲唤醒测试` 完成。
 
 计划列表：
 
@@ -4862,6 +4863,22 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1331。剩余�
 - 全量：
   `python -B -m pytest -p no:cacheprovider tests/ -v`
   -> `1734 passed, 6 skipped, 139 warnings in 124.18s`。
+- 独立审查处理：
+  `Erdos the 3rd` 只读审查 `7c0863e..80a3406`，Critical 无；Important 指出
+  route 级 shrink 测试中 `first_sleep_started.wait()` 和
+  `second_sleep_started.wait()` 缺少超时，失败时可能挂住测试进程；Minor 指出旧
+  sleep 已取消后继续 `release_first_sleep.set()` 没有实际意义。已采纳：两个
+  wait 均改为 `asyncio.wait_for(..., timeout=1)`，异常分支释放事件并回收任务，
+  同时删除无效释放。
+- 审查处理定向验证：
+  `python -B -m pytest -p no:cacheprovider tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds -v`
+  -> `1 passed, 1 warning`。
+- 审查处理组合验证：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_private_buffer_split.py tests/test_api.py::test_private_buffer_silent_releases_waiters tests/test_api.py::test_private_buffer_refreshes_window_and_persists_merged_messages tests/test_api.py::test_private_buffer_merges_files_for_final_bridge_request tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds tests/test_api.py::test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer tests/test_api.py::test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer -v`
+  -> `13 passed, 1 warning`。
+- 审查处理后全量：
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1734 passed, 6 skipped, 139 warnings in 126.39s`。
 
 执行约束：
 

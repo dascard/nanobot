@@ -1262,7 +1262,16 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
     )
 
     task1 = asyncio.create_task(proxy_chat(req1, BackgroundTasks(), db_session, None))
-    await first_sleep_started.wait()
+    try:
+        await asyncio.wait_for(first_sleep_started.wait(), timeout=1)
+    except Exception:
+        release_first_sleep.set()
+        release_second_sleep.set()
+        if not task1.done():
+            task1.cancel()
+        await asyncio.gather(task1, return_exceptions=True)
+        raise
+
     fake_now["value"] = 3.0
     task2 = asyncio.create_task(proxy_chat(req2, BackgroundTasks(), db_session, None))
     await real_sleep(0)
@@ -1275,9 +1284,15 @@ async def test_private_buffer_text_after_files_shrinks_window_to_five_seconds(db
         release_second_sleep.set()
         await asyncio.gather(task1, task2, return_exceptions=True)
         raise
-    release_first_sleep.set()
 
-    await second_sleep_started.wait()
+    try:
+        await asyncio.wait_for(second_sleep_started.wait(), timeout=1)
+    except Exception:
+        release_first_sleep.set()
+        release_second_sleep.set()
+        await asyncio.gather(task1, task2, return_exceptions=True)
+        raise
+
     release_second_sleep.set()
 
     result1 = await asyncio.wait_for(task1, timeout=1)
