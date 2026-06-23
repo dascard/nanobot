@@ -460,7 +460,7 @@ python -B -m pytest -p no:cacheprovider tests/test_asyncio_run_policy.py -v
 
 预期：全部通过，且未发现除 main guard 外的新增 `asyncio.run`。
 
-- [ ] **步骤 7：提交父模块接入**
+- [x] **步骤 7：提交父模块接入**
 
 运行：
 
@@ -479,7 +479,7 @@ git commit -m "refactor(普通API): 接入聊天安全门面"
 - 修改：`docs/todo.md`
 - 修改：`docs/plan_walkthrough.md`
 
-- [ ] **步骤 1：记录计划执行结果**
+- [x] **步骤 1：记录计划执行结果**
 
 在本计划的「验证记录」中写入每个阶段的命令、结果和提交哈希：
 
@@ -497,7 +497,7 @@ git commit -m "refactor(普通API): 接入聊天安全门面"
   - 结果：全部通过。
 ```
 
-- [ ] **步骤 2：记录行数变化**
+- [x] **步骤 2：记录行数变化**
 
 运行：
 
@@ -507,11 +507,11 @@ wc -l api/routes.py api/chat_guardrail_facade.py tests/test_api_chat_guardrail_f
 
 将输出写入本计划、`docs/todo.md` 和 `docs/plan_walkthrough.md`，用于追踪 P3 超大文件拆分进度。
 
-- [ ] **步骤 3：更新待办和 walkthrough**
+- [x] **步骤 3：更新待办和 walkthrough**
 
 在 `docs/todo.md` 中记录 `api/routes.py` 已完成 guardrail 小刀拆分，并保留 P3 对剩余 `/chat` 体积的后续拆分方向。在 `docs/plan_walkthrough.md` 中追加 `2026-06-23` 记录，包含设计、计划、红灯、新模块、父模块接入和全量验证提交。
 
-- [ ] **步骤 4：运行文档自检**
+- [x] **步骤 4：运行文档自检**
 
 运行：
 
@@ -522,7 +522,7 @@ git diff --check -- .Codex/plans/api-chat-guardrail-facade-split.md docs/todo.md
 
 预期：计划缺陷扫描无输出，diff 检查无输出。
 
-- [ ] **步骤 5：运行全量测试**
+- [x] **步骤 5：运行全量测试**
 
 运行：
 
@@ -532,7 +532,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：全部通过，跳过数量和警告数量记录到 `docs/plan_walkthrough.md`。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 
@@ -546,6 +546,15 @@ git commit -m "docs(计划): 收口聊天安全门面拆分"
 
 ## 验证记录
 
+- 阶段提交：
+  - 设计：`db8c2fd docs(普通API): 设计聊天安全门面拆分`。
+  - 计划：`5f0ef24 docs(计划): 记录聊天安全门面计划`。
+  - 红灯测试：`5bdafcb test(普通API): 锁定聊天安全门面契约`。
+  - 新模块：`0eaf862 refactor(普通API): 增加聊天安全门面`。
+  - 父模块接入：`c2a3405 refactor(普通API): 接入聊天安全门面`。
+- 行数检查：
+  - 命令：`wc -l api/routes.py api/chat_guardrail_facade.py tests/test_api_chat_guardrail_facade_split.py`
+  - 结果：`api/routes.py` 1449 行，`api/chat_guardrail_facade.py` 51 行，`tests/test_api_chat_guardrail_facade_split.py` 153 行。
 - 红灯测试：
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_split.py -v`
   - 结果：8 failed、1 passed、1 warning；失败原因是 `api/chat_guardrail_facade.py` 不存在，符合预期红灯。
@@ -567,6 +576,14 @@ git commit -m "docs(计划): 收口聊天安全门面拆分"
 - asyncio 策略回归：
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_asyncio_run_policy.py -v`
   - 结果：3 passed、1 warning。
+- 全量回归：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/ -v`
+  - 结果：1716 passed、6 skipped、139 warnings in 137.97s。
+- 文档收口复验：
+  - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-guardrail-facade-split.md docs/todo.md docs/plan_walkthrough.md`
+  - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。
+  - 命令：`git diff --check -- .Codex/plans/api-chat-guardrail-facade-split.md docs/todo.md docs/plan_walkthrough.md`
+  - 结果：无输出，命令退出码为 0。
 - 计划文档自检：
   - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-guardrail-facade-split.md`
   - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。

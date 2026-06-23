@@ -1,6 +1,6 @@
 # Nanobot Server — 待办计划
 
-> 本文件分两部分：**一、缺陷修复清单**（来自 2026-06-16 全仓库 Python 代码审查 + 逐条对抗式核验）；**二、架构演进路线**（2026-06-16 读真实代码核实重写，后续状态已更新至 2026-06-22，每项含现状/痛点/目标/关联/粗略路径）。
+> 本文件分两部分：**一、缺陷修复清单**（来自 2026-06-16 全仓库 Python 代码审查 + 逐条对抗式核验）；**二、架构演进路线**（2026-06-16 读真实代码核实重写，后续状态已更新至 2026-06-23，每项含现状/痛点/目标/关联/粗略路径）。
 > 缺陷条目均经「读真实代码 + 引用行号」核验，已剔除 11 项误报（见附录）。严重度 = 真实可利用性，非原始审查给分。
 
 ---
@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1470)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1449)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -400,6 +400,20 @@
     全量回归 `1707 passed, 6 skipped, 139 warnings in 127.22s`。下一刀候选为
     guardrail thin facade、私聊缓冲基础件或 streaming helper；继续不优先拆
     `/health`。
+  - 进展：`api/routes.py` 第十五刀已拆出 Chat Guardrail Facade 到
+    `api/chat_guardrail_facade.py`；旧 `api.routes._detect_guardrail()` 继续保留
+    父模块 wrapper，`get_guardrail()` patch point、`_build_guardrail_input()`、
+    私聊缓冲 `asyncio.to_thread()` 调度、superuser passthrough、streaming finalizer、
+    聊天落库、response envelope 和 `/health` 仍留在父模块。新模块承载
+    `detect_guardrail()` 与 `guardrail_status_from_result()`，兼容新
+    `detect_injection()` 和 legacy `classify()`，不反向导入 `api.routes`，
+    也没有 `asyncio.run` 或 `run_awaitable_sync`。`api/routes.py` 从 1470 行降至
+    1449 行，`api/chat_guardrail_facade.py` 为 51 行，拆分测试为 153 行。
+    验证结果：红灯 `8 failed, 1 passed`，相邻扫描红灯 `4 failed`，新模块绿灯
+    `9 passed`，相邻扫描绿灯 `4 passed`，父模块门面回归 `9 passed`，
+    guardrail 与私聊缓冲邻近回归 `9 passed`，asyncio 策略回归 `3 passed`，
+    全量回归 `1716 passed, 6 skipped, 139 warnings in 137.97s`。下一刀候选为
+    私聊缓冲基础件或 streaming helper；继续不优先拆 `/health`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch

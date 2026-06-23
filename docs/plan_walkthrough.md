@@ -4526,3 +4526,72 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1470。剩余�
 围绕 `/chat` 主链路做细粒度设计：可评估 guardrail thin facade、私聊缓冲基础件或
 streaming helper。下一刀仍应保留父模块 monkeypatch facade，避免一次性迁移完整
 `proxy_chat()`。
+
+## 2026-06-23 普通 API Chat Guardrail Facade 拆分
+
+状态：设计、计划、红灯测试、新模块拆分、父模块接入、验证和实现阶段提交均已完成。本阶段继续拆普通 `api/routes.py`，新增 `api/chat_guardrail_facade.py`，迁移 guardrail 新旧 provider 兼容归一化逻辑和 `guardrail_status` 映射。`api.routes` 继续保留 `/chat` 路由本体、`get_guardrail` patch point、`_build_guardrail_input()` wrapper、私聊缓冲、`asyncio.to_thread()` 调度时机、streaming finalizer、聊天落库、response envelope 和 `/health`。`api/routes.py` 从 1470 行降至 1449 行；`api/chat_guardrail_facade.py` 为 51 行，拆分测试为 153 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-22-api-chat-guardrail-facade-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-guardrail-facade-split.md`。
+
+阶段提交：
+
+- 设计提交：`db8c2fd docs(普通API): 设计聊天安全门面拆分`。
+- 计划提交：`5f0ef24 docs(计划): 记录聊天安全门面计划`。
+- 红灯测试提交：`5bdafcb test(普通API): 锁定聊天安全门面契约`。
+- 新模块提交：`0eaf862 refactor(普通API): 增加聊天安全门面`。
+- 父模块接入提交：`c2a3405 refactor(普通API): 接入聊天安全门面`。
+- 文档收口提交：随本次 `docs(计划): 收口聊天安全门面拆分` 完成。
+
+计划列表：
+
+- [x] 汇总 `/chat` 剩余边界审计结论并确定 Chat Guardrail Facade 边界。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API chat guardrail facade split 红灯测试并提交。
+- [x] 新增 `api/chat_guardrail_facade.py`，锁定新 `detect_injection()` provider 优先、legacy `classify()` provider 归一化、`silent` / `injection` / `safe` 状态映射和不导入父模块约束，并提交。
+- [x] 将 `api.routes._detect_guardrail()` 改为父模块薄 wrapper，`/chat` 内联 guardrail status 映射改为调用新门面 helper，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 新增 split 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_split.py -v`
+  -> `8 failed, 1 passed, 1 warning`；失败点为 `api/chat_guardrail_facade.py` 不存在。
+- 相邻扫描红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  -> `4 failed, 1 warning`，4 个失败均为新模块尚未创建。
+- 新模块 split 绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_split.py -v`
+  -> `9 passed, 1 warning`。
+- 相邻扫描绿灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  -> `4 passed, 1 warning`。
+- 父模块接入回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_split.py -v`
+  -> `9 passed, 1 warning`。
+- guardrail 与私聊缓冲邻近回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api.py::test_superuser_bypasses_injection_guardrail tests/test_api.py::test_superuser_image_only_message_bypasses_injection_guardrail tests/test_api.py::test_image_only_message_uses_multimodal_prompt_placeholder tests/test_api.py::test_private_buffer_silent_releases_waiters tests/test_api.py::test_private_buffer_refreshes_window_and_persists_merged_messages tests/test_api.py::test_private_buffer_merges_files_for_final_bridge_request tests/test_api.py::test_private_buffer_text_after_files_shrinks_window_to_five_seconds tests/test_api.py::test_private_buffer_owner_cancel_releases_waiters_and_cleans_buffer tests/test_api.py::test_private_buffer_bridge_cancel_releases_waiters_and_cleans_buffer -v`
+  -> `9 passed, 21 warnings`。
+- asyncio 策略回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_asyncio_run_policy.py -v`
+  -> `3 passed, 1 warning`。
+- 行数检查：`api/routes.py` 1449 行，`api/chat_guardrail_facade.py` 51 行，`tests/test_api_chat_guardrail_facade_split.py` 153 行。
+- 全量：`python -B -m pytest -p no:cacheprovider tests/ -v` ->
+  `1716 passed, 6 skipped, 139 warnings in 137.97s`。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移 `get_guardrail()`、`_build_guardrail_input()`、私聊缓冲、streaming runner / finalizer、聊天落库、response envelope、`get_bridge` 或 `CHAT_STREAM_QUEUE_MAXSIZE`。
+- 保持 `api.routes._detect_guardrail()` 作为父模块 wrapper，函数身份仍属于 `api.routes`。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约或 message envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1449。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界应继续围绕 `/chat` 主链路做细粒度设计：优先评估私聊缓冲基础件或 streaming helper，继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
