@@ -55,7 +55,7 @@
 **文件：**
 - 创建：`tests/test_api_chat_persona_context_split.py`
 
-- [ ] **步骤 1：创建 split 测试文件**
+- [x] **步骤 1：创建 split 测试文件**
 
 创建 `tests/test_api_chat_persona_context_split.py`：
 
@@ -92,7 +92,7 @@ def test_parent_persona_formatter_wrapper_remains_in_routes():
     assert routes._format_persona_for_prompt(data) == chat_persona_context.format_persona_for_prompt(data)
 ```
 
-- [ ] **步骤 2：补结构化 persona 契约测试**
+- [x] **步骤 2：补结构化 persona 契约测试**
 
 在同一文件追加：
 
@@ -112,7 +112,7 @@ def test_format_persona_for_prompt_preserves_structured_contract():
                 "低优先": {"confidence": "low", "interaction_count": 99, "summary": "低置信内容"},
                 "高优先": {"confidence": "high", "interaction_count": 1, "summary": "高置信内容"},
                 "中优先": {"confidence": "medium", "interaction_count": 3, "description": "中置信内容"},
-                "第四项": {"confidence": "high", "interaction_count": 0, "summary": "不应出现"},
+                "第四项": {"confidence": "low", "interaction_count": 0, "summary": "不应出现"},
             },
             "facts": [
                 {
@@ -151,7 +151,7 @@ def test_format_persona_for_prompt_preserves_structured_contract():
     assert "- [可能] [证据2] 异步 constraint: 用户不希望除 main guard 外出现 asyncio.run。" in text
 ```
 
-- [ ] **步骤 3：补 fallback 与 sanitize 测试**
+- [x] **步骤 3：补 fallback 与 sanitize 测试**
 
 在同一文件追加：
 
@@ -174,10 +174,11 @@ def test_format_persona_for_prompt_falls_back_to_scalar_fields_and_sanitizes():
     assert "level: 7" in text
     assert "enabled: True" in text
     assert "</system>" not in text
-    assert len(text) <= 80
+    assert "...[截断:" in text
+    assert len(text) <= 110
 ```
 
-- [ ] **步骤 4：运行红灯**
+- [x] **步骤 4：运行红灯**
 
 运行：
 
@@ -190,7 +191,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_context_spli
 - 失败。
 - 失败原因为 `api/chat_persona_context.py` 不存在或无法导入。
 
-- [ ] **步骤 5：提交红灯测试**
+- [x] **步骤 5：提交红灯测试**
 
 ```bash
 git add tests/test_api_chat_persona_context_split.py .Codex/plans/api-chat-persona-context-split.md
@@ -515,4 +516,10 @@ git commit -m "docs(计划): 收口聊天画像拆分"
 
 ## 执行记录
 
-本节在各任务完成后追加命令输出摘要和提交号。
+- 2026-06-23 任务 1 红灯测试：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_context_split.py -v`
+  退出码 1，`4 failed, 1 warning`。失败点为 `api/chat_persona_context.py`
+  不存在、`from api import chat_persona_context` 失败和
+  `ModuleNotFoundError: No module named 'api.chat_persona_context'`，符合红灯预期。
+- 2026-06-23 任务 1 提交：
+  随本次 `test(普通API): 锁定聊天画像拆分契约` 提交。
