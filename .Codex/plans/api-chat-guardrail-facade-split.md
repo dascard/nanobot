@@ -268,7 +268,7 @@ python -B -m pytest -p no:cacheprovider \
 
 预期：4 个测试失败，原因是扫描清单包含的新模块文件尚不存在。
 
-- [ ] **步骤 5：提交红灯测试**
+- [x] **步骤 5：提交红灯测试**
 
 运行：
 
@@ -289,7 +289,7 @@ git commit -m "test(普通API): 锁定聊天安全门面契约"
 **文件：**
 - 创建：`api/chat_guardrail_facade.py`
 
-- [ ] **步骤 1：编写最小门面实现**
+- [x] **步骤 1：编写最小门面实现**
 
 在 `api/chat_guardrail_facade.py` 写入：
 
@@ -308,11 +308,10 @@ def detect_guardrail(
     allow_passthrough: bool = False,
 ) -> dict[str, Any]:
     if hasattr(guardrail, "detect_injection"):
-        result = guardrail.detect_injection(
+        return guardrail.detect_injection(
             message,
             allow_passthrough=allow_passthrough,
         )
-        return result if isinstance(result, dict) else {}
 
     result = guardrail.classify(
         message,
@@ -350,7 +349,7 @@ def guardrail_status_from_result(result: dict[str, Any] | None) -> str:
     return "safe"
 ```
 
-- [ ] **步骤 2：运行门面测试验证绿灯**
+- [x] **步骤 2：运行门面测试验证绿灯**
 
 运行：
 
@@ -360,7 +359,7 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_spl
 
 预期：当前测试全部通过。
 
-- [ ] **步骤 3：运行扫描测试验证绿灯**
+- [x] **步骤 3：运行扫描测试验证绿灯**
 
 运行：
 
@@ -553,6 +552,12 @@ git commit -m "docs(计划): 收口聊天安全门面拆分"
 - 扫描红灯：
   - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
   - 结果：4 failed、1 warning；失败原因是扫描清单中的 `api/chat_guardrail_facade.py` 不存在，符合预期红灯。
+- 新模块绿灯：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_guardrail_facade_split.py -v`
+  - 结果：9 passed、1 warning。
+- 扫描绿灯：
+  - 命令：`python -B -m pytest -p no:cacheprovider tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  - 结果：4 passed、1 warning。
 - 计划文档自检：
   - 命令：`rg -n -P 'T[O]DO|待[定]|后续实[现]|占[位]|\x{FFFD}' .Codex/plans/api-chat-guardrail-facade-split.md`
   - 结果：无输出，命令退出码为 1，表示未命中计划缺陷模式。
