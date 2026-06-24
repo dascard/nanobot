@@ -365,7 +365,7 @@ git commit -m "test(普通API): 锁定画像查找拆分契约"
 - 创建：`api/chat_persona_lookup.py`
 - 修改：`.Codex/plans/api-chat-persona-lookup-split.md`
 
-- [ ] **步骤 1：新增模块与 dataclass**
+- [x] **步骤 1：新增模块与 dataclass**
 
 创建 `api/chat_persona_lookup.py`：
 
@@ -392,7 +392,7 @@ class ChatPersonaSnapshot:
     parse_failed: bool
 ```
 
-- [ ] **步骤 2：实现候选生成**
+- [x] **步骤 2：实现候选生成**
 
 追加：
 
@@ -408,7 +408,7 @@ def iter_persona_user_id_candidates(uid: str) -> list[str]:
     return list(dict.fromkeys(candidates))
 ```
 
-- [ ] **步骤 3：实现 JSON object parse**
+- [x] **步骤 3：实现 JSON object parse**
 
 追加：
 
@@ -423,7 +423,7 @@ def _parse_persona_json(value: str) -> tuple[dict[str, Any], bool]:
     return data, False
 ```
 
-- [ ] **步骤 4：实现 resolver**
+- [x] **步骤 4：实现 resolver**
 
 追加：
 
@@ -459,7 +459,7 @@ def resolve_chat_persona_snapshot(
     )
 ```
 
-- [ ] **步骤 5：运行 helper 定向测试**
+- [x] **步骤 5：运行 helper 定向测试**
 
 运行：
 
@@ -469,12 +469,16 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_lookup_split
 
 预期：helper 行为测试通过，父模块 wrapper / HTTP fallback 测试仍失败。
 
-- [ ] **步骤 6：提交 helper**
+实际：`5 passed, 1 failed, 21 warnings in 6.94s`。唯一失败为父模块 `_resolve_chat_persona_snapshot` 尚未存在；HTTP fallback 回归仍由旧内联实现通过。
+
+- [x] **步骤 6：提交 helper**
 
 ```bash
 git add api/chat_persona_lookup.py .Codex/plans/api-chat-persona-lookup-split.md
 git commit -m "refactor(普通API): 增加画像查找助手"
 ```
+
+说明：本步骤随 helper 提交自身完成。
 
 ---
 
