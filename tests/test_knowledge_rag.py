@@ -3,6 +3,11 @@ from datetime import datetime, timedelta
 from tests.async_helpers import run_async
 
 
+def _local_now() -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 class IdentityRerankerProvider:
     def __init__(self, scores):
         self.scores = scores
@@ -200,7 +205,7 @@ def test_knowledge_query_score_breakdown_uses_document_recency(db_session):
     from core.database import SemanticIndexItem
     from core.knowledge_rag import KnowledgeRagService
 
-    now = datetime.now()
+    now = _local_now()
     old = _manual_doc(
         db_session,
         "old-recency.md",

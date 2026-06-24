@@ -13,6 +13,11 @@ def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: in
     return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
 
 
+def _local_now() -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 class IdentityRerankerProvider:
     def __init__(self, scores, *, default_score=0.9):
         self.scores = scores
@@ -231,7 +236,7 @@ def test_sticker_search_uses_reranker_before_usage_boost(db_session):
 def test_sticker_search_score_breakdown_uses_last_seen_recency(db_session):
     from core.sticker_memory import search_stickers
 
-    now = datetime.now()
+    now = _local_now()
     old = _add_sticker(
         db_session,
         "old-recency",

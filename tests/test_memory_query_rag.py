@@ -11,6 +11,11 @@ from core.semantic.adapters import (
 from core.semantic.indexer import upsert_semantic_chunks
 
 
+def _local_now() -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 class KeywordEmbeddingProvider:
     def embed(self, texts):
         vectors = []
@@ -110,7 +115,7 @@ def test_memory_query_uses_reranker_after_recall(db_session):
 def test_memory_query_score_breakdown_uses_index_recency(db_session):
     from core.memory_rag import MemoryRagService
 
-    now = datetime.now()
+    now = _local_now()
     digest = _digest_row(106, cards=[
         {"title": "旧端口", "text": "端口冲突 recency 旧记录。", "keywords": ["端口"]},
         {"title": "新端口", "text": "端口冲突 recency 新记录。", "keywords": ["端口"]},
