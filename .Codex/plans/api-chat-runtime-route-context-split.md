@@ -813,7 +813,7 @@ git commit -m "refactor(普通API): 接入运行时路由上下文助手"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-chat-runtime-route-context-split.md`
 
-- [ ] **步骤 1：Prompt Runtime 模板核查**
+- [x] **步骤 1：Prompt Runtime 模板核查**
 
 运行：
 
@@ -823,7 +823,9 @@ rg -n "persona_text|raw_query|history_header|history_messages|effort_constraint|
 
 预期：只证明现有字段和模板引用仍一致。本阶段不修改字段名、变量语义、模板标记、`enriched_query` 包裹方式或 audit 行为，因此默认模板与 `data/prompts_v2/` 运行时模板无需变更。
 
-- [ ] **步骤 2：运行定向与相邻回归**
+实际：核查命令命中 `nanobot_kt/bridge.py`、`prompts.v2.default/chat/*`、`data/prompts_v2/chat/*` 和 `core/prompt_v2/variables.py` 的既有字段引用；本阶段未改字段名、变量语义、模板标记、`enriched_query` 包裹方式或 audit 行为，因此默认模板与 `data/prompts_v2/` 运行时模板无需变更。
+
+- [x] **步骤 2：运行定向与相邻回归**
 
 运行：
 
@@ -846,7 +848,9 @@ tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_imp
 
 预期：全部通过。
 
-- [ ] **步骤 3：运行静态检查和行数检查**
+实际：定向 / 相邻回归合并运行结果为 `24 passed, 21 warnings in 3.60s`；split 扫描为 `4 passed, 1 warning in 1.13s`。
+
+- [x] **步骤 3：运行静态检查和行数检查**
 
 运行：
 
@@ -858,7 +862,9 @@ wc -l api/routes.py api/chat_runtime_route_context.py tests/test_api_chat_runtim
 
 预期：`api/routes.py` 行数低于 1013 行。
 
-- [ ] **步骤 4：运行全量测试**
+实际：`python -m compileall api/routes.py api/chat_runtime_route_context.py -q` 退出码 0；`wc -l` 为 `1005 api/routes.py`、`177 api/chat_runtime_route_context.py`、`342 tests/test_api_chat_runtime_route_context_split.py`。
+
+- [x] **步骤 4：运行全量测试**
 
 运行：
 
@@ -869,7 +875,9 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 5：更新文档**
+实际：`1795 passed, 6 skipped, 139 warnings in 125.86s (0:02:05)`。
+
+- [x] **步骤 5：更新文档**
 
 更新 `docs/todo.md`：
 
@@ -888,7 +896,7 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 - 勾选全部任务。
 - 填入提交号和验证输出摘要。
 
-- [ ] **步骤 6：提交文档收口**
+- [x] **步骤 6：提交文档收口**
 
 运行：
 

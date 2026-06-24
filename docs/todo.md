@@ -612,6 +612,29 @@
     `6 passed, 1 warning in 0.96s`，split 扫描 `4 passed, 1 warning in 1.19s`，
     相邻回归 `15 passed, 21 warnings in 2.36s`，静态检查通过，全量回归
     `1788 passed, 6 skipped, 139 warnings in 124.64s (0:02:04)`。
+  - 进展：`api/routes.py` 第二十九刀已拆出 Chat runtime route context 组装到
+    `api/chat_runtime_route_context.py`；父模块继续保留 HTTP route、DB session、
+    带 `label="chat_before_bridge"` 参数的 `release_clean_session_transaction()`、
+    Bridge、SSE、response envelope、push envelope、非流式 / 流式结果收尾和后续
+    落库边界。新模块只负责动态 persona injection、`ChatRuntimeInput` 委托构造、
+    payload 展开和 Prompt budget 日志，通过 services 接收
+    `_build_multimodal_user_input_text()`、`_estimate_tokens()`、
+    `_chat_request_platform()`、`get_effort_constraint()`、
+    `chat_runtime_facade.build_chat_runtime_payload()`、persona injection callback 和
+    logger。Prompt Runtime 字段名、`<user_input>` 包裹、conversation 结构、工具输出
+    契约、message envelope、push envelope 和 response envelope 均未改变；默认模板与
+    `data/prompts_v2/` 运行时模板无需变更。新模块不反向导入 `api.routes`、FastAPI、
+    Bridge、Prompt Runtime 模板注册或 DB 全局入口，也没有新增 `asyncio.run`、
+    `run_awaitable_sync` 或同步函数包装 awaitable。`api/routes.py` 从 1013 行降至
+    1005 行，`api/chat_runtime_route_context.py` 为 177 行，拆分测试为 342 行。
+    验证结果：红灯 `7 failed, 1 warning in 3.73s` 与扫描红灯
+    `4 failed, 1 warning in 3.95s`；helper 阶段
+    `6 passed, 1 deselected, 1 warning in 0.73s`，完整新测试剩余父模块 wrapper
+    红灯 `6 passed, 1 failed, 1 warning in 6.54s`；父模块接入后新测试
+    `7 passed, 1 warning in 0.99s`，定向 / 相邻回归
+    `24 passed, 21 warnings in 3.60s`，split 扫描 `4 passed, 1 warning in 1.13s`，
+    静态检查通过，全量回归
+    `1795 passed, 6 skipped, 139 warnings in 125.86s (0:02:05)`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch

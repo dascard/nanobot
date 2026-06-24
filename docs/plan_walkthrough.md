@@ -5556,3 +5556,85 @@ async 策略核对：
 下一步：
 
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1013。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界建议继续围绕 `proxy_chat()` 中低耦合的纯组装 helper 做小刀拆分，可优先评估 `safe_user_input` / `bridge_meta` / runtime payload 前后的小边界，目标仍是把 `api/routes.py` 降到 800 行以下。
+
+## 2026-06-24 普通 API Chat Runtime Route Context 拆分
+
+状态：设计、计划、红灯测试、helper 拆分、父模块接入、Prompt Runtime 核查、相邻回归、全量验证和阶段提交均已完成。本阶段把 `proxy_chat()` 中 runtime route context 组装拆到 `api/chat_runtime_route_context.py`，包括动态 persona injection、`ChatRuntimeInput` 委托构造、payload 展开和 Prompt budget 日志。父模块继续保留 HTTP route、DB session、带 `label="chat_before_bridge"` 参数的 `release_clean_session_transaction()`、Bridge、SSE、response envelope、push envelope、非流式 / 流式结果收尾和后续落库边界。`api/routes.py` 从 1013 行降至 1005 行；`api/chat_runtime_route_context.py` 为 177 行，拆分测试为 342 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-24-api-chat-runtime-route-context-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-runtime-route-context-split.md`。
+
+阶段提交：
+
+- 设计提交：`7f78355 docs(普通API): 设计运行时路由上下文拆分`。
+- 计划提交：`732722e docs(计划): 记录运行时路由上下文计划`。
+- 红灯测试提交：`81b8337 test(普通API): 锁定运行时路由上下文契约`。
+- Helper 提交：`bbba2a4 refactor(普通API): 增加运行时路由上下文助手`。
+- 父模块接入提交：`bef712a refactor(普通API): 接入运行时路由上下文助手`。
+- 文档收口提交：随本次 `docs(计划): 收口运行时路由上下文拆分` 完成。
+
+计划列表：
+
+- [x] 确认 runtime route context 拆分范围，排除 `/chat` route、DB session、Bridge、SSE、message envelope、push envelope、response envelope 和后续落库迁移。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API Chat Runtime Route Context split 红灯测试和 chat split module 扫描约束，并提交。
+- [x] 新增 `api/chat_runtime_route_context.py`，锁定 dynamic persona injection、runtime payload 委托、Prompt budget 日志和不导入父模块约束，并提交。
+- [x] 将父模块 `proxy_chat()` 中的内联 runtime route context 组装改为委托 `_build_chat_runtime_route_context()`，并提交。
+- [x] 运行 Prompt Runtime 核查、chat split 扫描、相邻回归、静态检查和全量测试，记录验证结果。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_route_context_split.py -v`
+  -> `7 failed, 1 warning in 3.73s`；失败点为 `api/chat_runtime_route_context.py` 不存在、`api.chat_runtime_route_context` 无法 import、父模块 `_build_chat_runtime_route_context()` 尚不存在。
+- 扫描红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  -> `4 failed, 1 warning in 3.95s`；四个失败均为扫描清单读取 `api/chat_runtime_route_context.py` 时文件尚不存在。
+- Helper 阶段：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_route_context_split.py -k 'not parent_proxy_chat_delegates' -v`
+  -> `6 passed, 1 deselected, 1 warning in 0.73s`；完整新测试为 `6 passed, 1 failed, 1 warning in 6.54s`，唯一失败为父模块尚未提供 `_build_chat_runtime_route_context()`。
+- 父模块接入定向：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_route_context_split.py -v`
+  -> `7 passed, 1 warning in 0.99s`。
+- 定向 / 相邻回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_route_context_split.py tests/test_api_chat_runtime_facade_split.py tests/test_api_chat_pre_bridge_route_result_split.py tests/test_api.py::test_proxy_chat_passes_history_header_to_bridge tests/test_api.py::test_proxy_chat_passes_client_platform_to_bridge tests/test_api.py::test_proxy_chat_releases_db_transaction_before_bridge -v`
+  -> `24 passed, 21 warnings in 3.60s`。
+- Split 扫描：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  -> `4 passed, 1 warning in 1.13s`。
+- Prompt Runtime 核查：
+  `rg -n "persona_text|raw_query|history_header|history_messages|effort_constraint|runtime_preset|<user_input>|platform|chat_type|stream" prompts.v2.default/chat data/prompts_v2/chat core/prompt_v2/variables.py core/prompt_v2/template_registry.py nanobot_kt/bridge.py`
+  -> 现有 `bridge.py`、默认模板和 `data/prompts_v2/` 运行时模板仍按原字段名引用；本阶段未改字段名、变量语义、模板标记、`enriched_query` 包裹方式或 audit 行为，因此模板无需变更。
+- 静态检查：
+  `python -m compileall api/routes.py api/chat_runtime_route_context.py -q` 退出码 0；
+  `git diff --check` 对本阶段生产代码、测试文件、计划文件和收口文档无输出；
+  `wc -l api/routes.py api/chat_runtime_route_context.py tests/test_api_chat_runtime_route_context_split.py`
+  -> `1005 api/routes.py`、`177 api/chat_runtime_route_context.py`、`342 tests/test_api_chat_runtime_route_context_split.py`。
+- 全量：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1795 passed, 6 skipped, 139 warnings in 125.86s (0:02:05)`。
+
+async 策略核对：
+
+- 本阶段新模块和 `api/routes.py` 未新增 `asyncio.run`、`run_awaitable_sync` 或同步函数包装 awaitable。
+- `rg -n "asyncio\\.run|run_awaitable_sync" api/routes.py api/chat_runtime_route_context.py tests/test_api_chat_runtime_route_context_split.py` 仅命中新测试中的禁止断言字符串，生产代码无新增命中。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移 `release_clean_session_transaction()`、Bridge、SSE、message envelope、push envelope、response envelope、non-streaming result 或后续落库。
+- 新模块通过 services 接收 `_build_multimodal_user_input_text()`、`_estimate_tokens()`、`_chat_request_platform()`、`get_effort_constraint()`、runtime payload builder、persona injection callback 和 logger。
+- 父模块通过 `_chat_runtime_route_services(db)` 用闭包把当前 `db` 绑定到 `_build_persona_injection_context()`；helper 不导入 DB model 或父模块。
+- Prompt Runtime 字段名、`<user_input>` 包裹语义、conversation 结构、工具输出契约、message envelope、push envelope 和 response envelope 均未改变。
+- 新模块不导入 `api.routes`、FastAPI、Bridge、Prompt Runtime 模板注册或 DB 全局入口。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1005。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界建议继续围绕 `proxy_chat()` 中低耦合的小 helper 做拆分，可优先评估 Bridge 调用前后仍留在父模块的 `_do_chat()` / `_stream_chat()` 外围编排、stream runner context 或进一步压缩 wrapper 排版；目标仍是把 `api/routes.py` 降到 800 行以下。
