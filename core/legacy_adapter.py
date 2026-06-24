@@ -622,7 +622,7 @@ class NanobotKTController:
         user_msgs = filter_user_messages(logs)
         logs_text = format_candidate_logs(user_msgs)
         if not logs_text.strip():
-            logger.info(f"  [KT Local StateMachine] No user messages, skipping persona update")
+            logger.info("  [KT Local StateMachine] No user messages, skipping persona update")
             self.memory.mark_logs_processed([log["id"] for log in logs])
             return
 
@@ -651,7 +651,7 @@ class NanobotKTController:
         candidates = parsed.get("candidates", []) if isinstance(parsed, dict) else []
 
         if not candidates:
-            logger.warning(f"  [KT Local StateMachine] No candidates extracted, skipping")
+            logger.warning("  [KT Local StateMachine] No candidates extracted, skipping")
             self.memory.mark_logs_processed([log["id"] for log in logs])
             return
 

@@ -668,7 +668,7 @@
 
 - [ ] **ruff 批量清理** · LOW · S
   F401 未用 import ×~24（`ruff check --fix`）；F841 死变量（`classifier_client.py:1164`、`persona_update/tool.py:53,139`）；E402/F811（`admin_routes.py:34-38,89`）；`__import__("datetime")`(`model_registry.py:418,459`)；`asyncio.ensure_future`→`create_task`(`new_api_client.py:320`，并入 E4)；旧式 `List/Dict/Optional`→内置泛型；`database.py` naive datetime（单机部署，低优先）。
-  - 进展（2026-06-24）：F821 类型注解引用已清零；F841 未使用局部变量已清零，并补强 `news_daily` 同实体 render guard 测试，修复 top story 未计入 highlight 去重的问题。剩余清理继续按 F401 facade 兼容、E402/E701/E702、F541、E741 等小批推进。
+  - 进展（2026-06-24）：F821 类型注解引用已清零；F841 未使用局部变量已清零，并补强 `news_daily` 同实体 render guard 测试，修复 top story 未计入 highlight 去重的问题；F541 冗余 f-string 前缀已清零。剩余清理继续按 F401 facade 兼容、E402/E701/E702、E741 等小批推进。
 
 ---
 

@@ -350,13 +350,13 @@ class TestStickerCRUD:
         assert r.status_code == 200, r.text
         sid = r.json()["id"]
         # 通过 Admin list 确认 active
-        r1 = client.get(f"/api/v1/admin/stickers?search=searchme&status=active",
+        r1 = client.get("/api/v1/admin/stickers?search=searchme&status=active",
                         headers=auth_header)
         assert any(s["id"] == sid for s in r1.json()["items"])
         # 删除
         client.delete(f"/api/v1/admin/stickers/{sid}", headers=auth_header)
         # active 列表不再可见
-        r2 = client.get(f"/api/v1/admin/stickers?search=searchme&status=active",
+        r2 = client.get("/api/v1/admin/stickers?search=searchme&status=active",
                         headers=auth_header)
         assert not any(s["id"] == sid for s in r2.json()["items"]), \
             f"deleted sticker {sid} should not appear in active list"

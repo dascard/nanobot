@@ -67,7 +67,7 @@ def run_case(case: EvalCase) -> EvalResult:
         # error 候选来自日志抽样，只有 needs_label=True，不可运行
         return EvalResult(
             case_id=case.id, suite=case.suite, passed=False, score=0.0,
-            errors=[f"error suite candidates are not runnable — needs manual labeling first"],
+            errors=["error suite candidates are not runnable — needs manual labeling first"],
         )
     else:
         return EvalResult(

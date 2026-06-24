@@ -167,7 +167,7 @@ def render_html(digest: dict) -> str:
             unknown = d.get("unknown", [])
             impact = d.get("impact", "")
             src_labels = d.get("source_labels", [])
-            html += f'\n    <div class="detail-card">'
+            html += '\n    <div class="detail-card">'
             html += f'\n      <div class="detail-title">{_e(title)}</div>'
             if known:
                 html += '\n      <div class="detail-block"><b>已知：</b><ul>'

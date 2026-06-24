@@ -179,7 +179,7 @@ def score_case(case: EvalCase, output: EvalOutput) -> dict:
     if "should_write_conversation_turn" in exp:
         actual = output.db_writes.get("conversation_turn_written", False)
         if actual != exp["should_write_conversation_turn"]:
-            errors.append(f"should_write_conversation_turn mismatch")
+            errors.append("should_write_conversation_turn mismatch")
 
     # model_used
     if "model_used" in exp and output.model_used != exp["model_used"]:

@@ -590,7 +590,7 @@ def batch_delete_stickers(body: dict, request: Request, db: Session = Depends(ge
     if not ids:
         raise HTTPException(400, "no valid ids")
     if len(ids) > 500:
-        raise HTTPException(400, f"too many ids, max 500")
+        raise HTTPException(400, "too many ids, max 500")
     rows = db.query(StickerMemory).filter(StickerMemory.id.in_(list(ids))).all()
     count = 0
     for row in rows:

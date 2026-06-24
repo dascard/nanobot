@@ -398,7 +398,7 @@ def safe_digest(digest: dict, cards: list[EvidenceCard]) -> dict:
     """valid 通过返回 digest，不通过返回 fallback。"""
     ok, issues = validate_digest(digest, cards)
     if ok:
-        logger.info(f"[validator] PASS")
+        logger.info("[validator] PASS")
         return digest
     logger.warning(f"[validator] FAIL: {issues}")
     return {**FALLBACK_DIGEST, "missing_info": issues}

@@ -1883,7 +1883,7 @@ class NanobotBridge:
             event_content = event_payload.event_content
             required_capabilities = event_payload.required_capabilities
             event = create_user_event(event_content, stream=meta["stream"])
-            logger.info(f"[NanobotBridge] Event created, about to call _process_event")
+            logger.info("[NanobotBridge] Event created, about to call _process_event")
 
             # --- Dynamic Model Routing (new priority-ordered system) ---
             route_client = None
@@ -2087,14 +2087,14 @@ class NanobotBridge:
             target_model = model_loop.target_model
             preserved_html = model_loop.preserved_html
 
-            logger.info(f"[NanobotBridge] Checking output buffer...")
+            logger.info("[NanobotBridge] Checking output buffer...")
             response = self._output.get_response()
             buffer_list = self._output._buffer if hasattr(self._output, '_buffer') else []
             buffer_len = len(buffer_list)
 
             # 如果 output buffer 为空，尝试从返回值获取
             if not response and result:
-                logger.info(f"[NanobotBridge] Buffer empty, using _process_event return value")
+                logger.info("[NanobotBridge] Buffer empty, using _process_event return value")
                 response = str(result) if result else ""
 
             # 事后兜底——retry loop 已做 preserved HTML 提取，这里只补漏
@@ -2108,7 +2108,7 @@ class NanobotBridge:
             if response:
                 logger.debug(f"[NanobotBridge] Response preview: {response[:200]}")
             else:
-                logger.warning(f"[NanobotBridge] EMPTY RESPONSE!")
+                logger.warning("[NanobotBridge] EMPTY RESPONSE!")
                 logger.warning(f"[NanobotBridge] buffer={buffer_list}, result={result}")
 
             reply_resolution = await self._check_reply_contract(
