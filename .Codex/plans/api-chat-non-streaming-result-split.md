@@ -415,7 +415,7 @@ git commit -m "test(普通API): 锁定非流式结果收尾契约"
 - 创建：`api/chat_non_streaming_result.py`
 - 修改：`.Codex/plans/api-chat-non-streaming-result-split.md`
 
-- [ ] **步骤 1：创建 helper 模块**
+- [x] **步骤 1：创建 helper 模块**
 
 创建 `api/chat_non_streaming_result.py`，写入：
 
@@ -466,7 +466,7 @@ class ChatNonStreamingResult:
     prompt_audit_failed: bool = False
 ```
 
-- [ ] **步骤 2：实现内部 request attr 和 audit 判断**
+- [x] **步骤 2：实现内部 request attr 和 audit 判断**
 
 在同一文件追加：
 
@@ -479,7 +479,7 @@ def _is_prompt_audit_failed(reply_meta: dict[str, Any] | None) -> bool:
     return (reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed"
 ```
 
-- [ ] **步骤 3：实现 `finalize_non_streaming_chat_result()`**
+- [x] **步骤 3：实现 `finalize_non_streaming_chat_result()`**
 
 在同一文件追加：
 
@@ -560,7 +560,7 @@ async def finalize_non_streaming_chat_result(
     )
 ```
 
-- [ ] **步骤 4：运行 helper 绿灯测试**
+- [x] **步骤 4：运行 helper 绿灯测试**
 
 运行：
 
@@ -575,9 +575,9 @@ tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_imp
 -v
 ```
 
-预期：只有父模块接入测试仍 FAIL；helper 行为测试和 split module 扫描通过。
+结果：`8 passed, 1 failed, 1 warning in 6.74s`。唯一失败为 `test_parent_non_streaming_chat_delegates_result_finalize_and_keeps_http_boundaries`，原因是 `api.routes` 尚未接入 `chat_non_streaming_result`；helper 行为测试和 split module 扫描均已通过。
 
-- [ ] **步骤 5：提交 helper 模块**
+- [x] **步骤 5：提交 helper 模块**
 
 运行：
 
