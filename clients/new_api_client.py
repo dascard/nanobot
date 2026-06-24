@@ -515,10 +515,14 @@ class NewAPIClient:
         has_tools = bool(tools)
 
         score = 2  # baseline
-        if length > 400:   score += 1
-        if length > 800:   score += 1
-        if length > 1800:  score += 1
-        if has_tools:      score += 1
+        if length > 400:
+            score += 1
+        if length > 800:
+            score += 1
+        if length > 1800:
+            score += 1
+        if has_tools:
+            score += 1
 
         hard_markers = ["设计", "证明", "推导", "架构", "审计", "优化",
                         "debug", "reason", "analyze", "复杂", "proof"]

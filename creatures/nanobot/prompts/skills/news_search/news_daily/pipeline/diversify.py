@@ -27,8 +27,10 @@ def _src_diversity(cluster: EventCluster) -> float:
 
 
 def _src_confidence(cluster: EventCluster) -> float:
-    if len(cluster.source_domains) >= 2: return 1.0
-    if cluster.representative and cluster.representative.is_official: return 0.75
+    if len(cluster.source_domains) >= 2:
+        return 1.0
+    if cluster.representative and cluster.representative.is_official:
+        return 0.75
     return 0.35
 
 
@@ -66,8 +68,10 @@ def select_diverse_clusters(clusters: list[EventCluster], now: datetime) -> list
         if any(entity_cnt[e] >= MAX_SAME_ENTITY_CLUSTERS_DAILY for e in c.entities):
             continue
         selected.append(c)
-        if rep: domain_cnt[rep.domain] += 1
-        for e in c.entities: entity_cnt[e] += 1
+        if rep:
+            domain_cnt[rep.domain] += 1
+        for e in c.entities:
+            entity_cnt[e] += 1
     return selected
 
 

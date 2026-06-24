@@ -147,7 +147,8 @@ def list_block_rules(page: int = 1, limit: int = 20, db: Session = Depends(get_d
 @router.post("/block-rules")
 def create_block_rule(body: BlockRuleCreate, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     rule = UserBlockRule(**body.model_dump())
-    db.add(rule); db.commit()
+    db.add(rule)
+    db.commit()
     audit_request(db, request, "create_block_rule", "block_rule", rule.id, body.model_dump())
     return _block_dict(rule)
 
@@ -182,7 +183,8 @@ def update_block_rule(rule_id: int, body: BlockRuleUpdate, request: Request, db:
     for field in ("rule_mode", "reason", "enabled"):
         val = getattr(body, field, None)
         if val is not None:
-            setattr(row, field, val); updates[field] = val
+            setattr(row, field, val)
+            updates[field] = val
     db.commit()
     audit_request(db, request, "update_block_rule", "block_rule", rule_id, updates)
     return _block_dict(row)
@@ -193,7 +195,8 @@ def delete_block_rule(rule_id: int, request: Request, db: Session = Depends(get_
     row = db.query(UserBlockRule).filter(UserBlockRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "Not found")
-    db.delete(row); db.commit()
+    db.delete(row)
+    db.commit()
     audit_request(db, request, "delete_block_rule", "block_rule", rule_id)
     return {"ok": True}
 
@@ -222,7 +225,8 @@ def create_content_block_rule(body: ContentBlockRuleCreate, request: Request,
     if body.scope_type not in ("global", "session"):
         raise HTTPException(400, "scope_type 必须是 global/session")
     rule = ContentBlockRule(**body.model_dump())
-    db.add(rule); db.commit()
+    db.add(rule)
+    db.commit()
     audit_request(db, request, "create_content_block_rule", "content_block_rule", rule.id)
     return _content_block_dict(rule)
 
@@ -242,11 +246,13 @@ def update_content_block_rule(rule_id: int, body: ContentBlockRuleUpdate, reques
     for field in ("pattern", "match_type", "scope_type", "chat_stream_id", "category", "reason"):
         val = getattr(body, field, None)
         if val is not None:
-            setattr(row, field, val); updates[field] = val
+            setattr(row, field, val)
+            updates[field] = val
     for field in int_fields:
         val = getattr(body, field, None)
         if val is not None:
-            setattr(row, field, int(val)); updates[field] = int(val)
+            setattr(row, field, int(val))
+            updates[field] = int(val)
     db.commit()
     audit_request(db, request, "update_content_block_rule", "content_block_rule", rule_id, updates)
     return _content_block_dict(row)
@@ -258,7 +264,8 @@ def delete_content_block_rule(rule_id: int, request: Request,
     row = db.query(ContentBlockRule).filter(ContentBlockRule.id == rule_id).first()
     if not row:
         raise HTTPException(404, "Not found")
-    db.delete(row); db.commit()
+    db.delete(row)
+    db.commit()
     audit_request(db, request, "delete_content_block_rule", "content_block_rule", rule_id)
     return {"ok": True}
 
@@ -362,7 +369,8 @@ def update_config(chat_stream_id: str, body: ConfigUpdate, request: Request, db:
     row = db.query(ChatStreamConfig).filter(ChatStreamConfig.chat_stream_id == chat_stream_id).first()
     if not row:
         row = ChatStreamConfig(chat_stream_id=chat_stream_id)
-        db.add(row); db.flush()
+        db.add(row)
+        db.flush()
     updates = {}
     int_fields = ("mentioned_bot_reply", "use_expression", "enable_expression_learning",
                   "enable_jargon_learning", "planner_smooth")

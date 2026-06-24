@@ -131,18 +131,22 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
 
     ref = extract_preview_ref(row)
     if not ref:
-        row.preview_status = "invalid_ref"; db.commit()
+        row.preview_status = "invalid_ref"
+        db.commit()
         return StickerPreviewCacheResult(ok=False, status="invalid_ref", error="no preview ref")
 
     u = urlparse(ref)
     if u.scheme not in {"http", "https"}:
-        row.preview_status = "blocked"; db.commit()
+        row.preview_status = "blocked"
+        db.commit()
         return StickerPreviewCacheResult(ok=False, status="blocked", error="unsupported scheme")
     if not u.hostname:
-        row.preview_status = "blocked"; db.commit()
+        row.preview_status = "blocked"
+        db.commit()
         return StickerPreviewCacheResult(ok=False, status="blocked", error="missing hostname")
     if is_blocked_host(u.hostname):
-        row.preview_status = "blocked"; db.commit()
+        row.preview_status = "blocked"
+        db.commit()
         return StickerPreviewCacheResult(ok=False, status="blocked", error="private IP blocked")
 
     try:
@@ -157,9 +161,11 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
             body_preview = data[:500].decode("utf-8", errors="ignore")
             lower = body_preview.lower()
             if "download url has expired" in lower or "-5503007" in body_preview:
-                row.preview_status = "expired"; db.commit()
+                row.preview_status = "expired"
+                db.commit()
                 return StickerPreviewCacheResult(ok=False, status="expired", error=body_preview[:200])
-            row.preview_status = "fetch_failed"; db.commit()
+            row.preview_status = "fetch_failed"
+            db.commit()
             return StickerPreviewCacheResult(ok=False, status="fetch_failed",
                                               error=f"http {e.code}: {body_preview[:200]}")
 
@@ -167,13 +173,16 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
             body_preview = data[:500].decode("utf-8", errors="ignore")
             lower = body_preview.lower()
             if "download url has expired" in lower or "-5503007" in body_preview:
-                row.preview_status = "expired"; db.commit()
+                row.preview_status = "expired"
+                db.commit()
                 return StickerPreviewCacheResult(ok=False, status="expired", error=body_preview[:200])
-            row.preview_status = "invalid_image"; db.commit()
+            row.preview_status = "invalid_image"
+            db.commit()
             return StickerPreviewCacheResult(ok=False, status="invalid_image", error="not an image")
 
         if len(data) < 512:
-            row.preview_status = "invalid_image"; db.commit()
+            row.preview_status = "invalid_image"
+            db.commit()
             return StickerPreviewCacheResult(ok=False, status="invalid_image", error="too small")
 
         try:
@@ -182,7 +191,8 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
             img2 = Image.open(io.BytesIO(data))
             width, height = img2.size
         except Exception as e:
-            row.preview_status = "invalid_image"; db.commit()
+            row.preview_status = "invalid_image"
+            db.commit()
             return StickerPreviewCacheResult(ok=False, status="invalid_image", error=str(e))
 
         ext_map = {"image/png":".png","image/jpeg":".jpg","image/gif":".gif","image/webp":".webp"}
@@ -193,10 +203,14 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
             f.write(data)
         row.local_path = local
         row.preview_status = "ok"
-        if hasattr(row, "content_hash"): row.content_hash = ch
-        if hasattr(row, "byte_size"): row.byte_size = len(data)
-        if hasattr(row, "width"): row.width = width
-        if hasattr(row, "height"): row.height = height
+        if hasattr(row, "content_hash"):
+            row.content_hash = ch
+        if hasattr(row, "byte_size"):
+            row.byte_size = len(data)
+        if hasattr(row, "width"):
+            row.width = width
+        if hasattr(row, "height"):
+            row.height = height
 
         # 计算感知哈希（动图取首帧，透明背景转白底）
         if local:
@@ -216,7 +230,8 @@ def cache_sticker_preview(db: Session, sticker_id: int, *, force: bool = False) 
         return StickerPreviewCacheResult(ok=True, status="ok", local_path=local,
                                           content_hash=ch, width=width, height=height)
     except Exception as e:
-        row.preview_status = "fetch_failed"; db.commit()
+        row.preview_status = "fetch_failed"
+        db.commit()
         return StickerPreviewCacheResult(ok=False, status="fetch_failed", error=str(e))
 
 

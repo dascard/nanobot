@@ -484,7 +484,8 @@ def search_and_extract_news_v2(
     mode: str = "fast",
 ) -> str:
     """新 Pipeline: 搜索→去重评分→Evidence Cards→结构化JSON→validate→模板HTML。"""
-    import time as _t; t0 = _t.time()
+    import time as _t
+    t0 = _t.time()
     from .evidence import (
         build_evidence_pipeline, validate_digest, safe_digest, FALLBACK_DIGEST,
     )

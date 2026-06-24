@@ -377,8 +377,10 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
             old_models = []
             old_row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
             if old_row:
-                try: old_models = json.loads(old_row.value or "{}").get("models", [])
-                except Exception: pass
+                try:
+                    old_models = json.loads(old_row.value or "{}").get("models", [])
+                except Exception:
+                    pass
             val = json.dumps({
                 "models": old_models, "updated_at": datetime.now().isoformat(),
                 "last_refresh_ok": False, "last_error": str(e)[:300],

@@ -667,8 +667,8 @@
   已在 `core/prompts/manager.py` 的 trace fallback、`core/context_legacy.py` 的 deprecated 群画像 fallback、`api/admin/system_routes.py` 的 git 探测 fallback、`app/group_ingress/helpers.py` 的 `safe_meta()` / `get_group_talk_value()` fallback，以及 `app/memory_digest/builder.py` 的 `_safe_meta()` fallback 补 `logger.debug`；日志只记录定位信息和异常摘要，不记录 prompt 正文、原始 `meta_json`、用户消息或群记忆 evidence。`core/legacy_adapter.py::SQLiteMemory.save_log()` 此前已完成 rollback + `logger.exception` + 回归测试，本次仅复验旧行为，未改业务语义。
 
 - [ ] **ruff 批量清理** · LOW · S
-  F401 未用 import ×~24（`ruff check --fix`）；F841 死变量（`classifier_client.py:1164`、`persona_update/tool.py:53,139`）；E402/F811（`admin_routes.py:34-38,89`）；`__import__("datetime")`(`model_registry.py:418,459`)；`asyncio.ensure_future`→`create_task`(`new_api_client.py:320`，并入 E4)；旧式 `List/Dict/Optional`→内置泛型；`database.py` naive datetime（单机部署，低优先）。
-  - 进展（2026-06-24）：F821 类型注解引用已清零；F841 未使用局部变量已清零，并补强 `news_daily` 同实体 render guard 测试，修复 top story 未计入 highlight 去重的问题；F541 冗余 f-string 前缀已清零；E401/E712/F402/E741 小类别已清零；F811 重复定义已清零。剩余清理继续按 F401 facade 兼容、E402/E701/E702 等小批推进。
+  F401 未用 import（当前主要是 facade / re-export 兼容项，不能无脑 `ruff --fix`）；E402 import 位置；旧式 `List/Dict/Optional`→内置泛型；`database.py` naive datetime（单机部署，低优先）。
+  - 进展（2026-06-24）：F821 类型注解引用已清零；F841 未使用局部变量已清零，并补强 `news_daily` 同实体 render guard 测试，修复 top story 未计入 highlight 去重的问题；F541 冗余 f-string 前缀已清零；E401/E712/F402/E741 小类别已清零；F811 重复定义已清零；E701/E702 一行多语句已清零。剩余清理继续按 F401 facade 兼容和 E402 小批推进；当前 Ruff 统计剩余为 F401 ×442、E402 ×46。
 
 ---
 

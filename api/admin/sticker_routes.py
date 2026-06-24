@@ -285,11 +285,14 @@ def update_sticker(sticker_id: int, body: StickerUpdate, request: Request, db: S
     for field, attr in [("name", "name"), ("description", "description"), ("status", "status")]:
         val = getattr(body, field, None)
         if val is not None:
-            setattr(row, attr, val); updates[field] = val
+            setattr(row, attr, val)
+            updates[field] = val
     if body.tags is not None:
-        row.tags_json = json.dumps(body.tags, ensure_ascii=False); updates["tags"] = body.tags
+        row.tags_json = json.dumps(body.tags, ensure_ascii=False)
+        updates["tags"] = body.tags
     if body.emotions is not None:
-        row.emotions_json = json.dumps(body.emotions, ensure_ascii=False); updates["emotions"] = body.emotions
+        row.emotions_json = json.dumps(body.emotions, ensure_ascii=False)
+        updates["emotions"] = body.emotions
     db.commit()
     _audit_request(db, request, "update_sticker", "sticker", sticker_id, updates)
     return _sticker_dict(row)
@@ -302,7 +305,8 @@ def enable_sticker(sticker_id: int, request: Request, db: Session = Depends(get_
         raise HTTPException(404, "Not found")
     if row.dedupe_status == "duplicate":
         raise HTTPException(400, "duplicate sticker cannot be enabled directly")
-    row.status = "active"; db.commit()
+    row.status = "active"
+    db.commit()
     _audit_request(db, request, "enable_sticker", "sticker", sticker_id)
     return {"ok": True}
 
@@ -312,7 +316,8 @@ def disable_sticker(sticker_id: int, request: Request, db: Session = Depends(get
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
-    row.status = "disabled"; db.commit()
+    row.status = "disabled"
+    db.commit()
     _audit_request(db, request, "disable_sticker", "sticker", sticker_id)
     return {"ok": True}
 
@@ -609,6 +614,7 @@ def delete_sticker(sticker_id: int, request: Request, db: Session = Depends(get_
     row = db.query(StickerMemory).filter(StickerMemory.id == sticker_id).first()
     if not row:
         raise HTTPException(404, "Not found")
-    row.status = "deleted"; db.commit()
+    row.status = "deleted"
+    db.commit()
     _audit_request(db, request, "soft_delete_sticker", "sticker", sticker_id)
     return {"ok": True}

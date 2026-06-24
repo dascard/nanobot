@@ -32,8 +32,10 @@ def article_similarity(a: Article, b: Article) -> float:
 def _pick_representative(articles: list[Article]) -> Article:
     def score(a: Article) -> float:
         s = a.freshness_score * 0.35 + a.source_quality_score * 0.30 + a.importance_hint * 0.20
-        if a.is_official: s += 0.10
-        if a.published_at is not None: s += 0.05
+        if a.is_official:
+            s += 0.10
+        if a.published_at is not None:
+            s += 0.05
         return s
     return max(articles, key=score)
 

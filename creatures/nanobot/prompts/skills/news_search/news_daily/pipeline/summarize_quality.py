@@ -138,10 +138,13 @@ def summarize_quality(cards: list[dict], fallback: dict) -> dict:
         raw = run_awaitable_sync(_call())
 
         if not raw:
-            logger.warning("[quality] LLM returned empty, using fallback"); return fallback
+            logger.warning("[quality] LLM returned empty, using fallback")
+            return fallback
 
         parsed = json.loads(_extract_json(raw))
-        logger.info("[quality] LLM summary success chars=%d", len(raw)); parsed["_quality_source"] = "llm"; return parsed if isinstance(parsed, dict) else fallback
+        logger.info("[quality] LLM summary success chars=%d", len(raw))
+        parsed["_quality_source"] = "llm"
+        return parsed if isinstance(parsed, dict) else fallback
 
     except Exception as e:
         logger.warning("[quality] LLM summary failed: %s", e)

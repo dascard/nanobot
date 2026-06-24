@@ -608,7 +608,8 @@ class NanobotKTController:
         """
         # 1. Memory Stage: Fetch logs (now returns list of dicts, not ORM objects)
         logs = self.memory.get_unprocessed_logs(user_id)
-        if not logs: return
+        if not logs:
+            return
 
         # 2. Analysis Stage: LogAnalyst sub-agent
         logger.info(f"  [KT Local Analyst] Analyzing logs for {user_id}...")
@@ -733,7 +734,8 @@ class EvolutionUtils:
                     user_corrections = user_corrections + 1
             else:
                 consecutive_depth = 0
-                if len(content) > 200: long_exchanges = long_exchanges + 1
+                if len(content) > 200:
+                    long_exchanges = long_exchanges + 1
             
             cleaned_lines.append(f"{role.capitalize()}: {content}")
 

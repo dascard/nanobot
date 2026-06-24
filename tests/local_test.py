@@ -98,7 +98,8 @@ def _save(text: str, prefix: str = "chat") -> str:
 
 
 def _show(text: str):
-    if not text: return
+    if not text:
+        return
     is_html = text.lstrip()[:15].lower().startswith(("<!doctype", "<html", "<article"))
     path = _save(text, "chat")
     tag = "HTML" if is_html else "text"
@@ -137,11 +138,16 @@ if __name__ == "__main__":
         try:
             while True:
                 q = input("> ").strip()
-                if not q: continue
+                if not q:
+                    continue
                 r = _chat(q)
                 a = r.get("answer", "")
-                if r.get("status") == "silent": print("<- [silent]\n")
-                else: print("<- ", end=""); _show(a); print()
+                if r.get("status") == "silent":
+                    print("<- [silent]\n")
+                else:
+                    print("<- ", end="")
+                    _show(a)
+                    print()
         except (KeyboardInterrupt, EOFError):
             print("\nBye.")
     else:

@@ -519,7 +519,8 @@ class ModelRegistry:
     def add_or_update_model(self, model_data: Dict[str, Any]):
         model_data = normalize_model_record(model_data)
         model_id = model_data.get("id")
-        if not model_id: return
+        if not model_id:
+            return
         
         models_list = self.data.get("models", [])
         found = False
