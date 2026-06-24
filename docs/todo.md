@@ -1,6 +1,6 @@
 # Nanobot Server — 待办计划
 
-> 本文件分两部分：**一、缺陷修复清单**（来自 2026-06-16 全仓库 Python 代码审查 + 逐条对抗式核验）；**二、架构演进路线**（2026-06-16 读真实代码核实重写，后续状态已更新至 2026-06-23，每项含现状/痛点/目标/关联/粗略路径）。
+> 本文件分两部分：**一、缺陷修复清单**（来自 2026-06-16 全仓库 Python 代码审查 + 逐条对抗式核验）；**二、架构演进路线**（2026-06-16 读真实代码核实重写，后续状态已更新至 2026-06-24，每项含现状/痛点/目标/关联/粗略路径）。
 > 缺陷条目均经「读真实代码 + 引用行号」核验，已剔除 11 项误报（见附录）。严重度 = 真实可利用性，非原始审查给分。
 
 ---
@@ -111,7 +111,7 @@
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
 - [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1098)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
+  `api/routes.py`(1022)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
   - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
@@ -559,6 +559,25 @@
     `5 passed, 1 warning in 0.91s`，相邻回归 `31 passed, 21 warnings in 7.90s`，
     静态检查通过，全量回归
     `1768 passed, 6 skipped, 139 warnings in 125.22s (0:02:05)`。
+  - 进展：`api/routes.py` 第二十六刀已拆出私聊 pre-bridge 决策编排到
+    `api/chat_pre_bridge_decision.py`；父模块继续保留 DB、HTTP response、
+    `_persist_chat_turn()`、`_chat_response_payload()`、guardrail silent 落库、
+    `PersonaInjectionService`、Prompt Runtime payload、Bridge 调用、SSE、非流式结果
+    收尾和所有 monkeypatch facade。新模块只通过 `ChatPreBridgeServices` 接收
+    private timing、guardrail、private buffer、时间源和 logger patch point，并返回
+    `ChatPreBridgeEarlyReturn` 或 `ChatPreBridgeContinue` outcome。本阶段未迁移
+    `proxy_chat()` 路由本体、history 注入、`safe_user_input`、`enriched_query`、
+    `bridge_meta`、message envelope、push envelope 或 Prompt Runtime 模板；新模块不
+    反向导入 `api.routes`、FastAPI、DB、Bridge 或 Prompt Runtime，也没有新增
+    `asyncio.run`、`run_awaitable_sync` 或同步函数包装 awaitable。`api/routes.py`
+    从 1098 行降至 1022 行，`api/chat_pre_bridge_decision.py` 为 316 行，
+    拆分测试为 378 行。验证结果：红灯 `12 failed, 1 warning in 6.94s`，
+    helper 阶段 `6 passed, 2 failed, 1 warning in 6.57s`，父模块接入定向
+    `8 passed, 1 warning in 0.96s`，split 扫描 `4 passed, 1 warning in 1.11s`，
+    private buffer / guardrail 相邻回归 `27 passed, 21 warnings in 5.18s`，
+    静态检查通过，全量回归
+    `1776 passed, 6 skipped, 139 warnings in 137.28s (0:02:17)`；文档收口
+    提交前复跑 `1776 passed, 6 skipped, 139 warnings in 123.02s (0:02:03)`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch

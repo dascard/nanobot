@@ -1144,7 +1144,7 @@ wc -l api/routes.py api/chat_pre_bridge_decision.py tests/test_api_chat_pre_brid
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-chat-pre-bridge-decision-split.md`
 
-- [ ] **步骤 1：更新 `docs/todo.md`**
+- [x] **步骤 1：更新 `docs/todo.md`**
 
 在 P3 超大文件拆分记录中追加 2026-06-24 私聊 pre-bridge 决策拆分结果：
 
@@ -1152,7 +1152,7 @@ wc -l api/routes.py api/chat_pre_bridge_decision.py tests/test_api_chat_pre_brid
 - 2026-06-24：完成 `api/routes.py` 私聊 pre-bridge 决策拆分，新增 `api/chat_pre_bridge_decision.py`，父模块保留 DB、response、Prompt Runtime、Bridge 和 SSE 边界。
 ```
 
-- [ ] **步骤 2：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 2：更新 `docs/plan_walkthrough.md`**
 
 追加本阶段收口记录，包含：
 
@@ -1169,7 +1169,7 @@ wc -l api/routes.py api/chat_pre_bridge_decision.py tests/test_api_chat_pre_brid
 - 下一步：继续寻找 `api/routes.py` 中剩余可拆连续区块，避免触碰 Prompt Runtime 模板契约。
 ```
 
-- [ ] **步骤 3：运行全量测试**
+- [x] **步骤 3：运行全量测试**
 
 运行：
 
@@ -1180,7 +1180,9 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 4：运行最终文档检查**
+实际：阶段全量为 1776 passed, 6 skipped, 139 warnings in 137.28s (0:02:17)；文档收口提交前复跑为 1776 passed, 6 skipped, 139 warnings in 123.02s (0:02:03)。
+
+- [x] **步骤 4：运行最终文档检查**
 
 运行：
 
@@ -1193,12 +1195,16 @@ git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-chat-
 
 预期：计划和设计文档没有占位红旗；`git diff --check` 无输出。
 
-- [ ] **步骤 5：Commit 文档收口**
+实际：占位红旗扫描无输出；`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-chat-pre-bridge-decision-split.md` 无输出。
+
+- [x] **步骤 5：Commit 文档收口**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-chat-pre-bridge-decision-split.md
 git commit -m "docs(计划): 收口私聊前置决策拆分"
 ```
+
+说明：本步骤随文档收口提交自身完成。
 
 ---
 
