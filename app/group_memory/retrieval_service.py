@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from core.group_runtime.ids import normalize_group_session_id
 from core.semantic.reranker import SemanticCandidate
+from core.time_utils import db_now_naive
 
 
 TYPE_LIMITS = {
@@ -98,7 +99,7 @@ def _lexical_relevance(memory_text: str, query_text: str) -> float:
 def _recency_weight(last_seen: datetime | None) -> float:
     if not last_seen:
         return 0.0
-    days = max(0.0, (datetime.now() - last_seen).total_seconds() / 86400)
+    days = max(0.0, (db_now_naive() - last_seen).total_seconds() / 86400)
     return max(0.0, min(1.0, math.exp(-days / 30.0)))
 
 

@@ -16,6 +16,7 @@ from core.group_runtime.ids import (
     normalize_group_stream_id,
     raw_group_id,
 )
+from core.time_utils import db_now_naive
 
 from app.group_memory.renderer import render_group_memory_context
 from app.group_memory.retrieval_service import GroupMemoryRetrievalService
@@ -186,7 +187,7 @@ def record_group_memory_injected(db: Session, selected_ids: list[int]) -> int:
         return 0
     from core.database import GroupMemory
 
-    now = datetime.now()
+    now = db_now_naive()
     rows = db.query(GroupMemory).filter(GroupMemory.id.in_(ids)).all()
     for row in rows:
         row.last_injected_at = now

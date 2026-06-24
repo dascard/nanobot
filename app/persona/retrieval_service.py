@@ -10,6 +10,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from core.time_utils import db_now_naive
+
 
 TYPE_LIMITS = {
     "stable_preference": 3,
@@ -84,7 +86,7 @@ def _confidence_score(label: str) -> float:
 def _recency_weight(last_seen: datetime | None) -> float:
     if not last_seen:
         return 0.0
-    days = max(0.0, (datetime.now() - last_seen).total_seconds() / 86400)
+    days = max(0.0, (db_now_naive() - last_seen).total_seconds() / 86400)
     return max(0.0, min(1.0, math.exp(-days / 45.0)))
 
 

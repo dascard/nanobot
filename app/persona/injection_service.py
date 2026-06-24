@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.persona.renderer import render_persona_context
 from app.persona.retrieval_service import PersonaRetrievalService
+from core.time_utils import db_now_naive
 
 
 @dataclass
@@ -87,7 +87,7 @@ def record_persona_injected(db: Session, selected_ids: list[int]) -> int:
 
     from core.database import PersonaFact
 
-    now = datetime.now()
+    now = db_now_naive()
     rows = db.query(PersonaFact).filter(PersonaFact.id.in_(ids)).all()
     for row in rows:
         row.last_injected_at = now

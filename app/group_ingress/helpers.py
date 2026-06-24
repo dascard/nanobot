@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -18,6 +18,7 @@ from core.database import ChatLog, ConversationTurn
 from core.group_runtime.ids import normalize_group_session_id as normalize_group_session_id
 from core.settings_service import settings
 from core.sqlite_retry import run_sqlite_locked_retry
+from core.time_utils import db_now_naive
 
 logger = logging.getLogger("nanobot.group_ingress")
 
@@ -536,7 +537,7 @@ def find_recent_duplicate_group_reply(
     if len(normalized) < min_chars:
         return None
 
-    cutoff = datetime.now() - timedelta(seconds=window_seconds)
+    cutoff = db_now_naive() - timedelta(seconds=window_seconds)
     rows = (
         db.query(ChatLog)
         .filter(ChatLog.session_id == group_user_id, ChatLog.role == "assistant", ChatLog.created_at >= cutoff)

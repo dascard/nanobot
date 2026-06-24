@@ -9,7 +9,6 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -25,6 +24,7 @@ from app.session_memory.rolling_summary import archive_active_summaries_for_sess
 from app.session_memory.summarizer import render_summary_text
 from app.session_memory.windowing import estimate_tokens, is_context_eligible_turn
 from core.database import ConversationTurn, RollingSessionSummary, SessionSummaryJob
+from core.time_utils import db_now_naive
 
 logger = logging.getLogger("nanobot.session_summary.llm")
 
@@ -326,6 +326,7 @@ def save_llm_session_summary(
     quality = payload.get("quality") if isinstance(payload.get("quality"), dict) else {}
     issues = quality.get("issues") if isinstance(quality.get("issues"), list) else []
     summary_text = render_summary_text(payload)
+    now = db_now_naive()
     row = RollingSessionSummary(
         session_id=job.session_id,
         user_id=job.user_id or "",
@@ -363,8 +364,8 @@ def save_llm_session_summary(
             "fallback_summary_id": int(getattr(fallback, "id", 0) or 0),
             "previous_summary_id": int(getattr(previous, "id", 0) or 0),
         }, ensure_ascii=False),
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+        created_at=now,
+        updated_at=now,
     )
     db.add(row)
     db.flush()
