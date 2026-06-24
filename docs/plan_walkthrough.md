@@ -5,7 +5,7 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-24
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成私聊 Pre-Bridge 决策拆分，当前为 1022 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成 Chat Persona Lookup 拆分，当前为 1020 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。同日续跑补记：测试 helper 的 `asyncio.Runner` 兼容性问题已随 `cfdd9c2 test(异步): 移除 Runner 测试依赖` 收口，提交前全量回归结果为 `1380 passed, 6 skipped, 139 warnings in 100.75s`，非 vendor Python 代码中无 `asyncio.Runner` 命中。TimingGate scoring 可观测性收尾也已完成：设计提交 `4824036 docs(时机): 设计评分可观测收尾`，计划提交 `2820f7a docs(计划): 记录评分可观测收尾计划`，实现提交 `9d5817c feat(时机): 补齐评分可观测字段`；验证包括红灯 `s_transport_tier` 缺失、绿灯 `1 passed`、相邻回归 `7 passed`、WebUI build 退出码 0、全量回归 `1380 passed, 6 skipped, 139 warnings in 103.22s`。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
@@ -5399,3 +5399,80 @@ async 策略核对：
 下一步：
 
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1022。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界建议优先评估 `proxy_chat()` 中 Prompt Runtime payload 之后但 Bridge 调用之前的低耦合 helper，或拆更小的 guardrail silent / persona lookup 子边界；继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
+
+## 2026-06-24 普通 API Chat Persona Lookup 拆分
+
+状态：设计、计划、红灯测试、helper 拆分、父模块接入、相邻回归、全量验证和阶段提交均已完成。本阶段把 `proxy_chat()` 中的 persona user_id fallback、`Persona` 查询、JSON object parse 和初始 persona formatter 编排拆到 `api/chat_persona_lookup.py`。父模块继续保留 persona fallback / missing / lookup 日志、`PersonaInjectionService`、Prompt Runtime payload、Bridge、SSE、response envelope、落库边界和全部 monkeypatch facade。`api/routes.py` 从 1022 行降至 1020 行；`api/chat_persona_lookup.py` 为 73 行，拆分测试为 207 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-24-api-chat-persona-lookup-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-persona-lookup-split.md`。
+
+阶段提交：
+
+- 设计提交：`021aed2 docs(普通API): 设计画像查找拆分`。
+- 计划提交：`b067b89 docs(计划): 记录画像查找拆分计划`。
+- 红灯测试提交：`1797923 test(普通API): 锁定画像查找拆分契约`。
+- Helper 提交：`1df6689 refactor(普通API): 增加画像查找助手`。
+- 父模块接入提交：`f633619 refactor(普通API): 接入画像查找助手`。
+- 验证记录提交：`cdce46c docs(计划): 记录画像查找拆分验证`。
+- 文档收口提交：随本次 `docs(计划): 收口画像查找拆分` 完成。
+
+计划列表：
+
+- [x] 确认 persona lookup 拆分范围，排除 `PersonaInjectionService`、Prompt Runtime payload、Bridge、SSE、message envelope、push envelope 和 response envelope 迁移。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API Chat Persona Lookup split 红灯测试和 chat split module 扫描约束，并提交。
+- [x] 新增 `api/chat_persona_lookup.py`，锁定候选顺序、fallback lookup、JSON 降级、formatter callback 和不导入父模块约束，并提交。
+- [x] 将父模块 `proxy_chat()` 中的内联 persona lookup 改为委托 `_resolve_chat_persona_snapshot()`，并提交。
+- [x] 运行 chat split 扫描、相邻回归、静态检查和全量测试，记录验证结果。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_lookup_split.py -v`
+  -> `9 failed, 1 passed, 21 warnings in 7.66s`；失败点为 `api/chat_persona_lookup.py` 不存在、`api.chat_persona_lookup` 无法 import、父模块 `_resolve_chat_persona_snapshot` 尚不存在，以及 4 个 chat split module 扫描清单读取新模块失败。
+- Helper 阶段：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_lookup_split.py -v`
+  -> `5 passed, 1 failed, 21 warnings in 6.94s`；新模块行为测试通过，剩余失败为父模块尚未提供 `_resolve_chat_persona_snapshot`。
+- 父模块接入定向：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_lookup_split.py -v`
+  -> `6 passed, 21 warnings in 1.38s`。
+- Split 扫描：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  -> `4 passed, 1 warning in 1.27s`。
+- Persona context / runtime 相邻回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_context_split.py tests/test_api_chat_runtime_facade_split.py tests/test_api.py::test_proxy_chat_passes_history_header_to_bridge tests/test_api.py::test_proxy_chat_releases_db_transaction_before_bridge -v`
+  -> `14 passed, 21 warnings in 3.26s`。
+- 静态检查：
+  `python -m compileall api/routes.py api/chat_persona_lookup.py -q` 退出码 0；
+  `git diff --check` 对本阶段生产代码、测试文件和计划文件无输出；
+  `wc -l api/routes.py api/chat_persona_lookup.py tests/test_api_chat_persona_lookup_split.py`
+  -> `1020 api/routes.py`、`73 api/chat_persona_lookup.py`、`207 tests/test_api_chat_persona_lookup_split.py`。
+- 全量：
+  `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1782 passed, 6 skipped, 139 warnings in 133.42s (0:02:13)`。
+
+async 策略核对：
+
+- 本阶段新模块和 `api/routes.py` 未新增 `asyncio.run`、`run_awaitable_sync` 或同步函数包装 awaitable。
+- `rg -n "asyncio\\.run|run_awaitable_sync" api/routes.py api/chat_persona_lookup.py tests/test_api_chat_persona_lookup_split.py || true` 仅命中新测试中的禁止断言字符串，生产代码无新增命中。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移 `_build_chat_context()`、history 注入、`PersonaInjectionService`、Prompt Runtime payload、`safe_user_input`、`enriched_query`、`bridge_meta`、Bridge、SSE、message envelope、push envelope 或 response envelope。
+- 父模块继续负责 persona lookup 日志、动态 persona context 覆盖、Prompt Runtime、Bridge 调用和后续非流式 / 流式收尾。
+- 新模块只通过入参接收 DB session、`Persona` model 和 `_format_persona_for_prompt()` formatter callback。
+- 新模块不导入 `api.routes`、FastAPI、Bridge 或 Prompt Runtime。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约、message envelope、push envelope 或 response envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1020。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界建议继续围绕 `proxy_chat()` 中低耦合的纯组装或收尾 helper 做小刀拆分，目标仍是把 `api/routes.py` 降到 800 行以下。
