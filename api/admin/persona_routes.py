@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -20,6 +20,7 @@ from core.persona_preprocess import (
     content_hash,
     format_candidate_logs,
 )
+from core.time_utils import db_now_naive
 
 
 router = APIRouter(prefix="/persona", tags=["admin-persona"])
@@ -256,7 +257,7 @@ async def persona_extract_user(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    cutoff = None if body.window_hours <= 0 else datetime.now() - timedelta(hours=body.window_hours)
+    cutoff = None if body.window_hours <= 0 else db_now_naive() - timedelta(hours=body.window_hours)
     q = db.query(ChatLog).filter(ChatLog.user_id == user_id, ChatLog.role == "user")
     if cutoff is not None:
         q = q.filter(ChatLog.created_at >= cutoff)
@@ -310,7 +311,7 @@ async def persona_extract_user(
     persona = db.query(Persona).filter(Persona.user_id == user_id).first()
     if persona:
         persona.persona_json = persona_summary
-        persona.updated_at = datetime.now()
+        persona.updated_at = db_now_naive()
     else:
         db.add(Persona(user_id=user_id, persona_json=persona_summary))
     db.commit()

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -24,6 +23,7 @@ from core.database import (
 from core.evolution import evolution_task
 from core.group_runtime.ids import normalize_group_session_id
 from core.sqlite_retry import run_sqlite_locked_retry
+from core.time_utils import db_now_naive
 
 
 logger = logging.getLogger("nanobot.routes.history_log")
@@ -48,7 +48,7 @@ def mark_clear(
     之后的历史查询只拉取此时间点之后的 ConversationTurn。
     """
     try:
-        now = datetime.now()
+        now = db_now_naive()
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
             db.add(User(id=user_id, history_clear_at=now))

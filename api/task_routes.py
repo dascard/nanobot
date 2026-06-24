@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -11,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from api.common_auth import verify_token
 from core.database import get_db
+from core.time_utils import db_now_naive
 
 
 logger = logging.getLogger("nanobot.routes")
@@ -142,7 +142,7 @@ async def run_scheduled_task_now(
     )
     ok = await push_envelope_to_qq(t.target_type, t.target_id, envelope)
     if ok:
-        t.last_run_at = datetime.now()
+        t.last_run_at = db_now_naive()
         db.commit()
         return {
             "status": "ok",

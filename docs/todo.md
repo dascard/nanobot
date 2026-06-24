@@ -693,6 +693,7 @@
   - 进展（2026-06-24）：DTZ 第二十一批处理 DB-backed 测试 fixture，覆盖 `tests/test_persona_injection_service.py`、`tests/test_prompt_trace_admin.py`、`tests/test_rag_debug.py` 和 `tests/test_reply_admin.py` 中 4 个 `datetime.now()`；测试侧新增 `_local_now()`，集中保留 PersonaFact、trace DB、GroupMemory 和 ReplyContractCheckLog fixture 的 naive 本地墙钟时间语义，reply traffic 窗口断言继续使用单个 `now` 基准派生相对时间。定向回归 `36 passed, 21 warnings in 8.88s`；全仓 DTZ 统计从 91 降至 87。
   - 进展（2026-06-24）：DTZ 第二十二批处理本地测试脚本时间戳，覆盖 `tests/local_test.py` 中 1 个 `datetime.now()`；该位置只用于 push raw / json 本地调试 artifact 文件名，改为复用文件内已有 `time.strftime()` 风格，保持本地墙钟文件名语义并移除 `datetime` 导入。目标文件 Ruff / `compileall` 通过；全仓 DTZ 统计从 87 降至 86。
   - 进展（2026-06-24）：DTZ 第二十三批处理 DB 管理辅助时间，覆盖 `core/schema_migrations.py`、`core/runtime_tool_service.py` 和 `core/knowledge_library.py` 中 4 个命中；migration applied_at、RuntimeToolDecision 清理 cutoff 和 KnowledgeDocument 写入时间统一复用 `db_now_naive()`，保留 SQLite ORM naive 本地墙钟语义，migration 备份文件名改为 `time.strftime()`。定向回归 `46 passed, 139 warnings in 8.97s`；全仓 DTZ 统计从 86 降至 82。
+  - 进展（2026-06-24）：DTZ 第二十四批处理 Admin/API DB naive 时间，覆盖 `api/admin/persona_routes.py`、`api/history_log_routes.py` 和 `api/task_routes.py` 中 4 个命中；画像提取 cutoff / Persona.updated_at、mark-clear 清除边界和 ScheduledTask.last_run_at 均复用 `db_now_naive()`，保留 SQLite ORM naive 本地墙钟语义。定向回归 `24 passed, 21 warnings in 3.60s`；全仓 DTZ 统计从 82 降至 78。
 
 ---
 
