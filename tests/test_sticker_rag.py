@@ -8,6 +8,11 @@ from core.semantic.adapters import chunk_from_sticker
 from core.semantic.indexer import upsert_semantic_chunks
 
 
+def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
+
+
 class IdentityRerankerProvider:
     def __init__(self, scores, *, default_score=0.9):
         self.scores = scores
@@ -77,7 +82,7 @@ def _add_sticker(
         duplicate_of_id=duplicate_of_id,
         describe_status=describe_status,
         usage_count=usage_count,
-        last_seen=last_seen or datetime(2026, 5, 26, 12, 0, 0),
+        last_seen=last_seen or _db_time(2026, 5, 26, 12, 0, 0),
         meta_json=json.dumps(meta or {}, ensure_ascii=False),
     )
     db_session.add(row)

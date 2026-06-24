@@ -69,6 +69,11 @@ GROUP_MEMORY_DECOY_GROUP_ID = "group_rag_fixture_other"
 GROUP_MEMORY_QUERY = "群体记忆 RAG fixture 正例"
 
 
+def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
+    # RAG benchmark fixture 写入 SQLite ORM DateTime，保持 naive 本地墙钟时间语义。
+    return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
+
+
 def _ensure_supported_preset(preset: str) -> None:
     if preset != FIXTURE_PRESET:
         raise ValueError(f"unsupported rag benchmark fixture preset: {preset}")
@@ -204,7 +209,7 @@ def fixture_cases(preset: str = FIXTURE_PRESET) -> list[BenchmarkCase]:
 
 
 def _seed_knowledge_positive_fixture(db: Session) -> None:
-    now = datetime(2026, 6, 20, 0, 0, 0)
+    now = _db_time(2026, 6, 20, 0, 0, 0)
     semantic_chunks: list[SemanticChunk] = []
 
     def add_knowledge_doc(
@@ -296,7 +301,7 @@ def _seed_knowledge_positive_fixture(db: Session) -> None:
 
 
 def _seed_sticker_positive_fixture(db: Session) -> None:
-    now = datetime(2026, 6, 20, 0, 0, 0)
+    now = _db_time(2026, 6, 20, 0, 0, 0)
     semantic_chunks: list[SemanticChunk] = []
 
     def add_sticker(
@@ -362,7 +367,7 @@ def _seed_sticker_positive_fixture(db: Session) -> None:
 
 
 def _seed_group_memory_positive_fixture(db: Session) -> None:
-    now = datetime(2026, 6, 20, 0, 0, 0)
+    now = _db_time(2026, 6, 20, 0, 0, 0)
     meta = {"fixture": FIXTURE_PRESET, "evidence_short_summary": GROUP_MEMORY_QUERY}
     rows = [
         GroupMemory(
