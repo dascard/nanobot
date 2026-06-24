@@ -444,7 +444,7 @@ git commit -m "test(普通API): 锁定前置决策结果契约"
 - 创建：`api/chat_pre_bridge_route_result.py`
 - 修改：`.Codex/plans/api-chat-pre-bridge-route-result-split.md`
 
-- [ ] **步骤 1：新增模块与 dataclass**
+- [x] **步骤 1：新增模块与 dataclass**
 
 创建 `api/chat_pre_bridge_route_result.py`：
 
@@ -484,7 +484,7 @@ class ChatPreBridgeRouteContinue:
     persist_req: Any
 ```
 
-- [ ] **步骤 2：实现 early return 转译**
+- [x] **步骤 2：实现 early return 转译**
 
 追加：
 
@@ -517,7 +517,7 @@ async def _resolve_early_return(
     )
 ```
 
-- [ ] **步骤 3：实现 continue 与 guardrail silent 转译**
+- [x] **步骤 3：实现 continue 与 guardrail silent 转译**
 
 追加：
 
@@ -563,7 +563,7 @@ async def _resolve_continue(
     )
 ```
 
-- [ ] **步骤 4：实现公共 resolver**
+- [x] **步骤 4：实现公共 resolver**
 
 追加：
 
@@ -581,7 +581,7 @@ async def resolve_pre_bridge_route_result(
     raise TypeError(f"unsupported pre_bridge result: {type(pre_bridge)!r}")
 ```
 
-- [ ] **步骤 5：运行 helper 定向测试**
+- [x] **步骤 5：运行 helper 定向测试**
 
 运行：
 
@@ -591,7 +591,9 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_pre_bridge_route_res
 
 预期：helper 行为测试通过，父模块 wrapper 测试仍失败。
 
-- [ ] **步骤 6：提交 helper**
+实际结果（2026-06-24）：`5 passed, 1 failed, 1 warning in 6.49s`。新模块源码边界、early return、continue 和 guardrail silent 行为测试已通过；剩余失败为父模块尚未提供 `_chat_pre_bridge_route_callbacks()`。
+
+- [x] **步骤 6：提交 helper**
 
 ```bash
 git add api/chat_pre_bridge_route_result.py .Codex/plans/api-chat-pre-bridge-route-result-split.md
