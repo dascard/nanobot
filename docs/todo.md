@@ -686,6 +686,7 @@
   - 进展（2026-06-24）：DTZ 第十四批处理生产侧 rolling summary / tracing DB 时间，覆盖 `app/session_memory/rolling_summary.py` 和 `core/tracing.py` 中 12 个 ORM 写入时间；新增 `core/time_utils.py` 提供 `db_now_naive()` / `to_db_naive()`，保持 SQLite ORM naive 本地墙钟时间语义，并兼容 tracing 外部传入的 aware `finished_at`。定向回归 `70 passed, 21 warnings in 6.16s`；全仓 DTZ 统计从 161 降至 149。
   - 进展（2026-06-24）：DTZ 第十五批处理 job 队列 DB 时间，覆盖 `app/session_memory/jobs.py`、`core/semantic/jobs.py` 和 `workers/semantic_index_worker.py` 中 22 个 job 状态机 / worker 写入时间；复用 `db_now_naive()` / `to_db_naive()`，claim、recover、failed retry 等同一状态迁移只取一次本地 naive 时间，不改 retry 状态语义。定向回归 `43 passed, 21 warnings in 3.10s`；全仓 DTZ 统计从 149 降至 127。
   - 进展（2026-06-24）：DTZ 第十六批处理任务相关测试 fixture，覆盖 `tests/test_session_memory.py` 和 `tests/test_semantic_index_worker.py` 中 10 个 `datetime.now()`；测试侧新增 `_local_now()`，集中保留 SQLite ORM naive 本地墙钟时间语义，raw window、history clear、群上下文 rollup、session summary worker stale job 和 semantic index worker transaction / recover fixture 均复用同一 helper 或单个 `now` 基准。定向回归 `43 passed, 21 warnings in 3.17s`；全仓 DTZ 统计从 127 降至 117。
+  - 进展（2026-06-24）：DTZ 第十七批处理 Admin API 测试 fixture，覆盖 `tests/test_admin_api.py` 中 12 个 `datetime.now()`；测试侧新增 `_local_now()`，集中保留 ChatLog、ConversationTurn、GroupMemory 和 PersonaFact 等 SQLite ORM fixture 的 naive 本地墙钟时间语义，overview、timing gate events、画像治理、群记忆预览和工具目标列表用例继续使用单个 `now` 基准派生相对时间。定向回归 `30 passed, 1 warning in 4.89s`；全仓 DTZ 统计从 117 降至 105。
 
 ---
 

@@ -53,6 +53,11 @@ def _ok(r, msg=""):
     return r.json()
 
 
+def _local_now() -> datetime:
+    # Admin API 测试 DB fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 class TestAuth:
     def test_no_token_returns_401(self, client):
         assert client.get("/api/v1/admin/stickers").status_code == 401
@@ -426,7 +431,7 @@ class TestPrivateBlockFlow:
 
 class TestObservabilityAPI:
     def test_group_memory_overview_includes_groups_without_memories(self, client, auth_header):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(ChatLog(
                 user_id="group_7788", session_id="group_7788",
@@ -572,7 +577,7 @@ class TestObservabilityAPI:
             assert row.group_profile_mode == "on"
 
     def test_group_memory_injection_preview_returns_selected_and_skipped(self, client, auth_header):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(ChatStreamConfig(chat_stream_id="qq:7788:group", group_profile_mode="on"))
             db.add(GroupMemory(
@@ -690,7 +695,7 @@ class TestObservabilityAPI:
 
 class TestPersonaAdmin:
     def test_persona_users_facts_and_injection_preview(self, client, auth_header):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(User(id="u-persona", name="画像用户"))
             db.add(PersonaFact(
@@ -747,7 +752,7 @@ class TestPersonaAdmin:
             assert row.last_injected_at is None
 
     def test_persona_extract_returns_502_when_llm_content_is_empty(self, client, auth_header, monkeypatch):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(User(id="u-persona", name="画像用户"))
             db.add(ChatLog(
@@ -779,7 +784,7 @@ class TestPersonaAdmin:
     def test_persona_update_fact_rejects_duplicate_content(self, client, auth_header):
         from core.persona_preprocess import content_hash
 
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add_all([
                 PersonaFact(
@@ -827,7 +832,7 @@ class TestPersonaAdmin:
     def test_persona_update_fact_rejects_duplicate_when_memory_type_changes(self, client, auth_header):
         from core.persona_preprocess import content_hash
 
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add_all([
                 PersonaFact(
@@ -865,7 +870,7 @@ class TestPersonaAdmin:
         assert dup.status_code == 409
 
     def test_persona_update_fact_rejects_unknown_memory_type(self, client, auth_header):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(PersonaFact(
                 user_id="u-persona",
@@ -889,7 +894,7 @@ class TestPersonaAdmin:
         assert r.status_code == 422
 
     def test_overview_counts_recent_runtime_signals(self, client, auth_header):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(User(id="group_1001", name="测试群"))
             db.add(ChatStreamConfig(chat_stream_id="qq:1001:group", talk_value=0.35))
@@ -932,7 +937,7 @@ class TestPersonaAdmin:
         assert any(item["name"] == "数据库可用" and item["ok"] for item in data["health"])
 
     def test_group_list_and_detail_expose_recent_decision(self, client, auth_header):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(User(id="group_2002", name="运行群"))
             db.add(ChatStreamConfig(chat_stream_id="qq:2002:group", talk_value=0.6))
@@ -971,7 +976,7 @@ class TestPersonaAdmin:
         assert detail["timing_events"][0]["raw"].startswith("节奏普通")
 
     def test_timing_gate_events_returns_stats(self, client, auth_header):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(ChatLog(
                 user_id="group_3003", session_id="group_3003",
@@ -996,7 +1001,7 @@ class TestPersonaAdmin:
         assert data["items"][0]["fallback_action"] == "no_reply"
 
     def test_timing_gate_events_returns_scoring(self, client, auth_header):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(ChatLog(
                 user_id="group_3004", session_id="group_3004",
@@ -1421,7 +1426,7 @@ class TestToolAdmin:
         assert {"qq", "web", "synergy"}.issubset(target_ids)
 
     def test_tool_targets_list_real_groups_and_users(self, client, auth_header):
-        now = datetime.now()
+        now = _local_now()
         with next(app.dependency_overrides[get_db]()) as db:
             db.add(User(id="group_2002", name="真实群"))
             db.add(User(id="group_test", name="测试群"))
