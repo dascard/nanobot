@@ -24,6 +24,12 @@ from core.database import (
     Persona,
     ChatLog,
 )
+from core.context_builder import (
+    sanitize_prompt_text as _sanitize_prompt_text,
+    estimate_tokens as _estimate_tokens,
+    build_chat_context as _build_chat_context,
+    build_session_memory as _build_session_memory,
+)
 from core.evolution import evolution_task
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from core.moderation import check_message_moderation_db
@@ -176,14 +182,6 @@ def init_legacy_memory():
     global memory
     memory = SQLiteMemory()
     logger.info("Legacy SQLiteMemory initialized for evolution endpoints")
-
-
-from core.context_builder import (
-    sanitize_prompt_text as _sanitize_prompt_text,
-    estimate_tokens as _estimate_tokens,
-    build_chat_context as _build_chat_context,
-    build_session_memory as _build_session_memory,
-)
 
 # 旧函数已移至 core/context_builder.py，此处仅保留向后兼容 re-export
 

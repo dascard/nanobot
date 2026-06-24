@@ -16,9 +16,7 @@ from core.database import (
 )
 from config import NANOBOT_ADMIN_TOKEN
 
-logger = logging.getLogger("nanobot.admin")
-router = APIRouter(prefix="/api/v1/admin")
-
+# Legacy facade：聚合拆分子路由并保留旧导入路径兼容。
 from api.admin.db_browser_routes import (
     BLOCKED_DB_TABLES,
     DB_TABLE_GROUPS,
@@ -292,6 +290,9 @@ from api.admin.tool_routes import (
     set_tool_override,
     update_tool_defaults,
 )
+
+logger = logging.getLogger("nanobot.admin")
+router = APIRouter(prefix="/api/v1/admin")
 
 router.include_router(system_router)
 router.include_router(db_browser_router)

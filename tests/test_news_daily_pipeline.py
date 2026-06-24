@@ -1,4 +1,7 @@
 """news_daily EventCluster 管线单元测试——normalize_v2 / freshness / cluster / diversify / tool。"""
+
+# ruff: noqa: E402
+
 import sys
 from datetime import datetime, timedelta
 from dataclasses import dataclass

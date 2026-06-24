@@ -1,9 +1,10 @@
-from __future__ import annotations
 """GroupRuntime — per-group stateful runtime。
 
 保留 GroupRuntime.process_message() / handle_timer_fired() API，
 内部升级为 GroupChatState：force_next_continue + talk_value + message_cache。
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging

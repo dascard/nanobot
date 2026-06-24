@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 # Enable DEBUG logging to capture proxy or API exceptions natively
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(name)s: %(message)s')
 
-from nanobot_kt.bridge import NanobotBridge
+from nanobot_kt.bridge import NanobotBridge  # noqa: E402
 
 async def main():
     bridge = NanobotBridge()

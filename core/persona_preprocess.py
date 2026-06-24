@@ -11,6 +11,7 @@ import json
 import logging
 import math
 import os
+import threading as _threading
 import warnings
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
@@ -20,10 +21,10 @@ import numpy as np
 # 无 GPU 环境：抑制 CUDA 初始化 warning（PyTorch 会自动降级到 CPU）
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 warnings.filterwarnings("ignore", message=".*CUDA initialization.*")
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session  # noqa: E402
 
-from core.database import SessionLocal, ChatLog, PersonaFact, PersonaBehavior
-from core.persona_candidate_prompt import (
+from core.database import SessionLocal, ChatLog, PersonaFact, PersonaBehavior  # noqa: E402
+from core.persona_candidate_prompt import (  # noqa: E402
     CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
     build_candidate_extraction_prompt,
     filter_user_messages,
@@ -64,8 +65,6 @@ PREFERENCE_ARCHIVE_SCORE = 0.1  # 偏好置信度低于此值→归档
 BEHAVIOR_ARCHIVE_SCORE = 0.15   # 行为置信度低于此值→归档
 
 # ── 懒加载 ──
-import threading as _threading
-
 _embedder = None
 _embedder_lock = _threading.Lock()
 _nli_pipeline = None

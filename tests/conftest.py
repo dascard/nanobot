@@ -1,31 +1,32 @@
 import pytest
+import os
+import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, patch, MagicMock
+
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')")
-from sqlalchemy.orm import sessionmaker
-from fastapi.testclient import TestClient
-import sys
-from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 # 劫持 DATABASE_URL 到内存数据库进行测试
-import os
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["NANOBOT_API_TOKEN"] = "" # 测试环境禁用 API Token
 os.environ["NEW_API_KEY"] = "test-key-for-ci"  # Prevent KT init crash
 os.environ["NANOBOT_TESTING"] = "1"  # 测试环境跳过生产启动副作用
 os.environ.setdefault("RAG_LOCAL_RERANKER_MODEL", "./models/not-present-reranker")
 
-from core.database import Base, get_db
-from core import database
-from server import app
-from sqlalchemy.pool import StaticPool
+from core.database import Base, get_db  # noqa: E402
+from core import database  # noqa: E402
+from server import app  # noqa: E402
 
 # 创建测试专用的 engine 和 session（使用 StaticPool 允许多线程共享同一块 memoryDB）
 test_engine = create_engine(

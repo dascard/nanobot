@@ -20,6 +20,7 @@ from config import (
     IMAGE_SUMMARY_TIMEOUT,
     IMAGE_SUMMARY_TOP_P,
 )
+from nanobot_kt.image_pipeline import prepare_image_parts
 
 
 def _get_image_summary_route() -> dict:
@@ -64,7 +65,6 @@ def _get_image_summary_route() -> dict:
 
     _get_image_summary_route._cache = {"ts": now, "route": route}
     return route
-from nanobot_kt.image_pipeline import prepare_image_parts
 
 logger = logging.getLogger("nanobot.tool.image_summary")
 
