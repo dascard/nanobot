@@ -92,6 +92,13 @@ def _report_to_digest(report, articles):
 
     # render guard
     seen_ids, seen_entities, seen_domains = set(), {}, {}
+    if top:
+        seen_ids.add(top.id)
+        for e in top.entities:
+            seen_entities[e] = seen_entities.get(e, 0) + 1
+        top_rep = top.representative
+        if top_rep:
+            seen_domains[top_rep.domain] = seen_domains.get(top_rep.domain, 0) + 1
     safe_hl = []
     for c in highlights:
         if c.id in seen_ids:
@@ -172,7 +179,6 @@ def _report_to_digest(report, articles):
         }
 
     # details 也走 render guard
-    safe_ids = {c.id for c in safe_hl}
     safe_details = []
     for c in ([top] if top else []) + safe_hl[:2]:
         if c and c.id not in {d.id for d in safe_details}:

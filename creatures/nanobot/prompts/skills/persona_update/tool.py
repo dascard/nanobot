@@ -50,7 +50,6 @@ class PersonaUpdateTool(BaseTool):
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
         user_id = str(args.get("user_id", "")).strip()
-        instructions = str(args.get("instructions", "")).strip()
 
         if not user_id:
             return ToolResult(error="Missing 'user_id' argument")
@@ -136,7 +135,7 @@ class PersonaUpdateTool(BaseTool):
                 # 4. Run analysis pipeline
                 logger.info(f"[persona_update] Analyzing {len(log_dicts)} logs for user={user_id}")
                 log_analyst = LogAnalystAgent()
-                log_summary = await log_analyst.run(log_dicts, provider)
+                await log_analyst.run(log_dicts, provider)
 
                 # 5. 新版状态机：LLM 候选提取 + Python 去重聚类（替代旧 PersonaArchitectAgent）
                 logger.info(f"[persona_update] Extracting candidates for user={user_id}")

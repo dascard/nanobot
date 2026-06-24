@@ -27,7 +27,6 @@ class TestNewAPIClientRetry:
 
         # Mock aiohttp to return 429 first, then 200
         call_count = 0
-        original_chat = client.chat_completion
 
         async def mock_session_post(*args, **kwargs):
             nonlocal call_count
@@ -268,7 +267,8 @@ class TestAgenticToolLoop:
             answer = await controller.chat("u1", "s1", "loop test", {"sender_name": "T"})
 
         # Should have stopped after MAX_TOOL_ROUNDS (default 5)
-        # The answer will be empty content from the last tool_call response
+        # The answer falls back to "No content" after the last tool_call response.
+        assert answer == "No content"
         # invoke called once (round 0) + invoke_with_messages called (MAX_TOOL_ROUNDS - 1) times
         from config import MAX_TOOL_ROUNDS
         assert mock_provider.invoke_with_messages.call_count == MAX_TOOL_ROUNDS - 1

@@ -655,7 +655,6 @@ class TestGroupRuntime:
     @pytest.mark.asyncio
     async def test_timer_does_not_bypass_talk_value_gate(self):
         """timer 回调也检查 talk_value——ambient 一条不能绕过。"""
-        runtime = GroupRuntime()
         rt = GroupRuntime()
 
         rt._states["group_1"] = GateState()

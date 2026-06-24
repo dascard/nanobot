@@ -612,7 +612,7 @@ class NanobotKTController:
 
         # 2. Analysis Stage: LogAnalyst sub-agent
         logger.info(f"  [KT Local Analyst] Analyzing logs for {user_id}...")
-        results_02 = await self.log_analyst.run(logs, self.provider)
+        await self.log_analyst.run(logs, self.provider)
         
         # 3. Design Stage: LLM 候选提取 + Python 状态机（替代旧的 PersonaArchitectAgent）
         logger.info(f"  [KT Local StateMachine] Extracting persona candidates for {user_id}...")

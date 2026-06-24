@@ -1071,7 +1071,6 @@ class NanobotBridge:
 
             # Update KT agent's LLM model + provider base_url/api_key
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
-                old_model = self._agent.controller.llm.config.model
                 self._agent.controller.llm.config.model = target_model
                 # 同步 route provider 的 base_url / api_key 到 controller
                 llm = self._agent.controller.llm

@@ -866,11 +866,14 @@ class TestReportToDigest:
         digest = _report_to_digest(report, [a1, a2, c3_a])
         # top 是 kimi，highlights 中第二个 kimi c2 应被 guard 过滤
         # 所以 highlights 只剩 c3 (anthropic)
-        highlight_entities = []
-        for h in digest["highlights"]:
-            # 通过 source_ids 反查 entity
-            pass
         assert digest["top_story"] is not None
+        source_entities = {1: "kimi", 2: "kimi", 3: "anthropic"}
+        highlight_entities = [
+            source_entities[sid]
+            for h in digest["highlights"]
+            for sid in h["source_ids"]
+        ]
+        assert highlight_entities == ["anthropic"]
 
     def test_digest_structure_complete(self):
         """digest 字典包含所有必需字段。"""

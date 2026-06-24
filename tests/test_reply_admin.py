@@ -72,7 +72,7 @@ def _install_fake_reply_bridge(monkeypatch, reply_text="测试回复", capture=N
                 chat_type=metadata.get("chat_type", "group") if metadata else "group",
                 group_id=metadata.get("group_id", "") if metadata else "",
                 run_type="reply_test",
-                prompt_mode="prompt",
+                prompt_mode=prompt_engine,
                 prompt_key="chat_group",
                 prompt_source="Prompt Runtime",
                 prompt_sha256=prompt_sha,

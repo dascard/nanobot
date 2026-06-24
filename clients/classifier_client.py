@@ -1162,7 +1162,6 @@ class TimingGate:
         )
 
     def _parse_output(self, raw: str) -> dict:
-        result = {"raw": raw[:200], "error_type": None}
         # 去 think
         cleaned = raw
         for _ in range(5):

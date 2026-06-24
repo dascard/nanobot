@@ -37,6 +37,8 @@ class TestExtractAndPersist:
             "titles": {"users": []},
         }
         stats = extract_and_persist("g_test2", analysis)
+        assert stats["new"] == 1
+        assert stats["updated"] == 0
         # quotes confidence_hint=0.50 < CONFIDENCE_FLOOR → status=review, 不active
         from core.group_memory import query_active
         mems = query_active("g_test2")
