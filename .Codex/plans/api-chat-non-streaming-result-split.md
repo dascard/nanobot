@@ -728,7 +728,7 @@ git commit -m "refactor(普通API): 接入非流式结果收尾助手"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-chat-non-streaming-result-split.md`
 
-- [ ] **步骤 1：运行全量验证**
+- [x] **步骤 1：运行全量验证**
 
 运行：
 
@@ -737,9 +737,9 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 python -B -m pytest -p no:cacheprovider tests/ -v
 ```
 
-预期：0 failures。
+结果：`1768 passed, 6 skipped, 139 warnings in 125.22s (0:02:05)`。
 
-- [ ] **步骤 2：核对行数和 async 策略**
+- [x] **步骤 2：核对行数和 async 策略**
 
 运行：
 
@@ -748,9 +748,9 @@ wc -l api/routes.py api/chat_non_streaming_result.py
 rg -n "asyncio\\.run|run_awaitable_sync" api core clients nanobot_kt tests --glob '*.py'
 ```
 
-预期：`api/routes.py` 行数下降；本阶段新增代码不包含 `asyncio.run` 或 `run_awaitable_sync`。已有合法测试 helper 或历史命中若存在，只记录不扩大范围。
+结果：`api/routes.py` 为 1098 行，`api/chat_non_streaming_result.py` 为 128 行。本阶段新增生产代码不包含 `asyncio.run` 或 `run_awaitable_sync`；`rg` 命中项仍为既有测试断言、`tests/async_helpers.py`、`core/async_bridge.py`、`core/evolution.py` 和 `core/eval_sampling/scheduler.py` 等历史边界，未扩大范围。
 
-- [ ] **步骤 3：更新 `docs/todo.md`**
+- [x] **步骤 3：更新 `docs/todo.md`**
 
 在 P3「超大文件 >800 行拆分」的 `api/routes.py` 进展列表追加一条事实记录，必须包含：
 
@@ -760,7 +760,7 @@ rg -n "asyncio\\.run|run_awaitable_sync" api core clients nanobot_kt tests --glo
 - `api/routes.py` 的拆分前行数 `1121` 和拆分后实际行数。
 - 红灯、helper / 接入绿灯、相邻回归和全量回归的实际输出摘要。
 
-- [ ] **步骤 4：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 4：更新 `docs/plan_walkthrough.md`**
 
 在顶部当前推进焦点后追加 2026-06-24 状态段，必须写入：
 
@@ -771,11 +771,11 @@ rg -n "asyncio\\.run|run_awaitable_sync" api core clients nanobot_kt tests --glo
 - `api/routes.py` 当前实际行数。
 - 下一刀建议评估私聊 pre-bridge 决策编排或 persona lookup 小刀。
 
-- [ ] **步骤 5：更新本计划状态**
+- [x] **步骤 5：更新本计划状态**
 
 把所有已完成步骤改为 `[x]`，并在「执行记录」小节追加每个阶段的实际提交号、提交标题和最终全量 pytest 输出摘要。不要留下尖括号占位符。
 
-- [ ] **步骤 6：运行文档检查**
+- [x] **步骤 6：运行文档检查**
 
 运行：
 
@@ -783,9 +783,9 @@ rg -n "asyncio\\.run|run_awaitable_sync" api core clients nanobot_kt tests --glo
 git diff --check -- .Codex/plans/api-chat-non-streaming-result-split.md docs/todo.md docs/plan_walkthrough.md
 ```
 
-预期：`git diff --check` 退出码为 0；同时人工核对文档中已写入实际提交号、行数和验证摘要，没有未替换占位符。
+结果：红旗词扫描无输出；`git diff --check -- .Codex/plans/api-chat-non-streaming-result-split.md docs/todo.md docs/plan_walkthrough.md` 无输出。
 
-- [ ] **步骤 7：提交文档收口**
+- [x] **步骤 7：提交文档收口**
 
 运行：
 
@@ -797,3 +797,14 @@ git commit -m "docs(计划): 收口非流式结果收尾拆分"
 ## 执行记录
 
 - 设计提交：`b04c996 docs(普通API): 设计非流式结果收尾拆分`
+- 计划提交：`c68e4ea docs(计划): 记录非流式结果收尾计划`
+- 测试契约提交：`40d49f0 test(普通API): 锁定非流式结果收尾契约`
+- Helper 提交：`74137fb refactor(普通API): 增加非流式结果收尾助手`
+- 接入提交：`47e0ee5 refactor(普通API): 接入非流式结果收尾助手`
+- 文档收口提交：随 `docs(计划): 收口非流式结果收尾拆分` 完成
+- 红灯验证：`9 failed, 1 warning`
+- Helper 阶段验证：`8 passed, 1 failed, 1 warning in 6.74s`
+- 接入定向验证：`5 passed, 1 warning in 0.91s`
+- 相邻回归：`31 passed, 21 warnings in 7.90s`
+- 静态检查：`compileall` 和 `git diff --check` 无输出；`api/routes.py` 为 1098 行
+- 最终验证：`1768 passed, 6 skipped, 139 warnings in 125.22s (0:02:05)`

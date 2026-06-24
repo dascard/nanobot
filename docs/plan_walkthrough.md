@@ -1,11 +1,11 @@
 # Nanobot Server 阶段计划 Walkthrough
 
 计划日期：2026-06-17
-更新日期：2026-06-23
+更新日期：2026-06-24
 本轮计划写入日期：2026-06-18
-状态校准日期：2026-06-23
+状态校准日期：2026-06-24
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成 Chat SSE Loop queue pump 拆分，当前为 1121 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 P3 超大文件拆分；`api/admin_routes.py` 已降至 632 行并移出 >800 行清单，普通 `api/routes.py` 已完成非流式结果收尾拆分，当前为 1098 行，本文件后续阶段记录以 `api/routes.py` 的模块边界收敛为主。
 
 本文记录当前长期目标的完整阶段计划，用于继续推进 `docs/todo.md` 中的架构演进路线，并保持每个阶段完成后单独验证、单独提交。2026-06-18 已基于当时工作区、最近提交和 `docs/todo.md` 做过详细校准；2026-06-20 仅修正文档状态漂移，不重写历史执行记录。同日续跑补记：测试 helper 的 `asyncio.Runner` 兼容性问题已随 `cfdd9c2 test(异步): 移除 Runner 测试依赖` 收口，提交前全量回归结果为 `1380 passed, 6 skipped, 139 warnings in 100.75s`，非 vendor Python 代码中无 `asyncio.Runner` 命中。TimingGate scoring 可观测性收尾也已完成：设计提交 `4824036 docs(时机): 设计评分可观测收尾`，计划提交 `2820f7a docs(计划): 记录评分可观测收尾计划`，实现提交 `9d5817c feat(时机): 补齐评分可观测字段`；验证包括红灯 `s_transport_tier` 缺失、绿灯 `1 passed`、相邻回归 `7 passed`、WebUI build 退出码 0、全量回归 `1380 passed, 6 skipped, 139 warnings in 103.22s`。P1-6 已随 `101c457 docs(计划): 同步提示词收口最终状态` 完成文档收口；P1-7「残余同步 IO 审计与收口」已随 `b3d27f5 docs(计划): 同步同步 IO 收口状态` 完成实现、验证和文档归档。P1-8「模型能力校验」也已完成：设计文档已随 `ded7213 docs(模型能力): 设计请求能力校验` 提交，实现计划已随 `d4748d2 docs(计划): 记录模型能力校验计划` 提交；registry 能力归一化和候选硬过滤已随 `388c00f feat(模型能力): 归一化能力并过滤候选` 落地，直接 New API 请求能力推导已随 `d907a98 feat(模型能力): 推导直接请求能力需求` 落地，Bridge 主回复路由能力校验已随 `66fdfd9 feat(桥接): 接入回复模型能力校验` 落地，payload / SDK request 前 guard 与无视觉候选降级已随 `d2a7a1f fix(模型能力): 防止发送不兼容请求` 落地，`model_routing` eval 覆盖已随 `e1d3bef test(评测): 覆盖视觉模型路由` 落地。P2-1「工具配置增加 platform 维度」已完成：只读审计、设计文档和实现计划已完成，设计文档随 `d221180 docs(工具): 设计平台维度配置` 提交，实现计划已写入 `.Codex/plans/tool-platform-scope.md`；后端解析任务已随 `bb7489c feat(工具): 支持平台维度解析` 落地，运行时决策 platform 审计已随 `295e3f7 feat(工具): 记录平台维度决策` 落地，真实入口 platform 透传已随 `73bbe8a feat(消息): 透传客户端平台` 落地，Admin API platform 覆盖和预览已随 `d9a1bae feat(工具): 支持平台覆盖接口` 落地，WebUI 工具页 platform selector 和「指定平台」覆盖入口已随 `2b0e203 feat(工具): 配置平台覆盖` 落地。
 
@@ -5246,3 +5246,76 @@ P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1163。剩余�
 下一步：
 
 P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1121。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界建议优先评估私聊 pre-bridge 决策、guardrail superuser、或 buffer flow 中不触碰 Bridge / 落库 / SSE 的纯状态协调 helper；继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
+
+## 2026-06-24 普通 API Chat 非流式结果收尾拆分
+
+状态：设计、计划、红灯测试、helper 拆分、父模块接入、最终验证和阶段提交均已完成。本阶段把 `/chat` 非流式 Bridge 成功返回后的结果收尾拆到 `api/chat_non_streaming_result.py`，负责通过 callbacks 处理 `private_reply_meta`、Prompt V2 audit failure、private buffer finalize、原始 answer 落库、transport answer 展开和 response payload 构造。父模块继续保留 Bridge 调用、KT error path、`HTTPException`、evolution 后台任务、SSE 路径和所有 monkeypatch facade。`api/routes.py` 从 1121 行降至 1098 行；`api/chat_non_streaming_result.py` 为 128 行，拆分测试为 246 行。
+
+设计文档：
+`docs/superpowers/specs/2026-06-23-api-chat-non-streaming-result-split-design.md`。
+
+实现计划：
+`.Codex/plans/api-chat-non-streaming-result-split.md`。
+
+阶段提交：
+
+- 设计提交：`b04c996 docs(普通API): 设计非流式结果收尾拆分`。
+- 计划提交：`c68e4ea docs(计划): 记录非流式结果收尾计划`。
+- 红灯测试提交：`40d49f0 test(普通API): 锁定非流式结果收尾契约`。
+- Helper 提交：`74137fb refactor(普通API): 增加非流式结果收尾助手`。
+- 父模块接入提交：`47e0ee5 refactor(普通API): 接入非流式结果收尾助手`。
+- 文档收口提交：随本次 `docs(计划): 收口非流式结果收尾拆分` 完成。
+
+计划列表：
+
+- [x] 确认非流式结果收尾拆分范围，排除 Bridge 调用、KT error path、Prompt Runtime、SSE、message envelope 和 push envelope 迁移。
+- [x] 写入设计文档并提交。
+- [x] 写入实现计划并提交。
+- [x] 补普通 API Chat 非流式结果 split 红灯测试和 chat split module 扫描约束，并提交。
+- [x] 新增 `api/chat_non_streaming_result.py`，锁定正常成功路径、Prompt V2 audit failure、transport expand 失败降级和不导入父模块约束，并提交。
+- [x] 将父模块非流式成功收尾改为委托 `chat_non_streaming_result.finalize_non_streaming_chat_result()`，并提交。
+- [x] 更新 `docs/todo.md`、本 walkthrough 和计划执行记录，完成最终验证后提交文档收口。
+
+验证记录：
+
+- 红灯：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_non_streaming_result_split.py tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  -> `9 failed, 1 warning`；失败点为 `api/chat_non_streaming_result.py` 不存在、模块无法导入，且父模块尚未委托新 helper。
+- Helper 阶段：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_non_streaming_result_split.py tests/test_api_group_message_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_agent_step_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_history_log_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable -v`
+  -> `8 passed, 1 failed, 1 warning in 6.74s`；唯一失败为父模块尚未导入并委托 `chat_non_streaming_result`。
+- 父模块接入定向：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_non_streaming_result_split.py -v`
+  -> `5 passed, 1 warning in 0.91s`。
+- 相邻回归：
+  `python -B -m pytest -p no:cacheprovider tests/test_api_chat_streaming_result_split.py tests/test_api_chat_push_envelope_split.py tests/test_api_chat_persistence_split.py tests/test_chat_response_envelope.py tests/test_streaming_response_envelope.py tests/test_api.py::test_proxy_chat tests/test_api.py::test_proxy_chat_kt_error_does_not_echo_internal_detail tests/test_api.py::test_private_prompt_v2_audit_failure_is_not_context_chat tests/test_asyncio_run_policy.py -v`
+  -> `31 passed, 21 warnings in 7.90s`。
+- 静态检查：
+  `python -m compileall api/routes.py api/chat_non_streaming_result.py -q` 退出码 0；
+  `wc -l api/routes.py api/chat_non_streaming_result.py tests/test_api_chat_non_streaming_result_split.py`
+  -> `1098 api/routes.py`、`128 api/chat_non_streaming_result.py`、`246 tests/test_api_chat_non_streaming_result_split.py`；
+  `git diff --check -- api/routes.py api/chat_non_streaming_result.py tests/test_api_chat_non_streaming_result_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_sticker_media_routes_split.py .Codex/plans/api-chat-non-streaming-result-split.md`
+  无输出，退出码 0。
+- 全量：
+  `python -B -m pytest -p no:cacheprovider tests/ -v`
+  -> `1768 passed, 6 skipped, 139 warnings in 125.22s (0:02:05)`。
+
+async 策略核对：
+
+- `rg -n "asyncio\\.run|run_awaitable_sync" api core clients nanobot_kt tests --glob '*.py'` 未显示本阶段新增生产代码命中；新增的 `api/chat_non_streaming_result.py` 不包含 `asyncio.run`、`run_awaitable_sync` 或同步函数包装 awaitable。
+- 命中项仍为既有测试断言、`tests/async_helpers.py`、`core/async_bridge.py`、`core/evolution.py` 和 `core/eval_sampling/scheduler.py` 等历史边界，本阶段未扩大范围。
+
+执行约束：
+
+- 不拆 `/chat` 路由本体。
+- 不拆 `/health`。
+- 不迁移 `_do_chat()`、`get_bridge()`、`chat_runtime_facade.call_bridge_non_streaming()`、KT error path、`asyncio.CancelledError` path、SSE、Prompt Runtime 输入、message envelope 或 push envelope。
+- 父模块继续负责 `HTTPException` 抛出和 `background_tasks.add_task(evolution_task, req.user_id)`。
+- 新模块只通过 callbacks 调用 `_pop_bridge_reply_meta()`、`_private_prompt_audit_failure_meta()`、`_finalize_private_buffer()`、`_persist_chat_turn()`、`_expand_chat_transport_answer()` 和 `_chat_response_payload()`。
+- 新模块不导入 `api.routes`、FastAPI、DB、`core.daily_digest`、Bridge 或 guardrail。
+- 不改变 Prompt Runtime 模板、`enriched_query`、conversation 结构、工具输出契约、message envelope、push envelope 或 response envelope。
+- 不新增 `asyncio.run()`，不新增 `run_awaitable_sync`，不新增同步函数包装 awaitable。
+
+下一步：
+
+P3 超大文件队列当前仍只剩 `api/routes.py`，行数为 1098。剩余显式路由为 `/chat` 和 `/health`；`/health` 收益很低且承担多处父模块哨兵作用，不优先拆。下一候选边界建议优先评估私聊 pre-bridge 决策编排；如果需要更小风险的小刀，可先拆 persona lookup / JSON parse，但不要混入 `PersonaInjectionService` 或 Prompt Runtime payload。继续保留父模块 monkeypatch facade，避免一次性迁移完整 `proxy_chat()`。
