@@ -21,6 +21,7 @@ from config import (
     AUTO_MODEL_ROUTING_MODE,
 )
 from clients.model_registry import (
+    ModelFailureTracker,
     registry,
     model_cost_value,
     model_intelligence_value,
@@ -131,7 +132,6 @@ class NewAPIClient:
     def get_failure_tracker(cls) -> "ModelFailureTracker":
         if cls._failure_tracker is None:
             from core.settings_service import settings
-            from clients.model_registry import ModelFailureTracker
             cls._failure_tracker = ModelFailureTracker(
                 max_failures=settings.get_int("model.max_consecutive_failures", 3),
                 cooldown_base_s=settings.get_int("model.cooldown_base_seconds", 300),

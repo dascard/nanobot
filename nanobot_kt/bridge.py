@@ -12,7 +12,7 @@ import inspect
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from zoneinfo import ZoneInfo
 
 from kohakuterrarium.core.agent import Agent
@@ -36,6 +36,9 @@ from config import (
 )
 
 logger = logging.getLogger("nanobot.kt.bridge")
+
+if TYPE_CHECKING:
+    from nanobot_kt.prompt_runtime import PromptRuntimeInput
 
 
 def _current_time_label() -> str:
