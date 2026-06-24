@@ -1060,7 +1060,7 @@ git commit -m "refactor(普通API): 接入私聊前置决策助手"
 **文件：**
 - 修改：`.Codex/plans/api-chat-pre-bridge-decision-split.md`
 
-- [ ] **步骤 1：运行 chat split module 扫描测试**
+- [x] **步骤 1：运行 chat split module 扫描测试**
 
 运行：
 
@@ -1076,7 +1076,9 @@ tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_imp
 
 预期：4 个测试通过。
 
-- [ ] **步骤 2：运行 private buffer / guardrail 相邻回归**
+实际：4 passed, 1 warning in 1.11s。
+
+- [x] **步骤 2：运行 private buffer / guardrail 相邻回归**
 
 运行：
 
@@ -1099,7 +1101,9 @@ tests/test_asyncio_run_policy.py \
 
 预期：全部通过。
 
-- [ ] **步骤 3：运行静态检查**
+实际：27 passed, 21 warnings in 5.18s。
+
+- [x] **步骤 3：运行静态检查**
 
 运行：
 
@@ -1117,7 +1121,9 @@ rg -n "asyncio\\.run|run_awaitable_sync" api core clients nanobot_kt tests --glo
 
 预期：`compileall` 和 `git diff --check` 无输出；`rg` 只允许命中测试策略文件或 main guard 中既有允许项，不能在新模块和非 main 业务代码中出现新增同步 awaitable。
 
-- [ ] **步骤 4：统计行数**
+实际：`compileall` 和 `git diff --check` 无输出。repo-wide `rg` 仍命中既有 `core/async_bridge.py`、`core/evolution.py`、`core/eval_sampling/scheduler.py` 和测试策略文件；本阶段触碰的 `api/routes.py` 与 `api/chat_pre_bridge_decision.py` 没有新增 `asyncio.run` 或 `run_awaitable_sync`。定向检索只命中新测试中的源码断言文本。
+
+- [x] **步骤 4：统计行数**
 
 运行：
 
@@ -1126,6 +1132,8 @@ wc -l api/routes.py api/chat_pre_bridge_decision.py tests/test_api_chat_pre_brid
 ```
 
 预期：`api/routes.py` 行数较 1098 明显下降。
+
+实际：`api/routes.py` 1022 行，`api/chat_pre_bridge_decision.py` 316 行，`tests/test_api_chat_pre_bridge_decision_split.py` 378 行。
 
 ---
 
