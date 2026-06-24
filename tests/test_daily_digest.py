@@ -267,7 +267,6 @@ def test_run_scheduled_tasks_advances_last_run_when_push_fails(db_session, monke
 
 
 def test_scheduled_task_runner_does_not_require_asyncio_runner(monkeypatch):
-    import asyncio
     import threading
 
     stop_event = threading.Event()
