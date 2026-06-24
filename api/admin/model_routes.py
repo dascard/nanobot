@@ -25,7 +25,7 @@ router = APIRouter(tags=["admin-models"])
 @router.get("/models/status")
 def models_status(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     from clients.classifier_client import (
-        Guardrail, resolve_model_route, list_providers, build_model_catalog,
+        Guardrail, resolve_model_route, list_providers,
     )
     from config import NEW_API_BASE_URL, NEW_API_KEY, CLASSIFIER_API_URL
 
@@ -474,10 +474,6 @@ _STAGE_META = {
 def _resolve_route_value(stage: str, db: Session) -> tuple[str, str, str]:
     """Return (value, source, is_overridden). source 准确反映值来源。"""
     from core.settings_service import settings
-    from config import (
-        LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART,
-        CLASSIFIER_API_URL, IMAGE_SUMMARY_API_URL,
-    )
     meta = _STAGE_META[stage]
     key = meta["key"]
 
