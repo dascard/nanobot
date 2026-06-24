@@ -6,6 +6,11 @@ from app.memory_digest.builder import MemoryDigestBuilder
 from core.database import ChatLog
 
 
+def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
+
+
 def _log(*, content: str, sender_name: str = "Alice", log_id: int = 1) -> ChatLog:
     return ChatLog(
         id=log_id,
@@ -15,7 +20,7 @@ def _log(*, content: str, sender_name: str = "Alice", log_id: int = 1) -> ChatLo
         role="ambient",
         content=content,
         processed=1,
-        created_at=datetime(2026, 5, 28, 12, 0, 0),
+        created_at=_db_time(2026, 5, 28, 12, 0, 0),
         meta_json=json.dumps({"kind": "chat"}, ensure_ascii=False),
     )
 

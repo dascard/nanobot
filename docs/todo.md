@@ -677,6 +677,7 @@
   - 进展（2026-06-24）：DTZ 第五批处理 EvalCandidate DB 时间戳，覆盖 `core/eval_sampling/store.py` 中 cursor、candidate status transition、promotion 和 trend 本地日期分桶；新增本地 `_db_now_naive()`，用 aware 当前时间转回本地 naive，保留 SQLite ORM 的 naive 本地时间语义。全仓 DTZ 统计从 227 降至 217。
   - 进展（2026-06-24）：DTZ 第六批处理 Admin Session Memory Browser 测试 DB fixture，覆盖 `tests/test_admin_session_memory_browser.py` 中 10 个固定 ORM 时间；新增 `_db_time()` 集中说明这些 fixture 保持 SQLite ORM naive 本地墙钟语义，并用单点 `noqa` 取代重复 DTZ 命中。全仓 DTZ 统计从 217 降至 207。
   - 进展（2026-06-24）：DTZ 第七批处理 Daily Digest 测试本地时间 fixture，覆盖 `tests/test_daily_digest.py` 中 ChatLog 目标日期、定时任务 prompt 北京时间入参和 `last_run_at` 近实时断言；新增 `_local_time()` / `_local_now()` 集中保留生产侧 naive 本地墙钟时间语义。全仓 DTZ 统计从 207 降至 200。
+  - 进展（2026-06-24）：DTZ 第八批处理 RAG benchmark admin、memory digest 和 memory digest builder quality 测试 DB fixture，覆盖 `tests/test_rag_benchmark_admin.py`、`tests/test_memory_digest.py` 和 `tests/test_memory_digest_builder_quality.py` 中 6 个固定 ORM 时间；新增 `_db_time()` 集中保留 SQLite ORM naive 本地墙钟时间语义，不触碰生产代码、评测 fixture 数据层或 MemoryDigest 查询契约。定向回归 `52 passed, 21 warnings in 9.00s`，全量回归 `1805 passed, 6 skipped, 139 warnings in 122.37s`；全仓 DTZ 统计从 200 降至 194。
 
 ---
 

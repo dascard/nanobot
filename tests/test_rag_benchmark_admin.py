@@ -9,6 +9,11 @@ from sqlalchemy.orm import sessionmaker
 from core.database import AdminAuditLog, Base, GroupMemory, RagDebugRun, SemanticIndexItem
 
 
+def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
+
+
 def _auth_header():
     return {"Authorization": "Bearer test-token"}
 
@@ -238,9 +243,9 @@ def test_group_memory_case_results_include_time_and_metadata(client, tmp_path, m
         evidence_log_ids_json="[11, 12]",
         confidence=0.8,
         evidence_count=2,
-        first_seen=datetime(2026, 5, 1, 10, 0, 0),
-        last_seen=datetime(2026, 5, 27, 21, 0, 0),
-        updated_at=datetime(2026, 5, 27, 21, 30, 0),
+        first_seen=_db_time(2026, 5, 1, 10, 0, 0),
+        last_seen=_db_time(2026, 5, 27, 21, 0, 0),
+        updated_at=_db_time(2026, 5, 27, 21, 30, 0),
         decay_score=0.9,
         status="active",
         inject_policy="auto",

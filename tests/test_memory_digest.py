@@ -5,6 +5,11 @@ from datetime import datetime
 from core.database import ChatLog, MemoryDigest, RollingSessionSummary
 
 
+def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
+
+
 def _log(**kwargs):
     defaults = {
         "user_id": "group_42",
@@ -12,7 +17,7 @@ def _log(**kwargs):
         "role": "ambient",
         "sender_name": "甲",
         "content": "KohakuVQ 这个 VQ codebook 的 usage 很高，图像生成效果也不错",
-        "created_at": datetime(2026, 5, 22, 12, 0, 0),
+        "created_at": _db_time(2026, 5, 22, 12, 0, 0),
     }
     defaults.update(kwargs)
     return ChatLog(**defaults)
@@ -951,7 +956,7 @@ def test_memory_query_tool_session_summary_search_and_expand(db_session, monkeyp
         covered_until_turn_id=20,
         source_turn_count=10,
         quality_score=0.86,
-        created_at=datetime(2026, 5, 26, 12, 0, 0),
+        created_at=_db_time(2026, 5, 26, 12, 0, 0),
     )
     db_session.add(row)
     db_session.commit()
