@@ -5,7 +5,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -220,6 +220,14 @@ def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _local_iso_from_ts(ts: float) -> str:
+    return datetime.fromtimestamp(ts, UTC).astimezone().isoformat()
+
+
+def _local_backup_ts() -> str:
+    return datetime.now(UTC).astimezone().strftime("%Y%m%d_%H%M%S_%f")
+
+
 def _safe_key(prompt_key: str) -> str:
     prompt_key = prompt_key.removesuffix(".md").strip()
     if not _KEY_PATTERN.fullmatch(prompt_key):
@@ -333,7 +341,7 @@ class PromptManager:
                     "required_vars": tmpl.required_vars,
                     "optional_vars": tmpl.optional_vars,
                     "size": path.stat().st_size,
-                    "updated_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+                    "updated_at": _local_iso_from_ts(path.stat().st_mtime),
                     "parse_error": "",
                 })
             except Exception as e:
@@ -345,7 +353,7 @@ class PromptManager:
                     "required_vars": [],
                     "optional_vars": [],
                     "size": path.stat().st_size,
-                    "updated_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(),
+                    "updated_at": _local_iso_from_ts(path.stat().st_mtime),
                     "parse_error": str(e),
                 })
         return items
@@ -359,7 +367,7 @@ class PromptManager:
             "frontmatter": tmpl.frontmatter,
             "required_vars": tmpl.required_vars,
             "optional_vars": tmpl.optional_vars,
-            "updated_at": datetime.fromtimestamp(tmpl.mtime).isoformat(),
+            "updated_at": _local_iso_from_ts(tmpl.mtime),
             "size": tmpl.path.stat().st_size,
             "token_estimate": _estimate_tokens(tmpl.body),
         }
@@ -460,7 +468,7 @@ class PromptManager:
         old = path.read_text(encoding="utf-8") if path.exists() else ""
         backup_name = ""
         if old:
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            ts = _local_backup_ts()
             backup_name = f"{key}.{ts}.{_hash_text(old)}.bak"
             (self.backup_dir / backup_name).write_text(old, encoding="utf-8")
         path.write_text(content, encoding="utf-8")
@@ -508,7 +516,7 @@ class PromptManager:
         target = self._path_for(key)
         if target.exists():
             current = target.read_text(encoding="utf-8")
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            ts = _local_backup_ts()
             guard_name = f"{key}.{ts}.{_hash_text(current)}.bak"
             self.backup_dir.mkdir(parents=True, exist_ok=True)
             (self.backup_dir / guard_name).write_text(current, encoding="utf-8")

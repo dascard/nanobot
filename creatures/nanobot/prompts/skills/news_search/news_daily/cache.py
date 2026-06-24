@@ -4,8 +4,11 @@ import time
 import threading
 import hashlib
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 logger = __import__("logging").getLogger("nanobot.news_daily.cache")
+
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 _cache: dict[str, tuple[float, str, str]] = {}
 _lock = threading.Lock()
@@ -27,7 +30,7 @@ def _daily_query_key(query: str) -> str:
 
 
 def make_key(query: str, mode: str, limit: int, output_format: str = "html") -> str:
-    date = datetime.now().strftime("%Y-%m-%d")
+    date = datetime.now(CN_TZ).strftime("%Y-%m-%d")
     q = _daily_query_key(query)
     return f"news:{date}:{mode}:{SOURCE_SET_VERSION}:{output_format}:{limit}:{q}"
 

@@ -7,7 +7,7 @@ import os
 import re
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -106,7 +106,7 @@ def _clamp(value: int, low: int, high: int) -> int:
 
 
 def _now_id() -> str:
-    return datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
 
 
 def _safe_rel_path(path: Path) -> str:
@@ -203,7 +203,7 @@ def db_fingerprint(db_path: Path, db: Session | None = None) -> dict[str, Any]:
         return {
             "path": db_path.resolve().as_posix(),
             "size": int(stat.st_size),
-            "mtime": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            "mtime": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
             "mtime_ns": int(stat.st_mtime_ns),
             "semantic_index_count": count,
         }
@@ -597,7 +597,7 @@ def promote_generated_case_to_manual(
     if existed and not body.overwrite:
         raise HTTPException(409, "manual benchmark case already exists")
 
-    promoted_at = datetime.now().isoformat(timespec="seconds")
+    promoted_at = datetime.now(UTC).isoformat(timespec="seconds")
     case = _manual_case_from_generated(
         source_case,
         target_case_id=target_case_id,
@@ -690,7 +690,7 @@ def sample_benchmark_cases(body: BenchmarkSampleRequest, _auth=Depends(verify_ad
         fingerprint = db_fingerprint(db_path, db)
         per_source = _clamp(body.per_source, 1, 50)
         cases = sample_cases(db, per_source=per_source)
-        generated_at = datetime.now().isoformat()
+        generated_at = datetime.now(UTC).isoformat()
         for case in cases:
             case.meta["db_fingerprint"] = fingerprint
             case.meta["generated_at"] = generated_at
@@ -732,7 +732,7 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
     if provider_mode not in {"deterministic", "no_reranker_baseline", "runtime"}:
         raise HTTPException(400, "Invalid provider_mode")
     with _run_lock():
-        started_at = datetime.now()
+        started_at = datetime.now(UTC)
         started = time.perf_counter()
         db = _open_readonly_session(db_path)
         try:
@@ -740,7 +740,7 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                 sample_body = BenchmarkSampleRequest(per_source=_clamp(body.per_source, 1, 50))
                 cases = sample_cases(db, per_source=sample_body.per_source)
                 fingerprint_for_sample = db_fingerprint(db_path, db)
-                generated_at = datetime.now().isoformat()
+                generated_at = datetime.now(UTC).isoformat()
                 for case in cases:
                     case.meta["db_fingerprint"] = fingerprint_for_sample
                     case.meta["generated_at"] = generated_at
@@ -826,7 +826,7 @@ def run_benchmark_web(body: BenchmarkRunRequest, _auth=Depends(verify_admin)):
                 if baseline_missing_error:
                     gate["errors"].append(baseline_missing_error)
                     gate["passed"] = False
-            finished_at = datetime.now()
+            finished_at = datetime.now(UTC)
             executed = len(scores) > 0
             report_id = ""
             report_paths_payload: dict[str, str] = {}

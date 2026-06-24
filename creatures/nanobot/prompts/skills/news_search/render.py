@@ -1,6 +1,10 @@
 """新闻日报 HTML 模板渲染——LLM 只填 JSON，模板负责视觉。"""
 
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 NEWS_TEMPLATE_CSS = """
@@ -106,7 +110,7 @@ def source_link(url: str) -> str:
 
 def render_html(digest: dict) -> str:
     """将 NewsDigest JSON 渲染为 HTML 新闻日报。"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M")
 
     # 顶部
     html = f"""<!DOCTYPE html>

@@ -2,6 +2,10 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 @dataclass
@@ -65,7 +69,7 @@ class NewsDigest:
 
 
 def fallback_digest(query: str = "", reason: str = "", mode: str = "quality") -> NewsDigest:
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M")
     return NewsDigest(
         title="AI 日报暂无内容",
         subtitle=query[:30],

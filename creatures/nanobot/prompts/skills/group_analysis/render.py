@@ -2,6 +2,10 @@
 
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
+
+
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def escape_html(text: Any) -> str:
@@ -101,7 +105,7 @@ def format_scrapbook_html(
     group_name: str, group_stats: dict,
     topics: dict, titles: dict, quotes: dict, quality: dict,
 ) -> str:
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = datetime.now(CN_TZ).strftime("%Y-%m-%d %H:%M")
 
     cards = [
         ("消息总数", group_stats.get("message_count", 0)),
