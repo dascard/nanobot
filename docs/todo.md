@@ -695,6 +695,7 @@
   - 进展（2026-06-24）：DTZ 第二十三批处理 DB 管理辅助时间，覆盖 `core/schema_migrations.py`、`core/runtime_tool_service.py` 和 `core/knowledge_library.py` 中 4 个命中；migration applied_at、RuntimeToolDecision 清理 cutoff 和 KnowledgeDocument 写入时间统一复用 `db_now_naive()`，保留 SQLite ORM naive 本地墙钟语义，migration 备份文件名改为 `time.strftime()`。定向回归 `46 passed, 139 warnings in 8.97s`；全仓 DTZ 统计从 86 降至 82。
   - 进展（2026-06-24）：DTZ 第二十四批处理 Admin/API DB naive 时间，覆盖 `api/admin/persona_routes.py`、`api/history_log_routes.py` 和 `api/task_routes.py` 中 4 个命中；画像提取 cutoff / Persona.updated_at、mark-clear 清除边界和 ScheduledTask.last_run_at 均复用 `db_now_naive()`，保留 SQLite ORM naive 本地墙钟语义。定向回归 `24 passed, 21 warnings in 3.60s`；全仓 DTZ 统计从 82 降至 78。
   - 进展（2026-06-24）：DTZ 第二十五批处理 app 层记忆/画像 DB naive 时间，覆盖 `app/group_ingress/helpers.py`、`app/group_memory/retrieval_service.py`、`app/group_memory/injection_service.py`、`app/persona/injection_service.py`、`app/persona/retrieval_service.py` 和 `app/session_memory/llm_summarizer.py` 中 7 个命中；重复群回复窗口、群体记忆/画像 recency、注入记录时间和 LLM rolling summary 写入时间统一复用 `db_now_naive()`，保留 SQLite ORM naive 本地墙钟语义。`GROUP_MEMORY_RAG_CACHE` 的 3 个缓存 TTL 命中暂不混入本批，后续单独改为 monotonic 时间。定向回归 `104 passed, 3 skipped, 21 warnings in 7.04s`；全仓 DTZ 统计从 78 降至 71。
+  - 进展（2026-06-24）：DTZ 第二十六批处理群体记忆 RAG 缓存 TTL，覆盖 `app/group_memory/injection_service.py` 中 3 个内存缓存命中；`GROUP_MEMORY_RAG_CACHE` 过期戳改为 `time.monotonic()` 浮点值，避免 wall-clock 调整影响短 TTL 缓存，不改变 DB naive 时间语义。新增缓存 TTL 行为测试，定向回归 `7 passed, 1 warning in 1.15s`；全仓 DTZ 统计从 71 降至 68。
 
 ---
 

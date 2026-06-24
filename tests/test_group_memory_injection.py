@@ -48,6 +48,73 @@ def test_group_memory_injection_uses_stream_config_for_group_id(db_session):
     assert memory.last_injected_at is None
 
 
+def test_group_memory_rag_cache_uses_monotonic_ttl(db_session, monkeypatch):
+    from app.group_memory import injection_service as injection_module
+    from core.database import ChatStreamConfig, GroupMemory
+
+    injection_module.GROUP_MEMORY_RAG_CACHE.clear()
+    clock = {"now": 100.0}
+    monkeypatch.setattr(injection_module.time, "monotonic", lambda: clock["now"])
+
+    db_session.add(ChatStreamConfig(
+        chat_stream_id="qq:1097666427:group",
+        group_profile_mode="on",
+    ))
+    db_session.add(GroupMemory(
+        group_id="group_1097666427",
+        memory_type="topic",
+        content="缓存测试: 群里持续讨论 RAG 缓存与召回",
+        content_hash="gm-cache-topic",
+        confidence=0.90,
+        evidence_count=3,
+        evidence_log_ids_json="[1, 2, 3]",
+        decay_score=1.0,
+        status="active",
+        inject_policy="auto",
+        last_seen=_local_now(),
+    ))
+    db_session.commit()
+
+    try:
+        service = injection_module.GroupMemoryInjectionService(db_session)
+        first = service.build_context(
+            group_id="group_1097666427",
+            current_user_input="RAG 缓存怎么处理？",
+            recent_messages=[],
+        )
+        first_ids = list(first.selected_ids)
+        deadline = next(iter(injection_module.GROUP_MEMORY_RAG_CACHE.values()))[0]
+
+        assert first.debug["cache_hit"] is False
+        assert first_ids
+        assert deadline == 220.0
+
+        db_session.query(GroupMemory).filter(GroupMemory.content_hash == "gm-cache-topic").delete(
+            synchronize_session=False,
+        )
+        db_session.commit()
+
+        clock["now"] = 101.0
+        cached = service.build_context(
+            group_id="group_1097666427",
+            current_user_input="RAG 缓存怎么处理？",
+            recent_messages=[],
+        )
+        assert cached.debug["cache_hit"] is True
+        assert cached.selected_ids == first_ids
+
+        clock["now"] = 221.0
+        expired = service.build_context(
+            group_id="group_1097666427",
+            current_user_input="RAG 缓存怎么处理？",
+            recent_messages=[],
+        )
+        assert expired.debug["cache_hit"] is False
+        assert expired.selected_ids == []
+    finally:
+        injection_module.GROUP_MEMORY_RAG_CACHE.clear()
+
+
 def test_group_memory_record_injected_updates_stats_explicitly(db_session):
     from app.group_memory.injection_service import GroupMemoryInjectionService
     from core.database import GroupMemory

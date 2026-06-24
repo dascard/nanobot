@@ -6,7 +6,6 @@ import hashlib
 import json
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -22,7 +21,7 @@ from app.group_memory.renderer import render_group_memory_context
 from app.group_memory.retrieval_service import GroupMemoryRetrievalService
 
 
-GROUP_MEMORY_RAG_CACHE: dict[str, tuple[datetime, GroupMemoryInjectionResult]] = {}
+GROUP_MEMORY_RAG_CACHE: dict[str, tuple[float, GroupMemoryInjectionResult]] = {}
 GROUP_MEMORY_RAG_CACHE_TTL_SECONDS = 120
 
 
@@ -96,7 +95,7 @@ class GroupMemoryInjectionService:
         debug["cache_key"] = cache_key
         if not record_injection:
             cached = GROUP_MEMORY_RAG_CACHE.get(cache_key)
-            if cached and cached[0] > datetime.now():
+            if cached and cached[0] > time.monotonic():
                 cached_result = cached[1]
                 cached_result.debug["cache_hit"] = True
                 return cached_result
@@ -152,7 +151,7 @@ class GroupMemoryInjectionService:
             )
             if not record_injection:
                 GROUP_MEMORY_RAG_CACHE[cache_key] = (
-                    datetime.now() + timedelta(seconds=GROUP_MEMORY_RAG_CACHE_TTL_SECONDS),
+                    time.monotonic() + GROUP_MEMORY_RAG_CACHE_TTL_SECONDS,
                     result,
                 )
             return result
@@ -165,7 +164,7 @@ class GroupMemoryInjectionService:
         )
         if not record_injection:
             GROUP_MEMORY_RAG_CACHE[cache_key] = (
-                datetime.now() + timedelta(seconds=GROUP_MEMORY_RAG_CACHE_TTL_SECONDS),
+                time.monotonic() + GROUP_MEMORY_RAG_CACHE_TTL_SECONDS,
                 result,
             )
         return result
