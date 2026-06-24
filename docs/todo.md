@@ -680,6 +680,7 @@
   - 进展（2026-06-24）：DTZ 第八批处理 RAG benchmark admin、memory digest 和 memory digest builder quality 测试 DB fixture，覆盖 `tests/test_rag_benchmark_admin.py`、`tests/test_memory_digest.py` 和 `tests/test_memory_digest_builder_quality.py` 中 6 个固定 ORM 时间；新增 `_db_time()` 集中保留 SQLite ORM naive 本地墙钟时间语义，不触碰生产代码、评测 fixture 数据层或 MemoryDigest 查询契约。定向回归 `52 passed, 21 warnings in 9.00s`，全量回归 `1805 passed, 6 skipped, 139 warnings in 122.37s`；全仓 DTZ 统计从 200 降至 194。
   - 进展（2026-06-24）：DTZ 第九批处理 RAG benchmark fixture 数据和 sticker RAG 测试默认时间，覆盖 `evals/rag_benchmark/fixtures.py` 与 `tests/test_sticker_rag.py` 中 4 个固定 ORM 时间；新增 `_db_time()` 集中保留 SQLite ORM naive 本地墙钟时间语义，不触碰生产缓存、RSS 日期解析或 runtime cache。定向回归 `47 passed, 21 warnings in 9.34s`，全量回归 `1805 passed, 6 skipped, 139 warnings in 121.59s`；全仓 DTZ 统计从 194 降至 190。
   - 进展（2026-06-24）：DTZ 第十批清零剩余 DTZ001，覆盖新闻搜索 runtime cache 日期规范化和 RSS published_parsed 日期格式化；`_coerce_date()` 改用 `date(...).isoformat()` 仅校验并输出日期字符串，RSS 解析改用 `date(*parsed[:3]).isoformat()` 保持原年月日输出。定向回归 `35 passed, 1 warning in 2.84s`；全仓 DTZ 统计从 190 降至 188，当前 DTZ001 已清零。
+  - 进展（2026-06-24）：DTZ 第十一批处理 EvalCandidate 合同测试 DB now helper，覆盖 `tests/test_eval_candidate_contract.py` 中趋势按日聚合和只读 API fixture 的 3 个 `datetime.now()`；新增 `_db_now()` 集中保留 SQLite ORM naive 本地墙钟时间语义，不触碰 `core/eval_sampling/store.py` 生产趋势聚合逻辑或 Admin API 合同。定向回归 `34 passed, 21 warnings in 5.43s`；全仓 DTZ 统计从 188 降至 185。
 
 ---
 

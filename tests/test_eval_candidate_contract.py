@@ -1,8 +1,14 @@
 import json
+from datetime import datetime, timedelta
 
 import pytest
 
 from core.database import EvalCandidate
+
+
+def _db_now() -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
 
 
 def _auth_header():
@@ -262,11 +268,9 @@ def test_eval_list_candidates_returns_summary_and_readiness(client, db_session, 
 
 
 def test_candidate_trend_report_groups_current_snapshot_by_created_date(db_session):
-    from datetime import datetime, timedelta
-
     from core.eval_sampling.store import candidate_trend_report
 
-    today = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+    today = _db_now().replace(hour=10, minute=0, second=0, microsecond=0)
     old_day = today - timedelta(days=1)
     rows = [
         EvalCandidate(
@@ -321,8 +325,6 @@ def test_candidate_trend_report_groups_current_snapshot_by_created_date(db_sessi
 
 
 def test_candidates_trend_api_is_read_only(client, db_session, monkeypatch):
-    from datetime import datetime
-
     from core.database import AdminAuditLog
 
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
@@ -332,8 +334,8 @@ def test_candidates_trend_api_is_read_only(client, db_session, monkeypatch):
             suite="timing_gate",
             source="api",
             status="candidate",
-            created_at=datetime.now(),
-            updated_at=datetime.now(),
+            created_at=_db_now(),
+            updated_at=_db_now(),
         )
     )
     db_session.commit()
