@@ -538,7 +538,7 @@ git commit -m "test(普通API): 锁定私聊前置决策契约"
 - 创建：`api/chat_pre_bridge_decision.py`
 - 修改：`.Codex/plans/api-chat-pre-bridge-decision-split.md`
 
-- [ ] **步骤 1：创建新模块数据结构**
+- [x] **步骤 1：创建新模块数据结构**
 
 创建 `api/chat_pre_bridge_decision.py`，写入：
 
@@ -600,7 +600,7 @@ class ChatPreBridgeContinue:
     classifier_ran: bool
 ```
 
-- [ ] **步骤 2：实现 private timing helper**
+- [x] **步骤 2：实现 private timing helper**
 
 在同一文件追加：
 
@@ -677,7 +677,7 @@ async def _classify_private_timing(
     return private_decision, private_timing_meta, None, buffered_query, buffered_files
 ```
 
-- [ ] **步骤 3：实现 guardrail 与 private buffer helper**
+- [x] **步骤 3：实现 guardrail 与 private buffer helper**
 
 在同一文件追加：
 
@@ -781,7 +781,7 @@ async def _run_guardrail_buffer(
     return buffered_query, buffered_files, guardrail_status, None
 ```
 
-- [ ] **步骤 4：实现公开入口**
+- [x] **步骤 4：实现公开入口**
 
 在同一文件追加：
 
@@ -857,7 +857,7 @@ async def resolve_chat_pre_bridge_decision(
     )
 ```
 
-- [ ] **步骤 5：运行新模块定向测试**
+- [x] **步骤 5：运行新模块定向测试**
 
 运行：
 
@@ -868,12 +868,16 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_pre_bridge_decision_
 
 预期：新模块行为测试通过，父模块 wrapper 相关测试仍失败。
 
-- [ ] **步骤 6：Commit 新模块 helper**
+实际：6 passed, 2 failed, 1 warning in 6.57s。通过项覆盖新模块源码边界、group skip、private timing 早返回、owner 多消息重检和 follower silent；失败项仅为 `api.routes._resolve_chat_pre_bridge_decision` 与 `api.routes._chat_pre_bridge_services` 尚未接入。
+
+- [x] **步骤 6：Commit 新模块 helper**
 
 ```bash
 git add api/chat_pre_bridge_decision.py .Codex/plans/api-chat-pre-bridge-decision-split.md
 git commit -m "refactor(普通API): 增加私聊前置决策助手"
 ```
+
+实际提交：本阶段 helper 提交自身，message 为 `refactor(普通API): 增加私聊前置决策助手`。提交前 `compileall`、`git diff --check` 和新模块源码边界扫描均无输出。
 
 ---
 
