@@ -7,6 +7,11 @@ from sqlalchemy.orm import sessionmaker
 from core.database import Base, PersonaFact
 
 
+def _local_now() -> datetime:
+    # PersonaFact 测试 DB fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 def _session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
@@ -16,7 +21,7 @@ def _session():
 
 
 def _fact(**kwargs):
-    now = kwargs.pop("now", datetime.now())
+    now = kwargs.pop("now", _local_now())
     data = {
         "user_id": "u1",
         "content": "用户偏好先给结论，再给必要步骤",

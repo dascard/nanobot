@@ -1,6 +1,12 @@
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import inspect, text
+
+
+def _local_now() -> datetime:
+    # GroupMemory 测试 DB fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
 
 
 class DebugRerankerProvider:
@@ -432,8 +438,6 @@ def test_rag_debug_group_analysis_exposes_bundle_trace(client, monkeypatch):
 
 
 def test_rag_debug_group_memory_uses_retrieval_service_not_stub(client, db_session, monkeypatch):
-    from datetime import datetime
-
     from core.database import GroupMemory
 
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
@@ -448,7 +452,7 @@ def test_rag_debug_group_memory_uses_retrieval_service_not_stub(client, db_sessi
         decay_score=1.0,
         status="active",
         inject_policy="auto",
-        last_seen=datetime.now(),
+        last_seen=_local_now(),
     )
     db_session.add(row)
     db_session.commit()

@@ -4,6 +4,11 @@ from datetime import datetime, timedelta
 import pytest
 
 
+def _local_now() -> datetime:
+    # Reply admin 测试 DB fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 @pytest.fixture
 def auth_header(monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
@@ -346,7 +351,7 @@ def test_reply_eval_supports_v2_named_variants(client, auth_header, monkeypatch)
 def test_reply_eval_traffic_stats_aggregate_real_reply_contract_logs(client, auth_header, db_session):
     from core.database import ReplyContractCheckLog
 
-    now = datetime.now()
+    now = _local_now()
     db_session.add_all([
         ReplyContractCheckLog(
             trace_id="t1",

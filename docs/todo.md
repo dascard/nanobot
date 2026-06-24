@@ -690,6 +690,7 @@
   - 进展（2026-06-24）：DTZ 第十八批处理画像预处理测试 fixture，覆盖 `tests/test_persona_preprocess.py` 中 8 个 `datetime.now()`；测试侧新增 `_local_now()`，集中保留 PersonaFact SQLite ORM fixture 和 `_apply_decay(now)` 入参的 naive 本地墙钟时间语义，衰减测试统一用单个 `now` 基准派生旧/新时间。定向回归 `33 passed, 3 skipped, 1 warning in 1.38s`；全仓 DTZ 统计从 105 降至 97。
   - 进展（2026-06-24）：DTZ 第十九批处理 RAG recency 测试 fixture，覆盖 `tests/test_knowledge_rag.py`、`tests/test_memory_query_rag.py` 和 `tests/test_sticker_rag.py` 中 3 个 `datetime.now()`；测试侧新增 `_local_now()`，集中保留 KnowledgeDocument、SemanticIndexItem 和 StickerMemory 等 SQLite ORM fixture 的 naive 本地墙钟时间语义，recency 断言继续使用单个 `now` 基准派生旧/新时间。定向回归 `45 passed, 1 warning in 5.55s`；全仓 DTZ 统计从 97 降至 94。
   - 进展（2026-06-24）：DTZ 第二十批处理群分析测试 fixture，覆盖 `tests/test_group_analysis_tool.py` 中 3 个 `datetime.now()`；测试侧新增 `_local_now()`，集中保留 ChatLog ORM fixture 与 RawChatLog dataclass fixture 的 naive 本地墙钟时间语义，最近窗口、artifact 过滤和 LLM 失败降级用例继续使用单个 `now` 基准派生相对时间。定向回归 `21 passed, 1 warning in 1.63s`；全仓 DTZ 统计从 94 降至 91。
+  - 进展（2026-06-24）：DTZ 第二十一批处理 DB-backed 测试 fixture，覆盖 `tests/test_persona_injection_service.py`、`tests/test_prompt_trace_admin.py`、`tests/test_rag_debug.py` 和 `tests/test_reply_admin.py` 中 4 个 `datetime.now()`；测试侧新增 `_local_now()`，集中保留 PersonaFact、trace DB、GroupMemory 和 ReplyContractCheckLog fixture 的 naive 本地墙钟时间语义，reply traffic 窗口断言继续使用单个 `now` 基准派生相对时间。定向回归 `36 passed, 21 warnings in 8.88s`；全仓 DTZ 统计从 91 降至 87。
 
 ---
 

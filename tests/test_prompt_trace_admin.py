@@ -9,6 +9,11 @@ from sqlalchemy.orm import sessionmaker
 from core.database import Base
 
 
+def _local_now() -> datetime:
+    # Trace 测试 DB fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 @pytest.fixture
 def auth_header(monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
@@ -260,7 +265,7 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
         status="success",
         latency_ms=7,
     )
-    RunTracer.finish_run(run.run_id, status="error", error="boom", finished_at=datetime.now())
+    RunTracer.finish_run(run.run_id, status="error", error="boom", finished_at=_local_now())
 
     runs_resp = client.get("/api/v1/admin/agent-runs", headers=auth_header)
     assert runs_resp.status_code == 200, runs_resp.text
