@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -167,7 +167,7 @@ def _manifest_date(manifest: dict[str, Any]) -> str:
     started_at = str(manifest.get("started_at") or "")
     if len(started_at) >= 10:
         return started_at[:10]
-    return datetime.now().strftime("%Y-%m-%d")
+    return datetime.now(UTC).astimezone().strftime("%Y-%m-%d")
 
 
 def write_periodic_manifest(

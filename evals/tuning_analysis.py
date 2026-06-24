@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -565,7 +565,7 @@ def build_tuning_analysis(
 
     return {
         "analysis_version": 1,
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "source": source,
         "readiness": {"ready": not blocking, "blocking_reasons": blocking},
         "summary": _summarize(recommendations),

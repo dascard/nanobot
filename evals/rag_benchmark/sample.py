@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from collections.abc import Iterable
 
@@ -53,14 +53,14 @@ def db_fingerprint(db: Session, db_path: str | Path) -> dict:
     return {
         "path": path.as_posix(),
         "size": int(stat.st_size),
-        "mtime": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        "mtime": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
         "mtime_ns": int(stat.st_mtime_ns),
         "semantic_index_count": semantic_index_count,
     }
 
 
 def attach_generation_meta(cases: Iterable[BenchmarkCase], fingerprint: dict) -> list[BenchmarkCase]:
-    generated_at = datetime.now().isoformat()
+    generated_at = datetime.now(UTC).isoformat()
     result = list(cases)
     for case in result:
         case.meta["db_fingerprint"] = fingerprint

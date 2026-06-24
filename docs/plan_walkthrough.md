@@ -5,7 +5,9 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-24
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 `docs/todo.md` 的剩余质量项；P3 超大文件队列已完成当前收口，`api/admin_routes.py` 已保持 633 行并移出 >800 行清单，普通 `api/routes.py` 已通过 Chat Route Runner 拆分降至 783 行。当前处于「ruff 批量清理」阶段，F821、F841、F541、E401、E712、F402、E741、F811、E701/E702、E402、F401 与旧式 typing 泛型已完成清零；naive datetime / DTZ 仍未处理，继续作为低优先独立阶段。全仓仍有其他历史大文件未纳入本轮 P3 队列，如需治理应另立计划。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 `docs/todo.md` 的剩余质量项；P3 超大文件队列已完成当前收口，`api/admin_routes.py` 已保持 633 行并移出 >800 行清单，普通 `api/routes.py` 已通过 Chat Route Runner 拆分降至 783 行。当前处于「ruff 批量清理」阶段，F821、F841、F541、E401、E712、F402、E741、F811、E701/E702、E402、F401 与旧式 typing 泛型已完成清零；naive datetime / DTZ 已启动第一批 eval artifact 清理，全仓 DTZ 剩余 303 个。DB/ORM 当前仍是 naive 本地时间语义，后续必须按 DB 写入、运行时比较、缓存 TTL、测试夹具分批处理，不能直接全仓替换为 UTC aware。全仓仍有其他历史大文件未纳入本轮 P3 队列，如需治理应另立计划。
+
+2026-06-24 Ruff DTZ 第一批 eval artifact 清理：本阶段先做只读审计并确认 `core/database.py` 没有 Ruff DTZ 命中，数据库/ORM 当前仍是 naive 本地时间语义，SQLite + SQLAlchemy 会把 aware datetime 绑定为不带 offset 的字符串，不能把 ORM 写入点直接替换为 `datetime.now(UTC)`。基于该边界，第一批只处理不进入 ORM 比较的 eval/report artifact 时间戳：`evals/periodic_manifest.py`、`evals/run.py`、`evals/rag_benchmark/report.py`、`evals/rag_benchmark/sample.py`、`evals/timing_signal_audit.py`、`evals/timing_tuning_proposal.py` 和 `evals/tuning_analysis.py`。报告 `generated_at`、RAG DB 指纹 mtime 使用 aware UTC ISO；文件名日期 / report id 保留本地展示语义但通过 aware datetime 获取。验证包括候选文件 `ruff check --select DTZ` 红灯 9 个命中、绿灯 `All checks passed`、候选文件常规 Ruff / `compileall` / `git diff --check` 通过、定向回归 `78 passed, 1 warning in 5.05s`；全仓 DTZ 统计从 312 降至 303，剩余集中在 DB 写入/比较、news daily 测试夹具、session/semantic job、tracing 和业务模块时间窗口。
 
 2026-06-24 Ruff typing 现代化第二批：本阶段收口 `core/legacy_adapter.py` 中剩余的 `UP006` / `UP045` / `UP035`，将旧式 `List` / `Dict` / `Optional` 注解改为内置泛型和 PEP 604 写法，并把顶层 `typing` import 收敛为仅保留 `Any`。该文件仍是 CRLF / LF 混合历史状态，本阶段只将 Ruff 改动行转为 LF 以通过 `git diff --check`，未做整文件换行归一化，避免制造大面积行尾 diff。验证包括 `core/legacy_adapter.py` typing 专项、非 vendor Python typing 专项、tracked Python 全仓 `ruff check --statistics`、`compileall` 和 `git diff --check`；后续 Ruff 低优先剩余项转为 naive datetime / DTZ 整理。
 

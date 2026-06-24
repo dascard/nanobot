@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -107,7 +107,7 @@ def write_reports(
 ) -> dict[str, Path | str]:
     root = Path(report_out)
     root.mkdir(parents=True, exist_ok=True)
-    report_id = report_id or datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8]
+    report_id = report_id or datetime.now(UTC).astimezone().strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8]
     payload = build_rag_report_payload(
         cases,
         results,

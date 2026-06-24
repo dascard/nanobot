@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -424,7 +424,7 @@ def build_timing_tuning_proposal(
 
     return {
         "proposal_version": PROPOSAL_VERSION,
-        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "source": {
             "git_sha": _git_sha(),
             "manifest_path": source_paths.get("manifest", ""),
