@@ -46,6 +46,7 @@ from api import (
     chat_request_contract,
     chat_response_contract,
     chat_runtime_facade,
+    chat_runtime_route_context,
     chat_sse_loop,
     chat_streaming_helpers,
     chat_streaming_result,
@@ -552,6 +553,49 @@ async def _resolve_pre_bridge_route_result(db: Session, req: ChatProxyRequest, p
     )
 
 
+def _build_persona_injection_context(
+    db: Session,
+    *,
+    user_id: str,
+    current_user_input: str,
+    recent_messages: list[dict[str, str]],
+) -> Any:
+    from app.persona.injection_service import PersonaInjectionService
+
+    return PersonaInjectionService(db).build_context(
+        user_id=user_id,
+        current_user_input=current_user_input,
+        recent_messages=recent_messages,
+    )
+
+
+def _chat_runtime_route_services(db: Session) -> chat_runtime_route_context.ChatRuntimeRouteServices:
+    def build_persona_context(**kwargs: Any) -> Any:
+        return _build_persona_injection_context(db, **kwargs)
+
+    return chat_runtime_route_context.ChatRuntimeRouteServices(
+        build_multimodal_user_input_text=_build_multimodal_user_input_text,
+        max_query_chars=MAX_QUERY_CHARS,
+        estimate_tokens=_estimate_tokens,
+        get_effort_constraint=get_effort_constraint,
+        chat_request_platform=_chat_request_platform,
+        build_runtime_payload=chat_runtime_facade.build_chat_runtime_payload,
+        build_persona_context=build_persona_context,
+        logger=logger,
+    )
+
+
+def _build_chat_runtime_route_context(
+    runtime_input: chat_runtime_route_context.ChatRuntimeRouteInput,
+    *,
+    services: chat_runtime_route_context.ChatRuntimeRouteServices,
+) -> chat_runtime_route_context.ChatRuntimeRouteContext:
+    return chat_runtime_route_context.build_chat_runtime_route_context(
+        runtime_input,
+        services=services,
+    )
+
+
 # 旧群消息 helper 已收敛到 app.group_ingress.helpers；此处保留旧私有导入路径兼容。
 _normalize_onebot_segments = group_ingress_helpers.normalize_onebot_segments
 _extract_mentions_from_segments = group_ingress_helpers.extract_mentions_from_segments
@@ -692,79 +736,27 @@ async def proxy_chat(
     persist_req = pre_bridge_route.persist_req
 
     # 4b. 组装 runtime payload — 使用缓冲合并后的查询
-    safe_user_input = _build_multimodal_user_input_text(final_query, final_files, max_chars=MAX_QUERY_CHARS)
-    if not is_group:
-        try:
-            from app.persona.injection_service import PersonaInjectionService
-
-            persona_result = PersonaInjectionService(db).build_context(
-                user_id=req.user_id,
-                current_user_input=safe_user_input,
-                recent_messages=history_messages,
-            )
-            _ctx_debug.update(persona_result.debug)
-            if persona_result.context:
-                persona_text = persona_result.context
-        except Exception as exc:
-            logger.warning("[/chat] persona injection context failed user=%s: %s", req.user_id, exc)
-    release_clean_session_transaction(db, label="chat_before_bridge", logger=logger)
-
-    def _empty_effort_constraint(_effort: str | None) -> str:
-        return ""
-
-    _effort_constraint_func = get_effort_constraint if _private_decision else _empty_effort_constraint
-    runtime_payload = chat_runtime_facade.build_chat_runtime_payload(
-        chat_runtime_facade.ChatRuntimeInput(
+    runtime_route_context = _build_chat_runtime_route_context(
+        chat_runtime_route_context.ChatRuntimeRouteInput(
+            req=req,
             final_query=final_query,
             final_files=final_files,
-            req_user_id=req.user_id,
-            req_session_id=req.session_id,
-            sender_name=req.sender_name or "",
-            session_name=req.session_name,
-            message_id=req.message_id or "",
             persona_text=persona_text,
             memory_header=memory_header,
             history_messages=history_messages,
+            ctx_debug=_ctx_debug,
             is_group=is_group,
             is_superuser=is_superuser,
-            stream=bool(req.stream),
-            platform=_chat_request_platform(req),
             private_decision=_private_decision,
             guardrail_status=guardrail_status,
             classifier_ran=_classifier_ran,
         ),
-        build_multimodal_user_input_text=_build_multimodal_user_input_text,
-        max_query_chars=MAX_QUERY_CHARS,
-        estimate_tokens=_estimate_tokens,
-        get_effort_constraint=_effort_constraint_func,
+        services=_chat_runtime_route_services(db),
     )
-    safe_user_input = runtime_payload.safe_user_input
-    enriched_query = runtime_payload.enriched_query
-    bridge_meta = runtime_payload.bridge_meta
-    platform = str(bridge_meta.get("platform") or "")
-    prompt_budget = runtime_payload.prompt_budget
-
-    if not runtime_payload.injection_mode:
-        chat_type = "private" if str(req.session_id).startswith("private_") else "group"
-
-        logger.info(
-            f"[/chat] Prompt budget: type={chat_type}, "
-            f"query_chars={prompt_budget['safe_user_input_chars']}, "
-            f"query_tokens~{prompt_budget['safe_user_input_tokens']}, "
-            f"persona_chars={prompt_budget['persona_chars']}, "
-            f"persona_tokens~{prompt_budget['persona_tokens']}, "
-            f"history_msgs={prompt_budget['history_messages']}, "
-            f"history_total_chars~{prompt_budget['history_total_chars']}, "
-            f"enriched_chars={prompt_budget['enriched_query_chars']}, "
-            f"enriched_tokens~{prompt_budget['enriched_query_tokens']}"
-        )
-    else:
-        logger.info(
-            f"[/chat] Injection mode, using mock enriched_query, "
-            f"persona_chars={prompt_budget['persona_chars']}, "
-            f"persona_tokens~{prompt_budget['persona_tokens']}, "
-            f"history_msgs={prompt_budget['history_messages']}"
-        )
+    enriched_query = runtime_route_context.enriched_query
+    bridge_meta = runtime_route_context.bridge_meta
+    platform = runtime_route_context.platform
+    release_clean_session_transaction(db, label="chat_before_bridge", logger=logger)
 
     # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
     bridge = get_bridge()

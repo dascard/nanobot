@@ -674,7 +674,7 @@ git commit -m "refactor(普通API): 增加运行时路由上下文助手"
 - 修改：`tests/test_api_chat_runtime_route_context_split.py`
 - 修改：`.Codex/plans/api-chat-runtime-route-context-split.md`
 
-- [ ] **步骤 1：新增父模块 wrapper**
+- [x] **步骤 1：新增父模块 wrapper**
 
 在 `api/routes.py` 中新增：
 
@@ -713,7 +713,7 @@ def _build_chat_runtime_route_context(
     return chat_runtime_route_context.build_chat_runtime_route_context(runtime_input, services=services)
 ```
 
-- [ ] **步骤 2：替换 `proxy_chat()` 内联区段**
+- [x] **步骤 2：替换 `proxy_chat()` 内联区段**
 
 把 `api/routes.py` 中 `# 4b. 组装 runtime payload` 到 Prompt budget 日志分支结束的代码替换为：
 
@@ -735,19 +735,17 @@ runtime_route_context = _build_chat_runtime_route_context(
     ),
     services=_chat_runtime_route_services(db),
 )
-safe_user_input = runtime_route_context.safe_user_input
 enriched_query = runtime_route_context.enriched_query
 bridge_meta = runtime_route_context.bridge_meta
 platform = runtime_route_context.platform
-prompt_budget = runtime_route_context.prompt_budget
-persona_text = runtime_route_context.persona_text
-_ctx_debug = runtime_route_context.ctx_debug
 release_clean_session_transaction(db, label="chat_before_bridge", logger=logger)
 ```
 
 注意：`release_clean_session_transaction()` 必须仍在 runtime route context 构建后、`get_bridge()` 前。
 
-- [ ] **步骤 3：运行父模块 wrapper 测试**
+实际：父模块只保留 `enriched_query`、`bridge_meta` 和 `platform` 三个后续仍使用的展开变量，其余已由 helper 内部处理，`release_clean_session_transaction()` 仍在 helper 返回后、`get_bridge()` 前。
+
+- [x] **步骤 3：运行父模块 wrapper 测试**
 
 运行：
 
@@ -757,7 +755,9 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_route_contex
 
 预期：全部通过。
 
-- [ ] **步骤 4：运行相邻回归**
+实际：`7 passed, 1 warning in 0.99s`。
+
+- [x] **步骤 4：运行相邻回归**
 
 运行：
 
@@ -773,7 +773,9 @@ tests/test_api.py::test_proxy_chat_releases_db_transaction_before_bridge \
 
 预期：全部通过。
 
-- [ ] **步骤 5：运行扫描和静态检查**
+实际：`17 passed, 21 warnings in 3.39s`。
+
+- [x] **步骤 5：运行扫描和静态检查**
 
 运行：
 
@@ -789,7 +791,9 @@ python -m compileall api/routes.py api/chat_runtime_route_context.py -q
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交父模块接入**
+实际：chat split 扫描 `4 passed, 1 warning in 1.12s`；`python -m compileall api/routes.py api/chat_runtime_route_context.py -q` 退出码 0；`wc -l` 为 `1005 api/routes.py`、`177 api/chat_runtime_route_context.py`、`342 tests/test_api_chat_runtime_route_context_split.py`。
+
+- [x] **步骤 6：提交父模块接入**
 
 运行：
 
