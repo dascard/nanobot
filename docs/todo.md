@@ -669,7 +669,7 @@
 - [ ] **ruff 批量清理** · LOW · S
   F401 未用 import（当前主要是 facade / re-export 兼容项，不能无脑 `ruff --fix`）；旧式 `List/Dict/Optional`→内置泛型；`database.py` naive datetime（单机部署，低优先）。
   - 进展（2026-06-24）：F821 类型注解引用已清零；F841 未使用局部变量已清零，并补强 `news_daily` 同实体 render guard 测试，修复 top story 未计入 highlight 去重的问题；F541 冗余 f-string 前缀已清零；E401/E712/F402/E741 小类别已清零；F811 重复定义已清零；E701/E702 一行多语句已清零；E402 import 位置已清零。F401 第一批已完成 80 处低风险未用 import 清理，避开 `api/admin_routes.py`、`api/routes.py` 等 facade / re-export 兼容边界；第二批清理测试侧、runtime、news、persona 与 legacy adapter 的非大型 F401，并把拆分后的兼容符号改为显式 re-export；第三批先删除 `api/admin/model_routes.py` 中 6 个函数内真未用导入；第四批删除 `api/routes.py` 中 13 个真未用导入，并把 55 个普通 API 拆分后的旧路径兼容符号显式标记为 re-export；第五批将 `api/admin_routes.py` 中 235 个 Admin legacy facade 兼容导出改为冗余别名 re-export。当前 tracked Python F401 已清零。
-  - 进展（2026-06-24）：旧式 typing 泛型第一批已完成非 vendor 代码的大部分 Ruff 自动现代化，覆盖 `List` / `Dict` / `Tuple` / `Set` 等 PEP 585 内置泛型、`Optional` 的 PEP 604 写法和相关 `typing` import 清理；当前 `UP006/UP045/UP035` 剩余 40 个，集中在 `core/legacy_adapter.py`，因该文件存在 CRLF / 行尾噪声，留作单独阶段处理，避免把换行归一化和类型注解改动混在同一提交。后续仍剩 `core/legacy_adapter.py` typing 收口与 naive datetime / DTZ 低优先整理，不能将本项标为完成。
+  - 进展（2026-06-24）：旧式 typing 泛型第一批已完成非 vendor 代码的大部分 Ruff 自动现代化，覆盖 `List` / `Dict` / `Tuple` / `Set` 等 PEP 585 内置泛型、`Optional` 的 PEP 604 写法和相关 `typing` import 清理；第二批已收口 `core/legacy_adapter.py` 中剩余 40 个 `UP006/UP045/UP035` 命中，仅把本次改动行转为 LF 行尾，未做整文件换行归一化。当前非 vendor `UP006/UP007/UP045/UP035` 已清零，后续剩余为 naive datetime / DTZ 低优先整理，不能将本项标为完成。
 
 ---
 

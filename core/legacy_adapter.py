@@ -7,7 +7,7 @@ import copy
 import json
 import logging
 import re
-from typing import List, Optional, Dict, Any
+from typing import Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from core.database import ChatLog, Persona, SystemPrompt, SessionLocal
@@ -175,7 +175,7 @@ class SQLiteMemory:
     def close(self):
         pass  # Sessions are now closed per-operation
 
-    def get_recent_context(self, session_id: str, limit: int = 20) -> List[Dict[str, str]]:
+    def get_recent_context(self, session_id: str, limit: int = 20) -> list[dict[str, str]]:
         """提取场（Session）的历史记录"""
         db = self._get_session()
         try:
@@ -231,7 +231,7 @@ class SQLiteMemory:
         finally:
             db.close()
 
-    def get_unprocessed_logs(self, user_id: str) -> List[Dict[str, Any]]:
+    def get_unprocessed_logs(self, user_id: str) -> list[dict[str, Any]]:
         """提取待进化的原始日志 (返回 detached dicts 以避免跨 session 操作)
         
         Returns list of dicts with keys: id, user_id, role, content, sender_name, session_id, created_at
@@ -263,7 +263,7 @@ class SQLiteMemory:
         finally:
             db.close()
 
-    def _get_unprocessed_log_ids(self, user_id: str) -> List[int]:
+    def _get_unprocessed_log_ids(self, user_id: str) -> list[int]:
         """获取未处理日志 ID 列表 (session-safe)"""
         from config import EVOLUTION_THRESHOLD
         db = self._get_session()
@@ -280,7 +280,7 @@ class SQLiteMemory:
         finally:
             db.close()
 
-    def mark_logs_processed(self, log_ids: List[int]):
+    def mark_logs_processed(self, log_ids: list[int]):
         """按 ID 批量标记日志为已处理 (session-safe)"""
         if not log_ids:
             return
@@ -342,7 +342,7 @@ class UnifiedProvider:
     Acts as a bridge for the NanobotKTController.
     Supports model tiering (fast/smart/reasoning).
     """
-    def __init__(self, provider_type: str, api_key: str, base_url: str = "", model_map: dict = None, timeout: Optional[int] = None):
+    def __init__(self, provider_type: str, api_key: str, base_url: str = "", model_map: dict = None, timeout: int | None = None):
         self.provider_type = provider_type
         self.api_key = api_key
         if provider_type == "dify":
@@ -354,8 +354,8 @@ class UnifiedProvider:
                       user_id: str, 
                       session_id: str, 
                       memory: "SQLiteMemory",
-                      tools: Optional[List[Dict[str, Any]]] = None,
-                      files: Optional[List[str]] = None,
+                      tools: list[dict[str, Any]] | None = None,
+                      files: list[str] | None = None,
                       model_tier: str = "smart") -> Any:
         """调用统一推理层"""
         persona = memory.get_user_persona(user_id)
@@ -373,9 +373,9 @@ class UnifiedProvider:
             )
 
     async def invoke_with_messages(self,
-                                    messages: List[Dict[str, Any]],
-                                    tools: Optional[List[Dict[str, Any]]] = None,
-                                    model_tier: str = "smart") -> Dict[str, Any]:
+                                    messages: list[dict[str, Any]],
+                                    tools: list[dict[str, Any]] | None = None,
+                                    model_tier: str = "smart") -> dict[str, Any]:
         """直接传入已组装好的 messages 调用 LLM (多轮工具循环场景)"""
         from core.llm_trace_context import llm_trace_scope
         with llm_trace_scope(source="legacy_adapter.tool_loop"):
@@ -416,7 +416,7 @@ class NanobotKTController:
         self.data_analyst = DataAnalystAgent(self.sandbox)
         self.model_scout = ModelScoutAgent()
         # 本地工具注册表 (slash commands)
-        self.local_tools: Dict[str, Any] = {
+        self.local_tools: dict[str, Any] = {
             "stats": self.data_analyst.perform_sql_audit,
             "vibe": self._get_vibe_tool,
             "ai_daily": search_and_extract_news,
@@ -499,7 +499,7 @@ class NanobotKTController:
             return f"[Local Tool]: {result}"
         return "Unknown local tool."
 
-    def _execute_native_tool(self, func_name: str, args: Dict[str, Any]) -> str:
+    def _execute_native_tool(self, func_name: str, args: dict[str, Any]) -> str:
         """Execute a native tool call and return the result string."""
         from core.tool_tracing import begin_tool_trace, finish_tool_trace
 
@@ -519,7 +519,7 @@ class NanobotKTController:
             finish_tool_trace(tool_call_id, started, status="error", error=str(e))
             raise
 
-    async def chat(self, user_id: str, session_id: str, query: str, metadata: Dict[str, Any]) -> str:
+    async def chat(self, user_id: str, session_id: str, query: str, metadata: dict[str, Any]) -> str:
         # 1. Local Tool Interceptor
         if query.startswith("/") and any(query.startswith(f"/{t}") for t in self.local_tools):
             return await self._execute_local_tool(query, user_id, session_id)
@@ -527,7 +527,7 @@ class NanobotKTController:
         # 2. Agentic Loop (Core Interaction)
         return await self._agentic_chat_loop(user_id, session_id, query, metadata)
 
-    async def _agentic_chat_loop(self, user_id: str, session_id: str, query: str, metadata: Dict[str, Any]) -> str:
+    async def _agentic_chat_loop(self, user_id: str, session_id: str, query: str, metadata: dict[str, Any]) -> str:
         """
         Multi-turn native tool loop (aligned with KT Controller protocol).
         
@@ -682,7 +682,7 @@ class EvolutionUtils:
     """封装历史工作流迁移来的 Python 容错逻辑。"""
     
     @staticmethod
-    def json_repair(raw: Any) -> Dict[str, Any]:
+    def json_repair(raw: Any) -> dict[str, Any]:
         """JSON 格式容错修补逻辑。"""
         return _json_repair(raw)
 
@@ -694,7 +694,7 @@ class EvolutionUtils:
         return getattr(log, field, default)
 
     @staticmethod
-    def pre_clean_logs(logs: List[Any], user_id: str) -> Dict[str, Any]:
+    def pre_clean_logs(logs: list[Any], user_id: str) -> dict[str, Any]:
         """日志预清洗与质量分级逻辑。"""
         turn_count: int = 0
         user_corrections: int = 0
@@ -753,7 +753,7 @@ class EvolutionUtils:
 
 class LogAnalystAgent:
     """对话日志结构化提炼 (High Fidelity)"""
-    async def run(self, logs: List[Any], provider: Any) -> Dict[str, Any]:
+    async def run(self, logs: list[Any], provider: Any) -> dict[str, Any]:
         # 1. 预清洗与元数据生成
         clean_res = EvolutionUtils.pre_clean_logs(logs, "N/A")
         
@@ -776,7 +776,7 @@ class LogAnalystAgent:
         })
         return structured
 
-    def _format_kb(self, structured: Dict[str, Any], clean_res: Dict[str, Any]) -> str:
+    def _format_kb(self, structured: dict[str, Any], clean_res: dict[str, Any]) -> str:
         """生成结构化知识库文档。"""
         return f"""# 对话日志摘要
 {clean_res['meta_info']}
@@ -790,11 +790,11 @@ Tier: {structured.get('quality_tier')} | Summary: {structured.get('summary')}
 class PersonaArchitectAgent:
     """深层画像提炼引擎 (High Fidelity: Merge -> Critique -> Format)"""
     @staticmethod
-    def _to_json_len(payload: Dict[str, Any]) -> int:
+    def _to_json_len(payload: dict[str, Any]) -> int:
         return len(json.dumps(payload, ensure_ascii=False))
 
     @staticmethod
-    def _enforce_persona_size(persona: Dict[str, Any], max_chars: int = 3000) -> Dict[str, Any]:
+    def _enforce_persona_size(persona: dict[str, Any], max_chars: int = 3000) -> dict[str, Any]:
         """将画像压缩到长度预算内，优先删除低置信/低活跃领域。"""
         if not isinstance(persona, dict):
             return {"parse_error": True, "raw": str(persona)[:1000]}
@@ -853,7 +853,7 @@ class PersonaArchitectAgent:
         return result
 
     @staticmethod
-    def to_kb_document(persona: Dict[str, Any], user_id: str) -> str:
+    def to_kb_document(persona: dict[str, Any], user_id: str) -> str:
         """将画像转成可写入知识库的文本快照。"""
         if not isinstance(persona, dict):
             return ""
@@ -864,7 +864,7 @@ class PersonaArchitectAgent:
             f"## Full JSON\n{json.dumps(persona, ensure_ascii=False)}"
         )
 
-    async def run(self, existing_persona: str, log_summary: Dict[str, Any], provider: Any) -> Dict[str, Any]:
+    async def run(self, existing_persona: str, log_summary: dict[str, Any], provider: Any) -> dict[str, Any]:
         # 1. Stage: Merge (T2 - Use Smart model)
         merge_input = f"## 现有画像\n{existing_persona}\n\n## 新日志摘要\n{json.dumps(log_summary, ensure_ascii=False)}"
         draft_res = await provider.invoke_raw(query=merge_input, system_prompt=PERSONA_MERGE_PROMPT, user_id="p_architect_merge", model_tier="smart")
@@ -941,7 +941,7 @@ class PromptAuditorAgent:
 
         return truncated, self._estimate_tokens(truncated), True
 
-    async def run(self, current_prompt: str, persona_json: str, provider: Any) -> Dict[str, Any]:
+    async def run(self, current_prompt: str, persona_json: str, provider: Any) -> dict[str, Any]:
         # 1. Stage: Draft (T2 - Smart)
         draft_res = await provider.invoke_raw(
             query=f"## 现有 Prompt\n{current_prompt}\n\n## 患者画像\n{persona_json}", 
@@ -1004,7 +1004,7 @@ class DataAnalystAgent:
 
 class ModelScoutAgent:
     """自动模型情报侦察员：负责从海量信息中提取新模型并更新注册表"""
-    async def run(self, scout_info: str, provider: Any) -> List[Dict[str, Any]]:
+    async def run(self, scout_info: str, provider: Any) -> list[dict[str, Any]]:
         # 1. 自动决定是否执行实时搜索
         if not scout_info or "搜集" in scout_info or "search" in scout_info.lower():
             logger.info("  [Model Scout] Initiating real-time web search...")

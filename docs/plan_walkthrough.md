@@ -5,7 +5,9 @@
 本轮计划写入日期：2026-06-18
 状态校准日期：2026-06-24
 
-当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 `docs/todo.md` 的剩余质量项；P3 超大文件队列已完成当前收口，`api/admin_routes.py` 已保持 633 行并移出 >800 行清单，普通 `api/routes.py` 已通过 Chat Route Runner 拆分降至 783 行。当前处于「ruff 批量清理」阶段，F821、F841、F541、E401、E712、F402、E741、F811、E701/E702、E402 与 F401 已完成清零；旧式 typing 泛型已完成非 vendor 第一批自动现代化，剩余集中在 `core/legacy_adapter.py`，需单独处理该文件 CRLF / 行尾噪声后再收口；naive datetime / DTZ 仍未处理，继续作为低优先独立阶段。全仓仍有其他历史大文件未纳入本轮 P3 队列，如需治理应另立计划。
+当前推进焦点：TimingGate proposal 运营链路已进入只读复核和运营闭环，代码迭代优先级已转回 `docs/todo.md` 的剩余质量项；P3 超大文件队列已完成当前收口，`api/admin_routes.py` 已保持 633 行并移出 >800 行清单，普通 `api/routes.py` 已通过 Chat Route Runner 拆分降至 783 行。当前处于「ruff 批量清理」阶段，F821、F841、F541、E401、E712、F402、E741、F811、E701/E702、E402、F401 与旧式 typing 泛型已完成清零；naive datetime / DTZ 仍未处理，继续作为低优先独立阶段。全仓仍有其他历史大文件未纳入本轮 P3 队列，如需治理应另立计划。
+
+2026-06-24 Ruff typing 现代化第二批：本阶段收口 `core/legacy_adapter.py` 中剩余的 `UP006` / `UP045` / `UP035`，将旧式 `List` / `Dict` / `Optional` 注解改为内置泛型和 PEP 604 写法，并把顶层 `typing` import 收敛为仅保留 `Any`。该文件仍是 CRLF / LF 混合历史状态，本阶段只将 Ruff 改动行转为 LF 以通过 `git diff --check`，未做整文件换行归一化，避免制造大面积行尾 diff。验证包括 `core/legacy_adapter.py` typing 专项、非 vendor Python typing 专项、tracked Python 全仓 `ruff check --statistics`、`compileall` 和 `git diff --check`；后续 Ruff 低优先剩余项转为 naive datetime / DTZ 整理。
 
 2026-06-24 Ruff typing 现代化第一批：本阶段使用 Ruff 自动修复非 vendor 代码中的大部分 `UP006` / `UP007` / `UP045` / `UP035`，将旧式 `List` / `Dict` / `Tuple` / `Set` 等注解改为内置泛型，部分 `Optional[T]` 改为 `T | None`，并清理自动修复后残留的未用 `typing` import。阶段范围覆盖 Admin 子路由、普通 API 子路由、memory digest、session memory、New API / model registry、core 工具、news / image 工具、RAG benchmark、Bridge 和 worker 等 38 个 Python 文件；刻意排除 `tests/conftest.py` 的历史换行噪声，并撤回 `core/legacy_adapter.py` 的本阶段改动。当前 tracked Python 常规 Ruff 检查通过；typing 专项仍剩 `UP006 ×34`、`UP045 ×4`、`UP035 ×2`，集中在 `core/legacy_adapter.py`，留作单独阶段先处理换行边界再清理。验证包括 `ruff check --select UP006,UP007,UP045,UP035 --statistics` 确认剩余 40 个仅为 legacy adapter 阶段项、tracked Python 全仓 `ruff check --statistics`、受影响文件 `compileall`、排除 `tests/conftest.py` 的 `git diff --check` 和全量回归 `1805 passed, 6 skipped, 139 warnings in 122.40s`。
 
