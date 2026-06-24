@@ -54,8 +54,10 @@ class RSSProvider:
                 pub_date = ""
                 if pub:
                     try:
-                        from datetime import datetime
-                        pub_date = datetime(*entry.published_parsed[:6]).strftime("%Y-%m-%d") if hasattr(entry, "published_parsed") and entry.published_parsed else pub[:10]
+                        from datetime import date
+
+                        parsed = getattr(entry, "published_parsed", None)
+                        pub_date = date(*parsed[:3]).isoformat() if parsed else pub[:10]
                     except Exception:
                         pub_date = str(pub)[:10]
 

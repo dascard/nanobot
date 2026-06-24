@@ -7,7 +7,7 @@ import re
 import threading
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 
@@ -32,7 +32,7 @@ DAILY_DIGEST_KEYWORDS = {
 
 def _coerce_date(year: int | str, month: int | str, day: int | str) -> str | None:
     try:
-        return datetime(int(year), int(month), int(day)).strftime("%Y-%m-%d")
+        return date(int(year), int(month), int(day)).isoformat()
     except ValueError:
         return None
 
