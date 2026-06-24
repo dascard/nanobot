@@ -76,7 +76,7 @@
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 - 修改：`.Codex/plans/api-chat-pre-bridge-route-result-split.md`
 
-- [ ] **步骤 1：创建测试文件基础结构**
+- [x] **步骤 1：创建测试文件基础结构**
 
 创建 `tests/test_api_chat_pre_bridge_route_result_split.py`，写入：
 
@@ -106,7 +106,7 @@ def _request() -> SimpleNamespace:
     )
 ```
 
-- [ ] **步骤 2：新增 fake callbacks helper**
+- [x] **步骤 2：新增 fake callbacks helper**
 
 在同一文件追加：
 
@@ -139,7 +139,7 @@ def _callbacks(calls: dict[str, list[Any]]):
     )
 ```
 
-- [ ] **步骤 3：新增源码边界红灯**
+- [x] **步骤 3：新增源码边界红灯**
 
 追加测试：
 
@@ -169,7 +169,7 @@ def test_chat_pre_bridge_route_result_module_does_not_import_parent_routes_or_ru
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 4：新增 early return 持久化测试**
+- [x] **步骤 4：新增 early return 持久化测试**
 
 追加测试：
 
@@ -228,7 +228,7 @@ async def test_early_return_persists_when_answer_is_present_and_builds_payload()
     assert result.payload["payload"]["answer"] == "传输回复"
 ```
 
-- [ ] **步骤 5：新增 early return 不持久化测试**
+- [x] **步骤 5：新增 early return 不持久化测试**
 
 追加测试：
 
@@ -265,7 +265,7 @@ async def test_early_return_without_persist_only_builds_payload():
     assert result.payload["payload"]["status"] == "silent"
 ```
 
-- [ ] **步骤 6：新增 continue 字段展开测试**
+- [x] **步骤 6：新增 continue 字段展开测试**
 
 追加测试：
 
@@ -310,7 +310,7 @@ async def test_continue_outcome_clones_persist_request_and_exposes_fields():
     assert calls.get("payload") is None
 ```
 
-- [ ] **步骤 7：新增 guardrail silent 转译测试**
+- [x] **步骤 7：新增 guardrail silent 转译测试**
 
 追加测试：
 
@@ -364,7 +364,7 @@ async def test_guardrail_silent_finalizes_buffer_persists_silent_answer_and_retu
     assert result.payload["payload"]["reason"] == "guardrail_silent"
 ```
 
-- [ ] **步骤 8：新增父模块 wrapper 测试**
+- [x] **步骤 8：新增父模块 wrapper 测试**
 
 追加测试：
 
@@ -400,7 +400,7 @@ async def test_parent_pre_bridge_route_result_wrapper_remains_patchable(monkeypa
     assert calls[0][2].finalize_private_buffer is routes._finalize_private_buffer
 ```
 
-- [ ] **步骤 9：更新 chat split 扫描清单**
+- [x] **步骤 9：更新 chat split 扫描清单**
 
 在以下文件的 `test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable()` 清单中追加 `"api/chat_pre_bridge_route_result.py"`：
 
@@ -411,7 +411,7 @@ tests/test_api_history_log_routes_split.py
 tests/test_api_sticker_media_routes_split.py
 ```
 
-- [ ] **步骤 10：运行红灯测试**
+- [x] **步骤 10：运行红灯测试**
 
 运行：
 
@@ -427,7 +427,9 @@ tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_imp
 
 预期：测试失败，失败原因是 `api/chat_pre_bridge_route_result.py` 不存在或父模块 wrapper 不存在。
 
-- [ ] **步骤 11：提交红灯测试**
+实际结果（2026-06-24）：`10 failed, 1 warning in 6.84s`。失败原因符合红灯预期：新模块 `api/chat_pre_bridge_route_result.py` 尚不存在，父模块 `_chat_pre_bridge_route_callbacks()` / `_resolve_pre_bridge_route_result()` 尚不存在，四个 chat split 扫描清单因此读取新模块失败。
+
+- [x] **步骤 11：提交红灯测试**
 
 ```bash
 git add tests/test_api_chat_pre_bridge_route_result_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_sticker_media_routes_split.py .Codex/plans/api-chat-pre-bridge-route-result-split.md

@@ -133,6 +133,7 @@ def test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable():
         "api/chat_streaming_result.py",
         "api/chat_non_streaming_result.py",
         "api/chat_pre_bridge_decision.py",
+        "api/chat_pre_bridge_route_result.py",
         "api/chat_private_buffer.py",
         "api/chat_push_envelope.py",
     ):
