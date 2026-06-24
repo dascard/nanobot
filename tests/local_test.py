@@ -16,7 +16,6 @@ import time
 import urllib.error
 import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime
 
 BASE = os.environ.get("NANOBOT_URL", "http://127.0.0.1:8765")
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_resp")
@@ -53,7 +52,7 @@ class _PushHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'{"status":"ok"}')
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = time.strftime("%Y%m%d_%H%M%S")
         os.makedirs(OUT, exist_ok=True)
 
         # 存原始
