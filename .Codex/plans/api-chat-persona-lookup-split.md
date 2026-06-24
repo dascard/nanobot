@@ -488,7 +488,7 @@ git commit -m "refactor(普通API): 增加画像查找助手"
 - 修改：`api/routes.py`
 - 修改：`.Codex/plans/api-chat-persona-lookup-split.md`
 
-- [ ] **步骤 1：导入新模块**
+- [x] **步骤 1：导入新模块**
 
 在 `from api import (` 列表中加入：
 
@@ -496,7 +496,7 @@ git commit -m "refactor(普通API): 增加画像查找助手"
     chat_persona_lookup,
 ```
 
-- [ ] **步骤 2：新增父模块 wrapper**
+- [x] **步骤 2：新增父模块 wrapper**
 
 在 `_format_persona_for_prompt()` 附近增加：
 
@@ -510,7 +510,7 @@ def _resolve_chat_persona_snapshot(db: Session, user_id: str) -> chat_persona_lo
     )
 ```
 
-- [ ] **步骤 3：替换 `proxy_chat()` 内联 persona lookup**
+- [x] **步骤 3：替换 `proxy_chat()` 内联 persona lookup**
 
 把内联 `_find_persona()`、`persona_json_str`、`json.loads()` 和 formatter 逻辑替换为：
 
@@ -536,7 +536,7 @@ def _resolve_chat_persona_snapshot(db: Session, user_id: str) -> chat_persona_lo
 
 保留下方 `logger.info("[/chat] Persona lookup:")` 语义对应的总结日志，字段改为读取 `persona_snapshot` 结果。
 
-- [ ] **步骤 4：运行定向测试**
+- [x] **步骤 4：运行定向测试**
 
 运行：
 
@@ -546,12 +546,16 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_persona_lookup_split
 
 预期：全部通过。
 
-- [ ] **步骤 5：提交父模块接入**
+实际：`6 passed, 21 warnings in 1.39s`。
+
+- [x] **步骤 5：提交父模块接入**
 
 ```bash
 git add api/routes.py .Codex/plans/api-chat-persona-lookup-split.md
 git commit -m "refactor(普通API): 接入画像查找助手"
 ```
+
+说明：本步骤随父模块接入提交自身完成。
 
 ---
 

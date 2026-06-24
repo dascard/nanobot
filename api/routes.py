@@ -39,6 +39,7 @@ from api import (
     chat_pre_bridge_decision,
     chat_persistence,
     chat_persona_context,
+    chat_persona_lookup,
     chat_private_buffer,
     chat_push_envelope,
     chat_request_contract,
@@ -194,11 +195,19 @@ from core.context_builder import (
 # 旧函数已移至 core/context_builder.py，此处仅保留向后兼容 re-export
 
 
-
 def _format_persona_for_prompt(persona_data: dict, max_chars: int = MAX_PERSONA_CHARS) -> str:
     return chat_persona_context.format_persona_for_prompt(
         persona_data,
         max_chars=max_chars,
+    )
+
+
+def _resolve_chat_persona_snapshot(db: Session, user_id: str) -> chat_persona_lookup.ChatPersonaSnapshot:
+    return chat_persona_lookup.resolve_chat_persona_snapshot(
+        db,
+        user_id,
+        persona_model=Persona,
+        format_persona=_format_persona_for_prompt,
     )
 
 
@@ -595,35 +604,24 @@ async def proxy_chat(
         source_name_prefix=f"{req.session_id}_{req.message_id or 'message'}",
     )
 
-    # 2. 加载用户画像 (PersonaArchitectAgent 实际输出的键: identity, communication_style, domain_profiles, persona_summary)
-    # 兼容性：bot 端 user_id 格式可能变化（"12345" vs "private_12345" vs "group_xxx"）
-    # 逐一尝试所有可能的 ID 变体
-    def _find_persona(db: Session, uid: str) -> Persona | None:
-        candidates: list[str] = [uid]
-        # 添加前缀变体
-        for prefix in ("private_", "group_"):
-            if not uid.startswith(prefix):
-                candidates.append(f"{prefix}{uid}")
-        # 剥离前缀变体
-        for prefix in ("private_", "group_"):
-            if uid.startswith(prefix):
-                candidates.append(uid[len(prefix):])
-        # 去重后依次尝试
-        for c in dict.fromkeys(candidates):
-            p = db.query(Persona).filter(Persona.user_id == c).first()
-            if p:
-                if c != candidates[0]:
-                    logger.info(f"[/chat] Persona found via fallback: tried={candidates[0]}, matched={c}")
-                return p
-        logger.debug(f"[/chat] No persona for user_id={uid} (tried {len(candidates)} variants)")
-        return None
-    persona_obj = _find_persona(db, req.user_id)
-    persona_json_str = persona_obj.persona_json if persona_obj else "{}"
-    try:
-        persona_data = json.loads(persona_json_str)
-    except (json.JSONDecodeError, TypeError):
-        persona_data = {}
-    persona_text = _format_persona_for_prompt(persona_data)
+    # 2. 加载用户画像 snapshot；动态 PersonaInjectionService 仍在 runtime payload 前处理
+    persona_snapshot = _resolve_chat_persona_snapshot(db, req.user_id)
+    persona_obj = persona_snapshot.persona_obj
+    persona_json_str = persona_snapshot.persona_json
+    persona_data = persona_snapshot.persona_data
+    persona_text = persona_snapshot.persona_text
+    if persona_snapshot.matched_user_id and persona_snapshot.matched_user_id != persona_snapshot.lookup_user_id:
+        logger.info(
+            "[/chat] Persona found via fallback: tried=%s, matched=%s",
+            persona_snapshot.lookup_user_id,
+            persona_snapshot.matched_user_id,
+        )
+    if persona_obj is None:
+        logger.debug(
+            "[/chat] No persona for user_id=%s (tried %s variants)",
+            req.user_id,
+            persona_snapshot.candidate_count,
+        )
 
     logger.info(
         f"[/chat] Persona lookup: user_id={req.user_id}, "
