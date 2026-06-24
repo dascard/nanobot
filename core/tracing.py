@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from core.time_utils import db_now_naive, to_db_naive
+
 logger = logging.getLogger("nanobot.tracing")
 
 SENSITIVE_KEY_PARTS = ("api_key", "apikey", "authorization", "password", "secret", "token")
@@ -142,7 +144,7 @@ class RunTracer:
                         status="running",
                         input_preview=_preview(input_preview, max_chars=1000),
                         meta_json=_json_dumps(meta or {}, max_chars=3000),
-                        started_at=datetime.now(),
+                        started_at=db_now_naive(),
                     ))
                     db.commit()
 
@@ -217,7 +219,7 @@ class RunTracer:
                         row.model = str(model)[:160]
                     if meta is not None:
                         row.meta_json = _json_dumps(meta, max_chars=3000)
-                    row.finished_at = finished_at or datetime.now()
+                    row.finished_at = to_db_naive(finished_at) or db_now_naive()
                     db.commit()
 
                 _run_db_write(db, operation, label="agent_run_finish")
@@ -251,7 +253,7 @@ class ToolTracer:
                         tool_name=str(tool_name or "")[:128],
                         args_json=_json_dumps(args),
                         status="running",
-                        started_at=datetime.now(),
+                        started_at=db_now_naive(),
                     ))
                     db.commit()
 
@@ -289,7 +291,7 @@ class ToolTracer:
                     row.error = _preview(error, max_chars=1000)
                     if latency_ms is not None:
                         row.latency_ms = int(latency_ms)
-                    row.finished_at = finished_at or datetime.now()
+                    row.finished_at = to_db_naive(finished_at) or db_now_naive()
                     db.commit()
 
                 _run_db_write(db, operation, label="tool_call_finish")
@@ -337,7 +339,7 @@ class PromptTracer:
                         token_estimate=int(token_estimate or 0),
                         warnings_json=_json_dumps(warnings or [], max_chars=2000),
                         error=_preview(error, max_chars=1000),
-                        created_at=datetime.now(),
+                        created_at=db_now_naive(),
                     ))
                     db.commit()
 
@@ -412,7 +414,7 @@ class LLMRequestTracer:
                         runtime_enabled_tools_json=_json_dumps(lint_result.get("runtime_enabled_tools") or [], max_chars=0),
                         runtime_disabled_tools_json=_json_dumps(lint_result.get("runtime_disabled_tools") or [], max_chars=0),
                         framework_injected_tools_json=_json_dumps(lint_result.get("framework_injected_tools") or [], max_chars=0),
-                        created_at=datetime.now(),
+                        created_at=db_now_naive(),
                     )
                     db.add(log)
                     db.flush()
@@ -454,7 +456,7 @@ class LLMRequestTracer:
                     log.status = str(status or "success")[:32]
                     log.error = _preview(error, max_chars=2000)
                     log.latency_ms = int(latency_ms or 0)
-                    log.finished_at = datetime.now()
+                    log.finished_at = db_now_naive()
                     db.commit()
 
                 _run_db_write(db, operation, label="llm_api_request_finish")
@@ -512,7 +514,7 @@ class ReplyContractTracer:
                         structured_fallback_count=fallback_count,
                         total_final_action_count=total_count,
                         result=str(result or "")[:64],
-                        created_at=datetime.now(),
+                        created_at=db_now_naive(),
                     ))
                     db.commit()
 

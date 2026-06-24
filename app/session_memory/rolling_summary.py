@@ -15,6 +15,7 @@ from app.session_memory import config
 from app.session_memory.summarizer import build_rolling_summary_payload, render_summary_text
 from app.session_memory.windowing import estimate_tokens, should_rollup
 from core.database import ConversationTurn, RollingSessionSummary
+from core.time_utils import db_now_naive
 
 
 @dataclass
@@ -49,7 +50,7 @@ def get_active_summary(
         return None
     if after_clear_at and row.updated_at and row.updated_at <= after_clear_at:
         row.status = "archived"
-        row.updated_at = datetime.now()
+        row.updated_at = db_now_naive()
         db.flush()
         return None
     return row
@@ -79,10 +80,11 @@ def get_best_session_summary(
         return None
 
     valid: list[RollingSessionSummary] = []
+    archived_at = db_now_naive()
     for row in rows:
         if after_clear_at and row.updated_at and row.updated_at <= after_clear_at:
             row.status = "archived"
-            row.updated_at = datetime.now()
+            row.updated_at = archived_at
             continue
         valid.append(row)
     if len(valid) != len(rows):
@@ -127,9 +129,10 @@ def archive_active_summaries_for_session(db: Session, session_id: str) -> int:
         )
         .all()
     )
+    archived_at = db_now_naive()
     for row in rows:
         row.status = "archived"
-        row.updated_at = datetime.now()
+        row.updated_at = archived_at
     if rows:
         db.flush()
     return len(rows)
@@ -144,9 +147,10 @@ def archive_active_summaries_for_user(db: Session, user_id: str) -> int:
         )
         .all()
     )
+    archived_at = db_now_naive()
     for row in rows:
         row.status = "archived"
-        row.updated_at = datetime.now()
+        row.updated_at = archived_at
     if rows:
         db.flush()
     return len(rows)
