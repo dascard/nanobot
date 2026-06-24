@@ -7,13 +7,18 @@ from core.database import ChatLog, ConversationTurn, RollingSessionSummary, Sess
 from tests.async_helpers import run_async
 
 
+def _local_now() -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 def _turn(db, *, session_id="s1", user_id="u1", role="user", content="hello", meta=None, created_at=None):
     row = ConversationTurn(
         user_id=user_id,
         session_id=session_id,
         role=role,
         content=content,
-        created_at=created_at or datetime.now(),
+        created_at=created_at or _local_now(),
         meta_json=json.dumps(meta or {"kind": "chat"}, ensure_ascii=False),
     )
     db.add(row)
@@ -42,15 +47,16 @@ def test_eligible_excludes_internal_and_no_context_turns(db_session):
 def test_recent_raw_window_selects_latest_by_id_not_created_at(db_session):
     from app.session_memory.windowing import select_latest_raw_window
 
+    now = _local_now()
     old_created_late_id = _turn(
         db_session,
         content="id 小但时间新",
-        created_at=datetime.now() + timedelta(days=1),
+        created_at=now + timedelta(days=1),
     )
     late_id_old_created = _turn(
         db_session,
         content="id 大但时间旧",
-        created_at=datetime.now() - timedelta(days=1),
+        created_at=now - timedelta(days=1),
     )
     newest_id = _turn(db_session, content="最新 id")
     db_session.commit()
@@ -168,14 +174,15 @@ def test_admin_rollup_inputs_large_session_uses_latest_raw_window(db_session):
 def test_history_clear_at_archives_active_summary(db_session):
     from app.session_memory.rolling_summary import get_active_summary
 
-    db_session.add(User(id="u1", history_clear_at=datetime.now()))
+    now = _local_now()
+    db_session.add(User(id="u1", history_clear_at=now))
     row = RollingSessionSummary(
         session_id="s1",
         user_id="u1",
         status="active",
         summary_text="旧摘要",
         covered_until_turn_id=10,
-        updated_at=datetime.now() - timedelta(minutes=1),
+        updated_at=now - timedelta(minutes=1),
     )
     db_session.add(row)
     db_session.commit()
@@ -183,7 +190,7 @@ def test_history_clear_at_archives_active_summary(db_session):
     summary = get_active_summary(
         db_session,
         "s1",
-        after_clear_at=datetime.now() - timedelta(seconds=1),
+        after_clear_at=now - timedelta(seconds=1),
     )
 
     assert summary is None
@@ -406,7 +413,7 @@ def test_deterministic_summary_redacts_urls_carried_from_previous_summary(db_ses
 def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session):
     from core.context_builder import build_chat_context
 
-    now = datetime.now()
+    now = _local_now()
     for i in range(24):
         sender = "A" if i % 2 == 0 else "B"
         _turn(
@@ -1210,6 +1217,7 @@ def test_worker_run_once_recovers_stale_running_job(db_session, monkeypatch):
     from core import database
     from workers import session_summary_worker as worker
 
+    now = _local_now()
     turns = [_turn(db_session, content=f"超时回收用例 {i}") for i in range(6)]
     fallback = RollingSessionSummary(
         session_id="s1",
@@ -1232,7 +1240,7 @@ def test_worker_run_once_recovers_stale_running_job(db_session, monkeypatch):
         fallback_summary_id=1,
         status="running",
         locked_by="dead-worker",
-        locked_at=datetime.now() - timedelta(hours=2),
+        locked_at=now - timedelta(hours=2),
         retry_count=0,
         max_retry=3,
     )

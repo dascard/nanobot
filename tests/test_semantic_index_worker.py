@@ -7,6 +7,11 @@ from core.semantic.adapters import SemanticChunk
 from core.semantic.schema import ensure_semantic_schema
 
 
+def _local_now() -> datetime:
+    # SemanticIndexJob DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 def _chunk(text_value: str = "8000 端口被占用") -> SemanticChunk:
     return SemanticChunk(
         source_type="memory_digest",
@@ -139,7 +144,7 @@ def test_running_job_timeout_recovers_to_pending(db_session):
         index_version="fake:v1:v1",
         status="running",
         locked_by="old-worker",
-        locked_at=datetime.now() - timedelta(minutes=10),
+        locked_at=_local_now() - timedelta(minutes=10),
     ))
     db_session.commit()
 
@@ -162,7 +167,7 @@ def test_item_and_fts_write_are_same_transaction(db_session):
         index_version="fake:v1:v1",
         status="running",
         locked_by="worker-a",
-        locked_at=datetime.now(),
+        locked_at=_local_now(),
     )
     db_session.add(job)
     db_session.commit()
