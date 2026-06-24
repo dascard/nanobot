@@ -3,7 +3,7 @@
 # ruff: noqa: E402
 
 import sys
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,6 +66,13 @@ class MockRawItem:
     content_excerpt: str = ""
 
 
+FIXED_NOW_UTC = datetime(2026, 5, 4, 12, 0, 0, tzinfo=UTC)
+
+
+def _now_utc():
+    return FIXED_NOW_UTC
+
+
 def make_article(aid="a1", title="Test", domain="example.com", source_group="ai_media",
                  published_at=None, source_name="Test Source", entity_keys=None,
                  topic_keys=None, is_official=False, summary="", freshness=0.85,
@@ -112,7 +119,7 @@ class TestParseDate:
 
     def test_iso_8601_with_t(self):
         dt = parse_date("2026-05-04T10:30:00")
-        assert dt == datetime(2026, 5, 4, 10, 30, 0)
+        assert dt == datetime(2026, 5, 4, 10, 30, 0)  # noqa: DTZ001 - parse_date returns naive datetimes
 
     def test_iso_8601_with_z(self):
         dt = parse_date("2026-05-04T08:00:00Z")
@@ -126,15 +133,15 @@ class TestParseDate:
 
     def test_date_only_dash(self):
         dt = parse_date("2026-05-04")
-        assert dt == datetime(2026, 5, 4)
+        assert dt == datetime(2026, 5, 4)  # noqa: DTZ001 - parse_date returns naive datetimes
 
     def test_date_only_slash(self):
         dt = parse_date("2026/05/04")
-        assert dt == datetime(2026, 5, 4)
+        assert dt == datetime(2026, 5, 4)  # noqa: DTZ001 - parse_date returns naive datetimes
 
     def test_month_name_comma(self):
         dt = parse_date("May 04, 2026")
-        assert dt == datetime(2026, 5, 4)
+        assert dt == datetime(2026, 5, 4)  # noqa: DTZ001 - parse_date returns naive datetimes
 
     def test_empty_string_returns_none(self):
         assert parse_date("") is None
@@ -227,7 +234,7 @@ class TestNormalizeArticles:
     """normalize_articles —— 从原始条目构造 Article 列表。"""
 
     def test_basic_normalization(self):
-        now = datetime.now()
+        now = _now_utc()
         items = [
             MockRawItem(
                 id="a1", title="OpenAI 发布 GPT-5",
@@ -296,32 +303,32 @@ class TestNormalizeArticles:
 
 class TestComputeFreshness:
     def test_within_6_hours(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=now - timedelta(hours=2))
         assert compute_freshness(a, now) == 1.0
 
     def test_6_to_24_hours(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=now - timedelta(hours=12))
         assert compute_freshness(a, now) == 0.85
 
     def test_24_to_48_hours(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=now - timedelta(hours=36))
         assert compute_freshness(a, now) == 0.65
 
     def test_48_to_72_hours(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=now - timedelta(hours=60))
         assert compute_freshness(a, now) == 0.35
 
     def test_over_72_hours(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=now - timedelta(hours=80))
         assert compute_freshness(a, now) == 0.0
 
     def test_unknown_time(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=None)
         score = compute_freshness(a, now)
         assert score == 0.0
@@ -332,7 +339,7 @@ class TestFilterFreshArticles:
     """超过 DAILY_FRESHNESS_HOURS(48h) 的文章被过滤。"""
 
     def test_keeps_recent_articles(self):
-        now = datetime.now()
+        now = _now_utc()
         articles = [
             make_article("a1", published_at=now - timedelta(hours=6)),
             make_article("a2", published_at=now - timedelta(hours=24)),
@@ -341,7 +348,7 @@ class TestFilterFreshArticles:
         assert len(kept) == 2
 
     def test_filters_old_articles(self):
-        now = datetime.now()
+        now = _now_utc()
         articles = [
             make_article("a1", published_at=now - timedelta(hours=6)),
             make_article("a2", published_at=now - timedelta(hours=50)),
@@ -353,7 +360,7 @@ class TestFilterFreshArticles:
 
     def test_filters_unknown_time(self):
         """无时间文章直接过滤。"""
-        now = datetime.now()
+        now = _now_utc()
         articles = [
             make_article("a1", published_at=now - timedelta(hours=6)),
             make_article("a2", published_at=None),
@@ -365,7 +372,7 @@ class TestFilterFreshArticles:
 
 class TestCanBeTopStory:
     def test_recent_multi_source_eligible(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=now - timedelta(hours=3))
         c = make_cluster("c1", articles=[a],
                          latest_seen=now - timedelta(hours=3),
@@ -373,7 +380,7 @@ class TestCanBeTopStory:
         assert can_be_top_story(c, now) is True
 
     def test_single_source_unofficial_not_eligible(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=now - timedelta(hours=3), is_official=False)
         c = make_cluster("c1", articles=[a],
                          latest_seen=now - timedelta(hours=3),
@@ -381,7 +388,7 @@ class TestCanBeTopStory:
         assert can_be_top_story(c, now) is False
 
     def test_single_source_official_eligible(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=now - timedelta(hours=3), is_official=True)
         c = make_cluster("c1", articles=[a],
                          latest_seen=now - timedelta(hours=3),
@@ -389,7 +396,7 @@ class TestCanBeTopStory:
         assert can_be_top_story(c, now) is True
 
     def test_too_old_not_eligible(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article(published_at=now - timedelta(hours=40))
         c = make_cluster("c1", articles=[a],
                          latest_seen=now - timedelta(hours=40),
@@ -418,7 +425,7 @@ class TestJaccard:
 
 class TestArticleSimilarity:
     def test_same_entity_same_topic_high_similarity(self):
-        now = datetime.now()
+        now = _now_utc()
         a1 = make_article("a1", "Kimi 发布新版本", entity_keys=["kimi"],
                           topic_keys=["model_release"], published_at=now)
         a2 = make_article("a2", "月之暗面 Kimi 更新", entity_keys=["kimi"],
@@ -428,7 +435,7 @@ class TestArticleSimilarity:
         assert sim > 0.6
 
     def test_different_entities_low_similarity(self):
-        now = datetime.now()
+        now = _now_utc()
         a1 = make_article("a1", "OpenAI 发布 GPT-5", entity_keys=["openai"],
                           topic_keys=["model_release"], published_at=now)
         a2 = make_article("a2", "Kimi 发布新版本", entity_keys=["kimi"],
@@ -438,7 +445,7 @@ class TestArticleSimilarity:
         assert sim < 0.5
 
     def test_same_topic_no_entity(self):
-        now = datetime.now()
+        now = _now_utc()
         a1 = make_article("a1", "新模型发布", entity_keys=[],
                           topic_keys=["model_release"], published_at=now)
         a2 = make_article("a2", "AI 大模型发布", entity_keys=[],
@@ -453,7 +460,7 @@ class TestClusterArticles:
 
     def test_same_event_articles_clustered(self):
         """Kimi 事件 3 篇文章 → 1 个 cluster。"""
-        now = datetime.now()
+        now = _now_utc()
         articles = [
             make_article("a1", "Kimi 发布新模型 K2", domain="moonshot.cn",
                          entity_keys=["kimi"], topic_keys=["model_release"],
@@ -476,7 +483,7 @@ class TestClusterArticles:
 
     def test_different_events_separate(self):
         """OpenAI + Kimi + Meta 不同事件分开。"""
-        now = datetime.now()
+        now = _now_utc()
         articles = [
             make_article("a1", "OpenAI 发布 GPT-5", domain="openai.com",
                          entity_keys=["openai"], topic_keys=["model_release"],
@@ -493,7 +500,7 @@ class TestClusterArticles:
 
     def test_similarity_threshold_respected(self):
         """不同主题文章不被合并。"""
-        now = datetime.now()
+        now = _now_utc()
         articles = [
             make_article("a1", "AI 融资新闻", entity_keys=[],
                          topic_keys=["funding"], published_at=now),
@@ -505,7 +512,7 @@ class TestClusterArticles:
 
     def test_representative_highest_quality(self):
         """代表文章是 quality 最高的。"""
-        now = datetime.now()
+        now = _now_utc()
         articles = [
             make_article("a1", "GPT-5 发布", domain="zhihu.com",
                          entity_keys=["openai"], topic_keys=["model_release"],
@@ -521,7 +528,7 @@ class TestClusterArticles:
 
     def test_entity_and_keywords_aggregated(self):
         """Cluster 聚合所有文章 entity/topic。"""
-        now = datetime.now()
+        now = _now_utc()
         articles = [
             make_article("a1", "Kimi K2 发布", domain="moonshot.cn",
                          entity_keys=["kimi"], topic_keys=["model_release"],
@@ -542,7 +549,7 @@ class TestClusterArticles:
 
 class TestScoreClusters:
     def test_scoring_produces_valid_range(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article("a1", "Test", published_at=now - timedelta(hours=2))
         c = make_cluster("c1", articles=[a], entities=["openai"],
                          keywords=["model_release"],
@@ -552,7 +559,7 @@ class TestScoreClusters:
         assert 0 < clusters[0].final_score <= 1.0
 
     def test_major_entity_boosted(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article("a1", "OpenAI", published_at=now - timedelta(hours=2))
         c1 = make_cluster("c1", articles=[a], entities=["openai"],
                           latest_seen=now - timedelta(hours=2))
@@ -563,7 +570,7 @@ class TestScoreClusters:
         assert scores["c1"] > scores["c2"], f"Major entity should score higher: {scores}"
 
     def test_single_source_penalty(self):
-        now = datetime.now()
+        now = _now_utc()
         a1 = make_article("a1", "News", published_at=now - timedelta(hours=2))
         a2 = make_article("a2", "News Too", domain="other.com",
                           published_at=now - timedelta(hours=2))
@@ -585,7 +592,7 @@ class TestSelectDiverseClusters:
         from creatures.nanobot.prompts.skills.news_search.news_daily.pipeline.config import (
             MAX_SAME_ENTITY_CLUSTERS_DAILY,
         )
-        now = datetime.now()
+        now = _now_utc()
         clusters = []
         for i in range(5):
             a = make_article(f"a{i}", f"Kimi 新闻 {i}", domain=f"source{i}.com",
@@ -606,7 +613,7 @@ class TestSelectDiverseClusters:
         from creatures.nanobot.prompts.skills.news_search.news_daily.pipeline.config import (
             MAX_CLUSTERS_PER_DOMAIN_FINAL,
         )
-        now = datetime.now()
+        now = _now_utc()
         clusters = []
         for i in range(5):
             a = make_article(f"a{i}", f"News {i}", domain="same-domain.com",
@@ -624,7 +631,7 @@ class TestSelectDiverseClusters:
 
     def test_too_old_filtered(self):
         """超过 freshness hour 的 cluster 被排除。"""
-        now = datetime.now()
+        now = _now_utc()
         old_a = make_article("old", "Old News", published_at=now - timedelta(hours=50))
         old = make_cluster("c1", articles=[old_a],
                            latest_seen=now - timedelta(hours=50))
@@ -640,7 +647,7 @@ class TestSelectDiverseClusters:
         assert selected[0].id == "c2"
 
     def test_null_latest_seen_excluded(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article("a1", "News", published_at=now - timedelta(hours=2))
         c = make_cluster("c1", articles=[a], latest_seen=None)
         c.final_score = 0.9
@@ -651,7 +658,7 @@ class TestSelectDiverseClusters:
         from creatures.nanobot.prompts.skills.news_search.news_daily.pipeline.config import (
             MAX_FINAL_CLUSTERS,
         )
-        now = datetime.now()
+        now = _now_utc()
         clusters = []
         for i in range(20):
             a = make_article(f"a{i}", f"News {i}", domain=f"domain{i}.com",
@@ -667,7 +674,7 @@ class TestSelectDiverseClusters:
 
 class TestPickTopStory:
     def test_picks_highest_score_eligible(self):
-        now = datetime.now()
+        now = _now_utc()
         a1 = make_article("a1", "GPT-5", domain="openai.com",
                           is_official=True, published_at=now - timedelta(hours=2))
         a2 = make_article("a2", "Other", domain="other.com",
@@ -684,7 +691,7 @@ class TestPickTopStory:
         assert top.id == "c1"
 
     def test_returns_none_when_none_eligible(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article("a1", "News", published_at=now - timedelta(hours=40))
         c = make_cluster("c1", articles=[a], latest_seen=now - timedelta(hours=40))
         c.final_score = 0.9
@@ -694,7 +701,7 @@ class TestPickTopStory:
 
 class TestBuildDailyReport:
     def test_report_structure(self):
-        now = datetime.now()
+        now = _now_utc()
         a1 = make_article("a1", "GPT-5 Released", domain="openai.com",
                           entity_keys=["openai"], topic_keys=["model_release"],
                           published_at=now - timedelta(hours=2),
@@ -715,7 +722,7 @@ class TestBuildDailyReport:
         assert len(report.highlights) == 0  # only one cluster, used as top
 
     def test_no_top_story_if_none_eligible(self):
-        now = datetime.now()
+        now = _now_utc()
         a = make_article("a1", "News", published_at=now - timedelta(hours=2))
         c = make_cluster("c1", articles=[a], latest_seen=now - timedelta(hours=2))
         score_clusters([c], now)
@@ -781,7 +788,7 @@ class TestReportToDigest:
             id=aid, title=title,
             url=f"https://{domain}/{aid}", domain=domain,
             source=source_name, source_group="ai_media",
-            published_at=pub or datetime.now(),
+            published_at=pub or _now_utc(),
             title_norm=normalize_title(title),
             source_quality_score=0.75,
         )
@@ -811,7 +818,7 @@ class TestReportToDigest:
         c2.known = ["Claude 4 outperforms GPT-5 on coding"]
 
         report = NewsReport(
-            mode="daily", title="AI 日报", generated_at=datetime.now(),
+            mode="daily", title="AI 日报", generated_at=_now_utc(),
             top_story=c1, highlights=[c2],
         )
         articles = [a1, a2, a3, c2_a1]
@@ -839,7 +846,7 @@ class TestReportToDigest:
         c1.known = ["Known fact"]
 
         report = NewsReport(
-            mode="daily", title="AI 日报", generated_at=datetime.now(),
+            mode="daily", title="AI 日报", generated_at=_now_utc(),
             top_story=c1, highlights=[],
         )
         digest = _report_to_digest(report, [a1])
@@ -861,7 +868,7 @@ class TestReportToDigest:
                                 entities=["anthropic"])
 
         report = NewsReport(
-            mode="daily", title="AI 日报", generated_at=datetime.now(),
+            mode="daily", title="AI 日报", generated_at=_now_utc(),
             top_story=c1, highlights=[c2, c3],
         )
         digest = _report_to_digest(report, [a1, a2, c3_a])
@@ -881,7 +888,7 @@ class TestReportToDigest:
         a1 = self._make_article("a1", "News", "example.com")
         c1 = self._make_cluster("c1", "News", articles=[a1])
         report = NewsReport(
-            mode="daily", title="AI 日报", generated_at=datetime.now(),
+            mode="daily", title="AI 日报", generated_at=_now_utc(),
             highlights=[c1],
         )
         digest = _report_to_digest(report, [a1])
@@ -901,7 +908,7 @@ class TestReportToDigest:
         ]
         c1 = self._make_cluster("c1", "News", articles=[articles[0]])
         report = NewsReport(
-            mode="daily", title="AI 日报", generated_at=datetime.now(),
+            mode="daily", title="AI 日报", generated_at=_now_utc(),
             highlights=[c1],
         )
         digest = _report_to_digest(report, articles)

@@ -673,6 +673,7 @@
   - 进展（2026-06-24）：DTZ 第一批仅处理 eval/report artifact 时间戳，不触碰 ORM 持久化时间或历史窗口比较；`evals/periodic_manifest.py`、`evals/run.py`、`evals/rag_benchmark/report.py`、`evals/rag_benchmark/sample.py`、`evals/timing_signal_audit.py`、`evals/timing_tuning_proposal.py` 与 `evals/tuning_analysis.py` 已改为 timezone-aware 获取报告生成时间、文件名日期或文件 mtime。全仓 DTZ 统计从 312 降至 303；数据库审计确认 `core/database.py` 当前没有 Ruff DTZ 命中，实际 DB 风险在 `core/schema_migrations.py` 与各模块 ORM 写入/比较点，后续不能无脑将 DB 写入替换为 UTC aware。
   - 进展（2026-06-24）：DTZ 第二批处理生产 artifact / 中文展示时间，覆盖 Admin health / model catalog / RAG benchmark metadata、群记忆提取 metadata、生成图片 / Prompt 文件 mtime 展示、群分析 HTML 展示和新闻日报 fallback / cache 日期边界。机器可读 artifact 使用 aware UTC，中文用户展示和日报自然日使用 `Asia/Shanghai`，文件 mtime 展示保留本地 aware 墙钟语义；继续不触碰 ORM `DateTime` 写入、历史窗口比较、job retry/lock 和业务 recency 计算。全仓 DTZ 统计从 303 降至 281。
   - 进展（2026-06-24）：DTZ 第三批处理测试侧相对时间用例，覆盖 AI 日报新鲜度、旧新闻工具日期过滤、群分析 local RAG 临时消息和 semantic recency score 测试；新闻日期和临时消息时间改为 aware UTC，明确验证 naive reference 兼容的 semantic scoring 测试保留 naive 并加定点 `noqa`。全仓 DTZ 统计从 281 降至 271。
+  - 进展（2026-06-24）：DTZ 第四批处理新闻日报测试 fixture，覆盖 `tests/test_news_daily_pipeline.py` 中 freshness、cluster、diversify、report 和 digest 的动态 `datetime.now()`；测试统一使用固定 aware UTC 基准，`parse_date()` 返回 naive datetime 的 4 个契约断言保留 naive expected 并加定点 `noqa`。全仓 DTZ 统计从 271 降至 227。
 
 ---
 
