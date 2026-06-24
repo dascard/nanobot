@@ -75,7 +75,7 @@
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 - 修改：`.Codex/plans/api-chat-persona-lookup-split.md`
 
-- [ ] **步骤 1：创建测试文件基础结构**
+- [x] **步骤 1：创建测试文件基础结构**
 
 创建 `tests/test_api_chat_persona_lookup_split.py`，写入：
 
@@ -95,7 +95,7 @@ def _source(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 ```
 
-- [ ] **步骤 2：新增 fake DB helper**
+- [x] **步骤 2：新增 fake DB helper**
 
 在同一文件追加：
 
@@ -137,7 +137,7 @@ class FakeDb:
         return FakeQuery(self)
 ```
 
-- [ ] **步骤 3：新增源码边界红灯**
+- [x] **步骤 3：新增源码边界红灯**
 
 追加测试：
 
@@ -163,7 +163,7 @@ def test_chat_persona_lookup_module_does_not_import_parent_routes_or_runtime_sid
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 4：新增候选顺序测试**
+- [x] **步骤 4：新增候选顺序测试**
 
 追加测试：
 
@@ -177,7 +177,7 @@ def test_iter_persona_user_id_candidates_preserves_legacy_order_and_dedupes():
     assert iter_persona_user_id_candidates("") == ["", "private_", "group_"]
 ```
 
-- [ ] **步骤 5：新增 snapshot fallback 与 formatter 测试**
+- [x] **步骤 5：新增 snapshot fallback 与 formatter 测试**
 
 追加测试：
 
@@ -210,7 +210,7 @@ def test_resolve_persona_snapshot_uses_first_matching_candidate_and_formatter():
     assert formatter_calls == [{"persona_summary": "fallback"}]
 ```
 
-- [ ] **步骤 6：新增 missing / invalid JSON 测试**
+- [x] **步骤 6：新增 missing / invalid JSON 测试**
 
 追加测试：
 
@@ -253,7 +253,7 @@ def test_resolve_persona_snapshot_falls_back_to_empty_data_for_missing_or_invali
     assert formatter_payloads == [{}, {}, {}]
 ```
 
-- [ ] **步骤 7：新增父模块 wrapper 和 HTTP fallback 回归**
+- [x] **步骤 7：新增父模块 wrapper 和 HTTP fallback 回归**
 
 追加测试：
 
@@ -319,7 +319,7 @@ def test_proxy_chat_persona_fallback_still_reaches_bridge_metadata(client, db_se
     assert "fallback persona" in kwargs["metadata"]["persona_text"]
 ```
 
-- [ ] **步骤 8：更新 chat split 扫描清单**
+- [x] **步骤 8：更新 chat split 扫描清单**
 
 在以下文件的 `test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable()` 清单中补齐 `"api/chat_media_precache.py"`、`"api/chat_persona_context.py"`，并追加 `"api/chat_persona_lookup.py"`：
 
@@ -330,7 +330,7 @@ tests/test_api_history_log_routes_split.py
 tests/test_api_sticker_media_routes_split.py
 ```
 
-- [ ] **步骤 9：运行红灯测试**
+- [x] **步骤 9：运行红灯测试**
 
 运行：
 
@@ -346,12 +346,16 @@ tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_imp
 
 预期：测试失败，失败原因是 `api/chat_persona_lookup.py` 不存在或父模块 wrapper 不存在。
 
-- [ ] **步骤 10：提交红灯测试**
+实际：`9 failed, 1 passed, 21 warnings in 7.66s`。失败原因为 `api/chat_persona_lookup.py` 不存在、`api.chat_persona_lookup` 无法 import、父模块 `_resolve_chat_persona_snapshot` 尚不存在、四个 chat split module 扫描清单读取新模块失败；HTTP fallback 回归在旧内联实现下已通过。
+
+- [x] **步骤 10：提交红灯测试**
 
 ```bash
 git add tests/test_api_chat_persona_lookup_split.py tests/test_api_group_message_routes_split.py tests/test_api_agent_step_routes_split.py tests/test_api_history_log_routes_split.py tests/test_api_sticker_media_routes_split.py .Codex/plans/api-chat-persona-lookup-split.md
 git commit -m "test(普通API): 锁定画像查找拆分契约"
 ```
+
+说明：本步骤随红灯测试提交自身完成。
 
 ---
 
