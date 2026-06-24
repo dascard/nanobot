@@ -594,7 +594,7 @@ git commit -m "refactor(普通API): 增加非流式结果收尾助手"
 - 修改：`api/routes.py`
 - 修改：`.Codex/plans/api-chat-non-streaming-result-split.md`
 
-- [ ] **步骤 1：导入新 helper**
+- [x] **步骤 1：导入新 helper**
 
 在 `api/routes.py` 顶部已有 chat helper import 区增加：
 
@@ -602,7 +602,7 @@ git commit -m "refactor(普通API): 增加非流式结果收尾助手"
 from api import chat_non_streaming_result
 ```
 
-- [ ] **步骤 2：替换非流式成功收尾代码**
+- [x] **步骤 2：替换非流式成功收尾代码**
 
 把 `_do_chat()` 成功后从：
 
@@ -666,7 +666,7 @@ return non_streaming_result.payload
 
 注意：不要移动 `try: answer = await _do_chat()`、`except asyncio.CancelledError` 和 `except Exception`。
 
-- [ ] **步骤 3：运行父模块接入绿灯**
+- [x] **步骤 3：运行父模块接入绿灯**
 
 运行：
 
@@ -675,9 +675,9 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 python -B -m pytest -p no:cacheprovider tests/test_api_chat_non_streaming_result_split.py -v
 ```
 
-预期：`tests/test_api_chat_non_streaming_result_split.py` 全部 PASS。
+结果：`5 passed, 1 warning in 0.91s`。
 
-- [ ] **步骤 4：运行相邻回归**
+- [x] **步骤 4：运行相邻回归**
 
 运行：
 
@@ -696,9 +696,9 @@ tests/test_asyncio_run_policy.py \
 -v
 ```
 
-预期：全部 PASS。
+结果：`31 passed, 21 warnings in 7.90s`。
 
-- [ ] **步骤 5：运行静态检查**
+- [x] **步骤 5：运行静态检查**
 
 运行：
 
@@ -708,9 +708,9 @@ git diff --check -- api/routes.py api/chat_non_streaming_result.py tests/test_ap
 wc -l api/routes.py api/chat_non_streaming_result.py tests/test_api_chat_non_streaming_result_split.py
 ```
 
-预期：`compileall` 和 `git diff --check` 退出码为 0，`api/routes.py` 行数下降。
+结果：`compileall` 和 `git diff --check` 均无输出；`api/routes.py` 为 1098 行，`api/chat_non_streaming_result.py` 为 128 行，`tests/test_api_chat_non_streaming_result_split.py` 为 246 行。
 
-- [ ] **步骤 6：提交父模块接入**
+- [x] **步骤 6：提交父模块接入**
 
 运行：
 

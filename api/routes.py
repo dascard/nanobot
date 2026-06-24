@@ -35,6 +35,7 @@ from api import (
     chat_content_helpers,
     chat_guardrail_facade,
     chat_media_precache,
+    chat_non_streaming_result,
     chat_persistence,
     chat_persona_context,
     chat_private_buffer,
@@ -1046,67 +1047,43 @@ async def proxy_chat(
             logger.error(f"[/chat] Persist failed on KT error path: {pe}")
         raise HTTPException(status_code=502, detail=SAFE_STREAM_ERROR_MESSAGE)
 
-    private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
-    if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
-        logger.error("[/chat] Prompt V2 audit failed: user=%s session=%s", req.user_id, req.session_id)
-        try:
-            await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-            _persist_chat_turn(
-                db,
-                persist_req,
-                EMPTY_ASSISTANT_PLACEHOLDER,
-                guardrail_status,
-                assistant_meta=_private_prompt_audit_failure_meta(),
-                assistant_processed=1,
-                timing_meta=private_timing_meta,
-            )
-        except Exception as pe:
-            logger.error(f"[/chat] Persist failed on prompt audit error path: {pe}")
-        raise HTTPException(status_code=500, detail="系统暂时不可用，请稍后再试")
-
-    logger.info(f"[/chat] Bridge returned: answer_len={len(answer)}, answer_stripped_empty={not answer.strip()}")
-    if answer:
-        logger.debug(f"[/chat] Answer preview: {answer[:300]}")
-    else:
-        logger.warning(f"[/chat] EMPTY ANSWER returned from bridge!")
-
-    # 仅传输层展开图片 token，数据库仍存短 token
-    # 禁用 base64——所有面向 QQbot 的响应都不应返回大 base64
-    transport_answer = answer
-    try:
-        transport_answer = _expand_chat_transport_answer(answer)
-    except Exception:
-        logger.warning("[/chat] generated image ref expansion failed", exc_info=True)
-
-    # 3. 落库 (KT 的 session 管理是独立的, nanobot 原有日志需手动写入)
-    await _finalize_private_buffer(req.user_id, answer)
-    pending = _persist_chat_turn(
-        db,
-        persist_req,
-        answer,
-        guardrail_status,
-        timing_meta=private_timing_meta,
+    non_streaming_callbacks = chat_non_streaming_result.ChatNonStreamingResultCallbacks(
+        pop_bridge_reply_meta=_pop_bridge_reply_meta,
+        private_prompt_audit_failure_meta=_private_prompt_audit_failure_meta,
+        finalize_private_buffer=_finalize_private_buffer,
+        persist_chat_turn=_persist_chat_turn,
+        expand_chat_transport_answer=_expand_chat_transport_answer,
+        chat_response_payload=_chat_response_payload,
     )
-
-    # 4. 检查进化触发阈值 (按 user_id 计数，而非 session_id，确保个人消息足够才触发进化)
-    if pending >= EVOLUTION_THRESHOLD:
-        logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
+    non_streaming_context = chat_non_streaming_result.ChatNonStreamingResultContext(
+        req=req,
+        persist_req=persist_req,
+        bridge=bridge,
+        answer=answer,
+        platform=platform,
+        bridge_meta=bridge_meta,
+        guardrail_status=guardrail_status,
+        private_timing_meta=private_timing_meta,
+        empty_assistant_placeholder=EMPTY_ASSISTANT_PLACEHOLDER,
+        evolution_threshold=EVOLUTION_THRESHOLD,
+        callbacks=non_streaming_callbacks,
+    )
+    non_streaming_result = await chat_non_streaming_result.finalize_non_streaming_chat_result(
+        db,
+        non_streaming_context,
+    )
+    if non_streaming_result.prompt_audit_failed:
+        raise HTTPException(status_code=500, detail="系统暂时不可用，请稍后再试")
+    if non_streaming_result.should_trigger_evolution:
+        logger.info(
+            "[/chat] Evolution triggered: user=%s, pending=%s, threshold=%s",
+            req.user_id,
+            non_streaming_result.pending,
+            EVOLUTION_THRESHOLD,
+        )
         background_tasks.add_task(evolution_task, req.user_id)
 
-    answer_chunks = _split_chat_answer_chunks(transport_answer)
-
-    logger.info(f"[/chat] Response: answer_chunks_count={len(answer_chunks)}, status=ok")
-    return _chat_response_payload(
-        req,
-        status="ok",
-        answer=transport_answer,
-        reply_meta=private_reply_meta,
-        platform=platform,
-        chat_type=str(bridge_meta.get("chat_type") or ""),
-        unprocessed_logs=pending,
-        guardrail_status=guardrail_status,
-        include_answer_chunks=True,
-    )
+    return non_streaming_result.payload
 
 router.include_router(evolution_router)
 router.include_router(history_log_router)
