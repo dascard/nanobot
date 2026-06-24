@@ -74,7 +74,7 @@
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 - 修改：`.Codex/plans/api-chat-pre-bridge-decision-split.md`
 
-- [ ] **步骤 1：创建测试文件基础结构**
+- [x] **步骤 1：创建测试文件基础结构**
 
 创建 `tests/test_api_chat_pre_bridge_decision_split.py`，写入：
 
@@ -117,7 +117,7 @@ def _request(
     )
 ```
 
-- [ ] **步骤 2：新增 fake service helper**
+- [x] **步骤 2：新增 fake service helper**
 
 在同一文件追加：
 
@@ -251,7 +251,7 @@ def _services(
     return services, store, calls, gate_calls
 ```
 
-- [ ] **步骤 3：新增源码边界红灯**
+- [x] **步骤 3：新增源码边界红灯**
 
 在同一文件追加：
 
@@ -285,7 +285,7 @@ def test_chat_pre_bridge_decision_module_does_not_import_parent_routes_or_runtim
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 4：新增 group skip 红灯**
+- [x] **步骤 4：新增 group skip 红灯**
 
 在同一文件追加：
 
@@ -316,7 +316,7 @@ async def test_group_chat_skips_private_timing_guardrail_and_buffer():
     assert "get_guardrail" not in calls
 ```
 
-- [ ] **步骤 5：新增 private timing 早返回红灯**
+- [x] **步骤 5：新增 private timing 早返回红灯**
 
 在同一文件追加：
 
@@ -378,7 +378,7 @@ async def test_private_casual_returns_template_or_fallback_without_guardrail_or_
     assert "get_guardrail" not in calls
 ```
 
-- [ ] **步骤 6：新增 private buffer 和 guardrail 红灯**
+- [x] **步骤 6：新增 private buffer 和 guardrail 红灯**
 
 在同一文件追加：
 
@@ -450,7 +450,7 @@ async def test_follower_waits_and_returns_silent_without_parent_response_side_ef
     assert store.store_guardrail_calls == []
 ```
 
-- [ ] **步骤 7：新增父模块 wrapper 红灯**
+- [x] **步骤 7：新增父模块 wrapper 红灯**
 
 在同一文件追加：
 
@@ -482,7 +482,7 @@ def test_parent_pre_bridge_services_uses_routes_patch_points(monkeypatch):
     assert services.finalize_private_buffer is routes._finalize_private_buffer
 ```
 
-- [ ] **步骤 8：更新 chat split module 扫描清单**
+- [x] **步骤 8：更新 chat split module 扫描清单**
 
 在以下 4 个文件的 `test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable()` 路径列表中加入 `"api/chat_pre_bridge_decision.py"`：
 
@@ -497,7 +497,7 @@ def test_parent_pre_bridge_services_uses_routes_patch_points(monkeypatch):
 - `tests/test_api_history_log_routes_split.py`
 - `tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 9：运行红灯测试**
+- [x] **步骤 9：运行红灯测试**
 
 运行：
 
@@ -514,7 +514,9 @@ tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_imp
 
 预期：失败，核心原因是 `api/chat_pre_bridge_decision.py` 尚不存在，以及 `api.routes._resolve_chat_pre_bridge_decision` / `_chat_pre_bridge_services` 尚不存在。
 
-- [ ] **步骤 10：Commit 红灯测试**
+实际：12 failed, 1 warning in 6.94s。失败原因符合预期，包括 `api/chat_pre_bridge_decision.py` 不存在、`api.routes._resolve_chat_pre_bridge_decision` 不存在、`api.routes._chat_pre_bridge_services` 不存在，以及 4 个 chat split module 扫描清单读取新模块失败。
+
+- [x] **步骤 10：Commit 红灯测试**
 
 ```bash
 git add tests/test_api_chat_pre_bridge_decision_split.py \
@@ -525,6 +527,8 @@ tests/test_api_sticker_media_routes_split.py \
 .Codex/plans/api-chat-pre-bridge-decision-split.md
 git commit -m "test(普通API): 锁定私聊前置决策契约"
 ```
+
+实际提交：本阶段测试提交自身，message 为 `test(普通API): 锁定私聊前置决策契约`。
 
 ---
 
