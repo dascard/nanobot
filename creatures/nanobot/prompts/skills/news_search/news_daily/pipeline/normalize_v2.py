@@ -1,6 +1,7 @@
 """Article 标准化——title/source/time/entity/topic 归一化。"""
 
-import re, hashlib
+import hashlib
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 

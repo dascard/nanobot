@@ -1428,7 +1428,7 @@ async def test_group_message_ambient_enters_timing_gate(db_session, monkeypatch)
     # ambient log written
     logs = db_session.query(ChatLog).filter_by(role="ambient").all()
     assert len(logs) >= 1
-    assert any("[A]: 哈哈" in l.content for l in logs)
+    assert any("[A]: 哈哈" in log.content for log in logs)
     assert calls
     assert calls[0][0] == "123"
     assert calls[0][2]["trigger_reason"] == "ambient"
@@ -2150,7 +2150,7 @@ def test_deprecated_log_ambient_still_works(client, db_session):
     })
     assert response.status_code == 200
     logs = db_session.query(ChatLog).filter_by(role="ambient").all()
-    assert any("[D]: 还在用旧接口" in l.content for l in logs)
+    assert any("[D]: 还在用旧接口" in log.content for log in logs)
 
 
 def test_persist_group_bridge_reply_uses_runtime_bot_name(db_session):

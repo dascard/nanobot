@@ -353,10 +353,10 @@ def validate_digest(digest: dict, cards: list[EvidenceCard]) -> tuple[bool, list
     if not digest.get("verdict"):
         warnings.append("缺少 verdict")
     vague = re.compile(r"(值得关注|行业持续|不断进步|日益增长|越来越|趋势)")
-    for field in ["verdict", "closing"]:
-        text = digest.get(field, "")
+    for digest_field in ["verdict", "closing"]:
+        text = digest.get(digest_field, "")
         if vague.search(text):
-            warnings.append(f"{field} 空泛: {vague.search(text).group()}")
+            warnings.append(f"{digest_field} 空泛: {vague.search(text).group()}")
 
     # 中文友好实体检测 (warning only)
     known_entity_re = re.compile(

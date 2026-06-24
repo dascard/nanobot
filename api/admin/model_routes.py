@@ -685,7 +685,8 @@ _TINY_TEST_PNG = (
 @router.post("/models/routes/{route_key}/test")
 async def test_model_route(route_key: str, mode: str = "ping", _auth=Depends(verify_admin)):
     """测试某个模型路由的连通性。"""
-    import time, asyncio
+    import asyncio
+    import time
     from clients.classifier_client import call_model_route, ensure_model_route_enabled, resolve_model_route
     from core.llm_trace_context import llm_trace_scope
 

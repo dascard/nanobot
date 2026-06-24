@@ -69,7 +69,8 @@ def is_trusted_sticker_preview_host(hostname: str) -> bool:
 
 
 def is_blocked_host(hostname: str) -> bool:
-    import ipaddress, socket
+    import ipaddress
+    import socket
     host = (hostname or "").lower().rstrip(".")
     if is_trusted_sticker_preview_host(host):
         return False

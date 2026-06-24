@@ -9,7 +9,13 @@
 chat 和 push 的输出全部保存到 tests/chat_resp/
 """
 
-import os, sys, json, time, threading, urllib.request, urllib.error
+import json
+import os
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 

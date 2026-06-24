@@ -59,7 +59,7 @@ def _scan_log(log_path: str, limit: int) -> list[dict]:
 
             ctx_start = max(0, i - 3)
             ctx_end = min(len(lines), i + 4)
-            context = [l.strip()[:300] for l in lines[ctx_start:ctx_end]]
+            context = [line.strip()[:300] for line in lines[ctx_start:ctx_end]]
             error_msg = (m.group(1) if m.lastindex and m.lastindex >= 1 else m.group(0))[:200]
 
             cases.append({

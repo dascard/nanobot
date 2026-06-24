@@ -1041,7 +1041,7 @@ class TestGroupPendingMessageDirected:
         d = msg.to_dict()
         assert d["segments"] == []
         assert d["mentions"] == []
-        assert d.get("directed", {}).get("directed_to_other") != True
+        assert not d.get("directed", {}).get("directed_to_other")
 
     def test_directed_to_other_is_derived_from_direction_payload(self):
         from core.group_runtime.runtime import GroupPendingMessage

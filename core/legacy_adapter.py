@@ -198,8 +198,8 @@ class SQLiteMemory:
         """提取场的历史记录并格式化为字符串"""
         logs = self.get_recent_context(session_id, limit)
         return "\n".join([
-            f"{'User' if l['role'] == 'user' else 'Assistant'}({l['sender'] or ''}): {l['content']}" 
-            for l in logs
+            f"{'User' if log['role'] == 'user' else 'Assistant'}({log['sender'] or ''}): {log['content']}"
+            for log in logs
         ])
 
     def get_user_persona(self, user_id: str) -> str:
@@ -714,10 +714,10 @@ class EvolutionUtils:
         }
         domain_counts = {}
 
-        for l in logs:
-            raw_role = str(EvolutionUtils._read_log_field(l, "role", "")).strip().lower()
+        for log in logs:
+            raw_role = str(EvolutionUtils._read_log_field(log, "role", "")).strip().lower()
             role = "user" if raw_role == "user" else "assistant"
-            content = str(EvolutionUtils._read_log_field(l, "content", "")).strip()
+            content = str(EvolutionUtils._read_log_field(log, "content", "")).strip()
             content_lower = content.lower()
             
             if role == "user":

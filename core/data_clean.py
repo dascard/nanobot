@@ -18,7 +18,7 @@ logger = logging.getLogger("nanobot.data_clean")
 
 
 def _regenerate_digest(logs: List[ChatLog]) -> tuple[str, str, str]:
-    lines = [l for x in logs if (l := _format_log_line(x)) is not None]
+    lines = [formatted_line for x in logs if (formatted_line := _format_log_line(x)) is not None]
     if not lines:
         return ("", "", "")
     return _build_progressive_layers(lines)
