@@ -630,7 +630,7 @@ git commit -m "test(普通API): 锁定聊天路由执行器契约"
 - 创建：`api/chat_route_runner.py`
 - 修改：`.Codex/plans/api-chat-route-runner-split.md`
 
-- [ ] **步骤 1：创建新模块类型和 callbacks**
+- [x] **步骤 1：创建新模块类型和 callbacks**
 
 创建 `api/chat_route_runner.py`：
 
@@ -707,7 +707,7 @@ class ChatRouteRunnerContext:
     callbacks: ChatRouteRunnerCallbacks
 ```
 
-- [ ] **步骤 2：实现 stream runner helper**
+- [x] **步骤 2：实现 stream runner helper**
 
 追加：
 
@@ -735,7 +735,7 @@ async def _run_stream_bridge(
         done.set()
 ```
 
-- [ ] **步骤 3：实现 stream result context builder**
+- [x] **步骤 3：实现 stream result context builder**
 
 追加：
 
@@ -773,7 +773,7 @@ def _stream_result_context(
     )
 ```
 
-- [ ] **步骤 4：实现 `iter_streaming_chat_response()`**
+- [x] **步骤 4：实现 `iter_streaming_chat_response()`**
 
 追加：
 
@@ -901,7 +901,7 @@ async def iter_streaming_chat_response(db: Any, context: ChatRouteRunnerContext)
         done.set()
 ```
 
-- [ ] **步骤 5：实现 non-streaming context builder 和 runner**
+- [x] **步骤 5：实现 non-streaming context builder 和 runner**
 
 追加：
 
@@ -989,7 +989,7 @@ async def run_non_streaming_chat_response(
     )
 ```
 
-- [ ] **步骤 6：运行 helper 定向测试**
+- [x] **步骤 6：运行 helper 定向测试**
 
 运行：
 
@@ -997,9 +997,10 @@ async def run_non_streaming_chat_response(
 python -B -m pytest -p no:cacheprovider tests/test_api_chat_route_runner_split.py -k "not parent_chat_route_delegates" -v
 ```
 
-预期：新模块行为测试通过；父模块瘦身测试仍失败。
+结果：`9 passed, 1 deselected, 1 warning in 0.93s`。新模块行为测试通过；
+父模块瘦身测试按预期未纳入本轮。
 
-- [ ] **步骤 7：静态检查 helper**
+- [x] **步骤 7：静态检查 helper**
 
 运行：
 
@@ -1007,7 +1008,13 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_route_runner_split.p
 python -m compileall api/chat_route_runner.py -q
 ```
 
-预期：退出码 0。
+结果：退出码 0。补充验证：
+`tests/test_api_chat_route_runner_split.py -v` 为
+`9 passed, 1 failed, 1 warning in 6.56s`，唯一失败为父模块尚未包含
+`chat_route_runner` 委托入口；四个 chat split 扫描测试为
+`4 passed, 1 warning in 1.18s`；`rg -n "asyncio\\.run|run_awaitable_sync"
+api/chat_route_runner.py tests/test_api_chat_route_runner_split.py || true`
+仅命中新测试的禁止断言字符串。
 
 - [ ] **步骤 8：提交 helper**
 
