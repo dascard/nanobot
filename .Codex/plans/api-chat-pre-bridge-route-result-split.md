@@ -709,7 +709,7 @@ git commit -m "refactor(普通API): 接入前置决策结果助手"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-chat-pre-bridge-route-result-split.md`
 
-- [ ] **步骤 1：运行 split 扫描和相邻回归**
+- [x] **步骤 1：运行 split 扫描和相邻回归**
 
 运行：
 
@@ -735,7 +735,12 @@ tests/test_api.py::test_proxy_chat_no_reply_persists_private_timing_scoring_meta
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行静态检查**
+实际结果（2026-06-24）：
+
+- chat split 扫描：`4 passed, 1 warning in 1.19s`。
+- 相邻回归：`15 passed, 21 warnings in 2.36s`。
+
+- [x] **步骤 2：运行静态检查**
 
 运行：
 
@@ -755,7 +760,16 @@ wc -l api/routes.py api/chat_pre_bridge_route_result.py tests/test_api_chat_pre_
 
 预期：compileall 退出码 0；`git diff --check` 无输出；记录行数。
 
-- [ ] **步骤 3：运行全量测试**
+实际结果（2026-06-24）：
+
+- `python -m compileall api/routes.py api/chat_pre_bridge_route_result.py -q` 退出码 0。
+- `git diff --check` 无输出。
+- `wc -l api/routes.py api/chat_pre_bridge_route_result.py tests/test_api_chat_pre_bridge_route_result_split.py`
+  -> `1013 api/routes.py`、`115 api/chat_pre_bridge_route_result.py`、`311 tests/test_api_chat_pre_bridge_route_result_split.py`。
+- `rg -n "asyncio\\.run|run_awaitable_sync" api/routes.py api/chat_pre_bridge_route_result.py tests/test_api_chat_pre_bridge_route_result_split.py` 仅命中新测试中的禁止断言字符串，生产代码无命中。
+- 验证中发现初版 wrapper 让 `api/routes.py` 从 1020 行增到 1028 行，已随 `4794458 refactor(普通API): 压缩前置结果包装器` 压缩 wrapper；最终为 1013 行。
+
+- [x] **步骤 3：运行全量测试**
 
 运行：
 
@@ -766,7 +780,9 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 4：提交验证记录**
+实际结果（2026-06-24）：`1788 passed, 6 skipped, 139 warnings in 124.64s`。
+
+- [x] **步骤 4：提交验证记录**
 
 把任务 1 到任务 4 的实际命令输出摘要写回本计划，然后提交：
 
