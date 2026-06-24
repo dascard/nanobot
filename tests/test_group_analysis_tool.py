@@ -3,6 +3,11 @@ from tests.async_helpers import run_async
 import json
 
 
+def _local_now() -> datetime:
+    # 群分析测试 fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 def test_clean_message_filters_commands_and_noise():
     from creatures.nanobot.prompts.skills.group_analysis.preprocess import clean_message
 
@@ -396,7 +401,7 @@ def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
     from core.database import ChatLog, User, Persona
     from creatures.nanobot.prompts.skills.group_analysis.tool import GroupAnalysisTool
 
-    now = datetime.now()
+    now = _local_now()
     logs = [
         ChatLog(user_id="group_123", session_id="group_123", sender_name="A", role="ambient", content="今天聊 AI", created_at=now - timedelta(hours=1)),
         ChatLog(user_id="group_123", session_id="group_123", sender_name="B", role="ambient", content="价格确实降了", created_at=now - timedelta(hours=1)),
@@ -479,7 +484,7 @@ def test_group_analysis_tool_filters_artifacts_before_llm(monkeypatch):
     from core.database import ChatLog, User
     from creatures.nanobot.prompts.skills.group_analysis.tool import GroupAnalysisTool
 
-    now = datetime.now()
+    now = _local_now()
     logs = [
         ChatLog(user_id="group_123", session_id="group_123", sender_name="A", role="ambient",
                 content="今天聊 AI", created_at=now - timedelta(minutes=30)),
@@ -564,7 +569,7 @@ def test_group_analysis_uses_deterministic_fallback_when_llm_fails(monkeypatch):
     from creatures.nanobot.prompts.skills.group_analysis.preprocess import build_analysis_payload
     from creatures.nanobot.prompts.skills.group_analysis.schemas import RawChatLog
 
-    now = datetime.now()
+    now = _local_now()
     logs = [
         RawChatLog(id=1, role="ambient", user_id="u1", sender_name="A",
                    content="今天 AI 模型价格又降了，benchmark 也反转了", created_at=now),
