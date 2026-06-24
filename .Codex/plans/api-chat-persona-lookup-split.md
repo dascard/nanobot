@@ -566,7 +566,7 @@ git commit -m "refactor(普通API): 接入画像查找助手"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-chat-persona-lookup-split.md`
 
-- [ ] **步骤 1：运行 split 扫描和相邻回归**
+- [x] **步骤 1：运行 split 扫描和相邻回归**
 
 运行：
 
@@ -592,7 +592,12 @@ tests/test_api.py::test_proxy_chat_releases_db_transaction_before_bridge \
 
 预期：全部通过。
 
-- [ ] **步骤 2：运行静态检查**
+实际：
+
+- Split 扫描：`4 passed, 1 warning in 1.27s`。
+- 相邻回归：`14 passed, 21 warnings in 3.26s`。
+
+- [x] **步骤 2：运行静态检查**
 
 运行：
 
@@ -612,7 +617,14 @@ wc -l api/routes.py api/chat_persona_lookup.py tests/test_api_chat_persona_looku
 
 预期：compileall 退出码 0；`git diff --check` 无输出；记录行数。
 
-- [ ] **步骤 3：运行全量测试**
+实际：
+
+- `python -m compileall api/routes.py api/chat_persona_lookup.py -q` 无输出，退出码 0。
+- `git diff --check` 对本阶段生产代码、测试文件和计划文件无输出。
+- 行数：`1020 api/routes.py`、`73 api/chat_persona_lookup.py`、`207 tests/test_api_chat_persona_lookup_split.py`。
+- `rg -n "asyncio\.run|run_awaitable_sync" api/routes.py api/chat_persona_lookup.py tests/test_api_chat_persona_lookup_split.py || true` 仅命中新测试中的禁止断言字符串，生产代码无新增命中。
+
+- [x] **步骤 3：运行全量测试**
 
 运行：
 
@@ -623,7 +635,9 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 
 预期：0 failures。
 
-- [ ] **步骤 4：提交验证记录**
+实际：`1782 passed, 6 skipped, 139 warnings in 133.42s (0:02:13)`。
+
+- [x] **步骤 4：提交验证记录**
 
 把任务 1 到任务 4 的实际命令输出摘要写回本计划，然后提交：
 
@@ -631,6 +645,8 @@ python -B -m pytest -p no:cacheprovider tests/ -v
 git add .Codex/plans/api-chat-persona-lookup-split.md
 git commit -m "docs(计划): 记录画像查找拆分验证"
 ```
+
+说明：本步骤随验证记录提交自身完成。
 
 - [ ] **步骤 5：更新 `docs/todo.md`**
 
