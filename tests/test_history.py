@@ -7,6 +7,11 @@ from datetime import datetime, timedelta
 from core.database import ChatLog, ConversationTurn, RollingSessionSummary, User
 
 
+def _local_now() -> datetime:
+    # SQLite ORM DateTime fixture 和 history cutoff 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 # ── _sanitize_prompt_text ──
 
 def test_sanitize_handles_None():
@@ -142,9 +147,8 @@ def test_build_memory_token_cap_keeps_latest_rows(db_session):
 def test_build_memory_keeps_old_private_turns_until_capacity_boundary(db_session):
     """私聊上下文不再按 30 分钟硬切；只要 raw window 容量允许就保留原文。"""
     from api.routes import _build_session_memory
-    from datetime import timedelta
 
-    old_time = datetime.now() - timedelta(hours=2)
+    old_time = _local_now() - timedelta(hours=2)
     db_session.add(ConversationTurn(
         user_id="test_user", session_id="s1", role="user",
         content="old message", created_at=old_time,
@@ -171,7 +175,8 @@ def test_build_memory_injects_rolling_summary_for_trimmed_private_turns(db_sessi
     """被 raw window 容量挤出的私聊历史应滚动进 session summary。"""
     from api.routes import _build_session_memory
 
-    base_time = datetime.now() - timedelta(hours=2)
+    now = _local_now()
+    base_time = now - timedelta(hours=2)
     rows = []
     for i in range(10):
         rows.append((
@@ -180,8 +185,8 @@ def test_build_memory_injects_rolling_summary_for_trimmed_private_turns(db_sessi
             base_time + timedelta(seconds=i),
         ))
     rows.extend([
-        ("user", "现在继续处理这个问题，并保留最近原文", datetime.now() - timedelta(seconds=20)),
-        ("assistant", "我会继续处理最新问题", datetime.now() - timedelta(seconds=10)),
+        ("user", "现在继续处理这个问题，并保留最近原文", now - timedelta(seconds=20)),
+        ("assistant", "我会继续处理最新问题", now - timedelta(seconds=10)),
     ])
     for role, content, ct in rows:
         db_session.add(ConversationTurn(
@@ -218,8 +223,9 @@ def test_build_group_memory_keeps_old_turns_until_capacity_boundary(db_session):
     """群聊 ConversationTurn 也不再按 10 分钟硬切，容量边界才触发摘要。"""
     from api.routes import _build_session_memory
 
-    old_time = datetime.now() - timedelta(hours=2)
-    recent_time = datetime.now() - timedelta(minutes=2)
+    now = _local_now()
+    old_time = now - timedelta(hours=2)
+    recent_time = now - timedelta(minutes=2)
     for role, content, ct in [
         ("user", "旧群聊请求", old_time),
         ("assistant", "旧群聊回复", old_time),
@@ -253,7 +259,7 @@ def test_build_chat_context_group_uses_unified_chatlog_messages(db_session):
     """群聊上下文应统一成 role messages，不再生成独立 group_recent_context 块。"""
     from core.context_builder import build_chat_context
 
-    now = datetime.now()
+    now = _local_now()
     db_session.add(ChatLog(
         user_id="group_1",
         session_id="group_1",
@@ -320,7 +326,7 @@ def test_build_chat_context_group_injects_active_rolling_summary(db_session):
     """群聊真实 ChatLog 上下文也应带上 active rolling summary header。"""
     from core.context_builder import build_chat_context
 
-    now = datetime.now()
+    now = _local_now()
     db_session.add(RollingSessionSummary(
         session_id="group_1",
         user_id="group_1",
@@ -382,14 +388,15 @@ def test_mark_clear_respected(db_session):
     """After mark-clear, messages before the clear point should not appear."""
     from api.routes import _build_session_memory
 
+    now = _local_now()
     # Set a clear marker 15 minutes ago
-    clear_time = datetime.now() - timedelta(minutes=15)
+    clear_time = now - timedelta(minutes=15)
     db_session.add(User(id="test_user", history_clear_at=clear_time))
     db_session.commit()
 
     # Insert messages: one old (20 min ago), one recent (5 min ago)
-    old_time = datetime.now() - timedelta(minutes=20)
-    recent_time = datetime.now() - timedelta(minutes=5)
+    old_time = now - timedelta(minutes=20)
+    recent_time = now - timedelta(minutes=5)
     for role, content, ct in [
         ("user", "before clear", old_time),
         ("assistant", "before clear reply", old_time),
