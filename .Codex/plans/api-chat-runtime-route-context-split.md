@@ -514,7 +514,7 @@ git commit -m "test(普通API): 锁定运行时路由上下文契约"
 - 创建：`api/chat_runtime_route_context.py`
 - 修改：`.Codex/plans/api-chat-runtime-route-context-split.md`
 
-- [ ] **步骤 1：新增 dataclass 和 services 类型**
+- [x] **步骤 1：新增 dataclass 和 services 类型**
 
 创建 `api/chat_runtime_route_context.py`，包含：
 
@@ -570,7 +570,7 @@ class ChatRuntimeRouteContext:
     injection_mode: bool
 ```
 
-- [ ] **步骤 2：实现 persona injection 辅助逻辑**
+- [x] **步骤 2：实现 persona injection 辅助逻辑**
 
 追加：
 
@@ -605,7 +605,7 @@ def _inject_persona_context(
     return persona_text, ctx_debug
 ```
 
-- [ ] **步骤 3：实现 runtime payload 构造和日志**
+- [x] **步骤 3：实现 runtime payload 构造和日志**
 
 追加 `build_chat_runtime_route_context()`，核心行为：
 
@@ -634,7 +634,7 @@ def build_chat_runtime_route_context(
 - 按原 normal / injection 分支记录日志。
 - 返回 `ChatRuntimeRouteContext`。
 
-- [ ] **步骤 4：运行 helper 定向测试**
+- [x] **步骤 4：运行 helper 定向测试**
 
 运行：
 
@@ -644,7 +644,9 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_route_contex
 
 预期：新模块行为测试通过；父模块 wrapper 测试仍可能失败，因为 `api/routes.py` 尚未接入。
 
-- [ ] **步骤 5：静态检查并提交**
+实际：`python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_route_context_split.py -k 'not parent_proxy_chat_delegates' -v` 为 `6 passed, 1 deselected, 1 warning in 0.73s`。完整新测试为 `6 passed, 1 failed, 1 warning in 6.54s`，唯一失败是父模块尚未提供 `_build_chat_runtime_route_context`。
+
+- [x] **步骤 5：静态检查并提交**
 
 运行：
 
@@ -660,6 +662,8 @@ git add api/chat_runtime_route_context.py .Codex/plans/api-chat-runtime-route-co
 git diff --cached --check
 git commit -m "refactor(普通API): 增加运行时路由上下文助手"
 ```
+
+实际：chat split 扫描 `4 passed, 1 warning in 0.97s`；`python -m compileall api/chat_runtime_route_context.py -q` 退出码 0。
 
 ---
 
