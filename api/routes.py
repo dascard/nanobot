@@ -37,6 +37,7 @@ from api import (
     chat_media_precache,
     chat_non_streaming_result,
     chat_pre_bridge_decision,
+    chat_pre_bridge_route_result,
     chat_persistence,
     chat_persona_context,
     chat_persona_lookup,
@@ -526,6 +527,46 @@ def _persist_chat_turn(
     )
 
 
+def _chat_pre_bridge_route_callbacks(
+    db: Session,
+) -> chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks:
+    def persist_chat_turn(
+        req: ChatProxyRequest,
+        answer: str,
+        guardrail_status: str | None = None,
+        **kwargs: Any,
+    ) -> int:
+        return _persist_chat_turn(
+            db,
+            req,
+            answer,
+            guardrail_status=guardrail_status,
+            **kwargs,
+        )
+
+    return chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks(
+        clone_chat_request=_clone_chat_request,
+        persist_chat_turn=persist_chat_turn,
+        chat_response_payload=_chat_response_payload,
+        finalize_private_buffer=_finalize_private_buffer,
+    )
+
+
+async def _resolve_pre_bridge_route_result(
+    db: Session,
+    req: ChatProxyRequest,
+    pre_bridge: Any,
+) -> (
+    chat_pre_bridge_route_result.ChatPreBridgeRouteEarlyResponse
+    | chat_pre_bridge_route_result.ChatPreBridgeRouteContinue
+):
+    return await chat_pre_bridge_route_result.resolve_pre_bridge_route_result(
+        req,
+        pre_bridge,
+        callbacks=_chat_pre_bridge_route_callbacks(db),
+    )
+
+
 # 旧群消息 helper 已收敛到 app.group_ingress.helpers；此处保留旧私有导入路径兼容。
 _normalize_onebot_segments = group_ingress_helpers.normalize_onebot_segments
 _extract_mentions_from_segments = group_ingress_helpers.extract_mentions_from_segments
@@ -653,50 +694,17 @@ async def proxy_chat(
         is_superuser=is_superuser,
     )
 
-    if isinstance(pre_bridge, chat_pre_bridge_decision.ChatPreBridgeEarlyReturn):
-        if pre_bridge.persist_answer is not None:
-            _persist_chat_turn(
-                db,
-                req,
-                pre_bridge.persist_answer,
-                guardrail_status=pre_bridge.persist_guardrail_status,
-                timing_meta=pre_bridge.persist_timing_meta,
-            )
-        return _chat_response_payload(
-            req,
-            status=pre_bridge.status,
-            reason=pre_bridge.reason,
-            answer=pre_bridge.answer,
-            source=pre_bridge.source,
-            intent=pre_bridge.intent,
-            guardrail_status=pre_bridge.guardrail_status,
-            include_answer_chunks=True,
-        )
+    pre_bridge_route = await _resolve_pre_bridge_route_result(db, req, pre_bridge)
+    if isinstance(pre_bridge_route, chat_pre_bridge_route_result.ChatPreBridgeRouteEarlyResponse):
+        return pre_bridge_route.payload
 
-    final_query = pre_bridge.final_query
-    final_files = pre_bridge.final_files
-    _private_decision = pre_bridge.private_decision
-    private_timing_meta = pre_bridge.private_timing_meta
-    guardrail_status = pre_bridge.guardrail_status
-    _classifier_ran = pre_bridge.classifier_ran
-    persist_req = _clone_chat_request(req, query=final_query, files=final_files)
-
-    if _classifier_ran and guardrail_status == "silent":
-        await _finalize_private_buffer(req.user_id)
-        _persist_chat_turn(
-            db,
-            persist_req,
-            "（数据中转，自动静默）",
-            guardrail_status,
-            timing_meta=private_timing_meta,
-        )
-        return _chat_response_payload(
-            req,
-            status="silent",
-            reason="guardrail_silent",
-            guardrail_status=guardrail_status,
-            include_answer_chunks=True,
-        )
+    final_query = pre_bridge_route.final_query
+    final_files = pre_bridge_route.final_files
+    _private_decision = pre_bridge_route.private_decision
+    private_timing_meta = pre_bridge_route.private_timing_meta
+    guardrail_status = pre_bridge_route.guardrail_status
+    _classifier_ran = pre_bridge_route.classifier_ran
+    persist_req = pre_bridge_route.persist_req
 
     # 4b. 组装 runtime payload — 使用缓冲合并后的查询
     safe_user_input = _build_multimodal_user_input_text(final_query, final_files, max_chars=MAX_QUERY_CHARS)

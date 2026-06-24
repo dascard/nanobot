@@ -257,6 +257,7 @@ async def test_parent_pre_bridge_route_result_wrapper_remains_patchable(monkeypa
     from api import routes
 
     calls: list[tuple[Any, Any, Any]] = []
+    persist_calls: list[tuple[Any, Any, str, str | None, dict[str, Any]]] = []
 
     async def fake_resolver(req: Any, pre_bridge: Any, *, callbacks: Any) -> Any:
         calls.append((req, pre_bridge, callbacks))
@@ -264,19 +265,47 @@ async def test_parent_pre_bridge_route_result_wrapper_remains_patchable(monkeypa
             payload={"status": "patched"}
         )
 
+    def fake_persist_chat_turn(
+        db: Any,
+        req: Any,
+        answer: str,
+        guardrail_status: str | None = None,
+        **kwargs: Any,
+    ) -> int:
+        persist_calls.append((db, req, answer, guardrail_status, kwargs))
+        return 9
+
     monkeypatch.setattr(chat_pre_bridge_route_result, "resolve_pre_bridge_route_result", fake_resolver)
+    monkeypatch.setattr(routes, "_persist_chat_turn", fake_persist_chat_turn)
+    db = object()
     req = _request()
     pre_bridge = object()
 
     assert routes._chat_pre_bridge_route_callbacks.__module__ == "api.routes"
     assert routes._resolve_pre_bridge_route_result.__module__ == "api.routes"
 
-    result = await routes._resolve_pre_bridge_route_result(req, pre_bridge)
+    result = await routes._resolve_pre_bridge_route_result(db, req, pre_bridge)
 
     assert result.payload == {"status": "patched"}
     assert calls[0][0] is req
     assert calls[0][1] is pre_bridge
     assert calls[0][2].clone_chat_request is routes._clone_chat_request
-    assert calls[0][2].persist_chat_turn is routes._persist_chat_turn
     assert calls[0][2].chat_response_payload is routes._chat_response_payload
     assert calls[0][2].finalize_private_buffer is routes._finalize_private_buffer
+
+    callbacks = routes._chat_pre_bridge_route_callbacks(db)
+    assert callbacks.persist_chat_turn(
+        req,
+        "持久化回复",
+        guardrail_status="silent",
+        timing_meta={"action": "reply_now"},
+    ) == 9
+    assert persist_calls == [
+        (
+            db,
+            req,
+            "持久化回复",
+            "silent",
+            {"timing_meta": {"action": "reply_now"}},
+        )
+    ]

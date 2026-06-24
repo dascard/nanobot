@@ -45,8 +45,8 @@
   - 只通过 callbacks 接收父模块 patch point。
 - 修改：`api/routes.py`
   - 导入 `api.chat_pre_bridge_route_result`。
-  - 新增 `_chat_pre_bridge_route_callbacks()` 薄 wrapper。
-  - 新增 `_resolve_pre_bridge_route_result()` 薄 wrapper。
+  - 新增 `_chat_pre_bridge_route_callbacks(db)` 薄 wrapper，通过闭包把当前 `db` 绑定到父模块 `_persist_chat_turn()`。
+  - 新增 `_resolve_pre_bridge_route_result(db, req, pre_bridge)` 薄 wrapper。
   - 用 wrapper 替换 `proxy_chat()` 中 pre-bridge early / continue / guardrail silent 转译。
 - 创建：`tests/test_api_chat_pre_bridge_route_result_split.py`
   - 锁定新模块源码边界。
@@ -608,7 +608,7 @@ git commit -m "refactor(普通API): 增加前置决策结果助手"
 - 修改：`api/routes.py`
 - 修改：`.Codex/plans/api-chat-pre-bridge-route-result-split.md`
 
-- [ ] **步骤 1：导入新模块**
+- [x] **步骤 1：导入新模块**
 
 在 `from api import (` 列表中加入：
 
@@ -616,42 +616,59 @@ git commit -m "refactor(普通API): 增加前置决策结果助手"
     chat_pre_bridge_route_result,
 ```
 
-- [ ] **步骤 2：新增父模块 callbacks wrapper**
+- [x] **步骤 2：新增父模块 callbacks wrapper**
 
-在 `_resolve_chat_pre_bridge_decision()` 附近增加：
+在 `_persist_chat_turn()` 后增加：
 
 ```python
-def _chat_pre_bridge_route_callbacks() -> chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks:
+def _chat_pre_bridge_route_callbacks(
+    db: Session,
+) -> chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks:
+    def persist_chat_turn(
+        req: ChatProxyRequest,
+        answer: str,
+        guardrail_status: str | None = None,
+        **kwargs: Any,
+    ) -> int:
+        return _persist_chat_turn(
+            db,
+            req,
+            answer,
+            guardrail_status=guardrail_status,
+            **kwargs,
+        )
+
     return chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks(
         clone_chat_request=_clone_chat_request,
-        persist_chat_turn=_persist_chat_turn,
+        persist_chat_turn=persist_chat_turn,
         chat_response_payload=_chat_response_payload,
         finalize_private_buffer=_finalize_private_buffer,
     )
 ```
 
-- [ ] **步骤 3：新增父模块 resolver wrapper**
+- [x] **步骤 3：新增父模块 resolver wrapper**
 
 追加：
 
 ```python
 async def _resolve_pre_bridge_route_result(
+    db: Session,
     req: ChatProxyRequest,
     pre_bridge: Any,
 ) -> chat_pre_bridge_route_result.ChatPreBridgeRouteEarlyResponse | chat_pre_bridge_route_result.ChatPreBridgeRouteContinue:
     return await chat_pre_bridge_route_result.resolve_pre_bridge_route_result(
         req,
         pre_bridge,
-        callbacks=_chat_pre_bridge_route_callbacks(),
+        callbacks=_chat_pre_bridge_route_callbacks(db),
     )
 ```
 
-- [ ] **步骤 4：替换 `proxy_chat()` 内联转译逻辑**
+- [x] **步骤 4：替换 `proxy_chat()` 内联转译逻辑**
 
 把 `proxy_chat()` 中 `if isinstance(pre_bridge, ChatPreBridgeEarlyReturn)`、continue 字段展开和 guardrail silent 分支替换为：
 
 ```python
-    pre_bridge_route = await _resolve_pre_bridge_route_result(req, pre_bridge)
+    pre_bridge_route = await _resolve_pre_bridge_route_result(db, req, pre_bridge)
     if isinstance(pre_bridge_route, chat_pre_bridge_route_result.ChatPreBridgeRouteEarlyResponse):
         return pre_bridge_route.payload
 
@@ -664,7 +681,7 @@ async def _resolve_pre_bridge_route_result(
     persist_req = pre_bridge_route.persist_req
 ```
 
-- [ ] **步骤 5：运行定向测试**
+- [x] **步骤 5：运行定向测试**
 
 运行：
 
@@ -674,7 +691,9 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_pre_bridge_route_res
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交父模块接入**
+实际结果（2026-06-24）：`6 passed, 1 warning in 0.96s`。父模块 wrapper 已通过 `db` 绑定持久化 callback，仍保留 `_clone_chat_request()`、`_persist_chat_turn()`、`_chat_response_payload()` 和 `_finalize_private_buffer()` 的父模块 patch point。
+
+- [x] **步骤 6：提交父模块接入**
 
 ```bash
 git add api/routes.py .Codex/plans/api-chat-pre-bridge-route-result-split.md
