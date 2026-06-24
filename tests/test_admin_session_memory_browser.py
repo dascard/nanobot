@@ -8,9 +8,14 @@ def _auth_header():
     return {"Authorization": "Bearer test-token"}
 
 
+# SQLite ORM DateTime 列当前使用 naive 本地墙钟时间；这些测试 fixture 保持同一语义。
+def _db_time(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime:
+    return datetime(year, month, day, hour, minute, second)  # noqa: DTZ001
+
+
 def test_admin_session_memory_sessions_list_returns_session_summaries(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 5, 28, 12, 0, 0)
+    now = _db_time(2026, 5, 28, 12, 0, 0)
     db_session.add_all([
         RollingSessionSummary(
             id=1,
@@ -78,7 +83,7 @@ def test_admin_session_memory_sessions_list_returns_session_summaries(client, db
 
 def test_admin_session_memory_summary_and_digest_details_are_per_session(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 5, 28, 12, 0, 0)
+    now = _db_time(2026, 5, 28, 12, 0, 0)
     db_session.add(RollingSessionSummary(
         id=3,
         session_id="private_1",
@@ -145,7 +150,7 @@ def test_admin_session_memory_summary_and_digest_details_are_per_session(client,
 
 def test_admin_session_memory_digest_details_expose_generation_metadata(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 5, 28, 12, 0, 0)
+    now = _db_time(2026, 5, 28, 12, 0, 0)
     meta = {
         "schema_version": 2,
         "status": "active",
@@ -200,7 +205,7 @@ def test_admin_session_memory_digest_details_expose_generation_metadata(client, 
 
 def test_admin_session_memory_sessions_prefer_level1_digest_preview_over_latest_card(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 5, 28, 12, 0, 0)
+    now = _db_time(2026, 5, 28, 12, 0, 0)
     shared = {
         "schema_version": 2,
         "status": "active",
@@ -246,7 +251,7 @@ def test_admin_session_memory_sessions_prefer_level1_digest_preview_over_latest_
 
 def test_admin_session_memory_sessions_normalize_group_aliases_and_filter_system_rows(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 5, 28, 12, 0, 0)
+    now = _db_time(2026, 5, 28, 12, 0, 0)
     db_session.add_all([
         RollingSessionSummary(
             id=10,
@@ -313,7 +318,7 @@ def test_admin_session_memory_sessions_normalize_group_aliases_and_filter_system
 
 def test_admin_session_memory_sessions_kind_filters_current_tab(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 5, 28, 12, 0, 0)
+    now = _db_time(2026, 5, 28, 12, 0, 0)
     db_session.add(RollingSessionSummary(
         id=50,
         session_id="private_recent",
@@ -353,7 +358,7 @@ def test_admin_session_memory_sessions_kind_filters_current_tab(client, db_sessi
 
 def test_admin_session_memory_recent_sessions_include_conversation_turn_only_groups(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 6, 1, 12, 0, 0)
+    now = _db_time(2026, 6, 1, 12, 0, 0)
     db_session.add_all([
         ConversationTurn(
             session_id="group_1",
@@ -393,7 +398,7 @@ def test_admin_session_memory_recent_sessions_include_conversation_turn_only_gro
 
 def test_admin_session_memory_sessions_sql_paginates_beyond_scan_window(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 5, 28, 12, 0, 0)
+    now = _db_time(2026, 5, 28, 12, 0, 0)
     db_session.bulk_save_objects([
         RollingSessionSummary(
             session_id=f"private_{i:04d}",
@@ -430,7 +435,7 @@ def test_admin_session_memory_sessions_sql_paginates_beyond_scan_window(client, 
 
 def test_admin_session_memory_digest_details_search_group_aliases_and_render_v2_content(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 5, 28, 12, 0, 0)
+    now = _db_time(2026, 5, 28, 12, 0, 0)
     meta = {
         "schema_version": 2,
         "status": "active",
@@ -489,7 +494,7 @@ def test_admin_session_memory_digest_details_search_group_aliases_and_render_v2_
 
 def test_admin_session_memory_long_digest_run_endpoint_regenerates_selected_session(client, db_session, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    now = datetime(2026, 6, 1, 12, 0, 0)
+    now = _db_time(2026, 6, 1, 12, 0, 0)
     db_session.add(MemoryDigest(
         id=70,
         session_id="group_1",

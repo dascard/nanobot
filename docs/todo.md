@@ -675,6 +675,7 @@
   - 进展（2026-06-24）：DTZ 第三批处理测试侧相对时间用例，覆盖 AI 日报新鲜度、旧新闻工具日期过滤、群分析 local RAG 临时消息和 semantic recency score 测试；新闻日期和临时消息时间改为 aware UTC，明确验证 naive reference 兼容的 semantic scoring 测试保留 naive 并加定点 `noqa`。全仓 DTZ 统计从 281 降至 271。
   - 进展（2026-06-24）：DTZ 第四批处理新闻日报测试 fixture，覆盖 `tests/test_news_daily_pipeline.py` 中 freshness、cluster、diversify、report 和 digest 的动态 `datetime.now()`；测试统一使用固定 aware UTC 基准，`parse_date()` 返回 naive datetime 的 4 个契约断言保留 naive expected 并加定点 `noqa`。全仓 DTZ 统计从 271 降至 227。
   - 进展（2026-06-24）：DTZ 第五批处理 EvalCandidate DB 时间戳，覆盖 `core/eval_sampling/store.py` 中 cursor、candidate status transition、promotion 和 trend 本地日期分桶；新增本地 `_db_now_naive()`，用 aware 当前时间转回本地 naive，保留 SQLite ORM 的 naive 本地时间语义。全仓 DTZ 统计从 227 降至 217。
+  - 进展（2026-06-24）：DTZ 第六批处理 Admin Session Memory Browser 测试 DB fixture，覆盖 `tests/test_admin_session_memory_browser.py` 中 10 个固定 ORM 时间；新增 `_db_time()` 集中说明这些 fixture 保持 SQLite ORM naive 本地墙钟语义，并用单点 `noqa` 取代重复 DTZ 命中。全仓 DTZ 统计从 217 降至 207。
 
 ---
 
