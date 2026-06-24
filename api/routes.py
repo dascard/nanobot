@@ -2,20 +2,19 @@
 FastAPI 路由模块。
 定义所有 HTTP 端点，含 Bearer Token 认证中间件。
 """
-import os
 import logging
 import json
 import asyncio
 import time as _time
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Response
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import Any, Optional, List
 
 from config import (
-    NANOBOT_API_TOKEN, EVOLUTION_THRESHOLD, ADMIN_USER_ID,
-    OPENAI_API_KEY, OPENAI_BASE_URL, LLM_PROVIDER, NEW_API_KEY, NEW_API_BASE_URL, NEW_API_TIMEOUT,
-    LLM_MODEL_SMART, LLM_MODEL_FAST, LLM_MODEL_REASONING,
+    NANOBOT_API_TOKEN as NANOBOT_API_TOKEN,
+    EVOLUTION_THRESHOLD,
+    ADMIN_USER_ID,
 )
 from core.database import (
     get_db,
@@ -25,17 +24,16 @@ from core.database import (
     ChatLog,
 )
 from core.context_builder import (
-    sanitize_prompt_text as _sanitize_prompt_text,
+    sanitize_prompt_text as _sanitize_prompt_text,  # noqa: F401 - 旧 api.routes 导入路径兼容
     estimate_tokens as _estimate_tokens,
     build_chat_context as _build_chat_context,
-    build_session_memory as _build_session_memory,
+    build_session_memory as _build_session_memory,  # noqa: F401 - 旧 api.routes 导入路径兼容
 )
 from core.evolution import evolution_task
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
-from core.moderation import check_message_moderation_db
 from core import user_block_rules
 from nanobot_kt.bridge import get_bridge
-from clients.classifier_client import get_guardrail, get_timing_gate
+from clients.classifier_client import get_guardrail
 from app.group_ingress import helpers as group_ingress_helpers
 from api import (
     chat_content_helpers,
@@ -58,83 +56,83 @@ from api import (
 )
 from api.common_auth import verify_token
 from api.evolution_routes import (
-    EvolutionTriggerRequest,
+    EvolutionTriggerRequest as EvolutionTriggerRequest,
     router as evolution_router,
-    trigger_evolution,
+    trigger_evolution as trigger_evolution,
 )
 from api.history_log_routes import (
-    AmbientLogRequest,
-    LogRequest,
-    compact_history,
-    get_context,
-    get_history_summary,
-    mark_clear,
+    AmbientLogRequest as AmbientLogRequest,
+    LogRequest as LogRequest,
+    compact_history as compact_history,
+    get_context as get_context,
+    get_history_summary as get_history_summary,
+    mark_clear as mark_clear,
     router as history_log_router,
-    search_history_logs,
-    submit_ambient_log,
-    submit_log,
+    search_history_logs as search_history_logs,
+    submit_ambient_log as submit_ambient_log,
+    submit_log as submit_log,
 )
 from api.memory_routes import (
-    MemoryDigestRunRequest,
-    _build_expand_chain,
-    _calc_recall_confidence,
-    _short_text,
-    _validate_memory_digest_date_filters,
-    get_memory_digests,
-    recall_memory,
+    MemoryDigestRunRequest as MemoryDigestRunRequest,
+    _build_expand_chain as _build_expand_chain,
+    _calc_recall_confidence as _calc_recall_confidence,
+    _short_text as _short_text,
+    _validate_memory_digest_date_filters as _validate_memory_digest_date_filters,
+    get_memory_digests as get_memory_digests,
+    recall_memory as recall_memory,
     router as memory_router,
-    run_memory_digests,
+    run_memory_digests as run_memory_digests,
 )
 from api.model_routes import (
-    ModelSyncRequest,
-    list_models,
+    ModelSyncRequest as ModelSyncRequest,
+    list_models as list_models,
     router as model_router,
-    sync_models,
+    sync_models as sync_models,
 )
 from api.task_routes import (
-    ScheduledTaskCreate,
-    create_scheduled_task,
-    delete_scheduled_task,
-    list_scheduled_tasks,
+    ScheduledTaskCreate as ScheduledTaskCreate,
+    create_scheduled_task as create_scheduled_task,
+    delete_scheduled_task as delete_scheduled_task,
+    list_scheduled_tasks as list_scheduled_tasks,
     router as task_router,
-    run_scheduled_task_now,
-    toggle_scheduled_task,
-    update_scheduled_task,
+    run_scheduled_task_now as run_scheduled_task_now,
+    toggle_scheduled_task as toggle_scheduled_task,
+    update_scheduled_task as update_scheduled_task,
 )
 from api.sticker_media_routes import (
-    StickerRegisterRequest,
-    disable_sticker_endpoint,
-    public_generated_image,
-    public_sticker_image,
-    register_sticker_endpoint,
+    StickerRegisterRequest as StickerRegisterRequest,
+    disable_sticker_endpoint as disable_sticker_endpoint,
+    public_generated_image as public_generated_image,
+    public_sticker_image as public_sticker_image,
+    register_sticker_endpoint as register_sticker_endpoint,
     router as sticker_media_router,
-    search_sticker_endpoint,
+    search_sticker_endpoint as search_sticker_endpoint,
 )
 from api.agent_step_routes import (
-    AgentStepRequest,
-    agent_step_event_payload,
-    agent_step_sse_data,
-    chat_step,
-    render_markdown,
+    AgentStepRequest as AgentStepRequest,
+    agent_step_event_payload as agent_step_event_payload,
+    agent_step_sse_data as agent_step_sse_data,
+    chat_step as chat_step,
+    render_markdown as render_markdown,
     router as agent_step_router,
-    run_agent_step,
-    run_agent_step_stream,
+    run_agent_step as run_agent_step,
+    run_agent_step_stream as run_agent_step_stream,
 )
 from api.group_message_routes import (
-    GroupMessageRequest,
-    OneBotMessageSegmentPayload,
-    group_message,
+    GroupMessageRequest as GroupMessageRequest,
+    OneBotMessageSegmentPayload as OneBotMessageSegmentPayload,
+    group_message as group_message,
     router as group_message_router,
 )
 from api.group_utility_routes import (
-    GroupTimingRequest,
-    GroupTimingTimerRequest,
-    UpdateGroupNameRequest,
-    _build_group_timing_context,
-    group_timing_deprecated,
-    group_timing_timer,
+    GroupTimingRequest as GroupTimingRequest,
+    GroupTimingTimerRequest as GroupTimingTimerRequest,
+    UpdateGroupNameRequest as UpdateGroupNameRequest,
+    _build_group_timing_context as _build_group_timing_context,
+    group_timing_deprecated as group_timing_deprecated,
+    group_timing_timer as group_timing_timer,
     router as group_utility_router,
-    update_group_name,
+    update_group_name as update_group_name,
 )
 
 logger = logging.getLogger("nanobot.routes")
