@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -113,6 +113,10 @@ BATCH_AUDIT_DECISION_REASON_CODES = {
 }
 
 
+def _db_now_naive() -> datetime:
+    return datetime.now(timezone.utc).astimezone().replace(tzinfo=None)
+
+
 def _readiness_reason(code: str, message: str, **extra: Any) -> dict[str, Any]:
     reason: dict[str, Any] = {"code": code, "message": message}
     reason.update(extra)
@@ -212,7 +216,7 @@ def _candidate_batch_id(
     source: str,
     target_dataset: str,
 ) -> str:
-    now = datetime.now()
+    now = _db_now_naive()
     raw = json.dumps(
         {
             "case_ids": case_ids,
@@ -277,7 +281,7 @@ def save_cursor(db, source_type: str, source_key: str, cursor_dict: dict):
         row = EvalSampleCursor(source_type=source_type, source_key=source_key)
         db.add(row)
     row.cursor_json = json.dumps(cursor_dict, ensure_ascii=False)
-    row.updated_at = datetime.now()
+    row.updated_at = _db_now_naive()
     db.commit()
 
 
@@ -435,7 +439,7 @@ def candidate_trend_report(
 ) -> dict[str, Any]:
     """按候选创建日期分桶，返回当前候选状态与 readiness 快照。"""
     capped_days = max(1, min(int(days or 30), 90))
-    start_date = datetime.now().date() - timedelta(days=capped_days - 1)
+    start_date = _db_now_naive().date() - timedelta(days=capped_days - 1)
     start_at = datetime.combine(start_date, datetime.min.time())
     rows = (
         _candidate_query(db, suite=suite, status=status, source=source)
@@ -811,7 +815,7 @@ def update_candidate(db, case_id: str, **fields):
     for key, val in fields.items():
         if hasattr(row, key):
             setattr(row, key, val)
-    row.updated_at = datetime.now()
+    row.updated_at = _db_now_naive()
     db.commit()
     return _candidate_dict(row)
 
@@ -828,7 +832,7 @@ def label_candidate(db, case_id: str, expected_dict: dict, *, note: str | None =
     row.status = CANDIDATE_STATUS_LABELED
     if note is not None:
         row.note = note
-    row.updated_at = datetime.now()
+    row.updated_at = _db_now_naive()
     db.commit()
     return _candidate_dict(row)
 
@@ -841,7 +845,7 @@ def ignore_candidate(db, case_id: str):
     if row.status not in IGNORABLE_CANDIDATE_STATUSES:
         raise ValueError(f"invalid status transition: {row.status} -> ignored")
     row.status = CANDIDATE_STATUS_IGNORED
-    row.updated_at = datetime.now()
+    row.updated_at = _db_now_naive()
     db.commit()
     return _candidate_dict(row)
 
@@ -865,7 +869,7 @@ def reject_candidate(
     row.status = CANDIDATE_STATUS_REJECTED
     if normalized_note:
         row.note = normalized_note
-    row.updated_at = datetime.now()
+    row.updated_at = _db_now_naive()
     db.commit()
     return _triage_payload(
         row,
@@ -896,7 +900,7 @@ def defer_candidate(
     row.status = CANDIDATE_STATUS_DEFERRED
     if normalized_note:
         row.note = normalized_note
-    row.updated_at = datetime.now()
+    row.updated_at = _db_now_naive()
     db.commit()
     return _triage_payload(
         row,
@@ -926,7 +930,7 @@ def reopen_candidate(
     row.status = CANDIDATE_STATUS_CANDIDATE
     if normalized_note:
         row.note = normalized_note
-    row.updated_at = datetime.now()
+    row.updated_at = _db_now_naive()
     db.commit()
     return _triage_payload(
         row,
@@ -1096,7 +1100,7 @@ def promote_candidate(db, case_id: str, *, target_dataset: str = "regression") -
     if not row:
         return None
     row.status = "promoted"
-    row.updated_at = datetime.now()
+    row.updated_at = _db_now_naive()
     db.commit()
     return str(out_path)
 

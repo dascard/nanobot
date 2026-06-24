@@ -674,6 +674,7 @@
   - 进展（2026-06-24）：DTZ 第二批处理生产 artifact / 中文展示时间，覆盖 Admin health / model catalog / RAG benchmark metadata、群记忆提取 metadata、生成图片 / Prompt 文件 mtime 展示、群分析 HTML 展示和新闻日报 fallback / cache 日期边界。机器可读 artifact 使用 aware UTC，中文用户展示和日报自然日使用 `Asia/Shanghai`，文件 mtime 展示保留本地 aware 墙钟语义；继续不触碰 ORM `DateTime` 写入、历史窗口比较、job retry/lock 和业务 recency 计算。全仓 DTZ 统计从 303 降至 281。
   - 进展（2026-06-24）：DTZ 第三批处理测试侧相对时间用例，覆盖 AI 日报新鲜度、旧新闻工具日期过滤、群分析 local RAG 临时消息和 semantic recency score 测试；新闻日期和临时消息时间改为 aware UTC，明确验证 naive reference 兼容的 semantic scoring 测试保留 naive 并加定点 `noqa`。全仓 DTZ 统计从 281 降至 271。
   - 进展（2026-06-24）：DTZ 第四批处理新闻日报测试 fixture，覆盖 `tests/test_news_daily_pipeline.py` 中 freshness、cluster、diversify、report 和 digest 的动态 `datetime.now()`；测试统一使用固定 aware UTC 基准，`parse_date()` 返回 naive datetime 的 4 个契约断言保留 naive expected 并加定点 `noqa`。全仓 DTZ 统计从 271 降至 227。
+  - 进展（2026-06-24）：DTZ 第五批处理 EvalCandidate DB 时间戳，覆盖 `core/eval_sampling/store.py` 中 cursor、candidate status transition、promotion 和 trend 本地日期分桶；新增本地 `_db_now_naive()`，用 aware 当前时间转回本地 naive，保留 SQLite ORM 的 naive 本地时间语义。全仓 DTZ 统计从 227 降至 217。
 
 ---
 
