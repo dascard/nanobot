@@ -10,13 +10,10 @@ import re
 from typing import List, Optional, Dict, Any
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from core.database import ChatLog, Persona, SystemPrompt, User, SessionLocal
+from core.database import ChatLog, Persona, SystemPrompt, SessionLocal
 from core.json_utils import json_repair as _json_repair
 from core.token_utils import estimate_tokens as _shared_estimate_tokens
-from config import (
-    ADMIN_USER_ID, OPENAI_API_KEY, OPENAI_BASE_URL,
-    MAX_TOOL_ROUNDS,
-)
+from config import MAX_TOOL_ROUNDS
 from core.state_manager import StateManager
 from sandbox import AnalysisSandbox
 from creatures.nanobot.prompts.skills.news_search.tool import search_and_extract_news

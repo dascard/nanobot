@@ -1,5 +1,4 @@
 import json
-import asyncio
 from tests.async_helpers import run_async
 from datetime import datetime
 
@@ -7,8 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import Base, get_db
-from server import app
+from core.database import Base
 
 
 @pytest.fixture
@@ -158,7 +156,6 @@ def test_executor_records_tool_call_with_contextvars(tmp_path, monkeypatch):
 
 
 def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeypatch):
-    from core import database
     from core.tracing import LLMRequestTracer, ReplyContractTracer, RunTracer, ToolTracer
 
     legacy_prompt = tmp_path / "runtime_prompt.md"

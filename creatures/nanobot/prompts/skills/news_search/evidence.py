@@ -4,14 +4,12 @@ Pipeline:
   raw_search → dedup & score → content extract → related sentences → evidence cards
 """
 
-import hashlib
 import json
 import logging
 import re
 import time as _time
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
-from typing import Any
+from dataclasses import dataclass, field
+from datetime import datetime
 from urllib.parse import urlparse
 
 logger = logging.getLogger("nanobot.ai_daily.evidence")
