@@ -38,6 +38,11 @@ def state_machine(db_session):
     return PersonaStateMachine(db_session, "test_user_01")
 
 
+def _local_now() -> datetime:
+    # PersonaFact 测试 DB fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 # ── 纯函数测试 ──
 
 class TestConfidence:
@@ -420,7 +425,8 @@ class TestProcessCandidatesMerge:
 
 class TestDecay:
     def test_old_preference_archives(self, state_machine, db_session):
-        old = datetime.now() - timedelta(days=100)
+        now = _local_now()
+        old = now - timedelta(days=100)
         fact = PersonaFact(
             user_id="test_user_01",
             content="test",
@@ -433,13 +439,14 @@ class TestDecay:
         db_session.add(fact)
         db_session.commit()
 
-        state_machine._apply_decay(datetime.now())
+        state_machine._apply_decay(now)
         # _apply_decay 修改内存对象但不由它负责 flush
         # process_candidates 会在末尾 commit
         assert fact.confidence == "归档"
 
     def test_recent_fact_preserved(self, state_machine, db_session):
-        recent = datetime.now() - timedelta(days=2)
+        now = _local_now()
+        recent = now - timedelta(days=2)
         fact = PersonaFact(
             user_id="test_user_01",
             content="test",
@@ -452,11 +459,12 @@ class TestDecay:
         db_session.add(fact)
         db_session.commit()
 
-        state_machine._apply_decay(datetime.now())
+        state_machine._apply_decay(now)
         assert fact.confidence != "归档"
 
     def test_behavior_decays_faster(self, state_machine, db_session):
-        old = datetime.now() - timedelta(days=50)
+        now = _local_now()
+        old = now - timedelta(days=50)
         fact = PersonaFact(
             user_id="test_user_01",
             content="test",
@@ -469,7 +477,7 @@ class TestDecay:
         db_session.add(fact)
         db_session.commit()
 
-        state_machine._apply_decay(datetime.now())
+        state_machine._apply_decay(now)
         assert fact.confidence == "归档"
 
 
@@ -479,7 +487,7 @@ class TestBuildSummary:
         assert summary == "{}"
 
     def test_with_facts(self, state_machine, db_session):
-        now = datetime.now()
+        now = _local_now()
         facts = [
             PersonaFact(user_id="test_user_01", content="喜欢简洁", confidence="确认",
                         evidence_count=3, fact_type="preference",
@@ -501,7 +509,7 @@ class TestBuildSummary:
         assert {x["content"] for x in data["facts"]} == {"喜欢简洁", "喜欢命令行"}
 
     def test_archived_excluded(self, state_machine, db_session):
-        now = datetime.now()
+        now = _local_now()
         facts = [
             PersonaFact(user_id="test_user_01", content="喜欢简洁", confidence="确认",
                         evidence_count=3, fact_type="preference",
