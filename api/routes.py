@@ -527,22 +527,14 @@ def _persist_chat_turn(
     )
 
 
-def _chat_pre_bridge_route_callbacks(
-    db: Session,
-) -> chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks:
+def _chat_pre_bridge_route_callbacks(db: Session) -> chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks:
     def persist_chat_turn(
         req: ChatProxyRequest,
         answer: str,
         guardrail_status: str | None = None,
         **kwargs: Any,
     ) -> int:
-        return _persist_chat_turn(
-            db,
-            req,
-            answer,
-            guardrail_status=guardrail_status,
-            **kwargs,
-        )
+        return _persist_chat_turn(db, req, answer, guardrail_status=guardrail_status, **kwargs)
 
     return chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks(
         clone_chat_request=_clone_chat_request,
@@ -552,14 +544,7 @@ def _chat_pre_bridge_route_callbacks(
     )
 
 
-async def _resolve_pre_bridge_route_result(
-    db: Session,
-    req: ChatProxyRequest,
-    pre_bridge: Any,
-) -> (
-    chat_pre_bridge_route_result.ChatPreBridgeRouteEarlyResponse
-    | chat_pre_bridge_route_result.ChatPreBridgeRouteContinue
-):
+async def _resolve_pre_bridge_route_result(db: Session, req: ChatProxyRequest, pre_bridge: Any) -> Any:
     return await chat_pre_bridge_route_result.resolve_pre_bridge_route_result(
         req,
         pre_bridge,
