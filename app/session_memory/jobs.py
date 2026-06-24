@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.session_memory import config
 from core.database import ConversationTurn, RollingSessionSummary, SessionSummaryJob
+from core.time_utils import db_now_naive, to_db_naive
 
 
 ACTIVE_JOB_STATUSES = frozenset({"pending", "running", "done"})
@@ -82,6 +83,7 @@ def enqueue_session_summary_job(
     if existing is not None:
         return existing, False
 
+    now = db_now_naive()
     job = SessionSummaryJob(
         session_id=session_id,
         user_id=user_id or "",
@@ -100,8 +102,8 @@ def enqueue_session_summary_job(
             "created_by": "rolling_summary_fallback",
             "fallback_summary_kind": getattr(fallback_summary, "summary_kind", "") or "deterministic_fallback",
         }, ensure_ascii=False),
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+        created_at=now,
+        updated_at=now,
     )
     db.add(job)
     db.flush()
@@ -119,7 +121,7 @@ def retry_session_summary_job(db: Session, job_id: int) -> SessionSummaryJob:
     job.next_retry_at = None
     job.locked_by = ""
     job.locked_at = None
-    job.updated_at = datetime.now()
+    job.updated_at = db_now_naive()
     db.flush()
     return job
 
@@ -130,7 +132,7 @@ def fetch_pending_summary_jobs(
     limit: int | None = None,
     now: datetime | None = None,
 ) -> list[SessionSummaryJob]:
-    now = now or datetime.now()
+    now = to_db_naive(now) or db_now_naive()
     return (
         db.query(SessionSummaryJob)
         .filter(
@@ -154,9 +156,10 @@ def mark_summary_job_running(
 ) -> SessionSummaryJob:
     job.status = "running"
     job.locked_by = owner or "session-summary-worker"
-    job.locked_at = datetime.now()
+    now = db_now_naive()
+    job.locked_at = now
     job.error = ""
-    job.updated_at = datetime.now()
+    job.updated_at = now
     db.flush()
     return job
 
@@ -172,7 +175,7 @@ def claim_summary_job(
 
     多 worker 并发时，只有第一个满足 `status='pending'` 的 UPDATE 会成功。
     """
-    now = now or datetime.now()
+    now = to_db_naive(now) or db_now_naive()
     affected = (
         db.query(SessionSummaryJob)
         .filter(
@@ -210,7 +213,7 @@ def recover_stale_running_jobs(
     worker 崩溃或进程被杀时，running job 不会被 `fetch_pending_summary_jobs`
     再次取到。这里把超时 job 重新放回 pending；超过重试次数则标 failed。
     """
-    now = now or datetime.now()
+    now = to_db_naive(now) or db_now_naive()
     timeout = int(timeout_sec if timeout_sec is not None else config.SESSION_SUMMARY_RUNNING_TIMEOUT_SEC)
     cutoff = now - timedelta(seconds=max(1, timeout))
     query = (
@@ -257,7 +260,7 @@ def mark_summary_job_done(
     job.next_retry_at = None
     job.locked_by = ""
     job.locked_at = None
-    job.updated_at = datetime.now()
+    job.updated_at = db_now_naive()
     db.flush()
     return job
 
@@ -273,12 +276,13 @@ def mark_summary_job_failed(
     job.error = str(error or "summary_job_failed")[:4000]
     job.locked_by = ""
     job.locked_at = None
-    job.updated_at = datetime.now()
+    now = db_now_naive()
+    job.updated_at = now
     max_retry = max(0, int(job.max_retry or config.SESSION_SUMMARY_MAX_RETRY))
     if job.retry_count < max_retry:
         job.status = "pending"
         delay = int(retry_delay_sec if retry_delay_sec is not None else config.SESSION_SUMMARY_RETRY_DELAY_SEC)
-        job.next_retry_at = datetime.now() + timedelta(seconds=max(1, delay))
+        job.next_retry_at = now + timedelta(seconds=max(1, delay))
     else:
         job.status = "failed"
         job.next_retry_at = None

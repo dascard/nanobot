@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from datetime import datetime
 from collections.abc import Callable
 
 from sqlalchemy import text
@@ -24,6 +23,7 @@ from core.semantic.indexer import upsert_semantic_chunks
 from core.semantic.jobs import claim_next_job, finish_job, recover_timed_out_jobs
 from core.semantic.provider_factory import get_embedding_provider
 from core.semantic.schema import ensure_semantic_schema
+from core.time_utils import db_now_naive
 
 
 ChunkLoader = Callable[[SemanticIndexJob], list[SemanticChunk]]
@@ -37,7 +37,7 @@ def _mark_source_deleted(db: Session, job: SemanticIndexJob) -> None:
         .filter(SemanticIndexItem.index_version == job.index_version)
         .all()
     )
-    now = datetime.now()
+    now = db_now_naive()
     for row in rows:
         row.status = "deleted"
         row.deleted_at = now

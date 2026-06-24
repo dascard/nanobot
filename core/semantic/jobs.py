@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from core.database import SemanticIndexJob
 from core.semantic.schema import ensure_semantic_schema
+from core.time_utils import db_now_naive
 
 
 def enqueue_index_job(
@@ -22,6 +23,7 @@ def enqueue_index_job(
     max_retry: int = 3,
 ) -> SemanticIndexJob:
     ensure_semantic_schema(db.bind)
+    now = db_now_naive()
     job = SemanticIndexJob(
         source_type=source_type,
         source_id=str(source_id),
@@ -30,8 +32,8 @@ def enqueue_index_job(
         index_version=index_version,
         status="pending",
         max_retry=max_retry,
-        created_at=datetime.now(),
-        updated_at=datetime.now(),
+        created_at=now,
+        updated_at=now,
     )
     db.add(job)
     db.commit()
@@ -41,7 +43,7 @@ def enqueue_index_job(
 
 def claim_next_job(db: Session, *, worker_id: str) -> SemanticIndexJob | None:
     ensure_semantic_schema(db.bind)
-    now = datetime.now()
+    now = db_now_naive()
     candidate = (
         db.query(SemanticIndexJob)
         .with_entities(SemanticIndexJob.id)
@@ -78,7 +80,8 @@ def claim_next_job(db: Session, *, worker_id: str) -> SemanticIndexJob | None:
 
 def recover_timed_out_jobs(db: Session, *, timeout_seconds: int) -> int:
     ensure_semantic_schema(db.bind)
-    cutoff = datetime.now() - timedelta(seconds=int(timeout_seconds))
+    now = db_now_naive()
+    cutoff = now - timedelta(seconds=int(timeout_seconds))
     rows = (
         db.query(SemanticIndexJob)
         .filter(SemanticIndexJob.status == "running")
@@ -90,7 +93,7 @@ def recover_timed_out_jobs(db: Session, *, timeout_seconds: int) -> int:
         row.status = "pending"
         row.locked_by = ""
         row.locked_at = None
-        row.updated_at = datetime.now()
+        row.updated_at = now
     db.commit()
     return len(rows)
 
@@ -102,12 +105,13 @@ def finish_job(
     status: str,
     error: str = "",
 ) -> SemanticIndexJob:
+    now = db_now_naive()
     job.status = status
     job.error = error or ""
     job.locked_by = ""
     job.locked_at = None
-    job.updated_at = datetime.now()
-    job.finished_at = datetime.now()
+    job.updated_at = now
+    job.finished_at = now
     db.commit()
     db.refresh(job)
     return job
@@ -120,17 +124,18 @@ def fail_job(
     error: str,
     retry: bool = True,
 ) -> SemanticIndexJob:
+    now = db_now_naive()
     job.retry_count = int(job.retry_count or 0) + 1
     job.error = error
     job.locked_by = ""
     job.locked_at = None
-    job.updated_at = datetime.now()
+    job.updated_at = now
     if retry and job.retry_count < int(job.max_retry or 0):
         job.status = "failed"
-        job.next_retry_at = datetime.now() + timedelta(seconds=min(300, 2 ** job.retry_count))
+        job.next_retry_at = now + timedelta(seconds=min(300, 2 ** job.retry_count))
     else:
         job.status = "failed"
-        job.finished_at = datetime.now()
+        job.finished_at = now
     db.commit()
     db.refresh(job)
     return job
