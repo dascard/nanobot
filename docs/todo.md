@@ -692,6 +692,7 @@
   - 进展（2026-06-24）：DTZ 第二十批处理群分析测试 fixture，覆盖 `tests/test_group_analysis_tool.py` 中 3 个 `datetime.now()`；测试侧新增 `_local_now()`，集中保留 ChatLog ORM fixture 与 RawChatLog dataclass fixture 的 naive 本地墙钟时间语义，最近窗口、artifact 过滤和 LLM 失败降级用例继续使用单个 `now` 基准派生相对时间。定向回归 `21 passed, 1 warning in 1.63s`；全仓 DTZ 统计从 94 降至 91。
   - 进展（2026-06-24）：DTZ 第二十一批处理 DB-backed 测试 fixture，覆盖 `tests/test_persona_injection_service.py`、`tests/test_prompt_trace_admin.py`、`tests/test_rag_debug.py` 和 `tests/test_reply_admin.py` 中 4 个 `datetime.now()`；测试侧新增 `_local_now()`，集中保留 PersonaFact、trace DB、GroupMemory 和 ReplyContractCheckLog fixture 的 naive 本地墙钟时间语义，reply traffic 窗口断言继续使用单个 `now` 基准派生相对时间。定向回归 `36 passed, 21 warnings in 8.88s`；全仓 DTZ 统计从 91 降至 87。
   - 进展（2026-06-24）：DTZ 第二十二批处理本地测试脚本时间戳，覆盖 `tests/local_test.py` 中 1 个 `datetime.now()`；该位置只用于 push raw / json 本地调试 artifact 文件名，改为复用文件内已有 `time.strftime()` 风格，保持本地墙钟文件名语义并移除 `datetime` 导入。目标文件 Ruff / `compileall` 通过；全仓 DTZ 统计从 87 降至 86。
+  - 进展（2026-06-24）：DTZ 第二十三批处理 DB 管理辅助时间，覆盖 `core/schema_migrations.py`、`core/runtime_tool_service.py` 和 `core/knowledge_library.py` 中 4 个命中；migration applied_at、RuntimeToolDecision 清理 cutoff 和 KnowledgeDocument 写入时间统一复用 `db_now_naive()`，保留 SQLite ORM naive 本地墙钟语义，migration 备份文件名改为 `time.strftime()`。定向回归 `46 passed, 139 warnings in 8.97s`；全仓 DTZ 统计从 86 降至 82。
 
 ---
 

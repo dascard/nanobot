@@ -9,12 +9,14 @@ import hashlib
 import logging
 import re
 import shutil
+import time
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import inspect, text
+
+from core.time_utils import db_now_naive
 
 
 MigrationFn = Callable[[Any, Any, str | None], None]
@@ -39,7 +41,7 @@ def _applied_versions(conn: Any) -> set[str]:
 def _record(conn: Any, version: str, name: str) -> None:
     conn.execute(
         text("INSERT INTO schema_migrations(version, name, applied_at) VALUES (:v, :n, :t)"),
-        {"v": version, "n": name, "t": datetime.now()},
+        {"v": version, "n": name, "t": db_now_naive()},
     )
 
 
@@ -80,7 +82,7 @@ def _backup_sqlite_db(db_path: str | None) -> None:
     if not path.exists():
         return
 
-    backup_path = path.with_name(f"{path.name}.bak.{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    backup_path = path.with_name(f"{path.name}.bak.{time.strftime('%Y%m%d_%H%M%S')}")
     try:
         shutil.copy2(path, backup_path)
         backups = sorted(

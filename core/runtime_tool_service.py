@@ -2,7 +2,9 @@
 
 import json
 import logging
+from datetime import timedelta
 
+from core.time_utils import db_now_naive
 from core.tool_registry import TOOL_METADATA, get_tool_def
 
 logger = logging.getLogger("nanobot.runtime_tools")
@@ -293,8 +295,7 @@ def record_runtime_tool_decision(
             # 惰性清理：概率 1/50 清理 30 天前旧记录（与写入同一事务）
             import random as _random
             if _random.randint(1, 50) == 1:
-                from datetime import datetime as _dt, timedelta as _td
-                cutoff = _dt.now() - _td(days=30)
+                cutoff = db_now_naive() - timedelta(days=30)
                 deleted = session.query(RuntimeToolDecision).filter(
                     RuntimeToolDecision.created_at < cutoff
                 ).delete()

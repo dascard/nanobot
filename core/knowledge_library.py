@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from core.database import KnowledgeChunk, KnowledgeDocument
+from core.time_utils import db_now_naive
 
 
 SUPPORTED_MANUAL_FILE_EXTENSIONS = {".txt", ".md"}
@@ -117,7 +117,7 @@ def create_manual_document(
 ) -> KnowledgeDocument:
     filename = validate_manual_filename(filename)
     clean_title = str(title or "").strip() or Path(filename).stem
-    now = datetime.now()
+    now = db_now_naive()
     document = KnowledgeDocument(
         document_kind="manual_file",
         title=clean_title,
