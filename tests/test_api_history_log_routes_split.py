@@ -152,6 +152,7 @@ def test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable():
         "api/chat_pre_bridge_route_result.py",
         "api/chat_private_buffer.py",
         "api/chat_push_envelope.py",
+        "api/chat_route_runner.py",
     ):
         source = Path(path).read_text(encoding="utf-8")
 

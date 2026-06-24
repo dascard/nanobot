@@ -122,7 +122,9 @@ async def test_iter_chat_stream_events_coalesces_delta_before_progress_and_flush
 def test_parent_stream_chat_delegates_sse_loop_and_keeps_streaming_response_boundary():
     source = _source("api/routes.py")
 
-    assert "chat_sse_loop" in source
-    assert "chat_sse_loop.iter_chat_stream_events" in source
-    assert "StreamingResponse(_stream_chat(), media_type=\"text/event-stream\")" in source
+    assert "chat_route_runner" in source
+    assert "chat_route_runner.iter_streaming_chat_response" in source
+    assert "StreamingResponse(" in source
+    assert "async def _stream_chat" not in source
+    assert "chat_sse_loop.iter_chat_stream_events(" not in source
     assert "asyncio.wait(\n                        {get_task, done_task}," not in source

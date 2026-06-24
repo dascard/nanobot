@@ -236,11 +236,10 @@ async def test_finalize_non_streaming_keeps_raw_answer_when_transport_expand_fai
 def test_parent_non_streaming_chat_delegates_result_finalize_and_keeps_http_boundaries():
     source = _source("api/routes.py")
 
-    assert "chat_non_streaming_result" in source
-    assert "chat_non_streaming_result.finalize_non_streaming_chat_result" in source
-    assert 'HTTPException(status_code=500, detail="系统暂时不可用，请稍后再试")' in source
-    assert "background_tasks.add_task(evolution_task, req.user_id)" in source
-    assert "async def _do_chat()" in source
-    assert "chat_runtime_facade.call_bridge_non_streaming" in source
-    assert "except asyncio.CancelledError" in source
+    assert "chat_route_runner" in source
+    assert "chat_route_runner.run_non_streaming_chat_response" in source
+    assert "HTTPException(" in source
+    assert "async def _do_chat" not in source
+    assert "chat_runtime_facade.call_bridge_non_streaming" not in source
+    assert "except asyncio.CancelledError" not in source
     assert "SAFE_STREAM_ERROR_MESSAGE" in source

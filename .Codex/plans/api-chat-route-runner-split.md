@@ -82,7 +82,7 @@
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 - 修改：`.Codex/plans/api-chat-route-runner-split.md`
 
-- [ ] **步骤 1：创建测试文件基础结构**
+- [x] **步骤 1：创建测试文件基础结构**
 
 创建 `tests/test_api_chat_route_runner_split.py`，写入基础 fake：
 
@@ -152,7 +152,7 @@ def _request(user_id: str = "u-runner", session_id: str | None = None) -> Simple
     )
 ```
 
-- [ ] **步骤 2：创建 callbacks helper**
+- [x] **步骤 2：创建 callbacks helper**
 
 在测试文件追加：
 
@@ -251,7 +251,7 @@ def _callbacks(
     )
 ```
 
-- [ ] **步骤 3：创建 context helper**
+- [x] **步骤 3：创建 context helper**
 
 在测试文件追加：
 
@@ -290,7 +290,7 @@ def _context(
     )
 ```
 
-- [ ] **步骤 4：新增源码边界红灯**
+- [x] **步骤 4：新增源码边界红灯**
 
 追加测试：
 
@@ -328,7 +328,7 @@ def test_chat_route_runner_module_does_not_import_parent_routes_or_fastapi_bound
         assert needle not in source
 ```
 
-- [ ] **步骤 5：新增 stream success 红灯**
+- [x] **步骤 5：新增 stream success 红灯**
 
 追加测试：
 
@@ -363,7 +363,7 @@ async def test_iter_streaming_chat_response_success_yields_done_payload_and_pers
     assert events[-1].startswith("data: ")
 ```
 
-- [ ] **步骤 6：新增 stream runner error 红灯**
+- [x] **步骤 6：新增 stream runner error 红灯**
 
 追加测试：
 
@@ -386,7 +386,7 @@ async def test_iter_streaming_chat_response_runner_error_persists_placeholder_an
     assert all("真实内部错误" not in event for event in events)
 ```
 
-- [ ] **步骤 7：新增 stream audit failed 红灯**
+- [x] **步骤 7：新增 stream audit failed 红灯**
 
 追加测试：
 
@@ -416,7 +416,7 @@ async def test_iter_streaming_chat_response_prompt_audit_failure_persists_audit_
     assert calls.get("payload") is None
 ```
 
-- [ ] **步骤 8：新增 stream disconnect 红灯**
+- [x] **步骤 8：新增 stream disconnect 红灯**
 
 追加测试：
 
@@ -456,7 +456,7 @@ async def test_iter_streaming_chat_response_client_disconnect_schedules_backgrou
     release.set()
 ```
 
-- [ ] **步骤 9：新增 non-streaming success 红灯**
+- [x] **步骤 9：新增 non-streaming success 红灯**
 
 追加测试：
 
@@ -481,7 +481,7 @@ async def test_run_non_streaming_chat_response_success_delegates_bridge_and_fina
     assert result.should_trigger_evolution is True
 ```
 
-- [ ] **步骤 10：新增 non-streaming error / cancel / audit 红灯**
+- [x] **步骤 10：新增 non-streaming error / cancel / audit 红灯**
 
 追加测试：
 
@@ -532,7 +532,7 @@ async def test_run_non_streaming_chat_response_prompt_audit_failure_returns_500_
     assert result.prompt_audit_failed is True
 ```
 
-- [ ] **步骤 11：新增父模块瘦身红灯**
+- [x] **步骤 11：新增父模块瘦身红灯**
 
 追加测试：
 
@@ -556,7 +556,7 @@ def test_parent_chat_route_delegates_bridge_runner_and_keeps_fastapi_boundary():
     assert "chat_non_streaming_result.ChatNonStreamingResultCallbacks(" not in source
 ```
 
-- [ ] **步骤 12：更新旧结构测试和扫描清单**
+- [x] **步骤 12：更新旧结构测试和扫描清单**
 
 修改旧测试断言：
 
@@ -578,7 +578,7 @@ assert "chat_runtime_facade.call_bridge_non_streaming" not in source
 "api/chat_route_runner.py",
 ```
 
-- [ ] **步骤 13：运行红灯测试**
+- [x] **步骤 13：运行红灯测试**
 
 运行：
 
@@ -586,10 +586,11 @@ assert "chat_runtime_facade.call_bridge_non_streaming" not in source
 python -B -m pytest -p no:cacheprovider tests/test_api_chat_route_runner_split.py -v
 ```
 
-预期：失败，主要原因为 `api/chat_route_runner.py` 不存在、无法 import
-`api.chat_route_runner`，以及父模块还没有 route runner 入口。
+结果：`10 failed, 1 warning in 6.34s`。失败原因符合预期：
+`api/chat_route_runner.py` 不存在、`api.chat_route_runner` 无法 import，且
+`api.routes` 尚未包含 `chat_route_runner` 委托入口。
 
-- [ ] **步骤 14：运行扫描红灯**
+- [x] **步骤 14：运行扫描红灯**
 
 运行：
 
@@ -602,7 +603,8 @@ python -B -m pytest -p no:cacheprovider \
   -v
 ```
 
-预期：失败，四个失败均为扫描清单读取 `api/chat_route_runner.py` 时文件不存在。
+结果：`4 failed, 1 warning in 6.83s`。四个失败均为扫描清单读取
+`api/chat_route_runner.py` 时文件不存在，符合预期。
 
 - [ ] **步骤 15：提交红灯测试**
 
