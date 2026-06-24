@@ -80,7 +80,7 @@
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 - 修改：`.Codex/plans/api-chat-runtime-route-context-split.md`
 
-- [ ] **步骤 1：创建测试文件基础结构**
+- [x] **步骤 1：创建测试文件基础结构**
 
 创建 `tests/test_api_chat_runtime_route_context_split.py`，写入 helper：
 
@@ -122,7 +122,7 @@ def _request(**updates: Any) -> SimpleNamespace:
     return SimpleNamespace(**data)
 ```
 
-- [ ] **步骤 2：新增 services helper**
+- [x] **步骤 2：新增 services helper**
 
 在同一文件追加：
 
@@ -171,7 +171,7 @@ def _services(calls: dict[str, list[Any]], *, persona_context: str = "动态画�
     )
 ```
 
-- [ ] **步骤 3：新增源码边界红灯**
+- [x] **步骤 3：新增源码边界红灯**
 
 追加测试：
 
@@ -216,7 +216,7 @@ def test_chat_runtime_route_context_module_does_not_import_parent_routes_or_prom
         assert needle not in source
 ```
 
-- [ ] **步骤 4：新增 group chat 不触发 persona injection 测试**
+- [x] **步骤 4：新增 group chat 不触发 persona injection 测试**
 
 追加测试：
 
@@ -252,7 +252,7 @@ def test_build_chat_runtime_route_context_skips_group_persona_injection():
     assert context.ctx_debug == {"source": "history"}
 ```
 
-- [ ] **步骤 5：新增 private persona injection 成功测试**
+- [x] **步骤 5：新增 private persona injection 成功测试**
 
 追加测试：
 
@@ -287,7 +287,7 @@ def test_build_chat_runtime_route_context_injects_private_persona_with_safe_mult
     assert context.bridge_meta["effort_constraint"] == "constraint:high"
 ```
 
-- [ ] **步骤 6：新增 persona injection 异常 fallback 测试**
+- [x] **步骤 6：新增 persona injection 异常 fallback 测试**
 
 追加测试：
 
@@ -325,7 +325,7 @@ def test_build_chat_runtime_route_context_recovers_private_persona_injection_fai
     assert "persona injection context failed user=u-runtime-route: persona down" in calls["warning"][0]
 ```
 
-- [ ] **步骤 7：新增 runtime payload 委托和日志测试**
+- [x] **步骤 7：新增 runtime payload 委托和日志测试**
 
 追加测试：
 
@@ -368,7 +368,7 @@ def test_build_chat_runtime_route_context_delegates_runtime_input_and_logs_promp
     assert context.prompt_budget["safe_user_input_chars"] == len("私聊问题")
 ```
 
-- [ ] **步骤 8：新增 injection 日志测试**
+- [x] **步骤 8：新增 injection 日志测试**
 
 追加测试：
 
@@ -403,7 +403,7 @@ def test_build_chat_runtime_route_context_logs_injection_mode():
     assert any("[/chat] Injection mode, using mock enriched_query" in message for message in calls["info"])
 ```
 
-- [ ] **步骤 9：新增父模块 wrapper patch point 测试**
+- [x] **步骤 9：新增父模块 wrapper patch point 测试**
 
 追加测试：
 
@@ -452,7 +452,7 @@ def test_parent_proxy_chat_delegates_runtime_route_context_and_preserves_patch_p
     assert routes._build_chat_runtime_route_context.__module__ == "api.routes"
 ```
 
-- [ ] **步骤 10：更新四个扫描清单**
+- [x] **步骤 10：更新四个扫描清单**
 
 在以下测试文件的 chat split module 路径 tuple 中追加：
 
@@ -467,7 +467,7 @@ def test_parent_proxy_chat_delegates_runtime_route_context_and_preserves_patch_p
 - `tests/test_api_history_log_routes_split.py`
 - `tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 11：运行红灯验证**
+- [x] **步骤 11：运行红灯验证**
 
 运行：
 
@@ -476,6 +476,8 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_runtime_route_contex
 ```
 
 预期：失败，首个失败来自 `api/chat_runtime_route_context.py` 不存在或父模块 wrapper 不存在。
+
+实际：`7 failed, 1 warning in 3.73s`。失败原因均为 `api/chat_runtime_route_context.py` 不存在、`api.chat_runtime_route_context` 无法导入，符合红灯预期。
 
 运行：
 
@@ -490,7 +492,9 @@ tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_imp
 
 预期：失败，原因是扫描清单引用的新模块尚不存在。
 
-- [ ] **步骤 12：记录红灯结果并提交**
+实际：`4 failed, 1 warning in 3.95s`。四个失败均为 `FileNotFoundError: api/chat_runtime_route_context.py`，符合红灯预期。
+
+- [x] **步骤 12：记录红灯结果并提交**
 
 更新本计划任务状态和红灯命令输出摘要。
 
