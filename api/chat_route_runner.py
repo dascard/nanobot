@@ -177,18 +177,21 @@ async def iter_streaming_chat_response(
                 context.req.session_id,
                 err_msg,
             )
-            await callbacks.finalize_private_buffer(
-                context.req.user_id,
-                context.empty_assistant_placeholder,
-            )
-            callbacks.persist_chat_turn(
-                db,
-                context.persist_req,
-                context.empty_assistant_placeholder,
-                context.guardrail_status,
-                timing_meta=context.private_timing_meta,
-            )
-            persisted = True
+            try:
+                await callbacks.finalize_private_buffer(
+                    context.req.user_id,
+                    context.empty_assistant_placeholder,
+                )
+                callbacks.persist_chat_turn(
+                    db,
+                    context.persist_req,
+                    context.empty_assistant_placeholder,
+                    context.guardrail_status,
+                    timing_meta=context.private_timing_meta,
+                )
+                persisted = True
+            except Exception as exc:
+                logger.error("[/chat] Stream persist failed on error path: %s", exc)
             yield callbacks.chat_sse_data(callbacks.stream_error_event())
             return
 
@@ -309,17 +312,20 @@ async def run_non_streaming_chat_response(
         raise
     except Exception as exc:
         logger.error("[/chat] KT Agent failed: %s", exc)
-        await context.callbacks.finalize_private_buffer(
-            context.req.user_id,
-            context.empty_assistant_placeholder,
-        )
-        context.callbacks.persist_chat_turn(
-            db,
-            context.persist_req,
-            context.empty_assistant_placeholder,
-            context.guardrail_status,
-            timing_meta=context.private_timing_meta,
-        )
+        try:
+            await context.callbacks.finalize_private_buffer(
+                context.req.user_id,
+                context.empty_assistant_placeholder,
+            )
+            context.callbacks.persist_chat_turn(
+                db,
+                context.persist_req,
+                context.empty_assistant_placeholder,
+                context.guardrail_status,
+                timing_meta=context.private_timing_meta,
+            )
+        except Exception as persist_exc:
+            logger.error("[/chat] Persist failed on KT error path: %s", persist_exc)
         return ChatRouteNonStreamingResult(
             payload=None,
             http_error=ChatRouteHttpError(502, context.safe_error_message),

@@ -45,11 +45,10 @@ from api import (
     chat_push_envelope,
     chat_request_contract,
     chat_response_contract,
+    chat_route_runner,
     chat_runtime_facade,
     chat_runtime_route_context,
-    chat_sse_loop,
     chat_streaming_helpers,
-    chat_streaming_result,
 )
 from api.common_auth import verify_token
 from api.evolution_routes import (
@@ -596,6 +595,59 @@ def _build_chat_runtime_route_context(
     )
 
 
+def _chat_route_runner_callbacks(
+    background_tasks: BackgroundTasks,
+) -> chat_route_runner.ChatRouteRunnerCallbacks:
+    from core.daily_digest import push_envelope_to_qq
+
+    return chat_route_runner.ChatRouteRunnerCallbacks(
+        call_bridge_non_streaming=getattr(chat_runtime_facade, "call_bridge_non_streaming"),
+        finalize_private_buffer=_finalize_private_buffer,
+        persist_chat_turn=_persist_chat_turn,
+        pop_bridge_reply_meta=_pop_bridge_reply_meta,
+        private_prompt_audit_failure_meta=_private_prompt_audit_failure_meta,
+        expand_chat_transport_answer=_expand_chat_transport_answer,
+        build_chat_push_envelope=_build_chat_push_envelope,
+        push_envelope_to_qq=push_envelope_to_qq,
+        chat_response_payload=_chat_response_payload,
+        chat_sse_data=_chat_sse_data,
+        stream_error_event=_stream_error_event,
+        drain_stream_queue_until_task_done=chat_streaming_helpers.drain_stream_queue_until_task_done,
+        finalize_non_streaming_chat_result=chat_non_streaming_result.finalize_non_streaming_chat_result,
+        add_background_task=background_tasks.add_task,
+        evolution_task=evolution_task,
+    )
+
+
+def _chat_route_runner_context(
+    *,
+    req: ChatProxyRequest,
+    persist_req: ChatProxyRequest,
+    bridge: Any,
+    enriched_query: str,
+    bridge_meta: dict[str, Any],
+    platform: str,
+    guardrail_status: str | None,
+    private_timing_meta: dict[str, Any] | None,
+    background_tasks: BackgroundTasks,
+) -> chat_route_runner.ChatRouteRunnerContext:
+    return chat_route_runner.ChatRouteRunnerContext(
+        req=req,
+        persist_req=persist_req,
+        bridge=bridge,
+        enriched_query=enriched_query,
+        bridge_meta=bridge_meta,
+        platform=platform,
+        guardrail_status=guardrail_status,
+        private_timing_meta=private_timing_meta,
+        queue_maxsize=CHAT_STREAM_QUEUE_MAXSIZE,
+        empty_assistant_placeholder=EMPTY_ASSISTANT_PLACEHOLDER,
+        safe_error_message=SAFE_STREAM_ERROR_MESSAGE,
+        evolution_threshold=EVOLUTION_THRESHOLD,
+        callbacks=_chat_route_runner_callbacks(background_tasks),
+    )
+
+
 # 旧群消息 helper 已收敛到 app.group_ingress.helpers；此处保留旧私有导入路径兼容。
 _normalize_onebot_segments = group_ingress_helpers.normalize_onebot_segments
 _extract_mentions_from_segments = group_ingress_helpers.extract_mentions_from_segments
@@ -760,235 +812,33 @@ async def proxy_chat(
 
     # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
     bridge = get_bridge()
-
-    async def _do_chat():
-        return await chat_runtime_facade.call_bridge_non_streaming(
-            bridge,
-            enriched_query=enriched_query,
-            user_id=req.user_id,
-            session_id=req.session_id,
-            sender_name=req.sender_name or "",
-            metadata=bridge_meta,
-        )
-
-    async def _stream_chat():
-        """SSE streaming with progress events and heartbeats."""
-        result_holder: dict = {}
-        done = asyncio.Event()
-        stream_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=CHAT_STREAM_QUEUE_MAXSIZE)
-        persisted = False
-
-        async def runner():
-            try:
-                result_holder["answer"] = await bridge.handle_message(
-                    enriched_query, user_id=req.user_id, session_id=req.session_id,
-                    sender_name=req.sender_name or "", metadata=bridge_meta,
-                    stream_queue=stream_queue,
-                    stream=True,
-                )
-            except Exception as e:
-                result_holder["error"] = str(e)
-            finally:
-                done.set()
-
-        runner_task = asyncio.create_task(runner())
-        heartbeat_interval = 5
-        coalescer = chat_streaming_helpers.StreamEventCoalescer()
-        sse_loop_callbacks = chat_sse_loop.ChatSseLoopCallbacks(
-            normalize_event=_normalize_chat_stream_event,
-        )
-        from core.daily_digest import push_envelope_to_qq
-
-        stream_result_callbacks = chat_streaming_result.ChatStreamResultCallbacks(
-            drain_stream_queue_until_task_done=chat_streaming_helpers.drain_stream_queue_until_task_done,
-            pop_bridge_reply_meta=_pop_bridge_reply_meta,
-            private_prompt_audit_failure_meta=_private_prompt_audit_failure_meta,
-            finalize_private_buffer=_finalize_private_buffer,
-            persist_chat_turn=_persist_chat_turn,
-            expand_chat_transport_answer=_expand_chat_transport_answer,
-            build_chat_push_envelope=_build_chat_push_envelope,
-            push_envelope_to_qq=push_envelope_to_qq,
-        )
-        stream_result_context = chat_streaming_result.ChatStreamResultContext(
-            req=req,
-            persist_req=persist_req,
-            bridge=bridge,
-            result_holder=result_holder,
-            runner_task=runner_task,
-            stream_queue=stream_queue,
-            platform=platform,
-            bridge_meta=bridge_meta,
-            guardrail_status=guardrail_status,
-            private_timing_meta=private_timing_meta,
-            empty_assistant_placeholder=EMPTY_ASSISTANT_PLACEHOLDER,
-            callbacks=stream_result_callbacks,
-        )
-
-        async def _persist_stream_result_after_runner_done(
-            *,
-            push: bool,
-            persist_db: Session | None = None,
-            drain_stream: bool = False,
-        ) -> None:
-            await chat_streaming_result.persist_stream_result_after_runner_done(
-                stream_result_context,
-                push=push,
-                persist_db=persist_db,
-                drain_stream=drain_stream,
-            )
-
-        try:
-            async for event in chat_sse_loop.iter_chat_stream_events(
-                stream_queue,
-                done,
-                heartbeat_interval=heartbeat_interval,
-                coalescer=coalescer,
-                callbacks=sse_loop_callbacks,
-            ):
-                yield _chat_sse_data(event)
-
-            if "error" in result_holder:
-                err_msg = str(result_holder.get("error") or "unknown")
-                logger.error(f"[/chat] Stream runner failed: user={req.user_id}, session={req.session_id}, error={err_msg}")
-                try:
-                    await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-                    _persist_chat_turn(
-                        db,
-                        persist_req,
-                        EMPTY_ASSISTANT_PLACEHOLDER,
-                        guardrail_status,
-                        timing_meta=private_timing_meta,
-                    )
-                    persisted = True
-                except Exception as pe:
-                    logger.error(f"[/chat] Stream persist failed on error path: {pe}")
-                yield _chat_sse_data(_stream_error_event())
-            else:
-                answer = result_holder.get("answer", "")
-                private_reply_meta = _pop_bridge_reply_meta(bridge, req.session_id)
-
-                # SSE 流禁止 base64 展开——单个 data chunk 过大会导致 QQbot 侧 Chunk too big。
-                # 有 public URL 时展开为短 CQ URL，否则保留短 token。
-                transport_answer = answer
-                try:
-                    transport_answer = _expand_chat_transport_answer(answer)
-                except Exception:
-                    logger.warning("[/chat] stream generated image ref expansion failed", exc_info=True)
-
-                if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
-                    await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-                    _persist_chat_turn(
-                        db,
-                        persist_req,
-                        EMPTY_ASSISTANT_PLACEHOLDER,
-                        guardrail_status,
-                        assistant_meta=_private_prompt_audit_failure_meta(),
-                        assistant_processed=1,
-                        timing_meta=private_timing_meta,
-                    )
-                    persisted = True
-                    yield _chat_sse_data(_stream_error_event())
-                else:
-                    await _finalize_private_buffer(req.user_id, answer)
-                    pending = _persist_chat_turn(
-                        db,
-                        persist_req,
-                        answer,
-                        guardrail_status,
-                        timing_meta=private_timing_meta,
-                    )
-                    persisted = True
-                    if pending >= EVOLUTION_THRESHOLD:
-                        logger.info(f"[/chat] Evolution triggered: user={req.user_id}, pending={pending}, threshold={EVOLUTION_THRESHOLD}")
-                        background_tasks.add_task(evolution_task, req.user_id)
-                    done_payload = _chat_response_payload(
-                        req,
-                        status="done",
-                        answer=transport_answer,
-                        reply_meta=private_reply_meta,
-                        platform=platform,
-                        chat_type=str(bridge_meta.get("chat_type") or ""),
-                        unprocessed_logs=pending,
-                        guardrail_status=guardrail_status,
-                    )
-                    yield _chat_sse_data(done_payload)
-        finally:
-            if not persisted:
-                if runner_task.done():
-                    await _persist_stream_result_after_runner_done(push=False, persist_db=db)
-                else:
-                    # 客户端断连但 runner 还在跑 → 后台继续，完成后 push 结果
-                    background_tasks.add_task(
-                        _persist_stream_result_after_runner_done,
-                        push=True,
-                        persist_db=None,
-                        drain_stream=True,
-                    )
-                    await _finalize_private_buffer(req.user_id)
-                    logger.warning(
-                        f"[/chat] Stream aborted, running in background: "
-                        f"user={req.user_id}, session={req.session_id}"
-                    )
-            done.set()
-
-    if req.stream:
-        return StreamingResponse(_stream_chat(), media_type="text/event-stream")
-
-    try:
-        answer = await _do_chat()
-    except asyncio.CancelledError:
-        await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-        raise
-    except Exception as e:
-        logger.error(f"[/chat] KT Agent failed: {e}")
-        try:
-            await _finalize_private_buffer(req.user_id, EMPTY_ASSISTANT_PLACEHOLDER)
-            _persist_chat_turn(
-                db,
-                persist_req,
-                EMPTY_ASSISTANT_PLACEHOLDER,
-                guardrail_status,
-                timing_meta=private_timing_meta,
-            )
-        except Exception as pe:
-            logger.error(f"[/chat] Persist failed on KT error path: {pe}")
-        raise HTTPException(status_code=502, detail=SAFE_STREAM_ERROR_MESSAGE)
-
-    non_streaming_callbacks = chat_non_streaming_result.ChatNonStreamingResultCallbacks(
-        pop_bridge_reply_meta=_pop_bridge_reply_meta,
-        private_prompt_audit_failure_meta=_private_prompt_audit_failure_meta,
-        finalize_private_buffer=_finalize_private_buffer,
-        persist_chat_turn=_persist_chat_turn,
-        expand_chat_transport_answer=_expand_chat_transport_answer,
-        chat_response_payload=_chat_response_payload,
-    )
-    non_streaming_context = chat_non_streaming_result.ChatNonStreamingResultContext(
+    route_runner_context = _chat_route_runner_context(
         req=req,
         persist_req=persist_req,
         bridge=bridge,
-        answer=answer,
-        platform=platform,
+        enriched_query=enriched_query,
         bridge_meta=bridge_meta,
+        platform=platform,
         guardrail_status=guardrail_status,
         private_timing_meta=private_timing_meta,
-        empty_assistant_placeholder=EMPTY_ASSISTANT_PLACEHOLDER,
-        evolution_threshold=EVOLUTION_THRESHOLD,
-        callbacks=non_streaming_callbacks,
+        background_tasks=background_tasks,
     )
-    non_streaming_result = await chat_non_streaming_result.finalize_non_streaming_chat_result(
-        db,
-        non_streaming_context,
-    )
-    if non_streaming_result.prompt_audit_failed:
-        raise HTTPException(status_code=500, detail="系统暂时不可用，请稍后再试")
-    if non_streaming_result.should_trigger_evolution:
-        logger.info(
-            "[/chat] Evolution triggered: user=%s, pending=%s, threshold=%s",
-            req.user_id,
-            non_streaming_result.pending,
-            EVOLUTION_THRESHOLD,
+
+    if req.stream:
+        return StreamingResponse(
+            chat_route_runner.iter_streaming_chat_response(db, route_runner_context),
+            media_type="text/event-stream",
         )
-        background_tasks.add_task(evolution_task, req.user_id)
+
+    non_streaming_result = await chat_route_runner.run_non_streaming_chat_response(
+        db,
+        route_runner_context,
+    )
+    if non_streaming_result.http_error is not None:
+        raise HTTPException(
+            status_code=non_streaming_result.http_error.status_code,
+            detail=non_streaming_result.http_error.detail,
+        )
 
     return non_streaming_result.payload
 

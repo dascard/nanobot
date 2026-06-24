@@ -1035,7 +1035,7 @@ git commit -m "refactor(普通API): 增加聊天路由执行器"
 - 修改：`tests/test_api_chat_non_streaming_result_split.py`
 - 修改：`.Codex/plans/api-chat-route-runner-split.md`
 
-- [ ] **步骤 1：更新 import**
+- [x] **步骤 1：更新 import**
 
 在 `api/routes.py` 的 `from api import (...)` 中加入：
 
@@ -1052,7 +1052,7 @@ chat_streaming_helpers,
 chat_streaming_result,
 ```
 
-- [ ] **步骤 2：新增 callbacks wrapper**
+- [x] **步骤 2：新增 callbacks wrapper**
 
 在 `_build_chat_runtime_route_context()` 后或 `/chat` 前新增：
 
@@ -1084,7 +1084,7 @@ def _chat_route_runner_callbacks(
 
 如果 `chat_streaming_helpers` 和 `chat_non_streaming_result` 只被 wrapper 使用，可保留父模块 import。若要进一步瘦身，可让 `api/chat_route_runner.py` 直接引用这些已拆 helper，并从父模块 wrapper 中移除对应字段；但必须保持测试禁止项不被触发。
 
-- [ ] **步骤 3：新增 context wrapper**
+- [x] **步骤 3：新增 context wrapper**
 
 在 callbacks wrapper 后新增：
 
@@ -1119,7 +1119,7 @@ def _chat_route_runner_context(
     )
 ```
 
-- [ ] **步骤 4：替换 `proxy_chat()` bridge 后半段**
+- [x] **步骤 4：替换 `proxy_chat()` bridge 后半段**
 
 删除父模块内嵌 `_do_chat()` 和 `_stream_chat()`，替换为：
 
@@ -1157,12 +1157,12 @@ return non_streaming_result.payload
 父模块不再直接构造 `chat_streaming_result.ChatStreamResultCallbacks` 或
 `chat_non_streaming_result.ChatNonStreamingResultCallbacks`。
 
-- [ ] **步骤 5：同步旧结构测试断言**
+- [x] **步骤 5：同步旧结构测试断言**
 
 确认 `tests/test_api_chat_sse_loop_split.py` 和
 `tests/test_api_chat_non_streaming_result_split.py` 的父模块断言与任务 1 一致。
 
-- [ ] **步骤 6：运行父模块接入定向测试**
+- [x] **步骤 6：运行父模块接入定向测试**
 
 运行：
 
@@ -1170,9 +1170,9 @@ return non_streaming_result.payload
 python -B -m pytest -p no:cacheprovider tests/test_api_chat_route_runner_split.py -v
 ```
 
-预期：全部通过。
+结果：`10 passed, 1 warning in 0.92s`。
 
-- [ ] **步骤 7：运行相邻 chat split 回归**
+- [x] **步骤 7：运行相邻 chat split 回归**
 
 运行：
 
@@ -1188,9 +1188,9 @@ python -B -m pytest -p no:cacheprovider \
   -v
 ```
 
-预期：全部通过。
+结果：`45 passed, 21 warnings in 4.57s`。
 
-- [ ] **步骤 8：运行扫描回归**
+- [x] **步骤 8：运行扫描回归**
 
 运行：
 
@@ -1203,7 +1203,20 @@ python -B -m pytest -p no:cacheprovider \
   -v
 ```
 
-预期：全部通过。
+结果：`4 passed, 1 warning in 0.96s`。
+
+补充回归：
+
+- `python -m compileall api/routes.py api/chat_route_runner.py -q` 退出码 0。
+- `python -B -m pytest -p no:cacheprovider tests/test_api.py -v`
+  -> `82 passed, 21 warnings in 21.72s`。
+- `python -B -m pytest -p no:cacheprovider tests/test_streaming_api.py tests/test_streaming_response_envelope.py tests/test_chat_response_envelope.py -v`
+  -> `13 passed, 21 warnings in 6.08s`。
+- `rg -n "asyncio\\.run|run_awaitable_sync" api/routes.py api/chat_route_runner.py tests/test_api_chat_route_runner_split.py || true`
+  仅命中新测试中的禁止断言字符串。
+- `wc -l api/routes.py api/chat_route_runner.py tests/test_api_chat_route_runner_split.py`
+  -> `855 api/routes.py`、`350 api/chat_route_runner.py`、
+  `432 tests/test_api_chat_route_runner_split.py`。
 
 - [ ] **步骤 9：提交父模块接入**
 
