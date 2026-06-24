@@ -6,7 +6,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -325,9 +325,9 @@ def eval_get_candidate(case_id: str, db: Session = Depends(get_db), _auth=Depend
 
 
 class EvalCandidatePatch(BaseModel):
-    priority: Optional[int] = None
-    note: Optional[str] = None
-    status: Optional[str] = None
+    priority: int | None = None
+    note: str | None = None
+    status: str | None = None
 
 
 @router.patch("/evals/candidates/{case_id}")
@@ -355,7 +355,7 @@ def eval_patch_candidate(
 
 class LabelRequest(BaseModel):
     expected: dict = Field(default_factory=dict)
-    expected_json: Optional[dict] = None
+    expected_json: dict | None = None
     note: str = ""
 
     def normalized_expected(self) -> dict:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -18,10 +17,10 @@ router = APIRouter(prefix="/tools", tags=["admin-tools"])
 
 
 class ToolUpdateBody(BaseModel):
-    private_default: Optional[bool] = None
-    private_superuser_default: Optional[bool] = None
-    group_default: Optional[bool] = None
-    lightweight_default: Optional[bool] = None
+    private_default: bool | None = None
+    private_superuser_default: bool | None = None
+    group_default: bool | None = None
+    lightweight_default: bool | None = None
 
 
 class ToolOverrideBody(BaseModel):

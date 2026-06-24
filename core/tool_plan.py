@@ -12,7 +12,8 @@ import json
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
 from core.tool_schema_preview import build_effective_tool_schemas

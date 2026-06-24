@@ -6,7 +6,8 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 from sqlalchemy.orm import Session
 

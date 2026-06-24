@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -19,8 +18,8 @@ router = APIRouter(tags=["memory"])
 
 
 class MemoryDigestRunRequest(BaseModel):
-    target_date: Optional[str] = None  # YYYY-MM-DD
-    user_id: Optional[str] = None
+    target_date: str | None = None  # YYYY-MM-DD
+    user_id: str | None = None
     force: bool = False
 
 

@@ -5,7 +5,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 
 @dataclass

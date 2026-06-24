@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -14,9 +14,9 @@ class ChatProxyRequest(BaseModel):
     user_id: str = "default_user"
     session_id: str = "default_session"
     query: str = ""
-    files: Optional[List[str]] = None
-    sender_name: Optional[str] = None
-    session_name: Optional[str] = None
+    files: list[str] | None = None
+    sender_name: str | None = None
+    session_name: str | None = None
     stream: bool = False
     classification_request: bool = False
     merged_messages: list[str] | None = None

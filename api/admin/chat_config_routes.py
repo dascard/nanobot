@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -31,9 +30,9 @@ class BlockRuleCreate(BaseModel):
 
 
 class BlockRuleUpdate(BaseModel):
-    rule_mode: Optional[str] = None
-    reason: Optional[str] = None
-    enabled: Optional[int] = None
+    rule_mode: str | None = None
+    reason: str | None = None
+    enabled: int | None = None
 
 
 class ContentBlockRuleCreate(BaseModel):
@@ -49,16 +48,16 @@ class ContentBlockRuleCreate(BaseModel):
 
 
 class ContentBlockRuleUpdate(BaseModel):
-    pattern: Optional[str] = None
-    match_type: Optional[str] = None
-    scope_type: Optional[str] = None
-    chat_stream_id: Optional[str] = None
-    no_reply: Optional[int] = None
-    no_learn: Optional[int] = None
-    no_context: Optional[int] = None
-    category: Optional[str] = None
-    reason: Optional[str] = None
-    enabled: Optional[int] = None
+    pattern: str | None = None
+    match_type: str | None = None
+    scope_type: str | None = None
+    chat_stream_id: str | None = None
+    no_reply: int | None = None
+    no_learn: int | None = None
+    no_context: int | None = None
+    category: str | None = None
+    reason: str | None = None
+    enabled: int | None = None
 
 
 class ContentBlockRuleTestRequest(BaseModel):
@@ -67,14 +66,14 @@ class ContentBlockRuleTestRequest(BaseModel):
 
 
 class ConfigUpdate(BaseModel):
-    talk_value: Optional[float] = None
-    mentioned_bot_reply: Optional[int] = None
-    use_expression: Optional[int] = None
-    enable_expression_learning: Optional[int] = None
-    enable_jargon_learning: Optional[int] = None
-    group_profile_mode: Optional[str] = None
-    enable_group_profile: Optional[int] = None  # deprecated, 兼容旧调用方
-    planner_smooth: Optional[int] = None
+    talk_value: float | None = None
+    mentioned_bot_reply: int | None = None
+    use_expression: int | None = None
+    enable_expression_learning: int | None = None
+    enable_jargon_learning: int | None = None
+    group_profile_mode: str | None = None
+    enable_group_profile: int | None = None  # deprecated, 兼容旧调用方
+    planner_smooth: int | None = None
 
 
 def _block_dict(r: UserBlockRule) -> dict:

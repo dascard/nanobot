@@ -10,7 +10,7 @@ import re
 import json
 import html
 from datetime import datetime
-from typing import Any, List, Dict
+from typing import Any
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from core.async_bridge import run_awaitable_sync
 from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
@@ -74,13 +74,13 @@ def _run_async_blocking(coro: Any) -> Any:
 
 def _summarize_news_layout(
     query: str,
-    search_results: List[Dict[str, Any]],
-    extracted_contents: List[str],
+    search_results: list[dict[str, Any]],
+    extracted_contents: list[str],
     *,
     deepen: bool,
     decision_reason: str,
-    value_alerts: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+    value_alerts: list[dict[str, Any]],
+) -> dict[str, Any]:
     fallback = _build_news_layout_fallback(
         query,
         search_results,
@@ -143,7 +143,7 @@ def _summarize_news_layout(
             },
         ]
 
-        async def _ask() -> Dict[str, Any]:
+        async def _ask() -> dict[str, Any]:
             client = NewAPIClient(
                 api_key=NEW_API_KEY,
                 base_url=NEW_API_BASE_URL,
@@ -172,7 +172,7 @@ def _summarize_news_layout(
         return fallback
 
 
-def _heuristic_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_results: int) -> bool:
+def _heuristic_should_deepen(query: str, coarse_results: list[dict[str, Any]], max_results: int) -> bool:
     q = (query or "").lower()
     deepen_markers = ["深入", "全面", "对比", "价格", "白嫖", "便宜", "free", "cheap", "pricing"]
     if any(m in q for m in deepen_markers):
@@ -188,7 +188,7 @@ def _heuristic_should_deepen(query: str, coarse_results: List[Dict[str, Any]], m
     return avg_score < 5
 
 
-def _model_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_results: int) -> tuple[bool, str]:
+def _model_should_deepen(query: str, coarse_results: list[dict[str, Any]], max_results: int) -> tuple[bool, str]:
     from config import NEW_API_KEY
 
     if not NEW_API_KEY:
@@ -224,7 +224,7 @@ def _model_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_r
             },
         ]
 
-        async def _ask() -> Dict[str, Any]:
+        async def _ask() -> dict[str, Any]:
             client = NewAPIClient(api_key=NEW_API_KEY, max_retries=1)
             from core.llm_trace_context import llm_trace_scope
             with llm_trace_scope(source="ai_daily"):
@@ -237,7 +237,7 @@ def _model_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_r
             .get("content", "")
         )
 
-        parsed: Dict[str, Any] = {}
+        parsed: dict[str, Any] = {}
         try:
             parsed = json.loads(content)
         except Exception:
@@ -257,7 +257,7 @@ def _model_should_deepen(query: str, coarse_results: List[Dict[str, Any]], max_r
 def _persist_news_artifacts(
     query: str,
     report_text: str,
-    alerts: List[Dict[str, Any]],
+    alerts: list[dict[str, Any]],
     *,
     user_id: str = "",
     session_id: str = "",
@@ -302,7 +302,7 @@ def _persist_news_artifacts(
         logger.warning(f"Persist to DB skipped/failed: {e}")
 
 
-def _dedup_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _dedup_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return _search_backend._dedup_results(results)
 
 
@@ -338,7 +338,7 @@ def _is_urgent_news_query(query: str) -> bool:
     return _search_backend._is_urgent_news_query(query)
 
 
-def _tokenize_query(query: str) -> List[str]:
+def _tokenize_query(query: str) -> list[str]:
     return _search_backend._tokenize_query(query)
 
 
@@ -350,27 +350,27 @@ def _is_recent_enough(raw_date: str, hours: int = 72) -> bool:
     return _search_backend._is_recent_enough(raw_date, hours=hours)
 
 
-def _normalize_search_result(item: Dict[str, Any], *, strategy: str) -> Dict[str, Any]:
+def _normalize_search_result(item: dict[str, Any], *, strategy: str) -> dict[str, Any]:
     return _search_backend._normalize_search_result(item, strategy=strategy)
 
 
-def _filter_stale_news_results(results: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+def _filter_stale_news_results(results: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
     return _search_backend._filter_stale_news_results(results, query)
 
 
-def _match_query(item: Dict[str, Any], query: str) -> bool:
+def _match_query(item: dict[str, Any], query: str) -> bool:
     return _search_backend._match_query(item, query)
 
 
-def _fetch_rss_source(source: Dict[str, Any], max_results: int) -> List[Dict[str, Any]]:
+def _fetch_rss_source(source: dict[str, Any], max_results: int) -> list[dict[str, Any]]:
     return _search_backend._fetch_rss_source(source, max_results=max_results, urlopen_fn=_urlopen)
 
 
-def _fetch_multi_rss(query: str | None = None, max_results: int = 5) -> List[Dict[str, Any]]:
+def _fetch_multi_rss(query: str | None = None, max_results: int = 5) -> list[dict[str, Any]]:
     return _search_backend._fetch_multi_rss(query=query, max_results=max_results, urlopen_fn=_urlopen)
 
 
-def _fetch_juya_rss(max_results: int, target_date: str | None = None) -> List[Dict[str, Any]]:
+def _fetch_juya_rss(max_results: int, target_date: str | None = None) -> list[dict[str, Any]]:
     return _search_backend._fetch_juya_rss(
         max_results=max_results,
         target_date=target_date,
@@ -378,7 +378,7 @@ def _fetch_juya_rss(max_results: int, target_date: str | None = None) -> List[Di
     )
 
 
-def _build_query_variants(query: str) -> List[str]:
+def _build_query_variants(query: str) -> list[str]:
     return _search_backend._build_query_variants(query)
 
 
@@ -409,7 +409,7 @@ def _store_cached_news_result(key: tuple[Any, ...], output: str) -> None:
     _runtime_cache._store_cached_news_result(key, output)
 
 
-def _rerank_with_domain_diversity(results: List[Dict[str, Any]], max_results: int) -> List[Dict[str, Any]]:
+def _rerank_with_domain_diversity(results: list[dict[str, Any]], max_results: int) -> list[dict[str, Any]]:
     return _search_backend._rerank_with_domain_diversity(results, max_results=max_results)
 
 
@@ -417,7 +417,7 @@ class WebTools:
     last_error: str = ""
 
     @staticmethod
-    def search(query: str, max_results: int = 5, deep: bool = False) -> List[Dict]:
+    def search(query: str, max_results: int = 5, deep: bool = False) -> list[dict]:
         results, last_error = _search_backend.search(
             query,
             max_results=max_results,
@@ -620,8 +620,8 @@ def search_and_extract_news(
     if not search_results:
         return _format_news_unavailable_report(query, "当前可用搜索结果为空，建议稍后再试，不要在本轮继续重试同类查询。")
     
-    value_alerts: List[Dict[str, Any]] = []
-    extracted_contents: List[str] = []
+    value_alerts: list[dict[str, Any]] = []
+    extracted_contents: list[str] = []
     for r in search_results:
         url = r.get('href', '')
 

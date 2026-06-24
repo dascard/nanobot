@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timedelta
-from typing import Sequence
+from collections.abc import Sequence
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session

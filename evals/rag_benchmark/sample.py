@@ -7,7 +7,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from collections.abc import Iterable
 
 from sqlalchemy import text
 from sqlalchemy import create_engine

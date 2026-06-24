@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -35,11 +35,11 @@ class StickerCreate(BaseModel):
 
 
 class StickerUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    tags: Optional[list[str]] = None
-    emotions: Optional[list[str]] = None
-    status: Optional[Literal["active", "disabled", "deleted"]] = None
+    name: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    emotions: list[str] | None = None
+    status: Literal["active", "disabled", "deleted"] | None = None
 
 
 class GeneratedImageCreate(BaseModel):

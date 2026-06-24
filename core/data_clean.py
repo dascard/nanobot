@@ -9,7 +9,6 @@
 """
 
 import logging
-from typing import List
 
 from core.database import ChatLog, MemoryDigest, SessionLocal
 from core.daily_digest import _format_log_line, _build_progressive_layers, _to_day
@@ -17,7 +16,7 @@ from core.daily_digest import _format_log_line, _build_progressive_layers, _to_d
 logger = logging.getLogger("nanobot.data_clean")
 
 
-def _regenerate_digest(logs: List[ChatLog]) -> tuple[str, str, str]:
+def _regenerate_digest(logs: list[ChatLog]) -> tuple[str, str, str]:
     lines = [formatted_line for x in logs if (formatted_line := _format_log_line(x)) is not None]
     if not lines:
         return ("", "", "")

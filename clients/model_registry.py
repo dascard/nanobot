@@ -4,7 +4,7 @@ import os
 import time
 import asyncio
 import logging
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 logger = logging.getLogger("nanobot.registry")
 
@@ -39,10 +39,10 @@ def model_intelligence_value(value: Any, default: float = 0.0) -> float:
 
 
 def normalize_model_cost_fields(
-    model: Dict[str, Any],
+    model: dict[str, Any],
     *,
-    fallback: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     normalized = dict(model)
     for field in ("cost_input_1m", "cost_output_1m"):
         value = normalized.get(field)
@@ -66,14 +66,14 @@ def _coerce_optional_bool(value: Any) -> bool | None:
     return None
 
 
-def _model_tags(model: Dict[str, Any]) -> List[str]:
+def _model_tags(model: dict[str, Any]) -> list[str]:
     tags = model.get("tags") or []
     if not isinstance(tags, list):
         return []
     return [str(t).lower() for t in tags]
 
 
-def _infer_supports_image(model: Dict[str, Any]) -> bool:
+def _infer_supports_image(model: dict[str, Any]) -> bool:
     tags = set(_model_tags(model))
     model_id = str(model.get("id") or "").lower()
     if {"vision", "multimodal"} & tags:
@@ -82,10 +82,10 @@ def _infer_supports_image(model: Dict[str, Any]) -> bool:
 
 
 def normalize_model_capability_fields(
-    model: Dict[str, Any],
+    model: dict[str, Any],
     *,
-    fallback: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     normalized = dict(model)
     nested = normalized.get("capabilities")
     nested_map = nested if isinstance(nested, dict) else {}
@@ -107,17 +107,17 @@ def normalize_model_capability_fields(
 
 
 def normalize_model_record(
-    model: Dict[str, Any],
+    model: dict[str, Any],
     *,
-    fallback: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     normalized = normalize_model_cost_fields(model, fallback=fallback)
     return normalize_model_capability_fields(normalized, fallback=fallback)
 
 
 def model_supports_capabilities(
-    model: Dict[str, Any],
-    required_capabilities: Optional[Dict[str, bool]] = None,
+    model: dict[str, Any],
+    required_capabilities: dict[str, bool] | None = None,
 ) -> bool:
     if not required_capabilities:
         return True
@@ -297,7 +297,7 @@ class ModelRegistry:
                 + free_b + unstable_p)
 
     def __init__(self):
-        self.data: Dict[str, Any] = {"models": [], "last_updated": "never"}
+        self.data: dict[str, Any] = {"models": [], "last_updated": "never"}
         self._load_registry()
 
     def _load_registry(self):
@@ -315,12 +315,12 @@ class ModelRegistry:
 
     def _log_all_models(self, event: str = "") -> None:
         """Log all registry models grouped by tier with key attributes."""
-        models_list: List[Dict[str, Any]] = self.data.get("models", [])
+        models_list: list[dict[str, Any]] = self.data.get("models", [])
         if not models_list:
             logger.info(f"Model registry is empty (event={event})")
             return
 
-        tiers: Dict[str, List[Dict[str, Any]]] = {}
+        tiers: dict[str, list[dict[str, Any]]] = {}
         for m in models_list:
             t = m.get("tier", "unknown")
             tiers.setdefault(t, []).append(m)
@@ -353,19 +353,19 @@ class ModelRegistry:
         for line in lines:
             logger.info(line)
 
-    def get_models_by_provider(self, provider: str) -> List[Dict[str, Any]]:
-        models_list: List[Dict[str, Any]] = self.data.get("models", [])
+    def get_models_by_provider(self, provider: str) -> list[dict[str, Any]]:
+        models_list: list[dict[str, Any]] = self.data.get("models", [])
         return [m for m in models_list if m.get("provider") == provider]
 
     def select_model(self,
                      provider: str,
                      tier: str = "smart",
-                     max_cost: Optional[float] = None,
+                     max_cost: float | None = None,
                      min_intelligence: int = 0,
-                     required_tags: Optional[List[str]] = None,
-                     avoid_tags: Optional[List[str]] = None,
-                     exclude_models: Optional[List[str]] = None,
-                     prefer_free: bool = True) -> Optional[str]:
+                     required_tags: list[str] | None = None,
+                     avoid_tags: list[str] | None = None,
+                     exclude_models: list[str] | None = None,
+                     prefer_free: bool = True) -> str | None:
         """
         根据厂商、层级、成本上限和最小智能得分选择模型。
         支持根据成本自动降级 (Smart -> Fast)
@@ -389,13 +389,13 @@ class ModelRegistry:
             f"exclude={exclude_models}, max_cost={max_cost}, prefer_free={prefer_free}"
         )
 
-        def _tags_of(m: Dict[str, Any]) -> List[str]:
+        def _tags_of(m: dict[str, Any]) -> list[str]:
             tags = m.get("tags") or []
             if not isinstance(tags, list):
                 return []
             return [str(t).lower() for t in tags]
 
-        def _score(m: Dict[str, Any]) -> tuple:
+        def _score(m: dict[str, Any]) -> tuple:
             tags = _tags_of(m)
             tag_hit = sum(1 for t in required_tags if t in tags)
             avoid_hit = sum(1 for t in avoid_tags if t in tags)
@@ -500,8 +500,8 @@ class ModelRegistry:
         )
         return target_id
 
-    def get_model_info(self, model_id: str) -> Optional[Dict[str, Any]]:
-        models_list: List[Dict[str, Any]] = self.data.get("models", [])
+    def get_model_info(self, model_id: str) -> dict[str, Any] | None:
+        models_list: list[dict[str, Any]] = self.data.get("models", [])
         for m in models_list:
             if m.get("id") == model_id:
                 return m
@@ -516,7 +516,7 @@ class ModelRegistry:
         except Exception as e:
             logger.error(f"Failed to save registry: {e}")
 
-    def add_or_update_model(self, model_data: Dict[str, Any]):
+    def add_or_update_model(self, model_data: dict[str, Any]):
         model_data = normalize_model_record(model_data)
         model_id = model_data.get("id")
         if not model_id:
@@ -537,7 +537,7 @@ class ModelRegistry:
         self.data["last_updated"] = __import__("datetime").datetime.now().isoformat()
         self.save_registry()
 
-    def add_or_update_many(self, models: List[Dict[str, Any]]) -> int:
+    def add_or_update_many(self, models: list[dict[str, Any]]) -> int:
         """批量更新模型，减少频繁磁盘写入。返回有效写入条数。"""
         if not models:
             return 0

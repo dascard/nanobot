@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from collections.abc import Callable, Mapping
-from typing import Any, List
+from typing import Any
 
 import aiohttp
 from sqlalchemy import and_
@@ -197,7 +197,7 @@ def _html_label(content: str) -> str:
     return f"[HTML内容 {len(content)} chars]"
 
 
-def _extract_structured_tags(logs: List[ChatLog]) -> dict:
+def _extract_structured_tags(logs: list[ChatLog]) -> dict:
     raw_text = "\n".join([(x.content or "") for x in logs]).lower()
 
     topics = []
@@ -269,7 +269,7 @@ def _build_memory_digest_result(
     user_id: str,
     session_id: str,
     digest_date: str,
-    logs: List[ChatLog],
+    logs: list[ChatLog],
     use_llm: bool | None,
     llm_summarizer: Callable[[list[dict[str, str]]], Any] | None,
 ):
@@ -296,7 +296,7 @@ async def _build_memory_digest_result_async(
     user_id: str,
     session_id: str,
     digest_date: str,
-    logs: List[ChatLog],
+    logs: list[ChatLog],
     use_llm: bool | None,
     llm_summarizer: Callable[[list[dict[str, str]]], Any] | None,
 ):
@@ -366,7 +366,7 @@ def _collect_daily_digest_logs_by_session(
     target_date: str,
     user_id: str | None,
     session_id: str | None,
-) -> dict[str, List[ChatLog]]:
+) -> dict[str, list[ChatLog]]:
     start = datetime.strptime(target_date, "%Y-%m-%d")
     end = start + timedelta(days=1)
     base_query = db.query(ChatLog).filter(ChatLog.created_at.isnot(None))
@@ -377,7 +377,7 @@ def _collect_daily_digest_logs_by_session(
     all_logs = base_query.order_by(ChatLog.id.asc()).all()
     session_aliases = _session_filter_aliases(session_id)
 
-    by_session: dict[str, List[ChatLog]] = {}
+    by_session: dict[str, list[ChatLog]] = {}
     for log in all_logs:
         if _to_day(log.created_at) != target_date:
             continue
@@ -395,7 +395,7 @@ def _write_memory_digest_rows(
     *,
     session_id: str,
     target_date: str,
-    logs: List[ChatLog],
+    logs: list[ChatLog],
     result,
     force: bool,
 ) -> bool:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -31,11 +31,11 @@ class GroupMemoryInjectionPreviewRequest(BaseModel):
 
 
 class GroupMemoryUpdateRequest(BaseModel):
-    content: Optional[str] = None
-    status: Optional[Literal["review", "active", "disabled", "archived", "rejected"]] = None
-    inject_policy: Optional[Literal["auto", "manual_only", "never"]] = None
-    disabled_reason: Optional[str] = None
-    rejected_reason: Optional[str] = None
+    content: str | None = None
+    status: Literal["review", "active", "disabled", "archived", "rejected"] | None = None
+    inject_policy: Literal["auto", "manual_only", "never"] | None = None
+    disabled_reason: str | None = None
+    rejected_reason: str | None = None
 
 
 @router.get("/groups/{group_id:path}/memories")

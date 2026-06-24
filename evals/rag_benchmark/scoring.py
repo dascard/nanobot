@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from statistics import mean
-from typing import Iterable
+from collections.abc import Iterable
 
 from evals.rag_benchmark.schema import BenchmarkCase, BenchmarkResult, CaseScore
 

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 
 SIGNAL_NAMES = ("s_ack", "s_transport", "w_marker")

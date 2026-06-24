@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -86,7 +85,7 @@ def mark_clear(
 @router.get("/chat/history-summary")
 def get_history_summary(
     user_id: str,
-    session_id: Optional[str] = None,
+    session_id: str | None = None,
     limit: int = 20,
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),
@@ -129,7 +128,7 @@ def get_history_summary(
 @router.post("/chat/compact-history")
 def compact_history(
     user_id: str,
-    session_id: Optional[str] = None,
+    session_id: str | None = None,
     keep_recent: int = 20,
     db: Session = Depends(get_db),
     _auth=Depends(verify_token),

@@ -3,7 +3,6 @@ import re
 import time
 import requests
 import logging
-from typing import List
 
 logger = logging.getLogger("nanobot.compact")
 
@@ -53,7 +52,7 @@ def format_compact_summary(summary_text: str) -> str:
         return f"Summary:\n{match.group(1).strip()}"
     return formatted.strip()
 
-def truncate_head_for_ptl_retry(history_lines: List[str]) -> List[str]:
+def truncate_head_for_ptl_retry(history_lines: list[str]) -> list[str]:
     """Circuit Breaker fallback: 截除 20% 最老的消息组。"""
     drop_count = max(1, int(len(history_lines) * 0.2))
     return history_lines[drop_count:]
@@ -137,7 +136,7 @@ def call_compaction_llm(context_text: str) -> str:
             pass
         raise
 
-def run_autocompact_circuit_breaker(context_lines: List[str], max_length: int = 4000) -> str:
+def run_autocompact_circuit_breaker(context_lines: list[str], max_length: int = 4000) -> str:
     """
     当内容超过 max_length 时，触发真正的 Autocompact，包含 Circuit Breaker（最大失败次数阈值3）。
     如果一切都失败，则强行执行首部截断。

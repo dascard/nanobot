@@ -8,7 +8,8 @@ import json
 import logging
 import urllib.error
 import urllib.request
-from typing import Any, Iterator
+from typing import Any
+from collections.abc import Iterator
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 

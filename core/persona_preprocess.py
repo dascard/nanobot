@@ -14,7 +14,7 @@ import os
 import threading as _threading
 import warnings
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -158,7 +158,7 @@ class PersonaStateMachine:
 
     # ── 公共入口 ──
 
-    def process_candidates(self, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def process_candidates(self, candidates: list[dict[str, Any]]) -> dict[str, Any]:
         """处理 LLM 提取的候选列表。
 
         新画像候选 → persona_facts 表（治理字段 + cluster 去重）
@@ -436,14 +436,14 @@ class PersonaStateMachine:
 
     # ── 匹配 ──
 
-    def _find_matches(self, vec: np.ndarray, existing: List[PersonaFact],
-                      threshold: float = MATCH_THRESHOLD) -> List[Tuple[PersonaFact, float]]:
+    def _find_matches(self, vec: np.ndarray, existing: list[PersonaFact],
+                      threshold: float = MATCH_THRESHOLD) -> list[tuple[PersonaFact, float]]:
         """与每个 cluster 的 centroid 比较，返回 > threshold 的匹配（按相似度降序）。
 
         existing 由调用方预取（避免 N+1 查询），应为同一用户的现有 facts 列表。
         """
         # 按 cluster_id 分组，每组取 centroid 比较
-        clusters: Dict[int, np.ndarray] = {}
+        clusters: dict[int, np.ndarray] = {}
         for f in existing:
             if f.cluster_id is not None and f.cluster_id not in clusters:
                 centroid_blob = f.cluster_centroid or f.embedding
@@ -531,7 +531,7 @@ class PersonaStateMachine:
     # ── Behavior 写入（简化去重，不做 centroid 聚类）──
 
     def _upsert_behavior(self, text: str, evidence: str, domain: str,
-                         vec: np.ndarray, existing: List[PersonaBehavior], now: datetime):
+                         vec: np.ndarray, existing: list[PersonaBehavior], now: datetime):
         """Behavior 去重：embedding 相似 > MATCH_THRESHOLD 则合并，否则新建。"""
         blob = _to_blob(vec)
         for b in existing:
@@ -614,7 +614,7 @@ class PersonaStateMachine:
 
     # ── 冲突解决 ──
 
-    def _resolve_conflicts(self, matches: List[Tuple[PersonaFact, float]],
+    def _resolve_conflicts(self, matches: list[tuple[PersonaFact, float]],
                            text: str, evidence: str, domain: str,
                            vec: np.ndarray, now: datetime, *,
                            memory_type: str = "stable_preference",
@@ -645,7 +645,7 @@ class PersonaStateMachine:
 
     # ── Centroid 更新 ──
 
-    def _update_centroid(self, cluster_id: Optional[int]):
+    def _update_centroid(self, cluster_id: int | None):
         """重新计算簇内均值向量。仅当 evidence >= 3 时才更新 centroid。"""
         if cluster_id is None:
             return

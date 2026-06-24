@@ -11,7 +11,8 @@ import time
 import os
 import fnmatch
 from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Optional, AsyncIterator
+from typing import Any
+from collections.abc import AsyncIterator
 
 from config import (
     NEW_API_BASE_URL,
@@ -44,7 +45,7 @@ MODEL_OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), "data", "model_ov
 _RETRYABLE_STATUS = {429, 502, 503, 504}
 
 
-def messages_have_image_url(messages: List[Dict[str, Any]]) -> bool:
+def messages_have_image_url(messages: list[dict[str, Any]]) -> bool:
     for message in messages or []:
         content = message.get("content")
         if not isinstance(content, list):
@@ -56,12 +57,12 @@ def messages_have_image_url(messages: List[Dict[str, Any]]) -> bool:
 
 
 def required_capabilities_for_request(
-    messages: List[Dict[str, Any]],
+    messages: list[dict[str, Any]],
     *,
-    tools: Optional[List[Dict[str, Any]]] = None,
+    tools: list[dict[str, Any]] | None = None,
     stream: bool = False,
-) -> Dict[str, bool]:
-    required: Dict[str, bool] = {}
+) -> dict[str, bool]:
+    required: dict[str, bool] = {}
     if messages_have_image_url(messages):
         required["supports_image"] = True
     if tools:
@@ -73,9 +74,9 @@ def required_capabilities_for_request(
 
 def validate_payload_capabilities(
     *,
-    model_info: Optional[Dict[str, Any]],
-    messages: List[Dict[str, Any]],
-    tools: Optional[List[Dict[str, Any]]] = None,
+    model_info: dict[str, Any] | None,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
     stream: bool = False,
 ) -> None:
     if not model_info:
@@ -96,7 +97,7 @@ def validate_payload_capabilities(
 class NewAPIClient:
     _last_model_sync_ts: float | None = None  # lazy-init from runtime_state
     _model_sync_lock = asyncio.Lock()
-    _model_overrides_cache: Dict[str, Any] | None = None
+    _model_overrides_cache: dict[str, Any] | None = None
     _failure_tracker: "ModelFailureTracker | None" = None
     _background_tasks: set[asyncio.Task] = set()
     _shared_session: aiohttp.ClientSession | None = None
@@ -142,7 +143,7 @@ class NewAPIClient:
         self,
         api_key: str,
         base_url: str = "",
-        timeout: Optional[int] = None,
+        timeout: int | None = None,
         max_retries: int = 3,
         registry_provider: str = "new-api",
         session: aiohttp.ClientSession | None = None,
@@ -152,7 +153,7 @@ class NewAPIClient:
         self.registry_provider = (registry_provider or "new-api").strip() or "new-api"
         self._timeout_override = timeout
         self.max_retries = max_retries
-        self.last_usage: Dict[str, int] = {}
+        self.last_usage: dict[str, int] = {}
         self._session = session
 
     @property
@@ -169,7 +170,7 @@ class NewAPIClient:
             yield session
 
     @classmethod
-    def _load_model_overrides(cls) -> Dict[str, Any]:
+    def _load_model_overrides(cls) -> dict[str, Any]:
         if cls._model_overrides_cache is not None:
             return cls._model_overrides_cache
 
@@ -186,9 +187,9 @@ class NewAPIClient:
         cls._model_overrides_cache = {}
         return cls._model_overrides_cache
 
-    def _infer_model_profile(self, model_id: str) -> Dict[str, Any]:
+    def _infer_model_profile(self, model_id: str) -> dict[str, Any]:
         mid = (model_id or "").lower()
-        tags: List[str] = []
+        tags: list[str] = []
         is_free = mid.endswith(":free") or mid.endswith("-free")
 
         if any(k in mid for k in ["reason", "o1", "r1", "think"]):
@@ -231,13 +232,13 @@ class NewAPIClient:
             "supports_stream": True,
         }
 
-    def _apply_model_override(self, model_id: str, base: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_model_override(self, model_id: str, base: dict[str, Any]) -> dict[str, Any]:
         base = normalize_model_record(base)
         overrides = self._load_model_overrides()
         if not overrides:
             return base
 
-        candidates: List[str] = []
+        candidates: list[str] = []
         candidates.append(model_id)
 
         # Strip provider prefix (e.g. "deepseek/deepseek-v4-pro-free" → "deepseek-v4-pro-free")
@@ -289,7 +290,7 @@ class NewAPIClient:
             merged["description"] = self._build_description(model_id, final_tags)
         return normalize_model_record(merged, fallback=base)
 
-    def _build_description(self, model_id: str, tags: List[str]) -> str:
+    def _build_description(self, model_id: str, tags: list[str]) -> str:
         """Build a human-readable description from model ID and tags."""
         mid = (model_id or "").lower()
         parts = mid.replace(":free", "").replace("-free", "").replace("/", " ").replace("-", " ").split()
@@ -309,7 +310,7 @@ class NewAPIClient:
         desc_parts.append("(free)" if is_free else "(paid)")
         return " ".join(desc_parts)
 
-    async def fetch_models(self) -> List[Dict[str, Any]]:
+    async def fetch_models(self) -> list[dict[str, Any]]:
         """从 new-api `/models` 拉取模型列表。"""
         if not self.api_key:
             return []
@@ -333,7 +334,7 @@ class NewAPIClient:
                     if items:
                         first = items[0]
                         logger.debug(f"new-api /models first item keys: {list(first.keys())}, sample={ {k: first[k] for k in list(first.keys())[:5]} }")
-                    models: List[Dict[str, Any]] = []
+                    models: list[dict[str, Any]] = []
                     free_count = 0
                     for item in items:
                         model_id = item.get("id")
@@ -454,7 +455,7 @@ class NewAPIClient:
             return models[0]["id"]
         return "gpt-4o"
 
-    def _build_headers(self) -> Dict[str, str]:
+    def _build_headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -462,16 +463,16 @@ class NewAPIClient:
 
     def _build_payload(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]],
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
         temperature: float,
         stream: bool,
         model: str,
         max_tokens: int | None = None,
         enable_thinking: Any = "auto",
-        model_info: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+        model_info: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
@@ -501,8 +502,8 @@ class NewAPIClient:
 
     # ── New Model Router ──
 
-    def estimate_complexity(self, messages: List[Dict[str, Any]],
-                            tools: Optional[List[Dict[str, Any]]] = None) -> int:
+    def estimate_complexity(self, messages: list[dict[str, Any]],
+                            tools: list[dict[str, Any]] | None = None) -> int:
         """Return complexity 1-10. Used to derive the intel_floor."""
         user_text = "\n".join(
             str(m.get("content", ""))
@@ -541,11 +542,11 @@ class NewAPIClient:
         return max(1, min(10, score))
 
     def get_ordered_candidates(self, provider: str, intel_floor: int,
-                               exclude_models: Optional[List[str]] = None,
-                               max_cost: Optional[float] = None,
-                               avoid_tags: Optional[List[str]] = None,
-                               required_capabilities: Optional[Dict[str, bool]] = None,
-                               ) -> List[Dict[str, Any]]:
+                               exclude_models: list[str] | None = None,
+                               max_cost: float | None = None,
+                               avoid_tags: list[str] | None = None,
+                               required_capabilities: dict[str, bool] | None = None,
+                               ) -> list[dict[str, Any]]:
         """Return healthy models ordered by priority.
 
         Phase 1: models meeting intel_floor, priority-score first.
@@ -600,10 +601,10 @@ class NewAPIClient:
         fallback.sort(key=lambda m: registry.compute_priority_score(m))
         return qualified + fallback
 
-    def resolve_model(self, messages: List[Dict[str, Any]],
-                      tools: Optional[List[Dict[str, Any]]] = None,
+    def resolve_model(self, messages: list[dict[str, Any]],
+                      tools: list[dict[str, Any]] | None = None,
                       manual_model: str = "",
-                      exclude_models: Optional[List[str]] = None,
+                      exclude_models: list[str] | None = None,
                       ) -> str:
         """Single entry point: complexity → intel_floor → ordered candidates → first healthy."""
         if manual_model:
@@ -639,8 +640,8 @@ class NewAPIClient:
 
     async def chat_completion(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.7,
         stream: bool = False,
         model_tier: str = "smart",
@@ -650,7 +651,7 @@ class NewAPIClient:
         run_id: str = "",
         llm_source: str = "",
         enable_thinking: Any = "auto",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Non-streaming chat completion with retry."""
         if not self.api_key:
             return {"error": "NEW_API_KEY is missing"}
@@ -686,7 +687,7 @@ class NewAPIClient:
 
         url = f"{self.base_url}/chat/completions"
         headers = self._build_headers()
-        last_error: Optional[str] = None
+        last_error: str | None = None
         tracker = self._safe_get_failure_tracker()
 
         # Iterate candidates in priority order, with configurable retry per model.
@@ -848,8 +849,8 @@ class NewAPIClient:
 
     async def chat_completion_stream(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.7,
         model_tier: str = "smart",
         manual_model: str = "",
@@ -858,7 +859,7 @@ class NewAPIClient:
         run_id: str = "",
         llm_source: str = "",
         enable_thinking: Any = "auto",
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """Streaming chat completion. Yields parsed SSE chunks."""
         if not self.api_key:
             yield {"error": "NEW_API_KEY is missing"}
@@ -1048,7 +1049,7 @@ class NewAPIClient:
                 yield {"error": "NetworkError", "detail": str(e)}
 
 
-def format_openai_messages(system_prompt: str, persona: str, context: str, query: str) -> List[Dict[str, str]]:
+def format_openai_messages(system_prompt: str, persona: str, context: str, query: str) -> list[dict[str, str]]:
     full_system = f"{system_prompt}\n\n[USER PERSONA]\n{persona}"
     return [
         {"role": "system", "content": full_system},

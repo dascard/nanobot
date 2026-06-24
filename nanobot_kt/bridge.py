@@ -309,7 +309,7 @@ class NanobotBridge:
     def __init__(self, creature_path: str = "creatures/nanobot"):
         self.creature_path = creature_path
         self._output = BufferedOutput()
-        self._agent: Optional[Agent] = None
+        self._agent: Agent | None = None
         self._session_locks: dict[str, asyncio.Lock] = {}  # 按 session 分锁
         self._last_prompt_render_meta: dict[str, str] = {}
 
@@ -2177,7 +2177,7 @@ class NanobotBridge:
             return response
 
     @property
-    def agent(self) -> Optional[Agent]:
+    def agent(self) -> Agent | None:
         """Access the underlying KT agent for advanced operations."""
         return self._agent
 
@@ -2375,7 +2375,7 @@ class NanobotBridgePool:
         return None
 
     @property
-    def agent(self) -> Optional[Agent]:
+    def agent(self) -> Agent | None:
         for bridge in self._bridges.values():
             return bridge.agent
         return None

@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Optional
 
 from core.context_builder import sanitize_prompt_text
 
 
-def normalize_files(files: Optional[list[str]]) -> list[str]:
+def normalize_files(files: list[str] | None) -> list[str]:
     return [file for file in (files or []) if isinstance(file, str) and file.strip()]
 
 
-def build_guardrail_input(query: str, files: Optional[list[str]]) -> str:
+def build_guardrail_input(query: str, files: list[str] | None) -> str:
     normalized_files = normalize_files(files)
     text = str(query or "").strip()
     if normalized_files and text:
@@ -23,7 +22,7 @@ def build_guardrail_input(query: str, files: Optional[list[str]]) -> str:
 
 def build_multimodal_user_input_text(
     query: str,
-    files: Optional[list[str]],
+    files: list[str] | None,
     *,
     max_chars: int = 0,
 ) -> str:
@@ -37,7 +36,7 @@ def build_multimodal_user_input_text(
     return "\n".join(parts)
 
 
-def build_file_archive_summary(files: Optional[list[str]], *, include_refs: bool) -> str:
+def build_file_archive_summary(files: list[str] | None, *, include_refs: bool) -> str:
     normalized_files = normalize_files(files)
     if not normalized_files:
         return ""
@@ -56,7 +55,7 @@ def build_file_archive_summary(files: Optional[list[str]], *, include_refs: bool
     return "\n".join(lines)
 
 
-def build_chatlog_user_content(query: str, files: Optional[list[str]]) -> str:
+def build_chatlog_user_content(query: str, files: list[str] | None) -> str:
     text = str(query or "").strip()
     file_summary = build_file_archive_summary(files, include_refs=True)
     if text and file_summary:
@@ -66,7 +65,7 @@ def build_chatlog_user_content(query: str, files: Optional[list[str]]) -> str:
     return query
 
 
-def build_conversation_user_content(query: str, files: Optional[list[str]]) -> str:
+def build_conversation_user_content(query: str, files: list[str] | None) -> str:
     text = str(query or "").strip()
     file_summary = build_file_archive_summary(files, include_refs=False)
     if text and file_summary:

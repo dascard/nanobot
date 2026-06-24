@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -240,10 +239,10 @@ def list_model_providers(_auth=Depends(verify_admin)):
 
 
 class ProviderUpdateBody(BaseModel):
-    base_url: Optional[str] = None
-    api_key: Optional[str] = None
-    enabled: Optional[bool] = None
-    registry_provider: Optional[str] = None
+    base_url: str | None = None
+    api_key: str | None = None
+    enabled: bool | None = None
+    registry_provider: str | None = None
 
 
 @router.put("/models/providers/{provider_id}")
@@ -579,13 +578,13 @@ def _redact(v: dict) -> dict:
 
 
 class ModelRouteEditBody(BaseModel):
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    api_key: Optional[str] = None
-    timeout: Optional[float] = None
-    temperature: Optional[float] = None
-    max_tokens: Optional[int] = None
-    enable_thinking: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
+    api_key: str | None = None
+    timeout: float | None = None
+    temperature: float | None = None
+    max_tokens: int | None = None
+    enable_thinking: str | None = None
 
 
 @router.put("/models/routes/{route_key}")

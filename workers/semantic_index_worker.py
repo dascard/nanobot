@@ -6,7 +6,7 @@ import argparse
 import json
 import time
 from datetime import datetime
-from typing import Callable
+from collections.abc import Callable
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session

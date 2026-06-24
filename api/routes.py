@@ -9,7 +9,7 @@ import time as _time
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import Any, Optional, List
+from typing import Any
 
 from config import (
     NANOBOT_API_TOKEN as NANOBOT_API_TOKEN,
@@ -217,13 +217,13 @@ def _join_buffered_messages(messages: list[str]) -> str:
     return chat_private_buffer.join_buffered_messages(messages)
 
 
-def _normalize_files(files: Optional[List[str]]) -> list[str]:
+def _normalize_files(files: list[str] | None) -> list[str]:
     return chat_content_helpers.normalize_files(files)
 
 
 def _schedule_image_precache(
     background_tasks: BackgroundTasks | None,
-    files: Optional[List[str]],
+    files: list[str] | None,
     *,
     source_type: str,
     source_name_prefix: str,
@@ -254,11 +254,11 @@ def _check_user_blocked(db, user_id: str, target_type: str = "private", group_id
     return False
 
 
-def _merge_buffered_files(existing: list[str], incoming: Optional[List[str]]) -> list[str]:
+def _merge_buffered_files(existing: list[str], incoming: list[str] | None) -> list[str]:
     return chat_private_buffer.merge_buffered_files(existing, _normalize_files(incoming))
 
 
-def _private_buffer_window_seconds(files: Optional[List[str]]) -> float:
+def _private_buffer_window_seconds(files: list[str] | None) -> float:
     return chat_private_buffer.private_buffer_window_seconds(_normalize_files(files), _private_buffer_config())
 
 
@@ -266,7 +266,7 @@ async def _wait_private_buffer_deadline(user_id: str) -> bool:
     return await _private_buffer_store.wait_until_deadline(user_id, now=_time.time, sleep=asyncio.sleep)
 
 
-def _build_guardrail_input(query: str, files: Optional[List[str]]) -> str:
+def _build_guardrail_input(query: str, files: list[str] | None) -> str:
     return chat_content_helpers.build_guardrail_input(query, files)
 
 
@@ -278,19 +278,19 @@ def _detect_guardrail_for_pre_bridge(guardrail: Any, message: str, allow_passthr
     return _detect_guardrail(guardrail, message, allow_passthrough=allow_passthrough)
 
 
-def _build_multimodal_user_input_text(query: str, files: Optional[List[str]], *, max_chars: int = 0) -> str:
+def _build_multimodal_user_input_text(query: str, files: list[str] | None, *, max_chars: int = 0) -> str:
     return chat_content_helpers.build_multimodal_user_input_text(query, files, max_chars=max_chars)
 
 
-def _build_file_archive_summary(files: Optional[List[str]], *, include_refs: bool) -> str:
+def _build_file_archive_summary(files: list[str] | None, *, include_refs: bool) -> str:
     return chat_content_helpers.build_file_archive_summary(files, include_refs=include_refs)
 
 
-def _build_chatlog_user_content(query: str, files: Optional[List[str]]) -> str:
+def _build_chatlog_user_content(query: str, files: list[str] | None) -> str:
     return chat_content_helpers.build_chatlog_user_content(query, files)
 
 
-def _build_conversation_user_content(query: str, files: Optional[List[str]]) -> str:
+def _build_conversation_user_content(query: str, files: list[str] | None) -> str:
     return chat_content_helpers.build_conversation_user_content(query, files)
 
 

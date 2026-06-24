@@ -7,7 +7,8 @@ import logging
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from core.database import ChatLog
 

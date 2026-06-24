@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Any, Optional, List
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -47,7 +47,7 @@ class GroupMessageRequest(BaseModel):
     sender_id: str = ""
     sender_name: str = ""
     message: str = ""
-    files: Optional[List[str]] = None
+    files: list[str] | None = None
     client_meta: dict | None = None
     message_id: str | None = None
     session_name: str | None = None

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -270,16 +270,16 @@ class ReplyEvalCaseIn(BaseModel):
 
 
 class ReplyEvalCasePatch(BaseModel):
-    title: Optional[str] = None
-    chat_type: Optional[Literal["group", "private"]] = None
-    input_text: Optional[str] = None
-    context: Optional[dict] = None
-    expected_action: Optional[Literal["reply", "no_reply", "any"]] = None
-    expected_keywords: Optional[list[str]] = None
-    forbidden_keywords: Optional[list[str]] = None
-    source: Optional[str] = None
-    tags: Optional[list[str]] = None
-    enabled: Optional[int] = None
+    title: str | None = None
+    chat_type: Literal["group", "private"] | None = None
+    input_text: str | None = None
+    context: dict | None = None
+    expected_action: Literal["reply", "no_reply", "any"] | None = None
+    expected_keywords: list[str] | None = None
+    forbidden_keywords: list[str] | None = None
+    source: str | None = None
+    tags: list[str] | None = None
+    enabled: int | None = None
 
 
 class ReplyEvalSaveGeneratedIn(BaseModel):

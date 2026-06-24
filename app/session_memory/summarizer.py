@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 from core.database import ConversationTurn, RollingSessionSummary
 from app.session_memory import config

@@ -9,7 +9,8 @@ import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from core.database import ChatLog
 from core.prompt_v2.section_renderer import sha256_text
