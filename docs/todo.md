@@ -110,9 +110,9 @@
 - [x] **H30 RAG query() ~337 行** · `core/knowledge_rag.py:122-459` / `core/memory_rag.py:126-349` · HIGH(可维护) · L ·〔呼应路线图 §6〕
   已完成第一轮拆分：knowledge / memory 两个 `query()` 已按 recall、filter、rerank、gate、result 模块内私有边界拆分；public signature、result envelope、`stats`、`debug_trace`、degraded 语义和 RAG benchmark / Admin debug 消费契约保持不变。阶段提交为 `c319b4f`、`ba512f6`、`5391274`；跨模块公共 recall helper 暂不抽取，保留为后续稳定后评估项。
 
-- [ ] **超大文件 >800 行拆分** · MEDIUM · L
-  `api/routes.py`(1020)。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，四者不再属于当前 >800 行清单。
-  - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；整项仍未完成，`api/routes.py` 仍待继续拆分。
+- [x] **超大文件 >800 行拆分** · MEDIUM · L
+  当前 P3 队列已完成：`api/routes.py` 已降至 783 行。按职责拆模块；`api/admin_routes.py` 已从 1009 行继续拆至 632 行，`news_search/tool.py` 已从原 1835 行拆至 798 行，`group_runtime/runtime.py` 已从原 1385 行拆至 722 行，`core/persona_preprocess.py` 已从原 857 行拆至 773 行，五者不再属于当前 >800 行清单。全仓仍有其他历史大文件未纳入本轮 P3 队列，后续如需治理应另立计划。
+  - 进展：`core/context_builder.py` 第一刀已拆出 deprecated group context 到 `core/context_legacy.py`；当时整项仍未完成，后续转入 `api/admin_routes.py` 与 `api/routes.py` 拆分。
   - 进展：`api/admin_routes.py` 第一刀已拆出只读 DB Browser 到
     `api/admin/db_browser_routes.py`；`/db/backup`、`/db/vacuum` 及其他
     admin 子域仍留在旧文件。
@@ -635,6 +635,29 @@
     `24 passed, 21 warnings in 3.60s`，split 扫描 `4 passed, 1 warning in 1.13s`，
     静态检查通过，全量回归
     `1795 passed, 6 skipped, 139 warnings in 125.86s (0:02:05)`。
+  - 进展：`api/routes.py` 第三十刀已拆出 Chat Route Runner 到
+    `api/chat_route_runner.py`；旧 `/chat` endpoint、`get_bridge()` patch point、
+    `StreamingResponse`、`HTTPException`、DB session、pre-bridge、Prompt Runtime
+    payload、message envelope、push envelope 和 response envelope 边界继续留在父模块。
+    新模块承载 stream / non-streaming bridge runner 编排、SSE 事件产出、断连后台
+    收尾登记和 route 级错误描述；不反向导入 `api.routes`、不导入 FastAPI HTTP
+    边界、不直接持有 DB / UoW 边界，也没有新增 `asyncio.run`、
+    `run_awaitable_sync` 或同步函数包装 awaitable。Prompt Runtime 字段名、
+    `<user_input>` 包裹、history / persona 注入、conversation 结构、工具输出契约、
+    message envelope、push envelope 和 response envelope 均未改变，默认模板与
+    `data/prompts_v2/` 运行时模板无需变更。`api/routes.py` 从 1005 行降至
+    783 行，`api/chat_route_runner.py` 为 350 行，拆分测试为 432 行。
+    验证结果：红灯 `10 failed, 1 warning in 6.34s`，扫描红灯
+    `4 failed, 1 warning in 6.83s`；helper 阶段
+    `9 passed, 1 deselected, 1 warning in 0.93s`，完整新测试剩余父模块接入红灯
+    `9 passed, 1 failed, 1 warning in 6.56s`；父模块接入后新测试
+    `10 passed, 1 warning in 0.92s`，相邻 chat split 回归
+    `45 passed, 21 warnings in 4.57s`，split 扫描
+    `4 passed, 1 warning in 0.96s`，主 API 回归
+    `82 passed, 21 warnings in 22.08s`，streaming / envelope 回归
+    `13 passed, 21 warnings in 6.08s`，wrapper / patch point 回归
+    `61 passed, 1 warning in 3.31s`，静态检查通过，全量回归
+    `1805 passed, 6 skipped, 139 warnings in 122.26s (0:02:02)`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch

@@ -1274,7 +1274,7 @@ rg -n "asyncio\\.run|run_awaitable_sync" api/routes.py api/chat_route_runner.py 
 结果：生产代码无命中；仅 `tests/test_api_chat_route_runner_split.py` 命中新测试的
 禁止断言字符串。
 
-- [ ] **步骤 4：Prompt Runtime 核查**
+- [x] **步骤 4：Prompt Runtime 核查**
 
 运行：
 
@@ -1283,7 +1283,10 @@ rg -n "enriched_query|<user_input>|bridge_meta|history_header|history_messages|r
   api/routes.py api/chat_route_runner.py prompts.v2.default/chat data/prompts_v2/chat core/prompt_v2/variables.py core/prompt_v2/template_registry.py
 ```
 
-预期：本阶段仅移动 runner 编排，不改变 Prompt Runtime 字段、模板标记或变量语义。若发现字段变更，必须同步更新模板或回退字段变更。
+结果：现有字段只在父模块与新 runner context 中透传；本阶段未改变
+`enriched_query`、`<user_input>`、`bridge_meta`、history / persona 注入、
+Prompt Runtime 变量、模板标记或 envelope 语义，默认模板与 `data/prompts_v2/`
+运行时模板无需变更。
 
 - [x] **步骤 5：运行定向和相邻回归**
 
@@ -1322,7 +1325,7 @@ python -B -m pytest -p no:cacheprovider \
 
 结果：接入阶段已运行，`4 passed, 1 warning in 0.96s`。
 
-- [ ] **步骤 7：运行全量测试**
+- [x] **步骤 7：运行全量测试**
 
 运行：
 
@@ -1331,9 +1334,9 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
   python -B -m pytest -p no:cacheprovider tests/ -v
 ```
 
-预期：0 failures。
+结果：`1805 passed, 6 skipped, 139 warnings in 122.26s (0:02:02)`。
 
-- [ ] **步骤 8：更新 `docs/todo.md`**
+- [x] **步骤 8：更新 `docs/todo.md`**
 
 在 P3 `api/routes.py` 进展列表追加本阶段记录，包含：
 
@@ -1350,9 +1353,10 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
   相邻回归 `<结果>`，全量回归 `<结果>`。
 ```
 
-如果 `api/routes.py` 已低于 800 行，将该 checkbox 标为完成；否则保留未完成并写明下一刀。
+结果：`api/routes.py` 已降至 783 行，当前 P3 超大文件队列收口；`docs/todo.md`
+已补第三十刀记录并将该 checkbox 标为完成，同时保留全仓其他历史大文件需另立计划的口径。
 
-- [ ] **步骤 9：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 9：更新 `docs/plan_walkthrough.md`**
 
 追加 `2026-06-24 普通 API Chat Route Runner 拆分` 小节，包含：
 
@@ -1366,7 +1370,10 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 - Prompt Runtime 核查。
 - 下一步建议。
 
-- [ ] **步骤 10：提交验证收口**
+结果：已追加 `2026-06-24 普通 API Chat Route Runner 拆分` 小节，并同步顶部
+当前推进焦点。
+
+- [x] **步骤 10：提交验证收口**
 
 运行：
 
@@ -1374,6 +1381,8 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-chat-route-runner-split.md
 git commit -m "docs(计划): 收口聊天路由执行器拆分"
 ```
+
+结果：随本次 `docs(计划): 收口聊天路由执行器拆分` 提交完成。
 
 ---
 
