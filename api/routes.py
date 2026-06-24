@@ -36,6 +36,7 @@ from api import (
     chat_guardrail_facade,
     chat_media_precache,
     chat_non_streaming_result,
+    chat_pre_bridge_decision,
     chat_persistence,
     chat_persona_context,
     chat_private_buffer,
@@ -304,6 +305,18 @@ def _detect_guardrail(guardrail, message: str, *, allow_passthrough: bool = Fals
     )
 
 
+def _detect_guardrail_for_pre_bridge(
+    guardrail: Any,
+    message: str,
+    allow_passthrough: bool,
+) -> dict[str, Any]:
+    return _detect_guardrail(
+        guardrail,
+        message,
+        allow_passthrough=allow_passthrough,
+    )
+
+
 def _build_multimodal_user_input_text(query: str, files: Optional[List[str]], *, max_chars: int = 0) -> str:
     return chat_content_helpers.build_multimodal_user_input_text(query, files, max_chars=max_chars)
 
@@ -415,6 +428,61 @@ def _private_prompt_audit_failure_meta() -> dict:
 
 def _private_timing_meta(decision: Any | None) -> dict[str, Any] | None:
     return chat_request_contract.private_timing_meta(decision)
+
+
+def get_private_gate() -> Any:
+    from core.private_timing import get_private_gate as _core_get_private_gate
+
+    return _core_get_private_gate()
+
+
+def get_effort_constraint(effort: str | None) -> str:
+    from core.private_timing import get_effort_constraint as _core_get_effort_constraint
+
+    return _core_get_effort_constraint(effort)
+
+
+def _get_casual_reply_for_pre_bridge(query: str, is_superuser: bool) -> str:
+    from core.reply_templates import get_casual_reply as _core_get_casual_reply
+
+    return _core_get_casual_reply(query, is_superuser=is_superuser)
+
+
+def _chat_pre_bridge_services() -> chat_pre_bridge_decision.ChatPreBridgeServices:
+    return chat_pre_bridge_decision.ChatPreBridgeServices(
+        private_buffer_store=_private_buffer_store,
+        private_buffer_config=_private_buffer_config,
+        private_buffer_follower_timeout_seconds=PRIVATE_BUFFER_FOLLOWER_TIMEOUT_SECONDS,
+        now=_time.time,
+        sleep=asyncio.sleep,
+        wait_private_buffer_deadline=_wait_private_buffer_deadline,
+        finalize_private_buffer=_finalize_private_buffer,
+        normalize_files=_normalize_files,
+        join_buffered_messages=_join_buffered_messages,
+        build_guardrail_input=_build_guardrail_input,
+        get_guardrail=get_guardrail,
+        detect_guardrail=_detect_guardrail_for_pre_bridge,
+        guardrail_status_from_result=chat_guardrail_facade.guardrail_status_from_result,
+        is_guardrail_superuser=_is_guardrail_superuser,
+        get_private_gate=get_private_gate,
+        get_casual_reply=_get_casual_reply_for_pre_bridge,
+        private_timing_meta=_private_timing_meta,
+        logger=logger,
+    )
+
+
+async def _resolve_chat_pre_bridge_decision(
+    req: ChatProxyRequest,
+    *,
+    is_group: bool,
+    is_superuser: bool,
+) -> chat_pre_bridge_decision.ChatPreBridgeEarlyReturn | chat_pre_bridge_decision.ChatPreBridgeContinue:
+    return await chat_pre_bridge_decision.resolve_chat_pre_bridge_decision(
+        req,
+        is_group=is_group,
+        is_superuser=is_superuser,
+        services=_chat_pre_bridge_services(),
+    )
 
 
 def _persist_chat_turn(
@@ -580,183 +648,39 @@ async def proxy_chat(
     )
     release_clean_session_transaction(db, label="chat_before_private_decision", logger=logger)
 
-    # 4a. 私聊三态分类：先分类再路由
-    guardrail_status: str | None = None
-    _classifier_ran = False
-    buffered_query: str | None = None
-    buffered_files: list[str] | None = None
-    _private_decision: PrivateDecision | None = None
-    private_timing_meta: dict | None = None
+    # 4a. 私聊三态分类、guardrail 和 private buffer pre-bridge 决策
+    pre_bridge = await _resolve_chat_pre_bridge_decision(
+        req,
+        is_group=is_group,
+        is_superuser=is_superuser,
+    )
 
-    if not is_group and not req.classification_request:
-        from core.private_timing import get_private_gate, PrivateDecision, get_effort_constraint
-        try:
-            private_gate = get_private_gate()
-            try:
-                _private_decision = await private_gate.classify(
-                    req.query, user_id=req.user_id, has_files=bool(req.files),
-                    is_superuser=is_superuser,
-                )
-            except TypeError as te:
-                if "is_superuser" not in str(te):
-                    raise
-                _private_decision = await private_gate.classify(
-                    req.query, user_id=req.user_id, has_files=bool(req.files),
-                )
-            private_timing_meta = _private_timing_meta(_private_decision)
-            if _private_decision.action == "no_reply":
-                _persist_chat_turn(db, req, "", guardrail_status=None, timing_meta=private_timing_meta)
-                return _chat_response_payload(
-                    req,
-                    status="no_reply",
-                    reason=_private_decision.reason,
-                    include_answer_chunks=True,
-                )
-            if _private_decision.effort == "casual":
-                from core.reply_templates import get_casual_reply
-                reply = get_casual_reply(req.query, is_superuser=is_superuser)
-                if reply:
-                    _persist_chat_turn(
-                        db,
-                        req,
-                        reply,
-                        guardrail_status="casual_template",
-                        timing_meta=private_timing_meta,
-                    )
-                    return _chat_response_payload(
-                        req,
-                        status="ok",
-                        answer=reply,
-                        source="casual_template",
-                        intent=_private_decision.reason,
-                        guardrail_status="casual_template",
-                        include_answer_chunks=True,
-                )
-                # 无模板匹配——casual 不进 bridge，走默认短句
-                fallback = "你先说事" if req.query else ""
-                _persist_chat_turn(
-                    db,
-                    req,
-                    fallback,
-                    guardrail_status="casual_template",
-                    timing_meta=private_timing_meta,
-                )
-                return _chat_response_payload(
-                    req,
-                    status="ok",
-                    answer=fallback,
-                    source="casual_template",
-                    intent=_private_decision.reason,
-                    guardrail_status="casual_template",
-                    include_answer_chunks=True,
-                )
-            if _private_decision.action == "reply_now":
-                messages = req.merged_messages or [req.query]
-                buffered_query = _join_buffered_messages(messages)
-                buffered_files = _normalize_files(req.files)
-        except Exception as e:
-            logger.warning("[/chat] PrivateGate classify failed user=%s: %s", req.user_id, e)
-
-    if not is_group or req.classification_request:
-        try:
-            _classifier_ran = True
-            guardrail = get_guardrail()
-            messages = req.merged_messages or [req.query]
-            merged = _join_buffered_messages(messages)
-            guardrail_input = _build_guardrail_input(merged, req.files)
-
-            def _guardrail_task_factory() -> asyncio.Task[Any]:
-                return asyncio.create_task(
-                    asyncio.to_thread(
-                        _detect_guardrail,
-                        guardrail,
-                        guardrail_input,
-                        allow_passthrough=_is_guardrail_superuser(req.user_id),
-                    )
-                )
-
-            buffer_result = await _private_buffer_store.begin_or_append(
-                req.user_id,
-                merged_query=merged,
-                files=_normalize_files(req.files),
-                guardrail_task_factory=_guardrail_task_factory,
-                now=_time.time(),
-                config=_private_buffer_config(),
+    if isinstance(pre_bridge, chat_pre_bridge_decision.ChatPreBridgeEarlyReturn):
+        if pre_bridge.persist_answer is not None:
+            _persist_chat_turn(
+                db,
+                req,
+                pre_bridge.persist_answer,
+                guardrail_status=pre_bridge.persist_guardrail_status,
+                timing_meta=pre_bridge.persist_timing_meta,
             )
+        return _chat_response_payload(
+            req,
+            status=pre_bridge.status,
+            reason=pre_bridge.reason,
+            answer=pre_bridge.answer,
+            source=pre_bridge.source,
+            intent=pre_bridge.intent,
+            guardrail_status=pre_bridge.guardrail_status,
+            include_answer_chunks=True,
+        )
 
-            if isinstance(buffer_result, chat_private_buffer.PrivateBufferFollowerJoined):
-                # 缓冲期内后续消息：等待第一条完成，但不返回 answer
-                # 第一条消息已通过 HTTP 响应返回了 answer，后续消息只静默消费
-                try:
-                    await asyncio.wait_for(
-                        buffer_result.done_event.wait(),
-                        timeout=PRIVATE_BUFFER_FOLLOWER_TIMEOUT_SECONDS,
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "[/chat] Private buffer follower timed out: user=%s",
-                        req.user_id,
-                    )
-                    await _finalize_private_buffer(req.user_id)
-                return _chat_response_payload(
-                    req,
-                    status="silent",
-                    reason="private_buffer_follower",
-                    include_answer_chunks=True,
-                )
-
-            # 第一条消息负责等待“最后一条消息后的 5 秒静默期”
-            if not await _wait_private_buffer_deadline(req.user_id):
-                return _chat_response_payload(
-                    req,
-                    status="silent",
-                    reason="private_buffer_missing",
-                    include_answer_chunks=True,
-                )
-
-            snapshot = await _private_buffer_store.snapshot(req.user_id)
-            if snapshot is None:
-                return _chat_response_payload(
-                    req,
-                    status="silent",
-                    reason="private_buffer_missing",
-                    include_answer_chunks=True,
-                )
-            buffered_messages = snapshot.messages
-            buffered_files = snapshot.files
-            qwen_task = snapshot.guardrail_task
-
-            buffered_query = _join_buffered_messages(buffered_messages)
-            buffered_guardrail_input = _build_guardrail_input(buffered_query, buffered_files)
-            if len(buffered_messages) > 1:
-                result = await asyncio.to_thread(
-                    _detect_guardrail,
-                    guardrail,
-                    buffered_guardrail_input,
-                    allow_passthrough=_is_guardrail_superuser(req.user_id),
-                )
-            else:
-                result = await qwen_task
-
-            await _private_buffer_store.store_guardrail_result(req.user_id, result)
-
-            guardrail_status = chat_guardrail_facade.guardrail_status_from_result(result)
-            logger.info(
-                "[/chat] Guardrail result: injection=%s, passthrough=%s, user=%s",
-                result.get("injection", False),
-                result.get("passthrough", False),
-                req.user_id,
-            )
-        except asyncio.CancelledError:
-            await _finalize_private_buffer(req.user_id)
-            raise
-        except Exception:
-            await _finalize_private_buffer(req.user_id)
-            raise
-
-    # 持久化使用合并后的真实 query，避免后续缓冲消息静默丢失
-    final_query = buffered_query or req.query
-    final_files = buffered_files if buffered_files is not None else _normalize_files(req.files)
+    final_query = pre_bridge.final_query
+    final_files = pre_bridge.final_files
+    _private_decision = pre_bridge.private_decision
+    private_timing_meta = pre_bridge.private_timing_meta
+    guardrail_status = pre_bridge.guardrail_status
+    _classifier_ran = pre_bridge.classifier_ran
     persist_req = _clone_chat_request(req, query=final_query, files=final_files)
 
     if _classifier_ran and guardrail_status == "silent":

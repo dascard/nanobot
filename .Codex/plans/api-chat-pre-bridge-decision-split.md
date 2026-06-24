@@ -887,7 +887,7 @@ git commit -m "refactor(普通API): 增加私聊前置决策助手"
 - 修改：`api/routes.py`
 - 修改：`.Codex/plans/api-chat-pre-bridge-decision-split.md`
 
-- [ ] **步骤 1：新增导入和 wrapper**
+- [x] **步骤 1：新增导入和 wrapper**
 
 在 `api/routes.py` 的 chat helper 导入区域加入：
 
@@ -959,7 +959,7 @@ async def _resolve_chat_pre_bridge_decision(
     )
 ```
 
-- [ ] **步骤 2：替换 `proxy_chat()` 内联 pre-bridge 区块**
+- [x] **步骤 2：替换 `proxy_chat()` 内联 pre-bridge 区块**
 
 删除 `proxy_chat()` 中从 `# 4a. 私聊三态分类：先分类再路由` 到 `if _classifier_ran and guardrail_status == "silent":` 之前的 private timing / guardrail / buffer 内联逻辑，替换为：
 
@@ -1020,7 +1020,7 @@ async def _resolve_chat_pre_bridge_decision(
         )
 ```
 
-- [ ] **步骤 3：移除父模块局部 import**
+- [x] **步骤 3：移除父模块局部 import**
 
 确认 `proxy_chat()` 中不再有以下局部 import：
 
@@ -1031,7 +1031,7 @@ from core.reply_templates import get_casual_reply
 
 如果 `PrivateDecision` 和 `get_effort_constraint` 只服务旧内联区块，应同步删除未使用引用。
 
-- [ ] **步骤 4：运行父模块接入定向测试**
+- [x] **步骤 4：运行父模块接入定向测试**
 
 运行：
 
@@ -1042,12 +1042,16 @@ python -B -m pytest -p no:cacheprovider tests/test_api_chat_pre_bridge_decision_
 
 预期：全部通过。
 
-- [ ] **步骤 5：Commit 父模块接入**
+实际：8 passed, 1 warning in 0.96s。父模块 wrapper、service patch point、新模块源码边界和 helper 行为全部通过。
+
+- [x] **步骤 5：Commit 父模块接入**
 
 ```bash
 git add api/routes.py .Codex/plans/api-chat-pre-bridge-decision-split.md
 git commit -m "refactor(普通API): 接入私聊前置决策助手"
 ```
+
+实际提交：本阶段父模块接入提交自身，message 为 `refactor(普通API): 接入私聊前置决策助手`。
 
 ---
 
