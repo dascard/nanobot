@@ -1240,7 +1240,7 @@ git commit -m "refactor(普通API): 接入聊天路由执行器"
 - 修改：`docs/plan_walkthrough.md`
 - 修改：`.Codex/plans/api-chat-route-runner-split.md`
 
-- [ ] **步骤 1：检查行数**
+- [x] **步骤 1：检查行数**
 
 运行：
 
@@ -1248,9 +1248,10 @@ git commit -m "refactor(普通API): 接入聊天路由执行器"
 wc -l api/routes.py api/chat_route_runner.py tests/test_api_chat_route_runner_split.py
 ```
 
-预期：`api/routes.py` 显著低于 1005 行。若仍高于 800 行，优先压缩本阶段新增 wrapper 排版和删除未使用 import；不要做无关重构。
+结果：接入后 `api/routes.py` 为 855 行，继续压缩薄 wrapper、删除未使用 import
+和未使用常量后降至 783 行，低于 800 行。
 
-- [ ] **步骤 2：静态检查**
+- [x] **步骤 2：静态检查**
 
 运行：
 
@@ -1259,9 +1260,10 @@ python -m compileall api/routes.py api/chat_route_runner.py -q
 git diff --check
 ```
 
-预期：退出码 0，`git diff --check` 无输出。
+结果：`python -m compileall api/routes.py api/chat_route_runner.py -q` 退出码 0；
+`git diff --check` 无输出。
 
-- [ ] **步骤 3：async 策略核对**
+- [x] **步骤 3：async 策略核对**
 
 运行：
 
@@ -1269,7 +1271,8 @@ git diff --check
 rg -n "asyncio\\.run|run_awaitable_sync" api/routes.py api/chat_route_runner.py tests/test_api_chat_route_runner_split.py || true
 ```
 
-预期：生产代码无命中；测试文件只允许命中禁止断言字符串。
+结果：生产代码无命中；仅 `tests/test_api_chat_route_runner_split.py` 命中新测试的
+禁止断言字符串。
 
 - [ ] **步骤 4：Prompt Runtime 核查**
 
@@ -1282,7 +1285,7 @@ rg -n "enriched_query|<user_input>|bridge_meta|history_header|history_messages|r
 
 预期：本阶段仅移动 runner 编排，不改变 Prompt Runtime 字段、模板标记或变量语义。若发现字段变更，必须同步更新模板或回退字段变更。
 
-- [ ] **步骤 5：运行定向和相邻回归**
+- [x] **步骤 5：运行定向和相邻回归**
 
 运行：
 
@@ -1298,9 +1301,13 @@ python -B -m pytest -p no:cacheprovider \
   -v
 ```
 
-预期：全部通过。
+结果：`tests/test_api_chat_route_runner_split.py tests/test_api_chat_helpers_split.py
+tests/test_api_chat_private_buffer_split.py tests/test_api_chat_persistence_split.py
+tests/test_api_chat_request_contract_split.py -v`
+为 `61 passed, 1 warning in 3.31s`。补充主 API 回归：
+`tests/test_api.py -v` 为 `82 passed, 21 warnings in 22.08s`。
 
-- [ ] **步骤 6：运行普通 API split 扫描**
+- [x] **步骤 6：运行普通 API split 扫描**
 
 运行：
 
@@ -1313,7 +1320,7 @@ python -B -m pytest -p no:cacheprovider \
   -v
 ```
 
-预期：全部通过。
+结果：接入阶段已运行，`4 passed, 1 warning in 0.96s`。
 
 - [ ] **步骤 7：运行全量测试**
 

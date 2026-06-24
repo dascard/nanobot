@@ -165,12 +165,8 @@ PRIVATE_BUFFER_FOLLOWER_TIMEOUT_SECONDS = 900.0
 # Prompt budget caps to avoid hidden context blow-up.
 MAX_QUERY_CHARS = 2000
 MAX_PERSONA_CHARS = 1600
-MAX_MEMORY_WINDOW_MINUTES = 30
 MAX_MEMORY_PER_MSG_CHARS = 300
 MAX_MEMORY_TOTAL_CHARS = 4000
-MAX_TIMING_PENDING_MESSAGES = 5
-MAX_TIMING_MESSAGE_CHARS = 200
-MAX_TIMING_CONTEXT_CHARS = 1200
 
 # --- Legacy Memory (for evolution endpoints) ---
 memory = None
@@ -185,30 +181,20 @@ def init_legacy_memory():
 from core.context_builder import (
     sanitize_prompt_text as _sanitize_prompt_text,
     estimate_tokens as _estimate_tokens,
-    relative_time_label as _relative_time_label,
     build_chat_context as _build_chat_context,
     build_session_memory as _build_session_memory,
-    format_group_planner_message as _format_group_planner_message,
-    MAX_GROUP_CONTEXT_ROWS,
-    MAX_PRIVATE_CONTEXT_ROWS,
 )
 
 # 旧函数已移至 core/context_builder.py，此处仅保留向后兼容 re-export
 
 
 def _format_persona_for_prompt(persona_data: dict, max_chars: int = MAX_PERSONA_CHARS) -> str:
-    return chat_persona_context.format_persona_for_prompt(
-        persona_data,
-        max_chars=max_chars,
-    )
+    return chat_persona_context.format_persona_for_prompt(persona_data, max_chars=max_chars)
 
 
 def _resolve_chat_persona_snapshot(db: Session, user_id: str) -> chat_persona_lookup.ChatPersonaSnapshot:
     return chat_persona_lookup.resolve_chat_persona_snapshot(
-        db,
-        user_id,
-        persona_model=Persona,
-        format_persona=_format_persona_for_prompt,
+        db, user_id, persona_model=Persona, format_persona=_format_persona_for_prompt
     )
 
 
@@ -225,8 +211,7 @@ def _clone_chat_request(req: ChatProxyRequest, **updates) -> ChatProxyRequest:
 
 def _private_buffer_config() -> chat_private_buffer.PrivateBufferConfig:
     return chat_private_buffer.PrivateBufferConfig(
-        max_messages=MAX_BUFFERED_MESSAGES,
-        window_seconds=PRIVATE_BUFFER_WINDOW_SECONDS,
+        max_messages=MAX_BUFFERED_MESSAGES, window_seconds=PRIVATE_BUFFER_WINDOW_SECONDS,
         window_with_files_seconds=PRIVATE_BUFFER_WINDOW_WITH_FILES_SECONDS,
         follower_timeout_seconds=PRIVATE_BUFFER_FOLLOWER_TIMEOUT_SECONDS,
     )
@@ -248,15 +233,9 @@ def _schedule_image_precache(
     source_name_prefix: str,
 ) -> None:
     return chat_media_precache.schedule_image_precache(
-        background_tasks,
-        files,
-        source_type=source_type,
-        source_name_prefix=source_name_prefix,
-        normalize_files=_normalize_files,
+        background_tasks, files, source_type=source_type,
+        source_name_prefix=source_name_prefix, normalize_files=_normalize_files,
     )
-
-
-from core.settings_service import settings
 
 
 def _get_group_talk_value(session_id: str) -> float:
@@ -273,12 +252,7 @@ def _get_group_talk_value(session_id: str) -> float:
 def _check_user_blocked(db, user_id: str, target_type: str = "private", group_id: str = "") -> bool:
     """检查用户是否被屏蔽——命中规则时返回 True。"""
     try:
-        return user_block_rules.is_user_blocked(
-            db,
-            user_id,
-            target_type=target_type,
-            group_id=group_id,
-        )
+        return user_block_rules.is_user_blocked(db, user_id, target_type=target_type, group_id=group_id)
     except Exception as e:
         logger.warning("[BlockRule] check failed user=%s group=%s: %s", user_id, group_id, e)
     return False
@@ -289,18 +263,11 @@ def _merge_buffered_files(existing: list[str], incoming: Optional[List[str]]) ->
 
 
 def _private_buffer_window_seconds(files: Optional[List[str]]) -> float:
-    return chat_private_buffer.private_buffer_window_seconds(
-        _normalize_files(files),
-        _private_buffer_config(),
-    )
+    return chat_private_buffer.private_buffer_window_seconds(_normalize_files(files), _private_buffer_config())
 
 
 async def _wait_private_buffer_deadline(user_id: str) -> bool:
-    return await _private_buffer_store.wait_until_deadline(
-        user_id,
-        now=_time.time,
-        sleep=asyncio.sleep,
-    )
+    return await _private_buffer_store.wait_until_deadline(user_id, now=_time.time, sleep=asyncio.sleep)
 
 
 def _build_guardrail_input(query: str, files: Optional[List[str]]) -> str:
@@ -308,23 +275,11 @@ def _build_guardrail_input(query: str, files: Optional[List[str]]) -> str:
 
 
 def _detect_guardrail(guardrail, message: str, *, allow_passthrough: bool = False) -> dict:
-    return chat_guardrail_facade.detect_guardrail(
-        guardrail,
-        message,
-        allow_passthrough=allow_passthrough,
-    )
+    return chat_guardrail_facade.detect_guardrail(guardrail, message, allow_passthrough=allow_passthrough)
 
 
-def _detect_guardrail_for_pre_bridge(
-    guardrail: Any,
-    message: str,
-    allow_passthrough: bool,
-) -> dict[str, Any]:
-    return _detect_guardrail(
-        guardrail,
-        message,
-        allow_passthrough=allow_passthrough,
-    )
+def _detect_guardrail_for_pre_bridge(guardrail: Any, message: str, allow_passthrough: bool) -> dict[str, Any]:
+    return _detect_guardrail(guardrail, message, allow_passthrough=allow_passthrough)
 
 
 def _build_multimodal_user_input_text(query: str, files: Optional[List[str]], *, max_chars: int = 0) -> str:
@@ -372,34 +327,16 @@ def _split_chat_answer_chunks(answer: str) -> list[str]:
 
 def _chat_response_payload(
     req: ChatProxyRequest,
-    *,
-    status: str,
-    answer: str = "",
-    reply_meta: dict | None = None,
-    platform: str = "",
-    chat_type: str = "",
-    unprocessed_logs: int | None = None,
-    reason: str = "",
-    source: str = "",
-    intent: str = "",
-    guardrail_status: str | None = None,
-    include_answer_chunks: bool = False,
-    extra_meta: dict | None = None,
+    *, status: str, answer: str = "", reply_meta: dict | None = None, platform: str = "",
+    chat_type: str = "", unprocessed_logs: int | None = None, reason: str = "",
+    source: str = "", intent: str = "", guardrail_status: str | None = None,
+    include_answer_chunks: bool = False, extra_meta: dict | None = None,
 ) -> dict[str, Any]:
     return chat_response_contract.chat_response_payload(
-        req,
-        status=status,
-        answer=answer,
-        reply_meta=reply_meta,
-        platform=platform,
-        chat_type=chat_type,
-        unprocessed_logs=unprocessed_logs,
-        reason=reason,
-        source=source,
-        intent=intent,
-        guardrail_status=guardrail_status,
-        include_answer_chunks=include_answer_chunks,
-        extra_meta=extra_meta,
+        req, status=status, answer=answer, reply_meta=reply_meta, platform=platform,
+        chat_type=chat_type, unprocessed_logs=unprocessed_logs, reason=reason,
+        source=source, intent=intent, guardrail_status=guardrail_status,
+        include_answer_chunks=include_answer_chunks, extra_meta=extra_meta,
     )
 
 
@@ -419,17 +356,8 @@ def _is_guardrail_superuser(user_id: str) -> bool:
     return bool(admin_user_id) and str(user_id or "").strip() == admin_user_id
 
 
-async def _finalize_private_buffer(
-    user_id: str,
-    answer: str | None = None,
-    *,
-    clear_window: bool = True,
-) -> None:
-    await _private_buffer_store.finalize(
-        user_id,
-        answer,
-        clear_window=clear_window,
-    )
+async def _finalize_private_buffer(user_id: str, answer: str | None = None, *, clear_window: bool = True) -> None:
+    await _private_buffer_store.finalize(user_id, answer, clear_window=clear_window)
 
 
 def _private_prompt_audit_failure_meta() -> dict:
