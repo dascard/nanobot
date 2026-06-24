@@ -5,6 +5,11 @@ from datetime import datetime
 import pytest
 
 
+def _local_now() -> datetime:
+    # 群体记忆窗口查询和 DB fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 @pytest.mark.asyncio
 async def test_extract_group_memories_reuses_group_analysis_pipeline(db_session, monkeypatch):
     from app.group_memory.extraction_service import extract_group_memories
@@ -24,7 +29,7 @@ async def test_extract_group_memories_reuses_group_analysis_pipeline(db_session,
             sender_name=f"user-{idx}",
             content=text,
             message_id=f"m-{idx}",
-            created_at=datetime.now(),
+            created_at=_local_now(),
             processed=1,
         ))
     db_session.commit()

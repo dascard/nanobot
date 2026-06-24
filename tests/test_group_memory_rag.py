@@ -1,6 +1,11 @@
 from datetime import datetime, timedelta
 
 
+def _local_now() -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 class FixedGroupReranker:
     def __init__(self, scores):
         self.scores = scores
@@ -35,7 +40,7 @@ def _memory(db, **kwargs):
         "decay_score": 1.0,
         "status": "active",
         "inject_policy": "auto",
-        "last_seen": datetime.now(),
+        "last_seen": _local_now(),
     }
     defaults.update(kwargs)
     row = GroupMemory(**defaults)
@@ -46,6 +51,7 @@ def _memory(db, **kwargs):
 def test_group_memory_does_not_apply_top100_before_relevance(db_session):
     from app.group_memory.retrieval_service import GroupMemoryRetrievalService
 
+    now = _local_now()
     for idx in range(120):
         _memory(
             db_session,
@@ -58,7 +64,7 @@ def test_group_memory_does_not_apply_top100_before_relevance(db_session):
         content="老记忆: 本地模型部署时要先检查量化参数和显存",
         content_hash="gm-old-relevant",
         confidence=0.60,
-        last_seen=datetime.now() - timedelta(days=120),
+        last_seen=now - timedelta(days=120),
     )
     db_session.commit()
 
@@ -75,19 +81,20 @@ def test_group_memory_does_not_apply_top100_before_relevance(db_session):
 def test_old_but_relevant_memory_can_be_selected(db_session):
     from app.group_memory.retrieval_service import GroupMemoryRetrievalService
 
+    now = _local_now()
     old = _memory(
         db_session,
         content="老项目记忆: RAG reranker 服务部署在独立进程",
         content_hash="gm-old-rag",
         confidence=0.66,
-        last_seen=datetime.now() - timedelta(days=180),
+        last_seen=now - timedelta(days=180),
     )
     _memory(
         db_session,
         content="新近闲聊: 大家讨论晚饭吃什么",
         content_hash="gm-new-food",
         confidence=0.99,
-        last_seen=datetime.now(),
+        last_seen=now,
     )
     db_session.commit()
 

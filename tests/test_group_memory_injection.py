@@ -1,6 +1,11 @@
 from datetime import datetime, timedelta
 
 
+def _local_now() -> datetime:
+    # SQLite ORM DateTime fixture 保持 naive 本地墙钟时间语义。
+    return datetime.now()  # noqa: DTZ005
+
+
 def test_group_memory_injection_uses_stream_config_for_group_id(db_session):
     from app.group_memory.injection_service import GroupMemoryInjectionService
     from core.database import ChatStreamConfig, GroupMemory
@@ -20,7 +25,7 @@ def test_group_memory_injection_uses_stream_config_for_group_id(db_session):
         decay_score=1.0,
         status="active",
         source="manual_group_memory_extract",
-        last_seen=datetime.now(),
+        last_seen=_local_now(),
     ))
     db_session.commit()
 
@@ -58,7 +63,7 @@ def test_group_memory_record_injected_updates_stats_explicitly(db_session):
         decay_score=1.0,
         status="active",
         inject_policy="auto",
-        last_seen=datetime.now(),
+        last_seen=_local_now(),
     ))
     db_session.commit()
 
@@ -93,7 +98,7 @@ def test_group_memory_injection_preview_mode_reports_without_context(db_session)
         evidence_log_ids_json="[3, 4, 5]",
         decay_score=1.0,
         status="active",
-        last_seen=datetime.now(),
+        last_seen=_local_now(),
     ))
     db_session.commit()
 
@@ -125,7 +130,7 @@ def test_group_memory_retrieval_skips_manual_policy_and_low_relevance(db_session
         decay_score=1.0,
         status="active",
         inject_policy="auto",
-        last_seen=datetime.now(),
+        last_seen=_local_now(),
     ))
     db_session.add(GroupMemory(
         group_id="group_1097666427",
@@ -138,7 +143,7 @@ def test_group_memory_retrieval_skips_manual_policy_and_low_relevance(db_session
         decay_score=1.0,
         status="active",
         inject_policy="manual_only",
-        last_seen=datetime.now(),
+        last_seen=_local_now(),
     ))
     db_session.add(GroupMemory(
         group_id="group_1097666427",
@@ -151,7 +156,7 @@ def test_group_memory_retrieval_skips_manual_policy_and_low_relevance(db_session
         decay_score=1.0,
         status="active",
         inject_policy="auto",
-        last_seen=datetime.now(),
+        last_seen=_local_now(),
     ))
     db_session.commit()
 
@@ -190,7 +195,7 @@ def test_group_memory_retrieval_budget_includes_rendering_overhead(db_session):
             decay_score=1.0,
             status="active",
             inject_policy="auto",
-            last_seen=datetime.now(),
+            last_seen=_local_now(),
         ))
     db_session.commit()
 
@@ -211,7 +216,7 @@ def test_group_memory_overview_recent_injected_ids_sort_by_injected_at(db_sessio
     from app.group_memory.extraction_service import build_group_memory_overview
     from core.database import GroupMemory
 
-    now = datetime.now()
+    now = _local_now()
     db_session.add(GroupMemory(
         group_id="group_1097666427",
         memory_type="topic",
