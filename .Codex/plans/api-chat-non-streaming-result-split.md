@@ -75,7 +75,7 @@
 - 修改：`tests/test_api_sticker_media_routes_split.py`
 - 修改：`.Codex/plans/api-chat-non-streaming-result-split.md`
 
-- [ ] **步骤 1：创建非流式结果 split 测试文件**
+- [x] **步骤 1：创建非流式结果 split 测试文件**
 
 创建 `tests/test_api_chat_non_streaming_result_split.py`，写入：
 
@@ -114,7 +114,7 @@ def _request(user_id: str = "u-non-stream", session_id: str = "private_u-non-str
     )
 ```
 
-- [ ] **步骤 2：新增 callback fake**
+- [x] **步骤 2：新增 callback fake**
 
 在同一文件追加：
 
@@ -171,7 +171,7 @@ def _callbacks(
     )
 ```
 
-- [ ] **步骤 3：新增 context helper**
+- [x] **步骤 3：新增 context helper**
 
 在同一文件追加：
 
@@ -209,7 +209,7 @@ def _context(
     )
 ```
 
-- [ ] **步骤 4：新增源码约束红灯**
+- [x] **步骤 4：新增源码约束红灯**
 
 在同一文件追加：
 
@@ -235,7 +235,7 @@ def test_chat_non_streaming_result_module_does_not_import_parent_routes_or_runti
     assert "run_awaitable_sync" not in source
 ```
 
-- [ ] **步骤 5：新增正常成功路径红灯**
+- [x] **步骤 5：新增正常成功路径红灯**
 
 在同一文件追加：
 
@@ -276,7 +276,7 @@ async def test_finalize_non_streaming_success_persists_raw_answer_and_returns_tr
     assert result.prompt_audit_failed is False
 ```
 
-- [ ] **步骤 6：新增 Prompt V2 audit failure 红灯**
+- [x] **步骤 6：新增 Prompt V2 audit failure 红灯**
 
 在同一文件追加：
 
@@ -320,7 +320,7 @@ async def test_finalize_non_streaming_prompt_audit_failure_persists_placeholder_
     assert result.prompt_audit_failed is True
 ```
 
-- [ ] **步骤 7：新增 transport expand 失败降级红灯**
+- [x] **步骤 7：新增 transport expand 失败降级红灯**
 
 在同一文件追加：
 
@@ -342,7 +342,7 @@ async def test_finalize_non_streaming_keeps_raw_answer_when_transport_expand_fai
     assert result.payload["answer"] == "图片 [generated:image]"
 ```
 
-- [ ] **步骤 8：新增父模块接入红灯**
+- [x] **步骤 8：新增父模块接入红灯**
 
 在同一文件追加：
 
@@ -360,7 +360,7 @@ def test_parent_non_streaming_chat_delegates_result_finalize_and_keeps_http_boun
     assert "SAFE_STREAM_ERROR_MESSAGE" in source
 ```
 
-- [ ] **步骤 9：更新 split module 扫描清单**
+- [x] **步骤 9：更新 split module 扫描清单**
 
 在以下文件的 `test_chat_split_modules_do_not_import_parent_routes_or_sync_awaitable()` 路径列表中追加：
 
@@ -375,7 +375,7 @@ def test_parent_non_streaming_chat_delegates_result_finalize_and_keeps_http_boun
 - `tests/test_api_history_log_routes_split.py`
 - `tests/test_api_sticker_media_routes_split.py`
 
-- [ ] **步骤 10：运行红灯测试**
+- [x] **步骤 10：运行红灯测试**
 
 运行：
 
@@ -390,9 +390,9 @@ tests/test_api_sticker_media_routes_split.py::test_chat_split_modules_do_not_imp
 -v
 ```
 
-预期：FAIL，失败原因是 `api/chat_non_streaming_result.py` 不存在或 `api.routes` 尚未接入 `chat_non_streaming_result`。
+结果：FAIL，`9 failed, 1 warning in 6.80s`。失败原因符合预期：`api/chat_non_streaming_result.py` 不存在、`api.chat_non_streaming_result` 无法导入、`api.routes` 尚未接入 `chat_non_streaming_result`。
 
-- [ ] **步骤 11：提交红灯测试契约**
+- [x] **步骤 11：提交红灯测试契约**
 
 运行：
 
