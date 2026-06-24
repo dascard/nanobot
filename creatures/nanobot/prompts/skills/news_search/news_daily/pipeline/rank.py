@@ -2,7 +2,7 @@
 
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from ..schema import NewsItem
 
 logger = logging.getLogger("nanobot.news_daily.rank")

@@ -11,7 +11,6 @@ chat 和 push 的输出全部保存到 tests/chat_resp/
 
 import json
 import os
-import sys
 import threading
 import time
 import urllib.error

@@ -583,7 +583,6 @@ def test_knowledge_query_tool_schema_declares_citation_boundary():
 
 
 def test_knowledge_query_tool_blocks_when_reranker_required_unavailable(db_session, monkeypatch):
-    import asyncio
 
     from core import database
     from core.semantic.provider_factory import get_reranker_provider

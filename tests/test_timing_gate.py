@@ -3,7 +3,6 @@
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 def _mock_qwen_response(content: str) -> MagicMock:

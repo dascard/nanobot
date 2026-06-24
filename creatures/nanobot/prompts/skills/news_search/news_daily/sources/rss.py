@@ -3,8 +3,7 @@
 import logging
 import re
 import os as _os
-from email.utils import parsedate_to_datetime
-from urllib.request import urlopen, build_opener, ProxyHandler, Request
+from urllib.request import build_opener, ProxyHandler, Request
 from ..schema import NewsItem
 
 logger = logging.getLogger("nanobot.news_daily.rss")
@@ -102,7 +101,7 @@ class RSSProvider:
         if not pub_date:
             return False
         try:
-            from datetime import datetime, timedelta
+            from datetime import datetime
             dt = datetime.strptime(pub_date, "%Y-%m-%d")
             return (datetime.now() - dt).days <= 1
         except Exception:

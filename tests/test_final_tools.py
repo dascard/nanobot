@@ -1,4 +1,3 @@
-import asyncio
 from tests.async_helpers import run_async
 from types import SimpleNamespace
 from unittest.mock import AsyncMock

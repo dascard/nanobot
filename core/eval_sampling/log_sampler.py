@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-from typing import Any
 
 # (regex, suite, description_prefix)
 ERROR_PATTERNS: list[tuple[str, str, str]] = [

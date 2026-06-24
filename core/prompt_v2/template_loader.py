@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from core.prompt_v2.template_registry import (
-    default_template_dir,
+    default_template_dir as default_template_dir,
     first_existing_template_path,
     resolve_template_key,
-    runtime_template_dir,
+    runtime_template_dir as runtime_template_dir,
     template_path_for,
 )
 

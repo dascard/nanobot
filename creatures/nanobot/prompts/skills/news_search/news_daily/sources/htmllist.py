@@ -1,8 +1,7 @@
 """HtmlListProvider——从无 RSS 的官方博客/新闻页提取标题列表。"""
 
 import logging
-import re
-from urllib.request import urlopen, build_opener, ProxyHandler, Request
+from urllib.request import build_opener, ProxyHandler, Request
 import os as _os
 from ..schema import NewsItem
 

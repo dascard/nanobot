@@ -2,7 +2,6 @@
 
 import asyncio
 from collections import Counter, defaultdict
-import json
 import logging
 import re
 

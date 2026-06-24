@@ -15,7 +15,6 @@ import json
 import tempfile
 import textwrap
 import logging
-from typing import Optional
 
 try:
     import pandas as pd

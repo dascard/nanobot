@@ -1,6 +1,5 @@
 """热重载配置服务——DB覆盖>环境变量>默认值, TTL缓存+invalidate。"""
 
-import json
 import os
 import time
 from threading import RLock

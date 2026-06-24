@@ -99,7 +99,6 @@ def _resolve_classifier_route(route_key: str) -> dict:
     子路由（private_decision / classifier_legacy）空配置时继承 timing_gate 的完整配置，
     字段级覆盖（如 private_decision.max_tokens=120）在继承后叠加。
     """
-    from core.settings_service import settings
 
     defaults = {
         "provider": "llama.cpp",
@@ -619,7 +618,7 @@ def build_route_references() -> list[dict]:
 
     用于「路由引用异常」展示——未确认的条目会高亮。
     """
-    from core.route_metadata import route_capability_for, canonical_provider_id, is_deprecated_provider
+    from core.route_metadata import canonical_provider_id, is_deprecated_provider
     from core.database import SessionLocal, SystemSetting
     import json
 

@@ -1,5 +1,4 @@
 import json
-import asyncio
 from datetime import datetime, timedelta
 
 from tests.async_helpers import run_async

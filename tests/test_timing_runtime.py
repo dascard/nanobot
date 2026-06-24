@@ -1,6 +1,5 @@
 """GroupRuntime 状态机测试——不依赖网络/模型。"""
 
-import asyncio
 import time as _time
 
 import pytest

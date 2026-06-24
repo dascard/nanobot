@@ -22,7 +22,6 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
     try:
         # sticker public proxy: 测试 _canonical_row_send_code
         if "content" in inp and inp.get("content", "").startswith("[sticker:"):
-            import re
             from core.sticker_memory import expand_sticker_refs_in_content
             from core.database import StickerMemory, get_db, Base
             from sqlalchemy import create_engine
@@ -143,7 +142,6 @@ def run_sticker_case(case: EvalCase) -> EvalOutput:
         # duplicate canonical — 已在上面分支处理
         else:
             # generic sticker check
-            from core.sticker_memory import _canonical_row_send_code, _public_sticker_image_url
             out.raw["checked"] = True
     finally:
         sp._cache_dir = orig_cache_dir

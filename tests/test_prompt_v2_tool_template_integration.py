@@ -170,7 +170,6 @@ def test_group_analysis_internal_llm_uses_v2_templates(tmp_path, monkeypatch):
     monkeypatch.setattr("clients.new_api_client.NewAPIClient", DummyClient)
     monkeypatch.setattr(analyzer, "_call_llm_with_retry", fake_call)
 
-    import asyncio
 
     result = run_async(
         analyzer.analyze_group(

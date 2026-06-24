@@ -4,10 +4,9 @@ Uses mocks exclusively — no real API calls needed.
 """
 import sys
 import os
-import asyncio
 import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Ensure project root is on path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -310,7 +309,6 @@ class TestSQLiteMemoryDetachedLogs:
 
         with patch.object(memory, '_get_session', return_value=mock_db):
             with patch('config.EVOLUTION_THRESHOLD', 20):
-                from config import EVOLUTION_THRESHOLD
                 logs = memory.get_unprocessed_logs("user1")
 
         assert len(logs) == 25

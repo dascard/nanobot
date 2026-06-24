@@ -1,6 +1,5 @@
 """TimingGate 群聊保守发言策略测试。"""
 
-import json
 from pathlib import Path
 
 

@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from api.admin.common import verify_admin
 from app.session_memory.rolling_summary import (
     archive_active_summaries_for_session,
-    get_active_summary,
     get_best_session_summary,
     maybe_rollup_session_summary,
 )

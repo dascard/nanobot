@@ -6,7 +6,6 @@ import hashlib
 import json
 import re
 from datetime import timedelta
-from typing import Any
 
 
 def _safe_json(raw) -> dict:

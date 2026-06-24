@@ -4,7 +4,6 @@
 """
 import threading
 import logging
-from core.database import SessionLocal
 from core.async_bridge import run_awaitable_sync
 from core.legacy_adapter import SQLiteMemory, UnifiedProvider, NanobotKTController
 from config import (

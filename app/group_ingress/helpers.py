@@ -9,13 +9,13 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from core.context_builder import (
-    build_chat_context,
-    format_group_planner_message,
+    build_chat_context as build_chat_context,
+    format_group_planner_message as format_group_planner_message,
     sanitize_prompt_text,
 )
 from core import user_block_rules
 from core.database import ChatLog, ConversationTurn
-from core.group_runtime.ids import normalize_group_session_id
+from core.group_runtime.ids import normalize_group_session_id as normalize_group_session_id
 from core.settings_service import settings
 from core.sqlite_retry import run_sqlite_locked_retry
 

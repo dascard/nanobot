@@ -3,7 +3,7 @@
 from dataclasses import asdict as _to_dict
 from datetime import datetime
 import re
-from ..schema import NewsItem, NewsDigest, fallback_digest
+from ..schema import NewsItem, fallback_digest
 
 
 CATEGORY_MAP = {

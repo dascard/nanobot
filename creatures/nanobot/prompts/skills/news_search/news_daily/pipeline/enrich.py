@@ -4,7 +4,7 @@ import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from urllib.parse import urlparse
-from urllib.request import urlopen, build_opener, ProxyHandler, Request
+from urllib.request import build_opener, ProxyHandler, Request
 import os as _os
 
 from ..schema import NewsItem

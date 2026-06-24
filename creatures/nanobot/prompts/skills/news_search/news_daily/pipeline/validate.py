@@ -1,6 +1,5 @@
 """Quality Validator——fatal 降级 fallback，warning 记 missing_info。"""
 
-import json
 import logging
 import re
 

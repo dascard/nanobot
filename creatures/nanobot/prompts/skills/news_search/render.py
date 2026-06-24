@@ -1,6 +1,5 @@
 """新闻日报 HTML 模板渲染——LLM 只填 JSON，模板负责视觉。"""
 
-import json
 from datetime import datetime
 
 

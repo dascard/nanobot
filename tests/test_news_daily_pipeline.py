@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 
-import pytest
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -25,7 +24,6 @@ from creatures.nanobot.prompts.skills.news_search.news_daily.pipeline.normalize_
 from creatures.nanobot.prompts.skills.news_search.news_daily.pipeline.freshness import (
     compute_freshness,
     filter_fresh_articles,
-    compute_cluster_freshness,
     can_be_top_story,
 )
 from creatures.nanobot.prompts.skills.news_search.news_daily.pipeline.cluster import (

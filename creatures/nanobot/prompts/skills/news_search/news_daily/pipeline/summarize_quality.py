@@ -3,7 +3,6 @@
 import json
 import logging
 import re
-from datetime import datetime
 
 logger = logging.getLogger("nanobot.news_daily.quality")
 

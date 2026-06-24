@@ -2,8 +2,6 @@
 针对代码审计修复的验证测试。
 覆盖 sandbox 安全性、tool dispatch、circuit breaker 等核心修复。
 """
-import pytest
-import json
 from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path

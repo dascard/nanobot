@@ -1,6 +1,5 @@
 """memory_candidates 映射测试。"""
 import pytest
-from core.database import init_db
 from creatures.nanobot.prompts.skills.group_analysis.memory_candidates import (
     extract_and_persist,
 )

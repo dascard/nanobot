@@ -6,7 +6,6 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from evals.baseline import build_baseline_diff, evaluate_gate, load_baseline_report
 from evals.schema import EvalCase, EvalResult, SuiteReport

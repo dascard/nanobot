@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
-from core.database import ChatLog, Persona, SystemPrompt
+from core.database import ChatLog
 from core.evolution import evolution_task, model_scout_task
 
 def test_evolution_task_not_triggered(db_session):

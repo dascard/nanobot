@@ -18,7 +18,6 @@ from config import (
     LLM_BUDGET_CAP,
     NEW_API_AUTO_MODEL_SYNC,
     NEW_API_MODEL_SYNC_INTERVAL_MINUTES,
-    AUTO_MODEL_ROUTING_MODE,
 )
 from clients.model_registry import (
     ModelFailureTracker,

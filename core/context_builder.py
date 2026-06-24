@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-from core.token_utils import estimate_tokens
+from core.token_utils import estimate_tokens as estimate_tokens
 
 logger = logging.getLogger("nanobot.context_builder")
 

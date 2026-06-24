@@ -1,13 +1,11 @@
-import asyncio
 from tests.async_helpers import run_async
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import pytest
 
 from core.database import LLMApiRequestLog
-from core.tracing import _json_dumps, _redact
+from core.tracing import _json_dumps
 
 
 def test_redact_authorization_header():

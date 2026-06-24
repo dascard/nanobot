@@ -2,7 +2,6 @@
 import logging
 
 import pytest
-from core.database import init_db
 from core.group_memory import upsert, query_active, query_injectable, build_profile, apply_decay
 from core.context_builder import build_group_profile_context, build_group_recent_context
 

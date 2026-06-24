@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 
 from core.async_bridge import run_awaitable_sync
 from core.database import SessionLocal
@@ -91,7 +90,6 @@ async def run_sampling_cycle():
 
 def eval_sampling_scheduler(stop_event):
     """后台采样调度线程——定期扫描日志和 DB。"""
-    import time as _time
     from core.settings_service import settings
 
     logger.info("[EvalSample] scheduler started")

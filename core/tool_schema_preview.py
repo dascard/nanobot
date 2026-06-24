@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-import importlib
+import importlib as importlib
 import json
 import logging
 from typing import Any

@@ -331,7 +331,7 @@ def public_generated_image_url(image_id: str) -> str:
 
     OneBot/NapCat 通过此 URL 拉取图片，不经过 SSE/JSON base64。
     """
-    from urllib.parse import quote, urlencode
+    from urllib.parse import urlencode
 
     base_url = str(os.environ.get("NANOBOT_PUBLIC_BASE_URL") or "").strip().rstrip("/")
     if not base_url:
