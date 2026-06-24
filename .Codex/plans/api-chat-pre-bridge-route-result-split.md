@@ -791,7 +791,7 @@ git add .Codex/plans/api-chat-pre-bridge-route-result-split.md
 git commit -m "docs(计划): 记录前置决策结果验证"
 ```
 
-- [ ] **步骤 5：更新 `docs/todo.md`**
+- [x] **步骤 5：更新 `docs/todo.md`**
 
 在 P3 超大文件拆分记录中追加本阶段结果：
 
@@ -799,7 +799,7 @@ git commit -m "docs(计划): 记录前置决策结果验证"
 - 进展：`api/routes.py` 第二十八刀已拆出 Chat pre-bridge route result 转译到 `api/chat_pre_bridge_route_result.py`；父模块继续保留 HTTP route、DB callback、persona injection、Prompt Runtime payload、Bridge、SSE、response 和落库边界。
 ```
 
-- [ ] **步骤 6：更新 `docs/plan_walkthrough.md`**
+- [x] **步骤 6：更新 `docs/plan_walkthrough.md`**
 
 追加本阶段收口记录，包含：
 
@@ -809,7 +809,7 @@ git commit -m "docs(计划): 记录前置决策结果验证"
 状态：设计、计划、红灯测试、helper 拆分、父模块接入、相邻回归、全量验证和阶段提交均已完成。
 ```
 
-- [ ] **步骤 7：运行最终文档检查**
+- [x] **步骤 7：运行最终文档检查**
 
 运行：
 
@@ -822,7 +822,9 @@ git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-chat-
 
 预期：计划和设计文档没有占位红旗；`git diff --check` 无输出。
 
-- [ ] **步骤 8：提交文档收口**
+实际结果（2026-06-24）：红旗词扫描无输出；`git diff --check -- docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-chat-pre-bridge-route-result-split.md` 无输出。
+
+- [x] **步骤 8：提交文档收口**
 
 ```bash
 git add docs/todo.md docs/plan_walkthrough.md .Codex/plans/api-chat-pre-bridge-route-result-split.md

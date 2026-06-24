@@ -593,6 +593,25 @@
     `4 passed, 1 warning in 1.27s`，相邻回归
     `14 passed, 21 warnings in 3.26s`，静态检查通过，全量回归
     `1782 passed, 6 skipped, 139 warnings in 133.42s (0:02:13)`。
+  - 进展：`api/routes.py` 第二十八刀已拆出 Chat pre-bridge route result 转译到
+    `api/chat_pre_bridge_route_result.py`；父模块继续保留 HTTP route、DB callback、
+    persona injection、Prompt Runtime payload、Bridge、SSE、response envelope 和
+    后续落库边界。新模块只把 `ChatPreBridgeEarlyReturn` /
+    `ChatPreBridgeContinue` 转成 route early response 或 continue context，通过
+    callbacks 复用 `_clone_chat_request()`、`_persist_chat_turn()`、
+    `_chat_response_payload()` 和 `_finalize_private_buffer()` patch point；父模块
+    用闭包把当前 `db` 绑定到持久化 callback。guardrail silent 分支继续使用
+    `persist_req` 持久化 `（数据中转，自动静默）`。本阶段未迁移 history 注入、
+    `PersonaInjectionService`、Prompt Runtime payload、Bridge、SSE、message
+    envelope、push envelope 或 response envelope；新模块不反向导入 `api.routes`、
+    FastAPI、Bridge、Prompt Runtime 或 DB 全局入口，也没有新增 `asyncio.run`、
+    `run_awaitable_sync` 或同步函数包装 awaitable。`api/routes.py` 从 1020 行降至
+    1013 行，`api/chat_pre_bridge_route_result.py` 为 115 行，拆分测试为 311 行。
+    验证结果：红灯 `10 failed, 1 warning in 6.84s`，helper 阶段
+    `5 passed, 1 failed, 1 warning in 6.49s`，父模块接入定向
+    `6 passed, 1 warning in 0.96s`，split 扫描 `4 passed, 1 warning in 1.19s`，
+    相邻回归 `15 passed, 21 warnings in 2.36s`，静态检查通过，全量回归
+    `1788 passed, 6 skipped, 139 warnings in 124.64s (0:02:04)`。
   - 进展：`core/persona_preprocess.py` 第一刀已拆出候选提取 prompt 和日志格式化
     helper 到 `core/persona_candidate_prompt.py`；旧 `core.persona_preprocess`
     导入路径保留同名符号兼容，状态机、embedding 懒加载、DB 写入和 monkeypatch
