@@ -668,7 +668,7 @@
 
 - [ ] **ruff 批量清理** · LOW · S
   F401 未用 import（当前主要是 facade / re-export 兼容项，不能无脑 `ruff --fix`）；旧式 `List/Dict/Optional`→内置泛型；`database.py` naive datetime（单机部署，低优先）。
-  - 进展（2026-06-24）：F821 类型注解引用已清零；F841 未使用局部变量已清零，并补强 `news_daily` 同实体 render guard 测试，修复 top story 未计入 highlight 去重的问题；F541 冗余 f-string 前缀已清零；E401/E712/F402/E741 小类别已清零；F811 重复定义已清零；E701/E702 一行多语句已清零；E402 import 位置已清零。F401 第一批已完成 80 处低风险未用 import 清理，避开 `api/admin_routes.py`、`api/routes.py` 等 facade / re-export 兼容边界；第二批清理测试侧、runtime、news、persona 与 legacy adapter 的非大型 F401，并把拆分后的兼容符号改为显式 re-export；第三批先删除 `api/admin/model_routes.py` 中 6 个函数内真未用导入；第四批删除 `api/routes.py` 中 13 个真未用导入，并把 55 个普通 API 拆分后的旧路径兼容符号显式标记为 re-export。当前 tracked Python Ruff 统计剩余为 F401 ×235，集中在 `api/admin_routes.py` 的 Admin legacy facade。
+  - 进展（2026-06-24）：F821 类型注解引用已清零；F841 未使用局部变量已清零，并补强 `news_daily` 同实体 render guard 测试，修复 top story 未计入 highlight 去重的问题；F541 冗余 f-string 前缀已清零；E401/E712/F402/E741 小类别已清零；F811 重复定义已清零；E701/E702 一行多语句已清零；E402 import 位置已清零。F401 第一批已完成 80 处低风险未用 import 清理，避开 `api/admin_routes.py`、`api/routes.py` 等 facade / re-export 兼容边界；第二批清理测试侧、runtime、news、persona 与 legacy adapter 的非大型 F401，并把拆分后的兼容符号改为显式 re-export；第三批先删除 `api/admin/model_routes.py` 中 6 个函数内真未用导入；第四批删除 `api/routes.py` 中 13 个真未用导入，并把 55 个普通 API 拆分后的旧路径兼容符号显式标记为 re-export；第五批将 `api/admin_routes.py` 中 235 个 Admin legacy facade 兼容导出改为冗余别名 re-export。当前 tracked Python F401 已清零，后续剩余为旧式 typing 泛型与 naive datetime 低优先整理。
 
 ---
 
