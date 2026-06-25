@@ -1,8 +1,8 @@
 """程序生成 NewsDigest——fast 模式不调 LLM。"""
 
 from dataclasses import asdict as _to_dict
-from datetime import datetime
 import re
+from core.time_utils import db_now_naive
 from ..schema import NewsItem, fallback_digest
 
 
@@ -42,7 +42,7 @@ def _fallback_text(item: NewsItem) -> str:
 def _top_story_score(item: NewsItem) -> int:
     text = f"{item.title} {item.summary}"
     score = 0
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = db_now_naive().strftime("%Y-%m-%d")
     if item.published_at == today:
         score += 4
     elif item.published_at:
@@ -65,7 +65,7 @@ def _pick_top_story_index(items: list[NewsItem]) -> int:
 
 
 def build_digest_deterministic(items, query="", mode="fast"):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = db_now_naive().strftime("%Y-%m-%d %H:%M")
     if not items:
         return _to_dict(fallback_digest(query, "未获取到 RSS 资讯", mode))
 

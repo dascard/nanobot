@@ -5,10 +5,12 @@ from __future__ import annotations
 import html
 import re
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
 
 from core.json_utils import json_repair
+from core.time_utils import db_now_naive
 
 
 TRUSTED_NEWS_DOMAINS = {
@@ -65,13 +67,13 @@ def _freshness_score(item: dict[str, Any]) -> int:
     if not raw_date:
         return 0
 
-    dt = None
-    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
+    try:
+        dt = parsedate_to_datetime(raw_date)
+    except Exception:
         try:
-            dt = datetime.strptime(raw_date, fmt)
-            break
+            dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
         except Exception:
-            continue
+            return 0
     if dt is None:
         return 0
 
@@ -685,7 +687,7 @@ def _format_news_html_report(
       <div class="meta-card"><div class="meta-label">深搜</div><div class="meta-value">{'已启用' if deepen else '未启用'}</div></div>
       <div class="meta-card"><div class="meta-label">命中结果</div><div class="meta-value">{len(search_results)}</div></div>
       <div class="meta-card"><div class="meta-label">决策原因</div><div class="meta-value">{_escape_html(decision_reason or '-')}</div></div>
-      <div class="meta-card"><div class="meta-label">时间</div><div class="meta-value">{_escape_html(datetime.now().strftime('%m-%d %H:%M'))}</div></div>
+      <div class="meta-card"><div class="meta-label">时间</div><div class="meta-value">{_escape_html(db_now_naive().strftime('%m-%d %H:%M'))}</div></div>
     </div>
   </section>
   <section class="section">

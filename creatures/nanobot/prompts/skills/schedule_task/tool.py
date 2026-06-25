@@ -115,8 +115,9 @@ class ScheduleTaskTool(BaseTool):
                     )
                     ok = await push_envelope_to_qq(target_type, target_id, envelope)
                     if ok:
-                        from datetime import datetime
-                        t.last_run_at = datetime.now()
+                        from core.time_utils import db_now_naive
+
+                        t.last_run_at = db_now_naive()
                         db.commit()
                         preview = content[:200] + ("..." if len(content) > 200 else "")
                         return ToolResult(

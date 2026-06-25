@@ -3,7 +3,9 @@
 import logging
 import re
 import os as _os
+from datetime import datetime
 from urllib.request import build_opener, ProxyHandler, Request
+from core.time_utils import db_now_naive
 from ..schema import NewsItem
 
 logger = logging.getLogger("nanobot.news_daily.rss")
@@ -103,8 +105,7 @@ class RSSProvider:
         if not pub_date:
             return False
         try:
-            from datetime import datetime
-            dt = datetime.strptime(pub_date, "%Y-%m-%d")
-            return (datetime.now() - dt).days <= 1
+            dt = datetime.fromisoformat(pub_date)
+            return (db_now_naive() - dt).days <= 1
         except Exception:
             return False

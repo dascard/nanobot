@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from urllib.parse import urlparse
 
+from core.time_utils import db_now_naive
+
 logger = logging.getLogger("nanobot.ai_daily.evidence")
 
 # ── 数据结构 ──
@@ -95,8 +97,8 @@ def score_sources(sources: list[dict]) -> list[dict]:
         pub = s.get("published_at") or s.get("date") or ""
         if pub:
             try:
-                dt = datetime.fromisoformat(pub.replace("Z", "+00:00")[:19])
-                days = (datetime.now() - dt.replace(tzinfo=None)).days
+                dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+                days = (db_now_naive() - dt.replace(tzinfo=None)).days
                 freshness = max(0.1, 1.0 - days / 7.0)
             except Exception:
                 pass

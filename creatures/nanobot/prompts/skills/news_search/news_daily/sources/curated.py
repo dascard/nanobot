@@ -2,6 +2,7 @@
 
 import logging
 import re
+from core.time_utils import db_now_naive
 from .rss import RSSProvider
 from ..schema import NewsItem
 
@@ -27,8 +28,8 @@ class JuyaProvider(RSSProvider):
 
     def fetch(self, limit: int = 10) -> list[NewsItem]:
         """从 Juya RSS 抓取并按 #N 拆分为独立事件——只取详情区。"""
-        from datetime import datetime, timedelta
-        cutoff = (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d")
+        from datetime import timedelta
+        cutoff = (db_now_naive() - timedelta(days=3)).strftime("%Y-%m-%d")
 
         raw_items = super().fetch(limit=min(limit * 3, 30))
         result = []

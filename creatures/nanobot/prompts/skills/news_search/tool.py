@@ -9,10 +9,10 @@ import logging
 import re
 import json
 import html
-from datetime import datetime
 from typing import Any
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from core.async_bridge import run_awaitable_sync
+from core.time_utils import db_now_naive
 from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
 from . import runtime_cache as _runtime_cache
 from . import search_backend as _search_backend
@@ -311,7 +311,7 @@ def _coerce_date(year: int | str, month: int | str, day: int | str) -> str | Non
 
 
 def _extract_date(query: str) -> str | None:
-    return _runtime_cache._extract_date(query, now=datetime.now())
+    return _runtime_cache._extract_date(query, now=db_now_naive())
 
 
 def _is_daily_digest_query(query: str) -> bool:
@@ -392,7 +392,7 @@ def _news_search_cache_key(
         mode=mode,
         user_id=user_id,
         session_id=session_id,
-        now=datetime.now(),
+        now=db_now_naive(),
         date_extractor=_extract_date,
         daily_digest_detector=_is_daily_digest_query,
     )
@@ -552,7 +552,7 @@ def search_and_extract_news_v2(
 
     # 5. Validate
     digest = safe_digest(digest, cards)
-    digest["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    digest["generated_at"] = db_now_naive().strftime("%Y-%m-%d %H:%M")
     digest["mode"] = mode
 
     # 6. 渲染 HTML

@@ -12,6 +12,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
+from core.time_utils import db_now_naive
 from duckduckgo_search import DDGS
 import trafilatura
 
@@ -68,7 +69,7 @@ RSS_SOURCES = [
 
 
 def _extract_date(query: str) -> str | None:
-    return runtime_cache._extract_date(query, now=datetime.now())
+    return runtime_cache._extract_date(query, now=db_now_naive())
 
 
 def _is_daily_digest_query(query: str) -> bool:
@@ -140,12 +141,13 @@ def _is_recent_enough(raw_date: str, hours: int = 72) -> bool:
     if not raw_date:
         return True
     dt = None
-    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+    try:
+        dt = parsedate_to_datetime(raw_date)
+    except Exception:
         try:
-            dt = datetime.strptime(raw_date, fmt)
-            break
+            dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
         except Exception:
-            continue
+            return True
     if dt is None:
         return True
     if dt.tzinfo is None:
@@ -319,7 +321,7 @@ def _build_query_variants(query: str) -> list[str]:
     variants.append(f"{q} 开源 OR 免费 OR 低价 模型")
     variants.append(f"{q} site:reuters.com OR site:techcrunch.com OR site:theverge.com")
     if _is_news_query(q):
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = db_now_naive().strftime("%Y-%m-%d")
         variants.append(f"{today} {q}")
         variants.append(f"{q} today breaking")
         variants.append(f"{q} site:openai.com OR site:anthropic.com OR site:huggingface.co")

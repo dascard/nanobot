@@ -238,13 +238,16 @@ def test_web_search_news_query_prefers_ddgs_news_results(monkeypatch):
 
 
 def test_extract_date_accepts_chinese_date_and_today(monkeypatch):
-    class FixedDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            base = cls(2026, 5, 1)
-            return base.replace(tzinfo=tz) if tz else base
-
-    monkeypatch.setattr(news_tool, "datetime", FixedDateTime)
+    monkeypatch.setattr(
+        news_tool,
+        "db_now_naive",
+        lambda: datetime(2026, 5, 1, tzinfo=UTC).astimezone().replace(tzinfo=None),
+    )
+    monkeypatch.setattr(
+        news_tool._runtime_cache,
+        "db_now_naive",
+        lambda: datetime(2026, 5, 1, tzinfo=UTC).astimezone().replace(tzinfo=None),
+    )
 
     assert news_tool._extract_date("2026年5月1日 人工智能 新闻") == "2026-05-01"
     assert news_tool._extract_date("今天 AI 日报") == "2026-05-01"

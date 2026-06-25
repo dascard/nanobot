@@ -10,6 +10,8 @@ from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
+from core.time_utils import db_now_naive
+
 
 NEWS_SEARCH_CACHE_TTL_SECONDS = int(os.environ.get("NEWS_SEARCH_CACHE_TTL_SECONDS", "300"))
 NEWS_SEARCH_CACHE_MAX_ENTRIES = 64
@@ -39,7 +41,7 @@ def _coerce_date(year: int | str, month: int | str, day: int | str) -> str | Non
 
 def _extract_date(query: str, *, now: datetime | None = None) -> str | None:
     text = query or ""
-    current = now or datetime.now()
+    current = now or db_now_naive()
 
     match = re.search(r"\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b", text)
     if match:
@@ -76,7 +78,7 @@ def _news_search_cache_key(
     daily_digest_detector: Callable[[str], bool] | None = None,
 ) -> tuple[Any, ...]:
     del user_id, session_id
-    current = now or datetime.now()
+    current = now or db_now_naive()
     q = re.sub(r"\s+", " ", (query or "").lower()).strip()
     is_daily_digest = daily_digest_detector or _is_daily_digest_query
     if date_extractor is None:

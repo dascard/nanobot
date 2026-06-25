@@ -25,6 +25,7 @@ from app.memory_digest.retrieval_service import safe_digest_meta, digest_status
 from config import DAILY_DIGEST_HOUR
 from core.context_builder import sanitize_prompt_text
 from core.database import ChatLog, MemoryDigest, ScheduledTask, SessionLocal
+from core.time_utils import db_now_naive
 
 logger = logging.getLogger("nanobot.daily_digest")
 
@@ -78,7 +79,7 @@ def _next_run_delay_seconds(now: datetime, run_hour: int) -> int:
 
 
 def _build_scheduled_task_query(task: ScheduledTask, now: datetime | None = None) -> str:
-    now = now or datetime.now()
+    now = now or db_now_naive()
     time_label = now.strftime("%Y-%m-%d %H:%M:%S")
     prompt = sanitize_prompt_text(task.prompt_template or "", max_chars=2000).strip()
     task_name = sanitize_prompt_text(task.name or "未命名任务", max_chars=120)
@@ -367,7 +368,7 @@ def _collect_daily_digest_logs_by_session(
     user_id: str | None,
     session_id: str | None,
 ) -> dict[str, list[ChatLog]]:
-    start = datetime.strptime(target_date, "%Y-%m-%d")
+    start = datetime.fromisoformat(target_date)
     end = start + timedelta(days=1)
     base_query = db.query(ChatLog).filter(ChatLog.created_at.isnot(None))
     base_query = base_query.filter(ChatLog.created_at >= start, ChatLog.created_at < end)
@@ -595,7 +596,7 @@ async def generate_daily_digest_for_date_async(
 
 def run_daily_digest_once() -> int:
     # Summarize yesterday by default so the day is complete.
-    yesterday = _to_day(datetime.now() - timedelta(days=1))
+    yesterday = _to_day(db_now_naive() - timedelta(days=1))
     return generate_daily_digest_for_date(yesterday)
 
 
@@ -607,7 +608,7 @@ def daily_digest_scheduler(stop_event: threading.Event) -> None:
     run_daily_digest_once()
 
     while not stop_event.is_set():
-        now = datetime.now()
+        now = db_now_naive()
         delay = _next_run_delay_seconds(now, DAILY_DIGEST_HOUR)
 
         # Sleep in short chunks so shutdown remains responsive.
@@ -721,7 +722,7 @@ async def run_scheduled_tasks() -> int:
     db = SessionLocal()
     executed = 0
     try:
-        now = datetime.now()
+        now = db_now_naive()
         tasks = db.query(ScheduledTask).filter(ScheduledTask.enabled == 1).all()
 
         for task in tasks:

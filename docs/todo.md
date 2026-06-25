@@ -1,6 +1,6 @@
 # Nanobot Server — 待办计划
 
-> 本文件分两部分：**一、缺陷修复清单**（来自 2026-06-16 全仓库 Python 代码审查 + 逐条对抗式核验）；**二、架构演进路线**（2026-06-16 读真实代码核实重写，后续状态已更新至 2026-06-24，每项含现状/痛点/目标/关联/粗略路径）。
+> 本文件分两部分：**一、缺陷修复清单**（来自 2026-06-16 全仓库 Python 代码审查 + 逐条对抗式核验）；**二、架构演进路线**（2026-06-16 读真实代码核实重写，后续状态已更新至 2026-06-25，每项含现状/痛点/目标/关联/粗略路径）。
 > 缺陷条目均经「读真实代码 + 引用行号」核验，已剔除 11 项误报（见附录）。严重度 = 真实可利用性，非原始审查给分。
 
 ---
@@ -666,10 +666,10 @@
 - [x] **静默吞异常补日志（best-effort 路径）** · LOW · S 批量
   已在 `core/prompts/manager.py` 的 trace fallback、`core/context_legacy.py` 的 deprecated 群画像 fallback、`api/admin/system_routes.py` 的 git 探测 fallback、`app/group_ingress/helpers.py` 的 `safe_meta()` / `get_group_talk_value()` fallback，以及 `app/memory_digest/builder.py` 的 `_safe_meta()` fallback 补 `logger.debug`；日志只记录定位信息和异常摘要，不记录 prompt 正文、原始 `meta_json`、用户消息或群记忆 evidence。`core/legacy_adapter.py::SQLiteMemory.save_log()` 此前已完成 rollback + `logger.exception` + 回归测试，本次仅复验旧行为，未改业务语义。
 
-- [ ] **ruff 批量清理** · LOW · S
-  F401 未用 import（当前主要是 facade / re-export 兼容项，不能无脑 `ruff --fix`）；旧式 `List/Dict/Optional`→内置泛型；`database.py` naive datetime（单机部署，低优先）。
+- [x] **ruff 批量清理** · LOW · S
+  已完成：tracked Python 当前通过 Ruff 默认检查；F401 facade / re-export 兼容项、旧式 typing 泛型、小类别告警和 naive datetime / DTZ 均已按批次收口。DB/ORM 仍保持 SQLite naive 本地时间语义，后续若要迁移到统一 aware 时间应另立设计，不再作为本项剩余。
   - 进展（2026-06-24）：F821 类型注解引用已清零；F841 未使用局部变量已清零，并补强 `news_daily` 同实体 render guard 测试，修复 top story 未计入 highlight 去重的问题；F541 冗余 f-string 前缀已清零；E401/E712/F402/E741 小类别已清零；F811 重复定义已清零；E701/E702 一行多语句已清零；E402 import 位置已清零。F401 第一批已完成 80 处低风险未用 import 清理，避开 `api/admin_routes.py`、`api/routes.py` 等 facade / re-export 兼容边界；第二批清理测试侧、runtime、news、persona 与 legacy adapter 的非大型 F401，并把拆分后的兼容符号改为显式 re-export；第三批先删除 `api/admin/model_routes.py` 中 6 个函数内真未用导入；第四批删除 `api/routes.py` 中 13 个真未用导入，并把 55 个普通 API 拆分后的旧路径兼容符号显式标记为 re-export；第五批将 `api/admin_routes.py` 中 235 个 Admin legacy facade 兼容导出改为冗余别名 re-export。当前 tracked Python F401 已清零。
-  - 进展（2026-06-24）：旧式 typing 泛型第一批已完成非 vendor 代码的大部分 Ruff 自动现代化，覆盖 `List` / `Dict` / `Tuple` / `Set` 等 PEP 585 内置泛型、`Optional` 的 PEP 604 写法和相关 `typing` import 清理；第二批已收口 `core/legacy_adapter.py` 中剩余 40 个 `UP006/UP045/UP035` 命中，仅把本次改动行转为 LF 行尾，未做整文件换行归一化。当前非 vendor `UP006/UP007/UP045/UP035` 已清零，后续剩余为 naive datetime / DTZ 低优先整理，不能将本项标为完成。
+  - 进展（2026-06-24）：旧式 typing 泛型第一批已完成非 vendor 代码的大部分 Ruff 自动现代化，覆盖 `List` / `Dict` / `Tuple` / `Set` 等 PEP 585 内置泛型、`Optional` 的 PEP 604 写法和相关 `typing` import 清理；第二批已收口 `core/legacy_adapter.py` 中剩余 40 个 `UP006/UP045/UP035` 命中，仅把本次改动行转为 LF 行尾，未做整文件换行归一化。当前非 vendor `UP006/UP007/UP045/UP035` 已清零；当时剩余的 naive datetime / DTZ 已在后续批次收口。
   - 进展（2026-06-24）：DTZ 第一批仅处理 eval/report artifact 时间戳，不触碰 ORM 持久化时间或历史窗口比较；`evals/periodic_manifest.py`、`evals/run.py`、`evals/rag_benchmark/report.py`、`evals/rag_benchmark/sample.py`、`evals/timing_signal_audit.py`、`evals/timing_tuning_proposal.py` 与 `evals/tuning_analysis.py` 已改为 timezone-aware 获取报告生成时间、文件名日期或文件 mtime。全仓 DTZ 统计从 312 降至 303；数据库审计确认 `core/database.py` 当前没有 Ruff DTZ 命中，实际 DB 风险在 `core/schema_migrations.py` 与各模块 ORM 写入/比较点，后续不能无脑将 DB 写入替换为 UTC aware。
   - 进展（2026-06-24）：DTZ 第二批处理生产 artifact / 中文展示时间，覆盖 Admin health / model catalog / RAG benchmark metadata、群记忆提取 metadata、生成图片 / Prompt 文件 mtime 展示、群分析 HTML 展示和新闻日报 fallback / cache 日期边界。机器可读 artifact 使用 aware UTC，中文用户展示和日报自然日使用 `Asia/Shanghai`，文件 mtime 展示保留本地 aware 墙钟语义；继续不触碰 ORM `DateTime` 写入、历史窗口比较、job retry/lock 和业务 recency 计算。全仓 DTZ 统计从 303 降至 281。
   - 进展（2026-06-24）：DTZ 第三批处理测试侧相对时间用例，覆盖 AI 日报新鲜度、旧新闻工具日期过滤、群分析 local RAG 临时消息和 semantic recency score 测试；新闻日期和临时消息时间改为 aware UTC，明确验证 naive reference 兼容的 semantic scoring 测试保留 naive 并加定点 `noqa`。全仓 DTZ 统计从 281 降至 271。
@@ -699,6 +699,7 @@
   - 进展（2026-06-24）：DTZ 第二十七批处理 core 旧记忆/表情/画像 DB 时间，覆盖 `core/ai_daily_ingest.py`、`core/expression_memory.py`、`core/group_memory.py`、`core/legacy_adapter.py` 和 `core/sticker_memory.py` 中 14 个 ORM 写入时间；AI Daily 入库、Expression / Jargon 更新、GroupMemory upsert、旧 KT adapter 画像 / SystemPrompt 回写、StickerMemory 注册 / 使用 / 描述时间统一复用 `db_now_naive()`，保留 SQLite ORM naive 本地墙钟语义。定向回归 `41 passed, 1 warning in 4.30s` 与 `34 passed, 1 warning in 3.68s`；全仓 DTZ 统计从 68 降至 54。
   - 进展（2026-06-25）：DTZ 第二十八批处理 Admin/API 与 session memory 日期边界，覆盖 `api/admin/reply_routes.py`、`api/admin/runtime_routes.py`、`api/memory_routes.py` 和 `app/session_memory/retrieval_service.py` 中 11 个命中；回复评测 case 更新时间、真实流量窗口、runtime 统计窗口和 `since_last_reply` 统一复用 `db_now_naive()`，记忆摘要默认目标日期按本地 naive 自然日取昨天，session summary 日期过滤改用 `datetime.fromisoformat()` 保持 SQLite naive 日期边界。定向回归 `65 passed, 21 warnings in 6.18s`；全仓 DTZ 统计从 54 降至 43。
   - 进展（2026-06-25）：DTZ 第二十九批处理核心上下文与群分析时间清理，覆盖 `core/context_builder.py`、`core/context_legacy.py`、`core/expression_learner.py`、`core/group_runtime/state.py`、`core/persona_preprocess.py`、`core/semantic/scoring.py` 和 `creatures/nanobot/prompts/skills/group_analysis/repository.py` 中 11 个命中；上下文相对时间、TimingGate / group recent cutoff、表达学习扫描窗口、画像状态机候选时间、语义 recency 参考时间和群分析 SQL cutoff 统一复用 `db_now_naive()`，群 pending 的 epoch 秒转本地墙钟展示改为 aware UTC 解析后再转 naive。定向回归 `94 passed, 3 skipped, 1 warning in 5.61s`；全仓 DTZ 统计从 43 降至 32。
+  - 进展（2026-06-25）：DTZ 第三十批处理 Daily Digest、定时任务执行和新闻搜索剩余时间清理，覆盖 `core/daily_digest.py`、`creatures/nanobot/prompts/skills/schedule_task/tool.py`、`creatures/nanobot/prompts/skills/news_search/runtime_cache.py`、`search_backend.py`、`tool.py`、`legacy_report.py`、`evidence.py` 以及 `news_daily` pipeline / sources 中剩余 32 个命中；调度任务、摘要查询、新闻缓存 key、日期抽取、展示时间、最近性判断和 RSS / HTML 日期解析均沿用本地 naive 或原有 UTC-aware 比较口径，`strptime` 无时区解析改为 `fromisoformat()`、`parsedate_to_datetime()` 或手写日期解析。定向回归 `21 passed, 21 warnings in 3.18s` 与 `120 passed, 1 warning in 4.85s`；tracked Python Ruff 默认检查通过；全量回归 `1806 passed, 6 skipped, 139 warnings in 128.89s`；tracked Python DTZ 已清零，本项完成。
 
 ---
 

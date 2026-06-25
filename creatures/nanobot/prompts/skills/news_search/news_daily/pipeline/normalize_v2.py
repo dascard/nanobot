@@ -2,7 +2,7 @@
 
 import hashlib
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 
 from .config import OFFICIAL_SOURCES, SOURCE_QUALITY, STOP_WORDS, TOPIC_KEYWORDS, KNOWN_ENTITIES
@@ -15,10 +15,39 @@ _OFFICIAL_DOMAINS = {
     "meta.com", "ai.meta.com",
 }
 
-_DATE_FORMATS = [
-    "%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S",
-    "%b %d, %Y", "%B %d, %Y", "%b %d, %y",
-]
+_MONTHS = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+
+
+def _build_datetime(year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0) -> datetime | None:
+    try:
+        return datetime.fromisoformat(f"{year:04d}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}")
+    except ValueError:
+        return None
 
 
 def parse_date(raw: str) -> datetime | None:
@@ -26,25 +55,42 @@ def parse_date(raw: str) -> datetime | None:
     value = (raw or "").strip()
     if not value:
         return None
-    # ISO
     try:
         v = value.replace("Z", "+00:00")
-        return datetime.fromisoformat(v).replace(tzinfo=None)
-    except Exception:
+        dt = datetime.fromisoformat(v)
+        return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+    except ValueError:
         pass
-    # RFC 2822
     try:
         dt = parsedate_to_datetime(value)
         if dt and dt.tzinfo:
-            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            dt = dt.replace(tzinfo=None)
         return dt
-    except Exception:
+    except (TypeError, ValueError):
         pass
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
+    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$", value)
+    if m:
+        return _build_datetime(
+            int(m.group(1)),
+            int(m.group(2)),
+            int(m.group(3)),
+            int(m.group(4) or 0),
+            int(m.group(5) or 0),
+            int(m.group(6) or 0),
+        )
+    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})$", value)
+    if m:
+        return _build_datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.match(r"^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$", value)
+    if m:
+        month = _MONTHS.get(m.group(1).lower())
+        if month:
+            return _build_datetime(int(m.group(3)), month, int(m.group(2)))
+    m = re.match(r"^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$", value)
+    if m:
+        month = _MONTHS.get(m.group(2).lower())
+        if month:
+            return _build_datetime(int(m.group(3)), month, int(m.group(1)))
     return None
 
 

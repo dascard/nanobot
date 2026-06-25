@@ -3,6 +3,9 @@
 import logging
 import hashlib
 from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
+import re
+from core.time_utils import db_now_naive
 from ..schema import NewsItem
 
 logger = logging.getLogger("nanobot.news_daily.normalize")
@@ -10,7 +13,7 @@ logger = logging.getLogger("nanobot.news_daily.normalize")
 
 def normalize_items(items: list[NewsItem]) -> list[NewsItem]:
     """补充 id/domain/fetched_at，过滤无效条目。"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = db_now_naive().strftime("%Y-%m-%d %H:%M")
     result = []
     for item in items:
         if not item.title or not item.url:
@@ -33,28 +36,81 @@ def normalize_items(items: list[NewsItem]) -> list[NewsItem]:
     return result
 
 
-_DATE_FORMATS = [
-    "%Y-%m-%d",
-    "%Y/%m/%d",
-    "%b %d, %Y",
-    "%B %d, %Y",
-    "%b %d %Y",
-    "%d %b %Y",
-]
+_MONTHS = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
+}
+
+
+def _build_datetime(year: int, month: int, day: int) -> datetime | None:
+    try:
+        return datetime.fromisoformat(f"{year:04d}-{month:02d}-{day:02d}")
+    except ValueError:
+        return None
 
 
 def _parse_date(raw: str):
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(raw.strip(), fmt)
-        except ValueError:
-            continue
+    value = (raw or "").strip()
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            return dt.replace(tzinfo=None)
+        return dt
+    except ValueError:
+        pass
+    try:
+        dt = parsedate_to_datetime(value)
+        if dt is not None and dt.tzinfo is not None:
+            return dt.replace(tzinfo=None)
+        return dt
+    except (TypeError, ValueError):
+        pass
+    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})$", value)
+    if m:
+        return _build_datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", value)
+    if m:
+        return _build_datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.match(r"^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$", value)
+    if m:
+        month = _MONTHS.get(m.group(1).lower())
+        if month:
+            return _build_datetime(int(m.group(3)), month, int(m.group(2)))
+    m = re.match(r"^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$", value)
+    if m:
+        month = _MONTHS.get(m.group(2).lower())
+        if month:
+            return _build_datetime(int(m.group(3)), month, int(m.group(1)))
     return None
 
 
 def filter_recent(items: list[NewsItem], hours: int = 72, keep_unknown: bool = False) -> list[NewsItem]:
     """过滤过旧条目；latest 默认丢弃无日期或无法解析日期的条目。"""
-    cutoff = datetime.now() - timedelta(hours=hours)
+    cutoff = db_now_naive() - timedelta(hours=hours)
     result = []
     for item in items:
         if not item.published_at:

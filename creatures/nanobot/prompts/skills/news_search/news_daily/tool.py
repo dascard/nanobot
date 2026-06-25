@@ -5,6 +5,7 @@ import time as _time
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from core.time_utils import db_now_naive
 
 from .schema import fallback_digest
 from .pipeline.collect import collect_sources
@@ -63,10 +64,9 @@ def _apply_quotas(items, limit: int) -> list:
 
 def _report_to_digest(report, articles):
     """EventCluster pipeline → 兼容旧 render dict 格式。"""
-    from datetime import datetime
     from .pipeline.config import MAX_SAME_ENTITY_CLUSTERS_DAILY, MAX_CLUSTERS_PER_DOMAIN_FINAL
 
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = db_now_naive().strftime("%Y-%m-%d %H:%M")
     top = report.top_story
     highlights = report.highlights
 
@@ -208,14 +208,13 @@ def _html_looks_usable(html: str) -> bool:
 
 
 def _render_no_new_digest(query: str, mode: str, skipped_seen: int) -> str:
-    from datetime import datetime
     from ..render import render_html
 
     return render_html({
         "title": "AI 日报暂无未推送新内容",
         "subtitle": query[:30],
         "verdict": f"已过滤此前推送过的 {skipped_seen} 条资讯，当前没有新的可推送条目。",
-        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "generated_at": db_now_naive().strftime("%Y-%m-%d %H:%M"),
         "mode": mode,
         "top_story": None,
         "highlights": [],
@@ -278,13 +277,12 @@ def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
         logger.warning("[daily] history dedup unavailable: %s", e)
 
     if mode == "daily":
-        from datetime import datetime
         from .pipeline.normalize_v2 import normalize_articles
         from .pipeline.freshness import filter_fresh_articles
         from .pipeline.cluster import cluster_articles
         from .pipeline.diversify import score_clusters, select_diverse_clusters, build_daily_report
 
-        now = datetime.now()
+        now = db_now_naive()
         articles = normalize_articles(items)
         articles = filter_fresh_articles(articles, now)
         clusters = cluster_articles(articles)
