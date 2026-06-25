@@ -7,7 +7,6 @@ import html
 import json
 import logging
 import re
-from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -16,6 +15,7 @@ from sqlalchemy.orm import Session
 from core.database import KnowledgeChunk, KnowledgeDocument, SessionLocal
 from core.semantic.adapters import chunk_from_knowledge_chunk
 from core.semantic.indexer import upsert_semantic_chunks
+from core.time_utils import db_now_naive
 
 
 logger = logging.getLogger("nanobot.ai_daily_ingest")
@@ -221,7 +221,7 @@ def _upsert_chunk(db: Session, document: KnowledgeDocument, normalized: dict[str
     row.status = "active"
     row.trust_level = document.trust_level or "medium"
     row.meta_json = json.dumps({"document_kind": "ai_daily"}, ensure_ascii=False, sort_keys=True)
-    row.updated_at = datetime.now()
+    row.updated_at = db_now_naive()
     db.flush()
     return row
 
@@ -232,7 +232,7 @@ def _apply_document_payload(
     *,
     created: bool,
 ) -> None:
-    now = datetime.now()
+    now = db_now_naive()
     document.document_kind = "ai_daily"
     document.title = normalized.get("title") or document.title
     document.url = normalized.get("url") or document.url

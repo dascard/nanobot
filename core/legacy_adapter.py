@@ -300,7 +300,7 @@ class SQLiteMemory:
     def update_persona_and_prompt(self, user_id: str, persona_json: str, system_prompt: str):
         """同步回写画像与提示词（带有效性校验）"""
         import json as _json
-        from datetime import datetime
+        from core.time_utils import db_now_naive
 
         try:
             data = _json.loads(persona_json) if isinstance(persona_json, str) else persona_json
@@ -319,7 +319,7 @@ class SQLiteMemory:
         try:
             persona_obj = db.query(Persona).filter(Persona.user_id == user_id).first()
             sys_obj = db.query(SystemPrompt).filter(SystemPrompt.user_id == user_id).first()
-            now = datetime.now()
+            now = db_now_naive()
             if persona_obj:
                 persona_obj.persona_json = _json.dumps(data, ensure_ascii=False)
                 persona_obj.updated_at = now

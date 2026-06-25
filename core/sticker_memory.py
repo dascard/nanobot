@@ -10,7 +10,6 @@ import logging
 import mimetypes
 import os
 import re
-from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
 
@@ -19,6 +18,7 @@ from sqlalchemy.orm import Session
 from config import STICKER_AUTO_DESCRIBE_ENABLED
 from core.database import SessionLocal, StickerMemory
 from core.group_runtime.ids import normalize_group_stream_id
+from core.time_utils import db_now_naive
 
 logger = logging.getLogger("nanobot.sticker_memory")
 
@@ -227,7 +227,7 @@ def register_sticker(
     if not ref:
         raise ValueError("file_ref 不能为空")
     stable_hash = build_sticker_hash(ref, sticker_hash=sticker_hash, description=description)
-    now = datetime.now()
+    now = db_now_naive()
 
     row = (
         db.query(StickerMemory)
@@ -431,7 +431,7 @@ def record_sticker_use(db: Session, sticker_id: int) -> dict[str, Any]:
     if row is None:
         raise ValueError(f"表情包不存在: {sticker_id}")
     row.usage_count = int(row.usage_count or 0) + 1
-    row.last_used = datetime.now()
+    row.last_used = db_now_naive()
     db.commit()
     db.refresh(row)
     return sticker_to_dict(row)
@@ -463,7 +463,7 @@ def record_sticker_uses_in_content(content: str, db: Session | None = None) -> i
                 if _canonical_row_send_code(row) in send_codes:
                     rows.append(row)
                     known_ids.add(row.id)
-        now = datetime.now()
+        now = db_now_naive()
         for row in rows:
             row.usage_count = int(row.usage_count or 0) + 1
             row.last_used = now
@@ -724,7 +724,7 @@ def auto_describe_sticker(sticker_id: int, *, force: bool = False) -> None:
         row.describe_status = "ok"
         row.describe_attempts = (row.describe_attempts or 0) + 1
         row.describe_last_error = ""
-        row.described_at = datetime.now()
+        row.described_at = db_now_naive()
         db.commit()
     finally:
         db.close()

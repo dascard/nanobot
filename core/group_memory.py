@@ -6,12 +6,12 @@ LLM 提候选 + confidence_hint，Python 决定 NEW/UPDATE/MERGE/ARCHIVE/DECAY�
 import hashlib
 import json
 import logging
-from datetime import datetime
 
 from sqlalchemy import and_
 
 from core.database import GroupMemory, SessionLocal
 from core.group_runtime.ids import normalize_group_session_id
+from core.time_utils import db_now_naive
 
 logger = logging.getLogger("nanobot.group_memory")
 
@@ -87,8 +87,9 @@ def upsert(
             .first()
         )
         if existing:
+            now = db_now_naive()
             existing.evidence_count += 1
-            existing.last_seen = datetime.now()
+            existing.last_seen = now
             existing.confidence = min(1.0, existing.confidence + confidence_hint * 0.1)
             existing.decay_score = min(1.0, existing.decay_score + 0.05)
             if evidence_log_ids:
@@ -107,13 +108,14 @@ def upsert(
 
         ck = cluster_key or _cluster_key(content)
         status, inject_policy = _default_status_and_policy(memory_type, confidence_hint, evidence_log_ids)
+        now = db_now_naive()
         entry = GroupMemory(
             group_id=group_id, memory_type=memory_type,
             content=content.strip(), content_hash=ch,
             cluster_key=ck,
             evidence_log_ids_json=json.dumps(evidence_log_ids or []),
             confidence=confidence_hint, evidence_count=1,
-            first_seen=datetime.now(), last_seen=datetime.now(),
+            first_seen=now, last_seen=now,
             decay_score=1.0, source=source,
             status=status,
             inject_policy=inject_policy,

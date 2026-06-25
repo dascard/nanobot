@@ -2,11 +2,11 @@
 
 import json
 import logging
-from datetime import datetime
 
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
 from core.database import SessionLocal, ExpressionMemory, JargonMemory, ChatStreamConfig
+from core.time_utils import db_now_naive
 
 logger = logging.getLogger("nanobot.expression")
 
@@ -111,7 +111,7 @@ def upsert_expression(chat_stream_id: str, expr: str, *, expr_type: str = "phras
         ).first()
         if existing:
             existing.source_count = (existing.source_count or 1) + source_count
-            existing.last_seen = datetime.now()
+            existing.last_seen = db_now_naive()
             delta = min(0.12, 0.02 + 0.01 * min(source_count, 10))
             existing.confidence = min(0.95, (existing.confidence or 0.5) + delta)
             if examples:
@@ -144,7 +144,7 @@ def upsert_expression(chat_stream_id: str, expr: str, *, expr_type: str = "phras
             ).first()
             if existing:
                 existing.source_count = (existing.source_count or 1) + source_count
-                existing.last_seen = datetime.now()
+                existing.last_seen = db_now_naive()
                 delta = min(0.12, 0.02 + 0.01 * min(source_count, 10))
                 existing.confidence = min(0.95, (existing.confidence or 0.5) + delta)
                 if (existing.checked or existing.confidence >= 0.75) and existing.status == "candidate":
@@ -196,7 +196,7 @@ def upsert_jargon(chat_stream_id: str, term: str, *, meaning: str = "",
         if existing:
             if meaning and meaning != existing.meaning:
                 existing.meaning = meaning
-            existing.last_seen = datetime.now()
+            existing.last_seen = db_now_naive()
             existing.confidence = min(0.95, (existing.confidence or 0.5) + 0.03)
             if examples:
                 old_examples = json.loads(existing.examples_json or "[]")
@@ -225,7 +225,7 @@ def upsert_jargon(chat_stream_id: str, term: str, *, meaning: str = "",
                      JargonMemory.term == term)
             ).first()
             if existing:
-                existing.last_seen = datetime.now()
+                existing.last_seen = db_now_naive()
                 existing.confidence = min(0.95, (existing.confidence or 0.5) + 0.03)
                 if (existing.checked or existing.confidence >= 0.75) and existing.status == "candidate":
                     existing.status = "active"
