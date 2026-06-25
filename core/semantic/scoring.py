@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from core.time_utils import db_now_naive
+
 
 def clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value)))
@@ -82,7 +84,7 @@ def recency_score(
     if not valid:
         return clamp01(default)
 
-    reference = _to_utc_naive(now or datetime.now())
+    reference = _to_utc_naive(now or db_now_naive())
     latest = max(valid)
     age_seconds = max(0.0, (reference - latest).total_seconds())
     half_life_seconds = max(float(half_life_days) * 86400.0, 1.0)

@@ -7,6 +7,7 @@ import json
 import logging
 from datetime import datetime, timedelta
 
+from core.time_utils import db_now_naive
 from core.token_utils import estimate_tokens as estimate_tokens
 
 logger = logging.getLogger("nanobot.context_builder")
@@ -102,7 +103,7 @@ def sanitize_prompt_text(text: str, max_chars: int = 0) -> str:
 
 
 def relative_time_label(dt: datetime) -> str:
-    delta = datetime.now() - dt
+    delta = db_now_naive() - dt
     minutes = int(delta.total_seconds() / 60)
     if minutes < 1:
         return "[刚刚]"
@@ -426,7 +427,7 @@ def format_group_planner_message(
     """生成 Maibot planner 风格的群消息文本块。"""
     safe_sender = sanitize_prompt_text(sender_name or "未知用户", 80)
     safe_content = sanitize_prompt_text(_strip_speaker_prefix(content, sender_name), 500)
-    ts = timestamp or datetime.now()
+    ts = timestamp or db_now_naive()
     lines: list[str] = []
     if include_message_id and message_id:
         lines.append(f"[msg_id]{sanitize_prompt_text(message_id, 120)}")
@@ -448,7 +449,7 @@ def build_timing_recent_context(
     """构建 TimingGate 轻量 recent context——仅最近 3-5 条 ambient 消息，精简格式。"""
     from core.database import ChatLog
 
-    age_cutoff = datetime.now() - timedelta(minutes=TIMING_CONTEXT_MAX_AGE_MIN)
+    age_cutoff = db_now_naive() - timedelta(minutes=TIMING_CONTEXT_MAX_AGE_MIN)
     excluded = {str(x) for x in (exclude_message_ids or []) if str(x).strip()}
     rows = (
         db.query(ChatLog)
@@ -526,7 +527,7 @@ def build_group_recent_messages(
     """
     from core.database import ChatLog
 
-    age_cutoff = datetime.now() - timedelta(minutes=GROUP_CONTEXT_MAX_AGE_MIN)
+    age_cutoff = db_now_naive() - timedelta(minutes=GROUP_CONTEXT_MAX_AGE_MIN)
     excluded = {str(x) for x in (exclude_message_ids or []) if str(x).strip()}
     rows = (
         db.query(ChatLog)

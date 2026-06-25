@@ -10,7 +10,9 @@ import logging
 import re
 import time as _time
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import timedelta
+
+from core.time_utils import db_now_naive
 
 logger = logging.getLogger("nanobot.expression_learner")
 
@@ -240,7 +242,7 @@ def run_learning_cycle():
 
     db = SessionLocal()
     try:
-        cutoff = datetime.now() - timedelta(minutes=SCAN_WINDOW_MIN)
+        cutoff = db_now_naive() - timedelta(minutes=SCAN_WINDOW_MIN)
         rows = (
             db.query(ChatLog)
             .filter(

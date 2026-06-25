@@ -30,6 +30,7 @@ from core.persona_candidate_prompt import (  # noqa: E402
     filter_user_messages as filter_user_messages,
     format_candidate_logs as format_candidate_logs,
 )
+from core.time_utils import db_now_naive  # noqa: E402
 
 logger = logging.getLogger("nanobot.persona")
 
@@ -175,7 +176,7 @@ class PersonaStateMachine:
         }
         if not candidates:
             return stats
-        now = datetime.now()
+        now = db_now_naive()
 
         # 一次性预取所有现有 facts（避免 N+1）
         existing_facts = (

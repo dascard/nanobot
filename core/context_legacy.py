@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from html import escape
 
+from core.time_utils import db_now_naive
 from core.context_builder import (
     GROUP_CONTEXT_MAX_AGE_MIN,
     MAX_GROUP_RECENT_ROWS,
@@ -36,7 +37,7 @@ def build_group_recent_context(
     """
     from core.database import ChatLog
 
-    age_cutoff = datetime.now() - timedelta(minutes=GROUP_CONTEXT_MAX_AGE_MIN)
+    age_cutoff = db_now_naive() - timedelta(minutes=GROUP_CONTEXT_MAX_AGE_MIN)
     excluded = {str(x) for x in (exclude_message_ids or []) if str(x).strip()}
     rows = (
         db.query(ChatLog)

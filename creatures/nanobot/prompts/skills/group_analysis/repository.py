@@ -2,9 +2,11 @@
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import or_
+
+from core.time_utils import db_now_naive
 
 from .schemas import GroupRef, RawChatLog, GroupLogBatch
 
@@ -225,7 +227,7 @@ class GroupAnalysisRepository:
         ).filter(ChatLog.role.in_(("ambient", "user", "assistant")))
 
         if window_hours and window_hours > 0:
-            cutoff = datetime.now() - timedelta(hours=window_hours)
+            cutoff = db_now_naive() - timedelta(hours=window_hours)
             q = q.filter(ChatLog.created_at >= cutoff)
 
         rows = (

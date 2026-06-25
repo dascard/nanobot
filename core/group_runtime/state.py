@@ -3,7 +3,9 @@ from __future__ import annotations
 import math
 import time as _time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
+
+from core.time_utils import db_now_naive
 
 from core.group_runtime.constants import (
     IDLE_CLEANUP_SEC,
@@ -152,7 +154,10 @@ def _pending_payload(pending: list[GroupPendingMessage]) -> dict:
         block = format_group_planner_message(
             sender_name=msg.sender_name or msg.sender_id or "未知用户",
             content=msg.message,
-            timestamp=datetime.fromtimestamp(msg.ts) if msg.ts > 0 else datetime.now(),
+            timestamp=(
+                datetime.fromtimestamp(msg.ts, tz=timezone.utc).astimezone().replace(tzinfo=None)
+                if msg.ts > 0 else db_now_naive()
+            ),
             message_id=msg.message_id,
         )
         if direction_lines:
