@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from api.admin.common import verify_admin
 from core.database import get_db
+from core.time_utils import db_now_naive
 from core.tracing import row_to_dict
 
 router = APIRouter(tags=["admin-reply"])
@@ -318,7 +320,7 @@ def _upsert_reply_eval_case(db: Session, item: ReplyEvalCaseIn):
     row.source = item.source or "manual"
     row.tags_json = json.dumps(item.tags or [], ensure_ascii=False)
     row.enabled = 1 if item.enabled else 0
-    row.updated_at = datetime.now()
+    row.updated_at = db_now_naive()
     db.commit()
     db.refresh(row)
     return row
@@ -381,7 +383,7 @@ def reply_eval_update_case(
         row.tags_json = json.dumps(updates["tags"] or [], ensure_ascii=False)
     if "enabled" in updates:
         row.enabled = 1 if updates["enabled"] else 0
-    row.updated_at = datetime.now()
+    row.updated_at = db_now_naive()
     db.commit()
     db.refresh(row)
     return _reply_case_to_dict(row)
@@ -464,7 +466,7 @@ async def reply_eval_run(
     if body.case_ids:
         q = q.filter(ReplyEvalCase.case_id.in_(body.case_ids))
     cases = q.order_by(ReplyEvalCase.created_at.asc()).limit(max(1, min(body.limit or 50, 200))).all()
-    run = ReplyEvalRun(name=body.name or f"{body.variant} {datetime.now().strftime('%m-%d %H:%M')}", variant=body.variant)
+    run = ReplyEvalRun(name=body.name or f"{body.variant} {time.strftime('%m-%d %H:%M')}", variant=body.variant)
     db.add(run)
     db.commit()
     db.refresh(run)
@@ -584,7 +586,7 @@ def reply_eval_real_traffic(
 
     window_hours = max(1, min(int(hours or 24), 168))
     sample_limit = max(1, min(int(limit or 50), 200))
-    since = datetime.now() - timedelta(hours=window_hours)
+    since = db_now_naive() - timedelta(hours=window_hours)
     query = db.query(ReplyContractCheckLog).filter(ReplyContractCheckLog.created_at >= since)
     if session_id:
         query = query.filter(ReplyContractCheckLog.session_id == session_id)
@@ -621,7 +623,15 @@ def reply_eval_real_traffic(
         structured_fallback_count += int(getattr(row, "structured_fallback_count", 0) or 0)
 
     for run_id, run_rows in runs.items():
-        ordered = sorted(run_rows, key=lambda row: (int(row.attempt or 0), row.created_at or datetime.min, int(row.id or 0)))
+        ordered = sorted(
+            run_rows,
+            key=lambda row: (
+                int(row.attempt or 0),
+                0 if row.created_at is None else 1,
+                row.created_at,
+                int(row.id or 0),
+            ),
+        )
         first = next((row for row in ordered if int(row.attempt or 0) == 0), ordered[0] if ordered else None)
         retry_rows = [row for row in ordered if int(row.attempt or 0) > 0]
         has_ok = any(_reply_contract_has_final_action(row) for row in ordered)

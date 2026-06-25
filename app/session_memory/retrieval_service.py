@@ -16,8 +16,8 @@ from core.database import RollingSessionSummary
 def _date_bounds(date_start: str = "", date_end: str = "") -> tuple[datetime | None, datetime | None]:
     start = validate_digest_date(date_start, "date_start")
     end = validate_digest_date(date_end, "date_end")
-    start_dt = datetime.strptime(start, "%Y-%m-%d") if start else None
-    end_dt = datetime.strptime(end, "%Y-%m-%d") + timedelta(days=1) if end else None
+    start_dt = datetime.fromisoformat(start) if start else None
+    end_dt = datetime.fromisoformat(end) + timedelta(days=1) if end else None
     return start_dt, end_dt
 
 

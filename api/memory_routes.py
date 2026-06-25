@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ from api.common_auth import verify_token
 from app.memory_digest.retrieval_service import MemoryDigestRetrievalService, validate_digest_date
 from core.daily_digest import generate_daily_digest_for_date
 from core.database import ChatLog, MemoryDigest, get_db
+from core.time_utils import db_now_naive
 
 
 router = APIRouter(tags=["memory"])
@@ -121,7 +122,7 @@ def run_memory_digests(
     """手动触发指定日期的每日记忆摘要任务。"""
     target_date = req.target_date
     if not target_date:
-        target_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        target_date = (db_now_naive().date() - timedelta(days=1)).isoformat()
 
     created = generate_daily_digest_for_date(
         target_date=target_date,

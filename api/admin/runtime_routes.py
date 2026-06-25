@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from api.admin.common import verify_admin
 from api.admin.sticker_routes import _sticker_dict
 from core.database import ChatLog, ChatStreamConfig, StickerMemory, User, UserBlockRule, get_db
+from core.time_utils import db_now_naive
 
 router = APIRouter(tags=["admin-runtime"])
 
@@ -35,7 +36,7 @@ def _age_seconds(v) -> int | None:
     if not v:
         return None
     try:
-        return max(0, int((datetime.now() - v).total_seconds()))
+        return max(0, int((db_now_naive() - v).total_seconds()))
     except Exception:
         return None
 
@@ -156,7 +157,7 @@ def _runtime_snapshot() -> dict:
 
 @router.get("/overview")
 def overview(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    now = datetime.now()
+    now = db_now_naive()
     since = now - timedelta(hours=1)
     group_filter = ChatLog.session_id.like("group_%")
 
@@ -254,7 +255,7 @@ def overview(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
 
 @router.get("/groups")
 def list_groups(limit: int = 100, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    now = datetime.now()
+    now = db_now_naive()
     since_1m = now - timedelta(minutes=1)
     since_5m = now - timedelta(minutes=5)
     runtime = _runtime_snapshot()
