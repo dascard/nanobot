@@ -629,28 +629,67 @@ def daily_digest_scheduler(stop_event: threading.Event) -> None:
 # ── QQ 推送 ──
 
 
+# 模块级单例 ClientSession：同一事件循环内复用连接池，避免逐请求握手开销。
+# 注意 aiohttp ClientSession 绑定到创建它的 loop，跨 loop（如 daemon thread 的
+# fresh loop）必须重建，因此按 running loop 校验。
+_push_session: aiohttp.ClientSession | None = None
+_push_session_loop: asyncio.AbstractEventLoop | None = None
+_push_session_lock = asyncio.Lock()
+
+
+async def _get_push_session() -> aiohttp.ClientSession:
+    """返回当前 loop 的复用 ClientSession；loop 不匹配则重建。"""
+    global _push_session, _push_session_loop
+    loop = asyncio.get_running_loop()
+    async with _push_session_lock:
+        if _push_session is not None and _push_session_loop is loop and not _push_session.closed:
+            return _push_session
+        # 旧 session 属于别的 loop 或已关闭——先关闭再重建
+        if _push_session is not None and not _push_session.closed:
+            try:
+                await _push_session.close()
+            except Exception:
+                logger.debug("[push] stale session close failed", exc_info=True)
+        _push_session = aiohttp.ClientSession()
+        _push_session_loop = loop
+        return _push_session
+
+
+async def close_push_session() -> None:
+    """关闭并清空模块级 push session（lifespan 关闭 / 测试隔离用）。"""
+    global _push_session, _push_session_loop
+    async with _push_session_lock:
+        if _push_session is not None and not _push_session.closed:
+            try:
+                await _push_session.close()
+            except Exception:
+                logger.debug("[push] session close failed", exc_info=True)
+        _push_session = None
+        _push_session_loop = None
+
+
 async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
     """推送消息到 QQ（通过 qqbot 的 /nanobot/push 端点）。"""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                QQBOT_PUSH_URL,
-                json={
-                    "target_type": target_type,
-                    "target_id": target_id,
-                    "message": message,
-                },
-                timeout=aiohttp.ClientTimeout(total=QQBOT_PUSH_TIMEOUT),
-            ) as resp:
-                if resp.status == 200:
-                    logger.info(
-                        f"Push OK: {target_type}/{target_id} len={len(message)}"
-                    )
-                    return True
-                logger.warning(
-                    f"Push failed: status={resp.status}, body={await resp.text()}"
+        session = await _get_push_session()
+        async with session.post(
+            QQBOT_PUSH_URL,
+            json={
+                "target_type": target_type,
+                "target_id": target_id,
+                "message": message,
+            },
+            timeout=aiohttp.ClientTimeout(total=QQBOT_PUSH_TIMEOUT),
+        ) as resp:
+            if resp.status == 200:
+                logger.info(
+                    f"Push OK: {target_type}/{target_id} len={len(message)}"
                 )
-                return False
+                return True
+            logger.warning(
+                f"Push failed: status={resp.status}, body={await resp.text()}"
+            )
+            return False
     except Exception as e:
         logger.error(f"Push error: {e}")
         return False

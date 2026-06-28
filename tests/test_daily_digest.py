@@ -312,3 +312,108 @@ def test_scheduled_task_runner_runs_async_loop_without_sync_bridge(monkeypatch):
     daily_digest.scheduled_task_runner(stop_event)
 
     assert calls == {"run": 1}
+
+
+def test_push_to_qq_reuses_shared_session(monkeypatch):
+    """H7: push_to_qq 应复用模块级单例 ClientSession，不逐请求新建。"""
+    import core.daily_digest as dd
+
+    constructed = {"count": 0}
+
+    class FakeResponse:
+        status = 200
+
+        async def text(self):
+            return "ok"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs):
+            constructed["count"] += 1
+            self.closed = False
+
+        def post(self, url, **kwargs):
+            return FakeResponse()
+
+        async def close(self):
+            self.closed = True
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    # 重置模块单例，确保从干净状态开始
+    run_async(dd.close_push_session())
+    monkeypatch.setattr(dd.aiohttp, "ClientSession", FakeSession)
+
+    async def _two_pushes():
+        # 同一 loop 内两次 push，验证单例复用
+        ok1 = await dd.push_to_qq("group", "g1", "msg1")
+        ok2 = await dd.push_to_qq("group", "g2", "msg2")
+        return ok1, ok2
+
+    try:
+        ok1, ok2 = run_async(_two_pushes())
+
+        assert ok1 is True
+        assert ok2 is True
+        # 复用单例：同一 loop 内两次 push 只构造一次 ClientSession
+        assert constructed["count"] == 1
+    finally:
+        run_async(dd.close_push_session())
+
+
+def test_push_to_qq_still_works_when_session_close_and_recreated(monkeypatch):
+    """H7: 单例 session 关闭后，下次 push 应自动重建。"""
+    import core.daily_digest as dd
+
+    constructed = {"count": 0}
+
+    class FakeResponse:
+        status = 200
+
+        async def text(self):
+            return "ok"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs):
+            constructed["count"] += 1
+            self.closed = False
+
+        def post(self, url, **kwargs):
+            return FakeResponse()
+
+        async def close(self):
+            self.closed = True
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    run_async(dd.close_push_session())
+    monkeypatch.setattr(dd.aiohttp, "ClientSession", FakeSession)
+
+    try:
+        assert run_async(dd.push_to_qq("group", "g1", "msg1")) is True
+        # 显式关闭单例
+        run_async(dd.close_push_session())
+        assert run_async(dd.push_to_qq("group", "g2", "msg2")) is True
+        # 关闭后重建：构造两次
+        assert constructed["count"] == 2
+    finally:
+        run_async(dd.close_push_session())

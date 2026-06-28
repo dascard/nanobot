@@ -86,5 +86,11 @@ async def lifespan(app: Any):
                 await shutdown_bridge()
         finally:
             await shutdown_new_api_session(new_api_session)
+            # 关闭 daily_digest 模块级 push session（H7 复用单例的清理）
+            try:
+                from core.daily_digest import close_push_session
+                await close_push_session()
+            except Exception:
+                logger.debug("push session shutdown skipped", exc_info=True)
             app.state.bridge = None
             app.state.new_api_session = None
