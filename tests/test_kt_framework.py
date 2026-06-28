@@ -374,6 +374,60 @@ class TestNanobotBridge:
 
         run_async(_run())
 
+    def test_bridge_pool_stop_forces_after_inflight_timeout(self, monkeypatch, caplog):
+        """E2: inflight 永久卡死时，stop 不应无限挂起；超时后强制 stop 全部 bridge。"""
+        import logging
+        import nanobot_kt.bridge as bridge_mod
+
+        entered = asyncio.Event()
+        stop_entered = asyncio.Event()
+
+        class FakeBridge:
+            def __init__(self, _creature_path="creatures/nanobot"):
+                self.stop_count = 0
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                self.stop_count += 1
+                stop_entered.set()
+
+            async def handle_message(self, query, *, session_id="", **_kwargs):
+                if session_id == "busy":
+                    entered.set()
+                    # 永不返回——模拟 in-flight 请求卡死
+                    await asyncio.sleep(3600)
+                return session_id
+
+        monkeypatch.setattr(bridge_mod, "NanobotBridge", FakeBridge)
+        caplog.set_level(logging.WARNING, logger="nanobot.bridge")
+
+        async def _run():
+            pool = bridge_mod.NanobotBridgePool()
+            pool.BRIDGE_STOP_TIMEOUT_SECONDS = 0.1  # 收紧超时便于测试
+            await pool.start()
+
+            busy_task = asyncio.create_task(pool.handle_message("a", session_id="busy"))
+            await entered.wait()
+            busy_bridge = pool._bridges["busy"]
+
+            stop_task = asyncio.create_task(pool.stop())
+            try:
+                # 超时后 stop 应强制完成（不永久挂起），并 stop 卡死的 bridge
+                await asyncio.wait_for(stop_task, timeout=2)
+                assert busy_bridge.stop_count == 1
+                assert stop_entered.is_set()
+                # 应记录超时 warning
+                assert any("inflight" in r.message.lower() or "timeout" in r.message.lower()
+                           for r in caplog.records)
+            finally:
+                busy_task.cancel()
+                await asyncio.gather(busy_task, return_exceptions=True)
+                await asyncio.gather(stop_task, return_exceptions=True)
+
+        run_async(_run())
+
     def test_bridge_pool_tracks_stale_stop_task_until_finished(self, monkeypatch, caplog):
         import time
         import nanobot_kt.bridge as bridge_mod

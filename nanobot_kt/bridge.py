@@ -2196,6 +2196,7 @@ class NanobotBridgePool:
         self._started = False
         self._stopping = False
         self.BRIDGE_TTL_SECONDS = 600  # 10 分钟无使用则回收
+        self.BRIDGE_STOP_TIMEOUT_SECONDS = 30  # stop 等待 inflight 的上限，超时强制回收
 
     async def start(self) -> None:
         async with self._create_lock:
@@ -2226,10 +2227,13 @@ class NanobotBridgePool:
         async with self._stop_lock:
             bridges: list[NanobotBridge] = []
             try:
+                import time as _t
                 async with self._create_lock:
                     self._stopping = True
                     self._started = False
 
+                deadline = _t.monotonic() + max(0.0, float(self.BRIDGE_STOP_TIMEOUT_SECONDS))
+                forced = False
                 while True:
                     async with self._create_lock:
                         inflight = dict(self._bridge_inflight)
@@ -2239,6 +2243,21 @@ class NanobotBridgePool:
                             self._bridge_last_used.clear()
                             self._bridge_inflight.clear()
                             break
+                    if _t.monotonic() >= deadline:
+                        # inflight 长时间未归零（在途请求卡死）——不再无限等待，
+                        # 强制回收所有 bridge，避免 stop 永久挂起阻塞进程关闭。
+                        logger.warning(
+                            "[BridgePool] stop inflight timeout after %.1fs, forcing shutdown: %s",
+                            float(self.BRIDGE_STOP_TIMEOUT_SECONDS),
+                            inflight,
+                        )
+                        async with self._create_lock:
+                            bridges = list(self._bridges.values())
+                            self._bridges.clear()
+                            self._bridge_last_used.clear()
+                            self._bridge_inflight.clear()
+                        forced = True
+                        break
                     logger.debug(
                         "[BridgePool] waiting for inflight requests before stop: %s",
                         inflight,
@@ -2249,10 +2268,13 @@ class NanobotBridgePool:
                     await asyncio.gather(*(bridge.stop() for bridge in bridges), return_exceptions=True)
                 if self._stop_tasks:
                     await asyncio.gather(*list(self._stop_tasks), return_exceptions=True)
+                if forced:
+                    logger.info("[NanobotBridgePool] stopped (forced after inflight timeout)")
+                else:
+                    logger.info("[NanobotBridgePool] stopped")
             finally:
                 async with self._create_lock:
                     self._stopping = False
-            logger.info("[NanobotBridgePool] stopped")
 
     def _session_key(self, user_id: str = "", session_id: str = "") -> str:
         sid = str(session_id or "").strip()
