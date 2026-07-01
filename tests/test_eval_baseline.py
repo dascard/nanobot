@@ -462,6 +462,7 @@ def test_eval_pr_gate_workflow_runs_unified_script():
     text = workflow.read_text(encoding="utf-8")
     assert "name: Eval PR Gate" in text
     assert "eval-pr-gate:" in text
+    assert "submodules: recursive" in text
     assert "scripts/run_eval_pr_gate.sh" in text
 
 
