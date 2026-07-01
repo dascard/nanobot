@@ -3,7 +3,7 @@ import json
 
 import pytest
 from unittest.mock import MagicMock, patch
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from creatures.nanobot.prompts.skills.news_search import tool as news_tool
 from creatures.nanobot.prompts.skills.news_search.tool import (
@@ -109,7 +109,7 @@ def test_combined_news_tool_output_matches_qqbot_markdown_render_patterns():
 def test_web_search_news_query_uses_daily_timelimit_and_merges_rss_with_web(monkeypatch):
     monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
     monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])
-    fresh_date = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S%z")
+    fresh_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
     rss_results = [
         {
             "title": "RSS AI Daily",
@@ -208,7 +208,7 @@ def test_web_search_news_query_prefers_ddgs_news_results(monkeypatch):
     monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
     monkeypatch.setattr(news_tool, "_fetch_multi_rss", lambda query=None, max_results=3: [])
     monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])
-    fresh_date = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S%z")
+    fresh_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
     news_results = [
         {
             "title": "Fresh AI Launch",
@@ -241,12 +241,12 @@ def test_extract_date_accepts_chinese_date_and_today(monkeypatch):
     monkeypatch.setattr(
         news_tool,
         "db_now_naive",
-        lambda: datetime(2026, 5, 1, tzinfo=UTC).astimezone().replace(tzinfo=None),
+        lambda: datetime(2026, 5, 1, tzinfo=timezone.utc).astimezone().replace(tzinfo=None),
     )
     monkeypatch.setattr(
         news_tool._runtime_cache,
         "db_now_naive",
-        lambda: datetime(2026, 5, 1, tzinfo=UTC).astimezone().replace(tzinfo=None),
+        lambda: datetime(2026, 5, 1, tzinfo=timezone.utc).astimezone().replace(tzinfo=None),
     )
 
     assert news_tool._extract_date("2026年5月1日 人工智能 新闻") == "2026-05-01"
@@ -298,7 +298,7 @@ def test_ai_daily_tool_reuses_equivalent_daily_query_cache(monkeypatch):
 def test_web_search_latest_query_filters_out_obviously_stale_dated_results(monkeypatch):
     monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
     monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     fresh_date = now.strftime("%Y-%m-%dT%H:%M:%S%z")
     old_date = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%S%z")
     rss_results = [
@@ -426,7 +426,7 @@ async def test_reply_tool_preserves_html_without_text_style_normalization():
 def test_web_search_preserves_partial_results_when_later_variant_fails(monkeypatch):
     monkeypatch.setattr(news_tool, "NEWS_SEARCH_DDG_ENABLED", True)
     monkeypatch.setattr(news_tool, "_fetch_juya_rss", lambda max_results=3, target_date=None: [])
-    fresh_date = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S%z")
+    fresh_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
     rss_results = [
         {
             "title": "RSS Fresh News",

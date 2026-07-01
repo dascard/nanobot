@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, or_
 
@@ -100,7 +100,7 @@ async def extract_group_memories(
         "raw_count": batch.raw_count,
         "window_hours": resolved_window_hours or 0,
         "source_log_ids": payload.get("source_log_ids", []),
-        "extracted_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "extracted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     stats = extract_and_persist(group.group_id, analysis, source_meta=source_meta)
 

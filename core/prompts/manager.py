@@ -5,7 +5,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -221,11 +221,11 @@ def _sha256_text(text: str) -> str:
 
 
 def _local_iso_from_ts(ts: float) -> str:
-    return datetime.fromtimestamp(ts, UTC).astimezone().isoformat()
+    return datetime.fromtimestamp(ts, timezone.utc).astimezone().isoformat()
 
 
 def _local_backup_ts() -> str:
-    return datetime.now(UTC).astimezone().strftime("%Y%m%d_%H%M%S_%f")
+    return datetime.now(timezone.utc).astimezone().strftime("%Y%m%d_%H%M%S_%f")
 
 
 def _safe_key(prompt_key: str) -> str:

@@ -3,7 +3,7 @@
 # ruff: noqa: E402
 
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,7 +66,7 @@ class MockRawItem:
     content_excerpt: str = ""
 
 
-FIXED_NOW_UTC = datetime(2026, 5, 4, 12, 0, 0, tzinfo=UTC)
+FIXED_NOW_UTC = datetime(2026, 5, 4, 12, 0, 0, tzinfo=timezone.utc)
 
 
 def _now_utc():

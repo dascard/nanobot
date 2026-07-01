@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -97,7 +97,7 @@ def run_audit(
     report = build_timing_signal_audit_report(samples)
     payload = {
         **report,
-        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source": {
             "db": db_path,
             "after_id": after_id,
@@ -132,7 +132,7 @@ def run_labeled_audit(
     effective_run_id = str(run_id or input_source.get("run_id") or "")
     payload = {
         **report,
-        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source": {
             "mode": "input_report",
             "input_report": str(input_report_path),

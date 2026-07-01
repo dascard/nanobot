@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from evals.baseline import build_baseline_diff, evaluate_gate, load_baseline_report
@@ -145,7 +145,7 @@ def run_suite(
     )
     # 写入 reports/
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(UTC).astimezone().strftime("%Y-%m-%d")
+    ts = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
     latest = REPORTS_DIR / "latest.json"
     dated = REPORTS_DIR / f"{ts}-{suite}.json"
     payload = report.model_dump(exclude_none=True)

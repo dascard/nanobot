@@ -337,7 +337,7 @@ def get_route_references(_auth=Depends(verify_admin)):
 def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
     """从各 provider 的 /models 端点刷新模型列表，持久化到 SystemSetting。"""
     import urllib.request as _ur
-    from datetime import UTC, datetime
+    from datetime import datetime, timezone
     from clients.classifier_client import list_providers, build_provider_catalog
 
     results = []
@@ -361,7 +361,7 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
             models = sorted(set(m["id"] for m in items if isinstance(m, dict) and m.get("id")))
             key = f"model.catalog.{p['id']}"
             val = json.dumps({
-                "models": models, "updated_at": datetime.now(UTC).isoformat(),
+                "models": models, "updated_at": datetime.now(timezone.utc).isoformat(),
                 "last_refresh_ok": True, "last_error": "",
             }, ensure_ascii=False)
             row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
@@ -381,7 +381,7 @@ def refresh_model_catalog(db: Session = Depends(get_db), _auth=Depends(verify_ad
                 except Exception:
                     pass
             val = json.dumps({
-                "models": old_models, "updated_at": datetime.now(UTC).isoformat(),
+                "models": old_models, "updated_at": datetime.now(timezone.utc).isoformat(),
                 "last_refresh_ok": False, "last_error": str(e)[:300],
             }, ensure_ascii=False)
             if not old_row:

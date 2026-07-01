@@ -10,7 +10,7 @@ import os
 import re
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from config import LOG_DIR
@@ -47,7 +47,7 @@ def _meta_path_for_token(token: str) -> str:
 
 
 def _iso_from_ts(ts: float) -> str:
-    return datetime.fromtimestamp(ts, UTC).astimezone().isoformat(timespec="seconds")
+    return datetime.fromtimestamp(ts, timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def save_generated_image(

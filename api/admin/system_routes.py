@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 
@@ -101,4 +101,4 @@ def admin_version(_auth=Depends(verify_admin)):
 
 @router.get("/health")
 def health():
-    return {"ok": True, "time": datetime.now(UTC).isoformat()}
+    return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}

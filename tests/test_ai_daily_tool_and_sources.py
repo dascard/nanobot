@@ -1,6 +1,6 @@
 from tests.async_helpers import run_async
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -207,7 +207,7 @@ def test_filter_recent_drops_unknown_dates_by_default():
     from creatures.nanobot.prompts.skills.news_search.news_daily.pipeline.normalize import filter_recent
 
     dated = _news_item("今天新闻", "openai_news")
-    dated.published_at = datetime.now(UTC).strftime("%Y-%m-%d")
+    dated.published_at = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     missing_date = _news_item("无日期旧内容", "kimi_blog")
     missing_date.published_at = ""
     invalid_date = _news_item("坏日期旧内容", "kimi_blog")

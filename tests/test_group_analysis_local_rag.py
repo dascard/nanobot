@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 class CountingEmbeddingProvider:
@@ -47,7 +47,7 @@ class IdentityRerankerProvider:
 
 
 def _messages(count=20, *, keyword_every=1):
-    base = datetime(2026, 5, 26, 12, 0, 0, tzinfo=UTC)
+    base = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
     result = []
     for idx in range(count):
         result.append({
@@ -132,7 +132,7 @@ def test_group_analysis_does_not_change_group_stats():
             "id": item["log_id"],
             "content": item["content"],
             "sender_name": item["user_id"],
-            "created_at": datetime(2026, 5, 26, 12, 0, 0, tzinfo=UTC) + timedelta(minutes=idx),
+            "created_at": datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc) + timedelta(minutes=idx),
         })()
         for idx, item in enumerate(messages)
     ]

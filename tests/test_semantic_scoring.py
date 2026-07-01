@@ -1,5 +1,5 @@
 import math
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 def test_weighted_score_renormalizes_none_components():
@@ -35,7 +35,7 @@ def test_sqlite_bm25_smaller_is_better():
 def test_recency_score_decays_from_latest_to_old():
     from core.semantic.scoring import recency_score
 
-    now = datetime(2026, 6, 17, 12, 0, 0, tzinfo=UTC)
+    now = datetime(2026, 6, 17, 12, 0, 0, tzinfo=timezone.utc)
 
     latest = recency_score(now, now=now, half_life_days=30)
     old = recency_score(now - timedelta(days=90), now=now, half_life_days=30)
@@ -48,7 +48,7 @@ def test_recency_score_decays_from_latest_to_old():
 def test_recency_score_missing_and_future_timestamps_are_stable():
     from core.semantic.scoring import recency_score
 
-    now = datetime(2026, 6, 17, 12, 0, 0, tzinfo=UTC)
+    now = datetime(2026, 6, 17, 12, 0, 0, tzinfo=timezone.utc)
 
     assert recency_score(None, now=now) == 0.5
     assert recency_score(now + timedelta(days=1), now=now) == 1.0
