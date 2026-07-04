@@ -661,3 +661,48 @@ SETTING_DEFS.setdefault(
         description="sticker_describe thinking 模式: auto/true/false（视觉摘要默认禁用）",
     ),
 )
+
+
+def _register_web_search_settings() -> None:
+    from core.web_search.provider_catalog import env_name_for, list_provider_catalog
+
+    for item in list_provider_catalog():
+        base = f"web_search.providers.{item.id}"
+        SETTING_DEFS.setdefault(
+            f"{base}.enabled",
+            SettingDef(
+                key=f"{base}.enabled",
+                env_name=env_name_for(item.id, "enabled"),
+                default=item.enabled_by_default,
+                value_type="bool",
+                category="web_search",
+                description=f"{item.name} 启用状态",
+            ),
+        )
+        SETTING_DEFS.setdefault(
+            f"{base}.api_key",
+            SettingDef(
+                key=f"{base}.api_key",
+                env_name=env_name_for(item.id, "api_key"),
+                default="",
+                value_type="str",
+                category="web_search",
+                description=f"{item.name} API Key",
+                sensitive=True,
+            ),
+        )
+        if item.supports_base_url:
+            SETTING_DEFS.setdefault(
+                f"{base}.base_url",
+                SettingDef(
+                    key=f"{base}.base_url",
+                    env_name=env_name_for(item.id, "base_url"),
+                    default=item.default_base_url,
+                    value_type="str",
+                    category="web_search",
+                    description=f"{item.name} Base URL",
+                ),
+            )
+
+
+_register_web_search_settings()

@@ -290,6 +290,7 @@ from api.admin.tool_routes import (
     set_tool_override as set_tool_override,
     update_tool_defaults as update_tool_defaults,
 )
+from api.admin.web_search_routes import router as web_search_router
 
 logger = logging.getLogger("nanobot.admin")
 router = APIRouter(prefix="/api/v1/admin")
@@ -306,6 +307,7 @@ router.include_router(group_memory_router)
 router.include_router(runtime_router)
 router.include_router(tool_router)
 router.include_router(model_router)
+router.include_router(web_search_router)
 router.include_router(reply_router)
 router.include_router(eval_router)
 router.include_router(trace_router)
@@ -547,6 +549,8 @@ def list_settings(_auth=Depends(verify_admin)):
     values = settings.all_values()
     result = []
     for key, defn in sorted(SETTING_DEFS.items(), key=lambda x: x[1].category + x[0]):
+        if defn.category == "web_search":
+            continue
         val = values.get(key, defn.default)
         result.append({
             "key": key, "value": None if defn.sensitive else val,
