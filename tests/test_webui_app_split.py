@@ -2,6 +2,7 @@ from pathlib import Path
 
 
 APP_JS = Path("webui/src/App.jsx")
+WEB_SEARCH_API_JS = Path("webui/src/features/web-search/api.js")
 FEATURES = {
     "AgentRunsPage": Path("webui/src/features/agent-runs/AgentRunsPage.jsx"),
     "AgentRunDetailPage": Path("webui/src/features/agent-runs/AgentRunDetailPage.jsx"),
@@ -11,6 +12,7 @@ FEATURES = {
     "EffectivePromptPreviewPage": Path("webui/src/features/prompt/PromptPages.jsx"),
     "ReplyEvalPage": Path("webui/src/features/reply-eval/ReplyEvalPage.jsx"),
     "ModelsPage": Path("webui/src/features/models/ModelsPage.jsx"),
+    "WebSearchPage": Path("webui/src/features/web-search/WebSearchPage.jsx"),
     "ToolsPage": Path("webui/src/features/tools/ToolsPage.jsx"),
     "EvalsPage": Path("webui/src/features/evals/EvalsPage.jsx"),
     "GeneratedImagesPage": Path("webui/src/features/generated-images/GeneratedImagesPage.jsx"),
@@ -35,6 +37,7 @@ def test_app_js_imports_split_feature_pages():
     assert "from './features/prompt/PromptPages'" in source
     assert "from './features/reply-eval/ReplyEvalPage'" in source
     assert "from './features/models/ModelsPage'" in source
+    assert "from './features/web-search/WebSearchPage'" in source
     assert "from './features/tools/ToolsPage'" in source
     assert "from './features/evals/EvalsPage'" in source
     assert "from './features/generated-images/GeneratedImagesPage'" in source
@@ -76,3 +79,17 @@ def test_generated_images_page_is_wired_for_gallery():
     assert "测试生图" in page_source
     assert "generated-image-prompt" in page_source
     assert "最近结果" in page_source
+
+
+def test_web_search_page_is_wired_into_admin_app():
+    source = APP_JS.read_text(encoding="utf-8")
+    page_source = FEATURES["WebSearchPage"].read_text(encoding="utf-8")
+    api_source = WEB_SEARCH_API_JS.read_text(encoding="utf-8")
+
+    assert "to: '/web-search'" in source
+    assert 'path="/web-search"' in source
+    assert "搜索 API" in source
+    assert "export function WebSearchPage(" in page_source
+    assert "api.get('/web-search/providers'" in api_source
+    assert "api.put(`/web-search/providers/${encodeURIComponent(providerId)}`" in api_source
+    assert "api.post(`/web-search/providers/${encodeURIComponent(providerId)}/test`" in api_source

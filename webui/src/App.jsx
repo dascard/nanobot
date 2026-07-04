@@ -51,6 +51,7 @@ import { EvalsPage } from './features/evals/EvalsPage'
 import { GeneratedImagesPage } from './features/generated-images/GeneratedImagesPage'
 import { RagDebugPage } from './features/rag/RagDebugPage'
 import { RagBenchmarkPage } from './features/rag/RagBenchmarkPage'
+import { WebSearchPage } from './features/web-search/WebSearchPage'
 
 function formatApiError(error, fallback = '请求失败') {
   const detail = error?.response?.data?.detail
@@ -183,6 +184,7 @@ const NAV_SECTIONS = [
     title: '模型与工具',
     items: [
       { to: '/models', label: '模型', icon: Bot },
+      { to: '/web-search', label: '搜索 API', icon: Search },
       { to: '/tools', label: '工具管理', icon: Wrench },
       { to: '/evals', label: 'Eval 评测', icon: BarChart3 },
     ],
@@ -2978,6 +2980,7 @@ export default function App() {
           <Route path="/llm-api-logs" element={<LLMApiLogsPage />} />
           <Route path="/tool-calls" element={<ToolCallsPage />} />
           <Route path="/models" element={<ModelsPage />} />
+          <Route path="/web-search" element={<WebSearchPage />} />
           <Route path="/audit" element={<AuditPage />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
