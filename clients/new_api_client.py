@@ -129,6 +129,22 @@ class NewAPIClient:
         cls._shared_session = session
 
     @classmethod
+    def _session_usable_in_current_loop(cls, session: aiohttp.ClientSession | None) -> bool:
+        if session is None or getattr(session, "closed", False):
+            return False
+        session_loop = getattr(session, "_loop", None)
+        if session_loop is None:
+            return True
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return False
+        is_closed = getattr(session_loop, "is_closed", None)
+        if callable(is_closed) and is_closed():
+            return False
+        return session_loop is current_loop
+
+    @classmethod
     def get_failure_tracker(cls) -> "ModelFailureTracker":
         if cls._failure_tracker is None:
             from core.settings_service import settings
@@ -162,10 +178,16 @@ class NewAPIClient:
 
     @asynccontextmanager
     async def _request_session(self) -> AsyncIterator[aiohttp.ClientSession]:
-        session = self._session or self.__class__._shared_session
-        if session is not None:
+        session = self._session
+        if self.__class__._session_usable_in_current_loop(session):
             yield session
             return
+
+        shared_session = self.__class__._shared_session
+        if self.__class__._session_usable_in_current_loop(shared_session):
+            yield shared_session
+            return
+
         async with aiohttp.ClientSession() as session:
             yield session
 

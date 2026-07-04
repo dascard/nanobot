@@ -1,8 +1,9 @@
-from tests.async_helpers import run_async
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from tests.async_helpers import run_async
 
 from core.database import LLMApiRequestLog
 from core.tracing import _json_dumps
@@ -524,6 +525,67 @@ def test_new_api_client_uses_shared_session_by_default(monkeypatch):
 
     assert [m["id"] for m in models] == ["qwen/shared-model"]
     assert session.get_calls == 1
+
+
+def test_new_api_client_skips_shared_session_from_other_loop(monkeypatch):
+    from clients.new_api_client import NewAPIClient
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return {"data": [{"id": "qwen/current-loop-model"}]}
+
+    class _StaleSharedSession:
+        closed = False
+
+        def __init__(self, loop):
+            self._loop = loop
+
+        def get(self, *args, **kwargs):
+            raise RuntimeError("不应复用其他事件循环的共享 session")
+
+    class _CurrentLoopSession:
+        created = 0
+        get_calls = 0
+        closed = False
+
+        def __init__(self):
+            type(self).created += 1
+            self._loop = asyncio.get_running_loop()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            self.closed = True
+            return False
+
+        def get(self, *args, **kwargs):
+            type(self).get_calls += 1
+            return _FakeResp()
+
+    stale_loop = asyncio.new_event_loop()
+    stale_session = _StaleSharedSession(stale_loop)
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", _CurrentLoopSession)
+
+    try:
+        NewAPIClient.set_shared_session(stale_session)
+        client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
+        models = run_async(client.fetch_models())
+    finally:
+        NewAPIClient.set_shared_session(None)
+        stale_loop.close()
+
+    assert [m["id"] for m in models] == ["qwen/current-loop-model"]
+    assert _CurrentLoopSession.created == 1
+    assert _CurrentLoopSession.get_calls == 1
 
 
 def test_new_api_client_uses_injected_session_for_chat_completion(monkeypatch):
