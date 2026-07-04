@@ -1,0 +1,27 @@
+diff --git a/src/kohakuterrarium/core/controller.py b/src/kohakuterrarium/core/controller.py
+index b04a3072..735d5707 100644
+--- a/src/kohakuterrarium/core/controller.py
++++ b/src/kohakuterrarium/core/controller.py
+@@ -840,0 +841 @@ class Controller:
++        user_stream = any(bool((e.context or {}).get("stream")) for e in events)
+@@ -842 +843 @@ class Controller:
+-            self.conversation.append("user", user_content)
++            self.conversation.append("user", user_content, stream=user_stream)
+diff --git a/src/kohakuterrarium/llm/message.py b/src/kohakuterrarium/llm/message.py
+index d28c4c39..aff73ffd 100644
+--- a/src/kohakuterrarium/llm/message.py
++++ b/src/kohakuterrarium/llm/message.py
+@@ -195,0 +196 @@ class Message:
++        stream: Internal flag marking whether this message came from a streaming request
+@@ -207,0 +209 @@ class Message:
++    stream: bool = False
+@@ -252 +254,6 @@ class Message:
+-        extras = {k: v for k, v in data.items() if k not in _STANDARD_MESSAGE_KEYS}
++        stream = bool(data.get("stream", False))
++        extras = {
++            k: v
++            for k, v in data.items()
++            if k not in _STANDARD_MESSAGE_KEYS and k != "stream"
++        }
+@@ -262,0 +270 @@ class Message:
++            stream=stream,

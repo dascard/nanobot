@@ -21,14 +21,17 @@ jobs:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.10"
+
+      - name: Apply KohakuTerrarium patches
+        run: bash scripts/apply_kohaku_patches.sh
 
       - name: Install dependencies
         run: |
@@ -45,7 +48,7 @@ jobs:
 
       - name: Upload eval reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: eval-reports-${{ github.run_id }}
           if-no-files-found: warn

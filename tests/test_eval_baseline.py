@@ -462,7 +462,10 @@ def test_eval_pr_gate_workflow_runs_unified_script():
     text = workflow.read_text(encoding="utf-8")
     assert "name: Eval PR Gate" in text
     assert "eval-pr-gate:" in text
+    assert "actions/checkout@v7" in text
+    assert "actions/setup-python@v6" in text
     assert "submodules: recursive" in text
+    assert "scripts/apply_kohaku_patches.sh" in text
     assert "scripts/run_eval_pr_gate.sh" in text
 
 
@@ -480,12 +483,25 @@ def test_eval_workflow_uploads_report_artifacts():
     workflow = Path(".github/workflows/timing-gate-eval.yml")
 
     text = workflow.read_text(encoding="utf-8")
-    assert "actions/upload-artifact@v4" in text
+    assert "actions/upload-artifact@v7" in text
     assert "if: always()" in text
     assert "evals/reports/*.json" in text
     assert "tmp/rag_benchmark/reports/*.json" in text
     assert "tmp/rag_benchmark/reports/*.md" in text
     assert "if-no-files-found: warn" in text
+
+
+def test_eval_workflow_keeps_kohaku_patch_available():
+    patch = Path("patches/kohakuterrarium/stream-message-flag.patch")
+    script = Path("scripts/apply_kohaku_patches.sh")
+
+    assert patch.exists()
+    assert script.exists()
+    patch_text = patch.read_text(encoding="utf-8")
+    script_text = script.read_text(encoding="utf-8")
+    assert "src/kohakuterrarium/core/controller.py" in patch_text
+    assert "src/kohakuterrarium/llm/message.py" in patch_text
+    assert "git -C \"$KT_DIR\" apply --check \"$PATCH_FILE\"" in script_text
 
 
 def test_eval_workflow_uploads_periodic_manifest():
