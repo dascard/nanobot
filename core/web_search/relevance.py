@@ -22,16 +22,6 @@ _STOPWORDS = {
     "to",
     "with",
 }
-_OFF_TOPIC_TERMS = {
-    "ad",
-    "ads",
-    "download",
-    "login",
-    "proton",
-    "protonvpn",
-    "signup",
-    "vpn",
-}
 _WEATHER_TERMS = {"天气", "气温", "预报", "weather"}
 _WEATHER_DOMAINS = (
     "weather.com.cn",
@@ -137,17 +127,6 @@ def judge_search_relevance(query: str, results: list[Any]) -> SearchRelevanceDec
         domains = [_domain(item) for item in results[:5]]
         if any(_domain_matches(domain, _WEATHER_DOMAINS) for domain in domains):
             score = min(1.0, score + 0.25)
-
-    off_topic_hits = sorted(term for term in _OFF_TOPIC_TERMS if term in combined_text)
-    if off_topic_hits and not matched:
-        return SearchRelevanceDecision(
-            ok=False,
-            score=0.0,
-            reason=f"明显跑偏：结果包含 {', '.join(off_topic_hits[:3])}，且未命中 query 关键词",
-            matched_terms=[],
-        )
-    if off_topic_hits:
-        score = max(0.0, score - 0.2)
 
     ok = score >= 0.5
     reason = "结果与 query 相关" if ok else "结果未充分命中 query 关键词"

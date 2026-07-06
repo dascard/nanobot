@@ -19,7 +19,7 @@ def test_weather_query_accepts_weather_domains():
     assert "天气" in decision.matched_terms
 
 
-def test_weather_query_rejects_proton_vpn_download_page():
+def test_weather_query_rejects_unmatched_result_without_brand_blacklist():
     from core.web_search.relevance import judge_search_relevance
 
     result = WebSearchResult(
@@ -33,7 +33,8 @@ def test_weather_query_rejects_proton_vpn_download_page():
 
     assert decision.ok is False
     assert decision.score < 0.5
-    assert "明显跑偏" in decision.reason
+    assert decision.reason == "结果未充分命中 query 关键词"
+    assert decision.matched_terms == []
 
 
 def test_english_technical_query_accepts_matching_result():
