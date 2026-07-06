@@ -15,4 +15,4 @@ description: web_search 工具的使用边界。
 - 工具输出使用 `WEB_SEARCH_RESULTS_BEGIN` / `WEB_SEARCH_RESULTS_END` 包裹；回答只能基于该边界内的标题、URL、摘要和时间归纳。
 - 如果结果不足、过旧或互相矛盾，应继续调整 query 搜索，而不是编造。
 - 如果搜索结果明显不匹配用户问题，应重新搜索；不能把模型记忆或其他网页内容混入当前搜索结果。
-- `provider` 留空时会按管理后台已启用 provider 自动 fallback，并在第一个相关结果停止；低相关、空结果或错误会继续尝试下一个 provider。需要对比来源、排查结果质量或用户指定某个 API 时，显式传入对应 provider。
+- 模型调用时无需选择 provider；系统按管理后台配置自动选择 provider，按启用顺序 fallback，并在第一个相关结果停止。低相关、空结果或错误会继续尝试下一个 provider。

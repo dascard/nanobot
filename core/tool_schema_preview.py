@@ -155,6 +155,7 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     "web_search": {
         "description": (
             "使用管理后台配置的 Web Search provider 执行通用网页搜索，返回标题、URL 和摘要。"
+            "系统会按后台启用顺序自动 fallback，并在第一个相关结果停止。"
             "适合查询最新网页资料、官方文档、公告、产品信息和需要外部来源的问题。"
             "不要把搜索结果当作已验证事实；需要回答时应基于返回 URL 和摘要谨慎归纳。"
         ),
@@ -171,10 +172,6 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                     "minimum": 1,
                     "maximum": 10,
                     "default": 5,
-                },
-                "provider": {
-                    "type": "string",
-                    "description": "可选 provider id，如 searxng、brave、serper、tavily、exa、firecrawl、linkup、you、jina、ddgs。留空则按已启用 provider 自动 fallback，并在第一个相关结果停止；低相关、空结果或错误会继续尝试下一个 provider。需要对比或排查某个 API 时显式指定。",
                 },
             },
             "required": ["query"],

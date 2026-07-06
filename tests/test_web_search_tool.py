@@ -7,7 +7,9 @@ def test_web_search_registered_in_tool_plan(db_session):
     plan = build_tool_plan(chat_type="private", runtime_preset="full", db=db_session)
 
     assert "web_search" in plan.sent_tool_names
-    assert any(schema["function"]["name"] == "web_search" for schema in plan.sent_tool_schemas)
+    schema = next(schema for schema in plan.sent_tool_schemas if schema["function"]["name"] == "web_search")
+    props = schema["function"]["parameters"]["properties"]
+    assert "provider" not in props
 
 
 @pytest.mark.asyncio
@@ -100,6 +102,15 @@ def test_web_search_model_message_formatter_matches_tool_output(monkeypatch):
     assert "摘要: 搜索结果摘要" in message
     assert "只能基于以上 WEB_SEARCH_RESULTS 回答" in message
     assert message.endswith("WEB_SEARCH_RESULTS_END")
+
+
+def test_web_search_prompt_declares_provider_is_runtime_selected():
+    from pathlib import Path
+
+    usage = Path("prompts.v2.default/tools/web_search/usage.md").read_text(encoding="utf-8")
+
+    assert "系统按管理后台配置自动选择 provider" in usage
+    assert "`provider` 留空" not in usage
 
 
 @pytest.mark.asyncio
