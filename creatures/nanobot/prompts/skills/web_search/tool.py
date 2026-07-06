@@ -7,7 +7,11 @@ from typing import Any
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
 from core.uow import UnitOfWork
-from core.web_search.search_runtime import WebSearchError, search_enabled_providers
+from core.web_search.search_runtime import (
+    WebSearchError,
+    format_provider_result_for_model,
+    search_enabled_providers,
+)
 
 
 class WebSearchTool(BaseTool):
@@ -87,27 +91,13 @@ class WebSearchTool(BaseTool):
         items = result.results
         if not items:
             return ToolResult(
-                output=f"web_search: query={query} provider={result.provider_id} count=0",
+                output=format_provider_result_for_model(query, result, limit=limit),
                 exit_code=0,
                 metadata={"structured_content": result.to_dict()},
             )
 
-        lines = [
-            f"web_search: query={query} provider={result.provider_id} count={len(items)}",
-        ]
-        for index, item in enumerate(items[:limit], start=1):
-            snippet = item.snippet.replace("\n", " ").strip()
-            if len(snippet) > 260:
-                snippet = f"{snippet[:260]}..."
-            line = f"{index}. {item.title}\n   URL: {item.url}"
-            if snippet:
-                line += f"\n   摘要: {snippet}"
-            if item.published_at:
-                line += f"\n   时间: {item.published_at}"
-            lines.append(line)
-
         return ToolResult(
-            output="\n".join(lines),
+            output=format_provider_result_for_model(query, result, limit=limit),
             exit_code=0,
             metadata={"structured_content": result.to_dict()},
         )

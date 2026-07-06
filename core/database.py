@@ -667,6 +667,22 @@ class SystemSetting(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class WebSearchProviderUsage(Base):
+    """Web Search provider 聚合调用统计。"""
+    __tablename__ = "web_search_provider_usage"
+
+    provider_id = Column(String, primary_key=True, index=True)
+    total_calls = Column(Integer, default=0)
+    success_calls = Column(Integer, default=0)
+    failure_calls = Column(Integer, default=0)
+    last_called_at = Column(DateTime, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)
+    last_error_at = Column(DateTime, nullable=True)
+    last_error_code = Column(String, default="")
+    last_duration_ms = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class AgentRun(Base):
     """一次模型/Agent 处理请求的运行记录。"""
     __tablename__ = "agent_runs"

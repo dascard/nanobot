@@ -17,6 +17,12 @@ from core.web_search.provider_settings import (
     update_provider_config,
 )
 from core.web_search.provider_tests import test_provider
+from core.web_search.search_runtime import (
+    WebSearchError,
+    format_provider_result_for_model,
+    search_enabled_providers,
+)
+from core.web_search.usage_stats import get_provider_usage
 
 
 router = APIRouter(prefix="/web-search", tags=["admin-web-search"])
@@ -33,6 +39,12 @@ class ProviderTestRequest(BaseModel):
     query: str = "nanobot"
 
 
+class ProviderPreviewRequest(BaseModel):
+    query: str
+    limit: int = 5
+    provider: str = ""
+
+
 def _provider_payload(db: Session, provider_id: str) -> dict[str, Any]:
     item = get_provider_catalog(provider_id)
     if item is None:
@@ -41,6 +53,7 @@ def _provider_payload(db: Session, provider_id: str) -> dict[str, Any]:
     data = item.to_dict()
     data.update(config.public_dict())
     data["last_test"] = None
+    data["usage"] = get_provider_usage(db, provider_id)
     return data
 
 
@@ -96,5 +109,41 @@ async def test_web_search_provider(
         raise HTTPException(status_code=404, detail="Unknown web search provider")
     config = resolve_provider_config(db, provider_id)
     query = (body.query or "nanobot").strip() or "nanobot"
-    result = await test_provider(provider_id, config, query)
+    result = await test_provider(provider_id, config, query, db=db)
     return result.to_dict()
+
+
+@router.post("/preview")
+async def preview_web_search(
+    body: ProviderPreviewRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    query = (body.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=422, detail="query is required")
+    try:
+        limit = max(1, min(int(body.limit or 5), 10))
+    except (TypeError, ValueError):
+        limit = 5
+    provider = (body.provider or "").strip()
+
+    try:
+        result = await search_enabled_providers(
+            db,
+            query=query,
+            limit=limit,
+            provider_id=provider,
+        )
+    except WebSearchError as exc:
+        return {
+            "ok": False,
+            "provider_id": exc.provider_id,
+            "error_code": exc.error_code,
+            "message": exc.message,
+        }
+
+    data = result.to_dict()
+    data["ok"] = True
+    data["message"] = format_provider_result_for_model(query, result, limit=limit)
+    return data

@@ -43,6 +43,7 @@ def test_schema_migrations_records_applied_versions():
     assert "reply_tool_call_count" in reply_contract_columns
     assert "total_final_action_count" in reply_contract_columns
     assert "rolling_session_summaries" in inspector.get_table_names()
+    assert "web_search_provider_usage" in inspector.get_table_names()
     rss_columns = [col["name"] for col in inspector.get_columns("rolling_session_summaries")]
     assert "covered_until_turn_id" in rss_columns
     assert "raw_window_start_turn_id" in rss_columns
@@ -50,6 +51,9 @@ def test_schema_migrations_records_applied_versions():
     assert "inject_policy" in group_memory_columns
     assert "last_injected_at" in group_memory_columns
     assert "injected_count" in group_memory_columns
+    usage_columns = [col["name"] for col in inspector.get_columns("web_search_provider_usage")]
+    assert "total_calls" in usage_columns
+    assert "last_error_code" in usage_columns
 
     with engine.connect() as conn:
         rows = conn.execute(text("SELECT version FROM schema_migrations ORDER BY version")).fetchall()

@@ -705,6 +705,23 @@ def _runtime_tool_decision_platform_column(conn: Any, engine: Any, db_path: str 
     })
 
 
+def _web_search_provider_usage_table(conn: Any, engine: Any, db_path: str | None) -> None:
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS web_search_provider_usage ("
+        "provider_id TEXT PRIMARY KEY, "
+        "total_calls INTEGER DEFAULT 0, "
+        "success_calls INTEGER DEFAULT 0, "
+        "failure_calls INTEGER DEFAULT 0, "
+        "last_called_at DATETIME, "
+        "last_success_at DATETIME, "
+        "last_error_at DATETIME, "
+        "last_error_code TEXT DEFAULT '', "
+        "last_duration_ms INTEGER DEFAULT 0, "
+        "updated_at DATETIME"
+        ")"
+    ))
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_chat_log_metadata_columns", "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -726,6 +743,7 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260526_semantic_rag_tables", "semantic rag tables", _semantic_rag_tables),
     ("20260526_knowledge_library_tables", "knowledge library tables", _knowledge_library_tables),
     ("20260618_runtime_tool_decision_platform", "runtime tool decision platform column", _runtime_tool_decision_platform_column),
+    ("20260706_web_search_provider_usage", "web search provider usage table", _web_search_provider_usage_table),
 ]
 
 

@@ -93,6 +93,24 @@ def test_web_search_page_is_wired_into_admin_app():
     assert "api.get('/web-search/providers'" in api_source
     assert "api.put(`/web-search/providers/${encodeURIComponent(providerId)}`" in api_source
     assert "api.post(`/web-search/providers/${encodeURIComponent(providerId)}/test`" in api_source
+    assert "api.post('/web-search/preview'" in api_source
+
+
+def test_web_search_page_exposes_preview_search_and_model_message():
+    page_source = FEATURES["WebSearchPage"].read_text(encoding="utf-8")
+
+    assert "previewWebSearch" in page_source
+    assert "web-search-preview-query" in page_source
+    assert "发送给模型的消息" in page_source
+    assert "result.results || []" in page_source
+
+
+def test_web_search_page_displays_provider_usage_counts():
+    page_source = FEATURES["WebSearchPage"].read_text(encoding="utf-8")
+
+    assert "调用次数" in page_source
+    assert "success_calls" in page_source
+    assert "failure_calls" in page_source
 
 
 def test_web_search_page_no_longer_shows_not_tested_copy():

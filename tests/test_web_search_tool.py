@@ -44,6 +44,32 @@ async def test_web_search_tool_returns_structured_results(monkeypatch):
     assert result.metadata["structured_content"]["results"][0]["title"] == "Nanobot"
 
 
+def test_web_search_model_message_formatter_matches_tool_output(monkeypatch):
+    from core.web_search.search_runtime import (
+        WebSearchProviderResult,
+        WebSearchResult,
+        format_provider_result_for_model,
+    )
+
+    provider_result = WebSearchProviderResult(
+        provider_id="searxng",
+        results=[
+            WebSearchResult(
+                provider="searxng",
+                title="Nanobot",
+                url="https://example.test/nanobot",
+                snippet="搜索结果摘要",
+            )
+        ],
+    )
+
+    message = format_provider_result_for_model("nanobot", provider_result, limit=5)
+
+    assert message.startswith("web_search: query=nanobot provider=searxng count=1")
+    assert "URL: https://example.test/nanobot" in message
+    assert "摘要: 搜索结果摘要" in message
+
+
 @pytest.mark.asyncio
 async def test_web_search_tool_reports_no_enabled_provider(monkeypatch):
     from core.web_search.search_runtime import WebSearchError

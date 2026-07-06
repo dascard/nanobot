@@ -13,6 +13,7 @@ import aiohttp
 
 from core.web_search.provider_catalog import get_provider_catalog, list_provider_catalog
 from core.web_search.provider_settings import ProviderResolvedConfig, resolve_provider_config
+from core.web_search.usage_stats import record_provider_usage
 
 
 USER_AGENT = "Nanobot-WebSearch/1.0"
@@ -231,6 +232,31 @@ def _collect_lists(data: Any, paths: tuple[tuple[str, ...], ...]) -> list[Any]:
 
 def _limit(value: int) -> int:
     return max(1, min(int(value or 5), 10))
+
+
+def format_provider_result_for_model(
+    query: str,
+    result: WebSearchProviderResult,
+    limit: int = 5,
+) -> str:
+    """把搜索结果格式化成工具输出给模型的文本。"""
+
+    normalized_limit = _limit(limit)
+    items = result.results[:normalized_limit]
+    lines = [
+        f"web_search: query={str(query or '').strip()} provider={result.provider_id} count={len(items)}",
+    ]
+    for index, item in enumerate(items, start=1):
+        snippet = item.snippet.replace("\n", " ").strip()
+        if len(snippet) > 260:
+            snippet = f"{snippet[:260]}..."
+        line = f"{index}. {item.title}\n   URL: {item.url}"
+        if snippet:
+            line += f"\n   摘要: {snippet}"
+        if item.published_at:
+            line += f"\n   时间: {item.published_at}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 async def _test_json_get(
@@ -499,12 +525,33 @@ async def search_enabled_providers(
     limit: int = 5,
     provider_id: str = "",
 ) -> WebSearchProviderResult:
+    async def _search_and_record(config: ProviderResolvedConfig) -> WebSearchProviderResult:
+        start = time.perf_counter()
+        try:
+            provider_result = await search_provider(config, query, limit=limit)
+            record_provider_usage(
+                db,
+                config.provider_id,
+                ok=True,
+                duration_ms=_elapsed_ms(start),
+            )
+            return provider_result
+        except WebSearchError as exc:
+            record_provider_usage(
+                db,
+                config.provider_id,
+                ok=False,
+                error_code=exc.error_code,
+                duration_ms=_elapsed_ms(start),
+            )
+            raise
+
     requested = str(provider_id or "").strip()
     if requested:
         config = resolve_provider_config(db, requested)
         if not config.enabled:
             raise WebSearchError("provider_disabled", f"Provider {requested} 未启用", provider_id=requested)
-        return await search_provider(config, query, limit=limit)
+        return await _search_and_record(config)
 
     configs = [resolve_provider_config(db, item.id) for item in list_provider_catalog()]
     enabled_configs = [config for config in configs if config.enabled]
@@ -514,7 +561,7 @@ async def search_enabled_providers(
     last_error: WebSearchError | None = None
     for config in enabled_configs:
         try:
-            result = await search_provider(config, query, limit=limit)
+            result = await _search_and_record(config)
             if result.results:
                 return result
             last_error = WebSearchError("empty_results", f"Provider {config.provider_id} 返回空结果", provider_id=config.provider_id)

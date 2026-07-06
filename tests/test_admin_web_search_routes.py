@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from core.database import AdminAuditLog, Base, SystemSetting, get_db
+from core.database import AdminAuditLog, Base, SystemSetting, WebSearchProviderUsage, get_db
 from server import app
 
 
@@ -81,6 +81,9 @@ def test_list_providers_returns_catalog_and_config_state(client, auth_header):
     assert serper["api_key_configured"] is False
     assert serper["api_key_source"] is None
     assert serper["last_test"] is None
+    assert serper["usage"]["total_calls"] == 0
+    assert serper["usage"]["success_calls"] == 0
+    assert serper["usage"]["failure_calls"] == 0
 
 
 def test_all_web_search_providers_are_testable(client, auth_header):
@@ -270,7 +273,7 @@ def test_test_provider_masks_secret_in_error_message(client, auth_header, monkey
                 "error_code": self.error_code,
             }
 
-    async def fake_test_provider(provider_id, config, query):
+    async def fake_test_provider(provider_id, config, query, db=None):
         return FakeResult()
 
     monkeypatch.setattr("api.admin.web_search_routes.test_provider", fake_test_provider)
@@ -285,6 +288,157 @@ def test_test_provider_masks_secret_in_error_message(client, auth_header, monkey
     data = _ok(response)
     assert data["ok"] is False
     assert data["message"] == "Authorization Bearer *** failed"
+
+
+def test_preview_web_search_returns_results_and_model_message(client, auth_header, monkeypatch):
+    from core.web_search.search_runtime import WebSearchProviderResult, WebSearchResult
+
+    client.put(
+        "/api/v1/admin/web-search/providers/searxng",
+        headers=auth_header,
+        json={"enabled": True},
+    )
+
+    async def fake_search_provider(config, query, limit=5):
+        assert config.provider_id == "searxng"
+        assert limit == 2
+        assert query == "nanobot web search"
+        return WebSearchProviderResult(
+            provider_id="searxng",
+            elapsed_ms=12,
+            results=[
+                WebSearchResult(
+                    provider="searxng",
+                    title="Nanobot Search",
+                    url="https://example.test/search",
+                    snippet="搜索结果摘要",
+                    published_at="2026-07-06",
+                )
+            ],
+        )
+
+    monkeypatch.setattr("core.web_search.search_runtime.search_provider", fake_search_provider)
+
+    data = _ok(client.post(
+        "/api/v1/admin/web-search/preview",
+        headers=auth_header,
+        json={"query": "nanobot web search", "limit": 2},
+    ))
+
+    assert data["ok"] is True
+    assert data["provider_id"] == "searxng"
+    assert data["elapsed_ms"] == 12
+    assert data["results"][0]["title"] == "Nanobot Search"
+    assert "web_search: query=nanobot web search provider=searxng count=1" in data["message"]
+    assert "https://example.test/search" in data["message"]
+
+    listed = _ok(client.get("/api/v1/admin/web-search/providers", headers=auth_header))
+    usage = _provider(listed, "searxng")["usage"]
+    assert usage["total_calls"] == 1
+    assert usage["success_calls"] == 1
+    assert usage["failure_calls"] == 0
+
+
+def test_preview_web_search_passes_provider_and_limit(client, auth_header, monkeypatch):
+    from core.web_search.search_runtime import WebSearchProviderResult
+
+    client.put(
+        "/api/v1/admin/web-search/providers/searxng",
+        headers=auth_header,
+        json={"enabled": True},
+    )
+    calls = []
+
+    async def fake_search_provider(config, query, limit=5):
+        calls.append({"query": query, "limit": limit, "provider_id": config.provider_id})
+        return WebSearchProviderResult(provider_id=config.provider_id, elapsed_ms=1, results=[])
+
+    monkeypatch.setattr("core.web_search.search_runtime.search_provider", fake_search_provider)
+
+    data = _ok(client.post(
+        "/api/v1/admin/web-search/preview",
+        headers=auth_header,
+        json={"query": "  python 3.10 datetime UTC  ", "limit": 3, "provider": "searxng"},
+    ))
+
+    assert data["ok"] is True
+    assert calls == [{"query": "python 3.10 datetime UTC", "limit": 3, "provider_id": "searxng"}]
+
+
+def test_preview_web_search_returns_ok_false_on_runtime_error(client, auth_header, monkeypatch):
+    from core.web_search.search_runtime import WebSearchError
+
+    async def fake_search_enabled_providers(db, query, limit=5, provider_id=""):
+        raise WebSearchError("no_enabled_provider", "没有启用的搜索 provider")
+
+    monkeypatch.setattr("api.admin.web_search_routes.search_enabled_providers", fake_search_enabled_providers)
+
+    data = _ok(client.post(
+        "/api/v1/admin/web-search/preview",
+        headers=auth_header,
+        json={"query": "nanobot"},
+    ))
+
+    assert data["ok"] is False
+    assert data["error_code"] == "no_enabled_provider"
+    assert data["message"] == "没有启用的搜索 provider"
+
+
+def test_preview_web_search_records_provider_failure_usage(client, auth_header, monkeypatch):
+    from core.web_search.search_runtime import WebSearchError
+
+    client.put(
+        "/api/v1/admin/web-search/providers/brave",
+        headers=auth_header,
+        json={"enabled": True},
+    )
+
+    async def fake_search_provider(config, query, limit=5):
+        assert config.provider_id == "brave"
+        raise WebSearchError("provider_rate_limited", "Provider 限流", provider_id="brave")
+
+    monkeypatch.setattr("core.web_search.search_runtime.search_provider", fake_search_provider)
+
+    data = _ok(client.post(
+        "/api/v1/admin/web-search/preview",
+        headers=auth_header,
+        json={"query": "nanobot", "provider": "brave"},
+    ))
+
+    assert data["ok"] is False
+    listed = _ok(client.get("/api/v1/admin/web-search/providers", headers=auth_header))
+    usage = _provider(listed, "brave")["usage"]
+    assert usage["total_calls"] == 1
+    assert usage["success_calls"] == 0
+    assert usage["failure_calls"] == 1
+    assert usage["last_error_code"] == "provider_rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_provider_test_records_usage_when_route_passes_db(client, auth_header, monkeypatch):
+    from core.web_search.search_runtime import WebSearchProviderResult
+
+    async def fake_search_provider(config, query, limit=3):
+        assert config.provider_id == "ddgs"
+        return WebSearchProviderResult(provider_id="ddgs", elapsed_ms=1, results=[])
+
+    monkeypatch.setattr("core.web_search.provider_tests.search_provider", fake_search_provider)
+
+    data = _ok(client.post(
+        "/api/v1/admin/web-search/providers/ddgs/test",
+        headers=auth_header,
+        json={"query": "nanobot"},
+    ))
+
+    assert data["ok"] is True
+    session = client.testing_session_factory()
+    try:
+        row = session.query(WebSearchProviderUsage).filter_by(provider_id="ddgs").one()
+        assert row.total_calls == 1
+        assert row.success_calls == 1
+        assert row.failure_calls == 0
+    finally:
+        session.close()
 
 
 def test_web_search_settings_excluded_from_generic_settings_list(client, auth_header):

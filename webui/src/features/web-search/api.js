@@ -12,3 +12,6 @@ export function testWebSearchProvider(providerId, query = 'nanobot') {
   return api.post(`/web-search/providers/${encodeURIComponent(providerId)}/test`, { query }).then(r => r.data)
 }
 
+export function previewWebSearch(payload) {
+  return api.post('/web-search/preview', payload).then(r => r.data)
+}

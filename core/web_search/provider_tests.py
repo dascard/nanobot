@@ -10,6 +10,7 @@ from typing import Any
 from core.web_search.provider_catalog import get_provider_catalog
 from core.web_search.provider_settings import ProviderResolvedConfig
 from core.web_search.search_runtime import WebSearchError, search_provider
+from core.web_search.usage_stats import record_provider_usage
 
 
 @dataclass
@@ -71,7 +72,7 @@ def _success(provider_id: str, start: float, sample_count: int) -> ProviderTestR
     )
 
 
-async def test_provider(provider_id: str, config: ProviderResolvedConfig, query: str) -> ProviderTestResult:
+async def test_provider(provider_id: str, config: ProviderResolvedConfig, query: str, db=None) -> ProviderTestResult:
     start = time.perf_counter()
     item = get_provider_catalog(provider_id)
     if item is None:
@@ -81,8 +82,28 @@ async def test_provider(provider_id: str, config: ProviderResolvedConfig, query:
 
     try:
         result = await search_provider(config, query, limit=3)
+        record_provider_usage(
+            db,
+            provider_id,
+            ok=True,
+            duration_ms=_elapsed_ms(start),
+        )
         return _success(provider_id, start, len(result.results))
     except WebSearchError as exc:
+        record_provider_usage(
+            db,
+            provider_id,
+            ok=False,
+            error_code=exc.error_code,
+            duration_ms=_elapsed_ms(start),
+        )
         return _failure(provider_id, start, exc.message, exc.error_code, config.api_key)
     except Exception as exc:
+        record_provider_usage(
+            db,
+            provider_id,
+            ok=False,
+            error_code="provider_bad_response",
+            duration_ms=_elapsed_ms(start),
+        )
         return _failure(provider_id, start, str(exc), "provider_bad_response", config.api_key)

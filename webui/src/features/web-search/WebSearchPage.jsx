@@ -6,13 +6,15 @@ import {
   PlugZap,
   RotateCw,
   Save,
+  Search,
+  Send,
   Settings2,
   Trash2,
   XCircle,
 } from 'lucide-react'
 
-import { ActionButton, Badge, Card, Field, Modal, PageHeader, Spinner } from '../../components/ui'
-import { listWebSearchProviders, testWebSearchProvider, updateWebSearchProvider } from './api'
+import { ActionButton, Badge, Card, Field, JsonBlock, Modal, PageHeader, Spinner } from '../../components/ui'
+import { listWebSearchProviders, previewWebSearch, testWebSearchProvider, updateWebSearchProvider } from './api'
 
 function formatApiError(error, fallback = '请求失败') {
   const detail = error?.response?.data?.detail
@@ -46,6 +48,11 @@ function errorLabel(code) {
     not_implemented: 'Provider 未接入搜索运行时',
   }
   return labels[code] || code || '测试失败'
+}
+
+function formatUsageTime(value) {
+  if (!value) return '从未'
+  return String(value).replace('T', ' ')
 }
 
 function ProviderModal({ provider, onClose, onSaved }) {
@@ -183,23 +190,80 @@ function TestResult({ result }) {
   )
 }
 
+function PreviewResult({ result }) {
+  if (!result) return null
+  if (result.loading) {
+    return <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950 px-3 py-3 text-xs text-slate-500">搜索中...</div>
+  }
+  if (!result.ok) {
+    return (
+      <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-3 text-xs text-red-300">
+        <div className="flex items-center gap-1.5">
+          <XCircle className="h-3.5 w-3.5" />
+          <span>{result.message || errorLabel(result.error_code)}</span>
+        </div>
+        {result.error_code && <div className="mt-1 text-slate-400">{errorLabel(result.error_code)}</div>}
+      </div>
+    )
+  }
+
+  const results = result.results || []
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+        <Badge tone="emerald">Provider {result.provider_id || '-'}</Badge>
+        <span>结果 {results.length}</span>
+        {Number.isFinite(result.elapsed_ms) && <span>{result.elapsed_ms}ms</span>}
+      </div>
+
+      <div className="space-y-2">
+        {results.map((item, index) => (
+          <div key={`${item.url}-${index}`} className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-3">
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-slate-800 text-[11px] text-slate-400">{index + 1}</span>
+              <div className="min-w-0 flex-1">
+                <a href={item.url} target="_blank" rel="noreferrer" className="break-words text-sm font-medium text-emerald-300 hover:text-emerald-200">
+                  {item.title || item.url}
+                </a>
+                <div className="mt-1 break-all font-mono text-[11px] text-slate-500">{item.url}</div>
+                {item.snippet && <div className="mt-2 text-xs leading-5 text-slate-300">{item.snippet}</div>}
+                {item.published_at && <div className="mt-2 text-[11px] text-slate-500">{item.published_at}</div>}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-slate-300">
+          <Send className="h-3.5 w-3.5 text-emerald-300" />
+          发送给模型的消息
+        </div>
+        <JsonBlock value={result.message || ''} className="max-h-80" />
+      </div>
+    </div>
+  )
+}
+
 export function WebSearchPage() {
   const [providers, setProviders] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState(null)
   const [testResults, setTestResults] = useState({})
+  const [previewForm, setPreviewForm] = useState({ query: 'nanobot web search', provider: '', limit: 5 })
+  const [previewResult, setPreviewResult] = useState(null)
 
-  const load = async () => {
+  const load = async ({ quiet = false } = {}) => {
     setError('')
-    setLoading(true)
+    if (!quiet) setLoading(true)
     try {
       const data = await listWebSearchProviders()
       setProviders(data.providers || [])
     } catch (e) {
       setError(formatApiError(e))
     } finally {
-      setLoading(false)
+      if (!quiet) setLoading(false)
     }
   }
 
@@ -222,6 +286,30 @@ export function WebSearchPage() {
         ...prev,
         [provider.id]: { ok: false, message: formatApiError(e), error_code: 'request_failed' },
       }))
+    } finally {
+      await load({ quiet: true })
+    }
+  }
+
+  const runPreview = async () => {
+    const query = previewForm.query.trim()
+    if (!query) {
+      setPreviewResult({ ok: false, message: '请输入搜索词', error_code: 'invalid_query' })
+      return
+    }
+    const limit = Math.max(1, Math.min(Number(previewForm.limit) || 5, 10))
+    setPreviewResult({ loading: true })
+    try {
+      const result = await previewWebSearch({
+        query,
+        limit,
+        provider: previewForm.provider,
+      })
+      setPreviewResult(result)
+    } catch (e) {
+      setPreviewResult({ ok: false, message: formatApiError(e), error_code: 'request_failed' })
+    } finally {
+      await load({ quiet: true })
     }
   }
 
@@ -246,9 +334,59 @@ export function WebSearchPage() {
 
       {error && <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">{error}</div>}
 
+      <Card className="mb-4 p-4">
+        <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-slate-100">搜索测试</h2>
+            <p className="mt-1 text-[11px] leading-4 text-slate-500">运行一次真实搜索，并查看 bot 工具会交给模型的结果文本。</p>
+          </div>
+          <ActionButton type="button" tone="emerald" onClick={runPreview} disabled={previewResult?.loading} className="gap-1">
+            <Search className="h-3.5 w-3.5" /> {previewResult?.loading ? '搜索中...' : '搜索'}
+          </ActionButton>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_220px_120px]">
+          <Field id="web-search-preview-query" label="搜索词">
+            <input
+              id="web-search-preview-query"
+              value={previewForm.query}
+              onChange={e => setPreviewForm(prev => ({ ...prev, query: e.target.value }))}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-500"
+            />
+          </Field>
+          <Field id="web-search-preview-provider" label="Provider">
+            <select
+              id="web-search-preview-provider"
+              value={previewForm.provider}
+              onChange={e => setPreviewForm(prev => ({ ...prev, provider: e.target.value }))}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-500"
+            >
+              <option value="">自动 fallback</option>
+              {providers.map(provider => (
+                <option key={provider.id} value={provider.id}>{provider.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field id="web-search-preview-limit" label="条数">
+            <input
+              id="web-search-preview-limit"
+              type="number"
+              min="1"
+              max="10"
+              value={previewForm.limit}
+              onChange={e => setPreviewForm(prev => ({ ...prev, limit: e.target.value }))}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-500"
+            />
+          </Field>
+        </div>
+
+        <PreviewResult result={previewResult} />
+      </Card>
+
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         {providers.map(provider => {
           const testResult = testResults[provider.id]
+          const usage = provider.usage || {}
           return (
             <Card key={provider.id} className="p-4">
               <div className="flex items-start justify-between gap-3">
@@ -285,6 +423,26 @@ export function WebSearchPage() {
                     <ExternalLink className="h-3 w-3 shrink-0" />
                   </a>
                 </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+                  <div className="text-[11px] text-slate-500">调用次数</div>
+                  <div className="mt-0.5 font-semibold text-slate-100">{usage.total_calls || 0}</div>
+                </div>
+                <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+                  <div className="text-[11px] text-slate-500">成功</div>
+                  <div className="mt-0.5 font-semibold text-emerald-300">{usage.success_calls || 0}</div>
+                </div>
+                <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+                  <div className="text-[11px] text-slate-500">失败</div>
+                  <div className="mt-0.5 font-semibold text-red-300">{usage.failure_calls || 0}</div>
+                </div>
+              </div>
+
+              <div className="mt-2 text-[11px] leading-4 text-slate-500">
+                最近调用：{formatUsageTime(usage.last_called_at)}
+                {usage.last_error_code ? <span className="ml-2 text-red-300">最近错误：{errorLabel(usage.last_error_code)}</span> : null}
               </div>
 
               <TestResult result={testResult} />
