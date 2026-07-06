@@ -28,6 +28,7 @@ class ProviderResolvedConfig:
     api_key: str
     api_key_configured: bool
     api_key_source: str | None
+    priority: int = 0
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -36,6 +37,7 @@ class ProviderResolvedConfig:
             "base_url": self.base_url,
             "api_key_configured": self.api_key_configured,
             "api_key_source": self.api_key_source,
+            "priority": self.priority,
         }
 
 
@@ -59,11 +61,22 @@ def _bool_value(raw: str | None, default: bool) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _catalog_default(item: ProviderCatalogItem, field: str) -> str | bool:
+def _int_value(raw: str | None, default: int) -> int:
+    if raw is None:
+        return int(default)
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _catalog_default(item: ProviderCatalogItem, field: str) -> Any:
     if field == "enabled":
         return item.enabled_by_default
     if field == "base_url":
         return item.default_base_url
+    if field == "priority":
+        return item.default_priority
     return ""
 
 
@@ -79,11 +92,13 @@ def resolve_provider_config(db: Session, provider_id: str) -> ProviderResolvedCo
     enabled_raw, _enabled_source = _row_value(db, provider_id, "enabled")
     base_url_raw, _base_url_source = _row_value(db, provider_id, "base_url")
     api_key_raw, api_key_source = _row_value(db, provider_id, "api_key")
+    priority_raw, _priority_source = _row_value(db, provider_id, "priority")
 
     enabled = _bool_value(enabled_raw, bool(_catalog_default(item, "enabled")))
     base_url = str(base_url_raw if base_url_raw is not None else _catalog_default(item, "base_url") or "")
     api_key = str(api_key_raw or "")
     api_key_configured = bool(api_key_source and api_key)
+    priority = _int_value(priority_raw, int(_catalog_default(item, "priority")))
 
     return ProviderResolvedConfig(
         provider_id=provider_id,
@@ -92,6 +107,7 @@ def resolve_provider_config(db: Session, provider_id: str) -> ProviderResolvedCo
         api_key=api_key,
         api_key_configured=api_key_configured,
         api_key_source=api_key_source if api_key_configured else None,
+        priority=priority,
     )
 
 
@@ -127,6 +143,16 @@ def _validate_base_url(item: ProviderCatalogItem, value: str) -> str:
     return normalized
 
 
+def _validate_priority(value: Any) -> int:
+    try:
+        priority = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Invalid priority")
+    if priority < 0 or priority > 1_000_000:
+        raise HTTPException(status_code=422, detail="Invalid priority")
+    return priority
+
+
 def update_provider_config(db: Session, provider_id: str, payload: dict[str, Any]) -> ProviderResolvedConfig:
     item = _require_provider(provider_id)
     api_key = payload.get("api_key")
@@ -155,6 +181,15 @@ def update_provider_config(db: Session, provider_id: str, payload: dict[str, Any
         else:
             _delete_setting(db, setting_key(provider_id, "base_url"))
 
+    if "priority" in payload and payload.get("priority") is not None:
+        priority = _validate_priority(payload.get("priority"))
+        _upsert_setting(
+            db,
+            setting_key(provider_id, "priority"),
+            str(priority),
+            f"{item.name} 自动搜索优先级",
+        )
+
     if clear_api_key:
         _delete_setting(db, setting_key(provider_id, "api_key"))
     elif api_key is not None and str(api_key).strip():
@@ -168,4 +203,3 @@ def update_provider_config(db: Session, provider_id: str, payload: dict[str, Any
     db.commit()
     settings.invalidate()
     return resolve_provider_config(db, provider_id)
-

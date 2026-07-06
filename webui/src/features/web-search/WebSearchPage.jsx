@@ -83,6 +83,7 @@ function ProviderModal({ provider, onClose, onSaved }) {
     enabled: provider.enabled,
     base_url: provider.base_url || provider.default_base_url || '',
     api_key: '',
+    priority: Number.isFinite(Number(provider.priority)) ? Number(provider.priority) : 1000,
   })
   const [clearApiKey, setClearApiKey] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -94,6 +95,7 @@ function ProviderModal({ provider, onClose, onSaved }) {
     setSaving(true)
     const payload = { enabled: !!form.enabled }
     if (provider.supports_base_url) payload.base_url = form.base_url.trim()
+    payload.priority = Math.max(0, Math.min(Number(form.priority) || 0, 1000000))
     if (clearApiKey) payload.clear_api_key = true
     if (form.api_key.trim()) payload.api_key = form.api_key.trim()
     try {
@@ -146,6 +148,18 @@ function ProviderModal({ provider, onClose, onSaved }) {
               />
             </Field>
           )}
+
+          <Field id={`web-search-priority-${provider.id}`} label="优先级" hint="数值越小越优先，自动搜索按优先级 fallback。">
+            <input
+              id={`web-search-priority-${provider.id}`}
+              type="number"
+              min="0"
+              max="1000000"
+              value={form.priority}
+              onChange={e => setForm(prev => ({ ...prev, priority: e.target.value }))}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-500"
+            />
+          </Field>
 
           {hasKeyField && (
             <Field id={`web-search-api-key-${provider.id}`} label="API Key" hint={provider.api_key_configured ? `当前状态：${sourceLabel(provider)}` : ''}>
@@ -460,6 +474,7 @@ export function WebSearchPage() {
                   {sourceLabel(provider)}
                 </Badge>
                 <Badge tone={provider.testable ? 'emerald' : 'slate'}>{provider.testable ? '可测试' : '测试未启用'}</Badge>
+                <Badge tone="slate">优先级 {provider.priority ?? '-'}</Badge>
               </div>
 
               <div className="mt-3 space-y-1 text-xs text-slate-400">

@@ -114,6 +114,8 @@ def test_web_search_page_displays_provider_usage_counts():
     assert "调用次数" in page_source
     assert "success_calls" in page_source
     assert "failure_calls" in page_source
+    assert "优先级" in page_source
+    assert "priority" in page_source
 
 
 def test_web_search_page_no_longer_shows_not_tested_copy():

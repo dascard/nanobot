@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 from sqlalchemy import create_engine
@@ -80,6 +80,7 @@ def test_list_providers_returns_catalog_and_config_state(client, auth_header):
     assert serper["docs_url"] == "https://serper.dev/signup"
     assert serper["api_key_configured"] is False
     assert serper["api_key_source"] is None
+    assert serper["priority"] == 200
     assert serper["last_test"] is None
     assert serper["usage"]["total_calls"] == 0
     assert serper["usage"]["success_calls"] == 0
@@ -105,6 +106,20 @@ def test_update_provider_saves_enabled_and_base_url(client, auth_header):
     assert data["provider"]["base_url"] == "https://search.example.test"
     listed = _ok(client.get("/api/v1/admin/web-search/providers", headers=auth_header))
     assert _provider(listed, "searxng")["base_url"] == "https://search.example.test"
+
+
+def test_update_provider_saves_priority(client, auth_header):
+    response = client.put(
+        "/api/v1/admin/web-search/providers/brave",
+        headers=auth_header,
+        json={"priority": 10},
+    )
+    data = _ok(response)
+
+    assert data["provider"]["id"] == "brave"
+    assert data["provider"]["priority"] == 10
+    listed = _ok(client.get("/api/v1/admin/web-search/providers", headers=auth_header))
+    assert _provider(listed, "brave")["priority"] == 10
 
 
 def test_update_provider_replaces_api_key_without_echoing_secret(client, auth_header):
@@ -434,6 +449,99 @@ def test_preview_web_search_falls_back_when_first_provider_is_low_relevance(clie
     assert calls == ["searxng", "brave"]
 
 
+def test_preview_web_search_uses_priority_order(client, auth_header, monkeypatch):
+    from core.web_search.search_runtime import WebSearchProviderResult, WebSearchResult
+
+    client.put(
+        "/api/v1/admin/web-search/providers/searxng",
+        headers=auth_header,
+        json={"enabled": True, "priority": 20},
+    )
+    client.put(
+        "/api/v1/admin/web-search/providers/brave",
+        headers=auth_header,
+        json={"enabled": True, "priority": 10},
+    )
+
+    calls = []
+
+    async def fake_search_provider(config, query, limit=5):
+        calls.append(config.provider_id)
+        return WebSearchProviderResult(
+            provider_id=config.provider_id,
+            elapsed_ms=2,
+            results=[
+                WebSearchResult(
+                    provider=config.provider_id,
+                    title="上海天气预报",
+                    url="https://www.weather.com.cn/weather/101020100.shtml",
+                    snippet="上海今日天气和未来一周天气预报。",
+                )
+            ],
+        )
+
+    monkeypatch.setattr("core.web_search.search_runtime.search_provider", fake_search_provider)
+
+    data = _ok(client.post(
+        "/api/v1/admin/web-search/preview",
+        headers=auth_header,
+        json={"query": "上海天气", "limit": 5},
+    ))
+
+    assert data["ok"] is True
+    assert data["provider_id"] == "brave"
+    assert calls == ["brave"]
+
+
+def test_preview_web_search_filters_non_search_capability(client, auth_header, monkeypatch):
+    from core.web_search.provider_catalog import get_provider_catalog
+    from core.web_search.search_runtime import WebSearchProviderResult, WebSearchResult
+
+    client.put(
+        "/api/v1/admin/web-search/providers/searxng",
+        headers=auth_header,
+        json={"enabled": True, "priority": 1},
+    )
+    client.put(
+        "/api/v1/admin/web-search/providers/brave",
+        headers=auth_header,
+        json={"enabled": True, "priority": 2},
+    )
+
+    searxng = replace(get_provider_catalog("searxng"), capabilities=("extract",))
+    brave = get_provider_catalog("brave")
+    monkeypatch.setattr("core.web_search.search_runtime.list_provider_catalog", lambda: [searxng, brave])
+
+    calls = []
+
+    async def fake_search_provider(config, query, limit=5):
+        calls.append(config.provider_id)
+        return WebSearchProviderResult(
+            provider_id=config.provider_id,
+            elapsed_ms=2,
+            results=[
+                WebSearchResult(
+                    provider=config.provider_id,
+                    title="上海天气预报",
+                    url="https://www.weather.com.cn/weather/101020100.shtml",
+                    snippet="上海今日天气和未来一周天气预报。",
+                )
+            ],
+        )
+
+    monkeypatch.setattr("core.web_search.search_runtime.search_provider", fake_search_provider)
+
+    data = _ok(client.post(
+        "/api/v1/admin/web-search/preview",
+        headers=auth_header,
+        json={"query": "上海天气", "limit": 5},
+    ))
+
+    assert data["ok"] is True
+    assert data["provider_id"] == "brave"
+    assert calls == ["brave"]
+
+
 def test_preview_web_search_returns_ok_false_on_runtime_error(client, auth_header, monkeypatch):
     from core.web_search.search_runtime import WebSearchError
 
@@ -545,6 +653,10 @@ def test_config_registry_contains_sensitive_web_search_keys():
     assert key in SETTING_DEFS
     assert SETTING_DEFS[key].category == "web_search"
     assert SETTING_DEFS[key].sensitive is True
+    priority_key = "web_search.providers.serper.priority"
+    assert priority_key in SETTING_DEFS
+    assert SETTING_DEFS[priority_key].category == "web_search"
+    assert SETTING_DEFS[priority_key].value_type == "int"
 
 
 def test_api_key_is_persisted_to_system_setting(client, auth_header):

@@ -19,6 +19,7 @@ from core.web_search.usage_stats import record_provider_usage
 
 USER_AGENT = "Nanobot-WebSearch/1.0"
 TIMEOUT_SECONDS = 12
+SEARCH_CAPABILITY = "search"
 
 
 @dataclass(frozen=True)
@@ -243,6 +244,11 @@ def _collect_lists(data: Any, paths: tuple[tuple[str, ...], ...]) -> list[Any]:
 
 def _limit(value: int) -> int:
     return max(1, min(int(value or 5), 10))
+
+
+def _supports_search(provider_id: str) -> bool:
+    item = get_provider_catalog(provider_id)
+    return bool(item and SEARCH_CAPABILITY in item.capabilities)
 
 
 def _with_relevance(query: str, result: WebSearchProviderResult) -> WebSearchProviderResult:
@@ -621,14 +627,30 @@ async def search_enabled_providers(
 
     requested = str(provider_id or "").strip()
     if requested:
+        if not _supports_search(requested):
+            raise WebSearchError("provider_capability_unsupported", f"Provider {requested} 不支持网页搜索", provider_id=requested)
         config = resolve_provider_config(db, requested)
         if not config.enabled:
             raise WebSearchError("provider_disabled", f"Provider {requested} 未启用", provider_id=requested)
         result = await _search_and_record(config)
         return replace(result, attempted_providers=[_attempt_payload(result)])
 
-    configs = [resolve_provider_config(db, item.id) for item in list_provider_catalog()]
-    enabled_configs = [config for config in configs if config.enabled]
+    indexed_items = [
+        (index, item)
+        for index, item in enumerate(list_provider_catalog())
+        if SEARCH_CAPABILITY in item.capabilities
+    ]
+    configs_with_index = [
+        (index, resolve_provider_config(db, item.id))
+        for index, item in indexed_items
+    ]
+    enabled_configs = [
+        config
+        for _index, config in sorted(
+            ((index, config) for index, config in configs_with_index if config.enabled),
+            key=lambda pair: (pair[1].priority, pair[0], pair[1].provider_id),
+        )
+    ]
     if not enabled_configs:
         raise WebSearchError("no_enabled_provider", "没有启用的搜索 provider，请先到管理后台“搜索 API”启用至少一个 provider。")
 

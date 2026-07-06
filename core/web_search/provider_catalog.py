@@ -16,6 +16,7 @@ class ProviderCatalogItem:
     supports_base_url: bool
     default_base_url: str
     docs_url: str
+    default_priority: int
     enabled_by_default: bool = False
     testable: bool = False
     api_key_optional: bool = False
@@ -36,6 +37,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="",
         docs_url="https://docs.searxng.org/dev/search_api.html",
+        default_priority=100,
         testable=True,
     ),
     "serper": ProviderCatalogItem(
@@ -47,6 +49,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://google.serper.dev",
         docs_url="https://serper.dev/signup",
+        default_priority=200,
         testable=True,
     ),
     "brave": ProviderCatalogItem(
@@ -58,6 +61,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://api.search.brave.com/res/v1",
         docs_url="https://brave.com/search/api/",
+        default_priority=300,
         testable=True,
     ),
     "tavily": ProviderCatalogItem(
@@ -69,6 +73,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://api.tavily.com",
         docs_url="https://docs.tavily.com/documentation/quickstart",
+        default_priority=400,
         testable=True,
     ),
     "ddgs": ProviderCatalogItem(
@@ -80,6 +85,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=False,
         default_base_url="",
         docs_url="https://pypi.org/project/duckduckgo-search/",
+        default_priority=500,
         testable=True,
     ),
     "exa": ProviderCatalogItem(
@@ -91,6 +97,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://api.exa.ai",
         docs_url="https://exa.ai/docs/reference/search-api-guide",
+        default_priority=600,
         testable=True,
     ),
     "firecrawl": ProviderCatalogItem(
@@ -102,6 +109,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://api.firecrawl.dev",
         docs_url="https://docs.firecrawl.dev/api-reference/introduction",
+        default_priority=700,
         testable=True,
     ),
     "linkup": ProviderCatalogItem(
@@ -113,6 +121,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://api.linkup.so",
         docs_url="https://docs.linkup.so/pages/documentation/platform/authentication",
+        default_priority=800,
         testable=True,
     ),
     "you": ProviderCatalogItem(
@@ -124,6 +133,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://ydc-index.io",
         docs_url="https://you.com/docs/administration/api-keys",
+        default_priority=900,
         testable=True,
     ),
     "jina": ProviderCatalogItem(
@@ -135,6 +145,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://s.jina.ai",
         docs_url="https://api.jina.ai/docs",
+        default_priority=1000,
         testable=True,
     ),
 }

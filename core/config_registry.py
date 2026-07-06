@@ -703,6 +703,19 @@ def _register_web_search_settings() -> None:
                     description=f"{item.name} Base URL",
                 ),
             )
+        SETTING_DEFS.setdefault(
+            f"{base}.priority",
+            SettingDef(
+                key=f"{base}.priority",
+                env_name=env_name_for(item.id, "priority"),
+                default=item.default_priority,
+                value_type="int",
+                category="web_search",
+                description=f"{item.name} 自动搜索优先级（数值越小越优先）",
+                min_value=0,
+                max_value=1_000_000,
+            ),
+        )
 
 
 _register_web_search_settings()

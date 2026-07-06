@@ -33,6 +33,7 @@ class ProviderUpdateRequest(BaseModel):
     api_key: str | None = None
     clear_api_key: bool = False
     base_url: str | None = None
+    priority: int | None = None
 
 
 class ProviderTestRequest(BaseModel):
@@ -90,6 +91,7 @@ def update_web_search_provider(
         {
             "enabled_changed": "enabled" in payload,
             "base_url_changed": "base_url" in payload,
+            "priority_changed": "priority" in payload,
             "api_key_changed": bool(payload.get("api_key")),
             "clear_api_key": bool(payload.get("clear_api_key")),
         },
