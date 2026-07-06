@@ -144,6 +144,204 @@ class TestGroupRuntime:
         assert captured_ctx.get("session_name") == "测试群"
 
     @pytest.mark.asyncio
+    async def test_timer_linger_active_bypasses_talk_value_gate(self, monkeypatch):
+        """linger 激活时,timer 路径应像消息路径一样豁免 talk_value 频率门。
+
+        回归:消息路径(:265)在 linger 激活时豁免 talk_value gate,但 timer 路径(:381)
+        曾漏掉同一豁免,导致余韵窗口内的 timer 被频率门错误拦成 wait,让 bot 静默。
+        """
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            return {"action": "continue", "reason": "gate reached"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        # 建 state:一条 ambient 消息,talk_value 低使频率门阈值 > 当前 pending
+        await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "随便说一句",
+        }, trigger_reason="ambient", talk_value=0.2)
+
+        state = runtime._states["group_g1"]
+        # 模拟刚 @过 bot:linger 激活;并绕开限流,让 timer 能进入 gate 判断
+        state.activate_linger("u1", "at_bot")
+        state.last_trigger_reason = "ambient"
+        state.last_gate_completed_ts = 0.0
+        gen = state.generation
+
+        assert runtime._active_linger_score(state) > 0  # 前置:linger 确实激活
+
+        r = await runtime.handle_timer_fired("g1", gen, trigger_reason="ambient")
+
+        # 修复后:豁免 talk_value gate,继续走 gate(fake 返回 continue)
+        assert not str(r.get("reason", "")).startswith("talk_value gate"), (
+            f"linger 激活时 timer 仍被 talk_value gate 拦下: {r.get('reason')}"
+        )
+        assert r["action"] == "continue"
+
+    @pytest.mark.asyncio
+    async def test_timer_talk_value_gate_still_applies_without_linger(self, monkeypatch):
+        """无 linger 时,timer 的 talk_value 频率门仍应生效(不能误放行)。"""
+        runtime = GroupRuntime()
+
+        async def fake_gate(_gid, _p, _ctx, _tr):
+            return {"action": "continue", "reason": "gate reached"}
+
+        monkeypatch.setattr(runtime, "_call_gate", fake_gate)
+
+        await runtime.process_message("g1", {
+            "sender_id": "u1", "sender_name": "A", "message": "随便说一句",
+        }, trigger_reason="ambient", talk_value=0.2)
+
+        state = runtime._states["group_g1"]
+        state.last_trigger_reason = "ambient"
+        state.last_gate_completed_ts = 0.0
+        gen = state.generation
+
+        assert runtime._active_linger_score(state) == 0  # 前置:无 linger
+
+        r = await runtime.handle_timer_fired("g1", gen, trigger_reason="ambient")
+
+        # 无 linger 时频率门照常拦截
+        assert r["action"] == "wait"
+        assert str(r.get("reason", "")).startswith("talk_value gate")
+
+    # ── 主动发言(proactive)──
+
+    @staticmethod
+    def _patch_proactive_settings(monkeypatch, *, enabled=True, floor=3, ceiling=20,
+                                  window=1800, max_per=2):
+        """固定 proactive 设置,避免依赖真实 DB。"""
+        from core.settings_service import settings
+        ints = {
+            "timing_gate.proactive.activity_floor": floor,
+            "timing_gate.proactive.activity_ceiling": ceiling,
+            "timing_gate.proactive.window_sec": window,
+            "timing_gate.proactive.max_per_window": max_per,
+        }
+        monkeypatch.setattr(settings, "get_bool", lambda k, d=False: enabled if k == "timing_gate.proactive.enabled" else d)
+        monkeypatch.setattr(settings, "get_int", lambda k, d=0: ints.get(k, d))
+
+    @staticmethod
+    def _cold_active_state(runtime, n_msgs=3):
+        """构造冷启动 + 活跃群 state:n 条普通 ambient 消息(无 bot 信号)。"""
+        state = runtime._states.setdefault("group_g1", GateState(group_id="group_g1"))
+        for i in range(n_msgs):
+            state.add_message(PendingMessage(f"u{i}", f"用户{i}", f"闲聊内容{i}"))
+        return state
+
+    def test_proactive_precheck_passes_on_cold_active_group(self, monkeypatch):
+        runtime = GroupRuntime()
+        self._patch_proactive_settings(monkeypatch)
+        state = self._cold_active_state(runtime, n_msgs=3)
+        assert runtime._proactive_precheck(state, state.take_snapshot()) is True
+
+    def test_proactive_precheck_blocked_when_disabled(self, monkeypatch):
+        runtime = GroupRuntime()
+        self._patch_proactive_settings(monkeypatch, enabled=False)
+        state = self._cold_active_state(runtime, n_msgs=3)
+        assert runtime._proactive_precheck(state, state.take_snapshot()) is False
+
+    def test_proactive_precheck_blocked_when_bot_signal(self, monkeypatch):
+        runtime = GroupRuntime()
+        self._patch_proactive_settings(monkeypatch)
+        state = self._cold_active_state(runtime, n_msgs=2)
+        state.add_message(PendingMessage("u9", "小明", "在吗", is_at_bot=True))
+        assert runtime._proactive_precheck(state, state.take_snapshot()) is False
+
+    def test_proactive_precheck_blocked_when_linger_active(self, monkeypatch):
+        runtime = GroupRuntime()
+        self._patch_proactive_settings(monkeypatch)
+        state = self._cold_active_state(runtime, n_msgs=3)
+        state.activate_linger(state.take_snapshot()[-1].sender_id, "at_bot")
+        assert runtime._proactive_precheck(state, state.take_snapshot()) is False
+
+    def test_proactive_precheck_blocked_when_dead_group(self, monkeypatch):
+        runtime = GroupRuntime()
+        self._patch_proactive_settings(monkeypatch, floor=3)
+        state = self._cold_active_state(runtime, n_msgs=1)  # msg_5m=1 < floor
+        assert runtime._proactive_precheck(state, state.take_snapshot()) is False
+
+    def test_proactive_precheck_blocked_when_firehose(self, monkeypatch):
+        runtime = GroupRuntime()
+        self._patch_proactive_settings(monkeypatch, ceiling=20)
+        state = self._cold_active_state(runtime, n_msgs=25)  # msg_1m=25 >= ceiling
+        assert runtime._proactive_precheck(state, state.take_snapshot()) is False
+
+    def test_proactive_precheck_blocked_when_budget_exhausted(self, monkeypatch):
+        runtime = GroupRuntime()
+        self._patch_proactive_settings(monkeypatch, max_per=2)
+        state = self._cold_active_state(runtime, n_msgs=3)
+        state.record_proactive()
+        state.record_proactive()  # 用满 2 次
+        assert runtime._proactive_precheck(state, state.take_snapshot()) is False
+
+    @pytest.mark.asyncio
+    async def test_run_proactive_speak_produces_continue_and_linger(self, monkeypatch):
+        runtime = GroupRuntime()
+        state = self._cold_active_state(runtime, n_msgs=3)
+
+        def fake_judge(_ctx):
+            return {"should_speak": True, "reason": "有可贡献的内容", "error_type": None}
+
+        monkeypatch.setattr("clients.classifier_client.judge_proactive", fake_judge)
+        state.mark_gate_start()
+        gen = state.generation
+        r = await runtime._run_proactive("group_g1", state.take_snapshot(), {}, gen, "u2")
+
+        assert r["action"] == "continue"
+        assert r["proactive"]["should_speak"] is True
+        assert state.linger_source_user_id == "u2"
+        assert runtime._active_linger_score(state) > 0
+        assert len(state.proactive_ts_window) == 1
+        assert state.running is False  # gate 已释放
+
+    @pytest.mark.asyncio
+    async def test_run_proactive_declined_keeps_no_reply(self, monkeypatch):
+        runtime = GroupRuntime()
+        state = self._cold_active_state(runtime, n_msgs=3)
+
+        monkeypatch.setattr("clients.classifier_client.judge_proactive",
+                            lambda _c: {"should_speak": False, "reason": "无需插话", "error_type": None})
+        state.mark_gate_start()
+        gen = state.generation
+        r = await runtime._run_proactive("group_g1", state.take_snapshot(), {}, gen, "u2")
+
+        assert r["action"] == "no_reply"
+        assert len(state.proactive_ts_window) == 0  # 未消费预算
+        assert state.running is False
+
+    @pytest.mark.asyncio
+    async def test_run_proactive_gen_mismatch_dropped(self, monkeypatch):
+        runtime = GroupRuntime()
+        state = self._cold_active_state(runtime, n_msgs=3)
+
+        monkeypatch.setattr("clients.classifier_client.judge_proactive",
+                            lambda _c: {"should_speak": True, "reason": "x", "error_type": None})
+        state.mark_gate_start()
+        gen = state.generation
+        state.add_message(PendingMessage("u5", "新人", "新消息"))  # generation 变化
+
+        r = await runtime._run_proactive("group_g1", state.take_snapshot(), {}, gen, "u2")
+        assert r["action"] == "no_reply"
+        assert "mismatch" in r["reason"]
+        assert len(state.proactive_ts_window) == 0
+
+    @pytest.mark.asyncio
+    async def test_run_proactive_llm_error_defaults_silent(self, monkeypatch):
+        runtime = GroupRuntime()
+        state = self._cold_active_state(runtime, n_msgs=3)
+
+        monkeypatch.setattr("clients.classifier_client.judge_proactive",
+                            lambda _c: {"should_speak": False, "reason": "裁判不可用", "error_type": "network_error"})
+        state.mark_gate_start()
+        gen = state.generation
+        r = await runtime._run_proactive("group_g1", state.take_snapshot(), {}, gen, "u2")
+
+        assert r["action"] == "no_reply"
+        assert r["proactive"]["error_type"] == "network_error"
+
+    @pytest.mark.asyncio
     async def test_timer_fired_gen_mismatch_rejected(self, monkeypatch):
         runtime = GroupRuntime()
 

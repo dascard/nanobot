@@ -112,7 +112,7 @@ def _resolve_classifier_route(route_key: str) -> dict:
     }
 
     # 只有分类器子路由继承 timing_gate；controller/vision route 独立解析。
-    if route_key in ("private_decision", "classifier_legacy"):
+    if route_key in ("private_decision", "classifier_legacy", "timing_proactive"):
         base = _resolve_classifier_route("timing_gate")
     else:
         base = dict(defaults)
@@ -1308,3 +1308,56 @@ def call_qwen_private_timing(message: str, has_files: bool = False) -> dict:
         "raw": result.get("raw", ""),
         "confidence": 1.0,
     }
+
+
+# ── 群聊主动发言裁判（独立 route timing_proactive，默认倾向沉默）──
+
+_PROACTIVE_PROMPT = """你是群聊里的一个成员 bot。现在群里有人在闲聊，没有 @ 你、也没有点名你。
+判断这条消息你是否**值得主动**接一句话。
+
+默认倾向【不说】。只有当你确实有相关、有价值、能自然融入的内容可以贡献时，才选择说。
+以下情况应【不说】：纯寒暄附和、你没有相关信息、话题与你无关、插话会显得突兀或打扰。
+
+只输出 JSON，不要解释、不要 Markdown：
+{"should_speak": true 或 false, "reason": "一句话原因"}
+
+示例：
+{"should_speak": false, "reason": "群友日常寒暄，无需插话"}
+{"should_speak": true, "reason": "有人问到我了解的技术问题，可以补充"}"""
+
+PROACTIVE_MAX_TOKENS = 80
+
+
+def judge_proactive(context: str) -> dict:
+    """群聊主动发言语义裁判。走独立 route timing_proactive，解析失败保守沉默。"""
+    import time as _t
+
+    t0 = _t.time()
+    try:
+        raw = call_model_route(
+            route_key="timing_proactive",
+            system_prompt=_PROACTIVE_PROMPT,
+            user_message=context,
+            max_tokens=PROACTIVE_MAX_TOKENS,
+        )
+    except Exception as e:
+        logger.warning("[Proactive] failed latency=%dms: %s", int((_t.time() - t0) * 1000), e)
+        return {"should_speak": False, "reason": f"裁判不可用: {e}", "raw": "", "error_type": "network_error"}
+
+    cleaned = strip_think_blocks(raw)
+    try:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = json.loads(cleaned[start:end])
+            return {
+                "should_speak": bool(data.get("should_speak", False)),
+                "reason": str(data.get("reason", ""))[:200],
+                "raw": raw[:200],
+                "error_type": None,
+            }
+    except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+        pass
+
+    logger.warning("[Proactive] invalid output: %s", str(raw)[:100])
+    return {"should_speak": False, "reason": "非法输出", "raw": str(raw)[:200], "error_type": "parse_error"}

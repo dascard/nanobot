@@ -231,6 +231,7 @@ class GroupChatState:
     linger_last_reply_ts: float = 0.0
     last_active_ts: float = 0.0
     created_at: float = 0.0
+    proactive_ts_window: list[float] = field(default_factory=list)  # 主动发言时间戳滑动窗口
 
     def __post_init__(self):
         now = _time.time()
@@ -356,6 +357,17 @@ class GroupChatState:
         self.linger_source_user_id = str(sender_id or "")
         self.linger_started_by = str(trigger_reason or "")
         self.linger_last_reply_ts = 0.0
+        self._touch()
+
+    def proactive_budget_available(self, window_sec: float, max_per_window: int) -> bool:
+        """滑动窗口预算:剪掉窗口外的时间戳,判断剩余是否小于上限。"""
+        now = _time.time()
+        self.proactive_ts_window = [t for t in self.proactive_ts_window if now - t < window_sec]
+        return len(self.proactive_ts_window) < max(1, int(max_per_window))
+
+    def record_proactive(self):
+        """记录一次主动发言,消费预算。"""
+        self.proactive_ts_window.append(_time.time())
         self._touch()
 
     def linger_score_for(self, sender_id: str = "") -> float:

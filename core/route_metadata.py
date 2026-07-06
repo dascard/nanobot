@@ -9,6 +9,7 @@ ROUTE_METADATA: dict[str, dict] = {
     "fast":     {"type": "controller", "label": "快速模型（预留）"},
     "smart":    {"type": "controller", "label": "智能模型（预留）"},
     "timing_gate":        {"type": "classifier", "label": "TimingGate 分类器"},
+    "timing_proactive":   {"type": "classifier", "label": "主动发言裁判"},
     "private_decision":   {"type": "classifier", "label": "私聊决策分类器"},
     "classifier_legacy":  {"type": "classifier", "label": "旧分类器"},
     "sticker_describe":   {"type": "vision",     "label": "表情包打标"},

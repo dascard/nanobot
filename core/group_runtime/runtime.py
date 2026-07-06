@@ -215,6 +215,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                 }, state, tr)
 
             gate_prepared = False
+            proactive_prepared = False
             if state.force_next_continue:
                 force_reason = state.force_reason or tr
                 snapshot = state.take_snapshot()
@@ -299,29 +300,47 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                         scoring_decision = None
                         logger.debug("[GroupRuntime] ambient scoring failed: %s", exc, exc_info=True)
                     if scoring_decision is not None and scoring_decision.stage == "rule_shortcut":
-                        logger.info("[GroupRuntime] ambient_scoring_shortcut group=%s action=%s pending=%d",
-                                    group_id, scoring_decision.action, len(snapshot))
-                        return self._apply_scoring_shortcut(
-                            state,
-                            scoring_decision,
-                            pending=snapshot,
-                            reason_prefix="ambient scoring shortcut",
-                        )
+                        # 冷启动 no_reply 且满足主动前置检查 → 尝试主动发言(锁外调 LLM 裁判)
+                        if (scoring_decision.action == "no_reply"
+                                and self._proactive_precheck(state, snapshot)):
+                            state.mark_gate_start()
+                            proactive_prepared = True
+                            proactive_gen = state.generation
+                            proactive_ctx = dict(ctx)
+                            proactive_snapshot = snapshot
+                            proactive_sender = snapshot[-1].sender_id if snapshot else ""
+                            logger.info("[GroupRuntime] proactive_prepared group=%s pending=%d",
+                                        group_id, len(snapshot))
+                        else:
+                            logger.info("[GroupRuntime] ambient_scoring_shortcut group=%s action=%s pending=%d",
+                                        group_id, scoring_decision.action, len(snapshot))
+                            return self._apply_scoring_shortcut(
+                                state,
+                                scoring_decision,
+                                pending=snapshot,
+                                reason_prefix="ambient scoring shortcut",
+                            )
 
-                policy = self._resolve_timing_model_policy(state, group_id)
-                if policy.mode == "rules_only":
-                    return self._apply_policy_scoring_decision(
-                        state,
-                        policy,
-                        tr,
-                        pending=snapshot,
-                        reason_prefix="timing model rules_only",
-                    )
-                state.mark_gate_start()
-                gen = state.generation
-                ctx_snapshot = dict(ctx)
-                gate_policy = policy
-                gate_force_direct_score = 0.0
+                if not proactive_prepared:
+                    policy = self._resolve_timing_model_policy(state, group_id)
+                    if policy.mode == "rules_only":
+                        return self._apply_policy_scoring_decision(
+                            state,
+                            policy,
+                            tr,
+                            pending=snapshot,
+                            reason_prefix="timing model rules_only",
+                        )
+                    state.mark_gate_start()
+                    gen = state.generation
+                    ctx_snapshot = dict(ctx)
+                    gate_policy = policy
+                    gate_force_direct_score = 0.0
+
+        if proactive_prepared:
+            return await self._run_proactive(
+                group_id, proactive_snapshot, proactive_ctx, proactive_gen, proactive_sender,
+            )
 
         result = await self._call_gate(group_id, snapshot, ctx_snapshot, tr)
 
@@ -377,8 +396,9 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             if not state:
                 return {"action": "no_reply", "delay_seconds": None, "reason": "state cleaned up"}
 
-            # 检查 talk_value gate——timer 也不能绕过
+            # 检查 talk_value gate——linger 激活时豁免(与消息路径 process_message 对齐)
             if (state.last_trigger_reason == "ambient"
+                    and self._active_linger_score(state) <= 0
                     and not self._should_gate_by_frequency(state, state.talk_value)):
                 threshold = max(1, round(1.0 / max(state.talk_value, 0.05)))
                 return self._attach_shadow_scoring({
@@ -635,6 +655,95 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                 "last_active_ago": round(now - state.last_active_ts, 1),
             }
         return out
+
+    def _proactive_precheck(self, state: GroupChatState,
+                            pending: list[GroupPendingMessage]) -> bool:
+        """主动发言前置检查(锁内,廉价规则)。全部通过才值得调 LLM 裁判。"""
+        from core.settings_service import settings
+
+        if not settings.get_bool("timing_gate.proactive.enabled", True):
+            return False
+        # 无 bot 指向信号(纯冷启动;有 @/reply 走直接路径,不主动)
+        if any(m.is_at_bot or m.is_reply_to_bot for m in pending):
+            return False
+        # 无活跃 linger(有则走 linger 加权路径,不重复主动)
+        if self._active_linger_score(state, pending) > 0:
+            return False
+        # 活跃度带:群不死(msg_5m>=floor)且不刷屏(msg_1m<ceiling)
+        floor = settings.get_int("timing_gate.proactive.activity_floor", 3)
+        ceiling = settings.get_int("timing_gate.proactive.activity_ceiling", 20)
+        if state.recent_message_count(300) < floor:
+            return False
+        if state.recent_message_count(60) >= ceiling:
+            return False
+        # 硬预算:滑动窗口计数
+        window = settings.get_int("timing_gate.proactive.window_sec", 1800)
+        max_per = settings.get_int("timing_gate.proactive.max_per_window", 2)
+        if not state.proactive_budget_available(window, max_per):
+            return False
+        return True
+
+    async def _run_proactive(self, group_id: str, pending: list[GroupPendingMessage],
+                             ctx: dict, gen: int, sender_id: str) -> dict:
+        """锁外调用主动发言 LLM 裁判,再校验 generation 并应用决策。"""
+        from clients.classifier_client import judge_proactive
+
+        context = self._build_timing_context(pending=pending, trigger_reason="proactive", **ctx)
+        t0 = _time.time()
+        verdict = await asyncio.to_thread(judge_proactive, context)
+        latency = int((_time.time() - t0) * 1000)
+
+        async with self._lock:
+            state = self._states.get(group_id)
+            if not state:
+                return {"action": "no_reply", "delay_seconds": None, "reason": "state cleaned up"}
+
+            proactive_meta = {
+                "should_speak": bool(verdict.get("should_speak")),
+                "reason": str(verdict.get("reason", ""))[:200],
+                "latency_ms": latency,
+                "error_type": verdict.get("error_type"),
+            }
+
+            if gen != state.generation:
+                state.mark_gate_done()
+                return self._attach_shadow_scoring({
+                    "action": "no_reply", "delay_seconds": None,
+                    "generation": state.generation,
+                    "cooldown_ago": round(state.bot_reply_ago(), 1),
+                    "reason": "generation mismatch during proactive",
+                    "proactive": proactive_meta,
+                }, state, "proactive", pending=pending)
+
+            if verdict.get("should_speak"):
+                state.activate_linger(sender_id, "proactive")
+                state.record_proactive()
+                payload = _pending_payload(pending)
+                state.handle_continue()
+                state.mark_gate_done()
+                logger.info("[GroupRuntime] proactive_speak group=%s latency=%dms reason=%.60s",
+                            group_id, latency, proactive_meta["reason"])
+                response = {
+                    "action": "continue",
+                    "delay_seconds": None,
+                    "generation": state.generation,
+                    "cooldown_ago": round(state.bot_reply_ago(), 1),
+                    "reason": f"proactive: {proactive_meta['reason']}",
+                    "proactive": proactive_meta,
+                }
+                response.update(payload)
+                return response
+
+            state.handle_no_reply()
+            state.mark_gate_done()
+            return {
+                "action": "no_reply",
+                "delay_seconds": None,
+                "generation": state.generation,
+                "cooldown_ago": round(state.bot_reply_ago(), 1),
+                "reason": f"proactive declined: {proactive_meta['reason']}",
+                "proactive": proactive_meta,
+            }
 
     async def _call_gate(self, group_id: str, pending: list[GroupPendingMessage],
                          ctx: dict, trigger_reason: str) -> dict:
