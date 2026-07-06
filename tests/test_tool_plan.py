@@ -325,3 +325,59 @@ async def test_tool_plan_guard_rejects_disabled_dispatch():
 
     assert "python_sandbox" in str(exc.value)
     assert "测试禁用" in str(exc.value)
+
+
+def test_tool_plan_native_schema_filter_uses_sent_tool_schemas():
+    from types import SimpleNamespace
+
+    from core.tool_plan import ToolPlan, tool_plan_scope
+    from nanobot_kt.tool_runtime import install_tool_plan_native_schema_filter
+
+    web_search_schema = {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "项目 Web Search",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "provider": {"type": "string"},
+                },
+                "required": ["query"],
+            },
+        },
+    }
+    plan = ToolPlan.from_effective_tools(
+        enabled={"web_search": True},
+        chat_type="private",
+        tool_schemas=[web_search_schema],
+    )
+    controller = SimpleNamespace(
+        _get_native_tool_schemas=lambda: [
+            SimpleNamespace(
+                name="web_search",
+                description="KT 内置 Web Search",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "max_results": {"type": "integer"},
+                    },
+                    "required": ["query"],
+                },
+            )
+        ]
+    )
+    agent = SimpleNamespace(controller=controller)
+
+    assert install_tool_plan_native_schema_filter(agent) is True
+
+    with tool_plan_scope(plan):
+        schemas = controller._get_native_tool_schemas()
+
+    assert [schema.name for schema in schemas] == ["web_search"]
+    props = schemas[0].parameters["properties"]
+    assert {"query", "limit", "provider"} <= set(props)
+    assert "max_results" not in props

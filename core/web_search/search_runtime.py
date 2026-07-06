@@ -244,18 +244,31 @@ def format_provider_result_for_model(
     normalized_limit = _limit(limit)
     items = result.results[:normalized_limit]
     lines = [
-        f"web_search: query={str(query or '').strip()} provider={result.provider_id} count={len(items)}",
+        "WEB_SEARCH_RESULTS_BEGIN",
+        f"QUERY: {str(query or '').strip()}",
+        f"PROVIDER: {result.provider_id}",
+        f"RESULT_COUNT: {len(items)}",
+        "RESULTS:",
     ]
-    for index, item in enumerate(items, start=1):
-        snippet = item.snippet.replace("\n", " ").strip()
-        if len(snippet) > 260:
-            snippet = f"{snippet[:260]}..."
-        line = f"{index}. {item.title}\n   URL: {item.url}"
-        if snippet:
-            line += f"\n   摘要: {snippet}"
-        if item.published_at:
-            line += f"\n   时间: {item.published_at}"
-        lines.append(line)
+    if not items:
+        lines.append("(无搜索结果)")
+    else:
+        for index, item in enumerate(items, start=1):
+            snippet = item.snippet.replace("\n", " ").strip()
+            if len(snippet) > 260:
+                snippet = f"{snippet[:260]}..."
+            line = f"{index}. {item.title}\n   URL: {item.url}"
+            if snippet:
+                line += f"\n   摘要: {snippet}"
+            if item.published_at:
+                line += f"\n   时间: {item.published_at}"
+            lines.append(line)
+    lines.extend(
+        [
+            "只能基于以上 WEB_SEARCH_RESULTS 回答；如果结果与用户问题不匹配，必须重新调用 web_search，不能使用其它网页记忆或臆测。",
+            "WEB_SEARCH_RESULTS_END",
+        ]
+    )
     return "\n".join(lines)
 
 

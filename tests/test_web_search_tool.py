@@ -44,6 +44,30 @@ async def test_web_search_tool_returns_structured_results(monkeypatch):
     assert result.metadata["structured_content"]["results"][0]["title"] == "Nanobot"
 
 
+@pytest.mark.asyncio
+async def test_web_search_tool_accepts_legacy_max_results(monkeypatch):
+    from core.web_search.search_runtime import WebSearchProviderResult
+    from creatures.nanobot.prompts.skills.web_search.tool import WebSearchTool
+
+    calls = []
+
+    async def fake_search_enabled_providers(db, query, limit=5, provider_id=""):
+        calls.append({"query": query, "limit": limit, "provider_id": provider_id})
+        return WebSearchProviderResult(provider_id=provider_id or "searxng", results=[])
+
+    monkeypatch.setattr(
+        "creatures.nanobot.prompts.skills.web_search.tool.search_enabled_providers",
+        fake_search_enabled_providers,
+    )
+
+    result = await WebSearchTool()._execute(
+        {"query": "nanobot", "max_results": 7, "provider": "brave"}
+    )
+
+    assert result.exit_code == 0
+    assert calls == [{"query": "nanobot", "limit": 7, "provider_id": "brave"}]
+
+
 def test_web_search_model_message_formatter_matches_tool_output(monkeypatch):
     from core.web_search.search_runtime import (
         WebSearchProviderResult,
@@ -65,9 +89,14 @@ def test_web_search_model_message_formatter_matches_tool_output(monkeypatch):
 
     message = format_provider_result_for_model("nanobot", provider_result, limit=5)
 
-    assert message.startswith("web_search: query=nanobot provider=searxng count=1")
+    assert message.startswith("WEB_SEARCH_RESULTS_BEGIN")
+    assert "QUERY: nanobot" in message
+    assert "PROVIDER: searxng" in message
+    assert "RESULT_COUNT: 1" in message
     assert "URL: https://example.test/nanobot" in message
     assert "摘要: 搜索结果摘要" in message
+    assert "只能基于以上 WEB_SEARCH_RESULTS 回答" in message
+    assert message.endswith("WEB_SEARCH_RESULTS_END")
 
 
 @pytest.mark.asyncio

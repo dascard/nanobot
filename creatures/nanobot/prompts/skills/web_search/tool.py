@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
@@ -12,6 +13,8 @@ from core.web_search.search_runtime import (
     format_provider_result_for_model,
     search_enabled_providers,
 )
+
+logger = logging.getLogger("nanobot.web_search.tool")
 
 
 class WebSearchTool(BaseTool):
@@ -49,7 +52,7 @@ class WebSearchTool(BaseTool):
                 },
                 "provider": {
                     "type": "string",
-                    "description": "可选 provider id，如 searxng、brave、serper、tavily、exa、firecrawl、linkup、you、jina、ddgs。留空则按已启用 provider 自动 fallback。",
+                    "description": "可选 provider id，如 searxng、brave、serper、tavily、exa、firecrawl、linkup、you、jina、ddgs。留空则按已启用 provider 自动 fallback，并在第一个有结果的 provider 停止；需要对比或排查某个 API 时显式指定。",
                 },
             },
             "required": ["query"],
@@ -60,7 +63,10 @@ class WebSearchTool(BaseTool):
         if not query:
             return ToolResult(error="Missing 'query' argument")
         try:
-            limit = max(1, min(int(args.get("limit") or 5), 10))
+            raw_limit = args.get("limit")
+            if raw_limit in (None, ""):
+                raw_limit = args.get("max_results")
+            limit = max(1, min(int(raw_limit or 5), 10))
         except (TypeError, ValueError):
             limit = 5
         provider = str(args.get("provider") or "").strip()
@@ -89,6 +95,15 @@ class WebSearchTool(BaseTool):
             return ToolResult(error=f"web_search failed: {exc}")
 
         items = result.results
+        first = items[0] if items else None
+        logger.info(
+            "web_search result provider=%s query=%s count=%d first_title=%s first_url=%s",
+            result.provider_id,
+            query[:120],
+            len(items),
+            (first.title[:120] if first else ""),
+            (first.url[:200] if first else ""),
+        )
         if not items:
             return ToolResult(
                 output=format_provider_result_for_model(query, result, limit=limit),

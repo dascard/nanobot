@@ -329,7 +329,10 @@ def test_preview_web_search_returns_results_and_model_message(client, auth_heade
     assert data["provider_id"] == "searxng"
     assert data["elapsed_ms"] == 12
     assert data["results"][0]["title"] == "Nanobot Search"
-    assert "web_search: query=nanobot web search provider=searxng count=1" in data["message"]
+    assert "QUERY: nanobot web search" in data["message"]
+    assert "PROVIDER: searxng" in data["message"]
+    assert "RESULT_COUNT: 1" in data["message"]
+    assert "WEB_SEARCH_RESULTS_END" in data["message"]
     assert "https://example.test/search" in data["message"]
 
     listed = _ok(client.get("/api/v1/admin/web-search/providers", headers=auth_header))

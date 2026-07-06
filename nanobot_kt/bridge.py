@@ -344,12 +344,17 @@ class NanobotBridge:
             except Exception as e:
                 logger.warning("[NanobotBridge] Tool tracing wrapper install failed: %s", e)
         try:
-            from nanobot_kt.tool_runtime import install_tool_plan_guard
+            from nanobot_kt.tool_runtime import (
+                install_tool_plan_guard,
+                install_tool_plan_native_schema_filter,
+            )
 
             if install_tool_plan_guard(self._agent):
                 logger.info("[NanobotBridge] ToolPlan guard plugin installed")
+            if install_tool_plan_native_schema_filter(self._agent):
+                logger.info("[NanobotBridge] ToolPlan native schema filter installed")
         except Exception as e:
-            logger.warning("[NanobotBridge] ToolPlan guard plugin install failed: %s", e)
+            logger.warning("[NanobotBridge] ToolPlan runtime install failed: %s", e)
 
         # Critical: Agent must be started so _running=True; otherwise
         # _process_event() drops all events and returns empty output.
