@@ -8,6 +8,8 @@ from core.prompt_v2.variables import render_scoped_template
 
 logger = logging.getLogger("nanobot.prompt_v2.task_templates")
 
+TASK_USER_INSTRUCTION = "请根据上面的任务内容输出结果。"
+
 
 def render_task_prompt(prompt_key: str, values: dict[str, Any], *, fallback_text: str = "") -> str:
     try:
@@ -28,4 +30,12 @@ def render_task_messages(
     rendered = render_task_prompt(prompt_key, values, fallback_text="")
     if not rendered:
         return list(fallback_messages or [])
-    return [{"role": "system", "content": rendered}]
+    user_content = str(
+        (values or {}).get("pending_text")
+        or (values or {}).get("message")
+        or TASK_USER_INSTRUCTION
+    )
+    return [
+        {"role": "system", "content": rendered},
+        {"role": "user", "content": user_content},
+    ]

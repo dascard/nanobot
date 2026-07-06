@@ -47,6 +47,22 @@ class TestParseOutput:
         assert r["action"] == "no_reply"
         assert r["error_type"] is None
 
+    def test_reply_bool_json_is_continue(self):
+        from clients.classifier_client import TimingGate
+        g = TimingGate()
+        r = g._parse_output('```json\n{"reply": true, "reason": "用户明确点名bot"}\n```')
+        assert r["action"] == "continue"
+        assert r["reason"] == "用户明确点名bot"
+        assert r["parse_quality"] == "json_compat"
+
+    def test_needs_reply_false_json_is_no_reply(self):
+        from clients.classifier_client import TimingGate
+        g = TimingGate()
+        r = g._parse_output('{"needs_reply": false, "reason": "未点名bot"}')
+        assert r["action"] == "no_reply"
+        assert r["reason"] == "未点名bot"
+        assert r["parse_quality"] == "json_compat"
+
     def test_delay_clamp_too_low(self):
         from clients.classifier_client import TimingGate
         g = TimingGate()

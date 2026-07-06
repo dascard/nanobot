@@ -1188,6 +1188,18 @@ class TimingGate:
                         "parse_quality": "json",
                         "model_confidence": 0.8,
                     }
+                for compat_key in ("reply", "needs_reply", "should_reply"):
+                    compat_value = data.get(compat_key)
+                    if isinstance(compat_value, bool):
+                        return {
+                            "action": "continue" if compat_value else "no_reply",
+                            "delay_seconds": None,
+                            "reason": str(data.get("reason", ""))[:200],
+                            "raw": raw[:200],
+                            "error_type": None,
+                            "parse_quality": "json_compat",
+                            "model_confidence": 0.6,
+                        }
         except (json.JSONDecodeError, ValueError, KeyError, TypeError):
             pass
 

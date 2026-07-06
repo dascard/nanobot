@@ -248,6 +248,8 @@ V2 判定: {{{{ pending_text }}}} / {{{{ bot_name }}}}
 
         messages = captured["payload"]["messages"]
         assert "V2 判定: ping" in messages[0]["content"]
+        assert [m["role"] for m in messages] == ["system", "user"]
+        assert messages[1]["content"] == "ping"
         assert "legacy system" not in json.dumps(messages, ensure_ascii=False)
         assert captured["payload"]["enable_thinking"] is False
         assert captured["payload"]["thinking"] == {"type": "disabled"}
