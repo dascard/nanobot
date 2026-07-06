@@ -44,6 +44,7 @@ _LEGACY_ALIASES: dict[str, str] = {
     "ai_daily_quality_user": "tools/ai_daily/quality_user",
     "memory_query": "tools/memory_query/usage",
     "knowledge_query": "tools/knowledge_query/usage",
+    "web_search": "tools/web_search/usage",
     "persona_update": "tools/persona_update/usage",
     "schedule_task": "tools/schedule_task/usage",
     "sticker_search": "tools/sticker_search/usage",

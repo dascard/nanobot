@@ -73,6 +73,14 @@ TOOL_METADATA: dict[str, ToolDef] = {
             "今天、刚刚、实时资讯仍优先用 ai_daily。"
         ),
     ),
+    "web_search": ToolDef(
+        name="web_search", label="网页搜索", category="data", risk_level="low",
+        private_default=True, group_default=True,
+        description=(
+            "调用管理后台配置的 Web Search provider 搜索外部网页，返回标题、URL 和摘要。"
+            "适合需要最新网页资料、官方文档、公告或产品信息的问题。"
+        ),
+    ),
 
     # ── 分析工具 ──
     "image_summary": ToolDef(

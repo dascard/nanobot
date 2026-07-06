@@ -91,6 +91,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://api.exa.ai",
         docs_url="https://exa.ai/docs/reference/search-api-guide",
+        testable=True,
     ),
     "firecrawl": ProviderCatalogItem(
         id="firecrawl",
@@ -101,6 +102,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://api.firecrawl.dev",
         docs_url="https://docs.firecrawl.dev/api-reference/introduction",
+        testable=True,
     ),
     "linkup": ProviderCatalogItem(
         id="linkup",
@@ -111,6 +113,7 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         supports_base_url=True,
         default_base_url="https://api.linkup.so",
         docs_url="https://docs.linkup.so/pages/documentation/platform/authentication",
+        testable=True,
     ),
     "you": ProviderCatalogItem(
         id="you",
@@ -119,19 +122,20 @@ PROVIDER_CATALOG: dict[str, ProviderCatalogItem] = {
         capabilities=("search",),
         requires_api_key=True,
         supports_base_url=True,
-        default_base_url="https://api.ydc-index.io",
+        default_base_url="https://ydc-index.io",
         docs_url="https://you.com/docs/administration/api-keys",
+        testable=True,
     ),
     "jina": ProviderCatalogItem(
         id="jina",
-        name="Jina Reader",
-        description="网页读取与抽取服务，可作为搜索结果 fetch/extract 组件。",
-        capabilities=("extract",),
-        requires_api_key=False,
+        name="Jina Search",
+        description="Jina Reader/Search 服务，可作为搜索与网页抽取组件。",
+        capabilities=("search", "extract"),
+        requires_api_key=True,
         supports_base_url=True,
-        default_base_url="https://r.jina.ai",
-        docs_url="https://jina.ai/reader/",
-        api_key_optional=True,
+        default_base_url="https://s.jina.ai",
+        docs_url="https://api.jina.ai/docs",
+        testable=True,
     ),
 }
 
@@ -155,4 +159,3 @@ def is_known_provider(provider_id: str) -> bool:
 def env_name_for(provider_id: str, field: str) -> str:
     normalized = provider_id.upper().replace("-", "_")
     return f"WEB_SEARCH_{normalized}_{field.upper()}"
-

@@ -83,6 +83,12 @@ def test_list_providers_returns_catalog_and_config_state(client, auth_header):
     assert serper["last_test"] is None
 
 
+def test_all_web_search_providers_are_testable(client, auth_header):
+    data = _ok(client.get("/api/v1/admin/web-search/providers", headers=auth_header))
+
+    assert all(item["testable"] is True for item in data["providers"])
+
+
 def test_update_provider_saves_enabled_and_base_url(client, auth_header):
     response = client.put(
         "/api/v1/admin/web-search/providers/searxng",
@@ -237,17 +243,6 @@ def test_test_provider_missing_key_returns_ok_false_without_http_call(client, au
     assert calls == []
 
 
-def test_test_provider_not_implemented_returns_ok_false(client, auth_header):
-    data = _ok(client.post(
-        "/api/v1/admin/web-search/providers/exa/test",
-        headers=auth_header,
-        json={"query": "nanobot"},
-    ))
-
-    assert data["ok"] is False
-    assert data["error_code"] == "not_implemented"
-
-
 def test_test_provider_masks_secret_in_error_message(client, auth_header, monkeypatch):
     secret = "serper-secret-value"
     client.put(
@@ -392,12 +387,45 @@ class _FakeSession:
 
 
 def _patch_session(monkeypatch, response: _FakeResponse):
-    import core.web_search.provider_tests as pt
+    import core.web_search.search_runtime as runtime
 
     def fake_session(*args, **kwargs):
         return _FakeSession(response)
 
-    monkeypatch.setattr(pt.aiohttp, "ClientSession", fake_session)
+    monkeypatch.setattr(runtime.aiohttp, "ClientSession", fake_session)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_id", "json_data"),
+    [
+        ("exa", {"results": [{"title": "Exa", "url": "https://example.test/exa", "text": "exa snippet"}]}),
+        ("firecrawl", {"data": {"web": [{"title": "Firecrawl", "url": "https://example.test/firecrawl", "description": "firecrawl snippet"}]}}),
+        ("linkup", {"results": [{"title": "Linkup", "url": "https://example.test/linkup", "content": "linkup snippet"}]}),
+        ("you", {"results": {"web": [{"title": "You", "url": "https://example.test/you", "description": "you snippet"}]}}),
+        ("jina", {"data": [{"title": "Jina", "url": "https://example.test/jina", "content": "jina snippet"}]}),
+    ],
+)
+async def test_all_added_provider_smoke_tests_can_succeed(monkeypatch, provider_id, json_data):
+    from core.web_search.provider_catalog import get_provider_catalog
+    from core.web_search.provider_settings import ProviderResolvedConfig
+    from core.web_search.provider_tests import test_provider
+
+    _patch_session(monkeypatch, _FakeResponse(200, json_data=json_data))
+    item = get_provider_catalog(provider_id)
+    config = ProviderResolvedConfig(
+        provider_id=provider_id,
+        enabled=True,
+        base_url=item.default_base_url,
+        api_key="provider-secret" if item.requires_api_key else "",
+        api_key_configured=item.requires_api_key,
+        api_key_source="db" if item.requires_api_key else None,
+    )
+
+    result = await test_provider(provider_id, config, "nanobot")
+
+    assert result.ok is True
+    assert result.sample_count == 1
 
 
 @pytest.mark.asyncio
@@ -464,3 +492,37 @@ async def test_brave_auth_failure_with_html_body_returns_auth_failed(monkeypatch
 
     assert result.ok is False
     assert result.error_code == "provider_auth_failed"
+
+
+@pytest.mark.asyncio
+async def test_jina_provider_test_uses_search_runtime(monkeypatch):
+    from core.web_search.provider_settings import ProviderResolvedConfig
+    from core.web_search.provider_tests import test_provider
+    from core.web_search.search_runtime import WebSearchProviderResult, WebSearchResult
+
+    async def fake_search_provider(config, query, limit=3):
+        assert config.provider_id == "jina"
+        assert query == "nanobot"
+        assert limit == 3
+        return WebSearchProviderResult(
+            provider_id="jina",
+            results=[
+                WebSearchResult(provider="jina", title="A", url="https://example.test/a"),
+                WebSearchResult(provider="jina", title="B", url="https://example.test/b"),
+            ],
+        )
+
+    monkeypatch.setattr("core.web_search.provider_tests.search_provider", fake_search_provider)
+    config = ProviderResolvedConfig(
+        provider_id="jina",
+        enabled=True,
+        base_url="https://s.jina.ai",
+        api_key="jina-secret",
+        api_key_configured=True,
+        api_key_source="db",
+    )
+
+    result = await test_provider("jina", config, "nanobot")
+
+    assert result.ok is True
+    assert result.sample_count == 2

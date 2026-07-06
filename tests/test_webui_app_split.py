@@ -93,3 +93,10 @@ def test_web_search_page_is_wired_into_admin_app():
     assert "api.get('/web-search/providers'" in api_source
     assert "api.put(`/web-search/providers/${encodeURIComponent(providerId)}`" in api_source
     assert "api.post(`/web-search/providers/${encodeURIComponent(providerId)}/test`" in api_source
+
+
+def test_web_search_page_no_longer_shows_not_tested_copy():
+    page_source = FEATURES["WebSearchPage"].read_text(encoding="utf-8")
+
+    assert "暂不测试" not in page_source
+    assert "暂不支持连接测试" not in page_source

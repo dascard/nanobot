@@ -152,6 +152,34 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
             "required": ["mode"],
         },
     },
+    "web_search": {
+        "description": (
+            "使用管理后台配置的 Web Search provider 执行通用网页搜索，返回标题、URL 和摘要。"
+            "适合查询最新网页资料、官方文档、公告、产品信息和需要外部来源的问题。"
+            "不要把搜索结果当作已验证事实；需要回答时应基于返回 URL 和摘要谨慎归纳。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "搜索词。应包含关键实体、限定词或时间范围，避免只传一个模糊词。",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "返回条数，默认 5，最大 10。",
+                    "minimum": 1,
+                    "maximum": 10,
+                    "default": 5,
+                },
+                "provider": {
+                    "type": "string",
+                    "description": "可选 provider id，如 searxng、brave、serper、tavily、exa、firecrawl、linkup、you、jina、ddgs。留空则按已启用 provider 自动 fallback。",
+                },
+            },
+            "required": ["query"],
+        },
+    },
     "image_summary": {
         "description": (
             "生成图片摘要并输出结构化 JSON。当你需要 OCR、细节归档、版面分析或多图整理时使用。"

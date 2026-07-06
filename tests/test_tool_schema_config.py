@@ -61,6 +61,7 @@ def test_news_search_is_not_exposed_as_tool_schema():
 
     enabled, _disabled = resolve_effective_tools(chat_type="private", runtime_preset="full")
     assert "ai_daily" in enabled
+    assert "web_search" in enabled
     assert "news_search" not in enabled
 
     schemas = build_effective_tool_schemas({"ai_daily": True, "news_search": True})
@@ -68,6 +69,21 @@ def test_news_search_is_not_exposed_as_tool_schema():
     assert names == ["ai_daily"]
     with pytest.raises(ValueError):
         build_tool_schema_config(None, "news_search")
+
+
+def test_web_search_tool_schema_is_exposed():
+    from core.tool_registry import get_tool_def
+    from core.tool_schema_preview import build_tool_schema
+
+    tool_def = get_tool_def("web_search")
+    assert tool_def is not None
+    assert "搜索" in tool_def.description
+
+    schema = build_tool_schema("web_search")
+    assert schema["function"]["name"] == "web_search"
+    props = schema["function"]["parameters"]["properties"]
+    assert {"query", "limit", "provider"} <= set(props)
+    assert schema["category"] == "data"
 
 
 def test_memory_query_description_declares_unsummarized_window_boundary():

@@ -42,6 +42,10 @@ tools:
     type: package
     module: nanobot_kt.tools.knowledge_query
     class: KnowledgeQueryTool
+  - name: web_search
+    type: package
+    module: nanobot_kt.tools.web_search
+    class: WebSearchTool
   - name: image_summary
     type: package
     module: nanobot_kt.tools.image_summary

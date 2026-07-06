@@ -43,7 +43,7 @@ function errorLabel(code) {
     provider_timeout: 'Provider 请求超时',
     provider_bad_response: 'Provider 响应异常',
     dependency_missing: '服务端缺少依赖',
-    not_implemented: '暂不支持连接测试',
+    not_implemented: 'Provider 未接入搜索运行时',
   }
   return labels[code] || code || '测试失败'
 }
@@ -86,7 +86,7 @@ function ProviderModal({ provider, onClose, onSaved }) {
             <h2 className="text-lg font-semibold text-white">{provider.name}</h2>
             <p className="mt-1 text-xs leading-5 text-slate-500">{provider.id}</p>
           </div>
-          <Badge tone={provider.testable ? 'emerald' : 'slate'}>{provider.testable ? '可测试' : '暂不测试'}</Badge>
+          <Badge tone={provider.testable ? 'emerald' : 'slate'}>{provider.testable ? '可测试' : '测试未启用'}</Badge>
         </div>
 
         <div className="space-y-4">
@@ -270,7 +270,7 @@ export function WebSearchPage() {
                   <KeyRound className="mr-1 h-3 w-3" />
                   {sourceLabel(provider)}
                 </Badge>
-                <Badge tone={provider.testable ? 'emerald' : 'slate'}>{provider.testable ? '可测试' : '暂不测试'}</Badge>
+                <Badge tone={provider.testable ? 'emerald' : 'slate'}>{provider.testable ? '可测试' : '测试未启用'}</Badge>
               </div>
 
               <div className="mt-3 space-y-1 text-xs text-slate-400">
@@ -315,4 +315,3 @@ export function WebSearchPage() {
     </div>
   )
 }
-
