@@ -174,7 +174,7 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
                 },
                 "provider": {
                     "type": "string",
-                    "description": "可选 provider id，如 searxng、brave、serper、tavily、exa、firecrawl、linkup、you、jina、ddgs。留空则按已启用 provider 自动 fallback，并在第一个有结果的 provider 停止；需要对比或排查某个 API 时显式指定。",
+                    "description": "可选 provider id，如 searxng、brave、serper、tavily、exa、firecrawl、linkup、you、jina、ddgs。留空则按已启用 provider 自动 fallback，并在第一个相关结果停止；低相关、空结果或错误会继续尝试下一个 provider。需要对比或排查某个 API 时显式指定。",
                 },
             },
             "required": ["query"],

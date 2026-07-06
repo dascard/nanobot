@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -13,6 +13,7 @@ import aiohttp
 
 from core.web_search.provider_catalog import get_provider_catalog, list_provider_catalog
 from core.web_search.provider_settings import ProviderResolvedConfig, resolve_provider_config
+from core.web_search.relevance import judge_search_relevance
 from core.web_search.usage_stats import record_provider_usage
 
 
@@ -39,11 +40,21 @@ class WebSearchProviderResult:
     provider_id: str
     results: list[WebSearchResult]
     elapsed_ms: int = 0
+    quality: str = "unknown"
+    quality_score: float = 0.0
+    quality_reason: str = ""
+    matched_terms: list[str] = field(default_factory=list)
+    attempted_providers: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "provider_id": self.provider_id,
             "elapsed_ms": self.elapsed_ms,
+            "quality": self.quality,
+            "quality_score": self.quality_score,
+            "quality_reason": self.quality_reason,
+            "matched_terms": list(self.matched_terms),
+            "attempted_providers": list(self.attempted_providers),
             "results": [item.to_dict() for item in self.results],
         }
 
@@ -234,6 +245,42 @@ def _limit(value: int) -> int:
     return max(1, min(int(value or 5), 10))
 
 
+def _with_relevance(query: str, result: WebSearchProviderResult) -> WebSearchProviderResult:
+    decision = judge_search_relevance(query, result.results)
+    return replace(
+        result,
+        quality="ok" if decision.ok else "low_relevance",
+        quality_score=decision.score,
+        quality_reason=decision.reason,
+        matched_terms=decision.matched_terms,
+    )
+
+
+def _attempt_payload(result: WebSearchProviderResult, status: str = "") -> dict[str, Any]:
+    return {
+        "provider_id": result.provider_id,
+        "status": status or result.quality,
+        "result_count": len(result.results),
+        "elapsed_ms": result.elapsed_ms,
+        "quality": result.quality,
+        "quality_score": result.quality_score,
+        "quality_reason": result.quality_reason,
+    }
+
+
+def _error_attempt_payload(config: ProviderResolvedConfig, exc: WebSearchError) -> dict[str, Any]:
+    return {
+        "provider_id": config.provider_id,
+        "status": "error",
+        "result_count": 0,
+        "elapsed_ms": 0,
+        "quality": "error",
+        "quality_score": 0.0,
+        "quality_reason": exc.message,
+        "error_code": exc.error_code,
+    }
+
+
 def format_provider_result_for_model(
     query: str,
     result: WebSearchProviderResult,
@@ -243,11 +290,23 @@ def format_provider_result_for_model(
 
     normalized_limit = _limit(limit)
     items = result.results[:normalized_limit]
+    if result.quality == "unknown":
+        decision = judge_search_relevance(query, items)
+        quality = "ok" if decision.ok else "low_relevance"
+        quality_score = decision.score
+        quality_reason = decision.reason
+    else:
+        quality = result.quality
+        quality_score = result.quality_score
+        quality_reason = result.quality_reason
     lines = [
         "WEB_SEARCH_RESULTS_BEGIN",
         f"QUERY: {str(query or '').strip()}",
         f"PROVIDER: {result.provider_id}",
         f"RESULT_COUNT: {len(items)}",
+        f"QUALITY: {quality}",
+        f"QUALITY_SCORE: {quality_score}",
+        f"QUALITY_REASON: {quality_reason}",
         "RESULTS:",
     ]
     if not items:
@@ -542,6 +601,7 @@ async def search_enabled_providers(
         start = time.perf_counter()
         try:
             provider_result = await search_provider(config, query, limit=limit)
+            provider_result = _with_relevance(query, provider_result)
             record_provider_usage(
                 db,
                 config.provider_id,
@@ -564,7 +624,8 @@ async def search_enabled_providers(
         config = resolve_provider_config(db, requested)
         if not config.enabled:
             raise WebSearchError("provider_disabled", f"Provider {requested} 未启用", provider_id=requested)
-        return await _search_and_record(config)
+        result = await _search_and_record(config)
+        return replace(result, attempted_providers=[_attempt_payload(result)])
 
     configs = [resolve_provider_config(db, item.id) for item in list_provider_catalog()]
     enabled_configs = [config for config in configs if config.enabled]
@@ -572,15 +633,33 @@ async def search_enabled_providers(
         raise WebSearchError("no_enabled_provider", "没有启用的搜索 provider，请先到管理后台“搜索 API”启用至少一个 provider。")
 
     last_error: WebSearchError | None = None
+    attempts: list[dict[str, Any]] = []
+    best_low_relevance: WebSearchProviderResult | None = None
     for config in enabled_configs:
         try:
             result = await _search_and_record(config)
+            attempts.append(_attempt_payload(result))
+            if result.results and result.quality == "ok":
+                return replace(result, attempted_providers=list(attempts))
             if result.results:
-                return result
+                if (
+                    best_low_relevance is None
+                    or result.quality_score > best_low_relevance.quality_score
+                ):
+                    best_low_relevance = result
+                last_error = WebSearchError(
+                    "low_relevance",
+                    f"Provider {config.provider_id} 返回低相关结果: {result.quality_reason}",
+                    provider_id=config.provider_id,
+                )
+                continue
             last_error = WebSearchError("empty_results", f"Provider {config.provider_id} 返回空结果", provider_id=config.provider_id)
         except WebSearchError as exc:
+            attempts.append(_error_attempt_payload(config, exc))
             last_error = exc
             continue
+    if best_low_relevance is not None:
+        return replace(best_low_relevance, attempted_providers=list(attempts))
     if last_error:
         raise last_error
     raise WebSearchError("provider_bad_response", "所有搜索 provider 均未返回结果")

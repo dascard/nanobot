@@ -328,10 +328,14 @@ def test_preview_web_search_returns_results_and_model_message(client, auth_heade
     assert data["ok"] is True
     assert data["provider_id"] == "searxng"
     assert data["elapsed_ms"] == 12
+    assert data["quality"] == "ok"
+    assert data["quality_score"] >= 0.5
+    assert data["attempted_providers"][0]["provider_id"] == "searxng"
     assert data["results"][0]["title"] == "Nanobot Search"
     assert "QUERY: nanobot web search" in data["message"]
     assert "PROVIDER: searxng" in data["message"]
     assert "RESULT_COUNT: 1" in data["message"]
+    assert "QUALITY: ok" in data["message"]
     assert "WEB_SEARCH_RESULTS_END" in data["message"]
     assert "https://example.test/search" in data["message"]
 
@@ -366,6 +370,68 @@ def test_preview_web_search_passes_provider_and_limit(client, auth_header, monke
 
     assert data["ok"] is True
     assert calls == [{"query": "python 3.10 datetime UTC", "limit": 3, "provider_id": "searxng"}]
+
+
+def test_preview_web_search_falls_back_when_first_provider_is_low_relevance(client, auth_header, monkeypatch):
+    from core.web_search.search_runtime import WebSearchProviderResult, WebSearchResult
+
+    client.put(
+        "/api/v1/admin/web-search/providers/searxng",
+        headers=auth_header,
+        json={"enabled": True},
+    )
+    client.put(
+        "/api/v1/admin/web-search/providers/brave",
+        headers=auth_header,
+        json={"enabled": True},
+    )
+
+    calls = []
+
+    async def fake_search_provider(config, query, limit=5):
+        calls.append(config.provider_id)
+        if config.provider_id == "searxng":
+            return WebSearchProviderResult(
+                provider_id="searxng",
+                elapsed_ms=3,
+                results=[
+                    WebSearchResult(
+                        provider="searxng",
+                        title="Proton VPN Download",
+                        url="https://protonvpn.com/download",
+                        snippet="Download Proton VPN for Windows, macOS, Linux, Android and iOS.",
+                    )
+                ],
+            )
+        if config.provider_id == "brave":
+            return WebSearchProviderResult(
+                provider_id="brave",
+                elapsed_ms=4,
+                results=[
+                    WebSearchResult(
+                        provider="brave",
+                        title="上海天气预报",
+                        url="https://www.weather.com.cn/weather/101020100.shtml",
+                        snippet="上海今日天气和未来一周天气预报。",
+                    )
+                ],
+            )
+        return WebSearchProviderResult(provider_id=config.provider_id, elapsed_ms=1, results=[])
+
+    monkeypatch.setattr("core.web_search.search_runtime.search_provider", fake_search_provider)
+
+    data = _ok(client.post(
+        "/api/v1/admin/web-search/preview",
+        headers=auth_header,
+        json={"query": "上海天气", "limit": 5},
+    ))
+
+    assert data["ok"] is True
+    assert data["provider_id"] == "brave"
+    assert data["quality"] == "ok"
+    assert [item["provider_id"] for item in data["attempted_providers"]] == ["searxng", "brave"]
+    assert data["attempted_providers"][0]["quality"] == "low_relevance"
+    assert calls == ["searxng", "brave"]
 
 
 def test_preview_web_search_returns_ok_false_on_runtime_error(client, auth_header, monkeypatch):

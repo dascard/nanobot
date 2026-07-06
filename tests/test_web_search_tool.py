@@ -93,6 +93,9 @@ def test_web_search_model_message_formatter_matches_tool_output(monkeypatch):
     assert "QUERY: nanobot" in message
     assert "PROVIDER: searxng" in message
     assert "RESULT_COUNT: 1" in message
+    assert "QUALITY: ok" in message
+    assert "QUALITY_SCORE:" in message
+    assert "QUALITY_REASON:" in message
     assert "URL: https://example.test/nanobot" in message
     assert "摘要: 搜索结果摘要" in message
     assert "只能基于以上 WEB_SEARCH_RESULTS 回答" in message

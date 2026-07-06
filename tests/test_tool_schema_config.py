@@ -83,6 +83,8 @@ def test_web_search_tool_schema_is_exposed():
     assert schema["function"]["name"] == "web_search"
     props = schema["function"]["parameters"]["properties"]
     assert {"query", "limit", "provider"} <= set(props)
+    assert "第一个相关结果" in props["provider"]["description"]
+    assert "低相关" in props["provider"]["description"]
     assert schema["category"] == "data"
 
 

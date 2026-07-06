@@ -103,6 +103,9 @@ def test_web_search_page_exposes_preview_search_and_model_message():
     assert "web-search-preview-query" in page_source
     assert "发送给模型的消息" in page_source
     assert "result.results || []" in page_source
+    assert "搜索质量" in page_source
+    assert "Provider 尝试链" in page_source
+    assert "attempted_providers" in page_source
 
 
 def test_web_search_page_displays_provider_usage_counts():

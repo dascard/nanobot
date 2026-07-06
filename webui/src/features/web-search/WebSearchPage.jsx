@@ -50,6 +50,29 @@ function errorLabel(code) {
   return labels[code] || code || '测试失败'
 }
 
+function qualityTone(quality) {
+  if (quality === 'ok') return 'emerald'
+  if (quality === 'low_relevance') return 'amber'
+  if (quality === 'error') return 'red'
+  return 'slate'
+}
+
+function qualityLabel(quality) {
+  const labels = {
+    ok: '相关',
+    low_relevance: '低相关',
+    error: '错误',
+    unknown: '未知',
+  }
+  return labels[quality] || quality || '未知'
+}
+
+function formatScore(value) {
+  const score = Number(value)
+  if (!Number.isFinite(score)) return '-'
+  return score.toFixed(2)
+}
+
 function formatUsageTime(value) {
   if (!value) return '从未'
   return String(value).replace('T', ' ')
@@ -208,13 +231,41 @@ function PreviewResult({ result }) {
   }
 
   const results = result.results || []
+  const attempts = result.attempted_providers || []
   return (
     <div className="mt-4 space-y-4">
       <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
         <Badge tone="emerald">Provider {result.provider_id || '-'}</Badge>
+        <Badge tone={qualityTone(result.quality)}>搜索质量 {qualityLabel(result.quality)}</Badge>
         <span>结果 {results.length}</span>
+        <span>score {formatScore(result.quality_score)}</span>
         {Number.isFinite(result.elapsed_ms) && <span>{result.elapsed_ms}ms</span>}
       </div>
+      {result.quality_reason && (
+        <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-400">
+          {result.quality_reason}
+        </div>
+      )}
+
+      {attempts.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs font-medium text-slate-300">Provider 尝试链</div>
+          <div className="space-y-1">
+            {attempts.map((attempt, index) => (
+              <div key={`${attempt.provider_id}-${index}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-400">
+                <span className="flex h-5 w-5 items-center justify-center rounded-md bg-slate-800 text-[11px] text-slate-400">{index + 1}</span>
+                <span className="font-mono text-slate-200">{attempt.provider_id || '-'}</span>
+                <Badge tone={qualityTone(attempt.quality)}>{qualityLabel(attempt.quality)}</Badge>
+                <span>结果 {attempt.result_count || 0}</span>
+                <span>score {formatScore(attempt.quality_score)}</span>
+                {Number.isFinite(attempt.elapsed_ms) && <span>{attempt.elapsed_ms}ms</span>}
+                {attempt.error_code && <span className="text-red-300">{errorLabel(attempt.error_code)}</span>}
+                {attempt.quality_reason && <span className="min-w-0 flex-1 truncate text-slate-500">{attempt.quality_reason}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="space-y-2">
         {results.map((item, index) => (
