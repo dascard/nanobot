@@ -1,7 +1,7 @@
 from core.web_search.search_runtime import WebSearchResult
 
 
-def test_weather_query_accepts_weather_domains():
+def test_cjk_query_accepts_word_matched_result():
     from core.web_search.relevance import judge_search_relevance
 
     result = WebSearchResult(

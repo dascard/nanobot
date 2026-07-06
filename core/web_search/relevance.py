@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlparse
 
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]+")
@@ -22,13 +21,11 @@ _STOPWORDS = {
     "to",
     "with",
 }
-_WEATHER_TERMS = {"天气", "气温", "预报", "weather"}
-_WEATHER_DOMAINS = (
-    "weather.com.cn",
-    "cma.gov.cn",
-    "tianqi.com",
-    "weather.gov",
-)
+
+# 相关性评分参数(命名常量,避免散落魔法值)
+RELEVANCE_ACCEPT_THRESHOLD = 0.5   # score ≥ 此值视为结果与 query 相关
+EMPTY_QUERY_SCORE = 0.5            # query 无可提取关键词时的保守分
+MAX_RESULTS_CONSIDERED = 5         # 相关性评分只看前 N 条结果
 
 
 @dataclass(frozen=True)
@@ -82,22 +79,6 @@ def _result_text(item: Any) -> str:
     return f"{title}\n{snippet}\n{url}".lower()
 
 
-def _domain(item: Any) -> str:
-    try:
-        return urlparse(str(getattr(item, "url", "") or "")).netloc.lower()
-    except Exception:
-        return ""
-
-
-def _is_weather_query(query: str, terms: list[str]) -> bool:
-    text = str(query or "").lower()
-    return any(term in text or term in terms for term in _WEATHER_TERMS)
-
-
-def _domain_matches(domain: str, suffixes: tuple[str, ...]) -> bool:
-    return any(domain == suffix or domain.endswith(f".{suffix}") for suffix in suffixes)
-
-
 def judge_search_relevance(query: str, results: list[Any]) -> SearchRelevanceDecision:
     """判断一批搜索结果是否足够匹配 query。"""
 
@@ -113,22 +94,17 @@ def judge_search_relevance(query: str, results: list[Any]) -> SearchRelevanceDec
     if not terms:
         return SearchRelevanceDecision(
             ok=True,
-            score=0.5,
+            score=EMPTY_QUERY_SCORE,
             reason="query 缺少可提取关键词，保守接受非空结果",
             matched_terms=[],
         )
 
-    combined_text = "\n".join(_result_text(item) for item in results[:5])
+    combined_text = "\n".join(_result_text(item) for item in results[:MAX_RESULTS_CONSIDERED])
     matched = [term for term in terms if term in combined_text]
     match_ratio = len(matched) / max(1, len(terms))
     score = min(1.0, match_ratio)
 
-    if _is_weather_query(query, terms):
-        domains = [_domain(item) for item in results[:5]]
-        if any(_domain_matches(domain, _WEATHER_DOMAINS) for domain in domains):
-            score = min(1.0, score + 0.25)
-
-    ok = score >= 0.5
+    ok = score >= RELEVANCE_ACCEPT_THRESHOLD
     reason = "结果与 query 相关" if ok else "结果未充分命中 query 关键词"
     return SearchRelevanceDecision(
         ok=ok,
