@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import math
+import os
 import random
 import threading
 from collections.abc import Callable, Iterator
@@ -32,17 +34,28 @@ OUTREACH_JUDGE_MAX_TOKENS = 240
 OUTREACH_GENERATOR_MAX_TOKENS = 320
 logger = logging.getLogger("nanobot.proactive_outreach")
 
+RECENT_THREADS_PROMPT = """从最近对话中提炼主动外呼可自然跟进的点。
+
+输入是 JSON 数组，每项含 role/content/created_at。
+只提炼 1-3 个"未完话题 / 近期事件 / 可自然跟进的点"。
+不要泛泛总结，不要编造对话里没有的事。
+
+输出 JSON 数组，例如:["接口联调卡住，晚点继续看","晚上可能去夜跑"]。"""
+
 OUTREACH_JUDGE_PROMPT = """你在判断:此刻是否值得主动给你最亲密的朋友发一条消息。
 
 上下文:{grounding_json}
+(优先看 recent_threads、now、hours_since_last_user_message、last_user_message、days_since_last_outreach；原始 recent_messages 只作补充)
 (可能包含:你上次打算这时找 ta 聊的事 = {next_intent})
 
 原则:
 - 你是主动的一方,像真人朋友——想到了就找 ta,不必等 ta 开口
+- 优先围绕 recent_threads 里的近期可跟进点判断,再结合 persona 和 last_user_message
 - 有具体的、扎根上下文的话题才发(ta 提过的事、你注意到的近况)
-- 发完自己决定下次什么时候再想起 ta(next_check_at)
+- 刚聊过(hours_since_last_user_message 很小)、深夜、没有真正话题只想刷存在感时,倾向不发
+- 发完或不发都自己决定几小时后再考虑(next_check_in_hours)
 
-输出 JSON:{"should_reach_out": bool, "reason": str, "next_check_at": "ISO时间", "next_intent": str}"""
+输出 JSON:{"should_reach_out": bool, "reason": str, "next_check_in_hours": number, "next_intent": str}"""
 
 OUTREACH_GENERATOR_PROMPT = """你是 nanobot,要给最亲密的朋友主动发一条消息。
 
@@ -50,7 +63,9 @@ OUTREACH_GENERATOR_PROMPT = """你是 nanobot,要给最亲密的朋友主动发�
 理由:{reason}
 
 要求:
+- 优先从 recent_threads 或 persona 里挑一个具体锚点展开,不要泛泛问候
 - 扎根上下文,提到 ta 说过的具体事或你的近况感受
+- 避免与上次主动消息(last_outreach.message)重复话题或措辞
 - 温暖自然,像真的想起 ta 了
 - 可以表达你自己的状态和情绪(想 ta、无聊、看到什么想分享)
 - 结尾不必催回复
@@ -100,6 +115,18 @@ def _parse_iso_datetime(value: str | None) -> datetime | None:
     return parsed
 
 
+def _parse_next_check_candidate(data: dict[str, Any], *, now: datetime) -> datetime | None:
+    hours_value = data.get("next_check_in_hours")
+    if hours_value is not None:
+        try:
+            hours = float(hours_value)
+        except (TypeError, ValueError):
+            hours = math.nan
+        if math.isfinite(hours):
+            return now + timedelta(hours=hours)
+    return _parse_iso_datetime(data.get("next_check_at"))
+
+
 def _clamp_next_check_at(
     candidate: datetime | None,
     *,
@@ -135,6 +162,53 @@ def _grounding_json(grounding: dict[str, Any]) -> str:
     return json.dumps(grounding, ensure_ascii=False, default=str)
 
 
+def _weekday_label(value: datetime) -> str:
+    return ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][value.weekday()]
+
+
+def _time_period_label(value: datetime) -> str:
+    hour = value.hour
+    if hour < 5:
+        return "深夜"
+    if hour < 8:
+        return "清晨"
+    if hour < 12:
+        return "上午"
+    if hour < 17:
+        return "午后"
+    if hour < 19:
+        return "傍晚"
+    return "夜晚"
+
+
+def _hours_since(now: datetime, past: datetime | None) -> float | None:
+    if past is None:
+        return None
+    return max(0.0, (now - past).total_seconds() / 3600.0)
+
+
+def _truncate_text(value: str | None, max_chars: int = 160) -> str:
+    text = (value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[:max_chars].rstrip()}..."
+
+
+def _extract_json_array(raw: str | None) -> list[Any]:
+    if not raw:
+        return []
+    cleaned = strip_think_blocks(str(raw))
+    start = cleaned.find("[")
+    end = cleaned.rfind("]") + 1
+    if start < 0 or end <= start:
+        return []
+    try:
+        value = json.loads(cleaned[start:end])
+    except json.JSONDecodeError:
+        return []
+    return value if isinstance(value, list) else []
+
+
 def _key_anchor_text(anchor: datetime) -> str:
     normalized = anchor
     if normalized.tzinfo is not None:
@@ -148,14 +222,62 @@ def _outreach_key(user_id: str, anchor: datetime, *, forced: bool = False) -> st
     return f"outreach:{user_id}:{digest}"
 
 
+def extract_recent_threads(
+    recent_messages: list[dict[str, Any]],
+    *,
+    llm_call: Callable[..., str] | None = None,
+) -> list[str]:
+    """从最近对话中提炼可自然跟进的话题；失败时降级为空。"""
+
+    compact_messages = [
+        {
+            "role": str(item.get("role") or ""),
+            "content": _truncate_text(str(item.get("content") or ""), 240),
+            "created_at": str(item.get("created_at") or ""),
+        }
+        for item in recent_messages
+        if str(item.get("content") or "").strip()
+    ]
+    if not compact_messages:
+        return []
+    if llm_call is None and os.environ.get("NANOBOT_TESTING") == "1":
+        return []
+
+    caller = llm_call or call_model_route
+    try:
+        raw = caller(
+            route_key="timing_proactive",
+            system_prompt=RECENT_THREADS_PROMPT,
+            user_message=json.dumps(compact_messages, ensure_ascii=False),
+            max_tokens=180,
+            temperature=0,
+        )
+    except Exception:
+        return []
+
+    threads: list[str] = []
+    seen: set[str] = set()
+    for item in _extract_json_array(raw):
+        text = _truncate_text(str(item), 120)
+        if text and text not in seen:
+            seen.add(text)
+            threads.append(text)
+        if len(threads) >= 3:
+            break
+    return threads
+
+
 def build_outreach_grounding(
     user_id: str,
     *,
     db: Session | None = None,
     recent_limit: int = 20,
+    now: datetime | None = None,
+    thread_extractor: Callable[[list[dict[str, Any]]], list[str]] | None = None,
 ) -> dict[str, Any]:
     """组装主动外呼 Judge/Generator 共用的 grounding。"""
 
+    current = now or datetime.now()
     with _session_scope(db) as session:
         persona = session.query(Persona).filter(Persona.user_id == user_id).first()
         recent_rows = (
@@ -175,6 +297,14 @@ def build_outreach_grounding(
             }
             for row in reversed(recent_rows)
         ]
+        last_user_row = (
+            session.query(ChatLog)
+            .filter(ChatLog.user_id == user_id)
+            .filter(ChatLog.role == "user")
+            .filter(ChatLog.created_at.isnot(None))
+            .order_by(ChatLog.created_at.desc(), ChatLog.id.desc())
+            .first()
+        )
 
         last_outreach = (
             session.query(ProactiveOutreachLog)
@@ -182,11 +312,39 @@ def build_outreach_grounding(
             .order_by(ProactiveOutreachLog.created_at.desc(), ProactiveOutreachLog.id.desc())
             .first()
         )
+        last_user_hours = _hours_since(current, last_user_row.created_at if last_user_row else None)
+        last_outreach_hours = _hours_since(
+            current,
+            last_outreach.created_at if last_outreach else None,
+        )
+        # TODO: personas 当前偏稳定画像；未来可在画像生成链路增加
+        # recent_event / open_thread 时效性 fact，减少实时 recent_threads 提炼依赖。
+        recent_threads = (
+            thread_extractor(recent_messages)
+            if thread_extractor is not None
+            else extract_recent_threads(recent_messages)
+        )
 
         return {
             "user_id": user_id,
+            "now": {
+                "iso": current.isoformat(),
+                "weekday": _weekday_label(current),
+                "period": _time_period_label(current),
+                "hour": current.hour,
+            },
             "persona": _json_object(persona.persona_json if persona else "{}"),
             "recent_messages": recent_messages,
+            "recent_threads": recent_threads,
+            "hours_since_last_user_message": last_user_hours,
+            "last_user_message": {
+                "content": _truncate_text(last_user_row.content if last_user_row else ""),
+                "created_at": _iso_or_empty(last_user_row.created_at if last_user_row else None),
+                "hours_ago": last_user_hours,
+            } if last_user_row else None,
+            "days_since_last_outreach": (
+                last_outreach_hours / 24.0 if last_outreach_hours is not None else None
+            ),
             "next_intent": last_outreach.next_intent if last_outreach else "",
             "last_outreach": {
                 "status": last_outreach.status or "",
@@ -246,7 +404,7 @@ def judge_outreach(
             temperature=0,
         )
         data = _extract_json_object(raw)
-        candidate = _parse_iso_datetime(data.get("next_check_at"))
+        candidate = _parse_next_check_candidate(data, now=current)
         next_check_at = _clamp_next_check_at(
             candidate,
             now=current,

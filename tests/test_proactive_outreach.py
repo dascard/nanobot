@@ -61,6 +61,110 @@ def test_build_outreach_grounding_includes_persona_recent_chat_and_intent(db_ses
     assert grounding["recent_messages"][1]["role"] == "model"
 
 
+def test_build_outreach_grounding_includes_precomputed_time_anchors(db_session):
+    from core.proactive_outreach import build_outreach_grounding
+
+    now = datetime(2026, 7, 7, 15, 30, 0)
+    db_session.add_all([
+        ChatLog(
+            user_id="superuser",
+            session_id="private_superuser",
+            sender_name="主人",
+            role="user",
+            content="今天上午说接口联调卡住了，晚点继续看。",
+            created_at=datetime(2026, 7, 7, 9, 0, 0),
+        ),
+        ChatLog(
+            user_id="superuser",
+            session_id="private_superuser",
+            sender_name="nanobot",
+            role="model",
+            content="那我下午想起来再问问你。",
+            created_at=datetime(2026, 7, 7, 9, 5, 0),
+        ),
+        ProactiveOutreachLog(
+            user_id="superuser",
+            idempotency_key="outreach:superuser:sent-before",
+            grounding_json="{}",
+            judge_should=True,
+            judge_reason="旧外呼",
+            message="两天前主动问过你接口联调。",
+            status="sent",
+            forced=False,
+            created_at=datetime(2026, 7, 5, 15, 30, 0),
+        ),
+    ])
+    db_session.commit()
+
+    grounding = build_outreach_grounding(
+        "superuser",
+        db=db_session,
+        now=now,
+        thread_extractor=lambda messages: ["接口联调卡住，晚点继续看"],
+    )
+
+    assert grounding["now"] == {
+        "iso": "2026-07-07T15:30:00",
+        "weekday": "星期二",
+        "period": "午后",
+        "hour": 15,
+    }
+    assert grounding["hours_since_last_user_message"] == pytest.approx(6.5)
+    assert grounding["last_user_message"] == {
+        "content": "今天上午说接口联调卡住了，晚点继续看。",
+        "created_at": "2026-07-07T09:00:00",
+        "hours_ago": pytest.approx(6.5),
+    }
+    assert grounding["days_since_last_outreach"] == pytest.approx(2.0)
+    assert grounding["recent_threads"] == ["接口联调卡住，晚点继续看"]
+
+
+def test_extract_recent_threads_uses_injected_llm_call():
+    from core.proactive_outreach import extract_recent_threads
+
+    calls = []
+
+    def fake_llm_call(**kwargs):
+        calls.append(kwargs)
+        return '["接口联调卡住，晚点继续看", "晚上可能去夜跑"]'
+
+    recent_messages = [
+        {"role": "user", "content": "接口联调卡住了，下午继续看。"},
+        {"role": "model", "content": "那我晚点想起来问问你。"},
+    ]
+
+    threads = extract_recent_threads(recent_messages, llm_call=fake_llm_call)
+
+    assert threads == ["接口联调卡住，晚点继续看", "晚上可能去夜跑"]
+    assert calls[0]["route_key"] == "timing_proactive"
+    assert "JSON 数组" in calls[0]["system_prompt"]
+
+
+def test_extract_recent_threads_returns_empty_when_llm_fails():
+    from core.proactive_outreach import extract_recent_threads
+
+    def fail_llm_call(**kwargs):
+        raise RuntimeError("model down")
+
+    assert extract_recent_threads(
+        [{"role": "user", "content": "今天有个项目要收尾。"}],
+        llm_call=fail_llm_call,
+    ) == []
+
+
+def test_extract_recent_threads_returns_empty_for_no_messages():
+    from core.proactive_outreach import extract_recent_threads
+
+    calls = []
+
+    def fake_llm_call(**kwargs):
+        calls.append(kwargs)
+        return '["不应该调用"]'
+
+    assert extract_recent_threads([], llm_call=fake_llm_call) == []
+    assert calls == []
+
+
 def test_active_hours_uses_chat_log_distribution_and_default_when_sparse(db_session):
     from core.proactive_outreach import active_hours
 
@@ -123,6 +227,48 @@ def test_judge_outreach_uses_timing_proactive_and_clamps_next_check_at(monkeypat
     assert "shadow" not in calls[0]["system_prompt"].lower()
 
 
+def test_judge_outreach_converts_next_check_in_hours_to_iso_and_clamps(monkeypatch):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 6, 12, 0, 0)
+    responses = [
+        '{"should_reach_out": false, "reason": "下午再想", '
+        '"next_check_in_hours": 3, "next_intent": "问接口联调"}',
+        '{"should_reach_out": false, "reason": "太近了", '
+        '"next_check_in_hours": 0.1, "next_intent": "稍后"}',
+        '{"should_reach_out": false, "reason": "太远了", '
+        '"next_check_in_hours": 100, "next_intent": "明天"}',
+    ]
+
+    def fake_call_model_route(**kwargs):
+        return responses.pop(0)
+
+    monkeypatch.setattr(proactive_outreach, "call_model_route", fake_call_model_route)
+
+    normal = proactive_outreach.judge_outreach(
+        {"user_id": "superuser", "recent_threads": ["接口联调"]},
+        now=now,
+        min_interval_min=30,
+        max_check_interval_min=1440,
+    )
+    low = proactive_outreach.judge_outreach(
+        {"user_id": "superuser", "recent_threads": ["接口联调"]},
+        now=now,
+        min_interval_min=30,
+        max_check_interval_min=1440,
+    )
+    high = proactive_outreach.judge_outreach(
+        {"user_id": "superuser", "recent_threads": ["接口联调"]},
+        now=now,
+        min_interval_min=30,
+        max_check_interval_min=60,
+    )
+
+    assert normal["next_check_at"] == "2026-07-06T15:00:00"
+    assert low["next_check_at"] == "2026-07-06T12:30:00"
+    assert high["next_check_at"] == "2026-07-06T13:00:00"
+
+
 def test_generate_outreach_message_uses_reply_route_and_positive_prompt(monkeypatch):
     from core import proactive_outreach
 
@@ -135,13 +281,21 @@ def test_generate_outreach_message_uses_reply_route_and_positive_prompt(monkeypa
     monkeypatch.setattr(proactive_outreach, "call_model_route", fake_call_model_route)
 
     message = proactive_outreach.generate_outreach_message(
-        {"user_id": "superuser", "recent_messages": [{"content": "我今晚想去夜跑。"}]},
+        {
+            "user_id": "superuser",
+            "persona": {"likes": ["夜跑"]},
+            "recent_threads": ["今晚可能去夜跑"],
+            "last_outreach": {"message": "昨天已经问过接口联调了。"},
+            "recent_messages": [{"content": "我今晚想去夜跑。"}],
+        },
         "想问夜跑",
     )
 
     assert message == "刚想起你说今晚要夜跑，想来问问风是不是舒服一点。"
     assert calls[0]["route_key"] == "reply"
     assert "可以表达你自己的状态和情绪" in calls[0]["system_prompt"]
+    assert "recent_threads" in calls[0]["system_prompt"]
+    assert "避免与上次主动消息" in calls[0]["system_prompt"]
     forbidden_markers = ["禁止", "黑名单", "语义越界", "情感依赖", "shadow", "dry-run"]
     assert all(marker not in calls[0]["system_prompt"] for marker in forbidden_markers)
 
