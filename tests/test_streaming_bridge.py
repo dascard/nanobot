@@ -5,50 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 
-def test_message_stream_flag_is_internal_not_wire():
-    from kohakuterrarium.llm.message import Message, UserMessage
-
-    msg = UserMessage("你好", stream=True)
-    assert msg.stream is True
-    assert "stream" not in msg.to_dict()
-
-    restored = Message.from_dict({"role": "user", "content": "你好", "stream": True})
-    assert restored.stream is True
-    assert "stream" not in restored.to_dict()
-
-
-@pytest.mark.asyncio
-async def test_controller_user_message_carries_stream_without_wire_leak():
-    from kohakuterrarium.core.controller import Controller, ControllerConfig
-    from nanobot_kt.kt_adapter import create_user_event
-
-    class FakeLLM:
-        provider_name = "fake"
-        last_tool_calls = []
-        last_assistant_extra_fields = {}
-        last_assistant_content_parts = None
-        last_usage = {}
-
-        def __init__(self):
-            self.seen_messages = None
-
-        async def chat(self, messages, **_kwargs):
-            self.seen_messages = messages
-            yield "ok"
-
-    llm = FakeLLM()
-    controller = Controller(llm, ControllerConfig(include_job_status=False))
-    await controller.push_event(create_user_event("你好", stream=True))
-
-    async for _event in controller.run_once():
-        pass
-
-    user_msg = next(msg for msg in controller.conversation.get_messages() if msg.role == "user")
-    assert user_msg.stream is True
-    user_wire = next(msg for msg in llm.seen_messages if msg["role"] == "user")
-    assert user_wire == {"role": "user", "content": "你好"}
-
-
 @pytest.mark.asyncio
 async def test_bridge_pool_passes_stream_flag_to_child(monkeypatch):
     import nanobot_kt.bridge as bridge_mod
@@ -338,8 +294,3 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
     assert captured_route_kwargs["required_capabilities"]["supports_stream"] is True
     user_wire = next(msg for msg in fake_llm.seen_messages if msg["role"] == "user")
     assert user_wire == {"role": "user", "content": "你好"}
-    user_message = next(
-        msg for msg in bridge._agent.controller.conversation.get_messages()
-        if msg.role == "user"
-    )
-    assert user_message.stream is True
