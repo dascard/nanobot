@@ -722,6 +722,35 @@ def _web_search_provider_usage_table(conn: Any, engine: Any, db_path: str | None
     ))
 
 
+def _proactive_outreach_log_table(conn: Any, engine: Any, db_path: str | None) -> None:
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS proactive_outreach_log ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "user_id TEXT, "
+        "idempotency_key TEXT UNIQUE, "
+        "grounding_json TEXT DEFAULT '{}', "
+        "judge_should BOOLEAN DEFAULT 0, "
+        "judge_reason TEXT DEFAULT '', "
+        "next_check_at DATETIME, "
+        "next_intent TEXT DEFAULT '', "
+        "message TEXT DEFAULT '', "
+        "status TEXT DEFAULT 'pending', "
+        "forced BOOLEAN DEFAULT 0, "
+        "created_at DATETIME"
+        ")"
+    ))
+    _create_indexes(conn, [
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_proactive_outreach_log_idempotency_key "
+        "ON proactive_outreach_log(idempotency_key)",
+        "CREATE INDEX IF NOT EXISTS ix_proactive_outreach_log_user_id "
+        "ON proactive_outreach_log(user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_proactive_outreach_log_status "
+        "ON proactive_outreach_log(status)",
+        "CREATE INDEX IF NOT EXISTS ix_proactive_outreach_log_created_at "
+        "ON proactive_outreach_log(created_at)",
+    ])
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260523_chat_log_metadata_columns", "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -744,6 +773,7 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260526_knowledge_library_tables", "knowledge library tables", _knowledge_library_tables),
     ("20260618_runtime_tool_decision_platform", "runtime tool decision platform column", _runtime_tool_decision_platform_column),
     ("20260706_web_search_provider_usage", "web search provider usage table", _web_search_provider_usage_table),
+    ("20260706_proactive_outreach_log", "proactive outreach log table", _proactive_outreach_log_table),
 ]
 
 

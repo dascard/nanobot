@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     event,
@@ -296,6 +297,25 @@ class ScheduledTask(Base):
     enabled = Column(Integer, default=1)
     last_run_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.now)
+
+
+class ProactiveOutreachLog(Base):
+    """主动情感外呼记录，用于幂等投递和调度审计。"""
+
+    __tablename__ = "proactive_outreach_log"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(String, index=True)
+    idempotency_key = Column(String, unique=True, index=True)
+    grounding_json = Column(Text, default="{}")
+    judge_should = Column(Boolean, default=False)
+    judge_reason = Column(Text, default="")
+    next_check_at = Column(DateTime, nullable=True)
+    next_intent = Column(Text, default="")
+    message = Column(Text, default="")
+    status = Column(String, index=True, default="pending")
+    forced = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.now, index=True)
 
 
 class SensitiveData(Base):

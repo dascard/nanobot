@@ -1,4 +1,6 @@
+import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 
 def test_sqlite_path_from_database_url_respects_configured_database_path(tmp_path):
@@ -59,6 +61,45 @@ def test_schema_migrations_records_applied_versions():
         rows = conn.execute(text("SELECT version FROM schema_migrations ORDER BY version")).fetchall()
 
     assert [row[0] for row in rows] == sorted(version for version, _, _ in MIGRATIONS)
+
+
+def test_proactive_outreach_log_table_is_created_by_migration():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+
+    run_schema_migrations(engine)
+
+    inspector = inspect(engine)
+    assert "proactive_outreach_log" in inspector.get_table_names()
+    columns = {col["name"] for col in inspector.get_columns("proactive_outreach_log")}
+    assert {
+        "id",
+        "user_id",
+        "idempotency_key",
+        "grounding_json",
+        "judge_should",
+        "judge_reason",
+        "next_check_at",
+        "next_intent",
+        "message",
+        "status",
+        "forced",
+        "created_at",
+    } <= columns
+
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO proactive_outreach_log "
+            "(user_id, idempotency_key, grounding_json, status) "
+            "VALUES ('superuser', 'outreach:once', '{}', 'pending')"
+        ))
+        with pytest.raises(IntegrityError):
+            conn.execute(text(
+                "INSERT INTO proactive_outreach_log "
+                "(user_id, idempotency_key, grounding_json, status) "
+                "VALUES ('superuser', 'outreach:once', '{}', 'pending')"
+            ))
 
 
 def test_group_memory_governance_columns_apply_when_old_group_memory_migration_already_recorded():

@@ -1,4 +1,7 @@
-from core.database import User, Persona, ChatLog
+import pytest
+from sqlalchemy.exc import IntegrityError
+
+from core.database import User, Persona, ChatLog, ProactiveOutreachLog
 
 def test_create_user(db_session):
     user = User(id="test_user_1")
@@ -31,6 +34,38 @@ def test_chat_log_processing_flag(db_session):
     
     updated = db_session.query(ChatLog).filter_by(user_id="user_3").first()
     assert updated.processed == 1
+
+
+def test_create_proactive_outreach_log_enforces_idempotency_key(db_session):
+    log = ProactiveOutreachLog(
+        user_id="superuser",
+        idempotency_key="outreach:superuser:20260706T100000",
+        grounding_json='{"recent": []}',
+        judge_should=True,
+        judge_reason="想起之前聊过的项目",
+        next_intent="问问项目进展",
+        message="刚想起你昨天说的项目，来问问进展。",
+        status="pending",
+        forced=False,
+    )
+    db_session.add(log)
+    db_session.commit()
+
+    fetched = db_session.query(ProactiveOutreachLog).filter_by(user_id="superuser").one()
+    assert fetched.idempotency_key == "outreach:superuser:20260706T100000"
+    assert fetched.status == "pending"
+    assert fetched.forced is False
+
+    duplicate = ProactiveOutreachLog(
+        user_id="superuser",
+        idempotency_key="outreach:superuser:20260706T100000",
+        grounding_json="{}",
+        status="pending",
+    )
+    db_session.add(duplicate)
+
+    with pytest.raises(IntegrityError):
+        db_session.commit()
 
 
 def test_sqlite_connect_args_include_busy_timeout(monkeypatch):

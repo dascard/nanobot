@@ -25,6 +25,7 @@ class SchedulerHandles:
     session_summary: ThreadHandle | None = None
     expression_learner: ThreadHandle | None = None
     eval_sampling: ThreadHandle | None = None
+    proactive_outreach: ThreadHandle | None = None
 
     def stop_all(self) -> None:
         for handle in (
@@ -33,6 +34,7 @@ class SchedulerHandles:
             self.session_summary,
             self.expression_learner,
             self.eval_sampling,
+            self.proactive_outreach,
         ):
             if handle is not None:
                 handle.stop()
@@ -85,6 +87,8 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
     from core.daily_digest import daily_digest_scheduler, scheduled_task_runner
     from core.eval_sampling.scheduler import eval_sampling_scheduler
     from core.expression_learner import expression_learner_scheduler
+    from core.proactive_outreach import proactive_outreach_scheduler
+    from core.settings_service import settings
 
     handles = SchedulerHandles()
     if DAILY_DIGEST_ENABLED:
@@ -119,5 +123,12 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
         target=eval_sampling_scheduler,
     )
     logger.info("Eval sampling scheduler initialized.")
+
+    if settings.get_bool("proactive_outreach.enabled", False):
+        handles.proactive_outreach = _start_thread(
+            name="proactive-outreach-scheduler",
+            target=proactive_outreach_scheduler,
+        )
+        logger.info("Proactive outreach scheduler initialized.")
 
     return handles

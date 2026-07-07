@@ -182,6 +182,74 @@ def test_start_schedulers_starts_session_summary_worker(monkeypatch):
     assert handles.session_summary is not None
 
 
+def test_start_schedulers_skips_proactive_outreach_when_disabled(monkeypatch):
+    import config
+    import bootstrap.schedulers as schedulers
+    from core.settings_service import settings
+
+    calls: list[str] = []
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    def fake_start_thread(*, name, target):
+        calls.append(name)
+        return object()
+
+    def fake_get_bool(key, default=False):
+        if key == "proactive_outreach.enabled":
+            return False
+        return default
+
+    monkeypatch.setattr(config, "DAILY_DIGEST_ENABLED", False)
+    monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
+    monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
+    monkeypatch.setattr(settings, "get_bool", fake_get_bool)
+
+    handles = schedulers.start_schedulers(testing=False, logger=Logger())
+
+    assert "proactive-outreach-scheduler" not in calls
+    assert handles.proactive_outreach is None
+
+
+def test_start_schedulers_starts_proactive_outreach_when_enabled(monkeypatch):
+    import config
+    import bootstrap.schedulers as schedulers
+    from core.settings_service import settings
+
+    calls: list[str] = []
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    def fake_start_thread(*, name, target):
+        calls.append(name)
+        return f"handle:{name}"
+
+    def fake_get_bool(key, default=False):
+        if key == "proactive_outreach.enabled":
+            return True
+        return default
+
+    monkeypatch.setattr(config, "DAILY_DIGEST_ENABLED", False)
+    monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
+    monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
+    monkeypatch.setattr(settings, "get_bool", fake_get_bool)
+
+    handles = schedulers.start_schedulers(testing=False, logger=Logger())
+
+    assert "proactive-outreach-scheduler" in calls
+    assert handles.proactive_outreach == "handle:proactive-outreach-scheduler"
+
+
 @pytest.mark.asyncio
 async def test_lifespan_testing_mode_skips_bridge_network_and_scheduler_work(monkeypatch):
     import bootstrap.lifespan as bootstrap_lifespan
