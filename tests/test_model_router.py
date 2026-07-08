@@ -138,6 +138,67 @@ class TestClassifierRouteProviderResolution:
         assert route["provider_id"] == "newapi"
         assert route["model"] == "selected-reply-model"
 
+    def test_timing_proactive_inherits_reply_route_config(self, monkeypatch):
+        from clients.classifier_client import resolve_model_route
+
+        values = {
+            "model.route.timing_gate.provider": "local_llama",
+            "model.route.timing_gate.model": "timing-model",
+            "model.route.timing_gate.max_tokens": 30,
+            "model.route.timing_gate.temperature": 0,
+            "model.route.timing_gate.timeout": 5,
+            "model.providers.local_llama.base_url": "http://local-llama:9999/v1",
+            "model.providers.local_llama.enabled": True,
+            "model.route.reply.provider": "newapi",
+            "model.route.reply.model": "reply-route-model",
+            "model.route.reply.max_tokens": 2048,
+            "model.route.reply.temperature": 0.7,
+            "model.route.reply.timeout": 60,
+            "model.route.reply.enable_thinking": "true",
+            "model.providers.newapi.base_url": "http://newapi:9000/v1",
+            "model.providers.newapi.api_key": "newapi-key",
+            "model.providers.newapi.enabled": True,
+        }
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        route = resolve_model_route("timing_proactive")
+
+        assert route["provider_id"] == "newapi"
+        assert route["base_url"] == "http://newapi:9000/v1"
+        assert route["api_key"] == "newapi-key"
+        assert route["model"] == "reply-route-model"
+        assert route["max_tokens"] == 2048
+        assert route["temperature"] == 0.7
+        assert route["timeout"] == 60
+        assert route["enable_thinking"] == "true"
+        assert route["inherited_from"] == "reply"
+        assert route["source"] == "inherited_from_reply"
+
+    def test_timing_proactive_inherits_legacy_reply_model_setting(self, monkeypatch):
+        from clients.classifier_client import _resolve_classifier_route
+
+        values = {
+            "model.reply": "legacy-main-reply-model",
+            "model.route.reply.provider": "newapi",
+            "model.route.reply.max_tokens": 2048,
+            "model.providers.newapi.base_url": "http://newapi:9000/v1",
+            "model.providers.newapi.api_key": "newapi-key",
+            "model.providers.newapi.enabled": True,
+        }
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: values.get(key, default),
+        )
+
+        route = _resolve_classifier_route("timing_proactive")
+
+        assert route["provider_id"] == "newapi"
+        assert route["model"] == "legacy-main-reply-model"
+        assert route["max_tokens"] == 2048
+
     def test_route_enable_thinking_inherits_and_overrides(self, monkeypatch):
         from clients.classifier_client import resolve_model_route
 

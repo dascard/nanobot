@@ -227,6 +227,52 @@ def test_judge_outreach_uses_timing_proactive_and_clamps_next_check_at(monkeypat
     assert "shadow" not in calls[0]["system_prompt"].lower()
 
 
+def test_judge_outreach_sends_compact_grounding_only_as_user_message(monkeypatch):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 6, 12, 0, 0)
+    long_recent_message = "接口联调卡住了，" + ("这里是很长的原始聊天内容。" * 80)
+    calls = []
+
+    def fake_call_model_route(**kwargs):
+        calls.append(kwargs)
+        return (
+            '{"should_reach_out": false, "reason": "晚点再问", '
+            '"next_check_in_hours": 2, "next_intent": "问接口联调"}'
+        )
+
+    monkeypatch.setattr(proactive_outreach, "call_model_route", fake_call_model_route)
+
+    result = proactive_outreach.judge_outreach(
+        {
+            "user_id": "superuser",
+            "now": {"iso": now.isoformat(), "weekday": "星期一", "period": "午后", "hour": 12},
+            "recent_threads": ["接口联调卡住，晚点继续看"],
+            "recent_messages": [
+                {"role": "user", "content": long_recent_message, "created_at": now.isoformat()},
+            ],
+            "last_user_message": {
+                "content": long_recent_message,
+                "created_at": now.isoformat(),
+                "hours_ago": 3,
+            },
+            "hours_since_last_user_message": 3,
+            "days_since_last_outreach": 1,
+            "next_intent": "问接口联调",
+        },
+        now=now,
+    )
+
+    assert result["next_check_at"] == "2026-07-06T14:00:00"
+    assert calls[0]["route_key"] == "timing_proactive"
+    assert "next_check_in_hours" in calls[0]["system_prompt"]
+    assert "用户消息" in calls[0]["system_prompt"]
+    assert "recent_threads" in calls[0]["user_message"]
+    assert "接口联调卡住，晚点继续看" in calls[0]["user_message"]
+    assert long_recent_message not in calls[0]["system_prompt"]
+    assert long_recent_message not in calls[0]["user_message"]
+
+
 def test_judge_outreach_converts_next_check_in_hours_to_iso_and_clamps(monkeypatch):
     from core import proactive_outreach
 
@@ -298,6 +344,45 @@ def test_generate_outreach_message_uses_reply_route_and_positive_prompt(monkeypa
     assert "避免与上次主动消息" in calls[0]["system_prompt"]
     forbidden_markers = ["禁止", "黑名单", "语义越界", "情感依赖", "shadow", "dry-run"]
     assert all(marker not in calls[0]["system_prompt"] for marker in forbidden_markers)
+
+
+def test_generate_outreach_message_sends_compact_grounding_only_as_user_message(monkeypatch):
+    from core import proactive_outreach
+
+    long_recent_message = "今天项目收尾有点累，" + ("这里是很长的原始聊天内容。" * 80)
+    calls = []
+
+    def fake_call_model_route(**kwargs):
+        calls.append(kwargs)
+        return "刚想起你说项目收尾有点累，想来轻轻敲一下。"
+
+    monkeypatch.setattr(proactive_outreach, "call_model_route", fake_call_model_route)
+
+    message = proactive_outreach.generate_outreach_message(
+        {
+            "user_id": "superuser",
+            "persona": {"likes": ["夜跑"]},
+            "recent_threads": ["项目收尾有点累"],
+            "recent_messages": [
+                {"role": "user", "content": long_recent_message, "created_at": "2026-07-06T12:00:00"},
+            ],
+            "last_user_message": {
+                "content": long_recent_message,
+                "created_at": "2026-07-06T12:00:00",
+                "hours_ago": 4,
+            },
+            "last_outreach": {"message": "昨天已经问过接口联调了。"},
+        },
+        "想跟进项目收尾",
+    )
+
+    assert message == "刚想起你说项目收尾有点累，想来轻轻敲一下。"
+    assert calls[0]["route_key"] == "reply"
+    assert "用户消息" in calls[0]["system_prompt"]
+    assert "recent_threads" in calls[0]["user_message"]
+    assert "项目收尾有点累" in calls[0]["user_message"]
+    assert long_recent_message not in calls[0]["system_prompt"]
+    assert long_recent_message not in calls[0]["user_message"]
 
 
 @pytest.mark.asyncio

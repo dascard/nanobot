@@ -32,6 +32,9 @@ DEFAULT_SURGE_MIN_PROB = 0.1
 DEFAULT_SURGE_MAX_PROB = 0.6
 OUTREACH_JUDGE_MAX_TOKENS = 240
 OUTREACH_GENERATOR_MAX_TOKENS = 320
+MODEL_GROUNDING_RECENT_MESSAGE_LIMIT = 8
+MODEL_GROUNDING_TEXT_LIMIT = 480
+MODEL_GROUNDING_MESSAGE_TEXT_LIMIT = 240
 logger = logging.getLogger("nanobot.proactive_outreach")
 
 RECENT_THREADS_PROMPT = """从最近对话中提炼主动外呼可自然跟进的点。
@@ -44,9 +47,8 @@ RECENT_THREADS_PROMPT = """从最近对话中提炼主动外呼可自然跟进�
 
 OUTREACH_JUDGE_PROMPT = """你在判断:此刻是否值得主动给你最亲密的朋友发一条消息。
 
-上下文:{grounding_json}
-(优先看 recent_threads、now、hours_since_last_user_message、last_user_message、days_since_last_outreach；原始 recent_messages 只作补充)
-(可能包含:你上次打算这时找 ta 聊的事 = {next_intent})
+你会在用户消息中收到一份精简 grounding JSON。
+优先看 recent_threads、now、hours_since_last_user_message、last_user_message、days_since_last_outreach、next_intent、last_outreach；原始 recent_messages 只作补充。
 
 原则:
 - 你是主动的一方,像真人朋友——想到了就找 ta,不必等 ta 开口
@@ -59,7 +61,7 @@ OUTREACH_JUDGE_PROMPT = """你在判断:此刻是否值得主动给你最亲密�
 
 OUTREACH_GENERATOR_PROMPT = """你是 nanobot,要给最亲密的朋友主动发一条消息。
 
-上下文:{grounding_json}
+你会在用户消息中收到一份精简 grounding JSON。
 理由:{reason}
 
 要求:
@@ -160,6 +162,71 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
 
 def _grounding_json(grounding: dict[str, Any]) -> str:
     return json.dumps(grounding, ensure_ascii=False, default=str)
+
+
+def _compact_model_value(
+    value: Any,
+    *,
+    max_chars: int = MODEL_GROUNDING_TEXT_LIMIT,
+    max_items: int = 12,
+    depth: int = 0,
+) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        if depth >= 4:
+            return _truncate_text(_grounding_json(value), max_chars)
+        return {
+            str(key): _compact_model_value(
+                nested,
+                max_chars=max_chars,
+                max_items=max_items,
+                depth=depth + 1,
+            )
+            for key, nested in list(value.items())[:max_items]
+        }
+    if isinstance(value, list):
+        return [
+            _compact_model_value(
+                item,
+                max_chars=max_chars,
+                max_items=max_items,
+                depth=depth + 1,
+            )
+            for item in value[:max_items]
+        ]
+    return _truncate_text(str(value), max_chars)
+
+
+def _compact_recent_message_for_model(item: Any) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return {"content": _truncate_text(str(item), MODEL_GROUNDING_MESSAGE_TEXT_LIMIT)}
+    compact: dict[str, Any] = {}
+    for key in ("role", "content", "created_at", "sender_name"):
+        if key not in item:
+            continue
+        limit = MODEL_GROUNDING_MESSAGE_TEXT_LIMIT if key == "content" else MODEL_GROUNDING_TEXT_LIMIT
+        compact[key] = _compact_model_value(item.get(key), max_chars=limit)
+    return compact
+
+
+def _grounding_json_for_model(grounding: dict[str, Any]) -> str:
+    compact: dict[str, Any] = {}
+    for key, value in grounding.items():
+        if key == "recent_messages":
+            continue
+        limit = MODEL_GROUNDING_MESSAGE_TEXT_LIMIT if key in {"last_user_message", "last_outreach"} else MODEL_GROUNDING_TEXT_LIMIT
+        compact[key] = _compact_model_value(value, max_chars=limit)
+
+    recent_messages = grounding.get("recent_messages")
+    if isinstance(recent_messages, list) and recent_messages:
+        compact["recent_messages"] = [
+            _compact_recent_message_for_model(item)
+            for item in recent_messages[-MODEL_GROUNDING_RECENT_MESSAGE_LIMIT:]
+        ]
+    return _grounding_json(compact)
 
 
 def _weekday_label(value: datetime) -> str:
@@ -389,12 +456,8 @@ def judge_outreach(
     """判断是否应主动外呼，并钳制模型给出的下次检查时间。"""
 
     current = now or datetime.now()
-    grounding_text = _grounding_json(grounding)
-    prompt = (
-        OUTREACH_JUDGE_PROMPT
-        .replace("{grounding_json}", grounding_text)
-        .replace("{next_intent}", str(grounding.get("next_intent") or ""))
-    )
+    grounding_text = _grounding_json_for_model(grounding)
+    prompt = OUTREACH_JUDGE_PROMPT
     try:
         raw = call_model_route(
             route_key="timing_proactive",
@@ -439,11 +502,8 @@ def judge_outreach(
 def generate_outreach_message(grounding: dict[str, Any], reason: str) -> str:
     """生成主动外呼 DM 正文。"""
 
-    grounding_text = _grounding_json(grounding)
-    prompt = OUTREACH_GENERATOR_PROMPT.format(
-        grounding_json=grounding_text,
-        reason=reason,
-    )
+    grounding_text = _grounding_json_for_model(grounding)
+    prompt = OUTREACH_GENERATOR_PROMPT.replace("{reason}", str(reason)[:500])
     raw = call_model_route(
         route_key="reply",
         system_prompt=prompt,

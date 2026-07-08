@@ -96,7 +96,8 @@ def _resolve_classifier_route(route_key: str) -> dict:
     """解析分类器路由配置。
 
     返回 {provider, base_url, api_key, model, timeout, temperature, max_tokens}。
-    子路由（private_decision / classifier_legacy）空配置时继承 timing_gate 的完整配置，
+    子路由（private_decision / classifier_legacy）空配置时继承 timing_gate 的完整配置；
+    主动外呼/主动发言 Judge（timing_proactive）继承主回复模型 reply 的完整配置，
     字段级覆盖（如 private_decision.max_tokens=120）在继承后叠加。
     """
 
@@ -111,9 +112,11 @@ def _resolve_classifier_route(route_key: str) -> dict:
         "enable_thinking": "auto",
     }
 
-    # 只有分类器子路由继承 timing_gate；controller/vision route 独立解析。
-    if route_key in ("private_decision", "classifier_legacy", "timing_proactive"):
+    # 私聊/旧分类器子路由继承 timing_gate；主动外呼 Judge 跟随主回复模型。
+    if route_key in ("private_decision", "classifier_legacy"):
         base = _resolve_classifier_route("timing_gate")
+    elif route_key == "timing_proactive":
+        base = _resolve_classifier_route("reply")
     else:
         base = dict(defaults)
 
@@ -142,6 +145,18 @@ def _resolve_classifier_route(route_key: str) -> dict:
         v = _get_setting_value(f"{prefix}.{k}")
         if v is not None:
             base[k] = float(v) if k == "temperature" else (int(v) if k == "max_tokens" else float(v))
+
+    if not base.get("model") and route_key in ("reply", "fast", "smart", "session_summary", "memory_digest"):
+        from config import LLM_MODEL_REPLY, LLM_MODEL_FAST, LLM_MODEL_SMART
+
+        default_models = {
+            "reply": LLM_MODEL_REPLY,
+            "fast": LLM_MODEL_FAST,
+            "smart": LLM_MODEL_SMART,
+            "session_summary": LLM_MODEL_FAST,
+            "memory_digest": LLM_MODEL_SMART,
+        }
+        base["model"] = str(_get_setting_value(f"model.{route_key}") or default_models.get(route_key, ""))
 
     enable_thinking_key = f"{prefix}.enable_thinking"
     enable_thinking = _get_setting_value(enable_thinking_key, "")
@@ -555,15 +570,16 @@ def resolve_model_route(route_key: str) -> dict:
     }
 
     # 继承信息（非 timing_gate 的 classifier routes）
-    if route_key in ("private_decision", "classifier_legacy"):
-        tg = resolve_model_route("timing_gate")
+    if route_key in ("private_decision", "classifier_legacy", "timing_proactive"):
+        inherited_from = "reply" if route_key == "timing_proactive" else "timing_gate"
+        parent = resolve_model_route(inherited_from)
         overrides = {}
         for k in ("max_tokens", "timeout", "temperature", "model", "provider_id", "enable_thinking"):
-            if result[k] != tg.get(k) and result[k] not in ("", "未指定", 30):
+            if result[k] != parent.get(k) and result[k] not in ("", "未指定", 30):
                 overrides[k] = result[k]
-        result["inherited_from"] = "timing_gate"
+        result["inherited_from"] = inherited_from
         result["overridden_fields"] = overrides
-        result["source"] = "inherited_from_timing_gate"
+        result["source"] = f"inherited_from_{inherited_from}"
 
     return result
 
