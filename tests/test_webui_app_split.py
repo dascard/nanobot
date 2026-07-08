@@ -16,6 +16,7 @@ FEATURES = {
     "ToolsPage": Path("webui/src/features/tools/ToolsPage.jsx"),
     "EvalsPage": Path("webui/src/features/evals/EvalsPage.jsx"),
     "GeneratedImagesPage": Path("webui/src/features/generated-images/GeneratedImagesPage.jsx"),
+    "ProactiveOutreachPage": Path("webui/src/features/proactive-outreach/ProactiveOutreachPage.jsx"),
 }
 
 
@@ -41,6 +42,7 @@ def test_app_js_imports_split_feature_pages():
     assert "from './features/tools/ToolsPage'" in source
     assert "from './features/evals/EvalsPage'" in source
     assert "from './features/generated-images/GeneratedImagesPage'" in source
+    assert "from './features/proactive-outreach/ProactiveOutreachPage'" in source
 
 
 def test_app_shell_has_fixed_navigation_and_isolated_scroll_regions():
@@ -123,3 +125,21 @@ def test_web_search_page_no_longer_shows_not_tested_copy():
 
     assert "暂不测试" not in page_source
     assert "暂不支持连接测试" not in page_source
+
+
+def test_proactive_outreach_page_is_wired_into_admin_app():
+    source = APP_JS.read_text(encoding="utf-8")
+    page_source = FEATURES["ProactiveOutreachPage"].read_text(encoding="utf-8")
+
+    assert "to: '/proactive-outreach'" in source
+    assert 'path="/proactive-outreach"' in source
+    assert "主动外呼" in source
+    assert "export function ProactiveOutreachPage(" in page_source
+    assert "api.get('/proactive-outreach/status'" in page_source
+    assert "api.get('/proactive-outreach/logs'" in page_source
+    assert "api.put(`/proactive-outreach/settings/${encodeURIComponent(key)}`" in page_source
+    assert "api.post('/proactive-outreach/run-once'" in page_source
+    assert "业务记录" in page_source
+    assert "运行日志" in page_source
+    assert "LLM 请求" in page_source
+    assert "proactive_outreach.enabled" in page_source

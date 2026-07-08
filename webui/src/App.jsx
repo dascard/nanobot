@@ -16,6 +16,7 @@ import {
   Menu,
   MessageSquare,
   Network,
+  Radio,
   RefreshCw,
   Search,
   Settings,
@@ -52,6 +53,7 @@ import { GeneratedImagesPage } from './features/generated-images/GeneratedImages
 import { RagDebugPage } from './features/rag/RagDebugPage'
 import { RagBenchmarkPage } from './features/rag/RagBenchmarkPage'
 import { WebSearchPage } from './features/web-search/WebSearchPage'
+import { ProactiveOutreachPage } from './features/proactive-outreach/ProactiveOutreachPage'
 
 function formatApiError(error, fallback = '请求失败') {
   const detail = error?.response?.data?.detail
@@ -170,6 +172,7 @@ const NAV_SECTIONS = [
       { to: '/rag-benchmark', label: 'RAG Benchmark', icon: BarChart3 },
       { to: '/reply-eval', label: 'Reply 测试', icon: ListChecks },
       { to: '/timing-gate', label: 'TimingGate', icon: Clock3 },
+      { to: '/proactive-outreach', label: '主动外呼', icon: Radio },
       { to: '/logs', label: '日志', icon: FileText },
     ],
   },
@@ -2956,6 +2959,7 @@ export default function App() {
           <Route path="/groups" element={<GroupsPage />} />
           <Route path="/groups/:groupId" element={<GroupDetailPage />} />
           <Route path="/timing-gate" element={<TimingGatePage />} />
+          <Route path="/proactive-outreach" element={<ProactiveOutreachPage />} />
           <Route path="/stickers" element={<StickersPage />} />
           <Route path="/stickers/duplicates" element={<StickerDedupPage />} />
           <Route path="/blocks" element={<BlocksPage />} />

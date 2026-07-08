@@ -1,0 +1,302 @@
+"""Admin 主动情感外呼管理路由。"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from api.admin.common import audit, client_ip, verify_admin
+from core.config_registry import SETTING_DEFS, SettingDef
+from core.database import LLMApiRequestLog, ProactiveOutreachLog, SystemSetting, get_db
+from core.identity import _configured_super_user_ids
+from core.proactive_outreach import run_outreach_due_once, run_outreach_once
+from core.settings_service import settings
+
+
+router = APIRouter(prefix="/proactive-outreach", tags=["admin-proactive-outreach"])
+
+_MANAGED_SETTING_KEYS = (
+    "proactive_outreach.enabled",
+    "proactive_outreach.fallback_interval_min",
+    "proactive_outreach.min_interval_min",
+    "proactive_outreach.max_check_interval_min",
+    "proactive_outreach.max_silence_min",
+    "proactive_outreach.surge_min_prob",
+    "proactive_outreach.surge_max_prob",
+    "bot.super_user_ids",
+)
+_OUTREACH_LLM_SOURCES = (
+    "classifier.timing_proactive",
+    "classifier.reply",
+)
+
+
+class ProactiveSettingUpdate(BaseModel):
+    value: Any
+
+
+class ProactiveRunOnceRequest(BaseModel):
+    user_id: str = ""
+    mode: Literal["due", "check"] = "due"
+
+
+def _parse_json_object(raw: object) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(str(raw or "{}"))
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _iso(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value or "")
+
+
+def _setting_value(defn: SettingDef, raw_value: object) -> object:
+    try:
+        if defn.value_type == "bool":
+            if isinstance(raw_value, bool):
+                return raw_value
+            return str(raw_value).lower() in {"1", "true", "yes", "on"}
+        if defn.value_type == "int":
+            value = int(raw_value)
+            if defn.min_value is not None and value < defn.min_value:
+                raise HTTPException(status_code=400, detail=f"Min: {defn.min_value}")
+            if defn.max_value is not None and value > defn.max_value:
+                raise HTTPException(status_code=400, detail=f"Max: {defn.max_value}")
+            return value
+        if defn.value_type == "float":
+            value = float(raw_value)
+            if defn.min_value is not None and value < defn.min_value:
+                raise HTTPException(status_code=400, detail=f"Min: {defn.min_value}")
+            if defn.max_value is not None and value > defn.max_value:
+                raise HTTPException(status_code=400, detail=f"Max: {defn.max_value}")
+            return value
+        return str(raw_value)
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _setting_payload(key: str, values: dict[str, object]) -> dict[str, Any]:
+    defn = SETTING_DEFS[key]
+    value = values.get(key, defn.default)
+    return {
+        "key": key,
+        "value": None if defn.sensitive else value,
+        "display_value": "****" if defn.sensitive else str(value),
+        "default": defn.default,
+        "value_type": defn.value_type,
+        "category": defn.category,
+        "description": defn.description,
+        "restart_required": defn.restart_required,
+        "dangerous": defn.dangerous,
+        "sensitive": defn.sensitive,
+        "min_value": defn.min_value,
+        "max_value": defn.max_value,
+    }
+
+
+def _outreach_log_dict(row: ProactiveOutreachLog) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "user_id": row.user_id or "",
+        "idempotency_key": row.idempotency_key or "",
+        "grounding": _parse_json_object(row.grounding_json),
+        "judge_should": bool(row.judge_should),
+        "judge_reason": row.judge_reason or "",
+        "next_check_at": _iso(row.next_check_at),
+        "next_intent": row.next_intent or "",
+        "message": row.message or "",
+        "status": row.status or "",
+        "forced": bool(row.forced),
+        "created_at": _iso(row.created_at),
+    }
+
+
+def _llm_log_dict(row: LLMApiRequestLog) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "trace_id": row.trace_id or "",
+        "run_id": row.run_id or "",
+        "source": row.source or "",
+        "provider": row.provider or "",
+        "model": row.model or "",
+        "status": row.status or "",
+        "response_status": row.response_status or 0,
+        "request_preview": str(row.request_preview or "")[:500],
+        "response_preview": str(row.response_preview or "")[:500],
+        "error": str(row.error or "")[:500],
+        "latency_ms": int(row.latency_ms or 0),
+        "created_at": _iso(row.created_at),
+        "finished_at": _iso(row.finished_at),
+    }
+
+
+def _status_counts(db: Session) -> dict[str, Any]:
+    rows = (
+        db.query(ProactiveOutreachLog.status, func.count(ProactiveOutreachLog.id))
+        .group_by(ProactiveOutreachLog.status)
+        .all()
+    )
+    by_status = {str(status or "unknown"): int(count or 0) for status, count in rows}
+    return {
+        "total": sum(by_status.values()),
+        "by_status": by_status,
+    }
+
+
+def _assert_managed_setting(key: str) -> SettingDef:
+    if key not in _MANAGED_SETTING_KEYS:
+        raise HTTPException(status_code=400, detail="Setting is not managed here")
+    defn = SETTING_DEFS.get(key)
+    if defn is None:
+        raise HTTPException(status_code=400, detail=f"Unknown setting: {key}")
+    return defn
+
+
+@router.get("/status")
+def proactive_outreach_status(
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    values = settings.all_values()
+    latest_logs = (
+        db.query(ProactiveOutreachLog)
+        .order_by(ProactiveOutreachLog.created_at.desc(), ProactiveOutreachLog.id.desc())
+        .limit(20)
+        .all()
+    )
+    llm_logs = (
+        db.query(LLMApiRequestLog)
+        .filter(LLMApiRequestLog.source.in_(_OUTREACH_LLM_SOURCES))
+        .order_by(LLMApiRequestLog.created_at.desc(), LLMApiRequestLog.id.desc())
+        .limit(20)
+        .all()
+    )
+    return {
+        "enabled": bool(values.get("proactive_outreach.enabled", False)),
+        "super_user_ids": sorted(_configured_super_user_ids()),
+        "settings": [_setting_payload(key, values) for key in _MANAGED_SETTING_KEYS],
+        "stats": _status_counts(db),
+        "latest_logs": [_outreach_log_dict(row) for row in latest_logs],
+        "llm_logs": [_llm_log_dict(row) for row in llm_logs],
+        "version": settings.version,
+    }
+
+
+@router.get("/logs")
+def proactive_outreach_logs(
+    status: str = "",
+    user_id: str = "",
+    limit: int = Query(50, ge=1, le=200),
+    page: int = Query(1, ge=1),
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    query = db.query(ProactiveOutreachLog)
+    if status:
+        query = query.filter(ProactiveOutreachLog.status == status)
+    if user_id:
+        query = query.filter(ProactiveOutreachLog.user_id == user_id)
+    total = query.count()
+    items = (
+        query.order_by(ProactiveOutreachLog.created_at.desc(), ProactiveOutreachLog.id.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+    return {
+        "total": total,
+        "items": [_outreach_log_dict(row) for row in items],
+        "page": page,
+        "limit": limit,
+    }
+
+
+@router.put("/settings/{key:path}")
+def update_proactive_outreach_setting(
+    key: str,
+    body: ProactiveSettingUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    defn = _assert_managed_setting(key)
+    value = _setting_value(defn, body.value)
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if row is None:
+        row = SystemSetting(key=key, value=str(value), description=defn.description)
+        db.add(row)
+    else:
+        row.value = str(value)
+    db.commit()
+    settings.invalidate()
+    audit(
+        db,
+        "update_proactive_outreach_setting",
+        "setting",
+        key,
+        {"value": str(value)},
+        ip_address=client_ip(request),
+    )
+    return {
+        "key": key,
+        "value": value,
+        "restart_required": defn.restart_required,
+        "version": settings.version,
+    }
+
+
+@router.post("/settings/reload")
+def reload_proactive_outreach_settings(
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    settings.invalidate()
+    audit(
+        db,
+        "reload_proactive_outreach_settings",
+        "setting",
+        "proactive_outreach",
+        {},
+        ip_address=client_ip(request),
+    )
+    return {"ok": True, "version": settings.version}
+
+
+@router.post("/run-once")
+async def proactive_outreach_run_once(
+    body: ProactiveRunOnceRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    user_id = (body.user_id or "").strip()
+    if not user_id:
+        user_ids = sorted(_configured_super_user_ids())
+        if not user_ids:
+            raise HTTPException(status_code=400, detail="No superuser configured")
+        user_id = user_ids[0]
+
+    if body.mode == "check":
+        result = await run_outreach_once(user_id, db=db)
+    else:
+        result = await run_outreach_due_once(user_id, db=db)
+    return {
+        "ok": True,
+        "user_id": user_id,
+        "mode": body.mode,
+        "result": result,
+    }

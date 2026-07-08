@@ -291,6 +291,7 @@ from api.admin.tool_routes import (
     update_tool_defaults as update_tool_defaults,
 )
 from api.admin.web_search_routes import router as web_search_router
+from api.admin.proactive_outreach_routes import router as proactive_outreach_router
 
 logger = logging.getLogger("nanobot.admin")
 router = APIRouter(prefix="/api/v1/admin")
@@ -308,6 +309,7 @@ router.include_router(runtime_router)
 router.include_router(tool_router)
 router.include_router(model_router)
 router.include_router(web_search_router)
+router.include_router(proactive_outreach_router)
 router.include_router(reply_router)
 router.include_router(eval_router)
 router.include_router(trace_router)
