@@ -103,6 +103,57 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         db.close()
 
 
+def test_tool_tracer_preserves_complete_bounded_web_search_evidence(tmp_path, monkeypatch):
+    from core import database
+    from core.tracing import MAX_PREVIEW_CHARS, ToolTracer
+    from core.web_search.search_runtime import (
+        WebSearchProviderResult,
+        WebSearchResult,
+        format_provider_result_for_model,
+    )
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'web-search-trace.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    testing_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(database, "SessionLocal", testing_session)
+
+    provider_result = WebSearchProviderResult(
+        provider_id="searxng",
+        results=[
+            WebSearchResult(
+                provider="searxng",
+                title=f"Agent 记忆研究来源 {index} {'较长标题' * 20}",
+                url=f"https://example.com/research/{index}",
+                snippet="Agent 记忆研究的足够长搜索摘要" * 40,
+            )
+            for index in range(5)
+        ],
+    )
+    evidence = format_provider_result_for_model("研究 Agent 记忆", provider_result, limit=5)
+    assert len(evidence) > MAX_PREVIEW_CHARS
+
+    tool_id = ToolTracer.start_tool_call(
+        trace_id="trace-web-search",
+        run_id="run-web-search",
+        tool_name="web_search",
+        args={"query": "研究 Agent 记忆"},
+    )
+    ToolTracer.finish_tool_call(tool_id, status="success", result=evidence)
+
+    db = testing_session()
+    try:
+        row = db.query(database.ToolCall).one()
+        assert row.result_preview == evidence
+        assert row.result_preview.endswith("WEB_SEARCH_RESULTS_END")
+        assert "...[truncated]" not in row.result_preview
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_executor_records_tool_call_with_contextvars(tmp_path, monkeypatch):
     from core import database
     from core.tool_tracing import install_executor_tracing

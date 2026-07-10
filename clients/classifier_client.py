@@ -7,12 +7,15 @@ L3: Output validation (strict format)
 L4: Timeout fallback
 """
 
+import hashlib
 import json
 import logging
 import os
 import re
 import time
 import urllib.request
+from dataclasses import dataclass
+from typing import Any
 
 from config import CLASSIFIER_API_URL
 from core.model_route_options import apply_enable_thinking_to_payload, normalize_enable_thinking
@@ -21,6 +24,24 @@ logger = logging.getLogger("nanobot.classifier")
 
 
 _MISSING = object()
+_OUTREACH_ROUTE_KEYS = {
+    "timing_proactive",
+    "outreach_extract",
+    "outreach_judge",
+    "outreach_generate",
+}
+_RAW_BODY_PREVIEW_LIMIT = 4096
+
+
+@dataclass(frozen=True)
+class ModelRouteResponse:
+    """保留 OpenAI-compatible 响应中的业务契约元数据。"""
+
+    content: str
+    reasoning_content: str
+    finish_reason: str | None
+    usage: dict[str, Any]
+    raw_response: dict[str, Any]
 
 
 def _get_db_setting_value(key: str) -> tuple[bool, str | None]:
@@ -115,7 +136,7 @@ def _resolve_classifier_route(route_key: str) -> dict:
     # 私聊/旧分类器子路由继承 timing_gate；主动外呼 Judge 跟随主回复模型。
     if route_key in ("private_decision", "classifier_legacy"):
         base = _resolve_classifier_route("timing_gate")
-    elif route_key == "timing_proactive":
+    elif route_key in _OUTREACH_ROUTE_KEYS:
         base = _resolve_classifier_route("reply")
     else:
         base = dict(defaults)
@@ -142,7 +163,13 @@ def _resolve_classifier_route(route_key: str) -> dict:
     if v:
         base["model"] = str(v)
     for k in ("timeout", "temperature", "max_tokens"):
-        v = _get_setting_value(f"{prefix}.{k}")
+        route_default = None
+        if route_key in _OUTREACH_ROUTE_KEYS:
+            from core.config_registry import SETTING_DEFS
+
+            defn = SETTING_DEFS.get(f"{prefix}.{k}")
+            route_default = defn.default if defn is not None else None
+        v = _get_setting_value(f"{prefix}.{k}", route_default)
         if v is not None:
             base[k] = float(v) if k == "temperature" else (int(v) if k == "max_tokens" else float(v))
 
@@ -160,7 +187,9 @@ def _resolve_classifier_route(route_key: str) -> dict:
 
     enable_thinking_key = f"{prefix}.enable_thinking"
     enable_thinking = _get_setting_value(enable_thinking_key, "")
-    if _setting_is_explicit(enable_thinking_key, enable_thinking):
+    if route_key in _OUTREACH_ROUTE_KEYS:
+        base["enable_thinking"] = normalize_enable_thinking(enable_thinking or "false")
+    elif _setting_is_explicit(enable_thinking_key, enable_thinking):
         base["enable_thinking"] = normalize_enable_thinking(enable_thinking)
 
     # 合并 provider 配置：route.provider → provider base_url/api_key
@@ -230,7 +259,16 @@ def strip_think_blocks(text: str) -> str:
     return text
 
 
-def call_model_route(
+def _raw_body_audit(raw_body: bytes) -> dict[str, Any]:
+    text = raw_body.decode("utf-8", errors="replace")
+    return {
+        "raw_body_preview": text[:_RAW_BODY_PREVIEW_LIMIT],
+        "raw_body_chars": len(text),
+        "raw_body_sha256": hashlib.sha256(raw_body).hexdigest(),
+    }
+
+
+def call_model_route_response(
     route_key: str = "timing_gate",
     messages: list[dict] | None = None,
     *,
@@ -239,8 +277,8 @@ def call_model_route(
     max_tokens: int | None = None,
     temperature: float | None = None,
     timeout: float | None = None,
-) -> str:
-    """统一的分类器模型路由调用。
+) -> ModelRouteResponse:
+    """调用分类器模型路由并保留停止原因、推理正文和 usage。
 
     从 settings.get(f"model.route.{route_key}") 读取完整路由配置
     （provider/base_url/api_key/model/timeout/temperature/max_tokens），
@@ -265,6 +303,9 @@ def call_model_route(
                 "timing_gate": "timing_gate",
                 "private_decision": "private_decision",
                 "classifier_legacy": "classifier_legacy",
+                "outreach_extract": "outreach_extract",
+                "outreach_judge": "outreach_judge",
+                "outreach_generate": "outreach_generate",
             }.get(route_key, "")
             if prompt_key:
                 messages = render_task_messages(
@@ -332,12 +373,59 @@ def call_model_route(
     )
     proxy_handler = urllib.request.ProxyHandler({})
     opener = urllib.request.build_opener(proxy_handler)
+    response_status = 0
+    body: Any = {}
     try:
         with opener.open(req, timeout=timeout_s) as response:
             response_status = getattr(response, "status", None) or (
                 response.getcode() if hasattr(response, "getcode") else 200
             )
-            body = json.loads(response.read().decode("utf-8"))
+            raw_body = response.read()
+            try:
+                body = json.loads(raw_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                body = _raw_body_audit(raw_body)
+                raise ValueError(f"model response invalid JSON: {exc}") from exc
+
+        choices = body.get("choices") if isinstance(body, dict) else None
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise ValueError("model response missing choices[0]")
+        choice = choices[0]
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise ValueError("model response missing choices[0].message")
+
+        raw_content = message.get("content")
+        if not isinstance(raw_content, str):
+            raise ValueError(
+                "model response choices[0].message.content must be a string"
+            )
+        reasoning = message.get("reasoning_content")
+        if reasoning is None:
+            reasoning = message.get("reasoning")
+        if reasoning is not None and not isinstance(reasoning, str):
+            raise ValueError(
+                "model response choices[0].message.reasoning_content must be a string or null"
+            )
+        raw_finish_reason = choice.get("finish_reason")
+        if raw_finish_reason is not None and not isinstance(raw_finish_reason, str):
+            raise ValueError(
+                "model response choices[0].finish_reason must be a string or null"
+            )
+        usage = body.get("usage")
+        if usage is not None and not isinstance(usage, dict):
+            raise ValueError("model response usage must be an object or null")
+        result = ModelRouteResponse(
+            content=strip_think_blocks(raw_content),
+            reasoning_content=reasoning or "",
+            finish_reason=(
+                raw_finish_reason
+                if raw_finish_reason is not None
+                else None
+            ),
+            usage=dict(usage) if isinstance(usage, dict) else {},
+            raw_response=dict(body),
+        )
         try:
             from core.tracing import LLMRequestTracer
             LLMRequestTracer.finish_request(
@@ -349,13 +437,14 @@ def call_model_route(
             )
         except Exception:
             pass
+        return result
     except Exception as e:
         try:
             from core.tracing import LLMRequestTracer
-            status = getattr(e, "code", 0) or 0
+            status = getattr(e, "code", 0) or response_status
             LLMRequestTracer.finish_request(
                 log_id=log_id,
-                response={},
+                response=body if isinstance(body, dict) else {},
                 response_status=status,
                 status="error",
                 error=str(e),
@@ -365,8 +454,28 @@ def call_model_route(
             pass
         raise
 
-    content = body["choices"][0]["message"]["content"]
-    return strip_think_blocks(content)
+
+def call_model_route(
+    route_key: str = "timing_gate",
+    messages: list[dict] | None = None,
+    *,
+    system_prompt: str = "",
+    user_message: str = "",
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+    timeout: float | None = None,
+) -> str:
+    """兼容旧调用方，只返回清洗后的正文字符串。"""
+
+    return call_model_route_response(
+        route_key=route_key,
+        messages=messages,
+        system_prompt=system_prompt,
+        user_message=user_message,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        timeout=timeout,
+    ).content
 
 
 # ── 模型路由解析（provider + model）──
@@ -570,8 +679,8 @@ def resolve_model_route(route_key: str) -> dict:
     }
 
     # 继承信息（非 timing_gate 的 classifier routes）
-    if route_key in ("private_decision", "classifier_legacy", "timing_proactive"):
-        inherited_from = "reply" if route_key == "timing_proactive" else "timing_gate"
+    if route_key in ("private_decision", "classifier_legacy", *_OUTREACH_ROUTE_KEYS):
+        inherited_from = "reply" if route_key in _OUTREACH_ROUTE_KEYS else "timing_gate"
         parent = resolve_model_route(inherited_from)
         overrides = {}
         for k in ("max_tokens", "timeout", "temperature", "model", "provider_id", "enable_thinking"):
@@ -661,8 +770,10 @@ def build_route_references() -> list[dict]:
 
     items: list[dict] = []
     seen: set[str] = set()
-    for rk in ("reply", "fast", "smart", "timing_gate", "private_decision",
-               "classifier_legacy", "sticker_describe"):
+    for rk in (
+        "reply", "fast", "smart", "timing_gate", "private_decision",
+        "classifier_legacy", "sticker_describe", *_OUTREACH_ROUTE_KEYS,
+    ):
         r = resolve_model_route(rk)
         m = r.get("model", "")
         if not m or m == "未指定":
@@ -1341,34 +1452,50 @@ _PROACTIVE_PROMPT = """你是群聊里的一个成员 bot。现在群里有人�
 {"should_speak": false, "reason": "群友日常寒暄，无需插话"}
 {"should_speak": true, "reason": "有人问到我了解的技术问题，可以补充"}"""
 
-PROACTIVE_MAX_TOKENS = 80
-
-
 def judge_proactive(context: str) -> dict:
     """群聊主动发言语义裁判。走独立 route timing_proactive，解析失败保守沉默。"""
     import time as _t
 
     t0 = _t.time()
     try:
-        raw = call_model_route(
+        response = call_model_route_response(
             route_key="timing_proactive",
             system_prompt=_PROACTIVE_PROMPT,
             user_message=context,
-            max_tokens=PROACTIVE_MAX_TOKENS,
         )
     except Exception as e:
         logger.warning("[Proactive] failed latency=%dms: %s", int((_t.time() - t0) * 1000), e)
         return {"should_speak": False, "reason": f"裁判不可用: {e}", "raw": "", "error_type": "network_error"}
 
-    cleaned = strip_think_blocks(raw)
+    raw = response.content
+    if response.finish_reason not in (None, "stop"):
+        error_type = (
+            "model_truncated"
+            if response.finish_reason == "length"
+            else "model_finish_error"
+        )
+        logger.warning(
+            "[Proactive] abnormal finish_reason=%s",
+            response.finish_reason,
+        )
+        return {
+            "should_speak": False,
+            "reason": f"模型未正常结束: {response.finish_reason or 'missing'}",
+            "raw": str(raw)[:200],
+            "error_type": error_type,
+        }
+
+    cleaned = strip_think_blocks(raw).strip()
     try:
-        start = cleaned.find("{")
-        end = cleaned.rfind("}") + 1
-        if start >= 0 and end > start:
-            data = json.loads(cleaned[start:end])
+        data = json.loads(cleaned)
+        if (
+            isinstance(data, dict)
+            and type(data.get("should_speak")) is bool
+            and isinstance(data.get("reason"), str)
+        ):
             return {
-                "should_speak": bool(data.get("should_speak", False)),
-                "reason": str(data.get("reason", ""))[:200],
+                "should_speak": data["should_speak"],
+                "reason": data["reason"][:200],
                 "raw": raw[:200],
                 "error_type": None,
             }
@@ -1376,4 +1503,9 @@ def judge_proactive(context: str) -> dict:
         pass
 
     logger.warning("[Proactive] invalid output: %s", str(raw)[:100])
-    return {"should_speak": False, "reason": "非法输出", "raw": str(raw)[:200], "error_type": "parse_error"}
+    return {
+        "should_speak": False,
+        "reason": "输出不满足主动发言契约",
+        "raw": str(raw)[:200],
+        "error_type": "contract_error",
+    }

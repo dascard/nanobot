@@ -668,7 +668,7 @@ async def close_push_session() -> None:
         _push_session_loop = None
 
 
-async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
+async def push_to_qq(target_type: str, target_id: str, message: str) -> bool | None:
     """推送消息到 QQ（通过 qqbot 的 /nanobot/push 端点）。"""
     try:
         session = await _get_push_session()
@@ -689,17 +689,18 @@ async def push_to_qq(target_type: str, target_id: str, message: str) -> bool:
             logger.warning(
                 f"Push failed: status={resp.status}, body={await resp.text()}"
             )
-            return False
+            return False if 400 <= resp.status < 500 else None
     except Exception as e:
         logger.error(f"Push error: {e}")
-        return False
+        # 网络异常无法证明远端没有处理；保留不确定态，避免主动外呼自动重复发送。
+        return None
 
 
 async def push_envelope_to_qq(
     target_type: str,
     target_id: str,
     envelope: Mapping[str, Any] | None,
-) -> bool:
+) -> bool | None:
     """通过 QQ 出站渲染器派生旧 QQbot push message。"""
     from core.qq_outbound_renderer import render_qq_outbound_envelope
 

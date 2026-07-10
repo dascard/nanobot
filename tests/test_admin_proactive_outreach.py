@@ -82,6 +82,7 @@ def test_admin_proactive_outreach_routes_are_registered():
         ("PUT", "/api/v1/admin/proactive-outreach/settings/{key:path}"),
         ("POST", "/api/v1/admin/proactive-outreach/settings/reload"),
         ("POST", "/api/v1/admin/proactive-outreach/run-once"),
+        ("POST", "/api/v1/admin/proactive-outreach/simulate"),
     )
 
     for method, path in expected:
@@ -242,3 +243,17 @@ def test_proactive_outreach_run_once_uses_existing_runtime(proactive_client, mon
     assert check.json()["result"]["log_id"] == 7
     assert [item[0] for item in calls] == ["due", "check"]
     assert calls[0][1] == "u-proactive"
+
+
+def test_proactive_outreach_scripted_simulation_never_external_publishes(proactive_client):
+    response = proactive_client.post(
+        "/api/v1/admin/proactive-outreach/simulate",
+        json={"mode": "scripted"},
+        headers=_auth_header(),
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["ok"] is True
+    assert data["mode"] == "scripted"
+    assert data["report"]["metrics"]["external_push_count"] == 0

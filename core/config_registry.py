@@ -732,6 +732,75 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
 }
 
+_OUTREACH_ROUTE_DEFAULTS = {
+    "timing_proactive": {"timeout": 30, "temperature": 0.0, "max_tokens": 512},
+    "outreach_extract": {"timeout": 30, "temperature": 0.0, "max_tokens": 512},
+    "outreach_judge": {"timeout": 45, "temperature": 0.0, "max_tokens": 768},
+    "outreach_generate": {"timeout": 60, "temperature": 0.7, "max_tokens": 1024},
+}
+
+for _route_key, _route_defaults in _OUTREACH_ROUTE_DEFAULTS.items():
+    SETTING_DEFS.setdefault(
+        f"model.route.{_route_key}",
+        SettingDef(
+            key=f"model.route.{_route_key}",
+            env_name="",
+            default="",
+            value_type="str",
+            category="model",
+            description=f"{_route_key} 地址（空则继承 reply）",
+        ),
+    )
+    SETTING_DEFS.setdefault(
+        f"model.route.{_route_key}.model",
+        SettingDef(
+            key=f"model.route.{_route_key}.model",
+            env_name="",
+            default="",
+            value_type="str",
+            category="model",
+            description=f"{_route_key} 模型名（空则继承 reply）",
+        ),
+    )
+    SETTING_DEFS.setdefault(
+        f"model.route.{_route_key}.api_key",
+        SettingDef(
+            key=f"model.route.{_route_key}.api_key",
+            env_name="",
+            default="",
+            value_type="str",
+            category="model",
+            description=f"{_route_key} API key",
+            sensitive=True,
+        ),
+    )
+    for _field, _default in _route_defaults.items():
+        _value_type = "float" if _field == "temperature" else "int"
+        SETTING_DEFS.setdefault(
+            f"model.route.{_route_key}.{_field}",
+            SettingDef(
+                key=f"model.route.{_route_key}.{_field}",
+                env_name="",
+                default=_default,
+                value_type=_value_type,
+                category="model",
+                description=f"{_route_key} {_field}",
+                min_value=0 if _field == "temperature" else (3 if _field == "timeout" else 5),
+                max_value=2 if _field == "temperature" else (300 if _field == "timeout" else 8192),
+            ),
+        )
+    SETTING_DEFS.setdefault(
+        f"model.route.{_route_key}.enable_thinking",
+        SettingDef(
+            key=f"model.route.{_route_key}.enable_thinking",
+            env_name="",
+            default="false",
+            value_type="str",
+            category="model",
+            description=f"{_route_key} thinking 模式: auto/true/false",
+        ),
+    )
+
 for _route_key in (
     "reply",
     "fast",

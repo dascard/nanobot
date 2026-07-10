@@ -381,3 +381,25 @@ def test_tool_plan_native_schema_filter_uses_sent_tool_schemas():
     props = schemas[0].parameters["properties"]
     assert {"query", "limit", "provider"} <= set(props)
     assert "max_results" not in props
+
+
+@pytest.mark.asyncio
+async def test_tool_plan_guard_blocks_disabled_native_subagent_call():
+    from kohakuterrarium.modules.plugin.base import PluginBlockError
+
+    from core.tool_plan import ToolPlan, tool_plan_scope
+    from nanobot_kt.tool_runtime import ToolPlanGuardPlugin
+
+    plan = ToolPlan.from_effective_tools(
+        enabled={"web_search": True, "reply": True},
+        chat_type="private",
+        tool_schemas=[],
+    )
+
+    with tool_plan_scope(plan):
+        with pytest.raises(PluginBlockError):
+            await ToolPlanGuardPlugin().pre_subagent_run(
+                "把内容写入持久记忆",
+                name="memory_write",
+                is_background=False,
+            )

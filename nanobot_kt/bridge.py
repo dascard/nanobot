@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import inspect
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
@@ -21,6 +22,7 @@ from kohakuterrarium.llm.message import make_multimodal_content
 from openai import AsyncOpenAI
 
 from nanobot_kt.output import BufferedOutput
+from nanobot_kt.request_scope import BridgeRequestScope
 from nanobot_kt.image_pipeline import prepare_image_parts
 from clients.new_api_client import NewAPIClient
 from clients.model_registry import model_supports_capabilities, registry
@@ -245,9 +247,16 @@ class BridgeTraceFinalizer:
     tool_plan_token: Any = None
     closed: bool = False
 
-    def set_tool_tokens(self, *, final_tools_token: Any, tool_plan_token: Any) -> None:
-        self.final_tools_token = final_tools_token
-        self.tool_plan_token = tool_plan_token
+    def set_tool_tokens(
+        self,
+        *,
+        final_tools_token: Any = None,
+        tool_plan_token: Any = None,
+    ) -> None:
+        if final_tools_token is not None:
+            self.final_tools_token = final_tools_token
+        if tool_plan_token is not None:
+            self.tool_plan_token = tool_plan_token
 
     def finish(
         self,
@@ -260,36 +269,59 @@ class BridgeTraceFinalizer:
         if self.closed:
             return
         self.closed = True
-        self.bridge._restore_saved_tools()
-        from core.tracing import RunTracer
-        from core.tracing_context import reset_trace_context
 
-        RunTracer.finish_run(
-            self.run_id,
-            status=status,
-            output_preview=output_preview,
-            error=error,
-            latency_ms=int((self.now() - self.started_at) * 1000),
-            model=model,
-            meta=self.run_meta,
-        )
-        if self.final_tools_token is not None:
+        def run_step(label: str, callback: Callable[[], None]) -> None:
             try:
-                from core.final_tools import reset_current_final_tools
+                callback()
+            except Exception as exc:
+                logger.warning("Bridge trace cleanup step %s failed: %s", label, exc, exc_info=True)
 
-                reset_current_final_tools(self.final_tools_token)
-            except Exception:
-                pass
-            self.final_tools_token = None
+        run_step("restore_saved_tools", self.bridge._restore_saved_tools)
+
+        def finish_run() -> None:
+            from core.tracing import RunTracer
+
+            RunTracer.finish_run(
+                self.run_id,
+                status=status,
+                output_preview=output_preview,
+                error=error,
+                latency_ms=int((self.now() - self.started_at) * 1000),
+                model=model,
+                meta=self.run_meta,
+            )
+
+        run_step("finish_run", finish_run)
         if self.tool_plan_token is not None:
-            try:
+            tool_plan_token = self.tool_plan_token
+            self.tool_plan_token = None
+
+            def reset_tool_plan() -> None:
                 from core.tool_plan import reset_current_tool_plan
 
-                reset_current_tool_plan(self.tool_plan_token)
-            except Exception:
-                pass
-            self.tool_plan_token = None
-        reset_trace_context(self.trace_tokens)
+                reset_current_tool_plan(tool_plan_token)
+
+            run_step("reset_tool_plan", reset_tool_plan)
+        if self.final_tools_token is not None:
+            final_tools_token = self.final_tools_token
+            self.final_tools_token = None
+
+            def reset_final_tools() -> None:
+                from core.final_tools import reset_current_final_tools
+
+                reset_current_final_tools(final_tools_token)
+
+            run_step("reset_final_tools", reset_final_tools)
+        if self.trace_tokens is not None:
+            trace_tokens = self.trace_tokens
+            self.trace_tokens = None
+
+            def reset_trace() -> None:
+                from core.tracing_context import reset_trace_context
+
+                reset_trace_context(trace_tokens)
+
+            run_step("reset_trace", reset_trace)
 
 
 class NanobotBridge:
@@ -355,6 +387,14 @@ class NanobotBridge:
                 logger.info("[NanobotBridge] ToolPlan native schema filter installed")
         except Exception as e:
             logger.warning("[NanobotBridge] ToolPlan runtime install failed: %s", e)
+
+        try:
+            from nanobot_kt.tool_runtime import ensure_tool_plan_runtime
+
+            ensure_tool_plan_runtime(self._agent)
+        except Exception as e:
+            logger.error("[NanobotBridge] ToolPlan runtime unavailable: %s", e)
+            raise RuntimeError(f"ToolPlan runtime unavailable: {e}") from e
 
         # Critical: Agent must be started so _running=True; otherwise
         # _process_event() drops all events and returns empty output.
@@ -1673,7 +1713,11 @@ class NanobotBridge:
             logger.info("[SessionRuntime] Interrupt flag set for session=%s", session_id)
             self._agent._interrupt_requested = True
 
-        async with sess_lock:
+        async with BridgeRequestScope(
+            sess_lock,
+            self._output,
+            dry_run=bool((metadata or {}).get("dry_run")),
+        ) as request_scope:
             t_start = _time.time()
             meta = dict(metadata or {})
             meta["stream"] = bool(stream or meta.get("stream"))
@@ -1716,6 +1760,7 @@ class NanobotBridge:
                 started_at=t_start,
                 now=_time.time,
             )
+            request_scope.bind_trace_finalizer(trace_finalizer)
 
             self._prepare_output_for_request(
                 stream_queue=stream_queue,
@@ -1778,11 +1823,9 @@ class NanobotBridge:
                         uow.rollback()
                         logger.warning("[Bridge] failed to commit runtime tool decision: %s", e)
             final_tools_token = set_current_final_tools(tool_plan)
+            trace_finalizer.set_tool_tokens(final_tools_token=final_tools_token)
             tool_plan_token = set_current_tool_plan(tool_plan)
-            trace_finalizer.set_tool_tokens(
-                final_tools_token=final_tools_token,
-                tool_plan_token=tool_plan_token,
-            )
+            trace_finalizer.set_tool_tokens(tool_plan_token=tool_plan_token)
             enabled = dict(tool_plan.enabled or {})
             disabled = dict(tool_plan.disabled or {})
             runtime_tool_prompt = tool_plan.runtime_tool_prompt

@@ -3,6 +3,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+
 from tests.async_helpers import run_async
 
 from core.database import LLMApiRequestLog
@@ -393,6 +395,388 @@ def test_new_api_chat_completion_finishes_request_on_success(monkeypatch):
     assert finished[0]["response_status"] == 200
     assert finished[0]["status"] == "success"
     assert finished[0]["response"]["choices"][0]["message"]["content"] == "成功"
+
+
+def test_new_api_chat_completion_audits_invalid_json_response(monkeypatch):
+    from clients.new_api_client import NewAPIClient
+
+    finished = []
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **_kwargs: 655),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **kwargs: finished.append(kwargs)),
+    )
+    monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
+    monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
+    monkeypatch.setattr(
+        NewAPIClient,
+        "get_ordered_candidates",
+        lambda self, **kwargs: [{"id": "model-invalid-json", "intelligence": 7}],
+    )
+    monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
+    monkeypatch.setattr(
+        "core.settings_service.settings.get_int",
+        lambda key, default=0: 1 if key == "new_api.max_retries" else default,
+    )
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def read(self):
+            return b'{"choices": ['
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResp()
+
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", lambda: _FakeSession())
+
+    client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
+    result = run_async(client.chat_completion([{"role": "user", "content": "你好"}]))
+
+    assert result["error"] == "AllModelsFailed"
+    assert "invalid JSON" in result["detail"]
+    assert len(finished) == 1
+    assert finished[0]["status"] == "error"
+    assert finished[0]["response_status"] == 200
+    assert finished[0]["response"]["raw_body_preview"] == '{"choices": ['
+    assert finished[0]["response"]["raw_body_chars"] == 13
+    assert len(finished[0]["response"]["raw_body_sha256"]) == 64
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        [],
+        {},
+        {"choices": []},
+        {"choices": [{}]},
+        {"choices": [{"message": {}}]},
+        {"choices": [{"message": {"content": None, "tool_calls": [{}]}}]},
+        {
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{"id": "call-1", "type": "function"}],
+                }
+            }]
+        },
+        {
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "", "arguments": "{}"},
+                    }],
+                }
+            }]
+        },
+        {
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "web_search", "arguments": {}},
+                    }],
+                }
+            }]
+        },
+        {
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "web_search", "arguments": "not-json"},
+                    }],
+                }
+            }]
+        },
+    ],
+    ids=[
+        "list-root",
+        "empty-object",
+        "empty-choices",
+        "missing-message",
+        "empty-message",
+        "empty-tool-call",
+        "missing-function",
+        "empty-function-name",
+        "non-string-arguments",
+        "invalid-json-arguments",
+    ],
+)
+def test_new_api_chat_completion_rejects_malformed_success_contract(monkeypatch, body):
+    from clients.new_api_client import NewAPIClient
+
+    finished = []
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **_kwargs: 656),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **kwargs: finished.append(kwargs)),
+    )
+    monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
+    monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
+    monkeypatch.setattr(
+        NewAPIClient,
+        "get_ordered_candidates",
+        lambda self, **kwargs: [{"id": "model-malformed-contract", "intelligence": 7}],
+    )
+    monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: None)
+    monkeypatch.setattr(
+        "core.settings_service.settings.get_int",
+        lambda key, default=0: 1 if key == "new_api.max_retries" else default,
+    )
+
+    raw_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def read(self):
+            return raw_body
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResp()
+
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", lambda: _FakeSession())
+
+    client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
+    result = run_async(client.chat_completion([{"role": "user", "content": "你好"}]))
+
+    assert result["error"] == "AllModelsFailed"
+    assert "completion contract" in result["detail"]
+    assert len(finished) == 1
+    assert finished[0]["status"] == "error"
+    assert finished[0]["response_status"] == 200
+    assert finished[0]["response"]["raw_body_preview"] == raw_body.decode("utf-8")
+    assert finished[0]["response"]["raw_body_chars"] == len(raw_body.decode("utf-8"))
+    assert len(finished[0]["response"]["raw_body_sha256"]) == 64
+
+
+@pytest.mark.parametrize(
+    ("body", "expected_error"),
+    [
+        (
+            {
+                "choices": [{
+                    "message": {"content": "正文"},
+                    "finish_reason": 123,
+                }],
+            },
+            "finish_reason",
+        ),
+        (
+            {
+                "choices": [{
+                    "message": {"content": "正文"},
+                    "finish_reason": "stop",
+                }],
+                "usage": [],
+            },
+            "usage",
+        ),
+        (
+            {
+                "choices": [{
+                    "message": {
+                        "content": "正文",
+                        "reasoning_content": ["非法推理"],
+                    },
+                    "finish_reason": "stop",
+                }],
+            },
+            "reasoning_content",
+        ),
+        (
+            {
+                "choices": [{
+                    "message": {
+                        "content": "正文",
+                        "reasoning": {"unexpected": "object"},
+                    },
+                    "finish_reason": "stop",
+                }],
+            },
+            "reasoning",
+        ),
+    ],
+    ids=[
+        "non-string-finish-reason",
+        "non-mapping-usage",
+        "non-string-reasoning-content",
+        "non-string-reasoning",
+    ],
+)
+def test_new_api_chat_completion_rejects_malformed_metadata(
+    monkeypatch,
+    body,
+    expected_error,
+):
+    from clients.new_api_client import NewAPIClient
+
+    finished = []
+    tracker = SimpleNamespace(
+        record_failure=AsyncMock(return_value=None),
+        record_success=AsyncMock(return_value=None),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.record_request",
+        staticmethod(lambda **_kwargs: 657),
+    )
+    monkeypatch.setattr(
+        "core.tracing.LLMRequestTracer.finish_request",
+        staticmethod(lambda **kwargs: finished.append(kwargs)),
+    )
+    monkeypatch.setattr(NewAPIClient, "sync_models_to_registry", AsyncMock(return_value=None))
+    monkeypatch.setattr(NewAPIClient, "estimate_complexity", lambda self, messages, tools=None: 1)
+    monkeypatch.setattr(
+        NewAPIClient,
+        "get_ordered_candidates",
+        lambda self, **kwargs: [{"id": "model-malformed-metadata", "intelligence": 7}],
+    )
+    monkeypatch.setattr(NewAPIClient, "_safe_get_failure_tracker", lambda self: tracker)
+    monkeypatch.setattr(
+        "core.settings_service.settings.get_int",
+        lambda key, default=0: 1 if key == "new_api.max_retries" else default,
+    )
+
+    raw_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+    class _FakeResp:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def read(self):
+            return raw_body
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResp()
+
+    monkeypatch.setattr("clients.new_api_client.aiohttp.ClientSession", lambda: _FakeSession())
+
+    client = NewAPIClient(api_key="key", base_url="http://newapi.test/v1")
+    result = run_async(client.chat_completion([{"role": "user", "content": "你好"}]))
+
+    assert result["error"] == "AllModelsFailed"
+    assert expected_error in result["detail"]
+    assert len(finished) == 1
+    assert finished[0]["status"] == "error"
+    assert finished[0]["response_status"] == 200
+    assert finished[0]["response"]["raw_body_preview"] == raw_body.decode("utf-8")
+    tracker.record_failure.assert_called_once_with("model-malformed-metadata")
+    tracker.record_success.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "choices": [{
+                "message": {
+                    "content": "正文",
+                    "reasoning_content": "独立推理",
+                },
+                "finish_reason": "stop",
+            }],
+            "usage": {"total_tokens": 3},
+        },
+        {
+            "choices": [{
+                "message": {
+                    "content": "正文",
+                    "reasoning": None,
+                },
+                "finish_reason": None,
+            }],
+            "usage": None,
+        },
+    ],
+    ids=["string-metadata", "null-metadata"],
+)
+def test_new_api_chat_completion_accepts_valid_metadata(body):
+    from clients.new_api_client import _read_response_json
+
+    class _FakeResp:
+        async def read(self):
+            return json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+    assert run_async(_read_response_json(_FakeResp())) == body
+
+
+def test_new_api_chat_completion_accepts_tool_call_message_with_null_content(monkeypatch):
+    from clients.new_api_client import _read_response_json
+
+    body = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "web_search",
+                        "arguments": '{"query":"Nanobot"}',
+                    },
+                }],
+            }
+        }]
+    }
+
+    class _FakeResp:
+        async def read(self):
+            return json.dumps(body).encode("utf-8")
+
+    assert run_async(_read_response_json(_FakeResp())) == body
 
 
 def test_new_api_chat_completion_with_tools_requests_tool_capable_candidates(monkeypatch):

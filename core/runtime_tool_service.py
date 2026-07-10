@@ -12,6 +12,11 @@ logger = logging.getLogger("nanobot.runtime_tools")
 _DEFAULT_LIGHTWEIGHT_SET = {
     "reply", "no_reply", "image_summary", "image_generation", "python_sandbox", "sticker_search",
 }
+RESEARCH_TOOL_NAMES = frozenset({
+    "web_search",
+    "reply",
+    "no_reply",
+})
 
 _SUPPORTED_CHAT_TYPES = {"group", "private", "private_superuser"}
 _DEFAULT_FIELD_BY_CHAT_TYPE = {
@@ -73,6 +78,8 @@ def normalize_runtime_preset(value: str = "full") -> str:
         return "none"
     if normalized in {"lightweight", "light", "lite"}:
         return "lightweight"
+    if normalized in {"research", "research_companion"}:
+        return "research"
     return "full"
 
 
@@ -205,6 +212,13 @@ def resolve_effective_tools(
         if td.force_disabled_group and chat_type == "group":
             enabled[name] = False
             disabled[name] = "群聊强制禁用"
+
+    if runtime_preset == "research":
+        for name in list(enabled):
+            if name in RESEARCH_TOOL_NAMES:
+                continue
+            enabled[name] = False
+            disabled[name] = "研究预设固定权限上限"
 
     return enabled, disabled
 

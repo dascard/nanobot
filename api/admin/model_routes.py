@@ -552,7 +552,16 @@ _ROUTE_SETTING_MAP: dict[str, str] = {
     "memory_digest": "model.memory_digest",
 }
 # classifier routes: route_key 直接对应 model.route.<key>
-_CLASSIFIER_ROUTE_KEYS = {"timing_gate", "private_decision", "classifier_legacy", "sticker_describe"}
+_CLASSIFIER_ROUTE_KEYS = {
+    "timing_gate",
+    "timing_proactive",
+    "outreach_extract",
+    "outreach_judge",
+    "outreach_generate",
+    "private_decision",
+    "classifier_legacy",
+    "sticker_describe",
+}
 # frontend 友好名称 → 后端 route_key
 _ROUTE_ALIAS: dict[str, str] = {
     "vision": "sticker_describe",

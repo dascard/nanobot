@@ -53,6 +53,10 @@ _LEGACY_ALIASES: dict[str, str] = {
     "timing_gate": "tasks/timing_gate",
     "memory_extract": "tasks/memory_extract",
     "reply_contract_retry": "tasks/reply_contract_retry",
+    "outreach_extract": "tasks/outreach_extract",
+    "outreach_judge": "tasks/outreach_judge",
+    "outreach_generate": "tasks/outreach_generate",
+    "proactive_research": "tasks/proactive_research",
 }
 
 _TASK_TOOL_NAMES: dict[str, str] = {
@@ -61,6 +65,10 @@ _TASK_TOOL_NAMES: dict[str, str] = {
     "tasks/timing_gate": "timing_gate",
     "tasks/memory_extract": "memory_extract",
     "tasks/reply_contract_retry": "reply",
+    "tasks/outreach_extract": "outreach_extract",
+    "tasks/outreach_judge": "outreach_judge",
+    "tasks/outreach_generate": "outreach_generate",
+    "tasks/proactive_research": "web_search",
 }
 
 

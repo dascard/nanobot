@@ -161,10 +161,12 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         ),
         "parameters": {
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "query": {
                     "type": "string",
                     "description": "搜索词。应包含关键实体、限定词或时间范围，避免只传一个模糊词。",
+                    "maxLength": 1000,
                 },
                 "limit": {
                     "type": "integer",

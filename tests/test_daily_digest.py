@@ -417,3 +417,12 @@ def test_push_to_qq_still_works_when_session_close_and_recreated(monkeypatch):
         assert constructed["count"] == 2
     finally:
         run_async(dd.close_push_session())
+
+
+def test_push_to_qq_preserves_unknown_network_outcome(monkeypatch):
+    async def failing_session():
+        raise TimeoutError("响应超时，远端是否处理未知")
+
+    monkeypatch.setattr(daily_digest, "_get_push_session", failing_session)
+
+    assert run_async(daily_digest.push_to_qq("private", "u1", "测试消息")) is None

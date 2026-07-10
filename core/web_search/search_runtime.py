@@ -14,12 +14,19 @@ import aiohttp
 from core.web_search.provider_catalog import get_provider_catalog, list_provider_catalog
 from core.web_search.provider_settings import ProviderResolvedConfig, resolve_provider_config
 from core.web_search.relevance import judge_search_relevance
+from core.web_search.url_policy import canonicalize_http_url
 from core.web_search.usage_stats import record_provider_usage
 
 
 USER_AGENT = "Nanobot-WebSearch/1.0"
 TIMEOUT_SECONDS = 12
 SEARCH_CAPABILITY = "search"
+MODEL_QUERY_MAX_CHARS = 1000
+MODEL_TITLE_MAX_CHARS = 500
+MODEL_URL_MAX_CHARS = 2048
+MODEL_SNIPPET_MAX_CHARS = 260
+MODEL_PUBLISHED_AT_MAX_CHARS = 200
+MODEL_METADATA_MAX_CHARS = 500
 
 
 @dataclass(frozen=True)
@@ -199,7 +206,7 @@ def _normalized_result(
     url = _first(item, url_keys)
     if not url:
         return None
-    title = _first(item, title_keys) or url
+    title = _first(item, title_keys)
     snippet = _first(item, snippet_keys)
     return WebSearchResult(
         provider=provider,
@@ -246,20 +253,46 @@ def _limit(value: int) -> int:
     return max(1, min(int(value or 5), 10))
 
 
+def _bounded_single_line(value: Any, max_chars: int) -> str:
+    return " ".join(str(value or "").split())[:max_chars]
+
+
 def _supports_search(provider_id: str) -> bool:
     item = get_provider_catalog(provider_id)
     return bool(item and SEARCH_CAPABILITY in item.capabilities)
 
 
 def _with_relevance(query: str, result: WebSearchProviderResult) -> WebSearchProviderResult:
-    decision = judge_search_relevance(query, result.results)
+    filtered_results = _strict_relevant_results(query, result.results)
+    decision = judge_search_relevance(query, filtered_results)
     return replace(
         result,
+        results=filtered_results,
         quality="ok" if decision.ok else "low_relevance",
         quality_score=decision.score,
         quality_reason=decision.reason,
         matched_terms=decision.matched_terms,
     )
+
+
+def _strict_relevant_results(
+    query: str,
+    results: list[WebSearchResult],
+) -> list[WebSearchResult]:
+    """只保留 URL 合法且单条即可证明与查询相关的结果。"""
+
+    filtered: list[WebSearchResult] = []
+    seen: set[str] = set()
+    for item in results:
+        canonical_url = canonicalize_http_url(item.url)
+        if not canonical_url or canonical_url in seen:
+            continue
+        normalized = replace(item, url=canonical_url)
+        if not judge_search_relevance(query, [normalized]).ok:
+            continue
+        seen.add(canonical_url)
+        filtered.append(normalized)
+    return filtered
 
 
 def _attempt_payload(result: WebSearchProviderResult, status: str = "") -> dict[str, Any]:
@@ -295,38 +328,40 @@ def format_provider_result_for_model(
     """把搜索结果格式化成工具输出给模型的文本。"""
 
     normalized_limit = _limit(limit)
-    items = result.results[:normalized_limit]
-    if result.quality == "unknown":
-        decision = judge_search_relevance(query, items)
-        quality = "ok" if decision.ok else "low_relevance"
-        quality_score = decision.score
-        quality_reason = decision.reason
-    else:
-        quality = result.quality
-        quality_score = result.quality_score
-        quality_reason = result.quality_reason
+    items = [
+        item
+        for item in _strict_relevant_results(query, result.results)
+        if len(item.url) <= MODEL_URL_MAX_CHARS
+    ][:normalized_limit]
+    decision = judge_search_relevance(query, items)
+    quality = "ok" if decision.ok else "low_relevance"
+    quality_score = decision.score
+    quality_reason = decision.reason
     lines = [
         "WEB_SEARCH_RESULTS_BEGIN",
-        f"QUERY: {str(query or '').strip()}",
-        f"PROVIDER: {result.provider_id}",
+        f"QUERY: {_bounded_single_line(query, MODEL_QUERY_MAX_CHARS)}",
+        f"PROVIDER: {_bounded_single_line(result.provider_id, MODEL_METADATA_MAX_CHARS)}",
         f"RESULT_COUNT: {len(items)}",
-        f"QUALITY: {quality}",
+        f"QUALITY: {_bounded_single_line(quality, 32)}",
         f"QUALITY_SCORE: {quality_score}",
-        f"QUALITY_REASON: {quality_reason}",
+        f"QUALITY_REASON: {_bounded_single_line(quality_reason, MODEL_METADATA_MAX_CHARS)}",
         "RESULTS:",
     ]
     if not items:
         lines.append("(无搜索结果)")
     else:
         for index, item in enumerate(items, start=1):
-            snippet = item.snippet.replace("\n", " ").strip()
-            if len(snippet) > 260:
-                snippet = f"{snippet[:260]}..."
-            line = f"{index}. {item.title}\n   URL: {item.url}"
+            title = _bounded_single_line(item.title, MODEL_TITLE_MAX_CHARS) or "（无标题）"
+            snippet = _bounded_single_line(item.snippet, MODEL_SNIPPET_MAX_CHARS)
+            published_at = _bounded_single_line(
+                item.published_at,
+                MODEL_PUBLISHED_AT_MAX_CHARS,
+            )
+            line = f"{index}. {title}\n   URL: {str(item.url).strip()}"
             if snippet:
                 line += f"\n   摘要: {snippet}"
-            if item.published_at:
-                line += f"\n   时间: {item.published_at}"
+            if published_at:
+                line += f"\n   时间: {published_at}"
             lines.append(line)
     lines.extend(
         [

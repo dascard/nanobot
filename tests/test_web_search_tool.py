@@ -10,6 +10,8 @@ def test_web_search_registered_in_tool_plan(db_session):
     schema = next(schema for schema in plan.sent_tool_schemas if schema["function"]["name"] == "web_search")
     props = schema["function"]["parameters"]["properties"]
     assert "provider" not in props
+    assert props["query"]["maxLength"] == 1000
+    assert schema["function"]["parameters"]["additionalProperties"] is False
 
 
 @pytest.mark.asyncio
@@ -104,6 +106,81 @@ def test_web_search_model_message_formatter_matches_tool_output(monkeypatch):
     assert message.endswith("WEB_SEARCH_RESULTS_END")
 
 
+@pytest.mark.parametrize(
+    "invalid_url",
+    [
+        "https://trusted.example@evil.example/phish",
+        "https://example.test:99999/path",
+        "https://[::1/path",
+        "ftp://example.test/file",
+    ],
+    ids=["userinfo", "invalid-port", "bad-ipv6", "non-http"],
+)
+def test_web_search_formatter_never_emits_invalid_urls(invalid_url):
+    from core.web_search.search_runtime import (
+        WebSearchProviderResult,
+        WebSearchResult,
+        format_provider_result_for_model,
+    )
+
+    result = WebSearchProviderResult(
+        provider_id="test",
+        results=[
+            WebSearchResult(
+                provider="test",
+                title="Nanobot research",
+                url=invalid_url,
+                snippet="Nanobot research",
+            )
+        ],
+        quality="ok",
+        quality_score=1.0,
+    )
+
+    message = format_provider_result_for_model("Nanobot research", result)
+
+    assert invalid_url not in message
+    assert "RESULT_COUNT: 0" in message
+    assert "QUALITY: ok" not in message
+
+
+def test_web_search_formatter_recomputes_quality_after_invalid_url_filtering():
+    from core.web_search.search_runtime import (
+        WebSearchProviderResult,
+        WebSearchResult,
+        format_provider_result_for_model,
+    )
+
+    result = WebSearchProviderResult(
+        provider_id="test",
+        results=[
+            WebSearchResult(
+                provider="test",
+                title="Python 3.14 JIT official",
+                url="https://proof.invalid/bad url",
+            ),
+            WebSearchResult(
+                provider="test",
+                title="Casino bonus",
+                url="https://casino.invalid/bonus",
+            ),
+            WebSearchResult(
+                provider="test",
+                title="Cat food",
+                url="https://cats.invalid/food",
+            ),
+        ],
+        quality="ok",
+        quality_score=1.0,
+        quality_reason="过滤前相关",
+    )
+
+    message = format_provider_result_for_model("Python 3.14 JIT", result)
+
+    assert "https://proof.invalid/bad url" not in message
+    assert "QUALITY: ok" not in message
+
+
 def test_web_search_prompt_declares_provider_is_runtime_selected():
     from pathlib import Path
 
@@ -130,3 +207,15 @@ async def test_web_search_tool_reports_no_enabled_provider(monkeypatch):
 
     assert result.exit_code != 0
     assert "没有启用" in result.error
+
+
+@pytest.mark.asyncio
+async def test_web_search_rejects_query_longer_than_public_schema_limit():
+    from creatures.nanobot.prompts.skills.web_search.tool import WebSearchTool
+
+    tool = WebSearchTool()
+    query_schema = tool.get_parameters_schema()["properties"]["query"]
+    result = await tool._execute({"query": "x" * 1001})
+
+    assert query_schema["maxLength"] == 1000
+    assert result.error == "web_search query exceeds 1000 characters"

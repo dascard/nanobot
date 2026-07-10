@@ -10,6 +10,7 @@ from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResul
 from core.uow import UnitOfWork
 from core.web_search.search_runtime import (
     WebSearchError,
+    MODEL_QUERY_MAX_CHARS,
     format_provider_result_for_model,
     search_enabled_providers,
 )
@@ -39,10 +40,12 @@ class WebSearchTool(BaseTool):
     def get_parameters_schema(self) -> dict[str, Any]:
         return {
             "type": "object",
+            "additionalProperties": False,
             "properties": {
                 "query": {
                     "type": "string",
                     "description": "搜索词。应包含关键实体、限定词或时间范围，避免只传一个模糊词。",
+                    "maxLength": MODEL_QUERY_MAX_CHARS,
                 },
                 "limit": {
                     "type": "integer",
@@ -59,6 +62,10 @@ class WebSearchTool(BaseTool):
         query = str(args.get("query") or "").strip()
         if not query:
             return ToolResult(error="Missing 'query' argument")
+        if len(query) > MODEL_QUERY_MAX_CHARS:
+            return ToolResult(
+                error=f"web_search query exceeds {MODEL_QUERY_MAX_CHARS} characters"
+            )
         try:
             raw_limit = args.get("limit")
             if raw_limit in (None, ""):

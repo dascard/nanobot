@@ -7,12 +7,14 @@ from sqlalchemy import (
     DateTime,
     event,
     Float,
+    Index,
     Integer,
     LargeBinary,
     String,
     Text,
     UniqueConstraint,
     create_engine,
+    text,
 )
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -188,6 +190,24 @@ class ConversationTurn(Base):
     created_at = Column(DateTime, default=datetime.now)
     source_message_ids_json = Column(Text, default="[]")  # 合并消息的源 ID 列表
     meta_json = Column(Text, default="{}")
+
+
+class ProactiveOutreachLease(Base):
+    """主动外呼按用户串行评估的短期租约。"""
+
+    __tablename__ = "proactive_outreach_leases"
+    __table_args__ = (
+        Index(
+            "ix_proactive_outreach_lease_expires_at",
+            "lease_expires_at",
+        ),
+    )
+
+    user_id = Column(String(255), primary_key=True)
+    owner_token = Column(String(64), nullable=False)
+    lease_expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
 
 
 class RollingSessionSummary(Base):

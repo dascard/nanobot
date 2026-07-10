@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Literal
 
@@ -12,10 +13,15 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from api.admin.common import audit, client_ip, verify_admin
+from clients.classifier_client import strip_think_blocks
 from core.config_registry import SETTING_DEFS, SettingDef
 from core.database import LLMApiRequestLog, ProactiveOutreachLog, SystemSetting, get_db
 from core.identity import _configured_super_user_ids
-from core.proactive_outreach import run_outreach_due_once, run_outreach_once
+from core.proactive_outreach import (
+    run_outreach_dry_run_once,
+    run_outreach_due_once,
+    run_outreach_once,
+)
 from core.settings_service import settings
 
 
@@ -33,8 +39,17 @@ _MANAGED_SETTING_KEYS = (
 )
 _OUTREACH_LLM_SOURCES = (
     "classifier.timing_proactive",
+    "classifier.outreach_extract",
+    "classifier.outreach_judge",
+    "classifier.outreach_generate",
     "classifier.reply",
 )
+_LIVE_DRY_RUN_QUALITY_BLOCK_REASONS = frozenset({
+    "insufficient_sources",
+    "empty_draft",
+    "unverified_url",
+    "draft_budget_too_small",
+})
 
 
 class ProactiveSettingUpdate(BaseModel):
@@ -44,6 +59,11 @@ class ProactiveSettingUpdate(BaseModel):
 class ProactiveRunOnceRequest(BaseModel):
     user_id: str = ""
     mode: Literal["due", "check"] = "due"
+
+
+class ProactiveSimulationRequest(BaseModel):
+    mode: Literal["scripted", "live_dry_run"] = "scripted"
+    user_id: str = ""
 
 
 def _parse_json_object(raw: object) -> dict[str, Any]:
@@ -60,6 +80,34 @@ def _iso(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value or "")
+
+
+def _classify_live_dry_run_result(result: object) -> tuple[bool, bool]:
+    """按正向契约判定执行是否正常，以及是否形成完整候选。"""
+
+    if not isinstance(result, Mapping):
+        return False, False
+    status = result.get("status")
+    would_publish = result.get("would_publish")
+    if status == "candidate":
+        message = result.get("message")
+        candidate_available = (
+            would_publish is True
+            and isinstance(message, str)
+            and bool(strip_think_blocks(message).strip())
+        )
+        return candidate_available, candidate_available
+    if status == "no_candidate":
+        return would_publish is False, False
+    if status == "research_blocked":
+        reason_code = result.get("reason_code")
+        execution_ok = (
+            would_publish is False
+            and isinstance(reason_code, str)
+            and reason_code in _LIVE_DRY_RUN_QUALITY_BLOCK_REASONS
+        )
+        return execution_ok, False
+    return False, False
 
 
 def _setting_value(defn: SettingDef, raw_value: object) -> object:
@@ -298,5 +346,46 @@ async def proactive_outreach_run_once(
         "ok": True,
         "user_id": user_id,
         "mode": body.mode,
+        "result": result,
+    }
+
+
+@router.post("/simulate")
+async def proactive_outreach_simulate(
+    body: ProactiveSimulationRequest,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    """运行独立脚本模拟或真实模型 dry-run；两者都没有发布出口。"""
+
+    if body.mode == "scripted":
+        from core.proactive_simulation import run_accelerated_simulation
+
+        report = await run_accelerated_simulation()
+        execution_ok = bool(report.get("passed"))
+        return {
+            "ok": execution_ok,
+            "request_ok": True,
+            "execution_ok": execution_ok,
+            "candidate_available": False,
+            "mode": body.mode,
+            "report": report,
+        }
+
+    user_id = (body.user_id or "").strip()
+    if not user_id:
+        user_ids = sorted(_configured_super_user_ids())
+        if not user_ids:
+            raise HTTPException(status_code=400, detail="No superuser configured")
+        user_id = user_ids[0]
+    result = await run_outreach_dry_run_once(user_id, db=db)
+    execution_ok, candidate_available = _classify_live_dry_run_result(result)
+    return {
+        "ok": execution_ok,
+        "request_ok": True,
+        "execution_ok": execution_ok,
+        "candidate_available": candidate_available,
+        "mode": body.mode,
+        "user_id": user_id,
         "result": result,
     }

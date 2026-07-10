@@ -4,6 +4,7 @@ Supports retry with exponential backoff, streaming, and token usage tracking.
 """
 import asyncio
 import aiohttp
+import hashlib
 import json
 import logging
 import re
@@ -12,7 +13,7 @@ import os
 import fnmatch
 from contextlib import asynccontextmanager
 from typing import Any
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 
 from config import (
     NEW_API_BASE_URL,
@@ -43,6 +44,127 @@ MODEL_OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), "data", "model_ov
 
 # Retryable HTTP status codes
 _RETRYABLE_STATUS = {429, 502, 503, 504}
+_RAW_BODY_PREVIEW_LIMIT = 4096
+
+
+class _InvalidModelJSON(ValueError):
+    def __init__(self, message: str, audit: dict[str, Any]):
+        super().__init__(message)
+        self.audit = audit
+
+
+def _raw_body_audit(raw_body: bytes) -> dict[str, Any]:
+    text = raw_body.decode("utf-8", errors="replace")
+    return {
+        "raw_body_preview": text[:_RAW_BODY_PREVIEW_LIMIT],
+        "raw_body_chars": len(text),
+        "raw_body_sha256": hashlib.sha256(raw_body).hexdigest(),
+    }
+
+
+def _validate_chat_completion_payload(
+    payload: Any,
+    *,
+    raw_body: bytes,
+) -> dict[str, Any]:
+    """校验 HTTP 200 的 Chat Completions 根契约，避免把畸形响应记为成功。"""
+
+    if not isinstance(payload, dict):
+        reason = "root must be an object"
+    else:
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            reason = "choices must be a non-empty list"
+        elif not isinstance(choices[0], dict):
+            reason = "choices[0] must be an object"
+        else:
+            message = choices[0].get("message")
+            if not isinstance(message, dict):
+                reason = "choices[0].message must be an object"
+            else:
+                content = message.get("content")
+                tool_calls = message.get("tool_calls")
+                finish_reason = choices[0].get("finish_reason")
+                reasoning_content = message.get("reasoning_content")
+                reasoning = message.get("reasoning")
+                usage = payload.get("usage")
+                valid_content = isinstance(content, str)
+                valid_tool_calls = _valid_completion_tool_calls(tool_calls)
+                if "content" in message and content is not None and not valid_content:
+                    reason = "choices[0].message.content must be a string or null"
+                elif tool_calls is not None and not valid_tool_calls:
+                    reason = "choices[0].message.tool_calls must be a non-empty object list"
+                elif not valid_content and not valid_tool_calls:
+                    reason = "choices[0].message must contain content or tool_calls"
+                elif finish_reason is not None and not isinstance(finish_reason, str):
+                    reason = "choices[0].finish_reason must be a string or null"
+                elif reasoning_content is not None and not isinstance(reasoning_content, str):
+                    reason = (
+                        "choices[0].message.reasoning_content must be a string or null"
+                    )
+                elif reasoning is not None and not isinstance(reasoning, str):
+                    reason = "choices[0].message.reasoning must be a string or null"
+                elif usage is not None and not isinstance(usage, Mapping):
+                    reason = "usage must be an object or null"
+                else:
+                    return payload
+    raise _InvalidModelJSON(
+        f"model response invalid completion contract: {reason}",
+        _raw_body_audit(raw_body),
+    )
+
+
+def _valid_completion_tool_calls(value: Any) -> bool:
+    if not isinstance(value, list) or not value:
+        return False
+    for item in value:
+        if not isinstance(item, dict):
+            return False
+        if not isinstance(item.get("id"), str) or not item["id"].strip():
+            return False
+        if item.get("type") != "function":
+            return False
+        function = item.get("function")
+        if not isinstance(function, dict):
+            return False
+        name = function.get("name")
+        arguments = function.get("arguments")
+        if not isinstance(name, str) or not name.strip():
+            return False
+        if not isinstance(arguments, str):
+            return False
+        try:
+            parsed_arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(parsed_arguments, dict):
+            return False
+    return True
+
+
+async def _read_response_json(response: Any) -> Any:
+    read = getattr(response, "read", None)
+    if not callable(read):
+        payload = await response.json()
+        raw_body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        return _validate_chat_completion_payload(payload, raw_body=raw_body)
+    raw_body = await read()
+    if isinstance(raw_body, str):
+        raw_bytes = raw_body.encode("utf-8")
+    elif isinstance(raw_body, (bytes, bytearray, memoryview)):
+        raw_bytes = bytes(raw_body)
+    else:
+        payload = await response.json()
+        raw_bytes = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
+        return _validate_chat_completion_payload(payload, raw_body=raw_bytes)
+    try:
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _InvalidModelJSON(
+            f"model response invalid JSON: {exc}",
+            _raw_body_audit(raw_bytes),
+        ) from exc
+    return _validate_chat_completion_payload(payload, raw_body=raw_bytes)
 
 
 def messages_have_image_url(messages: list[dict[str, Any]]) -> bool:
@@ -771,7 +893,36 @@ class NewAPIClient:
                             timeout=aiohttp.ClientTimeout(total=self._timeout),
                         ) as resp:
                             if resp.status == 200:
-                                result = await resp.json()
+                                try:
+                                    result = await _read_response_json(resp)
+                                except _InvalidModelJSON as exc:
+                                    last_error = str(exc)
+                                    try:
+                                        from core.tracing import LLMRequestTracer
+                                        LLMRequestTracer.finish_request(
+                                            log_id=log_id,
+                                            response=exc.audit,
+                                            response_status=resp.status,
+                                            status="error",
+                                            error=last_error,
+                                            latency_ms=int((time.time() - started) * 1000),
+                                        )
+                                    except Exception as _e:
+                                        logger.warning("finish llm api request failed: %s", _e)
+                                    if tracker is not None:
+                                        self.__class__._track_background_task(
+                                            tracker.record_failure(target_model),
+                                            label="record_failure",
+                                        )
+                                    logger.warning(
+                                        "new-api: %s returned invalid JSON, %s",
+                                        target_model,
+                                        "retrying" if attempt + 1 < _attempts else "switching",
+                                    )
+                                    if attempt + 1 < _attempts:
+                                        await asyncio.sleep(1)
+                                        continue
+                                    break
                                 try:
                                     from core.tracing import LLMRequestTracer
                                     LLMRequestTracer.finish_request(

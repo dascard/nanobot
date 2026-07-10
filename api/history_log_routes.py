@@ -16,6 +16,8 @@ from core.database import (
     ChatLog,
     ConversationTurn,
     Persona,
+    ProactiveOutreachLease,
+    ProactiveOutreachLog,
     SystemPrompt,
     User,
     get_db,
@@ -60,6 +62,17 @@ def mark_clear(
             ConversationTurn.user_id == user_id,
             ConversationTurn.created_at <= now,
         ).delete()
+        cancelled_outreach = db.query(ProactiveOutreachLog).filter(
+            ProactiveOutreachLog.user_id == user_id,
+            ProactiveOutreachLog.status.in_(("pending", "candidate")),
+            ProactiveOutreachLog.created_at <= now,
+        ).update(
+            {ProactiveOutreachLog.status: "cancelled"},
+            synchronize_session=False,
+        )
+        cancelled_evaluations = db.query(ProactiveOutreachLease).filter(
+            ProactiveOutreachLease.user_id == user_id,
+        ).delete(synchronize_session=False)
         try:
             from app.session_memory.rolling_summary import archive_active_summaries_for_user
 
@@ -76,6 +89,8 @@ def mark_clear(
             "message": "已标记清除点",
             "deleted_context_rows": deleted,
             "archived_rolling_summaries": archived,
+            "cancelled_outreach_candidates": cancelled_outreach,
+            "cancelled_outreach_evaluations": cancelled_evaluations,
         }
     except Exception:
         logger.exception("[/mark-clear] Failed")

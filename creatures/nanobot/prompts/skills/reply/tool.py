@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
+from nanobot_kt.request_scope import is_request_dry_run
 
 REPLY_MARKER = "NANOBOT_REPLY_OUTPUT"
 _ALLOWED_SEND_MODES = {"normal", "quote", "mention", "quote_and_mention"}
@@ -86,7 +87,8 @@ class ReplyTool(BaseTool):
         try:
             from core.sticker_memory import expand_sticker_refs_in_content, record_sticker_uses_in_content
             content = expand_sticker_refs_in_content(content)
-            record_sticker_uses_in_content(content)
+            if not bool(kwargs.get("dry_run")) and not is_request_dry_run():
+                record_sticker_uses_in_content(content)
         except Exception:
             pass
         # 写入运行时缓存兜底——当 KT conversation 未写入 tool result 时

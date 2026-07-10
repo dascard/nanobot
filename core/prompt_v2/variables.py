@@ -85,7 +85,15 @@ def _scoped_variables(scope: str) -> tuple[VariableDef, ...]:
     normalized = normalize_scope(scope)
     if normalized in {"tasks/memory_digest_system", "tasks/memory_digest_user"}:
         return _MEMORY_DIGEST_VARIABLES
-    if normalized in {"tasks/classifier_legacy", "tasks/private_decision", "tasks/timing_gate"}:
+    if normalized in {
+        "tasks/classifier_legacy",
+        "tasks/private_decision",
+        "tasks/timing_gate",
+        "tasks/outreach_extract",
+        "tasks/outreach_judge",
+        "tasks/outreach_generate",
+        "tasks/proactive_research",
+    }:
         return _CLASSIFIER_TASK_VARIABLES
     if normalized == "tasks/memory_extract":
         return _MEMORY_EXTRACT_VARIABLES

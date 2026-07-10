@@ -12,6 +12,7 @@ logger = logging.getLogger("nanobot.tracing")
 
 SENSITIVE_KEY_PARTS = ("api_key", "apikey", "authorization", "password", "secret", "token")
 MAX_PREVIEW_CHARS = 2000
+MAX_WEB_SEARCH_PREVIEW_CHARS = 40000
 
 
 @dataclass
@@ -287,7 +288,12 @@ class ToolTracer:
                     if not row:
                         return
                     row.status = str(status or "success")[:32]
-                    row.result_preview = _preview(result)
+                    preview_limit = (
+                        MAX_WEB_SEARCH_PREVIEW_CHARS
+                        if row.tool_name == "web_search"
+                        else MAX_PREVIEW_CHARS
+                    )
+                    row.result_preview = _preview(result, max_chars=preview_limit)
                     row.error = _preview(error, max_chars=1000)
                     if latency_ms is not None:
                         row.latency_ms = int(latency_ms)

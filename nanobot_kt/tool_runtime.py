@@ -40,6 +40,57 @@ class ToolPlanGuardPlugin(BasePlugin):
         self._ensure_allowed(str(kwargs.get("tool_name", "") or ""))
         return None
 
+    async def pre_subagent_run(self, task: str, **kwargs: Any) -> str | None:
+        """SubAgentCallEvent 也必须服从同一请求级 ToolPlan。"""
+
+        self._ensure_allowed(str(kwargs.get("name", "") or ""))
+        return None
+
+
+def tool_plan_runtime_status(agent: Any) -> dict[str, Any]:
+    """检查 ToolPlan 执行守卫与原生 schema 过滤器的最终安装状态。"""
+
+    manager = getattr(agent, "plugins", None)
+    plugins = list(getattr(manager, "_plugins", []) or [])
+    guard_marker = bool(
+        getattr(agent, "__dict__", {}).get(
+            "_nanobot_tool_plan_guard_installed",
+            False,
+        )
+    )
+    guard_installed = guard_marker or any(
+        str(getattr(plugin, "name", "") or "") == ToolPlanGuardPlugin.name
+        for plugin in plugins
+    )
+    controller = getattr(agent, "controller", None)
+    schema_filter_installed = bool(
+        getattr(controller, "__dict__", {}).get(
+            "_nanobot_tool_plan_schema_filter_installed",
+            False,
+        )
+    )
+    missing = []
+    if not guard_installed:
+        missing.append("guard")
+    if not schema_filter_installed:
+        missing.append("native_schema_filter")
+    return {
+        "ready": not missing,
+        "guard_installed": guard_installed,
+        "schema_filter_installed": schema_filter_installed,
+        "missing": missing,
+    }
+
+
+def ensure_tool_plan_runtime(agent: Any) -> None:
+    """ToolPlan 运行时组件缺失时失败关闭。"""
+
+    status = tool_plan_runtime_status(agent)
+    if not status["ready"]:
+        raise RuntimeError(
+            "ToolPlan runtime missing: " + ", ".join(status["missing"])
+        )
+
 
 def install_tool_plan_guard(agent: Any) -> bool:
     """把 ToolPlan 守卫注册到 KT PluginManager。
@@ -51,8 +102,10 @@ def install_tool_plan_guard(agent: Any) -> bool:
         return False
     plugins = list(getattr(manager, "_plugins", []) or [])
     if any(getattr(plugin, "name", "") == ToolPlanGuardPlugin.name for plugin in plugins):
+        agent._nanobot_tool_plan_guard_installed = True
         return False
     manager.register(ToolPlanGuardPlugin())
+    agent._nanobot_tool_plan_guard_installed = True
     return True
 
 
@@ -109,7 +162,10 @@ def install_tool_plan_native_schema_filter(agent: Any) -> bool:
     controller = getattr(agent, "controller", None)
     if controller is None or not hasattr(controller, "_get_native_tool_schemas"):
         return False
-    if getattr(controller, "_nanobot_tool_plan_schema_filter_installed", False):
+    if getattr(controller, "__dict__", {}).get(
+        "_nanobot_tool_plan_schema_filter_installed",
+        False,
+    ):
         return False
 
     original_get_native_tool_schemas = controller._get_native_tool_schemas

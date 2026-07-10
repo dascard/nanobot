@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from core.database import ChatLog, Persona, ProactiveOutreachLog
+from core.database import ChatLog, ConversationTurn, Persona, ProactiveOutreachLog
 
 
 def test_build_outreach_grounding_includes_persona_recent_chat_and_intent(db_session):
@@ -11,27 +11,24 @@ def test_build_outreach_grounding_includes_persona_recent_chat_and_intent(db_ses
     base = datetime(2026, 7, 6, 9, 0, 0)
     db_session.add(Persona(user_id="superuser", persona_json='{"likes": ["夜跑"], "tone": "自然"}'))
     db_session.add_all([
-        ChatLog(
+        ConversationTurn(
             user_id="superuser",
             session_id="private_superuser",
-            sender_name="主人",
             role="user",
             content="我今晚想去夜跑。",
             created_at=base,
         ),
-        ChatLog(
+        ConversationTurn(
             user_id="other",
             session_id="private_other",
-            sender_name="别人",
             role="user",
             content="不要出现在 grounding 里。",
             created_at=base + timedelta(minutes=1),
         ),
-        ChatLog(
+        ConversationTurn(
             user_id="superuser",
             session_id="private_superuser",
-            sender_name="nanobot",
-            role="model",
+            role="assistant",
             content="那我晚点想起来可以问问你跑得怎么样。",
             created_at=base + timedelta(minutes=2),
         ),
@@ -58,7 +55,7 @@ def test_build_outreach_grounding_includes_persona_recent_chat_and_intent(db_ses
         "那我晚点想起来可以问问你跑得怎么样。",
     ]
     assert grounding["recent_messages"][0]["role"] == "user"
-    assert grounding["recent_messages"][1]["role"] == "model"
+    assert grounding["recent_messages"][1]["role"] == "assistant"
 
 
 def test_build_outreach_grounding_includes_precomputed_time_anchors(db_session):
@@ -66,19 +63,17 @@ def test_build_outreach_grounding_includes_precomputed_time_anchors(db_session):
 
     now = datetime(2026, 7, 7, 15, 30, 0)
     db_session.add_all([
-        ChatLog(
+        ConversationTurn(
             user_id="superuser",
             session_id="private_superuser",
-            sender_name="主人",
             role="user",
             content="今天上午说接口联调卡住了，晚点继续看。",
             created_at=datetime(2026, 7, 7, 9, 0, 0),
         ),
-        ChatLog(
+        ConversationTurn(
             user_id="superuser",
             session_id="private_superuser",
-            sender_name="nanobot",
-            role="model",
+            role="assistant",
             content="那我下午想起来再问问你。",
             created_at=datetime(2026, 7, 7, 9, 5, 0),
         ),
@@ -119,6 +114,43 @@ def test_build_outreach_grounding_includes_precomputed_time_anchors(db_session):
     assert grounding["recent_threads"] == ["接口联调卡住，晚点继续看"]
 
 
+def test_grounding_keeps_last_sent_message_when_newer_pending_exists(db_session):
+    from core.proactive_outreach import build_outreach_grounding
+
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    db_session.add_all([
+        ProactiveOutreachLog(
+            user_id="grounding-last-sent",
+            idempotency_key="outreach:grounding-last-sent:sent",
+            status="sent",
+            message="两天前真正发送的内容",
+            next_intent="",
+            created_at=now - timedelta(days=2),
+        ),
+        ProactiveOutreachLog(
+            user_id="grounding-last-sent",
+            idempotency_key="outreach:grounding-last-sent:pending",
+            status="pending",
+            message="",
+            next_intent="等待新的具体话题",
+            created_at=now - timedelta(hours=1),
+        ),
+    ])
+    db_session.commit()
+
+    grounding = build_outreach_grounding(
+        "grounding-last-sent",
+        db=db_session,
+        now=now,
+        thread_extractor=lambda _messages: [],
+    )
+
+    assert grounding["days_since_last_outreach"] == pytest.approx(2.0)
+    assert grounding["last_outreach"]["status"] == "sent"
+    assert grounding["last_outreach"]["message"] == "两天前真正发送的内容"
+    assert grounding["next_intent"] == "等待新的具体话题"
+
+
 def test_extract_recent_threads_uses_injected_llm_call():
     from core.proactive_outreach import extract_recent_threads
 
@@ -136,7 +168,7 @@ def test_extract_recent_threads_uses_injected_llm_call():
     threads = extract_recent_threads(recent_messages, llm_call=fake_llm_call)
 
     assert threads == ["接口联调卡住，晚点继续看", "晚上可能去夜跑"]
-    assert calls[0]["route_key"] == "timing_proactive"
+    assert calls[0]["route_key"] == "outreach_extract"
     assert "JSON 数组" in calls[0]["system_prompt"]
 
 
@@ -165,37 +197,61 @@ def test_extract_recent_threads_returns_empty_for_no_messages():
     assert calls == []
 
 
-def test_active_hours_uses_chat_log_distribution_and_default_when_sparse(db_session):
+def test_active_hours_uses_conversation_turn_distribution_and_default_when_sparse(db_session):
     from core.proactive_outreach import active_hours
 
     base = datetime(2026, 7, 6, 0, 0, 0)
     active_sample_hours = [9, 9, 10, 20, 20]
     for index, hour in enumerate(active_sample_hours):
-        db_session.add(ChatLog(
+        db_session.add(ConversationTurn(
             user_id="superuser",
+            session_id="private_superuser",
             role="user",
             content=f"第 {index} 条活跃样本",
             created_at=base.replace(hour=hour, minute=index),
         ))
-    db_session.add(ChatLog(
+    db_session.add(ConversationTurn(
         user_id="other",
+        session_id="private_other",
         role="user",
         content="其他用户不应影响统计",
         created_at=base.replace(hour=3),
     ))
-    db_session.add(ChatLog(
+    db_session.add(ConversationTurn(
         user_id="sparse",
+        session_id="private_sparse",
         role="user",
         content="样本不足",
         created_at=base.replace(hour=2),
     ))
     db_session.commit()
 
-    assert active_hours("superuser", db=db_session) == {9, 10, 20}
+    assert active_hours("superuser", db=db_session) == {8, 9, 10, 11, 19, 20, 21}
     assert active_hours("sparse", db=db_session) == set(range(8, 23))
 
 
-def test_judge_outreach_uses_timing_proactive_and_clamps_next_check_at(monkeypatch):
+def test_active_hours_window_intersects_default_two_hour_scheduler_cadence(db_session):
+    from core.proactive_outreach import active_hours
+
+    base = datetime(2026, 7, 6, 0, 0, 0)
+    for index in range(5):
+        db_session.add(ConversationTurn(
+            user_id="cadence-user",
+            session_id="private_cadence-user",
+            role="user",
+            content=f"九点活跃样本 {index}",
+            created_at=base.replace(hour=9, minute=index),
+        ))
+    db_session.commit()
+
+    hours = active_hours("cadence-user", db=db_session)
+    ticks = [base + timedelta(hours=8 + offset) for offset in range(0, 48, 2)]
+
+    assert hours == {8, 9, 10}
+    assert any(tick.hour in hours for tick in ticks)
+
+
+def test_judge_outreach_uses_dedicated_route_and_clamps_next_check_at(monkeypatch):
     from core import proactive_outreach
 
     now = datetime(2026, 7, 6, 12, 0, 0)
@@ -205,23 +261,23 @@ def test_judge_outreach_uses_timing_proactive_and_clamps_next_check_at(monkeypat
         calls.append(kwargs)
         return (
             '{"should_reach_out": true, "reason": "想问夜跑", '
-            '"next_check_at": "2026-07-13T12:00:00", "next_intent": "问夜跑"}'
+            '"next_check_at": "2026-07-13T12:00:00", "next_intent": "问夜跑", '
+            '"outreach_kind": "message", "research_query": ""}'
         )
-
-    monkeypatch.setattr(proactive_outreach, "call_model_route", fake_call_model_route)
 
     result = proactive_outreach.judge_outreach(
         {"user_id": "superuser", "recent_messages": []},
         now=now,
         min_interval_min=30,
         max_check_interval_min=1440,
+        model_call=fake_call_model_route,
     )
 
     assert result["should_reach_out"] is True
     assert result["reason"] == "想问夜跑"
     assert result["next_intent"] == "问夜跑"
     assert result["next_check_at"] == "2026-07-07T12:00:00"
-    assert calls[0]["route_key"] == "timing_proactive"
+    assert calls[0]["route_key"] == "outreach_judge"
     assert "禁止" not in calls[0]["system_prompt"]
     assert "黑名单" not in calls[0]["system_prompt"]
     assert "shadow" not in calls[0]["system_prompt"].lower()
@@ -238,10 +294,9 @@ def test_judge_outreach_sends_compact_grounding_only_as_user_message(monkeypatch
         calls.append(kwargs)
         return (
             '{"should_reach_out": false, "reason": "晚点再问", '
-            '"next_check_in_hours": 2, "next_intent": "问接口联调"}'
+            '"next_check_in_hours": 2, "next_intent": "问接口联调", '
+            '"outreach_kind": "message", "research_query": ""}'
         )
-
-    monkeypatch.setattr(proactive_outreach, "call_model_route", fake_call_model_route)
 
     result = proactive_outreach.judge_outreach(
         {
@@ -261,10 +316,11 @@ def test_judge_outreach_sends_compact_grounding_only_as_user_message(monkeypatch
             "next_intent": "问接口联调",
         },
         now=now,
+        model_call=fake_call_model_route,
     )
 
     assert result["next_check_at"] == "2026-07-06T14:00:00"
-    assert calls[0]["route_key"] == "timing_proactive"
+    assert calls[0]["route_key"] == "outreach_judge"
     assert "next_check_in_hours" in calls[0]["system_prompt"]
     assert "用户消息" in calls[0]["system_prompt"]
     assert "recent_threads" in calls[0]["user_message"]
@@ -279,35 +335,39 @@ def test_judge_outreach_converts_next_check_in_hours_to_iso_and_clamps(monkeypat
     now = datetime(2026, 7, 6, 12, 0, 0)
     responses = [
         '{"should_reach_out": false, "reason": "下午再想", '
-        '"next_check_in_hours": 3, "next_intent": "问接口联调"}',
+        '"next_check_in_hours": 3, "next_intent": "问接口联调", '
+        '"outreach_kind": "message", "research_query": ""}',
         '{"should_reach_out": false, "reason": "太近了", '
-        '"next_check_in_hours": 0.1, "next_intent": "稍后"}',
+        '"next_check_in_hours": 0.1, "next_intent": "稍后", '
+        '"outreach_kind": "message", "research_query": ""}',
         '{"should_reach_out": false, "reason": "太远了", '
-        '"next_check_in_hours": 100, "next_intent": "明天"}',
+        '"next_check_in_hours": 100, "next_intent": "明天", '
+        '"outreach_kind": "message", "research_query": ""}',
     ]
 
     def fake_call_model_route(**kwargs):
         return responses.pop(0)
-
-    monkeypatch.setattr(proactive_outreach, "call_model_route", fake_call_model_route)
 
     normal = proactive_outreach.judge_outreach(
         {"user_id": "superuser", "recent_threads": ["接口联调"]},
         now=now,
         min_interval_min=30,
         max_check_interval_min=1440,
+        model_call=fake_call_model_route,
     )
     low = proactive_outreach.judge_outreach(
         {"user_id": "superuser", "recent_threads": ["接口联调"]},
         now=now,
         min_interval_min=30,
         max_check_interval_min=1440,
+        model_call=fake_call_model_route,
     )
     high = proactive_outreach.judge_outreach(
         {"user_id": "superuser", "recent_threads": ["接口联调"]},
         now=now,
         min_interval_min=30,
         max_check_interval_min=60,
+        model_call=fake_call_model_route,
     )
 
     assert normal["next_check_at"] == "2026-07-06T15:00:00"
@@ -324,8 +384,6 @@ def test_generate_outreach_message_uses_reply_route_and_positive_prompt(monkeypa
         calls.append(kwargs)
         return "刚想起你说今晚要夜跑，想来问问风是不是舒服一点。"
 
-    monkeypatch.setattr(proactive_outreach, "call_model_route", fake_call_model_route)
-
     message = proactive_outreach.generate_outreach_message(
         {
             "user_id": "superuser",
@@ -335,10 +393,11 @@ def test_generate_outreach_message_uses_reply_route_and_positive_prompt(monkeypa
             "recent_messages": [{"content": "我今晚想去夜跑。"}],
         },
         "想问夜跑",
+        model_call=fake_call_model_route,
     )
 
     assert message == "刚想起你说今晚要夜跑，想来问问风是不是舒服一点。"
-    assert calls[0]["route_key"] == "reply"
+    assert calls[0]["route_key"] == "outreach_generate"
     assert "可以表达你自己的状态和情绪" in calls[0]["system_prompt"]
     assert "recent_threads" in calls[0]["system_prompt"]
     assert "避免与上次主动消息" in calls[0]["system_prompt"]
@@ -356,8 +415,6 @@ def test_generate_outreach_message_sends_compact_grounding_only_as_user_message(
         calls.append(kwargs)
         return "刚想起你说项目收尾有点累，想来轻轻敲一下。"
 
-    monkeypatch.setattr(proactive_outreach, "call_model_route", fake_call_model_route)
-
     message = proactive_outreach.generate_outreach_message(
         {
             "user_id": "superuser",
@@ -374,10 +431,11 @@ def test_generate_outreach_message_sends_compact_grounding_only_as_user_message(
             "last_outreach": {"message": "昨天已经问过接口联调了。"},
         },
         "想跟进项目收尾",
+        model_call=fake_call_model_route,
     )
 
     assert message == "刚想起你说项目收尾有点累，想来轻轻敲一下。"
-    assert calls[0]["route_key"] == "reply"
+    assert calls[0]["route_key"] == "outreach_generate"
     assert "用户消息" in calls[0]["system_prompt"]
     assert "recent_threads" in calls[0]["user_message"]
     assert "项目收尾有点累" in calls[0]["user_message"]
@@ -1075,3 +1133,73 @@ async def test_run_outreach_due_once_quiet_hours_does_not_roll_surge(monkeypatch
     )
 
     assert result == {"status": "skipped_quiet_hours", "hour": 2}
+
+
+@pytest.mark.asyncio
+async def test_max_silence_delivers_existing_candidate_once_without_forced_followup(
+    monkeypatch,
+    db_session,
+):
+    from core import proactive_outreach
+
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    candidate = ProactiveOutreachLog(
+        user_id="stale-candidate-user",
+        idempotency_key="outreach:stale-candidate",
+        grounding_json='{"recent_threads":["旧候选话题"]}',
+        judge_should=True,
+        judge_reason="旧候选",
+        next_check_at=now - timedelta(hours=48),
+        next_intent="",
+        message="只应发送一次的旧候选",
+        status="candidate",
+        forced=False,
+        created_at=now - timedelta(hours=49),
+    )
+    db_session.add(candidate)
+    db_session.commit()
+    published = []
+
+    async def publisher(*args):
+        published.append(args)
+        return True
+
+    def fail_generator(*_args, **_kwargs):
+        raise AssertionError("已有 candidate 时不得另行生成 forced 消息")
+
+    first = await proactive_outreach.run_outreach_once(
+        "stale-candidate-user",
+        db=db_session,
+        now=now,
+        max_silence_min=2880,
+        generator_fn=fail_generator,
+        publisher=publisher,
+    )
+    second = await proactive_outreach.run_outreach_once(
+        "stale-candidate-user",
+        db=db_session,
+        now=now + timedelta(hours=1),
+        max_silence_min=2880,
+        thread_extractor=lambda _messages: [],
+        judge_fn=lambda _grounding, *, now, **_kwargs: {
+            "should_reach_out": False,
+            "reason": "刚发送过，不再发送",
+            "next_check_at": (now + timedelta(hours=2)).isoformat(),
+            "next_intent": "",
+            "outreach_kind": "message",
+            "research_query": "",
+            "error_type": None,
+        },
+        generator_fn=fail_generator,
+        publisher=publisher,
+    )
+
+    db_session.expire_all()
+    stored = db_session.get(ProactiveOutreachLog, candidate.id)
+    assert first["status"] == "sent"
+    assert second["status"] == "pending"
+    assert published == [
+        ("private", "stale-candidate-user", "只应发送一次的旧候选")
+    ]
+    assert stored.status == "sent"
+    assert stored.created_at == now

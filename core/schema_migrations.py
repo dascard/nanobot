@@ -16,6 +16,10 @@ from typing import Any
 
 from sqlalchemy import inspect, text
 
+from core.proactive_outreach_schema import proactive_outreach_leases_table
+from core.schema_validation import (
+    SchemaMigrationValidationError as SchemaMigrationValidationError,
+)
 from core.time_utils import db_now_naive
 
 
@@ -774,6 +778,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260618_runtime_tool_decision_platform", "runtime tool decision platform column", _runtime_tool_decision_platform_column),
     ("20260706_web_search_provider_usage", "web search provider usage table", _web_search_provider_usage_table),
     ("20260706_proactive_outreach_log", "proactive outreach log table", _proactive_outreach_log_table),
+    (
+        "20260710_proactive_outreach_leases",
+        "proactive outreach leases table",
+        proactive_outreach_leases_table,
+    ),
 ]
 
 
