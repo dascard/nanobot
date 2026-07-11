@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from sqlalchemy import inspect, text
 
+from core.chat_delivery_outbox_schema import chat_delivery_outbox_table
 from core.proactive_outreach_schema import proactive_outreach_leases_table
 from core.schema_validation import (
     SchemaMigrationValidationError as SchemaMigrationValidationError,
@@ -1508,6 +1509,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "20260710_proactive_outreach_leases",
         "proactive outreach leases table",
         proactive_outreach_leases_table,
+    ),
+    (
+        "20260711_chat_delivery_outbox",
+        "chat delivery outbox table",
+        chat_delivery_outbox_table,
     ),
 ]
 

@@ -143,3 +143,5 @@ def test_proactive_outreach_page_is_wired_into_admin_app():
     assert "运行日志" in page_source
     assert "LLM 请求" in page_source
     assert "proactive_outreach.enabled" in page_source
+    assert "proactive_outreach.ambiguous_hold_min" in page_source
+    assert "投递不确定冻结" in page_source

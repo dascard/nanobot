@@ -1393,7 +1393,47 @@ async def test_unknown_publisher_outcome_is_ambiguous_and_same_key_is_not_republ
 
 
 @pytest.mark.asyncio
-async def test_unknown_forced_publish_is_held_for_full_silence_window(
+async def test_research_publisher_normalizes_verified_url_variant(db_session):
+    from core.proactive_outreach import deliver_outreach_once
+
+    canonical_url = "https://example.test/report"
+    published = []
+
+    async def publisher(*args):
+        published.append(args)
+        return True
+
+    result = await deliver_outreach_once(
+        user_id="research-publisher-canonical",
+        idempotency_key="outreach:research-publisher-canonical",
+        grounding={
+            "research": {
+                "sources": [
+                    {"url": canonical_url},
+                    {"url": "https://example.test/two"},
+                ],
+            },
+        },
+        judge_should=True,
+        judge_reason="研究候选",
+        next_check_at=None,
+        next_intent="",
+        message="研究正文 https://example.test/report/?utm_source=search。",
+        forced=False,
+        db=db_session,
+        publisher=publisher,
+    )
+
+    assert result["status"] == "sent"
+    assert published == [(
+        "private",
+        "research-publisher-canonical",
+        f"研究正文 {canonical_url}。",
+    )]
+
+
+@pytest.mark.asyncio
+async def test_unknown_forced_publish_uses_independent_ambiguity_hold(
     monkeypatch,
     db_session,
 ):
@@ -1428,6 +1468,7 @@ async def test_unknown_forced_publish_is_held_for_full_silence_window(
         db=db_session,
         now=first_run_at,
         max_silence_min=48 * 60,
+        ambiguous_hold_min=120,
         generator_fn=lambda *_args, **_kwargs: "不确定投递候选",
         publisher=publisher,
     )
@@ -1436,16 +1477,35 @@ async def test_unknown_forced_publish_is_held_for_full_silence_window(
         db=db_session,
         now=first_run_at + timedelta(hours=1),
         max_silence_min=48 * 60,
+        ambiguous_hold_min=120,
         generator_fn=lambda *_args, **_kwargs: "不应立即重发",
+        publisher=publisher,
+    )
+    resumed = await proactive_outreach.run_outreach_once(
+        "unknown-hold-user",
+        db=db_session,
+        now=first_run_at + timedelta(minutes=121),
+        max_silence_min=48 * 60,
+        ambiguous_hold_min=120,
+        generator_fn=lambda *_args, **_kwargs: "冻结结束后的新候选",
         publisher=publisher,
     )
 
     assert first["status"] == "ambiguous"
     assert held["status"] == "skipped_ambiguous"
     assert held["next_check_at"] == (
-        first_run_at + timedelta(hours=48)
+        first_run_at + timedelta(minutes=120)
     ).isoformat()
-    assert len(published) == 1
+    assert resumed["status"] == "sent"
+    assert len(published) == 2
+    rows = (
+        db_session.query(ProactiveOutreachLog)
+        .filter_by(user_id="unknown-hold-user", forced=True)
+        .order_by(ProactiveOutreachLog.id)
+        .all()
+    )
+    assert [row.status for row in rows] == ["ambiguous", "sent"]
+    assert rows[0].idempotency_key != rows[1].idempotency_key
 
 
 @pytest.mark.asyncio

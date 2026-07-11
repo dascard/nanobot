@@ -182,6 +182,60 @@ def test_start_schedulers_starts_session_summary_worker(monkeypatch):
     assert handles.session_summary is not None
 
 
+def test_start_schedulers_starts_chat_delivery_worker(monkeypatch):
+    import config
+    import bootstrap.schedulers as schedulers
+
+    calls: list[str] = []
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    def fake_start_thread(*, name, target):
+        calls.append(name)
+        return object()
+
+    monkeypatch.setattr(config, "DAILY_DIGEST_ENABLED", False)
+    monkeypatch.setattr(schedulers, "_start_thread", fake_start_thread)
+    monkeypatch.setattr(schedulers, "_preload_sentinel", lambda logger: None)
+
+    handles = schedulers.start_schedulers(testing=False, logger=Logger())
+
+    assert "chat-delivery-worker" in calls
+    assert handles.chat_delivery is not None
+
+
+def test_scheduler_handles_stop_chat_delivery_worker():
+    import bootstrap.schedulers as schedulers
+
+    calls = []
+
+    class Handle:
+        def stop(self):
+            calls.append("chat_delivery")
+
+    handles = schedulers.SchedulerHandles(chat_delivery=Handle())
+    handles.stop_all()
+
+    assert calls == ["chat_delivery"]
+
+
+def test_start_schedulers_testing_mode_skips_chat_delivery_worker():
+    import bootstrap.schedulers as schedulers
+
+    class Logger:
+        def info(self, *_args, **_kwargs):
+            pass
+
+    handles = schedulers.start_schedulers(testing=True, logger=Logger())
+
+    assert handles.chat_delivery is None
+
+
 def test_start_schedulers_skips_proactive_outreach_when_disabled(monkeypatch):
     import config
     import bootstrap.schedulers as schedulers

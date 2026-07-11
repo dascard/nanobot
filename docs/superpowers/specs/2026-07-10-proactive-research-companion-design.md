@@ -174,8 +174,9 @@ query。
 URL 策略只接受规范化的公开 HTTP/HTTPS：拒绝 userinfo、空白/控制字符、反斜杠、坏端口、
 协议相对 URL、裸 `www`、普通裸 FQDN/IPv4、非 HTTP scheme、localhost、单标签内网域名、
 `.local` 和非 global 字面 IP。
-provider URL 先规范化再进入 trace；模型正文必须逐字使用规范 URL，fragment、默认端口、追踪
-参数或其他会被 canonicalizer 改写的变体都失败关闭。bridge 正文先去除 think，再做 URL 核验，
+provider URL 先规范化再进入 trace；模型正文中的绝对 HTTP(S) URL 若能安全映射到已核验来源，
+会先重写为该 canonical URL，再由严格发布门逐字核验。默认端口、尾斜杠和追踪参数等展示
+变体不会原样发布；无法安全映射、语义不明确或未核验的 URL 仍失败关闭。bridge 正文先去除 think，再做 URL 核验，
 避免删除中间 think 块后重组出新链接。研究正文是纯文本契约，拒绝 `[CQ:*]`、
 `[generated_image:*]`、`[sticker:*]`；不可信来源标题的方括号由服务端全角化。最终候选层和
 publisher 前再复核一次来源 URL 与控制语法。最终“来源”段由服务端生成，不照抄模型声明。
@@ -192,8 +193,9 @@ publisher 前明确失租，使用 CAS 把行恢复为 `candidate`（清历史�
 毒化的 `sending`。若进程在 publisher 调用期间崩溃、结果确实不确定，则原 key 不自动重发；
 超过 30 分钟且旧租约失效后转成 `ambiguous`。默认 QQ publisher 对网络异常、5xx 或其他无法
 证明远端未处理的结果返回不确定态，投递层同样写 `ambiguous`，而不是误记为可重试的 `failed`；
-最新 ambiguous 在一个完整 `max_silence` 窗口内冻结新语义外呼，窗口届满后才允许再次评估，
-在重复风险与永久封死之间取保守平衡。相同 key 始终不会重新调用 publisher。
+最新 ambiguous 按独立的 `proactive_outreach.ambiguous_hold_min` 冻结新语义外呼，默认 120 分钟；
+窗口届满后才允许使用新 key 再次评估，在重复风险与永久封死之间取保守平衡。该配置不影响
+`max_silence_min` 的最长沉默语义，相同 key 始终不会重新调用 publisher。
 
 publisher 作为显式可注入依赖：生产默认适配 `push_to_qq`，模拟使用只记录不出站的
 `RecordingPublisher`。研究 runner、dry-run 和模拟模块均不导入生产 publisher。调度循环每轮

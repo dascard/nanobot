@@ -243,6 +243,80 @@ class InboundMessageClaim(Base):
     completed_at = Column(DateTime, nullable=True)
 
 
+class ChatDeliveryOutbox(Base):
+    """私聊断连后的持久投递任务。"""
+
+    __tablename__ = "chat_delivery_outbox"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'sending', 'ambiguous', 'delivered', 'failed')",
+            name="ck_chat_delivery_outbox_status",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="ck_chat_delivery_outbox_attempt_count",
+        ),
+        Index(
+            "uq_chat_delivery_outbox_delivery_key",
+            "delivery_key",
+            unique=True,
+        ),
+        Index(
+            "uq_chat_delivery_outbox_claim_identity",
+            "platform",
+            "chat_type",
+            "session_id",
+            "message_id",
+            unique=True,
+        ),
+        Index(
+            "ix_chat_delivery_outbox_due",
+            "status",
+            "next_attempt_at",
+        ),
+        Index(
+            "ix_chat_delivery_outbox_status_lease",
+            "status",
+            "lease_expires_at",
+        ),
+        {"sqlite_autoincrement": True},
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    delivery_key = Column(String(64), nullable=False)
+    platform = Column(String(32), nullable=False)
+    chat_type = Column(String(16), nullable=False)
+    session_id = Column(String(255), nullable=False)
+    message_id = Column(String(255), nullable=False)
+    target_type = Column(String(16), nullable=False)
+    target_id = Column(String(255), nullable=False)
+    envelope_json = Column(
+        Text,
+        nullable=False,
+        default="{}",
+        server_default=text("'{}'"),
+    )
+    status = Column(
+        String(16),
+        nullable=False,
+        default="pending",
+        server_default=text("'pending'"),
+    )
+    owner_token = Column(
+        String(64),
+        nullable=False,
+        default="",
+        server_default=text("''"),
+    )
+    lease_expires_at = Column(DateTime, nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    next_attempt_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=False, default="", server_default=text("''"))
+    created_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+    updated_at = Column(DateTime, nullable=False, server_default=text("CURRENT_TIMESTAMP"))
+    delivered_at = Column(DateTime, nullable=True)
+
+
 class ProactiveOutreachLease(Base):
     """主动外呼按用户串行评估的短期租约。"""
 

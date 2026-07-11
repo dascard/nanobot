@@ -12,10 +12,13 @@ from collections.abc import Callable
 class ThreadHandle:
     thread: threading.Thread
     stop_event: threading.Event
+    stop_timeout: float = 5.0
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self, timeout: float | None = None) -> None:
         self.stop_event.set()
-        self.thread.join(timeout=timeout)
+        self.thread.join(
+            timeout=self.stop_timeout if timeout is None else float(timeout)
+        )
 
 
 @dataclass
@@ -26,6 +29,7 @@ class SchedulerHandles:
     expression_learner: ThreadHandle | None = None
     eval_sampling: ThreadHandle | None = None
     proactive_outreach: ThreadHandle | None = None
+    chat_delivery: ThreadHandle | None = None
 
     def stop_all(self) -> None:
         for handle in (
@@ -35,6 +39,7 @@ class SchedulerHandles:
             self.expression_learner,
             self.eval_sampling,
             self.proactive_outreach,
+            self.chat_delivery,
         ):
             if handle is not None:
                 handle.stop()
@@ -77,6 +82,18 @@ def session_summary_worker_scheduler(stop_event: threading.Event) -> None:
     logger.info("Session summary worker scheduler stopped.")
 
 
+def chat_delivery_worker_scheduler(stop_event: threading.Event) -> None:
+    from workers.chat_delivery_worker import run_until_stopped
+
+    logger = logging.getLogger("nanobot.chat_delivery.worker")
+    logger.info("Chat delivery worker scheduler started.")
+    try:
+        run_until_stopped(stop_event)
+    except Exception as exc:
+        logger.exception("Chat delivery worker scheduler error: %s", exc)
+    logger.info("Chat delivery worker scheduler stopped.")
+
+
 def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandles:
     """启动后台调度器；测试模式只返回空 handles。"""
     if testing:
@@ -109,6 +126,14 @@ def start_schedulers(*, testing: bool, logger: logging.Logger) -> SchedulerHandl
         target=session_summary_worker_scheduler,
     )
     logger.info("Session summary worker initialized.")
+
+    handles.chat_delivery = _start_thread(
+        name="chat-delivery-worker",
+        target=chat_delivery_worker_scheduler,
+    )
+    if isinstance(handles.chat_delivery, ThreadHandle):
+        handles.chat_delivery.stop_timeout = 35.0
+    logger.info("Chat delivery worker initialized.")
 
     _preload_sentinel(logger)
 

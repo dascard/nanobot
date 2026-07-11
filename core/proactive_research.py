@@ -15,6 +15,7 @@ import unicodedata
 import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
+from urllib.parse import parse_qsl, unquote_to_bytes, urlsplit
 
 from kohakuterrarium.modules.plugin.base import BasePlugin, PluginBlockError
 
@@ -25,7 +26,17 @@ from core.web_search.url_policy import canonicalize_http_url
 
 _EXPLORATION_TOOLS = frozenset({"web_search"})
 _RESEARCH_ALLOWED_TOOLS = RESEARCH_TOOL_NAMES
-_URL_PATTERN = re.compile(r"https?://[^\s<>()\[\]{}\"']+", re.IGNORECASE)
+_URL_PROSE_DELIMITERS = (
+    "<>()[]{}\"'"
+    "（）［］【】｛｝〈〉《》「」『』“”‘’"
+    "，。；：！？、"
+)
+_URL_PATTERN = re.compile(
+    rf"https?://[^\s{re.escape(_URL_PROSE_DELIMITERS)}]+",
+    re.IGNORECASE,
+)
+_URL_TRAILING_PUNCTUATION = ".,;:!?，。；：！？、"
+_INVALID_PERCENT_ESCAPE_PATTERN = re.compile(r"%(?![0-9a-f]{2})", re.IGNORECASE)
 _PROTOCOL_RELATIVE_URL_PATTERN = re.compile(
     r"(?<!:)//[a-z0-9][^\s<>()\[\]{}\"']+",
     re.IGNORECASE,
@@ -44,8 +55,10 @@ _BARE_IPV4_PATTERN = re.compile(
     r"(?<![\d./:])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])"
 )
 _DANGEROUS_SCHEME_PATTERN = re.compile(
-    r"(?i)(?:^|[\s(\[{'\"])(?:javascript|data|vbscript|file|ftp|ftps|mailto|"
-    r"tel|magnet|smb|ssh|ws|wss):"
+    rf"(?:^|[\s{re.escape(_URL_PROSE_DELIMITERS)}])"
+    r"(?:javascript|data|vbscript|file|ftp|ftps|mailto|"
+    r"tel|magnet|smb|ssh|ws|wss):",
+    re.IGNORECASE,
 )
 _OUTBOUND_CONTROL_PATTERN = re.compile(
     r"\[(?:cq|generated_image|sticker):",
@@ -274,6 +287,95 @@ class ResearchBudgetPlugin(BasePlugin):
 
 def _canonical_url(raw: str) -> str:
     return canonicalize_http_url(raw)
+
+
+def _strict_percent_decode(value: str) -> str | None:
+    """严格解码 URL 组件；畸形 percent escape 或非法 UTF-8 返回 ``None``。"""
+
+    if _INVALID_PERCENT_ESCAPE_PATTERN.search(value):
+        return None
+    try:
+        return unquote_to_bytes(value).decode("utf-8", errors="strict")
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+def _discarded_component_is_ambiguous(value: str) -> bool:
+    decoded = _strict_percent_decode(value)
+    return decoded is None or not decoded.isascii()
+
+
+def _has_ambiguous_discarded_non_ascii(
+    raw_url: str,
+    canonical_url: str,
+) -> bool:
+    """判断 canonicalization 删除的 URL 部分是否可能粘连正文。"""
+
+    try:
+        raw_parts = urlsplit(raw_url)
+        canonical_parts = urlsplit(canonical_url)
+        remaining_query_items = list(
+            parse_qsl(canonical_parts.query, keep_blank_values=True)
+        )
+    except (TypeError, ValueError):
+        return True
+
+    for raw_segment in raw_parts.query.split("&"):
+        if not raw_segment:
+            continue
+        try:
+            parsed_segment = parse_qsl(raw_segment, keep_blank_values=True)
+        except ValueError:
+            if _discarded_component_is_ambiguous(raw_segment):
+                return True
+            continue
+        if len(parsed_segment) != 1:
+            if _discarded_component_is_ambiguous(raw_segment):
+                return True
+            continue
+        try:
+            kept_index = remaining_query_items.index(parsed_segment[0])
+        except ValueError:
+            if _discarded_component_is_ambiguous(raw_segment):
+                return True
+        else:
+            remaining_query_items.pop(kept_index)
+
+    return bool(
+        raw_parts.fragment
+        and _discarded_component_is_ambiguous(raw_parts.fragment)
+    )
+
+
+def normalize_research_publication_text(
+    text: str,
+    sources: list[Any] | tuple[Any, ...],
+) -> str:
+    """把正文中的已核验 HTTP(S) URL 变体重写为 canonical URL。"""
+
+    verified_urls: set[str] = set()
+    for source in sources:
+        raw_url = (
+            source.get("url")
+            if isinstance(source, dict)
+            else getattr(source, "url", "")
+        )
+        canonical = _canonical_url(raw_url)
+        if canonical:
+            verified_urls.add(canonical)
+
+    def replace_verified_url(match: re.Match[str]) -> str:
+        token = match.group(0)
+        candidate = token.rstrip(_URL_TRAILING_PUNCTUATION)
+        trailing_punctuation = token[len(candidate):]
+        canonical = _canonical_url(candidate)
+        if not canonical or canonical not in verified_urls:
+            return token
+        if _has_ambiguous_discarded_non_ascii(candidate, canonical):
+            return token
+        return f"{canonical}{trailing_punctuation}"
+
+    return _URL_PATTERN.sub(replace_verified_url, str(text or ""))
 
 
 @dataclass(frozen=True)
@@ -836,6 +938,7 @@ async def run_proactive_research(
             exploration_calls=budget_plugin.exploration_calls,
         )
 
+    draft = normalize_research_publication_text(draft, sources)
     publication_error = validate_research_publication_text(draft, sources)
     if publication_error:
         return _result(

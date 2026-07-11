@@ -672,6 +672,26 @@ async def push_to_qq(target_type: str, target_id: str, message: str) -> bool | N
     """推送消息到 QQ（通过 qqbot 的 /nanobot/push 端点）。"""
     try:
         session = await _get_push_session()
+    except Exception as exc:
+        logger.error(f"Push error: {exc}")
+        return None
+    return await push_to_qq_with_session(
+        session,
+        target_type,
+        target_id,
+        message,
+    )
+
+
+async def push_to_qq_with_session(
+    session: aiohttp.ClientSession,
+    target_type: str,
+    target_id: str,
+    message: str,
+) -> bool | None:
+    """使用调用方拥有的 HTTP session 推送，供独立事件循环复用。"""
+
+    try:
         async with session.post(
             QQBOT_PUSH_URL,
             json={
@@ -702,6 +722,17 @@ async def push_envelope_to_qq(
     envelope: Mapping[str, Any] | None,
 ) -> bool | None:
     """通过 QQ 出站渲染器派生旧 QQbot push message。"""
+    message = _render_qq_push_envelope(target_type, target_id, envelope)
+    if message is None:
+        return False
+    return await push_to_qq(target_type, target_id, message)
+
+
+def _render_qq_push_envelope(
+    target_type: str,
+    target_id: str,
+    envelope: Mapping[str, Any] | None,
+) -> str | None:
     from core.qq_outbound_renderer import render_qq_outbound_envelope
 
     rendered = render_qq_outbound_envelope(envelope, allow_base64=False)
@@ -712,7 +743,6 @@ async def push_envelope_to_qq(
             target_id,
             rendered.warnings,
         )
-
     message = rendered.message
     if not message.strip():
         logger.warning(
@@ -720,8 +750,26 @@ async def push_envelope_to_qq(
             target_type,
             target_id,
         )
+        return None
+    return message
+
+
+async def push_envelope_to_qq_with_session(
+    session: aiohttp.ClientSession,
+    target_type: str,
+    target_id: str,
+    envelope: Mapping[str, Any] | None,
+) -> bool | None:
+    """使用调用方 session 渲染并推送 envelope。"""
+    message = _render_qq_push_envelope(target_type, target_id, envelope)
+    if message is None:
         return False
-    return await push_to_qq(target_type, target_id, message)
+    return await push_to_qq_with_session(
+        session,
+        target_type,
+        target_id,
+        message,
+    )
 
 
 # ── 定时任务调度 ──

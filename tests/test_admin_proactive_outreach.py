@@ -151,6 +151,7 @@ def test_proactive_outreach_status_reports_settings_logs_and_llm(proactive_clien
     assert data["super_user_ids"] == ["u-proactive"]
     settings_by_key = {item["key"]: item for item in data["settings"]}
     assert settings_by_key["proactive_outreach.enabled"]["value"] is True
+    assert settings_by_key["proactive_outreach.ambiguous_hold_min"]["value"] == 120
     assert settings_by_key["bot.super_user_ids"]["value"] == "u-proactive"
     assert data["stats"]["total"] == 2
     assert data["stats"]["by_status"]["sent"] == 1
@@ -200,10 +201,25 @@ def test_proactive_outreach_setting_update_is_scoped(proactive_client):
         json={"value": "x"},
         headers=_auth_header(),
     )
+    ambiguity_hold = proactive_client.put(
+        "/api/v1/admin/proactive-outreach/settings/"
+        "proactive_outreach.ambiguous_hold_min",
+        json={"value": 90},
+        headers=_auth_header(),
+    )
+    invalid_ambiguity_hold = proactive_client.put(
+        "/api/v1/admin/proactive-outreach/settings/"
+        "proactive_outreach.ambiguous_hold_min",
+        json={"value": 0},
+        headers=_auth_header(),
+    )
 
     assert ok.status_code == 200, ok.text
     assert ok.json()["value"] is True
     assert denied.status_code == 400
+    assert ambiguity_hold.status_code == 200, ambiguity_hold.text
+    assert ambiguity_hold.json()["value"] == 90
+    assert invalid_ambiguity_hold.status_code == 400
 
 
 def test_proactive_outreach_run_once_uses_existing_runtime(proactive_client, monkeypatch):

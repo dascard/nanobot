@@ -644,6 +644,165 @@ async def test_iter_streaming_chat_response_success_yields_done_payload_and_pers
 
 
 @pytest.mark.asyncio
+async def test_disconnect_while_done_event_is_yielded_starts_delivery(monkeypatch):
+    from api import chat_route_runner
+
+    calls: dict[str, list[Any]] = {}
+
+    class FakeUnitOfWork:
+        def __enter__(self):
+            self.db = FakeDb()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.db = None
+            return False
+
+    monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
+    iterator = chat_route_runner.iter_streaming_chat_response(
+        FakeDb(),
+        _context(calls, bridge=FakeBridge(answer="done 期间断连回答")),
+    )
+
+    while True:
+        event = await asyncio.wait_for(anext(iterator), timeout=1)
+        if "'status': 'done'" in event:
+            break
+    await iterator.aclose()
+    await _wait_for_stream_finalizers(chat_route_runner)
+
+    assert calls["push"] == [
+        (
+            "private",
+            "u-runner",
+            {"answer": "expanded:done 期间断连回答"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_registers_delivery_before_claim_completion_and_push(
+    monkeypatch,
+):
+    from api import chat_route_runner, chat_streaming_result
+
+    calls: dict[str, list[Any]] = {}
+    order = []
+
+    class FakeUnitOfWork:
+        def __enter__(self):
+            self.db = FakeDb()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.db = None
+            return False
+
+    class ClaimOwner:
+        async def complete(self, _completion):
+            order.append("complete")
+            return True
+
+        async def fail(self, _error):
+            order.append("fail")
+            return True
+
+    async def register_delivery(_context, _result):
+        order.append("enqueue")
+        return object()
+
+    async def deliver_registered(_context, _result, _registered):
+        order.append("push")
+        return True
+
+    monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
+    monkeypatch.setattr(
+        chat_streaming_result,
+        "register_stream_finalization_delivery",
+        register_delivery,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        chat_streaming_result,
+        "deliver_registered_stream_finalization",
+        deliver_registered,
+        raising=False,
+    )
+    iterator = chat_route_runner.iter_streaming_chat_response(
+        FakeDb(),
+        _context(
+            calls,
+            bridge=FakeBridge(answer="顺序验证回答"),
+            claim_owner=ClaimOwner(),
+        ),
+    )
+
+    while True:
+        event = await asyncio.wait_for(anext(iterator), timeout=1)
+        if "'status': 'done'" in event:
+            break
+    await iterator.aclose()
+    await _wait_for_stream_finalizers(chat_route_runner)
+
+    assert order == ["enqueue", "complete", "push"]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_registration_failure_never_completes_claim(monkeypatch):
+    from api import chat_route_runner, chat_streaming_result
+
+    calls: dict[str, list[Any]] = {}
+    registration_error = RuntimeError("outbox registration failed")
+
+    class FakeUnitOfWork:
+        def __enter__(self):
+            self.db = FakeDb()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.db = None
+            return False
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("owner_complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("owner_fail", []).append(error)
+            return True
+
+    async def fail_registration(_context, _result):
+        raise registration_error
+
+    monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
+    monkeypatch.setattr(
+        chat_streaming_result,
+        "register_stream_finalization_delivery",
+        fail_registration,
+    )
+    iterator = chat_route_runner.iter_streaming_chat_response(
+        FakeDb(),
+        _context(
+            calls,
+            bridge=FakeBridge(answer="登记失败回答"),
+            claim_owner=ClaimOwner(),
+        ),
+    )
+
+    while True:
+        event = await asyncio.wait_for(anext(iterator), timeout=1)
+        if "'status': 'done'" in event:
+            break
+    await iterator.aclose()
+    await _wait_for_stream_finalizers(chat_route_runner)
+
+    assert calls.get("owner_complete") is None
+    assert calls["owner_fail"] == [registration_error]
+    assert calls.get("push") is None
+
+
+@pytest.mark.asyncio
 async def test_stream_consumer_cancel_after_finalizer_started_never_persists_with_request_db(
     monkeypatch,
 ):
@@ -887,7 +1046,8 @@ async def test_iter_streaming_persist_error_fails_claim_yields_only_safe_error_a
 
 
 @pytest.mark.asyncio
-async def test_iter_streaming_complete_error_fails_once_yields_safe_error_and_no_done():
+async def test_iter_streaming_complete_error_after_done_fails_once_and_schedules_delivery():
+    from api import chat_route_runner
     from api.chat_route_runner import iter_streaming_chat_response
 
     calls: dict[str, list[Any]] = {}
@@ -905,11 +1065,13 @@ async def test_iter_streaming_complete_error_fails_once_yields_safe_error_and_no
     context = _context(calls, claim_owner=ClaimOwner())
 
     events = [event async for event in iter_streaming_chat_response(FakeDb(), context)]
+    await _wait_for_stream_finalizers(chat_route_runner)
 
     assert len(calls["owner_complete"]) == 1
     assert calls["owner_fail"] == [complete_error]
-    assert any("系统暂时不可用" in event for event in events)
-    assert all("'status': 'done'" not in event for event in events)
+    assert sum("'status': 'done'" in event for event in events) == 1
+    assert all("系统暂时不可用" not in event for event in events)
+    assert len(calls["push"]) == 1
 
 
 @pytest.mark.asyncio
@@ -1872,3 +2034,130 @@ def test_parent_chat_route_delegates_bridge_runner_and_keeps_fastapi_boundary():
     assert "chat_sse_loop.iter_chat_stream_events(" not in source
     assert "chat_streaming_result.ChatStreamResultCallbacks(" not in source
     assert "chat_non_streaming_result.ChatNonStreamingResultCallbacks(" not in source
+
+
+@pytest.mark.asyncio
+async def test_claimed_nonstream_checkpoint_failure_skips_bridge_and_persistence():
+    from dataclasses import replace
+
+    from api.chat_route_runner import run_non_streaming_chat_response
+
+    calls: dict[str, list[Any]] = {}
+    checkpoint_error = RuntimeError("owner checkpoint failed")
+
+    class ClaimOwner:
+        async def checkpoint(self):
+            raise checkpoint_error
+
+        async def wait_unusable(self):
+            await asyncio.Event().wait()
+
+        async def fail(self, error):
+            calls.setdefault("owner_fail", []).append(error)
+            return False
+
+    bridge = FakeBridge()
+    context = replace(
+        _context(calls, bridge=bridge, claim_owner=ClaimOwner()),
+        claim_key=object(),
+        request_sha256="a" * 64,
+    )
+
+    result = await run_non_streaming_chat_response(FakeDb(), context)
+
+    assert result.http_error is not None
+    assert result.http_error.status_code == 502
+    assert bridge.calls == []
+    assert calls.get("persist") is None
+    assert calls["owner_fail"] == [checkpoint_error]
+
+
+@pytest.mark.asyncio
+async def test_claimed_nonstream_owner_unusable_cancels_running_bridge():
+    from dataclasses import replace
+
+    from api.chat_route_runner import run_non_streaming_chat_response
+
+    calls: dict[str, list[Any]] = {}
+    bridge_started = asyncio.Event()
+    bridge_cancelled = asyncio.Event()
+    owner_lost = RuntimeError("owner lost while bridge running")
+
+    class BlockingBridge(FakeBridge):
+        async def handle_message(self, *args: Any, **kwargs: Any) -> str:
+            self.calls.append((args, kwargs))
+            bridge_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                bridge_cancelled.set()
+                raise
+
+    class ClaimOwner:
+        async def checkpoint(self):
+            return True
+
+        async def wait_unusable(self):
+            await bridge_started.wait()
+            raise owner_lost
+
+        async def fail(self, error):
+            calls.setdefault("owner_fail", []).append(error)
+            return False
+
+    bridge = BlockingBridge()
+    context = replace(
+        _context(calls, bridge=bridge, claim_owner=ClaimOwner()),
+        claim_key=object(),
+        request_sha256="a" * 64,
+    )
+
+    result = await run_non_streaming_chat_response(FakeDb(), context)
+
+    assert result.http_error is not None
+    assert result.http_error.status_code == 502
+    assert bridge_cancelled.is_set()
+    assert calls.get("persist") is None
+    assert calls["owner_fail"] == [owner_lost]
+
+
+@pytest.mark.asyncio
+async def test_claimed_nonstream_post_bridge_checkpoint_failure_skips_persistence():
+    from dataclasses import replace
+
+    from api.chat_route_runner import run_non_streaming_chat_response
+
+    calls: dict[str, list[Any]] = {}
+    checkpoint_error = RuntimeError("owner lost after bridge")
+
+    class ClaimOwner:
+        def __init__(self):
+            self.checkpoints = 0
+
+        async def checkpoint(self):
+            self.checkpoints += 1
+            if self.checkpoints == 2:
+                raise checkpoint_error
+            return True
+
+        async def wait_unusable(self):
+            await asyncio.Event().wait()
+
+        async def fail(self, error):
+            calls.setdefault("owner_fail", []).append(error)
+            return False
+
+    bridge = FakeBridge()
+    context = replace(
+        _context(calls, bridge=bridge, claim_owner=ClaimOwner()),
+        claim_key=object(),
+        request_sha256="a" * 64,
+    )
+
+    result = await run_non_streaming_chat_response(FakeDb(), context)
+
+    assert result.http_error is not None
+    assert result.http_error.status_code == 502
+    assert len(bridge.calls) == 1
+    assert calls.get("persist") is None
+    assert calls["owner_fail"] == [checkpoint_error]

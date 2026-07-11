@@ -86,7 +86,7 @@ class ChatRouteRunnerCallbacks:
     private_prompt_audit_failure_meta: Callable[[], dict[str, Any]]
     expand_chat_transport_answer: Callable[[str], str]
     build_chat_push_envelope: Callable[..., Any]
-    push_envelope_to_qq: Callable[[str, str, dict[str, Any]], Awaitable[bool]]
+    push_envelope_to_qq: Callable[[str, str, dict[str, Any]], Awaitable[bool | None]]
     chat_response_payload: Callable[..., dict[str, Any]]
     chat_sse_data: Callable[[dict[str, Any]], str]
     stream_error_event: Callable[[], dict[str, Any]]
@@ -94,6 +94,7 @@ class ChatRouteRunnerCallbacks:
     finalize_non_streaming_chat_result: Callable[..., Awaitable[Any]]
     add_background_task: Callable[..., None]
     evolution_task: Callable[..., Any]
+    persist_claimed_chat_turn: Callable[..., Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,8 @@ class ChatRouteRunnerContext:
     evolution_threshold: int
     callbacks: ChatRouteRunnerCallbacks
     claim_owner: Any | None = None
+    claim_key: Any | None = None
+    request_sha256: str = ""
 
 
 async def _best_effort_fail_claim(owner: Any | None, error: Any) -> None:
@@ -233,6 +236,58 @@ class ColdChatStreamingBody(AsyncIterator[str]):
                     self._closed = True
 
 
+async def _await_with_owner_guard(
+    owner: Any | None,
+    awaitable: Awaitable[Any],
+) -> Any:
+    """在 Bridge 前后 checkpoint，并在执行期间响应 owner 失权。"""
+
+    checkpoint = getattr(owner, "checkpoint", None)
+    wait_unusable = getattr(owner, "wait_unusable", None)
+    if owner is None or not callable(checkpoint) or not callable(wait_unusable):
+        return await awaitable
+
+    try:
+        await checkpoint()
+    except BaseException:
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        raise
+    business_task = asyncio.ensure_future(awaitable)
+    unusable_task = asyncio.create_task(
+        wait_unusable(),
+        name="chat-owner-unusable-guard",
+    )
+    try:
+        done, _pending = await asyncio.wait(
+            {business_task, unusable_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if unusable_task in done:
+            try:
+                await unusable_task
+            except BaseException as owner_error:
+                if not business_task.done():
+                    business_task.cancel()
+                await asyncio.gather(business_task, return_exceptions=True)
+                raise owner_error
+            raise RuntimeError("claim owner unusable guard 意外正常返回")
+
+        result = await business_task
+        await checkpoint()
+        return result
+    finally:
+        for task in (business_task, unusable_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(
+            business_task,
+            unusable_task,
+            return_exceptions=True,
+        )
+
+
 async def _run_stream_bridge(
     context: ChatRouteRunnerContext,
     result_holder: MutableMapping[str, Any],
@@ -241,14 +296,17 @@ async def _run_stream_bridge(
 ) -> None:
     req = context.req
     try:
-        result_holder["answer"] = await context.bridge.handle_message(
-            context.enriched_query,
-            user_id=req.user_id,
-            session_id=req.session_id,
-            sender_name=req.sender_name or "",
-            metadata=context.bridge_meta,
-            stream_queue=stream_queue,
-            stream=True,
+        result_holder["answer"] = await _await_with_owner_guard(
+            context.claim_owner,
+            context.bridge.handle_message(
+                context.enriched_query,
+                user_id=req.user_id,
+                session_id=req.session_id,
+                sender_name=req.sender_name or "",
+                metadata=context.bridge_meta,
+                stream_queue=stream_queue,
+                stream=True,
+            ),
         )
     except asyncio.CancelledError:
         raise
@@ -287,8 +345,11 @@ def _stream_result_context(
             expand_chat_transport_answer=callbacks.expand_chat_transport_answer,
             build_chat_push_envelope=callbacks.build_chat_push_envelope,
             push_envelope_to_qq=callbacks.push_envelope_to_qq,
+            persist_claimed_chat_turn=callbacks.persist_claimed_chat_turn,
         ),
         claim_owner=context.claim_owner,
+        claim_key=context.claim_key,
+        request_sha256=context.request_sha256,
     )
 
 
@@ -311,7 +372,20 @@ async def iter_streaming_chat_response(
     )
     finalizer_task: asyncio.Task[Any] | None = None
     delivery_task: asyncio.Task[Any] | None = None
-    done_yield_started = False
+    done_yield_completed = False
+    claim_completion_attempted = False
+    claim_completion_succeeded = context.claim_owner is None
+
+    async def complete_claim_once(result: Any) -> bool:
+        nonlocal claim_completion_attempted, claim_completion_succeeded
+        if context.claim_owner is None:
+            return True
+        if claim_completion_attempted:
+            return claim_completion_succeeded
+        claim_completion_attempted = True
+        completed = await context.claim_owner.complete(result.completion)
+        claim_completion_succeeded = completed is True
+        return claim_completion_succeeded
 
     def ensure_finalizer(
         *,
@@ -325,6 +399,7 @@ async def iter_streaming_chat_response(
                     push=False,
                     persist_db=None,
                     drain_stream=drain_stream,
+                    settle_claim=False,
                 ),
                 name=f"chat-stream-finalizer:{context.req.message_id or context.req.session_id}",
             )
@@ -342,10 +417,43 @@ async def iter_streaming_chat_response(
                 exc,
             )
             return False
-        return await chat_streaming_result.push_stream_finalization_result(
-            stream_result_context,
-            result,
-        )
+        try:
+            registered = await (
+                chat_streaming_result.register_stream_finalization_delivery(
+                    stream_result_context,
+                    result,
+                )
+            )
+            if context.claim_owner is not None and not claim_completion_attempted:
+                if await complete_claim_once(result) is not True:
+                    raise RuntimeError("断连流式 claim complete 未成功")
+        except BaseException as exc:
+            await _best_effort_fail_claim(context.claim_owner, exc)
+            _safe_log(
+                "error",
+                "[/chat] Stream delivery registration/claim settlement failed: user=%s session=%s error=%r",
+                context.req.user_id,
+                context.req.session_id,
+                exc,
+            )
+            return False
+        try:
+            return await (
+                chat_streaming_result.deliver_registered_stream_finalization(
+                    stream_result_context,
+                    result,
+                    registered,
+                )
+            )
+        except BaseException as exc:
+            _safe_log(
+                "error",
+                "[/chat] Registered stream delivery failed: user=%s session=%s error=%r",
+                context.req.user_id,
+                context.req.session_id,
+                exc,
+            )
+            return False
 
     def ensure_delivery(task: asyncio.Task[Any]) -> asyncio.Task[Any]:
         nonlocal delivery_task
@@ -389,8 +497,6 @@ async def iter_streaming_chat_response(
             yield callbacks.chat_sse_data(callbacks.stream_error_event())
             return
 
-        if finalization_result.pending >= context.evolution_threshold:
-            callbacks.add_background_task(callbacks.evolution_task, context.req.user_id)
         done_payload = callbacks.chat_response_payload(
             context.req,
             status="done",
@@ -402,10 +508,29 @@ async def iter_streaming_chat_response(
             guardrail_status=context.guardrail_status,
         )
         done_event = callbacks.chat_sse_data(done_payload)
-        done_yield_started = True
         yield done_event
+        if context.claim_owner is not None:
+            try:
+                if await complete_claim_once(finalization_result) is not True:
+                    raise RuntimeError("流式 claim complete 未成功")
+            except BaseException as exc:
+                await _best_effort_fail_claim(context.claim_owner, exc)
+                _safe_log(
+                    "error",
+                    "[/chat] Stream claim settlement failed after done delivery: user=%s session=%s error=%r",
+                    context.req.user_id,
+                    context.req.session_id,
+                    exc,
+                )
+                return
+        if finalization_result.pending >= context.evolution_threshold:
+            callbacks.add_background_task(
+                callbacks.evolution_task,
+                context.req.user_id,
+            )
+        done_yield_completed = True
     finally:
-        if not done_yield_started:
+        if not done_yield_completed:
             task = ensure_finalizer(drain_stream=finalizer_task is None)
             ensure_delivery(task)
             _safe_log(
@@ -441,7 +566,10 @@ def _non_streaming_context(
             persist_chat_turn=callbacks.persist_chat_turn,
             expand_chat_transport_answer=callbacks.expand_chat_transport_answer,
             chat_response_payload=callbacks.chat_response_payload,
+            persist_claimed_chat_turn=callbacks.persist_claimed_chat_turn,
         ),
+        claim_key=context.claim_key,
+        request_sha256=context.request_sha256,
     )
 
 
@@ -450,13 +578,16 @@ async def run_non_streaming_chat_response(
     context: ChatRouteRunnerContext,
 ) -> ChatRouteNonStreamingResult:
     try:
-        answer = await context.callbacks.call_bridge_non_streaming(
-            context.bridge,
-            enriched_query=context.enriched_query,
-            user_id=context.req.user_id,
-            session_id=context.req.session_id,
-            sender_name=context.req.sender_name or "",
-            metadata=context.bridge_meta,
+        answer = await _await_with_owner_guard(
+            context.claim_owner,
+            context.callbacks.call_bridge_non_streaming(
+                context.bridge,
+                enriched_query=context.enriched_query,
+                user_id=context.req.user_id,
+                session_id=context.req.session_id,
+                sender_name=context.req.sender_name or "",
+                metadata=context.bridge_meta,
+            ),
         )
     except Exception as exc:
         _safe_log("error", "[/chat] KT Agent failed: %s", exc)
@@ -465,13 +596,14 @@ async def run_non_streaming_chat_response(
                 context.req.user_id,
                 context.empty_assistant_placeholder,
             )
-            context.callbacks.persist_chat_turn(
-                db,
-                context.persist_req,
-                context.empty_assistant_placeholder,
-                context.guardrail_status,
-                timing_meta=context.private_timing_meta,
-            )
+            if context.claim_key is None:
+                context.callbacks.persist_chat_turn(
+                    db,
+                    context.persist_req,
+                    context.empty_assistant_placeholder,
+                    context.guardrail_status,
+                    timing_meta=context.private_timing_meta,
+                )
         except BaseException as persist_exc:
             _safe_log("error", "[/chat] Persist failed on KT error path: %r", persist_exc)
         await _best_effort_fail_claim(context.claim_owner, exc)

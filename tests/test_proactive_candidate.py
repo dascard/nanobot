@@ -112,6 +112,45 @@ async def test_candidate_evaluator_requires_verified_research_result():
 
 
 @pytest.mark.asyncio
+async def test_research_candidate_normalizes_verified_url_variant():
+    from core.proactive_candidate import evaluate_outreach_candidate
+
+    now = datetime(2026, 7, 10, 12, 0, 0)
+    canonical_url = "https://example.test/report"
+
+    async def research_fn(request):
+        return ResearchResult(
+            request_id=request.request_id,
+            trace_id="trace-candidate-canonical",
+            status="draft_ready",
+            draft=(
+                "研究正文 https://example.test/report/?utm_source=search。\n\n"
+                "来源（本次真实检索）：\n"
+                f"1. 来源一\n   {canonical_url}\n"
+                "2. 来源二\n   https://example.test/two"
+            ),
+            sources=(
+                ResearchSource("tool-1", "来源一", canonical_url),
+                ResearchSource("tool-2", "来源二", "https://example.test/two"),
+            ),
+        )
+
+    result = await evaluate_outreach_candidate(
+        user_id="candidate-canonical-url",
+        request_id="candidate-canonical-url",
+        grounding={"recent_messages": []},
+        now=now,
+        judge_fn=lambda *_args, **_kwargs: _judge(now, kind="research"),
+        generator_fn=lambda *_args, **_kwargs: pytest.fail("研究不走普通生成"),
+        research_fn=research_fn,
+    )
+
+    assert result["status"] == "candidate"
+    assert "utm_source" not in result["message"]
+    assert f"研究正文 {canonical_url}。" in result["message"]
+
+
+@pytest.mark.asyncio
 async def test_production_outreach_uses_shared_candidate_evaluator(
     monkeypatch,
     db_session,

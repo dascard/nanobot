@@ -15,6 +15,7 @@ def _research_api():
         ResearchResult,
         ResearchSource,
         extract_verified_web_sources,
+        normalize_research_publication_text,
         run_proactive_research,
     )
 
@@ -25,6 +26,7 @@ def _research_api():
         ResearchResult=ResearchResult,
         ResearchSource=ResearchSource,
         extract_verified_web_sources=extract_verified_web_sources,
+        normalize_research_publication_text=normalize_research_publication_text,
         run_proactive_research=run_proactive_research,
     )
 
@@ -799,6 +801,319 @@ async def test_run_proactive_research_blocks_draft_with_unverified_url():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "raw_url",
+    [
+        "https://example.test/report/?utm_source=search",
+        "https://example.test/report/",
+        "https://example.test:443/report",
+        "HTTPS://EXAMPLE.TEST/report",
+    ],
+    ids=["utm", "trailing-slash", "default-443", "scheme-host-case"],
+)
+async def test_run_proactive_research_rewrites_noncanonical_verified_url(
+    raw_url,
+):
+    api = _research_api()
+    canonical_url = "https://example.test/report"
+    bridge = FakeBridge(f"正文引用 {raw_url}。")
+    calls = [
+        _web_search_tool_call(
+            "tool-1",
+            title="来源一",
+            url=canonical_url,
+        ),
+        _web_search_tool_call(
+            "tool-2",
+            title="来源二",
+            url="https://example.test/two",
+        ),
+    ]
+
+    result = await api.run_proactive_research(
+        _request(api, request_id="research-canonical-url"),
+        bridge_factory=lambda: bridge,
+        source_loader=lambda _trace_id: calls,
+    )
+
+    assert (result.status, result.reason_code) == ("draft_ready", "")
+    assert f"{canonical_url}。" in result.draft
+    assert raw_url not in result.draft
+    assert {
+        match.rstrip(".,;:!?，。；：！？、")
+        for match in re.findall(r"https?://[^\s<>()\[\]{}\"']+", result.draft, re.I)
+    } == {canonical_url, "https://example.test/two"}
+
+
+@pytest.mark.asyncio
+async def test_run_proactive_research_canonicalizes_verified_utm_redirect_url():
+    api = _research_api()
+    canonical_url = "https://example.test/report"
+    raw_url = f"{canonical_url}?utm_redirect=https://evil.example"
+    bridge = FakeBridge(f"正文引用 {raw_url}。")
+    calls = [
+        _web_search_tool_call(
+            "tool-1",
+            title="来源一",
+            url=canonical_url,
+        ),
+        _web_search_tool_call(
+            "tool-2",
+            title="来源二",
+            url="https://example.test/two",
+        ),
+    ]
+
+    result = await api.run_proactive_research(
+        _request(api, request_id="research-utm-redirect"),
+        bridge_factory=lambda: bridge,
+        source_loader=lambda _trace_id: calls,
+    )
+
+    assert (result.status, result.reason_code) == ("draft_ready", "")
+    assert f"{canonical_url}。" in result.draft
+    assert "utm_redirect" not in result.draft
+    assert "evil.example" not in result.draft
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source_url", "raw_url", "canonical_url"),
+    [
+        (
+            "https://example.test/报告",
+            "https://example.test/报告/?utm_source=search",
+            "https://example.test/报告",
+        ),
+        (
+            "https://例子.测试/报告?q=研究",
+            "HTTPS://例子.测试/报告/?q=研究&utm_source=search",
+            "https://xn--fsqu00a.xn--0zwm56d/报告?q=%E7%A0%94%E7%A9%B6",
+        ),
+    ],
+    ids=["unicode-path", "unicode-host-path-semantic-query"],
+)
+async def test_run_proactive_research_canonicalizes_verified_unicode_url(
+    source_url,
+    raw_url,
+    canonical_url,
+):
+    api = _research_api()
+    bridge = FakeBridge(f"正文引用 {raw_url}。")
+    calls = [
+        _web_search_tool_call(
+            "tool-1",
+            title="来源一",
+            url=source_url,
+        ),
+        _web_search_tool_call(
+            "tool-2",
+            title="来源二",
+            url="https://example.test/two",
+        ),
+    ]
+
+    result = await api.run_proactive_research(
+        _request(api, request_id="research-unicode-url"),
+        bridge_factory=lambda: bridge,
+        source_loader=lambda _trace_id: calls,
+    )
+
+    assert (result.status, result.reason_code) == ("draft_ready", "")
+    assert f"{canonical_url}。" in result.draft
+    assert raw_url not in result.draft
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_url",
+    [
+        "https://example.test/report/?utm_source=search后文",
+        "https://example.test/report#details后文",
+        "https://example.test/report/?utm_source=search后文。",
+        "https://example.test/report#details后文。",
+        "https://example.test/report/?utm_source=search后文 后续正文",
+        "https://example.test/report#details后文 后续正文",
+    ],
+    ids=[
+        "tracking-value-no-boundary",
+        "fragment-no-boundary",
+        "tracking-value-chinese-period",
+        "fragment-chinese-period",
+        "tracking-value-space-and-body",
+        "fragment-space-and-body",
+    ],
+)
+async def test_run_proactive_research_blocks_ambiguous_discarded_cjk_url(
+    raw_url,
+):
+    api = _research_api()
+    bridge = FakeBridge(f"正文引用 {raw_url}")
+    calls = [
+        _web_search_tool_call(
+            "tool-1",
+            title="来源一",
+            url="https://example.test/report",
+        ),
+        _web_search_tool_call(
+            "tool-2",
+            title="来源二",
+            url="https://example.test/two",
+        ),
+    ]
+
+    result = await api.run_proactive_research(
+        _request(api, request_id="research-ambiguous-discarded-cjk"),
+        bridge_factory=lambda: bridge,
+        source_loader=lambda _trace_id: calls,
+    )
+
+    assert (result.status, result.reason_code) == ("blocked", "unverified_url")
+    assert result.draft == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "dangerous_suffix",
+    [
+        "，javascript:alert(1)",
+        "）mailto:attacker@example.com",
+        "】data:text/html,payload",
+        "。ftp://evil.example/payload",
+    ],
+    ids=["javascript", "mailto", "data", "ftp"],
+)
+async def test_run_proactive_research_blocks_dangerous_scheme_after_url_delimiter(
+    dangerous_suffix,
+):
+    api = _research_api()
+    bridge = FakeBridge(f"正文引用 https://example.test/one{dangerous_suffix}")
+    calls = [
+        _web_search_tool_call(
+            "tool-1",
+            title="来源一",
+            url="https://example.test/one",
+        ),
+        _web_search_tool_call(
+            "tool-2",
+            title="来源二",
+            url="https://example.test/two",
+        ),
+    ]
+
+    result = await api.run_proactive_research(
+        _request(api, request_id="research-dangerous-scheme-delimiter"),
+        bridge_factory=lambda: bridge,
+        source_loader=lambda _trace_id: calls,
+    )
+
+    assert (result.status, result.reason_code) == ("blocked", "unverified_url")
+    assert result.draft == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw_url",
+    [
+        "https://example.test/report?utm_source=%E5%90%8E%E6%96%87",
+        "https://example.test/report?utm_source=search%E5%90%8E%E6%96%87",
+        "https://example.test/report#%E5%90%8E%E6%96%87",
+        "https://example.test/report?utm_source=%FF",
+        "https://example.test/report#%ZZ",
+    ],
+    ids=[
+        "tracking-encoded-cjk",
+        "tracking-mixed-ascii-cjk",
+        "fragment-encoded-cjk",
+        "tracking-invalid-utf8",
+        "fragment-malformed-percent",
+    ],
+)
+async def test_run_proactive_research_blocks_encoded_discarded_url_text(
+    raw_url,
+):
+    api = _research_api()
+    bridge = FakeBridge(f"正文引用 {raw_url}")
+    calls = [
+        _web_search_tool_call(
+            "tool-1",
+            title="来源一",
+            url="https://example.test/report",
+        ),
+        _web_search_tool_call(
+            "tool-2",
+            title="来源二",
+            url="https://example.test/two",
+        ),
+    ]
+
+    result = await api.run_proactive_research(
+        _request(api, request_id="research-encoded-discarded-url-text"),
+        bridge_factory=lambda: bridge,
+        source_loader=lambda _trace_id: calls,
+    )
+
+    assert (result.status, result.reason_code) == ("blocked", "unverified_url")
+    assert result.draft == ""
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "结论见（https://example.test/report/?utm_source=search）；后文必须保留。",
+            "结论见（https://example.test/report）；后文必须保留。",
+        ),
+        (
+            "结论见“https://example.test/report/?utm_source=search”，后文必须保留。",
+            "结论见“https://example.test/report”，后文必须保留。",
+        ),
+        (
+            "结论见【https://example.test/report/?utm_source=search】，后文必须保留。",
+            "结论见【https://example.test/report】，后文必须保留。",
+        ),
+        (
+            "结论见［https://example.test/report/?utm_source=search］，后文必须保留。",
+            "结论见［https://example.test/report］，后文必须保留。",
+        ),
+        (
+            "结论见 https://example.test/report#details，后文必须保留。",
+            "结论见 https://example.test/report，后文必须保留。",
+        ),
+        (
+            "结论见[报告](https://example.test/report/?utm_source=search)，后文必须保留。",
+            "结论见[报告](https://example.test/report)，后文必须保留。",
+        ),
+        (
+            "结论见 https://example.test/report/?utm_source=search后文",
+            "结论见 https://example.test/report/?utm_source=search后文",
+        ),
+    ],
+    ids=[
+        "utm-fullwidth-parenthesis",
+        "utm-chinese-quote",
+        "utm-chinese-bracket",
+        "utm-fullwidth-square-bracket",
+        "fragment-chinese-punctuation",
+        "markdown-destination-utm",
+        "ambiguous-unbounded-cjk",
+    ],
+)
+def test_normalize_research_publication_url_boundary_preserves_full_text(
+    text,
+    expected,
+):
+    api = _research_api()
+
+    normalized = api.normalize_research_publication_text(
+        text,
+        [{"url": "https://example.test/report"}],
+    )
+
+    assert normalized == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "unverified_link",
     [
         "//fabricated.example/report",
@@ -1452,12 +1767,9 @@ async def test_server_source_title_cannot_inject_cq_control_syntax():
         "mailto:attacker@example.com",
         "tel:+8613800138000",
         "magnet:?xt=urn:btih:deadbeef",
-        "https://example.test/one#unverified-fragment",
-        "https://example.test/one?utm_redirect=https%3A%2F%2Fevil.example",
-        "https://example.test:443/one",
     ],
 )
-async def test_run_proactive_research_rejects_noncanonical_or_unsupported_raw_url(
+async def test_run_proactive_research_rejects_unsupported_raw_url_scheme(
     unsafe_url,
 ):
     api = _research_api()

@@ -53,6 +53,7 @@ from core.sqlite_retry import run_sqlite_locked_retry
 ACTIVE_HOURS_MIN_SAMPLES = 5
 DEFAULT_EVALUATION_LEASE_SECONDS = 900
 DEFAULT_SENDING_AMBIGUITY_MINUTES = 30
+DEFAULT_AMBIGUOUS_HOLD_MIN = 120
 FORCED_FALLBACK_MESSAGE = (
     "突然想起你了。最近过得怎么样？有空的话，和我说说这几天吧。"
 )
@@ -1095,11 +1096,19 @@ async def deliver_outreach_once(
             }
         research_payload = grounding.get("research")
         if isinstance(research_payload, dict):
-            from core.proactive_research import validate_research_publication_text
+            from core.proactive_research import (
+                normalize_research_publication_text,
+                validate_research_publication_text,
+            )
 
+            research_sources = list(research_payload.get("sources") or [])
+            cleaned_message = normalize_research_publication_text(
+                cleaned_message,
+                research_sources,
+            )
             publication_error = validate_research_publication_text(
                 cleaned_message,
-                list(research_payload.get("sources") or []),
+                research_sources,
             )
             if publication_error:
                 return {
@@ -1792,6 +1801,7 @@ async def _run_outreach_once_acquired(
     min_interval_min: int = DEFAULT_MIN_INTERVAL_MIN,
     max_check_interval_min: int = DEFAULT_MAX_CHECK_INTERVAL_MIN,
     max_silence_min: int = DEFAULT_MAX_SILENCE_MIN,
+    ambiguous_hold_min: int = DEFAULT_AMBIGUOUS_HOLD_MIN,
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
@@ -1833,7 +1843,7 @@ async def _run_outreach_once_acquired(
             and (clear_at is None or latest_row.created_at > clear_at)
         ):
             hold_until = latest_row.created_at + timedelta(
-                minutes=max(0, int(max_silence_min))
+                minutes=max(0, int(ambiguous_hold_min))
             )
             if current < hold_until:
                 return {
@@ -2284,6 +2294,7 @@ async def run_outreach_once(
     min_interval_min: int = DEFAULT_MIN_INTERVAL_MIN,
     max_check_interval_min: int = DEFAULT_MAX_CHECK_INTERVAL_MIN,
     max_silence_min: int = DEFAULT_MAX_SILENCE_MIN,
+    ambiguous_hold_min: int = DEFAULT_AMBIGUOUS_HOLD_MIN,
     judge_fn: Callable[..., dict[str, Any]] | None = None,
     generator_fn: Callable[..., str] | None = None,
     research_fn: Callable[..., Any] | None = None,
@@ -2317,6 +2328,7 @@ async def run_outreach_once(
                 min_interval_min=min_interval_min,
                 max_check_interval_min=max_check_interval_min,
                 max_silence_min=max_silence_min,
+                ambiguous_hold_min=ambiguous_hold_min,
                 judge_fn=judge_fn,
                 generator_fn=generator_fn,
                 research_fn=research_fn,
@@ -2388,6 +2400,7 @@ async def run_outreach_due_once(
     min_interval_min: int | None = None,
     max_check_interval_min: int | None = None,
     max_silence_min: int | None = None,
+    ambiguous_hold_min: int | None = None,
     surge_min_prob: float | None = None,
     surge_max_prob: float | None = None,
     random_fn: Callable[[], float] | None = None,
@@ -2454,6 +2467,11 @@ async def run_outreach_due_once(
         max_silence_min=max_silence_min
         if max_silence_min is not None
         else effective_max_silence_min,
+        ambiguous_hold_min=(
+            ambiguous_hold_min
+            if ambiguous_hold_min is not None
+            else DEFAULT_AMBIGUOUS_HOLD_MIN
+        ),
     )
 
 
@@ -2486,6 +2504,10 @@ def proactive_outreach_scheduler(stop_event: threading.Event) -> None:
                     max_silence_min=settings.get_int(
                         "proactive_outreach.max_silence_min",
                         DEFAULT_MAX_SILENCE_MIN,
+                    ),
+                    ambiguous_hold_min=settings.get_int(
+                        "proactive_outreach.ambiguous_hold_min",
+                        DEFAULT_AMBIGUOUS_HOLD_MIN,
                     ),
                     surge_min_prob=settings.get_float(
                         "proactive_outreach.surge_min_prob",

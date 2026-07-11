@@ -55,6 +55,7 @@ from api import (
     chat_push_envelope,
     chat_request_contract,
     chat_response_contract,
+    chat_recovery,
     chat_route_runner,
     chat_runtime_facade,
     chat_runtime_route_context,
@@ -378,6 +379,29 @@ def _build_chat_push_envelope(
     return chat_push_envelope.build_chat_push_envelope(req, **kwargs)
 
 
+def _completed_chat_route_response(
+    req: ChatProxyRequest,
+    completed_response: Any,
+) -> dict[str, Any] | StreamingResponse:
+    answer = completed_response.reply
+    if completed_response.outcome == "respond":
+        try:
+            answer = _expand_chat_transport_answer(completed_response.reply)
+        except Exception:
+            answer = completed_response.reply
+    payload = chat_response_contract.completed_chat_response_payload(
+        req,
+        completed_response,
+        answer_override=answer,
+    )
+    if req.stream and completed_response.outcome == "respond":
+        return StreamingResponse(
+            iter((_chat_sse_data(payload),)),
+            media_type="text/event-stream",
+        )
+    return payload
+
+
 def _is_guardrail_superuser(user_id: str) -> bool:
     admin_user_id = str(ADMIN_USER_ID or "").strip()
     return bool(admin_user_id) and str(user_id or "").strip() == admin_user_id
@@ -463,17 +487,7 @@ def _persist_chat_turn(
     """Persist a chat turn to both ChatLog (evolution) and ConversationTurn (context)."""
     return chat_persistence.persist_chat_turn(
         db,
-        chat_persistence.ChatTurnPersistenceInput(
-            user_id=req.user_id,
-            session_id=req.session_id,
-            query=req.query,
-            files=req.files,
-            sender_name=req.sender_name,
-            session_name=req.session_name,
-            message_id=req.message_id,
-            source_message_ids=req.source_message_ids,
-            client_meta=req.client_meta,
-        ),
+        _chat_persistence_input(req),
         answer,
         guardrail_status,
         assistant_meta=assistant_meta,
@@ -482,7 +496,42 @@ def _persist_chat_turn(
     )
 
 
-def _chat_pre_bridge_route_callbacks(db: Session) -> chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks:
+def _chat_persistence_input(req: ChatProxyRequest) -> chat_persistence.ChatTurnPersistenceInput:
+    return chat_persistence.ChatTurnPersistenceInput(
+        user_id=req.user_id,
+        session_id=req.session_id,
+        query=req.query,
+        files=req.files,
+        sender_name=req.sender_name,
+        session_name=req.session_name,
+        message_id=req.message_id,
+        source_message_ids=req.source_message_ids,
+        client_meta=req.client_meta,
+    )
+
+
+def _persist_claimed_chat_turn(
+    db: Session,
+    req: ChatProxyRequest,
+    answer: str,
+    guardrail_status: str | None = None,
+    **kwargs: Any,
+) -> chat_persistence.ClaimedChatTurnPersistenceResult:
+    return chat_persistence.persist_claimed_chat_turn(
+        db,
+        _chat_persistence_input(req),
+        answer,
+        guardrail_status,
+        **kwargs,
+    )
+
+
+def _chat_pre_bridge_route_callbacks(
+    db: Session,
+    *,
+    claim_key: Any | None = None,
+    request_sha256: str = "",
+) -> chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks:
     def persist_chat_turn(
         req: ChatProxyRequest,
         answer: str,
@@ -491,19 +540,63 @@ def _chat_pre_bridge_route_callbacks(db: Session) -> chat_pre_bridge_route_resul
     ) -> int:
         return _persist_chat_turn(db, req, answer, guardrail_status=guardrail_status, **kwargs)
 
+    def persist_claimed_response(
+        req: ChatProxyRequest,
+        completion: Any,
+        *,
+        persist_answer: str | None,
+        guardrail_status: str | None,
+        timing_meta: dict[str, Any] | None,
+    ) -> Any:
+        if claim_key is None or not request_sha256:
+            raise RuntimeError("claimed pre-bridge 持久化缺少 claim identity")
+        if persist_answer is None:
+            return chat_persistence.persist_private_claim_completion(
+                db,
+                _chat_persistence_input(req),
+                key=claim_key,
+                request_sha256=request_sha256,
+                completion=completion,
+            )
+        result = _persist_claimed_chat_turn(
+            db,
+            req,
+            persist_answer,
+            guardrail_status,
+            key=claim_key,
+            request_sha256=request_sha256,
+            completion=completion,
+            timing_meta=timing_meta,
+        )
+        return result.completion
+
     return chat_pre_bridge_route_result.ChatPreBridgeRouteCallbacks(
         clone_chat_request=_clone_chat_request,
         persist_chat_turn=persist_chat_turn,
         chat_response_payload=_chat_response_payload,
         finalize_private_buffer=_finalize_private_buffer,
+        persist_claimed_response=(
+            persist_claimed_response if claim_key is not None else None
+        ),
     )
 
 
-async def _resolve_pre_bridge_route_result(db: Session, req: ChatProxyRequest, pre_bridge: Any) -> Any:
+async def _resolve_pre_bridge_route_result(
+    db: Session,
+    req: ChatProxyRequest,
+    pre_bridge: Any,
+    *,
+    claim_key: Any | None = None,
+    request_sha256: str = "",
+) -> Any:
     return await chat_pre_bridge_route_result.resolve_pre_bridge_route_result(
         req,
         pre_bridge,
-        callbacks=_chat_pre_bridge_route_callbacks(db),
+        callbacks=_chat_pre_bridge_route_callbacks(
+            db,
+            claim_key=claim_key,
+            request_sha256=request_sha256,
+        ),
     )
 
 
@@ -571,6 +664,7 @@ def _chat_route_runner_callbacks(
         finalize_non_streaming_chat_result=chat_non_streaming_result.finalize_non_streaming_chat_result,
         add_background_task=background_tasks.add_task,
         evolution_task=evolution_task,
+        persist_claimed_chat_turn=_persist_claimed_chat_turn,
     )
 
 
@@ -586,6 +680,8 @@ def _chat_route_runner_context(
     private_timing_meta: dict[str, Any] | None,
     background_tasks: BackgroundTasks,
     claim_owner: InboundClaimOwner | None = None,
+    claim_key: Any | None = None,
+    request_sha256: str = "",
 ) -> chat_route_runner.ChatRouteRunnerContext:
     return chat_route_runner.ChatRouteRunnerContext(
         req=req,
@@ -602,6 +698,8 @@ def _chat_route_runner_context(
         evolution_threshold=EVOLUTION_THRESHOLD,
         callbacks=_chat_route_runner_callbacks(background_tasks),
         claim_owner=claim_owner,
+        claim_key=claim_key,
+        request_sha256=request_sha256,
     )
 
 
@@ -662,25 +760,11 @@ async def proxy_chat(
         completed_response = claim_decision.response
         if completed_response is None:
             raise RuntimeError("completed claim 缺少完成结果")
-        replay_answer = completed_response.reply
-        if completed_response.outcome == "respond":
-            try:
-                replay_answer = _expand_chat_transport_answer(completed_response.reply)
-            except Exception:
-                replay_answer = completed_response.reply
-        replay_payload = chat_response_contract.completed_chat_response_payload(
-            req,
-            completed_response,
-            answer_override=replay_answer,
-        )
-        if req.stream and completed_response.outcome == "respond":
-            return StreamingResponse(
-                iter((_chat_sse_data(replay_payload),)),
-                media_type="text/event-stream",
-            )
-        return replay_payload
+        return _completed_chat_route_response(req, completed_response)
 
     claim_owner = None
+    private_claim_key = None
+    private_request_sha256 = ""
     try:
         if claim_decision.kind == ClaimDecisionKind.ACQUIRED:
             if claim_decision.handle is None:
@@ -689,6 +773,51 @@ async def proxy_chat(
 
         if claim_owner is not None:
             await claim_owner.start()
+            if claim_key is not None and claim_key.chat_type == "private":
+                private_claim_key = claim_key
+                private_business_input = chat_recovery.build_private_business_input(
+                    req,
+                    key=private_claim_key,
+                )
+                private_request_sha256 = (
+                    chat_recovery.private_business_input_sha256(
+                        private_business_input
+                    )
+                )
+                chat_persistence.ensure_private_request_journal(
+                    db,
+                    _chat_persistence_input(req),
+                    key=private_claim_key,
+                    request_sha256=private_request_sha256,
+                )
+                handle = claim_decision.handle
+                if handle is None:
+                    raise RuntimeError("acquired claim 缺少 owner handle")
+                if handle.attempt_count > 1:
+                    recovered_completion = (
+                        chat_recovery.load_private_recoverable_completion(
+                            db,
+                            key=private_claim_key,
+                            request_sha256=private_request_sha256,
+                        )
+                    )
+                    if recovered_completion is not None:
+                        release_clean_session_transaction(
+                            db,
+                            label="chat_before_recovery_complete",
+                            logger=logger,
+                        )
+                        completed = await claim_owner.complete(
+                            recovered_completion
+                        )
+                        if completed is not True:
+                            raise RuntimeError(
+                                "私聊恢复 claim complete 未成功"
+                            )
+                        return _completed_chat_route_response(
+                            req,
+                            recovered_completion,
+                        )
 
         _safe_log(
             "info",
@@ -712,21 +841,36 @@ async def proxy_chat(
         # 1.5 检查用户屏蔽规则——命中后只写 ChatLog，不回复
         if _check_user_blocked(db, req.user_id, target_type="private"):
             _safe_log("info", "[/chat] blocked user=%s", req.user_id)
-            db.add(ChatLog(
-                user_id=req.user_id, session_id=req.session_id,
-                role="user",
-                content=_build_chatlog_user_content(req.query, req.files),
-                sender_name=req.sender_name or "",
-                session_name=req.session_name or "",
-                processed=1, message_id=req.message_id or "",
-                meta_json=json.dumps({"blocked": True, "reason": "user_blocked"}, ensure_ascii=False),
-            ))
-            db.commit()
             blocked_completion = chat_response_contract.build_completed_inbound_response(
                 outcome="blocked",
                 reason="user_blocked",
                 guardrail_status="silent",
             )
+            blocked_content = _build_chatlog_user_content(req.query, req.files)
+            if private_claim_key is not None:
+                chat_persistence.persist_private_claim_completion(
+                    db,
+                    _chat_persistence_input(req),
+                    key=private_claim_key,
+                    request_sha256=private_request_sha256,
+                    completion=blocked_completion,
+                    journal_content=blocked_content,
+                    journal_processed=1,
+                )
+            else:
+                db.add(ChatLog(
+                    user_id=req.user_id, session_id=req.session_id,
+                    role="user",
+                    content=blocked_content,
+                    sender_name=req.sender_name or "",
+                    session_name=req.session_name or "",
+                    processed=1, message_id=req.message_id or "",
+                    meta_json=json.dumps(
+                        {"blocked": True, "reason": "user_blocked"},
+                        ensure_ascii=False,
+                    ),
+                ))
+                db.commit()
             blocked_payload = _chat_response_payload(
                 req,
                 status="silent",
@@ -735,7 +879,9 @@ async def proxy_chat(
                 include_answer_chunks=True,
             )
             if claim_owner is not None:
-                await claim_owner.complete(blocked_completion)
+                completed = await claim_owner.complete(blocked_completion)
+                if completed is not True:
+                    raise RuntimeError("blocked claim complete 未成功")
             return blocked_payload
 
         _schedule_image_precache(
@@ -797,12 +943,22 @@ async def proxy_chat(
             is_superuser=is_superuser,
         )
 
-        pre_bridge_route = await _resolve_pre_bridge_route_result(db, req, pre_bridge)
+        pre_bridge_route = await _resolve_pre_bridge_route_result(
+            db,
+            req,
+            pre_bridge,
+            claim_key=private_claim_key,
+            request_sha256=private_request_sha256,
+        )
         if isinstance(pre_bridge_route, chat_pre_bridge_route_result.ChatPreBridgeRouteEarlyResponse):
             if claim_owner is not None:
                 if pre_bridge_route.completion is None:
                     raise RuntimeError("pre-bridge early response 缺少完成结果")
-                await claim_owner.complete(pre_bridge_route.completion)
+                completed = await claim_owner.complete(
+                    pre_bridge_route.completion
+                )
+                if completed is not True:
+                    raise RuntimeError("pre-bridge claim complete 未成功")
             return pre_bridge_route.payload
 
         final_query = pre_bridge_route.final_query
@@ -849,6 +1005,8 @@ async def proxy_chat(
             private_timing_meta=private_timing_meta,
             background_tasks=background_tasks,
             claim_owner=claim_owner,
+            claim_key=private_claim_key,
+            request_sha256=private_request_sha256,
         )
 
         if req.stream:

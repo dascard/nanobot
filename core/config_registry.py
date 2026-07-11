@@ -112,6 +112,16 @@ SETTING_DEFS: dict[str, SettingDef] = {
         min_value=1,
         max_value=43200,
     ),
+    "proactive_outreach.ambiguous_hold_min": SettingDef(
+        key="proactive_outreach.ambiguous_hold_min",
+        env_name="PROACTIVE_OUTREACH_AMBIGUOUS_HOLD_MIN",
+        default=120,
+        value_type="int",
+        category="proactive",
+        description="投递结果不确定后暂停新外呼评估的时间(分钟)",
+        min_value=1,
+        max_value=10080,
+    ),
     "proactive_outreach.surge_min_prob": SettingDef(
         key="proactive_outreach.surge_min_prob",
         env_name="PROACTIVE_OUTREACH_SURGE_MIN_PROB",

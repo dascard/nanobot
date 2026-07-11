@@ -23,7 +23,7 @@ def _request() -> SimpleNamespace:
     )
 
 
-def _callbacks(calls: dict[str, list[Any]]):
+def _callbacks(calls: dict[str, list[Any]], *, claimed: bool = False):
     from api.chat_pre_bridge_route_result import ChatPreBridgeRouteCallbacks
 
     def clone_chat_request(req: Any, **updates: Any) -> Any:
@@ -43,11 +43,31 @@ def _callbacks(calls: dict[str, list[Any]]):
     async def finalize_private_buffer(user_id: str, answer: str | None = None, *, clear_window: bool = True) -> None:
         calls.setdefault("finalize", []).append((user_id, answer, clear_window))
 
+    def persist_claimed_response(
+        req: Any,
+        completion: Any,
+        *,
+        persist_answer: str | None,
+        guardrail_status: str | None,
+        timing_meta: dict[str, Any] | None,
+    ) -> Any:
+        from dataclasses import replace
+
+        calls.setdefault("persist_claimed", []).append((
+            req,
+            completion,
+            persist_answer,
+            guardrail_status,
+            timing_meta,
+        ))
+        return replace(completion, unprocessed_logs=4)
+
     return ChatPreBridgeRouteCallbacks(
         clone_chat_request=clone_chat_request,
         persist_chat_turn=persist_chat_turn,
         chat_response_payload=chat_response_payload,
         finalize_private_buffer=finalize_private_buffer,
+        persist_claimed_response=(persist_claimed_response if claimed else None),
     )
 
 
@@ -168,6 +188,41 @@ async def test_early_return_without_persist_only_builds_payload():
     assert result.payload["payload"]["status"] == "silent"
     assert result.completion.outcome == "silent"
     assert result.completion.reason == "private_buffer_follower"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("persist_answer", "expected_outcome"),
+    [("", "no_reply"), (None, "silent")],
+)
+async def test_claimed_early_return_persists_completion_without_legacy_writer(
+    persist_answer,
+    expected_outcome,
+):
+    from api.chat_pre_bridge_decision import ChatPreBridgeEarlyReturn
+    from api.chat_pre_bridge_route_result import resolve_pre_bridge_route_result
+
+    calls: dict[str, list[Any]] = {}
+    result = await resolve_pre_bridge_route_result(
+        _request(),
+        ChatPreBridgeEarlyReturn(
+            status=expected_outcome,
+            reason="claimed-early",
+            persist_answer=persist_answer,
+            persist_timing_meta={"action": "no_reply"},
+        ),
+        callbacks=_callbacks(calls, claimed=True),
+    )
+
+    assert calls.get("persist") is None
+    assert len(calls["persist_claimed"]) == 1
+    assert calls["persist_claimed"][0][2:] == (
+        persist_answer,
+        None,
+        {"action": "no_reply"},
+    )
+    assert result.completion.outcome == expected_outcome
+    assert result.completion.unprocessed_logs == 4
 
 
 @pytest.mark.asyncio

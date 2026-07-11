@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from api import routes
 from api.routes import ChatProxyRequest
 from core.database import ChatLog, ConversationTurn, SensitiveData
@@ -192,3 +194,227 @@ def test_persist_chat_turn_pending_count_returns_zero_when_evolution_running(db_
     assert pending == 0
     assert db_session.query(ChatLog).filter_by(user_id="u-running").count() == 2
     assert db_session.query(ConversationTurn).filter_by(user_id="u-running").count() == 2
+
+
+def _claimed_persistence_input(message_id: str = "claimed-message"):
+    from api.chat_persistence import ChatTurnPersistenceInput
+
+    return ChatTurnPersistenceInput(
+        user_id="u-claimed",
+        session_id="private_u-claimed",
+        query="需要可恢复的请求",
+        files=["img://claimed"],
+        sender_name="用户",
+        session_name="私聊",
+        message_id=message_id,
+        source_message_ids=["source-claimed"],
+        client_meta={"platform": "qq", "chat_type": "private"},
+    )
+
+
+def _claimed_key(message_id: str = "claimed-message"):
+    from core.inbound_idempotency import InboundClaimKey
+
+    return InboundClaimKey(
+        "qq",
+        "private",
+        "private_u-claimed",
+        message_id,
+    )
+
+
+def _claimed_completion(reply: str = "可恢复回复"):
+    from api.chat_response_contract import build_completed_inbound_response
+
+    return build_completed_inbound_response(
+        outcome="respond",
+        reply=reply,
+        reply_meta={"send_mode": "quote"},
+        reason="answered",
+        source="bridge",
+        guardrail_status="safe",
+    )
+
+
+def test_private_request_journal_is_unique_reusable_and_bypass_safe(db_session):
+    from api.chat_persistence import ensure_private_request_journal
+
+    first = ensure_private_request_journal(
+        db_session,
+        _claimed_persistence_input(),
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+    )
+    second = ensure_private_request_journal(
+        db_session,
+        _claimed_persistence_input(),
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+    )
+    bypass = ensure_private_request_journal(
+        db_session,
+        _claimed_persistence_input(message_id=""),
+        key=None,
+        request_sha256="",
+    )
+
+    assert first is not None
+    assert second is not None
+    assert first.id == second.id
+    assert bypass is None
+    rows = db_session.query(ChatLog).filter_by(
+        session_id="private_u-claimed",
+        role="user",
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].processed == 1
+    assert rows[0].message_id == "claimed-message"
+    assert json.loads(rows[0].meta_json)["kind"] == "private_inbound_request"
+
+
+def test_private_request_journal_rejects_changed_business_fingerprint(db_session):
+    from api.chat_persistence import ensure_private_request_journal
+    from api.chat_recovery import PrivateRequestMismatchError
+
+    ensure_private_request_journal(
+        db_session,
+        _claimed_persistence_input(),
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+    )
+
+    with pytest.raises(PrivateRequestMismatchError):
+        ensure_private_request_journal(
+            db_session,
+            _claimed_persistence_input(),
+            key=_claimed_key(),
+            request_sha256="b" * 64,
+        )
+
+
+def test_persist_claimed_chat_turn_commits_recovery_and_business_rows_atomically(
+    db_session,
+):
+    from api.chat_persistence import (
+        ensure_private_request_journal,
+        persist_claimed_chat_turn,
+    )
+    from api.chat_recovery import load_private_recoverable_completion
+
+    ensure_private_request_journal(
+        db_session,
+        _claimed_persistence_input(),
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+    )
+
+    result = persist_claimed_chat_turn(
+        db_session,
+        _claimed_persistence_input(),
+        "可恢复回复",
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+        completion=_claimed_completion(),
+    )
+
+    assert result.pending == 2
+    assert result.completion.unprocessed_logs == 2
+    assert db_session.query(ChatLog).filter_by(user_id="u-claimed").count() == 2
+    assert db_session.query(ConversationTurn).filter_by(user_id="u-claimed").count() == 2
+    journal = db_session.query(ChatLog).filter_by(
+        user_id="u-claimed",
+        role="user",
+    ).one()
+    assistant = db_session.query(ChatLog).filter_by(
+        user_id="u-claimed",
+        role="assistant",
+    ).one()
+    assert journal.content.startswith("需要可恢复的请求")
+    assert assistant.message_id == "claimed-message"
+    assert load_private_recoverable_completion(
+        db_session,
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+    ) == result.completion
+
+
+def test_persist_claimed_chat_turn_rolls_back_every_success_write_on_failure(
+    db_session,
+    monkeypatch,
+):
+    from api import chat_persistence
+
+    chat_persistence.ensure_private_request_journal(
+        db_session,
+        _claimed_persistence_input(),
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+    )
+
+    def fail_marker(*_args, **_kwargs):
+        raise RuntimeError("marker write failed")
+
+    monkeypatch.setattr(
+        chat_persistence.chat_recovery,
+        "attach_private_completion_recovery",
+        fail_marker,
+    )
+
+    with pytest.raises(RuntimeError, match="marker write failed"):
+        chat_persistence.persist_claimed_chat_turn(
+            db_session,
+            _claimed_persistence_input(),
+            "可恢复回复",
+            key=_claimed_key(),
+            request_sha256="a" * 64,
+            completion=_claimed_completion(),
+        )
+
+    db_session.expire_all()
+    rows = db_session.query(ChatLog).filter_by(user_id="u-claimed").all()
+    assert len(rows) == 1
+    assert rows[0].role == "user"
+    assert "inbound_claim_recovery" not in json.loads(rows[0].meta_json)
+    assert db_session.query(ConversationTurn).filter_by(user_id="u-claimed").count() == 0
+
+
+def test_persist_private_claim_completion_marks_journal_without_fake_turns(db_session):
+    from api.chat_persistence import (
+        ensure_private_request_journal,
+        persist_private_claim_completion,
+    )
+    from api.chat_recovery import load_private_recoverable_completion
+    from api.chat_response_contract import build_completed_inbound_response
+
+    ensure_private_request_journal(
+        db_session,
+        _claimed_persistence_input(),
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+    )
+    completion = build_completed_inbound_response(
+        outcome="no_reply",
+        reason="timing_gate_no_reply",
+    )
+
+    stored = persist_private_claim_completion(
+        db_session,
+        _claimed_persistence_input(),
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+        completion=completion,
+        journal_content="命中静默规则",
+        journal_processed=1,
+    )
+
+    assert stored == completion
+    assert db_session.query(ChatLog).filter_by(user_id="u-claimed").count() == 1
+    assert db_session.query(ConversationTurn).filter_by(user_id="u-claimed").count() == 0
+    journal = db_session.query(ChatLog).filter_by(user_id="u-claimed").one()
+    assert journal.content == "命中静默规则"
+    assert journal.processed == 1
+    assert load_private_recoverable_completion(
+        db_session,
+        key=_claimed_key(),
+        request_sha256="a" * 64,
+    ) == completion

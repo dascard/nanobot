@@ -7,6 +7,7 @@ def test_proactive_outreach_settings_are_registered_as_plain_boolean_switch():
         "proactive_outreach.min_interval_min": (30, "int"),
         "proactive_outreach.max_check_interval_min": (1440, "int"),
         "proactive_outreach.max_silence_min": (2880, "int"),
+        "proactive_outreach.ambiguous_hold_min": (120, "int"),
         "proactive_outreach.surge_min_prob": (0.1, "float"),
         "proactive_outreach.surge_max_prob": (0.6, "float"),
     }
@@ -22,3 +23,8 @@ def test_proactive_outreach_settings_are_registered_as_plain_boolean_switch():
     assert proactive_keys == set(expected)
     assert "proactive_outreach.mode" not in SETTING_DEFS
     assert all("shadow" not in key and "dry" not in key for key in proactive_keys)
+
+    ambiguous_hold = SETTING_DEFS["proactive_outreach.ambiguous_hold_min"]
+    assert ambiguous_hold.env_name == "PROACTIVE_OUTREACH_AMBIGUOUS_HOLD_MIN"
+    assert ambiguous_hold.min_value == 1
+    assert ambiguous_hold.max_value == 10080

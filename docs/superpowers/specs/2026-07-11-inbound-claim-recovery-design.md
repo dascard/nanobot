@@ -61,10 +61,11 @@ SQLAlchemy 和 SQLite backoff 位于事件循环线程；failed takeover 可能�
 ## 非目标
 
 - 不新增数据库表、列、唯一约束或迁移。
-- 不引入 outbox、步骤账本、Redis、消息队列、分布式锁或微服务。
+- 不为本文件描述的群聊恢复引入 outbox、步骤账本、Redis、消息队列、分布式锁或微服务。
 - 不承诺当前单实例进程之外的水平扩展能力。
 - 不为不支持 idempotency key 的下游工具提供数学意义上的 exactly-once。
-- 不修改 `/chat` 已完成的幂等协议语义。
+- 本阶段不修改 `/chat`；后续私聊恢复与投递整改见
+  `2026-07-11-private-chat-recovery-and-delivery-design.md`。
 - 不提前执行 Stage 2 Task 4 的 `api/task_routes.py` 和 Admin Persona Session 整改。
 - 不修改 `enriched_query`、历史注入、conversation 结构、工具输出契约或 Prompt Runtime 模板。
 - 不修改 `bootstrap/network_check.py`，也不改变完整 Admin Token 的启动日志行为。
@@ -99,7 +100,7 @@ SQLAlchemy 和 SQLite backoff 位于事件循环线程；failed takeover 可能�
 代价：`meta_json` 需要严格 codec；旧数据没有恢复记录；查询后需要在 Python 中验证 marker、
 claim identity 和请求指纹。
 
-### 方案 B：新增 outbox 或步骤账本表（不采用）
+### 方案 B：为群聊恢复新增 outbox 或步骤账本表（不采用）
 
 独立 outbox 可以更完整地记录每个不可逆步骤，也更适合多进程消费。但它会引入新表、迁移、
 dispatcher、清理与重放状态机，超出当前单实例可信内网部署的需求和已批准范围。
@@ -602,5 +603,15 @@ canonical idempotency key，则取消、checkpoint 和 fencing 无法证明该�
 8. `GroupIngressResult` 穷尽约束和 preserving-primary 异常链有单元测试。
 9. 定向 Runtime、group ingress、response contract、claim lifecycle 与 API 回归全部通过。
 10. 最终执行清除代理后的 `python -m pytest tests/ -v`，结果为 0 failures。
-11. `bootstrap/network_check.py` 保持零 diff，且未新增表、迁移、outbox、Redis 或消息队列。
+11. `bootstrap/network_check.py` 保持零 diff；本群聊恢复变更未新增表、迁移、outbox、Redis 或消息队列。
+
+## 后续范围演进
+
+本文件的方案比较和非目标只约束 `/group/message` 的业务恢复提交。后续私聊审查确认 `/chat`
+存在独立的“流式断连后 claim 已完成、QQ push 结果丢失”问题，因此新增
+`chat_delivery_outbox` 仅承载私聊断连补投递。该表不替代群聊 `ChatLog.meta_json` recovery marker，
+也不改变本文件的群聊 gate transaction、request fingerprint 或恢复裁决。
+
+QQbot 端未增加 idempotency key，私聊 outbox 提供的是持久化 at-least-once 重试；网络结果不确定
+时仍可能重复投递。完整边界、迁移和 worker 设计以私聊后续规格为准。
 12. 用户审阅本设计并确认后，才进入 `writing-plans` 和 TDD 实现阶段；本设计阶段不提交代码。

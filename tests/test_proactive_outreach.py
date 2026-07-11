@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime, timedelta
 
 import pytest
@@ -1203,3 +1204,58 @@ async def test_max_silence_delivers_existing_candidate_once_without_forced_follo
     ]
     assert stored.status == "sent"
     assert stored.created_at == now
+
+
+def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
+    from core import proactive_outreach
+
+    stop_event = threading.Event()
+    calls = []
+
+    async def fake_due_once(user_id, **kwargs):
+        calls.append((user_id, kwargs))
+        stop_event.set()
+        return {"status": "pending"}
+
+    int_values = {
+        "proactive_outreach.fallback_interval_min": 120,
+        "proactive_outreach.min_interval_min": 30,
+        "proactive_outreach.max_check_interval_min": 1440,
+        "proactive_outreach.max_silence_min": 2880,
+        "proactive_outreach.ambiguous_hold_min": 75,
+    }
+    monkeypatch.setattr(
+        proactive_outreach.settings,
+        "get_bool",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        proactive_outreach.settings,
+        "get_int",
+        lambda key, default: int_values.get(key, default),
+    )
+    monkeypatch.setattr(
+        proactive_outreach.settings,
+        "get_float",
+        lambda _key, default: default,
+    )
+    monkeypatch.setattr(
+        proactive_outreach,
+        "_configured_super_user_ids",
+        lambda: {"scheduler-user"},
+    )
+    monkeypatch.setattr(proactive_outreach, "run_outreach_due_once", fake_due_once)
+
+    proactive_outreach.proactive_outreach_scheduler(stop_event)
+
+    assert calls == [(
+        "scheduler-user",
+        {
+            "min_interval_min": 30,
+            "max_check_interval_min": 1440,
+            "max_silence_min": 2880,
+            "ambiguous_hold_min": 75,
+            "surge_min_prob": proactive_outreach.DEFAULT_SURGE_MIN_PROB,
+            "surge_max_prob": proactive_outreach.DEFAULT_SURGE_MAX_PROB,
+        },
+    )]

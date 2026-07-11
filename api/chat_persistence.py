@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from api import chat_content_helpers
+from api import chat_content_helpers, chat_recovery
 from core.database import ChatLog, ConversationTurn, SensitiveData
+from core.inbound_idempotency import CompletedInboundResponse, InboundClaimKey
 from core.sqlite_retry import run_sqlite_locked_retry
 
 logger = logging.getLogger("nanobot.api")
@@ -29,6 +30,27 @@ class ChatTurnPersistenceInput:
     client_meta: dict | None = None
 
 
+@dataclass(frozen=True)
+class ClaimedChatTurnPersistenceResult:
+    pending: int
+    completion: CompletedInboundResponse
+
+
+@dataclass(frozen=True)
+class _PreparedChatTurn:
+    is_silent: bool
+    processed_val: int
+    assistant_processed_val: int
+    archive_user_content: str
+    archive_display_content: str
+    context_display_content: str
+    source_ids_json: str
+    user_meta: dict[str, Any]
+    assistant_turn_meta: dict[str, Any]
+    assistant_chat_meta: dict[str, Any]
+    turn_answer: str
+
+
 def safe_meta(meta_json: str) -> dict:
     try:
         data = json.loads(meta_json or "{}")
@@ -37,10 +59,15 @@ def safe_meta(meta_json: str) -> dict:
         return {}
 
 
-def _source_message_ids_json(req: ChatTurnPersistenceInput) -> str:
+def _source_message_ids_json(
+    req: ChatTurnPersistenceInput,
+    *,
+    message_id: str | None = None,
+) -> str:
     source_ids = list(req.source_message_ids or [])
-    if req.message_id and req.message_id not in source_ids:
-        source_ids.insert(0, req.message_id)
+    canonical_message_id = req.message_id if message_id is None else message_id
+    if canonical_message_id and canonical_message_id not in source_ids:
+        source_ids.insert(0, canonical_message_id)
     return json.dumps(source_ids, ensure_ascii=False) if source_ids else "[]"
 
 
@@ -59,37 +86,49 @@ def _turn_answer(answer: str, guardrail_status: str | None) -> tuple[str, str]:
     return turn_answer, turn_answer_kind
 
 
-def persist_chat_turn(
-    db: Session,
+def _prepare_chat_turn(
     req: ChatTurnPersistenceInput,
     answer: str,
-    guardrail_status: str | None = None,
+    guardrail_status: str | None,
     *,
-    assistant_meta: dict | None = None,
-    assistant_processed: int | None = None,
-    timing_meta: dict | None = None,
-) -> int:
-    """Persist a chat turn to both ChatLog (evolution) and ConversationTurn (context)."""
+    assistant_meta: dict | None,
+    assistant_processed: int | None,
+    timing_meta: dict | None,
+    message_id: str | None = None,
+    user_kind: str = "chat",
+) -> _PreparedChatTurn:
     is_injection = guardrail_status == "injection"
     is_silent = guardrail_status == "silent"
     processed_val = -1 if is_injection else 0
-    assistant_processed_val = processed_val if assistant_processed is None else int(assistant_processed)
-    archive_user_content = chat_content_helpers.build_chatlog_user_content(req.query, req.files)
-    context_user_content = chat_content_helpers.build_conversation_user_content(req.query, req.files)
-
+    assistant_processed_val = (
+        processed_val if assistant_processed is None else int(assistant_processed)
+    )
+    archive_user_content = chat_content_helpers.build_chatlog_user_content(
+        req.query,
+        req.files,
+    )
+    context_user_content = chat_content_helpers.build_conversation_user_content(
+        req.query,
+        req.files,
+    )
     if is_silent:
         archive_display_content = "[敏感数据]"
         context_display_content = "[敏感数据]"
     else:
-        archive_display_content = "[安全提示: 检测到注入已被拦截]" if is_injection else archive_user_content
-        context_display_content = "[安全提示: 检测到注入已被拦截]" if is_injection else context_user_content
+        archive_display_content = (
+            "[安全提示: 检测到注入已被拦截]"
+            if is_injection
+            else archive_user_content
+        )
+        context_display_content = (
+            "[安全提示: 检测到注入已被拦截]"
+            if is_injection
+            else context_user_content
+        )
 
-    source_ids_json = _source_message_ids_json(req)
-    meta = json.dumps(req.client_meta or {}, ensure_ascii=False)
     turn_answer, turn_answer_kind = _turn_answer(answer, guardrail_status)
-
-    user_meta = safe_meta(meta)
-    user_meta["kind"] = "chat"
+    user_meta = safe_meta(json.dumps(req.client_meta or {}, ensure_ascii=False))
+    user_meta["kind"] = user_kind
     if timing_meta:
         user_meta["timing_gate"] = timing_meta
 
@@ -103,12 +142,340 @@ def persist_chat_turn(
     if timing_meta:
         assistant_chat_meta["timing_gate"] = timing_meta
 
+    return _PreparedChatTurn(
+        is_silent=is_silent,
+        processed_val=processed_val,
+        assistant_processed_val=assistant_processed_val,
+        archive_user_content=archive_user_content,
+        archive_display_content=archive_display_content,
+        context_display_content=context_display_content,
+        source_ids_json=_source_message_ids_json(req, message_id=message_id),
+        user_meta=user_meta,
+        assistant_turn_meta=assistant_turn_meta,
+        assistant_chat_meta=assistant_chat_meta,
+        turn_answer=turn_answer,
+    )
+
+
+def _pending_chat_log_count(db: Session, user_id: str) -> int:
+    from core.evolution import _evolution_running
+
+    if user_id in _evolution_running:
+        return 0
+    return db.query(ChatLog).filter(
+        ChatLog.user_id == user_id,
+        ChatLog.processed == 0,
+    ).count()
+
+
+def ensure_private_request_journal(
+    db: Session,
+    req: ChatTurnPersistenceInput,
+    *,
+    key: InboundClaimKey | None,
+    request_sha256: str,
+) -> ChatLog | None:
+    """为非空私聊 claim 建立或验证唯一 request journal。"""
+
+    if key is None:
+        return None
+    if type(key) is not InboundClaimKey or key.chat_type != "private":
+        raise TypeError("key 必须是 private InboundClaimKey 或 null")
+
+    def operation() -> int:
+        loaded = chat_recovery.load_private_request_journal(
+            db,
+            key=key,
+            request_sha256=request_sha256,
+        )
+        if loaded is not None:
+            row_id = int(loaded[0].id)
+            db.commit()
+            return row_id
+
+        meta = chat_recovery.attach_private_request_fingerprint(
+            {"kind": chat_recovery.REQUEST_JOURNAL_KIND},
+            request_sha256,
+        )
+        row = ChatLog(
+            user_id=req.user_id,
+            session_id=key.session_id,
+            role="user",
+            content="",
+            sender_name=req.sender_name or "",
+            session_name=req.session_name or "",
+            processed=1,
+            message_id=key.message_id,
+            source_message_ids_json=_source_message_ids_json(
+                req,
+                message_id=key.message_id,
+            ),
+            meta_json=json.dumps(meta, ensure_ascii=False),
+        )
+        db.add(row)
+        db.commit()
+        return int(row.id)
+
+    try:
+        row_id = run_sqlite_locked_retry(
+            operation,
+            rollback=db.rollback,
+            label="private_request_journal",
+            logger=logger,
+        )
+    except BaseException:
+        db.rollback()
+        raise
+    row = db.get(ChatLog, row_id)
+    if row is None:
+        raise chat_recovery.PrivateRecoveryCorruptError(
+            "private request journal 提交后不可见"
+        )
+    return row
+
+
+def persist_claimed_chat_turn(
+    db: Session,
+    req: ChatTurnPersistenceInput,
+    answer: str,
+    guardrail_status: str | None = None,
+    *,
+    key: InboundClaimKey,
+    request_sha256: str,
+    completion: CompletedInboundResponse,
+    assistant_meta: dict | None = None,
+    assistant_processed: int | None = None,
+    timing_meta: dict | None = None,
+) -> ClaimedChatTurnPersistenceResult:
+    """原子提交私聊业务行与 recoverable completion。"""
+
+    if type(key) is not InboundClaimKey or key.chat_type != "private":
+        raise TypeError("key 必须是 private InboundClaimKey")
+    if type(completion) is not CompletedInboundResponse:
+        raise TypeError("completion 必须是 CompletedInboundResponse")
+    if completion.outcome == "respond" and completion.reply != answer:
+        raise ValueError("respond completion 必须与 answer 一致")
+
+    prepared = _prepare_chat_turn(
+        req,
+        answer,
+        guardrail_status,
+        assistant_meta=assistant_meta,
+        assistant_processed=assistant_processed,
+        timing_meta=timing_meta,
+        message_id=key.message_id,
+        user_kind=chat_recovery.REQUEST_JOURNAL_KIND,
+    )
+
+    def operation() -> ClaimedChatTurnPersistenceResult:
+        loaded = chat_recovery.load_private_request_journal(
+            db,
+            key=key,
+            request_sha256=request_sha256,
+        )
+        if loaded is None:
+            raise chat_recovery.PrivateRecoveryCorruptError(
+                "claimed chat turn 缺少 private request journal"
+            )
+        journal, journal_meta = loaded
+
+        if prepared.is_silent:
+            db.add(SensitiveData(
+                user_id=req.user_id,
+                session_id=key.session_id,
+                content=prepared.archive_user_content,
+                guardrail_status="silent",
+                sender_name=req.sender_name or "",
+                session_name=req.session_name or "",
+            ))
+
+        journal.user_id = req.user_id
+        journal.session_id = key.session_id
+        journal.content = prepared.archive_display_content
+        journal.sender_name = req.sender_name or ""
+        journal.session_name = req.session_name or ""
+        journal.processed = prepared.processed_val
+        journal.message_id = key.message_id
+        journal.source_message_ids_json = prepared.source_ids_json
+
+        assistant_chat_meta = dict(prepared.assistant_chat_meta)
+        assistant_chat_meta.setdefault(
+            "kind",
+            prepared.assistant_turn_meta.get("kind", "chat"),
+        )
+        db.add(ChatLog(
+            user_id=req.user_id,
+            session_id=key.session_id,
+            role="assistant",
+            content=answer,
+            sender_name="nanobot",
+            session_name=req.session_name or "",
+            processed=prepared.assistant_processed_val,
+            message_id=key.message_id,
+            meta_json=json.dumps(assistant_chat_meta, ensure_ascii=False),
+        ))
+        db.add(ConversationTurn(
+            user_id=req.user_id,
+            session_id=key.session_id,
+            role="user",
+            content=prepared.context_display_content,
+            source_message_ids_json=prepared.source_ids_json,
+            meta_json=json.dumps(prepared.user_meta, ensure_ascii=False),
+        ))
+        db.add(ConversationTurn(
+            user_id=req.user_id,
+            session_id=key.session_id,
+            role="assistant",
+            content=prepared.turn_answer,
+            meta_json=json.dumps(prepared.assistant_turn_meta, ensure_ascii=False),
+        ))
+        db.flush()
+        pending = _pending_chat_log_count(db, req.user_id)
+        final_completion = replace(completion, unprocessed_logs=pending)
+        completed_journal_meta = dict(prepared.user_meta)
+        completed_journal_meta[chat_recovery.REQUEST_META_FIELD] = dict(
+            journal_meta[chat_recovery.REQUEST_META_FIELD]
+        )
+        journal.meta_json = json.dumps(
+            chat_recovery.attach_private_completion_recovery(
+                completed_journal_meta,
+                key=key,
+                request_sha256=request_sha256,
+                completion=final_completion,
+            ),
+            ensure_ascii=False,
+        )
+        db.commit()
+        return ClaimedChatTurnPersistenceResult(
+            pending=pending,
+            completion=final_completion,
+        )
+
+    try:
+        return run_sqlite_locked_retry(
+            operation,
+            rollback=db.rollback,
+            label="claimed_chat_turn_persist",
+            logger=logger,
+        )
+    except BaseException:
+        db.rollback()
+        raise
+
+
+def persist_private_claim_completion(
+    db: Session,
+    req: ChatTurnPersistenceInput,
+    *,
+    key: InboundClaimKey,
+    request_sha256: str,
+    completion: CompletedInboundResponse,
+    journal_content: str | None = None,
+    journal_processed: int | None = None,
+) -> CompletedInboundResponse:
+    """只在 request journal 上原子保存非回复型完成结果。"""
+
+    if type(key) is not InboundClaimKey or key.chat_type != "private":
+        raise TypeError("key 必须是 private InboundClaimKey")
+    if type(completion) is not CompletedInboundResponse:
+        raise TypeError("completion 必须是 CompletedInboundResponse")
+    if completion.outcome == "respond":
+        raise ValueError("respond completion 必须通过 persist_claimed_chat_turn 保存")
+
+    def operation() -> CompletedInboundResponse:
+        loaded = chat_recovery.load_private_request_journal(
+            db,
+            key=key,
+            request_sha256=request_sha256,
+        )
+        if loaded is None:
+            raise chat_recovery.PrivateRecoveryCorruptError(
+                "claim completion 缺少 private request journal"
+            )
+        journal, journal_meta = loaded
+        if chat_recovery.RECOVERY_META_FIELD in journal_meta:
+            existing = chat_recovery.decode_private_completion_recovery(
+                journal_meta,
+                key=key,
+                request_sha256=request_sha256,
+            )
+            if existing != completion:
+                raise chat_recovery.PrivateRecoveryCorruptError(
+                    "private request journal 已存在冲突 completion"
+                )
+            db.commit()
+            return existing
+
+        completed_meta = safe_meta(
+            json.dumps(req.client_meta or {}, ensure_ascii=False)
+        )
+        completed_meta["kind"] = chat_recovery.REQUEST_JOURNAL_KIND
+        completed_meta[chat_recovery.REQUEST_META_FIELD] = dict(
+            journal_meta[chat_recovery.REQUEST_META_FIELD]
+        )
+        journal.meta_json = json.dumps(
+            chat_recovery.attach_private_completion_recovery(
+                completed_meta,
+                key=key,
+                request_sha256=request_sha256,
+                completion=completion,
+            ),
+            ensure_ascii=False,
+        )
+        journal.user_id = req.user_id
+        journal.session_id = key.session_id
+        journal.sender_name = req.sender_name or ""
+        journal.session_name = req.session_name or ""
+        journal.message_id = key.message_id
+        journal.source_message_ids_json = _source_message_ids_json(
+            req,
+            message_id=key.message_id,
+        )
+        if journal_content is not None:
+            journal.content = str(journal_content)
+        if journal_processed is not None:
+            journal.processed = int(journal_processed)
+        db.commit()
+        return completion
+
+    try:
+        return run_sqlite_locked_retry(
+            operation,
+            rollback=db.rollback,
+            label="private_claim_completion",
+            logger=logger,
+        )
+    except BaseException:
+        db.rollback()
+        raise
+
+
+def persist_chat_turn(
+    db: Session,
+    req: ChatTurnPersistenceInput,
+    answer: str,
+    guardrail_status: str | None = None,
+    *,
+    assistant_meta: dict | None = None,
+    assistant_processed: int | None = None,
+    timing_meta: dict | None = None,
+) -> int:
+    """Persist a chat turn to both ChatLog (evolution) and ConversationTurn (context)."""
+    prepared = _prepare_chat_turn(
+        req,
+        answer,
+        guardrail_status,
+        assistant_meta=assistant_meta,
+        assistant_processed=assistant_processed,
+        timing_meta=timing_meta,
+    )
+
     def operation() -> None:
-        if is_silent:
+        if prepared.is_silent:
             db.add(SensitiveData(
                 user_id=req.user_id,
                 session_id=req.session_id,
-                content=archive_user_content,
+                content=prepared.archive_user_content,
                 guardrail_status="silent",
                 sender_name=req.sender_name or "",
                 session_name=req.session_name or "",
@@ -117,13 +484,13 @@ def persist_chat_turn(
             user_id=req.user_id,
             session_id=req.session_id,
             role="user",
-            content=archive_display_content,
+            content=prepared.archive_display_content,
             sender_name=req.sender_name or "",
             session_name=req.session_name or "",
-            processed=processed_val,
+            processed=prepared.processed_val,
             message_id=req.message_id,
-            source_message_ids_json=source_ids_json,
-            meta_json=json.dumps(user_meta, ensure_ascii=False),
+            source_message_ids_json=prepared.source_ids_json,
+            meta_json=json.dumps(prepared.user_meta, ensure_ascii=False),
         ))
         db.add(ChatLog(
             user_id=req.user_id,
@@ -132,23 +499,23 @@ def persist_chat_turn(
             content=answer,
             sender_name="nanobot",
             session_name=req.session_name or "",
-            processed=assistant_processed_val,
-            meta_json=json.dumps(assistant_chat_meta, ensure_ascii=False),
+            processed=prepared.assistant_processed_val,
+            meta_json=json.dumps(prepared.assistant_chat_meta, ensure_ascii=False),
         ))
         db.add(ConversationTurn(
             user_id=req.user_id,
             session_id=req.session_id,
             role="user",
-            content=context_display_content,
-            source_message_ids_json=source_ids_json,
-            meta_json=json.dumps(user_meta, ensure_ascii=False),
+            content=prepared.context_display_content,
+            source_message_ids_json=prepared.source_ids_json,
+            meta_json=json.dumps(prepared.user_meta, ensure_ascii=False),
         ))
         db.add(ConversationTurn(
             user_id=req.user_id,
             session_id=req.session_id,
             role="assistant",
-            content=turn_answer,
-            meta_json=json.dumps(assistant_turn_meta, ensure_ascii=False),
+            content=prepared.turn_answer,
+            meta_json=json.dumps(prepared.assistant_turn_meta, ensure_ascii=False),
         ))
         db.commit()
 
@@ -159,7 +526,4 @@ def persist_chat_turn(
         logger=logger,
     )
 
-    from core.evolution import _evolution_running
-    if req.user_id in _evolution_running:
-        return 0
-    return db.query(ChatLog).filter(ChatLog.user_id == req.user_id, ChatLog.processed == 0).count()
+    return _pending_chat_log_count(db, req.user_id)

@@ -33,6 +33,7 @@ _MANAGED_SETTING_KEYS = (
     "proactive_outreach.min_interval_min",
     "proactive_outreach.max_check_interval_min",
     "proactive_outreach.max_silence_min",
+    "proactive_outreach.ambiguous_hold_min",
     "proactive_outreach.surge_min_prob",
     "proactive_outreach.surge_max_prob",
     "bot.super_user_ids",

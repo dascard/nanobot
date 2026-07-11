@@ -131,6 +131,7 @@ def _context(
     finalize_error: BaseException | None = None,
     envelope_error: BaseException | None = None,
     push_error: BaseException | None = None,
+    claim_key: Any | None = None,
 ):
     from api.chat_streaming_result import ChatStreamResultContext
 
@@ -156,6 +157,7 @@ def _context(
             push_error=push_error,
         ),
         claim_owner=claim_owner,
+        claim_key=claim_key,
     )
 
 
@@ -170,6 +172,73 @@ def test_chat_streaming_result_module_does_not_import_parent_routes_or_sync_awai
     assert "get_guardrail(" not in source
     assert "from core.daily_digest import push_envelope_to_qq" not in source
     assert "import core.daily_digest" not in source
+
+
+@pytest.mark.asyncio
+async def test_claimed_stream_push_uses_persistent_outbox_service(monkeypatch):
+    from api.chat_streaming_result import (
+        ChatStreamFinalizationResult,
+        push_stream_finalization_result,
+    )
+    from core.inbound_idempotency import CompletedInboundResponse, InboundClaimKey
+
+    calls: dict[str, list[Any]] = {}
+    key = InboundClaimKey(
+        platform="qq",
+        chat_type="private",
+        session_id="private_u-outbox",
+        message_id="m-outbox",
+    )
+    context = _context(
+        {},
+        asyncio.create_task(asyncio.sleep(0)),
+        calls,
+        req=_request(user_id="u-outbox", session_id="private_u-outbox"),
+        claim_key=key,
+    )
+    enqueue_calls = []
+    delivery_calls = []
+
+    async def fake_enqueue(**kwargs):
+        enqueue_calls.append(kwargs)
+        return SimpleNamespace(row_id=7, status="pending")
+
+    async def fake_deliver(**kwargs):
+        delivery_calls.append(kwargs)
+        return SimpleNamespace(status="delivered")
+
+    monkeypatch.setattr(
+        "core.chat_delivery_service.enqueue_chat_response_delivery",
+        fake_enqueue,
+    )
+    monkeypatch.setattr(
+        "core.chat_delivery_service.deliver_chat_delivery",
+        fake_deliver,
+    )
+    result = ChatStreamFinalizationResult(
+        answer="已持久化回答",
+        transport_answer="expanded:已持久化回答",
+        reply_meta=None,
+        pending=0,
+        completion=CompletedInboundResponse(
+            outcome="respond",
+            reply="已持久化回答",
+        ),
+    )
+
+    assert await push_stream_finalization_result(context, result) is True
+    assert len(enqueue_calls) == 1
+    assert enqueue_calls[0]["key"] == key
+    assert enqueue_calls[0]["target_type"] == "private"
+    assert enqueue_calls[0]["target_id"] == "u-outbox"
+    assert enqueue_calls[0]["envelope"]["reply"] == "expanded:已持久化回答"
+    assert delivery_calls == [
+        {
+            "publisher": context.callbacks.push_envelope_to_qq,
+            "row_id": 7,
+        }
+    ]
+    assert calls.get("push") is None
 
 
 @pytest.mark.asyncio

@@ -236,8 +236,12 @@ async def evaluate_outreach_candidate(
                 "judge": judge,
                 "research": research_payload,
             }
-        from core.proactive_research import validate_research_publication_text
+        from core.proactive_research import (
+            normalize_research_publication_text,
+            validate_research_publication_text,
+        )
 
+        message = normalize_research_publication_text(message, result.sources)
         publication_error = validate_research_publication_text(
             message,
             result.sources,

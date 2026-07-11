@@ -22,6 +22,7 @@ class ChatNonStreamingResultCallbacks:
     persist_chat_turn: Callable[..., int]
     expand_chat_transport_answer: Callable[[str], str]
     chat_response_payload: Callable[..., dict[str, Any]]
+    persist_claimed_chat_turn: Callable[..., Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,8 @@ class ChatNonStreamingResultContext:
     empty_assistant_placeholder: str
     evolution_threshold: int
     callbacks: ChatNonStreamingResultCallbacks
+    claim_key: Any | None = None
+    request_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -106,21 +109,42 @@ async def finalize_non_streaming_chat_result(
         logger.warning("[/chat] generated image ref expansion failed", exc_info=True)
 
     await callbacks.finalize_private_buffer(str(_request_attr(req, "user_id")), answer)
-    pending = callbacks.persist_chat_turn(
-        db,
-        context.persist_req,
-        answer,
-        context.guardrail_status,
-        timing_meta=context.private_timing_meta,
-    )
-
-    completion = chat_response_contract.build_completed_inbound_response(
-        outcome="respond",
-        reply=answer,
-        reply_meta=private_reply_meta,
-        guardrail_status=context.guardrail_status,
-        unprocessed_logs=pending,
-    )
+    if context.claim_key is not None:
+        if callbacks.persist_claimed_chat_turn is None or not context.request_sha256:
+            raise RuntimeError("claimed 非流式结果缺少可恢复持久化依赖")
+        completion = chat_response_contract.build_completed_inbound_response(
+            outcome="respond",
+            reply=answer,
+            reply_meta=private_reply_meta,
+            guardrail_status=context.guardrail_status,
+        )
+        claimed_result = callbacks.persist_claimed_chat_turn(
+            db,
+            context.persist_req,
+            answer,
+            context.guardrail_status,
+            key=context.claim_key,
+            request_sha256=context.request_sha256,
+            completion=completion,
+            timing_meta=context.private_timing_meta,
+        )
+        pending = int(claimed_result.pending)
+        completion = claimed_result.completion
+    else:
+        pending = callbacks.persist_chat_turn(
+            db,
+            context.persist_req,
+            answer,
+            context.guardrail_status,
+            timing_meta=context.private_timing_meta,
+        )
+        completion = chat_response_contract.build_completed_inbound_response(
+            outcome="respond",
+            reply=answer,
+            reply_meta=private_reply_meta,
+            guardrail_status=context.guardrail_status,
+            unprocessed_logs=pending,
+        )
 
     payload = callbacks.chat_response_payload(
         req,
