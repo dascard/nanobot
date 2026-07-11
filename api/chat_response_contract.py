@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from core.client_meta import client_meta_request_id
+from core.inbound_idempotency import (
+    CompletedInboundResponse,
+    GroupReplayFields,
+)
 from core.message_envelope import build_chat_response_envelope
 
 
@@ -76,6 +81,11 @@ def _chat_request_platform(req: Any) -> str:
 
 
 def _chat_request_type(req: Any) -> str:
+    client_meta = getattr(req, "client_meta", None)
+    client_meta = client_meta if isinstance(client_meta, dict) else {}
+    chat_type = str(client_meta.get("chat_type") or "").strip().lower()
+    if chat_type in {"private", "group"}:
+        return chat_type
     return "private" if str(getattr(req, "session_id", "")).startswith("private_") else "group"
 
 
@@ -161,3 +171,90 @@ def chat_response_payload(
     if include_answer_chunks:
         payload["answer_chunks"] = split_chat_answer_chunks(payload["reply"])
     return payload
+
+
+def build_completed_inbound_response(
+    *,
+    outcome: str,
+    reply: str = "",
+    reply_meta: Mapping[str, Any] | None = None,
+    reason: str = "",
+    source: str = "",
+    intent: str = "",
+    guardrail_status: str | None = None,
+    unprocessed_logs: int | None = None,
+    group: GroupReplayFields | None = None,
+) -> CompletedInboundResponse:
+    """只用业务字段构造可持久化的完成结果。"""
+
+    return CompletedInboundResponse(
+        outcome=outcome,
+        reply=reply,
+        reply_meta={} if reply_meta is None else reply_meta,
+        reason=reason,
+        source=source,
+        intent=intent,
+        guardrail_status=guardrail_status,
+        unprocessed_logs=unprocessed_logs,
+        group=group,
+    )
+
+
+def _completed_chat_status(req: Any, response: CompletedInboundResponse) -> str:
+    if response.outcome == "respond":
+        return "done" if bool(getattr(req, "stream", False)) else "ok"
+    if response.outcome == "blocked":
+        return "silent"
+    return response.outcome
+
+
+def completed_chat_response_payload(
+    req: Any,
+    response: CompletedInboundResponse,
+    *,
+    answer_override: str | None = None,
+) -> dict[str, Any]:
+    """以当前请求身份把业务完成结果重建成 ``/chat`` 响应。"""
+
+    if type(response) is not CompletedInboundResponse:
+        raise TypeError("response 必须是 CompletedInboundResponse")
+    if answer_override is not None and type(answer_override) is not str:
+        raise TypeError("answer_override 必须是字符串或 null")
+
+    is_respond = response.outcome == "respond"
+    if is_respond:
+        answer = response.reply if answer_override is None else answer_override
+    else:
+        answer = ""
+    stream = bool(getattr(req, "stream", False))
+    return chat_response_payload(
+        req,
+        status=_completed_chat_status(req, response),
+        answer=answer,
+        reply_meta=dict(response.reply_meta),
+        platform=_chat_request_platform(req),
+        chat_type=_chat_request_type(req),
+        unprocessed_logs=response.unprocessed_logs,
+        reason=response.reason,
+        source=response.source,
+        intent=response.intent,
+        guardrail_status=response.guardrail_status,
+        include_answer_chunks=not stream or not is_respond,
+    )
+
+
+def duplicate_inflight_chat_response_payload(
+    req: Any,
+    *,
+    reason: str = "duplicate_inflight",
+) -> dict[str, Any]:
+    """为当前请求构造不属于完成结果的处理中重复响应。"""
+
+    return chat_response_payload(
+        req,
+        status="duplicate_inflight",
+        platform=_chat_request_platform(req),
+        chat_type=_chat_request_type(req),
+        reason=reason,
+        include_answer_chunks=True,
+    )

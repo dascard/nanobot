@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time as _time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -195,6 +196,86 @@ def _has_other_recipient_signal(pending: list[GroupPendingMessage]) -> bool:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class GateStateSnapshot:
+    """gate 启动时需要事务式恢复的内存状态。"""
+
+    generation: int
+    pending: tuple[GroupPendingMessage, ...]
+    wait_count: int
+    total_wait_s: float
+    waiting_for_more: bool
+    wait_started_at: float
+    wait_until: float
+    max_wait_until: float
+    new_messages_during_wait: tuple[dict, ...]
+    previous_gate_action: str
+    wait_reason: str
+    linger_active_until: float
+    linger_reply_count: int
+    linger_source_user_id: str
+    linger_started_by: str
+    linger_last_reply_ts: float
+    proactive_ts_window: tuple[float, ...]
+    force_next_continue: bool
+    force_reason: str
+    running: bool
+    last_gate_completed_ts: float
+
+    @classmethod
+    def capture(cls, state: GroupChatState) -> GateStateSnapshot:
+        return cls(
+            generation=state.generation,
+            pending=tuple(deepcopy(state.pending)),
+            wait_count=state.wait_count,
+            total_wait_s=state.total_wait_s,
+            waiting_for_more=state.waiting_for_more,
+            wait_started_at=state.wait_started_at,
+            wait_until=state.wait_until,
+            max_wait_until=state.max_wait_until,
+            new_messages_during_wait=tuple(
+                deepcopy(state.new_messages_during_wait)
+            ),
+            previous_gate_action=state.previous_gate_action,
+            wait_reason=state.wait_reason,
+            linger_active_until=state.linger_active_until,
+            linger_reply_count=state.linger_reply_count,
+            linger_source_user_id=state.linger_source_user_id,
+            linger_started_by=state.linger_started_by,
+            linger_last_reply_ts=state.linger_last_reply_ts,
+            proactive_ts_window=tuple(state.proactive_ts_window),
+            force_next_continue=state.force_next_continue,
+            force_reason=state.force_reason,
+            running=state.running,
+            last_gate_completed_ts=state.last_gate_completed_ts,
+        )
+
+    def restore_exact(self, state: GroupChatState) -> None:
+        state.pending = list(deepcopy(self.pending))
+        state.generation = self.generation
+        state.wait_count = self.wait_count
+        state.total_wait_s = self.total_wait_s
+        state.waiting_for_more = self.waiting_for_more
+        state.wait_started_at = self.wait_started_at
+        state.wait_until = self.wait_until
+        state.max_wait_until = self.max_wait_until
+        state.new_messages_during_wait = list(
+            deepcopy(self.new_messages_during_wait)
+        )
+        state.previous_gate_action = self.previous_gate_action
+        state.wait_reason = self.wait_reason
+        state.linger_active_until = self.linger_active_until
+        state.linger_reply_count = self.linger_reply_count
+        state.linger_source_user_id = self.linger_source_user_id
+        state.linger_started_by = self.linger_started_by
+        state.linger_last_reply_ts = self.linger_last_reply_ts
+        state.proactive_ts_window = list(self.proactive_ts_window)
+        state.force_next_continue = self.force_next_continue
+        state.force_reason = self.force_reason
+        state.running = self.running
+        state.last_gate_completed_ts = self.last_gate_completed_ts
+
+
 @dataclass
 class GroupChatState:
     """单个群的运行时状态——per-group stateful runtime。"""
@@ -243,12 +324,23 @@ class GroupChatState:
     def _touch(self):
         self.last_active_ts = _time.time()
 
-    def add_message(self, msg: GroupPendingMessage):
+    def add_message(self, msg: GroupPendingMessage) -> bool:
         now = _time.time()
         # 兼容测试：ts=0 或被设为零值时使用当前时间
         if msg.ts <= 0:
             msg.ts = now
-        self.pending = [m for m in self.pending if now - m.ts < MAX_AGE_SEC]
+        active_pending = [
+            pending
+            for pending in self.pending
+            if now - pending.ts < MAX_AGE_SEC
+        ]
+        message_id = str(msg.message_id or "").strip()
+        if message_id and any(
+            str(pending.message_id or "").strip() == message_id
+            for pending in active_pending
+        ):
+            return False
+        self.pending = active_pending
         self.pending.append(msg)
         self.message_cache.append(msg)
         if len(self.pending) > MAX_PENDING:
@@ -257,6 +349,7 @@ class GroupChatState:
             self.message_cache = self.message_cache[-100:]
         self.generation += 1
         self._touch()
+        return True
 
     def take_snapshot(self) -> list[GroupPendingMessage]:
         return list(self.pending)
@@ -279,6 +372,12 @@ class GroupChatState:
     def mark_gate_done(self):
         self.running = False
         self.last_gate_completed_ts = _time.time()
+        self._touch()
+
+    def abort_gate(self, previous_completed_ts: float):
+        """中止失败的 gate，不伪造一次成功冷却。"""
+        self.running = False
+        self.last_gate_completed_ts = previous_completed_ts
         self._touch()
 
     def handle_continue(self):

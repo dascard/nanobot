@@ -27,7 +27,7 @@ if not NANOBOT_ADMIN_TOKEN:
             _fh.write(f"\nNANOBOT_ADMIN_TOKEN={NANOBOT_ADMIN_TOKEN}\n")
     except Exception:
         pass
-ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "0000000000")
+ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")
 
 
 # ── 超级用户列表 ──

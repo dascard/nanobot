@@ -1,5 +1,6 @@
 """GroupRuntime 状态机测试——不依赖网络/模型。"""
 
+import asyncio
 import time as _time
 
 import pytest
@@ -7,6 +8,12 @@ import pytest
 from core.timing_runtime import (
     GateState, PendingMessage, GroupRuntime, MAX_PENDING, MAX_AGE_SEC, MAX_RETRIES, MAX_WAIT_SEC,
 )
+
+
+def _gate_relevant_state(state):
+    from core.group_runtime.state import GateStateSnapshot
+
+    return GateStateSnapshot.capture(state)
 
 
 class TestGateState:
@@ -72,8 +79,345 @@ class TestGateState:
         s.add_message(PendingMessage("u1", "A", "msg2"))
         assert s.generation == gen + 1
 
+    def test_same_nonempty_message_id_is_idempotent_while_pending(self):
+        s = GateState()
+        s.add_message(PendingMessage("u1", "A", "first", message_id="m1"))
+
+        s.add_message(PendingMessage("u1", "A", "retry", message_id="m1"))
+
+        assert s.generation == 1
+        assert [message.message for message in s.pending] == ["first"]
+        assert [message.message for message in s.message_cache] == ["first"]
+
+    def test_add_message_returns_added_and_duplicate_has_zero_state_mutation(
+        self,
+        monkeypatch,
+    ):
+        import core.group_runtime.state as state_module
+
+        now = 1000.0
+        monkeypatch.setattr(state_module._time, "time", lambda: now)
+        state = GateState(group_id="group_g1")
+        first = PendingMessage("u1", "A", "first", message_id="m1")
+        duplicate = PendingMessage("u1", "A", "retry", message_id="m1")
+
+        assert state.add_message(first) is True
+        before = (
+            list(state.pending),
+            list(state.message_cache),
+            state.generation,
+            state.last_active_ts,
+        )
+        now = 1001.0
+
+        assert state.add_message(duplicate) is False
+        assert (
+            state.pending,
+            state.message_cache,
+            state.generation,
+            state.last_active_ts,
+        ) == before
+
+    def test_gate_state_snapshot_restores_every_gate_relevant_field(self):
+        from core.group_runtime.state import GateStateSnapshot
+
+        state = GateState(group_id="group_g1")
+        state.add_message(PendingMessage(
+            "u1",
+            "A",
+            "hello",
+            message_id="m1",
+            segments=[{"type": "text", "data": {"text": "hello"}}],
+        ))
+        state.start_wait(9, "等待更多")
+        state.receive_during_wait({
+            "sender_name": "B",
+            "message": "new",
+            "details": {"source": "wait"},
+        })
+        state.activate_linger("u1", "at_bot")
+        state.record_proactive()
+        state.force_next_continue = True
+        state.force_reason = "at_bot"
+        state.last_gate_completed_ts = 123.0
+        snapshot = GateStateSnapshot.capture(state)
+
+        state.pending[0].segments[0]["data"]["text"] = "mutated"
+        state.pending.clear()
+        state._reset_wait_state()
+        state.linger_reply_count = 99
+        state.proactive_ts_window.clear()
+        state.force_next_continue = False
+        state.force_reason = ""
+        state.running = True
+        state.last_gate_completed_ts = 999.0
+        snapshot.restore_exact(state)
+
+        assert GateStateSnapshot.capture(state) == snapshot
+        assert state.pending[0].segments[0]["data"]["text"] == "hello"
+        assert state.new_messages_during_wait[0]["details"] == {"source": "wait"}
+
 
 class TestGroupRuntime:
+    @pytest.mark.asyncio
+    async def test_directed_scoring_shortcut_base_exception_restores_full_snapshot(
+        self,
+        monkeypatch,
+    ):
+        from core.timing_score import decide_timing
+
+        class ApplyFatal(BaseException):
+            pass
+
+        runtime = GroupRuntime()
+        state = runtime._states.setdefault(
+            "group_1",
+            GateState(group_id="group_1"),
+        )
+        state.add_message(
+            PendingMessage(
+                "seed",
+                "种子",
+                "@其他人 保留",
+                message_id="seed",
+                is_directed_to_other=True,
+                directed={
+                    "at_others": True,
+                    "directed_to_other": True,
+                },
+            )
+        )
+        state.start_wait(8, "原 wait")
+        state.end_wait()
+        state.activate_linger("seed", "at_bot")
+        state.record_proactive()
+        state.last_gate_completed_ts = 123.0
+        error = ApplyFatal("shortcut apply fatal")
+        shortcut_decision = decide_timing(
+            "@其他人 你看",
+            is_directed_to_other=True,
+            has_other_recipient=True,
+        )
+        assert shortcut_decision.stage == "rule_shortcut"
+        monkeypatch.setattr(
+            runtime,
+            "_score_timing",
+            lambda *_args, **_kwargs: shortcut_decision,
+        )
+
+        original_apply = runtime._apply_scoring_shortcut
+
+        def apply_then_fail(state_arg, decision, **kwargs):
+            original_apply(state_arg, decision, **kwargs)
+            raise error
+
+        monkeypatch.setattr(runtime, "_apply_scoring_shortcut", apply_then_fail)
+        original_begin = runtime._begin_gate
+        recorded = {}
+
+        def recording_begin(group_id, state_arg):
+            transaction = original_begin(group_id, state_arg)
+            recorded["snapshot"] = transaction.snapshot
+            return transaction
+
+        monkeypatch.setattr(runtime, "_begin_gate", recording_begin)
+
+        with pytest.raises(ApplyFatal) as raised:
+            await runtime.process_message(
+                "group_1",
+                {
+                    "sender_id": "u1",
+                    "sender_name": "A",
+                    "message": "@B 你看",
+                    "message_id": "m1",
+                    "is_directed_to_other": True,
+                    "directed": {
+                        "at_others": True,
+                        "directed_to_other": True,
+                    },
+                },
+                trigger_reason="ambient",
+                talk_value=1.0,
+            )
+
+        assert raised.value is error
+        assert _gate_relevant_state(state) == recorded["snapshot"]
+
+    @pytest.mark.asyncio
+    async def test_timer_failure_restores_wait_linger_budget_pending_and_timestamp(
+        self,
+        monkeypatch,
+    ):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda *_args: TimingModelPolicy("enabled", "test")
+        )
+        state = runtime._states.setdefault(
+            "group_g1",
+            GateState(group_id="group_g1"),
+        )
+        state.add_message(
+            PendingMessage("u1", "A", "hello", message_id="m1")
+        )
+        state.start_wait(5, "等待续句")
+        state.activate_linger("u1", "at_bot")
+        state.record_proactive()
+        state.last_gate_completed_ts = 77.0
+        before = _gate_relevant_state(state)
+        error = RuntimeError("timer failed")
+
+        async def fail_gate(*_args, **_kwargs):
+            raise error
+
+        monkeypatch.setattr(runtime, "_call_gate", fail_gate)
+        with pytest.raises(RuntimeError) as raised:
+            await runtime.handle_timer_fired(
+                "g1",
+                state.generation,
+                trigger_reason="retry_test",
+            )
+
+        assert raised.value is error
+        assert _gate_relevant_state(state) == before
+
+    def test_runtime_has_one_gate_start_boundary_and_scoring_has_none(self):
+        import inspect
+
+        import core.group_runtime.runtime as runtime_module
+        import core.group_runtime.scoring as scoring_module
+
+        runtime_source = inspect.getsource(runtime_module)
+        scoring_source = inspect.getsource(scoring_module)
+        assert runtime_source.count(".mark_gate_start(") == 1
+        assert ".mark_gate_start(" not in scoring_source
+        assert ".mark_gate_done(" not in scoring_source
+
+    @pytest.mark.asyncio
+    async def test_duplicate_message_during_wait_does_not_refresh_deadline_or_generation(
+        self,
+        monkeypatch,
+    ):
+        import core.group_runtime.runtime as runtime_module
+        import core.group_runtime.state as state_module
+
+        now = 1000.0
+        monkeypatch.setattr(runtime_module._time, "time", lambda: now)
+        monkeypatch.setattr(state_module._time, "time", lambda: now)
+        runtime = GroupRuntime()
+        state = runtime._states.setdefault("group_g1", GateState(group_id="group_g1"))
+        message = PendingMessage("u1", "A", "first", message_id="m1")
+        assert state.add_message(message) is True
+        state.start_wait(8, "wait for more")
+        state.talk_value = 0.8
+        state.platform = "qq"
+        state.last_trigger_reason = "original_trigger"
+        state.session_name = "原群名"
+        state.bot_aliases = ["原别名"]
+        state.bot_id = "original-bot"
+        state.bot_name = "原机器人"
+        before = (
+            state.wait_until,
+            list(state.new_messages_during_wait),
+            state.generation,
+            state.last_active_ts,
+            state.talk_value,
+            state.platform,
+            state.last_trigger_reason,
+            state.session_name,
+            list(state.bot_aliases),
+            state.bot_id,
+            state.bot_name,
+        )
+        now = 1001.0
+
+        result = await runtime.process_message(
+            "g1",
+            {
+                "sender_id": "u1",
+                "sender_name": "A",
+                "message": "retry",
+                "message_id": "m1",
+                "bot_id": "changed-bot",
+                "bot_name": "变更机器人",
+            },
+            trigger_reason="at_bot",
+            session_name="变更群名",
+            bot_aliases=["变更别名"],
+            talk_value=0.2,
+            platform="discord",
+        )
+
+        assert result["action"] == "wait"
+        assert (
+            state.wait_until,
+            state.new_messages_during_wait,
+            state.generation,
+            state.last_active_ts,
+            state.talk_value,
+            state.platform,
+            state.last_trigger_reason,
+            state.session_name,
+            state.bot_aliases,
+            state.bot_id,
+            state.bot_name,
+        ) == before
+
+    @pytest.mark.asyncio
+    async def test_duplicate_message_after_wait_deadline_retries_existing_pending(
+        self,
+        monkeypatch,
+    ):
+        import core.group_runtime.runtime as runtime_module
+        import core.group_runtime.state as state_module
+        from core.timing_model_policy import TimingModelPolicy
+
+        now = 1000.0
+        monkeypatch.setattr(runtime_module._time, "time", lambda: now)
+        monkeypatch.setattr(state_module._time, "time", lambda: now)
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda *_args: TimingModelPolicy("enabled", "test")
+        )
+        state = runtime._states.setdefault(
+            "group_g1",
+            GateState(group_id="group_g1"),
+        )
+        assert state.add_message(
+            PendingMessage("u1", "A", "first", message_id="m1")
+        ) is True
+        state.start_wait(8, "wait for more")
+        calls: list[list[str]] = []
+
+        async def gate(_group_id, pending, _ctx, _reason):
+            calls.append([item.message_id for item in pending])
+            return {
+                "action": "no_reply",
+                "reason": "expired duplicate retried",
+                "model_confidence": 1.0,
+            }
+
+        monkeypatch.setattr(runtime, "_call_gate", gate)
+        now = 1009.0
+
+        result = await runtime.process_message(
+            "g1",
+            {
+                "sender_id": "u1",
+                "sender_name": "A",
+                "message": "retry",
+                "message_id": "m1",
+            },
+            trigger_reason="retry_test",
+        )
+
+        assert calls == [["m1"]]
+        assert result["action"] == "no_reply"
+        assert state.generation == 1
+        assert state.waiting_for_more is False
+        assert state.new_messages_during_wait == []
+
     @pytest.mark.asyncio
     async def test_process_message_rate_limited_returns_wait(self, monkeypatch):
         runtime = GroupRuntime()
@@ -118,6 +462,183 @@ class TestGroupRuntime:
         assert "mismatch" in r["reason"]
         # running 必须已清除
         assert not runtime._states["group_g1"].running
+
+    @pytest.mark.asyncio
+    async def test_direct_message_during_running_gate_does_not_start_second_gate(
+        self,
+        monkeypatch,
+    ):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda *_args: TimingModelPolicy("enabled", "test")
+        )
+        first_gate_entered = asyncio.Event()
+        release_first_gate = asyncio.Event()
+        gate_calls = 0
+
+        async def controlled_gate(*_args, **_kwargs):
+            nonlocal gate_calls
+            gate_calls += 1
+            if gate_calls != 1:
+                raise AssertionError("同一群已有 gate 运行时不得启动第二个 gate")
+            first_gate_entered.set()
+            await release_first_gate.wait()
+            return {"action": "continue", "reason": "first gate returned"}
+
+        monkeypatch.setattr(runtime, "_call_gate", controlled_gate)
+        first_task = asyncio.create_task(runtime.process_message(
+            "g1",
+            {
+                "sender_id": "u1",
+                "sender_name": "A",
+                "message": "first",
+                "message_id": "m1",
+            },
+            trigger_reason="retry_test",
+        ))
+        try:
+            await asyncio.wait_for(first_gate_entered.wait(), timeout=1)
+
+            second_result = await runtime.process_message(
+                "g1",
+                {
+                    "sender_id": "u2",
+                    "sender_name": "B",
+                    "message": "@bot https://example.com/second",
+                    "message_id": "m2",
+                    "is_at_bot": True,
+                },
+                trigger_reason="at_bot",
+            )
+
+            state = runtime._states["group_g1"]
+            assert second_result["action"] == "wait"
+            assert "gate in progress" in second_result["reason"]
+            assert gate_calls == 1
+            assert state.running is True
+            assert [item.message_id for item in state.pending] == ["m1", "m2"]
+
+            release_first_gate.set()
+            first_result = await first_task
+
+            assert first_result["action"] == "no_reply"
+            assert "generation mismatch" in first_result["reason"]
+            assert state.running is False
+            assert state.force_next_continue is True
+            assert state.force_reason == "at_bot"
+        finally:
+            release_first_gate.set()
+            if not first_task.done():
+                first_task.cancel()
+            await asyncio.gather(first_task, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_gate_error_aborts_without_cooldown_and_same_message_retries(self, monkeypatch):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda _session_id, _platform: TimingModelPolicy("enabled", "test")
+        )
+        gate_error = RuntimeError("timing boom")
+        calls: list[list[str]] = []
+
+        async def flaky_gate(_gid, pending, _ctx, _tr):
+            calls.append([message.message_id for message in pending])
+            if len(calls) == 1:
+                raise gate_error
+            return {"action": "wait", "delay_seconds": 5, "reason": "retry reached gate"}
+
+        monkeypatch.setattr(runtime, "_call_gate", flaky_gate)
+        message = {
+            "sender_id": "u1",
+            "sender_name": "A",
+            "message": "hello",
+            "message_id": "m1",
+        }
+
+        with pytest.raises(RuntimeError) as raised:
+            await runtime.process_message("g1", message, trigger_reason="retry_test")
+
+        assert raised.value is gate_error
+        state = runtime._states["group_g1"]
+        state_after_error = (
+            state.running,
+            state.last_gate_completed_ts,
+            state.generation,
+            len(state.pending),
+        )
+
+        result = await runtime.process_message("g1", message, trigger_reason="retry_test")
+
+        assert state_after_error == (False, 0.0, 1, 1)
+        assert calls == [["m1"], ["m1"]]
+        assert "rate limited" not in result["reason"]
+        assert state.generation == 1
+
+    @pytest.mark.asyncio
+    async def test_process_cancel_while_reacquiring_lock_restores_gate_state(self, monkeypatch):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda _session_id, _platform: TimingModelPolicy("enabled", "test")
+        )
+        state = runtime._states.setdefault("group_g1", GateState(group_id="group_g1"))
+        previous_completed_ts = 123.456
+        state.last_gate_completed_ts = previous_completed_ts
+        gate_entered = asyncio.Event()
+        release_gate = asyncio.Event()
+        observed: dict[str, BaseException] = {}
+
+        async def controlled_gate(*_args, **_kwargs):
+            gate_entered.set()
+            await release_gate.wait()
+            return {"action": "continue", "reason": "model returned"}
+
+        async def invoke():
+            try:
+                return await runtime.process_message(
+                    "g1",
+                    {
+                        "sender_id": "u1",
+                        "sender_name": "A",
+                        "message": "hello",
+                        "message_id": "cancel-reacquire",
+                    },
+                    trigger_reason="retry_test",
+                )
+            except BaseException as exc:
+                observed["error"] = exc
+                raise
+
+        monkeypatch.setattr(runtime, "_call_gate", controlled_gate)
+        task = asyncio.create_task(invoke())
+        lock_held = False
+        try:
+            await asyncio.wait_for(gate_entered.wait(), timeout=1)
+            await runtime._lock.acquire()
+            lock_held = True
+            release_gate.set()
+            await asyncio.sleep(0)
+            assert not task.done()
+
+            task.cancel("cancel while reacquiring runtime lock")
+            with pytest.raises(asyncio.CancelledError) as raised:
+                await task
+
+            assert raised.value is observed["error"]
+            assert state.running is False
+            assert state.last_gate_completed_ts == previous_completed_ts
+        finally:
+            release_gate.set()
+            if lock_held:
+                runtime._lock.release()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     @pytest.mark.asyncio
     async def test_session_name_saved_for_timer_reuse(self, monkeypatch):
@@ -206,6 +727,77 @@ class TestGroupRuntime:
         assert r["action"] == "wait"
         assert str(r.get("reason", "")).startswith("talk_value gate")
 
+    @pytest.mark.asyncio
+    async def test_timer_gate_error_aborts_without_success_cooldown(self, monkeypatch):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda _session_id, _platform: TimingModelPolicy("enabled", "test")
+        )
+        state = runtime._states.setdefault("group_g1", GateState(group_id="group_g1"))
+        state.add_message(PendingMessage("u1", "A", "hello", message_id="m1"))
+        state.last_trigger_reason = "retry_test"
+        gate_error = RuntimeError("timer timing boom")
+
+        async def fail_gate(*_args, **_kwargs):
+            raise gate_error
+
+        monkeypatch.setattr(runtime, "_call_gate", fail_gate)
+
+        with pytest.raises(RuntimeError) as raised:
+            await runtime.handle_timer_fired(
+                "g1",
+                state.generation,
+                trigger_reason="retry_test",
+            )
+
+        assert raised.value is gate_error
+        assert state.running is False
+        assert state.last_gate_completed_ts == 0.0
+
+    @pytest.mark.asyncio
+    async def test_timer_apply_base_exception_restores_previous_completed_timestamp(
+        self,
+        monkeypatch,
+    ):
+        from core.timing_model_policy import TimingModelPolicy
+
+        class TimerApplyFatal(BaseException):
+            pass
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda _session_id, _platform: TimingModelPolicy("enabled", "test")
+        )
+        state = runtime._states.setdefault("group_g1", GateState(group_id="group_g1"))
+        state.add_message(PendingMessage("u1", "A", "hello", message_id="timer-apply"))
+        state.last_trigger_reason = "retry_test"
+        previous_completed_ts = 234.567
+        state.last_gate_completed_ts = previous_completed_ts
+        apply_error = TimerApplyFatal("timer apply fatal")
+
+        async def successful_gate(*_args, **_kwargs):
+            return {"action": "continue", "reason": "model returned"}
+
+        def fail_after_done(state_arg, *_args, **_kwargs):
+            state_arg.mark_gate_done()
+            raise apply_error
+
+        monkeypatch.setattr(runtime, "_call_gate", successful_gate)
+        monkeypatch.setattr(runtime, "_apply_gate_result", fail_after_done)
+
+        with pytest.raises(TimerApplyFatal) as raised:
+            await runtime.handle_timer_fired(
+                "g1",
+                state.generation,
+                trigger_reason="retry_test",
+            )
+
+        assert raised.value is apply_error
+        assert state.running is False
+        assert state.last_gate_completed_ts == previous_completed_ts
+
     # ── 主动发言(proactive)──
 
     @staticmethod
@@ -277,6 +869,207 @@ class TestGroupRuntime:
         assert runtime._proactive_precheck(state, state.take_snapshot()) is False
 
     @pytest.mark.asyncio
+    async def test_process_message_public_path_runs_proactive_and_commits_once(
+        self,
+        monkeypatch,
+    ):
+        runtime = GroupRuntime()
+        self._patch_proactive_settings(monkeypatch, floor=3)
+        state = runtime._states.setdefault(
+            "group_g1",
+            GateState(group_id="group_g1"),
+        )
+        state.add_message(
+            PendingMessage("u0", "用户0", "闲聊0", message_id="m0")
+        )
+        state.add_message(
+            PendingMessage("u1", "用户1", "闲聊1", message_id="m1")
+        )
+        monkeypatch.setattr(
+            "clients.classifier_client.judge_proactive",
+            lambda _context: {
+                "should_speak": True,
+                "reason": "可补充",
+                "error_type": None,
+            },
+        )
+        original_commit = runtime._commit_gate
+        committed = []
+
+        def recording_commit(transaction):
+            committed.append(transaction)
+            original_commit(transaction)
+
+        monkeypatch.setattr(runtime, "_commit_gate", recording_commit)
+
+        result = await runtime.process_message(
+            "g1",
+            {
+                "sender_id": "u2",
+                "sender_name": "用户2",
+                "message": "闲聊2",
+                "message_id": "m2",
+            },
+            trigger_reason="ambient",
+            talk_value=1.0,
+        )
+
+        assert result["action"] == "continue"
+        assert result["proactive"]["should_speak"] is True
+        assert len(committed) == 1
+        assert committed[0].active is False
+        assert state.running is False
+        assert len(state.proactive_ts_window) == 1
+        assert state.pending == []
+
+    @pytest.mark.asyncio
+    async def test_two_group_gate_transactions_isolate_failure_and_success(
+        self,
+        monkeypatch,
+    ):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda *_args: TimingModelPolicy("enabled", "test")
+        )
+        both_entered = asyncio.Event()
+        release = asyncio.Event()
+        entered: set[str] = set()
+        failure = RuntimeError("group one failed")
+        tasks: list[asyncio.Task] = []
+
+        async def gate(group_id, *_args):
+            entered.add(group_id)
+            if len(entered) == 2:
+                both_entered.set()
+            await release.wait()
+            if group_id == "group_1":
+                raise failure
+            return {
+                "action": "continue",
+                "reason": "group two succeeds",
+                "model_confidence": 1.0,
+            }
+
+        monkeypatch.setattr(runtime, "_call_gate", gate)
+        try:
+            tasks = [
+                asyncio.create_task(runtime.process_message(
+                    "1",
+                    {
+                        "sender_id": "u1",
+                        "sender_name": "A",
+                        "message": "@bot @B one",
+                        "message_id": "m1",
+                        "is_at_bot": True,
+                        "directed": {
+                            "at_bot": True,
+                            "at_others": True,
+                            "directed_to_other": False,
+                        },
+                    },
+                    trigger_reason="at_bot",
+                )),
+                asyncio.create_task(runtime.process_message(
+                    "2",
+                    {
+                        "sender_id": "u2",
+                        "sender_name": "B",
+                        "message": "@bot @C two",
+                        "message_id": "m2",
+                        "is_at_bot": True,
+                        "directed": {
+                            "at_bot": True,
+                            "at_others": True,
+                            "directed_to_other": False,
+                        },
+                    },
+                    trigger_reason="at_bot",
+                )),
+            ]
+            await asyncio.wait_for(both_entered.wait(), timeout=1)
+            runtime._states["group_1"].add_message(
+                PendingMessage("u3", "C", "new", message_id="m3")
+            )
+            release.set()
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            assert results[0] is failure
+            assert results[1]["action"] == "continue"
+            assert [
+                item.message_id
+                for item in runtime._states["group_1"].pending
+            ] == ["m1", "m3"]
+            assert runtime._states["group_1"].running is False
+            assert runtime._states["group_1"].force_next_continue is True
+            assert runtime._states["group_1"].force_reason == "at_bot"
+            assert runtime._states["group_2"].running is False
+            assert runtime._states["group_2"].force_next_continue is False
+        finally:
+            release.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_gate_state_replacement_does_not_mutate_new_state(
+        self,
+        monkeypatch,
+    ):
+        from core.timing_model_policy import TimingModelPolicy
+
+        runtime = GroupRuntime()
+        runtime.timing_model_policy_resolver = (
+            lambda *_args: TimingModelPolicy("enabled", "test")
+        )
+        gate_entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def gate(*_args, **_kwargs):
+            gate_entered.set()
+            await release.wait()
+            return {"action": "continue", "reason": "old state result"}
+
+        monkeypatch.setattr(runtime, "_call_gate", gate)
+        task = asyncio.create_task(runtime.process_message(
+            "1",
+            {
+                "sender_id": "u1",
+                "sender_name": "A",
+                "message": "old",
+                "message_id": "old-m1",
+            },
+            trigger_reason="retry_test",
+        ))
+        try:
+            await asyncio.wait_for(gate_entered.wait(), timeout=1)
+            replacement = GateState(group_id="group_1")
+            replacement.add_message(
+                PendingMessage("u2", "B", "new", message_id="new-m1")
+            )
+            replacement.start_wait(9, "replacement wait")
+            replacement.running = True
+            replacement.last_gate_completed_ts = 987.0
+            before = _gate_relevant_state(replacement)
+            runtime._states["group_1"] = replacement
+            release.set()
+
+            result = await task
+
+            assert result["action"] == "no_reply"
+            assert "replaced" in result["reason"]
+            assert _gate_relevant_state(replacement) == before
+        finally:
+            release.set()
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    @pytest.mark.asyncio
     async def test_run_proactive_speak_produces_continue_and_linger(self, monkeypatch):
         runtime = GroupRuntime()
         state = self._cold_active_state(runtime, n_msgs=3)
@@ -285,9 +1078,16 @@ class TestGroupRuntime:
             return {"should_speak": True, "reason": "有可贡献的内容", "error_type": None}
 
         monkeypatch.setattr("clients.classifier_client.judge_proactive", fake_judge)
-        state.mark_gate_start()
+        transaction = runtime._begin_gate("group_g1", state)
         gen = state.generation
-        r = await runtime._run_proactive("group_g1", state.take_snapshot(), {}, gen, "u2")
+        r = await runtime._run_proactive(
+            "group_g1",
+            state.take_snapshot(),
+            {},
+            gen,
+            "u2",
+            transaction=transaction,
+        )
 
         assert r["action"] == "continue"
         assert r["proactive"]["should_speak"] is True
@@ -303,9 +1103,16 @@ class TestGroupRuntime:
 
         monkeypatch.setattr("clients.classifier_client.judge_proactive",
                             lambda _c: {"should_speak": False, "reason": "无需插话", "error_type": None})
-        state.mark_gate_start()
+        transaction = runtime._begin_gate("group_g1", state)
         gen = state.generation
-        r = await runtime._run_proactive("group_g1", state.take_snapshot(), {}, gen, "u2")
+        r = await runtime._run_proactive(
+            "group_g1",
+            state.take_snapshot(),
+            {},
+            gen,
+            "u2",
+            transaction=transaction,
+        )
 
         assert r["action"] == "no_reply"
         assert len(state.proactive_ts_window) == 0  # 未消费预算
@@ -318,11 +1125,18 @@ class TestGroupRuntime:
 
         monkeypatch.setattr("clients.classifier_client.judge_proactive",
                             lambda _c: {"should_speak": True, "reason": "x", "error_type": None})
-        state.mark_gate_start()
+        transaction = runtime._begin_gate("group_g1", state)
         gen = state.generation
         state.add_message(PendingMessage("u5", "新人", "新消息"))  # generation 变化
 
-        r = await runtime._run_proactive("group_g1", state.take_snapshot(), {}, gen, "u2")
+        r = await runtime._run_proactive(
+            "group_g1",
+            state.take_snapshot(),
+            {},
+            gen,
+            "u2",
+            transaction=transaction,
+        )
         assert r["action"] == "no_reply"
         assert "mismatch" in r["reason"]
         assert len(state.proactive_ts_window) == 0
@@ -334,12 +1148,142 @@ class TestGroupRuntime:
 
         monkeypatch.setattr("clients.classifier_client.judge_proactive",
                             lambda _c: {"should_speak": False, "reason": "裁判不可用", "error_type": "network_error"})
-        state.mark_gate_start()
+        transaction = runtime._begin_gate("group_g1", state)
         gen = state.generation
-        r = await runtime._run_proactive("group_g1", state.take_snapshot(), {}, gen, "u2")
+        r = await runtime._run_proactive(
+            "group_g1",
+            state.take_snapshot(),
+            {},
+            gen,
+            "u2",
+            transaction=transaction,
+        )
 
         assert r["action"] == "no_reply"
         assert r["proactive"]["error_type"] == "network_error"
+
+    @pytest.mark.asyncio
+    async def test_run_proactive_cancel_aborts_without_success_cooldown(self, monkeypatch):
+        runtime = GroupRuntime()
+        state = self._cold_active_state(runtime, n_msgs=3)
+        cancellation = asyncio.CancelledError("proactive cancelled")
+
+        def cancel_proactive(_context):
+            raise cancellation
+
+        monkeypatch.setattr("clients.classifier_client.judge_proactive", cancel_proactive)
+        transaction = runtime._begin_gate("group_g1", state)
+
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await runtime._run_proactive(
+                "group_g1",
+                state.take_snapshot(),
+                {},
+                state.generation,
+                "u2",
+                transaction=transaction,
+            )
+
+        assert raised.value is cancellation
+        assert state.running is False
+        assert state.last_gate_completed_ts == 0.0
+
+    @pytest.mark.asyncio
+    async def test_run_proactive_normalize_base_exception_uses_explicit_transaction(
+        self,
+        monkeypatch,
+    ):
+        class ProactiveNormalizeFatal(BaseException):
+            pass
+
+        runtime = GroupRuntime()
+        state = self._cold_active_state(runtime, n_msgs=3)
+        previous_completed_ts = 456.789
+        state.last_gate_completed_ts = previous_completed_ts
+        transaction = runtime._begin_gate("group_g1", state)
+        normalize_error = ProactiveNormalizeFatal("proactive normalize fatal")
+
+        def fail_normalize(_group_id):
+            raise normalize_error
+
+        monkeypatch.setattr(runtime, "_norm_group_id", fail_normalize)
+
+        with pytest.raises(ProactiveNormalizeFatal) as raised:
+            await runtime._run_proactive(
+                "group_g1",
+                state.take_snapshot(),
+                {},
+                state.generation,
+                "u2",
+                transaction=transaction,
+            )
+
+        assert raised.value is normalize_error
+        assert state.running is False
+        assert state.last_gate_completed_ts == previous_completed_ts
+
+    @pytest.mark.asyncio
+    async def test_proactive_post_done_base_exception_restores_timestamp_and_primary(
+        self,
+        monkeypatch,
+    ):
+        from core.group_runtime.state import GateStateSnapshot
+
+        class ProactiveApplyFatal(BaseException):
+            pass
+
+        runtime = GroupRuntime()
+        state = self._cold_active_state(runtime, n_msgs=3)
+        previous_completed_ts = 345.678
+        state.last_gate_completed_ts = previous_completed_ts
+        transaction = runtime._begin_gate("group_g1", state)
+        apply_error = ProactiveApplyFatal("proactive apply fatal")
+        cleanup_error = RuntimeError("abort cleanup failed")
+        logging_error = RuntimeError("gate abort logging failed")
+        original_done = state.mark_gate_done
+        original_restore = GateStateSnapshot.restore_exact
+
+        class BrokenLogger:
+            def exception(self, *_args, **_kwargs):
+                raise logging_error
+
+        def done_then_fail():
+            original_done()
+            raise apply_error
+
+        def restore_then_fail(snapshot, state_arg):
+            original_restore(snapshot, state_arg)
+            raise cleanup_error
+
+        monkeypatch.setattr(
+            "clients.classifier_client.judge_proactive",
+            lambda _context: {
+                "should_speak": False,
+                "reason": "declined",
+                "error_type": None,
+            },
+        )
+        monkeypatch.setattr(state, "mark_gate_done", done_then_fail)
+        monkeypatch.setattr(
+            GateStateSnapshot,
+            "restore_exact",
+            restore_then_fail,
+        )
+        monkeypatch.setattr("core.group_runtime.runtime.logger", BrokenLogger())
+
+        with pytest.raises(ProactiveApplyFatal) as raised:
+            await runtime._run_proactive(
+                "group_g1",
+                state.take_snapshot(),
+                {},
+                state.generation,
+                "u2",
+                transaction=transaction,
+            )
+
+        assert raised.value is apply_error
+        assert state.running is False
+        assert state.last_gate_completed_ts == previous_completed_ts
 
     @pytest.mark.asyncio
     async def test_timer_fired_gen_mismatch_rejected(self, monkeypatch):

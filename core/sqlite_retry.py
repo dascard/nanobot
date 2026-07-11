@@ -67,8 +67,17 @@ def run_sqlite_locked_retry(
             if rollback is not None:
                 try:
                     rollback()
-                except Exception:
-                    pass
+                except BaseException as rollback_exc:
+                    add_note = getattr(exc, "add_note", None)
+                    if callable(add_note):
+                        try:
+                            add_note(
+                                "SQLite 锁重试前 rollback 失败: "
+                                f"{type(rollback_exc).__name__}: {rollback_exc}"
+                            )
+                        except BaseException:
+                            pass
+                    raise exc from rollback_exc
             delay = base_delay * (2 ** (attempt - 1))
             if logger is not None:
                 next_attempt = attempt + 1

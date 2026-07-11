@@ -12,27 +12,27 @@ def test_prompt_v2_flow_selects_single_conditional_path_by_edge_condition():
         "version": 1,
         "nodes": [
             {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "private_branch", "type": "template", "template_key": "chat/branch_private"},
-            {"id": "group_branch", "type": "template", "template_key": "chat/branch_group"},
-            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "private_policy", "type": "template", "template_key": "chat/branch_private"},
+            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group"},
+            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
         ],
         "edges": [
-            {"from": "base", "to": "private_branch", "chat_types": ["private"]},
-            {"from": "base", "to": "group_branch", "chat_types": ["group"]},
-            {"from": "private_branch", "to": "tail", "chat_types": ["private"]},
-            {"from": "group_branch", "to": "tail", "chat_types": ["group"]},
+            {"from": "base", "to": "private_policy", "chat_types": ["private"]},
+            {"from": "base", "to": "group_policy", "chat_types": ["group"]},
+            {"from": "private_policy", "to": "current_user_event", "chat_types": ["private"]},
+            {"from": "group_policy", "to": "current_user_event", "chat_types": ["group"]},
         ],
     }
 
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
         "base",
-        "private_branch",
-        "tail",
+        "private_policy",
+        "current_user_event",
     ]
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "group")] == [
         "base",
-        "group_branch",
-        "tail",
+        "group_policy",
+        "current_user_event",
     ]
 
 
@@ -43,11 +43,11 @@ def test_prompt_v2_flow_rejects_ambiguous_outgoing_branch_condition():
         "version": 1,
         "nodes": [
             {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "a", "type": "template", "template_key": "chat/branch_private"},
+            {"id": "private_policy", "type": "template", "template_key": "chat/branch_private"},
             {"id": "b", "type": "template", "template_key": "chat/identity_context"},
         ],
         "edges": [
-            {"from": "base", "to": "a", "chat_types": ["private"]},
+            {"from": "base", "to": "private_policy", "chat_types": ["private"]},
             {"from": "base", "to": "b", "chat_types": ["private"]},
         ],
     }
@@ -64,17 +64,17 @@ def test_prompt_v2_flow_orders_multiple_entry_nodes_by_topology():
         "nodes": [
             {"id": "identity", "type": "template", "template_key": "chat/identity_context"},
             {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
         ],
         "edges": [
-            {"from": "base", "to": "tail"},
+            {"from": "base", "to": "current_user_event"},
         ],
     }
 
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
         "identity",
         "base",
-        "tail",
+        "current_user_event",
     ]
 
 
@@ -85,21 +85,21 @@ def test_prompt_v2_flow_ignores_nodes_only_used_by_inactive_conditions():
         "version": 1,
         "nodes": [
             {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "inactive_group_branch", "type": "template", "template_key": "chat/branch_group"},
+            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group"},
             {"id": "runtime_context", "type": "runtime", "runtime_key": "runtime_context"},
-            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
         ],
         "edges": [
-            {"from": "base", "to": "inactive_group_branch", "chat_types": ["group"]},
-            {"from": "inactive_group_branch", "to": "runtime_context", "chat_types": ["private"]},
-            {"from": "runtime_context", "to": "tail"},
+            {"from": "base", "to": "group_policy", "chat_types": ["group"]},
+            {"from": "group_policy", "to": "runtime_context", "chat_types": ["private"]},
+            {"from": "runtime_context", "to": "current_user_event"},
         ],
     }
 
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
-        "inactive_group_branch",
+        "group_policy",
         "runtime_context",
-        "tail",
+        "current_user_event",
     ]
 
 
@@ -111,15 +111,19 @@ def test_prompt_v2_flow_entry_is_derived_from_in_degree_not_node_order():
         "nodes": [
             {"id": "identity", "type": "template", "template_key": "chat/identity_context"},
             {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
         ],
         "edges": [
             {"from": "base", "to": "identity"},
-            {"from": "identity", "to": "tail"},
+            {"from": "identity", "to": "current_user_event"},
         ],
     }
 
-    assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == ["base", "identity", "tail"]
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
+        "base",
+        "identity",
+        "current_user_event",
+    ]
 
 
 def test_prompt_v2_flow_filters_by_chat_type_and_platform():
@@ -139,18 +143,18 @@ def test_prompt_v2_flow_filters_by_chat_type_and_platform():
                 "platforms": ["qq"],
             },
             {"id": "private_policy", "type": "template", "template_key": "chat/branch_private", "chat_types": ["private"]},
-            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
         ],
         "edges": [
             {"from": "base", "to": "qq_common", "platforms": ["qq"]},
             {"from": "base", "to": "group_policy", "chat_types": ["group"], "platforms": ["web"]},
             {"from": "qq_common", "to": "group_policy", "chat_types": ["group"], "platforms": ["qq"]},
             {"from": "group_policy", "to": "qq_group", "chat_types": ["group"], "platforms": ["qq"]},
-            {"from": "qq_group", "to": "tail", "chat_types": ["group"], "platforms": ["qq"]},
-            {"from": "group_policy", "to": "tail", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "qq_group", "to": "current_user_event", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "group_policy", "to": "current_user_event", "chat_types": ["group"], "platforms": ["web"]},
             {"from": "qq_common", "to": "private_policy", "chat_types": ["private"], "platforms": ["qq"]},
             {"from": "base", "to": "private_policy", "chat_types": ["private"], "platforms": ["web"]},
-            {"from": "private_policy", "to": "tail", "chat_types": ["private"]},
+            {"from": "private_policy", "to": "current_user_event", "chat_types": ["private"]},
         ],
     }
 
@@ -159,18 +163,18 @@ def test_prompt_v2_flow_filters_by_chat_type_and_platform():
         "qq_common",
         "group_policy",
         "qq_group",
-        "tail",
+        "current_user_event",
     ]
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private", platform="qq")] == [
         "base",
         "qq_common",
         "private_policy",
-        "tail",
+        "current_user_event",
     ]
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private", platform="web")] == [
         "base",
         "private_policy",
-        "tail",
+        "current_user_event",
     ]
 
 
@@ -182,19 +186,27 @@ def test_prompt_v2_flow_allows_disjoint_platform_branches_for_same_chat_type():
         "nodes": [
             {"id": "base", "type": "template", "template_key": "chat/main"},
             {"id": "qq", "type": "template", "template_key": "chat/platform/qq/group"},
-            {"id": "web", "type": "template", "template_key": "chat/branch_group"},
-            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group"},
+            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
         ],
         "edges": [
             {"from": "base", "to": "qq", "chat_types": ["group"], "platforms": ["qq"]},
-            {"from": "base", "to": "web", "chat_types": ["group"], "platforms": ["web"]},
-            {"from": "qq", "to": "tail", "chat_types": ["group"], "platforms": ["qq"]},
-            {"from": "web", "to": "tail", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "base", "to": "group_policy", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "qq", "to": "current_user_event", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "group_policy", "to": "current_user_event", "chat_types": ["group"], "platforms": ["web"]},
         ],
     }
 
-    assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="qq")] == ["base", "qq", "tail"]
-    assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="web")] == ["base", "web", "tail"]
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="qq")] == [
+        "base",
+        "qq",
+        "current_user_event",
+    ]
+    assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="web")] == [
+        "base",
+        "group_policy",
+        "current_user_event",
+    ]
 
 
 def test_prompt_v2_flow_rejects_overlapping_platform_branches():
@@ -204,11 +216,11 @@ def test_prompt_v2_flow_rejects_overlapping_platform_branches():
         "version": 1,
         "nodes": [
             {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "generic", "type": "template", "template_key": "chat/branch_group"},
+            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group"},
             {"id": "qq", "type": "template", "template_key": "chat/platform/qq/group"},
         ],
         "edges": [
-            {"from": "base", "to": "generic", "chat_types": ["group"]},
+            {"from": "base", "to": "group_policy", "chat_types": ["group"]},
             {"from": "base", "to": "qq", "chat_types": ["group"], "platforms": ["qq"]},
         ],
     }
@@ -224,13 +236,162 @@ def test_prompt_v2_flow_rejects_invalid_platform_values():
         "version": 1,
         "nodes": [
             {"id": "base", "type": "template", "template_key": "chat/main", "platforms": ["QQ!"]},
-            {"id": "tail", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
         ],
-        "edges": [{"from": "base", "to": "tail"}],
+        "edges": [{"from": "base", "to": "current_user_event"}],
     }
 
     with pytest.raises(PromptFlowError, match="platforms 不支持"):
         validate_flow(flow)
+
+
+def _mutate_reserved_flow_node(flow, node_id, invalid_fields):
+    node = next(item for item in flow["nodes"] if item["id"] == node_id)
+    replacement_id = invalid_fields.get("id", node_id)
+    node.update(invalid_fields)
+    if replacement_id == node_id:
+        return
+    for edge in flow["edges"]:
+        if edge["from"] == node_id:
+            edge["from"] = replacement_id
+        if edge["to"] == node_id:
+            edge["to"] = replacement_id
+
+
+@pytest.mark.parametrize(
+    ("node_id", "invalid_fields"),
+    [
+        ("persona_reference", {"id": "renamed_persona_reference"}),
+        (
+            "runtime_tool_prompt",
+            {"type": "template", "template_key": "chat/main"},
+        ),
+        ("current_user_event", {"runtime_key": "runtime_context"}),
+        ("private_policy", {"id": "renamed_private_policy"}),
+        (
+            "group_policy",
+            {"type": "runtime", "runtime_key": "runtime_context"},
+        ),
+        ("group_policy", {"template_key": "chat/main"}),
+    ],
+    ids=(
+        "persona-node-id",
+        "runtime-tool-node-type",
+        "current-user-runtime-key",
+        "private-policy-node-id",
+        "group-policy-node-type",
+        "group-policy-template-key",
+    ),
+)
+def test_prompt_v2_flow_rejects_reserved_section_identity(node_id, invalid_fields):
+    import copy
+
+    from core.prompt_v2.flow import DEFAULT_FLOW, PromptFlowError, validate_flow
+
+    flow = copy.deepcopy(DEFAULT_FLOW)
+    _mutate_reserved_flow_node(flow, node_id, invalid_fields)
+
+    with pytest.raises(PromptFlowError):
+        validate_flow(flow)
+
+
+def test_prompt_v2_save_flow_rejects_renamed_reserved_node_before_write(
+    tmp_path,
+    monkeypatch,
+):
+    import copy
+
+    from core.prompt_v2 import flow as flow_module
+
+    flow = copy.deepcopy(flow_module.DEFAULT_FLOW)
+    _mutate_reserved_flow_node(
+        flow,
+        "runtime_tool_prompt",
+        {"id": "renamed_runtime_tool_prompt"},
+    )
+    runtime_path = tmp_path / "chat" / "flow.json"
+    monkeypatch.setattr(flow_module, "runtime_flow_path", lambda: runtime_path)
+
+    with pytest.raises(flow_module.PromptFlowError):
+        flow_module.save_flow(flow)
+
+    assert runtime_path.exists() is False
+
+
+@pytest.mark.parametrize(
+    "invalid_variant",
+    [
+        "missing-singleton",
+        "fully-renamed-singleton",
+        "platform-excluded-singleton",
+        "platform-excluded-policy",
+    ],
+)
+def test_prompt_v2_save_flow_rejects_runtime_contract_that_strict_audit_would_reject(
+    tmp_path,
+    monkeypatch,
+    invalid_variant,
+):
+    import copy
+
+    from core.prompt_v2 import flow as flow_module
+
+    flow = copy.deepcopy(flow_module.DEFAULT_FLOW)
+    if invalid_variant == "missing-singleton":
+        flow["nodes"] = [
+            node for node in flow["nodes"] if node["id"] != "runtime_tool_prompt"
+        ]
+        flow["edges"] = [
+            edge
+            for edge in flow["edges"]
+            if "runtime_tool_prompt" not in {edge["from"], edge["to"]}
+        ]
+        flow["edges"].append(
+            {"from": "effort_constraint", "to": "current_user_event"}
+        )
+    elif invalid_variant == "fully-renamed-singleton":
+        _mutate_reserved_flow_node(
+            flow,
+            "runtime_tool_prompt",
+            {
+                "id": "custom_runtime_context",
+                "runtime_key": "runtime_context",
+            },
+        )
+    elif invalid_variant == "platform-excluded-singleton":
+        node = next(
+            item for item in flow["nodes"] if item["id"] == "runtime_tool_prompt"
+        )
+        node["platforms"] = ["qq"]
+    else:
+        node = next(item for item in flow["nodes"] if item["id"] == "private_policy")
+        node["platforms"] = ["qq"]
+
+    runtime_path = tmp_path / invalid_variant / "chat" / "flow.json"
+    monkeypatch.setattr(flow_module, "runtime_flow_path", lambda: runtime_path)
+
+    with pytest.raises(flow_module.PromptFlowError):
+        flow_module.save_flow(flow)
+
+    assert runtime_path.exists() is False
+
+
+def test_prompt_v2_save_flow_accepts_default_platform_branches(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from core.prompt_v2 import flow as flow_module
+
+    flow = json.loads(
+        Path("prompts.v2.default/chat/flow.json").read_text(encoding="utf-8")
+    )
+    runtime_path = tmp_path / "chat" / "flow.json"
+    monkeypatch.setattr(flow_module, "runtime_flow_path", lambda: runtime_path)
+
+    result = flow_module.save_flow(flow)
+
+    assert result["saved"] is True
+    assert result["flow"] == flow_module.validate_flow(flow)
+    assert runtime_path.exists() is True
 
 
 def test_prompt_v2_template_values_and_runtime_context_include_platform():
@@ -263,7 +424,7 @@ async def test_prompt_v2_compile_plan_exposes_platform(monkeypatch):
         "nodes": [
             {"id": "base", "type": "template", "template_key": "chat/main"},
             {
-                "id": "web_private",
+                "id": "private_policy",
                 "type": "template",
                 "template_key": "chat/branch_private",
                 "chat_types": ["private"],
@@ -272,8 +433,8 @@ async def test_prompt_v2_compile_plan_exposes_platform(monkeypatch):
             {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
         ],
         "edges": [
-            {"from": "base", "to": "web_private", "chat_types": ["private"], "platforms": ["web"]},
-            {"from": "web_private", "to": "current_user_event", "chat_types": ["private"], "platforms": ["web"]},
+            {"from": "base", "to": "private_policy", "chat_types": ["private"], "platforms": ["web"]},
+            {"from": "private_policy", "to": "current_user_event", "chat_types": ["private"], "platforms": ["web"]},
         ],
     }
     monkeypatch.setattr(
@@ -288,7 +449,7 @@ async def test_prompt_v2_compile_plan_exposes_platform(monkeypatch):
 
     assert plan.platform == "web"
     assert plan.debug["platform"] == "web"
-    assert plan.debug["flow_node_ids"] == ["base", "web_private", "current_user_event"]
+    assert plan.debug["flow_node_ids"] == ["base", "private_policy", "current_user_event"]
 
 
 @pytest.mark.asyncio
@@ -385,6 +546,10 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
         "group_policy",
         "qq_group_policy",
     ]
+    assert all(
+        {"node_id", "node_type", "template_key", "runtime_key"}.issubset(section)
+        for section in plan.flow_sections
+    )
 
     roles = [m["role"] for m in plan.messages]
     assert roles == [
@@ -414,7 +579,124 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
     assert sum("<persona_reference" in c for c in contents) == 1
     assert "当前问题" in plan.current_user_content
     assert "当前问题" not in "\n".join(contents[:-1])
-    assert json.loads(json.dumps(plan.to_dict(), ensure_ascii=False))["engine"] == "prompt"
+    serialized_plan = json.loads(json.dumps(plan.to_dict(), ensure_ascii=False))
+    assert serialized_plan["engine"] == "prompt"
+    assert serialized_plan["flow_sections"] == plan.flow_sections
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_flow_sections_describe_output_status_and_message_indexes(
+    monkeypatch,
+):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    ordered_nodes = [
+        {"id": "base_contract", "type": "template", "template_key": "chat/main"},
+        {
+            "id": "private_policy",
+            "type": "template",
+            "template_key": "chat/branch_private",
+        },
+        {"id": "runtime_context", "type": "runtime", "runtime_key": "runtime_context"},
+        {
+            "id": "effort_constraint",
+            "type": "runtime",
+            "runtime_key": "effort_constraint",
+        },
+        {
+            "id": "runtime_tool_prompt",
+            "type": "runtime",
+            "runtime_key": "runtime_tool_prompt",
+        },
+        {
+            "id": "current_user_event",
+            "type": "runtime",
+            "runtime_key": "current_user_event",
+        },
+        {
+            "id": "duplicate_runtime_tool_prompt",
+            "type": "runtime",
+            "runtime_key": "runtime_tool_prompt",
+        },
+    ]
+    monkeypatch.setattr(
+        compiler,
+        "load_flow",
+        lambda: SimpleNamespace(flow={}, path=Path("test-flow.json"), source="test"),
+    )
+    monkeypatch.setattr(
+        compiler,
+        "ordered_nodes_for_chat",
+        lambda _flow, _chat_type, platform: ordered_nodes,
+    )
+    original_load_template = compiler.load_template
+
+    def load_template(template_key):
+        template = original_load_template(template_key)
+        if template_key == "chat/main":
+            return dataclasses.replace(template, body="BASE SECTION")
+        return template
+
+    monkeypatch.setattr(compiler, "load_template", load_template)
+
+    plan = await compiler.compile_prompt_plan(
+        PromptCompileRequest(
+            chat_type="private",
+            platform="web",
+            user_id="u1",
+            user_input="CURRENT USER SECTION",
+            persona_text="FALLBACK PERSONA",
+            runtime_tool_prompt="RUNTIME TOOL SECTION",
+        )
+    )
+    sections = {section["node_id"]: section for section in plan.flow_sections}
+    legacy_fields = {"node_id", "node_type", "template_key", "runtime_key"}
+
+    assert all(legacy_fields.issubset(section) for section in plan.flow_sections)
+
+    base = sections["base_contract"]
+    assert (base["origin"], base["status"]) == ("flow", "emitted")
+    assert [plan.messages[index]["content"] for index in base["message_indexes"]] == [
+        "BASE SECTION"
+    ]
+
+    runtime_tool = sections["runtime_tool_prompt"]
+    assert (runtime_tool["origin"], runtime_tool["status"]) == ("flow", "emitted")
+    assert [
+        plan.messages[index]["content"]
+        for index in runtime_tool["message_indexes"]
+    ] == ["RUNTIME TOOL SECTION"]
+
+    effort = sections["effort_constraint"]
+    assert (effort["origin"], effort["status"], effort["message_indexes"]) == (
+        "flow",
+        "empty",
+        [],
+    )
+
+    duplicate = sections["duplicate_runtime_tool_prompt"]
+    assert (
+        duplicate["origin"],
+        duplicate["status"],
+        duplicate["message_indexes"],
+    ) == ("flow", "skipped_duplicate", [])
+
+    persona = sections["persona_reference"]
+    assert (persona["origin"], persona["status"]) == ("fallback", "emitted")
+    assert persona["message_indexes"]
+    assert all(
+        "FALLBACK PERSONA" in str(plan.messages[index]["content"])
+        for index in persona["message_indexes"]
+    )
+
+    current_user = sections["current_user_event"]
+    assert (current_user["origin"], current_user["status"]) == ("flow", "emitted")
+    assert current_user["message_indexes"] == [len(plan.messages) - 1]
+    assert plan.messages[current_user["message_indexes"][0]] == plan.messages[-1]
 
 
 @pytest.mark.asyncio
@@ -516,20 +798,31 @@ def test_prompt_v2_audit_reports_duplicate_required_sections():
         engine="v2",
         chat_type="group",
         prompt_key="chat_group",
-        messages=[
-            {"role": "system", "content": "<persona_reference>x</persona_reference>"},
-            {"role": "system", "content": "<persona_reference>y</persona_reference>"},
-            {"role": "system", "content": "[RuntimeTool]\none"},
-            {"role": "system", "content": "[RuntimeTool]\ntwo"},
-            {"role": "system", "content": "<user_input>bad</user_input>"},
-            {"role": "user", "content": "<user_input>ok</user_input>"},
-        ],
+        messages=[{"role": "user", "content": "正文不参与结构审计"}],
         tool_schemas=[],
         section_hashes={},
         prompt_sha256="x" * 64,
         token_estimate=1,
         warnings=[],
         debug={},
+        flow_sections=[
+            {
+                "node_id": "private_policy",
+                "node_type": "template",
+                "template_key": "chat/branch_private",
+                "runtime_key": "",
+            },
+            *[
+                {
+                    "node_id": f"{runtime_key}_{index}",
+                    "node_type": "runtime",
+                    "template_key": "",
+                    "runtime_key": runtime_key,
+                }
+                for runtime_key in ("persona_reference", "runtime_tool_prompt", "current_user_event")
+                for index in range(2)
+            ],
+        ],
     )
 
     audit = audit_prompt_plan(plan)
@@ -537,6 +830,387 @@ def test_prompt_v2_audit_reports_duplicate_required_sections():
     assert any("current user input" in issue for issue in audit.issues)
     assert any("runtime_tool_prompt" in issue for issue in audit.issues)
     assert any("persona_reference" in issue for issue in audit.issues)
+    assert any("group plan must select its policy" in issue for issue in audit.issues)
+    assert any("group plan contains private policy" in issue for issue in audit.issues)
+
+
+def _valid_prompt_v2_flow_sections(chat_type: str) -> list[dict[str, str]]:
+    return [
+        {
+            "node_id": f"{chat_type}_policy",
+            "node_type": "template",
+            "template_key": f"chat/branch_{chat_type}",
+            "runtime_key": "",
+        },
+        *[
+            {
+                "node_id": runtime_key,
+                "node_type": "runtime",
+                "template_key": "",
+                "runtime_key": runtime_key,
+            }
+            for runtime_key in ("persona_reference", "runtime_tool_prompt", "current_user_event")
+        ],
+    ]
+
+
+def test_prompt_v2_audit_accepts_legacy_sections_without_output_metadata():
+    from core.prompt_v2.audit import audit_prompt_plan
+    from core.prompt_v2.schema import PromptPlan
+
+    plan = PromptPlan(
+        engine="prompt",
+        chat_type="private",
+        prompt_key="chat_private",
+        messages=[],
+        tool_schemas=[],
+        section_hashes={},
+        prompt_sha256="x" * 64,
+        token_estimate=0,
+        warnings=[],
+        debug={},
+        flow_sections=_valid_prompt_v2_flow_sections("private"),
+    )
+
+    assert audit_prompt_plan(plan).ok is True
+
+
+def test_prompt_v2_audit_does_not_treat_explicit_empty_status_as_legacy():
+    from core.prompt_v2.audit import audit_prompt_plan
+    from core.prompt_v2.schema import PromptPlan
+
+    flow_sections = _valid_prompt_v2_flow_sections("private")
+    next(
+        section
+        for section in flow_sections
+        if section["runtime_key"] == "persona_reference"
+    )["status"] = ""
+    plan = PromptPlan(
+        engine="prompt",
+        chat_type="private",
+        prompt_key="chat_private",
+        messages=[],
+        tool_schemas=[],
+        section_hashes={},
+        prompt_sha256="x" * 64,
+        token_estimate=0,
+        warnings=[],
+        debug={},
+        flow_sections=flow_sections,
+    )
+
+    audit = audit_prompt_plan(plan)
+
+    assert audit.ok is False
+    assert any("persona_reference status must be emitted" in issue for issue in audit.issues)
+
+
+@pytest.mark.parametrize(
+    ("runtime_key", "invalid_fields"),
+    [
+        ("persona_reference", {"node_id": "renamed_persona_reference"}),
+        ("runtime_tool_prompt", {"node_type": "template"}),
+        ("current_user_event", {"template_key": "chat/main"}),
+    ],
+    ids=("wrong-node-id", "wrong-node-type", "unexpected-template-key"),
+)
+def test_prompt_v2_audit_rejects_invalid_singleton_section_identity(runtime_key, invalid_fields):
+    from core.prompt_v2.audit import audit_prompt_plan
+    from core.prompt_v2.schema import PromptPlan
+
+    flow_sections = _valid_prompt_v2_flow_sections("private")
+    section = next(item for item in flow_sections if item["runtime_key"] == runtime_key)
+    section.update(invalid_fields)
+    plan = PromptPlan(
+        engine="prompt",
+        chat_type="private",
+        prompt_key="chat_private",
+        messages=[],
+        tool_schemas=[],
+        section_hashes={},
+        prompt_sha256="x" * 64,
+        token_estimate=0,
+        warnings=[],
+        debug={},
+        flow_sections=flow_sections,
+    )
+
+    audit = audit_prompt_plan(plan)
+
+    assert audit.ok is False
+    assert any(runtime_key in issue for issue in audit.issues)
+
+
+@pytest.mark.parametrize(
+    ("chat_type", "invalid_fields"),
+    [
+        ("private", {"node_id": "renamed_private_policy"}),
+        ("private", {"node_type": "runtime"}),
+        ("private", {"runtime_key": "unexpected_policy_runtime"}),
+        ("private", {"template_key": "chat/main"}),
+        ("group", {"node_id": "renamed_group_policy"}),
+        ("group", {"node_type": "runtime"}),
+        ("group", {"runtime_key": "unexpected_policy_runtime"}),
+        ("group", {"template_key": "chat/main"}),
+    ],
+    ids=(
+        "private-wrong-node-id",
+        "private-wrong-node-type",
+        "private-unexpected-runtime-key",
+        "private-wrong-template-key",
+        "group-wrong-node-id",
+        "group-wrong-node-type",
+        "group-unexpected-runtime-key",
+        "group-wrong-template-key",
+    ),
+)
+def test_prompt_v2_audit_rejects_invalid_policy_section_identity(chat_type, invalid_fields):
+    from core.prompt_v2.audit import audit_prompt_plan
+    from core.prompt_v2.schema import PromptPlan
+
+    flow_sections = _valid_prompt_v2_flow_sections(chat_type)
+    flow_sections[0].update(invalid_fields)
+    plan = PromptPlan(
+        engine="prompt",
+        chat_type=chat_type,
+        prompt_key=f"chat_{chat_type}",
+        messages=[],
+        tool_schemas=[],
+        section_hashes={},
+        prompt_sha256="x" * 64,
+        token_estimate=0,
+        warnings=[],
+        debug={},
+        flow_sections=flow_sections,
+    )
+
+    audit = audit_prompt_plan(plan)
+
+    assert audit.ok is False
+    assert any(chat_type in issue for issue in audit.issues)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict_audit", [True, False], ids=("strict", "non-strict"))
+async def test_prompt_v2_compile_audit_rejects_renamed_singleton_node(
+    monkeypatch,
+    strict_audit,
+):
+    import copy
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.flow import DEFAULT_FLOW, PromptFlowError
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    flow = copy.deepcopy(DEFAULT_FLOW)
+    old_node_id = "runtime_tool_prompt"
+    new_node_id = "renamed_runtime_tool_prompt"
+    next(node for node in flow["nodes"] if node["id"] == old_node_id)["id"] = new_node_id
+    for edge in flow["edges"]:
+        if edge["from"] == old_node_id:
+            edge["from"] = new_node_id
+        if edge["to"] == old_node_id:
+            edge["to"] = new_node_id
+    monkeypatch.setattr(
+        compiler,
+        "load_flow",
+        lambda: SimpleNamespace(flow=flow, path=Path("test-flow.json"), source="test"),
+    )
+    request = PromptCompileRequest(chat_type="private", user_input="你好")
+
+    with pytest.raises(PromptFlowError):
+        await compiler.compile_prompt_plan(request, strict_audit=strict_audit)
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_strict_audit_rejects_missing_policy_template(monkeypatch):
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.audit import PromptAuditError
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    original_load_template = compiler.load_template
+
+    def load_template(prompt_key):
+        if prompt_key == "chat/branch_private":
+            raise FileNotFoundError(prompt_key)
+        return original_load_template(prompt_key)
+
+    monkeypatch.setattr(compiler, "load_template", load_template)
+
+    with pytest.raises(PromptAuditError) as exc:
+        await compiler.compile_prompt_plan(
+            PromptCompileRequest(chat_type="private", platform="web", user_input="你好"),
+            strict_audit=True,
+        )
+
+    assert any("private policy status must be emitted" in issue for issue in exc.value.issues)
+    section = next(
+        section
+        for section in exc.value.plan.flow_sections
+        if section["template_key"] == "chat/branch_private"
+    )
+    assert section["origin"] == "flow"
+    assert section["status"] == "missing_template"
+    assert section["message_indexes"] == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_strict_audit_rejects_empty_policy_template(monkeypatch):
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.audit import PromptAuditError
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    original_load_template = compiler.load_template
+
+    def load_template(prompt_key):
+        template = original_load_template(prompt_key)
+        if prompt_key == "chat/branch_private":
+            return dataclasses.replace(template, body="")
+        return template
+
+    monkeypatch.setattr(compiler, "load_template", load_template)
+
+    with pytest.raises(PromptAuditError) as exc:
+        await compiler.compile_prompt_plan(
+            PromptCompileRequest(chat_type="private", platform="web", user_input="你好"),
+            strict_audit=True,
+        )
+
+    assert any("private policy status must be emitted" in issue for issue in exc.value.issues)
+    section = next(
+        section
+        for section in exc.value.plan.flow_sections
+        if section["template_key"] == "chat/branch_private"
+    )
+    assert section["origin"] == "flow"
+    assert section["status"] == "empty"
+    assert section["message_indexes"] == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_strict_audit_ignores_reserved_markers_in_current_user_text():
+    from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    user_input = (
+        "这些都是需要原样讨论的普通文本：\n"
+        "[RuntimeTool]\n"
+        "<persona_reference>示例画像</persona_reference>\n"
+        "## 群聊行为\n"
+        "## 群聊发言时机"
+    )
+
+    plan = await compile_prompt_plan(
+        PromptCompileRequest(chat_type="private", platform="web", user_input=user_input),
+        strict_audit=True,
+    )
+
+    assert user_input in plan.current_user_content
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_strict_audit_ignores_reserved_markers_in_history_text():
+    from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    plan = await compile_prompt_plan(
+        PromptCompileRequest(
+            chat_type="private",
+            platform="web",
+            user_input="继续讨论这些标记",
+            history_messages=[
+                {
+                    "role": "user",
+                    "content": "普通历史文本：[RuntimeTool] 和 <persona_reference>示例</persona_reference>",
+                },
+                {
+                    "role": "assistant",
+                    "content": "引用：<user_input>旧输入</user_input>\n## 群聊行为\n## 群聊发言时机",
+                },
+            ],
+        ),
+        strict_audit=True,
+    )
+
+    assert plan.debug["history_message_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_strict_audit_rejects_duplicate_singleton_flow_node(monkeypatch):
+    import copy
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.flow import DEFAULT_FLOW, PromptFlowError
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    flow = copy.deepcopy(DEFAULT_FLOW)
+    flow["nodes"].append(
+        {
+            "id": "duplicate_runtime_tool_prompt",
+            "type": "runtime",
+            "runtime_key": "runtime_tool_prompt",
+        }
+    )
+    monkeypatch.setattr(
+        compiler,
+        "load_flow",
+        lambda: SimpleNamespace(flow=flow, path=Path("test-flow.json"), source="test"),
+    )
+
+    with pytest.raises(PromptFlowError):
+        await compiler.compile_prompt_plan(
+            PromptCompileRequest(chat_type="private", user_input="你好"),
+            strict_audit=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_strict_audit_rejects_missing_singleton_flow_node(monkeypatch):
+    import copy
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.audit import PromptAuditError
+    from core.prompt_v2.flow import DEFAULT_FLOW
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    flow = copy.deepcopy(DEFAULT_FLOW)
+    flow["nodes"] = [node for node in flow["nodes"] if node["id"] != "runtime_tool_prompt"]
+    flow["edges"] = [
+        edge
+        for edge in flow["edges"]
+        if "runtime_tool_prompt" not in {edge["from"], edge["to"]}
+    ]
+    flow["edges"].append({"from": "effort_constraint", "to": "current_user_event"})
+    monkeypatch.setattr(
+        compiler,
+        "load_flow",
+        lambda: SimpleNamespace(flow=flow, path=Path("test-flow.json"), source="test"),
+    )
+
+    with pytest.raises(PromptAuditError) as exc:
+        await compiler.compile_prompt_plan(
+            PromptCompileRequest(chat_type="private", user_input="你好"),
+            strict_audit=True,
+        )
+
+    assert any(
+        "runtime_tool_prompt flow node must appear once, got 0" in issue
+        for issue in exc.value.issues
+    )
+    fallback = next(
+        section
+        for section in exc.value.plan.flow_sections
+        if section["runtime_key"] == "runtime_tool_prompt"
+        and section["origin"] == "fallback"
+    )
+    assert fallback["status"] == "emitted"
+    assert fallback["message_indexes"]
 
 
 @pytest.mark.asyncio

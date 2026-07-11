@@ -8,11 +8,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import shutil
-import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import inspect, text
 
@@ -20,10 +20,12 @@ from core.proactive_outreach_schema import proactive_outreach_leases_table
 from core.schema_validation import (
     SchemaMigrationValidationError as SchemaMigrationValidationError,
 )
+from core.sqlite_backup import create_sqlite_snapshot
 from core.time_utils import db_now_naive
 
 
 MigrationFn = Callable[[Any, Any, str | None], None]
+_CHAT_LOG_METADATA_VERSION = "20260523_chat_log_metadata_columns"
 
 
 def _ensure_table(conn: Any) -> None:
@@ -78,25 +80,117 @@ def _create_indexes(conn: Any, statements: list[str]) -> None:
         conn.execute(text(stmt))
 
 
-def _backup_sqlite_db(db_path: str | None) -> None:
-    if not db_path:
-        return
+def _backup_sqlite_db(db_path: str | Path) -> None:
+    path = Path(db_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
 
-    path = Path(db_path)
-    if not path.exists():
-        return
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = path.with_name(f"{path.name}.bak.{timestamp}_{uuid4().hex}")
+    create_sqlite_snapshot(path, backup_path)
 
-    backup_path = path.with_name(f"{path.name}.bak.{time.strftime('%Y%m%d_%H%M%S')}")
     try:
-        shutil.copy2(path, backup_path)
-        backups = sorted(
-            [p for p in path.parent.iterdir() if p.name.startswith(f"{path.name}.bak.")],
+        backup_name_pattern = re.compile(
+            rf"{re.escape(path.name)}\.bak\."
+            r"\d{8}_\d{6}_\d{6}_[0-9a-f]{32}"
+        )
+        backups = [
+            candidate
+            for candidate in path.parent.iterdir()
+            if backup_name_pattern.fullmatch(candidate.name)
+            and candidate.is_file()
+            and not candidate.is_symlink()
+        ]
+        backups.sort(
+            key=lambda candidate: (candidate.stat().st_mtime_ns, candidate.name),
             reverse=True,
         )
-        for old in backups[5:]:
+    except Exception as exc:  # pragma: no cover - 保留扫描失败不应阻断迁移
+        logging.getLogger("nanobot").warning(
+            "DB backup cleanup scan failed (migration continues): %s",
+            exc,
+        )
+        return
+
+    for old in backups[5:]:
+        try:
             old.unlink(missing_ok=True)
-    except Exception as exc:  # pragma: no cover - 备份失败不应阻断迁移
-        logging.getLogger("nanobot").warning("DB backup/cleanup failed (migration continues): %s", exc)
+        except Exception as exc:  # pragma: no cover - 保留清理失败不应阻断迁移
+            logging.getLogger("nanobot").warning(
+                "DB backup cleanup failed (migration continues): %s",
+                exc,
+            )
+
+
+def _sqlite_engine_database_path(engine: Any) -> Path | None:
+    """解析文件型 SQLite engine 路径；内存数据库明确返回 None。"""
+    url = getattr(engine, "url", None)
+    drivername = str(getattr(url, "drivername", ""))
+    if not drivername.startswith("sqlite"):
+        raise ValueError("Schema migration backup requires a SQLite engine")
+
+    database = getattr(url, "database", None)
+    if database in (None, "", ":memory:"):
+        return None
+
+    database_text = str(database)
+    query = dict(getattr(url, "query", {}) or {})
+    uri_enabled = str(query.get("uri", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if uri_enabled and (
+        database_text == "file::memory:"
+        or str(query.get("mode", "")).strip().lower() == "memory"
+    ):
+        return None
+    if database_text.startswith("file:"):
+        raise ValueError("SQLite URI file paths are not supported for migration backup")
+    return Path(database_text).resolve()
+
+
+def _migration_backup_path(engine: Any, db_path: str | None) -> Path | None:
+    engine_path = _sqlite_engine_database_path(engine)
+    if engine_path is None:
+        if db_path is not None:
+            raise ValueError("Explicit db_path conflicts with in-memory SQLite engine")
+        return None
+
+    if db_path is None:
+        selected_path = engine_path
+    else:
+        selected_path = Path(db_path).resolve()
+        if not selected_path.is_file():
+            raise FileNotFoundError(selected_path)
+        if selected_path != engine_path:
+            raise FileNotFoundError(
+                f"Migration backup path does not match engine database: {selected_path}"
+            )
+
+    if not selected_path.is_file():
+        raise FileNotFoundError(selected_path)
+    return selected_path
+
+
+def _chat_log_metadata_needs_backup(bind: Any) -> bool:
+    chat_columns = _columns(bind, "chat_logs")
+    conv_columns = _columns(bind, "conversation_turns")
+    return bool(
+        (chat_columns and any(col not in chat_columns for col in (
+            "session_id",
+            "sender_name",
+            "session_name",
+            "message_id",
+            "source_message_ids_json",
+            "meta_json",
+        )))
+        or (conv_columns and any(col not in conv_columns for col in (
+            "source_message_ids_json",
+            "meta_json",
+        )))
+    )
 
 
 def _chat_log_metadata_columns(conn: Any, engine: Any, db_path: str | None) -> None:
@@ -112,16 +206,6 @@ def _chat_log_metadata_columns(conn: Any, engine: Any, db_path: str | None) -> N
         "source_message_ids_json": "TEXT",
         "meta_json": "TEXT",
     }
-
-    needs_backup = False
-    chat_columns = _columns(conn, "chat_logs")
-    conv_columns = _columns(conn, "conversation_turns")
-    if chat_columns:
-        needs_backup = any(col not in chat_columns for col in chat_missing)
-    if conv_columns:
-        needs_backup = needs_backup or any(col not in conv_columns for col in conv_missing)
-    if needs_backup:
-        _backup_sqlite_db(db_path)
 
     _add_missing_columns(conn, "chat_logs", chat_missing)
     _add_missing_columns(conn, "conversation_turns", conv_missing)
@@ -755,8 +839,649 @@ def _proactive_outreach_log_table(conn: Any, engine: Any, db_path: str | None) -
     ])
 
 
+_INBOUND_CLAIM_COLUMNS = (
+    ("id", "INTEGER", 1, None, 1),
+    ("platform", "VARCHAR(32)", 1, None, 0),
+    ("chat_type", "VARCHAR(16)", 1, None, 0),
+    ("session_id", "VARCHAR(255)", 1, None, 0),
+    ("message_id", "VARCHAR(255)", 1, None, 0),
+    ("status", "VARCHAR(16)", 1, "'processing'", 0),
+    ("owner_token", "VARCHAR(64)", 1, None, 0),
+    ("lease_expires_at", "DATETIME", 0, None, 0),
+    ("response_json", "TEXT", 1, "''", 0),
+    ("error_summary", "TEXT", 1, "''", 0),
+    ("attempt_count", "INTEGER", 1, "1", 0),
+    ("created_at", "DATETIME", 1, "current_timestamp", 0),
+    ("updated_at", "DATETIME", 1, "current_timestamp", 0),
+    ("completed_at", "DATETIME", 0, None, 0),
+)
+
+_PROACTIVE_OUTREACH_LEASE_COLUMNS = (
+    ("user_id", "VARCHAR(255)", 1, None, 1),
+    ("owner_token", "VARCHAR(64)", 1, None, 0),
+    ("lease_expires_at", "DATETIME", 1, None, 0),
+    ("created_at", "DATETIME", 1, "current_timestamp", 0),
+    ("updated_at", "DATETIME", 1, "current_timestamp", 0),
+)
+
+
+_SQL_KEYWORDS = {
+    "autoincrement",
+    "check",
+    "collate",
+    "constraint",
+    "current_date",
+    "current_time",
+    "current_timestamp",
+    "in",
+    "integer",
+    "key",
+    "not",
+    "null",
+    "primary",
+}
+_SQLToken = tuple[str, str]
+_SQLITE_ASCII_IDENTIFIER_CASE_MAP = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "abcdefghijklmnopqrstuvwxyz",
+)
+
+
+def _canonicalize_sqlite_identifier(value: str) -> str:
+    """按 SQLite 默认规则仅折叠标识符中的 ASCII 大写字母。"""
+    return value.translate(_SQLITE_ASCII_IDENTIFIER_CASE_MAP)
+
+
+def _tokenize_sql(value: str) -> tuple[_SQLToken, ...]:
+    """切分 SQLite DDL，并保留 literal 与 quoted identifier 的语义边界。"""
+    tokens: list[_SQLToken] = []
+    index = 0
+    length = len(value)
+    while index < length:
+        char = value[index]
+        if char.isspace():
+            index += 1
+            continue
+        if value.startswith("--", index):
+            newline = value.find("\n", index + 2)
+            index = length if newline < 0 else newline + 1
+            continue
+        if value.startswith("/*", index):
+            comment_end = value.find("*/", index + 2)
+            if comment_end < 0:
+                tokens.append(("invalid", value[index:]))
+                break
+            index = comment_end + 2
+            continue
+        if char == "'":
+            start = index
+            index += 1
+            closed = False
+            while index < length:
+                if value[index] != "'":
+                    index += 1
+                    continue
+                if index + 1 < length and value[index + 1] == "'":
+                    index += 2
+                    continue
+                index += 1
+                closed = True
+                break
+            if not closed:
+                tokens.append(("invalid", value[start:]))
+                break
+            tokens.append(("literal", value[start:index]))
+            continue
+        if char in ('"', "`"):
+            delimiter = char
+            identifier: list[str] = []
+            index += 1
+            closed = False
+            while index < length:
+                if value[index] != delimiter:
+                    identifier.append(value[index])
+                    index += 1
+                    continue
+                if index + 1 < length and value[index + 1] == delimiter:
+                    identifier.append(delimiter)
+                    index += 2
+                    continue
+                index += 1
+                closed = True
+                break
+            if not closed:
+                tokens.append(("invalid", "".join(identifier)))
+                break
+            tokens.append((
+                "identifier",
+                _canonicalize_sqlite_identifier("".join(identifier)),
+            ))
+            continue
+        if char == "[":
+            closing = value.find("]", index + 1)
+            if closing < 0:
+                tokens.append(("invalid", value[index:]))
+                break
+            tokens.append((
+                "identifier",
+                _canonicalize_sqlite_identifier(value[index + 1:closing]),
+            ))
+            index = closing + 1
+            continue
+        if char.isalpha() or char == "_" or ord(char) >= 128:
+            start = index
+            index += 1
+            while index < length:
+                current = value[index]
+                if not (
+                    current.isalnum()
+                    or current in "_$"
+                    or ord(current) >= 128
+                ):
+                    break
+                index += 1
+            word = _canonicalize_sqlite_identifier(value[start:index])
+            kind = "keyword" if word in _SQL_KEYWORDS else "identifier"
+            tokens.append((kind, word))
+            continue
+        if char.isdigit():
+            start = index
+            index += 1
+            while index < length and (value[index].isalnum() or value[index] in "._"):
+                index += 1
+            tokens.append(("number", value[start:index].casefold()))
+            continue
+        tokens.append(("symbol", char))
+        index += 1
+    return tuple(tokens)
+
+
+def _tokens_have_wrapping_parentheses(tokens: tuple[_SQLToken, ...]) -> bool:
+    if len(tokens) < 2 or tokens[0] != ("symbol", "(") or tokens[-1] != ("symbol", ")"):
+        return False
+    depth = 0
+    for index, token in enumerate(tokens):
+        if token == ("symbol", "("):
+            depth += 1
+        elif token == ("symbol", ")"):
+            depth -= 1
+            if depth == 0 and index != len(tokens) - 1:
+                return False
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _normalize_schema_default(value: Any) -> tuple[_SQLToken, ...] | None:
+    if value is None:
+        return None
+    tokens = _tokenize_sql(str(value))
+    while _tokens_have_wrapping_parentheses(tokens):
+        tokens = tokens[1:-1]
+    return tokens
+
+
+def _count_token_sequence(
+    tokens: tuple[_SQLToken, ...],
+    expected: tuple[_SQLToken, ...],
+) -> int:
+    if not expected or len(expected) > len(tokens):
+        return 0
+    return sum(
+        tokens[index:index + len(expected)] == expected
+        for index in range(len(tokens) - len(expected) + 1)
+    )
+
+
+def _validate_inbound_claim_table(conn: Any) -> None:
+    rows = conn.execute(text("PRAGMA table_xinfo(inbound_message_claims)")).mappings().all()
+    hidden_columns = [
+        (str(row["name"]), int(row["hidden"]))
+        for row in rows
+        if int(row["hidden"]) != 0
+    ]
+    if hidden_columns:
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims 不允许 hidden 隐藏或生成列: "
+            f"{hidden_columns!r}"
+        )
+    raw_actual_names = tuple(str(row["name"]) for row in rows)
+    actual_names = tuple(
+        _canonicalize_sqlite_identifier(name) for name in raw_actual_names
+    )
+    expected_names = tuple(
+        _canonicalize_sqlite_identifier(item[0])
+        for item in _INBOUND_CLAIM_COLUMNS
+    )
+    if actual_names != expected_names:
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims 列集合或顺序不符合契约: "
+            f"expected={expected_names!r} actual={raw_actual_names!r}"
+        )
+
+    for row, expected in zip(rows, _INBOUND_CLAIM_COLUMNS, strict=True):
+        name, column_type, not_null, default, primary_key = expected
+        actual = (
+            str(row["type"]).upper().replace(" ", ""),
+            int(row["notnull"]),
+            _normalize_schema_default(row["dflt_value"]),
+            int(row["pk"]),
+        )
+        required = (
+            column_type,
+            not_null,
+            _normalize_schema_default(default),
+            primary_key,
+        )
+        if actual != required:
+            raise SchemaMigrationValidationError(
+                f"inbound_message_claims.{name} 定义不符合契约: "
+                f"expected={required!r} actual={actual!r}"
+            )
+
+    table_sql = conn.execute(text(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'table' AND lower(name) = 'inbound_message_claims'"
+    )).scalar_one_or_none()
+    if not isinstance(table_sql, str):
+        raise SchemaMigrationValidationError("inbound_message_claims 缺少建表 DDL")
+    table_tokens = _tokenize_sql(table_sql)
+    if any(kind == "invalid" for kind, _value in table_tokens):
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims 建表 DDL 包含未闭合的注释或引号"
+        )
+    if ("keyword", "collate") in table_tokens:
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims 不允许 COLLATE 声明，所有列必须使用默认 BINARY"
+        )
+    triggers = conn.execute(text(
+        "SELECT name FROM sqlite_master "
+        "WHERE type = 'trigger' AND lower(tbl_name) = 'inbound_message_claims'"
+    )).scalars().all()
+    if triggers:
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims 不允许 trigger 触发器: "
+            f"{sorted(str(name) for name in triggers)!r}"
+        )
+    autoincrement_tokens = _tokenize_sql(
+        "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT"
+    )
+    if _count_token_sequence(table_tokens, autoincrement_tokens) != 1:
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims.id 必须显式使用 "
+            "INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT"
+        )
+    required_checks = (
+        "CONSTRAINT ck_inbound_message_claim_status "
+        "CHECK (status IN ('processing', 'completed', 'failed'))",
+        "CONSTRAINT ck_inbound_message_claim_attempt_count "
+        "CHECK (attempt_count >= 1)",
+    )
+    for check_sql in required_checks:
+        if _count_token_sequence(table_tokens, _tokenize_sql(check_sql)) != 1:
+            raise SchemaMigrationValidationError(
+                "inbound_message_claims 缺少或错误的具名 CHECK: " + check_sql
+            )
+
+    check_count = sum(
+        table_tokens[index] == ("keyword", "check")
+        and table_tokens[index + 1] == ("symbol", "(")
+        for index in range(len(table_tokens) - 1)
+    )
+    check_names: set[str] = set()
+    for index in range(len(table_tokens) - 3):
+        if (
+            table_tokens[index] == ("keyword", "constraint")
+            and table_tokens[index + 1][0] == "identifier"
+            and table_tokens[index + 2] == ("keyword", "check")
+            and table_tokens[index + 3] == ("symbol", "(")
+        ):
+            check_names.add(table_tokens[index + 1][1])
+    expected_check_names = {
+        "ck_inbound_message_claim_status",
+        "ck_inbound_message_claim_attempt_count",
+    }
+    if check_count != 2 or check_names != expected_check_names:
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims CHECK 集合不符合契约: "
+            f"count={check_count} names={sorted(check_names)!r}"
+        )
+
+    foreign_keys = conn.execute(text(
+        "PRAGMA foreign_key_list(inbound_message_claims)"
+    )).mappings().all()
+    if foreign_keys:
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims 不允许 FOREIGN KEY 外键约束"
+        )
+
+
+def _validate_inbound_claim_indexes(conn: Any) -> None:
+    index_rows = conn.execute(text(
+        "PRAGMA index_list(inbound_message_claims)"
+    )).mappings().all()
+    indexes: dict[str, tuple[str, Any]] = {}
+    duplicate_index_names: list[str] = []
+    for row in index_rows:
+        original_name = str(row["name"])
+        normalized_name = _canonicalize_sqlite_identifier(original_name)
+        if normalized_name in indexes:
+            duplicate_index_names.append(original_name)
+            continue
+        indexes[normalized_name] = (original_name, row)
+    if duplicate_index_names:
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims 存在大小写等价的重复索引名: "
+            f"{sorted(duplicate_index_names)!r}"
+        )
+    extra_unique_indexes = sorted(
+        original_name
+        for normalized_name, (original_name, row) in indexes.items()
+        if int(row["unique"]) == 1
+        and normalized_name
+        != _canonicalize_sqlite_identifier("uq_inbound_message_claim_identity")
+    )
+    if extra_unique_indexes:
+        raise SchemaMigrationValidationError(
+            "inbound_message_claims 不允许额外唯一 unique 索引: "
+            f"{extra_unique_indexes!r}"
+        )
+    expected_indexes = {
+        "uq_inbound_message_claim_identity": (
+            1,
+            ("platform", "chat_type", "session_id", "message_id"),
+        ),
+        "ix_inbound_message_claim_status_lease": (
+            0,
+            ("status", "lease_expires_at"),
+        ),
+    }
+    for index_name, (unique, columns) in expected_indexes.items():
+        index_entry = indexes.get(_canonicalize_sqlite_identifier(index_name))
+        if index_entry is None:
+            raise SchemaMigrationValidationError(
+                f"inbound_message_claims 缺少索引 {index_name}"
+            )
+        original_index_name, row = index_entry
+        actual_unique = int(row["unique"])
+        actual_origin = str(row["origin"])
+        actual_partial = int(row["partial"])
+        escaped_index_name = original_index_name.replace("'", "''")
+        xinfo_rows = conn.execute(text(
+            f"PRAGMA index_xinfo('{escaped_index_name}')"
+        )).mappings().all()
+        key_rows = sorted(
+            (item for item in xinfo_rows if int(item["key"]) == 1),
+            key=lambda item: int(item["seqno"]),
+        )
+        auxiliary_rows = [item for item in xinfo_rows if int(item["key"]) == 0]
+        actual_columns = tuple(
+            None
+            if item["name"] is None
+            else _canonicalize_sqlite_identifier(str(item["name"]))
+            for item in key_rows
+        )
+        expected_columns = tuple(
+            _canonicalize_sqlite_identifier(column) for column in columns
+        )
+        key_semantics_valid = all(
+            item["name"] is not None
+            and int(item["cid"]) >= 0
+            and _canonicalize_sqlite_identifier(str(item["coll"])) == "binary"
+            and int(item["desc"]) == 0
+            and int(item["key"]) == 1
+            for item in key_rows
+        )
+        auxiliary_rows_valid = (
+            len(auxiliary_rows) == 1
+            and int(auxiliary_rows[0]["cid"]) == -1
+            and auxiliary_rows[0]["name"] is None
+            and _canonicalize_sqlite_identifier(
+                str(auxiliary_rows[0]["coll"])
+            ) == "binary"
+            and int(auxiliary_rows[0]["desc"]) == 0
+            and int(auxiliary_rows[0]["key"]) == 0
+        )
+        if (
+            actual_unique != unique
+            or actual_origin != "c"
+            or actual_partial != 0
+            or actual_columns != expected_columns
+            or not key_semantics_valid
+            or not auxiliary_rows_valid
+        ):
+            raise SchemaMigrationValidationError(
+                f"inbound_message_claims 索引 {index_name} 不符合契约: "
+                f"unique={actual_unique} origin={actual_origin!r} "
+                f"partial={actual_partial} columns={actual_columns!r} "
+                f"key_semantics_valid={key_semantics_valid} "
+                f"auxiliary_rows_valid={auxiliary_rows_valid}"
+            )
+
+
+def _inbound_message_claims_table(conn: Any, engine: Any, db_path: str | None) -> None:
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS inbound_message_claims ("
+        "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, "
+        "platform VARCHAR(32) NOT NULL, "
+        "chat_type VARCHAR(16) NOT NULL, "
+        "session_id VARCHAR(255) NOT NULL, "
+        "message_id VARCHAR(255) NOT NULL, "
+        "status VARCHAR(16) NOT NULL DEFAULT 'processing', "
+        "owner_token VARCHAR(64) NOT NULL, "
+        "lease_expires_at DATETIME, "
+        "response_json TEXT NOT NULL DEFAULT '', "
+        "error_summary TEXT NOT NULL DEFAULT '', "
+        "attempt_count INTEGER NOT NULL DEFAULT 1, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "completed_at DATETIME, "
+        "CONSTRAINT ck_inbound_message_claim_status "
+        "CHECK (status IN ('processing', 'completed', 'failed')), "
+        "CONSTRAINT ck_inbound_message_claim_attempt_count "
+        "CHECK (attempt_count >= 1)"
+        ")"
+    ))
+    _validate_inbound_claim_table(conn)
+    _create_indexes(conn, [
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_inbound_message_claim_identity "
+        "ON inbound_message_claims(platform, chat_type, session_id, message_id)",
+        "CREATE INDEX IF NOT EXISTS ix_inbound_message_claim_status_lease "
+        "ON inbound_message_claims(status, lease_expires_at)",
+    ])
+    _validate_inbound_claim_indexes(conn)
+
+
+def _validate_proactive_outreach_lease_table(conn: Any) -> None:
+    rows = conn.execute(
+        text("PRAGMA table_xinfo(proactive_outreach_leases)")
+    ).mappings().all()
+    hidden_columns = [
+        (str(row["name"]), int(row["hidden"]))
+        for row in rows
+        if int(row["hidden"]) != 0
+    ]
+    if hidden_columns:
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 不允许 hidden 隐藏或生成列: "
+            f"{hidden_columns!r}"
+        )
+
+    raw_actual_names = tuple(str(row["name"]) for row in rows)
+    actual_names = tuple(name.casefold() for name in raw_actual_names)
+    expected_names = tuple(
+        item[0].casefold() for item in _PROACTIVE_OUTREACH_LEASE_COLUMNS
+    )
+    if actual_names != expected_names:
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 列集合或顺序不符合契约: "
+            f"expected={expected_names!r} actual={raw_actual_names!r}"
+        )
+
+    for row, expected in zip(
+        rows,
+        _PROACTIVE_OUTREACH_LEASE_COLUMNS,
+        strict=True,
+    ):
+        name, column_type, not_null, default, primary_key = expected
+        actual = (
+            str(row["type"]).upper().replace(" ", ""),
+            int(row["notnull"]),
+            _normalize_schema_default(row["dflt_value"]),
+            int(row["pk"]),
+        )
+        required = (
+            column_type,
+            not_null,
+            _normalize_schema_default(default),
+            primary_key,
+        )
+        if actual != required:
+            raise SchemaMigrationValidationError(
+                f"proactive_outreach_leases.{name} 定义不符合契约: "
+                f"expected={required!r} actual={actual!r}"
+            )
+
+    table_sql = conn.execute(text(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'table' AND lower(name) = 'proactive_outreach_leases'"
+    )).scalar_one_or_none()
+    if not isinstance(table_sql, str):
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 缺少建表 DDL"
+        )
+    table_tokens = _tokenize_sql(table_sql)
+    if any(kind == "invalid" for kind, _value in table_tokens):
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 建表 DDL 包含未闭合的注释或引号"
+        )
+    if ("keyword", "collate") in table_tokens:
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 不允许 COLLATE 声明"
+        )
+    if ("keyword", "check") in table_tokens:
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 不允许 CHECK 约束"
+        )
+    triggers = conn.execute(text(
+        "SELECT name FROM sqlite_master "
+        "WHERE type = 'trigger' AND lower(tbl_name) = 'proactive_outreach_leases'"
+    )).scalars().all()
+    if triggers:
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 不允许 trigger 触发器: "
+            f"{sorted(str(name) for name in triggers)!r}"
+        )
+    foreign_keys = conn.execute(
+        text("PRAGMA foreign_key_list(proactive_outreach_leases)")
+    ).mappings().all()
+    if foreign_keys:
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 不允许 FOREIGN KEY 外键约束"
+        )
+
+
+def _validate_proactive_outreach_lease_indexes(conn: Any) -> None:
+    index_rows = conn.execute(
+        text("PRAGMA index_list(proactive_outreach_leases)")
+    ).mappings().all()
+    indexes = {
+        str(row["name"]).casefold(): (str(row["name"]), row)
+        for row in index_rows
+    }
+    index_name = "ix_proactive_outreach_lease_expires_at"
+    unexpected_indexes = sorted(
+        str(row["name"])
+        for row in index_rows
+        if str(row["origin"]) != "pk"
+        and str(row["name"]).casefold() != index_name.casefold()
+    )
+    if unexpected_indexes:
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 不允许额外索引: "
+            f"{unexpected_indexes!r}"
+        )
+    extra_unique_indexes = sorted(
+        original_name
+        for original_name, row in (
+            (str(item["name"]), item) for item in index_rows
+        )
+        if int(row["unique"]) == 1 and str(row["origin"]) != "pk"
+    )
+    if extra_unique_indexes:
+        raise SchemaMigrationValidationError(
+            "proactive_outreach_leases 不允许额外唯一 unique 索引: "
+            f"{extra_unique_indexes!r}"
+        )
+    index_entry = indexes.get(index_name.casefold())
+    if index_entry is None:
+        raise SchemaMigrationValidationError(
+            f"proactive_outreach_leases 缺少索引 {index_name}"
+        )
+
+    original_name, row = index_entry
+    escaped_name = original_name.replace("'", "''")
+    xinfo_rows = conn.execute(
+        text(f"PRAGMA index_xinfo('{escaped_name}')")
+    ).mappings().all()
+    key_rows = sorted(
+        (item for item in xinfo_rows if int(item["key"]) == 1),
+        key=lambda item: int(item["seqno"]),
+    )
+    auxiliary_rows = [item for item in xinfo_rows if int(item["key"]) == 0]
+    actual_columns = tuple(
+        None if item["name"] is None else str(item["name"]).casefold()
+        for item in key_rows
+    )
+    key_semantics_valid = all(
+        item["name"] is not None
+        and int(item["cid"]) >= 0
+        and str(item["coll"]).upper() == "BINARY"
+        and int(item["desc"]) == 0
+        for item in key_rows
+    )
+    auxiliary_rows_valid = (
+        len(auxiliary_rows) == 1
+        and int(auxiliary_rows[0]["cid"]) == -1
+        and auxiliary_rows[0]["name"] is None
+        and str(auxiliary_rows[0]["coll"]).upper() == "BINARY"
+        and int(auxiliary_rows[0]["desc"]) == 0
+    )
+    if (
+        int(row["unique"]) != 0
+        or str(row["origin"]) != "c"
+        or int(row["partial"]) != 0
+        or actual_columns != ("lease_expires_at",)
+        or not key_semantics_valid
+        or not auxiliary_rows_valid
+    ):
+        raise SchemaMigrationValidationError(
+            f"proactive_outreach_leases 索引 {index_name} 不符合契约: "
+            f"unique={int(row['unique'])} origin={str(row['origin'])!r} "
+            f"partial={int(row['partial'])} columns={actual_columns!r}"
+        )
+
+
+def _proactive_outreach_leases_table(conn: Any, engine: Any, db_path: str | None) -> None:
+    conn.execute(text(
+        "CREATE TABLE IF NOT EXISTS proactive_outreach_leases ("
+        "user_id VARCHAR(255) NOT NULL PRIMARY KEY, "
+        "owner_token VARCHAR(64) NOT NULL, "
+        "lease_expires_at DATETIME NOT NULL, "
+        "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+        "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+        ")"
+    ))
+    _validate_proactive_outreach_lease_table(conn)
+    _create_indexes(conn, [
+        "CREATE INDEX IF NOT EXISTS ix_proactive_outreach_lease_expires_at "
+        "ON proactive_outreach_leases(lease_expires_at)",
+    ])
+    _validate_proactive_outreach_lease_indexes(conn)
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
-    ("20260523_chat_log_metadata_columns", "chat log metadata columns", _chat_log_metadata_columns),
+    (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
     ("20260523_group_memory_columns", "group memory columns", _group_memory_columns),
     ("20260524_group_memory_governance_columns", "group memory governance columns", _group_memory_governance_columns),
@@ -778,6 +1503,7 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     ("20260618_runtime_tool_decision_platform", "runtime tool decision platform column", _runtime_tool_decision_platform_column),
     ("20260706_web_search_provider_usage", "web search provider usage table", _web_search_provider_usage_table),
     ("20260706_proactive_outreach_log", "proactive outreach log table", _proactive_outreach_log_table),
+    ("20260710_inbound_message_claims", "inbound message claims table", _inbound_message_claims_table),
     (
         "20260710_proactive_outreach_leases",
         "proactive outreach leases table",
@@ -787,6 +1513,23 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
 
 
 def run_schema_migrations(engine: Any, *, db_path: str | None = None) -> None:
+    with engine.connect() as conn:
+        if "schema_migrations" in _table_names(conn):
+            applied_before_transaction = {
+                str(row[0])
+                for row in conn.execute(text("SELECT version FROM schema_migrations")).fetchall()
+            }
+        else:
+            applied_before_transaction = set()
+
+    if (
+        _CHAT_LOG_METADATA_VERSION not in applied_before_transaction
+        and _chat_log_metadata_needs_backup(engine)
+    ):
+        backup_path = _migration_backup_path(engine, db_path)
+        if backup_path is not None:
+            _backup_sqlite_db(backup_path)
+
     with engine.begin() as conn:
         applied = _applied_versions(conn)
         for version, name, fn in MIGRATIONS:

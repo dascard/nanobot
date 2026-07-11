@@ -12,6 +12,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class FatalStreamFinalizerError(BaseException):
+    pass
+
+
 def _source(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
@@ -45,11 +49,19 @@ async def _runner_sets(result_holder: dict[str, Any], key: str, value: Any) -> N
     result_holder[key] = value
 
 
+async def _runner_raises(error: BaseException) -> None:
+    raise error
+
+
 def _callbacks(
     calls: dict[str, list[Any]],
     *,
     reply_meta: dict[str, Any] | None = None,
     push_ok: bool = True,
+    persist_error: BaseException | None = None,
+    finalize_error: BaseException | None = None,
+    envelope_error: BaseException | None = None,
+    push_error: BaseException | None = None,
 ):
     from api.chat_streaming_result import ChatStreamResultCallbacks
 
@@ -66,9 +78,13 @@ def _callbacks(
 
     async def finalize_private_buffer(user_id: str, answer: str | None = None, *, clear_window: bool = True):
         calls.setdefault("finalize", []).append((user_id, answer, clear_window))
+        if finalize_error is not None:
+            raise finalize_error
 
     def persist_chat_turn(db, req, answer, guardrail_status=None, **kwargs):
         calls.setdefault("persist", []).append((db, req, answer, guardrail_status, kwargs))
+        if persist_error is not None:
+            raise persist_error
         return 3
 
     def expand_chat_transport_answer(answer: str) -> str:
@@ -77,6 +93,8 @@ def _callbacks(
 
     def build_chat_push_envelope(req, **kwargs):
         calls.setdefault("envelope", []).append((req, kwargs))
+        if envelope_error is not None:
+            raise envelope_error
         return FakePushEnvelope(
             target_type="private",
             target_id=req.user_id,
@@ -85,6 +103,8 @@ def _callbacks(
 
     async def push_envelope_to_qq(target_type: str, target_id: str, envelope: dict[str, Any]) -> bool:
         calls.setdefault("push", []).append((target_type, target_id, envelope))
+        if push_error is not None:
+            raise push_error
         return push_ok
 
     return ChatStreamResultCallbacks(
@@ -106,6 +126,11 @@ def _context(
     *,
     req: Any | None = None,
     reply_meta: dict[str, Any] | None = None,
+    claim_owner: Any | None = None,
+    persist_error: BaseException | None = None,
+    finalize_error: BaseException | None = None,
+    envelope_error: BaseException | None = None,
+    push_error: BaseException | None = None,
 ):
     from api.chat_streaming_result import ChatStreamResultContext
 
@@ -122,7 +147,15 @@ def _context(
         guardrail_status="safe",
         private_timing_meta={"private_decision": "ok"},
         empty_assistant_placeholder="（无回复内容）",
-        callbacks=_callbacks(calls, reply_meta=reply_meta),
+        callbacks=_callbacks(
+            calls,
+            reply_meta=reply_meta,
+            persist_error=persist_error,
+            finalize_error=finalize_error,
+            envelope_error=envelope_error,
+            push_error=push_error,
+        ),
+        claim_owner=claim_owner,
     )
 
 
@@ -147,10 +180,35 @@ async def test_persist_stream_result_success_uses_result_holder_and_request_db()
     result_holder: dict[str, Any] = {}
     runner_task = asyncio.create_task(_runner_sets(result_holder, "answer", "最终答案"))
     req = _request(user_id="u-success")
-    context = _context(result_holder, runner_task, calls, req=req)
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            assert calls["persist"]
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return True
+
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        req=req,
+        reply_meta={
+            "send_mode": "quote",
+            "_agent_result": "must-not-persist",
+        },
+        claim_owner=ClaimOwner(),
+    )
     db = FakeDb()
 
-    await persist_stream_result_after_runner_done(context, push=False, persist_db=db)
+    result = await persist_stream_result_after_runner_done(
+        context,
+        push=False,
+        persist_db=db,
+    )
 
     assert calls["finalize"] == [("u-success", "最终答案", True)]
     assert calls["persist"] == [
@@ -166,6 +224,15 @@ async def test_persist_stream_result_success_uses_result_holder_and_request_db()
             },
         )
     ]
+    assert len(calls["complete"]) == 1
+    assert calls["complete"][0].reply == "最终答案"
+    assert calls["complete"][0].reply_meta == {"send_mode": "quote"}
+    assert calls["complete"][0].unprocessed_logs == 3
+    assert calls.get("fail") is None
+    assert result.answer == "最终答案"
+    assert result.transport_answer == "expanded:最终答案"
+    assert result.pending == 3
+    assert result.completion is calls["complete"][0]
     assert calls.get("push") is None
 
 
@@ -176,16 +243,32 @@ async def test_persist_stream_result_prompt_audit_failure_uses_meta_and_skips_pu
     calls: dict[str, list[Any]] = {}
     result_holder: dict[str, Any] = {}
     runner_task = asyncio.create_task(_runner_sets(result_holder, "answer", ""))
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return True
+
     context = _context(
         result_holder,
         runner_task,
         calls,
         req=_request(user_id="u-audit"),
         reply_meta={"_agent_result": "prompt_v2_audit_failed"},
+        claim_owner=ClaimOwner(),
     )
     db = FakeDb()
 
-    await persist_stream_result_after_runner_done(context, push=True, persist_db=db)
+    with pytest.raises(RuntimeError, match="prompt_v2_audit_failed"):
+        await persist_stream_result_after_runner_done(
+            context,
+            push=True,
+            persist_db=db,
+        )
 
     assert calls["audit_meta"] == [()]
     assert calls["finalize"] == [("u-audit", "（无回复内容）", True)]
@@ -198,6 +281,8 @@ async def test_persist_stream_result_prompt_audit_failure_uses_meta_and_skips_pu
         "agent_result": "prompt_v2_audit_failed",
     }
     assert persisted[4]["assistant_processed"] == 1
+    assert len(calls["fail"]) == 1
+    assert calls.get("complete") is None
     assert calls.get("push") is None
 
 
@@ -208,7 +293,25 @@ async def test_persist_stream_result_background_push_uses_unit_of_work_and_drain
     calls: dict[str, list[Any]] = {}
     result_holder: dict[str, Any] = {}
     runner_task = asyncio.create_task(_runner_sets(result_holder, "answer", "后台答案"))
-    context = _context(result_holder, runner_task, calls, req=_request(user_id="u-bg"))
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            assert calls["persist"]
+            assert calls.get("push") is None
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return True
+
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        req=_request(user_id="u-bg"),
+        claim_owner=ClaimOwner(),
+    )
     uow_db = FakeDb()
 
     class FakeUnitOfWork:
@@ -230,8 +333,396 @@ async def test_persist_stream_result_background_push_uses_unit_of_work_and_drain
 
     assert calls["drain"] == [(context.stream_queue, runner_task)]
     assert calls["persist"][0][0] is uow_db
+    assert len(calls["complete"]) == 1
+    assert calls.get("fail") is None
     assert calls["expand"] == ["后台答案"]
     assert calls["envelope"][0][1]["answer"] == "expanded:后台答案"
     assert calls["push"] == [
         ("private", "u-bg", {"reply": "expanded:后台答案", "meta": {"chat_type": "private"}})
     ]
+
+
+@pytest.mark.asyncio
+async def test_persist_stream_result_bridge_error_preserves_original_and_fails_owner():
+    from api.chat_streaming_result import persist_stream_result_after_runner_done
+
+    calls: dict[str, list[Any]] = {}
+    bridge_error = RuntimeError("bridge original error")
+    result_holder: dict[str, Any] = {"error": bridge_error}
+    runner_task = asyncio.create_task(asyncio.sleep(0))
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return True
+
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        claim_owner=ClaimOwner(),
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await persist_stream_result_after_runner_done(
+            context,
+            push=False,
+            persist_db=FakeDb(),
+        )
+
+    assert raised.value is bridge_error
+    assert calls["fail"] == [bridge_error]
+    assert calls.get("complete") is None
+    assert calls.get("push") is None
+
+
+@pytest.mark.parametrize("cleanup_stage", ["finalize", "persist"])
+@pytest.mark.asyncio
+async def test_stream_bridge_primary_error_wins_over_secondary_cleanup_error(
+    cleanup_stage,
+):
+    from api.chat_streaming_result import persist_stream_result_after_runner_done
+
+    calls: dict[str, list[Any]] = {}
+    bridge_error = RuntimeError("primary bridge error")
+    cleanup_error = RuntimeError(f"secondary {cleanup_stage} error")
+    result_holder: dict[str, Any] = {"error": bridge_error}
+    runner_task = asyncio.create_task(asyncio.sleep(0))
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return True
+
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        claim_owner=ClaimOwner(),
+        finalize_error=cleanup_error if cleanup_stage == "finalize" else None,
+        persist_error=cleanup_error if cleanup_stage == "persist" else None,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await persist_stream_result_after_runner_done(
+            context,
+            push=False,
+            persist_db=FakeDb(),
+        )
+
+    assert raised.value is bridge_error
+    assert calls["fail"] == [bridge_error]
+    assert calls.get("complete") is None
+
+
+@pytest.mark.asyncio
+async def test_stream_audit_primary_error_wins_over_finalize_cleanup_error():
+    from api.chat_streaming_result import persist_stream_result_after_runner_done
+
+    calls: dict[str, list[Any]] = {}
+    cleanup_error = RuntimeError("secondary audit finalize error")
+    result_holder: dict[str, Any] = {}
+    runner_task = asyncio.create_task(_runner_sets(result_holder, "answer", ""))
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return True
+
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        reply_meta={"_agent_result": "prompt_v2_audit_failed"},
+        claim_owner=ClaimOwner(),
+        finalize_error=cleanup_error,
+    )
+
+    with pytest.raises(RuntimeError, match="prompt_v2_audit_failed") as raised:
+        await persist_stream_result_after_runner_done(
+            context,
+            push=False,
+            persist_db=FakeDb(),
+        )
+
+    assert raised.value is calls["fail"][0]
+    assert raised.value is not cleanup_error
+    assert calls.get("complete") is None
+
+
+@pytest.mark.asyncio
+async def test_persist_stream_result_persist_error_fails_owner_and_never_completes():
+    from api.chat_streaming_result import persist_stream_result_after_runner_done
+
+    calls: dict[str, list[Any]] = {}
+    persist_error = RuntimeError("database is locked")
+    result_holder: dict[str, Any] = {}
+    runner_task = asyncio.create_task(_runner_sets(result_holder, "answer", "不会完成"))
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return True
+
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        claim_owner=ClaimOwner(),
+        persist_error=persist_error,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await persist_stream_result_after_runner_done(
+            context,
+            push=False,
+            persist_db=FakeDb(),
+        )
+
+    assert raised.value is persist_error
+    assert calls["fail"] == [persist_error]
+    assert calls.get("complete") is None
+
+
+@pytest.mark.parametrize("stage", ["runner", "finalize", "persist"])
+@pytest.mark.asyncio
+async def test_stream_finalizer_fatal_base_exception_fails_owner_once_and_stops_renewal(
+    stage,
+):
+    from api.chat_streaming_result import persist_stream_result_after_runner_done
+
+    calls: dict[str, list[Any]] = {}
+    fatal = FatalStreamFinalizerError(f"stream {stage} fatal")
+    result_holder: dict[str, Any] = {}
+    runner_task = asyncio.create_task(
+        _runner_raises(fatal)
+        if stage == "runner"
+        else _runner_sets(result_holder, "answer", "不会完成")
+    )
+
+    class ClaimOwner:
+        def __init__(self):
+            self.renewal_task = asyncio.create_task(asyncio.Event().wait())
+
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            self.renewal_task.cancel()
+            await asyncio.gather(self.renewal_task, return_exceptions=True)
+            return True
+
+    owner = ClaimOwner()
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        claim_owner=owner,
+        finalize_error=fatal if stage == "finalize" else None,
+        persist_error=fatal if stage == "persist" else None,
+    )
+
+    try:
+        with pytest.raises(FatalStreamFinalizerError) as raised:
+            await persist_stream_result_after_runner_done(
+                context,
+                push=False,
+                persist_db=FakeDb(),
+            )
+
+        assert raised.value is fatal
+        assert calls["fail"] == [fatal]
+        assert calls.get("complete") is None
+        assert owner.renewal_task.done()
+    finally:
+        if not owner.renewal_task.done():
+            owner.renewal_task.cancel()
+            await asyncio.gather(owner.renewal_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_stream_bridge_error_logger_failure_preserves_primary_and_still_fails_owner(
+    monkeypatch,
+):
+    from api import chat_streaming_result
+
+    calls: dict[str, list[Any]] = {}
+    bridge_error = RuntimeError("primary stream bridge error")
+    log_error = RuntimeError("broken stream log handler")
+    result_holder: dict[str, Any] = {"error": bridge_error}
+    runner_task = asyncio.create_task(asyncio.sleep(0))
+
+    class ClaimOwner:
+        def __init__(self):
+            self.renewal_task = asyncio.create_task(asyncio.Event().wait())
+
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            self.renewal_task.cancel()
+            await asyncio.gather(self.renewal_task, return_exceptions=True)
+            return True
+
+    def broken_error_log(*_args, **_kwargs):
+        raise log_error
+
+    owner = ClaimOwner()
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        claim_owner=owner,
+    )
+    monkeypatch.setattr(chat_streaming_result.logger, "error", broken_error_log)
+
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            await chat_streaming_result.persist_stream_result_after_runner_done(
+                context,
+                push=False,
+                persist_db=FakeDb(),
+            )
+
+        assert raised.value is bridge_error
+        assert calls["fail"] == [bridge_error]
+        assert owner.renewal_task.done()
+    finally:
+        if not owner.renewal_task.done():
+            owner.renewal_task.cancel()
+            await asyncio.gather(owner.renewal_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_persist_stream_result_complete_error_attempts_one_fail_and_never_pushes():
+    from api.chat_streaming_result import persist_stream_result_after_runner_done
+
+    calls: dict[str, list[Any]] = {}
+    complete_error = RuntimeError("claim owner lost")
+    result_holder: dict[str, Any] = {}
+    runner_task = asyncio.create_task(_runner_sets(result_holder, "answer", "不会推送"))
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            raise complete_error
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return False
+
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        claim_owner=ClaimOwner(),
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await persist_stream_result_after_runner_done(
+            context,
+            push=True,
+            persist_db=FakeDb(),
+        )
+
+    assert raised.value is complete_error
+    assert len(calls["complete"]) == 1
+    assert calls["fail"] == [complete_error]
+    assert calls.get("push") is None
+
+
+@pytest.mark.asyncio
+async def test_persist_stream_result_push_exception_after_complete_is_only_recorded():
+    from api.chat_streaming_result import persist_stream_result_after_runner_done
+
+    calls: dict[str, list[Any]] = {}
+    push_error = RuntimeError("qq push unavailable")
+    result_holder: dict[str, Any] = {}
+    runner_task = asyncio.create_task(_runner_sets(result_holder, "answer", "已完成答案"))
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return True
+
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        claim_owner=ClaimOwner(),
+        push_error=push_error,
+    )
+
+    result = await persist_stream_result_after_runner_done(
+        context,
+        push=True,
+        persist_db=FakeDb(),
+    )
+
+    assert result.answer == "已完成答案"
+    assert len(calls["complete"]) == 1
+    assert calls.get("fail") is None
+    assert len(calls["push"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_persist_stream_result_push_envelope_error_after_complete_is_only_recorded():
+    from api.chat_streaming_result import persist_stream_result_after_runner_done
+
+    calls: dict[str, list[Any]] = {}
+    envelope_error = RuntimeError("push envelope unavailable")
+    result_holder: dict[str, Any] = {}
+    runner_task = asyncio.create_task(_runner_sets(result_holder, "answer", "已完成答案"))
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("complete", []).append(completion)
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("fail", []).append(error)
+            return True
+
+    context = _context(
+        result_holder,
+        runner_task,
+        calls,
+        claim_owner=ClaimOwner(),
+        envelope_error=envelope_error,
+    )
+
+    result = await persist_stream_result_after_runner_done(
+        context,
+        push=True,
+        persist_db=FakeDb(),
+    )
+
+    assert result.answer == "已完成答案"
+    assert len(calls["complete"]) == 1
+    assert calls.get("fail") is None
+    assert len(calls["envelope"]) == 1
+    assert calls.get("push") is None

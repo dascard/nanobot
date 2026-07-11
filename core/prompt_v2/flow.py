@@ -24,7 +24,22 @@ RUNTIME_NODE_KEYS = {
     "current_user_event",
 }
 
+_RESERVED_RUNTIME_NODE_IDS = {
+    "persona_reference",
+    "runtime_tool_prompt",
+    "current_user_event",
+}
+_RESERVED_POLICY_TEMPLATE_KEYS = {
+    "chat/branch_private": "private_policy",
+    "chat/branch_group": "group_policy",
+}
+_RESERVED_POLICY_NODE_IDS = {
+    node_id: template_key
+    for template_key, node_id in _RESERVED_POLICY_TEMPLATE_KEYS.items()
+}
+
 CHAT_TYPES = {"group", "private"}
+RUNTIME_PLATFORMS = {"qq", "web"}
 _ANY_PLATFORM = "*"
 _PLATFORM_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
@@ -157,6 +172,65 @@ def _node_index(nodes: list[dict[str, Any]]) -> dict[str, int]:
     return {str(node.get("id")): idx for idx, node in enumerate(nodes)}
 
 
+def _validate_reserved_node_identity(node: dict[str, Any]) -> None:
+    node_id = str(node.get("id") or "").strip()
+    node_type = str(node.get("type") or "").strip()
+    template_key = str(node.get("template_key") or "").strip()
+    runtime_key = str(node.get("runtime_key") or "").strip()
+
+    expected_runtime_id = ""
+    if node_id in _RESERVED_RUNTIME_NODE_IDS:
+        expected_runtime_id = node_id
+    elif runtime_key in _RESERVED_RUNTIME_NODE_IDS:
+        expected_runtime_id = runtime_key
+    if expected_runtime_id:
+        label = f"singleton {expected_runtime_id}"
+        if node_id != expected_runtime_id:
+            raise PromptFlowError(
+                f"{label} node_id must be {expected_runtime_id}, got {node_id or '<empty>'}"
+            )
+        if node_type != "runtime":
+            raise PromptFlowError(
+                f"{label} node_type must be runtime, got {node_type or '<empty>'}"
+            )
+        if runtime_key != expected_runtime_id:
+            raise PromptFlowError(
+                f"{label} runtime_key must be {expected_runtime_id}, got {runtime_key or '<empty>'}"
+            )
+        if template_key:
+            raise PromptFlowError(
+                f"{label} template_key must be empty, got {template_key}"
+            )
+
+    expected_policy_id = ""
+    expected_policy_template = ""
+    if node_id in _RESERVED_POLICY_NODE_IDS:
+        expected_policy_id = node_id
+        expected_policy_template = _RESERVED_POLICY_NODE_IDS[node_id]
+    elif template_key in _RESERVED_POLICY_TEMPLATE_KEYS:
+        expected_policy_id = _RESERVED_POLICY_TEMPLATE_KEYS[template_key]
+        expected_policy_template = template_key
+    if expected_policy_id:
+        label = f"{expected_policy_id.removesuffix('_policy')} policy"
+        if node_id != expected_policy_id:
+            raise PromptFlowError(
+                f"{label} node_id must be {expected_policy_id}, got {node_id or '<empty>'}"
+            )
+        if node_type != "template":
+            raise PromptFlowError(
+                f"{label} node_type must be template, got {node_type or '<empty>'}"
+            )
+        if template_key != expected_policy_template:
+            raise PromptFlowError(
+                f"{label} template_key must be {expected_policy_template}, "
+                f"got {template_key or '<empty>'}"
+            )
+        if runtime_key:
+            raise PromptFlowError(
+                f"{label} runtime_key must be empty, got {runtime_key}"
+            )
+
+
 def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
     nodes = list(flow.get("nodes") or [])
     edges = list(flow.get("edges") or [])
@@ -181,6 +255,7 @@ def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
             raise PromptFlowError(f"template node 缺少 template_key: {node_id}")
         if node_type == "runtime" and str(node.get("runtime_key") or "") not in RUNTIME_NODE_KEYS:
             raise PromptFlowError(f"runtime_key 不支持: {node.get('runtime_key')}")
+        _validate_reserved_node_identity(node)
         chat_types = _normalize_chat_types(node, label=f"node {node_id}")
         if chat_types:
             node["chat_types"] = chat_types
@@ -242,8 +317,49 @@ def load_flow() -> PromptFlow:
     return PromptFlow(validate_flow(DEFAULT_FLOW), default, "built-in")
 
 
+def _runtime_contract_platforms(flow: dict[str, Any]) -> list[str]:
+    platforms = set(RUNTIME_PLATFORMS)
+    for item in [*(flow.get("nodes") or []), *(flow.get("edges") or [])]:
+        values = item.get("platforms")
+        if isinstance(values, str):
+            values = [values]
+        platforms.update(str(value).strip().lower() for value in (values or []) if str(value).strip())
+    return sorted(platforms)
+
+
+def _validate_runtime_contract(flow: dict[str, Any]) -> None:
+    from types import SimpleNamespace
+
+    from core.prompt_v2.audit import audit_prompt_plan
+
+    for chat_type in sorted(CHAT_TYPES):
+        for platform in _runtime_contract_platforms(flow):
+            ordered_nodes = ordered_nodes_for_chat(flow, chat_type, platform=platform)
+            flow_sections = [
+                {
+                    "node_id": str(node.get("id") or ""),
+                    "node_type": str(node.get("type") or ""),
+                    "template_key": str(node.get("template_key") or ""),
+                    "runtime_key": str(node.get("runtime_key") or ""),
+                    "origin": "flow",
+                    "status": "emitted",
+                    "message_indexes": [],
+                }
+                for node in ordered_nodes
+            ]
+            audit = audit_prompt_plan(
+                SimpleNamespace(chat_type=chat_type, flow_sections=flow_sections)
+            )
+            if not audit.ok:
+                issues = "; ".join(audit.issues)
+                raise PromptFlowError(
+                    f"flow 在 chat_type={chat_type}, platform={platform} 下不满足运行契约: {issues}"
+                )
+
+
 def save_flow(flow: dict[str, Any]) -> dict[str, Any]:
     normalized = validate_flow(flow)
+    _validate_runtime_contract(normalized)
     path = runtime_flow_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

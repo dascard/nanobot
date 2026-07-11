@@ -30,6 +30,12 @@ from core.context_builder import (
     build_session_memory as _build_session_memory,  # noqa: F401 - 旧 api.routes 导入路径兼容
 )
 from core.evolution import evolution_task
+from core.inbound_claim_lifecycle import InboundClaimOwner
+from core.inbound_idempotency import (
+    ClaimDecisionKind,
+    acquire_inbound_claim,
+    normalize_inbound_claim_key,
+)
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from core import user_block_rules
 from nanobot_kt.bridge import get_bridge
@@ -140,6 +146,31 @@ router = APIRouter(prefix="/api/v1")
 EMPTY_ASSISTANT_PLACEHOLDER = "（无回复内容）"
 SAFE_STREAM_ERROR_MESSAGE = "系统暂时不可用，请稍后再试"
 CHAT_STREAM_QUEUE_MAXSIZE = 128
+
+
+def _safe_log(method_name: str, message: str, *args: Any, **kwargs: Any) -> None:
+    try:
+        log_method = getattr(logger, method_name)
+        log_method(message, *args, **kwargs)
+    except BaseException:
+        pass
+
+
+async def _best_effort_fail_chat_claim(
+    owner: InboundClaimOwner | None,
+    error: BaseException,
+) -> None:
+    if owner is None:
+        return
+    try:
+        await owner.fail(error)
+    except BaseException as cleanup_error:
+        _safe_log(
+            "error",
+            "[/chat] Claim cleanup failed: primary=%r cleanup=%r",
+            error,
+            cleanup_error,
+        )
 
 
 def _normalize_chat_stream_event(event: Any) -> dict[str, Any] | None:
@@ -554,6 +585,7 @@ def _chat_route_runner_context(
     guardrail_status: str | None,
     private_timing_meta: dict[str, Any] | None,
     background_tasks: BackgroundTasks,
+    claim_owner: InboundClaimOwner | None = None,
 ) -> chat_route_runner.ChatRouteRunnerContext:
     return chat_route_runner.ChatRouteRunnerContext(
         req=req,
@@ -569,6 +601,7 @@ def _chat_route_runner_context(
         safe_error_message=SAFE_STREAM_ERROR_MESSAGE,
         evolution_threshold=EVOLUTION_THRESHOLD,
         callbacks=_chat_route_runner_callbacks(background_tasks),
+        claim_owner=claim_owner,
     )
 
 
@@ -611,148 +644,225 @@ async def proxy_chat(
     统一网关：接收客户端的发问，通过 KT Agent 处理，返回结果并双向落库。
     """
     _normalize_request_client_meta(req, expected_chat_type=_chat_request_type(req))
-    logger.info(f"[/chat] Request START: user={req.user_id}, session={req.session_id}, query={req.query[:100]}, sender={req.sender_name}, files={req.files}, session_name={req.session_name}")
-
-    # 1. 自动注册用户 & 更新用户名
-    user = db.query(User).filter(User.id == req.user_id).first()
-    if not user:
-        db.add(User(id=req.user_id, name=(req.sender_name or "")))
-        db.commit()
-    elif req.sender_name and user.name != req.sender_name:
-        user.name = req.sender_name
-        db.commit()
-
-    # 1.5 检查用户屏蔽规则——命中后只写 ChatLog，不回复
-    if _check_user_blocked(db, req.user_id, target_type="private"):
-        logger.info("[/chat] blocked user=%s", req.user_id)
-        db.add(ChatLog(
-            user_id=req.user_id, session_id=req.session_id,
-            role="user",
-            content=_build_chatlog_user_content(req.query, req.files),
-            sender_name=req.sender_name or "",
-            session_name=req.session_name or "",
-            processed=1, message_id=req.message_id or "",
-            meta_json=json.dumps({"blocked": True, "reason": "user_blocked"}, ensure_ascii=False),
-        ))
-        db.commit()
-        return _chat_response_payload(
-            req,
-            status="silent",
-            reason="user_blocked",
-            guardrail_status="silent",
-            include_answer_chunks=True,
-        )
-
-    _schedule_image_precache(
-        background_tasks,
-        req.files,
-        source_type="chat_request",
-        source_name_prefix=f"{req.session_id}_{req.message_id or 'message'}",
-    )
-
-    # 2. 加载用户画像 snapshot；动态 PersonaInjectionService 仍在 runtime payload 前处理
-    persona_snapshot = _resolve_chat_persona_snapshot(db, req.user_id)
-    persona_obj = persona_snapshot.persona_obj
-    persona_json_str = persona_snapshot.persona_json
-    persona_data = persona_snapshot.persona_data
-    persona_text = persona_snapshot.persona_text
-    if persona_snapshot.matched_user_id and persona_snapshot.matched_user_id != persona_snapshot.lookup_user_id:
-        logger.info(
-            "[/chat] Persona found via fallback: tried=%s, matched=%s",
-            persona_snapshot.lookup_user_id,
-            persona_snapshot.matched_user_id,
-        )
-    if persona_obj is None:
-        logger.debug(
-            "[/chat] No persona for user_id=%s (tried %s variants)",
-            req.user_id,
-            persona_snapshot.candidate_count,
-        )
-
-    logger.info(
-        f"[/chat] Persona lookup: user_id={req.user_id}, "
-        f"found={persona_obj is not None}, persona_raw_len={len(persona_json_str)}, "
-        f"persona_text_len={len(persona_text)}, "
-        f"keys={list(persona_data.keys()) if isinstance(persona_data, dict) else 'N/A'}"
-    )
-
-    is_group = not str(req.session_id).startswith("private_")
-    is_superuser = (not is_group) and _is_guardrail_superuser(req.user_id)
-
-    # 3. 构建会话记忆上下文 (时间窗口 + clear 标记感知)
-    memory_header, history_messages, _ctx_debug = _build_chat_context(
-        db,
+    normalized_files = _normalize_files(req.files)
+    req.files = normalized_files
+    release_clean_session_transaction(db, label="chat_before_inbound_claim")
+    claim_key = normalize_inbound_claim_key(
+        _chat_request_platform(req),
+        _chat_request_type(req),
         req.session_id,
-        user_id=req.user_id,
-        max_per_msg=MAX_MEMORY_PER_MSG_CHARS,
-        is_group=is_group,
-        group_id=_extract_group_id_from_chat_request(req) if is_group else "",
-        max_total=MAX_MEMORY_TOTAL_CHARS,
-        current_user_input=req.query,
+        req.message_id,
     )
-    release_clean_session_transaction(db, label="chat_before_private_decision", logger=logger)
+    claim_decision = acquire_inbound_claim(db, claim_key)
 
-    # 4a. 私聊三态分类、guardrail 和 private buffer pre-bridge 决策
-    pre_bridge = await _resolve_chat_pre_bridge_decision(
-        req,
-        is_group=is_group,
-        is_superuser=is_superuser,
-    )
+    if claim_decision.kind == ClaimDecisionKind.DUPLICATE_INFLIGHT:
+        return chat_response_contract.duplicate_inflight_chat_response_payload(req)
 
-    pre_bridge_route = await _resolve_pre_bridge_route_result(db, req, pre_bridge)
-    if isinstance(pre_bridge_route, chat_pre_bridge_route_result.ChatPreBridgeRouteEarlyResponse):
-        return pre_bridge_route.payload
+    if claim_decision.kind == ClaimDecisionKind.REPLAY:
+        completed_response = claim_decision.response
+        if completed_response is None:
+            raise RuntimeError("completed claim 缺少完成结果")
+        replay_answer = completed_response.reply
+        if completed_response.outcome == "respond":
+            try:
+                replay_answer = _expand_chat_transport_answer(completed_response.reply)
+            except Exception:
+                replay_answer = completed_response.reply
+        replay_payload = chat_response_contract.completed_chat_response_payload(
+            req,
+            completed_response,
+            answer_override=replay_answer,
+        )
+        if req.stream and completed_response.outcome == "respond":
+            return StreamingResponse(
+                iter((_chat_sse_data(replay_payload),)),
+                media_type="text/event-stream",
+            )
+        return replay_payload
 
-    final_query = pre_bridge_route.final_query
-    final_files = pre_bridge_route.final_files
-    _private_decision = pre_bridge_route.private_decision
-    private_timing_meta = pre_bridge_route.private_timing_meta
-    guardrail_status = pre_bridge_route.guardrail_status
-    _classifier_ran = pre_bridge_route.classifier_ran
-    persist_req = pre_bridge_route.persist_req
+    claim_owner = None
+    try:
+        if claim_decision.kind == ClaimDecisionKind.ACQUIRED:
+            if claim_decision.handle is None:
+                raise RuntimeError("acquired claim 缺少 owner handle")
+            claim_owner = InboundClaimOwner(claim_decision.handle)
 
-    # 4b. 组装 runtime payload — 使用缓冲合并后的查询
-    runtime_route_context = _build_chat_runtime_route_context(
-        chat_runtime_route_context.ChatRuntimeRouteInput(
-            req=req,
-            final_query=final_query,
-            final_files=final_files,
-            persona_text=persona_text,
-            memory_header=memory_header,
-            history_messages=history_messages,
-            ctx_debug=_ctx_debug,
+        if claim_owner is not None:
+            await claim_owner.start()
+
+        _safe_log(
+            "info",
+            "[/chat] Request START: user=%s, session=%s, sender=%s, file_count=%d, session_name=%s",
+            req.user_id,
+            req.session_id,
+            req.sender_name,
+            len(normalized_files),
+            req.session_name,
+        )
+
+        # 1. 自动注册用户 & 更新用户名
+        user = db.query(User).filter(User.id == req.user_id).first()
+        if not user:
+            db.add(User(id=req.user_id, name=(req.sender_name or "")))
+            db.commit()
+        elif req.sender_name and user.name != req.sender_name:
+            user.name = req.sender_name
+            db.commit()
+
+        # 1.5 检查用户屏蔽规则——命中后只写 ChatLog，不回复
+        if _check_user_blocked(db, req.user_id, target_type="private"):
+            _safe_log("info", "[/chat] blocked user=%s", req.user_id)
+            db.add(ChatLog(
+                user_id=req.user_id, session_id=req.session_id,
+                role="user",
+                content=_build_chatlog_user_content(req.query, req.files),
+                sender_name=req.sender_name or "",
+                session_name=req.session_name or "",
+                processed=1, message_id=req.message_id or "",
+                meta_json=json.dumps({"blocked": True, "reason": "user_blocked"}, ensure_ascii=False),
+            ))
+            db.commit()
+            blocked_completion = chat_response_contract.build_completed_inbound_response(
+                outcome="blocked",
+                reason="user_blocked",
+                guardrail_status="silent",
+            )
+            blocked_payload = _chat_response_payload(
+                req,
+                status="silent",
+                reason="user_blocked",
+                guardrail_status="silent",
+                include_answer_chunks=True,
+            )
+            if claim_owner is not None:
+                await claim_owner.complete(blocked_completion)
+            return blocked_payload
+
+        _schedule_image_precache(
+            background_tasks,
+            req.files,
+            source_type="chat_request",
+            source_name_prefix=f"{req.session_id}_{req.message_id or 'message'}",
+        )
+
+        # 2. 加载用户画像 snapshot；动态 PersonaInjectionService 仍在 runtime payload 前处理
+        persona_snapshot = _resolve_chat_persona_snapshot(db, req.user_id)
+        persona_obj = persona_snapshot.persona_obj
+        persona_json_str = persona_snapshot.persona_json
+        persona_data = persona_snapshot.persona_data
+        persona_text = persona_snapshot.persona_text
+        if persona_snapshot.matched_user_id and persona_snapshot.matched_user_id != persona_snapshot.lookup_user_id:
+            _safe_log(
+                "info",
+                "[/chat] Persona found via fallback: tried=%s, matched=%s",
+                persona_snapshot.lookup_user_id,
+                persona_snapshot.matched_user_id,
+            )
+        if persona_obj is None:
+            _safe_log(
+                "debug",
+                "[/chat] No persona for user_id=%s (tried %s variants)",
+                req.user_id,
+                persona_snapshot.candidate_count,
+            )
+
+        _safe_log(
+            "info",
+            f"[/chat] Persona lookup: user_id={req.user_id}, "
+            f"found={persona_obj is not None}, persona_raw_len={len(persona_json_str)}, "
+            f"persona_text_len={len(persona_text)}, "
+            f"keys={list(persona_data.keys()) if isinstance(persona_data, dict) else 'N/A'}"
+        )
+
+        is_group = not str(req.session_id).startswith("private_")
+        is_superuser = (not is_group) and _is_guardrail_superuser(req.user_id)
+
+        # 3. 构建会话记忆上下文 (时间窗口 + clear 标记感知)
+        memory_header, history_messages, _ctx_debug = _build_chat_context(
+            db,
+            req.session_id,
+            user_id=req.user_id,
+            max_per_msg=MAX_MEMORY_PER_MSG_CHARS,
+            is_group=is_group,
+            group_id=_extract_group_id_from_chat_request(req) if is_group else "",
+            max_total=MAX_MEMORY_TOTAL_CHARS,
+            current_user_input=req.query,
+        )
+        release_clean_session_transaction(db, label="chat_before_private_decision", logger=logger)
+
+        # 4a. 私聊三态分类、guardrail 和 private buffer pre-bridge 决策
+        pre_bridge = await _resolve_chat_pre_bridge_decision(
+            req,
             is_group=is_group,
             is_superuser=is_superuser,
-            private_decision=_private_decision,
-            guardrail_status=guardrail_status,
-            classifier_ran=_classifier_ran,
-        ),
-        services=_chat_runtime_route_services(db),
-    )
-    enriched_query = runtime_route_context.enriched_query
-    bridge_meta = runtime_route_context.bridge_meta
-    platform = runtime_route_context.platform
-    release_clean_session_transaction(db, label="chat_before_bridge", logger=logger)
-
-    # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
-    bridge = get_bridge()
-    route_runner_context = _chat_route_runner_context(
-        req=req,
-        persist_req=persist_req,
-        bridge=bridge,
-        enriched_query=enriched_query,
-        bridge_meta=bridge_meta,
-        platform=platform,
-        guardrail_status=guardrail_status,
-        private_timing_meta=private_timing_meta,
-        background_tasks=background_tasks,
-    )
-
-    if req.stream:
-        return StreamingResponse(
-            chat_route_runner.iter_streaming_chat_response(db, route_runner_context),
-            media_type="text/event-stream",
         )
+
+        pre_bridge_route = await _resolve_pre_bridge_route_result(db, req, pre_bridge)
+        if isinstance(pre_bridge_route, chat_pre_bridge_route_result.ChatPreBridgeRouteEarlyResponse):
+            if claim_owner is not None:
+                if pre_bridge_route.completion is None:
+                    raise RuntimeError("pre-bridge early response 缺少完成结果")
+                await claim_owner.complete(pre_bridge_route.completion)
+            return pre_bridge_route.payload
+
+        final_query = pre_bridge_route.final_query
+        final_files = pre_bridge_route.final_files
+        _private_decision = pre_bridge_route.private_decision
+        private_timing_meta = pre_bridge_route.private_timing_meta
+        guardrail_status = pre_bridge_route.guardrail_status
+        _classifier_ran = pre_bridge_route.classifier_ran
+        persist_req = pre_bridge_route.persist_req
+
+        # 4b. 组装 runtime payload — 使用缓冲合并后的查询
+        runtime_route_context = _build_chat_runtime_route_context(
+            chat_runtime_route_context.ChatRuntimeRouteInput(
+                req=req,
+                final_query=final_query,
+                final_files=final_files,
+                persona_text=persona_text,
+                memory_header=memory_header,
+                history_messages=history_messages,
+                ctx_debug=_ctx_debug,
+                is_group=is_group,
+                is_superuser=is_superuser,
+                private_decision=_private_decision,
+                guardrail_status=guardrail_status,
+                classifier_ran=_classifier_ran,
+            ),
+            services=_chat_runtime_route_services(db),
+        )
+        enriched_query = runtime_route_context.enriched_query
+        bridge_meta = runtime_route_context.bridge_meta
+        platform = runtime_route_context.platform
+        release_clean_session_transaction(db, label="chat_before_bridge", logger=logger)
+
+        # 5. 通过 KT Bridge 调用 Agent (KT 自动处理工具循环、session 管理等)
+        bridge = get_bridge()
+        route_runner_context = _chat_route_runner_context(
+            req=req,
+            persist_req=persist_req,
+            bridge=bridge,
+            enriched_query=enriched_query,
+            bridge_meta=bridge_meta,
+            platform=platform,
+            guardrail_status=guardrail_status,
+            private_timing_meta=private_timing_meta,
+            background_tasks=background_tasks,
+            claim_owner=claim_owner,
+        )
+
+        if req.stream:
+            if claim_owner is not None:
+                paused = await claim_owner.pause()
+                if paused is not True:
+                    raise RuntimeError("流式 claim owner 暂停续租失败")
+            return StreamingResponse(
+                chat_route_runner.ColdChatStreamingBody(route_runner_context),
+                media_type="text/event-stream",
+            )
+    except BaseException as exc:
+        await _best_effort_fail_chat_claim(claim_owner, exc)
+        raise
 
     non_streaming_result = await chat_route_runner.run_non_streaming_chat_response(
         db,

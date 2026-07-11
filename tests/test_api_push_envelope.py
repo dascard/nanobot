@@ -55,6 +55,7 @@ async def test_stream_disconnect_background_push_uses_envelope_and_no_base64(
     db_session,
     monkeypatch,
 ):
+    from api import chat_route_runner
     from api.routes import ChatProxyRequest, _private_buffers, proxy_chat
     from tests.test_api import _fast_private_reply
 
@@ -109,12 +110,28 @@ async def test_stream_disconnect_background_push_uses_envelope_and_no_base64(
     )
 
     iterator = response.body_iterator
-    first_event = await asyncio.wait_for(iterator.__anext__(), timeout=1)
-    assert "thinking" in first_event
+    try:
+        first_event = await asyncio.wait_for(iterator.__anext__(), timeout=1)
+        assert "thinking" in first_event
 
-    await iterator.aclose()
-    release.set()
-    await asyncio.wait_for(background_tasks(), timeout=1)
+        await iterator.aclose()
+        assert chat_route_runner._STREAM_FINALIZER_TASKS
+        release.set()
+        await asyncio.wait_for(background_tasks(), timeout=1)
+
+        async def wait_for_owned_finalizers() -> None:
+            while chat_route_runner._STREAM_FINALIZER_TASKS:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_owned_finalizers(), timeout=3)
+    finally:
+        release.set()
+        pending = list(chat_route_runner._STREAM_FINALIZER_TASKS)
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     assert expand_calls == [("断连图 [generated_image:abc123]", False)]
     assert legacy_calls == []

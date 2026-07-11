@@ -1,8 +1,244 @@
 import asyncio
 import json
+from contextlib import suppress
 from types import SimpleNamespace
 
 import pytest
+
+
+def _make_request_scope_bridge(monkeypatch, *, prompt_error, finish_calls):
+    """构造只运行到 Prompt Runtime 的最小 Bridge。"""
+    from nanobot_kt.bridge import NanobotBridge
+    from nanobot_kt.output import BufferedOutput
+
+    class FakeUnitOfWork:
+        def __enter__(self):
+            self.db = None
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+    tool_plan = SimpleNamespace(
+        enabled={},
+        disabled={},
+        runtime_tool_prompt="",
+        executable_tool_names=set(),
+        sent_tool_schemas=[],
+        sha256="b" * 64,
+    )
+    output = BufferedOutput()
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    bridge.creature_path = "creatures/nanobot"
+    bridge._output = output
+    bridge._agent = SimpleNamespace(
+        controller=SimpleNamespace(
+            conversation=SimpleNamespace(_messages=[]),
+        ),
+        executor=SimpleNamespace(_session=SimpleNamespace(extra={})),
+        _interrupt_requested=False,
+    )
+    bridge._session_locks = {}
+    bridge._last_prompt_render_meta = {}
+
+    async def fail_prompt_runtime(_prompt_input):
+        raise prompt_error
+
+    monkeypatch.setattr(
+        "nanobot_kt.kt_adapter.reset_conversation_to_system",
+        lambda _agent: (0, 0),
+    )
+    monkeypatch.setattr("core.tracing.new_trace_id", lambda: "trace-request")
+    monkeypatch.setattr(
+        "core.tracing.RunTracer.start_run",
+        lambda **_kwargs: SimpleNamespace(run_id="run-request"),
+    )
+    monkeypatch.setattr(
+        "core.tracing.RunTracer.finish_run",
+        lambda run_id, **kwargs: finish_calls.append((run_id, kwargs)),
+    )
+    monkeypatch.setattr("core.settings_service.settings.get", lambda _key, default=None: default)
+    monkeypatch.setattr("core.tool_plan.build_tool_plan", lambda **_kwargs: tool_plan)
+    monkeypatch.setattr(
+        "core.runtime_tool_service.record_runtime_tool_decision",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
+    monkeypatch.setattr(
+        "nanobot_kt.prompt_runtime.build_prompt_runtime",
+        fail_prompt_runtime,
+    )
+    return bridge, output, tool_plan
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error_type", "expected_status"),
+    [
+        (RuntimeError, "error"),
+        (asyncio.CancelledError, "cancelled"),
+    ],
+    ids=["runtime-error", "cancelled"],
+)
+async def test_request_scope_restores_context_and_stream_after_prompt_failure(
+    monkeypatch,
+    error_type,
+    expected_status,
+):
+    from core.final_tools import (
+        get_current_final_tools,
+        reset_current_final_tools,
+        set_current_final_tools,
+    )
+    from core.tool_plan import (
+        get_current_tool_plan,
+        reset_current_tool_plan,
+        set_current_tool_plan,
+    )
+    from core.tracing_context import (
+        get_trace_context,
+        reset_trace_context,
+        set_trace_context,
+    )
+
+    finish_calls = []
+    bridge, output, _tool_plan = _make_request_scope_bridge(
+        monkeypatch,
+        prompt_error=error_type("prompt failed"),
+        finish_calls=finish_calls,
+    )
+    queue = asyncio.Queue()
+    outer_final_tools = object()
+    outer_tool_plan = object()
+    trace_tokens = set_trace_context("outer-trace", "outer-run")
+    final_tools_token = set_current_final_tools(outer_final_tools)
+    tool_plan_token = set_current_tool_plan(outer_tool_plan)
+    try:
+        with pytest.raises(error_type, match="prompt failed"):
+            await bridge.handle_message(
+                "你好",
+                user_id="u1",
+                session_id="private_u1",
+                metadata={"runtime_preset": "none"},
+                stream=True,
+                stream_queue=queue,
+            )
+
+        assert len(finish_calls) == 1
+        assert finish_calls[0][0] == "run-request"
+        assert finish_calls[0][1]["status"] == expected_status
+        assert get_trace_context() == ("outer-trace", "outer-run")
+        assert get_current_final_tools() is outer_final_tools
+        assert get_current_tool_plan() is outer_tool_plan
+        assert output._stream_queue is None
+    finally:
+        reset_current_tool_plan(tool_plan_token)
+        reset_current_final_tools(final_tools_token)
+        reset_trace_context(trace_tokens)
+
+
+@pytest.mark.asyncio
+async def test_request_scope_restores_final_tools_when_tool_plan_set_fails(monkeypatch):
+    from core.final_tools import (
+        get_current_final_tools,
+        reset_current_final_tools,
+        set_current_final_tools,
+    )
+    from core.tool_plan import (
+        get_current_tool_plan,
+        reset_current_tool_plan,
+        set_current_tool_plan,
+    )
+    from core.tracing_context import (
+        get_trace_context,
+        reset_trace_context,
+        set_trace_context,
+    )
+
+    finish_calls = []
+    bridge, output, _tool_plan = _make_request_scope_bridge(
+        monkeypatch,
+        prompt_error=AssertionError("Prompt Runtime 不应执行"),
+        finish_calls=finish_calls,
+    )
+
+    def fail_set_tool_plan(_plan):
+        raise RuntimeError("tool plan set failed")
+
+    monkeypatch.setattr("core.tool_plan.set_current_tool_plan", fail_set_tool_plan)
+    outer_final_tools = object()
+    outer_tool_plan = object()
+    trace_tokens = set_trace_context("outer-trace", "outer-run")
+    final_tools_token = set_current_final_tools(outer_final_tools)
+    tool_plan_token = set_current_tool_plan(outer_tool_plan)
+    try:
+        with pytest.raises(RuntimeError, match="tool plan set failed"):
+            await bridge.handle_message(
+                "你好",
+                user_id="u1",
+                session_id="private_u1",
+                metadata={"runtime_preset": "none"},
+                stream=True,
+                stream_queue=asyncio.Queue(),
+            )
+
+        assert len(finish_calls) == 1
+        assert finish_calls[0][1]["status"] == "error"
+        assert get_trace_context() == ("outer-trace", "outer-run")
+        assert get_current_final_tools() is outer_final_tools
+        assert get_current_tool_plan() is outer_tool_plan
+        assert output._stream_queue is None
+    finally:
+        reset_current_tool_plan(tool_plan_token)
+        reset_current_final_tools(final_tools_token)
+        reset_trace_context(trace_tokens)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_waiter_does_not_disable_active_request_stream():
+    from nanobot_kt.bridge import NanobotBridge
+    from nanobot_kt.output import BufferedOutput
+
+    active_queue = asyncio.Queue()
+    waiting_queue = asyncio.Queue()
+    output = BufferedOutput()
+    output.enable_stream(active_queue)
+    lock = asyncio.Lock()
+    await lock.acquire()
+
+    bridge = NanobotBridge.__new__(NanobotBridge)
+    bridge._agent = SimpleNamespace(_interrupt_requested=False)
+    bridge._output = output
+    bridge._session_locks = {"same-session": lock}
+    waiting_task = asyncio.create_task(
+        bridge.handle_message(
+            "等待中的请求",
+            session_id="same-session",
+            stream=True,
+            stream_queue=waiting_queue,
+        )
+    )
+    try:
+        await asyncio.sleep(0)
+        assert waiting_task.done() is False
+        waiting_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting_task
+        assert output._stream_queue is active_queue
+    finally:
+        try:
+            if not waiting_task.done():
+                waiting_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await waiting_task
+        finally:
+            lock.release()
 
 
 @pytest.mark.asyncio
@@ -209,7 +445,11 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
         "core.tracing.RunTracer.start_run",
         lambda **_kwargs: SimpleNamespace(run_id="run-stream"),
     )
-    monkeypatch.setattr("core.tracing.RunTracer.finish_run", lambda *_args, **_kwargs: None)
+    finish_calls = []
+    monkeypatch.setattr(
+        "core.tracing.RunTracer.finish_run",
+        lambda run_id, **kwargs: finish_calls.append((run_id, kwargs)),
+    )
     monkeypatch.setattr("core.tracing.RunTracer.update_prompt_source", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("core.tracing_context.set_trace_context", lambda *_args, **_kwargs: None)
     monkeypatch.setattr("core.tracing_context.reset_trace_context", lambda *_args, **_kwargs: None)
@@ -294,3 +534,6 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
     assert captured_route_kwargs["required_capabilities"]["supports_stream"] is True
     user_wire = next(msg for msg in fake_llm.seen_messages if msg["role"] == "user")
     assert user_wire == {"role": "user", "content": "你好"}
+    assert len(finish_calls) == 1
+    assert finish_calls[0][1]["status"] == "success"
+    assert output._stream_queue is None

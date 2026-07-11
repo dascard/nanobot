@@ -1,3 +1,4 @@
+import pytest
 from sqlalchemy.exc import OperationalError
 
 
@@ -227,3 +228,35 @@ def test_sqlite_locked_retry_logs_attempt_elapsed_ms():
 
     assert records
     assert "elapsed_ms" in records[0][0]
+
+
+def test_sqlite_locked_retry_stops_when_rollback_fails():
+    from core.sqlite_retry import run_sqlite_locked_retry
+
+    locked_error = OperationalError(
+        "COMMIT",
+        {},
+        Exception("database is locked"),
+    )
+    rollback_error = RuntimeError("rollback failed")
+    calls = {"operation": 0, "rollback": 0}
+
+    def operation():
+        calls["operation"] += 1
+        raise locked_error
+
+    def rollback():
+        calls["rollback"] += 1
+        raise rollback_error
+
+    with pytest.raises(OperationalError) as caught:
+        run_sqlite_locked_retry(
+            operation,
+            rollback=rollback,
+            attempts=3,
+            base_delay_seconds=0,
+        )
+
+    assert caught.value is locked_error
+    assert calls == {"operation": 1, "rollback": 1}
+    assert caught.value.__cause__ is rollback_error

@@ -1,13 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 
 def _normalize_message(message: dict[str, Any]) -> dict[str, Any]:
     role = str(message.get("role") or "user")
     content = message.get("content", "")
     return {"role": role, "content": content}
+
+
+PromptFlowOrigin = Literal["flow", "fallback"]
+PromptFlowStatus = Literal["emitted", "empty", "skipped_duplicate", "missing_template"]
+
+
+class PromptFlowSection(TypedDict):
+    node_id: str
+    node_type: str
+    template_key: str
+    runtime_key: str
+    origin: PromptFlowOrigin
+    status: PromptFlowStatus
+    message_indexes: list[int]
 
 
 @dataclass(frozen=True)
@@ -23,6 +37,7 @@ class PromptPlan:
     warnings: list[str]
     debug: dict[str, Any]
     platform: str = "qq"
+    flow_sections: list[PromptFlowSection] = field(default_factory=list)
 
     @property
     def messages_without_current_user(self) -> list[dict[str, Any]]:

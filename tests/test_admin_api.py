@@ -109,6 +109,70 @@ class TestAuth:
         assert client.get("/api/v1/admin/stickers").status_code == 503
 
 
+class TestSettingsAudit:
+    def test_non_sensitive_setting_audit_preserves_value(
+        self,
+        client,
+        auth_header,
+    ):
+        from core.database import AdminAuditLog
+
+        response = client.put(
+            "/api/v1/admin/settings/log.level",
+            json={"value": "DEBUG"},
+            headers=auth_header,
+        )
+
+        assert response.status_code == 200, response.text
+        with next(app.dependency_overrides[get_db]()) as db:
+            audit = (
+                db.query(AdminAuditLog)
+                .filter(
+                    AdminAuditLog.action == "update_setting",
+                    AdminAuditLog.target_id == "log.level",
+                )
+                .order_by(AdminAuditLog.id.desc())
+                .one()
+            )
+            detail = json.loads(audit.detail_json)
+
+        assert detail == {"value": "DEBUG"}
+
+    def test_sensitive_setting_audit_omits_raw_value_and_records_fingerprint(
+        self,
+        client,
+        auth_header,
+    ):
+        import hashlib
+
+        from core.database import AdminAuditLog
+
+        secret = "audit-secret-that-must-not-leak"
+        response = client.put(
+            "/api/v1/admin/settings/model.providers.newapi.api_key",
+            json={"value": secret},
+            headers=auth_header,
+        )
+
+        assert response.status_code == 200, response.text
+        with next(app.dependency_overrides[get_db]()) as db:
+            audit = (
+                db.query(AdminAuditLog)
+                .filter(
+                    AdminAuditLog.action == "update_setting",
+                    AdminAuditLog.target_id == "model.providers.newapi.api_key",
+                )
+                .order_by(AdminAuditLog.id.desc())
+                .one()
+            )
+            detail = json.loads(audit.detail_json)
+
+        assert secret not in json.dumps(detail, ensure_ascii=False)
+        assert "value" not in detail
+        assert detail["changed"] is True
+        assert detail["fingerprint"] == hashlib.sha256(secret.encode("utf-8")).hexdigest()[:12]
+
+
 class TestWebUIStatic:
     def test_spa_route_returns_webui_index(self, client):
         r = client.get("/tools")

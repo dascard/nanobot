@@ -8,6 +8,7 @@ from datetime import timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
+from app.group_ingress.recovery import attach_group_completion_recovery
 from core.context_builder import (
     build_chat_context as build_chat_context,
     format_group_planner_message as format_group_planner_message,
@@ -16,6 +17,8 @@ from core.context_builder import (
 from core import user_block_rules
 from core.database import ChatLog, ConversationTurn
 from core.group_runtime.ids import normalize_group_session_id as normalize_group_session_id
+from core.inbound_idempotency import CompletedInboundResponse, InboundClaimKey
+from core.message_envelope import sanitize_reply_meta
 from core.settings_service import settings
 from core.sqlite_retry import run_sqlite_locked_retry
 from core.time_utils import db_now_naive
@@ -596,14 +599,45 @@ def persist_group_bridge_reply(
     message_id: str | None = None,
     source_message_ids: list[str] | None = None,
     reply_meta: dict | None = None,
+    claim_key: InboundClaimKey | None = None,
+    request_sha256: str = "",
+    completion: CompletedInboundResponse | None = None,
 ) -> None:
     source_ids = list(source_message_ids or [])
     if message_id and message_id not in source_ids:
         source_ids.insert(0, message_id)
     source_ids_json = json.dumps(source_ids, ensure_ascii=False) if source_ids else "[]"
     meta = {"kind": "group_reply"}
-    if reply_meta:
-        meta["reply_meta"] = reply_meta
+    if message_id:
+        if claim_key is None or completion is None:
+            raise ValueError(
+                "非空 message_id 的群回复必须包含 claim_key 与 completion"
+            )
+        if claim_key.chat_type != "group":
+            raise ValueError(
+                "群回复 recovery 的 claim_key.chat_type 必须为 group"
+            )
+        if (
+            claim_key.session_id != group_user_id
+            or claim_key.message_id != message_id
+        ):
+            raise ValueError("群回复 recovery identity 与持久化行不一致")
+        if completion.outcome != "respond" or completion.reply != answer:
+            raise ValueError(
+                "群回复 recovery completion 与原始 Bridge reply 不一致"
+            )
+        if completion.reply_meta:
+            meta["reply_meta"] = dict(completion.reply_meta)
+        meta = attach_group_completion_recovery(
+            meta,
+            key=claim_key,
+            request_sha256=request_sha256,
+            completion=completion,
+        )
+    else:
+        persisted_reply_meta = sanitize_reply_meta(reply_meta)
+        if persisted_reply_meta:
+            meta["reply_meta"] = persisted_reply_meta
 
     def operation() -> None:
         db.add(ChatLog(
@@ -614,6 +648,7 @@ def persist_group_bridge_reply(
             sender_name=(bot_name or "nanobot"),
             session_name=session_name or "",
             processed=1,
+            message_id=message_id,
             meta_json=json.dumps(meta, ensure_ascii=False),
         ))
         db.add(ConversationTurn(

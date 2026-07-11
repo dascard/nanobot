@@ -7,6 +7,9 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
+from dataclasses import dataclass
+from functools import wraps
 import logging
 import math
 import time as _time
@@ -32,6 +35,7 @@ from core.group_runtime.constants import (
 )
 from core.group_runtime.scoring import GroupRuntimeScoringMixin
 from core.group_runtime.state import (
+    GateStateSnapshot,
     GroupChatState,
     GroupPendingMessage,
     _clip_timing_wait_delay,
@@ -46,6 +50,45 @@ from core.group_runtime.state import (
 )
 
 logger = logging.getLogger("nanobot.group_runtime")
+
+
+@dataclass(slots=True)
+class _GateTransaction:
+    group_id: str
+    state: GroupChatState
+    snapshot: GateStateSnapshot
+    active: bool = True
+
+
+_gate_transaction: ContextVar[_GateTransaction | None] = ContextVar(
+    "group_runtime_gate_transaction",
+    default=None,
+)
+
+
+def _guard_gate_lifecycle(method):
+    """确保 gate 启动后的任意异常都会同步回滚 transaction 状态。"""
+
+    @wraps(method)
+    async def guarded(self, *args, **kwargs):
+        token = _gate_transaction.set(None)
+        try:
+            return await method(self, *args, **kwargs)
+        except BaseException:
+            transaction = _gate_transaction.get()
+            if transaction is not None:
+                try:
+                    self._abort_gate_sync(transaction)
+                except BaseException:
+                    try:
+                        logger.exception("[GroupRuntime] gate abort cleanup failed")
+                    except BaseException:
+                        pass
+            raise
+        finally:
+            _gate_transaction.reset(token)
+
+    return guarded
 
 
 class GroupRuntime(GroupRuntimeScoringMixin):
@@ -64,6 +107,62 @@ class GroupRuntime(GroupRuntimeScoringMixin):
         from core.group_runtime.ids import normalize_group_session_id
         return normalize_group_session_id(group_id)
 
+    def _begin_gate(
+        self,
+        group_id: str,
+        state: GroupChatState,
+    ) -> _GateTransaction:
+        """捕获完整状态并启动当前 task 的 gate transaction。"""
+        current = _gate_transaction.get()
+        if current is not None and current.active:
+            raise RuntimeError("当前 task 已存在 active gate transaction")
+        transaction = _GateTransaction(
+            group_id=group_id,
+            state=state,
+            snapshot=GateStateSnapshot.capture(state),
+        )
+        _gate_transaction.set(transaction)
+        state.mark_gate_start()
+        return transaction
+
+    def _commit_gate(self, transaction: _GateTransaction) -> None:
+        """在响应完整构造后提交 gate transaction。"""
+        if not transaction.active:
+            raise RuntimeError("gate transaction 已结束")
+        current = self._states.get(transaction.group_id)
+        if current is not transaction.state:
+            transaction.active = False
+            if _gate_transaction.get() is transaction:
+                _gate_transaction.set(None)
+            return
+        current.mark_gate_done()
+        transaction.active = False
+        if _gate_transaction.get() is transaction:
+            _gate_transaction.set(None)
+
+    def _abort_gate_sync(
+        self,
+        transaction: _GateTransaction,
+    ) -> None:
+        """同步回滚；跨 generation 时只恢复 transaction lifecycle。"""
+        if not transaction.active:
+            return
+        try:
+            current = self._states.get(transaction.group_id)
+            if current is transaction.state:
+                if current.generation == transaction.snapshot.generation:
+                    transaction.snapshot.restore_exact(current)
+                else:
+                    current.running = transaction.snapshot.running
+                    current.last_gate_completed_ts = (
+                        transaction.snapshot.last_gate_completed_ts
+                    )
+        finally:
+            transaction.active = False
+            if _gate_transaction.get() is transaction:
+                _gate_transaction.set(None)
+
+    @_guard_gate_lifecycle
     async def process_message(
         self, group_id: str, msg: dict, *,
         trigger_reason: str = "", session_name: str = "",
@@ -103,21 +202,49 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                 group_id=group_id,
                 stream_id=stream_id,
             ))
-            state.talk_value = talk_value
-            state.platform = str(platform or "qq").strip() or "qq"
             tr = str(trigger_reason or "").strip()
             if tr == "ambient" and self._looks_like_recent_bot_followup(state, pm):
                 tr = "recent_bot_followup"
                 pm.trigger_reason = tr
-            state.last_trigger_reason = tr
-            state.session_name = session_name
-            state.bot_aliases = list(bot_aliases or [])
-            state.bot_id = pm.bot_id or state.bot_id
-            state.bot_name = pm.bot_name or state.bot_name
-            state.add_message(pm)
+            added = state.add_message(pm)
+            if added:
+                state.talk_value = talk_value
+                state.platform = str(platform or "qq").strip() or "qq"
+                state.last_trigger_reason = tr
+                state.session_name = session_name
+                state.bot_aliases = list(bot_aliases or [])
+                state.bot_id = pm.bot_id or state.bot_id
+                state.bot_name = pm.bot_name or state.bot_name
+
+            if not added and state.waiting_for_more:
+                if not state.is_wait_expired():
+                    delay = max(1, int(state.wait_until - _time.time()))
+                    return {
+                        "action": "wait",
+                        "delay_seconds": delay,
+                        "generation": state.generation,
+                        "reason": "duplicate message while waiting",
+                        "waiting_for_more": True,
+                        "new_messages_during_wait": len(
+                            state.new_messages_during_wait
+                        ),
+                    }
+                state.end_wait()
+                logger.info(
+                    "[GroupRuntime] duplicate after wait expiry "
+                    "group=%s proceeding to gate",
+                    group_id,
+                )
+            if not added and state.running:
+                return {
+                    "action": "wait",
+                    "delay_seconds": state.next_gate_delay(),
+                    "generation": state.generation,
+                    "reason": "duplicate message while gate in progress",
+                }
 
             # wait 期间收到新消息：累积 + 刷新计时器，不调用 TimingGate
-            if state.waiting_for_more:
+            if added and state.waiting_for_more:
                 wait_msg = {
                     "sender_name": pm.sender_name,
                     "message": pm.message[:200],
@@ -151,10 +278,23 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                 ctx["last_bot_reply_ago"] = _time.time() - state.last_bot_reply_ts
 
             # 直接触发 → arm force_next_continue
-            if tr in _DIRECT_TRIGGERS or pm.is_at_bot or pm.is_reply_to_bot:
+            if added and (
+                tr in _DIRECT_TRIGGERS
+                or pm.is_at_bot
+                or pm.is_reply_to_bot
+            ):
                 direct_reason = tr or ("reply_to_bot" if pm.is_reply_to_bot else "at_bot")
                 state.activate_linger(pm.sender_id, direct_reason)
                 state.arm_force_continue(direct_reason)
+
+            if state.running:
+                return self._attach_shadow_scoring({
+                    "action": "wait",
+                    "delay_seconds": state.next_gate_delay(),
+                    "generation": state.generation,
+                    "cooldown_ago": state.bot_reply_ago(),
+                    "reason": "rate limited / gate in progress",
+                }, state, tr)
 
             # directed_to_other：降级为 scoring 抑制信号，独自成立时仍会规则短路 no_reply
             if should_suppress_directed_to_other(state.pending):
@@ -178,6 +318,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                         **payload,
                     }, state, tr, pending=snapshot)
                 if scoring_decision.stage == "rule_shortcut":
+                    transaction = self._begin_gate(group_id, state)
                     response = self._apply_scoring_shortcut(
                         state,
                         scoring_decision,
@@ -190,6 +331,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                         "directed_to_other": True,
                         **payload,
                     })
+                    self._commit_gate(transaction)
                     return response
 
             # 硬 cooldown：bot 刚回复过且非直接互动 → wait
@@ -198,6 +340,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                 ago = state.bot_reply_ago()
                 if tr in {"", "ambient"}:
                     snapshot = state.take_snapshot()
+                    transaction = self._begin_gate(group_id, state)
                     scoring_response = self._cooldown_scoring_shortcut(
                         state,
                         tr,
@@ -205,7 +348,9 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                         reason_prefix="cooldown scoring shortcut",
                     )
                     if scoring_response is not None:
+                        self._commit_gate(transaction)
                         return scoring_response
+                    self._abort_gate_sync(transaction)
                 return self._attach_shadow_scoring({
                     "action": "wait",
                     "delay_seconds": _clip_timing_wait_delay(math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),
@@ -229,19 +374,24 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                 except Exception as exc:
                     scoring_decision = None
                     logger.debug("[GroupRuntime] force scoring failed: %s", exc, exc_info=True)
-                state.force_next_continue = False
                 if scoring_decision is not None and scoring_decision.stage == "rule_shortcut":
+                    transaction = self._begin_gate(group_id, state)
+                    state.force_next_continue = False
                     logger.info("[GroupRuntime] force_scoring_shortcut group=%s reason=%s action=%s pending=%d",
                                 group_id, force_reason, scoring_decision.action, len(snapshot))
-                    return self._apply_scoring_shortcut(
+                    response = self._apply_scoring_shortcut(
                         state,
                         scoring_decision,
                         pending=snapshot,
                         reason_prefix=f"direct trigger: {force_reason}",
                     )
+                    self._commit_gate(transaction)
+                    return response
                 policy = self._resolve_timing_model_policy(state, group_id)
+                transaction = self._begin_gate(group_id, state)
                 if policy.mode == "rules_only":
-                    return self._apply_policy_scoring_decision(
+                    state.force_next_continue = False
+                    response = self._apply_policy_scoring_decision(
                         state,
                         policy,
                         force_reason,
@@ -249,7 +399,8 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                         reason_prefix="timing model rules_only",
                         force_direct_score=1.0,
                     )
-                state.mark_gate_start()
+                    self._commit_gate(transaction)
+                    return response
                 gen = state.generation
                 ctx_snapshot = dict(ctx)
                 tr = force_reason
@@ -303,7 +454,10 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                         # 冷启动 no_reply 且满足主动前置检查 → 尝试主动发言(锁外调 LLM 裁判)
                         if (scoring_decision.action == "no_reply"
                                 and self._proactive_precheck(state, snapshot)):
-                            state.mark_gate_start()
+                            proactive_transaction = self._begin_gate(
+                                group_id,
+                                state,
+                            )
                             proactive_prepared = True
                             proactive_gen = state.generation
                             proactive_ctx = dict(ctx)
@@ -314,24 +468,30 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                         else:
                             logger.info("[GroupRuntime] ambient_scoring_shortcut group=%s action=%s pending=%d",
                                         group_id, scoring_decision.action, len(snapshot))
-                            return self._apply_scoring_shortcut(
+                            transaction = self._begin_gate(group_id, state)
+                            response = self._apply_scoring_shortcut(
                                 state,
                                 scoring_decision,
                                 pending=snapshot,
                                 reason_prefix="ambient scoring shortcut",
                             )
+                            self._commit_gate(transaction)
+                            return response
 
                 if not proactive_prepared:
                     policy = self._resolve_timing_model_policy(state, group_id)
                     if policy.mode == "rules_only":
-                        return self._apply_policy_scoring_decision(
+                        transaction = self._begin_gate(group_id, state)
+                        response = self._apply_policy_scoring_decision(
                             state,
                             policy,
                             tr,
                             pending=snapshot,
                             reason_prefix="timing model rules_only",
                         )
-                    state.mark_gate_start()
+                        self._commit_gate(transaction)
+                        return response
+                    transaction = self._begin_gate(group_id, state)
                     gen = state.generation
                     ctx_snapshot = dict(ctx)
                     gate_policy = policy
@@ -340,17 +500,23 @@ class GroupRuntime(GroupRuntimeScoringMixin):
         if proactive_prepared:
             return await self._run_proactive(
                 group_id, proactive_snapshot, proactive_ctx, proactive_gen, proactive_sender,
+                transaction=proactive_transaction,
             )
 
         result = await self._call_gate(group_id, snapshot, ctx_snapshot, tr)
 
         async with self._lock:
             state = self._states.get(group_id)
-            if not state:
-                return {"action": "no_reply", "delay_seconds": None, "reason": "state cleaned up"}
+            if state is not transaction.state:
+                self._abort_gate_sync(transaction)
+                return {
+                    "action": "no_reply",
+                    "delay_seconds": None,
+                    "reason": "state cleaned up or replaced",
+                }
 
             if gen != state.generation:
-                state.mark_gate_done()
+                self._abort_gate_sync(transaction)
                 logger.info("[GroupRuntime] gen mismatch %d!=%d for %s",
                             gen, state.generation, group_id)
                 return self._attach_shadow_scoring({
@@ -360,6 +526,9 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     "reason": "generation mismatch, new messages arrived during gate",
                 }, state, tr, pending=snapshot, model_result=result)
 
+            if gate_force_direct_score > 0:
+                state.force_next_continue = False
+
             if getattr(gate_policy, "mode", "enabled") == "shadow":
                 shadow_scoring = self._shadow_scoring(
                     state,
@@ -368,7 +537,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     model_result=result,
                     force_direct_score=gate_force_direct_score,
                 )
-                return self._apply_policy_scoring_decision(
+                response = self._apply_policy_scoring_decision(
                     state,
                     gate_policy,
                     tr,
@@ -377,15 +546,20 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     force_direct_score=gate_force_direct_score,
                     shadow_scoring=shadow_scoring,
                 )
+                self._commit_gate(transaction)
+                return response
 
-            return self._apply_gate_result(
+            response = self._apply_gate_result(
                 state,
                 result,
                 trigger_reason=tr,
                 pending=snapshot,
                 force_direct_score=gate_force_direct_score,
             )
+            self._commit_gate(transaction)
+            return response
 
+    @_guard_gate_lifecycle
     async def handle_timer_fired(self, group_id: str, generation: int,
                                  trigger_reason: str = "",
                                  recent_context: str = "") -> dict:
@@ -425,6 +599,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             if self._should_cooldown(state, trigger_reason or "timer"):
                 ago = state.bot_reply_ago()
                 snapshot = state.take_snapshot()
+                transaction = self._begin_gate(group_id, state)
                 scoring_response = self._cooldown_scoring_shortcut(
                     state,
                     trigger_reason or state.last_trigger_reason or "timer",
@@ -432,7 +607,9 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     reason_prefix="timer cooldown scoring shortcut",
                 )
                 if scoring_response is not None:
+                    self._commit_gate(transaction)
                     return scoring_response
+                self._abort_gate_sync(transaction)
                 return self._attach_shadow_scoring({
                     "action": "wait",
                     "delay_seconds": _clip_timing_wait_delay(math.ceil(BOT_REPLY_COOLDOWN_SEC - ago)),
@@ -450,24 +627,28 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     "reason": "rate limited",
                 }, state, trigger_reason or state.last_trigger_reason or "timer")
 
-            # timer 触发时退出 wait 状态
             was_waiting = state.waiting_for_more
-            if was_waiting:
-                state.end_wait()
-
+            wait_count = state.wait_count
+            new_messages_during_wait = len(state.new_messages_during_wait)
+            wait_reason = state.wait_reason
             snapshot = state.take_snapshot()
             policy = self._resolve_timing_model_policy(state, group_id)
             timer_trigger_reason = trigger_reason or state.last_trigger_reason or "timer"
             if policy.mode == "rules_only":
-                return self._apply_policy_scoring_decision(
+                transaction = self._begin_gate(group_id, state)
+                if was_waiting:
+                    state.end_wait()
+                response = self._apply_policy_scoring_decision(
                     state,
                     policy,
                     timer_trigger_reason,
                     pending=snapshot,
                     reason_prefix="timing model rules_only",
                 )
+                self._commit_gate(transaction)
+                return response
 
-            state.mark_gate_start()
+            transaction = self._begin_gate(group_id, state)
             gen = state.generation
             ctx_saved = {
                 "session_name": state.session_name,
@@ -479,24 +660,32 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             # 注入 wait 元信息
             if was_waiting or state.previous_gate_action == "wait":
                 ctx_saved["previous_gate_action"] = "wait"
-                ctx_saved["wait_count"] = state.wait_count
-                ctx_saved["new_messages_during_wait"] = len(state.new_messages_during_wait)
-                ctx_saved["wait_reason"] = state.wait_reason
-                ctx_saved["wait_timeout"] = not state.new_messages_during_wait
+                ctx_saved["wait_count"] = wait_count
+                ctx_saved["new_messages_during_wait"] = new_messages_during_wait
+                ctx_saved["wait_reason"] = wait_reason
+                ctx_saved["wait_timeout"] = new_messages_during_wait == 0
 
         result = await self._call_gate(group_id, snapshot, ctx_saved, timer_trigger_reason)
 
         async with self._lock:
             state = self._states.get(group_id)
-            if not state:
-                return {"action": "no_reply", "delay_seconds": None, "reason": "state cleaned up"}
+            if state is not transaction.state:
+                self._abort_gate_sync(transaction)
+                return {
+                    "action": "no_reply",
+                    "delay_seconds": None,
+                    "reason": "state cleaned up or replaced",
+                }
             if gen != state.generation:
-                state.mark_gate_done()
+                self._abort_gate_sync(transaction)
                 return self._attach_shadow_scoring({
                     "action": "no_reply", "delay_seconds": None,
                     "generation": state.generation,
                     "reason": "state changed during timer gate",
                 }, state, timer_trigger_reason, pending=snapshot, model_result=result)
+
+            if was_waiting:
+                state.end_wait()
 
             if getattr(policy, "mode", "enabled") == "shadow":
                 shadow_scoring = self._shadow_scoring(
@@ -505,7 +694,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     pending=snapshot,
                     model_result=result,
                 )
-                return self._apply_policy_scoring_decision(
+                response = self._apply_policy_scoring_decision(
                     state,
                     policy,
                     timer_trigger_reason,
@@ -513,13 +702,17 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     reason_prefix="timing model shadow",
                     shadow_scoring=shadow_scoring,
                 )
+                self._commit_gate(transaction)
+                return response
 
-            return self._apply_gate_result(
+            response = self._apply_gate_result(
                 state,
                 result,
                 trigger_reason=timer_trigger_reason,
                 pending=snapshot,
             )
+            self._commit_gate(transaction)
+            return response
 
     def _apply_gate_result(
         self,
@@ -586,7 +779,6 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             action = "no_reply"
 
         cooldown = round(state.bot_reply_ago(), 1)
-        state.mark_gate_done()
         response = {
             "action": action, "delay_seconds": delay,
             "generation": state.generation,
@@ -683,11 +875,15 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             return False
         return True
 
+    @_guard_gate_lifecycle
     async def _run_proactive(self, group_id: str, pending: list[GroupPendingMessage],
-                             ctx: dict, gen: int, sender_id: str) -> dict:
+                             ctx: dict, gen: int, sender_id: str, *,
+                             transaction: _GateTransaction) -> dict:
         """锁外调用主动发言 LLM 裁判,再校验 generation 并应用决策。"""
+        _gate_transaction.set(transaction)
         from clients.classifier_client import judge_proactive
 
+        group_id = self._norm_group_id(group_id)
         context = self._build_timing_context(pending=pending, trigger_reason="proactive", **ctx)
         t0 = _time.time()
         verdict = await asyncio.to_thread(judge_proactive, context)
@@ -695,8 +891,13 @@ class GroupRuntime(GroupRuntimeScoringMixin):
 
         async with self._lock:
             state = self._states.get(group_id)
-            if not state:
-                return {"action": "no_reply", "delay_seconds": None, "reason": "state cleaned up"}
+            if state is not transaction.state:
+                self._abort_gate_sync(transaction)
+                return {
+                    "action": "no_reply",
+                    "delay_seconds": None,
+                    "reason": "state cleaned up or replaced",
+                }
 
             proactive_meta = {
                 "should_speak": bool(verdict.get("should_speak")),
@@ -706,7 +907,7 @@ class GroupRuntime(GroupRuntimeScoringMixin):
             }
 
             if gen != state.generation:
-                state.mark_gate_done()
+                self._abort_gate_sync(transaction)
                 return self._attach_shadow_scoring({
                     "action": "no_reply", "delay_seconds": None,
                     "generation": state.generation,
@@ -720,7 +921,6 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                 state.record_proactive()
                 payload = _pending_payload(pending)
                 state.handle_continue()
-                state.mark_gate_done()
                 logger.info("[GroupRuntime] proactive_speak group=%s latency=%dms reason=%.60s",
                             group_id, latency, proactive_meta["reason"])
                 response = {
@@ -732,11 +932,11 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                     "proactive": proactive_meta,
                 }
                 response.update(payload)
+                self._commit_gate(transaction)
                 return response
 
             state.handle_no_reply()
-            state.mark_gate_done()
-            return {
+            response = {
                 "action": "no_reply",
                 "delay_seconds": None,
                 "generation": state.generation,
@@ -744,6 +944,8 @@ class GroupRuntime(GroupRuntimeScoringMixin):
                 "reason": f"proactive declined: {proactive_meta['reason']}",
                 "proactive": proactive_meta,
             }
+            self._commit_gate(transaction)
+            return response
 
     async def _call_gate(self, group_id: str, pending: list[GroupPendingMessage],
                          ctx: dict, trigger_reason: str) -> dict:

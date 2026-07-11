@@ -128,6 +128,12 @@ async def test_early_return_persists_when_answer_is_present_and_builds_payload()
         )
     ]
     assert result.payload["payload"]["answer"] == "传输回复"
+    assert result.completion.outcome == "respond"
+    assert result.completion.reply == "原始回复"
+    assert result.completion.reason == "casual"
+    assert result.completion.source == "casual_template"
+    assert result.completion.intent == "寒暄"
+    assert result.completion.guardrail_status == "casual_template"
 
 
 @pytest.mark.asyncio
@@ -160,6 +166,41 @@ async def test_early_return_without_persist_only_builds_payload():
         "include_answer_chunks": True,
     }
     assert result.payload["payload"]["status"] == "silent"
+    assert result.completion.outcome == "silent"
+    assert result.completion.reason == "private_buffer_follower"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "reason", "persist_answer", "expected_outcome"),
+    [
+        ("no_reply", "timing_gate_no_reply", "", "no_reply"),
+        ("silent", "private_buffer_missing", None, "silent"),
+    ],
+)
+async def test_early_return_exposes_transport_independent_completion(
+    status: str,
+    reason: str,
+    persist_answer: str | None,
+    expected_outcome: str,
+):
+    from api.chat_pre_bridge_decision import ChatPreBridgeEarlyReturn
+    from api.chat_pre_bridge_route_result import resolve_pre_bridge_route_result
+
+    calls: dict[str, list[Any]] = {}
+    result = await resolve_pre_bridge_route_result(
+        _request(),
+        ChatPreBridgeEarlyReturn(
+            status=status,
+            reason=reason,
+            persist_answer=persist_answer,
+        ),
+        callbacks=_callbacks(calls),
+    )
+
+    assert result.completion.outcome == expected_outcome
+    assert result.completion.reply == ""
+    assert result.completion.reason == reason
 
 
 @pytest.mark.asyncio
@@ -249,6 +290,9 @@ async def test_guardrail_silent_finalizes_buffer_persists_silent_answer_and_retu
         "include_answer_chunks": True,
     }
     assert result.payload["payload"]["reason"] == "guardrail_silent"
+    assert result.completion.outcome == "silent"
+    assert result.completion.reason == "guardrail_silent"
+    assert result.completion.guardrail_status == "silent"
 
 
 @pytest.mark.asyncio

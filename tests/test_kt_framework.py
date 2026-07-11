@@ -140,6 +140,209 @@ class TestAiDailyTool:
 class TestNanobotBridge:
     """Test the NanobotBridge lifecycle manager."""
 
+    @pytest.mark.parametrize(
+        "process_outcome",
+        ["empty", "system_error"],
+        ids=["empty", "system-error"],
+    )
+    def test_single_candidate_terminal_failure_records_failure(self, process_outcome):
+        """最后一个候选的空响应或系统错误也必须按失败记账。"""
+        from types import SimpleNamespace
+
+        from nanobot_kt.bridge import NanobotBridge
+
+        bridge = NanobotBridge()
+        bridge._agent = SimpleNamespace(controller=SimpleNamespace())
+        bridge._extract_last_rich_tool_output = MagicMock(return_value="")
+        bridge._extract_reply_from_tool_output = MagicMock(return_value="")
+
+        tracker = MagicMock(
+            record_failure=AsyncMock(),
+            record_success=AsyncMock(),
+        )
+
+        async def process_event(_agent, _event):
+            if process_outcome == "system_error":
+                raise RuntimeError("模型调用失败")
+            return None
+
+        result = run_async(bridge._run_model_loop(
+            candidate_models=[{"id": "only-model"}],
+            route_plan=SimpleNamespace(),
+            event_content="你好",
+            query="你好",
+            session_id="session-1",
+            meta={"stream": False},
+            tracker=tracker,
+            trace_id="trace-1",
+            run_id="run-1",
+            reply_llm_source="replyer.private_chat",
+            create_user_event=lambda content, stream: (content, stream),
+            process_event=process_event,
+        ))
+
+        if process_outcome == "empty":
+            assert result.response == ""
+        else:
+            assert "[系统内部错误]" in result.response
+        tracker.record_failure.assert_awaited_once_with("only-model")
+        tracker.record_success.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "terminal_kind",
+        ["reply", "html", "no_reply"],
+        ids=["reply", "html", "no-reply"],
+    )
+    def test_model_loop_legal_tool_terminal_records_success_without_fallback(
+        self,
+        terminal_kind,
+    ):
+        """合法 reply、富 HTML 和 no_reply 都应由当前模型成功终止。"""
+        import json
+        from types import SimpleNamespace
+
+        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
+        from nanobot_kt.bridge import NanobotBridge
+
+        bridge = NanobotBridge()
+        messages = [SimpleNamespace(role="user", content="你好")]
+        conversation = MagicMock()
+        conversation.get_messages.side_effect = lambda: list(messages)
+        conversation.find_last_user_index.return_value = 0
+        conversation.truncate_from.side_effect = lambda index: messages.__delitem__(
+            slice(index, None)
+        )
+        bridge._agent = SimpleNamespace(
+            controller=SimpleNamespace(conversation=conversation),
+        )
+
+        if terminal_kind == "reply":
+            tool_output = json.dumps(
+                {REPLY_MARKER: {"content": "合法回复"}},
+                ensure_ascii=False,
+            )
+        elif terminal_kind == "html":
+            tool_output = '<article class="news-brief">合法富文本</article>'
+        else:
+            tool_output = json.dumps(
+                {
+                    REPLY_MARKER: {
+                        "content": "",
+                        "no_reply": True,
+                        "reason": "无需回复",
+                    }
+                },
+                ensure_ascii=False,
+            )
+
+        async def process_event(_agent, _event):
+            messages.append(SimpleNamespace(role="tool", content=tool_output))
+
+        process_event_mock = AsyncMock(side_effect=process_event)
+        tracker = MagicMock(
+            record_failure=AsyncMock(),
+            record_success=AsyncMock(),
+        )
+
+        result = run_async(bridge._run_model_loop(
+            candidate_models=[{"id": "model-a"}, {"id": "model-b"}],
+            route_plan=SimpleNamespace(),
+            event_content="你好",
+            query="你好",
+            session_id="session-terminal",
+            meta={"stream": False},
+            tracker=tracker,
+            trace_id="trace-terminal",
+            run_id="run-terminal",
+            reply_llm_source="replyer.private_chat",
+            create_user_event=lambda content, stream: SimpleNamespace(
+                content=content,
+                stream=stream,
+            ),
+            process_event=process_event_mock,
+        ))
+
+        assert result.target_model == "model-a"
+        assert result.attempts == 1
+        process_event_mock.assert_awaited_once()
+        tracker.record_success.assert_awaited_once_with("model-a")
+        tracker.record_failure.assert_not_awaited()
+        if terminal_kind == "no_reply":
+            assert bridge.is_no_reply_session("session-terminal") is True
+
+    @pytest.mark.parametrize(
+        ("raw_output", "expected_agent_result"),
+        [
+            ("普通文本但没有调用最终工具", "no_tool_call"),
+            ("我已经调用 reply 工具发送了", "fake_tool_call_claim"),
+        ],
+        ids=["plain", "fake-tool-claim"],
+    )
+    def test_suppressed_contract_output_does_not_record_success_before_validation(
+        self,
+        raw_output,
+        expected_agent_result,
+    ):
+        """最终被 contract 抑制的非空输出不能提前清除模型失败记录。"""
+        from types import SimpleNamespace
+
+        from nanobot_kt.bridge import NanobotBridge
+
+        bridge = NanobotBridge()
+        bridge._agent = SimpleNamespace(controller=SimpleNamespace())
+        bridge._extract_last_rich_tool_output = MagicMock(return_value="")
+        bridge._extract_reply_from_tool_output = MagicMock(return_value="")
+        bridge._record_reply_contract_check = MagicMock()
+        tracker = MagicMock(
+            record_failure=AsyncMock(),
+            record_success=AsyncMock(),
+        )
+
+        async def process_event(_agent, _event):
+            bridge._output._buffer.append(raw_output)
+
+        create_user_event = lambda content, stream: SimpleNamespace(
+            content=content,
+            stream=stream,
+        )
+        model_loop = run_async(bridge._run_model_loop(
+            candidate_models=[{"id": "only-model"}],
+            route_plan=SimpleNamespace(),
+            event_content="你好",
+            query="你好",
+            session_id="session-suppressed",
+            meta={"stream": False},
+            tracker=tracker,
+            trace_id="trace-suppressed",
+            run_id="run-suppressed",
+            reply_llm_source="replyer.private_chat",
+            create_user_event=create_user_event,
+            process_event=process_event,
+        ))
+
+        resolution = run_async(bridge._check_reply_contract(
+            session_id="session-suppressed",
+            response=model_loop.response,
+            result=model_loop.result,
+            preserved_html=model_loop.preserved_html,
+            target_model=model_loop.target_model,
+            query="你好",
+            meta={
+                "stream": False,
+                "enable_reply_contract_retry": False,
+            },
+            event_content="你好",
+            create_user_event=create_user_event,
+            process_event=process_event,
+            trace_id="trace-suppressed",
+            run_id="run-suppressed",
+            reply_llm_source="replyer.private_chat",
+        ))
+
+        assert resolution.finish_status == "suppressed"
+        assert resolution.agent_result == expected_agent_result
+        tracker.record_success.assert_not_awaited()
+
     def test_bridge_trace_finalizer_finishes_once(self, monkeypatch):
         from nanobot_kt.bridge import BridgeTraceFinalizer, NanobotBridge
 
@@ -187,6 +390,68 @@ class TestNanobotBridge:
         assert reset_trace_calls == ["trace-token"]
         assert reset_final_tools_calls == ["final-token"]
         assert reset_tool_plan_calls == ["tool-token"]
+
+    @pytest.mark.parametrize("failing_step", [None, "restore", "finish_run"])
+    def test_bridge_trace_finalizer_runs_all_cleanup_steps_best_effort(
+        self,
+        monkeypatch,
+        failing_step,
+    ):
+        from nanobot_kt.bridge import BridgeTraceFinalizer, NanobotBridge
+
+        events = []
+        bridge = NanobotBridge.__new__(NanobotBridge)
+
+        def restore_saved_tools():
+            events.append("restore-tools")
+            if failing_step == "restore":
+                raise RuntimeError("restore failed")
+
+        def finish_run(*_args, **_kwargs):
+            events.append("finish-run")
+            if failing_step == "finish_run":
+                raise RuntimeError("finish failed")
+
+        bridge._restore_saved_tools = restore_saved_tools
+        monkeypatch.setattr("core.tracing.RunTracer.finish_run", finish_run)
+        monkeypatch.setattr(
+            "core.tool_plan.reset_current_tool_plan",
+            lambda _token: events.append("reset-tool-plan"),
+        )
+        monkeypatch.setattr(
+            "core.final_tools.reset_current_final_tools",
+            lambda _token: events.append("reset-final-tools"),
+        )
+        monkeypatch.setattr(
+            "core.tracing_context.reset_trace_context",
+            lambda _token: events.append("reset-trace"),
+        )
+
+        finalizer = BridgeTraceFinalizer(
+            bridge=bridge,
+            run_id="run-best-effort",
+            trace_tokens="trace-token",
+            run_meta={},
+            started_at=10.0,
+            now=lambda: 10.1,
+            final_tools_token="final-token",
+            tool_plan_token="tool-token",
+        )
+
+        finalizer.finish("success", output_preview="ok")
+        finalizer.finish("error", error="late")
+
+        assert events == [
+            "restore-tools",
+            "finish-run",
+            "reset-tool-plan",
+            "reset-final-tools",
+            "reset-trace",
+        ]
+        assert finalizer.closed is True
+        assert finalizer.tool_plan_token is None
+        assert finalizer.final_tools_token is None
+        assert finalizer.trace_tokens is None
 
     def test_remove_system_contexts_cleans_effort_and_retry_prompts(self):
         from nanobot_kt.bridge import NanobotBridge
@@ -1175,86 +1440,317 @@ class TestNanobotBridge:
         assert captured["intel_floor"] == 12
         assert captured["max_cost"] == 10.0
 
+    @pytest.mark.parametrize(
+        ("configured_model", "preferred_known", "expected_attempts_by_request"),
+        [
+            (
+                "override-model",
+                True,
+                [["override-model", "auto-model"], ["auto-model"]],
+            ),
+            ("unknown-model", False, [["auto-model"]]),
+        ],
+        ids=["circuit-disabled-on-next-request", "unknown-preferred"],
+    )
     @patch("nanobot_kt.bridge.registry")
     @patch("nanobot_kt.bridge.NewAPIClient")
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_reply_model_uses_settings_override(
-        self, MockAgent, mock_load, MockClient, mock_registry, monkeypatch
+    def test_bridge_routes_only_eligible_preferred_with_real_failure_tracker(
+        self,
+        MockAgent,
+        mock_load,
+        MockClient,
+        mock_registry,
+        monkeypatch,
+        configured_model,
+        preferred_known,
+        expected_attempts_by_request,
     ):
-        """settings.get("model.reply") 覆盖 > LLM_MODEL_REPLY > 默认值"""
-        from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
-        from nanobot_kt.bridge import NanobotBridge
-        import json
+        """Bridge 仅尝试合格首选，并通过真实熔断状态过滤后续候选。"""
+        from types import SimpleNamespace
 
-        # settings 返回 override-model，LLM_MODEL_REPLY 是 env-model
-        fake_settings = {"model.reply": "override-model"}
+        from clients.model_registry import ModelFailureTracker
+        from clients.new_api_client import NewAPIClient as RealNewAPIClient
+        from nanobot_kt.bridge import NanobotBridge, ReplyResolution
+
         monkeypatch.setattr(
             "core.settings_service.settings.get",
-            lambda key, default=None: fake_settings.get(key, default),
+            lambda key, default=None: (
+                configured_model if key == "model.reply" else default
+            ),
         )
         monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "env-model", raising=False)
         monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_FLOOR", 12, raising=False)
         monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_INTEL_BOOST", 2, raising=False)
         monkeypatch.setattr("nanobot_kt.bridge.REPLY_MODEL_MAX_COST", 10.0, raising=False)
+        monkeypatch.setattr(ModelFailureTracker, "_load", lambda self: None)
+        monkeypatch.setattr(ModelFailureTracker, "_save", lambda self: None)
 
-        # registry 确认 override-model 存在且 enabled
-        mock_registry.get_model_info = MagicMock(return_value={
+        preferred_model = {
             "id": "override-model", "enabled": True, "provider": "new-api",
             "intelligence": 12, "cost_input_1m": 0.4, "tier": "smart",
-        })
-        mock_registry.get_models_by_provider.return_value = [{"id": "override-model"}]
-
-        auto_called = []
-
-        route_client = MagicMock()
-        route_client.sync_models_to_registry = AsyncMock()
-        route_client.estimate_complexity.return_value = 3
-        route_client.get_ordered_candidates = MagicMock(side_effect=lambda **kw: auto_called.append(True) or [
-            {"id": "auto-model", "intelligence": 12, "cost_input_1m": 0.5, "context_window": 128000},
-        ])
-        MockClient.return_value = route_client
-        MockClient.get_failure_tracker.return_value = MagicMock(
-            record_success=AsyncMock(),
-            record_failure=AsyncMock(),
+            "supports_stream": True,
+        }
+        auto_model = {
+            "id": "auto-model", "enabled": True, "provider": "new-api",
+            "intelligence": 12, "cost_input_1m": 0.5, "tier": "smart",
+            "supports_stream": True,
+        }
+        models = [auto_model]
+        if preferred_known:
+            models.insert(0, preferred_model)
+        mock_registry.get_model_info.side_effect = lambda model_id: (
+            preferred_model
+            if preferred_known and model_id == configured_model
+            else None
         )
+        mock_registry.get_models_by_provider.return_value = models
+        mock_registry.compute_priority_score.side_effect = (
+            lambda model: model["cost_input_1m"]
+        )
+        monkeypatch.setattr("clients.new_api_client.registry", mock_registry)
+
+        failure_tracker = ModelFailureTracker(max_failures=1)
+        route_client = RealNewAPIClient(
+            api_key="test",
+            base_url="http://test",
+            registry_provider="new-api",
+        )
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity = MagicMock(return_value=3)
+        monkeypatch.setattr(
+            route_client,
+            "_safe_get_failure_tracker",
+            lambda: failure_tracker,
+        )
+        real_get_ordered_candidates = route_client.get_ordered_candidates
+        routed_candidates_by_request = []
+
+        def get_ordered_candidates(**kwargs):
+            candidates = real_get_ordered_candidates(**kwargs)
+            routed_candidates_by_request.append(
+                [candidate["id"] for candidate in candidates]
+            )
+            return candidates
+
+        route_client.get_ordered_candidates = MagicMock(
+            side_effect=get_ordered_candidates,
+        )
+        MockClient.return_value = route_client
+        MockClient.get_failure_tracker.return_value = failure_tracker
 
         mock_config = MagicMock()
         mock_config.name = "test"
         mock_load.return_value = mock_config
 
-        reply_output = json.dumps({REPLY_MARKER: {"content": "覆盖测试"}}, ensure_ascii=False)
+        user_msg = SimpleNamespace(role="user", content="你好")
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [
-            {"role": "tool", "content": reply_output},
-        ]
+        mock_conv.get_messages.return_value = [user_msg]
         mock_conv.to_messages.return_value = []
-        mock_conv.find_last_user_index.return_value = -1
+        mock_conv.find_last_user_index.return_value = 0
+
+        attempts_by_request = []
+        llm = MagicMock(config=MagicMock(model="old-model"))
+
+        async def fake_process(_event):
+            attempts_by_request[-1].append(llm.config.model)
+            if llm.config.model == "auto-model":
+                bridge._output._buffer.append("自动降级回复")
+            return None
 
         mock_agent = MagicMock()
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_agent.controller = MagicMock(
             conversation=mock_conv,
-            llm=MagicMock(config=MagicMock(model="old-model")),
+            llm=llm,
         )
+        mock_agent._process_event = AsyncMock(side_effect=fake_process)
+        MockAgent.return_value = mock_agent
+
+        bridge = NanobotBridge()
+        bridge._check_reply_contract = AsyncMock(return_value=ReplyResolution(
+            response="自动降级回复",
+            agent_result="reply",
+            no_reply=False,
+            no_tool_call=False,
+            output_preview="自动降级回复",
+            finish_status="success",
+        ))
+
+        async def _run_requests():
+            await bridge.start()
+            results = []
+            for request_index in range(len(expected_attempts_by_request)):
+                attempts_by_request.append([])
+                results.append(await bridge.handle_message(
+                    "你好",
+                    user_id="u1",
+                    session_id=f"private_u1_{request_index}",
+                    metadata={"complexity": 3},
+                ))
+            return results
+
+        results = run_async(_run_requests())
+
+        assert results == ["自动降级回复"] * len(expected_attempts_by_request)
+        assert attempts_by_request == expected_attempts_by_request
+        assert routed_candidates_by_request == expected_attempts_by_request
+        assert failure_tracker.sync_is_disabled(configured_model) is preferred_known
+        assert failure_tracker.sync_is_disabled("auto-model") is False
+
+    @pytest.mark.parametrize(
+        (
+            "configured_model",
+            "model_info",
+            "controller_model",
+            "circuit_disabled",
+        ),
+        [
+            ("unknown-model", None, "unknown-model", False),
+            (
+                "disabled-model",
+                {
+                    "id": "disabled-model",
+                    "enabled": False,
+                    "supports_stream": True,
+                    "supports_tools": True,
+                },
+                "disabled-model",
+                False,
+            ),
+            (
+                "incapable-model",
+                {
+                    "id": "incapable-model",
+                    "enabled": True,
+                    "supports_stream": False,
+                    "supports_tools": True,
+                },
+                "incapable-model",
+                False,
+            ),
+            (
+                "circuit-model",
+                {
+                    "id": "circuit-model",
+                    "enabled": True,
+                    "supports_stream": True,
+                    "supports_tools": True,
+                },
+                "circuit-model",
+                True,
+            ),
+            ("", None, "", False),
+            ("", None, "unknown-fallback", False),
+        ],
+        ids=[
+            "unknown-preferred",
+            "disabled-preferred",
+            "incapable-preferred",
+            "circuit-disabled-preferred",
+            "hardcoded-fallback",
+            "unknown-controller-fallback",
+        ],
+    )
+    @patch("nanobot_kt.bridge.registry")
+    @patch("nanobot_kt.bridge.NewAPIClient")
+    @patch("nanobot_kt.bridge.load_agent_config")
+    @patch("nanobot_kt.bridge.Agent")
+    def test_bridge_does_not_attempt_ineligible_preferred_or_final_fallback(
+        self,
+        MockAgent,
+        mock_load,
+        MockClient,
+        mock_registry,
+        monkeypatch,
+        configured_model,
+        model_info,
+        controller_model,
+        circuit_disabled,
+    ):
+        """不合格首选和无健康候选时的临时 fallback 都不得发起模型调用。"""
+        from nanobot_kt.bridge import NanobotBridge, ReplyResolution
+
+        monkeypatch.setattr(
+            "core.settings_service.settings.get",
+            lambda key, default=None: (
+                configured_model if key == "model.reply" else default
+            ),
+        )
+        monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "", raising=False)
+
+        def get_model_info(model_id):
+            if configured_model and model_id == configured_model:
+                return model_info
+            return None
+
+        mock_registry.get_model_info.side_effect = get_model_info
+        mock_registry.get_models_by_provider.return_value = [{"id": "registry-seed"}]
+
+        route_client = MagicMock()
+        route_client.sync_models_to_registry = AsyncMock()
+        route_client.estimate_complexity.return_value = 3
+        route_client.get_ordered_candidates.return_value = []
+        MockClient.return_value = route_client
+
+        tracker = MagicMock(
+            sync_is_disabled=MagicMock(
+                side_effect=lambda model_id: (
+                    circuit_disabled and model_id == configured_model
+                )
+            ),
+            record_success=AsyncMock(),
+            record_failure=AsyncMock(),
+        )
+        MockClient.get_failure_tracker.return_value = tracker
+
+        mock_config = MagicMock()
+        mock_config.name = "test"
+        mock_load.return_value = mock_config
+
+        conversation = MagicMock()
+        conversation._messages = []
+        conversation.get_messages.return_value = []
+        conversation.to_messages.return_value = []
+        conversation.find_last_user_index.return_value = -1
+        llm = MagicMock(config=MagicMock(model=controller_model))
+        mock_agent = MagicMock()
+        mock_agent.start = AsyncMock()
+        mock_agent.registry.list_tools.return_value = []
+        mock_agent.controller = MagicMock(conversation=conversation, llm=llm)
         mock_agent._process_event = AsyncMock(return_value=None)
         MockAgent.return_value = mock_agent
 
         bridge = NanobotBridge()
+        bridge._check_reply_contract = AsyncMock(return_value=ReplyResolution(
+            response="",
+            agent_result="suppressed",
+            no_reply=False,
+            no_tool_call=True,
+            output_preview="",
+            finish_status="suppressed",
+        ))
 
         async def _run():
             await bridge.start()
             return await bridge.handle_message(
-                "你好", user_id="u1", session_id="private_u1",
-                metadata={"complexity": 3},
+                "你好",
+                user_id="u1",
+                session_id="private_u1",
+                metadata={
+                    "complexity": 3,
+                    "enable_reply_contract_retry": False,
+                },
             )
 
         result = run_async(_run())
-        assert result == "覆盖测试"
-        # 手动模型路径：不应调用 get_ordered_candidates
-        assert not auto_called, "settings override should use manual model, not auto-routing"
+
+        assert result == ""
+        mock_agent._process_event.assert_not_awaited()
+        tracker.record_success.assert_not_awaited()
 
     @patch("nanobot_kt.bridge.registry")
     @patch("nanobot_kt.bridge.NewAPIClient")
@@ -2324,10 +2820,19 @@ class TestReplyContract:
 
         monkeypatch.setattr("clients.classifier_client.resolve_model_route", lambda key: {"base_url": "http://llm.test/v1", "api_key": "k", "provider_id": "newapi"})
         monkeypatch.setattr("clients.classifier_client.ensure_model_route_enabled", lambda key, route: None)
+        monkeypatch.setattr("core.settings_service.settings.get", lambda key, default=None: default)
+        monkeypatch.setattr("nanobot_kt.bridge.LLM_MODEL_REPLY", "", raising=False)
         monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.sync_models_to_registry", AsyncMock(return_value=None))
         monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.estimate_complexity", lambda self, messages, tools=None: 1)
         monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.get_ordered_candidates", lambda self, **kwargs: [{"id": "test-model", "intelligence": 7, "cost_input_1m": 0}])
-        monkeypatch.setattr("nanobot_kt.bridge.NewAPIClient.get_failure_tracker", classmethod(lambda cls: None))
+        failure_tracker = MagicMock(
+            record_success=AsyncMock(),
+            record_failure=AsyncMock(),
+        )
+        monkeypatch.setattr(
+            "nanobot_kt.bridge.NewAPIClient.get_failure_tracker",
+            classmethod(lambda cls: failure_tracker),
+        )
         monkeypatch.setattr("nanobot_kt.bridge.registry.get_models_by_provider", lambda provider: [{"id": "test-model"}])
 
         mock_config = MagicMock()
@@ -2370,6 +2875,8 @@ class TestReplyContract:
         assert bridge.is_no_tool_call("s-fake-claim") is True
         logs = db_session.query(ReplyContractCheckLog).order_by(ReplyContractCheckLog.attempt.asc()).all()
         assert [log.result for log in logs] == ["fake_tool_call_claim", "suppressed"]
+        failure_tracker.record_success.assert_not_awaited()
+        failure_tracker.record_failure.assert_awaited_once_with("test-model")
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")

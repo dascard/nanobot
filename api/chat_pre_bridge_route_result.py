@@ -6,7 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from api import chat_pre_bridge_decision
+from api import chat_pre_bridge_decision, chat_response_contract
+from core.inbound_idempotency import CompletedInboundResponse
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class ChatPreBridgeRouteCallbacks:
 @dataclass(frozen=True)
 class ChatPreBridgeRouteEarlyResponse:
     payload: dict[str, Any]
+    completion: CompletedInboundResponse | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,18 @@ async def _resolve_early_return(
             timing_meta=pre_bridge.persist_timing_meta,
         )
 
+    if pre_bridge.status == "ok":
+        outcome = "respond"
+    elif pre_bridge.status in {"no_reply", "wait"}:
+        outcome = pre_bridge.status
+    else:
+        outcome = "silent"
+    raw_reply = (
+        pre_bridge.persist_answer
+        if pre_bridge.persist_answer is not None
+        else pre_bridge.answer
+    )
+
     return ChatPreBridgeRouteEarlyResponse(
         payload=callbacks.chat_response_payload(
             req,
@@ -57,7 +71,15 @@ async def _resolve_early_return(
             intent=pre_bridge.intent,
             guardrail_status=pre_bridge.guardrail_status,
             include_answer_chunks=True,
-        )
+        ),
+        completion=chat_response_contract.build_completed_inbound_response(
+            outcome=outcome,
+            reply=raw_reply if outcome == "respond" else "",
+            reason=pre_bridge.reason,
+            source=pre_bridge.source,
+            intent=pre_bridge.intent,
+            guardrail_status=pre_bridge.guardrail_status,
+        ),
     )
 
 
@@ -88,7 +110,12 @@ async def _resolve_continue(
                 reason="guardrail_silent",
                 guardrail_status=pre_bridge.guardrail_status,
                 include_answer_chunks=True,
-            )
+            ),
+            completion=chat_response_contract.build_completed_inbound_response(
+                outcome="silent",
+                reason="guardrail_silent",
+                guardrail_status=pre_bridge.guardrail_status,
+            ),
         )
 
     return ChatPreBridgeRouteContinue(

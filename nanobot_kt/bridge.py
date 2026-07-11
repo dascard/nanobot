@@ -24,6 +24,11 @@ from openai import AsyncOpenAI
 from nanobot_kt.output import BufferedOutput
 from nanobot_kt.request_scope import BridgeRequestScope
 from nanobot_kt.image_pipeline import prepare_image_parts
+from nanobot_kt.model_attempts import (
+    AttemptOutcome,
+    classify_attempt_outcome,
+    merge_model_candidates,
+)
 from clients.new_api_client import NewAPIClient
 from clients.model_registry import model_supports_capabilities, registry
 from core.llm_sdk_tracing import install_openai_chat_completion_tracer
@@ -222,6 +227,7 @@ class ModelLoopResult:
     preserved_html: str
     selected_candidate: dict[str, Any] | None
     attempts: int
+    health_status: AttemptOutcome
 
 
 @dataclass
@@ -1097,10 +1103,10 @@ class NanobotBridge:
         preserved_html = ""
         selected_candidate = None
         attempts = 0
+        health_status = "pending"
         next_event = create_user_event(event_content, stream=meta["stream"])
 
         for attempt in range(max_attempts):
-            attempts = attempt + 1
             self._output.clear()
             event = next_event
             next_event = create_user_event(event_content, stream=meta["stream"])
@@ -1113,6 +1119,8 @@ class NanobotBridge:
             except StopIteration:
                 logger.warning(f"[Model Router] No more candidates after {attempt} attempts")
                 break
+            attempts = attempt + 1
+            health_status = "pending"
 
             # Update KT agent's LLM model + provider base_url/api_key
             if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
@@ -1193,25 +1201,35 @@ class NanobotBridge:
                 logger.info("[NanobotBridge] Using preserved tool HTML output (replacing buffer)")
                 self._output._buffer = [preserved_html]
                 await _call_tracker_method(tracker, "record_success", target_model)
+                health_status = "success"
                 break
 
             reply_text = self._extract_reply_from_tool_output(session_id)
+            if self.is_no_reply_session(session_id):
+                logger.info("[NanobotBridge] no_reply() called, stopping model loop")
+                await _call_tracker_method(tracker, "record_success", target_model)
+                health_status = "success"
+                break
             if reply_text:
                 from core.reply_postprocess import strip_chat_end_punct
                 reply_text = strip_chat_end_punct(reply_text)
                 logger.info("[NanobotBridge] reply() called len=%d, stopping model loop", len(reply_text))
                 await _call_tracker_method(tracker, "record_success", target_model)
+                health_status = "success"
                 break
 
-            is_empty = not response.strip()
-            is_error = "[系统内部错误]" in response
-            if (is_empty or is_error) and attempt < max_attempts - 1:
+            attempt_outcome = classify_attempt_outcome(response)
+            if attempt_outcome == "failure":
                 logger.warning(f"[NanobotBridge] Framework error. Recording failure for {target_model}")
                 await _call_tracker_method(tracker, "record_failure", target_model)
+                health_status = "failure"
 
                 # reasoning_content: 只 ban 出错的特定模型，不波及同厂商其他模型
                 if "reasoning_content" in response:
                     logger.warning("[NanobotBridge] reasoning_content — banning %s only", target_model)
+
+                if attempt >= max_attempts - 1:
+                    break
 
                 # Conversation rollback logic
                 tool_results_preserved = False
@@ -1240,9 +1258,8 @@ class NanobotBridge:
                 if not tool_results_preserved:
                     next_event = create_user_event(event_content, stream=meta["stream"])
                 continue
-            else:
-                await _call_tracker_method(tracker, "record_success", target_model)
-                break
+
+            break
 
         return ModelLoopResult(
             response=response,
@@ -1251,6 +1268,7 @@ class NanobotBridge:
             preserved_html=preserved_html,
             selected_candidate=selected_candidate,
             attempts=attempts,
+            health_status=health_status,
         )
 
     async def _check_reply_contract(
@@ -1937,6 +1955,11 @@ class NanobotBridge:
             route_client = None
             raw_query = str(meta.get("raw_query", query)).strip() or query
             reply_llm_source = "replyer.group_chat" if is_group else "replyer.private_chat"
+            try:
+                tracker = NewAPIClient.get_failure_tracker()
+            except Exception as e:
+                tracker = None
+                logger.warning(f"[Model Router] Failure tracker unavailable: {e}")
 
             # 从 WebUI route 读取 provider 配置，让 route provider 控制实际 API 调用
             try:
@@ -1994,6 +2017,12 @@ class NanobotBridge:
                     base_intel_floor + max(0, REPLY_MODEL_INTEL_BOOST),
                     max(1, REPLY_MODEL_INTEL_FLOOR),
                 )
+                automatic_candidates = route_client.get_ordered_candidates(
+                    provider=_route_registry_provider,
+                    intel_floor=reply_intel_floor,
+                    max_cost=REPLY_MODEL_MAX_COST,
+                    required_capabilities=required_capabilities,
+                )
                 from core.settings_service import settings
                 manual_reply_model = str(
                     meta.get("reply_model")
@@ -2001,50 +2030,54 @@ class NanobotBridge:
                     or LLM_MODEL_REPLY
                     or ""
                 ).strip()
+                preferred_candidate = None
                 if manual_reply_model:
                     info = registry.get_model_info(manual_reply_model)
-                    if info and info.get("enabled", True) is False:
+                    if info is None:
+                        logger.warning(
+                            "[ReplyModel] configured model unknown: %s, falling back to auto",
+                            manual_reply_model,
+                        )
+                        manual_reply_model = ""
+                    elif info.get("enabled", True) is False:
                         logger.warning(
                             "[ReplyModel] configured model disabled: %s, falling back to auto",
                             manual_reply_model,
                         )
                         manual_reply_model = ""
-                    elif info and not model_supports_capabilities(info, required_capabilities):
+                    elif not model_supports_capabilities(info, required_capabilities):
                         logger.warning(
                             "[ReplyModel] configured model lacks capabilities: %s required=%s, falling back to auto",
                             manual_reply_model,
                             required_capabilities,
                         )
                         manual_reply_model = ""
-                    elif info is None and required_capabilities.get("supports_image"):
+                    elif (
+                        tracker is not None
+                        and tracker.sync_is_disabled(manual_reply_model) is True
+                    ):
                         logger.warning(
-                            "[ReplyModel] configured model is unknown for image request: %s, falling back to auto",
+                            "[ReplyModel] configured model circuit-disabled: %s, falling back to auto",
                             manual_reply_model,
                         )
                         manual_reply_model = ""
 
                 if manual_reply_model:
-                    candidates = [{
-                        "id": manual_reply_model,
-                        "intelligence": reply_intel_floor,
-                        "cost_input_1m": 0.0,
-                        "context_window": 128000,
-                    }]
+                    preferred_candidate = dict(info)
+                    preferred_candidate.setdefault("id", manual_reply_model)
                     logger.info(
                         "[ReplyModel] manual=%s complexity=%s base_floor=%s reply_floor=%s",
                         manual_reply_model, complexity, base_intel_floor, reply_intel_floor,
                     )
-                else:
-                    candidates = route_client.get_ordered_candidates(
-                        provider=_route_registry_provider,
-                        intel_floor=reply_intel_floor,
-                        max_cost=REPLY_MODEL_MAX_COST,
-                        required_capabilities=required_capabilities,
-                    )
-                    logger.info(
-                        "[ReplyModel] auto complexity=%s base_floor=%s reply_floor=%s max_cost=%.3f required=%s",
-                        complexity, base_intel_floor, reply_intel_floor, REPLY_MODEL_MAX_COST, required_capabilities,
-                    )
+
+                candidates = merge_model_candidates(
+                    preferred_candidate,
+                    automatic_candidates,
+                )
+                logger.info(
+                    "[ReplyModel] auto complexity=%s base_floor=%s reply_floor=%s max_cost=%.3f required=%s",
+                    complexity, base_intel_floor, reply_intel_floor, REPLY_MODEL_MAX_COST, required_capabilities,
+                )
                 logger.info(
                     f"[Model Router] complexity={complexity}, intel_floor={reply_intel_floor}, "
                     f"candidates={[(c['id'][:30], c.get('intelligence')) for c in candidates[:8]]}"
@@ -2089,16 +2122,7 @@ class NanobotBridge:
                         logger.error("[Model Router] degraded text-only route failed: %s", e, exc_info=True)
 
             if not candidates:
-                fallback_model = ""
-                try:
-                    if hasattr(self._agent, 'controller') and hasattr(self._agent.controller, 'llm') and hasattr(self._agent.controller.llm, 'config'):
-                        fallback_model = str(getattr(self._agent.controller.llm.config, 'model', '') or '')
-                except Exception:
-                    fallback_model = ""
-                if not fallback_model:
-                    fallback_model = "gpt-4o-mini"
-                candidates = [{"id": fallback_model, "intelligence": 0, "cost_input_1m": 0.0}]
-                logger.warning(f"[Model Router] No candidates from registry, using fallback model: {fallback_model}")
+                logger.warning("[Model Router] No healthy candidates available")
 
             # --- Context budget awareness ---
             est_tokens = len(query) // 2
@@ -2111,11 +2135,6 @@ class NanobotBridge:
                 )
             # ----------------------------------
 
-            try:
-                tracker = NewAPIClient.get_failure_tracker()
-            except Exception as e:
-                tracker = None
-                logger.warning(f"[Model Router] Failure tracker unavailable: {e}")
             model_loop = await self._run_model_loop(
                 candidate_models=candidates,
                 route_plan=route_plan,
@@ -2134,6 +2153,11 @@ class NanobotBridge:
             result = model_loop.result
             target_model = model_loop.target_model
             preserved_html = model_loop.preserved_html
+
+            if not target_model:
+                logger.warning("[Model Router] No model attempt was made")
+                trace_finalizer.finish("empty", model="")
+                return ""
 
             logger.info("[NanobotBridge] Checking output buffer...")
             response = self._output.get_response()
@@ -2176,6 +2200,19 @@ class NanobotBridge:
             )
             response = reply_resolution.response
             reply_source = reply_resolution.agent_result
+            if target_model:
+                if (
+                    reply_resolution.finish_status in {"success", "no_reply"}
+                    and model_loop.health_status != "success"
+                ):
+                    await _call_tracker_method(tracker, "record_success", target_model)
+                    model_loop.health_status = "success"
+                elif (
+                    reply_resolution.finish_status in {"suppressed", "error"}
+                    and model_loop.health_status != "failure"
+                ):
+                    await _call_tracker_method(tracker, "record_failure", target_model)
+                    model_loop.health_status = "failure"
             if reply_resolution.finish_status in {"no_reply", "suppressed"}:
                 trace_finalizer.finish(
                     reply_resolution.finish_status,

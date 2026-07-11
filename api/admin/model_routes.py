@@ -1076,7 +1076,7 @@ async def timing_gate_stability_test(body: TimingGateStabilityRequest, _auth=Dep
 
         for i in range(body.runs):
             t0 = time.time()
-            result = gate.judge(timing_context)
+            result = await asyncio.to_thread(gate.judge, timing_context)
             lat = time.time() - t0
             latencies.append(lat)
 

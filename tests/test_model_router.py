@@ -391,6 +391,84 @@ class TestComplexityEstimator:
 
 
 class TestPriorityScore:
+    def test_resolve_model_does_not_select_circuit_disabled_manual_model(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from clients.new_api_client import NewAPIClient
+
+        client = NewAPIClient(
+            api_key="test",
+            base_url="http://test",
+            registry_provider="new-api",
+        )
+        tracker = MagicMock()
+        tracker.sync_is_disabled.return_value = True
+        ordered_candidates = MagicMock(return_value=[{"id": "healthy-model"}])
+        monkeypatch.setattr(client, "_safe_get_failure_tracker", lambda: tracker)
+        monkeypatch.setattr(client, "estimate_complexity", lambda messages, tools: 3)
+        monkeypatch.setattr(client, "get_ordered_candidates", ordered_candidates)
+
+        selected = client.resolve_model(
+            messages=[{"role": "user", "content": "你好"}],
+            manual_model="preferred-model",
+        )
+
+        assert selected == "healthy-model"
+        tracker.sync_is_disabled.assert_called_once_with("preferred-model")
+        ordered_candidates.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "remaining_model",
+        [
+            {
+                "id": "disabled-fallback",
+                "enabled": False,
+                "cost_input_1m": 0.01,
+            },
+            {
+                "id": "circuit-disabled-fallback",
+                "enabled": True,
+                "cost_input_1m": 0.01,
+            },
+        ],
+        ids=["disabled", "circuit-disabled"],
+    )
+    def test_resolve_model_does_not_use_unhealthy_raw_registry_fallback(
+        self,
+        monkeypatch,
+        remaining_model,
+    ):
+        from unittest.mock import MagicMock
+
+        from clients import new_api_client as module
+        from clients.new_api_client import NewAPIClient
+
+        client = NewAPIClient(
+            api_key="test",
+            base_url="http://test",
+            registry_provider="new-api",
+        )
+        tracker = MagicMock()
+        tracker.sync_is_disabled.side_effect = lambda model_id: model_id in {
+            "preferred-model",
+            "circuit-disabled-fallback",
+        }
+        monkeypatch.setattr(client, "_safe_get_failure_tracker", lambda: tracker)
+        monkeypatch.setattr(client, "estimate_complexity", lambda messages, tools: 3)
+        monkeypatch.setattr(client, "get_ordered_candidates", lambda **kwargs: [])
+
+        registry = MagicMock()
+        registry.get_models_by_provider.return_value = [remaining_model]
+        monkeypatch.setattr(module, "registry", registry)
+
+        selected = client.resolve_model(
+            messages=[{"role": "user", "content": "你好"}],
+            manual_model="preferred-model",
+        )
+
+        assert selected == ""
+        registry.get_models_by_provider.assert_not_called()
+
     def test_priority_score_treats_none_cost_as_unknown(self):
         from clients.model_registry import ModelRegistry
         unknown = {"id": "unknown", "cost_input_1m": None, "intelligence": 8, "tags": []}

@@ -198,11 +198,10 @@ class GroupRuntimeScoringMixin:
         pending: list[GroupPendingMessage],
         reason_prefix: str,
     ) -> dict:
-        """应用规则评分短路结果。调用方需持有 runtime lock。"""
+        """应用规则评分短路结果；调用方必须持有 active transaction。"""
         action = decision.action
         delay = decision.delay_seconds
         payload = _pending_payload(pending)
-        state.mark_gate_start()
         if action == "continue":
             state.handle_continue()
         elif action == "wait":
@@ -213,7 +212,6 @@ class GroupRuntimeScoringMixin:
             delay = None
             state.handle_no_reply()
         cooldown = round(state.bot_reply_ago(), 1)
-        state.mark_gate_done()
         response = {
             "action": action,
             "delay_seconds": delay,
@@ -249,6 +247,7 @@ class GroupRuntimeScoringMixin:
         force_direct_score: float = 0.0,
         shadow_scoring: dict | None = None,
     ) -> dict:
+        """应用模型策略评分；调用方必须持有 active transaction。"""
         decision = self._score_timing(
             state,
             trigger_reason,
@@ -274,7 +273,7 @@ class GroupRuntimeScoringMixin:
         pending: list[GroupPendingMessage],
         reason_prefix: str,
     ) -> dict | None:
-        """尝试用 shared scoring 接管 cooldown；无法短路时保留旧 fallback。"""
+        """在 active transaction 中尝试用 shared scoring 接管 cooldown。"""
         try:
             scoring_decision = self._score_timing(
                 state,

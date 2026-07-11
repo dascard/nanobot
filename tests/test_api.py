@@ -2,6 +2,7 @@ import pytest
 from core.database import ChatLog
 from fastapi import BackgroundTasks
 import json
+import logging
 
 
 def _fast_private_reply(monkeypatch):
@@ -39,6 +40,26 @@ def _assert_silent_response(result, user_id):
     assert result["messages"] == []
     assert result["reply_meta"] == {}
     assert result["meta"]["user_id"] == user_id
+
+
+async def _wait_for_stream_finalizers():
+    import asyncio
+
+    from api import chat_route_runner
+
+    async def wait_until_empty() -> None:
+        while tasks := tuple(
+            getattr(chat_route_runner, "_STREAM_FINALIZER_TASKS", set())
+        ):
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.sleep(0)
+
+    try:
+        await asyncio.wait_for(wait_until_empty(), timeout=1)
+    except TimeoutError as exc:
+        raise AssertionError(
+            "stream finalizer registry 未在 1 秒内清空"
+        ) from exc
 
 
 def test_health_check(client):
@@ -97,6 +118,38 @@ def test_api_auth_accepts_valid_bearer_token(monkeypatch):
     monkeypatch.setattr(routes, "NANOBOT_API_TOKEN", "test-token")
 
     assert routes.verify_token(authorization="Bearer test-token") is None
+
+
+@pytest.mark.parametrize(
+    ("configured_admin_id", "candidate_user_id", "expected"),
+    [
+        (None, "0000000000", False),
+        ("explicit-admin", "explicit-admin", True),
+    ],
+)
+def test_superuser_default_requires_explicit_admin_user_id(
+    monkeypatch,
+    configured_admin_id,
+    candidate_user_id,
+    expected,
+):
+    import runpy
+
+    import config
+    import dotenv
+    from api import routes
+
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda: None)
+    monkeypatch.setenv("NANOBOT_ADMIN_TOKEN", "test-token")
+    if configured_admin_id is None:
+        monkeypatch.delenv("ADMIN_USER_ID", raising=False)
+    else:
+        monkeypatch.setenv("ADMIN_USER_ID", configured_admin_id)
+
+    isolated_config = runpy.run_path(config.__file__)
+    monkeypatch.setattr(routes, "ADMIN_USER_ID", isolated_config["ADMIN_USER_ID"])
+
+    assert routes._is_guardrail_superuser(candidate_user_id) is expected
 
 
 def test_search_logs_rejects_limit_above_max(client, monkeypatch):
@@ -288,6 +341,45 @@ def test_proxy_chat(client, db_session):
         _, kwargs = mock_bridge.handle_message.await_args
         assert kwargs["metadata"]["history_header"] == ""
         assert kwargs["metadata"]["chat_type"] == "group"
+
+
+def test_proxy_chat_query_log_omits_raw_query(client, monkeypatch, caplog):
+    from unittest.mock import AsyncMock
+    from unittest.mock import patch
+
+    _fast_private_reply(monkeypatch)
+    secret_query = "QUERY_LOG_SECRET_7f0b67e5"
+    unique_url = "https://assets.example.test/query-log-7f0b67e5.png"
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(return_value="日志脱敏回复")
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="nanobot.routes"):
+        with patch("api.routes.get_bridge", return_value=mock_bridge):
+            response = client.post(
+                "/api/v1/chat",
+                json={
+                    "user_id": "query-log-user",
+                    "session_id": "private_query-log-user",
+                    "query": secret_query,
+                    "files": [unique_url, "", "   "],
+                },
+            )
+
+    assert response.status_code == 200, response.text
+    route_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "nanobot.routes"
+    ]
+    assert any(
+        "[/chat] Request START" in message
+        and "query-log-user" in message
+        and "file_count=1" in message
+        for message in route_messages
+    )
+    assert all(secret_query not in message for message in route_messages)
+    assert all(unique_url not in message for message in route_messages)
 
 
 def test_proxy_chat_passes_history_header_to_bridge(client, db_session, monkeypatch):
@@ -707,7 +799,7 @@ async def test_stream_disconnect_background_push_uses_result_holder(db_session, 
 
     await iterator.aclose()
     release.set()
-    await asyncio.wait_for(background_tasks(), timeout=1)
+    await asyncio.wait_for(_wait_for_stream_finalizers(), timeout=1)
 
     assert pushed == [("private", "u-stream-abort", "断连后的真实回复")]
     assert persist_db_is_request_db == [False]
@@ -768,7 +860,7 @@ async def test_stream_disconnect_drains_bounded_queue_for_background_runner(db_s
 
     await iterator.aclose()
     release.set()
-    await asyncio.wait_for(background_tasks(), timeout=1)
+    await asyncio.wait_for(_wait_for_stream_finalizers(), timeout=1)
 
     assert pushed[0][0:2] == ("private", "u-stream-bounded-abort")
     assert pushed[0][2]["reply"] == "断连后的 bounded 回复"
@@ -814,6 +906,7 @@ async def test_stream_disconnect_after_runner_done_persists_result_holder(db_ses
     await asyncio.wait_for(bridge_done.wait(), timeout=1)
 
     await iterator.aclose()
+    await asyncio.wait_for(_wait_for_stream_finalizers(), timeout=1)
 
     assistant_log = db_session.query(ChatLog).filter_by(
         user_id="u-stream-done-abort",
@@ -869,7 +962,7 @@ async def test_stream_disconnect_prompt_v2_audit_failure_is_no_send(db_session, 
 
     await iterator.aclose()
     release.set()
-    await asyncio.wait_for(background_tasks(), timeout=1)
+    await asyncio.wait_for(_wait_for_stream_finalizers(), timeout=1)
 
     assert pushed == []
     assistant_turn = db_session.query(ConversationTurn).filter_by(
@@ -1581,11 +1674,18 @@ async def test_group_message_retries_ambient_log_when_sqlite_locked(db_session, 
         return {"action": "no_reply", "generation": 1, "reason": "timing says no"}
 
     original_commit = db_session.commit
-    commit_calls = {"count": 0}
+    ambient_failures = 0
 
     def flaky_commit():
-        commit_calls["count"] += 1
-        if commit_calls["count"] == 1:
+        nonlocal ambient_failures
+        pending_ambient = any(
+            isinstance(row, ChatLog)
+            and row.role == "ambient"
+            and row.message_id == "m-lock-retry-1"
+            for row in db_session.new
+        )
+        if pending_ambient and ambient_failures == 0:
+            ambient_failures += 1
             raise OperationalError(
                 "INSERT INTO chat_logs ...",
                 {},
@@ -1613,7 +1713,7 @@ async def test_group_message_retries_ambient_log_when_sqlite_locked(db_session, 
     logs = db_session.query(ChatLog).filter_by(session_id="group_lock-retry", role="ambient").all()
     assert len(logs) == 1
     assert logs[0].message_id == "m-lock-retry-1"
-    assert commit_calls["count"] >= 2
+    assert ambient_failures == 1
 
 
 @pytest.mark.asyncio
@@ -1621,19 +1721,32 @@ async def test_group_message_returns_no_reply_when_sqlite_lock_retries_exhausted
     from sqlalchemy.exc import OperationalError
 
     from api.routes import GroupMessageRequest, group_message
-    from core.database import User
+    from core.database import InboundMessageClaim, User
 
     db_session.add(User(id="group_lock-exhausted", name="锁耗尽群"))
     db_session.commit()
 
-    def always_locked_commit():
-        raise OperationalError(
-            "INSERT INTO chat_logs ...",
-            {},
-            Exception("database is locked"),
-        )
+    original_commit = db_session.commit
+    ambient_failures = 0
 
-    monkeypatch.setattr(db_session, "commit", always_locked_commit)
+    def ambient_locked_commit():
+        nonlocal ambient_failures
+        pending_ambient = any(
+            isinstance(row, ChatLog)
+            and row.role == "ambient"
+            and row.message_id == "m-lock-exhausted-1"
+            for row in db_session.new
+        )
+        if pending_ambient:
+            ambient_failures += 1
+            raise OperationalError(
+                "INSERT INTO chat_logs ...",
+                {},
+                Exception("database is locked"),
+            )
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", ambient_locked_commit)
 
     data = await group_message(
         GroupMessageRequest(
@@ -1650,6 +1763,14 @@ async def test_group_message_returns_no_reply_when_sqlite_lock_retries_exhausted
 
     assert data["action"] == "no_reply"
     assert data["reason"] == "db_locked:ambient_log"
+    assert ambient_failures >= 4
+    assert db_session.query(ChatLog).filter_by(
+        session_id="group_lock-exhausted",
+        role="ambient",
+    ).count() == 0
+    claim = db_session.query(InboundMessageClaim).one()
+    assert claim.status == "failed"
+    assert claim.response_json == ""
 
 
 @pytest.mark.asyncio
@@ -1964,8 +2085,6 @@ async def test_group_message_image_auto_registers_sticker(db_session, monkeypatc
 @pytest.mark.asyncio
 async def test_group_message_sticker_preview_without_background_tasks_uses_to_thread(db_session, monkeypatch):
     """无 BackgroundTasks 的程序化调用不能在 async 路径直接缓存表情预览。"""
-    from types import SimpleNamespace
-
     import app.group_ingress.service as service_module
     from api.routes import GroupMessageRequest, group_message
     from core.database import StickerMemory
@@ -1990,7 +2109,7 @@ async def test_group_message_sticker_preview_without_background_tasks_uses_to_th
     monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
     monkeypatch.setattr("core.sticker_preview.cache_sticker_preview", fake_direct_cache)
     monkeypatch.setattr("core.sticker_preview_jobs.cache_sticker_preview_bg", fake_background_cache)
-    monkeypatch.setattr(service_module, "asyncio", SimpleNamespace(to_thread=fake_to_thread), raising=False)
+    monkeypatch.setattr(service_module.asyncio, "to_thread", fake_to_thread)
 
     data = await group_message(
         GroupMessageRequest(
@@ -1998,7 +2117,6 @@ async def test_group_message_sticker_preview_without_background_tasks_uses_to_th
             sender_id="u-img-thread",
             sender_name="发图人",
             message="",
-            message_id="m-img-thread-1",
             session_name="测试群",
             files=["https://example.com/thread-sticker.png"],
             client_meta={
@@ -2171,6 +2289,7 @@ def test_persist_group_bridge_reply_uses_runtime_bot_name(db_session):
     assistant_turn = db_session.query(ConversationTurn).filter_by(role="assistant").one()
     turn_meta = json.loads(assistant_turn.meta_json or "{}")
     assert assistant_log.sender_name == "测试Bot"
+    assert assistant_log.message_id is None
     assert turn_meta["bot_name"] == "测试Bot"
 
 

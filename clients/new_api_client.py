@@ -751,27 +751,33 @@ class NewAPIClient:
                       exclude_models: list[str] | None = None,
                       ) -> str:
         """Single entry point: complexity → intel_floor → ordered candidates → first healthy."""
+        circuit_disabled_manual = ""
         if manual_model:
-            return manual_model
+            tracker = self._safe_get_failure_tracker()
+            if tracker is None or tracker.sync_is_disabled(manual_model) is not True:
+                return manual_model
+            circuit_disabled_manual = manual_model
+            logger.warning(
+                "Manual model circuit-disabled, falling back to healthy candidates: %s",
+                manual_model,
+            )
 
         complexity = self.estimate_complexity(messages, tools)
         intel_floor = max(1, complexity - 1)
+        effective_excludes = list(exclude_models or [])
+        if circuit_disabled_manual:
+            effective_excludes.append(circuit_disabled_manual)
 
         candidates = self.get_ordered_candidates(
             provider=self.registry_provider,
             intel_floor=intel_floor,
-            exclude_models=exclude_models,
+            exclude_models=effective_excludes,
             avoid_tags=None,
         )
 
         if not candidates:
-            all_models = registry.get_models_by_provider(self.registry_provider)
-            all_models.sort(key=lambda m: model_cost_value(m.get("cost_input_1m")))
-            if all_models:
-                fallback = all_models[0]["id"]
-                logger.warning(f"No healthy candidates, using cheapest: {fallback}")
-                return fallback
-            return "gpt-4o"
+            logger.warning("No healthy model candidates available")
+            return ""
 
         selected = candidates[0]
         logger.info(

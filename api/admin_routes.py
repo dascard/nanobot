@@ -1,19 +1,26 @@
 """WebUI 管理 API——Sticker/Block/Config/DB 管理。prefix=/api/v1/admin，认证使用 NANOBOT_ADMIN_TOKEN。"""
 
+import hashlib
 import json
 import logging
 from hmac import compare_digest
+from pathlib import Path
 from typing import Literal
 
+import config
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from core.database import (
     get_db,
     SystemSetting, AdminAuditLog,
+    sqlite_path_from_database_url,
 )
+from core.sqlite_backup import create_sqlite_snapshot
 from config import NANOBOT_ADMIN_TOKEN
 
 # Legacy facade：聚合拆分子路由并保留旧导入路径兼容。
@@ -349,6 +356,16 @@ def _client_ip(request) -> str:
     return ""
 
 
+def _setting_audit_detail(value: object, *, sensitive: bool) -> dict[str, object]:
+    text = str(value)
+    if sensitive:
+        return {
+            "changed": True,
+            "fingerprint": hashlib.sha256(text.encode("utf-8")).hexdigest()[:12],
+        }
+    return {"value": text}
+
+
 def _audit_request(db: Session, request: Request, action: str,
                    target_type: str = "", target_id: str = "",
                    detail: dict | None = None):
@@ -513,19 +530,41 @@ def model_replies(
 # Audit logs + DB backup
 # ═══════════════════════════════════════════
 
+
+def _remove_db_snapshot(snapshot_path: Path) -> None:
+    try:
+        snapshot_path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Failed to remove temporary DB snapshot: %s", snapshot_path, exc_info=True)
+
+
 @router.get("/db/backup")
 def download_backup(_auth=Depends(verify_admin)):
-    from fastapi.responses import FileResponse
-    import os as _os
-    from config import DATABASE_URL as _db_url
-    if not (_db_url or "").startswith("sqlite:///"):
+    db_path = sqlite_path_from_database_url(config.DATABASE_URL)
+    if not db_path:
         raise HTTPException(400, "Only SQLite backup supported")
-    db_rel = _db_url.removeprefix("sqlite:///")
-    base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    db_path = _os.path.join(base, db_rel) if not _os.path.isabs(db_rel) else db_rel
-    if not _os.path.exists(db_path):
+
+    source_path = Path(db_path).resolve()
+    if not source_path.exists():
         raise HTTPException(404, "Database file not found")
-    return FileResponse(db_path, media_type="application/octet-stream", filename="nanobot.db")
+
+    try:
+        snapshot_path = create_sqlite_snapshot(source_path)
+    except Exception:
+        logger.exception("Failed to create SQLite snapshot for Admin backup")
+        raise HTTPException(500, "Database backup failed") from None
+
+    try:
+        return FileResponse(
+            snapshot_path,
+            media_type="application/octet-stream",
+            filename="nanobot.db",
+            background=BackgroundTask(_remove_db_snapshot, snapshot_path),
+        )
+    except Exception:
+        _remove_db_snapshot(snapshot_path)
+        logger.exception("Failed to construct Admin database backup response")
+        raise HTTPException(500, "Database backup failed") from None
 
 
 @router.post("/db/vacuum")
@@ -607,7 +646,8 @@ def update_setting(key: str, body: dict, request: Request, db: Session = Depends
     else:
         row.value = str(val)
     db.commit()
-    _audit(db, "update_setting", "setting", key, {"value": str(val)}, ip_address=_client_ip(request))
+    audit_detail = _setting_audit_detail(val, sensitive=defn.sensitive)
+    _audit(db, "update_setting", "setting", key, audit_detail, ip_address=_client_ip(request))
     settings.invalidate()
     return {"key": key, "value": val, "restart_required": defn.restart_required,
             "version": settings.version}

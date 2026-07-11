@@ -178,6 +178,39 @@ async def test_finalize_non_streaming_success_persists_raw_answer_and_returns_tr
 
 
 @pytest.mark.asyncio
+async def test_finalize_non_streaming_exposes_transport_independent_completed_response():
+    from api.chat_non_streaming_result import finalize_non_streaming_chat_result
+    from core.inbound_idempotency import CompletedInboundResponse
+
+    calls: dict[str, list[Any]] = {}
+    context = _context(
+        calls,
+        answer="raw:[generated:image-token]",
+        reply_meta={
+            "send_mode": "quote",
+            "reply_to_message_id": "source-message",
+            "_agent_result": "must-not-persist",
+            "request_id": "request-identity-must-not-persist",
+        },
+        pending=11,
+    )
+
+    result = await finalize_non_streaming_chat_result(FakeDb(), context)
+
+    assert isinstance(result.completion, CompletedInboundResponse)
+    assert result.completion.outcome == "respond"
+    assert result.completion.reply == "raw:[generated:image-token]"
+    assert result.completion.reply_meta == {
+        "send_mode": "quote",
+        "reply_to_message_id": "source-message",
+    }
+    assert result.completion.unprocessed_logs == 11
+    assert result.completion.guardrail_status == "safe"
+    assert result.payload["answer"] == "expanded:raw:[generated:image-token]"
+    assert result.completion.reply != result.payload["answer"]
+
+
+@pytest.mark.asyncio
 async def test_finalize_non_streaming_prompt_audit_failure_persists_placeholder_and_skips_payload():
     from api.chat_non_streaming_result import finalize_non_streaming_chat_result
 
@@ -241,5 +274,6 @@ def test_parent_non_streaming_chat_delegates_result_finalize_and_keeps_http_boun
     assert "HTTPException(" in source
     assert "async def _do_chat" not in source
     assert "chat_runtime_facade.call_bridge_non_streaming" not in source
-    assert "except asyncio.CancelledError" not in source
+    assert "except BaseException as exc:" in source
+    assert "await _best_effort_fail_chat_claim(claim_owner, exc)" in source
     assert "SAFE_STREAM_ERROR_MESSAGE" in source

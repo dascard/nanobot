@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +18,48 @@ from api import (
 
 
 logger = logging.getLogger("nanobot.routes")
+_STREAM_FINALIZER_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _safe_log(method_name: str, message: str, *args: Any, **kwargs: Any) -> None:
+    try:
+        log_method = getattr(logger, method_name)
+        log_method(message, *args, **kwargs)
+    except BaseException:
+        pass
+
+
+def _observe_stream_finalizer(task: asyncio.Task[Any]) -> None:
+    """取走后台 finalizer 异常并在完成后释放强引用。"""
+
+    try:
+        if task.cancelled():
+            _safe_log("warning", "[/chat] Stream finalizer task was cancelled: name=%s", task.get_name())
+        else:
+            error = task.exception()
+            if error is not None:
+                _safe_log(
+                    "error",
+                    "[/chat] Stream finalizer failed: name=%s error=%s",
+                    task.get_name(),
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+    finally:
+        _STREAM_FINALIZER_TASKS.discard(task)
+
+
+def _register_stream_finalizer(
+    coroutine: Coroutine[Any, Any, Any],
+    *,
+    name: str,
+) -> asyncio.Task[Any]:
+    """注册一个受强引用保护且异常可观察的 stream finalizer。"""
+
+    task = asyncio.create_task(coroutine, name=name)
+    _STREAM_FINALIZER_TASKS.add(task)
+    task.add_done_callback(_observe_stream_finalizer)
+    return task
 
 
 @dataclass(frozen=True)
@@ -69,6 +111,126 @@ class ChatRouteRunnerContext:
     safe_error_message: str
     evolution_threshold: int
     callbacks: ChatRouteRunnerCallbacks
+    claim_owner: Any | None = None
+
+
+async def _best_effort_fail_claim(owner: Any | None, error: Any) -> None:
+    if owner is None:
+        return
+    try:
+        await owner.fail(error)
+    except BaseException as cleanup_error:
+        _safe_log(
+            "error",
+            "[/chat] Claim fail cleanup failed: primary=%r cleanup=%r",
+            error,
+            cleanup_error,
+        )
+
+
+class ColdChatStreamingBody(AsyncIterator[str]):
+    """首次拉取 body 时才启动 claim 续租和 Bridge runner。"""
+
+    def __init__(self, context: ChatRouteRunnerContext) -> None:
+        self._context = context
+        self._iterator: AsyncIterator[str] | None = None
+        self._state_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
+        self._active_pull_task: asyncio.Task[Any] | None = None
+        self._inner_started = asyncio.Event()
+        self._claim_fail_task: asyncio.Task[None] | None = None
+        self._closing = False
+        self._closed = False
+
+    def __aiter__(self) -> ColdChatStreamingBody:
+        return self
+
+    async def _fail_claim_once(self, error: BaseException) -> None:
+        async with self._state_lock:
+            task = self._claim_fail_task
+            if task is None:
+                task = asyncio.create_task(
+                    _best_effort_fail_claim(self._context.claim_owner, error),
+                    name="chat-cold-body-fail",
+                )
+                self._claim_fail_task = task
+        await asyncio.shield(task)
+
+    async def __anext__(self) -> str:
+        current = asyncio.current_task()
+        if current is None:
+            raise RuntimeError("流式 body pull 缺少当前 task")
+        async with self._state_lock:
+            if self._closing or self._closed:
+                raise StopAsyncIteration
+            active = self._active_pull_task
+            if active is not None and not active.done() and active is not current:
+                raise RuntimeError("流式 body 不支持并发拉取")
+            self._active_pull_task = current
+            iterator = self._iterator
+        try:
+            if iterator is None:
+                if self._context.claim_owner is not None:
+                    await self._context.claim_owner.resume()
+                async with self._state_lock:
+                    if self._closing or self._closed:
+                        raise asyncio.CancelledError("流式 body 在 resume 期间关闭")
+                    if self._iterator is None:
+                        self._iterator = iter_streaming_chat_response(
+                            None,
+                            self._context,
+                            lifecycle_started=self._inner_started,
+                        )
+                    iterator = self._iterator
+            return await iterator.__anext__()
+        except StopAsyncIteration:
+            async with self._state_lock:
+                self._closed = True
+            raise
+        except BaseException as exc:
+            if not self._inner_started.is_set():
+                await self._fail_claim_once(exc)
+            async with self._state_lock:
+                if not self._closing:
+                    self._closed = True
+            raise
+        finally:
+            async with self._state_lock:
+                if self._active_pull_task is current:
+                    self._active_pull_task = None
+
+    async def aclose(self) -> None:
+        async with self._close_lock:
+            async with self._state_lock:
+                if self._closed:
+                    return
+                self._closing = True
+                active_pull_task = self._active_pull_task
+
+            try:
+                current = asyncio.current_task()
+                if (
+                    active_pull_task is not None
+                    and active_pull_task is not current
+                    and not active_pull_task.done()
+                ):
+                    active_pull_task.cancel()
+                    await asyncio.gather(active_pull_task, return_exceptions=True)
+
+                async with self._state_lock:
+                    iterator = self._iterator
+                inner_started = self._inner_started.is_set()
+                close = getattr(iterator, "aclose", None)
+                if iterator is not None and close is not None:
+                    await close()
+                if not inner_started:
+                    await self._fail_claim_once(
+                        RuntimeError("流式响应在 inner 启动前关闭"),
+                    )
+            finally:
+                async with self._state_lock:
+                    self._closing = False
+                    self._closed = True
 
 
 async def _run_stream_bridge(
@@ -88,8 +250,10 @@ async def _run_stream_bridge(
             stream_queue=stream_queue,
             stream=True,
         )
-    except Exception as exc:
-        result_holder["error"] = str(exc)
+    except asyncio.CancelledError:
+        raise
+    except BaseException as exc:
+        result_holder["error"] = exc
     finally:
         done.set()
 
@@ -124,18 +288,20 @@ def _stream_result_context(
             build_chat_push_envelope=callbacks.build_chat_push_envelope,
             push_envelope_to_qq=callbacks.push_envelope_to_qq,
         ),
+        claim_owner=context.claim_owner,
     )
 
 
 async def iter_streaming_chat_response(
     db: Any,
     context: ChatRouteRunnerContext,
+    *,
+    lifecycle_started: asyncio.Event | None = None,
 ) -> AsyncIterator[str]:
     callbacks = context.callbacks
     result_holder: dict[str, Any] = {}
     done = asyncio.Event()
     stream_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=context.queue_maxsize)
-    persisted = False
     runner_task = asyncio.create_task(_run_stream_bridge(context, result_holder, done, stream_queue))
     stream_result_context = _stream_result_context(
         context,
@@ -143,21 +309,56 @@ async def iter_streaming_chat_response(
         runner_task=runner_task,
         stream_queue=stream_queue,
     )
+    finalizer_task: asyncio.Task[Any] | None = None
+    delivery_task: asyncio.Task[Any] | None = None
+    done_yield_started = False
 
-    async def persist_stream_result_after_runner_done(
+    def ensure_finalizer(
         *,
-        push: bool,
-        persist_db: Any | None = None,
         drain_stream: bool = False,
-    ) -> None:
-        await chat_streaming_result.persist_stream_result_after_runner_done(
+    ) -> asyncio.Task[Any]:
+        nonlocal finalizer_task
+        if finalizer_task is None:
+            finalizer_task = _register_stream_finalizer(
+                chat_streaming_result.persist_stream_result_after_runner_done(
+                    stream_result_context,
+                    push=False,
+                    persist_db=None,
+                    drain_stream=drain_stream,
+                ),
+                name=f"chat-stream-finalizer:{context.req.message_id or context.req.session_id}",
+            )
+        return finalizer_task
+
+    async def deliver_after_finalizer(task: asyncio.Task[Any]) -> bool:
+        try:
+            result = await asyncio.shield(task)
+        except BaseException as exc:
+            _safe_log(
+                "error",
+                "[/chat] Stream delivery skipped after finalizer failure: user=%s session=%s error=%r",
+                context.req.user_id,
+                context.req.session_id,
+                exc,
+            )
+            return False
+        return await chat_streaming_result.push_stream_finalization_result(
             stream_result_context,
-            push=push,
-            persist_db=persist_db,
-            drain_stream=drain_stream,
+            result,
         )
 
+    def ensure_delivery(task: asyncio.Task[Any]) -> asyncio.Task[Any]:
+        nonlocal delivery_task
+        if delivery_task is None:
+            delivery_task = _register_stream_finalizer(
+                deliver_after_finalizer(task),
+                name=f"chat-stream-delivery:{context.req.message_id or context.req.session_id}",
+            )
+        return delivery_task
+
     try:
+        if lifecycle_started is not None:
+            lifecycle_started.set()
         async for event in chat_sse_loop.iter_chat_stream_events(
             stream_queue,
             done,
@@ -169,97 +370,50 @@ async def iter_streaming_chat_response(
         ):
             yield callbacks.chat_sse_data(event)
 
-        if "error" in result_holder:
-            err_msg = str(result_holder.get("error") or "unknown")
-            logger.error(
-                "[/chat] Stream runner failed: user=%s, session=%s, error=%s",
+        try:
+            finalization_result = await asyncio.shield(
+                ensure_finalizer(
+                    drain_stream=False,
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _safe_log(
+                "error",
+                "[/chat] Stream finalization failed: user=%s, session=%s, error=%s",
                 context.req.user_id,
                 context.req.session_id,
-                err_msg,
+                exc,
             )
-            try:
-                await callbacks.finalize_private_buffer(
-                    context.req.user_id,
-                    context.empty_assistant_placeholder,
-                )
-                callbacks.persist_chat_turn(
-                    db,
-                    context.persist_req,
-                    context.empty_assistant_placeholder,
-                    context.guardrail_status,
-                    timing_meta=context.private_timing_meta,
-                )
-                persisted = True
-            except Exception as exc:
-                logger.error("[/chat] Stream persist failed on error path: %s", exc)
             yield callbacks.chat_sse_data(callbacks.stream_error_event())
             return
 
-        answer = result_holder.get("answer", "")
-        private_reply_meta = callbacks.pop_bridge_reply_meta(context.bridge, context.req.session_id)
-        transport_answer = answer
-        try:
-            transport_answer = callbacks.expand_chat_transport_answer(answer)
-        except Exception:
-            logger.warning("[/chat] stream generated image ref expansion failed", exc_info=True)
-
-        if (private_reply_meta or {}).get("_agent_result") == "prompt_v2_audit_failed":
-            await callbacks.finalize_private_buffer(
-                context.req.user_id,
-                context.empty_assistant_placeholder,
-            )
-            callbacks.persist_chat_turn(
-                db,
-                context.persist_req,
-                context.empty_assistant_placeholder,
-                context.guardrail_status,
-                assistant_meta=callbacks.private_prompt_audit_failure_meta(),
-                assistant_processed=1,
-                timing_meta=context.private_timing_meta,
-            )
-            persisted = True
-            yield callbacks.chat_sse_data(callbacks.stream_error_event())
-            return
-
-        await callbacks.finalize_private_buffer(context.req.user_id, answer)
-        pending = callbacks.persist_chat_turn(
-            db,
-            context.persist_req,
-            answer,
-            context.guardrail_status,
-            timing_meta=context.private_timing_meta,
-        )
-        persisted = True
-        if pending >= context.evolution_threshold:
+        if finalization_result.pending >= context.evolution_threshold:
             callbacks.add_background_task(callbacks.evolution_task, context.req.user_id)
         done_payload = callbacks.chat_response_payload(
             context.req,
             status="done",
-            answer=transport_answer,
-            reply_meta=private_reply_meta,
+            answer=finalization_result.transport_answer,
+            reply_meta=finalization_result.reply_meta,
             platform=context.platform,
             chat_type=str(context.bridge_meta.get("chat_type") or ""),
-            unprocessed_logs=pending,
+            unprocessed_logs=finalization_result.pending,
             guardrail_status=context.guardrail_status,
         )
-        yield callbacks.chat_sse_data(done_payload)
+        done_event = callbacks.chat_sse_data(done_payload)
+        done_yield_started = True
+        yield done_event
     finally:
-        if not persisted:
-            if runner_task.done():
-                await persist_stream_result_after_runner_done(push=False, persist_db=db)
-            else:
-                callbacks.add_background_task(
-                    persist_stream_result_after_runner_done,
-                    push=True,
-                    persist_db=None,
-                    drain_stream=True,
-                )
-                await callbacks.finalize_private_buffer(context.req.user_id)
-                logger.warning(
-                    "[/chat] Stream aborted, running in background: user=%s, session=%s",
-                    context.req.user_id,
-                    context.req.session_id,
-                )
+        if not done_yield_started:
+            task = ensure_finalizer(drain_stream=finalizer_task is None)
+            ensure_delivery(task)
+            _safe_log(
+                "warning",
+                "[/chat] Stream aborted, running owned finalizer/delivery: user=%s, session=%s",
+                context.req.user_id,
+                context.req.session_id,
+            )
         done.set()
 
 
@@ -304,14 +458,8 @@ async def run_non_streaming_chat_response(
             sender_name=context.req.sender_name or "",
             metadata=context.bridge_meta,
         )
-    except asyncio.CancelledError:
-        await context.callbacks.finalize_private_buffer(
-            context.req.user_id,
-            context.empty_assistant_placeholder,
-        )
-        raise
     except Exception as exc:
-        logger.error("[/chat] KT Agent failed: %s", exc)
+        _safe_log("error", "[/chat] KT Agent failed: %s", exc)
         try:
             await context.callbacks.finalize_private_buffer(
                 context.req.user_id,
@@ -324,23 +472,62 @@ async def run_non_streaming_chat_response(
                 context.guardrail_status,
                 timing_meta=context.private_timing_meta,
             )
-        except Exception as persist_exc:
-            logger.error("[/chat] Persist failed on KT error path: %s", persist_exc)
+        except BaseException as persist_exc:
+            _safe_log("error", "[/chat] Persist failed on KT error path: %r", persist_exc)
+        await _best_effort_fail_claim(context.claim_owner, exc)
         return ChatRouteNonStreamingResult(
             payload=None,
             http_error=ChatRouteHttpError(502, context.safe_error_message),
         )
+    except BaseException as exc:
+        try:
+            await context.callbacks.finalize_private_buffer(
+                context.req.user_id,
+                context.empty_assistant_placeholder,
+            )
+        except BaseException as cleanup_error:
+            _safe_log(
+                "error",
+                "[/chat] Fatal Bridge buffer cleanup failed: primary=%r cleanup=%r",
+                exc,
+                cleanup_error,
+            )
+        await _best_effort_fail_claim(context.claim_owner, exc)
+        raise
 
-    result = await context.callbacks.finalize_non_streaming_chat_result(
-        db,
-        _non_streaming_context(context, answer=answer),
-    )
+    try:
+        result = await context.callbacks.finalize_non_streaming_chat_result(
+            db,
+            _non_streaming_context(context, answer=answer),
+        )
+    except BaseException as exc:
+        await _best_effort_fail_claim(context.claim_owner, exc)
+        raise
+
     if result.prompt_audit_failed:
+        await _best_effort_fail_claim(
+            context.claim_owner,
+            RuntimeError("prompt_v2_audit_failed"),
+        )
         return ChatRouteNonStreamingResult(
             payload=None,
             http_error=ChatRouteHttpError(500, context.safe_error_message),
             prompt_audit_failed=True,
         )
+
+    if context.claim_owner is not None:
+        if result.completion is None:
+            completion_error = RuntimeError("非流式成功结果缺少 claim completion")
+            await _best_effort_fail_claim(context.claim_owner, completion_error)
+            raise completion_error
+        try:
+            completed = await context.claim_owner.complete(result.completion)
+            if completed is not True:
+                raise RuntimeError("非流式 claim complete 未成功")
+        except BaseException as exc:
+            await _best_effort_fail_claim(context.claim_owner, exc)
+            raise
+
     if result.should_trigger_evolution:
         context.callbacks.add_background_task(context.callbacks.evolution_task, context.req.user_id)
     return ChatRouteNonStreamingResult(

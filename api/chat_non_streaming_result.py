@@ -7,6 +7,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from api import chat_response_contract
+from core.inbound_idempotency import CompletedInboundResponse
+
 
 logger = logging.getLogger("nanobot.routes")
 
@@ -42,6 +45,7 @@ class ChatNonStreamingResult:
     pending: int | None = None
     should_trigger_evolution: bool = False
     prompt_audit_failed: bool = False
+    completion: CompletedInboundResponse | None = None
 
 
 def _request_attr(req: Any, name: str, default: Any = "") -> Any:
@@ -110,6 +114,14 @@ async def finalize_non_streaming_chat_result(
         timing_meta=context.private_timing_meta,
     )
 
+    completion = chat_response_contract.build_completed_inbound_response(
+        outcome="respond",
+        reply=answer,
+        reply_meta=private_reply_meta,
+        guardrail_status=context.guardrail_status,
+        unprocessed_logs=pending,
+    )
+
     payload = callbacks.chat_response_payload(
         req,
         status="ok",
@@ -125,4 +137,5 @@ async def finalize_non_streaming_chat_result(
         payload=payload,
         pending=pending,
         should_trigger_evolution=pending >= context.evolution_threshold,
+        completion=completion,
     )

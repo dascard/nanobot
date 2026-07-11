@@ -12,7 +12,13 @@ from core.prompt_v2.context_adapters import (
     jsonable,
 )
 from core.prompt_v2.flow import load_flow, ordered_nodes_for_chat
-from core.prompt_v2.schema import PromptCompileRequest, PromptPlan
+from core.prompt_v2.schema import (
+    PromptCompileRequest,
+    PromptFlowOrigin,
+    PromptFlowSection,
+    PromptFlowStatus,
+    PromptPlan,
+)
 from core.prompt_v2.section_renderer import (
     estimate_tokens,
     hash_section,
@@ -89,6 +95,7 @@ async def compile_prompt_plan(
     current_user = ensure_user_input_block(request.user_input)
     flow_state = load_flow()
     ordered_nodes = ordered_nodes_for_chat(flow_state.flow, chat_type, platform=platform)
+    flow_sections: list[PromptFlowSection] = []
     warnings: list[str] = []
 
     runtime_sections: dict[str, Any] = {
@@ -110,12 +117,36 @@ async def compile_prompt_plan(
     seen_current_user = False
     seen_runtime_keys: set[str] = set()
     singleton_runtime_keys = {"persona_reference", "runtime_tool_prompt", "current_user_event"}
+    current_user_flow_section: PromptFlowSection | None = None
 
-    def append_system(section_id: str, content: Any) -> None:
+    def append_system(section_id: str, content: Any) -> list[int]:
         text = str(content or "").strip()
         hash_section(section_hashes, section_id, content)
         if text:
+            message_index = len(messages)
             messages.append(system_message(text))
+            return [message_index]
+        return []
+
+    def section_metadata(
+        *,
+        node_id: str,
+        node_type: str,
+        template_key: str = "",
+        runtime_key: str = "",
+        origin: PromptFlowOrigin = "flow",
+        status: PromptFlowStatus,
+        message_indexes: list[int] | None = None,
+    ) -> PromptFlowSection:
+        return {
+            "node_id": node_id,
+            "node_type": node_type,
+            "template_key": template_key,
+            "runtime_key": runtime_key,
+            "origin": origin,
+            "status": status,
+            "message_indexes": list(message_indexes or []),
+        }
 
     for node in ordered_nodes:
         node_id = str(node.get("id") or "").strip()
@@ -127,10 +158,27 @@ async def compile_prompt_plan(
             except FileNotFoundError:
                 warnings.append(f"template node {node_id} missing template: {template_key}")
                 hash_section(section_hashes, node_id, "")
+                flow_sections.append(
+                    section_metadata(
+                        node_id=node_id,
+                        node_type=node_type,
+                        template_key=template_key,
+                        status="missing_template",
+                    )
+                )
                 continue
             rendered = render_scoped_template(template_key, template.body, template_values).strip()
             template_paths[node_id] = str(template.path)
-            append_system(node_id, rendered)
+            message_indexes = append_system(node_id, rendered)
+            flow_sections.append(
+                section_metadata(
+                    node_id=node_id,
+                    node_type=node_type,
+                    template_key=template_key,
+                    status="emitted" if message_indexes else "empty",
+                    message_indexes=message_indexes,
+                )
+            )
             if node_id in {"group_policy", "private_policy"}:
                 hash_section(section_hashes, "chat_policy", rendered)
             continue
@@ -140,30 +188,89 @@ async def compile_prompt_plan(
         if runtime_key in singleton_runtime_keys and runtime_key in seen_runtime_keys:
             warnings.append(f"flow duplicated singleton runtime node {runtime_key}; skipped node {node_id}")
             hash_section(section_hashes, node_id, content)
+            flow_sections.append(
+                section_metadata(
+                    node_id=node_id,
+                    node_type=node_type,
+                    runtime_key=runtime_key,
+                    status="skipped_duplicate",
+                )
+            )
             continue
         seen_runtime_keys.add(runtime_key)
         if runtime_key == "history_messages":
             hash_section(section_hashes, node_id, content)
+            start_index = len(messages)
             messages.extend(history_messages)
+            message_indexes = list(range(start_index, len(messages)))
         elif runtime_key == "current_user_event":
             seen_current_user = True
             hash_section(section_hashes, node_id, content)
+            message_indexes = []
         else:
-            append_system(node_id, content)
+            message_indexes = append_system(node_id, content)
+        section = section_metadata(
+            node_id=node_id,
+            node_type=node_type,
+            runtime_key=runtime_key,
+            status=(
+                "emitted"
+                if message_indexes or runtime_key == "current_user_event"
+                else "empty"
+            ),
+            message_indexes=message_indexes,
+        )
+        flow_sections.append(section)
+        if runtime_key == "current_user_event":
+            current_user_flow_section = section
 
     if "base_contract" not in section_hashes:
         hash_section(section_hashes, "base_contract", "")
     if "persona_reference" not in seen_runtime_keys:
-        append_system("persona_reference", persona_reference)
+        message_indexes = append_system("persona_reference", persona_reference)
+        flow_sections.append(
+            section_metadata(
+                node_id="persona_reference",
+                node_type="runtime",
+                runtime_key="persona_reference",
+                origin="fallback",
+                status="emitted" if message_indexes else "empty",
+                message_indexes=message_indexes,
+            )
+        )
         warnings.append("flow missing persona_reference; compiler appended singleton runtime section")
     if "runtime_tool_prompt" not in seen_runtime_keys:
-        append_system("runtime_tool_prompt", runtime_tool_prompt)
+        message_indexes = append_system("runtime_tool_prompt", runtime_tool_prompt)
+        flow_sections.append(
+            section_metadata(
+                node_id="runtime_tool_prompt",
+                node_type="runtime",
+                runtime_key="runtime_tool_prompt",
+                origin="fallback",
+                status="emitted" if message_indexes else "empty",
+                message_indexes=message_indexes,
+            )
+        )
         warnings.append("flow missing runtime_tool_prompt; compiler appended singleton runtime section")
     if "current_user_event" not in section_hashes:
         hash_section(section_hashes, "current_user_event", current_user)
     if not seen_current_user:
         warnings.append("flow missing current_user_event; compiler appended user event at tail")
     messages.append({"role": "user", "content": current_user})
+    current_user_index = len(messages) - 1
+    if current_user_flow_section is not None:
+        current_user_flow_section["message_indexes"] = [current_user_index]
+    else:
+        flow_sections.append(
+            section_metadata(
+                node_id="current_user_event",
+                node_type="runtime",
+                runtime_key="current_user_event",
+                origin="fallback",
+                status="emitted",
+                message_indexes=[current_user_index],
+            )
+        )
 
     token_estimate = sum(estimate_tokens(str(m.get("content") or "")) for m in messages)
     prompt_sha = sha256_text(stable_json({"messages": messages, "tools": request.tool_schemas}))
@@ -193,6 +300,7 @@ async def compile_prompt_plan(
         warnings=warnings,
         debug=jsonable(debug),
         platform=platform,
+        flow_sections=flow_sections,
     )
     audit = audit_prompt_plan(plan)
     if audit.ok:
@@ -211,4 +319,5 @@ async def compile_prompt_plan(
         warnings=list(plan.warnings) + audit.issues,
         debug=plan.debug,
         platform=plan.platform,
+        flow_sections=plan.flow_sections,
     )

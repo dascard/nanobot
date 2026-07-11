@@ -38,14 +38,21 @@ def _write_flow(path: Path) -> None:
   "version": 1,
   "nodes": [
     {"id": "base_contract", "type": "template", "label": "system: V2 base contract", "template_key": "chat/main"},
+    {"id": "group_policy", "type": "template", "label": "system: group policy", "template_key": "chat/branch_group", "chat_types": ["group"]},
     {"id": "private_policy", "type": "template", "label": "system: private policy", "template_key": "chat/branch_private", "chat_types": ["private"]},
     {"id": "runtime_context", "type": "runtime", "label": "system: runtime_context", "runtime_key": "runtime_context"},
+    {"id": "persona_reference", "type": "runtime", "label": "system: persona_reference", "runtime_key": "persona_reference"},
+    {"id": "runtime_tool_prompt", "type": "runtime", "label": "system: runtime_tool_prompt", "runtime_key": "runtime_tool_prompt"},
     {"id": "current_user_event", "type": "runtime", "label": "user: current_user_input", "runtime_key": "current_user_event"}
   ],
   "edges": [
+    {"from": "base_contract", "to": "group_policy", "chat_types": ["group"]},
     {"from": "base_contract", "to": "private_policy", "chat_types": ["private"]},
+    {"from": "group_policy", "to": "runtime_context", "chat_types": ["group"]},
     {"from": "private_policy", "to": "runtime_context", "chat_types": ["private"]},
-    {"from": "runtime_context", "to": "current_user_event", "chat_types": ["private"]}
+    {"from": "runtime_context", "to": "persona_reference"},
+    {"from": "persona_reference", "to": "runtime_tool_prompt"},
+    {"from": "runtime_tool_prompt", "to": "current_user_event"}
   ]
 }
 """,
@@ -98,6 +105,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
     runtime_dir = tmp_path / "runtime"
     default_dir.mkdir()
     _write_template(default_dir / "chat" / "main.md", "主回复 V2", "默认主规则 {{ chat_type }}")
+    _write_template(default_dir / "chat" / "branch_group.md", "群聊回复 V2", "默认群聊行为")
     _write_template(default_dir / "chat" / "branch_private.md", "私聊回复 V2", "默认私聊行为")
     _write_template(default_dir / "chat" / "identity_context.md", "身份上下文", "你叫 {{ character_name }}")
     _write_tool_template(default_dir / "tools" / "sql_analysis" / "usage.md", "SQL 分析工具", "sql_analysis", "只读查询")
@@ -129,6 +137,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         assert data["default_dir"] == str(default_dir)
         assert data["runtime_dir"] == str(runtime_dir)
         assert [item["template_key"] for item in data["items"]] == [
+            "chat/branch_group",
             "chat/branch_private",
             "chat/identity_context",
             "chat/main",
@@ -206,14 +215,17 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         flow_json = flow.json()
         assert [node["id"] for node in flow_json["flow"]["nodes"]] == [
             "base_contract",
+            "group_policy",
             "private_policy",
             "runtime_context",
+            "persona_reference",
+            "runtime_tool_prompt",
             "current_user_event",
         ]
 
         edited_flow = flow_json["flow"]
         edited_flow["nodes"].insert(
-            2,
+            3,
             {
                 "id": "custom_template",
                 "type": "template",
@@ -223,10 +235,14 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             },
         )
         edited_flow["edges"] = [
+            {"from": "base_contract", "to": "group_policy", "chat_types": ["group"]},
             {"from": "base_contract", "to": "private_policy", "chat_types": ["private"]},
+            {"from": "group_policy", "to": "runtime_context", "chat_types": ["group"]},
             {"from": "private_policy", "to": "custom_template", "chat_types": ["private"]},
             {"from": "custom_template", "to": "runtime_context", "chat_types": ["private"]},
-            {"from": "runtime_context", "to": "current_user_event", "chat_types": ["private"]},
+            {"from": "runtime_context", "to": "persona_reference"},
+            {"from": "persona_reference", "to": "runtime_tool_prompt"},
+            {"from": "runtime_tool_prompt", "to": "current_user_event"},
         ]
         saved_flow = client.put(
             "/api/v1/admin/prompt-v2/flow",
