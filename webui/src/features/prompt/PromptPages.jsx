@@ -619,7 +619,6 @@ export function PromptV2TemplatesPage() {
   const [identitySettings, setIdentitySettings] = useState({
     'bot.character_name': '',
     'bot.alias_names': '',
-    'bot.super_user_ids': '',
   })
   const [toolSchemaConfig, setToolSchemaConfig] = useState(null)
   const [schemaEditText, setSchemaEditText] = useState('')
@@ -674,7 +673,6 @@ export function PromptV2TemplatesPage() {
       const next = {
         'bot.character_name': '',
         'bot.alias_names': '',
-        'bot.super_user_ids': '',
       }
       for (const item of r.data.settings || []) {
         if (Object.prototype.hasOwnProperty.call(next, item.key)) next[item.key] = String(item.value ?? '')
@@ -1363,12 +1361,6 @@ export function PromptV2TemplatesPage() {
                   onChange={e => setIdentitySettings(prev => ({ ...prev, 'bot.alias_names': e.target.value }))}
                   onBlur={e => saveIdentitySetting('bot.alias_names', e.target.value)}
                   className="prompt-flow-scrollbar mt-1 h-20 w-full resize-none rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200 outline-none focus:border-emerald-500" />
-              </label>
-              <label className="block text-xs text-slate-500">super_user_id
-                <input value={identitySettings['bot.super_user_ids'] || ''}
-                  onChange={e => setIdentitySettings(prev => ({ ...prev, 'bot.super_user_ids': e.target.value }))}
-                  onBlur={e => saveIdentitySetting('bot.super_user_ids', e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-2 py-1.5 font-mono text-xs text-slate-200 outline-none focus:border-emerald-500" />
               </label>
             </div>
           </Card>

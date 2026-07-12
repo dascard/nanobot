@@ -1481,6 +1481,23 @@ def _proactive_outreach_leases_table(conn: Any, engine: Any, db_path: str | None
     _validate_proactive_outreach_lease_indexes(conn)
 
 
+def _super_user_config_cleanup(conn: Any, engine: Any, db_path: str | None) -> None:
+    tables = _table_names(conn)
+    if "system_settings" in tables:
+        conn.execute(text(
+            "DELETE FROM system_settings WHERE key = 'bot.super_user_ids'"
+        ))
+    if "admin_audit_logs" in tables:
+        conn.execute(
+            text(
+                "UPDATE admin_audit_logs "
+                "SET detail_json = :detail_json "
+                "WHERE target_id = 'bot.super_user_ids'"
+            ),
+            {"detail_json": '{"changed":true,"redacted":true}'},
+        )
+
+
 MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
     (_CHAT_LOG_METADATA_VERSION, "chat log metadata columns", _chat_log_metadata_columns),
     ("20260523_sticker_memory_columns", "sticker memory columns", _sticker_memory_columns),
@@ -1514,6 +1531,11 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "20260711_chat_delivery_outbox",
         "chat delivery outbox table",
         chat_delivery_outbox_table,
+    ),
+    (
+        "20260712_super_user_config_cleanup",
+        "remove persisted super user configuration and redact audit details",
+        _super_user_config_cleanup,
     ),
 ]
 

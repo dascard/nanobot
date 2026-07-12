@@ -14,7 +14,6 @@ from typing import Any
 from config import (
     NANOBOT_API_TOKEN as NANOBOT_API_TOKEN,
     EVOLUTION_THRESHOLD,
-    ADMIN_USER_ID,
 )
 from core.database import (
     get_db,
@@ -36,6 +35,7 @@ from core.inbound_idempotency import (
     acquire_inbound_claim,
     normalize_inbound_claim_key,
 )
+from core.identity import is_super_user_id
 from core.legacy_adapter import SQLiteMemory  # Keep for evolution; UnifiedProvider/Controller replaced by KT
 from core import user_block_rules
 from nanobot_kt.bridge import get_bridge
@@ -403,8 +403,7 @@ def _completed_chat_route_response(
 
 
 def _is_guardrail_superuser(user_id: str) -> bool:
-    admin_user_id = str(ADMIN_USER_ID or "").strip()
-    return bool(admin_user_id) and str(user_id or "").strip() == admin_user_id
+    return is_super_user_id(user_id)
 
 
 async def _finalize_private_buffer(user_id: str, answer: str | None = None, *, clear_window: bool = True) -> None:

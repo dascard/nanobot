@@ -117,7 +117,7 @@ def test_prompt_runtime_v2_page_exposes_template_editor():
     assert "身份变量配置" in source
     assert "bot.character_name" in source
     assert "bot.alias_names" in source
-    assert "bot.super_user_ids" in source
+    assert "bot.super_user_ids" not in source
     assert "api.put(`/settings/${encodeURIComponent(key)}`" in source
     assert "node.label || node.id" in source
     assert "添加节点" in source

@@ -486,4 +486,6 @@ def test_chat_delivery_outbox_migration_is_registered():
 
     versions = [version for version, _name, _fn in MIGRATIONS]
     assert versions.count("20260711_chat_delivery_outbox") == 1
-    assert versions[-1] == "20260711_chat_delivery_outbox"
+    assert versions.index("20260710_proactive_outreach_leases") < versions.index(
+        "20260711_chat_delivery_outbox"
+    )

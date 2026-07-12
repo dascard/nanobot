@@ -8,6 +8,8 @@ data/prompts_history/
 /data/*.log.*
 .venv/*
 .env
+.pytest_cache/
+.playwright-mcp/
 __pycache__/*
 **/__pycache__/
 *.py[cod]

@@ -28,7 +28,6 @@ _GLOBAL_VARIABLES: tuple[VariableDef, ...] = (
     VariableDef("name_hint", "global", "用户可能用来称呼机器人的主名称", "七濑"),
     VariableDef("alias_names", "global", "用户可能用来称呼机器人的别名列表", "小七\\nbot"),
     VariableDef("sender_id", "global", "当前发送者 ID", "0000000000"),
-    VariableDef("super_user_id", "global", "超级用户 ID 列表", "0000000000"),
     VariableDef("is_super_user", "global", "当前发送者是否超级用户", "true"),
     VariableDef("chat_type", "global", "当前会话类型", "group"),
     VariableDef("platform", "global", "当前客户端平台", "qq"),

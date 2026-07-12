@@ -27,21 +27,16 @@ if not NANOBOT_ADMIN_TOKEN:
             _fh.write(f"\nNANOBOT_ADMIN_TOKEN={NANOBOT_ADMIN_TOKEN}\n")
     except Exception:
         pass
-ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")
-
-
 # ── 超级用户列表 ──
 def _parse_id_set(raw: str) -> set[str]:
     return {
         x.strip()
-        for x in str(raw or "").replace("，", ",").split(",")
+        for x in str(raw or "").replace("，", ",").replace("\n", ",").split(",")
         if x.strip()
     }
 
-SUPER_USER_IDS = _parse_id_set(
-    os.environ.get("NANOBOT_SUPER_USER_IDS")
-    or os.environ.get("SUPER_USER_IDS")
-    or os.environ.get("ADMIN_USER_ID", "")
+NANOBOT_SUPER_USER_IDS = _parse_id_set(
+    os.environ.get("NANOBOT_SUPER_USER_IDS", "")
 )
 
 # ── Bot 身份变量 ──

@@ -26,7 +26,6 @@ import {
 
 const SETTING_LABELS = {
   'proactive_outreach.enabled': '启用主动外呼',
-  'bot.super_user_ids': 'Superuser ID',
   'proactive_outreach.fallback_interval_min': '心跳间隔',
   'proactive_outreach.min_interval_min': '最小间隔',
   'proactive_outreach.max_check_interval_min': '最晚再考虑',
@@ -128,7 +127,7 @@ function LogRow({ item, expanded, onToggle }) {
       <tr className="border-b border-slate-800/80 align-top">
         <td className="px-3 py-2 text-xs text-slate-500">#{item.id}</td>
         <td className="px-3 py-2 text-xs text-slate-400">{formatTime(item.created_at)}</td>
-        <td className="px-3 py-2 text-xs text-slate-300">{item.user_id || '-'}</td>
+        <td className="px-3 py-2 font-mono text-xs text-slate-300">{item.target_fingerprint || '-'}</td>
         <td className="px-3 py-2"><Badge tone={statusTone(item.status)}>{item.status || '-'}</Badge></td>
         <td className="px-3 py-2 text-xs text-slate-400">{item.forced ? '是' : '否'}</td>
         <td className="px-3 py-2 text-xs text-slate-400">{formatTime(item.next_check_at)}</td>
@@ -171,7 +170,7 @@ export function ProactiveOutreachPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [logStatus, setLogStatus] = useState('')
-  const [logUser, setLogUser] = useState('')
+  const [logTargetFingerprint, setLogTargetFingerprint] = useState('')
   const [expandedId, setExpandedId] = useState(null)
   const [runtimeQuery, setRuntimeQuery] = useState('Proactive outreach')
   const [runtimeLog, setRuntimeLog] = useState('')
@@ -200,7 +199,11 @@ export function ProactiveOutreachPage() {
     setLogsLoading(true)
     try {
       const response = await api.get('/proactive-outreach/logs', {
-        params: { status: logStatus, user_id: logUser.trim(), limit: 50 },
+        params: {
+          status: logStatus,
+          target_fingerprint: logTargetFingerprint.trim(),
+          limit: 50,
+        },
       })
       setLogs(response.data)
     } catch (e) {
@@ -208,7 +211,7 @@ export function ProactiveOutreachPage() {
     } finally {
       setLogsLoading(false)
     }
-  }, [logStatus, logUser])
+  }, [logStatus, logTargetFingerprint])
 
   const refreshAll = useCallback(async () => {
     setLoading(true)
@@ -281,10 +284,8 @@ export function ProactiveOutreachPage() {
     setRunningMode(mode)
     setError('')
     setNotice('')
-    const userId = formValues['bot.super_user_ids'] || ''
     try {
       const response = await api.post('/proactive-outreach/run-once', {
-        user_id: String(userId).split(/[,\n，]/).map(item => item.trim()).filter(Boolean)[0] || '',
         mode,
       })
       setNotice(`检查完成：${response.data.result?.status || 'ok'}`)
@@ -298,7 +299,7 @@ export function ProactiveOutreachPage() {
 
   const stats = status?.stats || { total: 0, by_status: {} }
   const latest = status?.latest_logs?.[0]
-  const superUsers = status?.super_user_ids || []
+  const superUserCount = status?.super_user_count || 0
 
   if (loading && !status) return <Spinner />
 
@@ -324,7 +325,11 @@ export function ProactiveOutreachPage() {
 
       <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
         <MiniStat label="开关" value={boolLabel(status?.enabled)} tone={status?.enabled ? 'emerald' : 'slate'} />
-        <MiniStat label="Superuser" value={superUsers.length ? superUsers.join(', ') : '未配置'} tone={superUsers.length ? 'blue' : 'amber'} />
+        <MiniStat
+          label="Superuser"
+          value={status?.super_user_configured ? `已配置 ${superUserCount} 个` : '未配置'}
+          tone={status?.super_user_configured ? 'blue' : 'amber'}
+        />
         <MiniStat label="业务记录" value={stats.total || 0} tone="slate" />
         <MiniStat label="最近状态" value={latest?.status || '-'} tone={statusTone(latest?.status)} />
       </div>
@@ -349,7 +354,6 @@ export function ProactiveOutreachPage() {
             onSave={updateSetting}
           />
           {[
-            'bot.super_user_ids',
             'proactive_outreach.fallback_interval_min',
             'proactive_outreach.min_interval_min',
             'proactive_outreach.max_check_interval_min',
@@ -391,11 +395,12 @@ export function ProactiveOutreachPage() {
               {STATUS_OPTIONS.map(item => <option key={item || 'all'} value={item}>{item || '全部'}</option>)}
             </select>
           </Field>
-          <Field id="proactive-log-user" label="User ID">
+          <Field id="proactive-log-target" label="目标指纹">
             <input
-              id="proactive-log-user"
-              value={logUser}
-              onChange={e => setLogUser(e.target.value)}
+              id="proactive-log-target"
+              value={logTargetFingerprint}
+              onChange={e => setLogTargetFingerprint(e.target.value)}
+              placeholder="sha256:..."
               className="w-52 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-500"
             />
           </Field>
@@ -409,7 +414,7 @@ export function ProactiveOutreachPage() {
               <tr>
                 <th className="px-3 py-2 font-medium">ID</th>
                 <th className="px-3 py-2 font-medium">时间</th>
-                <th className="px-3 py-2 font-medium">User</th>
+                <th className="px-3 py-2 font-medium">目标指纹</th>
                 <th className="px-3 py-2 font-medium">Status</th>
                 <th className="px-3 py-2 font-medium">Forced</th>
                 <th className="px-3 py-2 font-medium">Next</th>

@@ -120,38 +120,6 @@ def test_api_auth_accepts_valid_bearer_token(monkeypatch):
     assert routes.verify_token(authorization="Bearer test-token") is None
 
 
-@pytest.mark.parametrize(
-    ("configured_admin_id", "candidate_user_id", "expected"),
-    [
-        (None, "0000000000", False),
-        ("explicit-admin", "explicit-admin", True),
-    ],
-)
-def test_superuser_default_requires_explicit_admin_user_id(
-    monkeypatch,
-    configured_admin_id,
-    candidate_user_id,
-    expected,
-):
-    import runpy
-
-    import config
-    import dotenv
-    from api import routes
-
-    monkeypatch.setattr(dotenv, "load_dotenv", lambda: None)
-    monkeypatch.setenv("NANOBOT_ADMIN_TOKEN", "test-token")
-    if configured_admin_id is None:
-        monkeypatch.delenv("ADMIN_USER_ID", raising=False)
-    else:
-        monkeypatch.setenv("ADMIN_USER_ID", configured_admin_id)
-
-    isolated_config = runpy.run_path(config.__file__)
-    monkeypatch.setattr(routes, "ADMIN_USER_ID", isolated_config["ADMIN_USER_ID"])
-
-    assert routes._is_guardrail_superuser(candidate_user_id) is expected
-
-
 def test_search_logs_rejects_limit_above_max(client, monkeypatch):
     monkeypatch.setattr("api.routes.NANOBOT_API_TOKEN", "test-token")
 
@@ -586,7 +554,11 @@ def test_superuser_bypasses_injection_guardrail(client, db_session, monkeypatch)
     mock_bridge = AsyncMock()
     mock_bridge.handle_message = AsyncMock(return_value="管理员回复")
 
-    monkeypatch.setattr("api.routes.ADMIN_USER_ID", "super-001")
+    monkeypatch.setattr(
+        "api.routes.is_super_user_id",
+        lambda user_id: user_id == "super-001",
+        raising=False,
+    )
     monkeypatch.setattr("api.routes.get_guardrail", lambda: guardrail)
 
     with patch("api.routes.get_bridge", return_value=mock_bridge):
@@ -630,7 +602,11 @@ def test_superuser_image_only_message_bypasses_injection_guardrail(client, monke
     mock_bridge = AsyncMock()
     mock_bridge.handle_message = AsyncMock(return_value="图片管理员回复")
 
-    monkeypatch.setattr("api.routes.ADMIN_USER_ID", "super-001")
+    monkeypatch.setattr(
+        "api.routes.is_super_user_id",
+        lambda user_id: user_id == "super-001",
+        raising=False,
+    )
     monkeypatch.setattr("api.routes.get_guardrail", lambda: guardrail)
 
     with patch("api.routes.get_bridge", return_value=mock_bridge):

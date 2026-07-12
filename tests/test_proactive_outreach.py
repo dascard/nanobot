@@ -1241,7 +1241,7 @@ def test_scheduler_threads_ambiguity_hold_setting_into_due_runner(monkeypatch):
     )
     monkeypatch.setattr(
         proactive_outreach,
-        "_configured_super_user_ids",
+        "get_super_user_ids",
         lambda: {"scheduler-user"},
     )
     monkeypatch.setattr(proactive_outreach, "run_outreach_due_once", fake_due_once)

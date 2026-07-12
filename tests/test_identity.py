@@ -8,7 +8,7 @@ def test_normalize_user_id():
 
 
 def test_is_super_user_id(monkeypatch):
-    monkeypatch.setattr("core.identity.SUPER_USER_IDS", {"123", "456"})
+    monkeypatch.setattr("core.identity.NANOBOT_SUPER_USER_IDS", {"123", "456"})
     assert is_super_user_id("123")
     assert is_super_user_id("456")
     assert not is_super_user_id("789")
@@ -28,7 +28,7 @@ def test_build_identity_vars():
 def test_build_identity_vars_has_non_empty_defaults(monkeypatch):
     monkeypatch.setattr("core.identity.NANOBOT_CHARACTER_NAME", "nanobot")
     monkeypatch.setattr("core.identity.NANOBOT_BOT_ALIASES", {"nanobot"})
-    monkeypatch.setattr("core.identity.SUPER_USER_IDS", set())
+    monkeypatch.setattr("core.identity.NANOBOT_SUPER_USER_IDS", set())
 
     vars_ = build_identity_vars()
 
@@ -36,14 +36,13 @@ def test_build_identity_vars_has_non_empty_defaults(monkeypatch):
     assert vars_["character_name"] == "nanobot"
     assert vars_["name_hint"] == "nanobot"
     assert vars_["alias_names"] == "nanobot"
-    assert vars_["super_user_id"] == "未配置"
+    assert "super_user_id" not in vars_
 
 
-def test_build_identity_vars_reads_web_configured_identity(monkeypatch):
+def test_build_identity_vars_reads_identity_without_exposing_super_user_ids(monkeypatch):
     configured = {
         "bot.character_name": "七濑",
         "bot.alias_names": "小七\nnanobot",
-        "bot.super_user_ids": "42,99",
     }
     monkeypatch.setattr(
         "core.settings_service.settings.get_str",
@@ -51,13 +50,13 @@ def test_build_identity_vars_reads_web_configured_identity(monkeypatch):
     )
     monkeypatch.setattr("core.identity.NANOBOT_CHARACTER_NAME", "fallback")
     monkeypatch.setattr("core.identity.NANOBOT_BOT_ALIASES", {"fallback"})
-    monkeypatch.setattr("core.identity.SUPER_USER_IDS", set())
+    monkeypatch.setattr("core.identity.NANOBOT_SUPER_USER_IDS", {"42", "99"})
 
     vars_ = build_identity_vars(sender_id="42")
 
     assert vars_["character_name"] == "七濑"
     assert vars_["name_hint"] == "七濑"
     assert vars_["alias_names"] == "小七\nnanobot"
-    assert vars_["super_user_id"] == "42,99"
+    assert "super_user_id" not in vars_
     assert vars_["is_super_user"] == "true"
     assert is_super_user_id("99")

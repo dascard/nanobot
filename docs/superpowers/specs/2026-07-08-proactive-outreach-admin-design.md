@@ -14,9 +14,9 @@
 
 新增 `api/admin/proactive_outreach_routes.py`，路由前缀 `/proactive-outreach`。
 
-- `GET /proactive-outreach/status` 返回 proactive 配置、superuser 列表、最近业务记录、状态统计、最近相关 LLM 请求摘要。
-- `GET /proactive-outreach/logs` 返回 `proactive_outreach_log` 分页记录，支持 `status` 与 `user_id` 过滤。
-- `PUT /proactive-outreach/settings/{key}` 仅允许更新 `proactive_outreach.*` 和 `bot.super_user_ids`，复用 `SystemSetting` 与 `settings.invalidate()`。
+- `GET /proactive-outreach/status` 返回 proactive 配置、superuser 配置状态和数量、脱敏业务记录、状态统计、最近相关 LLM 请求摘要。
+- `GET /proactive-outreach/logs` 返回 `proactive_outreach_log` 脱敏分页记录，支持 `status` 与 `target_fingerprint` 过滤，不在 URL 中传递原始用户 ID。
+- `PUT /proactive-outreach/settings/{key}` 仅允许更新 `proactive_outreach.*`，复用 `SystemSetting` 与 `settings.invalidate()`；超级用户后来收敛为唯一环境变量，不再从 Admin 写入。
 - `POST /proactive-outreach/settings/reload` 触发配置重载。
 - `POST /proactive-outreach/run-once` 调用现有 `run_outreach_due_once` 或 `run_outreach_once`。这是一次真实检查，可能在 Judge 判定后真实发送。
 

@@ -20,6 +20,11 @@ def init_prompt_runtimes(logger: logging.Logger) -> None:
             )
         else:
             logger.info("[PromptRuntime] runtime templates ready: %s", runtime_result["runtime_dir"])
+        if runtime_result.get("migrated"):
+            logger.info(
+                "[PromptRuntime] migrated %d legacy identity placeholders",
+                len(runtime_result["migrated"]),
+            )
     except Exception as exc:
         logger.warning("[PromptRuntime] init_runtime_dir failed: %s", exc)
 

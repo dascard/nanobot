@@ -55,14 +55,6 @@ SETTING_DEFS: dict[str, SettingDef] = {
         category="bot",
         description="角色别名，支持逗号或换行分隔，对应 {{ alias_names }} / {{ bot_aliases }}",
     ),
-    "bot.super_user_ids": SettingDef(
-        key="bot.super_user_ids",
-        env_name="NANOBOT_SUPER_USER_IDS",
-        default="",
-        value_type="str",
-        category="bot",
-        description="超级用户 ID 列表，支持逗号或换行分隔，对应 {{ super_user_id }}",
-    ),
     "proactive_outreach.enabled": SettingDef(
         key="proactive_outreach.enabled",
         env_name="PROACTIVE_OUTREACH_ENABLED",

@@ -102,6 +102,62 @@ def test_proactive_outreach_log_table_is_created_by_migration():
             ))
 
 
+def test_super_user_config_cleanup_removes_setting_and_redacts_audit():
+    from core.schema_migrations import run_schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE system_settings ("
+            "key TEXT PRIMARY KEY, value TEXT, description TEXT, updated_at DATETIME)"
+        ))
+        conn.execute(text(
+            "CREATE TABLE admin_audit_logs ("
+            "id INTEGER PRIMARY KEY, action TEXT NOT NULL, target_type TEXT, "
+            "target_id TEXT, detail_json TEXT, ip_address TEXT, created_at DATETIME)"
+        ))
+        conn.execute(text(
+            "INSERT INTO system_settings(key, value, description) "
+            "VALUES ('bot.super_user_ids', '0000000000', 'legacy target')"
+        ))
+        conn.execute(text(
+            "INSERT INTO admin_audit_logs"
+            "(action, target_type, target_id, detail_json) VALUES "
+            "('update_proactive_outreach_setting', 'setting', "
+            "'bot.super_user_ids', '{\"value\":\"0000000000\"}')"
+        ))
+        conn.execute(text(
+            "INSERT INTO admin_audit_logs"
+            "(action, target_type, target_id, detail_json) VALUES "
+            "('other', 'setting', 'other.key', '{\"value\":\"keep\"}')"
+        ))
+
+    run_schema_migrations(engine)
+    run_schema_migrations(engine)
+
+    with engine.connect() as conn:
+        setting_count = conn.execute(text(
+            "SELECT COUNT(*) FROM system_settings "
+            "WHERE key = 'bot.super_user_ids'"
+        )).scalar_one()
+        redacted = conn.execute(text(
+            "SELECT detail_json FROM admin_audit_logs "
+            "WHERE target_id = 'bot.super_user_ids'"
+        )).scalar_one()
+        untouched = conn.execute(text(
+            "SELECT detail_json FROM admin_audit_logs WHERE target_id = 'other.key'"
+        )).scalar_one()
+        version_count = conn.execute(text(
+            "SELECT COUNT(*) FROM schema_migrations "
+            "WHERE version = '20260712_super_user_config_cleanup'"
+        )).scalar_one()
+
+    assert setting_count == 0
+    assert redacted == '{"changed":true,"redacted":true}'
+    assert untouched == '{"value":"keep"}'
+    assert version_count == 1
+
+
 def test_group_memory_governance_columns_apply_when_old_group_memory_migration_already_recorded():
     from core.schema_migrations import run_schema_migrations
 

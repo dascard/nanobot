@@ -88,12 +88,17 @@ NEW_API_TIMEOUT=180
 
 NANOBOT_API_TOKEN=<random-api-token>
 NANOBOT_ADMIN_TOKEN=<random-admin-token>
+NANOBOT_SUPER_USER_IDS=<comma-separated-user-ids>
 NANOBOT_AGENT_STEP_MODEL=<fixed-model-id-for-synergy-agent-step>
 
 DATABASE_URL=sqlite:///./data/nanobot.db
 LOG_DIR=./data
 LOG_LEVEL=INFO
 ```
+
+`NANOBOT_SUPER_USER_IDS` 是超级用户权限和主动外呼目标的唯一配置来源，支持英文
+或中文逗号分隔。不要把真实 ID 写入源码、受版本控制的配置或 Admin 数据库设置；
+需要停用时将变量设为空。修改后必须重启所有读取 `.env` 的服务。
 
 可选本地 Qwen / 分类器：
 

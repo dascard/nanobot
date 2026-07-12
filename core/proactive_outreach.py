@@ -46,7 +46,7 @@ from core.database import (
     SessionLocal,
     User,
 )
-from core.identity import _configured_super_user_ids
+from core.identity import get_super_user_ids
 from core.settings_service import settings
 from core.sqlite_retry import run_sqlite_locked_retry
 
@@ -2485,7 +2485,7 @@ def proactive_outreach_scheduler(stop_event: threading.Event) -> None:
                 interval_min = settings.get_int("proactive_outreach.fallback_interval_min", 120)
                 stop_event.wait(timeout=max(60, interval_min * 60))
                 continue
-            user_ids = sorted(_configured_super_user_ids())
+            user_ids = sorted(get_super_user_ids())
             if not user_ids:
                 logger.info("Proactive outreach skipped: no superuser configured.")
             for user_id in user_ids:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,12 @@ _TASK_TOOL_NAMES: dict[str, str] = {
     "tasks/proactive_research": "web_search",
 }
 
+_LEGACY_SUPER_USER_LINE = re.compile(
+    r"(?m)^(?P<indent>\s*)super_user_id\s*:\s*"
+    r"{{\s*super_user_id\s*}}[ \t]*$"
+)
+_LEGACY_SUPER_USER_PLACEHOLDER = re.compile(r"{{\s*super_user_id\s*}}")
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -98,21 +105,37 @@ def init_prompt_v2_runtime_dir() -> dict[str, Any]:
     runtime_dir = runtime_template_dir()
     runtime_dir.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
-    if not source_dir.exists():
-        return {"source_dir": str(source_dir), "runtime_dir": str(runtime_dir), "copied": copied}
+    if source_dir.exists():
+        for source_path in sorted(source_dir.rglob("*")):
+            if not source_path.is_file() or source_path.suffix not in {".md", ".json"}:
+                continue
+            rel = source_path.relative_to(source_dir)
+            target_path = runtime_dir / rel
+            if target_path.exists():
+                continue
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
+            copied.append(rel.as_posix())
 
-    for source_path in sorted(source_dir.rglob("*")):
-        if not source_path.is_file() or source_path.suffix not in {".md", ".json"}:
+    migrated: list[str] = []
+    for runtime_path in sorted(runtime_dir.rglob("*.md")):
+        original = runtime_path.read_text(encoding="utf-8")
+        updated = _LEGACY_SUPER_USER_LINE.sub(
+            r"\g<indent>is_super_user: {{ is_super_user }}",
+            original,
+        )
+        updated = _LEGACY_SUPER_USER_PLACEHOLDER.sub("{{ is_super_user }}", updated)
+        if updated == original:
             continue
-        rel = source_path.relative_to(source_dir)
-        target_path = runtime_dir / rel
-        if target_path.exists():
-            continue
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
-        copied.append(rel.as_posix())
+        runtime_path.write_text(updated, encoding="utf-8")
+        migrated.append(runtime_path.relative_to(runtime_dir).as_posix())
 
-    return {"source_dir": str(source_dir), "runtime_dir": str(runtime_dir), "copied": copied}
+    return {
+        "source_dir": str(source_dir),
+        "runtime_dir": str(runtime_dir),
+        "copied": copied,
+        "migrated": migrated,
+    }
 
 
 def _normalize(raw_key: str) -> str:

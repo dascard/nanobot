@@ -47,3 +47,20 @@ def test_new_api_timeout_defaults_to_300_seconds():
     assert 'NEW_API_TIMEOUT = int(os.environ.get("NEW_API_TIMEOUT", "300"))' in config_text
     assert "key=\"new_api.timeout\", env_name=\"NEW_API_TIMEOUT\",\n        default=300" in registry_text
     assert "NEW_API_TIMEOUT=300" in env_example
+
+
+def test_super_user_ids_use_one_canonical_environment_variable():
+    config_text = Path("config.py").read_text(encoding="utf-8")
+    registry_text = Path("core/config_registry.py").read_text(encoding="utf-8")
+    env_example = Path(".env.example").read_text(encoding="utf-8")
+    legacy_reads = (
+        'os.environ.get("' + "SUPER" + '_USER_IDS"',
+        'os.environ.get("' + "ADMIN" + '_USER_ID"',
+    )
+
+    assert 'os.environ.get("NANOBOT_SUPER_USER_IDS", "")' in config_text
+    assert "NANOBOT_SUPER_USER_IDS=" in env_example
+    assert "bot.super_user_ids" not in registry_text
+    assert all(read not in config_text for read in legacy_reads)
+    assert "\n" + "SUPER" + "_USER_IDS =" not in config_text
+    assert "\n" + "ADMIN" + "_USER_ID =" not in config_text

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from config import NANOBOT_BOT_ALIASES, NANOBOT_CHARACTER_NAME, SUPER_USER_IDS
+from config import (
+    NANOBOT_BOT_ALIASES,
+    NANOBOT_CHARACTER_NAME,
+    NANOBOT_SUPER_USER_IDS,
+)
 
 
 def _parse_text_set(raw: object) -> set[str]:
@@ -44,10 +48,10 @@ def _configured_aliases() -> list[str]:
     return aliases or sorted(NANOBOT_BOT_ALIASES)
 
 
-def _configured_super_user_ids() -> set[str]:
-    raw = _setting_str("bot.super_user_ids", ",".join(sorted(SUPER_USER_IDS)))
-    ids = _parse_text_set(raw)
-    return ids if str(raw or "").strip() else set(SUPER_USER_IDS)
+def get_super_user_ids() -> set[str]:
+    """返回启动时从唯一环境变量解析的超级用户集合副本。"""
+
+    return set(NANOBOT_SUPER_USER_IDS)
 
 
 def normalize_user_id(value: object) -> str:
@@ -56,7 +60,7 @@ def normalize_user_id(value: object) -> str:
 
 def is_super_user_id(user_id: object) -> bool:
     uid = normalize_user_id(user_id)
-    return bool(uid and uid in _configured_super_user_ids())
+    return bool(uid and uid in get_super_user_ids())
 
 
 def build_identity_vars(
@@ -75,13 +79,10 @@ def build_identity_vars(
     name = str(bot_name or "").strip() or _configured_character_name()
     if not alias_text.strip():
         alias_text = name
-    super_user_text = ",".join(sorted(_configured_super_user_ids())) or "未配置"
-
     return {
         "sender_id": normalized_sender_id or "未提供",
         "is_super_user": "true" if is_super_user_id(normalized_sender_id) else "false",
         "character_name": name,
         "name_hint": name,
         "alias_names": alias_text,
-        "super_user_id": super_user_text,
     }

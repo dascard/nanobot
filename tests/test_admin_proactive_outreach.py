@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timedelta
 
 import pytest
@@ -18,7 +19,14 @@ from server import app
 @pytest.fixture
 def proactive_client(tmp_path, monkeypatch):
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
-    monkeypatch.setenv("NANOBOT_SUPER_USER_IDS", "")
+    from api.admin import proactive_outreach_routes
+
+    monkeypatch.setattr(
+        proactive_outreach_routes,
+        "get_super_user_ids",
+        lambda: {"u-proactive"},
+        raising=False,
+    )
     engine = create_engine(
         f"sqlite:///{tmp_path / 'test.db'}",
         connect_args={"check_same_thread": False},
@@ -93,18 +101,15 @@ def test_admin_proactive_outreach_routes_are_registered():
         }
 
 
-def test_proactive_outreach_status_reports_settings_logs_and_llm(proactive_client):
+def test_proactive_outreach_status_reports_redacted_target_and_runtime(
+    proactive_client,
+):
     db = next(app.dependency_overrides[get_db]())
     now = datetime(2026, 7, 8, 12, 0, 0)
     db.add(SystemSetting(
         key="proactive_outreach.enabled",
         value="true",
         description="开关",
-    ))
-    db.add(SystemSetting(
-        key="bot.super_user_ids",
-        value="u-proactive",
-        description="superuser",
     ))
     db.add(ProactiveOutreachLog(
         user_id="u-proactive",
@@ -148,38 +153,53 @@ def test_proactive_outreach_status_reports_settings_logs_and_llm(proactive_clien
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["enabled"] is True
-    assert data["super_user_ids"] == ["u-proactive"]
+    assert data["super_user_configured"] is True
+    assert data["super_user_count"] == 1
+    assert "super_user_ids" not in data
+    assert "u-proactive" not in response.text
     settings_by_key = {item["key"]: item for item in data["settings"]}
     assert settings_by_key["proactive_outreach.enabled"]["value"] is True
     assert settings_by_key["proactive_outreach.ambiguous_hold_min"]["value"] == 120
-    assert settings_by_key["bot.super_user_ids"]["value"] == "u-proactive"
+    assert "bot.super_user_ids" not in settings_by_key
     assert data["stats"]["total"] == 2
     assert data["stats"]["by_status"]["sent"] == 1
     assert data["latest_logs"][0]["status"] == "sent"
+    assert "target_fingerprint" in data["latest_logs"][0]
+    assert "user_id" not in data["latest_logs"][0]
+    assert "idempotency_key" not in data["latest_logs"][0]
     assert data["latest_logs"][1]["grounding"]["recent_threads"] == ["项目进展"]
     assert data["llm_logs"][0]["source"] == "classifier.timing_proactive"
     assert data["llm_logs"][0]["latency_ms"] == 123
 
 
-def test_proactive_outreach_logs_filter_by_status(proactive_client):
+def test_proactive_outreach_logs_filter_by_status_and_target_fingerprint(
+    proactive_client,
+):
     db = next(app.dependency_overrides[get_db]())
     db.add(ProactiveOutreachLog(
-        user_id="u1",
-        idempotency_key="outreach:u1:pending",
+        user_id="u-proactive",
+        idempotency_key="outreach:u-proactive:pending",
         grounding_json="{}",
         status="pending",
     ))
     db.add(ProactiveOutreachLog(
-        user_id="u1",
-        idempotency_key="outreach:u1:sent",
+        user_id="other-user",
+        idempotency_key="outreach:other-user:pending",
         grounding_json="{}",
-        status="sent",
+        status="pending",
     ))
     db.commit()
 
+    target_fingerprint = "sha256:" + hashlib.sha256(
+        b"u-proactive"
+    ).hexdigest()[:12]
+
     response = proactive_client.get(
         "/api/v1/admin/proactive-outreach/logs",
-        params={"status": "pending"},
+        params={
+            "status": "pending",
+            "target_fingerprint": target_fingerprint,
+        },
         headers=_auth_header(),
     )
 
@@ -187,7 +207,8 @@ def test_proactive_outreach_logs_filter_by_status(proactive_client):
     data = response.json()
     assert data["total"] == 1
     assert data["items"][0]["status"] == "pending"
-    assert data["items"][0]["user_id"] == "u1"
+    assert "user_id" not in data["items"][0]
+    assert data["items"][0]["target_fingerprint"] == target_fingerprint
 
 
 def test_proactive_outreach_setting_update_is_scoped(proactive_client):
@@ -213,6 +234,11 @@ def test_proactive_outreach_setting_update_is_scoped(proactive_client):
         json={"value": 0},
         headers=_auth_header(),
     )
+    removed_super_user_setting = proactive_client.put(
+        "/api/v1/admin/proactive-outreach/settings/bot.super_user_ids",
+        json={"value": "u-proactive"},
+        headers=_auth_header(),
+    )
 
     assert ok.status_code == 200, ok.text
     assert ok.json()["value"] is True
@@ -220,6 +246,7 @@ def test_proactive_outreach_setting_update_is_scoped(proactive_client):
     assert ambiguity_hold.status_code == 200, ambiguity_hold.text
     assert ambiguity_hold.json()["value"] == 90
     assert invalid_ambiguity_hold.status_code == 400
+    assert removed_super_user_setting.status_code == 400
 
 
 def test_proactive_outreach_run_once_uses_existing_runtime(proactive_client, monkeypatch):
@@ -244,7 +271,7 @@ def test_proactive_outreach_run_once_uses_existing_runtime(proactive_client, mon
 
     due = proactive_client.post(
         "/api/v1/admin/proactive-outreach/run-once",
-        json={"user_id": "u-proactive", "mode": "due"},
+        json={"user_id": "other-user", "mode": "due"},
         headers=_auth_header(),
     )
     check = proactive_client.post(
@@ -257,6 +284,10 @@ def test_proactive_outreach_run_once_uses_existing_runtime(proactive_client, mon
     assert check.status_code == 200, check.text
     assert due.json()["result"]["status"] == "skipped_not_due"
     assert check.json()["result"]["log_id"] == 7
+    assert "user_id" not in due.json()
+    assert due.json()["target_fingerprint"]
+    assert "u-proactive" not in due.text
+    assert "other-user" not in due.text
     assert [item[0] for item in calls] == ["due", "check"]
     assert calls[0][1] == "u-proactive"
 

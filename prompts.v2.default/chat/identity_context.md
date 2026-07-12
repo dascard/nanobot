@@ -12,6 +12,5 @@ description: 身份与称呼变量模板。
 {{ alias_names }}
 
 sender_id: {{ sender_id }}
-super_user_id: {{ super_user_id }}
 is_super_user: {{ is_super_user }}
 </identity_context>

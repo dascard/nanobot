@@ -160,7 +160,6 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
             "name_hint",
             "alias_names",
             "sender_id",
-            "super_user_id",
             "is_super_user",
             "chat_type",
             "platform",
@@ -193,13 +192,13 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
 
         saved = client.put(
             "/api/v1/admin/prompt-v2/templates/chat/identity_context",
-            json={"content": "你叫 {{ character_name }}\nsuper: {{ super_user_id }}"},
+            json={"content": "你叫 {{ character_name }}\nsuper: {{ is_super_user }}"},
             headers=_auth_header(),
         )
         assert saved.status_code == 200, saved.text
         assert saved.json()["saved"] is True
         assert (runtime_dir / "chat" / "identity_context.md").read_text(encoding="utf-8") == (
-            "你叫 {{ character_name }}\nsuper: {{ super_user_id }}\n"
+            "你叫 {{ character_name }}\nsuper: {{ is_super_user }}\n"
         )
 
         rejected = client.put(

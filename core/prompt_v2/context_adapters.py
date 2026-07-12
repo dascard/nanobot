@@ -101,7 +101,6 @@ def build_identity_context(request) -> str:
         "{{ name_hint }}\n"
         "{{ alias_names }}\n\n"
         "sender_id: {{ sender_id }}\n"
-        "super_user_id: {{ super_user_id }}\n"
         "is_super_user: {{ is_super_user }}\n"
         "</identity_context>"
     )

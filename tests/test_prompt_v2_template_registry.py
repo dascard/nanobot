@@ -66,6 +66,32 @@ def test_prompt_v2_init_runtime_dir_copies_missing_files_without_overwrite(tmp_p
     assert (runtime_dir / "chat" / "flow.json").read_text(encoding="utf-8") == '{"nodes": [], "edges": []}\n'
 
 
+def test_prompt_v2_init_runtime_dir_migrates_legacy_super_user_placeholder(
+    tmp_path,
+    monkeypatch,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    default_dir.mkdir()
+    identity_path = runtime_dir / "chat" / "identity_context.md"
+    identity_path.parent.mkdir(parents=True)
+    identity_path.write_text(
+        "super_user_id: {{ super_user_id }}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    result = init_prompt_v2_runtime_dir()
+
+    assert result["migrated"] == ["chat/identity_context.md"]
+    assert identity_path.read_text(encoding="utf-8") == (
+        "is_super_user: {{ is_super_user }}\n"
+    )
+
+
 def test_prompt_template_registry_prefers_canonical_env_names(tmp_path, monkeypatch):
     default_dir = tmp_path / "prompt_defaults"
     runtime_dir = tmp_path / "prompt_runtime"

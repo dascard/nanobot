@@ -274,7 +274,8 @@ def test_admin_prompt_and_trace_endpoints(client, auth_header, tmp_path, monkeyp
     assert "character_name" in variable_names
     assert "name_hint" in variable_names
     assert "alias_names" in variable_names
-    assert "super_user_id" in variable_names
+    assert "super_user_id" not in variable_names
+    assert "is_super_user" in variable_names
     assert "user_input" not in variable_names
 
     run = RunTracer.start_run(

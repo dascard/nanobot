@@ -28,7 +28,7 @@
 
 ## 阶段一：安全与主链路
 
-敏感设置写入仍由 Admin 完成，但审计详情对 `SettingDef.sensitive` 仅记录 `changed=true` 和值的 SHA-256 短指纹。聊天 INFO 日志只记录元数据，不记录 query 或文件 URL。`ADMIN_USER_ID` 默认改为空，显式配置后行为不变。
+敏感设置写入仍由 Admin 完成，但审计详情对 `SettingDef.sensitive` 仅记录 `changed=true` 和值的 SHA-256 短指纹。聊天 INFO 日志只记录元数据，不记录 query 或文件 URL。超级用户配置后来由 2026-07-12 设计收敛为唯一环境变量，不再由 Admin 或数据库维护。
 
 Prompt 审计改为检查编译器生成的 section 元数据，不扫描 user/assistant 正文。编译器为 singleton runtime section 记录稳定的 section id，审计只验证 id 的唯一性与必需分支。
 

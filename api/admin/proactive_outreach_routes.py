@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from datetime import datetime
@@ -16,7 +17,7 @@ from api.admin.common import audit, client_ip, verify_admin
 from clients.classifier_client import strip_think_blocks
 from core.config_registry import SETTING_DEFS, SettingDef
 from core.database import LLMApiRequestLog, ProactiveOutreachLog, SystemSetting, get_db
-from core.identity import _configured_super_user_ids
+from core.identity import get_super_user_ids
 from core.proactive_outreach import (
     run_outreach_dry_run_once,
     run_outreach_due_once,
@@ -36,7 +37,6 @@ _MANAGED_SETTING_KEYS = (
     "proactive_outreach.ambiguous_hold_min",
     "proactive_outreach.surge_min_prob",
     "proactive_outreach.surge_max_prob",
-    "bot.super_user_ids",
 )
 _OUTREACH_LLM_SOURCES = (
     "classifier.timing_proactive",
@@ -58,7 +58,6 @@ class ProactiveSettingUpdate(BaseModel):
 
 
 class ProactiveRunOnceRequest(BaseModel):
-    user_id: str = ""
     mode: Literal["due", "check"] = "due"
 
 
@@ -81,6 +80,38 @@ def _iso(value: object) -> str:
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value or "")
+
+
+def _target_fingerprint(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+    return f"sha256:{digest}"
+
+
+def _redact_super_user_value(value: object) -> object:
+    targets = sorted(get_super_user_ids(), key=len, reverse=True)
+
+    def redact(item: object) -> object:
+        if isinstance(item, Mapping):
+            return {
+                str(redact(str(key))): redact(nested)
+                for key, nested in item.items()
+            }
+        if isinstance(item, list):
+            return [redact(nested) for nested in item]
+        if isinstance(item, tuple):
+            return [redact(nested) for nested in item]
+        if not isinstance(item, str):
+            return item
+        result = item
+        for target in targets:
+            if target:
+                result = result.replace(target, "[目标已脱敏]")
+        return result
+
+    return redact(value)
 
 
 def _classify_live_dry_run_result(result: object) -> tuple[bool, bool]:
@@ -160,14 +191,13 @@ def _setting_payload(key: str, values: dict[str, object]) -> dict[str, Any]:
 def _outreach_log_dict(row: ProactiveOutreachLog) -> dict[str, Any]:
     return {
         "id": row.id,
-        "user_id": row.user_id or "",
-        "idempotency_key": row.idempotency_key or "",
-        "grounding": _parse_json_object(row.grounding_json),
+        "target_fingerprint": _target_fingerprint(row.user_id),
+        "grounding": _redact_super_user_value(_parse_json_object(row.grounding_json)),
         "judge_should": bool(row.judge_should),
-        "judge_reason": row.judge_reason or "",
+        "judge_reason": _redact_super_user_value(row.judge_reason or ""),
         "next_check_at": _iso(row.next_check_at),
-        "next_intent": row.next_intent or "",
-        "message": row.message or "",
+        "next_intent": _redact_super_user_value(row.next_intent or ""),
+        "message": _redact_super_user_value(row.message or ""),
         "status": row.status or "",
         "forced": bool(row.forced),
         "created_at": _iso(row.created_at),
@@ -184,9 +214,9 @@ def _llm_log_dict(row: LLMApiRequestLog) -> dict[str, Any]:
         "model": row.model or "",
         "status": row.status or "",
         "response_status": row.response_status or 0,
-        "request_preview": str(row.request_preview or "")[:500],
-        "response_preview": str(row.response_preview or "")[:500],
-        "error": str(row.error or "")[:500],
+        "request_preview": str(_redact_super_user_value(str(row.request_preview or "")[:500])),
+        "response_preview": str(_redact_super_user_value(str(row.response_preview or "")[:500])),
+        "error": str(_redact_super_user_value(str(row.error or "")[:500])),
         "latency_ms": int(row.latency_ms or 0),
         "created_at": _iso(row.created_at),
         "finished_at": _iso(row.finished_at),
@@ -234,9 +264,11 @@ def proactive_outreach_status(
         .limit(20)
         .all()
     )
+    super_user_ids = get_super_user_ids()
     return {
         "enabled": bool(values.get("proactive_outreach.enabled", False)),
-        "super_user_ids": sorted(_configured_super_user_ids()),
+        "super_user_configured": bool(super_user_ids),
+        "super_user_count": len(super_user_ids),
         "settings": [_setting_payload(key, values) for key in _MANAGED_SETTING_KEYS],
         "stats": _status_counts(db),
         "latest_logs": [_outreach_log_dict(row) for row in latest_logs],
@@ -248,7 +280,7 @@ def proactive_outreach_status(
 @router.get("/logs")
 def proactive_outreach_logs(
     status: str = "",
-    user_id: str = "",
+    target_fingerprint: str = "",
     limit: int = Query(50, ge=1, le=200),
     page: int = Query(1, ge=1),
     db: Session = Depends(get_db),
@@ -257,8 +289,17 @@ def proactive_outreach_logs(
     query = db.query(ProactiveOutreachLog)
     if status:
         query = query.filter(ProactiveOutreachLog.status == status)
-    if user_id:
-        query = query.filter(ProactiveOutreachLog.user_id == user_id)
+    normalized_fingerprint = str(target_fingerprint or "").strip().lower()
+    if normalized_fingerprint:
+        matching_targets = [
+            user_id
+            for user_id in get_super_user_ids()
+            if _target_fingerprint(user_id) == normalized_fingerprint
+        ]
+        if matching_targets:
+            query = query.filter(ProactiveOutreachLog.user_id.in_(matching_targets))
+        else:
+            query = query.filter(ProactiveOutreachLog.id == -1)
     total = query.count()
     items = (
         query.order_by(ProactiveOutreachLog.created_at.desc(), ProactiveOutreachLog.id.desc())
@@ -332,12 +373,10 @@ async def proactive_outreach_run_once(
     db: Session = Depends(get_db),
     _auth=Depends(verify_admin),
 ):
-    user_id = (body.user_id or "").strip()
-    if not user_id:
-        user_ids = sorted(_configured_super_user_ids())
-        if not user_ids:
-            raise HTTPException(status_code=400, detail="No superuser configured")
-        user_id = user_ids[0]
+    user_ids = sorted(get_super_user_ids())
+    if not user_ids:
+        raise HTTPException(status_code=400, detail="No superuser configured")
+    user_id = user_ids[0]
 
     if body.mode == "check":
         result = await run_outreach_once(user_id, db=db)
@@ -345,9 +384,9 @@ async def proactive_outreach_run_once(
         result = await run_outreach_due_once(user_id, db=db)
     return {
         "ok": True,
-        "user_id": user_id,
+        "target_fingerprint": _target_fingerprint(user_id),
         "mode": body.mode,
-        "result": result,
+        "result": _redact_super_user_value(result),
     }
 
 
@@ -375,7 +414,7 @@ async def proactive_outreach_simulate(
 
     user_id = (body.user_id or "").strip()
     if not user_id:
-        user_ids = sorted(_configured_super_user_ids())
+        user_ids = sorted(get_super_user_ids())
         if not user_ids:
             raise HTTPException(status_code=400, detail="No superuser configured")
         user_id = user_ids[0]
@@ -387,6 +426,6 @@ async def proactive_outreach_simulate(
         "execution_ok": execution_ok,
         "candidate_available": candidate_available,
         "mode": body.mode,
-        "user_id": user_id,
-        "result": result,
+        "target_fingerprint": _target_fingerprint(user_id),
+        "result": _redact_super_user_value(result),
     }

@@ -1271,7 +1271,7 @@ async def test_prompt_v2_identity_context_uses_non_empty_default_values(monkeypa
 
     monkeypatch.setattr("core.identity.NANOBOT_CHARACTER_NAME", "nanobot")
     monkeypatch.setattr("core.identity.NANOBOT_BOT_ALIASES", {"nanobot"})
-    monkeypatch.setattr("core.identity.SUPER_USER_IDS", set())
+    monkeypatch.setattr("core.identity.NANOBOT_SUPER_USER_IDS", set())
 
     plan = await compile_prompt_plan(
         PromptCompileRequest(
@@ -1284,7 +1284,7 @@ async def test_prompt_v2_identity_context_uses_non_empty_default_values(monkeypa
     identity = next(str(m["content"]) for m in plan.messages if "<identity_context>" in str(m["content"]))
     assert "你叫 nanobot" in identity
     assert "nanobot" in identity
-    assert "super_user_id: 未配置" in identity
+    assert "super_user_id:" not in identity
     assert "{{" not in identity
     assert "character_name:" not in identity
 
@@ -1294,15 +1294,15 @@ def test_prompt_v2_section_variables_are_whitelisted_by_scope():
 
     rendered = render_scoped_template(
         "identity_context",
-        "你叫 {{character_name}}\n{{ name_hint }}\n{{ alias_names }}\n{{super_user_id}}",
+        "你叫 {{character_name}}\n{{ name_hint }}\n{{ alias_names }}\n{{is_super_user}}",
         {
             "character_name": "七濑",
             "name_hint": "小七",
             "alias_names": "小七\n七七",
-            "super_user_id": "0000000000",
+            "is_super_user": "true",
         },
     )
-    assert rendered == "你叫 七濑\n小七\n小七\n七七\n0000000000"
+    assert rendered == "你叫 七濑\n小七\n小七\n七七\ntrue"
 
     with pytest.raises(PromptVariableError):
         render_scoped_template("identity_context", "{{ user_input }}", {"user_input": "禁止"})
