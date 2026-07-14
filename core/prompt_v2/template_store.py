@@ -20,6 +20,13 @@ from core.prompt_v2.template_registry import (
 from core.prompt_v2.variables import list_variables, validate_scoped_template
 
 
+def _validate_template_for_save(key: str, text: str) -> None:
+    validate_scoped_template(key, text)
+    from core.prompt_v2.task_contracts import validate_task_template
+
+    validate_task_template(key, text)
+
+
 def _read_body(path: Path | None) -> str:
     if not path or not path.exists():
         return ""
@@ -55,6 +62,20 @@ def _template_record(key: str, *, db=None) -> dict[str, Any]:
         **_read_frontmatter(runtime_path),
     }
     classified = classify_template(canonical, frontmatter)
+    task_contract = None
+    task_contract_status = None
+    if classified.kind == "task":
+        from core.prompt_v2.task_contracts import get_task_contract
+        from core.prompt_v2.task_templates import select_task_template
+
+        contract = get_task_contract(canonical)
+        if contract is not None:
+            task_contract = contract.to_dict()
+            selection = select_task_template(canonical)
+            task_contract_status = {
+                "source": selection.source,
+                "invalid_sources": list(selection.invalid_sources),
+            }
     tool_schema = None
     if classified.kind == "tool" and classified.tool_name:
         try:
@@ -80,6 +101,8 @@ def _template_record(key: str, *, db=None) -> dict[str, Any]:
         "size": len(template.body.encode("utf-8")),
         "variables": list_variables(canonical),
         "frontmatter": frontmatter,
+        "task_contract": task_contract,
+        "task_contract_status": task_contract_status,
     }
 
 
@@ -138,7 +161,7 @@ def create_template(
 ) -> dict[str, Any]:
     key = resolve_template_key(template_key)
     text = str(content or "")
-    validate_scoped_template(key, text)
+    _validate_template_for_save(key, text)
     path = template_path_for(key, runtime=True)
     if path.exists():
         raise ValueError("运行时模板已存在")
@@ -167,7 +190,7 @@ def create_template(
 def save_template(template_key: str, content: str) -> dict[str, Any]:
     key = resolve_template_key(template_key)
     text = str(content or "")
-    validate_scoped_template(key, text)
+    _validate_template_for_save(key, text)
     path = template_path_for(key, runtime=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     before = _read_body(path)

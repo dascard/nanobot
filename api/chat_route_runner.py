@@ -372,19 +372,36 @@ async def iter_streaming_chat_response(
     )
     finalizer_task: asyncio.Task[Any] | None = None
     delivery_task: asyncio.Task[Any] | None = None
-    done_yield_completed = False
-    claim_completion_attempted = False
+    done_handed_off = False
+    suppress_abort_delivery = False
+    claim_completion_task: asyncio.Task[bool] | None = None
     claim_completion_succeeded = context.claim_owner is None
 
     async def complete_claim_once(result: Any) -> bool:
-        nonlocal claim_completion_attempted, claim_completion_succeeded
+        nonlocal claim_completion_task, claim_completion_succeeded
         if context.claim_owner is None:
             return True
-        if claim_completion_attempted:
-            return claim_completion_succeeded
-        claim_completion_attempted = True
-        completed = await context.claim_owner.complete(result.completion)
-        claim_completion_succeeded = completed is True
+        if claim_completion_task is None:
+            async def settle_claim() -> bool:
+                completed = await context.claim_owner.complete(result.completion)
+                return completed is True
+
+            claim_completion_task = asyncio.create_task(
+                settle_claim(),
+                name=(
+                    "chat-stream-claim-complete:"
+                    f"{context.req.message_id or context.req.session_id}"
+                ),
+            )
+        try:
+            claim_completion_succeeded = await asyncio.shield(
+                claim_completion_task
+            )
+        except asyncio.CancelledError as exc:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            raise RuntimeError("流式 claim complete task 被取消") from exc
         return claim_completion_succeeded
 
     def ensure_finalizer(
@@ -418,13 +435,20 @@ async def iter_streaming_chat_response(
             )
             return False
         try:
+            if (
+                context.claim_owner is not None
+                and claim_completion_task is not None
+                and not claim_completion_succeeded
+                and await complete_claim_once(result) is not True
+            ):
+                raise RuntimeError("断连流式 claim complete 未成功")
             registered = await (
                 chat_streaming_result.register_stream_finalization_delivery(
                     stream_result_context,
                     result,
                 )
             )
-            if context.claim_owner is not None and not claim_completion_attempted:
+            if context.claim_owner is not None and not claim_completion_succeeded:
                 if await complete_claim_once(result) is not True:
                     raise RuntimeError("断连流式 claim complete 未成功")
         except BaseException as exc:
@@ -497,6 +521,24 @@ async def iter_streaming_chat_response(
             yield callbacks.chat_sse_data(callbacks.stream_error_event())
             return
 
+        if context.claim_owner is not None:
+            try:
+                if await complete_claim_once(finalization_result) is not True:
+                    raise RuntimeError("流式 claim complete 未成功")
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                suppress_abort_delivery = True
+                await _best_effort_fail_claim(context.claim_owner, exc)
+                _safe_log(
+                    "error",
+                    "[/chat] Stream claim settlement failed before done delivery: user=%s session=%s error=%r",
+                    context.req.user_id,
+                    context.req.session_id,
+                    exc,
+                )
+                yield callbacks.chat_sse_data(callbacks.stream_error_event())
+                return
         done_payload = callbacks.chat_response_payload(
             context.req,
             status="done",
@@ -508,29 +550,15 @@ async def iter_streaming_chat_response(
             guardrail_status=context.guardrail_status,
         )
         done_event = callbacks.chat_sse_data(done_payload)
+        done_handed_off = True
         yield done_event
-        if context.claim_owner is not None:
-            try:
-                if await complete_claim_once(finalization_result) is not True:
-                    raise RuntimeError("流式 claim complete 未成功")
-            except BaseException as exc:
-                await _best_effort_fail_claim(context.claim_owner, exc)
-                _safe_log(
-                    "error",
-                    "[/chat] Stream claim settlement failed after done delivery: user=%s session=%s error=%r",
-                    context.req.user_id,
-                    context.req.session_id,
-                    exc,
-                )
-                return
         if finalization_result.pending >= context.evolution_threshold:
             callbacks.add_background_task(
                 callbacks.evolution_task,
                 context.req.user_id,
             )
-        done_yield_completed = True
     finally:
-        if not done_yield_completed:
+        if not done_handed_off and not suppress_abort_delivery:
             task = ensure_finalizer(drain_stream=finalizer_task is None)
             ensure_delivery(task)
             _safe_log(

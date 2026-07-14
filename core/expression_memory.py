@@ -5,6 +5,8 @@ import logging
 
 from sqlalchemy import and_, or_
 from sqlalchemy.exc import IntegrityError
+
+from core.chat_stream_identity import resolve_chat_stream_identity
 from core.database import SessionLocal, ExpressionMemory, JargonMemory, ChatStreamConfig
 from core.time_utils import db_now_naive
 
@@ -18,12 +20,16 @@ def _safe_json(raw: str, default):
         return default
 
 
-def normalize_chat_stream_id(raw_id: str, chat_type: str = "group", platform: str = "qq") -> str:
-    raw = str(raw_id or "").strip()
-    if raw.count(":") == 2:
-        return raw
-    raw = raw.removeprefix("group_").removeprefix("private_")
-    return f"{platform}:{raw}:{chat_type}"
+def normalize_chat_stream_id(
+    raw_id: str,
+    chat_type: str = "group",
+    platform: str = "qq",
+) -> str:
+    return resolve_chat_stream_identity(
+        platform=platform,
+        chat_type=chat_type,
+        session_id=raw_id,
+    ).chat_stream_id
 
 
 # ── ChatStreamConfig ──

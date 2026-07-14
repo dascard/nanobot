@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 from core.time_utils import db_now_naive
 from ..schema import NewsItem
+from .normalize import _parse_date
 
 logger = logging.getLogger("nanobot.news_daily.rank")
 
@@ -38,16 +39,26 @@ def is_ai_industry_relevant(item) -> bool:
     return bool(AI_KEYWORDS.search(text))
 
 
-def rank_items(items: list[NewsItem]) -> list[NewsItem]:
+def rank_items(items: list[NewsItem], *, now: datetime | None = None) -> list[NewsItem]:
     """评分排序 + AI行业过滤。"""
-    now = db_now_naive()
+    reference_time = now or db_now_naive()
 
     for item in items:
         if item.published_at:
             try:
-                dt = datetime.fromisoformat(item.published_at)
-                days = (now - dt).days
-                item.freshness = 1.0 if days <= 1 else (0.8 if days <= 3 else (0.5 if days <= 7 else 0.2))
+                dt = _parse_date(item.published_at)
+                if dt is None:
+                    raise ValueError("unparseable published_at")
+                age = reference_time - dt
+                if age.total_seconds() < 0:
+                    item.freshness = 0.0
+                else:
+                    days = age.days
+                    item.freshness = (
+                        1.0
+                        if days <= 1
+                        else (0.8 if days <= 3 else (0.5 if days <= 7 else 0.2))
+                    )
             except Exception:
                 item.freshness = 0.5
         else:

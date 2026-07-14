@@ -5,15 +5,22 @@ Uses DuckDuckGo for web search and trafilatura for high-quality article extracti
 """
 
 import asyncio
+import hashlib
+import html
+import json
 import logging
 import re
-import json
-import html
 from typing import Any
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from core.async_bridge import run_awaitable_sync
 from core.time_utils import db_now_naive
-from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
+from core.tool_contracts.ai_daily import (
+    AiDailyRequest,
+    AiDailyRequestError,
+    ai_daily_parameters_schema,
+    parse_ai_daily_request,
+)
+from nanobot_kt.reply_contract import build_rich_tool_result
 from . import runtime_cache as _runtime_cache
 from . import search_backend as _search_backend
 from .legacy_report import (
@@ -473,10 +480,10 @@ def _extract_json_object(raw: str) -> str:
     return m.group(0) if m else raw
 
 
-def _run_news_daily_pipeline(query: str, mode: str = "quality", limit: int = 8) -> str:
+def _run_news_daily_pipeline(request: AiDailyRequest) -> str:
     """统一入口——quality → daily fallback。"""
     from .news_daily.tool import run_news_search_auto
-    return run_news_search_auto(query, limit)
+    return run_news_search_auto(request)
 
 def search_and_extract_news_v2(
     query: str,
@@ -663,7 +670,7 @@ def search_and_extract_news(
 
 
 def _build_ai_daily_tool_result(html_result: str, query: str) -> ToolResult:
-    result = build_reply_tool_result(html_result)
+    result = build_rich_tool_result(html_result, report_kind="ai_daily")
     try:
         from core.ai_daily_ingest import best_effort_ingest_ai_daily_result
 
@@ -716,84 +723,61 @@ class AiDailyTool(BaseTool):
         return ExecutionMode.DIRECT
 
     def get_parameters_schema(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "日报主题或自然语言请求；今天/最新类请求必须基于 runtime_context.current_time，不要自行编造年份。",
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "候选新闻数量（默认 8）；日报/最新资讯类请求会至少使用 8 条候选。",
-                    "default": 8,
-                },
-                "freshness": {
-                    "type": "string",
-                    "description": "时效范围：today/latest/week/custom。今天、最新、日报、早报优先使用 today 或 latest。",
-                    "enum": ["today", "latest", "week", "custom"],
-                    "default": "latest",
-                },
-                "target_date": {
-                    "type": "string",
-                    "description": "目标日期，YYYY-MM-DD；仅用户明确指定日期时填写。",
-                },
-                "no_cache": {"type": "boolean", "description": "跳过缓存强制重新检索", "default": False},
-                "refresh": {"type": "boolean", "description": "强制刷新", "default": False},
-            },
-            "required": ["query"],
-        }
+        return ai_daily_parameters_schema()
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
-        query = args.get("query", "")
-        if not query.strip():
-            return ToolResult(error="Missing 'query' argument")
-        max_results = int(args.get("max_results", 8) or 8)
-        freshness = str(args.get("freshness") or "").strip().lower()
-        # 日报/新闻类请求强制至少8条候选
-        if freshness in {"today", "latest"} or any(
-            k in query for k in ("日报", "早报", "简报", "每日", "今日", "今天", "新闻", "资讯", "AI 新闻", "AI新闻", "最新新闻", "最新资讯")
-        ):
-            max_results = max(max_results, 8)
-        no_cache = bool(args.get("no_cache") or args.get("refresh"))
+        try:
+            request = parse_ai_daily_request(args)
+        except AiDailyRequestError as exc:
+            return ToolResult(error=f"Invalid ai_daily arguments: {exc}")
 
-        user_id = str(args.get("user_id") or kwargs.get("user_id") or "")
-        session_id = str(args.get("session_id") or kwargs.get("session_id") or "")
-        metadata = kwargs.get("metadata") or {}
-        if not user_id and isinstance(metadata, dict):
-            user_id = str(metadata.get("user_id") or "")
-        if not session_id and isinstance(metadata, dict):
-            session_id = str(metadata.get("session_id") or "")
+        query_len = len(request.query)
+        query_sha = hashlib.sha256(request.query.encode("utf-8")).hexdigest()[:12]
+        logger.info(
+            "[ai_daily] query_len=%d query_sha=%s max=%d freshness=%s "
+            "bypass_cache=%s",
+            query_len,
+            query_sha,
+            request.max_results,
+            request.freshness,
+            request.bypass_cache,
+        )
 
-        logger.info("[ai_daily] query=%r max=%d no_cache=%s",
-                    query[:80], max_results, no_cache)
-
-        cache_key = _news_search_cache_key(query, max_results, mode="quality",
-                                           user_id=user_id, session_id=session_id)
-        if not no_cache:
+        cache_key = _runtime_cache.make_ai_daily_cache_key(request, mode="quality")
+        if not request.bypass_cache:
             cached = _get_cached_news_result(cache_key)
             if cached is not None:
                 logger.info("[ai_daily] cache HIT")
-                return _build_ai_daily_tool_result(cached, query)
+                return _build_ai_daily_tool_result(cached, request.query)
 
         # KT runs tools concurrently; run blocking code in thread
         result = await asyncio.to_thread(
-            _run_news_daily_pipeline, query, "quality", max_results,
+            _run_news_daily_pipeline,
+            request,
         )
         # 强制HTML输出——永不为空/不裸文本
         if not result or not str(result).strip():
-            logger.error("[ai_daily] empty output query=%r", query)
+            logger.error(
+                "[ai_daily] empty output query_len=%d query_sha=%s",
+                query_len,
+                query_sha,
+            )
             result = _render_ai_daily_fallback(
                 "暂无可用资讯",
                 "本轮没有生成有效输出，已触发兜底。",
                 ["工具返回为空"],
             )
         elif "<html" not in str(result).lower() and "<article" not in str(result).lower():
-            logger.warning("[ai_daily] non-html output query=%r len=%d", query, len(str(result)))
+            logger.warning(
+                "[ai_daily] non-html output query_len=%d query_sha=%s output_len=%d",
+                query_len,
+                query_sha,
+                len(str(result)),
+            )
             result = _render_ai_daily_fallback(
                 "资讯结果不完整",
                 "本轮生成结果非标准HTML，已转换兜底。",
                 [str(result)[:200]],
             )
         _store_cached_news_result(cache_key, result)
-        return _build_ai_daily_tool_result(result, query)
+        return _build_ai_daily_tool_result(result, request.query)

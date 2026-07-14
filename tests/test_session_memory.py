@@ -465,6 +465,64 @@ def test_build_chat_context_group_rolls_up_pending_conversation_turns(db_session
     assert debug["rolling_summary_recent_raw_turn_ids"][-1] == 24
 
 
+@pytest.mark.parametrize(
+    ("chat_type", "turn_count"),
+    [("group", 24), ("private", 40)],
+)
+def test_read_only_rollup_header_matches_live_without_preview_writes(
+    db_session,
+    chat_type,
+    turn_count,
+):
+    from core.context_builder import build_chat_context
+
+    session_id = f"{chat_type}_preview-live-rollup"
+    user_id = "preview-live-user"
+    now = _local_now()
+    for index in range(turn_count):
+        role = "user" if index % 2 == 0 else "assistant"
+        sender_name = "甲" if index % 4 < 2 else "乙"
+        _turn(
+            db_session,
+            session_id=session_id,
+            user_id=user_id,
+            role=role,
+            content=f"只读与实时摘要一致性 {index + 1}",
+            meta={"kind": "chat", "sender_name": sender_name},
+            created_at=now + timedelta(seconds=index),
+        )
+    db_session.commit()
+
+    preview_header, _preview_messages, preview_debug = build_chat_context(
+        db_session,
+        session_id,
+        user_id=user_id,
+        is_group=chat_type == "group",
+        group_id="preview-live-rollup" if chat_type == "group" else "",
+        max_total=10000,
+        read_only=True,
+    )
+
+    assert "<rolling_session_summary" in preview_header
+    assert preview_debug["rolling_summary_read_only"] is True
+    assert db_session.query(RollingSessionSummary).count() == 0
+    assert db_session.query(SessionSummaryJob).count() == 0
+
+    live_header, _live_messages, live_debug = build_chat_context(
+        db_session,
+        session_id,
+        user_id=user_id,
+        is_group=chat_type == "group",
+        group_id="preview-live-rollup" if chat_type == "group" else "",
+        max_total=10000,
+    )
+
+    assert live_header == preview_header
+    assert live_debug["rolling_summary_read_only"] is False
+    assert db_session.query(RollingSessionSummary).count() == 1
+    assert db_session.query(SessionSummaryJob).count() == 1
+
+
 def test_rollup_audit_rejects_current_user_input_leak(db_session):
     from app.session_memory.rolling_summary import audit_rolling_summary
 

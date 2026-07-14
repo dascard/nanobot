@@ -8,13 +8,18 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.time_utils import db_now_naive
+from core.tool_contracts.ai_daily import AI_DAILY_CACHE_VERSION
+
+if TYPE_CHECKING:
+    from core.tool_contracts.ai_daily import AiDailyRequest
 
 
 NEWS_SEARCH_CACHE_TTL_SECONDS = int(os.environ.get("NEWS_SEARCH_CACHE_TTL_SECONDS", "300"))
 NEWS_SEARCH_CACHE_MAX_ENTRIES = 64
+AI_DAILY_ROLLING_CACHE_BUCKET_MINUTES = 5
 _NEWS_SEARCH_CACHE: dict[tuple[Any, ...], tuple[float, str]] = {}
 _NEWS_SEARCH_CACHE_LOCK = threading.Lock()
 
@@ -92,6 +97,36 @@ def _news_search_cache_key(
     return (version, "query", q, int(max_results), mode)
 
 
+def make_ai_daily_cache_key(
+    request: "AiDailyRequest",
+    *,
+    mode: str,
+) -> tuple[Any, ...]:
+    """按已验证请求的全部检索语义生成稳定缓存键。"""
+    normalized_query = re.sub(r"\s+", " ", request.query).strip().lower()
+    rolling_bucket = None
+    if request.freshness in {"latest", "week"}:
+        reference_time = request.reference_time
+        rolling_bucket = reference_time.replace(
+            minute=(
+                reference_time.minute // AI_DAILY_ROLLING_CACHE_BUCKET_MINUTES
+            )
+            * AI_DAILY_ROLLING_CACHE_BUCKET_MINUTES,
+            second=0,
+            microsecond=0,
+        ).isoformat()
+    return (
+        AI_DAILY_CACHE_VERSION,
+        "ai_daily",
+        normalized_query,
+        request.freshness,
+        request.cache_date,
+        rolling_bucket,
+        request.max_results,
+        str(mode or "quality").strip().lower(),
+    )
+
+
 def _get_cached_news_result(
     key: tuple[Any, ...],
     *,
@@ -118,7 +153,10 @@ def _store_cached_news_result(
     monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
     with _NEWS_SEARCH_CACHE_LOCK:
-        if len(_NEWS_SEARCH_CACHE) > NEWS_SEARCH_CACHE_MAX_ENTRIES:
+        if (
+            key not in _NEWS_SEARCH_CACHE
+            and len(_NEWS_SEARCH_CACHE) >= NEWS_SEARCH_CACHE_MAX_ENTRIES
+        ):
             oldest_key = min(_NEWS_SEARCH_CACHE, key=lambda k: _NEWS_SEARCH_CACHE[k][0])
             _NEWS_SEARCH_CACHE.pop(oldest_key, None)
         _NEWS_SEARCH_CACHE[key] = (monotonic(), output)

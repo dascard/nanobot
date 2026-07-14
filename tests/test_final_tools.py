@@ -32,6 +32,24 @@ def test_final_tools_filter_removes_unallowed_framework_tools():
     assert result["tool_choice"] == "auto"
 
 
+def test_final_tools_filter_normalizes_and_clips_tuple_tools():
+    from core.final_tools import FinalToolSet, filter_payload_tools
+
+    result = filter_payload_tools(
+        {
+            "tools": (_tool("reply"), _tool("python_sandbox")),
+            "tool_choice": "auto",
+        },
+        FinalToolSet(
+            allowed={"reply"},
+            disabled={"python_sandbox": "测试禁用"},
+        ),
+    )
+
+    assert isinstance(result["tools"], list)
+    assert [tool["function"]["name"] for tool in result["tools"]] == ["reply"]
+
+
 def test_final_tools_filter_removes_tool_choice_when_no_tools_remain():
     from core.final_tools import FinalToolSet, filter_payload_tools
 
@@ -42,6 +60,79 @@ def test_final_tools_filter_removes_tool_choice_when_no_tools_remain():
 
     assert "tools" not in result
     assert "tool_choice" not in result
+
+
+def test_final_tools_filter_is_pure_clipping_without_schema_growth(monkeypatch):
+    from core.final_tools import filter_payload_tools
+    from core.prompt_v2 import tool_templates
+    from core.prompt_v2.tool_templates import get_tool_template_policy
+    from core.tool_plan import build_tool_plan
+
+    plan = build_tool_plan(chat_type="private", runtime_preset="full")
+    schemas = list(plan.sent_tool_schemas)
+    original_descriptions = {
+        tool["function"]["name"]: tool["function"]["description"]
+        for tool in schemas
+    }
+    overlay_calls = []
+
+    def fail_if_overlay_called(_schema):
+        overlay_calls.append(True)
+        raise AssertionError("final filter must not overlay tool templates")
+
+    monkeypatch.setattr(
+        tool_templates,
+        "overlay_tool_schema_description",
+        fail_if_overlay_called,
+    )
+    payload = {"tools": schemas, "tool_choice": "auto"}
+    result = filter_payload_tools(payload, plan)
+
+    assert result["tools"] == schemas
+    assert payload["tools"] == schemas
+    assert overlay_calls == []
+    for tool in result["tools"]:
+        description = tool["function"]["description"]
+        assert description == original_descriptions[tool["function"]["name"]]
+        policy = get_tool_template_policy(tool["function"]["name"])
+        expected_markers = 1 if policy and policy.body else 0
+        assert description.count("[V2ToolTemplate:") == expected_markers
+
+    result["tools"][0]["function"]["description"] = "调用方修改"
+    assert payload["tools"][0]["function"]["description"] != "调用方修改"
+    assert plan.sent_tool_schemas[0]["function"]["description"] != "调用方修改"
+
+
+def test_final_tools_group_override_requires_nonempty_group_scope(db_session):
+    from core.database import ToolOverride
+    from core.final_tools import resolve_final_tools
+
+    db_session.add(ToolOverride(
+        tool_name="memory_query",
+        scope_type="group",
+        scope_id="private_placeholder",
+        enabled=0,
+        reason="群级禁用",
+    ))
+    db_session.commit()
+
+    private_tools = resolve_final_tools(
+        chat_type="private",
+        group_id="",
+        runtime_preset="full",
+        db=db_session,
+    )
+    group_tools = resolve_final_tools(
+        chat_type="group",
+        group_id="private_placeholder",
+        runtime_preset="full",
+        db=db_session,
+    )
+
+    assert "memory_query" in private_tools.allowed
+    assert "memory_query" not in private_tools.disabled
+    assert "memory_query" not in group_tools.allowed
+    assert group_tools.disabled["memory_query"] == "群级禁用"
 
 
 def test_openai_sdk_tracer_filters_tools_before_request(monkeypatch):
@@ -219,7 +310,7 @@ def test_effective_tool_schema_preview_uses_real_descriptions():
     })
     by_name = {item["function"]["name"]: item["function"] for item in schemas}
 
-    assert "普通聊天里出现的新信息不要主动调用" in by_name["persona_update"]["description"]
+    assert "刷新当前用户已持久化聊天日志形成的画像" in by_name["persona_update"]["description"]
     assert "简单聊天记录查询" in by_name["python_sandbox"]["description"]
     assert "Asia/Shanghai" in by_name["schedule_task"]["description"]
     assert by_name["schedule_task"]["parameters"]["properties"]["target_type"]["enum"] == ["private", "group"]

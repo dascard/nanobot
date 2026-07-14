@@ -13,6 +13,7 @@ class ToolDef:
     group_default: bool        # 群聊默认开启
     description: str           # WebUI 用途说明
     force_enabled: bool = False           # 不可禁用（reply/no_reply）
+    force_disabled: bool = False          # 全局硬禁用（任何默认或覆盖都不能开启）
     force_disabled_group: bool = False    # 群聊强制禁用（bash/write/edit）
 
 
@@ -49,8 +50,9 @@ TOOL_METADATA: dict[str, ToolDef] = {
     ),
     "python_sandbox": ToolDef(
         name="python_sandbox", label="Python沙箱", category="data", risk_level="high",
-        private_default=True, group_default=True,
-        description="执行复杂数据处理/计算；简单聊天记录查询、上一句、表结构检查优先用 sql_analysis。",
+        private_default=False, group_default=False,
+        description="任意 Python 执行已安全禁用；复杂分析需先通过只读 SQL 获取有界数据。",
+        force_disabled=True,
     ),
     "ai_daily": ToolDef(
         name="ai_daily", label="AI日报", category="data", risk_level="low",
@@ -98,7 +100,7 @@ TOOL_METADATA: dict[str, ToolDef] = {
     "persona_update": ToolDef(
         name="persona_update", label="画像更新", category="system", risk_level="medium",
         private_default=True, group_default=True,
-        description="用户明确要求记住、纠正、删除或重建画像时使用；普通聊天新信息由后台画像进化处理。",
+        description="用户明确要求时，刷新当前用户已持久化聊天日志形成的画像。",
     ),
     "schedule_task": ToolDef(
         name="schedule_task", label="定时任务", category="system", risk_level="medium",

@@ -2,21 +2,36 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from api.admin.common import audit, audit_request, client_ip, verify_admin
+from app.session_config import DiscoveredChatStream, discover_chat_streams
+from api.admin.common import audit_request, client_ip, verify_admin
 from api.admin.runtime_routes import _runtime_snapshot
+from core.chat_stream_identity import (
+    ChatStreamIdentity,
+    ChatStreamIdentityError,
+    canonicalize_legacy_chat_stream_id,
+    parse_canonical_chat_stream_id,
+    resolve_chat_stream_identity,
+)
 from core.database import (
-    ChatLog,
+    AdminAuditLog,
     ChatStreamConfig,
     ContentBlockRule,
-    User,
     UserBlockRule,
     get_db,
 )
+from core.session_guidance import (
+    SessionGuidanceValidationError,
+    normalize_session_guidance,
+)
+from core.time_utils import db_now_naive
 
 router = APIRouter(tags=["admin-chat-config"])
 
@@ -74,6 +89,14 @@ class ConfigUpdate(BaseModel):
     group_profile_mode: str | None = None
     enable_group_profile: int | None = None  # deprecated, 兼容旧调用方
     planner_smooth: int | None = None
+    session_guidance: str | None = None
+
+
+class ConfigUpsert(ConfigUpdate):
+    platform: str
+    chat_type: Literal["group", "private"]
+    session_id: str
+    session_guidance: str
 
 
 def _block_dict(r: UserBlockRule) -> dict:
@@ -86,8 +109,40 @@ def _block_dict(r: UserBlockRule) -> dict:
     }
 
 
-def _config_dict(r: ChatStreamConfig) -> dict:
+def _guidance_summary(text: object, updated_at: object = None) -> dict:
+    raw = text if isinstance(text, str) else str(text or "")
+    try:
+        normalized = normalize_session_guidance(raw)
+    except SessionGuidanceValidationError:
+        # 历史脏数据仍可被治理，但列表和审计绝不回传正文。
+        normalized = raw
+    configured = bool(normalized)
     return {
+        "session_guidance_configured": configured,
+        "session_guidance_chars": len(normalized),
+        "session_guidance_sha256": (
+            hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            if configured
+            else ""
+        ),
+        "session_guidance_updated_at": _iso(updated_at),
+    }
+
+
+def _identity_summary(chat_stream_id: str) -> dict:
+    try:
+        identity = parse_canonical_chat_stream_id(chat_stream_id)
+    except ChatStreamIdentityError:
+        return {"platform": "", "chat_type": "", "session_id": ""}
+    return {
+        "platform": identity.platform,
+        "chat_type": identity.chat_type,
+        "session_id": identity.external_session_id,
+    }
+
+
+def _config_dict(r: ChatStreamConfig) -> dict:
+    result = {
         "chat_stream_id": r.chat_stream_id,
         "talk_value": r.talk_value,
         "mentioned_bot_reply": bool(r.mentioned_bot_reply),
@@ -97,6 +152,18 @@ def _config_dict(r: ChatStreamConfig) -> dict:
         "group_profile_mode": r.group_profile_mode or "off",
         "planner_smooth": r.planner_smooth,
     }
+    result.update(_identity_summary(r.chat_stream_id))
+    result.update(_guidance_summary(
+        r.session_guidance,
+        r.session_guidance_updated_at,
+    ))
+    return result
+
+
+def _config_detail_dict(r: ChatStreamConfig) -> dict:
+    result = _config_dict(r)
+    result["session_guidance"] = str(r.session_guidance or "")
+    return result
 
 
 def _iso(v) -> str:
@@ -129,10 +196,25 @@ def _content_block_dict(r: ContentBlockRule) -> dict:
 
 
 def _config_default(sid: str) -> dict:
-    return {"chat_stream_id": sid, "talk_value": 0.5, "mentioned_bot_reply": True,
-            "use_expression": True, "enable_expression_learning": True,
-            "enable_jargon_learning": True, "group_profile_mode": "off",
-            "planner_smooth": 3}
+    result = {
+        "chat_stream_id": sid,
+        "talk_value": 0.5,
+        "mentioned_bot_reply": True,
+        "use_expression": True,
+        "enable_expression_learning": True,
+        "enable_jargon_learning": True,
+        "group_profile_mode": "off",
+        "planner_smooth": 3,
+    }
+    result.update(_identity_summary(sid))
+    result.update(_guidance_summary(""))
+    return result
+
+
+def _config_default_detail(sid: str) -> dict:
+    result = _config_default(sid)
+    result["session_guidance"] = ""
+    return result
 
 
 @router.get("/block-rules")
@@ -283,121 +365,362 @@ def toggle_content_block_rule(rule_id: int, request: Request,
 
 @router.get("/chat-streams")
 def list_chat_streams(db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    """返回所有已知的 chat_stream_id，供局部规则下拉选择。"""
-    seen: set[str] = set()
-    # 1. 覆写表
-    for r in db.query(ChatStreamConfig).all():
-        seen.add(r.chat_stream_id)
-    # 2. ChatLog 群聊
-    for (sid,) in db.query(ChatLog.session_id).filter(
-        ChatLog.session_id.like("group_%")
-    ).distinct().all():
-        seen.add(_group_stream_id(_raw_group_id(sid)))
-    # 3. runtime
-    for sid in _runtime_snapshot():
-        seen.add(_group_stream_id(_raw_group_id(sid)))
-    return {"items": sorted(seen)}
+    """返回所有可无歧义管理的 canonical 会话 ID。"""
+    discovered = discover_chat_streams(
+        db,
+        runtime_snapshot=_runtime_snapshot(),
+    )
+    return {
+        "items": sorted(
+            item.chat_stream_id
+            for item in discovered
+            if item.platform and item.chat_type
+        ),
+    }
+
+
+def _discovery_metadata(item: DiscoveredChatStream) -> dict:
+    return {
+        "platform": item.platform,
+        "chat_type": item.chat_type,
+        "session_id": item.session_id,
+        "runtime_session_id": item.runtime_session_id,
+        "session_name": item.session_name,
+        "identity_status": item.identity_status,
+        "identity_conflict": item.identity_conflict,
+        "legacy_aliases": list(item.legacy_aliases),
+        "sources": list(item.sources),
+    }
+
+
+def _filter_config_items(
+    items: list[dict],
+    *,
+    search: str,
+    platform: str,
+    chat_type: str,
+    configured: int | None,
+) -> list[dict]:
+    normalized_search = str(search or "").strip().casefold()
+    normalized_platform = str(platform or "").strip().lower()
+    normalized_chat_type = str(chat_type or "").strip().lower()
+    if normalized_chat_type and normalized_chat_type not in {"group", "private"}:
+        raise HTTPException(status_code=422, detail="chat_type 只允许 group 或 private")
+    if configured not in {None, 0, 1}:
+        raise HTTPException(status_code=422, detail="configured 只允许 0 或 1")
+
+    result: list[dict] = []
+    for item in items:
+        if normalized_search:
+            searchable = " ".join((
+                str(item.get("chat_stream_id") or ""),
+                str(item.get("session_name") or ""),
+            )).casefold()
+            if normalized_search not in searchable:
+                continue
+        if normalized_platform and item.get("platform") != normalized_platform:
+            continue
+        if normalized_chat_type and item.get("chat_type") != normalized_chat_type:
+            continue
+        if configured is not None and bool(
+            item.get("session_guidance_configured")
+        ) is not bool(configured):
+            continue
+        result.append(item)
+    return result
 
 
 @router.get("/configs")
-def list_configs(search: str = "", page: int = 1, limit: int = 20, effective: int = 0,
-                 db: Session = Depends(get_db), _auth=Depends(verify_admin)):
+def list_configs(
+    search: str = "",
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    effective: int = 0,
+    platform: str = "",
+    chat_type: str = "",
+    configured: int | None = None,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    all_overrides = db.query(ChatStreamConfig).all()
+    discovered = discover_chat_streams(
+        db,
+        runtime_snapshot=_runtime_snapshot(),
+    )
+
+    discovery_by_id = {item.chat_stream_id: item for item in discovered}
+    for item in discovered:
+        for alias in item.legacy_aliases:
+            discovery_by_id.setdefault(alias, item)
+
     if effective:
-        stream_ids: set[str] = set()
+        canonical_rows: dict[str, ChatStreamConfig] = {}
+        for row in all_overrides:
+            try:
+                identity = parse_canonical_chat_stream_id(row.chat_stream_id)
+            except ChatStreamIdentityError:
+                continue
+            canonical_rows[identity.chat_stream_id] = row
 
-        # 1. ChatStreamConfig 覆写表
-        all_overrides = db.query(ChatStreamConfig).all()
-        for r in all_overrides:
-            stream_ids.add(r.chat_stream_id)
-
-        # 2. User 表里 group_* 开头的 ID
-        for u in db.query(User).filter(User.id.like("group_%")).all():
-            stream_ids.add(_group_stream_id(_raw_group_id(u.id)))
-
-        # 3. ChatLog 里出现过的群聊 session
-        for (sid,) in db.query(ChatLog.session_id).filter(
-            ChatLog.session_id.like("group_%")
-        ).distinct().all():
-            stream_ids.add(_group_stream_id(_raw_group_id(sid)))
-
-        # 4. runtime snapshot
-        runtime_snap = _runtime_snapshot()
-        for sid in runtime_snap:
-            stream_ids.add(_group_stream_id(_raw_group_id(sid)))
-
-        rows_by_id = {r.chat_stream_id: r for r in all_overrides}
-
-        items = []
-        for sid in sorted(stream_ids):
-            row = rows_by_id.get(sid)
-            if row:
-                cfg = _config_dict(row)
-                cfg["has_override"] = True
-                cfg["source"] = "db"
+        items: list[dict] = []
+        for stream in discovered:
+            row = canonical_rows.get(stream.chat_stream_id)
+            if row is not None:
+                config = _config_dict(row)
+                config["has_override"] = True
+                config["source"] = "db"
             else:
-                cfg = _config_default(sid)
-                cfg["has_override"] = False
-                cfg["source"] = "default"
-            items.append(cfg)
+                config = _config_default(stream.chat_stream_id)
+                config["has_override"] = False
+                config["source"] = "default"
+            config.update(_discovery_metadata(stream))
+            items.append(config)
+    else:
+        items = []
+        for row in sorted(all_overrides, key=lambda value: value.chat_stream_id):
+            config = _config_dict(row)
+            stream = discovery_by_id.get(row.chat_stream_id)
+            if stream is not None:
+                config.update(_discovery_metadata(stream))
+                config["chat_stream_id"] = row.chat_stream_id
+            items.append(config)
 
-        if search:
-            items = [x for x in items if search in x["chat_stream_id"]]
+    items = _filter_config_items(
+        items,
+        search=search,
+        platform=platform,
+        chat_type=chat_type,
+        configured=configured,
+    )
+    total = len(items)
+    page_items = items[(page - 1) * limit: page * limit]
+    return {"items": page_items, "total": total, "page": page}
 
-        total = len(items)
-        page_items = items[(page - 1) * limit: page * limit]
-        return {"items": page_items, "total": total, "page": page}
 
-    q = db.query(ChatStreamConfig)
-    if search:
-        q = q.filter(ChatStreamConfig.chat_stream_id.contains(search))
-    total = q.count()
-    rows = q.order_by(ChatStreamConfig.chat_stream_id).offset((page - 1) * limit).limit(limit).all()
-    return {"total": total, "page": page, "items": [_config_dict(r) for r in rows]}
+def _identity_http_error(exc: ChatStreamIdentityError) -> HTTPException:
+    return HTTPException(
+        status_code=422,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+def _resolve_upsert_identity(body: ConfigUpsert) -> ChatStreamIdentity:
+    try:
+        return resolve_chat_stream_identity(
+            platform=body.platform,
+            chat_type=body.chat_type,
+            session_id=body.session_id,
+        )
+    except ChatStreamIdentityError as exc:
+        raise _identity_http_error(exc) from exc
+
+
+def _resolve_dynamic_identity(chat_stream_id: str) -> ChatStreamIdentity:
+    try:
+        return parse_canonical_chat_stream_id(chat_stream_id)
+    except ChatStreamIdentityError as canonical_error:
+        canonical = canonicalize_legacy_chat_stream_id(chat_stream_id)
+        if canonical is None:
+            raise _identity_http_error(canonical_error) from canonical_error
+        try:
+            return parse_canonical_chat_stream_id(canonical)
+        except ChatStreamIdentityError as exc:
+            raise _identity_http_error(exc) from exc
+
+
+def _normalized_guidance_or_422(value: str) -> str:
+    try:
+        return normalize_session_guidance(value)
+    except SessionGuidanceValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+
+
+def _apply_config_update(
+    db: Session,
+    *,
+    identity: ChatStreamIdentity,
+    body: ConfigUpdate,
+    request: Request,
+) -> dict:
+    normalized_guidance = (
+        _normalized_guidance_or_422(body.session_guidance)
+        if body.session_guidance is not None
+        else None
+    )
+    normalized_group_profile_mode: str | None = None
+    if body.group_profile_mode is not None:
+        normalized_group_profile_mode = str(body.group_profile_mode).strip()
+        if normalized_group_profile_mode not in {"off", "preview", "on"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid group_profile_mode: {normalized_group_profile_mode}",
+            )
+
+    try:
+        row = db.query(ChatStreamConfig).filter(
+            ChatStreamConfig.chat_stream_id == identity.chat_stream_id,
+        ).first()
+        old_guidance = str(row.session_guidance or "") if row is not None else ""
+        if row is None:
+            row = ChatStreamConfig(chat_stream_id=identity.chat_stream_id)
+            db.add(row)
+
+        changed_fields: list[str] = []
+        safe_values: dict[str, object] = {}
+        int_fields = (
+            "mentioned_bot_reply",
+            "use_expression",
+            "enable_expression_learning",
+            "enable_jargon_learning",
+            "planner_smooth",
+        )
+        for field in ("talk_value",) + int_fields:
+            value = getattr(body, field, None)
+            if value is None:
+                continue
+            stored_value = int(value) if field in int_fields else value
+            setattr(row, field, stored_value)
+            changed_fields.append(field)
+            safe_values[field] = stored_value
+
+        if normalized_group_profile_mode is not None:
+            row.group_profile_mode = normalized_group_profile_mode
+            changed_fields.append("group_profile_mode")
+            safe_values["group_profile_mode"] = normalized_group_profile_mode
+        elif body.enable_group_profile is not None:
+            row.group_profile_mode = "on" if body.enable_group_profile else "off"
+            changed_fields.append("group_profile_mode")
+            safe_values["group_profile_mode"] = row.group_profile_mode
+
+        if normalized_guidance is not None:
+            row.session_guidance = normalized_guidance
+            row.session_guidance_updated_at = db_now_naive()
+            changed_fields.append("session_guidance")
+
+        new_guidance = (
+            normalized_guidance
+            if normalized_guidance is not None
+            else old_guidance
+        )
+        old_summary = _guidance_summary(old_guidance)
+        new_summary = _guidance_summary(new_guidance)
+        audit_detail = {
+            "chat_stream_id": identity.chat_stream_id,
+            "updated_fields": sorted(set(changed_fields)),
+            "config_values": safe_values,
+            "session_guidance_changed": (
+                normalized_guidance is not None
+                and old_guidance != normalized_guidance
+            ),
+            "old_chars": old_summary["session_guidance_chars"],
+            "old_sha256": old_summary["session_guidance_sha256"],
+            "new_chars": new_summary["session_guidance_chars"],
+            "new_sha256": new_summary["session_guidance_sha256"],
+        }
+        db.add(AdminAuditLog(
+            action="update_config",
+            target_type="config",
+            target_id=identity.chat_stream_id,
+            detail_json=json.dumps(
+                audit_detail,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            ip_address=client_ip(request),
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return _config_detail_dict(row)
+
+
+@router.put("/configs")
+def upsert_config(
+    body: ConfigUpsert,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    identity = _resolve_upsert_identity(body)
+    return _apply_config_update(
+        db,
+        identity=identity,
+        body=body,
+        request=request,
+    )
 
 
 @router.get("/configs/{chat_stream_id:path}")
 def get_config(chat_stream_id: str, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    row = db.query(ChatStreamConfig).filter(ChatStreamConfig.chat_stream_id == chat_stream_id).first()
+    identity = _resolve_dynamic_identity(chat_stream_id)
+    row = db.query(ChatStreamConfig).filter(
+        ChatStreamConfig.chat_stream_id == identity.chat_stream_id,
+    ).first()
     if not row:
-        return _config_default(chat_stream_id)
-    return _config_dict(row)
+        return _config_default_detail(identity.chat_stream_id)
+    return _config_detail_dict(row)
 
 
 @router.put("/configs/{chat_stream_id:path}")
-def update_config(chat_stream_id: str, body: ConfigUpdate, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    row = db.query(ChatStreamConfig).filter(ChatStreamConfig.chat_stream_id == chat_stream_id).first()
-    if not row:
-        row = ChatStreamConfig(chat_stream_id=chat_stream_id)
-        db.add(row)
-        db.flush()
-    updates = {}
-    int_fields = ("mentioned_bot_reply", "use_expression", "enable_expression_learning",
-                  "enable_jargon_learning", "planner_smooth")
-    for field in ("talk_value",) + int_fields:
-        val = getattr(body, field, None)
-        if val is not None:
-            setattr(row, field, int(val) if field in int_fields else val)
-            updates[field] = val
-    if body.group_profile_mode is not None:
-        mode = str(body.group_profile_mode).strip()
-        if mode not in ("off", "preview", "on"):
-            raise HTTPException(status_code=400, detail=f"invalid group_profile_mode: {mode}")
-        row.group_profile_mode = mode
-        updates["group_profile_mode"] = mode
-    elif body.enable_group_profile is not None:
-        row.group_profile_mode = "on" if body.enable_group_profile else "off"
-        updates["group_profile_mode"] = row.group_profile_mode
-    db.commit()
-    audit(db, "update_config", "config", chat_stream_id, updates, ip_address=client_ip(request))
-    return _config_dict(row)
+def update_config(
+    chat_stream_id: str,
+    body: ConfigUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    identity = _resolve_dynamic_identity(chat_stream_id)
+    return _apply_config_update(
+        db,
+        identity=identity,
+        body=body,
+        request=request,
+    )
 
 
 @router.delete("/configs/{chat_stream_id:path}")
-def delete_config(chat_stream_id: str, request: Request, db: Session = Depends(get_db), _auth=Depends(verify_admin)):
-    row = db.query(ChatStreamConfig).filter(ChatStreamConfig.chat_stream_id == chat_stream_id).first()
+def delete_config(
+    chat_stream_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _auth=Depends(verify_admin),
+):
+    identity = _resolve_dynamic_identity(chat_stream_id)
+    row = db.query(ChatStreamConfig).filter(
+        ChatStreamConfig.chat_stream_id == identity.chat_stream_id,
+    ).first()
     if not row:
         raise HTTPException(status_code=404, detail="Config not found")
-    db.delete(row)
-    db.commit()
-    audit_request(db, request, "delete_config", "config", chat_stream_id)
+    try:
+        old_summary = _guidance_summary(row.session_guidance)
+        audit_detail = {
+            "chat_stream_id": identity.chat_stream_id,
+            "session_guidance_changed": bool(
+                old_summary["session_guidance_configured"],
+            ),
+            "old_chars": old_summary["session_guidance_chars"],
+            "old_sha256": old_summary["session_guidance_sha256"],
+            "new_chars": 0,
+            "new_sha256": "",
+        }
+        db.delete(row)
+        db.add(AdminAuditLog(
+            action="delete_config",
+            target_type="config",
+            target_id=identity.chat_stream_id,
+            detail_json=json.dumps(
+                audit_detail,
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            ip_address=client_ip(request),
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return {"ok": True}

@@ -187,12 +187,14 @@ async def group_timing_timer(
                     sender_id=timer_sender_id,
                     bot_name=timer_bot_name,
                     bot_aliases=timer_bot_aliases,
+                    is_super_user=False,
                 )
                 bridge_meta = {
                     "chat_type": "group",
                     "user_id": group_user_id,
                     "session_id": group_user_id,
                     "is_group": True,
+                    "is_superuser": False,
                     "history_header": memory_header,
                     "history_messages": history_messages,
                     "group_id": req.group_id,

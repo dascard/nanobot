@@ -6,14 +6,20 @@ from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 from core.time_utils import db_now_naive
+from core.tool_contracts.ai_daily import (
+    AiDailyRequest,
+    AiDailyRequestError,
+    ai_daily_parameters_schema,
+    parse_ai_daily_request,
+)
 
 from .schema import fallback_digest
 from .pipeline.collect import collect_sources
-from .pipeline.normalize import normalize_items, filter_recent
+from .pipeline.normalize import filter_for_ai_daily_request, normalize_items
 from .pipeline.dedup import dedup_items
 from .pipeline.rank import rank_items
 from .pipeline.digest import build_digest_deterministic
-from . import cache
+from .. import runtime_cache
 
 logger = logging.getLogger("nanobot.news_daily")
 
@@ -226,11 +232,11 @@ def _render_no_new_digest(query: str, mode: str, skipped_seen: int) -> str:
     })
 
 
-def run_news_search_auto(query: str, limit: int = 8) -> str:
+def run_news_search_auto(request: AiDailyRequest) -> str:
     """对外唯一入口：quality → daily fallback → fallback_digest。"""
     # 1. quality (LLM)
     try:
-        html = run_pipeline(query, mode="quality", limit=limit)
+        html = run_pipeline(request, mode="quality")
         if _html_looks_usable(html):
             return html
         raise FallbackNeeded("quality html not usable")
@@ -239,7 +245,7 @@ def run_news_search_auto(query: str, limit: int = 8) -> str:
 
     # 2. daily (EventCluster)
     try:
-        html = run_pipeline(query, mode="daily", limit=limit)
+        html = run_pipeline(request, mode="daily")
         if _html_looks_usable(html):
             return html
         raise FallbackNeeded("daily html not usable")
@@ -248,22 +254,31 @@ def run_news_search_auto(query: str, limit: int = 8) -> str:
 
     # 3. ultimate fallback
     from ..render import render_html
-    return render_html(fallback_digest(query, "管线无法生成有效日报", "quality"))
+    return render_html(
+        fallback_digest(request.query, "管线无法生成有效日报", "quality")
+    )
 
 
-def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
+def run_pipeline(request: AiDailyRequest, mode: str = "quality") -> str:
     """主 Pipeline——quality: LLM 摘要，daily: EventCluster 聚类。"""
     from ..render import render_html as _render
     t0 = _time.time()
+    query = request.query
+    limit = request.max_results
+    reference_now = request.reference_time_naive
 
     providers = _get_providers(mode)
-    items = collect_sources(providers, limit_per_source=8, timeout=10)
+    items = collect_sources(
+        providers,
+        limit_per_source=8,
+        timeout=10,
+    )
     logger.info("[daily] collect: %d items in %.1fs", len(items), _time.time() - t0)
 
     items = normalize_items(items)
-    items = filter_recent(items, hours=72)
+    items = filter_for_ai_daily_request(items, request)
     items = dedup_items(items)
-    items = rank_items(items)
+    items = rank_items(items, now=reference_now)
     try:
         from core.ai_daily_ingest import best_effort_filter_new_ai_daily_items
 
@@ -275,6 +290,7 @@ def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
             return _render_no_new_digest(query, mode, skipped_seen)
     except Exception as e:
         logger.warning("[daily] history dedup unavailable: %s", e)
+    items = items[:limit]
 
     if mode == "daily":
         from .pipeline.normalize_v2 import normalize_articles
@@ -282,13 +298,31 @@ def run_pipeline(query: str, mode: str = "quality", limit: int = 10) -> str:
         from .pipeline.cluster import cluster_articles
         from .pipeline.diversify import score_clusters, select_diverse_clusters, build_daily_report
 
-        now = db_now_naive()
+        now = reference_now
         articles = normalize_articles(items)
-        articles = filter_fresh_articles(articles, now)
+        articles = filter_fresh_articles(
+            articles,
+            now,
+            max_age_hours=request.max_age_hours,
+        )
         clusters = cluster_articles(articles)
         clusters = score_clusters(clusters, now)
-        clusters = select_diverse_clusters(clusters, now) if clusters else []
-        report = build_daily_report(clusters, now)
+        clusters = (
+            select_diverse_clusters(
+                clusters,
+                now,
+                max_age_hours=request.max_age_hours,
+                limit=request.max_results,
+            )
+            if clusters
+            else []
+        )
+        report = build_daily_report(
+            clusters,
+            now,
+            max_age_hours=request.max_age_hours,
+            limit=request.max_results,
+        )
         digest = _report_to_digest(report, articles)
         logger.info("[daily] v2: %d articles → %d clusters → %d selected in %.1fs",
                      len(articles), len(clusters), len(report.highlights), _time.time() - t0)
@@ -348,38 +382,28 @@ class NewsDailyTool(BaseTool):
         return ExecutionMode.DIRECT
 
     def get_parameters_schema(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "日报请求，例如：今日 AI 日报"},
-                "max_results": {"type": "integer", "default": 8},
-                "refresh": {"type": "boolean", "default": False},
-            },
-            "required": ["query"],
-        }
+        return ai_daily_parameters_schema()
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
-        query = args.get("query", "").strip()
-        if not query:
-            return ToolResult(error="Missing 'query' argument")
+        try:
+            request = parse_ai_daily_request(args)
+        except AiDailyRequestError as exc:
+            return ToolResult(error=f"Invalid ai_daily arguments: {exc}")
 
-        limit = int(args.get("max_results", 8) or 8)
-        refresh = bool(args.get("refresh", False))
-
-        ck = cache.make_key(query, "quality", limit, "html")
-        if not refresh:
-            cached = cache.get(ck)
+        cache_key = runtime_cache.make_ai_daily_cache_key(request, mode="quality")
+        if not request.bypass_cache:
+            cached = runtime_cache._get_cached_news_result(cache_key)
             if cached:
                 logger.info("[daily] cache HIT")
                 return ToolResult(output=cached, exit_code=0)
 
         try:
             import asyncio
-            result = await asyncio.to_thread(run_news_search_auto, query, limit)
+            result = await asyncio.to_thread(run_news_search_auto, request)
         except Exception as e:
             logger.exception("[daily] auto pipeline failed")
             from ..render import render_html
-            result = render_html(fallback_digest(query, str(e)[:160], "quality"))
+            result = render_html(fallback_digest(request.query, str(e)[:160], "quality"))
 
-        cache.set(ck, result, "quality")
+        runtime_cache._store_cached_news_result(cache_key, result)
         return ToolResult(output=result, exit_code=0)

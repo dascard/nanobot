@@ -11,6 +11,11 @@ from core.time_utils import db_now_naive, to_db_naive
 logger = logging.getLogger("nanobot.tracing")
 
 SENSITIVE_KEY_PARTS = ("api_key", "apikey", "authorization", "password", "secret", "token")
+SAFE_NUMERIC_TOKEN_KEYS = frozenset({
+    "message_token_estimate",
+    "tool_schema_token_estimate",
+    "token_estimate",
+})
 MAX_PREVIEW_CHARS = 2000
 MAX_WEB_SEARCH_PREVIEW_CHARS = 40000
 
@@ -38,7 +43,16 @@ def _redact(value: Any) -> Any:
         redacted = {}
         for key, item in value.items():
             key_str = str(key)
-            if any(part in key_str.lower() for part in SENSITIVE_KEY_PARTS):
+            key_lower = key_str.lower()
+            is_safe_numeric_metric = (
+                key_lower in SAFE_NUMERIC_TOKEN_KEYS
+                and isinstance(item, int)
+                and not isinstance(item, bool)
+            )
+            if (
+                not is_safe_numeric_metric
+                and any(part in key_lower for part in SENSITIVE_KEY_PARTS)
+            ):
                 redacted[key_str] = "[REDACTED]"
             else:
                 redacted[key_str] = _redact(item)

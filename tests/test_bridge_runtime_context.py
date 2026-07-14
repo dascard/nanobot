@@ -1,4 +1,12 @@
-def test_runtime_context_includes_current_message_id():
+import json
+
+
+def _runtime_facts(text: str) -> dict:
+    body = text.split("<runtime_context>", 1)[1].split("</runtime_context>", 1)[0]
+    return json.loads(body)
+
+
+def test_bridge_runtime_context_delegates_to_canonical_json():
     from nanobot_kt.bridge import NanobotBridge
 
     bridge = NanobotBridge()
@@ -14,10 +22,13 @@ def test_runtime_context_includes_current_message_id():
         },
     )
 
-    assert "current_message_id: msg-1" in text
+    facts = _runtime_facts(text)
+    assert facts["chat_type"] == "group"
+    assert facts["group_id"] == "1001"
+    assert "current_message_id" not in facts
 
 
-def test_runtime_context_uses_source_message_id_fallback():
+def test_bridge_runtime_context_keeps_source_message_id_out_of_system_facts():
     from nanobot_kt.bridge import NanobotBridge
 
     bridge = NanobotBridge()
@@ -33,7 +44,9 @@ def test_runtime_context_uses_source_message_id_fallback():
         },
     )
 
-    assert "current_message_id: msg-source" in text
+    facts = _runtime_facts(text)
+    assert facts["chat_type"] == "group"
+    assert "current_message_id" not in facts
 
 
 def test_bridge_clears_stale_controller_events_before_new_request():

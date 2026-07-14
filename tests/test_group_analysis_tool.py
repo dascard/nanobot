@@ -466,9 +466,11 @@ def test_group_analysis_tool_execute_returns_rich_html(monkeypatch):
     result = run_async(tool.execute({"group_id": "123", "instructions": "最近2小时"}))
 
     assert result.success
-    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
     payload = json.loads(result.output)
-    html = payload[REPLY_MARKER]["content"]
+    rich = payload["NANOBOT_RICH_OUTPUT"]
+    assert rich["report_kind"] == "group_analysis"
+    assert rich["content_type"] == "text/html"
+    html = rich["html"]
     assert "<!DOCTYPE html>" in html
     assert "group-analysis-report" in html
     assert "消息总数" in html

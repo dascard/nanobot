@@ -84,8 +84,82 @@ def test_record_request_persists_request_lint_fields(db_session):
     lint = json.loads(row.request_lint_json)
     assert lint["actual_sent_tools"] == ["reply"]
     assert lint["runtime_enabled_tools"] == ["reply"]
+    assert lint["payload_metrics"]["message_token_estimate"] > 0
+    assert lint["payload_metrics"]["tool_schema_token_estimate"] > 0
+    assert lint["payload_metrics"]["token_estimate"] == (
+        lint["payload_metrics"]["message_token_estimate"]
+        + lint["payload_metrics"]["tool_schema_token_estimate"]
+    )
+    assert len(lint["payload_metrics"]["prompt_sha256"]) == 64
     sources = json.loads(row.message_sources_json)
     assert sources[0]["source"] == "runtime_tool"
+
+
+def test_linter_payload_metrics_use_only_actual_messages_and_tools():
+    from core.llm_request_linter import lint_llm_request
+
+    messages = [{"role": "user", "content": "第一笔请求"}]
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "reply",
+            "description": "发送回复",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }]
+    first = lint_llm_request({
+        "model": "model-a",
+        "temperature": 0.1,
+        "messages": messages,
+        "tools": tools,
+    })["payload_metrics"]
+    provider_only_change = lint_llm_request({
+        "model": "model-b",
+        "temperature": 1.0,
+        "stream": True,
+        "messages": messages,
+        "tools": tools,
+    })["payload_metrics"]
+    message_change = lint_llm_request({
+        "messages": [*messages, {"role": "assistant", "content": "第二轮"}],
+        "tools": tools,
+    })["payload_metrics"]
+    tool_change = lint_llm_request({
+        "messages": messages,
+        "tools": [{
+            **tools[0],
+            "function": {
+                **tools[0]["function"],
+                "description": "变更后的长工具说明" * 50,
+            },
+        }],
+    })["payload_metrics"]
+
+    assert provider_only_change == first
+    assert message_change["message_token_estimate"] != first["message_token_estimate"]
+    assert message_change["tool_schema_token_estimate"] == first["tool_schema_token_estimate"]
+    assert message_change["prompt_sha256"] != first["prompt_sha256"]
+    assert tool_change["message_token_estimate"] == first["message_token_estimate"]
+    assert tool_change["tool_schema_token_estimate"] != first["tool_schema_token_estimate"]
+    assert tool_change["prompt_sha256"] != first["prompt_sha256"]
+
+    missing_tools = lint_llm_request({"messages": messages})["payload_metrics"]
+    none_tools = lint_llm_request({
+        "messages": messages,
+        "tools": None,
+    })["payload_metrics"]
+    empty_tools = lint_llm_request({
+        "messages": messages,
+        "tools": [],
+    })["payload_metrics"]
+    assert missing_tools == none_tools == empty_tools
+    assert missing_tools["tool_schema_token_estimate"] == 0
+
+    tuple_payload = lint_llm_request({
+        "messages": tuple(messages),
+        "tools": tuple(tools),
+    })["payload_metrics"]
+    assert tuple_payload == first
 
 
 def test_linter_accepts_schema_authoritative_runtime_tool():

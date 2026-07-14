@@ -288,7 +288,12 @@ async def test_private_casual_returns_template_or_fallback_without_guardrail_or_
 async def test_reply_now_uses_merged_messages_and_files_for_owner_continue():
     from api.chat_pre_bridge_decision import ChatPreBridgeContinue, resolve_chat_pre_bridge_decision
 
-    decision = SimpleNamespace(action="reply_now", effort="deep", reason="需要回复")
+    decision = SimpleNamespace(
+        action="reply_now",
+        effort="deep",
+        runtime_preset="lightweight",
+        reason="需要回复",
+    )
     store = FakeStore()
     task = asyncio.create_task(asyncio.to_thread(lambda: {"status": "safe"}))
     store.snapshot_result = chat_private_buffer.PrivateBufferSnapshot(
@@ -315,6 +320,7 @@ async def test_reply_now_uses_merged_messages_and_files_for_owner_continue():
     assert result.final_query == "第一句\n---\n第二句"
     assert result.final_files == ["a.png", "b.png"]
     assert result.private_decision is decision
+    assert result.private_decision.runtime_preset == "lightweight"
     assert result.private_timing_meta == {"action": "reply_now", "effort": "deep", "reason": "需要回复"}
     assert result.guardrail_status == "silent"
     assert result.classifier_ran is True

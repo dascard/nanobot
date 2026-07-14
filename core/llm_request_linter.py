@@ -46,7 +46,7 @@ def _tool_name(tool: Any) -> str:
 def extract_actual_sent_tools(request: dict[str, Any]) -> list[str]:
     """从 OpenAI-compatible payload 中提取实际发送的 tools 名称。"""
     tools = request.get("tools") if isinstance(request, dict) else []
-    if not isinstance(tools, list):
+    if not isinstance(tools, (list, tuple)):
         return []
     names = [_tool_name(tool) for tool in tools]
     return [name for name in names if name]
@@ -200,8 +200,25 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
     返回结构会直接写入 LLMApiRequestLog.request_lint_json。
     """
     payload = request if isinstance(request, dict) else {}
-    raw_messages = payload.get("messages") or []
-    messages = [msg for msg in raw_messages if isinstance(msg, dict)] if isinstance(raw_messages, list) else []
+    raw_message_value = payload.get("messages") or []
+    raw_messages = (
+        list(raw_message_value)
+        if isinstance(raw_message_value, (list, tuple))
+        else []
+    )
+    messages = [msg for msg in raw_messages if isinstance(msg, dict)]
+    raw_tool_value = payload.get("tools") or []
+    raw_tools = (
+        list(raw_tool_value)
+        if isinstance(raw_tool_value, (list, tuple))
+        else []
+    )
+    from core.prompt_v2.request_metrics import calculate_request_metrics
+
+    payload_metrics = calculate_request_metrics(
+        messages=raw_messages,
+        tools=raw_tools,
+    )
     actual_sent_tools = extract_actual_sent_tools(payload)
     runtime_enabled, runtime_disabled = _extract_runtime_tool_notes(messages)
     if not runtime_enabled and _has_schema_authoritative_runtime_tool(messages):
@@ -363,4 +380,5 @@ def lint_llm_request(request: Any) -> dict[str, Any]:
         "runtime_enabled_tools": runtime_enabled,
         "runtime_disabled_tools": runtime_disabled,
         "framework_injected_tools": sorted(framework_markers),
+        "payload_metrics": payload_metrics.to_dict(),
     }

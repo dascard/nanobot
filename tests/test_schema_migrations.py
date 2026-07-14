@@ -1,5 +1,6 @@
 import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 
@@ -61,6 +62,55 @@ def test_schema_migrations_records_applied_versions():
         rows = conn.execute(text("SELECT version FROM schema_migrations ORDER BY version")).fetchall()
 
     assert [row[0] for row in rows] == sorted(version for version, _, _ in MIGRATIONS)
+
+
+def test_session_guidance_migrations_are_registered_in_dependency_order():
+    from core.schema_migrations import (
+        MIGRATIONS,
+        _CHAT_STREAM_IDENTITY_VERSION,
+        _SESSION_GUIDANCE_COLUMNS_VERSION,
+    )
+
+    versions = [version for version, _, _ in MIGRATIONS]
+
+    assert versions.count(_SESSION_GUIDANCE_COLUMNS_VERSION) == 1
+    assert versions.count(_CHAT_STREAM_IDENTITY_VERSION) == 1
+    assert versions.index(_SESSION_GUIDANCE_COLUMNS_VERSION) < versions.index(
+        _CHAT_STREAM_IDENTITY_VERSION
+    )
+
+
+def test_non_sqlite_identity_migration_does_not_require_sqlite_snapshot(
+    monkeypatch,
+):
+    from core import schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE chat_stream_configs ("
+            "chat_stream_id TEXT PRIMARY KEY, talk_value FLOAT DEFAULT 0.5)"
+        ))
+        conn.execute(text(
+            "INSERT INTO chat_stream_configs(chat_stream_id) VALUES ('group_123')"
+        ))
+    engine.url = make_url("postgresql://user:password@example.invalid/nanobot")
+    monkeypatch.setattr(
+        schema_migrations,
+        "create_sqlite_snapshot",
+        lambda *_args, **_kwargs: pytest.fail("非 SQLite 不应创建文件快照"),
+    )
+
+    try:
+        schema_migrations.run_schema_migrations(engine)
+        with engine.connect() as conn:
+            stored_id = conn.execute(text(
+                "SELECT chat_stream_id FROM chat_stream_configs"
+            )).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert stored_id == "qq:123:group"
 
 
 def test_proactive_outreach_log_table_is_created_by_migration():

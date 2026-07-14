@@ -68,8 +68,14 @@ def build_identity_vars(
     sender_id: object = "",
     bot_name: object = "",
     bot_aliases: object = None,
+    is_super_user: bool | None = None,
 ) -> dict[str, str]:
     normalized_sender_id = normalize_user_id(sender_id)
+    authorization_fact = (
+        is_super_user_id(normalized_sender_id)
+        if is_super_user is None
+        else is_super_user is True
+    )
     aliases = bot_aliases or _configured_aliases()
     if isinstance(aliases, (list, tuple, set)):
         alias_text = "\n".join(str(x) for x in aliases if str(x).strip())
@@ -81,7 +87,7 @@ def build_identity_vars(
         alias_text = name
     return {
         "sender_id": normalized_sender_id or "未提供",
-        "is_super_user": "true" if is_super_user_id(normalized_sender_id) else "false",
+        "is_super_user": "true" if authorization_fact else "false",
         "character_name": name,
         "name_hint": name,
         "alias_names": alias_text,

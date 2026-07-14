@@ -179,6 +179,7 @@ async def list_tools(chat_type: str = "group", group_id: str = "",
             "group_default": resolve_tool_default(name, "group", db=db),
             "lightweight_default": resolve_lightweight_default(name, db=db),
             "force_enabled": td.force_enabled,
+            "force_disabled": td.force_disabled,
             "force_disabled_group": td.force_disabled_group,
             "description": td.description,
             "configured_enabled": configured_enabled.get(name, False),
@@ -476,6 +477,8 @@ def update_tool_defaults(tool_name: str, body: ToolUpdateBody,
     td = get_tool_def(tool_name)
     if not td:
         raise HTTPException(404, f"unknown tool: {tool_name}")
+    if td.force_disabled:
+        raise HTTPException(400, f"{tool_name} is force_disabled, cannot change defaults")
 
     prefix = f"tool.defaults.{tool_name}"
     updates = {}
@@ -554,6 +557,8 @@ def set_tool_override(tool_name: str, body: ToolOverrideBody,
         raise HTTPException(404, f"unknown tool: {tool_name}")
     if td.force_enabled:
         raise HTTPException(400, f"{tool_name} is force_enabled, cannot override")
+    if td.force_disabled:
+        raise HTTPException(400, f"{tool_name} is force_disabled, cannot override")
 
     row = db.query(ToolOverride).filter(
         ToolOverride.tool_name == tool_name,

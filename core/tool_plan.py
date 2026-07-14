@@ -6,14 +6,15 @@ ToolPlan 是运行时工具事实源：prompt、API tools schema、执行前校�
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import inspect
 import json
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import Any
-from collections.abc import Iterator
 
 from core.runtime_tool_service import build_runtime_tool_prompt, resolve_effective_tools
 from core.tool_schema_preview import build_effective_tool_schemas
@@ -39,6 +40,32 @@ def _stable_sha256(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def normalize_wire_tool_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """把管理端 schema 收窄为 OpenAI-compatible wire 形态。"""
+
+    if not isinstance(schema, dict):
+        raise ValueError("tool schema must be an object")
+    if schema.get("type") != "function":
+        raise ValueError("tool schema type must be function")
+    function = schema.get("function")
+    if not isinstance(function, dict):
+        raise ValueError("tool schema function must be an object")
+    name = str(function.get("name") or "").strip()
+    if not name:
+        raise ValueError("tool schema function.name required")
+    parameters = function.get("parameters")
+    if not isinstance(parameters, dict):
+        raise ValueError(f"tool schema parameters must be an object: {name}")
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": str(function.get("description") or ""),
+            "parameters": copy.deepcopy(parameters),
+        },
+    }
+
+
 def _build_effective_tool_schemas(enabled: dict[str, bool], db: Any = None) -> list[dict[str, Any]]:
     if db is None:
         return build_effective_tool_schemas(enabled)
@@ -60,7 +87,7 @@ class ToolPlan:
     enabled: dict[str, bool]
     disabled: dict[str, str]
     sent_tool_names: frozenset[str]
-    sent_tool_schemas: tuple[dict[str, Any], ...]
+    _sent_tool_schemas: tuple[dict[str, Any], ...] = field(repr=False)
     executable_tool_names: frozenset[str]
     runtime_tool_prompt: str
     sha256: str
@@ -75,6 +102,12 @@ class ToolPlan:
     def sent_tools(self) -> list[str]:
         """兼容旧 FinalToolSet 调用方。"""
         return sorted(self.sent_tool_names)
+
+    @property
+    def sent_tool_schemas(self) -> tuple[dict[str, Any], ...]:
+        """返回请求级 wire schema 的防御性副本。"""
+
+        return tuple(copy.deepcopy(schema) for schema in self._sent_tool_schemas)
 
     def can_execute(self, tool_name: str) -> bool:
         return str(tool_name or "").strip() in self.executable_tool_names
@@ -106,9 +139,13 @@ class ToolPlan:
             schemas = list(tool_schemas)
         else:
             schemas = _build_effective_tool_schemas(enabled_map, db=db)
-        sent_schemas = tuple(
-            dict(tool)
+        normalized_schemas = tuple(
+            normalize_wire_tool_schema(tool)
             for tool in schemas
+        )
+        sent_schemas = tuple(
+            tool
+            for tool in normalized_schemas
             if _tool_name(tool) in sent_names
         )
         executable_names = frozenset(sent_names)
@@ -125,7 +162,7 @@ class ToolPlan:
             enabled=enabled_map,
             disabled=disabled_map,
             sent_tool_names=sent_names,
-            sent_tool_schemas=sent_schemas,
+            _sent_tool_schemas=sent_schemas,
             executable_tool_names=executable_names,
             runtime_tool_prompt=runtime_prompt,
             sha256=sha256,

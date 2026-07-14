@@ -733,6 +733,13 @@ class ChatStreamConfig(Base):
     enable_jargon_learning = Column(Integer, default=1)
     group_profile_mode = Column(String, default="off")  # off/preview/on
     planner_smooth = Column(Integer, default=3)
+    session_guidance = Column(
+        Text,
+        default="",
+        server_default=text("''"),
+        nullable=False,
+    )
+    session_guidance_updated_at = Column(DateTime, nullable=True)
     meta_json = Column(Text, default="{}")
     created_at = Column(DateTime, default=datetime.now)
 

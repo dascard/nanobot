@@ -250,6 +250,11 @@ class TestClassifierRouteProviderResolution:
         default_dir = tmp_path / "prompts_v2"
         task_path = default_dir / "tasks" / f"{route_key}.md"
         task_path.parent.mkdir(parents=True)
+        task_body = {
+            "timing_gate": "V2 判定: {{ pending_text }} / {{ bot_name }}",
+            "private_decision": "V2 私聊判定",
+            "classifier_legacy": "V2 兼容: {{ system_prompt }} / {{ message }}",
+        }[route_key]
         task_path.write_text(
             f"""---
 name: Timing Gate
@@ -257,7 +262,7 @@ version: 1
 kind: task
 tool_name: {route_key}
 ---
-V2 判定: {{{{ pending_text }}}} / {{{{ bot_name }}}}
+{task_body}
 """,
             encoding="utf-8",
         )
@@ -308,10 +313,17 @@ V2 判定: {{{{ pending_text }}}} / {{{{ bot_name }}}}
         ) == "ok"
 
         messages = captured["payload"]["messages"]
-        assert "V2 判定: ping" in messages[0]["content"]
+        if route_key in {"timing_gate", "classifier_legacy"}:
+            assert "ping" not in messages[0]["content"]
+            assert "TaskPayload" in messages[0]["content"]
+            assert messages[1] == {"role": "user", "content": "ping"}
+            assert sum("ping" in str(message.get("content") or "") for message in messages) == 1
+        else:
+            assert messages[0] == {"role": "system", "content": "legacy system"}
         assert [m["role"] for m in messages] == ["system", "user"]
         assert messages[1]["content"] == "ping"
-        assert "legacy system" not in json.dumps(messages, ensure_ascii=False)
+        if route_key == "timing_gate":
+            assert "legacy system" not in json.dumps(messages, ensure_ascii=False)
         assert captured["payload"]["enable_thinking"] is False
         assert captured["payload"]["thinking"] == {"type": "disabled"}
 

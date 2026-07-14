@@ -143,11 +143,38 @@ def _join_context_headers(*parts: str) -> str:
     return "\n".join(part for part in (str(x or "").strip() for x in parts) if part)
 
 
+def _build_transient_rollup_summary(
+    *,
+    session_id: str,
+    user_id: str,
+    chat_type: str,
+    summary_text: str,
+    pending,
+    raw_window_start_turn_id: int,
+):
+    """构造只用于只读预览渲染、不会挂入 ORM Session 的摘要对象。"""
+    from core.database import RollingSessionSummary
+
+    return RollingSessionSummary(
+        session_id=session_id,
+        user_id=user_id,
+        chat_type=chat_type,
+        status="active",
+        summary_kind="deterministic_fallback",
+        summary_text=summary_text,
+        covered_from_turn_id=int(pending[0].id or 0),
+        covered_until_turn_id=int(pending[-1].id or 0),
+        source_turn_count=len(pending),
+        raw_window_start_turn_id=raw_window_start_turn_id,
+    )
+
+
 def build_session_memory(
     db, session_id: str, user_id: str = "",
     max_per_msg: int = 300, max_total: int = 4000,
     is_group: bool = False, group_id: str = "",
     current_user_input: str = "",
+    read_only: bool = False,
 ) -> tuple[str, list[dict], dict]:
     """从 ConversationTurn 构建 rolling summary + recent raw window。"""
     from app.session_memory.renderer import render_rolling_summary_context
@@ -184,6 +211,7 @@ def build_session_memory(
         "mid_term_context_turn_ids": [],
         "mid_term_context_chars": 0,
         "rolling_summary_enabled": True,
+        "rolling_summary_read_only": read_only,
         "rolling_summary_injected": False,
         "rolling_summary_id": 0,
         "rolling_summary_covered_until_turn_id": 0,
@@ -208,6 +236,7 @@ def build_session_memory(
         db,
         session_id,
         after_clear_at=history_clear_at,
+        mutate_stale=not read_only,
     )
     last_covered_id = int(active_summary.covered_until_turn_id or 0) if active_summary else 0
 
@@ -249,9 +278,20 @@ def build_session_memory(
                 recent_raw_turn_ids=raw_debug.get("raw_window_turn_ids") or [],
                 raw_window_start_turn_id=raw_start_id,
                 current_user_input=current_user_input,
+                after_clear_at=history_clear_at,
+                dry_run=read_only,
             )
             if rollup_result.summary is not None:
                 active_summary = rollup_result.summary
+            elif read_only and rollup_result.summary_text:
+                active_summary = _build_transient_rollup_summary(
+                    session_id=session_id,
+                    user_id=user_id,
+                    chat_type=chat_type,
+                    summary_text=rollup_result.summary_text,
+                    pending=pending,
+                    raw_window_start_turn_id=raw_start_id,
+                )
             debug["rolling_summary_skipped_reason"] = rollup_result.skipped_reason
             debug["rolling_summary_error"] = rollup_result.error
         except Exception as exc:
@@ -331,6 +371,7 @@ def _build_profile_section(
     *,
     current_user_input: str = "",
     recent_messages: list[dict] | None = None,
+    allow_model_calls: bool = True,
 ) -> tuple[str, dict]:
     """读取 group_profile_mode，生成群体记忆上下文并返回 debug 信息。
 
@@ -352,6 +393,7 @@ def _build_profile_section(
             group_id=group_id,
             current_user_input=current_user_input,
             recent_messages=recent_messages or [],
+            allow_model_calls=allow_model_calls,
         )
         debug.update(result.debug)
         debug["group_profile_injected"] = bool(result.debug.get("group_memory_injected"))
@@ -601,6 +643,7 @@ def build_chat_context(
     group_id: str = "",
     exclude_message_ids: list[str] | None = None,
     current_user_input: str = "",
+    read_only: bool = False,
 ) -> tuple[str, list[dict], dict]:
     """构建真实回复链路使用的统一上下文。
 
@@ -617,6 +660,7 @@ def build_chat_context(
             max_total=max_total,
             is_group=False,
             current_user_input=current_user_input,
+            read_only=read_only,
         )
         debug["context_source"] = "conversation_turn"
         return header, messages, debug
@@ -643,6 +687,7 @@ def build_chat_context(
             group_id,
             current_user_input=current_user_input,
             recent_messages=messages,
+            allow_model_calls=not read_only,
         )
     debug.update(profile_debug)
     summary_header = ""
@@ -662,6 +707,7 @@ def build_chat_context(
             db,
             session_id,
             after_clear_at=history_clear_at,
+            mutate_stale=not read_only,
         )
         last_covered_id = int(active_summary.covered_until_turn_id or 0) if active_summary else 0
         max_turns, max_tokens = raw_window_limits("group", max_total=max_total)
@@ -694,9 +740,20 @@ def build_chat_context(
                 recent_raw_turn_ids=raw_debug.get("raw_window_turn_ids") or [],
                 raw_window_start_turn_id=raw_start_id,
                 current_user_input=current_user_input,
+                after_clear_at=history_clear_at,
+                dry_run=read_only,
             )
             if rollup_result.summary is not None:
                 active_summary = rollup_result.summary
+            elif read_only and rollup_result.summary_text:
+                active_summary = _build_transient_rollup_summary(
+                    session_id=session_id,
+                    user_id=user_id,
+                    chat_type="group",
+                    summary_text=rollup_result.summary_text,
+                    pending=pending,
+                    raw_window_start_turn_id=raw_start_id,
+                )
             skipped_reason = rollup_result.skipped_reason
             rollup_error = rollup_result.error
         else:
@@ -706,6 +763,7 @@ def build_chat_context(
         summary_header = render_rolling_summary_context(active_summary)
         debug.update({
             "rolling_summary_enabled": True,
+            "rolling_summary_read_only": read_only,
             "rolling_summary_source": "conversation_turn",
             "rolling_summary_scope": "bot_participation",
             "rolling_summary_kind": (

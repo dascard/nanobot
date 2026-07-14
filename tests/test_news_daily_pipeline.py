@@ -369,6 +369,16 @@ class TestFilterFreshArticles:
         assert len(kept) == 1
         assert kept[0].id == "a1"
 
+    def test_explicit_week_window_keeps_six_day_old_article(self):
+        now = _now_utc()
+        articles = [
+            make_article("a1", published_at=now - timedelta(days=6)),
+        ]
+
+        kept = filter_fresh_articles(articles, now, max_age_hours=168)
+
+        assert kept == articles
+
 
 class TestCanBeTopStory:
     def test_recent_multi_source_eligible(self):
@@ -645,6 +655,47 @@ class TestSelectDiverseClusters:
         selected = select_diverse_clusters([old, recent], now)
         assert len(selected) == 1
         assert selected[0].id == "c2"
+
+    def test_explicit_week_window_keeps_six_day_old_cluster(self):
+        now = _now_utc()
+        article = make_article(
+            "week-old",
+            "Week Old News",
+            published_at=now - timedelta(days=6),
+        )
+        cluster = make_cluster(
+            "week-cluster",
+            articles=[article],
+            latest_seen=now - timedelta(days=6),
+        )
+        cluster.final_score = 0.8
+
+        selected = select_diverse_clusters([cluster], now, max_age_hours=168)
+
+        assert selected == [cluster]
+
+    def test_explicit_limit_caps_selected_clusters(self):
+        now = _now_utc()
+        clusters = []
+        for index in range(5):
+            article = make_article(
+                f"limit-{index}",
+                f"OpenAI News {index}",
+                domain=f"source-{index}.test",
+                published_at=now - timedelta(hours=index),
+            )
+            cluster = make_cluster(
+                f"limit-cluster-{index}",
+                articles=[article],
+                entities=[f"entity-{index}"],
+                latest_seen=now - timedelta(hours=index),
+            )
+            cluster.final_score = 1.0 - index * 0.01
+            clusters.append(cluster)
+
+        selected = select_diverse_clusters(clusters, now, limit=2)
+
+        assert len(selected) == 2
 
     def test_null_latest_seen_excluded(self):
         now = _now_utc()

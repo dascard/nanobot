@@ -54,6 +54,7 @@ import { RagDebugPage } from './features/rag/RagDebugPage'
 import { RagBenchmarkPage } from './features/rag/RagBenchmarkPage'
 import { WebSearchPage } from './features/web-search/WebSearchPage'
 import { ProactiveOutreachPage } from './features/proactive-outreach/ProactiveOutreachPage'
+import { SessionConfigsPage } from './features/session-config/SessionConfigsPage'
 
 function formatApiError(error, fallback = '请求失败') {
   const detail = error?.response?.data?.detail
@@ -207,7 +208,7 @@ const NAV_SECTIONS = [
   {
     title: '系统',
     items: [
-      { to: '/configs', label: '群聊策略', icon: Gauge },
+      { to: '/configs', label: '会话策略', icon: Gauge },
       { to: '/blocks', label: '屏蔽', icon: Shield },
       { to: '/settings', label: '设置', icon: Settings },
       { to: '/audit', label: '审计', icon: FileText },
@@ -1452,131 +1453,6 @@ function BlockRuleTestTab() {
         )}
       </div>
     </div>
-  )
-}
-
-// ── Configs ──
-function ConfigsPage() {
-  const [data, setData] = useState({ items: [], total: 0 })
-  const [edit, setEdit] = useState(null)
-  const [viewMode, setViewMode] = useState('effective')
-  const load = useCallback(() => {
-    const params = { limit: 50 }
-    if (viewMode === 'effective') params.effective = 1
-    api.get('/configs', { params }).then(r => setData(r.data))
-  }, [viewMode])
-  useEffect(() => { load() }, [load])
-  const deleteConfig = (sid) => {
-    if (!confirm(`确认删除 ${sid} 的覆写配置？将恢复为系统默认值。`)) return
-    api.delete(`/configs/${encodeURIComponent(sid)}`).then(load).catch(e => alert(e.response?.data?.detail || e.message))
-  }
-  return (
-    <div>
-      <div className="mb-4">
-        <h1 className="text-2xl font-bold">群聊策略配置</h1>
-        <p className="text-slate-500 text-sm mt-1">按群聊/私聊流覆写 talk_value、表达学习、群画像等策略。未覆写的流使用系统默认值。</p>
-      </div>
-      <div className="flex items-center gap-2 mb-4">
-        <div className="flex gap-1 bg-slate-900 rounded-lg p-0.5">
-          <button onClick={() => setViewMode('effective')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${viewMode === 'effective' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>有效配置</button>
-          <button onClick={() => setViewMode('override')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${viewMode === 'override' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}>仅覆写</button>
-        </div>
-        <span className="text-xs text-slate-500">{data.total} 条</span>
-      </div>
-      <Card className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead><tr className="text-left text-slate-500 border-b border-slate-800">
-            <th className="py-2 px-3 font-medium">流 ID</th>
-            <th className="py-2 px-3 font-medium">发言值</th>
-            <th className="py-2 px-3 font-medium">@回复</th>
-            <th className="py-2 px-3 font-medium">表达注入</th>
-            <th className="py-2 px-3 font-medium">表达学习</th>
-            <th className="py-2 px-3 font-medium">黑话学习</th>
-            <th className="py-2 px-3 font-medium">群画像</th>
-            <th className="py-2 px-3 font-medium">平滑轮数</th>
-            {viewMode === 'effective' && <th className="py-2 px-3 font-medium">来源</th>}
-            <th className="py-2 px-3 font-medium"></th>
-          </tr></thead>
-          <tbody>
-            {data.items.map(c => (
-              <tr key={c.chat_stream_id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
-                <td className="py-2 px-3 truncate max-w-[220px] text-xs text-slate-400">{c.chat_stream_id}</td>
-                <td className="py-2 px-3">{c.talk_value}</td>
-                <td className="py-2 px-3">{c.mentioned_bot_reply ? '✓' : '—'}</td>
-                <td className="py-2 px-3">{c.use_expression ? '✓' : '—'}</td>
-                <td className="py-2 px-3">{c.enable_expression_learning ? '✓' : '—'}</td>
-                <td className="py-2 px-3">{c.enable_jargon_learning ? '✓' : '—'}</td>
-                <td className="py-2 px-3"><Badge tone={c.group_profile_mode === 'on' ? 'emerald' : c.group_profile_mode === 'preview' ? 'amber' : 'slate'}>{c.group_profile_mode || 'off'}</Badge></td>
-                <td className="py-2 px-3">{c.planner_smooth}</td>
-                {viewMode === 'effective' && (
-                  <td className="py-2 px-3">
-                    <Badge tone={c.source === 'db' ? 'blue' : 'slate'}>{c.source === 'db' ? 'DB 覆写' : '默认'}</Badge>
-                  </td>
-                )}
-                <td className="py-2 px-3">
-                  <div className="flex gap-1">
-                    <button onClick={() => setEdit(c)} className="px-2 py-1 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs transition-colors">编辑</button>
-                    {(viewMode === 'effective' && c.has_override) || viewMode === 'override' ? (
-                      <button onClick={() => deleteConfig(c.chat_stream_id)} className="px-2 py-1 bg-red-700/50 hover:bg-red-700 text-red-300 rounded-lg text-xs transition-colors">删除覆写</button>
-                    ) : null}
-                    {viewMode === 'effective' && !c.has_override && (
-                      <button onClick={() => { setEdit(c); }} className="px-2 py-1 bg-emerald-700/50 hover:bg-emerald-700 text-emerald-300 rounded-lg text-xs transition-colors">创建覆写</button>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-      {edit && <ConfigEditModal config={edit} onClose={() => setEdit(null)} onSaved={load} />}
-    </div>
-  )
-}
-function ConfigEditModal({ config, onClose, onSaved }) {
-  const [f, setF] = useState({
-    talk_value: config.talk_value, mentioned_bot_reply: config.mentioned_bot_reply,
-    use_expression: config.use_expression, enable_expression_learning: config.enable_expression_learning,
-    enable_jargon_learning: config.enable_jargon_learning,
-    group_profile_mode: config.group_profile_mode || 'off',
-    planner_smooth: config.planner_smooth,
-  })
-  return (
-    <Modal onClose={onClose}>
-      <div className="p-6">
-        <h2 className="text-lg font-bold mb-1">编辑配置</h2>
-        <p className="text-xs text-slate-500 mb-4">{config.chat_stream_id}</p>
-        <label className="text-xs text-slate-400">发言 Value</label>
-        <input type="number" step="0.05" min="0.05" max="1" value={f.talk_value}
-          onChange={e => setF({ ...f, talk_value: parseFloat(e.target.value) })} className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm" />
-        {['mentioned_bot_reply', 'use_expression', 'enable_expression_learning', 'enable_jargon_learning'].map(k => (
-          <label key={k} className="flex items-center gap-2 mb-2 text-sm text-slate-400">
-            <input type="checkbox" checked={f[k]} onChange={e => setF({ ...f, [k]: e.target.checked })} className="accent-emerald-500" />{k}
-          </label>
-        ))}
-        <label className="text-xs text-slate-400">群画像注入 mode（待 ContextBuilder 接入后生效）</label>
-        <select value={f.group_profile_mode} onChange={e => setF({ ...f, group_profile_mode: e.target.value })}
-          className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-3 text-sm">
-          <option value="off">off — 不生成不注入</option>
-          <option value="preview">preview — 生成并记录 debug，不注入 prompt</option>
-          <option value="on">on — 生成并注入 GroupProfileContext</option>
-        </select>
-        <label className="text-xs text-slate-400">Planner 平滑</label>
-        <input type="number" value={f.planner_smooth} onChange={e => setF({ ...f, planner_smooth: parseInt(e.target.value) })}
-          className="w-full p-2.5 rounded-xl bg-slate-900 border border-slate-700 mb-4 text-sm" />
-        <div className="flex gap-2 justify-end">
-          <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-xl text-sm">取消</button>
-          <button onClick={() => {
-            api.put(`/configs/${encodeURIComponent(config.chat_stream_id)}`, {
-              ...f, mentioned_bot_reply: f.mentioned_bot_reply ? 1 : 0, use_expression: f.use_expression ? 1 : 0,
-              enable_expression_learning: f.enable_expression_learning ? 1 : 0, enable_jargon_learning: f.enable_jargon_learning ? 1 : 0,
-            }).then(() => { onSaved(); onClose() })
-          }} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-medium">保存</button>
-        </div>
-      </div>
-    </Modal>
   )
 }
 
@@ -2964,7 +2840,7 @@ export default function App() {
           <Route path="/stickers/duplicates" element={<StickerDedupPage />} />
           <Route path="/blocks" element={<BlocksPage />} />
           <Route path="/tools" element={<ToolsPage />} />
-          <Route path="/configs" element={<ConfigsPage />} />
+          <Route path="/configs" element={<SessionConfigsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/persona" element={<PersonaPage />} />

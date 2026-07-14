@@ -378,7 +378,7 @@ class TestEvolveWithDictLogs:
 
         mock_provider = MagicMock(spec=UnifiedProvider)
         mock_provider.provider_type = "new-api"
-        mock_provider.invoke_raw = AsyncMock(return_value='{"summary": "test"}')
+        mock_provider.invoke_raw = AsyncMock(return_value='{"candidates": []}')
 
         controller = NanobotKTController(provider=mock_provider, memory=mock_memory)
         controller.log_analyst.run = AsyncMock(return_value={"summary": "test", "kb_document": ""})

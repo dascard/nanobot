@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import time
@@ -57,6 +58,7 @@ class GroupMemoryInjectionService:
         max_chars: int = 1200,
         record_injection: bool = False,
         rag_timeout_ms: int = 1200,
+        allow_model_calls: bool = True,
     ) -> GroupMemoryInjectionResult:
         from core.database import ChatStreamConfig
 
@@ -84,6 +86,7 @@ class GroupMemoryInjectionService:
             "cache_key": "",
             "latency_ms": 0,
             "timeout_fallback": False,
+            "model_calls_allowed": bool(allow_model_calls),
         }
         if mode not in {"preview", "on"}:
             return GroupMemoryInjectionResult(debug=debug)
@@ -93,17 +96,29 @@ class GroupMemoryInjectionService:
 
         cache_key = _cache_key(session_id, current_user_input, recent_messages or [])
         debug["cache_key"] = cache_key
+        from core.semantic.provider_factory import (
+            get_rag_runtime_config,
+            get_reranker_provider,
+        )
+
+        runtime = get_rag_runtime_config("group_memory")
+        if runtime.enabled and runtime.reranker_enabled and not allow_model_calls:
+            debug["group_memory_skipped"].append({
+                "reason": "model_calls_forbidden",
+            })
+            debug["model_dependent_retrieval_skipped"] = True
+            return GroupMemoryInjectionResult(debug=debug)
         if not record_injection:
             cached = GROUP_MEMORY_RAG_CACHE.get(cache_key)
             if cached and cached[0] > time.monotonic():
-                cached_result = cached[1]
+                cached_result = copy.deepcopy(cached[1])
                 cached_result.debug["cache_hit"] = True
+                cached_result.debug["model_calls_allowed"] = bool(
+                    allow_model_calls
+                )
                 return cached_result
 
         started = time.perf_counter()
-        from core.semantic.provider_factory import get_rag_runtime_config, get_reranker_provider
-
-        runtime = get_rag_runtime_config("group_memory")
         reranker_provider = get_reranker_provider() if runtime.enabled and runtime.reranker_enabled else None
         if runtime.enabled and runtime.reranker_enabled and reranker_provider is None and not runtime.allow_degraded:
             debug["group_memory_skipped"].append({"reason": "reranker_unavailable"})

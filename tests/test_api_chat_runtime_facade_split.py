@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,7 +16,7 @@ class _Decision:
     action: str = "reply"
     complexity: int = 5
     effort: str | None = "high"
-    runtime_preset: str = "quick"
+    runtime_preset: str = "lightweight"
     reason: str = "测试原因"
 
 
@@ -106,18 +107,18 @@ def test_build_chat_runtime_payload_preserves_private_metadata_contract():
             "action": "reply",
             "complexity": 5,
             "effort": "high",
-            "runtime_preset": "quick",
+            "runtime_preset": "lightweight",
             "reason": "测试原因",
         },
         "effort_constraint": "constraint:high",
-        "runtime_preset": "quick",
+        "runtime_preset": "lightweight",
     }
     assert payload.prompt_budget["safe_user_input_chars"] == len("用户原始问题 files=1")
     assert payload.prompt_budget["enriched_query_chars"] == len(payload.enriched_query)
     assert payload.prompt_budget["history_messages"] == 1
 
 
-def test_build_chat_runtime_payload_uses_defaults_without_private_decision():
+def test_build_chat_runtime_payload_defaults_group_without_private_decision_to_full():
     from api.chat_runtime_facade import build_chat_runtime_payload
 
     payload = build_chat_runtime_payload(
@@ -135,6 +136,48 @@ def test_build_chat_runtime_payload_uses_defaults_without_private_decision():
     assert payload.bridge_meta["private_decision"] is None
     assert payload.bridge_meta["effort_constraint"] == ""
     assert payload.bridge_meta["runtime_preset"] == "full"
+
+
+def test_build_chat_runtime_payload_defaults_private_without_decision_to_lightweight():
+    from api.chat_runtime_facade import build_chat_runtime_payload
+
+    payload = build_chat_runtime_payload(
+        _runtime_input(private_decision=None),
+        build_multimodal_user_input_text=_build_text,
+        max_query_chars=100,
+        estimate_tokens=_tokens,
+        get_effort_constraint=_effort,
+    )
+
+    assert payload.bridge_meta["chat_type"] == "private"
+    assert payload.bridge_meta["private_decision"] is None
+    assert payload.bridge_meta["runtime_preset"] == "lightweight"
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [
+        SimpleNamespace(
+            action="reply",
+            complexity=3,
+            effort="short",
+            reason="缺少预设字段",
+        ),
+        _Decision(runtime_preset=""),
+    ],
+)
+def test_build_chat_runtime_payload_defaults_missing_private_preset_to_lightweight(decision):
+    from api.chat_runtime_facade import build_chat_runtime_payload
+
+    payload = build_chat_runtime_payload(
+        _runtime_input(private_decision=decision),
+        build_multimodal_user_input_text=_build_text,
+        max_query_chars=100,
+        estimate_tokens=_tokens,
+        get_effort_constraint=_effort,
+    )
+
+    assert payload.bridge_meta["runtime_preset"] == "lightweight"
 
 
 def test_build_chat_runtime_payload_preserves_guardrail_injection_prompt():

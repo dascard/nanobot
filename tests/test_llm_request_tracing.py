@@ -26,6 +26,22 @@ def test_redact_api_key():
     assert "sk-secret-key" not in text
 
 
+def test_redact_preserves_only_numeric_token_estimates():
+    payload = json.loads(_json_dumps({
+        "token_estimate": 123,
+        "message_token_estimate": 100,
+        "tool_schema_token_estimate": 23,
+        "access_token": "secret-access-token",
+        "nested": {"token_estimate": "secret-disguised-as-metric"},
+    }, max_chars=10000))
+
+    assert payload["token_estimate"] == 123
+    assert payload["message_token_estimate"] == 100
+    assert payload["tool_schema_token_estimate"] == 23
+    assert payload["access_token"] == "[REDACTED]"
+    assert payload["nested"]["token_estimate"] == "[REDACTED]"
+
+
 def test_request_json_preserves_messages():
     messages = [{"role": "user", "content": "hello"}]
     payload = {"model": "gpt-4", "messages": messages, "temperature": 0.7}
@@ -153,6 +169,107 @@ def test_openai_sdk_tracer_records_non_stream_request(monkeypatch):
     assert finished[0]["log_id"] == 456
     assert finished[0]["status"] == "success"
     assert finished[0]["response"]["choices"][0]["message"]["content"] == "ok"
+
+
+def test_openai_sdk_tracer_recomputes_metrics_for_each_tool_loop_request(db_session):
+    from core.llm_sdk_tracing import install_openai_chat_completion_tracer
+    from core.llm_trace_context import llm_trace_scope
+    from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.request_metrics import calculate_request_metrics
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "reply",
+            "description": "发送最终回复",
+            "parameters": {
+                "type": "object",
+                "properties": {"content": {"type": "string"}},
+                "required": ["content"],
+            },
+        },
+    }]
+    plan = run_async(compile_prompt_plan(PromptCompileRequest(
+        chat_type="private",
+        session_id="private_metrics",
+        user_id="metrics-user",
+        user_input="请回复",
+        runtime_tool_prompt=(
+            "[RuntimeTool]\n"
+            "本轮真实可调用工具以 API tools schema 为准。"
+        ),
+        tool_schemas=tools,
+    )))
+
+    create = AsyncMock(side_effect=[
+        {"choices": [{"message": {"content": "调用工具"}}]},
+        {"choices": [{"message": {"content": "完成"}}]},
+    ])
+    llm = SimpleNamespace(
+        _client=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
+        _api_key="reply-key",
+        _extra_headers={},
+        base_url="http://metrics-provider.test/v1",
+        provider_name="newapi",
+    )
+    assert install_openai_chat_completion_tracer(llm)
+
+    second_messages = [
+        *plan.messages,
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_reply",
+                "type": "function",
+                "function": {"name": "reply", "arguments": '{"content":"完成"}'},
+            }],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_reply",
+            "name": "reply",
+            "content": "已发送",
+        },
+    ]
+    with llm_trace_scope(trace_id="trace-metrics", run_id="run-metrics", source="replyer"):
+        run_async(llm._client.chat.completions.create(
+            model="metrics-model",
+            messages=plan.messages,
+            tools=plan.tool_schemas,
+        ))
+        run_async(llm._client.chat.completions.create(
+            model="metrics-model",
+            messages=second_messages,
+            tools=plan.tool_schemas,
+        ))
+
+    db_session.expire_all()
+    rows = (
+        db_session.query(LLMApiRequestLog)
+        .filter_by(run_id="run-metrics")
+        .order_by(LLMApiRequestLog.id.asc())
+        .all()
+    )
+    assert len(rows) == 2
+    first_payload = json.loads(rows[0].request_json)
+    second_payload = json.loads(rows[1].request_json)
+    first_metrics = json.loads(rows[0].request_lint_json)["payload_metrics"]
+    second_metrics = json.loads(rows[1].request_lint_json)["payload_metrics"]
+
+    assert first_payload["messages"] == plan.messages
+    assert first_payload["tools"] == plan.tool_schemas
+    assert first_metrics["prompt_sha256"] == plan.prompt_sha256
+    assert first_metrics == calculate_request_metrics(
+        messages=first_payload["messages"],
+        tools=first_payload["tools"],
+    ).to_dict()
+    assert second_metrics == calculate_request_metrics(
+        messages=second_payload["messages"],
+        tools=second_payload["tools"],
+    ).to_dict()
+    assert second_metrics["prompt_sha256"] != first_metrics["prompt_sha256"]
 
 
 def test_openai_sdk_tracer_records_stream_request(monkeypatch):

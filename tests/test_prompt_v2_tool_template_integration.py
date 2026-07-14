@@ -43,25 +43,80 @@ def test_outgoing_tool_schema_description_uses_v2_tool_template(tmp_path, monkey
     monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
 
     from core.final_tools import FinalToolSet, filter_payload_tools
+    from core.prompt_v2 import tool_templates
+    from core.tool_schema_preview import build_tool_schema
 
-    payload = {
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "sql_analysis",
-                    "description": "hardcoded description",
-                    "parameters": {"type": "object", "properties": {}},
-                },
-            }
-        ]
-    }
+    schema = build_tool_schema("sql_analysis")
+    payload = {"tools": [schema]}
+    overlay_calls = []
+
+    def fail_if_overlay_called(_schema):
+        overlay_calls.append(True)
+        raise AssertionError("final filter must not overlay tool templates")
+
+    monkeypatch.setattr(
+        tool_templates,
+        "overlay_tool_schema_description",
+        fail_if_overlay_called,
+    )
 
     result = filter_payload_tools(payload, FinalToolSet(allowed={"sql_analysis"}, disabled={}))
     description = result["tools"][0]["function"]["description"]
 
-    assert "hardcoded description" in description
     assert "V2 SCHEMA TEMPLATE MARKER" in description
+    assert result["tools"] == payload["tools"]
+    assert overlay_calls == []
+
+
+def test_tool_schema_overlay_is_idempotent_and_replaces_stale_generated_tail(
+    tmp_path,
+    monkeypatch,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    _write_tool_template(
+        default_dir,
+        "tools/sql_analysis/usage",
+        "sql_analysis",
+        "FIRST GENERATED BODY",
+    )
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.tool_templates import (
+        clear_tool_template_policy_cache,
+        overlay_tool_schema_description,
+    )
+
+    clear_tool_template_policy_cache()
+    base = {
+        "type": "function",
+        "function": {
+            "name": "sql_analysis",
+            "description": "人工说明前缀\n\n普通 Markdown 保留",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    first = overlay_tool_schema_description(base)
+    second = overlay_tool_schema_description(first)
+
+    assert second == first
+    assert second["function"]["description"].count("[V2ToolTemplate:") == 1
+
+    _write_tool_template(
+        runtime_dir,
+        "tools/sql_analysis/usage",
+        "sql_analysis",
+        "SECOND GENERATED BODY",
+    )
+    clear_tool_template_policy_cache()
+    refreshed = overlay_tool_schema_description(second)
+    description = refreshed["function"]["description"]
+
+    assert description.startswith("人工说明前缀\n\n普通 Markdown 保留")
+    assert "FIRST GENERATED BODY" not in description
+    assert "SECOND GENERATED BODY" in description
+    assert description.count("[V2ToolTemplate:") == 1
 
 
 def test_tool_template_policy_caches_directory_scan(tmp_path, monkeypatch):

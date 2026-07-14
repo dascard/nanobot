@@ -644,7 +644,7 @@ async def test_iter_streaming_chat_response_success_yields_done_payload_and_pers
 
 
 @pytest.mark.asyncio
-async def test_disconnect_while_done_event_is_yielded_starts_delivery(monkeypatch):
+async def test_done_event_handoff_does_not_start_duplicate_delivery(monkeypatch):
     from api import chat_route_runner
 
     calls: dict[str, list[Any]] = {}
@@ -671,17 +671,12 @@ async def test_disconnect_while_done_event_is_yielded_starts_delivery(monkeypatc
     await iterator.aclose()
     await _wait_for_stream_finalizers(chat_route_runner)
 
-    assert calls["push"] == [
-        (
-            "private",
-            "u-runner",
-            {"answer": "expanded:done 期间断连回答"},
-        )
-    ]
+    assert calls.get("push_envelope") is None
+    assert calls.get("push") is None
 
 
 @pytest.mark.asyncio
-async def test_disconnect_registers_delivery_before_claim_completion_and_push(
+async def test_done_event_handoff_completes_claim_without_duplicate_delivery(
     monkeypatch,
 ):
     from api import chat_route_runner, chat_streaming_result
@@ -744,15 +739,16 @@ async def test_disconnect_registers_delivery_before_claim_completion_and_push(
     await iterator.aclose()
     await _wait_for_stream_finalizers(chat_route_runner)
 
-    assert order == ["enqueue", "complete", "push"]
+    assert order == ["complete"]
 
 
 @pytest.mark.asyncio
-async def test_disconnect_registration_failure_never_completes_claim(monkeypatch):
+async def test_done_event_handoff_never_calls_disconnect_registration(monkeypatch):
     from api import chat_route_runner, chat_streaming_result
 
     calls: dict[str, list[Any]] = {}
     registration_error = RuntimeError("outbox registration failed")
+    registration_calls = []
 
     class FakeUnitOfWork:
         def __enter__(self):
@@ -773,6 +769,7 @@ async def test_disconnect_registration_failure_never_completes_claim(monkeypatch
             return True
 
     async def fail_registration(_context, _result):
+        registration_calls.append(True)
         raise registration_error
 
     monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
@@ -797,8 +794,147 @@ async def test_disconnect_registration_failure_never_completes_claim(monkeypatch
     await iterator.aclose()
     await _wait_for_stream_finalizers(chat_route_runner)
 
-    assert calls.get("owner_complete") is None
-    assert calls["owner_fail"] == [registration_error]
+    assert len(calls["owner_complete"]) == 1
+    assert calls.get("owner_fail") is None
+    assert registration_calls == []
+    assert calls.get("push") is None
+
+
+@pytest.mark.asyncio
+async def test_stream_cancel_while_claim_completion_pending_hands_off_same_settlement(
+    monkeypatch,
+):
+    from api import chat_route_runner
+
+    calls: dict[str, list[Any]] = {}
+    completion_started = asyncio.Event()
+    release_completion = asyncio.Event()
+
+    class FakeUnitOfWork:
+        def __enter__(self):
+            self.db = FakeDb()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.db = None
+            return False
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("owner_complete", []).append(completion)
+            completion_started.set()
+            await release_completion.wait()
+            return True
+
+        async def fail(self, error):
+            calls.setdefault("owner_fail", []).append(error)
+            return True
+
+    monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
+    iterator = chat_route_runner.iter_streaming_chat_response(
+        FakeDb(),
+        _context(
+            calls,
+            bridge=FakeBridge(answer="结算取消窗口回答"),
+            claim_owner=ClaimOwner(),
+        ),
+    )
+    consumer_task = asyncio.create_task(anext(iterator))
+
+    await asyncio.wait_for(completion_started.wait(), timeout=1)
+    consumer_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await consumer_task
+    release_completion.set()
+    await _wait_for_stream_finalizers(chat_route_runner)
+
+    assert len(calls["owner_complete"]) == 1
+    assert calls.get("owner_fail") is None
+    assert calls["push"] == [
+        (
+            "private",
+            "u-runner",
+            {"answer": "expanded:结算取消窗口回答"},
+        )
+    ]
+
+
+@pytest.mark.parametrize("completion_outcome", ["false", "raise"])
+@pytest.mark.asyncio
+async def test_stream_cancel_while_claim_completion_pending_never_registers_failed_claim(
+    monkeypatch,
+    completion_outcome,
+):
+    from api import chat_route_runner, chat_streaming_result
+
+    calls: dict[str, list[Any]] = {}
+    completion_started = asyncio.Event()
+    release_completion = asyncio.Event()
+    registration_calls = []
+    delivery_calls = []
+
+    class FakeUnitOfWork:
+        def __enter__(self):
+            self.db = FakeDb()
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.db = None
+            return False
+
+    class ClaimOwner:
+        async def complete(self, completion):
+            calls.setdefault("owner_complete", []).append(completion)
+            completion_started.set()
+            await release_completion.wait()
+            if completion_outcome == "raise":
+                raise RuntimeError("claim completion failed")
+            return False
+
+        async def fail(self, error):
+            calls.setdefault("owner_fail", []).append(error)
+            return True
+
+    async def register_delivery(_context, _result):
+        registration_calls.append(True)
+        return object()
+
+    async def deliver_registered(_context, _result, _registered):
+        delivery_calls.append(True)
+        return True
+
+    monkeypatch.setattr("core.uow.UnitOfWork", FakeUnitOfWork)
+    monkeypatch.setattr(
+        chat_streaming_result,
+        "register_stream_finalization_delivery",
+        register_delivery,
+    )
+    monkeypatch.setattr(
+        chat_streaming_result,
+        "deliver_registered_stream_finalization",
+        deliver_registered,
+    )
+    iterator = chat_route_runner.iter_streaming_chat_response(
+        FakeDb(),
+        _context(
+            calls,
+            bridge=FakeBridge(answer="失败结算取消窗口回答"),
+            claim_owner=ClaimOwner(),
+        ),
+    )
+    consumer_task = asyncio.create_task(anext(iterator))
+
+    await asyncio.wait_for(completion_started.wait(), timeout=1)
+    consumer_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await consumer_task
+    release_completion.set()
+    await _wait_for_stream_finalizers(chat_route_runner)
+
+    assert len(calls["owner_complete"]) == 1
+    assert len(calls["owner_fail"]) == 1
+    assert registration_calls == []
+    assert delivery_calls == []
     assert calls.get("push") is None
 
 
@@ -1046,7 +1182,7 @@ async def test_iter_streaming_persist_error_fails_claim_yields_only_safe_error_a
 
 
 @pytest.mark.asyncio
-async def test_iter_streaming_complete_error_after_done_fails_once_and_schedules_delivery():
+async def test_iter_streaming_complete_error_yields_safe_error_without_done_or_delivery():
     from api import chat_route_runner
     from api.chat_route_runner import iter_streaming_chat_response
 
@@ -1069,9 +1205,10 @@ async def test_iter_streaming_complete_error_after_done_fails_once_and_schedules
 
     assert len(calls["owner_complete"]) == 1
     assert calls["owner_fail"] == [complete_error]
-    assert sum("'status': 'done'" in event for event in events) == 1
-    assert all("系统暂时不可用" not in event for event in events)
-    assert len(calls["push"]) == 1
+    assert all("'status': 'done'" not in event for event in events)
+    assert any("系统暂时不可用" in event for event in events)
+    assert calls.get("push_envelope") is None
+    assert calls.get("push") is None
 
 
 @pytest.mark.asyncio

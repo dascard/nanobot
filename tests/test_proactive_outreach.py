@@ -284,6 +284,23 @@ def test_judge_outreach_uses_dedicated_route_and_clamps_next_check_at(monkeypatc
     assert "shadow" not in calls[0]["system_prompt"].lower()
 
 
+def test_judge_outreach_rejects_prompt_example_multivalue_kind():
+    from core import proactive_outreach
+
+    result = proactive_outreach.judge_outreach(
+        {"user_id": "contract-user", "recent_messages": []},
+        now=datetime(2026, 7, 6, 12, 0, 0),
+        model_call=lambda **_kwargs: (
+            '{"should_reach_out": true, "reason": "研究后跟进", '
+            '"next_check_in_hours": 2, "next_intent": "继续跟进", '
+            '"outreach_kind": "message|research", "research_query": "AI agent"}'
+        ),
+    )
+
+    assert result["should_reach_out"] is None
+    assert result["error_type"] == "contract_error"
+
+
 def test_judge_outreach_sends_compact_grounding_only_as_user_message(monkeypatch):
     from core import proactive_outreach
 

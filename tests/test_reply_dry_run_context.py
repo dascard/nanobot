@@ -93,6 +93,7 @@ def test_bridge_dry_run_reaches_public_reply_execute(
 ):
     """Bridge 的 dry-run 必须抑制公开 ReplyTool.execute 的贴纸计数副作用。"""
     from creatures.nanobot.prompts.skills.reply.tool import ReplyTool
+    from core.session_guidance import SessionGuidanceResolution
     from nanobot_kt.bridge import NanobotBridge
 
     recorded = []
@@ -104,6 +105,18 @@ def test_bridge_dry_run_reaches_public_reply_execute(
         "core.sticker_memory.record_sticker_uses_in_content",
         lambda content: recorded.append(content),
     )
+    monkeypatch.setattr(
+        "nanobot_kt.bridge.resolve_session_guidance",
+        lambda _db, *, platform, chat_type, session_id: SessionGuidanceResolution(
+            chat_stream_id=f"{platform}:{session_id}:{chat_type}",
+            text="",
+            configured=False,
+            chars=0,
+            sha256="",
+            updated_at=None,
+            status="missing",
+        ),
+    )
 
     mock_config = MagicMock()
     mock_config.name = "test"
@@ -113,7 +126,9 @@ def test_bridge_dry_run_reaches_public_reply_execute(
     mock_agent.start = AsyncMock()
     mock_agent.registry.list_tools.return_value = []
     mock_conversation = MagicMock()
-    mock_conversation.get_messages.return_value = []
+    conversation_messages = []
+    mock_conversation.get_messages.side_effect = lambda: list(conversation_messages)
+    mock_conversation.to_messages.side_effect = lambda: list(conversation_messages)
     mock_conversation.find_last_user_index.return_value = -1
     mock_controller = MagicMock()
     mock_controller.conversation = mock_conversation
@@ -146,6 +161,23 @@ def test_bridge_dry_run_reaches_public_reply_execute(
             {"content": "研究草稿 [sticker:test]"},
         )
         assert result.success
+        conversation_messages.extend([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": "call_dry_run_reply",
+                    "type": "function",
+                    "function": {"name": "reply", "arguments": "{}"},
+                }],
+            },
+            {
+                "role": "tool",
+                "name": "reply",
+                "tool_call_id": "call_dry_run_reply",
+                "content": result.output,
+            },
+        ])
 
     mock_agent._process_event = AsyncMock(side_effect=fake_process)
     MockAgent.return_value = mock_agent

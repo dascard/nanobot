@@ -3,14 +3,45 @@
 import pytest
 
 
-def test_superuser_general_query_uses_full_runtime_preset():
+@pytest.mark.parametrize(
+    ("text", "is_superuser", "expected"),
+    [
+        ("我是不是超级用户?", True, ("short", "lightweight", "superuser_query")),
+        ("这件事靠谱吗?", True, ("short", "lightweight", "superuser_query")),
+        ("为什么今天这么累?", True, ("short", "lightweight", "superuser_query")),
+        ("怎么了?", True, ("short", "lightweight", "superuser_query")),
+        ("如何保持好心情?", True, ("short", "lightweight", "superuser_query")),
+        ("能不能聊会儿?", True, ("short", "lightweight", "superuser_query")),
+        (
+            "为什么最近总觉得很累\n我已经连续好几天睡不好而且白天也没精神还一直提不起劲做任何事情",
+            True,
+            ("short", "lightweight", "superuser_query"),
+        ),
+        ("你是谁?", True, ("casual", "none", "identity_probe")),
+        ("你能做什么?", True, ("casual", "none", "check_capability")),
+        ("请审查这段代码并给出修复方案", True, ("serious", "full", "superuser_task")),
+        ("为什么这个 Traceback 会出现", True, ("serious", "full", "superuser_task")),
+        ("给我今日的 AI 日报", True, ("serious", "full", "daily_request")),
+        ("最新 AI 新闻", True, ("serious", "full", "daily_request")),
+        ("来份 AI 简报", True, ("serious", "full", "daily_request")),
+        ("总结今天的 AI 日报", True, ("serious", "full", "daily_request")),
+        ("帮我看下最新 AI 新闻", True, ("serious", "full", "daily_request")),
+        ("今日新闻真离谱", True, ("short", "lightweight", "superuser_query")),
+        ("他刚给我发了今天的新闻", True, ("short", "lightweight", "superuser_query")),
+        ("我已经整理完本周日报", True, ("short", "lightweight", "superuser_query")),
+        ("请审查这段代码并给出修复方案", False, ("short", "lightweight", "specific_task")),
+        ("给我今日的 AI 日报", False, ("casual", "none", "daily_request_casual")),
+        ("帮我看下最新 AI 新闻", False, ("casual", "none", "daily_request_casual")),
+    ],
+)
+def test_infer_effort_applies_superuser_as_permission_ceiling_only(
+    text,
+    is_superuser,
+    expected,
+):
     from core.private_timing import _infer_effort
 
-    effort, runtime_preset, intent = _infer_effort("随便聊两句", is_superuser=True)
-
-    assert effort == "short"
-    assert runtime_preset == "full"
-    assert intent == "superuser_query"
+    assert _infer_effort(text, is_superuser=is_superuser) == expected
 
 
 @pytest.mark.asyncio

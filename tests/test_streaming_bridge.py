@@ -6,6 +6,24 @@ from types import SimpleNamespace
 import pytest
 
 
+def _stub_missing_session_guidance(monkeypatch):
+    """流式桥接单元测试不依赖数据库中的会话指导。"""
+    from core.session_guidance import SessionGuidanceResolution
+
+    def resolve(_db, *, platform, chat_type, session_id):
+        return SessionGuidanceResolution(
+            chat_stream_id=f"{platform}:{session_id}:{chat_type}",
+            text="",
+            configured=False,
+            chars=0,
+            sha256="",
+            updated_at=None,
+            status="missing",
+        )
+
+    monkeypatch.setattr("nanobot_kt.bridge.resolve_session_guidance", resolve)
+
+
 def _make_request_scope_bridge(monkeypatch, *, prompt_error, finish_calls):
     """构造只运行到 Prompt Runtime 的最小 Bridge。"""
     from nanobot_kt.bridge import NanobotBridge
@@ -74,6 +92,7 @@ def _make_request_scope_bridge(monkeypatch, *, prompt_error, finish_calls):
         "nanobot_kt.prompt_runtime.build_prompt_runtime",
         fail_prompt_runtime,
     )
+    _stub_missing_session_guidance(monkeypatch)
     return bridge, output, tool_plan
 
 
@@ -324,6 +343,7 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
     from nanobot_kt.bridge import NanobotBridge
     from nanobot_kt.output import BufferedOutput
 
+    _stub_missing_session_guidance(monkeypatch)
     captured_route_kwargs = {}
 
     class FakeLLM:
@@ -385,6 +405,15 @@ async def test_bridge_handle_message_streams_controller_text_deltas(monkeypatch)
 
         async def _process_event(self, event):
             await self._process_event_with_controller(event, self.controller)
+            self.controller.conversation.append(
+                "assistant",
+                "",
+                tool_calls=[{
+                    "id": "call_reply",
+                    "type": "function",
+                    "function": {"name": "reply", "arguments": "{}"},
+                }],
+            )
             self.controller.conversation.append(
                 "tool",
                 json.dumps(

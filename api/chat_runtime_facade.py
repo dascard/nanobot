@@ -83,15 +83,19 @@ def build_chat_runtime_payload(
     else:
         enriched_query = f"<user_input>\n{safe_user_input}\n</user_input>"
 
+    default_runtime_preset = "full" if runtime_input.is_group else "lightweight"
     decision = runtime_input.private_decision
     if decision is None:
         complexity = 3
         effort_constraint = ""
-        runtime_preset = "full"
+        runtime_preset = default_runtime_preset
     else:
         complexity = _decision_attr(decision, "complexity", 3) or 3
         effort_constraint = get_effort_constraint(_decision_attr(decision, "effort")) or ""
-        runtime_preset = _decision_attr(decision, "runtime_preset", "full") or "full"
+        runtime_preset = (
+            _decision_attr(decision, "runtime_preset", default_runtime_preset)
+            or default_runtime_preset
+        )
 
     bridge_meta = {
         "chat_type": "group" if runtime_input.is_group else "private",

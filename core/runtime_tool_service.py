@@ -10,7 +10,7 @@ from core.tool_registry import TOOL_METADATA, get_tool_def
 logger = logging.getLogger("nanobot.runtime_tools")
 
 _DEFAULT_LIGHTWEIGHT_SET = {
-    "reply", "no_reply", "image_summary", "image_generation", "python_sandbox", "sticker_search",
+    "reply", "no_reply", "image_summary", "image_generation", "sticker_search",
 }
 RESEARCH_TOOL_NAMES = frozenset({
     "web_search",
@@ -43,6 +43,8 @@ def _metadata_default(tool_name: str, chat_type: str) -> bool:
     td = get_tool_def(tool_name)
     if not td:
         return False
+    if td.force_disabled:
+        return False
     normalized = normalize_tool_chat_type(chat_type)
     if normalized == "group":
         return bool(td.group_default)
@@ -55,6 +57,9 @@ def _metadata_default(tool_name: str, chat_type: str) -> bool:
 def resolve_tool_default(tool_name: str, chat_type: str = "group", db=None) -> bool:
     """读取某个默认模板下的工具启用状态，不包含指定覆盖和运行时预设。"""
     normalized = normalize_tool_chat_type(chat_type)
+    td = get_tool_def(tool_name)
+    if td and td.force_disabled:
+        return False
     default = _metadata_default(tool_name, normalized)
     if db is None:
         return default
@@ -117,6 +122,8 @@ def _load_lightweight_set(db=None) -> set[str]:
 def resolve_lightweight_default(tool_name: str, db=None) -> bool:
     """读取自动降档轻量预设中的工具启用状态。"""
     td = get_tool_def(tool_name)
+    if td and td.force_disabled:
+        return False
     if td and td.force_enabled:
         return True
     return tool_name in _load_lightweight_set(db=db)
@@ -134,10 +141,10 @@ def resolve_effective_tools(
 
     合并顺序（后面覆盖前面）：
     1. TOOL_METADATA 默认值 (private_default/group_default)
-    2. force_enabled / force_disabled_group 初始硬约束
+    2. force_enabled / force_disabled / force_disabled_group 初始硬约束
     3. 运行时预设 (none/lightweight/full)
     4. ToolOverride 表 (scope_type=chat_type/platform/group/user)，显式覆盖可放开轻量预设
-    5. force_enabled / force_disabled_group 硬约束最终兜底
+    5. force_enabled / force_disabled / force_disabled_group 硬约束最终兜底
 
     返回 (enabled: {tool_name: bool}, disabled_reasons: {tool_name: reason})
     """
@@ -151,7 +158,10 @@ def resolve_effective_tools(
         enabled[name] = resolve_tool_default(name, chat_type, db=db)
 
     for name, td in TOOL_METADATA.items():
-        if td.force_enabled:
+        if td.force_disabled:
+            enabled[name] = False
+            disabled[name] = "系统安全硬禁用"
+        elif td.force_enabled:
             enabled[name] = True
         if td.force_disabled_group and chat_type == "group":
             enabled[name] = False
@@ -195,7 +205,11 @@ def resolve_effective_tools(
                 if row.tool_name not in TOOL_METADATA:
                     continue
                 td = get_tool_def(row.tool_name)
-                if td and (td.force_enabled or (td.force_disabled_group and chat_type == "group")):
+                if td and (
+                    td.force_enabled
+                    or td.force_disabled
+                    or (td.force_disabled_group and chat_type == "group")
+                ):
                     continue
                 enabled[row.tool_name] = bool(row.enabled)
                 if not row.enabled:
@@ -206,7 +220,10 @@ def resolve_effective_tools(
             logger.warning("Failed to load ToolOverride: %s", e)
 
     for name, td in TOOL_METADATA.items():
-        if td.force_enabled:
+        if td.force_disabled:
+            enabled[name] = False
+            disabled[name] = "系统安全硬禁用"
+        elif td.force_enabled:
             enabled[name] = True
             disabled.pop(name, None)
         if td.force_disabled_group and chat_type == "group":
@@ -219,6 +236,11 @@ def resolve_effective_tools(
                 continue
             enabled[name] = False
             disabled[name] = "研究预设固定权限上限"
+
+    for name, td in TOOL_METADATA.items():
+        if td.force_disabled:
+            enabled[name] = False
+            disabled[name] = "系统安全硬禁用"
 
     return enabled, disabled
 

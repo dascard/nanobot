@@ -28,8 +28,8 @@ def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
     calls = []
     to_thread_calls = []
 
-    def fake_daily(query, mode="quality", limit=8):
-        calls.append((query, mode, limit))
+    def fake_daily(request):
+        calls.append(request)
         return "<article>AI daily</article>"
 
     async def fake_to_thread(func, *args, **kwargs):
@@ -53,8 +53,11 @@ def test_ai_daily_is_only_model_facing_daily_tool(monkeypatch):
 
     result = run_async(ai_daily.execute({"query": "人工智能 科技 最新新闻", "max_results": 5}))
     assert result.success
-    assert calls == [("人工智能 科技 最新新闻", "quality", 8)]
-    assert to_thread_calls == [(fake_daily, ("人工智能 科技 最新新闻", "quality", 8), {})]
+    assert len(calls) == 1
+    assert calls[0].query == "人工智能 科技 最新新闻"
+    assert calls[0].freshness == "latest"
+    assert calls[0].max_results == 8
+    assert to_thread_calls == [(fake_daily, (calls[0],), {})]
 
 
 def test_ai_daily_tool_returns_fallback_html_when_pipeline_empty(monkeypatch):
@@ -69,7 +72,9 @@ def test_ai_daily_tool_returns_fallback_html_when_pipeline_empty(monkeypatch):
 
     assert result.success
     payload = json.loads(result.output)
-    content = payload["NANOBOT_REPLY_OUTPUT"]["content"]
+    rich = payload["NANOBOT_RICH_OUTPUT"]
+    assert rich["report_kind"] == "ai_daily"
+    content = rich["html"]
     assert "<article" in content or "<html" in content
     assert "暂无可用资讯" in content or "工具返回为空" in content
 
@@ -86,7 +91,9 @@ def test_ai_daily_tool_returns_fallback_html_when_pipeline_plain_text(monkeypatc
 
     assert result.success
     payload = json.loads(result.output)
-    content = payload["NANOBOT_REPLY_OUTPUT"]["content"]
+    rich = payload["NANOBOT_RICH_OUTPUT"]
+    assert rich["report_kind"] == "ai_daily"
+    content = rich["html"]
     assert "<article" in content or "<html" in content
     assert "资讯结果不完整" in content
     assert "plain text" in content

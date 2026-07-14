@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from core.prompt_v2.flow_contract import (
+    RUNTIME_NODE_KEYS,
+    reserved_contract_by_node_id,
+    reserved_contract_by_runtime_key,
+    reserved_contract_by_template_key,
+)
+from core.prompt_v2.flow_storage import (
+    FlowStorageError,
+    assert_no_symlink_components,
+    atomic_replace_bytes,
+    flow_write_lock,
+)
 from core.prompt_v2.template_loader import default_template_dir, runtime_template_dir
 
 
@@ -13,45 +24,22 @@ class PromptFlowError(ValueError):
     """V2 图形编排配置校验失败。"""
 
 
-RUNTIME_NODE_KEYS = {
-    "runtime_context",
-    "persona_reference",
-    "conversation_context_header",
-    "history_messages",
-    "group_context",
-    "effort_constraint",
-    "runtime_tool_prompt",
-    "current_user_event",
-}
-
-_RESERVED_RUNTIME_NODE_IDS = {
-    "persona_reference",
-    "runtime_tool_prompt",
-    "current_user_event",
-}
-_RESERVED_POLICY_TEMPLATE_KEYS = {
-    "chat/branch_private": "private_policy",
-    "chat/branch_group": "group_policy",
-}
-_RESERVED_POLICY_NODE_IDS = {
-    node_id: template_key
-    for template_key, node_id in _RESERVED_POLICY_TEMPLATE_KEYS.items()
-}
-
 CHAT_TYPES = {"group", "private"}
 RUNTIME_PLATFORMS = {"qq", "web"}
 _ANY_PLATFORM = "*"
-_PLATFORM_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
 DEFAULT_FLOW: dict[str, Any] = {
     "version": 1,
     "nodes": [
-        {"id": "base_contract", "type": "template", "label": "system: V2 base contract", "template_key": "chat/main"},
+        {"id": "base_contract", "type": "template", "label": "system: base contract", "template_key": "chat/main"},
+        {"id": "qq_common_policy", "type": "template", "label": "system: QQ platform policy", "template_key": "chat/platform/qq/common", "platforms": ["qq"]},
         {"id": "group_policy", "type": "template", "label": "system: group policy", "template_key": "chat/branch_group", "chat_types": ["group"]},
+        {"id": "qq_group_policy", "type": "template", "label": "system: QQ group policy", "template_key": "chat/platform/qq/group", "chat_types": ["group"], "platforms": ["qq"]},
         {"id": "private_policy", "type": "template", "label": "system: private policy", "template_key": "chat/branch_private", "chat_types": ["private"]},
         {"id": "runtime_context", "type": "runtime", "label": "system: runtime_context", "runtime_key": "runtime_context"},
         {"id": "identity_context", "type": "template", "label": "system: identity_context", "template_key": "chat/identity_context"},
+        {"id": "session_guidance", "type": "runtime", "label": "system: session_guidance", "runtime_key": "session_guidance"},
         {"id": "persona_reference", "type": "runtime", "label": "system: persona_reference", "runtime_key": "persona_reference"},
         {"id": "conversation_context_header", "type": "runtime", "label": "system: conversation_context_header", "runtime_key": "conversation_context_header"},
         {"id": "history_messages", "type": "runtime", "label": "history: messages", "runtime_key": "history_messages"},
@@ -61,12 +49,18 @@ DEFAULT_FLOW: dict[str, Any] = {
         {"id": "current_user_event", "type": "runtime", "label": "user: current_user_input", "runtime_key": "current_user_event"},
     ],
     "edges": [
-        {"from": "base_contract", "to": "group_policy", "chat_types": ["group"]},
-        {"from": "base_contract", "to": "private_policy", "chat_types": ["private"]},
-        {"from": "group_policy", "to": "runtime_context", "chat_types": ["group"]},
+        {"from": "base_contract", "to": "qq_common_policy", "platforms": ["qq"]},
+        {"from": "base_contract", "to": "group_policy", "chat_types": ["group"], "platforms": ["web"]},
+        {"from": "base_contract", "to": "private_policy", "chat_types": ["private"], "platforms": ["web"]},
+        {"from": "qq_common_policy", "to": "group_policy", "chat_types": ["group"], "platforms": ["qq"]},
+        {"from": "qq_common_policy", "to": "private_policy", "chat_types": ["private"], "platforms": ["qq"]},
+        {"from": "group_policy", "to": "qq_group_policy", "chat_types": ["group"], "platforms": ["qq"]},
+        {"from": "qq_group_policy", "to": "runtime_context", "chat_types": ["group"], "platforms": ["qq"]},
+        {"from": "group_policy", "to": "runtime_context", "chat_types": ["group"], "platforms": ["web"]},
         {"from": "private_policy", "to": "runtime_context", "chat_types": ["private"]},
         {"from": "runtime_context", "to": "identity_context"},
-        {"from": "identity_context", "to": "persona_reference"},
+        {"from": "identity_context", "to": "session_guidance"},
+        {"from": "session_guidance", "to": "persona_reference"},
         {"from": "persona_reference", "to": "conversation_context_header"},
         {"from": "conversation_context_header", "to": "history_messages"},
         {"from": "history_messages", "to": "group_context", "chat_types": ["group"]},
@@ -98,7 +92,10 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _normalize_platform(platform: str) -> str:
-    return str(platform or "").strip().lower() or "qq"
+    normalized = str(platform or "").strip().lower() or "qq"
+    if normalized not in RUNTIME_PLATFORMS:
+        raise PromptFlowError(f"platform 不支持: {normalized}")
+    return normalized
 
 
 def _applies(item: dict[str, Any], chat_type: str, platform: str) -> bool:
@@ -136,7 +133,7 @@ def _normalize_platforms(item: dict[str, Any], *, label: str) -> list[str]:
     if isinstance(raw, str):
         raw = [raw]
     values = [str(value).strip().lower() for value in raw if str(value).strip()]
-    invalid = sorted(value for value in set(values) if not _PLATFORM_RE.fullmatch(value))
+    invalid = sorted(set(values) - RUNTIME_PLATFORMS)
     if invalid:
         raise PromptFlowError(f"{label}.platforms 不支持: {', '.join(invalid)}")
     return sorted(set(values), key=values.index)
@@ -178,57 +175,37 @@ def _validate_reserved_node_identity(node: dict[str, Any]) -> None:
     template_key = str(node.get("template_key") or "").strip()
     runtime_key = str(node.get("runtime_key") or "").strip()
 
-    expected_runtime_id = ""
-    if node_id in _RESERVED_RUNTIME_NODE_IDS:
-        expected_runtime_id = node_id
-    elif runtime_key in _RESERVED_RUNTIME_NODE_IDS:
-        expected_runtime_id = runtime_key
-    if expected_runtime_id:
-        label = f"singleton {expected_runtime_id}"
-        if node_id != expected_runtime_id:
-            raise PromptFlowError(
-                f"{label} node_id must be {expected_runtime_id}, got {node_id or '<empty>'}"
-            )
-        if node_type != "runtime":
-            raise PromptFlowError(
-                f"{label} node_type must be runtime, got {node_type or '<empty>'}"
-            )
-        if runtime_key != expected_runtime_id:
-            raise PromptFlowError(
-                f"{label} runtime_key must be {expected_runtime_id}, got {runtime_key or '<empty>'}"
-            )
-        if template_key:
-            raise PromptFlowError(
-                f"{label} template_key must be empty, got {template_key}"
-            )
+    contract = reserved_contract_by_node_id().get(node_id)
+    contract = contract or reserved_contract_by_template_key().get(template_key)
+    contract = contract or reserved_contract_by_runtime_key().get(runtime_key)
+    if contract is None:
+        return
 
-    expected_policy_id = ""
-    expected_policy_template = ""
-    if node_id in _RESERVED_POLICY_NODE_IDS:
-        expected_policy_id = node_id
-        expected_policy_template = _RESERVED_POLICY_NODE_IDS[node_id]
-    elif template_key in _RESERVED_POLICY_TEMPLATE_KEYS:
-        expected_policy_id = _RESERVED_POLICY_TEMPLATE_KEYS[template_key]
-        expected_policy_template = template_key
-    if expected_policy_id:
-        label = f"{expected_policy_id.removesuffix('_policy')} policy"
-        if node_id != expected_policy_id:
-            raise PromptFlowError(
-                f"{label} node_id must be {expected_policy_id}, got {node_id or '<empty>'}"
-            )
-        if node_type != "template":
-            raise PromptFlowError(
-                f"{label} node_type must be template, got {node_type or '<empty>'}"
-            )
-        if template_key != expected_policy_template:
-            raise PromptFlowError(
-                f"{label} template_key must be {expected_policy_template}, "
-                f"got {template_key or '<empty>'}"
-            )
-        if runtime_key:
-            raise PromptFlowError(
-                f"{label} runtime_key must be empty, got {runtime_key}"
-            )
+    if node_id != contract.node_id:
+        raise PromptFlowError(
+            f"{contract.node_id} node_id must be {contract.node_id}, got {node_id or '<empty>'}"
+        )
+    if node_type != contract.node_type:
+        raise PromptFlowError(
+            f"{contract.node_id} node_type must be {contract.node_type}, got {node_type or '<empty>'}"
+        )
+    if template_key != contract.template_key:
+        raise PromptFlowError(
+            f"{contract.node_id} template_key must be {contract.template_key or '<empty>'}, "
+            f"got {template_key or '<empty>'}"
+        )
+    if runtime_key != contract.runtime_key:
+        raise PromptFlowError(
+            f"{contract.node_id} runtime_key must be {contract.runtime_key or '<empty>'}, "
+            f"got {runtime_key or '<empty>'}"
+        )
+
+    actual_platforms = frozenset(_normalize_platforms(node, label=f"node {node_id}"))
+    if actual_platforms != contract.platforms:
+        raise PromptFlowError(f"{contract.node_id} platforms do not match its reserved contract")
+    actual_chat_types = frozenset(_normalize_chat_types(node, label=f"node {node_id}"))
+    if actual_chat_types != contract.chat_types:
+        raise PromptFlowError(f"{contract.node_id} chat_types do not match its reserved contract")
 
 
 def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
@@ -310,6 +287,10 @@ def validate_flow(flow: dict[str, Any]) -> dict[str, Any]:
 def load_flow() -> PromptFlow:
     runtime = runtime_flow_path()
     default = default_flow_path()
+    try:
+        assert_no_symlink_components(runtime)
+    except FlowStorageError as exc:
+        raise PromptFlowError(f"runtime flow 路径包含符号链接或不安全组件: {exc}") from exc
     if runtime.exists():
         return PromptFlow(validate_flow(_read_json(runtime)), runtime, "runtime")
     if default.exists():
@@ -327,7 +308,7 @@ def _runtime_contract_platforms(flow: dict[str, Any]) -> list[str]:
     return sorted(platforms)
 
 
-def _validate_runtime_contract(flow: dict[str, Any]) -> None:
+def validate_runtime_contract(flow: dict[str, Any]) -> None:
     from types import SimpleNamespace
 
     from core.prompt_v2.audit import audit_prompt_plan
@@ -348,7 +329,12 @@ def _validate_runtime_contract(flow: dict[str, Any]) -> None:
                 for node in ordered_nodes
             ]
             audit = audit_prompt_plan(
-                SimpleNamespace(chat_type=chat_type, flow_sections=flow_sections)
+                SimpleNamespace(
+                    chat_type=chat_type,
+                    platform=platform,
+                    flow_sections=flow_sections,
+                ),
+                audit_messages=False,
             )
             if not audit.ok:
                 issues = "; ".join(audit.issues)
@@ -359,10 +345,13 @@ def _validate_runtime_contract(flow: dict[str, Any]) -> None:
 
 def save_flow(flow: dict[str, Any]) -> dict[str, Any]:
     normalized = validate_flow(flow)
-    _validate_runtime_contract(normalized)
+    validate_runtime_contract(normalized)
     path = runtime_flow_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    payload = (
+        json.dumps(normalized, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+    with flow_write_lock(path):
+        atomic_replace_bytes(path, payload)
     return {"saved": True, "runtime_path": str(path), "flow": normalized}
 
 

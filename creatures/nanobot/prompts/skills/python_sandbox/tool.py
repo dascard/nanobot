@@ -8,7 +8,7 @@ from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
 
-from sandbox import AnalysisSandbox
+from sandbox import AnalysisSandbox, PYTHON_ANALYSIS_DISABLED_MESSAGE
 
 
 class PythonSandboxTool(BaseTool):
@@ -62,5 +62,4 @@ class PythonSandboxTool(BaseTool):
         code = args.get("code", "")
         if not code.strip():
             return ToolResult(error="Missing 'code' argument")
-        result = self._get_sandbox().execute_python_analysis(code)
-        return ToolResult(output=result, exit_code=0)
+        return ToolResult(error=PYTHON_ANALYSIS_DISABLED_MESSAGE)

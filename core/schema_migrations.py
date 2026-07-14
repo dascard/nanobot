@@ -17,16 +17,22 @@ from uuid import uuid4
 from sqlalchemy import inspect, text
 
 from core.chat_delivery_outbox_schema import chat_delivery_outbox_table
+from core.chat_stream_identity import canonicalize_legacy_chat_stream_id
 from core.proactive_outreach_schema import proactive_outreach_leases_table
 from core.schema_validation import (
     SchemaMigrationValidationError as SchemaMigrationValidationError,
 )
 from core.sqlite_backup import create_sqlite_snapshot
+from core.sqlite_retry import run_sqlite_locked_retry
 from core.time_utils import db_now_naive
 
 
 MigrationFn = Callable[[Any, Any, str | None], None]
 _CHAT_LOG_METADATA_VERSION = "20260523_chat_log_metadata_columns"
+_SESSION_GUIDANCE_COLUMNS_VERSION = "20260712_chat_stream_session_guidance_columns"
+_CHAT_STREAM_IDENTITY_VERSION = "20260712_chat_stream_identity_normalization"
+_SCHEMA_MIGRATION_LOCK_ATTEMPTS = 8
+_SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS = 0.05
 
 
 def _ensure_table(conn: Any) -> None:
@@ -41,6 +47,14 @@ def _ensure_table(conn: Any) -> None:
 
 def _applied_versions(conn: Any) -> set[str]:
     _ensure_table(conn)
+    rows = conn.execute(text("SELECT version FROM schema_migrations")).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def _existing_applied_versions(conn: Any) -> set[str]:
+    """读取已存在的迁移版本，且不在备份前创建版本表。"""
+    if "schema_migrations" not in _table_names(conn):
+        return set()
     rows = conn.execute(text("SELECT version FROM schema_migrations")).fetchall()
     return {str(row[0]) for row in rows}
 
@@ -340,6 +354,73 @@ def _chat_stream_config_group_profile_mode(conn: Any, engine: Any, db_path: str 
             "UPDATE chat_stream_configs SET group_profile_mode = "
             "CASE WHEN enable_group_profile != 0 THEN 'on' ELSE 'off' END"
         ))
+
+
+def _chat_stream_session_guidance_columns(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    _add_missing_columns(conn, "chat_stream_configs", {
+        "session_guidance": "TEXT NOT NULL DEFAULT ''",
+        "session_guidance_updated_at": "TIMESTAMP",
+    })
+
+
+def _chat_stream_identity_rename_candidates(conn: Any) -> list[tuple[str, str]]:
+    if "chat_stream_configs" not in _table_names(conn):
+        return []
+
+    existing_ids = {
+        str(row[0])
+        for row in conn.execute(text(
+            "SELECT chat_stream_id FROM chat_stream_configs"
+        )).fetchall()
+        if row[0] is not None
+    }
+    aliases_by_target: dict[str, list[str]] = {}
+    for alias in sorted(existing_ids):
+        canonical = canonicalize_legacy_chat_stream_id(alias)
+        if canonical is None or canonical in existing_ids:
+            continue
+        aliases_by_target.setdefault(canonical, []).append(alias)
+
+    return [
+        (aliases[0], canonical)
+        for canonical, aliases in sorted(aliases_by_target.items())
+        if len(aliases) == 1
+    ]
+
+
+def _rename_chat_stream_identity_alias(
+    conn: Any,
+    alias: str,
+    canonical: str,
+) -> None:
+    result = conn.execute(
+        text(
+            "UPDATE chat_stream_configs SET chat_stream_id = :canonical "
+            "WHERE chat_stream_id = :alias"
+        ),
+        {"alias": alias, "canonical": canonical},
+    )
+    if result.rowcount != 1:
+        raise SchemaMigrationValidationError(
+            f"chat_stream_configs identity 更新行数异常: {alias!r} -> {canonical!r}"
+        )
+
+
+def _chat_stream_identity_normalization(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    for alias, canonical in _chat_stream_identity_rename_candidates(conn):
+        _rename_chat_stream_identity_alias(conn, alias, canonical)
+
+
+def _chat_stream_identity_needs_backup(conn: Any) -> bool:
+    return bool(_chat_stream_identity_rename_candidates(conn))
 
 
 def _chat_log_session_message_index(conn: Any, engine: Any, db_path: str | None) -> None:
@@ -1537,31 +1618,93 @@ MIGRATIONS: list[tuple[str, str, MigrationFn]] = [
         "remove persisted super user configuration and redact audit details",
         _super_user_config_cleanup,
     ),
+    (
+        _SESSION_GUIDANCE_COLUMNS_VERSION,
+        "chat stream session guidance columns",
+        _chat_stream_session_guidance_columns,
+    ),
+    (
+        _CHAT_STREAM_IDENTITY_VERSION,
+        "chat stream identity normalization",
+        _chat_stream_identity_normalization,
+    ),
 ]
 
 
-def run_schema_migrations(engine: Any, *, db_path: str | None = None) -> None:
-    with engine.connect() as conn:
-        if "schema_migrations" in _table_names(conn):
-            applied_before_transaction = {
-                str(row[0])
-                for row in conn.execute(text("SELECT version FROM schema_migrations")).fetchall()
-            }
-        else:
-            applied_before_transaction = set()
-
-    if (
+def _prepare_schema_migration_backup(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+) -> None:
+    applied_before_transaction = _existing_applied_versions(conn)
+    chat_log_backup_needed = (
         _CHAT_LOG_METADATA_VERSION not in applied_before_transaction
-        and _chat_log_metadata_needs_backup(engine)
+        and _chat_log_metadata_needs_backup(conn)
+    )
+    identity_backup_needed = (
+        _CHAT_STREAM_IDENTITY_VERSION not in applied_before_transaction
+        and _chat_stream_identity_needs_backup(conn)
+    )
+    drivername = str(getattr(getattr(engine, "url", None), "drivername", ""))
+    if drivername.startswith("sqlite") and (
+        chat_log_backup_needed or identity_backup_needed
     ):
         backup_path = _migration_backup_path(engine, db_path)
         if backup_path is not None:
             _backup_sqlite_db(backup_path)
 
+
+def _apply_pending_schema_migrations(
+    conn: Any,
+    engine: Any,
+    db_path: str | None,
+    applied: set[str],
+) -> None:
+    for version, name, fn in MIGRATIONS:
+        if version in applied:
+            continue
+        fn(conn, engine, db_path)
+        _record(conn, version, name)
+
+
+def run_schema_migrations(engine: Any, *, db_path: str | None = None) -> None:
+    drivername = str(getattr(getattr(engine, "url", None), "drivername", ""))
+    if drivername.startswith("sqlite"):
+        with engine.connect() as conn:
+            run_sqlite_locked_retry(
+                lambda: conn.exec_driver_sql("BEGIN IMMEDIATE"),
+                rollback=conn.rollback,
+                label="schema_migration_lock",
+                logger=logging.getLogger("nanobot"),
+                attempts=_SCHEMA_MIGRATION_LOCK_ATTEMPTS,
+                base_delay_seconds=_SCHEMA_MIGRATION_LOCK_RETRY_DELAY_SECONDS,
+            )
+            version_table_initialized = False
+            try:
+                _prepare_schema_migration_backup(conn, engine, db_path)
+                applied = _applied_versions(conn)
+                version_table_initialized = True
+                _apply_pending_schema_migrations(conn, engine, db_path, applied)
+            except BaseException as exc:
+                conn.rollback()
+                if version_table_initialized:
+                    try:
+                        _ensure_table(conn)
+                        conn.commit()
+                    except BaseException as recovery_exc:
+                        conn.rollback()
+                        add_note = getattr(exc, "add_note", None)
+                        if callable(add_note):
+                            add_note(
+                                "迁移回滚后恢复 schema_migrations 表失败: "
+                                f"{type(recovery_exc).__name__}: {recovery_exc}"
+                            )
+                raise
+            else:
+                conn.commit()
+        return
+
     with engine.begin() as conn:
+        _prepare_schema_migration_backup(conn, engine, db_path)
         applied = _applied_versions(conn)
-        for version, name, fn in MIGRATIONS:
-            if version in applied:
-                continue
-            fn(conn, engine, db_path)
-            _record(conn, version, name)
+        _apply_pending_schema_migrations(conn, engine, db_path, applied)

@@ -5,34 +5,144 @@ import json
 import pytest
 
 
+def _metrics_tool(
+    name: str,
+    *,
+    description: str = "测试工具",
+    parameters: dict | None = None,
+) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": parameters or {"type": "object", "properties": {}},
+        },
+    }
+
+
+def test_prompt_request_metrics_cover_wire_messages_and_tools():
+    from core.prompt_v2.request_metrics import calculate_request_metrics
+    from core.prompt_v2.section_renderer import sha256_text, stable_json
+
+    messages = [
+        {"role": "system", "content": "系统规则"},
+        {"role": "user", "content": "当前问题"},
+    ]
+    tools = [
+        _metrics_tool("reply", description="发送最终回复"),
+        _metrics_tool(
+            "search",
+            description="检索资料" * 40,
+            parameters={
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        ),
+    ]
+
+    metrics = calculate_request_metrics(messages=messages, tools=tools)
+
+    assert metrics.message_token_estimate > 0
+    assert metrics.tool_schema_token_estimate > 0
+    assert metrics.token_estimate == (
+        metrics.message_token_estimate + metrics.tool_schema_token_estimate
+    )
+    assert metrics.prompt_sha256 == sha256_text(stable_json({
+        "messages": messages,
+        "tools": tools,
+    }))
+
+    changed_tools = [
+        tools[0],
+        _metrics_tool(
+            "search",
+            description="扩展后的检索资料说明" * 100,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                },
+                "required": ["query"],
+            },
+        ),
+    ]
+    changed = calculate_request_metrics(messages=messages, tools=changed_tools)
+    assert changed.message_token_estimate == metrics.message_token_estimate
+    assert changed.tool_schema_token_estimate != metrics.tool_schema_token_estimate
+    assert changed.prompt_sha256 != metrics.prompt_sha256
+
+    empty = calculate_request_metrics(messages=messages, tools=[])
+    assert empty.tool_schema_token_estimate == 0
+    assert empty.token_estimate == empty.message_token_estimate
+
+    tuple_metrics = calculate_request_metrics(  # type: ignore[arg-type]
+        messages=tuple(messages),
+        tools=tuple(tools),
+    )
+    assert tuple_metrics == metrics
+
+
+def test_prompt_request_metrics_ignore_non_wire_management_metadata():
+    from core.prompt_v2.request_metrics import calculate_request_metrics
+    from core.tool_plan import normalize_wire_tool_schema
+
+    base = _metrics_tool("reply", description="发送回复")
+    with_metadata_a = {
+        **base,
+        "category": "output",
+        "risk_level": "low",
+        "label": "回复工具",
+    }
+    with_metadata_b = {
+        **base,
+        "category": "other",
+        "risk_level": "high",
+        "label": "已变更管理标签",
+    }
+    wire_a = normalize_wire_tool_schema(with_metadata_a)
+    wire_b = normalize_wire_tool_schema(with_metadata_b)
+
+    assert wire_a == wire_b
+    assert calculate_request_metrics(
+        messages=[{"role": "user", "content": "你好"}],
+        tools=[wire_a],
+    ) == calculate_request_metrics(
+        messages=[{"role": "user", "content": "你好"}],
+        tools=[wire_b],
+    )
+
+
 def test_prompt_v2_flow_selects_single_conditional_path_by_edge_condition():
     from core.prompt_v2.flow import ordered_nodes_for_chat
 
     flow = {
         "version": 1,
         "nodes": [
-            {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "private_policy", "type": "template", "template_key": "chat/branch_private"},
-            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group"},
-            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "base", "type": "template", "template_key": "chat/custom_base"},
+            {"id": "private_path", "type": "template", "template_key": "chat/custom_private"},
+            {"id": "group_path", "type": "template", "template_key": "chat/custom_group"},
+            {"id": "tail", "type": "template", "template_key": "chat/custom_tail"},
         ],
         "edges": [
-            {"from": "base", "to": "private_policy", "chat_types": ["private"]},
-            {"from": "base", "to": "group_policy", "chat_types": ["group"]},
-            {"from": "private_policy", "to": "current_user_event", "chat_types": ["private"]},
-            {"from": "group_policy", "to": "current_user_event", "chat_types": ["group"]},
+            {"from": "base", "to": "private_path", "chat_types": ["private"]},
+            {"from": "base", "to": "group_path", "chat_types": ["group"]},
+            {"from": "private_path", "to": "tail", "chat_types": ["private"]},
+            {"from": "group_path", "to": "tail", "chat_types": ["group"]},
         ],
     }
 
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
         "base",
-        "private_policy",
-        "current_user_event",
+        "private_path",
+        "tail",
     ]
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "group")] == [
         "base",
-        "group_policy",
-        "current_user_event",
+        "group_path",
+        "tail",
     ]
 
 
@@ -42,12 +152,12 @@ def test_prompt_v2_flow_rejects_ambiguous_outgoing_branch_condition():
     flow = {
         "version": 1,
         "nodes": [
-            {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "private_policy", "type": "template", "template_key": "chat/branch_private"},
-            {"id": "b", "type": "template", "template_key": "chat/identity_context"},
+            {"id": "base", "type": "template", "template_key": "chat/custom_base"},
+            {"id": "a", "type": "template", "template_key": "chat/custom_a"},
+            {"id": "b", "type": "template", "template_key": "chat/custom_b"},
         ],
         "edges": [
-            {"from": "base", "to": "private_policy", "chat_types": ["private"]},
+            {"from": "base", "to": "a", "chat_types": ["private"]},
             {"from": "base", "to": "b", "chat_types": ["private"]},
         ],
     }
@@ -62,19 +172,19 @@ def test_prompt_v2_flow_orders_multiple_entry_nodes_by_topology():
     flow = {
         "version": 1,
         "nodes": [
-            {"id": "identity", "type": "template", "template_key": "chat/identity_context"},
-            {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "identity", "type": "template", "template_key": "chat/custom_identity"},
+            {"id": "base", "type": "template", "template_key": "chat/custom_base"},
+            {"id": "tail", "type": "template", "template_key": "chat/custom_tail"},
         ],
         "edges": [
-            {"from": "base", "to": "current_user_event"},
+            {"from": "base", "to": "tail"},
         ],
     }
 
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
         "identity",
         "base",
-        "current_user_event",
+        "tail",
     ]
 
 
@@ -84,22 +194,22 @@ def test_prompt_v2_flow_ignores_nodes_only_used_by_inactive_conditions():
     flow = {
         "version": 1,
         "nodes": [
-            {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group"},
-            {"id": "runtime_context", "type": "runtime", "runtime_key": "runtime_context"},
-            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "base", "type": "template", "template_key": "chat/custom_base"},
+            {"id": "conditional_group", "type": "template", "template_key": "chat/custom_group"},
+            {"id": "runtime_stage", "type": "template", "template_key": "chat/custom_runtime"},
+            {"id": "tail", "type": "template", "template_key": "chat/custom_tail"},
         ],
         "edges": [
-            {"from": "base", "to": "group_policy", "chat_types": ["group"]},
-            {"from": "group_policy", "to": "runtime_context", "chat_types": ["private"]},
-            {"from": "runtime_context", "to": "current_user_event"},
+            {"from": "base", "to": "conditional_group", "chat_types": ["group"]},
+            {"from": "conditional_group", "to": "runtime_stage", "chat_types": ["private"]},
+            {"from": "runtime_stage", "to": "tail"},
         ],
     }
 
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
-        "group_policy",
-        "runtime_context",
-        "current_user_event",
+        "conditional_group",
+        "runtime_stage",
+        "tail",
     ]
 
 
@@ -109,20 +219,20 @@ def test_prompt_v2_flow_entry_is_derived_from_in_degree_not_node_order():
     flow = {
         "version": 1,
         "nodes": [
-            {"id": "identity", "type": "template", "template_key": "chat/identity_context"},
-            {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "identity", "type": "template", "template_key": "chat/custom_identity"},
+            {"id": "base", "type": "template", "template_key": "chat/custom_base"},
+            {"id": "tail", "type": "template", "template_key": "chat/custom_tail"},
         ],
         "edges": [
             {"from": "base", "to": "identity"},
-            {"from": "identity", "to": "current_user_event"},
+            {"from": "identity", "to": "tail"},
         ],
     }
 
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private")] == [
         "base",
         "identity",
-        "current_user_event",
+        "tail",
     ]
 
 
@@ -132,49 +242,49 @@ def test_prompt_v2_flow_filters_by_chat_type_and_platform():
     flow = {
         "version": 1,
         "nodes": [
-            {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "qq_common", "type": "template", "template_key": "chat/platform/qq/common", "platforms": ["qq"]},
-            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group", "chat_types": ["group"]},
+            {"id": "base", "type": "template", "template_key": "chat/custom_base"},
+            {"id": "qq_common", "type": "template", "template_key": "chat/custom_qq_common", "platforms": ["qq"]},
+            {"id": "group_path", "type": "template", "template_key": "chat/custom_group", "chat_types": ["group"]},
             {
                 "id": "qq_group",
                 "type": "template",
-                "template_key": "chat/platform/qq/group",
+                "template_key": "chat/custom_qq_group",
                 "chat_types": ["group"],
                 "platforms": ["qq"],
             },
-            {"id": "private_policy", "type": "template", "template_key": "chat/branch_private", "chat_types": ["private"]},
-            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "private_path", "type": "template", "template_key": "chat/custom_private", "chat_types": ["private"]},
+            {"id": "tail", "type": "template", "template_key": "chat/custom_tail"},
         ],
         "edges": [
             {"from": "base", "to": "qq_common", "platforms": ["qq"]},
-            {"from": "base", "to": "group_policy", "chat_types": ["group"], "platforms": ["web"]},
-            {"from": "qq_common", "to": "group_policy", "chat_types": ["group"], "platforms": ["qq"]},
-            {"from": "group_policy", "to": "qq_group", "chat_types": ["group"], "platforms": ["qq"]},
-            {"from": "qq_group", "to": "current_user_event", "chat_types": ["group"], "platforms": ["qq"]},
-            {"from": "group_policy", "to": "current_user_event", "chat_types": ["group"], "platforms": ["web"]},
-            {"from": "qq_common", "to": "private_policy", "chat_types": ["private"], "platforms": ["qq"]},
-            {"from": "base", "to": "private_policy", "chat_types": ["private"], "platforms": ["web"]},
-            {"from": "private_policy", "to": "current_user_event", "chat_types": ["private"]},
+            {"from": "base", "to": "group_path", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "qq_common", "to": "group_path", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "group_path", "to": "qq_group", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "qq_group", "to": "tail", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "group_path", "to": "tail", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "qq_common", "to": "private_path", "chat_types": ["private"], "platforms": ["qq"]},
+            {"from": "base", "to": "private_path", "chat_types": ["private"], "platforms": ["web"]},
+            {"from": "private_path", "to": "tail", "chat_types": ["private"]},
         ],
     }
 
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="qq")] == [
         "base",
         "qq_common",
-        "group_policy",
+        "group_path",
         "qq_group",
-        "current_user_event",
+        "tail",
     ]
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private", platform="qq")] == [
         "base",
         "qq_common",
-        "private_policy",
-        "current_user_event",
+        "private_path",
+        "tail",
     ]
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "private", platform="web")] == [
         "base",
-        "private_policy",
-        "current_user_event",
+        "private_path",
+        "tail",
     ]
 
 
@@ -184,28 +294,28 @@ def test_prompt_v2_flow_allows_disjoint_platform_branches_for_same_chat_type():
     flow = {
         "version": 1,
         "nodes": [
-            {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "qq", "type": "template", "template_key": "chat/platform/qq/group"},
-            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group"},
-            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "base", "type": "template", "template_key": "chat/custom_base"},
+            {"id": "qq", "type": "template", "template_key": "chat/custom_qq"},
+            {"id": "web", "type": "template", "template_key": "chat/custom_web"},
+            {"id": "tail", "type": "template", "template_key": "chat/custom_tail"},
         ],
         "edges": [
             {"from": "base", "to": "qq", "chat_types": ["group"], "platforms": ["qq"]},
-            {"from": "base", "to": "group_policy", "chat_types": ["group"], "platforms": ["web"]},
-            {"from": "qq", "to": "current_user_event", "chat_types": ["group"], "platforms": ["qq"]},
-            {"from": "group_policy", "to": "current_user_event", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "base", "to": "web", "chat_types": ["group"], "platforms": ["web"]},
+            {"from": "qq", "to": "tail", "chat_types": ["group"], "platforms": ["qq"]},
+            {"from": "web", "to": "tail", "chat_types": ["group"], "platforms": ["web"]},
         ],
     }
 
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="qq")] == [
         "base",
         "qq",
-        "current_user_event",
+        "tail",
     ]
     assert [node["id"] for node in ordered_nodes_for_chat(flow, "group", platform="web")] == [
         "base",
-        "group_policy",
-        "current_user_event",
+        "web",
+        "tail",
     ]
 
 
@@ -215,12 +325,12 @@ def test_prompt_v2_flow_rejects_overlapping_platform_branches():
     flow = {
         "version": 1,
         "nodes": [
-            {"id": "base", "type": "template", "template_key": "chat/main"},
-            {"id": "group_policy", "type": "template", "template_key": "chat/branch_group"},
-            {"id": "qq", "type": "template", "template_key": "chat/platform/qq/group"},
+            {"id": "base", "type": "template", "template_key": "chat/custom_base"},
+            {"id": "group_path", "type": "template", "template_key": "chat/custom_group"},
+            {"id": "qq", "type": "template", "template_key": "chat/custom_qq"},
         ],
         "edges": [
-            {"from": "base", "to": "group_policy", "chat_types": ["group"]},
+            {"from": "base", "to": "group_path", "chat_types": ["group"]},
             {"from": "base", "to": "qq", "chat_types": ["group"], "platforms": ["qq"]},
         ],
     }
@@ -235,10 +345,10 @@ def test_prompt_v2_flow_rejects_invalid_platform_values():
     flow = {
         "version": 1,
         "nodes": [
-            {"id": "base", "type": "template", "template_key": "chat/main", "platforms": ["QQ!"]},
-            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
+            {"id": "base", "type": "template", "template_key": "chat/custom_base", "platforms": ["QQ!"]},
+            {"id": "tail", "type": "template", "template_key": "chat/custom_tail"},
         ],
-        "edges": [{"from": "base", "to": "current_user_event"}],
+        "edges": [{"from": "base", "to": "tail"}],
     }
 
     with pytest.raises(PromptFlowError, match="platforms 不支持"):
@@ -394,6 +504,53 @@ def test_prompt_v2_save_flow_accepts_default_platform_branches(tmp_path, monkeyp
     assert runtime_path.exists() is True
 
 
+def test_prompt_v2_load_flow_rejects_dangling_runtime_symlink(
+    tmp_path,
+    monkeypatch,
+):
+    from core.prompt_v2 import flow as flow_module
+
+    runtime_path = tmp_path / "runtime" / "chat" / "flow.json"
+    runtime_path.parent.mkdir(parents=True)
+    runtime_path.symlink_to(tmp_path / "missing-flow.json")
+    monkeypatch.setattr(flow_module, "runtime_flow_path", lambda: runtime_path)
+    monkeypatch.setattr(
+        flow_module,
+        "default_flow_path",
+        lambda: tmp_path / "missing-default-flow.json",
+    )
+
+    with pytest.raises(flow_module.PromptFlowError, match="符号链接"):
+        flow_module.load_flow()
+
+
+def test_prompt_v2_load_flow_rejects_symlinked_runtime_parent(
+    tmp_path,
+    monkeypatch,
+):
+    from pathlib import Path
+
+    from core.prompt_v2 import flow as flow_module
+
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    escaped_chat = tmp_path / "escaped-chat"
+    escaped_chat.mkdir()
+    (escaped_chat / "flow.json").write_text(
+        Path("prompts.v2.default/chat/flow.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (runtime_root / "chat").symlink_to(
+        escaped_chat,
+        target_is_directory=True,
+    )
+    runtime_path = runtime_root / "chat" / "flow.json"
+    monkeypatch.setattr(flow_module, "runtime_flow_path", lambda: runtime_path)
+
+    with pytest.raises(flow_module.PromptFlowError, match="符号链接"):
+        flow_module.load_flow()
+
+
 def test_prompt_v2_template_values_and_runtime_context_include_platform():
     from core.prompt_v2.context_adapters import build_runtime_context, build_template_values
     from core.prompt_v2.schema import PromptCompileRequest
@@ -407,41 +564,69 @@ def test_prompt_v2_template_values_and_runtime_context_include_platform():
     assert render_scoped_template("chat/main", "platform={{ platform }}", values) == "platform=web"
 
     runtime_context = build_runtime_context(request, current_time=values["current_time"])
-    assert "platform: web" in runtime_context
-    assert "chat_type: group" in runtime_context
+    runtime_facts = json.loads(
+        runtime_context.split("<runtime_context>", 1)[1]
+        .split("</runtime_context>", 1)[0]
+        .strip()
+    )
+    assert runtime_facts["platform"] == "web"
+    assert runtime_facts["chat_type"] == "group"
+    assert values["group_id"] == "1001"
+    assert runtime_facts["group_id"] == "1001"
+    assert runtime_facts["is_super_user"] is False
+
+
+def test_prompt_v2_private_runtime_context_clears_misrouted_group_id():
+    from core.prompt_v2.context_adapters import build_runtime_context, build_template_values
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    request = PromptCompileRequest(
+        chat_type="private",
+        session_id="private_placeholder",
+        group_id="should-not-leak",
+    )
+
+    values = build_template_values(request, current_time="2026-07-13 02:00:00 CST")
+    runtime_context = build_runtime_context(request, current_time=values["current_time"])
+    runtime_facts = json.loads(
+        runtime_context.split("<runtime_context>", 1)[1]
+        .split("</runtime_context>", 1)[0]
+        .strip()
+    )
+
+    assert values["group_id"] == ""
+    assert "group_id" not in runtime_facts
+
+
+def test_prompt_v2_template_values_and_runtime_context_use_explicit_super_user_fact(
+    monkeypatch,
+):
+    from core.prompt_v2.context_adapters import build_runtime_context, build_template_values
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    monkeypatch.setattr("core.identity.is_super_user_id", lambda _value: False)
+    request = PromptCompileRequest(
+        chat_type="private",
+        sender_id="placeholder-user",
+        is_super_user=True,
+    )
+
+    values = build_template_values(request, current_time="2026-07-13 01:30:00 CST")
+    runtime_context = build_runtime_context(request, current_time=values["current_time"])
+    runtime_facts = json.loads(
+        runtime_context.split("<runtime_context>", 1)[1]
+        .split("</runtime_context>", 1)[0]
+        .strip()
+    )
+
+    assert values["is_super_user"] == "true"
+    assert runtime_facts["is_super_user"] is True
 
 
 @pytest.mark.asyncio
 async def test_prompt_v2_compile_plan_exposes_platform(monkeypatch):
-    from pathlib import Path
-    from types import SimpleNamespace
-
     from core.prompt_v2 import compiler
     from core.prompt_v2.schema import PromptCompileRequest
-
-    flow = {
-        "version": 1,
-        "nodes": [
-            {"id": "base", "type": "template", "template_key": "chat/main"},
-            {
-                "id": "private_policy",
-                "type": "template",
-                "template_key": "chat/branch_private",
-                "chat_types": ["private"],
-                "platforms": ["web"],
-            },
-            {"id": "current_user_event", "type": "runtime", "runtime_key": "current_user_event"},
-        ],
-        "edges": [
-            {"from": "base", "to": "private_policy", "chat_types": ["private"], "platforms": ["web"]},
-            {"from": "private_policy", "to": "current_user_event", "chat_types": ["private"], "platforms": ["web"]},
-        ],
-    }
-    monkeypatch.setattr(
-        compiler,
-        "load_flow",
-        lambda: SimpleNamespace(flow=flow, path=Path("test-flow.json"), source="test"),
-    )
 
     plan = await compiler.compile_prompt_plan(
         PromptCompileRequest(chat_type="private", platform="web", user_input="你好"),
@@ -449,7 +634,9 @@ async def test_prompt_v2_compile_plan_exposes_platform(monkeypatch):
 
     assert plan.platform == "web"
     assert plan.debug["platform"] == "web"
-    assert plan.debug["flow_node_ids"] == ["base", "private_policy", "current_user_event"]
+    assert plan.debug["flow_node_ids"][0] == "base_contract"
+    assert "private_policy" in plan.debug["flow_node_ids"]
+    assert plan.debug["flow_node_ids"][-1] == "current_user_event"
 
 
 @pytest.mark.asyncio
@@ -466,7 +653,7 @@ async def test_prompt_v2_default_flow_selects_qq_platform_templates():
     assert "qq_common_policy" in plan.debug["flow_node_ids"]
     assert "qq_group_policy" in plan.debug["flow_node_ids"]
     joined = "\n".join(str(message["content"]) for message in plan.messages)
-    assert "platform: qq" in joined
+    assert '"platform":"qq"' in joined
     assert "QQ 平台" in joined
     assert "QQ 群聊" in joined
 
@@ -485,7 +672,7 @@ async def test_prompt_v2_default_flow_skips_qq_templates_for_web_private():
     assert "qq_common_policy" not in plan.debug["flow_node_ids"]
     assert "qq_group_policy" not in plan.debug["flow_node_ids"]
     joined = "\n".join(str(message["content"]) for message in plan.messages)
-    assert "platform: web" in joined
+    assert '"platform":"web"' in joined
     assert "QQ 平台" not in joined
     assert "OneBot" not in joined
     assert "CQ 码" not in joined
@@ -520,7 +707,23 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
             expression_context="[ExpressionContext]\n- 哈哈\n[/ExpressionContext]",
             jargon_context="[JargonContext]\n- 梗=解释\n[/JargonContext]",
             runtime_tool_prompt="[RuntimeTool]\n规则：必须 reply/no_reply",
-            tool_schemas=[{"type": "function", "function": {"name": "reply"}}],
+            debug={
+                "message_token_estimate": -1,
+                "tool_schema_token_estimate": -1,
+                "token_estimate": -1,
+            },
+            tool_schemas=[
+                _metrics_tool("reply", description="发送最终回复"),
+                _metrics_tool(
+                    "no_reply",
+                    description="决定不回复",
+                    parameters={
+                        "type": "object",
+                        "properties": {"reason": {"type": "string"}},
+                        "required": ["reason"],
+                    },
+                ),
+            ],
         )
     )
 
@@ -536,7 +739,23 @@ async def test_prompt_v2_compiles_group_plan_without_duplicate_dynamic_sections(
     assert plan.request_json["messages"] == plan.messages
     assert plan.request_json["tools"] == plan.tool_schemas
     assert len(plan.prompt_sha256) == 64
-    assert plan.token_estimate > 0
+    assert plan.message_token_estimate > 0
+    assert plan.tool_schema_token_estimate > 0
+    assert plan.token_estimate == (
+        plan.message_token_estimate + plan.tool_schema_token_estimate
+    )
+    from core.prompt_v2.section_renderer import sha256_text, stable_json
+
+    assert plan.prompt_sha256 == sha256_text(stable_json(plan.request_json))
+    assert plan.debug["message_token_estimate"] == plan.message_token_estimate
+    assert plan.debug["tool_schema_token_estimate"] == plan.tool_schema_token_estimate
+    assert plan.debug["token_estimate"] == plan.token_estimate
+    detached_request = plan.request_json
+    detached_request["messages"][0]["content"] = "外部修改"
+    detached_request["tools"][0]["function"]["description"] = "外部修改"
+    assert plan.messages[0]["content"] != "外部修改"
+    assert plan.tool_schemas[0]["function"]["description"] != "外部修改"
+    assert plan.prompt_sha256 == sha256_text(stable_json(plan.request_json))
     assert plan.section_hashes["base_contract"]
     assert plan.section_hashes["runtime_tool_prompt"]
     assert plan.debug["history_message_count"] == 2
@@ -651,7 +870,8 @@ async def test_prompt_v2_flow_sections_describe_output_status_and_message_indexe
             user_input="CURRENT USER SECTION",
             persona_text="FALLBACK PERSONA",
             runtime_tool_prompt="RUNTIME TOOL SECTION",
-        )
+        ),
+        strict_audit=False,
     )
     sections = {section["node_id"]: section for section in plan.flow_sections}
     legacy_fields = {"node_id", "node_type", "template_key", "runtime_key"}
@@ -724,7 +944,10 @@ async def test_prompt_v2_compiles_private_plan_and_keeps_rules_separate():
     assert "## 私聊行为" in joined
     assert "## 群聊行为" not in joined
     assert "## 群聊发言时机" not in joined
-    assert plan.current_user_content == "<user_input>\n你好\n</user_input>"
+    assert plan.current_user_content == (
+        '<message_meta>\n{"sender_name":"用户"}\n</message_meta>\n'
+        "<user_input>\n你好\n</user_input>"
+    )
     assert sum("<user_input>" in str(m["content"]) for m in plan.messages) == 1
 
 
@@ -791,8 +1014,29 @@ async def test_prompt_v2_moves_group_memory_context_after_history_messages():
 
 
 def test_prompt_v2_audit_reports_duplicate_required_sections():
+    import copy
+
     from core.prompt_v2.audit import audit_prompt_plan
     from core.prompt_v2.schema import PromptPlan
+
+    flow_sections = _valid_prompt_v2_flow_sections("group")
+    for node_id in (
+        "persona_reference",
+        "runtime_tool_prompt",
+        "current_user_event",
+    ):
+        flow_sections.append(
+            copy.deepcopy(
+                next(section for section in flow_sections if section["node_id"] == node_id)
+            )
+        )
+    flow_sections.append(
+        next(
+            section
+            for section in _valid_prompt_v2_flow_sections("private")
+            if section["node_id"] == "private_policy"
+        )
+    )
 
     plan = PromptPlan(
         engine="v2",
@@ -805,59 +1049,53 @@ def test_prompt_v2_audit_reports_duplicate_required_sections():
         token_estimate=1,
         warnings=[],
         debug={},
-        flow_sections=[
-            {
-                "node_id": "private_policy",
-                "node_type": "template",
-                "template_key": "chat/branch_private",
-                "runtime_key": "",
-            },
-            *[
-                {
-                    "node_id": f"{runtime_key}_{index}",
-                    "node_type": "runtime",
-                    "template_key": "",
-                    "runtime_key": runtime_key,
-                }
-                for runtime_key in ("persona_reference", "runtime_tool_prompt", "current_user_event")
-                for index in range(2)
-            ],
-        ],
+        flow_sections=flow_sections,
     )
 
-    audit = audit_prompt_plan(plan)
+    audit = audit_prompt_plan(plan, audit_messages=False)
     assert audit.ok is False
-    assert any("current user input" in issue for issue in audit.issues)
-    assert any("runtime_tool_prompt" in issue for issue in audit.issues)
-    assert any("persona_reference" in issue for issue in audit.issues)
-    assert any("group plan must select its policy" in issue for issue in audit.issues)
-    assert any("group plan contains private policy" in issue for issue in audit.issues)
+    assert any(
+        "required flow section current_user_event must appear once, got 2" in issue
+        for issue in audit.issues
+    )
+    assert any(
+        "required flow section runtime_tool_prompt must appear once, got 2" in issue
+        for issue in audit.issues
+    )
+    assert any(
+        "required flow section persona_reference must appear once, got 2" in issue
+        for issue in audit.issues
+    )
+    assert any("forbidden flow section private_policy" in issue for issue in audit.issues)
 
 
-def _valid_prompt_v2_flow_sections(chat_type: str) -> list[dict[str, str]]:
+def _valid_prompt_v2_flow_sections(chat_type: str) -> list[dict[str, object]]:
+    from core.prompt_v2.flow_contract import required_contracts
+
     return [
         {
-            "node_id": f"{chat_type}_policy",
-            "node_type": "template",
-            "template_key": f"chat/branch_{chat_type}",
-            "runtime_key": "",
-        },
-        *[
-            {
-                "node_id": runtime_key,
-                "node_type": "runtime",
-                "template_key": "",
-                "runtime_key": runtime_key,
-            }
-            for runtime_key in ("persona_reference", "runtime_tool_prompt", "current_user_event")
-        ],
+            "node_id": contract.node_id,
+            "node_type": contract.node_type,
+            "template_key": contract.template_key,
+            "runtime_key": contract.runtime_key,
+            "origin": "flow",
+            "status": "emitted",
+            "message_indexes": [],
+        }
+        for contract in required_contracts("qq", chat_type)
     ]
 
 
-def test_prompt_v2_audit_accepts_legacy_sections_without_output_metadata():
+def test_prompt_v2_audit_rejects_sections_without_output_metadata():
     from core.prompt_v2.audit import audit_prompt_plan
     from core.prompt_v2.schema import PromptPlan
 
+    flow_sections = _valid_prompt_v2_flow_sections("private")
+    base = next(
+        section for section in flow_sections if section["node_id"] == "base_contract"
+    )
+    base.pop("origin")
+    base.pop("status")
     plan = PromptPlan(
         engine="prompt",
         chat_type="private",
@@ -869,10 +1107,14 @@ def test_prompt_v2_audit_accepts_legacy_sections_without_output_metadata():
         token_estimate=0,
         warnings=[],
         debug={},
-        flow_sections=_valid_prompt_v2_flow_sections("private"),
+        flow_sections=flow_sections,
     )
 
-    assert audit_prompt_plan(plan).ok is True
+    audit = audit_prompt_plan(plan, audit_messages=False)
+
+    assert audit.ok is False
+    assert "base_contract origin is required" in audit.issues
+    assert "base_contract status is required" in audit.issues
 
 
 def test_prompt_v2_audit_does_not_treat_explicit_empty_status_as_legacy():
@@ -899,10 +1141,10 @@ def test_prompt_v2_audit_does_not_treat_explicit_empty_status_as_legacy():
         flow_sections=flow_sections,
     )
 
-    audit = audit_prompt_plan(plan)
+    audit = audit_prompt_plan(plan, audit_messages=False)
 
     assert audit.ok is False
-    assert any("persona_reference status must be emitted" in issue for issue in audit.issues)
+    assert "persona_reference status is invalid" in audit.issues
 
 
 @pytest.mark.parametrize(
@@ -935,7 +1177,7 @@ def test_prompt_v2_audit_rejects_invalid_singleton_section_identity(runtime_key,
         flow_sections=flow_sections,
     )
 
-    audit = audit_prompt_plan(plan)
+    audit = audit_prompt_plan(plan, audit_messages=False)
 
     assert audit.ok is False
     assert any(runtime_key in issue for issue in audit.issues)
@@ -969,7 +1211,10 @@ def test_prompt_v2_audit_rejects_invalid_policy_section_identity(chat_type, inva
     from core.prompt_v2.schema import PromptPlan
 
     flow_sections = _valid_prompt_v2_flow_sections(chat_type)
-    flow_sections[0].update(invalid_fields)
+    policy_node_id = f"{chat_type}_policy"
+    next(
+        section for section in flow_sections if section["node_id"] == policy_node_id
+    ).update(invalid_fields)
     plan = PromptPlan(
         engine="prompt",
         chat_type=chat_type,
@@ -984,10 +1229,10 @@ def test_prompt_v2_audit_rejects_invalid_policy_section_identity(chat_type, inva
         flow_sections=flow_sections,
     )
 
-    audit = audit_prompt_plan(plan)
+    audit = audit_prompt_plan(plan, audit_messages=False)
 
     assert audit.ok is False
-    assert any(chat_type in issue for issue in audit.issues)
+    assert any(policy_node_id in issue for issue in audit.issues)
 
 
 @pytest.mark.asyncio
@@ -1045,7 +1290,10 @@ async def test_prompt_v2_strict_audit_rejects_missing_policy_template(monkeypatc
             strict_audit=True,
         )
 
-    assert any("private policy status must be emitted" in issue for issue in exc.value.issues)
+    assert any(
+        "required flow section private_policy status must be emitted" in issue
+        for issue in exc.value.issues
+    )
     section = next(
         section
         for section in exc.value.plan.flow_sections
@@ -1078,7 +1326,10 @@ async def test_prompt_v2_strict_audit_rejects_empty_policy_template(monkeypatch)
             strict_audit=True,
         )
 
-    assert any("private policy status must be emitted" in issue for issue in exc.value.issues)
+    assert any(
+        "required flow section private_policy status must be emitted" in issue
+        for issue in exc.value.issues
+    )
     section = next(
         section
         for section in exc.value.plan.flow_sections
@@ -1200,7 +1451,7 @@ async def test_prompt_v2_strict_audit_rejects_missing_singleton_flow_node(monkey
         )
 
     assert any(
-        "runtime_tool_prompt flow node must appear once, got 0" in issue
+        "required flow section runtime_tool_prompt must appear once, got 0" in issue
         for issue in exc.value.issues
     )
     fallback = next(
@@ -1227,8 +1478,16 @@ async def test_prompt_v2_strict_audit_raises_instead_of_returning_warning(monkey
 
     preview_plan = await compiler.compile_prompt_plan(
         PromptCompileRequest(chat_type="group", user_input="你好"),
+        strict_audit=False,
     )
     assert "audit broken" in preview_plan.warnings
+    assert preview_plan.message_token_estimate > 0
+    assert preview_plan.tool_schema_token_estimate == 0
+    assert preview_plan.token_estimate == preview_plan.message_token_estimate
+    assert preview_plan.debug["message_token_estimate"] == (
+        preview_plan.message_token_estimate
+    )
+    assert preview_plan.debug["tool_schema_token_estimate"] == 0
 
     with pytest.raises(PromptAuditError) as exc:
         await compiler.compile_prompt_plan(
@@ -1262,6 +1521,58 @@ async def test_prompt_v2_identity_context_renders_whitelisted_variables():
     assert "bot" in identity
     assert "{{" not in identity
     assert "}}" not in identity
+
+
+@pytest.mark.asyncio
+async def test_prompt_v2_runtime_fact_survives_identity_template_without_placeholder(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from core.prompt_v2 import compiler
+    from core.prompt_v2.schema import PromptCompileRequest
+
+    original_load_template = compiler.load_template
+
+    def load_template_without_authorization_placeholder(template_key):
+        loaded = original_load_template(template_key)
+        if template_key != "chat/identity_context":
+            return loaded
+        return SimpleNamespace(
+            body="<identity_context>\n固定身份\n</identity_context>",
+            path=loaded.path,
+        )
+
+    monkeypatch.setattr(compiler, "load_template", load_template_without_authorization_placeholder)
+
+    plan = await compiler.compile_prompt_plan(
+        PromptCompileRequest(
+            chat_type="private",
+            sender_id="placeholder-user",
+            is_super_user=True,
+            user_input="你好",
+            runtime_tool_prompt="[RuntimeTool]\n必须 reply/no_reply",
+        )
+    )
+
+    identity = next(
+        str(message["content"])
+        for message in plan.messages
+        if str(message["content"]).startswith("<identity_context>")
+    )
+    runtime_context = next(
+        str(message["content"])
+        for message in plan.messages
+        if str(message["content"]).startswith("<runtime_context>")
+    )
+    runtime_facts = json.loads(
+        runtime_context.split("<runtime_context>", 1)[1]
+        .split("</runtime_context>", 1)[0]
+        .strip()
+    )
+
+    assert identity == "<identity_context>\n固定身份\n</identity_context>"
+    assert runtime_facts["is_super_user"] is True
 
 
 @pytest.mark.asyncio

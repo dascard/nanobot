@@ -172,6 +172,7 @@ class PersonaStateMachine:
             "merged": 0,
             "conflicts": 0,
             "rejected": 0,
+            "processing_errors": 0,
             "reject_reasons": {},
         }
         if not candidates:
@@ -222,6 +223,7 @@ class PersonaStateMachine:
                 vec = embed_text(text)
             except Exception as e:
                 logger.warning(f"Embedding failed for text hash={hashlib.sha256(text.encode()).hexdigest()[:12]}: {e}")
+                stats["processing_errors"] += 1
                 continue
 
             domain = c.get("domain", "general")

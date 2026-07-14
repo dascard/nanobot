@@ -194,6 +194,8 @@ async def test_group_timing_timer_uses_legacy_routes_get_bridge_monkeypatch(monk
             assert session_id == "group_123"
             assert user_id == "group_123"
             assert metadata["group_id"] == "123"
+            assert metadata["is_superuser"] is False
+            assert type(metadata["is_superuser"]) is bool
             return ""
 
     monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: FakeRuntime())

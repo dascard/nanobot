@@ -16,6 +16,7 @@ _ADMIN_CHAT_CONFIG_ROUTE_SIGNATURES = (
     ("POST", "/api/v1/admin/block-rules/test"),
     ("GET", "/api/v1/admin/chat-streams"),
     ("GET", "/api/v1/admin/configs"),
+    ("PUT", "/api/v1/admin/configs"),
     ("GET", "/api/v1/admin/configs/{chat_stream_id:path}"),
     ("PUT", "/api/v1/admin/configs/{chat_stream_id:path}"),
     ("DELETE", "/api/v1/admin/configs/{chat_stream_id:path}"),
@@ -29,6 +30,7 @@ _CHAT_CONFIG_ROUTE_EXPORTS = (
     "ContentBlockRuleUpdate",
     "ContentBlockRuleTestRequest",
     "ConfigUpdate",
+    "ConfigUpsert",
     "_block_dict",
     "_content_block_dict",
     "_config_dict",
@@ -48,6 +50,7 @@ _CHAT_CONFIG_ROUTE_EXPORTS = (
     "list_chat_streams",
     "list_configs",
     "get_config",
+    "upsert_config",
     "update_config",
     "delete_config",
 )
@@ -100,6 +103,12 @@ def test_legacy_admin_routes_chat_config_imports_still_work():
     assert admin_routes.BlockRuleCreate(user_id="u1").user_id == "u1"
     assert admin_routes.ContentBlockRuleTestRequest(message="测试").message == "测试"
     assert admin_routes.ConfigUpdate(talk_value=0.7).talk_value == 0.7
+    assert admin_routes.ConfigUpsert(
+        platform="qq",
+        chat_type="private",
+        session_id="private_u1",
+        session_guidance="简洁回答",
+    ).session_guidance == "简洁回答"
     assert admin_routes._raw_group_id("group_123") == "123"
     assert admin_routes._group_stream_id("123") == "qq:123:group"
 
@@ -126,12 +135,23 @@ def test_admin_chat_config_routes_are_not_registered_twice():
 
 
 def test_admin_chat_config_static_configs_route_precedes_dynamic_path_route():
-    route_paths = [path for path, _route in _admin_route_entries()]
+    entries = _admin_route_entries()
 
-    list_index = route_paths.index("/api/v1/admin/configs")
-    detail_index = route_paths.index("/api/v1/admin/configs/{chat_stream_id:path}")
+    for method in ("GET", "PUT"):
+        static_index = next(
+            index
+            for index, (path, route) in enumerate(entries)
+            if path == "/api/v1/admin/configs"
+            and method in getattr(route, "methods", set())
+        )
+        dynamic_index = next(
+            index
+            for index, (path, route) in enumerate(entries)
+            if path == "/api/v1/admin/configs/{chat_stream_id:path}"
+            and method in getattr(route, "methods", set())
+        )
 
-    assert list_index < detail_index
+        assert static_index < dynamic_index
 
 
 def test_admin_chat_config_block_rules_test_route_precedes_dynamic_rule_routes():

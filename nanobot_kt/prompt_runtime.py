@@ -9,6 +9,52 @@ from typing import Any
 
 logger = logging.getLogger("nanobot.prompt_runtime")
 
+_SESSION_GUIDANCE_RESOLUTION_STATUSES = {
+    "not_requested",
+    "missing",
+    "empty",
+    "configured",
+}
+
+
+def _normalize_session_guidance_resolution_status(value: str) -> str:
+    status = str(value or "not_requested").strip().lower()
+    if status not in _SESSION_GUIDANCE_RESOLUTION_STATUSES:
+        raise ValueError(f"invalid session guidance resolution status: {status}")
+    return status
+
+
+def _build_prompt_trace_request(prompt_plan: Any) -> dict[str, Any]:
+    """生成不含会话指导正文的 Prompt trace 请求快照。"""
+    request_json = prompt_plan.request_json
+    guidance_summary = {
+        key: prompt_plan.debug.get(key)
+        for key in (
+            "session_guidance_chat_stream_id",
+            "session_guidance_configured",
+            "session_guidance_chars",
+            "session_guidance_sha256",
+            "session_guidance_resolution_status",
+            "session_guidance_status",
+        )
+        if key in prompt_plan.debug
+    }
+    replacement = json.dumps(
+        {
+            "session_guidance": "[REDACTED]",
+            **guidance_summary,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    for message in request_json.get("messages", []):
+        if not isinstance(message, dict) or message.get("role") != "system":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.startswith("<session_guidance>"):
+            message["content"] = replacement
+    return request_json
+
 
 @dataclass(frozen=True)
 class PromptRuntimeInput:
@@ -39,7 +85,11 @@ class PromptRuntimeInput:
     effort_constraint: str
     trace_id: str
     run_id: str
+    session_guidance: str = field(default="", repr=False)
+    session_guidance_chat_stream_id: str = ""
+    session_guidance_resolution_status: str = "not_requested"
     is_group: bool = False
+    is_super_user: bool = False
     group_profile_context: str = ""
     expression_context: str = ""
     jargon_context: str = ""
@@ -60,6 +110,9 @@ class PromptRuntimeResult:
     pre_event_messages: list[dict[str, Any]]
     event_content: Any
     meta_update: dict[str, Any] = field(default_factory=dict)
+    message_token_estimate: int = 0
+    tool_schema_token_estimate: int = 0
+    token_estimate: int = 0
 
 
 class PromptRuntimeAuditFailure(RuntimeError):
@@ -75,9 +128,16 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
 
     from core.prompt_v2.audit import PromptAuditError
     from core.prompt_v2.compiler import compile_prompt_plan
+    from core.prompt_v2.flow import PromptFlowError
     from core.prompt_v2.schema import PromptCompileRequest
     from core.tracing import PromptTracer
 
+    request_debug = dict(input.debug or {})
+    request_debug["session_guidance_resolution_status"] = (
+        _normalize_session_guidance_resolution_status(
+            input.session_guidance_resolution_status
+        )
+    )
     prompt_request = PromptCompileRequest(
         chat_type=input.chat_type,
         platform=input.platform,
@@ -87,6 +147,7 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         group_id=input.group_id,
         sender_name=input.sender_name,
         sender_id=input.sender_id,
+        is_super_user=input.is_super_user is True,
         session_name=input.session_name,
         trigger_reason=input.trigger_reason,
         timing_decision=input.timing_decision,
@@ -98,6 +159,8 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         bot_aliases=input.bot_aliases,
         user_input=input.user_input,
         persona_text=input.persona_text,
+        session_guidance=input.session_guidance,
+        session_guidance_chat_stream_id=input.session_guidance_chat_stream_id,
         history_header=input.history_header,
         history_messages=input.history_messages,
         group_profile_context=input.group_profile_context,
@@ -106,11 +169,11 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         runtime_tool_prompt=input.runtime_tool_prompt,
         effort_constraint=input.effort_constraint,
         tool_schemas=input.tool_schemas,
-        debug=input.debug,
+        debug=request_debug,
     )
     try:
         prompt_plan = await compile_prompt_plan(prompt_request, strict_audit=True)
-    except PromptAuditError as exc:
+    except (PromptAuditError, PromptFlowError, json.JSONDecodeError) as exc:
         audit_issues = list(getattr(exc, "issues", []) or [str(exc)])
         meta_update = {
             "prompt_engine": "prompt",
@@ -128,7 +191,10 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         prompt_key=prompt_plan.prompt_key,
         mode="prompt",
         variables=prompt_plan.debug,
-        rendered_content=json.dumps(prompt_plan.request_json, ensure_ascii=False),
+        rendered_content=json.dumps(
+            _build_prompt_trace_request(prompt_plan),
+            ensure_ascii=False,
+        ),
         token_estimate=prompt_plan.token_estimate,
         warnings=prompt_plan.warnings,
         prompt_source="Prompt Runtime",
@@ -170,6 +236,16 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         except Exception as exc:
             logger.warning("[PromptRuntime] failed to record persona injection: %s", exc)
     for key in (
+        "session_guidance_chat_stream_id",
+        "session_guidance_configured",
+        "session_guidance_chars",
+        "session_guidance_sha256",
+        "session_guidance_resolution_status",
+        "session_guidance_status",
+    ):
+        if key in prompt_plan.debug:
+            meta_update[key] = prompt_plan.debug[key]
+    for key in (
         "group_memory_injected",
         "group_memory_ids",
         "group_memory_skipped",
@@ -203,4 +279,7 @@ async def build_prompt_runtime(input: PromptRuntimeInput) -> PromptRuntimeResult
         pre_event_messages=prompt_plan.messages_without_current_user,
         event_content=prompt_plan.current_user_content,
         meta_update=meta_update,
+        message_token_estimate=prompt_plan.message_token_estimate,
+        tool_schema_token_estimate=prompt_plan.tool_schema_token_estimate,
+        token_estimate=prompt_plan.token_estimate,
     )

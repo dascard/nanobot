@@ -26,6 +26,13 @@ def test_effective_prompt_preview_request_defaults_to_canonical_prompt():
     body = EffectivePromptPreviewRequest()
 
     assert body.engine == "prompt"
+    assert body.session_guidance_override is None
+    assert EffectivePromptPreviewRequest(
+        session_guidance_override="",
+    ).session_guidance_override == ""
+    assert EffectivePromptPreviewRequest(
+        session_guidance_override="预览草稿",
+    ).session_guidance_override == "预览草稿"
 
 
 def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
@@ -66,7 +73,12 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         run_id=run.run_id,
         prompt_key="group_chat",
         mode="shadow",
-        variables={"user_input": "你好"},
+        variables={
+            "user_input": "你好",
+            "message_token_estimate": 6,
+            "tool_schema_token_estimate": 2,
+            "token_estimate": 8,
+        },
         rendered_content="系统提示词不应完整入库",
         token_estimate=8,
         warnings=["unused: x"],
@@ -75,7 +87,23 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         prompt_default_path="/default/group_chat.md",
         prompt_sha256="b" * 64,
     )
-    RunTracer.finish_run(run.run_id, status="success", output_preview="回复", latency_ms=12)
+    guidance_body = "TRACE_META_GUIDANCE_BODY_SENTINEL"
+    RunTracer.finish_run(
+        run.run_id,
+        status="success",
+        output_preview="回复",
+        latency_ms=12,
+        meta={
+            "platform": "qq",
+            "chat_type": "group",
+            "session_guidance_chat_stream_id": "qq:1001:group",
+            "session_guidance_configured": True,
+            "session_guidance_chars": len(guidance_body),
+            "session_guidance_sha256": "c" * 64,
+            "session_guidance_resolution_status": "configured",
+            "session_guidance_status": "emitted",
+        },
+    )
 
     db = TestingSessionLocal()
     try:
@@ -91,6 +119,10 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         assert log.prompt_runtime_path == "/runtime/group_chat.md"
         assert log.prompt_default_path == "/default/group_chat.md"
         assert log.prompt_sha256 == "b" * 64
+        assert json.loads(log.variables_json)["message_token_estimate"] == 6
+        assert json.loads(log.variables_json)["tool_schema_token_estimate"] == 2
+        assert json.loads(log.variables_json)["token_estimate"] == 8
+        assert log.token_estimate == 8
         assert log.rendered_preview != "系统提示词不应完整入库"
         assert "系统提示词" in log.rendered_preview
 
@@ -99,6 +131,11 @@ def test_tracer_records_runs_tools_and_prompt_logs(tmp_path, monkeypatch):
         assert run_row.latency_ms == 12
         assert run_row.prompt_source == "Legacy runtime prompt"
         assert run_row.prompt_sha256 == "a" * 64
+        run_meta = json.loads(run_row.meta_json)
+        assert run_meta["session_guidance_chat_stream_id"] == "qq:1001:group"
+        assert run_meta["session_guidance_chars"] == len(guidance_body)
+        assert run_meta["session_guidance_sha256"] == "c" * 64
+        assert guidance_body not in run_row.meta_json
     finally:
         db.close()
 

@@ -64,3 +64,57 @@ def test_tool_cache_facade_shares_runtime_state_and_honors_legacy_ttl(monkeypatc
 
     monkeypatch.setattr(news_tool, "NEWS_SEARCH_CACHE_TTL_SECONDS", -1)
     assert news_tool._get_cached_news_result(key) is None
+
+
+def test_runtime_cache_evicts_before_inserting_beyond_capacity():
+    from creatures.nanobot.prompts.skills.news_search import runtime_cache
+
+    cache = runtime_cache._NEWS_SEARCH_CACHE
+    cache.clear()
+    clock = iter(range(runtime_cache.NEWS_SEARCH_CACHE_MAX_ENTRIES + 1))
+    try:
+        for index in range(runtime_cache.NEWS_SEARCH_CACHE_MAX_ENTRIES):
+            runtime_cache._store_cached_news_result(
+                ("key", index),
+                f"value-{index}",
+                monotonic=lambda: next(clock),
+            )
+
+        runtime_cache._store_cached_news_result(
+            ("key", "new"),
+            "new-value",
+            monotonic=lambda: next(clock),
+        )
+
+        assert len(cache) == runtime_cache.NEWS_SEARCH_CACHE_MAX_ENTRIES
+        assert ("key", 0) not in cache
+        assert cache[("key", "new")][1] == "new-value"
+    finally:
+        cache.clear()
+
+
+def test_runtime_cache_updates_existing_key_without_evicting_other_entries():
+    from creatures.nanobot.prompts.skills.news_search import runtime_cache
+
+    cache = runtime_cache._NEWS_SEARCH_CACHE
+    cache.clear()
+    clock = iter(range(runtime_cache.NEWS_SEARCH_CACHE_MAX_ENTRIES + 1))
+    try:
+        for index in range(runtime_cache.NEWS_SEARCH_CACHE_MAX_ENTRIES):
+            runtime_cache._store_cached_news_result(
+                ("key", index),
+                f"value-{index}",
+                monotonic=lambda: next(clock),
+            )
+
+        runtime_cache._store_cached_news_result(
+            ("key", 0),
+            "updated-value",
+            monotonic=lambda: next(clock),
+        )
+
+        assert len(cache) == runtime_cache.NEWS_SEARCH_CACHE_MAX_ENTRIES
+        assert cache[("key", 0)][1] == "updated-value"
+        assert ("key", 1) in cache
+    finally:
+        cache.clear()

@@ -35,6 +35,137 @@ def test_tool_plan_builds_prompt_schemas_and_stable_hash(monkeypatch):
     assert plan.sha256 == same_plan.sha256
 
 
+def test_tool_plan_normalizes_wire_schema_and_returns_defensive_copies():
+    from core.tool_plan import ToolPlan
+
+    source_schema = {
+        "type": "function",
+        "category": "interaction",
+        "risk_level": "low",
+        "label": "回复",
+        "source": "runtime_override",
+        "function": {
+            "name": "reply",
+            "description": "回复用户",
+            "parameters": {
+                "type": "object",
+                "properties": {"content": {"type": "string"}},
+                "required": ["content"],
+            },
+            "strict": True,
+        },
+    }
+    plan = ToolPlan.from_effective_tools(
+        enabled={"reply": True},
+        chat_type="private",
+        tool_schemas=[source_schema],
+    )
+
+    first = plan.sent_tool_schemas
+    assert set(first[0]) == {"type", "function"}
+    assert set(first[0]["function"]) == {"name", "description", "parameters"}
+    assert first[0]["function"]["name"] == "reply"
+
+    source_schema["function"]["parameters"]["properties"]["content"]["type"] = "integer"
+    first[0]["function"]["description"] = "被调用方篡改"
+    second = plan.sent_tool_schemas
+    assert second[0]["function"]["description"] == "回复用户"
+    assert second[0]["function"]["parameters"]["properties"]["content"]["type"] == "string"
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        None,
+        {
+            "type": "event",
+            "function": {"name": "reply", "parameters": {}},
+        },
+        {"type": "function", "function": []},
+        {"type": "function", "function": {"parameters": {}}},
+        {"type": "function", "function": {"name": "", "parameters": {}}},
+        {
+            "type": "function",
+            "function": {"name": "reply", "parameters": []},
+        },
+    ],
+)
+def test_tool_plan_rejects_invalid_wire_schema(schema):
+    from core.tool_plan import ToolPlan
+
+    with pytest.raises(ValueError):
+        ToolPlan.from_effective_tools(
+            enabled={"reply": True},
+            chat_type="private",
+            tool_schemas=[schema],
+        )
+
+
+def test_tool_plan_hash_ignores_management_metadata():
+    from core.tool_plan import ToolPlan
+
+    wire = {
+        "type": "function",
+        "function": {
+            "name": "reply",
+            "description": "回复用户",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    with_metadata = {
+        **wire,
+        "category": "interaction",
+        "risk_level": "low",
+        "source": "runtime_override",
+    }
+
+    plain_plan = ToolPlan.from_effective_tools(
+        enabled={"reply": True},
+        chat_type="private",
+        tool_schemas=[wire],
+    )
+    metadata_plan = ToolPlan.from_effective_tools(
+        enabled={"reply": True},
+        chat_type="private",
+        tool_schemas=[with_metadata],
+    )
+
+    assert metadata_plan.sha256 == plain_plan.sha256
+
+
+def test_tool_plan_hash_changes_with_wire_description_or_parameters():
+    import copy
+
+    from core.tool_plan import ToolPlan
+
+    base = {
+        "type": "function",
+        "function": {
+            "name": "reply",
+            "description": "回复用户",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+    changed_description = copy.deepcopy(base)
+    changed_description["function"]["description"] = "新的回复说明"
+    changed_parameters = copy.deepcopy(base)
+    changed_parameters["function"]["parameters"]["properties"]["content"] = {
+        "type": "string"
+    }
+
+    def build(schema):
+        return ToolPlan.from_effective_tools(
+            enabled={"reply": True},
+            chat_type="private",
+            tool_schemas=[schema],
+        )
+
+    base_plan = build(base)
+
+    assert build(changed_description).sha256 != base_plan.sha256
+    assert build(changed_parameters).sha256 != base_plan.sha256
+
+
 def test_tool_plan_exposes_memory_query_by_default_and_can_disable(db_session):
     from core.database import ToolOverride
     from core.tool_plan import build_tool_plan
@@ -57,6 +188,45 @@ def test_tool_plan_exposes_memory_query_by_default_and_can_disable(db_session):
     assert "memory_query" not in disabled_plan.sent_tool_names
     assert all(schema["function"]["name"] != "memory_query" for schema in disabled_plan.sent_tool_schemas)
     assert "memory_query：测试禁用" in disabled_plan.runtime_tool_prompt
+
+
+def test_superuser_tool_plan_follows_request_preset_instead_of_identity(db_session):
+    from core.private_timing import _infer_effort
+    from core.tool_plan import build_tool_plan
+
+    _, simple_preset, _ = _infer_effort("这件事靠谱吗?", is_superuser=True)
+    simple_plan = build_tool_plan(
+        chat_type="private_superuser",
+        runtime_preset=simple_preset,
+        db=db_session,
+    )
+
+    assert simple_preset == "lightweight"
+    assert not {"bash", "edit", "write"} & simple_plan.sent_tool_names
+    assert {"reply", "no_reply"} <= simple_plan.sent_tool_names
+
+    _, task_preset, _ = _infer_effort(
+        "请审查这段代码并给出修复方案",
+        is_superuser=True,
+    )
+    task_plan = build_tool_plan(
+        chat_type="private_superuser",
+        runtime_preset=task_preset,
+        db=db_session,
+    )
+
+    assert task_preset == "full"
+    assert {"bash", "edit", "write"} <= task_plan.sent_tool_names
+
+    _, daily_preset, _ = _infer_effort("给我今日的 AI 日报", is_superuser=True)
+    daily_plan = build_tool_plan(
+        chat_type="private_superuser",
+        runtime_preset=daily_preset,
+        db=db_session,
+    )
+
+    assert daily_preset == "full"
+    assert "ai_daily" in daily_plan.sent_tool_names
 
 
 def test_platform_override_precedence_between_chat_type_group_and_user(db_session):
@@ -103,6 +273,38 @@ def test_platform_override_precedence_between_chat_type_group_and_user(db_sessio
     )
     assert enabled_platform_only["memory_query"] is True
     assert "memory_query" not in disabled_platform_only
+
+
+def test_group_override_only_applies_when_caller_supplies_group_scope(db_session):
+    from core.database import ToolOverride
+    from core.tool_plan import build_tool_plan
+
+    db_session.add(ToolOverride(
+        tool_name="memory_query",
+        scope_type="group",
+        scope_id="private_placeholder",
+        enabled=0,
+        reason="群级禁用",
+    ))
+    db_session.commit()
+
+    private_plan = build_tool_plan(
+        chat_type="private",
+        group_id="",
+        runtime_preset="full",
+        db=db_session,
+    )
+    group_plan = build_tool_plan(
+        chat_type="group",
+        group_id="private_placeholder",
+        runtime_preset="full",
+        db=db_session,
+    )
+
+    assert private_plan.enabled["memory_query"] is True
+    assert "memory_query" not in private_plan.disabled
+    assert group_plan.enabled["memory_query"] is False
+    assert group_plan.disabled["memory_query"] == "群级禁用"
 
 
 def test_platform_override_cannot_bypass_none_or_hard_constraints(db_session):
@@ -331,7 +533,10 @@ def test_tool_plan_native_schema_filter_uses_sent_tool_schemas():
     from types import SimpleNamespace
 
     from core.tool_plan import ToolPlan, tool_plan_scope
-    from nanobot_kt.tool_runtime import install_tool_plan_native_schema_filter
+    from nanobot_kt.tool_runtime import (
+        _tool_plan_native_schemas,
+        install_tool_plan_native_schema_filter,
+    )
 
     web_search_schema = {
         "type": "function",
@@ -378,6 +583,9 @@ def test_tool_plan_native_schema_filter_uses_sent_tool_schemas():
         schemas = controller._get_native_tool_schemas()
 
     assert [schema.name for schema in schemas] == ["web_search"]
+    assert [schema.to_api_format() for schema in _tool_plan_native_schemas(plan)] == list(
+        plan.sent_tool_schemas
+    )
     props = schemas[0].parameters["properties"]
     assert {"query", "limit", "provider"} <= set(props)
     assert "max_results" not in props

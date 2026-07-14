@@ -1,6 +1,27 @@
+import json
 from pathlib import Path
+import threading
+import time
 
 import pytest
+
+
+def _legacy_flow_without_session_guidance() -> dict:
+    flow = json.loads(
+        Path("prompts.v2.default/chat/flow.json").read_text(encoding="utf-8")
+    )
+    flow["nodes"] = [
+        node for node in flow["nodes"] if node["id"] != "session_guidance"
+    ]
+    flow["edges"] = [
+        edge
+        for edge in flow["edges"]
+        if "session_guidance" not in {edge["from"], edge["to"]}
+    ]
+    flow["edges"].append(
+        {"from": "identity_context", "to": "persona_reference"}
+    )
+    return flow
 
 
 def _write_template(path: Path, *, kind: str = "tool", tool_name: str = "group_analysis", body: str = "默认") -> None:
@@ -48,7 +69,13 @@ def test_prompt_v2_init_runtime_dir_copies_missing_files_without_overwrite(tmp_p
     runtime_dir = tmp_path / "runtime"
     (default_dir / "chat").mkdir(parents=True)
     (default_dir / "chat" / "main.md").write_text("DEFAULT MAIN\n", encoding="utf-8")
-    (default_dir / "chat" / "flow.json").write_text('{"nodes": [], "edges": []}\n', encoding="utf-8")
+    canonical_flow = Path("prompts.v2.default/chat/flow.json").read_text(
+        encoding="utf-8"
+    )
+    (default_dir / "chat" / "flow.json").write_text(
+        canonical_flow,
+        encoding="utf-8",
+    )
     (runtime_dir / "chat").mkdir(parents=True)
     (runtime_dir / "chat" / "main.md").write_text("RUNTIME MAIN\n", encoding="utf-8")
 
@@ -62,8 +89,190 @@ def test_prompt_v2_init_runtime_dir_copies_missing_files_without_overwrite(tmp_p
     assert result["runtime_dir"] == str(runtime_dir)
     assert result["source_dir"] == str(default_dir)
     assert result["copied"] == ["chat/flow.json"]
+    assert result["flow_migrated"] is False
+    assert result["flow_backup_path"] == ""
     assert (runtime_dir / "chat" / "main.md").read_text(encoding="utf-8") == "RUNTIME MAIN\n"
-    assert (runtime_dir / "chat" / "flow.json").read_text(encoding="utf-8") == '{"nodes": [], "edges": []}\n'
+    assert (
+        runtime_dir / "chat" / "flow.json"
+    ).read_text(encoding="utf-8") == canonical_flow
+
+
+def test_prompt_v2_init_runtime_dir_migrates_existing_legacy_flow(
+    tmp_path,
+    monkeypatch,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    (default_dir / "chat").mkdir(parents=True)
+    (default_dir / "chat" / "flow.json").write_text(
+        Path("prompts.v2.default/chat/flow.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    runtime_flow = runtime_dir / "chat" / "flow.json"
+    runtime_flow.parent.mkdir(parents=True)
+    original = (
+        json.dumps(
+            _legacy_flow_without_session_guidance(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    runtime_flow.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    result = init_prompt_v2_runtime_dir()
+
+    assert result["flow_migrated"] is True
+    backup_path = Path(result["flow_backup_path"])
+    assert backup_path.parent == (
+        tmp_path / "prompt_template_backups" / "session_guidance_flow"
+    )
+    assert backup_path.read_text(encoding="utf-8") == original
+    migrated = json.loads(runtime_flow.read_text(encoding="utf-8"))
+    assert sum(
+        node["id"] == "session_guidance" for node in migrated["nodes"]
+    ) == 1
+
+
+def test_prompt_v2_init_runtime_dir_rejects_broken_flow_symlink_before_copy(
+    tmp_path,
+    monkeypatch,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    source_flow = default_dir / "chat" / "flow.json"
+    source_flow.parent.mkdir(parents=True)
+    source_flow.write_text(
+        Path("prompts.v2.default/chat/flow.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    runtime_flow = runtime_dir / "chat" / "flow.json"
+    runtime_flow.parent.mkdir(parents=True)
+    escaped_target = tmp_path / "escaped-flow.json"
+    runtime_flow.symlink_to(escaped_target)
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    with pytest.raises(ValueError, match="符号链接"):
+        init_prompt_v2_runtime_dir()
+
+    assert not escaped_target.exists()
+
+
+def test_prompt_v2_init_runtime_dir_rejects_symlinked_template_parent_before_copy(
+    tmp_path,
+    monkeypatch,
+):
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    source_flow = default_dir / "chat" / "flow.json"
+    source_flow.parent.mkdir(parents=True)
+    source_flow.write_text(
+        Path("prompts.v2.default/chat/flow.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    runtime_dir.mkdir()
+    escaped_dir = tmp_path / "escaped-chat"
+    escaped_dir.mkdir()
+    (runtime_dir / "chat").symlink_to(escaped_dir, target_is_directory=True)
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    from core.prompt_v2.template_registry import init_prompt_v2_runtime_dir
+
+    with pytest.raises(ValueError, match="符号链接"):
+        init_prompt_v2_runtime_dir()
+
+    assert not (escaped_dir / "flow.json").exists()
+
+
+def test_prompt_v2_init_runtime_flow_copy_and_admin_save_share_write_lock(
+    tmp_path,
+    monkeypatch,
+):
+    from core.prompt_v2 import flow as flow_module
+    from core.prompt_v2 import template_registry
+
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    source_flow = default_dir / "chat" / "flow.json"
+    source_flow.parent.mkdir(parents=True)
+    source_flow.write_text(
+        Path("prompts.v2.default/chat/flow.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    runtime_flow = runtime_dir / "chat" / "flow.json"
+    runtime_flow.parent.mkdir(parents=True)
+    monkeypatch.setenv("NANOBOT_PROMPT_DEFAULT_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_RUNTIME_DIR", str(runtime_dir))
+
+    missing_checked = threading.Event()
+    release_copy = threading.Event()
+    save_started = threading.Event()
+    errors: list[BaseException] = []
+    real_exists = Path.exists
+    check_paused = False
+
+    def paused_exists(path):
+        nonlocal check_paused
+        exists = real_exists(path)
+        if Path(path) == runtime_flow and not check_paused:
+            check_paused = True
+            missing_checked.set()
+            if not release_copy.wait(timeout=5):
+                raise TimeoutError("等待并发保存超时")
+        return exists
+
+    monkeypatch.setattr(Path, "exists", paused_exists)
+
+    def run_copy():
+        try:
+            template_registry.init_prompt_v2_runtime_dir()
+        except BaseException as exc:  # pragma: no cover - 仅用于跨线程传递
+            errors.append(exc)
+
+    concurrent_flow = json.loads(source_flow.read_text(encoding="utf-8"))
+    concurrent_node = next(
+        node
+        for node in concurrent_flow["nodes"]
+        if node["id"] == "session_guidance"
+    )
+    concurrent_node["concurrent_note"] = "admin-save-must-win"
+
+    def run_save():
+        save_started.set()
+        try:
+            flow_module.save_flow(concurrent_flow)
+        except BaseException as exc:  # pragma: no cover - 仅用于跨线程传递
+            errors.append(exc)
+
+    copy_thread = threading.Thread(target=run_copy)
+    save_thread = threading.Thread(target=run_save)
+    copy_thread.start()
+    assert missing_checked.wait(timeout=5)
+    save_thread.start()
+    assert save_started.wait(timeout=5)
+    time.sleep(0.05)
+    release_copy.set()
+    copy_thread.join(timeout=5)
+    save_thread.join(timeout=5)
+
+    assert not copy_thread.is_alive()
+    assert not save_thread.is_alive()
+    assert errors == []
+    final_flow = json.loads(runtime_flow.read_text(encoding="utf-8"))
+    final_node = next(
+        node
+        for node in final_flow["nodes"]
+        if node["id"] == "session_guidance"
+    )
+    assert final_node["concurrent_note"] == "admin-save-must-win"
 
 
 def test_prompt_v2_init_runtime_dir_migrates_legacy_super_user_placeholder(

@@ -36,6 +36,7 @@ def get_active_summary(
     session_id: str,
     *,
     after_clear_at: datetime | None = None,
+    mutate_stale: bool = True,
 ) -> RollingSessionSummary | None:
     row = (
         db.query(RollingSessionSummary)
@@ -49,9 +50,10 @@ def get_active_summary(
     if row is None:
         return None
     if after_clear_at and row.updated_at and row.updated_at <= after_clear_at:
-        row.status = "archived"
-        row.updated_at = db_now_naive()
-        db.flush()
+        if mutate_stale:
+            row.status = "archived"
+            row.updated_at = db_now_naive()
+            db.flush()
         return None
     return row
 
@@ -61,6 +63,7 @@ def get_best_session_summary(
     session_id: str,
     *,
     after_clear_at: datetime | None = None,
+    mutate_stale: bool = True,
 ) -> RollingSessionSummary | None:
     """返回运行时应注入的最佳 active summary。
 
@@ -83,11 +86,12 @@ def get_best_session_summary(
     archived_at = db_now_naive()
     for row in rows:
         if after_clear_at and row.updated_at and row.updated_at <= after_clear_at:
-            row.status = "archived"
-            row.updated_at = archived_at
+            if mutate_stale:
+                row.status = "archived"
+                row.updated_at = archived_at
             continue
         valid.append(row)
-    if len(valid) != len(rows):
+    if mutate_stale and len(valid) != len(rows):
         db.flush()
     if not valid:
         return None
@@ -257,6 +261,7 @@ def maybe_rollup_session_summary(
     recent_raw_turn_ids: Sequence[int],
     raw_window_start_turn_id: int,
     current_user_input: str = "",
+    after_clear_at: datetime | None = None,
     force: bool = False,
     dry_run: bool = False,
 ) -> RollupResult:
@@ -277,7 +282,12 @@ def maybe_rollup_session_summary(
         return result
 
     old_covered = int(getattr(active_summary, "covered_until_turn_id", 0) or 0)
-    fresh = get_active_summary(db, session_id)
+    fresh = get_active_summary(
+        db,
+        session_id,
+        after_clear_at=after_clear_at,
+        mutate_stale=not dry_run,
+    )
     if fresh is not None and int(fresh.covered_until_turn_id or 0) > old_covered:
         result.summary = fresh
         result.skipped_reason = "already_rolled"

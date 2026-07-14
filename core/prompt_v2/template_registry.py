@@ -6,6 +6,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from core.prompt_v2.flow_storage import (
+    assert_no_symlink_components,
+    atomic_replace_bytes,
+    ensure_directory_without_symlinks,
+    flow_write_lock,
+)
+
 
 @dataclass(frozen=True)
 class TemplateRecord:
@@ -102,8 +109,7 @@ def runtime_template_dir() -> Path:
 
 def init_prompt_v2_runtime_dir() -> dict[str, Any]:
     source_dir = default_template_dir()
-    runtime_dir = runtime_template_dir()
-    runtime_dir.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ensure_directory_without_symlinks(runtime_template_dir())
     copied: list[str] = []
     if source_dir.exists():
         for source_path in sorted(source_dir.rglob("*")):
@@ -111,14 +117,40 @@ def init_prompt_v2_runtime_dir() -> dict[str, Any]:
                 continue
             rel = source_path.relative_to(source_dir)
             target_path = runtime_dir / rel
+            if rel.as_posix() == "chat/flow.json":
+                with flow_write_lock(target_path):
+                    assert_no_symlink_components(target_path)
+                    if target_path.exists():
+                        continue
+                    atomic_replace_bytes(target_path, source_path.read_bytes())
+                    copied.append(rel.as_posix())
+                continue
+            assert_no_symlink_components(target_path)
             if target_path.exists():
                 continue
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text(source_path.read_text(encoding="utf-8"), encoding="utf-8")
             copied.append(rel.as_posix())
 
+    flow_result = {
+        "flow_migrated": False,
+        "flow_backup_path": "",
+    }
+    runtime_flow = runtime_dir / "chat" / "flow.json"
+    if runtime_flow.exists() or runtime_flow.is_symlink():
+        from core.prompt_v2.flow_migrations import (
+            default_session_guidance_flow_backup_dir,
+            upgrade_runtime_flow_file,
+        )
+
+        flow_result = upgrade_runtime_flow_file(
+            runtime_flow,
+            backup_dir=default_session_guidance_flow_backup_dir(runtime_flow),
+        )
+
     migrated: list[str] = []
     for runtime_path in sorted(runtime_dir.rglob("*.md")):
+        assert_no_symlink_components(runtime_path)
         original = runtime_path.read_text(encoding="utf-8")
         updated = _LEGACY_SUPER_USER_LINE.sub(
             r"\g<indent>is_super_user: {{ is_super_user }}",
@@ -130,11 +162,16 @@ def init_prompt_v2_runtime_dir() -> dict[str, Any]:
         runtime_path.write_text(updated, encoding="utf-8")
         migrated.append(runtime_path.relative_to(runtime_dir).as_posix())
 
+    from core.prompt_v2.task_templates import inspect_live_task_templates
+
     return {
         "source_dir": str(source_dir),
         "runtime_dir": str(runtime_dir),
         "copied": copied,
         "migrated": migrated,
+        "task_contracts": inspect_live_task_templates(),
+        "flow_migrated": flow_result["flow_migrated"],
+        "flow_backup_path": flow_result["flow_backup_path"],
     }
 
 
@@ -266,3 +303,7 @@ def list_template_records() -> list[dict[str, Any]]:
         })
         records.append(record)
     return records
+
+
+def live_task_template_keys() -> list[str]:
+    return sorted(_TASK_TOOL_NAMES)

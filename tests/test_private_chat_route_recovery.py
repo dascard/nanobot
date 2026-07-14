@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from types import SimpleNamespace
@@ -25,7 +26,14 @@ def _handle(*, attempt_count: int):
     )
 
 
-def _install_chat_route_dependencies(monkeypatch, routes, bridge_calls):
+def _install_chat_route_dependencies(
+    monkeypatch,
+    routes,
+    bridge_calls,
+    *,
+    bridge=None,
+    use_real_non_streaming: bool = False,
+):
     from api import chat_pre_bridge_route_result
 
     async def resolve_pre_bridge_decision(*_args, **_kwargs):
@@ -84,14 +92,31 @@ def _install_chat_route_dependencies(monkeypatch, routes, bridge_calls):
             platform="qq",
         ),
     )
-    monkeypatch.setattr(routes, "get_bridge", lambda: object())
     monkeypatch.setattr(
-        routes.chat_runtime_facade,
-        "call_bridge_non_streaming",
-        call_bridge_non_streaming,
+        routes,
+        "get_bridge",
+        lambda: bridge if bridge is not None else object(),
     )
+    if not use_real_non_streaming:
+        monkeypatch.setattr(
+            routes.chat_runtime_facade,
+            "call_bridge_non_streaming",
+            call_bridge_non_streaming,
+        )
     monkeypatch.setattr(routes, "_finalize_private_buffer", finalize_private_buffer)
     monkeypatch.setattr(routes, "_pop_bridge_reply_meta", lambda *_args, **_kwargs: {})
+
+
+async def _wait_for_stream_finalizers() -> None:
+    from api import chat_route_runner
+
+    for _ in range(100):
+        tasks = tuple(chat_route_runner._STREAM_FINALIZER_TASKS)
+        if not tasks:
+            return
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.sleep(0)
+    raise AssertionError("stream finalizer 未在预期时间内结束")
 
 
 @pytest.mark.asyncio
@@ -266,6 +291,7 @@ async def test_nonstream_takeover_recovers_after_stream_complete_failure(
     from fastapi import BackgroundTasks
 
     from api import routes
+    from core.database import ChatDeliveryOutbox
     from core.inbound_idempotency import ClaimDecisionKind, InboundClaimDecision
 
     decisions = [
@@ -279,6 +305,13 @@ async def test_nonstream_takeover_recovers_after_stream_complete_failure(
         ),
     ]
     bridge_calls = []
+    complete_attempts = []
+    pushed: list[tuple[str, str, dict]] = []
+
+    class StreamingBridge:
+        async def handle_message(self, *_args, **_kwargs):
+            bridge_calls.append("bridge")
+            return "只应生成一次的回复"
 
     class FakeOwner:
         def __init__(self, handle):
@@ -294,6 +327,7 @@ async def test_nonstream_takeover_recovers_after_stream_complete_failure(
             return True
 
         async def complete(self, _completion):
+            complete_attempts.append(self.handle.attempt_count)
             if self.handle.attempt_count == 1:
                 raise RuntimeError("stream complete failed after persist")
             return True
@@ -303,7 +337,18 @@ async def test_nonstream_takeover_recovers_after_stream_complete_failure(
 
     monkeypatch.setattr(routes, "acquire_inbound_claim", lambda *_args: decisions.pop(0))
     monkeypatch.setattr(routes, "InboundClaimOwner", FakeOwner)
-    _install_chat_route_dependencies(monkeypatch, routes, bridge_calls)
+
+    async def record_push(target_type: str, target_id: str, envelope: dict) -> bool:
+        pushed.append((target_type, target_id, envelope))
+        return True
+
+    monkeypatch.setattr("core.daily_digest.push_envelope_to_qq", record_push)
+    _install_chat_route_dependencies(
+        monkeypatch,
+        routes,
+        bridge_calls,
+        bridge=StreamingBridge(),
+    )
 
     def request(*, stream: bool):
         return routes.ChatProxyRequest(
@@ -322,6 +367,7 @@ async def test_nonstream_takeover_recovers_after_stream_complete_failure(
         None,
     )
     stream_events = [event async for event in first.body_iterator]
+    await _wait_for_stream_finalizers()
     recovered = await routes.proxy_chat(
         request(stream=False),
         BackgroundTasks(),
@@ -338,8 +384,179 @@ async def test_nonstream_takeover_recovers_after_stream_complete_failure(
     assert recovered["status"] == "ok"
     assert recovered["reply"] == "只应生成一次的回复"
     assert bridge_calls == ["bridge"]
+    assert complete_attempts == [1, 2]
+    assert pushed == []
+    assert db_session.query(ChatDeliveryOutbox).count() == 0
     assert db_session.query(ChatLog).filter_by(user_id="recovery-user").count() == 2
     assert db_session.query(ConversationTurn).filter_by(user_id="recovery-user").count() == 2
+
+
+@pytest.mark.asyncio
+async def test_private_bridge_resolver_failure_returns_502_then_recovers_once(
+    db_session,
+    monkeypatch,
+):
+    from fastapi import BackgroundTasks, HTTPException
+
+    from api import chat_recovery, routes
+    from core.database import InboundMessageClaim
+
+    calls = {"bridge": 0, "model": 0}
+
+    class ResolverBridge:
+        async def handle_message(self, *_args, **_kwargs):
+            calls["bridge"] += 1
+            if calls["bridge"] == 1:
+                raise RuntimeError("session guidance resolver failed")
+            calls["model"] += 1
+            return "恢复后的私聊回复"
+
+    bridge = ResolverBridge()
+    _install_chat_route_dependencies(
+        monkeypatch,
+        routes,
+        [],
+        bridge=bridge,
+        use_real_non_streaming=True,
+    )
+
+    def request():
+        return routes.ChatProxyRequest(
+            user_id="recovery-user",
+            session_id="private_recovery-user",
+            query="resolver 恢复请求",
+            message_id="recovery-message",
+            client_meta={"platform": "qq"},
+        )
+
+    with pytest.raises(HTTPException) as raised:
+        await routes.proxy_chat(
+            request(),
+            BackgroundTasks(),
+            db_session,
+            None,
+        )
+    assert raised.value.status_code == 502
+    assert raised.value.detail == "系统暂时不可用，请稍后再试"
+
+    db_session.expire_all()
+    failed_claim = db_session.query(InboundMessageClaim).one()
+    assert failed_claim.status == "failed"
+    assert failed_claim.response_json == ""
+    assert failed_claim.attempt_count == 1
+    journal = db_session.query(ChatLog).one()
+    assert journal.role == "user"
+    assert journal.content == ""
+    assert json.loads(journal.meta_json)["kind"] == chat_recovery.REQUEST_JOURNAL_KIND
+    assert db_session.query(ConversationTurn).count() == 0
+    db_session.rollback()
+
+    recovered = await routes.proxy_chat(
+        request(),
+        BackgroundTasks(),
+        db_session,
+        None,
+    )
+
+    assert recovered["status"] == "ok"
+    assert recovered["reply"] == "恢复后的私聊回复"
+    assert calls == {"bridge": 2, "model": 1}
+    completed_claim = db_session.query(InboundMessageClaim).one()
+    assert completed_claim.status == "completed"
+    assert completed_claim.attempt_count == 2
+    assert db_session.query(ChatLog).count() == 2
+    assert db_session.query(ConversationTurn).count() == 2
+
+
+@pytest.mark.asyncio
+async def test_private_stream_resolver_failure_has_no_empty_push_or_outbox(
+    db_session,
+    monkeypatch,
+):
+    from fastapi import BackgroundTasks
+
+    from api import chat_recovery, routes
+    from core.database import ChatDeliveryOutbox, InboundMessageClaim
+
+    calls = {"bridge": 0, "model": 0}
+    pushed: list[tuple[str, str, dict]] = []
+
+    class ResolverBridge:
+        async def handle_message(self, *_args, **_kwargs):
+            calls["bridge"] += 1
+            if calls["bridge"] == 1:
+                raise RuntimeError("session guidance resolver failed")
+            calls["model"] += 1
+            return "流式失败后的恢复回复"
+
+    async def record_push(target_type, target_id, envelope):
+        pushed.append((target_type, target_id, envelope))
+        return True
+
+    bridge = ResolverBridge()
+    monkeypatch.setattr("core.daily_digest.push_envelope_to_qq", record_push)
+    _install_chat_route_dependencies(
+        monkeypatch,
+        routes,
+        [],
+        bridge=bridge,
+        use_real_non_streaming=True,
+    )
+
+    def request(*, stream: bool):
+        return routes.ChatProxyRequest(
+            user_id="recovery-user",
+            session_id="private_recovery-user",
+            query="流式 resolver 恢复请求",
+            message_id="recovery-message",
+            stream=stream,
+            client_meta={"platform": "qq"},
+        )
+
+    first = await routes.proxy_chat(
+        request(stream=True),
+        BackgroundTasks(),
+        db_session,
+        None,
+    )
+    stream_events = [event async for event in first.body_iterator]
+    await _wait_for_stream_finalizers()
+    decoded_events = []
+    for event in stream_events:
+        text = event.decode() if isinstance(event, bytes) else str(event)
+        decoded_events.append(json.loads(text.removeprefix("data: ").strip()))
+
+    assert any(event.get("status") == "error" for event in decoded_events)
+    assert all(event.get("status") != "done" for event in decoded_events)
+    assert pushed == []
+    db_session.expire_all()
+    failed_claim = db_session.query(InboundMessageClaim).one()
+    assert failed_claim.status == "failed"
+    assert failed_claim.response_json == ""
+    assert failed_claim.attempt_count == 1
+    assert db_session.query(ChatDeliveryOutbox).count() == 0
+    journal = db_session.query(ChatLog).one()
+    assert journal.role == "user"
+    assert journal.content == ""
+    assert json.loads(journal.meta_json)["kind"] == chat_recovery.REQUEST_JOURNAL_KIND
+    assert db_session.query(ConversationTurn).count() == 0
+    db_session.rollback()
+
+    recovered = await routes.proxy_chat(
+        request(stream=False),
+        BackgroundTasks(),
+        db_session,
+        None,
+    )
+
+    assert recovered["status"] == "ok"
+    assert recovered["reply"] == "流式失败后的恢复回复"
+    assert calls == {"bridge": 2, "model": 1}
+    assert pushed == []
+    assert db_session.query(ChatDeliveryOutbox).count() == 0
+    completed_claim = db_session.query(InboundMessageClaim).one()
+    assert completed_claim.status == "completed"
+    assert completed_claim.attempt_count == 2
 
 
 @pytest.mark.asyncio

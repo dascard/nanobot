@@ -111,3 +111,229 @@ async def test_legacy_adapter_memory_extract_uses_v2_task_template(monkeypatch):
     assert "我长期使用 Python" in captured["query"]
     assert captured["processed"] == [1]
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_output",
+    ["", "garbage", "{}", "[]", '{"candidates":{}}'],
+)
+async def test_memory_extract_contract_failure_keeps_logs_unprocessed(
+    monkeypatch,
+    model_output,
+):
+    from core.legacy_adapter import NanobotKTController
+    from core.prompt_v2.task_contracts import TaskOutputContractError
+
+    captured = {"processed": []}
+
+    class FakeMemory:
+        def get_unprocessed_logs(self, user_id):
+            return [{"id": 1, "role": "user", "content": "长期使用 Python"}]
+
+        def get_user_persona(self, user_id):
+            return "{}"
+
+        def mark_logs_processed(self, ids):
+            captured["processed"].extend(ids)
+
+    class FakeProvider:
+        calls = 0
+
+        async def invoke_raw(self, **_kwargs):
+            self.calls += 1
+            return model_output
+
+    class FakeAnalyst:
+        async def run(self, logs, provider):
+            return {}
+
+    engine = NanobotKTController.__new__(NanobotKTController)
+    engine.memory = FakeMemory()
+    engine.provider = FakeProvider()
+    engine.log_analyst = FakeAnalyst()
+
+    with pytest.raises(TaskOutputContractError):
+        await engine.evolve("u1")
+
+    assert engine.provider.calls == 2
+    assert captured["processed"] == []
+
+
+@pytest.mark.asyncio
+async def test_memory_extract_state_machine_failure_keeps_logs_unprocessed(monkeypatch):
+    from core.legacy_adapter import NanobotKTController
+
+    captured = {"processed": []}
+
+    class FakeMemory:
+        def get_unprocessed_logs(self, user_id):
+            return [{"id": 1, "role": "user", "content": "长期使用 Python"}]
+
+        def get_user_persona(self, user_id):
+            return "{}"
+
+        def mark_logs_processed(self, ids):
+            captured["processed"].extend(ids)
+
+    class FakeProvider:
+        async def invoke_raw(self, **_kwargs):
+            return '{"candidates":[{"text":"长期使用 Python"}]}'
+
+    class FakeAnalyst:
+        async def run(self, logs, provider):
+            return {}
+
+    class FailingStateMachine:
+        def __init__(self, db, user_id):
+            pass
+
+        def process_candidates(self, candidates):
+            raise RuntimeError("state machine rollback")
+
+    class FakeDb:
+        def close(self):
+            pass
+
+    monkeypatch.setattr("core.legacy_adapter.PersonaStateMachine", FailingStateMachine)
+    monkeypatch.setattr("core.legacy_adapter.SessionLocal", lambda: FakeDb())
+
+    engine = NanobotKTController.__new__(NanobotKTController)
+    engine.memory = FakeMemory()
+    engine.provider = FakeProvider()
+    engine.log_analyst = FakeAnalyst()
+
+    with pytest.raises(RuntimeError, match="state machine rollback"):
+        await engine.evolve("u1")
+
+    assert captured["processed"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "processing_stats,update_result,error_match",
+    [
+        ({"processing_errors": 1}, True, "candidate processing errors"),
+        ({"processing_errors": 0}, False, "persona persistence rejected"),
+    ],
+)
+async def test_memory_extract_post_parse_failure_keeps_logs_unprocessed(
+    monkeypatch,
+    processing_stats,
+    update_result,
+    error_match,
+):
+    from core.legacy_adapter import NanobotKTController
+
+    captured = {"processed": []}
+
+    class FakeMemory:
+        def get_unprocessed_logs(self, user_id):
+            return [{"id": 1, "role": "user", "content": "长期使用 Python"}]
+
+        def get_user_persona(self, user_id):
+            return "{}"
+
+        def get_system_prompt(self, user_id):
+            return "稳定系统提示"
+
+        def update_persona_and_prompt(self, user_id, persona_summary, system_prompt):
+            return update_result
+
+        def mark_logs_processed(self, ids):
+            captured["processed"].extend(ids)
+
+    class FakeProvider:
+        async def invoke_raw(self, **_kwargs):
+            return '{"candidates":[{"text":"长期使用 Python"}]}'
+
+    class FakeAnalyst:
+        async def run(self, logs, provider):
+            return {}
+
+    class FakeAuditor:
+        async def run(self, current_prompt, persona_summary, provider):
+            return {"final_system_prompt": "稳定系统提示"}
+
+    class FakeStateMachine:
+        def __init__(self, db, user_id):
+            pass
+
+        def process_candidates(self, candidates):
+            return dict(processing_stats)
+
+        def build_summary(self):
+            return "{}"
+
+    class FakeDb:
+        def close(self):
+            pass
+
+    monkeypatch.setattr("core.legacy_adapter.PersonaStateMachine", FakeStateMachine)
+    monkeypatch.setattr("core.legacy_adapter.SessionLocal", lambda: FakeDb())
+
+    engine = NanobotKTController.__new__(NanobotKTController)
+    engine.memory = FakeMemory()
+    engine.provider = FakeProvider()
+    engine.log_analyst = FakeAnalyst()
+    engine.prompt_auditor = FakeAuditor()
+
+    with pytest.raises(RuntimeError, match=error_match):
+        await engine.evolve("u1")
+
+    assert captured["processed"] == []
+
+
+@pytest.mark.asyncio
+async def test_memory_extract_code_fallback_keeps_payload_in_user_query(
+    tmp_path,
+    monkeypatch,
+):
+    from core.legacy_adapter import NanobotKTController
+
+    default_dir = tmp_path / "defaults"
+    runtime_dir = tmp_path / "runtime"
+    for base, body in (
+        (default_dir, "BROKEN DEFAULT"),
+        (runtime_dir, "BROKEN RUNTIME"),
+    ):
+        path = base / "tasks" / "memory_extract.md"
+        path.parent.mkdir(parents=True)
+        path.write_text(body, encoding="utf-8")
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_DIR", str(default_dir))
+    monkeypatch.setenv("NANOBOT_PROMPT_V2_RUNTIME_DIR", str(runtime_dir))
+
+    captured = {"processed": []}
+
+    class FakeMemory:
+        def get_unprocessed_logs(self, user_id):
+            return [{"id": 1, "role": "user", "content": "长期使用 Rust"}]
+
+        def get_user_persona(self, user_id):
+            return '{"preference":"UNIQUE_EXISTING_MEMORY_123"}'
+
+        def mark_logs_processed(self, ids):
+            captured["processed"].extend(ids)
+
+    class FakeProvider:
+        async def invoke_raw(self, *, query, system_prompt, **_kwargs):
+            captured["query"] = query
+            captured["system_prompt"] = system_prompt
+            return '{"candidates":[]}'
+
+    class FakeAnalyst:
+        async def run(self, logs, provider):
+            return {}
+
+    engine = NanobotKTController.__new__(NanobotKTController)
+    engine.memory = FakeMemory()
+    engine.provider = FakeProvider()
+    engine.log_analyst = FakeAnalyst()
+
+    await engine.evolve("u1")
+
+    assert "长期使用 Rust" in captured["query"]
+    assert "UNIQUE_EXISTING_MEMORY_123" in captured["query"]
+    assert "长期使用 Rust" not in captured["system_prompt"]
+    assert "UNIQUE_EXISTING_MEMORY_123" not in captured["system_prompt"]
+    assert captured["processed"] == [1]
+

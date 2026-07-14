@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
@@ -128,9 +129,9 @@ def _tool_schema_description(schema: dict[str, Any]) -> str:
 def _tool_schema_parameters(schema: dict[str, Any]) -> dict[str, Any]:
     function = schema.get("function")
     if isinstance(function, dict) and isinstance(function.get("parameters"), dict):
-        return dict(function["parameters"])
+        return copy.deepcopy(function["parameters"])
     if isinstance(schema.get("parameters"), dict):
-        return dict(schema["parameters"])
+        return copy.deepcopy(schema["parameters"])
     return {"type": "object", "properties": {}}
 
 

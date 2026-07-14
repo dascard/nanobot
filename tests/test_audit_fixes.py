@@ -20,39 +20,39 @@ class TestSandboxSecurity:
         """SQL 查询应拒绝写操作"""
         from sandbox import AnalysisSandbox
         sb = AnalysisSandbox()
-        
+
         for dangerous_sql in ["INSERT INTO users VALUES ('hack')", "DROP TABLE users", "DELETE FROM chat_logs"]:
             result = sb.run_query(dangerous_sql)
-            assert "Only SELECT queries are permitted" in result, f"Should block: {dangerous_sql}"
+            assert result.startswith("SQL Error:"), f"Should block: {dangerous_sql}"
 
     def test_python_blocks_os(self):
         """Python 沙箱应阻止 import os"""
         from sandbox import AnalysisSandbox
         sb = AnalysisSandbox()
         result = sb.execute_python_analysis("import os\nprint(os.listdir('.'))")
-        assert "blocked" in result.lower() or "error" in result.lower(), f"Should block os import, got: {result}"
+        assert "disabled" in result.lower(), f"Should disable Python execution, got: {result}"
 
     def test_python_blocks_subprocess(self):
         """Python 沙箱应阻止 import subprocess"""
         from sandbox import AnalysisSandbox
         sb = AnalysisSandbox()
         result = sb.execute_python_analysis("import subprocess\nsubprocess.run(['whoami'])")
-        assert "blocked" in result.lower() or "error" in result.lower()
+        assert "disabled" in result.lower()
 
     def test_python_blocks_open(self):
         """Python 沙箱应阻止 open() 文件"""
         from sandbox import AnalysisSandbox
         sb = AnalysisSandbox()
         result = sb.execute_python_analysis("f = open('/etc/passwd')\nprint(f.read())")
-        assert "error" in result.lower()
+        assert "disabled" in result.lower()
 
-    def test_python_normal_output(self):
-        """正常的 print 输出应能工作"""
+    def test_python_normal_output_is_disabled(self):
+        """没有 OS 级隔离时，普通 Python 也不能执行。"""
         from sandbox import AnalysisSandbox
         sb = AnalysisSandbox(db_path=":memory:")  # Use in-memory DB for tests
         result = sb.execute_python_analysis("print('hello from sandbox')")
-        assert "hello from sandbox" in result
-
+        assert "hello from sandbox" not in result
+        assert "disabled" in result.lower()
 
 class TestToolDispatch:
     """BUG-06: 验证 local tool 命令前缀剥离"""

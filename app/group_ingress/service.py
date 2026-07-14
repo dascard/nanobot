@@ -25,6 +25,7 @@ from core.inbound_idempotency import (
     acquire_inbound_claim,
     normalize_inbound_claim_key,
 )
+from core.identity import build_identity_vars, is_super_user_id
 from core.moderation import check_message_moderation_db
 from core.sqlite_retry import is_sqlite_locked_error
 from core.sqlite_retry import run_sqlite_locked_retry
@@ -282,7 +283,11 @@ class GroupIngressService:
                     label="group_before_claim_complete",
                     logger=logger,
                 )
-                await owner.complete(result.completion)
+                completed = await owner.complete(result.completion)
+                if completed is not True:
+                    raise InboundClaimOwnershipLostError(
+                        "群聊成功结算时已失去 claim owner"
+                    )
             return result.payload
         except BaseException as exc:
             self._rollback_request_session_best_effort()
@@ -682,12 +687,13 @@ class GroupIngressService:
                 exclude_message_ids=source_message_ids,
                 current_user_input=chat_query,
             )
-            from core.identity import build_identity_vars
             sender_id = str(getattr(req, "sender_id", "") or getattr(req, "user_id", "") or "")
+            is_super_user = is_super_user_id(sender_id)
             identity_vars = build_identity_vars(
                 sender_id=sender_id,
                 bot_name=ambient_meta.get("bot", {}).get("bot_name", ""),
                 bot_aliases=list(req.bot_aliases or []),
+                is_super_user=is_super_user,
             )
             client_meta = req.client_meta if isinstance(req.client_meta, dict) else {}
             platform = str(client_meta.get("platform") or "qq").strip().lower() or "qq"
@@ -699,6 +705,7 @@ class GroupIngressService:
                 "sender_name": req.sender_name,
                 "sender_id": sender_id,
                 "is_group": True,
+                "is_superuser": is_super_user,
                 "history_header": memory_header,
                 "history_messages": history_messages,
                 "group_id": req.group_id,

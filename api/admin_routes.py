@@ -5,7 +5,7 @@ import json
 import logging
 from hmac import compare_digest
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import config
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -196,6 +196,7 @@ from api.admin.chat_config_routes import (
     BlockRuleCreate as BlockRuleCreate,
     BlockRuleUpdate as BlockRuleUpdate,
     ConfigUpdate as ConfigUpdate,
+    ConfigUpsert as ConfigUpsert,
     ContentBlockRuleCreate as ContentBlockRuleCreate,
     ContentBlockRuleTestRequest as ContentBlockRuleTestRequest,
     ContentBlockRuleUpdate as ContentBlockRuleUpdate,
@@ -221,6 +222,7 @@ from api.admin.chat_config_routes import (
     update_block_rule as update_block_rule,
     update_config as update_config,
     update_content_block_rule as update_content_block_rule,
+    upsert_config as upsert_config,
 )
 from api.admin.sticker_routes import (
     GeneratedImageCreate as GeneratedImageCreate,
@@ -387,6 +389,7 @@ class EffectivePromptPreviewRequest(BaseModel):
     mode: Literal["legacy", "shadow", "managed"] = "shadow"
     user_input: str = ""
     runtime_preset: str = "full"
+    session_guidance_override: Any | None = None
 
 
 # ── Helpers ──

@@ -5,4 +5,4 @@ from core.prompt_v2.schema import PromptCompileRequest
 
 
 async def build_preview_plan(request: PromptCompileRequest):
-    return await compile_prompt_plan(request)
+    return await compile_prompt_plan(request, strict_audit=True)

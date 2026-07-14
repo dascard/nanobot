@@ -11,6 +11,16 @@ def _strip(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _iso(value: Any) -> str:
+    return value.isoformat(sep=" ", timespec="seconds") if value else ""
+
+
+def _redact_guidance_from_error(detail: str, guidance_text: str) -> str:
+    if not guidance_text:
+        return detail
+    return detail.replace(guidance_text, "[REDACTED]")
+
+
 def _recent_prompt_preview_logs(db: Session, body: Any) -> tuple[str, list[dict]]:
     from core.database import AgentRun, LLMApiRequestLog
     from core.tracing import row_to_dict
@@ -40,10 +50,22 @@ def _recent_prompt_preview_logs(db: Session, body: Any) -> tuple[str, list[dict]
 async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     """构建 canonical Prompt Runtime 有效预览。"""
     from core.context_builder import build_chat_context
+    from core.chat_stream_identity import (
+        ChatStreamIdentityError,
+        resolve_chat_stream_identity,
+    )
     from core.database import Persona
+    from core.identity import is_super_user_id
+    from core.prompt_v2.audit import PromptAuditError
     from core.prompt_v2 import compiler as prompt_compiler
     from core.prompt_v2.flow import PromptFlowError
     from core.prompt_v2.schema import PromptCompileRequest
+    from core.session_guidance import (
+        SessionGuidanceValidationError,
+        normalize_session_guidance,
+        resolve_session_guidance,
+        summarize_session_guidance,
+    )
     from core.tool_plan import build_tool_plan
     from fastapi import HTTPException
 
@@ -55,6 +77,57 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         f"group_{group_id}" if is_group and group_id else ""
     )
     user_id = _strip(getattr(body, "user_id", ""))
+    is_super_user = bool(user_id and is_super_user_id(user_id))
+    runtime_chat_type = (
+        "private_superuser"
+        if chat_type == "private" and is_super_user
+        else chat_type
+    )
+
+    session_guidance_override = getattr(body, "session_guidance_override", None)
+    try:
+        if session_guidance_override is not None:
+            if not session_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "session_guidance_identity_required",
+                        "message": "预览会话指导需要明确的 session_id",
+                    },
+                )
+            identity = resolve_chat_stream_identity(
+                platform=platform,
+                chat_type=chat_type,
+                session_id=session_id,
+            )
+            normalized_guidance = normalize_session_guidance(
+                session_guidance_override
+            )
+            session_guidance = summarize_session_guidance(
+                chat_stream_id=identity.chat_stream_id,
+                text=normalized_guidance,
+                updated_at=None,
+                status="configured" if normalized_guidance else "empty",
+            )
+        elif session_id:
+            session_guidance = resolve_session_guidance(
+                db,
+                platform=platform,
+                chat_type=chat_type,
+                session_id=session_id,
+            )
+        else:
+            session_guidance = summarize_session_guidance(
+                chat_stream_id="",
+                text="",
+                updated_at=None,
+                status="not_requested",
+            )
+    except (ChatStreamIdentityError, SessionGuidanceValidationError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
 
     persona_text = ""
     if user_id:
@@ -70,6 +143,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
         is_group=is_group,
         group_id=group_id,
         current_user_input=user_input,
+        read_only=True,
     )
     persona_debug: dict[str, Any] = {}
     if user_id:
@@ -89,7 +163,7 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     context_debug = {**history_debug, **persona_debug}
     runtime_preset = _strip(getattr(body, "runtime_preset", "")) or "full"
     tool_plan = build_tool_plan(
-        chat_type=chat_type,
+        chat_type=runtime_chat_type,
         group_id=group_id,
         user_id=user_id,
         platform=platform,
@@ -116,17 +190,38 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
                 group_id=group_id,
                 sender_name=str(getattr(body, "sender_name", "") or ""),
                 sender_id=user_id,
+                is_super_user=is_super_user,
                 user_input=user_input,
                 persona_text=persona_text or "无已存储画像",
                 history_header=history_header,
                 history_messages=history_messages,
+                session_guidance=session_guidance.text,
+                session_guidance_chat_stream_id=session_guidance.chat_stream_id,
                 runtime_tool_prompt=runtime_tool_prompt,
                 tool_schemas=configured_tool_schemas,
-                debug={"history_debug": history_debug, "context_debug": context_debug},
-            )
+                debug={
+                    "history_debug": history_debug,
+                    "context_debug": context_debug,
+                    **session_guidance.debug,
+                },
+            ),
+            strict_audit=True,
         )
-    except PromptFlowError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (PromptAuditError, PromptFlowError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=_redact_guidance_from_error(str(exc), session_guidance.text),
+        ) from exc
+    preview_degraded_reasons = []
+    if history_debug.get("model_dependent_retrieval_skipped"):
+        preview_degraded_reasons.append(
+            "group_memory_model_calls_forbidden"
+        )
+    warnings = list(plan.warnings)
+    warnings.extend(
+        reason for reason in preview_degraded_reasons
+        if reason not in warnings
+    )
     recent_run_id, recent_logs = _recent_prompt_preview_logs(db, body)
     tools = [
         {"name": name, "enabled": bool(enabled.get(name, True))}
@@ -135,18 +230,27 @@ async def preview_effective_prompt_v2(body: Any, db: Session) -> dict[str, Any]:
     return {
         "engine": "prompt",
         "chat_type": chat_type,
+        "runtime_chat_type": runtime_chat_type,
+        "is_super_user": is_super_user,
         "platform": platform,
         "session_id": session_id,
         "user_id": user_id,
         "group_id": group_id,
+        **session_guidance.debug,
+        "session_guidance_updated_at": _iso(session_guidance.updated_at),
         "prompt_key": plan.prompt_key,
         "prompt_mode": "prompt",
         "prompt_source": "Prompt Runtime",
         "prompt_runtime_path": plan.debug.get("template_path", ""),
         "prompt_default_path": plan.debug.get("template_path", ""),
         "prompt_sha256": plan.prompt_sha256,
+        "message_token_estimate": plan.message_token_estimate,
+        "tool_schema_token_estimate": plan.tool_schema_token_estimate,
+        "token_estimate": plan.token_estimate,
+        "preview_exact": not preview_degraded_reasons,
+        "preview_degraded_reasons": preview_degraded_reasons,
         "section_hashes": plan.section_hashes,
-        "warnings": plan.warnings,
+        "warnings": warnings,
         "debug": plan.debug,
         "history_debug": history_debug,
         "context_debug": context_debug,

@@ -42,7 +42,10 @@ def test_ai_daily_ingest_failure_does_not_fail_tool(monkeypatch):
 
     assert result.success
     payload = json.loads(result.output)
-    assert payload["NANOBOT_REPLY_OUTPUT"]["content"] == html
+    rich = payload["NANOBOT_RICH_OUTPUT"]
+    assert rich["report_kind"] == "ai_daily"
+    assert rich["content_type"] == "text/html"
+    assert rich["html"] == html
 
 
 def test_duplicate_url_does_not_create_duplicate_active_document(db_session):
@@ -165,9 +168,13 @@ def test_news_daily_pipeline_filters_seen_items_before_digest(monkeypatch):
 
     monkeypatch.setattr(daily_tool, "_get_providers", lambda mode: [])
     monkeypatch.setattr(daily_tool, "collect_sources", lambda providers, limit_per_source=8, timeout=10: [seen, fresh])
-    monkeypatch.setattr(daily_tool, "filter_recent", lambda items, hours=72: items)
+    monkeypatch.setattr(
+        daily_tool,
+        "filter_for_ai_daily_request",
+        lambda items, request: items,
+    )
     monkeypatch.setattr(daily_tool, "dedup_items", lambda items: items)
-    monkeypatch.setattr(daily_tool, "rank_items", lambda items: items)
+    monkeypatch.setattr(daily_tool, "rank_items", lambda items, now=None: items)
     monkeypatch.setattr(
         "core.ai_daily_ingest.best_effort_filter_new_ai_daily_items",
         lambda items, query="": ([item for item in items if item.url.endswith("/new")], {"skipped_seen": 1}),
@@ -187,7 +194,16 @@ def test_news_daily_pipeline_filters_seen_items_before_digest(monkeypatch):
 
     monkeypatch.setattr(daily_tool, "build_digest_deterministic", fake_digest)
 
-    html = daily_tool.run_pipeline("今天 AI 新闻", mode="fast", limit=8)
+    from core.tool_contracts.ai_daily import parse_ai_daily_request
+
+    request = parse_ai_daily_request(
+        {
+            "query": "今天 AI 新闻",
+            "freshness": "custom",
+            "target_date": "2026-05-27",
+        }
+    )
+    html = daily_tool.run_pipeline(request, mode="fast")
 
     assert "<html" in html
     assert captured["urls"] == ["https://example.com/new"]

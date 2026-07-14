@@ -7,6 +7,9 @@ CSS = Path("webui/src/index.css")
 LLM_LOGS_JS = Path("webui/src/features/agent-runs/LLMApiLogsPage.jsx")
 MODELS_JS = Path("webui/src/features/models/ModelsPage.jsx")
 PROMPT_JS = Path("webui/src/features/prompt/PromptPages.jsx")
+SESSION_CONFIG_JS = Path(
+    "webui/src/features/session-config/SessionConfigsPage.jsx"
+)
 REPLY_EVAL_JS = Path("webui/src/features/reply-eval/ReplyEvalPage.jsx")
 TOOLS_JS = Path("webui/src/features/tools/ToolsPage.jsx")
 EVALS_JS = Path("webui/src/features/evals/EvalsPage.jsx")
@@ -17,7 +20,14 @@ def read_app() -> str:
 
 
 def read_ui_sources() -> str:
-    paths = [APP_JS, LLM_LOGS_JS, MODELS_JS, PROMPT_JS, REPLY_EVAL_JS]
+    paths = [
+        APP_JS,
+        LLM_LOGS_JS,
+        MODELS_JS,
+        PROMPT_JS,
+        REPLY_EVAL_JS,
+        SESSION_CONFIG_JS,
+    ]
     return "\n".join(path.read_text(encoding="utf-8") for path in paths if path.exists())
 
 
@@ -60,6 +70,9 @@ def test_key_filters_have_labels_or_aria_labels():
     assert "Field id=\"llm-log-status-filter\"" in source
     assert "id=\"model-catalog-query\"" in source
     assert "Field id=\"model-catalog-provider\"" in source
+    assert "Field id=\"session-config-platform-filter\"" in source
+    assert "Field id=\"session-config-chat-type-filter\"" in source
+    assert "Field id=\"session-config-guidance-filter\"" in source
 
 
 def test_reply_eval_case_editor_controls_are_labelled():

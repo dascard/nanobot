@@ -1,8 +1,10 @@
+import hashlib
+import json
+import logging
+
 import pytest
 from core.database import ChatLog
 from fastapi import BackgroundTasks
-import json
-import logging
 
 
 def _fast_private_reply(monkeypatch):
@@ -1573,6 +1575,52 @@ async def test_group_message_passes_client_platform_to_bridge(db_session, monkey
 
 
 @pytest.mark.asyncio
+async def test_group_message_passes_boolean_super_user_actor_fact_to_bridge(
+    db_session,
+    monkeypatch,
+):
+    """群 actor 事实应是服务端布尔值，不能只依赖模板字符串。"""
+    from unittest.mock import AsyncMock
+
+    from api.routes import GroupMessageRequest, group_message
+    from app.group_ingress import service as group_ingress_service
+
+    async def fake_process(*args, **kwargs):
+        return {"action": "continue", "generation": 1, "reason": "reply now"}
+
+    mock_bridge = AsyncMock()
+    mock_bridge.handle_message = AsyncMock(return_value="群聊回复")
+    monkeypatch.setattr("api.routes.get_bridge", lambda: mock_bridge)
+    monkeypatch.setattr("core.timing_runtime.GroupRuntime.process_message", fake_process)
+    monkeypatch.setattr(
+        group_ingress_service,
+        "is_super_user_id",
+        lambda user_id: user_id == "actor-super",
+        raising=False,
+    )
+
+    data = await group_message(
+        GroupMessageRequest(
+            group_id="super-fact-group",
+            sender_id="actor-super",
+            sender_name="群成员",
+            message="bot 你好",
+            session_name="测试群",
+            is_at_bot=True,
+            message_id="m-super-fact-1",
+        ),
+        db_session,
+        None,
+    )
+
+    assert data["action"] == "continue"
+    _, kwargs = mock_bridge.handle_message.await_args
+    assert kwargs["metadata"]["is_group"] is True
+    assert kwargs["metadata"]["is_superuser"] is True
+    assert type(kwargs["metadata"]["is_superuser"]) is bool
+
+
+@pytest.mark.asyncio
 async def test_group_message_releases_db_transaction_before_timing_gate(db_session, monkeypatch):
     """进入 timing gate 前不能保留请求级 DB 事务。"""
     from api.routes import GroupMessageRequest, group_message
@@ -2706,6 +2754,10 @@ def test_effective_configs_returns_default_for_chatlog_groups(client, db_session
     assert item["talk_value"] == 0.5
     assert item["mentioned_bot_reply"] is True
     assert item["group_profile_mode"] == "off"
+    assert item["session_guidance_configured"] is False
+    assert item["session_guidance_chars"] == 0
+    assert item["session_guidance_sha256"] == ""
+    assert "session_guidance" not in item
 
 
 def test_effective_configs_shows_override_when_config_exists(client, db_session, monkeypatch):
@@ -2713,10 +2765,12 @@ def test_effective_configs_shows_override_when_config_exists(client, db_session,
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
     from core.database import ChatStreamConfig
 
+    guidance = "列表中不能出现的指导正文"
     db_session.add(ChatStreamConfig(
         chat_stream_id="qq:555:group",
         talk_value=0.8,
         group_profile_mode="preview",
+        session_guidance=guidance,
     ))
     db_session.commit()
 
@@ -2736,6 +2790,13 @@ def test_effective_configs_shows_override_when_config_exists(client, db_session,
     assert item["source"] == "db"
     assert item["talk_value"] == 0.8
     assert item["group_profile_mode"] == "preview"
+    assert guidance not in resp.text
+    assert "session_guidance" not in item
+    assert item["session_guidance_configured"] is True
+    assert item["session_guidance_chars"] == len(guidance)
+    assert item["session_guidance_sha256"] == hashlib.sha256(
+        guidance.encode("utf-8")
+    ).hexdigest()
 
 
 def test_effective_configs_respects_search_filter(client, db_session, monkeypatch):

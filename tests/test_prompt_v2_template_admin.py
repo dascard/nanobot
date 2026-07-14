@@ -1,6 +1,10 @@
+import hashlib
+import json
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -14,6 +18,23 @@ PROMPT_V2_DEFAULT_DIR = Path("prompts.v2.default")
 
 def _auth_header() -> dict[str, str]:
     return {"Authorization": "Bearer test-token"}
+
+
+def _chat_stream_config_snapshot(db) -> list[tuple]:
+    from core.database import ChatStreamConfig
+
+    return [
+        (
+            row.chat_stream_id,
+            row.talk_value,
+            row.group_profile_mode,
+            row.session_guidance,
+            row.session_guidance_updated_at,
+        )
+        for row in db.query(ChatStreamConfig).order_by(
+            ChatStreamConfig.chat_stream_id,
+        ).all()
+    ]
 
 
 def _write_template(path: Path, name: str, body: str) -> None:
@@ -34,28 +55,7 @@ def _write_tool_template(path: Path, name: str, tool_name: str, body: str) -> No
 
 def _write_flow(path: Path) -> None:
     path.write_text(
-        """{
-  "version": 1,
-  "nodes": [
-    {"id": "base_contract", "type": "template", "label": "system: V2 base contract", "template_key": "chat/main"},
-    {"id": "group_policy", "type": "template", "label": "system: group policy", "template_key": "chat/branch_group", "chat_types": ["group"]},
-    {"id": "private_policy", "type": "template", "label": "system: private policy", "template_key": "chat/branch_private", "chat_types": ["private"]},
-    {"id": "runtime_context", "type": "runtime", "label": "system: runtime_context", "runtime_key": "runtime_context"},
-    {"id": "persona_reference", "type": "runtime", "label": "system: persona_reference", "runtime_key": "persona_reference"},
-    {"id": "runtime_tool_prompt", "type": "runtime", "label": "system: runtime_tool_prompt", "runtime_key": "runtime_tool_prompt"},
-    {"id": "current_user_event", "type": "runtime", "label": "user: current_user_input", "runtime_key": "current_user_event"}
-  ],
-  "edges": [
-    {"from": "base_contract", "to": "group_policy", "chat_types": ["group"]},
-    {"from": "base_contract", "to": "private_policy", "chat_types": ["private"]},
-    {"from": "group_policy", "to": "runtime_context", "chat_types": ["group"]},
-    {"from": "private_policy", "to": "runtime_context", "chat_types": ["private"]},
-    {"from": "runtime_context", "to": "persona_reference"},
-    {"from": "persona_reference", "to": "runtime_tool_prompt"},
-    {"from": "runtime_tool_prompt", "to": "current_user_event"}
-  ]
-}
-""",
+        (PROMPT_V2_DEFAULT_DIR / "chat" / "flow.json").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 
@@ -107,6 +107,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
     _write_template(default_dir / "chat" / "main.md", "主回复 V2", "默认主规则 {{ chat_type }}")
     _write_template(default_dir / "chat" / "branch_group.md", "群聊回复 V2", "默认群聊行为")
     _write_template(default_dir / "chat" / "branch_private.md", "私聊回复 V2", "默认私聊行为")
+    _write_template(default_dir / "chat" / "custom.md", "自定义扩展", "自定义规则")
     _write_template(default_dir / "chat" / "identity_context.md", "身份上下文", "你叫 {{ character_name }}")
     _write_tool_template(default_dir / "tools" / "sql_analysis" / "usage.md", "SQL 分析工具", "sql_analysis", "只读查询")
     _write_flow(default_dir / "chat" / "flow.json")
@@ -139,6 +140,7 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         assert [item["template_key"] for item in data["items"]] == [
             "chat/branch_group",
             "chat/branch_private",
+            "chat/custom",
             "chat/identity_context",
             "chat/main",
             "tools/sql_analysis/usage",
@@ -214,10 +216,18 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         flow_json = flow.json()
         assert [node["id"] for node in flow_json["flow"]["nodes"]] == [
             "base_contract",
+            "qq_common_policy",
             "group_policy",
+            "qq_group_policy",
             "private_policy",
             "runtime_context",
+            "identity_context",
+            "session_guidance",
             "persona_reference",
+            "conversation_context_header",
+            "history_messages",
+            "group_context",
+            "effort_constraint",
             "runtime_tool_prompt",
             "current_user_event",
         ]
@@ -229,20 +239,29 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
                 "id": "custom_template",
                 "type": "template",
                 "label": "system: custom",
-                "template_key": "chat/identity_context",
+                "template_key": "chat/custom",
                 "chat_types": ["private"],
             },
         )
         edited_flow["edges"] = [
-            {"from": "base_contract", "to": "group_policy", "chat_types": ["group"]},
-            {"from": "base_contract", "to": "private_policy", "chat_types": ["private"]},
-            {"from": "group_policy", "to": "runtime_context", "chat_types": ["group"]},
-            {"from": "private_policy", "to": "custom_template", "chat_types": ["private"]},
-            {"from": "custom_template", "to": "runtime_context", "chat_types": ["private"]},
-            {"from": "runtime_context", "to": "persona_reference"},
-            {"from": "persona_reference", "to": "runtime_tool_prompt"},
-            {"from": "runtime_tool_prompt", "to": "current_user_event"},
+            edge
+            for edge in edited_flow["edges"]
+            if (edge["from"], edge["to"]) != ("private_policy", "runtime_context")
         ]
+        edited_flow["edges"].extend(
+            [
+                {
+                    "from": "private_policy",
+                    "to": "custom_template",
+                    "chat_types": ["private"],
+                },
+                {
+                    "from": "custom_template",
+                    "to": "runtime_context",
+                    "chat_types": ["private"],
+                },
+            ]
+        )
         saved_flow = client.put(
             "/api/v1/admin/prompt-v2/flow",
             json={"flow": edited_flow},
@@ -266,10 +285,24 @@ def test_prompt_v2_templates_can_be_edited_from_admin(tmp_path, monkeypatch):
         preview_data = preview.json()
         assert preview_data["platform"] == "web"
         assert preview_data["prompt_plan"]["platform"] == "web"
+        assert preview_data["message_token_estimate"] > 0
+        assert preview_data["tool_schema_token_estimate"] > 0
+        assert preview_data["token_estimate"] == (
+            preview_data["message_token_estimate"]
+            + preview_data["tool_schema_token_estimate"]
+        )
         assert "qq_common_policy" not in preview_data["debug"].get("flow_node_ids", [])
         messages = preview_data["request_json"]["messages"]
+        runtime_message = next(
+            message
+            for message in messages
+            if str(message.get("content") or "").startswith("<runtime_context>")
+        )
+        runtime_body = str(runtime_message["content"]).split(
+            "<runtime_context>", 1
+        )[1].split("</runtime_context>", 1)[0]
+        assert json.loads(runtime_body)["platform"] == "web"
         rendered = str(messages)
-        assert "platform: web" in rendered
         assert "QQ 平台" not in rendered
         assert "默认主规则 private" in rendered
         assert "你叫" in rendered
@@ -318,6 +351,8 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
             section_hashes={"base_contract": "a" * 64},
             prompt_sha256="b" * 64,
             token_estimate=12,
+            message_token_estimate=5,
+            tool_schema_token_estimate=7,
             warnings=["preview warning"],
             debug={"template_path": "/tmp/v2.md"},
         )
@@ -333,8 +368,10 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
             json={
                 "engine": "v2",
                 "chat_type": "private",
+                "session_id": "private_preview-direct",
                 "user_id": "u1",
                 "user_input": "你好",
+                "session_guidance_override": "严格编译草稿",
             },
             headers=_auth_header(),
         )
@@ -344,7 +381,13 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
     assert response.status_code == 200, response.text
     data = response.json()
     assert captured
-    assert captured[0][1] is False
+    assert captured[0][1] is True
+    assert captured[0][0].session_guidance == "严格编译草稿"
+    assert (
+        captured[0][0].session_guidance_chat_stream_id
+        == "qq:preview-direct:private"
+    )
+    assert captured[0][0].debug["session_guidance_resolution_status"] == "configured"
     assert data["engine"] == "prompt"
     assert data["prompt_plan"]["engine"] == "prompt"
     assert data["compiled_prompt"]["engine"] == "prompt"
@@ -353,8 +396,240 @@ def test_effective_preview_v2_calls_compiler_directly(tmp_path, monkeypatch):
     assert data["messages"] == plan_messages
     assert data["request_json"]["tools"] == plan_tool_schemas
     assert data["tool_schemas"] == plan_tool_schemas
+    assert data["message_token_estimate"] == 5
+    assert data["tool_schema_token_estimate"] == 7
+    assert data["token_estimate"] == 12
+    assert data["prompt_plan"]["message_token_estimate"] == 5
+    assert data["compiled_prompt"]["tool_schema_token_estimate"] == 7
+    assert data["prompt_build"]["token_estimate"] == 12
     assert len(data["tool_plan_sha256"]) == 64
     assert data["warnings"] == ["preview warning"]
+    assert data["session_guidance_configured"] is True
+    assert data["session_guidance_chars"] == len("严格编译草稿")
+
+
+def test_effective_preview_uses_unsaved_session_guidance_without_persisting(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import ChatStreamConfig
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+
+    async def fail_model_call(*_args, **_kwargs):
+        raise AssertionError("effective preview 不得调用模型")
+
+    monkeypatch.setattr(
+        "kohakuterrarium.llm.openai.OpenAIProvider._complete_chat",
+        fail_model_call,
+    )
+    monkeypatch.setattr(
+        "kohakuterrarium.llm.openai.OpenAIProvider._stream_chat",
+        fail_model_call,
+    )
+    draft = "未保存草稿"
+
+    response = client.post(
+        "/api/v1/admin/prompt/effective-preview",
+        headers=_auth_header(),
+        json={
+            "engine": "prompt",
+            "platform": "qq",
+            "chat_type": "group",
+            "session_id": "group_preview-draft",
+            "group_id": "preview-draft",
+            "user_input": "预览消息",
+            "session_guidance_override": draft,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    guidance_messages = [
+        message
+        for message in data["messages"]
+        if str(message.get("content") or "").startswith("<session_guidance>")
+    ]
+    assert len(guidance_messages) == 1
+    assert draft in guidance_messages[0]["content"]
+    assert data["session_guidance_chat_stream_id"] == "qq:preview-draft:group"
+    assert data["session_guidance_resolution_status"] == "configured"
+    assert data["session_guidance_configured"] is True
+    assert data["session_guidance_chars"] == len(draft)
+    assert data["session_guidance_sha256"] == hashlib.sha256(
+        draft.encode("utf-8"),
+    ).hexdigest()
+    assert db_session.query(ChatStreamConfig).count() == 0
+
+
+def test_effective_preview_reads_database_guidance_and_empty_override_is_ephemeral(
+    client,
+    db_session,
+    monkeypatch,
+):
+    from core.database import ChatStreamConfig
+
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    stored_guidance = "数据库有效指导"
+    updated_at = datetime(2026, 7, 13, 12, 0, 0)
+    db_session.add(ChatStreamConfig(
+        chat_stream_id="web:preview-db:private",
+        talk_value=0.8,
+        group_profile_mode="preview",
+        session_guidance=stored_guidance,
+        session_guidance_updated_at=updated_at,
+    ))
+    db_session.commit()
+    before = _chat_stream_config_snapshot(db_session)
+
+    database_preview = client.post(
+        "/api/v1/admin/prompt/effective-preview",
+        headers=_auth_header(),
+        json={
+            "engine": "prompt",
+            "platform": "web",
+            "chat_type": "private",
+            "session_id": "private_preview-db",
+            "user_input": "读取数据库",
+        },
+    )
+    cleared_preview = client.post(
+        "/api/v1/admin/prompt/effective-preview",
+        headers=_auth_header(),
+        json={
+            "engine": "prompt",
+            "platform": "web",
+            "chat_type": "private",
+            "session_id": "private_preview-db",
+            "user_input": "临时清空",
+            "session_guidance_override": "",
+        },
+    )
+
+    assert database_preview.status_code == 200, database_preview.text
+    database_data = database_preview.json()
+    database_guidance = [
+        message
+        for message in database_data["messages"]
+        if str(message.get("content") or "").startswith("<session_guidance>")
+    ]
+    assert len(database_guidance) == 1
+    assert stored_guidance in database_guidance[0]["content"]
+    assert database_data["session_guidance_resolution_status"] == "configured"
+    assert database_data["session_guidance_updated_at"] == "2026-07-13 12:00:00"
+
+    assert cleared_preview.status_code == 200, cleared_preview.text
+    cleared_data = cleared_preview.json()
+    assert not any(
+        str(message.get("content") or "").startswith("<session_guidance>")
+        for message in cleared_data["messages"]
+    )
+    assert cleared_data["session_guidance_resolution_status"] == "empty"
+    assert cleared_data["session_guidance_configured"] is False
+    assert cleared_data["session_guidance_chars"] == 0
+    assert cleared_data["session_guidance_sha256"] == ""
+
+    db_session.expire_all()
+    assert _chat_stream_config_snapshot(db_session) == before
+
+
+@pytest.mark.parametrize(
+    ("payload", "secret"),
+    [
+        (
+            {
+                "session_id": "private_preview-invalid",
+                "session_guidance_override": "正文不能泄漏<runtime_context>",
+            },
+            "正文不能泄漏",
+        ),
+        (
+            {"session_guidance_override": "缺失身份的草稿正文"},
+            "缺失身份的草稿正文",
+        ),
+        (
+            {
+                "session_id": "private_preview-invalid-object",
+                "session_guidance_override": {
+                    "draft": "对象类型草稿正文不能泄漏",
+                },
+            },
+            "对象类型草稿正文不能泄漏",
+        ),
+        (
+            {
+                "session_id": "private_preview-invalid-list",
+                "session_guidance_override": ["数组类型草稿正文不能泄漏"],
+            },
+            "数组类型草稿正文不能泄漏",
+        ),
+    ],
+    ids=[
+        "reserved-marker",
+        "missing-identity",
+        "invalid-object-type",
+        "invalid-list-type",
+    ],
+)
+def test_effective_preview_rejects_invalid_guidance_without_echoing_body(
+    client,
+    db_session,
+    monkeypatch,
+    payload,
+    secret,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    before = _chat_stream_config_snapshot(db_session)
+    body = {
+        "engine": "prompt",
+        "platform": "qq",
+        "chat_type": "private",
+        "user_input": "错误路径",
+        **payload,
+    }
+
+    response = client.post(
+        "/api/v1/admin/prompt/effective-preview",
+        headers=_auth_header(),
+        json=body,
+    )
+
+    assert response.status_code == 422, response.text
+    assert secret not in response.text
+    assert _chat_stream_config_snapshot(db_session) == before
+
+
+def test_effective_preview_without_session_or_override_keeps_generic_behavior(
+    client,
+    db_session,
+    monkeypatch,
+):
+    monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
+    before = _chat_stream_config_snapshot(db_session)
+
+    response = client.post(
+        "/api/v1/admin/prompt/effective-preview",
+        headers=_auth_header(),
+        json={
+            "engine": "prompt",
+            "platform": "web",
+            "chat_type": "private",
+            "user_id": "generic-preview-user",
+            "user_input": "通用预览",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["session_guidance_resolution_status"] == "not_requested"
+    assert data["session_guidance_chat_stream_id"] == ""
+    assert data["session_guidance_configured"] is False
+    assert not any(
+        str(message.get("content") or "").startswith("<session_guidance>")
+        for message in data["messages"]
+    )
+    assert _chat_stream_config_snapshot(db_session) == before
 
 
 def test_effective_preview_v2_passes_platform_to_tools_and_compiler(tmp_path, monkeypatch):
@@ -433,7 +708,13 @@ def test_effective_preview_v2_passes_platform_to_tools_and_compiler(tmp_path, mo
     assert captured["tool_platform"] == "web"
 
 
-def test_effective_preview_v2_returns_400_for_invalid_flow(tmp_path, monkeypatch):
+@pytest.mark.parametrize("error_kind", ["flow", "audit"])
+def test_effective_preview_v2_returns_400_for_invalid_contract(
+    tmp_path,
+    monkeypatch,
+    error_kind,
+):
+    from core.prompt_v2.audit import PromptAuditError
     from core.prompt_v2.flow import PromptFlowError
 
     monkeypatch.setattr("api.admin_routes.NANOBOT_ADMIN_TOKEN", "test-token")
@@ -451,7 +732,10 @@ def test_effective_preview_v2_returns_400_for_invalid_flow(tmp_path, monkeypatch
         finally:
             db.close()
 
-    async def fail_compile(*_args, **_kwargs):
+    async def fail_compile(*_args, **kwargs):
+        assert kwargs.get("strict_audit") is True
+        if error_kind == "audit":
+            raise PromptAuditError(["identity_context flow contract invalid"])
         raise PromptFlowError("flow 在 private 下存在环: a -> b")
 
     monkeypatch.setattr("core.prompt_v2.compiler.compile_prompt_plan", fail_compile)
@@ -464,8 +748,10 @@ def test_effective_preview_v2_returns_400_for_invalid_flow(tmp_path, monkeypatch
             json={
                 "engine": "v2",
                 "chat_type": "private",
+                "session_id": "private_preview-error",
                 "user_id": "u1",
                 "user_input": "你好",
+                "session_guidance_override": "FLOW_ERROR_DRAFT_MUST_NOT_ECHO",
             },
             headers=_auth_header(),
         )
@@ -473,7 +759,13 @@ def test_effective_preview_v2_returns_400_for_invalid_flow(tmp_path, monkeypatch
         app.dependency_overrides.clear()
 
     assert response.status_code == 400
-    assert "flow 在 private 下存在环" in response.text
+    expected = (
+        "identity_context flow contract invalid"
+        if error_kind == "audit"
+        else "flow 在 private 下存在环"
+    )
+    assert expected in response.text
+    assert "FLOW_ERROR_DRAFT_MUST_NOT_ECHO" not in response.text
 
 
 def test_prompt_v2_template_admin_crud_runtime_overrides(tmp_path, monkeypatch):

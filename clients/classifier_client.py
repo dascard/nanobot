@@ -1296,53 +1296,19 @@ class TimingGate:
             if cleaned == prev:
                 break
 
-        # 提取 JSON
         try:
-            start = cleaned.find("{")
-            end = cleaned.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(cleaned[start:end])
-                action = str(data.get("action", "")).strip().lower()
-                if action in ("continue", "wait", "no_reply"):
-                    delay = int(data.get("delay_seconds", 5))
-                    delay = max(3, min(15, delay))
-                    return {
-                        "action": action,
-                        "delay_seconds": delay if action == "wait" else None,
-                        "reason": str(data.get("reason", ""))[:200],
-                        "raw": raw[:200],
-                        "error_type": None,
-                        "parse_quality": "json",
-                        "model_confidence": 0.8,
-                    }
-                for compat_key in ("reply", "needs_reply", "should_reply"):
-                    compat_value = data.get(compat_key)
-                    if isinstance(compat_value, bool):
-                        return {
-                            "action": "continue" if compat_value else "no_reply",
-                            "delay_seconds": None,
-                            "reason": str(data.get("reason", ""))[:200],
-                            "raw": raw[:200],
-                            "error_type": None,
-                            "parse_quality": "json_compat",
-                            "model_confidence": 0.6,
-                        }
-        except (json.JSONDecodeError, ValueError, KeyError, TypeError):
-            pass
+            from core.prompt_v2.task_contracts import parse_task_output
 
-        # 旧格式兼容
-        match = re.match(r"^\s*(是|否)\s*[,，]\s*(\d+)\s*$", cleaned)
-        if match:
-            action = "continue" if match.group(1) == "是" else "no_reply"
+            parsed = parse_task_output("timing_gate", cleaned)
             return {
-                "action": action,
-                "delay_seconds": None,
-                "reason": "旧格式兼容",
+                **parsed,
                 "raw": raw[:200],
                 "error_type": None,
-                "parse_quality": "legacy",
-                "model_confidence": 0.5,
+                "parse_quality": "json",
+                "model_confidence": 0.8,
             }
+        except ValueError:
+            pass
 
         # 非法 → no_reply
         logger.warning(f"[TimingGate] Invalid: {raw[:100]}")
@@ -1363,6 +1329,14 @@ class TimingGate:
         try:
             raw = self._call_qwen(context)
             result = self._parse_output(raw)
+            if result.get("error_type") == "parse_error":
+                retry_context = (
+                    f"{context}\n\n"
+                    "[输出契约修正] 只输出一个 JSON object。action 只能是 "
+                    "continue、wait 或 no_reply。wait 必须给 3-15 的整数 delay_seconds。"
+                )
+                raw = self._call_qwen(retry_context)
+                result = self._parse_output(raw)
             result["context"] = context
             result["raw"] = raw
             elapsed_ms = int((_t.time() - t0) * 1000)

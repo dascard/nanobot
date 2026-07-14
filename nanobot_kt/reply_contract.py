@@ -5,10 +5,27 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 
 
 ALLOWED_SEND_MODES = frozenset({"normal", "quote", "mention", "quote_and_mention"})
+RICH_OUTPUT_MARKER = "NANOBOT_RICH_OUTPUT"
+RICH_REPORT_TOOLS = {
+    "ai_daily": "ai_daily",
+    "group_analysis": "group_analysis",
+}
+RICH_REPORT_HTML_MARKERS = {
+    "ai_daily": "news-brief",
+    "group_analysis": "group-analysis-report",
+}
+
+
+@dataclass(frozen=True)
+class VerifiedToolOutput:
+    tool_name: str
+    tool_call_id: str
+    content: str
+    message_index: int
 
 
 @dataclass(frozen=True)
@@ -17,6 +34,17 @@ class ReplyToolExtraction:
     reply_meta: dict[str, Any] | None = None
     no_reply: bool = False
     no_reply_reason: str = ""
+    tool_name: str = ""
+    tool_call_id: str = ""
+
+
+@dataclass(frozen=True)
+class RichTerminalOutput:
+    html: str
+    tool_name: str
+    tool_call_id: str
+    report_kind: str
+    message_index: int
 
 
 def message_content_to_text(content: Any) -> str:
@@ -43,6 +71,84 @@ def _message_content(msg: Any) -> str:
     if isinstance(msg, dict):
         return message_content_to_text(msg.get("content", ""))
     return message_content_to_text(getattr(msg, "content", ""))
+
+
+def _message_field(msg: Any, key: str, default: Any = None) -> Any:
+    if isinstance(msg, dict):
+        return msg.get(key, default)
+    return getattr(msg, key, default)
+
+
+def _nested_field(value: Any, key: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def _declared_tool_calls(msg: Any) -> list[tuple[str, str]]:
+    raw_calls = _message_field(msg, "tool_calls", None)
+    if not isinstance(raw_calls, (list, tuple)):
+        return []
+
+    declared: list[tuple[str, str]] = []
+    for raw_call in raw_calls:
+        call_id = str(_nested_field(raw_call, "id", "") or "").strip()
+        function = _nested_field(raw_call, "function", None)
+        tool_name = str(_nested_field(function, "name", "") or "").strip()
+        if call_id and tool_name:
+            declared.append((call_id, tool_name))
+    return declared
+
+
+def iter_verified_tool_outputs(messages: list[Any]) -> Iterator[VerifiedToolOutput]:
+    """按消息顺序产出具有完整 KT 调用来源的工具结果。
+
+    只有前置 ``assistant.tool_calls`` 声明、结果 ``name`` 与声明一致、且
+    ``tool_call_id`` 首次消费时才可信。新的 user/system/assistant 消息会关闭
+    上一批尚未消费的声明，避免孤儿结果跨轮次重新关联。
+    """
+
+    pending: dict[str, str] = {}
+    seen_call_ids: set[str] = set()
+    invalid_call_ids: set[str] = set()
+
+    for index, msg in enumerate(messages or []):
+        role = _message_role(msg)
+        if role == "assistant":
+            pending.clear()
+            batch_ids: set[str] = set()
+            for call_id, tool_name in _declared_tool_calls(msg):
+                if call_id in batch_ids or call_id in seen_call_ids:
+                    invalid_call_ids.add(call_id)
+                    pending.pop(call_id, None)
+                    continue
+                batch_ids.add(call_id)
+                seen_call_ids.add(call_id)
+                pending[call_id] = tool_name
+            continue
+        if role in {"user", "system"}:
+            pending.clear()
+            continue
+        if role != "tool":
+            continue
+
+        tool_call_id = str(_message_field(msg, "tool_call_id", "") or "").strip()
+        if not tool_call_id or tool_call_id in invalid_call_ids:
+            continue
+
+        declared_name = pending.pop(tool_call_id, None)
+        if not declared_name:
+            continue
+        tool_name = str(_message_field(msg, "name", "") or "").strip()
+        if not tool_name or declared_name != tool_name:
+            continue
+
+        yield VerifiedToolOutput(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            content=_message_content(msg),
+            message_index=index,
+        )
 
 
 def normalize_send_mode(value: Any) -> str:
@@ -73,11 +179,11 @@ def _clean_mentions(raw: Any) -> list[str]:
 def extract_reply_tool_output(messages: list[Any]) -> ReplyToolExtraction:
     """从 KT conversation 消息中提取 reply/no_reply 工具结果。"""
     marker = _reply_marker()
-    for msg in reversed(messages or []):
-        if _message_role(msg) != "tool":
+    for output in reversed(list(iter_verified_tool_outputs(messages))):
+        if output.tool_name not in {"reply", "no_reply"}:
             continue
         try:
-            data = json.loads(_message_content(msg))
+            data = json.loads(output.content)
         except (json.JSONDecodeError, TypeError, ValueError):
             data = {}
         if not isinstance(data, dict) or marker not in data:
@@ -85,11 +191,19 @@ def extract_reply_tool_output(messages: list[Any]) -> ReplyToolExtraction:
         payload = data.get(marker) or {}
         if not isinstance(payload, dict):
             continue
-        if payload.get("no_reply"):
+        if output.tool_name == "no_reply":
+            if payload.get("no_reply") is not True:
+                continue
+            if str(payload.get("content", "") or "").strip():
+                continue
             return ReplyToolExtraction(
                 no_reply=True,
                 no_reply_reason=str(payload.get("reason", ""))[:200],
+                tool_name=output.tool_name,
+                tool_call_id=output.tool_call_id,
             )
+        if payload.get("no_reply"):
+            continue
         reply_text = str(payload.get("content", "")).strip()
         if not reply_text:
             continue
@@ -102,8 +216,88 @@ def extract_reply_tool_output(messages: list[Any]) -> ReplyToolExtraction:
                 "at_sender": bool(payload.get("at_sender")),
                 "send_mode": normalize_send_mode(payload.get("send_mode")),
             },
+            tool_name=output.tool_name,
+            tool_call_id=output.tool_call_id,
         )
     return ReplyToolExtraction()
+
+
+def build_rich_output(html: str, *, report_kind: str) -> str:
+    """构造与 reply marker 分离的富 HTML 终结 envelope。"""
+
+    kind = str(report_kind or "").strip()
+    if kind not in RICH_REPORT_TOOLS:
+        raise ValueError(f"Unsupported rich report kind: {kind}")
+    content = str(html or "").strip()
+    if not content:
+        raise ValueError("Rich terminal HTML must not be empty")
+    return json.dumps(
+        {
+            RICH_OUTPUT_MARKER: {
+                "version": 1,
+                "report_kind": kind,
+                "content_type": "text/html",
+                "html": content,
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+def build_rich_tool_result(html: str, *, report_kind: str) -> Any:
+    from kohakuterrarium.modules.tool.base import ToolResult
+
+    return ToolResult(
+        output=build_rich_output(html, report_kind=report_kind),
+        exit_code=0,
+    )
+
+
+def extract_rich_terminal_output(
+    messages: list[Any],
+    *,
+    allowed_report_kinds: tuple[str, ...] | None = None,
+) -> RichTerminalOutput | None:
+    """提取经工具身份校验的富 HTML 终结结果。"""
+
+    allowed = set(allowed_report_kinds or RICH_REPORT_TOOLS)
+    for output in reversed(list(iter_verified_tool_outputs(messages))):
+        expected_kind = RICH_REPORT_TOOLS.get(output.tool_name)
+        if not expected_kind or expected_kind not in allowed:
+            continue
+        try:
+            data = json.loads(output.content)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        payload = data.get(RICH_OUTPUT_MARKER)
+        if not isinstance(payload, dict):
+            continue
+        version = payload.get("version")
+        if not isinstance(version, int) or isinstance(version, bool) or version != 1:
+            continue
+        if payload.get("content_type") != "text/html":
+            continue
+        report_kind = str(payload.get("report_kind", "") or "").strip()
+        if report_kind != expected_kind:
+            continue
+        html = str(payload.get("html", "") or "").strip()
+        html_lower = html.lower()
+        required_marker = RICH_REPORT_HTML_MARKERS[report_kind]
+        if (
+            not html_lower.startswith(("<!doctype html", "<html", "<article"))
+            or required_marker not in html
+        ):
+            continue
+        return RichTerminalOutput(
+            html=html,
+            tool_name=output.tool_name,
+            tool_call_id=output.tool_call_id,
+            report_kind=report_kind,
+            message_index=output.message_index,
+        )
+    return None
 
 
 def count_final_action_tool_calls(messages: list[Any]) -> dict[str, int]:
@@ -111,31 +305,34 @@ def count_final_action_tool_calls(messages: list[Any]) -> dict[str, int]:
     marker = _reply_marker()
     reply_count = 0
     no_reply_count = 0
-    fallback_count = 0
-    for msg in messages or []:
-        if _message_role(msg) != "tool":
+    for output in iter_verified_tool_outputs(messages):
+        if output.tool_name not in {"reply", "no_reply"}:
             continue
         try:
-            data = json.loads(_message_content(msg))
+            data = json.loads(output.content)
         except (json.JSONDecodeError, TypeError, ValueError):
             continue
         if not isinstance(data, dict):
             continue
         payload = data.get(marker)
         if isinstance(payload, dict):
-            if payload.get("no_reply"):
+            if (
+                output.tool_name == "no_reply"
+                and payload.get("no_reply") is True
+                and not str(payload.get("content", "") or "").strip()
+            ):
                 no_reply_count += 1
-            elif str(payload.get("content") or "").strip():
+            elif (
+                output.tool_name == "reply"
+                and not payload.get("no_reply")
+                and str(payload.get("content") or "").strip()
+            ):
                 reply_count += 1
-            continue
-        action = str(data.get("action") or "").strip().lower()
-        if action in {"reply", "no_reply"}:
-            fallback_count += 1
     return {
         "reply_tool_call_count": reply_count,
         "no_reply_tool_call_count": no_reply_count,
-        "structured_fallback_count": fallback_count,
-        "total_final_action_count": reply_count + no_reply_count + fallback_count,
+        "structured_fallback_count": 0,
+        "total_final_action_count": reply_count + no_reply_count,
     }
 
 

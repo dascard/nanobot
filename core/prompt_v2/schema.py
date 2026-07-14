@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, TypedDict
 
@@ -38,12 +39,22 @@ class PromptPlan:
     debug: dict[str, Any]
     platform: str = "qq"
     flow_sections: list[PromptFlowSection] = field(default_factory=list)
+    message_token_estimate: int = 0
+    tool_schema_token_estimate: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "messages", copy.deepcopy(list(self.messages or [])))
+        object.__setattr__(
+            self,
+            "tool_schemas",
+            copy.deepcopy(list(self.tool_schemas or [])),
+        )
 
     @property
     def messages_without_current_user(self) -> list[dict[str, Any]]:
         if not self.messages:
             return []
-        return list(self.messages[:-1])
+        return copy.deepcopy(list(self.messages[:-1]))
 
     @property
     def current_user_content(self) -> Any:
@@ -52,11 +63,14 @@ class PromptPlan:
         last = self.messages[-1]
         if str(last.get("role") or "") != "user":
             return ""
-        return last.get("content", "")
+        return copy.deepcopy(last.get("content", ""))
 
     @property
     def request_json(self) -> dict[str, Any]:
-        return {"messages": self.messages, "tools": self.tool_schemas}
+        return {
+            "messages": copy.deepcopy(self.messages),
+            "tools": copy.deepcopy(self.tool_schemas),
+        }
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -76,6 +90,7 @@ class PromptCompileRequest:
     group_id: str = ""
     sender_name: str = ""
     sender_id: str = ""
+    is_super_user: bool = False
     session_name: str = ""
     trigger_reason: str = ""
     timing_decision: str = ""
@@ -87,6 +102,8 @@ class PromptCompileRequest:
     bot_aliases: list[str] = field(default_factory=list)
     user_input: Any = ""
     persona_text: str = ""
+    session_guidance: str = field(default="", repr=False)
+    session_guidance_chat_stream_id: str = ""
     history_header: str = ""
     history_messages: list[dict[str, Any]] = field(default_factory=list)
     group_profile_context: str = ""

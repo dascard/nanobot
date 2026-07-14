@@ -86,7 +86,7 @@ def strip_kt_framework_tool_docs(messages: Any) -> list[Any]:
 
     只处理 system role，避免误删用户引用或工具结果。
     """
-    if not isinstance(messages, list):
+    if not isinstance(messages, (list, tuple)):
         return messages
 
     sanitized: list[Any] = []

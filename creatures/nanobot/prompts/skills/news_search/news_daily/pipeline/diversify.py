@@ -6,6 +6,7 @@ from datetime import datetime
 from .config import (
     MAX_FINAL_CLUSTERS, MAX_CLUSTERS_PER_DOMAIN_FINAL,
     MAX_SAME_ENTITY_CLUSTERS_DAILY, DAILY_FRESHNESS_HOURS,
+    TOP_STORY_FRESHNESS_HOURS,
     EVENT_TYPE_WEIGHT, MAJOR_ENTITIES,
 )
 from .freshness import compute_cluster_freshness, can_be_top_story
@@ -51,16 +52,23 @@ def score_clusters(clusters: list[EventCluster], now: datetime) -> list[EventClu
     return clusters
 
 
-def select_diverse_clusters(clusters: list[EventCluster], now: datetime) -> list[EventCluster]:
+def select_diverse_clusters(
+    clusters: list[EventCluster],
+    now: datetime,
+    *,
+    max_age_hours: int = DAILY_FRESHNESS_HOURS,
+    limit: int = MAX_FINAL_CLUSTERS,
+) -> list[EventCluster]:
     clusters = sorted(clusters, key=lambda c: c.final_score, reverse=True)
     selected, domain_cnt, entity_cnt = [], Counter(), Counter()
+    effective_limit = max(0, min(int(limit), MAX_FINAL_CLUSTERS))
 
     for c in clusters:
-        if len(selected) >= MAX_FINAL_CLUSTERS:
+        if len(selected) >= effective_limit:
             break
         if c.latest_seen is None:
             continue
-        if (now - c.latest_seen).total_seconds() / 3600 > DAILY_FRESHNESS_HOURS:
+        if (now - c.latest_seen).total_seconds() / 3600 > max_age_hours:
             continue
         rep = c.representative
         if rep and domain_cnt[rep.domain] >= MAX_CLUSTERS_PER_DOMAIN_FINAL:
@@ -75,17 +83,47 @@ def select_diverse_clusters(clusters: list[EventCluster], now: datetime) -> list
     return selected
 
 
-def pick_top_story(clusters: list[EventCluster], now: datetime) -> EventCluster | None:
-    candidates = [c for c in clusters if can_be_top_story(c, now)]
+def pick_top_story(
+    clusters: list[EventCluster],
+    now: datetime,
+    *,
+    max_age_hours: int = TOP_STORY_FRESHNESS_HOURS,
+) -> EventCluster | None:
+    candidates = [
+        c for c in clusters if can_be_top_story(c, now, max_age_hours=max_age_hours)
+    ]
     return max(candidates, key=lambda c: c.final_score) if candidates else None
 
 
-def build_daily_report(clusters: list[EventCluster], now: datetime) -> NewsReport:
-    top = pick_top_story(clusters, now)
+def build_daily_report(
+    clusters: list[EventCluster],
+    now: datetime,
+    *,
+    max_age_hours: int | None = None,
+    limit: int = MAX_FINAL_CLUSTERS,
+) -> NewsReport:
+    effective_limit = max(0, min(int(limit), MAX_FINAL_CLUSTERS))
+    top = (
+        pick_top_story(
+            clusters,
+            now,
+            max_age_hours=(
+                TOP_STORY_FRESHNESS_HOURS if max_age_hours is None else max_age_hours
+            ),
+        )
+        if effective_limit
+        else None
+    )
     remaining = [c for c in clusters if top is None or c.id != top.id]
-    highlights = select_diverse_clusters(remaining, now)
+    highlight_limit = max(0, effective_limit - (1 if top is not None else 0))
+    highlights = select_diverse_clusters(
+        remaining,
+        now,
+        max_age_hours=(DAILY_FRESHNESS_HOURS if max_age_hours is None else max_age_hours),
+        limit=highlight_limit,
+    )
     return NewsReport(
         mode="daily", title="AI 日报", generated_at=now,
-        top_story=top, highlights=highlights[:6],
+        top_story=top, highlights=highlights[:highlight_limit],
         details=(highlights[:3] if not top else [top] + highlights[:2]),
     )

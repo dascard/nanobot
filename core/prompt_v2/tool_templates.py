@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -17,6 +18,11 @@ from core.prompt_v2.template_registry import (
 from core.prompt_v2.variables import render_scoped_template
 
 logger = logging.getLogger("nanobot.prompt_v2.tool_templates")
+
+_GENERATED_TOOL_TEMPLATE_TAIL_RE = re.compile(
+    r"(?:\n{2,})?\[V2ToolTemplate:[^\]\n ]+ sha256:[0-9a-f]{12}\]\n.*\Z",
+    re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
@@ -186,6 +192,14 @@ def format_enabled_tool_templates(
     return "\n\n".join(sections)
 
 
+def _strip_generated_tool_template_tail(description: str) -> str:
+    text = str(description or "").strip()
+    match = _GENERATED_TOOL_TEMPLATE_TAIL_RE.search(text)
+    if match is None:
+        return text
+    return text[: match.start()].rstrip()
+
+
 def overlay_tool_schema_description(tool_schema: dict[str, Any], *, max_chars: int = 1600) -> dict[str, Any]:
     schema = copy.deepcopy(tool_schema or {})
     function = schema.get("function")
@@ -198,7 +212,9 @@ def overlay_tool_schema_description(tool_schema: dict[str, Any], *, max_chars: i
     if not policy or not policy.body:
         return schema
 
-    original = str(function.get("description") or "").strip()
+    original = _strip_generated_tool_template_tail(
+        str(function.get("description") or "")
+    )
     body = policy.body
     if len(body) > max_chars:
         body = f"{body[:max_chars].rstrip()}\n...[truncated:{len(policy.body)} chars sha256:{policy.sha256}]"

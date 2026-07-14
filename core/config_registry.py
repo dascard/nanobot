@@ -650,7 +650,7 @@ SETTING_DEFS: dict[str, SettingDef] = {
     ),
     "tool.lightweight_set": SettingDef(
         key="tool.lightweight_set", env_name="",
-        default='["reply","no_reply","image_summary","image_generation","python_sandbox","sticker_search"]',
+        default='["reply","no_reply","image_summary","image_generation","sticker_search"]',
         value_type="str",
         category="tool", description="自动降档轻量预设允许的工具列表（JSON数组）",
     ),

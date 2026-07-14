@@ -60,3 +60,21 @@ def test_build_identity_vars_reads_identity_without_exposing_super_user_ids(monk
     assert "super_user_id" not in vars_
     assert vars_["is_super_user"] == "true"
     assert is_super_user_id("99")
+
+
+def test_build_identity_vars_uses_explicit_authorization_fact(monkeypatch):
+    monkeypatch.setattr("core.identity.is_super_user_id", lambda _value: False)
+
+    explicit_true = build_identity_vars(
+        sender_id="placeholder-user",
+        is_super_user=True,
+    )
+
+    monkeypatch.setattr("core.identity.is_super_user_id", lambda _value: True)
+    explicit_false = build_identity_vars(
+        sender_id="placeholder-user",
+        is_super_user=False,
+    )
+
+    assert explicit_true["is_super_user"] == "true"
+    assert explicit_false["is_super_user"] == "false"

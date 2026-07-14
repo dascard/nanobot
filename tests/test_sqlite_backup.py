@@ -3,13 +3,16 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import threading
+import time
 from contextlib import closing
 from datetime import datetime as RealDateTime
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.exc import OperationalError
 
 
 def _create_database(path: Path) -> None:
@@ -23,6 +26,25 @@ def _create_legacy_chat_database(path: Path) -> None:
     with closing(sqlite3.connect(path)) as conn:
         conn.execute("CREATE TABLE chat_logs (id INTEGER PRIMARY KEY)")
         conn.execute("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY)")
+        conn.commit()
+
+
+def _create_legacy_chat_stream_database(
+    path: Path,
+    rows: list[tuple[str, float]],
+) -> None:
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute(
+            "CREATE TABLE chat_stream_configs ("
+            "chat_stream_id TEXT PRIMARY KEY, "
+            "talk_value FLOAT DEFAULT 0.5, "
+            "meta_json TEXT DEFAULT '{}')"
+        )
+        conn.executemany(
+            "INSERT INTO chat_stream_configs(chat_stream_id, talk_value) "
+            "VALUES (?, ?)",
+            rows,
+        )
         conn.commit()
 
 
@@ -509,6 +531,464 @@ def test_schema_migration_snapshot_failure_keeps_schema_and_versions_unchanged(
             "WHERE type = 'table' AND name = 'schema_migrations'"
         ).fetchone()[0]
     assert version_table == 0
+
+
+def test_chat_stream_identity_migration_snapshot_is_recoverable(
+    tmp_path,
+    monkeypatch,
+):
+    from core import schema_migrations
+    from core.sqlite_backup import create_sqlite_snapshot
+
+    db_path = tmp_path / "legacy-stream.db"
+    restored_path = tmp_path / "restored-stream.db"
+    _create_legacy_chat_stream_database(db_path, [("private_456", 0.7)])
+    engine = create_engine(f"sqlite:///{db_path}")
+    calls: list[tuple[Path, Path]] = []
+
+    def tracking_snapshot(source_path, target_path, **kwargs):
+        result = create_sqlite_snapshot(source_path, target_path, **kwargs)
+        calls.append((Path(source_path), Path(target_path)))
+        return result
+
+    monkeypatch.setattr(schema_migrations, "create_sqlite_snapshot", tracking_snapshot)
+
+    try:
+        schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+        schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+        with engine.connect() as conn:
+            live_rows = conn.execute(text(
+                "SELECT chat_stream_id, talk_value FROM chat_stream_configs"
+            )).fetchall()
+    finally:
+        engine.dispose()
+
+    assert len(calls) == 1
+    backup_source, backup_path = calls[0]
+    assert backup_source == db_path
+    assert backup_path.exists()
+    with closing(sqlite3.connect(backup_path)) as backup_conn:
+        backup_rows = backup_conn.execute(
+            "SELECT chat_stream_id, talk_value FROM chat_stream_configs"
+        ).fetchall()
+    assert backup_rows == [("private_456", 0.7)]
+    assert live_rows == [("qq:456:private", 0.7)]
+
+    shutil.copyfile(backup_path, restored_path)
+    restored_engine = create_engine(f"sqlite:///{restored_path}")
+    try:
+        with restored_engine.connect() as conn:
+            restored_rows = conn.execute(text(
+                "SELECT chat_stream_id, talk_value FROM chat_stream_configs"
+            )).fetchall()
+    finally:
+        restored_engine.dispose()
+    assert restored_rows == [("private_456", 0.7)]
+
+
+def test_chat_stream_identity_snapshot_failure_keeps_alias_and_schema_unchanged(
+    tmp_path,
+    monkeypatch,
+):
+    from core import schema_migrations
+
+    db_path = tmp_path / "identity-snapshot-failure.db"
+    _create_legacy_chat_stream_database(db_path, [("group_123", 0.5)])
+    schema_before = _database_schema(db_path)
+    engine = create_engine(f"sqlite:///{db_path}")
+
+    def fail_snapshot(*_args, **_kwargs):
+        raise OSError("identity snapshot unavailable")
+
+    monkeypatch.setattr(schema_migrations, "create_sqlite_snapshot", fail_snapshot)
+
+    try:
+        with pytest.raises(OSError, match="identity snapshot unavailable"):
+            schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+        with engine.connect() as conn:
+            stored_id = conn.execute(text(
+                "SELECT chat_stream_id FROM chat_stream_configs"
+            )).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert stored_id == "group_123"
+    assert _database_schema(db_path) == schema_before
+
+
+def test_in_memory_chat_stream_identity_migration_skips_file_snapshot(monkeypatch):
+    from core import schema_migrations
+
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE chat_stream_configs ("
+            "chat_stream_id TEXT PRIMARY KEY, talk_value FLOAT DEFAULT 0.5)"
+        ))
+        conn.execute(text(
+            "INSERT INTO chat_stream_configs(chat_stream_id) VALUES ('group_123')"
+        ))
+
+    monkeypatch.setattr(
+        schema_migrations,
+        "create_sqlite_snapshot",
+        lambda *_args, **_kwargs: pytest.fail("内存数据库不应创建文件快照"),
+    )
+
+    try:
+        schema_migrations.run_schema_migrations(engine)
+        with engine.connect() as conn:
+            stored_id = conn.execute(text(
+                "SELECT chat_stream_id FROM chat_stream_configs"
+            )).scalar_one()
+    finally:
+        engine.dispose()
+
+    assert stored_id == "qq:123:group"
+
+
+def test_chat_metadata_and_identity_migrations_share_one_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    from core import schema_migrations
+    from core.sqlite_backup import create_sqlite_snapshot
+
+    db_path = tmp_path / "combined-legacy.db"
+    _create_legacy_chat_stream_database(db_path, [("group_123", 0.5)])
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("CREATE TABLE chat_logs (id INTEGER PRIMARY KEY)")
+        conn.execute("CREATE TABLE conversation_turns (id INTEGER PRIMARY KEY)")
+        conn.commit()
+    engine = create_engine(f"sqlite:///{db_path}")
+    calls: list[tuple[Path, Path]] = []
+
+    def tracking_snapshot(source_path, target_path, **kwargs):
+        result = create_sqlite_snapshot(source_path, target_path, **kwargs)
+        calls.append((Path(source_path), Path(target_path)))
+        return result
+
+    monkeypatch.setattr(schema_migrations, "create_sqlite_snapshot", tracking_snapshot)
+
+    try:
+        schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+    finally:
+        engine.dispose()
+
+    assert len(calls) == 1
+
+
+def test_conflicting_chat_stream_alias_does_not_create_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    from core import schema_migrations
+
+    db_path = tmp_path / "conflicting-stream.db"
+    _create_legacy_chat_stream_database(
+        db_path,
+        [("group_123", 0.4), ("qq:123:group", 0.8)],
+    )
+    engine = create_engine(f"sqlite:///{db_path}")
+    backup_calls: list[tuple] = []
+    monkeypatch.setattr(
+        schema_migrations,
+        "create_sqlite_snapshot",
+        lambda *args, **kwargs: backup_calls.append((args, kwargs)),
+    )
+
+    try:
+        schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+        with engine.connect() as conn:
+            stored_ids = {
+                row[0]
+                for row in conn.execute(text(
+                    "SELECT chat_stream_id FROM chat_stream_configs"
+                )).fetchall()
+            }
+    finally:
+        engine.dispose()
+
+    assert backup_calls == []
+    assert stored_ids == {"group_123", "qq:123:group"}
+
+
+def test_identity_migration_does_not_rename_alias_inserted_after_backup_check(
+    tmp_path,
+    monkeypatch,
+):
+    from core import schema_migrations
+
+    db_path = tmp_path / "identity-preflight-race.db"
+    _create_legacy_chat_stream_database(db_path, [])
+    engine = create_engine(f"sqlite:///{db_path}")
+    original_applied_versions = schema_migrations._applied_versions
+    writer_attempt_finished = threading.Event()
+    migration_finished = threading.Event()
+    writer_errors: list[BaseException] = []
+    writer_was_locked: list[bool] = []
+    backup_calls: list[tuple] = []
+    hook_used = False
+
+    def coordinated_applied_versions(conn):
+        nonlocal hook_used
+        if not hook_used:
+            hook_used = True
+            allow_writer.set()
+            assert writer_attempt_finished.wait(timeout=2)
+        return original_applied_versions(conn)
+
+    def insert_alias():
+        allow_writer.wait(timeout=2)
+        writer_engine = create_engine(
+            f"sqlite:///{db_path}",
+            connect_args={"timeout": 0.0},
+        )
+        try:
+            with writer_engine.begin() as conn:
+                conn.execute(text(
+                    "INSERT INTO chat_stream_configs(chat_stream_id) "
+                    "VALUES ('group_123')"
+                ))
+        except OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                writer_errors.append(exc)
+            else:
+                writer_was_locked.append(True)
+        except BaseException as exc:  # pragma: no cover - 失败由主线程断言
+            writer_errors.append(exc)
+        else:
+            writer_was_locked.append(False)
+        finally:
+            writer_engine.dispose()
+            writer_attempt_finished.set()
+
+        if writer_was_locked == [True]:
+            if not migration_finished.wait(timeout=5):
+                writer_errors.append(TimeoutError("迁移完成事件超时"))
+                return
+            retry_engine = create_engine(f"sqlite:///{db_path}")
+            try:
+                with retry_engine.begin() as conn:
+                    conn.execute(text(
+                        "INSERT INTO chat_stream_configs(chat_stream_id) "
+                        "VALUES ('group_123')"
+                    ))
+            except BaseException as exc:  # pragma: no cover - 失败由主线程断言
+                writer_errors.append(exc)
+            finally:
+                retry_engine.dispose()
+
+    allow_writer = threading.Event()
+    monkeypatch.setattr(
+        schema_migrations,
+        "_applied_versions",
+        coordinated_applied_versions,
+    )
+    monkeypatch.setattr(
+        schema_migrations,
+        "create_sqlite_snapshot",
+        lambda *args, **kwargs: backup_calls.append((args, kwargs)),
+    )
+    writer = threading.Thread(target=insert_alias)
+    writer.start()
+
+    try:
+        schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+        migration_finished.set()
+        writer.join(timeout=5)
+        assert not writer.is_alive()
+        with engine.connect() as conn:
+            stored_ids = {
+                row[0]
+                for row in conn.execute(text(
+                    "SELECT chat_stream_id FROM chat_stream_configs"
+                )).fetchall()
+            }
+    finally:
+        migration_finished.set()
+        engine.dispose()
+
+    assert writer_errors == []
+    assert writer_was_locked == [True]
+    assert backup_calls == []
+    assert stored_ids == {"group_123"}
+
+
+def test_concurrent_identity_migration_runners_create_one_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    from core import schema_migrations
+    from core.sqlite_backup import create_sqlite_snapshot
+
+    db_path = tmp_path / "concurrent-identity.db"
+    _create_legacy_chat_stream_database(db_path, [("group_123", 0.5)])
+    first_snapshot_started = threading.Event()
+    release_first_snapshot = threading.Event()
+    second_begin_attempted = threading.Event()
+    calls_lock = threading.Lock()
+    calls: list[tuple[Path, Path]] = []
+    errors: list[BaseException] = []
+
+    def tracking_snapshot(source_path, target_path, **kwargs):
+        with calls_lock:
+            calls.append((Path(source_path), Path(target_path)))
+            call_index = len(calls)
+        if call_index == 1:
+            first_snapshot_started.set()
+            assert release_first_snapshot.wait(timeout=3)
+        return create_sqlite_snapshot(source_path, target_path, **kwargs)
+
+    def run_migration(runner_engine):
+        try:
+            schema_migrations.run_schema_migrations(
+                runner_engine,
+                db_path=str(db_path),
+            )
+        except BaseException as exc:  # pragma: no cover - 失败由主线程断言
+            errors.append(exc)
+
+    def observe_second_begin(
+        _conn,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ):
+        if statement.strip().upper() == "BEGIN IMMEDIATE":
+            second_begin_attempted.set()
+
+    monkeypatch.setattr(schema_migrations, "create_sqlite_snapshot", tracking_snapshot)
+    runner_engines = [
+        create_engine(
+            f"sqlite:///{db_path}",
+            connect_args={"check_same_thread": False, "timeout": 0.05},
+        )
+        for _ in range(2)
+    ]
+    event.listen(runner_engines[1], "before_cursor_execute", observe_second_begin)
+    runners = [
+        threading.Thread(target=run_migration, args=(runner_engine,))
+        for runner_engine in runner_engines
+    ]
+    runners[0].start()
+    assert first_snapshot_started.wait(timeout=3)
+    runners[1].start()
+    assert second_begin_attempted.wait(timeout=3)
+    time.sleep(0.1)
+    release_first_snapshot.set()
+    for runner in runners:
+        runner.join(timeout=5)
+        assert not runner.is_alive()
+    for runner_engine in runner_engines:
+        runner_engine.dispose()
+
+    verification_engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        with verification_engine.connect() as conn:
+            stored_ids = {
+                row[0]
+                for row in conn.execute(text(
+                    "SELECT chat_stream_id FROM chat_stream_configs"
+                )).fetchall()
+            }
+    finally:
+        verification_engine.dispose()
+
+    assert errors == []
+    assert len(calls) == 1
+    assert stored_ids == {"qq:123:group"}
+
+
+def test_chat_stream_identity_migration_failure_rolls_back_rows_and_version(
+    tmp_path,
+    monkeypatch,
+):
+    from core import schema_migrations
+
+    db_path = tmp_path / "rollback-stream.db"
+    original_ids = {"group_123", "private_456"}
+    _create_legacy_chat_stream_database(
+        db_path,
+        [("group_123", 0.2), ("private_456", 0.7)],
+    )
+    engine = create_engine(f"sqlite:///{db_path}")
+    real_rename = schema_migrations._rename_chat_stream_identity_alias
+    call_count = 0
+
+    def fail_after_second_rename(conn, alias, canonical):
+        nonlocal call_count
+        call_count += 1
+        real_rename(conn, alias, canonical)
+        if call_count == 2:
+            raise RuntimeError("simulated second identity conversion failure")
+
+    monkeypatch.setattr(
+        schema_migrations,
+        "_rename_chat_stream_identity_alias",
+        fail_after_second_rename,
+    )
+
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="simulated second identity conversion failure",
+        ):
+            schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+        with engine.connect() as conn:
+            stored_ids = {
+                row[0]
+                for row in conn.execute(text(
+                    "SELECT chat_stream_id FROM chat_stream_configs"
+                )).fetchall()
+            }
+            if "schema_migrations" in inspect(conn).get_table_names():
+                versions = {
+                    row[0]
+                    for row in conn.execute(text(
+                        "SELECT version FROM schema_migrations"
+                    )).fetchall()
+                }
+            else:
+                versions = set()
+
+        monkeypatch.setattr(
+            schema_migrations,
+            "_rename_chat_stream_identity_alias",
+            real_rename,
+        )
+        schema_migrations.run_schema_migrations(engine, db_path=str(db_path))
+        with engine.connect() as conn:
+            recovered_ids = {
+                row[0]
+                for row in conn.execute(text(
+                    "SELECT chat_stream_id FROM chat_stream_configs"
+                )).fetchall()
+            }
+            recovered_version_rows = [
+                row[0]
+                for row in conn.execute(text(
+                    "SELECT version FROM schema_migrations"
+                )).fetchall()
+            ]
+            recovered_versions = set(recovered_version_rows)
+    finally:
+        engine.dispose()
+
+    assert call_count == 2
+    assert stored_ids == original_ids
+    assert schema_migrations._SESSION_GUIDANCE_COLUMNS_VERSION not in versions
+    assert schema_migrations._CHAT_STREAM_IDENTITY_VERSION not in versions
+    assert recovered_ids == {"qq:123:group", "qq:456:private"}
+    assert recovered_version_rows.count(
+        schema_migrations._SESSION_GUIDANCE_COLUMNS_VERSION
+    ) == 1
+    assert recovered_version_rows.count(
+        schema_migrations._CHAT_STREAM_IDENTITY_VERSION
+    ) == 1
+    assert schema_migrations._CHAT_STREAM_IDENTITY_VERSION in recovered_versions
 
 
 def test_file_schema_migration_derives_backup_path_from_engine_url(tmp_path):

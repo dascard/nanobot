@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 import re
 from core.time_utils import db_now_naive
+from core.tool_contracts.ai_daily import AI_DAILY_TIMEZONE, AiDailyRequest
 from ..schema import NewsItem
 
 logger = logging.getLogger("nanobot.news_daily.normalize")
@@ -78,14 +79,14 @@ def _parse_date(raw: str):
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
         if dt.tzinfo is not None:
-            return dt.replace(tzinfo=None)
+            return dt.astimezone(AI_DAILY_TIMEZONE).replace(tzinfo=None)
         return dt
     except ValueError:
         pass
     try:
         dt = parsedate_to_datetime(value)
         if dt is not None and dt.tzinfo is not None:
-            return dt.replace(tzinfo=None)
+            return dt.astimezone(AI_DAILY_TIMEZONE).replace(tzinfo=None)
         return dt
     except (TypeError, ValueError):
         pass
@@ -124,4 +125,31 @@ def filter_recent(items: list[NewsItem], hours: int = 72, keep_unknown: bool = F
         elif dt >= cutoff:
             result.append(item)
     logger.debug("[normalize] %d → %d after %dh filter", len(items), len(result), hours)
+    return result
+
+
+def filter_for_ai_daily_request(
+    items: list[NewsItem],
+    request: AiDailyRequest,
+    *,
+    keep_unknown: bool = False,
+) -> list[NewsItem]:
+    """按请求的北京时间半开窗口过滤条目。"""
+    start = request.window_start_naive
+    end = request.window_end_naive
+    result = []
+    for item in items:
+        published_at = _parse_date(item.published_at)
+        if published_at is None:
+            if keep_unknown:
+                result.append(item)
+            continue
+        if start <= published_at < end:
+            result.append(item)
+    logger.debug(
+        "[normalize] %d → %d after %s window filter",
+        len(items),
+        len(result),
+        request.freshness,
+    )
     return result

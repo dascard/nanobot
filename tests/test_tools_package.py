@@ -379,9 +379,7 @@ def test_combined_news_tool_returns_unavailable_html_when_search_backends_fail()
         assert "不要继续重试" in final_report or "搜索源" in final_report
 
 
-def test_ai_daily_tool_wraps_html_as_reply_output():
-    from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
-
+def test_ai_daily_tool_wraps_html_as_rich_output():
     html = '<!DOCTYPE html><html><body><article class="news-brief">AI 资讯</article></body></html>'
 
     with patch("creatures.nanobot.prompts.skills.news_search.tool._run_news_daily_pipeline", return_value=html):
@@ -389,8 +387,11 @@ def test_ai_daily_tool_wraps_html_as_reply_output():
 
     assert result.success
     payload = json.loads(result.output)
-    assert payload[REPLY_MARKER]["content"] == html
-    assert payload[REPLY_MARKER]["send_mode"] == "normal"
+    rich = payload["NANOBOT_RICH_OUTPUT"]
+    assert rich["version"] == 1
+    assert rich["report_kind"] == "ai_daily"
+    assert rich["content_type"] == "text/html"
+    assert rich["html"] == html
 
 
 @pytest.mark.asyncio

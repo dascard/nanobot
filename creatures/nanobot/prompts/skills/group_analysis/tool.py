@@ -16,13 +16,17 @@ import time
 from typing import Any
 
 from kohakuterrarium.modules.tool.base import BaseTool, ExecutionMode, ToolResult
-from creatures.nanobot.prompts.skills.reply.tool import build_reply_tool_result
+from nanobot_kt.reply_contract import build_rich_tool_result
 
 logger = logging.getLogger("nanobot.tool.group_analysis")
 
 GROUP_ANALYSIS_MAX_LOGS = int(os.environ.get("GROUP_ANALYSIS_MAX_LOGS", "5000"))
 GROUP_ANALYSIS_PROMPT_CHAR_BUDGET = int(os.environ.get("GROUP_ANALYSIS_PROMPT_CHAR_BUDGET", "60000"))
 GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET = int(os.environ.get("GROUP_ANALYSIS_STYLE_PROMPT_CHAR_BUDGET", "24000"))
+
+
+def _build_group_analysis_tool_result(html: str) -> ToolResult:
+    return build_rich_tool_result(html, report_kind="group_analysis")
 
 
 class GroupAnalysisTool(BaseTool):
@@ -90,14 +94,14 @@ class GroupAnalysisTool(BaseTool):
                     candidates = repo.get_group_candidates(group_id)
                     if candidates:
                         lines = [f"group_{c['id']} — {c['name']}" for c in candidates[:10]]
-                        return build_reply_tool_result(
+                        return _build_group_analysis_tool_result(
                             format_error_html(
                                 "匹配到多个群",
                                 f"关键词 \"{group_id}\" 匹配到 {len(candidates)} 个群，请使用精确的群号或群名：",
                                 lines,
                             )
                         )
-                    return build_reply_tool_result(
+                    return _build_group_analysis_tool_result(
                         format_error_html(
                             "未找到群",
                             f"未找到群 \"{group_id}\"，群号或群名不匹配。",
@@ -118,12 +122,12 @@ class GroupAnalysisTool(BaseTool):
                 if cached:
                     cache.remember_group_analysis_report(cached)
                     logger.info("[group_analysis] cache_hit=true group=%s", group.group_id)
-                    return build_reply_tool_result(cached)
+                    return _build_group_analysis_tool_result(cached)
 
                 eligible_logs = filter_analyzable_logs(batch.logs)
                 logs = dedupe_group_logs(eligible_logs)
                 if not logs:
-                    return build_reply_tool_result(
+                    return _build_group_analysis_tool_result(
                         format_error_html("消息不足", f"群 {group.name} 暂无消息记录。")
                     )
 
@@ -164,7 +168,7 @@ class GroupAnalysisTool(BaseTool):
                 preprocess_ms = round((time.monotonic() - preprocess_t0) * 1000)
 
                 if len(payload["messages"]) < 3:
-                    return build_reply_tool_result(
+                    return _build_group_analysis_tool_result(
                         format_error_html(
                             "消息不足", f"群 {group.name} 可分析的消息不足（需≥3条）。",
                         )
@@ -212,7 +216,7 @@ class GroupAnalysisTool(BaseTool):
                     preprocess_ms, llm_ms, render_ms, total_ms,
                 )
 
-                return build_reply_tool_result(report)
+                return _build_group_analysis_tool_result(report)
 
             finally:
                 db.close()
@@ -220,6 +224,6 @@ class GroupAnalysisTool(BaseTool):
         except Exception as e:
             logger.error("[group_analysis] Failed: %s", e, exc_info=True)
             from .render import format_error_html
-            return build_reply_tool_result(
+            return _build_group_analysis_tool_result(
                 format_error_html("群聊分析失败", "工具执行时发生异常。", [str(e)[:300]])
             )

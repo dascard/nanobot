@@ -237,6 +237,67 @@ def test_group_memory_injection_uses_factory_reranker_provider(db_session, monke
     assert result.score_components[str(memory.id)]["reranker"] == 0.92
 
 
+def test_no_model_group_memory_does_not_reuse_reranker_cache(
+    db_session,
+    monkeypatch,
+):
+    from app.group_memory.injection_service import (
+        GROUP_MEMORY_RAG_CACHE,
+        GroupMemoryInjectionService,
+    )
+    from core.database import ChatStreamConfig
+    import core.semantic.provider_factory as provider_factory
+
+    calls = []
+    GROUP_MEMORY_RAG_CACHE.clear()
+    db_session.add(ChatStreamConfig(
+        chat_stream_id="qq:no-model-cache:group",
+        group_profile_mode="on",
+    ))
+    memory = _memory(
+        db_session,
+        group_id="group_no-model-cache",
+        content="缓存隔离测试群体记忆",
+        content_hash="gm-no-model-cache",
+    )
+    db_session.commit()
+
+    class CountingReranker(FixedGroupReranker):
+        def rerank(self, query, candidates, *, top_k=None):
+            calls.append(query)
+            return super().rerank(query, candidates, top_k=top_k)
+
+    provider = CountingReranker({
+        f"group_memory:{memory.id}:memory": 0.92,
+    })
+    monkeypatch.setattr(
+        provider_factory,
+        "get_reranker_provider",
+        lambda: provider,
+    )
+    service = GroupMemoryInjectionService(db_session)
+
+    live = service.build_context(
+        group_id="no-model-cache",
+        current_user_input="缓存隔离测试",
+    )
+    preview = service.build_context(
+        group_id="no-model-cache",
+        current_user_input="缓存隔离测试",
+        allow_model_calls=False,
+    )
+
+    assert live.context
+    assert calls == ["缓存隔离测试"]
+    assert preview.context == ""
+    assert preview.debug["cache_hit"] is False
+    assert preview.debug["model_calls_allowed"] is False
+    assert preview.debug["group_memory_skipped"] == [
+        {"reason": "model_calls_forbidden"}
+    ]
+    assert preview.debug["model_dependent_retrieval_skipped"] is True
+
+
 def test_group_memory_rag_timeout_marks_fallback(db_session, monkeypatch):
     import time
 

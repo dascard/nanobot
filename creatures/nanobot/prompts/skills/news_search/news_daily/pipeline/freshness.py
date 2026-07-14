@@ -23,7 +23,12 @@ def compute_freshness(article: Article, now: datetime) -> float:
     return 0.0
 
 
-def filter_fresh_articles(articles: list[Article], now: datetime) -> list[Article]:
+def filter_fresh_articles(
+    articles: list[Article],
+    now: datetime,
+    *,
+    max_age_hours: int = DAILY_FRESHNESS_HOURS,
+) -> list[Article]:
     kept = []
     for a in articles:
         a.freshness_score = compute_freshness(a, now)
@@ -34,7 +39,7 @@ def filter_fresh_articles(articles: list[Article], now: datetime) -> list[Articl
                 kept.append(a)
             continue
         age_hours = (now - a.published_at).total_seconds() / 3600
-        if age_hours > DAILY_FRESHNESS_HOURS:
+        if age_hours > max_age_hours:
             a.is_low_freshness = True
             continue
         kept.append(a)
@@ -54,11 +59,16 @@ def compute_cluster_freshness(cluster: EventCluster, now: datetime) -> float:
     return 0.35
 
 
-def can_be_top_story(cluster: EventCluster, now: datetime) -> bool:
+def can_be_top_story(
+    cluster: EventCluster,
+    now: datetime,
+    *,
+    max_age_hours: int = TOP_STORY_FRESHNESS_HOURS,
+) -> bool:
     if cluster.latest_seen is None:
         return False
     age_hours = (now - cluster.latest_seen).total_seconds() / 3600
-    if age_hours > TOP_STORY_FRESHNESS_HOURS:
+    if age_hours > max_age_hours:
         return False
     if cluster.is_single_source and not (cluster.representative and cluster.representative.is_official):
         return False

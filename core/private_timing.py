@@ -21,8 +21,35 @@ _TRANSPORT_PATTERNS = (
 _TASK_PATTERNS = (
     re.compile(r"(?:帮我|请|帮忙|麻烦).{0,20}(?:总结|分析|解释|翻译|写|搜索|看看|检查|查)"),
     re.compile(r"(?:总结|分析|解释|翻译|搜索|写).{0,12}(?:日报|新闻|代码|这段|这个|一下)"),
-    re.compile(r"(?:怎么|为什么|哪里错|能不能|如何|怎么办|有人知道|求推荐|怎么修)"),
-    re.compile(r"[?？]$"),
+    re.compile(r"(?:哪里错|有人知道|求推荐|怎么修)"),
+)
+_DIAGNOSTIC_QUESTION_PATTERN = re.compile(r"(?:怎么|为什么|能不能|如何|怎么办)")
+_DAILY_REQUEST_PATTERNS = (
+    re.compile(
+        r"(?:(?:请|麻烦)(?:帮我)?|帮我)?"
+        r"(?:给我|发我|来份|来一份|生成|整理|总结|搜索|查看|看看|看下|看一下|查下|查一下)"
+        r".{0,40}(?:日报|新闻|简报)[?？。！!]*"
+    ),
+    re.compile(r"(?:最新|今日|今天|本周|近期).{0,20}(?:日报|新闻|简报)[?？。！!]*"),
+)
+_INLINE_MATERIAL_STRONG = (
+    "traceback",
+    "error",
+    "exception",
+    "no module named",
+    "keyerror",
+    "typeerror",
+    "syntaxerror",
+    "httperror",
+    "importerror",
+    "modulenotfounderror",
+)
+_INLINE_MATERIAL_WEAK = ("\n", "```", "报错如下", "错误信息", "status code")
+_DIAGNOSTIC_MATERIAL_MARKERS = _INLINE_MATERIAL_STRONG + (
+    "```",
+    "报错如下",
+    "错误信息",
+    "status code",
 )
 _REQUEST_MARKERS = ("帮我", "解释", "看看", "分析", "总结", "翻译", "怎么", "为什么",
                     "哪里错", "报错", "能不能", "请", "求推荐", "有人知道", "如何", "怎么办")
@@ -60,28 +87,33 @@ def _looks_transport_only(text: str, has_files: bool) -> bool:
 
 
 def _looks_task_request(text: str) -> bool:
-    return any(p.search(text) for p in _TASK_PATTERNS)
+    if any(p.search(text) for p in _TASK_PATTERNS):
+        return True
+    return bool(_DIAGNOSTIC_QUESTION_PATTERN.search(text)) and _has_diagnostic_material(text)
+
+
+def _looks_daily_request(text: str) -> bool:
+    value = text.strip()
+    return any(pattern.fullmatch(value) for pattern in _DAILY_REQUEST_PATTERNS)
+
+
+def _has_diagnostic_material(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in _DIAGNOSTIC_MATERIAL_MARKERS)
 
 
 def _has_inline_material(text: str) -> bool:
     """判断消息里是否已包含具体材料（报错、日志、代码等）。"""
-    strong = ("Traceback", "Error", "Exception", "No module named",
-              "KeyError", "TypeError", "SyntaxError", "HTTPError",
-              "ImportError", "ModuleNotFoundError")
-    if any(m in text for m in strong):
+    lowered = text.lower()
+    if any(marker in lowered for marker in _INLINE_MATERIAL_STRONG):
         return True
     if len(text) < 40:
         return False
-    weak = ("\n", "```", "报错如下", "错误信息", "status code")
-    return any(m in text for m in weak)
+    return any(marker in lowered for marker in _INLINE_MATERIAL_WEAK)
 
 
 def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]:
     t = text.strip()
-    if is_superuser:
-        if _looks_task_request(t):
-            return "serious", "full", "superuser_task"
-        return "short", "full", "superuser_query"
     if any(w in t for w in _IDENTITY_PROBE_WORDS):
         return "casual", "none", "identity_probe"
     if any(w in t for w in _CHECK_CAPABILITY_WORDS):
@@ -90,18 +122,23 @@ def _infer_effort(text: str, is_superuser: bool = False) -> tuple[str, str, str]
         return "casual", "none", "is_bot_probe"
     if any(w in t for w in _PERSONAL_PROBE_WORDS):
         return "casual", "none", "personal_probe"
+    if any(w in t for w in _TOO_BROAD_WORDS):
+        return "casual", "none", "too_broad"
+    if _looks_daily_request(t):
+        if is_superuser:
+            return "serious", "full", "daily_request"
+        return "casual", "none", "daily_request_casual"
     if any(w in t for w in _MISSING_MATERIAL_WORDS) and not _looks_task_request(t):
         if _has_inline_material(t):
             return "short", "lightweight", "specific_task"
         return "casual", "none", "missing_material"
-    if any(w in t for w in _TOO_BROAD_WORDS):
-        return "casual", "none", "too_broad"
     if _looks_task_request(t):
-        if ("日报" in t or "新闻" in t):
-            if is_superuser:
-                return "serious", "full", "daily_request"
-            return "casual", "none", "daily_request_casual"
+        # 超级用户只定义权限上限，不能让每一轮请求自动扩大到完整工具集。
+        if is_superuser:
+            return "serious", "full", "superuser_task"
         return "short", "lightweight", "specific_task"
+    if is_superuser:
+        return "short", "lightweight", "superuser_query"
     return "short", "lightweight", "general_query"
 
 

@@ -62,6 +62,19 @@ def test_strip_kt_framework_tool_docs_keeps_business_system_text():
     assert sanitized[1]["content"] == "用户提到了 Available Functions，不应被改"
 
 
+def test_strip_kt_framework_tool_docs_normalizes_tuple_messages():
+    from core.llm_request_sanitizer import strip_kt_framework_tool_docs
+
+    sanitized = strip_kt_framework_tool_docs((
+        {"role": "system", "content": KT_DOC_TEXT},
+        {"role": "user", "content": "保留用户消息"},
+    ))
+
+    assert isinstance(sanitized, list)
+    assert "Available Functions" not in sanitized[0]["content"]
+    assert sanitized[1]["content"] == "保留用户消息"
+
+
 def test_new_api_payload_sanitizes_framework_docs():
     from clients.new_api_client import NewAPIClient
 

@@ -6,9 +6,77 @@ Uses mocks to avoid requiring real APIs or KT agent infrastructure.
 """
 
 import asyncio
+from types import SimpleNamespace
 from tests.async_helpers import run_async
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
+
+
+def _tool_exchange(
+    tool_name: str,
+    output: str,
+    *,
+    call_id: str | None = None,
+    as_objects: bool = False,
+):
+    call_id = call_id or f"call_{tool_name}"
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": call_id,
+                "type": "function",
+                "function": {"name": tool_name, "arguments": "{}"},
+            }],
+        },
+        {
+            "role": "tool",
+            "name": tool_name,
+            "tool_call_id": call_id,
+            "content": output,
+        },
+    ]
+    if as_objects:
+        return [SimpleNamespace(**message) for message in messages]
+    return messages
+
+
+def _rich_tool_exchange(
+    tool_name: str,
+    html: str,
+    *,
+    call_id: str | None = None,
+    as_objects: bool = False,
+):
+    from nanobot_kt.reply_contract import build_rich_output
+
+    return _tool_exchange(
+        tool_name,
+        build_rich_output(html, report_kind=tool_name),
+        call_id=call_id,
+        as_objects=as_objects,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_session_guidance_resolver(monkeypatch):
+    """框架单元测试不依赖数据库，统一模拟未配置会话指导。"""
+    from core.session_guidance import SessionGuidanceResolution
+
+    def resolve(_db, *, platform, chat_type, session_id):
+        del session_id
+        return SessionGuidanceResolution(
+            chat_stream_id=f"{platform}:test:{chat_type}",
+            text="",
+            configured=False,
+            chars=0,
+            sha256="",
+            updated_at=None,
+            status="missing",
+        )
+
+    monkeypatch.setattr("nanobot_kt.bridge.resolve_session_guidance", resolve)
 
 
 # ── BufferedOutput Tests ──
@@ -105,15 +173,14 @@ class TestPythonSandboxTool:
         assert tool.tool_name == "python_sandbox"
 
     @patch("creatures.nanobot.prompts.skills.python_sandbox.tool.AnalysisSandbox")
-    def test_execute_success(self, MockSandbox):
+    def test_execute_is_hard_disabled(self, MockSandbox):
         from creatures.nanobot.prompts.skills.python_sandbox.tool import PythonSandboxTool
-        mock_instance = MockSandbox.return_value
-        mock_instance.execute_python_analysis.return_value = "result: 42"
 
         tool = PythonSandboxTool()
         result = run_async(tool.execute({"code": "print(42)"}))
-        assert result.success
-        assert "42" in result.output
+        assert not result.success
+        assert "disabled" in str(result.error).lower()
+        MockSandbox.assert_not_called()
 
 
 class TestAiDailyTool:
@@ -153,7 +220,7 @@ class TestNanobotBridge:
 
         bridge = NanobotBridge()
         bridge._agent = SimpleNamespace(controller=SimpleNamespace())
-        bridge._extract_last_rich_tool_output = MagicMock(return_value="")
+        bridge._extract_last_rich_tool_output = MagicMock(return_value=None)
         bridge._extract_reply_from_tool_output = MagicMock(return_value="")
 
         tracker = MagicMock(
@@ -199,8 +266,6 @@ class TestNanobotBridge:
     ):
         """合法 reply、富 HTML 和 no_reply 都应由当前模型成功终止。"""
         import json
-        from types import SimpleNamespace
-
         from creatures.nanobot.prompts.skills.reply.tool import REPLY_MARKER
         from nanobot_kt.bridge import NanobotBridge
 
@@ -236,7 +301,19 @@ class TestNanobotBridge:
             )
 
         async def process_event(_agent, _event):
-            messages.append(SimpleNamespace(role="tool", content=tool_output))
+            if terminal_kind == "html":
+                messages.extend(_rich_tool_exchange(
+                    "ai_daily",
+                    tool_output,
+                    as_objects=True,
+                ))
+            else:
+                tool_name = "reply" if terminal_kind == "reply" else "no_reply"
+                messages.extend(_tool_exchange(
+                    tool_name,
+                    tool_output,
+                    as_objects=True,
+                ))
 
         process_event_mock = AsyncMock(side_effect=process_event)
         tracker = MagicMock(
@@ -290,7 +367,7 @@ class TestNanobotBridge:
 
         bridge = NanobotBridge()
         bridge._agent = SimpleNamespace(controller=SimpleNamespace())
-        bridge._extract_last_rich_tool_output = MagicMock(return_value="")
+        bridge._extract_last_rich_tool_output = MagicMock(return_value=None)
         bridge._extract_reply_from_tool_output = MagicMock(return_value="")
         bridge._record_reply_contract_check = MagicMock()
         tracker = MagicMock(
@@ -301,10 +378,8 @@ class TestNanobotBridge:
         async def process_event(_agent, _event):
             bridge._output._buffer.append(raw_output)
 
-        create_user_event = lambda content, stream: SimpleNamespace(
-            content=content,
-            stream=stream,
-        )
+        def create_user_event(content, stream):
+            return SimpleNamespace(content=content, stream=stream)
         model_loop = run_async(bridge._run_model_loop(
             candidate_models=[{"id": "only-model"}],
             route_plan=SimpleNamespace(),
@@ -324,7 +399,7 @@ class TestNanobotBridge:
             session_id="session-suppressed",
             response=model_loop.response,
             result=model_loop.result,
-            preserved_html=model_loop.preserved_html,
+            terminal_output=model_loop.terminal_output,
             target_model=model_loop.target_model,
             query="你好",
             meta={
@@ -468,6 +543,10 @@ class TestNanobotBridge:
             Msg("system", "本轮认真处理。可以使用工具"),
             Msg("system", "<reply_contract_retry>\nretry\n</reply_contract_retry>"),
             Msg("system", "<runtime_context>\nold\n</runtime_context>"),
+            Msg(
+                "system",
+                "<session_guidance>\n旧会话指导\n</session_guidance>",
+            ),
         ]
 
         bridge = NanobotBridge.__new__(NanobotBridge)
@@ -782,7 +861,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "Hello from KT!"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
@@ -797,7 +876,11 @@ class TestNanobotBridge:
 
         async def _run():
             await bridge.start()
-            return await bridge.handle_message("test query", user_id="u1")
+            return await bridge.handle_message(
+                "test query",
+                user_id="u1",
+                session_id="private_u1",
+            )
 
         result = run_async(_run())
         assert result == "Hello from KT"
@@ -838,7 +921,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "ok"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -884,8 +967,6 @@ class TestNanobotBridge:
 
     @pytest.mark.asyncio
     async def test_prepare_event_payload_builds_multimodal_capabilities(self, monkeypatch):
-        from types import SimpleNamespace
-
         from kohakuterrarium.llm.message import ImagePart
         from nanobot_kt.bridge import NanobotBridge
 
@@ -911,7 +992,7 @@ class TestNanobotBridge:
         payload = await bridge._prepare_event_payload(
             prompt_event_content="看看图",
             files=["https://example.com/a.png"],
-            tool_plan=SimpleNamespace(sent_tool_schemas=[{"name": "reply"}]),
+            tool_schemas=[{"name": "reply"}],
         )
 
         assert payload.image_parts == [image]
@@ -940,7 +1021,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "ok"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
@@ -975,6 +1056,7 @@ class TestNanobotBridge:
                 return await bridge.handle_message(
                     "看看这张图",
                     user_id="u1",
+                    session_id="private_u1",
                     metadata={"files": ["https://example.com/a.png", "https://example.com/b.png"]},
                 )
 
@@ -1039,7 +1121,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "视觉回复"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -1134,7 +1216,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "降级回复"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -1207,7 +1289,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "ok"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
@@ -1305,7 +1387,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "ok"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
         mock_agent.controller = MagicMock(conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")))
@@ -1416,9 +1498,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "高智回复"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [
-            {"role": "tool", "content": reply_output},
-        ]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -1805,9 +1885,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "自动回退"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [
-            {"role": "tool", "content": reply_output},
-        ]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -1900,7 +1978,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "能力回退"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -1979,7 +2057,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "openrouter 回复"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -2048,7 +2126,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "换 key 回复"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -2125,7 +2203,7 @@ class TestNanobotBridge:
         reply_output = json.dumps({REPLY_MARKER: {"content": "参数同步回复"}}, ensure_ascii=False)
         mock_conv = MagicMock()
         mock_conv._messages = []
-        mock_conv.get_messages.return_value = [{"role": "tool", "content": reply_output}]
+        mock_conv.get_messages.return_value = _tool_exchange("reply", reply_output)
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -2198,14 +2276,14 @@ class TestNanobotBridge:
         message_calls = []
         user_msg = SimpleNamespace(role="user", content="你好")
         assistant_msg = SimpleNamespace(role="assistant", content="")
-        reply_msg = {"role": "tool", "content": reply_output}
+        reply_messages = _tool_exchange("reply", reply_output)
 
         def fake_get_messages():
             message_calls.append(len(message_calls) + 1)
             if len(message_calls) == 3:
                 return [user_msg, assistant_msg]
             if process_count["value"] >= 2:
-                return [reply_msg]
+                return reply_messages
             return []
 
         mock_conv = MagicMock()
@@ -2250,8 +2328,6 @@ class TestNanobotBridge:
     @patch("nanobot_kt.bridge.Agent")
     def test_handle_message_prefers_ai_daily_wrapped_html_over_plaintext_rewrite(self, MockAgent, mock_load):
         from nanobot_kt.bridge import NanobotBridge
-        from creatures.nanobot.prompts.skills.reply.tool import build_reply_output
-
         mock_config = MagicMock()
         mock_config.name = "test"
         mock_load.return_value = mock_config
@@ -2263,7 +2339,7 @@ class TestNanobotBridge:
         mock_conv._messages = []
         html = '<article class="news-brief"><h1>HTML资讯卡片</h1></article>'
         tool_messages = [
-            {"role": "tool", "content": build_reply_output(html)},
+            *_rich_tool_exchange("ai_daily", html),
             {"role": "assistant", "content": "我给你整理了几条新闻"},
         ]
         mock_conv.to_messages.return_value = tool_messages
@@ -2280,7 +2356,11 @@ class TestNanobotBridge:
 
         async def _run():
             await bridge.start()
-            return await bridge.handle_message("给我最新 AI 新闻", user_id="u1")
+            return await bridge.handle_message(
+                "给我最新 AI 新闻",
+                user_id="u1",
+                session_id="private_u1",
+            )
 
         result = run_async(_run())
 
@@ -2301,15 +2381,12 @@ class TestNanobotBridge:
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
         mock_conv._messages = []
+        group_html = (
+            "<!DOCTYPE html><html><body class=\"group-analysis-report\">"
+            "<h1>群聊分析卡片</h1></body></html>"
+        )
         ga_messages = [
-            {
-                "role": "tool",
-                "content": (
-                    "[group_analysis]\n"
-                    "<!DOCTYPE html><html><body class=\"group-analysis-report\">"
-                    "<h1>群聊分析卡片</h1></body></html>"
-                ),
-            },
+            *_rich_tool_exchange("group_analysis", group_html),
             {"role": "assistant", "content": "我给你总结一下这个群"},
         ]
         mock_conv.to_messages.return_value = ga_messages
@@ -2326,7 +2403,11 @@ class TestNanobotBridge:
 
         async def _run():
             await bridge.start()
-            return await bridge.handle_message("分析第二团体这个群的消息", user_id="u1")
+            return await bridge.handle_message(
+                "分析第二团体这个群的消息",
+                user_id="u1",
+                session_id="private_u1",
+            )
 
         result = run_async(_run())
 
@@ -2361,12 +2442,14 @@ class TestNanobotBridge:
 
         group_html = "<!DOCTYPE html><html><body class=\"group-analysis-report\"><h1>群聊分析卡片</h1></body></html>"
 
-        tool_msg = MagicMock()
-        tool_msg.role = "tool"
-        tool_msg.content = group_html
+        tool_messages = _rich_tool_exchange(
+            "group_analysis",
+            group_html,
+            as_objects=True,
+        )
         mock_conv = MagicMock()
-        mock_conv._messages = [tool_msg]
-        mock_conv.get_messages.return_value = [tool_msg]
+        mock_conv._messages = tool_messages
+        mock_conv.get_messages.return_value = tool_messages
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
 
@@ -2381,7 +2464,11 @@ class TestNanobotBridge:
 
         async def _run():
             await bridge.start()
-            return await bridge.handle_message("分析这个群的消息", user_id="u1")
+            return await bridge.handle_message(
+                "分析这个群的消息",
+                user_id="u1",
+                session_id="private_u1",
+            )
 
         result = run_async(_run())
 
@@ -2416,6 +2503,7 @@ class TestNanobotBridge:
             return await bridge.handle_message(
                 "test query",
                 user_id="u1",
+                session_id="private_u1",
                 metadata={
                     "history_header": "[最近若干条对话历史，仅用于理解语境，已按行数和 token 预算裁剪。]",
                     "history_messages": [{"role": "user", "content": "旧消息"}],
@@ -2446,9 +2534,10 @@ class TestNanobotBridge:
         mock_conv.append.side_effect = lambda role, content: messages.append(
             {"role": role, "content": content}
         )
-        mock_conv.get_messages.return_value = [
-            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "ok"}}'},
-        ]
+        mock_conv.get_messages.return_value = _tool_exchange(
+            "reply",
+            '{"NANOBOT_REPLY_OUTPUT": {"content": "ok"}}',
+        )
         mock_conv.to_messages.return_value = []
         mock_conv.find_last_user_index.return_value = -1
         mock_controller = MagicMock()
@@ -2525,9 +2614,10 @@ class TestReplyContract:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
-        mock_conv.get_messages.return_value = [
-            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "这是给用户的回复"}}'},
-        ]
+        mock_conv.get_messages.return_value = _tool_exchange(
+            "reply",
+            '{"NANOBOT_REPLY_OUTPUT": {"content": "这是给用户的回复"}}',
+        )
         mock_agent.controller = MagicMock(
             conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")),
         )
@@ -2542,7 +2632,11 @@ class TestReplyContract:
 
         async def _run():
             await bridge.start()
-            return await bridge.handle_message("你好", user_id="u1")
+            return await bridge.handle_message(
+                "你好",
+                user_id="u1",
+                session_id="private_u1",
+            )
 
         result = run_async(_run())
         assert result == "这是给用户的回复"
@@ -2561,16 +2655,14 @@ class TestReplyContract:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
-        mock_conv.get_messages.return_value = [
-            {
-                "role": "tool",
-                "content": (
-                    "[group_analysis]\n"
-                    "<!DOCTYPE html><html><body class=\"group-analysis-report\">"
-                    "<h1>群聊日报</h1></body></html>"
-                ),
-            },
-        ]
+        group_html = (
+            "<!DOCTYPE html><html><body class=\"group-analysis-report\">"
+            "<h1>群聊日报</h1></body></html>"
+        )
+        mock_conv.get_messages.return_value = _rich_tool_exchange(
+            "group_analysis",
+            group_html,
+        )
         mock_agent.controller = MagicMock(
             conversation=mock_conv, llm=MagicMock(config=MagicMock(model="test-model")),
         )
@@ -2585,7 +2677,11 @@ class TestReplyContract:
 
         async def _run():
             await bridge.start()
-            return await bridge.handle_message("群日报", user_id="u1")
+            return await bridge.handle_message(
+                "群日报",
+                user_id="u1",
+                session_id="private_u1",
+            )
 
         result = run_async(_run())
         assert result.startswith("<!DOCTYPE html>")
@@ -2627,15 +2723,19 @@ class TestReplyContract:
 
         async def _run():
             await bridge.start()
-            return await bridge.handle_message("你好", user_id="u1")
+            return await bridge.handle_message(
+                "你好",
+                user_id="u1",
+                session_id="private_u1",
+            )
 
         result = run_async(_run())
         assert not result or result == ""
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_structured_final_action_no_reply_returns_empty(self, MockAgent, mock_load, monkeypatch):
-        """严格结构化 no_reply fallback 应作为不发送处理。"""
+    def test_structured_final_action_without_tool_is_suppressed(self, MockAgent, mock_load, monkeypatch):
+        """assistant 自报的结构化 no_reply 不能替代真实 no_reply 工具。"""
         import json
 
         from nanobot_kt.bridge import NanobotBridge
@@ -2685,8 +2785,9 @@ class TestReplyContract:
 
         assert result == ""
         reply_meta = bridge.pop_last_reply_meta("private_u1")
-        assert reply_meta["_agent_result"] == "no_reply_structured"
-        assert reply_meta["_no_reply"] is True
+        assert reply_meta["_agent_result"] == "no_tool_call"
+        assert reply_meta["_no_tool_call"] is True
+        assert "_no_reply" not in reply_meta
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
@@ -2732,7 +2833,11 @@ class TestReplyContract:
             if len(process_calls) == 1:
                 bridge._output._buffer.append("我会直接回复，但没有调用工具")
             else:
-                messages.append({"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "重试后的回复"}}'})
+                messages.extend(_tool_exchange(
+                    "reply",
+                    '{"NANOBOT_REPLY_OUTPUT": {"content": "重试后的回复"}}',
+                    call_id="call_retry_reply",
+                ))
 
         mock_agent._process_event = AsyncMock(side_effect=fake_process)
         MockAgent.return_value = mock_agent
@@ -2756,8 +2861,8 @@ class TestReplyContract:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_no_tool_call_retry_plain_text_is_repaired(self, MockAgent, mock_load, db_session, monkeypatch):
-        """重试后仍没有工具但产出普通文本 → 作为明文修复回复，避免随机空回复。"""
+    def test_no_tool_call_retry_plain_text_is_suppressed(self, MockAgent, mock_load, db_session, monkeypatch):
+        """重试后仍无真实工具调用时，普通文本不得成为最终回复。"""
         from core.database import ReplyContractCheckLog
         from nanobot_kt.bridge import NanobotBridge
 
@@ -2805,11 +2910,11 @@ class TestReplyContract:
 
         result = run_async(_run())
 
-        assert result == "还是直接输出普通文本"
+        assert result == ""
         assert mock_agent._process_event.await_count == 2
-        assert bridge.is_no_tool_call("s-suppress") is False
+        assert bridge.is_no_tool_call("s-suppress") is True
         logs = db_session.query(ReplyContractCheckLog).order_by(ReplyContractCheckLog.attempt.asc()).all()
-        assert [log.result for log in logs] == ["no_tool_call", "retry_plain_text_repair"]
+        assert [log.result for log in logs] == ["no_tool_call", "suppressed"]
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
@@ -2880,8 +2985,8 @@ class TestReplyContract:
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
-    def test_no_tool_call_retry_plain_marker_json_is_repaired(self, MockAgent, mock_load, db_session, monkeypatch):
-        """重试后把 reply marker JSON 当普通文本输出 → 提取 content，不把 JSON 发给用户。"""
+    def test_no_tool_call_retry_plain_marker_json_is_suppressed(self, MockAgent, mock_load, db_session, monkeypatch):
+        """assistant 输出 reply marker JSON 仍不具备真实工具来源。"""
         from core.database import ReplyContractCheckLog
         from nanobot_kt.bridge import NanobotBridge
 
@@ -2933,9 +3038,10 @@ class TestReplyContract:
 
         result = run_async(_run())
 
-        assert result == "修复后的回复"
+        assert result == ""
+        assert bridge.is_no_tool_call("s-marker-repair") is True
         logs = db_session.query(ReplyContractCheckLog).order_by(ReplyContractCheckLog.attempt.asc()).all()
-        assert [log.result for log in logs] == ["no_tool_call", "retry_marker_json_repair"]
+        assert [log.result for log in logs] == ["no_tool_call", "suppressed"]
 
     @patch("nanobot_kt.bridge.load_agent_config")
     @patch("nanobot_kt.bridge.Agent")
@@ -2972,7 +3078,11 @@ class TestReplyContract:
 
         async def _run():
             await bridge.start()
-            return await bridge.handle_message("你好", user_id="u1")
+            return await bridge.handle_message(
+                "你好",
+                user_id="u1",
+                session_id="private_u1",
+            )
 
         result = run_async(_run())
         assert not result or result == ""
@@ -3013,9 +3123,10 @@ class TestNoteBotRepliedBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
-        mock_conv.get_messages.return_value = [
-            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "群聊回复"}}'},
-        ]
+        mock_conv.get_messages.return_value = _tool_exchange(
+            "reply",
+            '{"NANOBOT_REPLY_OUTPUT": {"content": "群聊回复"}}',
+        )
         mock_conv.find_last_user_index.return_value = -1
         mock_controller = MagicMock()
         mock_controller.conversation = mock_conv
@@ -3056,9 +3167,10 @@ class TestNoteBotRepliedBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
-        mock_conv.get_messages.return_value = [
-            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "私聊回复"}}'},
-        ]
+        mock_conv.get_messages.return_value = _tool_exchange(
+            "reply",
+            '{"NANOBOT_REPLY_OUTPUT": {"content": "私聊回复"}}',
+        )
         mock_conv.find_last_user_index.return_value = -1
         mock_controller = MagicMock()
         mock_controller.conversation = mock_conv
@@ -3099,9 +3211,10 @@ class TestNoteBotRepliedBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
-        mock_conv.get_messages.return_value = [
-            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "dry-run 回复"}}'},
-        ]
+        mock_conv.get_messages.return_value = _tool_exchange(
+            "reply",
+            '{"NANOBOT_REPLY_OUTPUT": {"content": "dry-run 回复"}}',
+        )
         mock_conv.find_last_user_index.return_value = -1
         mock_controller = MagicMock()
         mock_controller.conversation = mock_conv
@@ -3184,9 +3297,10 @@ class TestNoteBotRepliedBridge:
         mock_agent.start = AsyncMock()
         mock_agent.registry.list_tools.return_value = []
         mock_conv = MagicMock()
-        mock_conv.get_messages.return_value = [
-            {"role": "tool", "content": '{"NANOBOT_REPLY_OUTPUT": {"content": "回复"}}'},
-        ]
+        mock_conv.get_messages.return_value = _tool_exchange(
+            "reply",
+            '{"NANOBOT_REPLY_OUTPUT": {"content": "回复"}}',
+        )
         mock_conv.find_last_user_index.return_value = -1
         mock_controller = MagicMock()
         mock_controller.conversation = mock_conv

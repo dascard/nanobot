@@ -749,6 +749,96 @@ async def test_failed_takeover_reuses_ambient_with_inbound_request_fingerprint(
     assert recovered_claim.attempt_count == 2
 
 
+@pytest.mark.asyncio
+async def test_bridge_resolver_failure_recovers_without_duplicate_group_effects(
+    db_session,
+    monkeypatch,
+):
+    from app.group_ingress.service import GroupIngressService
+    from core.database import ChatLog, InboundMessageClaim
+
+    resolver_error = RuntimeError("session guidance resolver failed")
+    calls = {
+        "bridge": 0,
+        "model": 0,
+        "timing": 0,
+        "bot_replied": 0,
+    }
+
+    class Runtime:
+        async def process_message(self, *_args, **_kwargs):
+            calls["timing"] += 1
+            return {
+                "action": "continue",
+                "generation": 1,
+                "reason": "resolver recovery",
+                "pending_text": "resolver recovery marker",
+                "source_message_ids": ["resolver-recovery"],
+            }
+
+        def note_bot_replied(self, *_args, **_kwargs):
+            calls["bot_replied"] += 1
+
+    class Bridge:
+        async def handle_message(self, *_args, **_kwargs):
+            calls["bridge"] += 1
+            if calls["bridge"] == 1:
+                raise resolver_error
+            calls["model"] += 1
+            return "恢复后的群聊回复"
+
+        def pop_last_reply_meta(self, _session_id):
+            return {}
+
+    monkeypatch.setattr("core.timing_runtime.get_group_runtime", lambda: Runtime())
+    service = GroupIngressService(db=db_session, bridge_provider=lambda: Bridge())
+
+    first = await service.handle(
+        _request(
+            group_id="resolver-recovery",
+            message_id="resolver-recovery",
+            message="resolver recovery marker",
+            is_at_bot=True,
+        )
+    )
+
+    assert first["status"] == "no_reply"
+    assert first["action"] == "no_reply"
+    assert first["reply"] == ""
+    assert first["messages"] == []
+    assert "session guidance resolver failed" in first["reason"]
+    failed_claim = db_session.query(InboundMessageClaim).one()
+    assert failed_claim.status == "failed"
+    assert failed_claim.response_json == ""
+    assert failed_claim.attempt_count == 1
+    assert db_session.query(ChatLog).filter_by(role="ambient").count() == 1
+    assert db_session.query(ChatLog).filter_by(role="assistant").count() == 0
+    db_session.rollback()
+
+    recovered = await service.handle(
+        _request(
+            group_id="group_resolver-recovery",
+            message_id="resolver-recovery",
+            message="resolver recovery marker",
+            is_at_bot=True,
+        )
+    )
+
+    assert recovered["action"] == "continue"
+    assert recovered["reply"] == "恢复后的群聊回复"
+    assert calls == {
+        "bridge": 2,
+        "model": 1,
+        "timing": 2,
+        "bot_replied": 1,
+    }
+    assert db_session.query(ChatLog).filter_by(role="ambient").count() == 1
+    assert db_session.query(ChatLog).filter_by(role="assistant").count() == 1
+    completed_claim = db_session.query(InboundMessageClaim).one()
+    assert completed_claim.status == "completed"
+    assert completed_claim.attempt_count == 2
+
+
 @pytest.mark.parametrize(
     ("changed_fields", "case_name"),
     [
@@ -1449,6 +1539,48 @@ async def test_owner_complete_error_never_returns_business_success(
         )
 
     assert raised.value is complete_error
+    assert db_session.query(InboundMessageClaim).one().status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_owner_complete_false_never_returns_business_success(
+    db_session,
+    monkeypatch,
+):
+    from app.group_ingress import response_contract
+    from app.group_ingress.service import GroupIngressResult, GroupIngressService
+    from core.database import InboundMessageClaim
+    from core.inbound_claim_lifecycle import (
+        InboundClaimOwner,
+        InboundClaimOwnershipLostError,
+    )
+
+    async def execute(req, **_kwargs):
+        completion = response_contract.build_completed_group_response(
+            outcome="no_reply",
+            reason="false complete 不得返回",
+        )
+        return GroupIngressResult(
+            payload=response_contract.completed_group_response_payload(
+                req,
+                completion,
+            ),
+            completion=completion,
+        )
+
+    async def false_complete(owner, _completion):
+        await owner._stop_renewal()
+        return False
+
+    monkeypatch.setattr(InboundClaimOwner, "complete", false_complete)
+    service = GroupIngressService(db=db_session)
+    monkeypatch.setattr(service, "_execute_request", execute)
+
+    with pytest.raises(InboundClaimOwnershipLostError):
+        await service.handle(
+            _request(group_id="complete-false", message_id="complete-false")
+        )
+
     assert db_session.query(InboundMessageClaim).one().status == "failed"
 
 

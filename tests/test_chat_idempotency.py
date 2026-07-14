@@ -4674,7 +4674,7 @@ async def test_proxy_chat_owner_handoff_failure_best_effort_fails_and_reraises_o
     db_session.commit()
     handle = _route_claim_handle("handoff-failure-message")
     events: list[object] = []
-    owners: list[FakeOwner] = []
+    owners: list["FakeOwner"] = []
 
     class FakeOwner:
         def __init__(self, actual_handle):

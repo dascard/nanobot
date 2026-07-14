@@ -1432,6 +1432,47 @@ class TestToolAdmin:
         assert tools["python_sandbox"]["override_present"] is False
         assert tools["python_sandbox"]["override_enabled"] is None
 
+    def test_python_sandbox_hard_disable_cannot_be_changed_by_admin(self, client, auth_header):
+        data = _ok(client.get(
+            "/api/v1/admin/tools",
+            params={"chat_type": "private_superuser", "runtime_preset": "full"},
+            headers=auth_header,
+        ))
+        tool = next(item for item in data["tools"] if item["name"] == "python_sandbox")
+        assert tool["force_disabled"] is True
+        assert tool["configured_enabled"] is False
+        assert tool["runtime_effective"] is False
+
+        defaults = client.put(
+            "/api/v1/admin/tools/python_sandbox",
+            json={"private_superuser_default": True, "lightweight_default": True},
+            headers=auth_header,
+        )
+        assert defaults.status_code == 400
+
+        override = client.put(
+            "/api/v1/admin/tools/python_sandbox/override",
+            json={
+                "scope_type": "user",
+                "scope_id": "placeholder-user",
+                "enabled": True,
+            },
+            headers=auth_header,
+        )
+        assert override.status_code == 400
+
+        effective = _ok(client.get(
+            "/api/v1/admin/tools/effective",
+            params={
+                "chat_type": "private_superuser",
+                "user_id": "placeholder-user",
+                "runtime_preset": "full",
+            },
+            headers=auth_header,
+        ))
+        assert "python_sandbox" not in effective["enabled"]
+        assert effective["disabled"]["python_sandbox"] == "系统安全硬禁用"
+
     def test_tool_platform_override_can_be_created_and_previewed(self, client, auth_header):
         r = client.put(
             "/api/v1/admin/tools/image_generation/override",

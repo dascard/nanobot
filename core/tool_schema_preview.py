@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from core.tool_contracts.ai_daily import ai_daily_parameters_schema
 from core.tool_registry import TOOL_METADATA, get_tool_def
 
 logger = logging.getLogger("nanobot.tool_schema")
@@ -65,33 +66,7 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "ai_daily": {
         "description": "聚合 AI/科技领域可信来源，生成可直接发送的 AI 日报或资讯简报 HTML。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "日报主题或自然语言请求；今天/最新类请求必须基于 runtime_context.current_time，不要自行编造年份。",
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "候选新闻数量（默认 8）；日报/最新资讯类请求会至少使用 8 条候选。",
-                    "default": 8,
-                },
-                "freshness": {
-                    "type": "string",
-                    "description": "时效范围：today/latest/week/custom。今天、最新、日报、早报优先使用 today 或 latest。",
-                    "enum": ["today", "latest", "week", "custom"],
-                    "default": "latest",
-                },
-                "target_date": {
-                    "type": "string",
-                    "description": "目标日期，YYYY-MM-DD；仅用户明确指定日期时填写。",
-                },
-                "no_cache": {"type": "boolean", "description": "跳过缓存强制重新检索", "default": False},
-                "refresh": {"type": "boolean", "description": "强制刷新", "default": False},
-            },
-            "required": ["query"],
-        },
+        "parameters": ai_daily_parameters_schema(),
     },
     "memory_query": {
         "description": (
@@ -237,16 +212,13 @@ STATIC_TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
     },
     "persona_update": {
         "description": (
-            "按用户明确要求更新画像。仅当用户直接说“更新我的画像”“记住这点”“纠正/删除我的偏好”等画像维护请求时使用。"
-            "普通聊天里出现的新信息不要主动调用本工具，后台画像进化链路会异步处理；也不要用它查询聊天记录。"
+            "刷新当前用户已持久化聊天日志形成的画像。仅当用户明确请求刷新画像时使用；"
+            "普通聊天里的新信息由后台画像进化链路异步处理。"
         ),
         "parameters": {
             "type": "object",
-            "properties": {
-                "user_id": {"type": "string", "description": "要更新画像的用户 ID，优先使用 <runtime_context> 中的 user_id"},
-                "instructions": {"type": "string", "description": "可选的画像维护指引，例如要记住、纠正或删除的具体偏好；留空则按最近日志全面更新"},
-            },
-            "required": ["user_id"],
+            "properties": {},
+            "required": [],
         },
     },
     "schedule_task": {

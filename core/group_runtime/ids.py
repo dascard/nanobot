@@ -9,6 +9,8 @@
   JargonMemory.stream      -> qq:123456:group (stream_id)
 """
 
+from core.chat_stream_identity import resolve_chat_stream_identity
+
 
 def normalize_group_session_id(group_id: str) -> str:
     """将任意群号格式统一为 group_<raw_id>。"""
@@ -25,11 +27,14 @@ def normalize_group_session_id(group_id: str) -> str:
 
 def normalize_group_stream_id(group_id: str) -> str:
     """将任意群号格式统一为 qq:<raw_id>:group。"""
-    session_id = normalize_group_session_id(group_id)
-    if not session_id:
+    raw = str(group_id or "").strip()
+    if not raw:
         return ""
-    raw = session_id.removeprefix("group_")
-    return f"qq:{raw}:group"
+    return resolve_chat_stream_identity(
+        platform="qq",
+        chat_type="group",
+        session_id=raw,
+    ).chat_stream_id
 
 
 def raw_group_id(group_id: str) -> str:

@@ -17,6 +17,8 @@ logger = logging.getLogger("nanobot.tool.persona_update")
 class PersonaUpdateTool(BaseTool):
     """Update user persona by running the evolution pipeline on recent logs."""
 
+    needs_context = True
+
     @property
     def tool_name(self) -> str:
         return "persona_update"
@@ -24,8 +26,8 @@ class PersonaUpdateTool(BaseTool):
     @property
     def description(self) -> str:
         return (
-            "按用户明确要求更新画像。仅当用户直接说“更新我的画像”“记住这点”“纠正/删除我的偏好”等画像维护请求时使用。"
-            "普通聊天里出现的新信息不要主动调用本工具，后台画像进化链路会异步处理；也不要用它查询聊天记录。"
+            "刷新当前用户已持久化聊天日志形成的画像。仅当用户明确请求刷新画像时使用；"
+            "普通聊天里的新信息由后台画像进化链路异步处理。"
         )
 
     @property
@@ -35,24 +37,34 @@ class PersonaUpdateTool(BaseTool):
     def get_parameters_schema(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "properties": {
-                "user_id": {
-                    "type": "string",
-                    "description": "要更新画像的用户 ID，优先使用 <runtime_context> 中的 user_id",
-                },
-                "instructions": {
-                    "type": "string",
-                    "description": "可选的画像维护指引，例如要记住、纠正或删除的具体偏好；留空则按最近日志全面更新",
-                },
-            },
-            "required": ["user_id"],
+            "properties": {},
+            "required": [],
         }
 
     async def _execute(self, args: dict[str, Any], **kwargs: Any) -> ToolResult:
-        user_id = str(args.get("user_id", "")).strip()
+        context = kwargs.get("context")
+        session = getattr(context, "session", None) if context is not None else None
+        session_extra = getattr(session, "extra", {}) if session is not None else {}
+        runtime_context = (
+            session_extra.get("nanobot_runtime_context", {})
+            if isinstance(session_extra, dict)
+            else {}
+        )
+        user_id = (
+            str(runtime_context.get("user_id", "")).strip()
+            if isinstance(runtime_context, dict)
+            else ""
+        )
 
         if not user_id:
-            return ToolResult(error="Missing 'user_id' argument")
+            return ToolResult(error="Persona update authorization failed")
+
+        requested_user_id = str(args.get("user_id", "")).strip()
+        if requested_user_id and requested_user_id != user_id:
+            return ToolResult(error="Persona update authorization failed")
+
+        if str(args.get("instructions", "")).strip():
+            return ToolResult(error="Unsupported persona update arguments")
 
         try:
             from core.database import SessionLocal, Persona, ChatLog

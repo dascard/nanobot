@@ -5,6 +5,8 @@ import re
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
+from core.tool_contracts.ai_daily import AI_DAILY_TIMEZONE
+
 from .config import OFFICIAL_SOURCES, SOURCE_QUALITY, STOP_WORDS, TOPIC_KEYWORDS, KNOWN_ENTITIES
 from .models import Article
 
@@ -58,13 +60,17 @@ def parse_date(raw: str) -> datetime | None:
     try:
         v = value.replace("Z", "+00:00")
         dt = datetime.fromisoformat(v)
-        return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+        return (
+            dt.astimezone(AI_DAILY_TIMEZONE).replace(tzinfo=None)
+            if dt.tzinfo is not None
+            else dt
+        )
     except ValueError:
         pass
     try:
         dt = parsedate_to_datetime(value)
         if dt and dt.tzinfo:
-            dt = dt.replace(tzinfo=None)
+            dt = dt.astimezone(AI_DAILY_TIMEZONE).replace(tzinfo=None)
         return dt
     except (TypeError, ValueError):
         pass

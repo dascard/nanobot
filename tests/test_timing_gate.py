@@ -47,48 +47,47 @@ class TestParseOutput:
         assert r["action"] == "no_reply"
         assert r["error_type"] is None
 
-    def test_reply_bool_json_is_continue(self):
+    def test_reply_bool_json_is_rejected_by_strict_contract(self):
         from clients.classifier_client import TimingGate
         g = TimingGate()
         r = g._parse_output('```json\n{"reply": true, "reason": "用户明确点名bot"}\n```')
-        assert r["action"] == "continue"
-        assert r["reason"] == "用户明确点名bot"
-        assert r["parse_quality"] == "json_compat"
+        assert r["action"] == "no_reply"
+        assert r["error_type"] == "parse_error"
 
-    def test_needs_reply_false_json_is_no_reply(self):
+    def test_needs_reply_false_json_is_rejected_by_strict_contract(self):
         from clients.classifier_client import TimingGate
         g = TimingGate()
         r = g._parse_output('{"needs_reply": false, "reason": "未点名bot"}')
         assert r["action"] == "no_reply"
-        assert r["reason"] == "未点名bot"
-        assert r["parse_quality"] == "json_compat"
+        assert r["error_type"] == "parse_error"
 
-    def test_delay_clamp_too_low(self):
+    def test_wait_delay_too_low_is_rejected(self):
         from clients.classifier_client import TimingGate
         g = TimingGate()
         r = g._parse_output('{"action":"wait","delay_seconds":1}')
-        assert r["delay_seconds"] == 3
+        assert r["action"] == "no_reply"
+        assert r["error_type"] == "parse_error"
 
-    def test_delay_clamp_too_high(self):
+    def test_wait_delay_too_high_is_rejected(self):
         from clients.classifier_client import TimingGate
         g = TimingGate()
         r = g._parse_output('{"action":"wait","delay_seconds":99}')
-        assert r["delay_seconds"] == 15
+        assert r["action"] == "no_reply"
+        assert r["error_type"] == "parse_error"
 
-    def test_old_format_yes_is_continue(self):
+    def test_old_format_yes_is_rejected_by_strict_contract(self):
         from clients.classifier_client import TimingGate
         g = TimingGate()
         r = g._parse_output("是,7")
-        assert r["action"] == "continue"
-        assert r["reason"] == "旧格式兼容"
-        assert r["parse_quality"] == "legacy"
-        assert r["model_confidence"] == 0.5
+        assert r["action"] == "no_reply"
+        assert r["error_type"] == "parse_error"
 
-    def test_old_format_no_is_no_reply(self):
+    def test_old_format_no_is_rejected_by_strict_contract(self):
         from clients.classifier_client import TimingGate
         g = TimingGate()
         r = g._parse_output("否,0")
         assert r["action"] == "no_reply"
+        assert r["error_type"] == "parse_error"
 
     def test_invalid_output_is_no_reply(self):
         from clients.classifier_client import TimingGate
@@ -103,12 +102,13 @@ class TestParseOutput:
         r = g._parse_output("<think>\n\n</think>\n\n{\"action\":\"continue\"}")
         assert r["action"] == "continue"
 
-    def test_continue_ignores_delay(self):
+    def test_continue_with_delay_is_rejected(self):
         from clients.classifier_client import TimingGate
         g = TimingGate()
         r = g._parse_output('{"action":"continue","delay_seconds":5}')
-        assert r["action"] == "continue"
+        assert r["action"] == "no_reply"
         assert r["delay_seconds"] is None
+        assert r["error_type"] == "parse_error"
 
 
 class TestJudge:
@@ -135,6 +135,36 @@ class TestJudge:
             r = g.judge("hello")
         assert r["action"] == "no_reply"
         assert r["error_type"] == "network_error"
+
+    def test_parse_error_retries_once_with_directed_contract(self):
+        from clients.classifier_client import TimingGate
+
+        g = TimingGate()
+        g._call_qwen = MagicMock(
+            side_effect=[
+                "garbage",
+                '{"action":"continue","reason":"用户明确点名"}',
+            ]
+        )
+
+        result = g.judge("原始上下文")
+
+        assert result["action"] == "continue"
+        assert result["parse_quality"] == "json"
+        assert g._call_qwen.call_count == 2
+        assert "只输出" in g._call_qwen.call_args_list[1].args[0]
+
+    def test_persistent_parse_error_retries_once_then_fails_closed(self):
+        from clients.classifier_client import TimingGate
+
+        g = TimingGate()
+        g._call_qwen = MagicMock(return_value="garbage")
+
+        result = g.judge("原始上下文")
+
+        assert result["action"] == "no_reply"
+        assert result["error_type"] == "parse_error"
+        assert g._call_qwen.call_count == 2
 
     def test_reply_to_bot_prompt_injection(self):
         """is_reply_to_bot=True → context 中注入提示行。"""

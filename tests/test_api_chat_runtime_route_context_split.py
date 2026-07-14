@@ -14,7 +14,7 @@ class _Decision:
     action: str = "reply"
     complexity: int = 4
     effort: str | None = "high"
-    runtime_preset: str = "quick"
+    runtime_preset: str = "lightweight"
     reason: str = "测试原因"
 
 
@@ -155,6 +155,7 @@ def test_build_chat_runtime_route_context_skips_group_persona_injection():
     assert context.enriched_query == "<user_input>\n群聊问题 files=1\n</user_input>"
     assert context.bridge_meta["chat_type"] == "group"
     assert context.bridge_meta["stream"] is True
+    assert context.bridge_meta["runtime_preset"] == "full"
     assert context.platform == "qq"
     assert context.persona_text == "群聊画像"
     assert context.ctx_debug == {"source": "history"}
@@ -227,6 +228,7 @@ def test_build_chat_runtime_route_context_recovers_private_persona_injection_fai
 
     assert context.persona_text == "静态画像"
     assert context.bridge_meta["persona_text"] == "静态画像"
+    assert context.bridge_meta["runtime_preset"] == "lightweight"
     assert "persona injection context failed user=u-runtime-route: persona down" in calls["warning"][0]
 
 
@@ -264,6 +266,8 @@ def test_build_chat_runtime_route_context_delegates_runtime_input_and_logs_promp
     assert delegated.stream is False
     assert delegated.platform == "qq"
     assert delegated.private_decision.action == "reply"
+    assert delegated.private_decision.runtime_preset == "lightweight"
+    assert context.bridge_meta["runtime_preset"] == "lightweight"
     assert any("[/chat] Prompt budget: type=private" in message for message in calls["info"])
     assert context.prompt_budget["safe_user_input_chars"] == len("私聊问题")
 

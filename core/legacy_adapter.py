@@ -297,7 +297,12 @@ class SQLiteMemory:
         finally:
             db.close()
 
-    def update_persona_and_prompt(self, user_id: str, persona_json: str, system_prompt: str):
+    def update_persona_and_prompt(
+        self,
+        user_id: str,
+        persona_json: str,
+        system_prompt: str,
+    ) -> bool:
         """同步回写画像与提示词（带有效性校验）"""
         import json as _json
         from core.time_utils import db_now_naive
@@ -306,14 +311,14 @@ class SQLiteMemory:
             data = _json.loads(persona_json) if isinstance(persona_json, str) else persona_json
         except (_json.JSONDecodeError, TypeError):
             logger.error(f"Persona update rejected: invalid JSON for user {user_id}")
-            return
+            return False
         if not isinstance(data, dict):
             logger.error(f"Persona update rejected: not dict, user={user_id}")
-            return
+            return False
         if "error" in data or "code" in data:
             logger.error(f"Persona update rejected: error response, user={user_id}, "
                           f"preview={str(data)[:200]}")
-            return
+            return False
 
         db = self._get_session()
         try:
@@ -333,6 +338,7 @@ class SQLiteMemory:
             else:
                 db.add(SystemPrompt(user_id=user_id, prompt_text=system_prompt, updated_at=now))
             db.commit()
+            return True
         finally:
             db.close()
 
@@ -441,20 +447,6 @@ class NanobotKTController:
             {
                 "type": "function",
                 "function": {
-                    "name": "run_python_analysis",
-                    "description": "在安全沙箱中执行 Python 数据分析脚本，可用于统计计算和可视化",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string", "description": "Python 代码（可用 sqlite3, json, math, statistics, collections）"}
-                        },
-                        "required": ["code"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "run_ai_daily",
                     "description": "聚合 AI/科技可信来源并生成日报或资讯简报",
                     "parameters": {
@@ -508,7 +500,9 @@ class NanobotKTController:
             if func_name == "run_sql_analysis":
                 result = self.sandbox.run_query(args.get("sql", ""))
             elif func_name == "run_python_analysis":
-                result = self.sandbox.execute_python_analysis(args.get("code", ""))
+                from sandbox import PYTHON_ANALYSIS_DISABLED_MESSAGE
+
+                result = PYTHON_ANALYSIS_DISABLED_MESSAGE
             elif func_name == "run_ai_daily":
                 result = search_and_extract_news(args.get("query", ""))
             else:
@@ -644,11 +638,26 @@ class NanobotKTController:
             model_tier="fast",
         )
 
-        # 3c. JSON 解析
-        parsed = EvolutionUtils.json_repair(candidate_res)
-        candidates = parsed.get("candidates", []) if isinstance(parsed, dict) else []
+        # 3c. 严格输出契约；解析/结构错误只定向重试一次，最终失败保留待处理日志。
+        from core.prompt_v2.task_contracts import TaskOutputContractError, parse_task_output
 
-        if not candidates:
+        try:
+            parsed = parse_task_output("memory_extract", candidate_res)
+        except TaskOutputContractError:
+            retry_prompt = (
+                f"{extraction_prompt}\n\n"
+                "[输出契约修正] 只输出 JSON object，且必须显式包含 candidates 数组。"
+            )
+            candidate_res = await self.provider.invoke_raw(
+                query=retry_prompt,
+                system_prompt=CANDIDATE_EXTRACTION_SYSTEM_PROMPT,
+                user_id=user_id,
+                model_tier="fast",
+            )
+            parsed = parse_task_output("memory_extract", candidate_res)
+        candidates = parsed["candidates"]
+
+        if candidates == []:
             logger.warning("  [KT Local StateMachine] No candidates extracted, skipping")
             self.memory.mark_logs_processed([log["id"] for log in logs])
             return
@@ -662,6 +671,9 @@ class NanobotKTController:
         finally:
             db.close()
 
+        if int(stats.get("processing_errors", 0) or 0) > 0:
+            raise RuntimeError("candidate processing errors; logs remain unprocessed")
+
         logger.info(f"  [KT Local StateMachine] {stats}")
 
         # 4. Quality Stage: PromptAuditor sub-agent
@@ -670,11 +682,13 @@ class NanobotKTController:
         results_04 = await self.prompt_auditor.run(current_prompt, persona_summary, self.provider)
 
         # 5. Commit Stage: Save to DB
-        self.memory.update_persona_and_prompt(
+        update_result = self.memory.update_persona_and_prompt(
             user_id,
             persona_summary,
             results_04["final_system_prompt"]
         )
+        if update_result is False:
+            raise RuntimeError("persona persistence rejected; logs remain unprocessed")
         self.memory.mark_logs_processed([log["id"] for log in logs])
         logger.info(f"  [KT Local Success] User {user_id} evolved successfully.")
 
@@ -1000,7 +1014,10 @@ class DataAnalystAgent:
         return self.sandbox.run_query(query)
 
     def perform_python_analysis(self, python_code: str) -> str:
-        return self.sandbox.execute_python_analysis(python_code)
+        del python_code
+        from sandbox import PYTHON_ANALYSIS_DISABLED_MESSAGE
+
+        return PYTHON_ANALYSIS_DISABLED_MESSAGE
 
 class ModelScoutAgent:
     """自动模型情报侦察员：负责从海量信息中提取新模型并更新注册表"""
