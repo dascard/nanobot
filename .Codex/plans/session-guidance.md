@@ -267,7 +267,7 @@ def canonicalize_legacy_chat_stream_id(value: str) -> str | None:
 - 任务文件 Ruff、全模块 `compileall`、`git diff --check` 均通过；第二轮独立复审
   `GO`，无 Critical 或 Important。
 
-- [ ] **步骤 5：授权后的提交检查点**
+- [x] **步骤 5：授权后的提交检查点（由最终聚合提交完成）**
 
 仅在用户明确说“提交”后执行：
 
@@ -445,7 +445,7 @@ SQLite 文件快照路径。备份失败必须阻止迁移。
   敏感账号零命中，`nanobot.db` 与 `cc2codex/` 均未被跟踪。
 - 步骤 6 未获用户提交授权，保持未勾选，未执行暂存或提交。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add core/database.py core/schema_migrations.py tests/test_session_guidance_schema.py tests/test_schema_migrations.py tests/test_sqlite_backup.py
@@ -645,7 +645,7 @@ AgentRun meta 沿用正文摘要 hash 语义；`section_hashes["session_guidance
   `git add --chmod=-x`，避免把 `100755` 写入 Git。
 - 步骤 5 未获用户提交授权，保持未勾选，未执行暂存或提交。
 
-- [ ] **步骤 5：授权后的提交检查点**
+- [x] **步骤 5：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add --chmod=-x core/session_guidance.py tests/test_session_guidance.py
@@ -839,7 +839,7 @@ role 序列和当前用户尾部行为必须不变。
   `git add --chmod=-x`，避免把 `100755` 写入 Git。
 - 步骤 6 未获用户提交授权，保持未勾选，未执行暂存或提交。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add core/prompt_v2/schema.py core/prompt_v2/context_adapters.py core/prompt_v2/compiler.py core/prompt_v2/flow.py core/prompt_v2/audit.py prompts.v2.default/chat/flow.json data/prompts_v2/chat/flow.json prompts.v2.default/chat/main.md tests/test_prompt_v2.py tests/test_prompt_v2_audit_policy.py tests/test_prompt_v2_core_contract.py tests/test_prompt_v2_template_admin.py
@@ -1004,7 +1004,7 @@ python scripts/manage_prompt_flow.py --help
   `rollback-session-guidance` 三个命令。
 - 步骤 6 未获用户提交授权，保持未勾选，未执行暂存或提交。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add core/prompt_v2/flow.py core/prompt_v2/template_registry.py bootstrap/prompt_runtime.py .gitignore tests/test_prompt_v2.py tests/test_prompt_v2_template_registry.py tests/test_prompt_runtime_bootstrap.py
@@ -1154,7 +1154,7 @@ AgentRun 和最终 `RunTracer.finish_run(meta=run_meta)` 都保留正确 platfor
 均通过。生产实现独立复审结论为 `GO`；全量回归暴露的旧测试夹具依赖缺口已完成
 红绿修复并纳入上述矩阵。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add nanobot_kt/bridge.py nanobot_kt/prompt_runtime.py tests/test_prompt_runtime_session_guidance.py tests/test_bridge_prompt_v2.py tests/test_prompt_trace_admin.py
@@ -1333,7 +1333,7 @@ def upsert_config(body: ConfigUpsert, request: Request, db: Session = Depends(ge
 `compileall` 与 `git diff --check` 均通过；全仓 Ruff 发现的既有测试前向引用问题已用
 字符串注解完成最小修正，对应参数化测试 `3 passed`。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add app/session_config/__init__.py app/session_config/discovery_service.py api/admin/chat_config_routes.py api/admin_routes.py tests/test_admin_session_guidance.py tests/test_admin_chat_config_routes_split.py tests/test_api.py
@@ -1442,7 +1442,7 @@ warning 返回 200。异常和 trace 不得复制草稿正文。
 `git diff --check` 均通过；独立复审结论为 `GO`。全仓 Ruff 仅命中未纳入 Git 的
 `.codex/skills/ui-ux-pro-max` 上游脚本既有告警，明确排除该本地技能目录后通过。
 
-- [ ] **步骤 5：授权后的提交检查点**
+- [x] **步骤 5：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add api/admin_routes.py app/prompt_runtime/preview_service.py tests/test_prompt_v2_template_admin.py tests/test_prompt_trace_admin.py
@@ -1577,7 +1577,7 @@ npm --prefix webui run build
   session ID 分流均通过。
 - 独立只读复审：`GO`，`0 Critical / 0 Important`。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add webui/src/features/session-config/SessionConfigsPage.jsx webui/src/App.jsx tests/test_webui_session_guidance.py tests/test_webui_admin_redesign.py webui/dist/index.html
@@ -1722,7 +1722,7 @@ npm --prefix webui run build
 - 暂存区、工作区/索引/历史敏感命中均为零，`nanobot.db` 与 `cc2codex/` 未被跟踪；
 - 独立只读复审结论为 `GO`，未发现 Critical、Important 或 Minor。
 
-- [ ] **步骤 7：授权后的最终提交检查点**
+- [x] **步骤 7：授权后的最终提交检查点（由最终聚合提交完成）**
 
 只有用户明确说“提交”后，按文件指定暂存最终测试或文档修正：
 

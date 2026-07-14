@@ -155,7 +155,7 @@ KT Tool 层。
 env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -m pytest tests/test_final_tools.py tests/test_research_tool_plan.py tests/test_kt_framework.py -v
 ```
 
-- [ ] **步骤 7：授权后的提交检查点（等待用户授权）**
+- [x] **步骤 7：授权后的提交检查点（由最终聚合提交完成）**
 
 用户明确说“提交”后才按实际变更文件精确暂存，建议提交信息：
 
@@ -273,7 +273,7 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 定向验证结果：`45 passed`。完整回归结果：`2897 passed, 6 skipped`，无失败。
 自审额外覆盖畸形首个 result 也必须消费已声明 call ID，防止第二个结果重新关联。
 
-- [ ] **步骤 7：授权后的提交检查点**
+- [x] **步骤 7：授权后的提交检查点（由最终聚合提交完成）**
 
 建议提交信息：
 
@@ -362,7 +362,7 @@ git diff --check：通过
 按用户明确范围，本阶段没有修改任何 Prompt 模板正文。现有模板中对旧 runtime 字段
 位置的文字说明登记为已知 drift，留待后续 Prompt 正文专项处理。
 
-- [ ] **步骤 7：授权后的提交检查点**
+- [x] **步骤 7：授权后的提交检查点（由最终聚合提交完成）**
 
 建议提交信息：
 
@@ -487,7 +487,7 @@ git diff --check：通过
 失败不再消费日志，但晚段失败后的跨表原子回滚与多 worker claim 仍需统一 UoW/fenced
 claim 设计，不能宣称已解决。
 
-- [ ] **步骤 9：授权后的提交检查点**
+- [x] **步骤 9：授权后的提交检查点（由最终聚合提交完成）**
 
 建议提交信息：
 
@@ -551,7 +551,7 @@ schema 移除未执行的 `instructions`；tool registry 不再宣称删除/重�
 - 暂存区为空，具体超级用户账号零命中，`cc2codex/` 与 `nanobot.db` 未被跟踪；
 - Prompt usage 模板正文未修改，未实现的纠正/删除/重建能力仍登记为延期事项。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 建议提交信息：
 
@@ -626,7 +626,7 @@ Critical/Important，全量回归 `2993 passed, 6 skipped, 0 failed`。未注册
 `NewsDailyTool` 仍返回裸 HTML，但生产桥只导出正式 `AiDailyTool`；登记为后续删除或
 委托正式实现的非阻塞技术债。
 
-- [ ] **步骤 8：授权后的提交检查点**
+- [x] **步骤 8：授权后的提交检查点（由最终聚合提交完成）**
 
 建议提交信息：
 
@@ -756,7 +756,7 @@ build_identity_vars(..., is_super_user=bool(request.is_super_user))
 无 Critical/Important，全量回归 `3000 passed, 6 skipped, 0 failed`。Bridge 对非 bool
 metadata 严格 fail closed；群聊 actor fact 可为 true，但 ToolPlan profile 保持 group。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 只有用户明确说“提交”后：
 
@@ -919,7 +919,7 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u AL
 - 两份 `flow.json` 字节一致且无差异；Prompt Markdown、QQ renderer、敏感账号、
   `nanobot.db`、`cc2codex/` 与暂存区边界检查均通过；未执行暂存或提交。
 
-- [ ] **步骤 7：授权后的提交检查点**
+- [x] **步骤 7：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add core/prompt_v2/flow_contract.py core/prompt_v2/flow.py core/prompt_v2/audit.py core/prompt_v2/compiler.py core/prompt_v2/preview.py app/prompt_runtime/preview_service.py bootstrap/prompt_runtime.py tests/test_prompt_v2_core_contract.py tests/test_prompt_v2_audit_policy.py tests/test_prompt_v2.py tests/test_prompt_v2_template_admin.py tests/test_prompt_runtime_bootstrap.py
@@ -1057,7 +1057,7 @@ assert description.count("[V2ToolTemplate:") <= 1
   均通过；Prompt/QQ、敏感账号、`nanobot.db`、`cc2codex/` 和暂存区边界检查通过；
   未执行暂存或提交。
 
-- [ ] **步骤 7：授权后的提交检查点**
+- [x] **步骤 7：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add core/prompt_v2/tool_templates.py core/tool_schema_preview.py core/tool_plan.py core/final_tools.py nanobot_kt/tool_runtime.py tests/test_prompt_v2_tool_template_integration.py tests/test_tool_schema_config.py tests/test_tool_plan.py tests/test_final_tools.py
@@ -1199,7 +1199,7 @@ cache marker，只在 provider 测试中单独断言，不把它混进 Prompt Ru
 env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u all_proxy -u ALL_PROXY python -m pytest tests/test_prompt_v2_tool_template_integration.py tests/test_final_tools.py -v
 ```
 
-- [ ] **步骤 8：授权后的提交检查点**
+- [x] **步骤 8：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add core/prompt_v2/request_metrics.py core/prompt_v2/schema.py core/prompt_v2/compiler.py nanobot_kt/prompt_runtime.py core/tracing.py core/llm_request_linter.py app/prompt_runtime/preview_service.py tests/test_prompt_v2.py tests/test_bridge_prompt_v2.py tests/test_prompt_v2_template_admin.py tests/test_llm_request_linter.py tests/test_llm_request_tracing.py
@@ -1289,7 +1289,7 @@ if request.normalized_chat_type != "group":
 运行同步骤 2。再运行已有群聊工具覆盖、群聊 Prompt 和 group runtime ID 测试，证明
 群聊行为不变。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add nanobot_kt/bridge.py core/prompt_v2/context_adapters.py tests/test_bridge_prompt_v2.py tests/test_prompt_v2.py tests/test_tool_plan.py tests/test_final_tools.py
@@ -1389,7 +1389,7 @@ runtime_preset = "full" if runtime_input.is_group else "lightweight"
 运行同步骤 2，并额外运行 runtime tool/service 和 proactive research 相关测试，确认
 `research` 固定上限不受影响。
 
-- [ ] **步骤 6：授权后的提交检查点**
+- [x] **步骤 6：授权后的提交检查点（由最终聚合提交完成）**
 
 ```bash
 git add core/private_timing.py api/chat_runtime_facade.py tests/test_private_timing.py tests/test_api_chat_pre_bridge_decision_split.py tests/test_api_chat_runtime_route_context_split.py tests/test_api_chat_runtime_facade_split.py tests/test_tool_plan.py
@@ -1541,7 +1541,7 @@ git status --short
 独立只读复审在修复 Conversation 元数据累加、emergency-drop 实例替换后守卫失效、
 `PromptFlowError`/非法 JSON 未归一三类问题后给出 `GO`，未发现新增 Critical 或 Important。
 
-- [ ] **步骤 9：授权后的最终提交检查点**
+- [x] **步骤 9：授权后的最终提交检查点（由最终聚合提交完成）**
 
 只有用户明确说“提交”后：
 
