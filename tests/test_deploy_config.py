@@ -1,5 +1,9 @@
-from pathlib import Path
+import json
+import os
 import re
+import shutil
+import subprocess
+from pathlib import Path
 
 
 def test_build_info_prefers_image_environment_without_git(monkeypatch):
@@ -133,6 +137,52 @@ def _environment_keys(service_block: str) -> set[str]:
     return keys
 
 
+def _docker_compose_command() -> list[str]:
+    standalone = shutil.which("docker-compose")
+    if standalone is not None:
+        return [standalone]
+    docker = shutil.which("docker")
+    if docker is None:
+        raise AssertionError("部署配置测试需要 Docker Compose CLI")
+    return [docker, "compose"]
+
+
+def _render_compose_with_env(tmp_path, values: dict[str, str]) -> dict:
+    compose_path = tmp_path / "docker-compose.yml"
+    compose_path.write_text(
+        Path("docker-compose.yml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "".join(f"{key}={value}\n" for key, value in values.items()),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(
+        [
+            *_docker_compose_command(),
+            "--project-directory",
+            str(tmp_path),
+            "--env-file",
+            str(env_path),
+            "-f",
+            str(compose_path),
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(tmp_path),
+            "LANG": "C.UTF-8",
+            "PATH": os.environ.get("PATH", ""),
+        },
+    )
+    return json.loads(completed.stdout)
+
+
 def test_runtime_image_uses_python_311():
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
 
@@ -235,6 +285,46 @@ def test_outbound_worker_receives_only_dedicated_push_token():
     assert "NANOBOT_PUSH_TOKEN" in keys
     assert "NANOBOT_API_TOKEN" not in keys
     assert "NANOBOT_ADMIN_TOKEN" not in keys
+
+
+def test_rendered_compose_keeps_push_secret_out_of_server(tmp_path):
+    push_sentinel = "push-token-compose-sentinel"
+    server_settings = {
+        "DATABASE_URL": "sqlite:///./data/compose-sentinel.db",
+        "LOG_DIR": "./data/compose-sentinel",
+        "LOG_LEVEL": "WARNING",
+        "NANOBOT_API_TOKEN": "api-token-compose-sentinel",
+        "NANOBOT_ADMIN_TOKEN": "admin-token-compose-sentinel",
+        "NEW_API_BASE_URL": "http://new-api.compose.invalid/v1",
+        "NEW_API_KEY": "new-api-compose-sentinel",
+        "CLASSIFIER_API_URL": "http://classifier.compose.invalid/v1",
+        "NANOBOT_PROMPT_RUNTIME_DIR": "./data/prompts-compose-sentinel",
+        "NANOBOT_SESSION_SUMMARY_WORKER_MODE": "embedded",
+    }
+    rendered = _render_compose_with_env(
+        tmp_path,
+        {
+            **server_settings,
+            "NANOBOT_PUSH_TOKEN": push_sentinel,
+        },
+    )
+
+    server_environment = rendered["services"]["nanobot-server"]["environment"]
+    worker_environment = rendered["services"]["outbound-delivery-worker"][
+        "environment"
+    ]
+    assert push_sentinel not in server_environment.values()
+    assert not server_environment.get("NANOBOT_PUSH_TOKEN")
+    assert worker_environment["NANOBOT_PUSH_TOKEN"] == push_sentinel
+    assert "NANOBOT_API_TOKEN" not in worker_environment
+    assert "NANOBOT_ADMIN_TOKEN" not in worker_environment
+    for key, value in server_settings.items():
+        expected = (
+            "external"
+            if key == "NANOBOT_SESSION_SUMMARY_WORKER_MODE"
+            else value
+        )
+        assert server_environment[key] == expected
 
 
 def test_outbound_worker_has_minimal_runtime_surface():

@@ -15,6 +15,7 @@ services:
     env_file:
       - .env
     environment:
+      NANOBOT_PUSH_TOKEN: ""
       NANOBOT_SESSION_SUMMARY_WORKER_MODE: external
     volumes:
       - ./data:/app/data
